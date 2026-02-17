@@ -1,6 +1,24 @@
 // ===== Base URL + helpers =====
+
+// ===== Base URL + helpers =====
+// ===== Base URL + helpers =====
+function _defaultBrokerBaseUrl() {
+  const h = String(location.hostname || '').toLowerCase();
+
+  // TEST frontend(s)
+  if (h === 'testmode.arthur-rai.co.uk' || h.endsWith('.testmode.arthur-rai.co.uk')) {
+    return 'https://test-cloudtms-backend.kier-88a.workers.dev';
+  }
+
+  // Default: LIVE
+  return 'https://cloudtms.kier-88a.workers.dev';
+}
+
+// Allow explicit override (handy for local/dev), otherwise pick based on hostname
+window.BROKER_BASE_URL = window.BROKER_BASE_URL || _defaultBrokerBaseUrl();
+
 const BROKER_BASE_URL = window.BROKER_BASE_URL;
-const API = (path)=> `${BROKER_BASE_URL}${path}`;
+const API = (path) => `${BROKER_BASE_URL}${path}`;
 
 let SESSION = null;  // {accessToken, user, exp}
 let refreshTimer = 0;
