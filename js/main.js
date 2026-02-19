@@ -1360,6 +1360,7 @@ function getFriendlyHeaderLabel(section, key) {
 //   (ALL matching ids for current filters) regardless of page size.
 // ─────────────────────────────────────────────────────────────────────────────
 
+
 async function loadSection() {
   const gl = beginGlobalLoading('Loading list…');
 
@@ -1426,16 +1427,6 @@ async function loadSection() {
         : (hasFilters || hasSort);
 
     const fetchRelatedPage = async (section, page, pageSize, rel) => {
-      // ✅ Keep fetchRelated(...) as the single fetcher for related views.
-      // It handles v2 RPC routing server-side and normalizes via toList().
-      //
-      // NOTE: the related endpoint may not return the same row shape as the normal list/search endpoint.
-      // For invoices specifically, the summary grid expects the canonical /api/search/invoices shape so
-      // configured columns work. We therefore:
-      //   1) fetch related → extract ids
-      //   2) fetch canonical invoices via search('invoices', { ids })
-      //   3) return canonical rows (same shape as normal invoices list)
-
       window.__listState = window.__listState || {};
       const stSec = (window.__listState[section] ||= {
         page: 1,
@@ -1453,12 +1444,8 @@ async function loadSection() {
       const srcId     = String(rel.source_id || '').trim();
       const relType   = String(rel.relation_type || '').trim();
 
-      // fetchRelated returns a normalized list via toList(res)
       const list = await fetchRelated(srcEntity, srcId, relType);
 
-      // Tolerate both shapes:
-      // - { items: [...], total: number|null }
-      // - [...items] (legacy)
       const items = Array.isArray(list?.items) ? list.items : (Array.isArray(list) ? list : []);
       const totalFromApi = (list && typeof list === 'object' && typeof list.total === 'number') ? list.total : null;
 
@@ -1473,7 +1460,6 @@ async function loadSection() {
           });
         } catch {}
 
-        // de-dupe but keep first-seen order
         const seen = new Set();
         const idsDedup = [];
         for (const id of idsAll) {
@@ -1494,7 +1480,6 @@ async function loadSection() {
             ? ((pg * ps) < total)
             : (idsDedup.length > ((pg - 1) * ps + ps));
 
-        // Apply paging slice locally (related endpoint may not page)
         let pageIds = idsDedup;
         if (pageSize !== 'ALL') {
           const start = (pg - 1) * ps;
@@ -1503,12 +1488,9 @@ async function loadSection() {
 
         if (!pageIds.length) return [];
 
-        // Canonical fetch via existing invoices search pipeline
         const canon = await search('invoices', { ids: pageIds });
-
         const canonRows = Array.isArray(canon?.rows) ? canon.rows : (Array.isArray(canon) ? canon : []);
 
-        // Preserve the related id order if the search endpoint returns different order
         const byId = new Map();
         canonRows.forEach(r => {
           const rid = r && (r.id ?? r.invoice_id);
@@ -1521,13 +1503,11 @@ async function loadSection() {
           if (row) ordered.push(row);
         });
 
-        // If anything didn’t match (defensive), append remaining rows
         if (ordered.length !== canonRows.length) {
           canonRows.forEach(r => {
             const rid = r && (r.id ?? r.invoice_id);
             const k = (rid != null) ? String(rid) : '';
             if (!k) return;
-            if (pageIds.includes(k) && byId.get(k) && ordered.find(x => String((x.id ?? x.invoice_id) || '') === k)) return;
             if (!ordered.includes(r)) ordered.push(r);
           });
         }
@@ -1553,12 +1533,10 @@ async function loadSection() {
       window.__listState[section].page = page;
       window.__listState[section].pageSize = pageSize;
 
-      // ✅ Related mode branch (exclusive; ignore other filters)
       if (inRelatedMode) {
         return await fetchRelatedPage(section, page, pageSize, related);
       }
 
-      // Timesheets always go via the summary endpoint (v_timesheets_summary)
       if (section === 'timesheets') {
         const filters = window.__listState[section].filters || {};
         return await listTimesheetsSummary(filters);
@@ -1578,13 +1556,10 @@ async function loadSection() {
       }
     };
 
-    // PageSize = ALL → fetch all pages sequentially (respecting filters + sort)
-    // ✅ Related mode: keep using the single related fetcher; just page through.
     if (st.pageSize === 'ALL') {
       const acc = [];
       let p = 1;
 
-      // Related fetcher is page-based; use 200 for non-related, and 100 for related if backend caps.
       const chunk = inRelatedMode ? 100 : 200;
 
       let gotMore = true;
@@ -1625,8 +1600,13 @@ async function loadSection() {
 
     // ✅ In related mode, hasMore/total are set by fetchRelatedPage()
     if (!inRelatedMode) {
-      const hasMore = Array.isArray(rows) && rows.length === ps;
-      window.__listState[currentSection].hasMore = hasMore;
+      // ✅ Prefer total-based hasMore when total is known (set by search/include_count)
+      const total = window.__listState[currentSection].total;
+      if (typeof total === 'number' && Number.isFinite(total)) {
+        window.__listState[currentSection].hasMore = (page * ps) < total;
+      } else {
+        window.__listState[currentSection].hasMore = Array.isArray(rows) && rows.length === ps;
+      }
     }
 
     try {
@@ -3109,6 +3089,7 @@ const IdleManager = (() => {
     bound: false,
     warnOpen: false,
     warnToken: null,
+    warnRootId: null,
     _onActivity: null,
     _onVisibility: null,
     _mmThrottleMs: 750,
@@ -3129,26 +3110,38 @@ const IdleManager = (() => {
     state.logoutTimer = 0;
   };
 
-  const _topFrameKind = () => {
-    try {
-      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      return fr && fr.kind ? String(fr.kind) : '';
-    } catch {
-      return '';
-    }
-  };
-
-  const _topFrameIsWarn = () => _topFrameKind() === WARN_KIND;
-
   const _closeWarnModalIfOpen = () => {
     try {
-      // Close ONLY if the warning modal is the top frame. Never touch other modals.
-      if (!_topFrameIsWarn()) return false;
+      // Primary (works even on cold start): close if our modal root element is present
+      if (state.warnRootId && document.getElementById(state.warnRootId)) {
+        const btn = document.getElementById('btnCloseModal');
+        if (btn) btn.click();
+        else if (typeof closeModal === 'function') closeModal();
+        return true;
+      }
 
-      const btn = document.getElementById('btnCloseModal');
-      if (btn) btn.click();
-      else if (typeof closeModal === 'function') closeModal();
-      return true;
+      // Secondary: close if modal DOM is tagged as our kind (also works without __getModalFrame)
+      const modal = document.getElementById('modal');
+      const kind = modal?.dataset?.uicfKind ? String(modal.dataset.uicfKind) : '';
+      if (kind === WARN_KIND) {
+        const btn = document.getElementById('btnCloseModal');
+        if (btn) btn.click();
+        else if (typeof closeModal === 'function') closeModal();
+        return true;
+      }
+
+      // Tertiary: if modal stack introspection exists, close only if top frame kind matches
+      if (typeof window.__getModalFrame === 'function') {
+        const fr = window.__getModalFrame();
+        if (fr && String(fr.kind || '') === WARN_KIND) {
+          const btn = document.getElementById('btnCloseModal');
+          if (btn) btn.click();
+          else if (typeof closeModal === 'function') closeModal();
+          return true;
+        }
+      }
+
+      return false;
     } catch {
       return false;
     }
@@ -3165,7 +3158,6 @@ const IdleManager = (() => {
     const elapsed = now - state.lastActivityMs;
 
     if (elapsed >= idleMs) {
-      // Ensure warning is closed BEFORE logout
       try { _closeWarnModalIfOpen(); } catch {}
       performLogout('inactivity');
       return;
@@ -3191,7 +3183,6 @@ const IdleManager = (() => {
     if (!state.enabled) return;
     if (!SESSION?.accessToken) return;
 
-    // Avoid stacking warning dialogs
     if (state.warnOpen) return;
     state.warnOpen = true;
 
@@ -3204,31 +3195,33 @@ const IdleManager = (() => {
 
       const msg = `You will be signed out in ${mins} minute${mins === 1 ? '' : 's'} due to inactivity.\n\nClick OK to stay signed in.`;
 
-      if (typeof openUiConfirmModal === 'function') {
-        const r = await openUiConfirmModal({
-          kind: WARN_KIND,
-          title: 'Inactivity warning',
-          message: msg,
-          confirm_label: 'OK',
-          hide_cancel: true,
-          confirm_class: 'btn btn-primary',
-          on_open: ({ token }) => { state.warnToken = token || null; }
-        });
+      // ✅ Use UI modal only. Do NOT fallback to window.confirm (it can be suppressed in background tabs).
+      if (typeof openUiConfirmModal !== 'function') return;
 
-        // Only “OK” resets timers.
-        if (r && r.confirmed) bump();
-      } else {
-        let stay = true;
-        try { stay = window.confirm(msg); } catch { stay = true; }
-        if (stay) bump();
-      }
+      const r = await openUiConfirmModal({
+        kind: WARN_KIND,
+        title: 'Inactivity warning',
+        message: msg,
+        confirm_label: 'OK',
+        hide_cancel: true,
+        confirm_class: 'btn btn-primary',
+        on_open: ({ token, rootId }) => {
+          state.warnToken = token || null;
+          state.warnRootId = rootId || null;
+        }
+      });
+
+      // Only “OK” resets timers. Closing the modal does nothing; logout timer continues.
+      if (r && r.confirmed) bump();
     } finally {
       state.warnOpen = false;
       state.warnToken = null;
+      state.warnRootId = null;
     }
   };
 
   const bump = () => {
+    // If a warning is open, user activity should still reset the timers.
     state.lastActivityMs = Date.now();
     _schedule();
   };
@@ -3290,16 +3283,19 @@ const IdleManager = (() => {
     state.lastActivityMs = Date.now();
     state.warnOpen = false;
     state.warnToken = null;
+    state.warnRootId = null;
     _bind();
     _schedule();
   };
 
   const stop = () => {
-    // ✅ Close the inactivity warning modal if it is currently the top modal (and it is ours)
-    // This prevents it lingering after logout and becoming unresponsive on next login.
+    // ✅ Close the inactivity warning modal if it is currently on-screen.
+    // Works even on cold start (no modal-stack introspection required).
     try { _closeWarnModalIfOpen(); } catch {}
 
     state.warnToken = null;
+    state.warnRootId = null;
+
     state.enabled = false;
     state.warnOpen = false;
     _clearTimers();
@@ -3312,7 +3308,6 @@ const IdleManager = (() => {
     bump: () => bump()
   };
 })();
-
 
 async function performLogout(reason){
   try { await apiLogout(); } catch {}
@@ -6116,6 +6111,7 @@ function populateSearchFormFromFilters(filters={}, formSel='#searchForm'){
 // ──────────────────────────────────────────────────────────────────────────────
 // FIX 1: Search route mismatch (contracts now calls /api/contracts with filters)
 // ──────────────────────────────────────────────────────────────────────────────
+
 async function search(section, filters = {}) {
   window.__listState = window.__listState || {};
   const st = (window.__listState[section] ||= {
@@ -6192,9 +6188,16 @@ async function search(section, filters = {}) {
     qs.set('order_dir', String(st.sort.dir || 'asc'));
   }
 
-  // Invoices: request count + totals so footer/paging can be correct
+  // ✅ NEW: include_count for correct paging when paging is active (pageSize != ALL)
+  // Applies to candidates, clients, umbrellas, contracts, invoices.
+  if (pageSize !== 'ALL') {
+    if (section === 'candidates' || section === 'clients' || section === 'umbrellas' || section === 'contracts' || section === 'invoices') {
+      qs.set('include_count', 'true');
+    }
+  }
+
+  // Invoices: request totals too
   if (section === 'invoices') {
-    qs.set('include_count', 'true');
     qs.set('include_totals', 'true');
   }
 
@@ -6214,14 +6217,26 @@ async function search(section, filters = {}) {
 
   // update state
   st.filters = { ...(filters || {}) };
-  const ps = (st.pageSize === 'ALL') ? null : Number(st.pageSize || 50);
-  st.hasMore = (ps != null) ? (Array.isArray(rows) && rows.length === ps) : false;
 
-  // Persist list meta where available
+  const ps = (st.pageSize === 'ALL') ? null : Number(st.pageSize || 50);
+
+  // ✅ Persist list meta where available (count/total) for ALL sections
+  // - For invoices: also persist totals
+  // - For contracts: we still fetch /api/contracts/count below (authoritative)
   try {
-    if (section === 'invoices' && j && typeof j === 'object') {
-      if (typeof j.count === 'number') st.total = Number(j.count);
-      if (j.totals && typeof j.totals === 'object') st.totals = j.totals;
+    if (j && typeof j === 'object') {
+      const cnt =
+        (typeof j.count === 'number') ? Number(j.count) :
+        (typeof j.total === 'number') ? Number(j.total) :
+        null;
+
+      if (cnt != null && Number.isFinite(cnt)) {
+        st.total = cnt;
+      }
+
+      if (section === 'invoices') {
+        if (j.totals && typeof j.totals === 'object') st.totals = j.totals;
+      }
     }
   } catch {}
 
@@ -6233,6 +6248,7 @@ async function search(section, filters = {}) {
       qsCount.delete('page_size');
       qsCount.delete('order_by');
       qsCount.delete('order_dir');
+      qsCount.delete('include_totals'); // irrelevant for count endpoint
 
       const cr = await authFetch(API(`/api/contracts/count?${qsCount.toString()}`));
       const cj = await safeJson(cr);
@@ -6240,6 +6256,13 @@ async function search(section, filters = {}) {
         st.total = Number(cj.count);
       }
     } catch {}
+  }
+
+  // ✅ hasMore: use total when known, otherwise fallback to page-size heuristic
+  if (ps != null && typeof st.total === 'number' && Number.isFinite(st.total)) {
+    st.hasMore = (page * ps) < st.total;
+  } else {
+    st.hasMore = (ps != null) ? (Array.isArray(rows) && rows.length === ps) : false;
   }
 
   return rows;
@@ -8503,17 +8526,90 @@ function getSummaryFingerprint(section){
    - Non-blocking; safe to call repeatedly (dedup by fingerprint)
 */
 // ─────────────────────────────────────────────────────────────────────────────
-async function primeSummaryMembership(section, fingerprint){
+
+async function primeSummaryMembership(section, fingerprint) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
   window.__summaryCache = window.__summaryCache || { candidates:{}, clients:{} };
   const secKey = (section==='candidates'||section==='clients') ? section : null;
   if (!secKey) return;
 
+  const getHeartbeatRevFor = (ent) => {
+    try {
+      const w = (typeof window !== 'undefined') ? window : null;
+      if (!w) return null;
+
+      // ✅ UPDATED: also accept the real runtime heartbeat (__changeHeartbeat)
+      // and read hb.seqs[ent] / hb.lastSeenSeqs[ent] which are the canonical seq maps.
+      const hb =
+        (w.__changesHeartbeat && typeof w.__changesHeartbeat === 'object' ? w.__changesHeartbeat : null) ||
+        (w.__changeHeartbeat && typeof w.__changeHeartbeat === 'object' ? w.__changeHeartbeat : null) ||
+        (w.__changes_heartbeat && typeof w.__changes_heartbeat === 'object' ? w.__changes_heartbeat : null) ||
+        (w.__heartbeat && typeof w.__heartbeat === 'object' ? w.__heartbeat : null) ||
+        (w.__hb && typeof w.__hb === 'object' ? w.__hb : null) ||
+        null;
+
+      if (!hb || typeof hb !== 'object') return null;
+
+      // ✅ Preferred: seqs map (what heartbeat now maintains)
+      const s = hb.seqs;
+      if (s && typeof s === 'object' && s[ent] != null) return s[ent];
+
+      // ✅ Back-compat: lastSeenSeqs map (older/newer heartbeat implementations)
+      const ls = hb.lastSeenSeqs;
+      if (ls && typeof ls === 'object' && ls[ent] != null) return ls[ent];
+
+      // Back-compat: older shapes
+      const a = hb.revByEntity;
+      if (a && typeof a === 'object' && a[ent] != null) return a[ent];
+
+      const b = hb.revs;
+      if (b && typeof b === 'object' && b[ent] != null) return b[ent];
+
+      const c = hb.entities;
+      if (c && typeof c === 'object' && c[ent] && typeof c[ent] === 'object') {
+        if (c[ent].rev != null) return c[ent].rev;
+        if (c[ent].version != null) return c[ent].version;
+        if (c[ent].ts != null) return c[ent].ts;
+      }
+
+      // Back-compat: direct scalar at hb[ent]
+      if (hb[ent] != null && (typeof hb[ent] === 'string' || typeof hb[ent] === 'number')) return hb[ent];
+
+      // Back-compat: dirty markers
+      const dirty = hb.dirty || hb.changed || hb.changedEntities || null;
+      if (dirty && typeof dirty === 'object' && dirty[ent] === true) return '__DIRTY__';
+
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const hbRevNow = getHeartbeatRevFor(secKey);
+
   const cache = window.__summaryCache[secKey] ||= {};
   const existing = cache[fingerprint];
+
+  // If there is an inflight prime, don't start another
   if (existing && existing._inflight) return;
-  if (existing && Array.isArray(existing.ids) && existing.ids.length) return;
+
+  // Heartbeat invalidation: if hb changed since this membership was built, mark stale
+  try {
+    if (existing && hbRevNow != null && existing.hb_rev != null) {
+      if (String(existing.hb_rev) !== String(hbRevNow)) {
+        existing.stale = true;
+      }
+    } else if (existing && hbRevNow != null && existing.hb_rev == null) {
+      // We have heartbeat but entry didn't record it; treat as stale once
+      existing.stale = true;
+    }
+  } catch {}
+
+  // TTL invalidation (keep)
   if (existing && existing.updatedAt && (Date.now() - existing.updatedAt > 60_000)) existing.stale = true;
+
+  // If we have ids and not stale, keep existing
+  if (existing && Array.isArray(existing.ids) && existing.ids.length && !existing.stale) return;
 
   cache[fingerprint] = cache[fingerprint] || {};
   cache[fingerprint]._inflight = true;
@@ -8532,29 +8628,95 @@ async function primeSummaryMembership(section, fingerprint){
       total: Number(json?.total || ids.length || 0),
       updatedAt: Date.now(),
       stale: false,
+      hb_rev: (hbRevNow != null ? hbRevNow : null)
     };
-    if (LOGC) console.log('[SUMMARY][primeMembership]', { section: secKey, total: ids.length });
+    if (LOGC) console.log('[SUMMARY][primeMembership]', { section: secKey, total: ids.length, hbRev: cache[fingerprint].hb_rev });
   } catch (e) {
-    cache[fingerprint] = { ids: [], total: 0, updatedAt: Date.now(), stale: true };
+    cache[fingerprint] = { ids: [], total: 0, updatedAt: Date.now(), stale: true, hb_rev: (hbRevNow != null ? hbRevNow : null) };
     if (LOGC) console.warn('[SUMMARY][primeMembership] failed', e);
   } finally {
     if (cache[fingerprint]) delete cache[fingerprint]._inflight;
   }
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 // NEW: getSummaryMembership(section, fingerprint)
 // Returns { ids, total, updatedAt, stale } or a stub if missing
 // ─────────────────────────────────────────────────────────────────────────────
-function getSummaryMembership(section, fingerprint){
+
+function getSummaryMembership(section, fingerprint) {
   window.__summaryCache = window.__summaryCache || { candidates:{}, clients:{} };
   const secKey = (section==='candidates'||section==='clients') ? section : null;
   if (!secKey) return { ids: [], total: 0, updatedAt: 0, stale: true };
-  const ent = window.__summaryCache[secKey] || {};
-  const res = ent[fingerprint] || { ids: [], total: 0, updatedAt: 0, stale: true };
-  return { ids: Array.isArray(res.ids) ? res.ids : [], total: Number(res.total||0), updatedAt: Number(res.updatedAt||0), stale: !!res.stale };
-}
 
+  const getHeartbeatRevFor = (ent) => {
+    try {
+      const w = (typeof window !== 'undefined') ? window : null;
+      if (!w) return null;
+
+      // ✅ UPDATED: include the runtime heartbeat (__changeHeartbeat) and read seq maps
+      const hb =
+        ((w.__changesHeartbeat && typeof w.__changesHeartbeat === 'object') ? w.__changesHeartbeat : null) ||
+        ((w.__changeHeartbeat && typeof w.__changeHeartbeat === 'object') ? w.__changeHeartbeat : null) ||
+        ((w.__changes_heartbeat && typeof w.__changes_heartbeat === 'object') ? w.__changes_heartbeat : null) ||
+        ((w.__heartbeat && typeof w.__heartbeat === 'object') ? w.__heartbeat : null) ||
+        ((w.__hb && typeof w.__hb === 'object') ? w.__hb : null) ||
+        null;
+
+      if (!hb || typeof hb !== 'object') return null;
+
+      // ✅ Preferred: canonical sequence maps
+      const s = hb.seqs;
+      if (s && typeof s === 'object' && s[ent] != null) return s[ent];
+
+      const ls = hb.lastSeenSeqs;
+      if (ls && typeof ls === 'object' && ls[ent] != null) return ls[ent];
+
+      // Back-compat: older shapes
+      const a = hb.revByEntity;
+      if (a && typeof a === 'object' && a[ent] != null) return a[ent];
+
+      const b = hb.revs;
+      if (b && typeof b === 'object' && b[ent] != null) return b[ent];
+
+      const c = hb.entities;
+      if (c && typeof c === 'object' && c[ent] && typeof c[ent] === 'object') {
+        if (c[ent].rev != null) return c[ent].rev;
+        if (c[ent].version != null) return c[ent].version;
+        if (c[ent].ts != null) return c[ent].ts;
+      }
+
+      if (hb[ent] != null && (typeof hb[ent] === 'string' || typeof hb[ent] === 'number')) return hb[ent];
+
+      const dirty = hb.dirty || hb.changed || hb.changedEntities || null;
+      if (dirty && typeof dirty === 'object' && dirty[ent] === true) return '__DIRTY__';
+
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const ent = window.__summaryCache[secKey] || {};
+  const res = ent[fingerprint] || { ids: [], total: 0, updatedAt: 0, stale: true, hb_rev: null };
+
+  let stale = !!res.stale;
+
+  // Heartbeat invalidation: if hb changed since membership was built, treat as stale
+  try {
+    const hbRevNow = getHeartbeatRevFor(secKey);
+    if (hbRevNow != null) {
+      if (res.hb_rev == null) stale = true;
+      else if (String(res.hb_rev) !== String(hbRevNow)) stale = true;
+    }
+  } catch {}
+
+  return {
+    ids: Array.isArray(res.ids) ? res.ids : [],
+    total: Number(res.total||0),
+    updatedAt: Number(res.updatedAt||0),
+    stale
+  };
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // NEW: buildSummaryFilterQSForIdList(section, filters)
 // Converts current summary filters to QS for id-list endpoints.
@@ -11058,12 +11220,71 @@ async function postHrWeeklyQrReissueBatch(timesheetIds) {
 // - Ensures dataset snapshot is loaded, then applies pending deltas.
 // - Safe to call before opening a picker.
 // ─────────────────────────────────────────────────────────────────────────────
-
-async function ensurePickerDatasetPrimed(entity){
+async function ensurePickerDatasetPrimed(entity, options) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
+
   window.__pickerData = window.__pickerData || { candidates:{ since:null, itemsById:{} }, clients:{ since:null, itemsById:{} } };
   const ds = window.__pickerData[entity] ||= { since:null, itemsById:{} };
 
+  const opts = (options && typeof options === 'object') ? options : {};
+  const forceDelta = !!opts.forceDelta;
+  const forceDeltaIfChanged = !!opts.forceDeltaIfChanged;
+
+  // Fallback TTL when forceDeltaIfChanged=true but heartbeat is unavailable
+  // (prevents "never delta" on cold start / when heartbeat endpoint not yet deployed).
+  const fallbackStaleAfterMs = Math.max(1_000, Number.isFinite(Number(opts.fallbackStaleAfterMs)) ? Number(opts.fallbackStaleAfterMs) : 30_000);
+
+  const getHeartbeatRevFor = (ent) => {
+    try {
+      const w = (typeof window !== 'undefined') ? window : null;
+      if (!w) return null;
+
+      // ✅ UPDATED: include the runtime heartbeat (__changeHeartbeat) and read seq maps
+      const hb =
+        ((w.__changesHeartbeat && typeof w.__changesHeartbeat === 'object') ? w.__changesHeartbeat : null) ||
+        ((w.__changeHeartbeat && typeof w.__changeHeartbeat === 'object') ? w.__changeHeartbeat : null) ||
+        ((w.__changes_heartbeat && typeof w.__changes_heartbeat === 'object') ? w.__changes_heartbeat : null) ||
+        ((w.__heartbeat && typeof w.__heartbeat === 'object') ? w.__heartbeat : null) ||
+        ((w.__hb && typeof w.__hb === 'object') ? w.__hb : null) ||
+        null;
+
+      if (!hb || typeof hb !== 'object') return null;
+
+      // ✅ Preferred: canonical sequence maps
+      const s = hb.seqs;
+      if (s && typeof s === 'object' && s[ent] != null) return s[ent];
+
+      const ls = hb.lastSeenSeqs;
+      if (ls && typeof ls === 'object' && ls[ent] != null) return ls[ent];
+
+      // Back-compat: older shapes
+      const a = hb.revByEntity;
+      if (a && typeof a === 'object' && a[ent] != null) return a[ent];
+
+      const b = hb.revs;
+      if (b && typeof b === 'object' && b[ent] != null) return b[ent];
+
+      const c = hb.entities;
+      if (c && typeof c === 'object' && c[ent] && typeof c[ent] === 'object') {
+        if (c[ent].rev != null) return c[ent].rev;
+        if (c[ent].version != null) return c[ent].version;
+        if (c[ent].ts != null) return c[ent].ts;
+      }
+
+      if (hb[ent] != null && (typeof hb[ent] === 'string' || typeof hb[ent] === 'number')) return hb[ent];
+
+      const dirty = hb.dirty || hb.changed || hb.changedEntities || null;
+      if (dirty && typeof dirty === 'object' && dirty[ent] === true) return '__DIRTY__';
+
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const hbRevNow = getHeartbeatRevFor(entity);
+
+  // 1) Snapshot (once)
   if (!ds._initStarted) {
     ds._initStarted = true;
     try {
@@ -11074,32 +11295,77 @@ async function ensurePickerDatasetPrimed(entity){
       const arr = Array.isArray(json?.items) ? json.items : [];
       for (const it of arr) ds.itemsById[String(it.id)] = it;
       ds.since = json?.since ?? ds.since ?? null;
-      if (LOGC) console.log('[PICKER][dataset snapshot]', { entity, count: arr.length, since: ds.since });
+      ds._snapshotAt = Date.now();
+
+      // Track heartbeat watermark (if available) as "fresh as of snapshot"
+      if (hbRevNow != null) ds._hbRev = hbRevNow;
+
+      if (LOGC) console.log('[PICKER][dataset snapshot]', { entity, count: arr.length, since: ds.since, hbRev: ds._hbRev ?? null });
     } catch (e) {
       if (LOGC) console.warn('[PICKER][dataset snapshot] failed', e);
     }
   }
 
-  try {
-    if (ds.since != null) {
-      const url  = API(`/api/pickers/${entity}/delta?since=${encodeURIComponent(ds.since)}`);
-      const resp = await authFetch(url);
-      if (resp && resp.ok) {
-        const json = await resp.json();
-        applyDatasetDelta(entity, json);
-        if (LOGC) console.log('[PICKER][dataset delta]', { entity, added: json?.added?.length||0, updated: json?.updated?.length||0, removed: json?.removed?.length||0, since: json?.since });
+  // 2) Delta (only when needed)
+  const shouldDelta = (() => {
+    if (forceDelta) return true;
+
+    if (forceDeltaIfChanged) {
+      // ✅ SAFE FALLBACK:
+      // If heartbeat is unavailable, don't "never delta".
+      // Instead: delta if we haven't deltasynced recently (or ever).
+      if (hbRevNow == null) {
+        const last = Number(ds._deltaAt || 0);
+        if (!last) return true; // never deltasynced → do it now
+        return (Date.now() - last) > fallbackStaleAfterMs;
       }
+
+      // Heartbeat present: delta when changed
+      if (ds._hbRev == null) return true; // we have a signal but no stored watermark
+      return String(hbRevNow) !== String(ds._hbRev);
+    }
+
+    // Default behavior: keep existing safety (delta each call) but avoid stampede
+    // (This preserves prior semantics for callers that don't pass options.)
+    return true;
+  })();
+
+  try {
+    if (!shouldDelta) return;
+
+    if (ds.since == null) return;
+
+    // Avoid concurrent delta pulls for the same dataset
+    if (ds._deltaInflight) return;
+    ds._deltaInflight = true;
+
+    const url  = API(`/api/pickers/${entity}/delta?since=${encodeURIComponent(ds.since)}`);
+    const resp = await authFetch(url);
+    if (resp && resp.ok) {
+      const json = await resp.json();
+      applyDatasetDelta(entity, json);
+      ds._deltaAt = Date.now();
+
+      // Advance hb watermark if present
+      if (hbRevNow != null) ds._hbRev = hbRevNow;
+
+      if (LOGC) console.log('[PICKER][dataset delta]', {
+        entity,
+        added: json?.added?.length||0,
+        updated: json?.updated?.length||0,
+        removed: json?.removed?.length||0,
+        since: json?.since,
+        hbRev: ds._hbRev ?? null
+      });
     }
   } catch (e) {
     if (LOGC) console.warn('[PICKER][dataset delta] failed', e);
+  } finally {
+    ds._deltaInflight = false;
   }
 }
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NEW: applyDatasetDelta(entity, delta)  // { added:[], updated:[], removed:[], since }
-// ─────────────────────────────────────────────────────────────────────────────
-function applyDatasetDelta(entity, delta){
+function applyDatasetDelta(entity, delta) {
   window.__pickerData = window.__pickerData || { candidates:{ since:null, itemsById:{} }, clients:{ since:null, itemsById:{} } };
   const ds = window.__pickerData[entity] ||= { since:null, itemsById:{} };
   ds.itemsById = ds.itemsById || {};
@@ -11122,7 +11388,14 @@ function applyDatasetDelta(entity, delta){
 
   // advance since watermark
   if (delta?.since != null) ds.since = delta.since;
+
+  // bookkeeping
+  ds._lastAppliedAt = Date.now();
 }
+
+
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // NEW: pickersLocalFilterAndSort(entity, ids, query, sortKey, sortDir)
 // Uses dataset cache rows restricted to {ids}, filters locally and sorts.
@@ -11425,828 +11698,6 @@ async function contractWeekCreateAdditional(week_id) {
 
 
 
-
-
-async function openCandidatePicker(onPick, options) {
-  const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true; // default ON
-  const ctx  = options && options.context ? options.context : null;
-
-  // ✅ NEW options
-  const ignoreMembership = !!(options && options.ignoreMembership);
-  const seedHintRaw      = (options && options.seed_hint && typeof options.seed_hint === 'object' && !Array.isArray(options.seed_hint))
-    ? options.seed_hint
-    : null;
-
-  if (LOGC) console.log('[PICKER][candidates] ensure dataset primed → start');
-  await ensurePickerDatasetPrimed('candidates').catch(e => {
-    if (LOGC) console.warn('[PICKER][candidates] priming failed', e);
-  });
-
-  let fp  = getSummaryFingerprint('candidates');
-  let mem = getSummaryMembership('candidates', fp);
-
-  // Keep existing behaviour by default; allow caller to ignore membership (timesheet resolve)
-  if (!ignoreMembership) {
-    if (!mem?.ids?.length || mem?.stale) {
-      if (LOGC) console.log('[PICKER][candidates] membership empty/stale → priming', { fp, mem });
-      await primeSummaryMembership('candidates', fp);
-      fp  = getSummaryFingerprint('candidates');
-      mem = getSummaryMembership('candidates', fp);
-    }
-  }
-
-  const ds    = (window.__pickerData ||= {}).candidates || { since: null, itemsById: {} };
-  const items = ds.itemsById || {};
-
-  // ✅ NEW: ignore membership if requested
-  const baseIds  = (!ignoreMembership && (mem?.ids && mem.ids.length)) ? mem.ids : Object.keys(items);
-  const baseRows = baseIds.map(id => items[id]).filter(Boolean);
-
-  // ✅ NEW: suggested rows based on hint (best matches shown immediately)
-  const norm = (s) => String(s || '').trim().toLowerCase();
-  const alnum = (s) => norm(s).replace(/[^a-z0-9]+/g, '');
-
-  const hint = (() => {
-    if (!seedHintRaw) return null;
-    return {
-      email: norm(seedHintRaw.email || ''),
-      first: norm(seedHintRaw.first_name || seedHintRaw.firstname || ''),
-      sur:   norm(seedHintRaw.surname || seedHintRaw.last_name || seedHintRaw.lastname || ''),
-      disp:  norm(seedHintRaw.display_name || ''),
-      disp2: alnum(seedHintRaw.display_name || '')
-    };
-  })();
-
-  const scoreCandidate = (r) => {
-    if (!hint) return 0;
-
-    const cEmail = norm(r.email || '');
-    const cFirst = norm(r.first_name || '');
-    const cLast  = norm(r.last_name || '');
-    const cDisp  = norm(r.display_name || `${r.first_name || ''} ${r.last_name || ''}`);
-    const cDisp2 = alnum(r.display_name || `${r.first_name || ''} ${r.last_name || ''}`);
-
-    let score = 0;
-
-    // Email is the strongest signal
-    if (hint.email && cEmail) {
-      if (cEmail === hint.email) score += 120;
-      else if (cEmail.includes(hint.email)) score += 60;
-    }
-
-    // Surname
-    if (hint.sur && cLast) {
-      if (cLast === hint.sur) score += 50;
-      else if (cLast.startsWith(hint.sur)) score += 30;
-      else if (cLast.includes(hint.sur)) score += 15;
-    }
-
-    // First name
-    if (hint.first && cFirst) {
-      if (cFirst === hint.first) score += 25;
-      else if (cFirst.startsWith(hint.first)) score += 15;
-      else if (cFirst.includes(hint.first)) score += 8;
-    }
-
-    // Display name / combined
-    if (hint.disp && cDisp.includes(hint.disp)) score += 12;
-    if (hint.disp2 && cDisp2 && cDisp2 === hint.disp2) score += 25;
-
-    // Bonus if both first+surname appear in display
-    if (hint.first && hint.sur && cDisp) {
-      if (cDisp.includes(hint.first) && cDisp.includes(hint.sur)) score += 18;
-    }
-
-    return score;
-  };
-
-  const suggestedRows = (() => {
-    if (!hint) return [];
-    const scored = baseRows
-      .map(r => ({ r, s: scoreCandidate(r) }))
-      .filter(x => x.s > 0)
-      .sort((a, b) =>
-        (b.s - a.s) ||
-        String(a.r.last_name||'').localeCompare(String(b.r.last_name||'')) ||
-        String(a.r.first_name||'').localeCompare(String(b.r.first_name||''))
-      );
-    return scored.slice(0, 20).map(x => x.r);
-  })();
-
-  const initialRows = (suggestedRows && suggestedRows.length) ? suggestedRows : baseRows;
-
-  if (LOGC) console.log('[PICKER][candidates] dataset snapshot', {
-    fingerprint: fp,
-    total: mem?.total,
-    ids: baseIds.length,
-    stale: !!mem?.stale,
-    since: ds?.since,
-    rowsBase: baseRows.length,
-    missingItems: baseIds.length - baseRows.length,
-    ignoreMembership,
-    suggestedCount: suggestedRows.length
-  });
-
-  const renderRows = (rows) => rows.map(r => {
-    const first = r.first_name || '';
-    const last  = r.last_name || '';
-    const label = (r.display_name || `${first} ${last}`).trim() || (r.tms_ref || r.id || '');
-    return `
-      <tr data-id="${r.id||''}" data-label="${(label||'').replace(/"/g,'&quot;')}" class="pick-row">
-        <td data-k="last_name">${(last)}</td>
-        <td data-k="first_name">${(first)}</td>
-        <td data-k="roles_display" class="mini">${(r.roles_display||'')}</td>
-        <td data-k="email" class="mini">${(r.email||'')}</td>
-      </tr>`;
-  }).join('');
-
-  // Context block above the search (which shift we’re resolving)
-  let ctxHtml = '';
-  if (ctx) {
-    const staff    = ctx.staffName || '';
-    const unit     = ctx.unit || ctx.hospital || '';
-    const ymd      = ctx.dateYmd || '';
-    const nice     = ctx.dateNice || (typeof formatYmdToNiceDate === 'function' ? formatYmdToNiceDate(ymd) : ymd);
-    const importId = ctx.importId || '';
-
-    ctxHtml = `
-      <div class="row">
-        <label>Resolving</label>
-        <div class="controls">
-          <div class="mini">
-            Candidate: <span class="mono">${escapeHtml ? escapeHtml(staff) : staff}</span><br/>
-            Unit / Site: <span class="mono">${escapeHtml ? escapeHtml(unit) : unit}</span><br/>
-            Date: <span class="mono">${escapeHtml ? escapeHtml(nice || '—') : (nice || '—')}</span><br/>
-            Import ID: <span class="mono">${escapeHtml ? escapeHtml(importId || '—') : (importId || '—')}</span>
-          </div>
-        </div>
-      </div>`;
-  }
-
-  const hintLine = (() => {
-    if (ignoreMembership) return `Showing candidates from the full dataset${baseRows.length ? ` (${baseRows.length})` : ''}.`;
-    return `Showing candidates from the current summary list${mem?.total ? ` (${mem.total} total)` : ''}.`;
-  })();
-
-  const hintLine2 = (suggestedRows && suggestedRows.length)
-    ? `<div class="hint mini" style="margin-top:6px;">Suggested matches shown (top ${suggestedRows.length}). Type to search all candidates.</div>`
-    : '';
-
-  const html = `
-    <div class="tabc">
-      ${ctxHtml}
-      <div class="row">
-        <label>Search</label>
-        <div class="controls">
-          <input class="input" type="text" id="pickerSearch"
-                 placeholder="${mem?.stale ? 'Priming list… type to narrow' : 'Type a first name, surname, role or email…'}"/>
-        </div>
-      </div>
-      <div class="hint">
-        ${hintLine}
-      </div>
-      ${hintLine2}
-      <div class="picker-table-wrap">
-        <table class="grid" id="pickerTable">
-          <thead>
-            <tr>
-              <th data-sort="last_name">Surname</th>
-              <th data-sort="first_name">First name</th>
-              <th data-sort="roles_display">Role</th>
-              <th data-sort="email">Email</th>
-            </tr>
-          </thead>
-          <tbody id="pickerTBody">${renderRows(initialRows)}</tbody>
-        </table>
-      </div>
-    </div>`;
-
-  let selectedId     = null;
-  let selectedLabel  = '';
-  let applySelection = null;
-
-  const renderTab = () => html;
-
-  const onSave = async () => {
-    if (typeof applySelection !== 'function') {
-      if (LOGC) console.warn('[PICKER][candidates] onSave called before wiring');
-      return false;
-    }
-    return await applySelection(true);
-  };
-
-  if (LOGC) console.log('[PICKER][candidates] opening modal');
-  showModal(
-    'Pick Candidate',
-    [{ key: 'p', title: 'Candidates' }],
-    renderTab,
-    onSave,
-    false,
-    () => {
-      const tbody  = document.getElementById('pickerTBody');
-      const search = document.getElementById('pickerSearch');
-      const table  = document.getElementById('pickerTable');
-      if (LOGC) console.log('[PICKER][candidates] onReturn', { hasTBody: !!tbody, hasSearch: !!search, hasTable: !!table });
-      if (!tbody || !search || !table) return;
-
-      let sortKey     = 'last_name';
-      let sortDir     = 'asc';
-      let currentRows = initialRows.slice();
-
-      const frame = window.__getModalFrame?.();
-      if (frame && frame.kind === 'candidate-picker') {
-        frame._pickerHasSelection = false;
-        frame._updateButtons && frame._updateButtons();
-      }
-
-      const applyRows = (rows) => {
-        tbody.innerHTML = renderRows(rows);
-        if (selectedId) {
-          const match = tbody.querySelector(`tr[data-id="${selectedId}"]`);
-          if (match) match.classList.add('active');
-        }
-        if (LOGC) console.log('[PICKER][candidates] render()', {
-          count: rows.length,
-          sample: rows.slice(0, 6).map(r => r.display_name || `${r.first_name} ${r.last_name}`)
-        });
-      };
-
-      // Always filter from the full baseRows (NOT initialRows)
-      const doFilter = (q) => {
-        const fn  = (window.pickersLocalFilterAndSort || pickersLocalFilterAndSort);
-        const out = fn('candidates', baseRows, q, sortKey, sortDir);
-        if (LOGC) console.log('[PICKER][candidates] doFilter()', {
-          q,
-          in: baseRows.length,
-          out: out.length
-        });
-        currentRows = out;
-        return out;
-      };
-
-      const setActiveRow = (tr) => {
-        const all = tbody.querySelectorAll('tr[data-id]');
-        all.forEach(r => r.classList.remove('active'));
-        if (!tr) {
-          selectedId = null;
-          selectedLabel = '';
-        } else {
-          tr.classList.add('active');
-          selectedId    = tr.getAttribute('data-id');
-          selectedLabel = tr.getAttribute('data-label') || tr.textContent.trim();
-        }
-
-        const fr = window.__getModalFrame?.();
-        if (fr && fr.kind === 'candidate-picker') {
-          fr._pickerHasSelection = !!selectedId;
-          fr._updateButtons && fr._updateButtons();
-        }
-      };
-
-      applySelection = async (_triggerClose) => {
-        if (!selectedId) {
-          alert('Please select a candidate first.');
-          return false;
-        }
-        if (LOGC) console.log('[PICKER][candidates] applySelection()', { selectedId, selectedLabel });
-        try {
-          await revalidateCandidateOnPick(selectedId);
-          if (typeof onPick === 'function') {
-            await onPick({ id: selectedId, label: selectedLabel });
-          }
-        } catch (err) {
-          console.warn('[PICKER][candidates] selection validation failed', err);
-          alert(err?.message || 'Selection could not be validated.');
-          return false;
-        }
-        return true;
-      };
-
-      if (!tbody.__wiredClick) {
-        tbody.__wiredClick = true;
-        tbody.addEventListener('click', (e) => {
-          const tr = e.target && e.target.closest('tr[data-id]');
-          if (!tr) return;
-          setActiveRow(tr);
-        });
-        tbody.addEventListener('dblclick', async (e) => {
-          const tr = e.target && e.target.closest('tr[data-id]');
-          if (!tr) return;
-          setActiveRow(tr);
-          const btnSave = document.getElementById('btnSave');
-          if (btnSave && !btnSave.disabled) btnSave.click();
-        });
-        if (LOGC) console.log('[PICKER][candidates] wired click + dblclick handler');
-      }
-
-      // ✅ FIX #1: sort should work even when search box is empty (sort currentRows = suggestions)
-      if (!table.__wiredSort) {
-        table.__wiredSort = true;
-        table.querySelector('thead').addEventListener('click', (e) => {
-          const th = e.target && e.target.closest('th[data-sort]');
-          if (!th) return;
-
-          const key = th.getAttribute('data-sort');
-          sortDir = (sortKey === key && sortDir === 'asc') ? 'desc' : 'asc';
-          sortKey = key;
-
-          const q = search.value.trim();
-
-          if (q) {
-            // Normal: filter+sort full set
-            currentRows = doFilter(q);
-            applyRows(currentRows);
-            if (LOGC) console.log('[PICKER][candidates] sort (filtered)', { sortKey, sortDir, count: currentRows.length });
-            return;
-          }
-
-          // Search empty: re-sort current visible set (suggestions / initial list)
-          const dir = (sortDir === 'desc') ? -1 : 1;
-          currentRows = (currentRows || []).slice().sort((a, b) => {
-            const av = String((a && a[sortKey]) ?? '').toLowerCase();
-            const bv = String((b && b[sortKey]) ?? '').toLowerCase();
-            if (av < bv) return -1 * dir;
-            if (av > bv) return  1 * dir;
-            return 0;
-          });
-          applyRows(currentRows);
-
-          if (LOGC) console.log('[PICKER][candidates] sort (currentRows)', { sortKey, sortDir, count: currentRows.length });
-        });
-        if (LOGC) console.log('[PICKER][candidates] wired sort header');
-      }
-
-      let t = 0;
-      if (!search.__wiredInput) {
-        search.__wiredInput = true;
-        search.addEventListener('input', () => {
-          const q = search.value.trim();
-          if (LOGC) console.log('[PICKER][candidates] search input', { q });
-          if (t) clearTimeout(t);
-          t = setTimeout(() => {
-            // If cleared, show suggested rows again (if any)
-            currentRows = q ? doFilter(q) : initialRows.slice();
-            applyRows(currentRows);
-            setActiveRow(null);
-          }, 150);
-        });
-        if (LOGC) console.log('[PICKER][candidates] wired search input');
-      }
-
-      if (!search.__wiredKey) {
-        search.__wiredKey = true;
-        search.addEventListener('keydown', (e) => {
-          const itemsEls = Array.from(tbody.querySelectorAll('tr[data-id]'));
-          if (!itemsEls.length) {
-            if (e.key === 'Escape') {
-              const closeBtn = document.getElementById('btnCloseModal');
-              if (closeBtn) closeBtn.click();
-            }
-            return;
-          }
-          const idx = itemsEls.findIndex(tr => tr.classList.contains('active'));
-          const setActiveIdx = (i) => {
-            const safe = Math.max(0, Math.min(i, itemsEls.length - 1));
-            setActiveRow(itemsEls[safe]);
-            itemsEls[safe].scrollIntoView({ block: 'nearest' });
-          };
-
-          if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            setActiveIdx(idx < 0 ? 0 : idx + 1);
-          }
-          if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            setActiveIdx(idx < 0 ? 0 : idx - 1);
-          }
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            const target = itemsEls[Math.max(idx, 0)];
-            if (target) {
-              setActiveRow(target);
-              const btnSave = document.getElementById('btnSave');
-              if (btnSave && !btnSave.disabled) btnSave.click();
-            }
-          }
-          if (e.key === 'Escape') {
-            e.preventDefault();
-            const closeBtn = document.getElementById('btnCloseModal');
-            if (closeBtn) closeBtn.click();
-          }
-        });
-        if (LOGC) console.log('[PICKER][candidates] wired search keydown');
-      }
-
-      // If we’re in seed mode, ensure the suggested rows are applied once after wiring
-      try {
-        if (suggestedRows && suggestedRows.length) {
-          applyRows(currentRows);
-        }
-      } catch {}
-
-      setTimeout(() => {
-        try {
-          search.focus();
-          if (LOGC) console.log('[PICKER][candidates] search focused');
-        } catch {}
-      }, 0);
-    },
-    { kind: 'candidate-picker', noParentGate: true }
-  );
-
-  // Post-render kick: ensure the picker's onReturn wiring runs once on first open
-  setTimeout(() => {
-    try {
-      const fr = window.__getModalFrame?.();
-      const willCall = !!(fr && fr.kind === 'candidate-picker' && typeof fr.onReturn === 'function' && !fr.__pickerInit);
-      if (LOGC) console.log('[PICKER][candidates] post-render kick', {
-        hasFrame: !!fr,
-        kind: fr?.kind,
-        hasOnReturn: typeof fr?.onReturn === 'function',
-        already: !!fr?.__pickerInit,
-        willCall
-      });
-      if (willCall) {
-        fr.__pickerInit = true;
-        fr.onReturn();
-        if (LOGC) console.log('[PICKER][candidates] initial onReturn() executed');
-      }
-    } catch (e) {
-      if (LOGC) console.warn('[PICKER][candidates] post-render kick failed', e);
-    }
-  }, 0);
-}
-
-async function openClientPicker(onPick, opts) {
-  const LOGC       = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true; // default ON
-  const nhspOnly   = !!(opts && opts.nhspOnly);
-  const hrAutoOnly = !!(opts && opts.hrAutoOnly);
-  const ctx        = opts && opts.context ? opts.context : null;
-
-  // ✅ NEW options
-  const ignoreMembership = !!(opts && opts.ignoreMembership);
-  const seedQueryRaw     = (opts && typeof opts.seed_query === 'string') ? String(opts.seed_query).trim() : '';
-  const seedQuery        = seedQueryRaw;
-
-  if (LOGC) console.log('[PICKER][clients] ensure dataset primed → start');
-  await ensurePickerDatasetPrimed('clients').catch(e => {
-    if (LOGC) console.warn('[PICKER][clients] priming failed', e);
-  });
-
-  let fp  = getSummaryFingerprint('clients');
-  let mem = getSummaryMembership('clients', fp);
-
-  if (!ignoreMembership) {
-    if (!mem?.ids?.length || mem?.stale) {
-      if (LOGC) console.log('[PICKER][clients] membership empty/stale → priming', { fp, mem });
-      await primeSummaryMembership('clients', fp);
-      fp  = getSummaryFingerprint('clients');
-      mem = getSummaryMembership('clients', fp);
-    }
-  }
-
-  const ds    = (window.__pickerData ||= {}).clients || { since: null, itemsById: {} };
-  const items = ds.itemsById || {};
-
-  // ✅ NEW: ignore membership if requested
-  const baseIds     = (!ignoreMembership && (mem?.ids && mem.ids.length)) ? mem.ids : Object.keys(items);
-  const baseRowsAll = baseIds.map(id => items[id]).filter(Boolean);
-
-  let baseRows = baseRowsAll;
-  if (nhspOnly) {
-    baseRows = baseRows.filter(r => r && (r.is_nhsp === true || r.is_nhsp === 'true'));
-  }
-  if (hrAutoOnly) {
-    baseRows = baseRows.filter(r => r && (r.autoprocess_hr === true || r.autoprocess_hr === 'true'));
-  }
-
-  if (LOGC) console.log('[PICKER][clients] dataset snapshot', {
-    fingerprint: fp,
-    total: mem?.total,
-    ids: baseIds.length,
-    stale: !!mem?.stale,
-    since: ds?.since,
-    rowsBase: baseRows.length,
-    missingItems: baseIds.length - baseRows.length,
-    nhspOnly,
-    hrAutoOnly,
-    ignoreMembership,
-    seedQuery
-  });
-
-  const renderRows = (rows) => rows.map(r => {
-    const label = (r.name || '').trim();
-    const sub   = (r.primary_invoice_email || '').trim();
-    return `
-      <tr data-id="${r.id||''}" data-label="${(label||'').replace(/"/g,'&quot;')}" class="pick-row">
-        <td data-k="name">${label}</td>
-        <td data-k="primary_invoice_email" class="mini">${sub}</td>
-      </tr>`;
-  }).join('');
-
-  let ctxHtml = '';
-  if (ctx) {
-    const staff   = ctx.staffName || '';
-    const unit    = ctx.unit || ctx.hospital || '';
-    const ymd     = ctx.dateYmd || '';
-    const nice    = ctx.dateNice || (typeof formatYmdToNiceDate === 'function' ? formatYmdToNiceDate(ymd) : ymd);
-    const importId= ctx.importId || '';
-
-    ctxHtml = `
-      <div class="row">
-        <label>Resolving</label>
-        <div class="controls">
-          <div class="mini">
-            Candidate: <span class="mono">${escapeHtml ? escapeHtml(staff) : staff}</span><br/>
-            Unit / Site: <span class="mono">${escapeHtml ? escapeHtml(unit) : unit}</span><br/>
-            Date: <span class="mono">${escapeHtml ? escapeHtml(nice || '—') : (nice || '—')}</span><br/>
-            Import ID: <span class="mono">${escapeHtml ? escapeHtml(importId || '—') : (importId || '—')}</span>
-          </div>
-        </div>
-      </div>`;
-  }
-
-  const hintLine = (() => {
-    if (ignoreMembership) return `Showing clients from the full dataset${baseRows.length ? ` (${baseRows.length})` : ''}.`;
-    return `Showing clients from the current summary list${mem?.total ? ` (${mem.total} total)` : ''}.`;
-  })();
-
-  // ✅ FIX #2: seed_query must be HTML-escaped (attribute-safe)
-  const seedEsc = seedQuery
-    ? ((typeof escapeHtml === 'function')
-        ? String(escapeHtml(seedQuery)).replace(/"/g, '&quot;')
-        : String(seedQuery)
-            .replace(/&/g,'&amp;')
-            .replace(/</g,'&lt;')
-            .replace(/>/g,'&gt;')
-            .replace(/"/g,'&quot;'))
-    : '';
-
-  const html = `
-    <div class="tabc">
-      ${ctxHtml}
-      <div class="row">
-        <label>Search</label>
-        <div class="controls">
-          <input class="input" type="text" id="pickerSearch"
-                 value="${seedEsc}"
-                 placeholder="${mem?.stale ? 'Priming list… type to narrow' : 'Type a client name or email…'}"/>
-        </div>
-      </div>
-      <div class="hint">
-        ${hintLine}
-        ${nhspOnly ? ' (NHSP-only filter)' : ''}${hrAutoOnly ? ' (Auto-process HR only)' : ''}
-        ${seedQuery ? `<span class="mini" style="margin-left:8px;">(prefilled)</span>` : ''}
-      </div>
-      <div class="picker-table-wrap">
-        <table class="grid" id="pickerTable">
-          <thead>
-            <tr>
-              <th data-sort="name">Name</th>
-              <th data-sort="primary_invoice_email">Email</th>
-            </tr>
-          </thead>
-          <tbody id="pickerTBody">${renderRows(baseRows)}</tbody>
-        </table>
-      </div>
-    </div>`;
-
-  let selectedId     = null;
-  let selectedLabel  = '';
-  let applySelection = null;
-
-  const renderTab = () => html;
-
-  const onSave = async () => {
-    if (typeof applySelection !== 'function') {
-      if (LOGC) console.warn('[PICKER][clients] onSave called before wiring');
-      return false;
-    }
-    return await applySelection(true);
-  };
-
-  if (LOGC) console.log('[PICKER][clients] opening modal');
-  showModal(
-    'Pick Client',
-    [{ key: 'p', title: 'Clients' }],
-    renderTab,
-    onSave,
-    false,
-    () => {
-      const tbody  = document.getElementById('pickerTBody');
-      const search = document.getElementById('pickerSearch');
-      const table  = document.getElementById('pickerTable');
-      if (LOGC) console.log('[PICKER][clients] onReturn', { hasTBody: !!tbody, hasSearch: !!search, hasTable: !!table });
-      if (!tbody || !search || !table) return;
-
-      let sortKey     = 'name';
-      let sortDir     = 'asc';
-      let currentRows = baseRows.slice();
-
-      const frame = window.__getModalFrame?.();
-      if (frame && frame.kind === 'client-picker') {
-        frame._pickerHasSelection = false;
-        frame._updateButtons && frame._updateButtons();
-      }
-
-      const applyRows = (rows) => {
-        tbody.innerHTML = renderRows(rows);
-        if (selectedId) {
-          const match = tbody.querySelector(`tr[data-id="${selectedId}"]`);
-          if (match) match.classList.add('active');
-        }
-        if (LOGC) console.log('[PICKER][clients] render()', {
-          count: rows.length,
-          sample: rows.slice(0, 6).map(r => r.name)
-        });
-      };
-
-      // Always filter from full baseRows
-      const doFilter = (q) => {
-        const fn  = (window.pickersLocalFilterAndSort || pickersLocalFilterAndSort);
-        const out = fn('clients', baseRows, q, sortKey, sortDir);
-        if (LOGC) console.log('[PICKER][clients] doFilter()', {
-          q,
-          in: baseRows.length,
-          out: out.length
-        });
-        currentRows = out;
-        return out;
-      };
-
-      // ✅ apply seed query immediately (prefill + filtered list on open)
-      if (seedQuery && !search.__seedApplied) {
-        search.__seedApplied = true;
-        try {
-          search.value = seedQuery;
-          currentRows = doFilter(seedQuery);
-          applyRows(currentRows);
-        } catch {}
-      }
-
-      const setActiveRow = (tr) => {
-        const all = tbody.querySelectorAll('tr[data-id]');
-        all.forEach(r => r.classList.remove('active'));
-        if (!tr) {
-          selectedId = null;
-          selectedLabel = '';
-        } else {
-          tr.classList.add('active');
-          selectedId    = tr.getAttribute('data-id');
-          selectedLabel = tr.getAttribute('data-label') || tr.textContent.trim();
-        }
-
-        const fr = window.__getModalFrame?.();
-        if (fr && fr.kind === 'client-picker') {
-          fr._pickerHasSelection = !!selectedId;
-          fr._updateButtons && fr._updateButtons();
-        }
-      };
-
-      applySelection = async (_triggerClose) => {
-        if (!selectedId) {
-          alert('Please select a client first.');
-          return false;
-        }
-        if (LOGC) console.log('[PICKER][clients] applySelection()', { selectedId, selectedLabel });
-        try {
-          await revalidateClientOnPick(selectedId);
-          if (typeof onPick === 'function') {
-            await onPick({ id: selectedId, label: selectedLabel });
-          }
-        } catch (err) {
-          console.warn('[PICKER][clients] selection validation failed', err);
-          alert(err?.message || 'Selection could not be validated.');
-          return false;
-        }
-        return true;
-      };
-
-      if (!tbody.__wiredClick) {
-        tbody.__wiredClick = true;
-        tbody.addEventListener('click', (e) => {
-          const tr = e.target && e.target.closest('tr[data-id]');
-          if (!tr) return;
-          setActiveRow(tr);
-        });
-        tbody.addEventListener('dblclick', (e) => {
-          const tr = e.target && e.target.closest('tr[data-id]');
-          if (!tr) return;
-          setActiveRow(tr);
-          const btnSave = document.getElementById('btnSave');
-          if (btnSave && !btnSave.disabled) btnSave.click();
-        });
-        if (LOGC) console.log('[PICKER][clients] wired click + dblclick handler');
-      }
-
-      if (!table.__wiredSort) {
-        table.__wiredSort = true;
-        table.querySelector('thead').addEventListener('click', (e) => {
-          const th = e.target && e.target.closest('th[data-sort]');
-          if (!th) return;
-          const key = th.getAttribute('data-sort');
-          sortDir = (sortKey === key && sortDir === 'asc') ? 'desc' : 'asc';
-          sortKey = key;
-          currentRows = doFilter(search.value.trim());
-          applyRows(currentRows);
-          if (LOGC) console.log('[PICKER][clients] sort', { sortKey, sortDir, count: currentRows.length });
-        });
-        if (LOGC) console.log('[PICKER][clients] wired sort header');
-      }
-
-      let t = 0;
-      if (!search.__wiredInput) {
-        search.__wiredInput = true;
-        search.addEventListener('input', () => {
-          const q = search.value.trim();
-          if (LOGC) console.log('[PICKER][clients] search input', { q });
-          if (t) clearTimeout(t);
-          t = setTimeout(() => {
-            currentRows = doFilter(q);
-            applyRows(currentRows);
-            setActiveRow(null);
-          }, 150);
-        });
-        if (LOGC) console.log('[PICKER][clients] wired search input');
-      }
-
-      if (!search.__wiredKey) {
-        search.__wiredKey = true;
-        search.addEventListener('keydown', (e) => {
-          const itemsEls = Array.from(tbody.querySelectorAll('tr[data-id]'));
-          if (!itemsEls.length) {
-            if (e.key === 'Escape') {
-              const closeBtn = document.getElementById('btnCloseModal');
-              if (closeBtn) closeBtn.click();
-            }
-            return;
-          }
-
-          const idx = itemsEls.findIndex(tr => tr.classList.contains('active'));
-          const setActiveIdx = (i) => {
-            const safe = Math.max(0, Math.min(i, itemsEls.length - 1));
-            setActiveRow(itemsEls[safe]);
-            itemsEls[safe].scrollIntoView({ block: 'nearest' });
-          };
-
-          if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            setActiveIdx(idx < 0 ? 0 : idx + 1);
-          }
-          if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            setActiveIdx(idx < 0 ? 0 : idx - 1);
-          }
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            const target = itemsEls[Math.max(idx, 0)];
-            if (target) {
-              setActiveRow(target);
-              const btnSave = document.getElementById('btnSave');
-              if (btnSave && !btnSave.disabled) btnSave.click();
-            }
-          }
-          if (e.key === 'Escape') {
-            e.preventDefault();
-            const closeBtn = document.getElementById('btnCloseModal');
-            if (closeBtn) closeBtn.click();
-          }
-        });
-        if (LOGC) console.log('[PICKER][clients] wired search keydown');
-      }
-
-      setTimeout(() => {
-        try {
-          search.focus();
-          if (LOGC) console.log('[PICKER][clients] search focused');
-        } catch {}
-      }, 0);
-    },
-    { kind: 'client-picker', noParentGate: true }
-  );
-
-  // Post-render kick: ensure the picker's onReturn wiring runs once on first open
-  setTimeout(() => {
-    try {
-      const fr = window.__getModalFrame?.();
-      const willCall = !!(fr && fr.kind === 'client-picker' && typeof fr.onReturn === 'function' && !fr.__pickerInit);
-      if (LOGC) console.log('[PICKER][clients] post-render kick', {
-        hasFrame: !!fr,
-        kind: fr?.kind,
-        hasOnReturn: typeof fr?.onReturn === 'function',
-        already: !!fr?.__pickerInit,
-        willCall
-      });
-      if (willCall) {
-        fr.__pickerInit = true;
-        fr.onReturn();
-        if (LOGC) console.log('[PICKER][clients] initial onReturn() executed');
-      }
-    } catch (e) {
-      if (LOGC) console.warn('[PICKER][clients] post-render kick failed', e);
-    }
-  }, 0);
-}
 
 
 
@@ -14957,7 +14408,6 @@ function openContractCloneAndExtend(contract_id) {
   }, 0);
 }
 
-
 async function openUiConfirmModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -15007,6 +14457,9 @@ async function openUiConfirmModal(opts = {}) {
     let ownerToken = null;
     let watchTimer = 0;
 
+    const hasGetFrame = (typeof window.__getModalFrame === 'function');
+    const hasStack = Array.isArray(window.__modalStack);
+
     const resolveOnce = (confirmed) => {
       if (done) return;
       done = true;
@@ -15015,11 +14468,13 @@ async function openUiConfirmModal(opts = {}) {
     };
 
     const topFrameIsMine = (token) => {
+      // If we can't introspect frames, don't gate clicks — allow buttons to work.
+      if (!hasGetFrame) return true;
       try {
-        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        const fr = window.__getModalFrame();
         return !!(fr && fr.kind === kind && fr._token === token);
       } catch {
-        return false;
+        return true;
       }
     };
 
@@ -15057,11 +14512,16 @@ async function openUiConfirmModal(opts = {}) {
 
     const onHeaderCloseCapture = (ev) => {
       if (done) return;
+
+      // If we can't bind to a specific token, rely on showModal.onDismiss instead.
+      if (!ownerToken || !hasGetFrame) return;
+
       const btn = document.getElementById('btnCloseModal');
       const bound = btn?.dataset?.ownerToken || null;
-      if (!ownerToken || !bound) return;
+      if (!bound) return;
       if (String(bound) !== String(ownerToken)) return;
       if (!topFrameIsMine(ownerToken)) return;
+
       resolveOnce(false);
       // do NOT prevent default; showModal will close it
     };
@@ -15071,15 +14531,30 @@ async function openUiConfirmModal(opts = {}) {
         const body = document.getElementById('modalBody');
         if (body) body.removeEventListener('click', onBodyClick);
       } catch {}
+
       try {
         const closeBtn = document.getElementById('btnCloseModal');
         if (closeBtn) closeBtn.removeEventListener('click', onHeaderCloseCapture, true);
       } catch {}
+
       try { if (watchTimer) clearInterval(watchTimer); } catch {}
       watchTimer = 0;
+
       try {
         const closeBtn = document.getElementById('btnCloseModal');
-        if (closeBtn && closeBtn.dataset && closeBtn.dataset.ownerToken) delete closeBtn.dataset.ownerToken;
+        if (closeBtn && closeBtn.dataset) {
+          if (closeBtn.dataset.ownerToken) delete closeBtn.dataset.ownerToken;
+          if (closeBtn.dataset.uicfKind) delete closeBtn.dataset.uicfKind;
+          if (closeBtn.dataset.uicfRootId) delete closeBtn.dataset.uicfRootId;
+        }
+      } catch {}
+
+      try {
+        const modal = document.getElementById('modal');
+        if (modal && modal.dataset) {
+          if (modal.dataset.uicfKind === String(kind)) delete modal.dataset.uicfKind;
+          if (modal.dataset.uicfRootId === String(rootId)) delete modal.dataset.uicfRootId;
+        }
       } catch {}
     };
 
@@ -15137,44 +14612,65 @@ async function openUiConfirmModal(opts = {}) {
       }
     );
 
-    // Capture token for this frame so we can gate events safely
+    // Mark the modal DOM so we can identify it even before __getModalFrame/__modalStack exist
     try {
-      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      ownerToken = fr && fr.kind === kind ? fr._token : null;
+      const modal = document.getElementById('modal');
+      if (modal && modal.dataset) {
+        modal.dataset.uicfKind = String(kind);
+        modal.dataset.uicfRootId = String(rootId);
+      }
+    } catch {}
+
+    // Capture token for this frame (only if introspection is available)
+    try {
+      if (hasGetFrame) {
+        const fr = window.__getModalFrame();
+        ownerToken = fr && fr.kind === kind ? fr._token : null;
+      } else {
+        ownerToken = null;
+      }
     } catch {
       ownerToken = null;
     }
 
-    // Tag the header Close button so header-close capture can confirm ownership
+    // Tag the header Close button for ownership (best-effort)
     try {
       const closeBtn = document.getElementById('btnCloseModal');
-      if (closeBtn && ownerToken) closeBtn.dataset.ownerToken = String(ownerToken);
+      if (closeBtn && closeBtn.dataset) {
+        closeBtn.dataset.uicfKind = String(kind);
+        closeBtn.dataset.uicfRootId = String(rootId);
+        if (ownerToken) closeBtn.dataset.ownerToken = String(ownerToken);
+      }
     } catch {}
 
-    // Allow caller to learn the token (used by IdleManager to close its warning on logout)
+    // Allow caller to learn identifiers (used by IdleManager to close its warning on logout)
     try {
-      if (typeof opts.on_open === 'function') opts.on_open({ kind, token: ownerToken || null });
+      if (typeof opts.on_open === 'function') opts.on_open({ kind, token: ownerToken || null, rootId });
     } catch {}
 
-    // Wire DOM events (delegated to modalBody; gated by top frame token + kind)
+    // Wire DOM events
     try {
       const body = document.getElementById('modalBody');
       if (body) body.addEventListener('click', onBodyClick);
     } catch {}
 
-    // Ensure closing via the header Close button resolves as Cancel too (no hang)
+    // Ensure closing via the header Close button resolves too (only when we can safely bind ownership)
     try {
       const closeBtn = document.getElementById('btnCloseModal');
-      if (closeBtn) closeBtn.addEventListener('click', onHeaderCloseCapture, true);
+      if (closeBtn && ownerToken && hasGetFrame) closeBtn.addEventListener('click', onHeaderCloseCapture, true);
     } catch {}
 
-    // Safety: if frame is closed by any other route, resolve as Cancel (no hang)
-    watchTimer = setInterval(() => {
-      if (done) return;
-      const stk = window.__modalStack || [];
-      const stillThere = ownerToken && stk.some(fr => fr && fr._token === ownerToken);
-      if (!stillThere) resolveOnce(false);
-    }, 250);
+    // Safety watcher: ONLY enable if we can actually introspect the modal stack and we have a token.
+    // On cold start, __getModalFrame/__modalStack are not yet defined; running this watcher would
+    // incorrectly resolve and detach listeners, leaving an unclickable modal on screen.
+    if (ownerToken && hasGetFrame && hasStack) {
+      watchTimer = setInterval(() => {
+        if (done) return;
+        const stk = window.__modalStack;
+        const stillThere = Array.isArray(stk) && stk.some(fr => fr && fr._token === ownerToken);
+        if (!stillThere) resolveOnce(false);
+      }, 250);
+    }
   });
 }
 
@@ -16479,9 +15975,8 @@ async function openSearchModal(opts = {}) {
   // Section-specific filters
   let inner = '';
   if (currentSection === 'candidates') {
-    let roleOptions = [];
-    try { roleOptions = await loadGlobalRoleOptions(); } catch { roleOptions = []; }
-
+    // ✅ IMPORTANT: do NOT await roles before showing the modal (instant open).
+    // We render a placeholder multi-select and populate it asynchronously onReturn.
     inner = [
       // Basic identity / contact
       row('First name',           inputText('first_name')),
@@ -16500,8 +15995,8 @@ async function openSearchModal(opts = {}) {
 
       // Care Package Role (rota roles)
       row('Care Package Role (any)', `
-        <select name="roles_any" multiple size="6">
-          ${roleOptions.map(r => `<option value="${r}">${r}</option>`).join('')}
+        <select id="rolesAnySelect" name="roles_any" multiple size="6">
+          <option value="" disabled>Loading roles…</option>
         </select>`),
 
       // Job titles
@@ -16816,6 +16311,79 @@ async function openSearchModal(opts = {}) {
         populateSearchFormFromFilters(st.filters || {}, '#searchForm');
       } catch {}
 
+      // ✅ Candidates: populate roles AFTER modal opens (instant modal open)
+      try {
+        if (currentSection === 'candidates') {
+          const selEl = document.getElementById('rolesAnySelect');
+          if (selEl && !selEl.__rolesWiringStarted) {
+            selEl.__rolesWiringStarted = true;
+
+            // Capture desired selection from current filters (so prefill works even if options arrive later)
+            const getDesired = () => {
+              try {
+                const st = (window.__listState && window.__listState['candidates']) ? window.__listState['candidates'] : null;
+                const f  = (st && st.filters && typeof st.filters === 'object') ? st.filters : {};
+                const v  = f.roles_any;
+                if (Array.isArray(v)) return v.map(x => String(x)).filter(Boolean);
+                if (typeof v === 'string') {
+                  const s = v.trim();
+                  if (!s) return [];
+                  // tolerate csv storage
+                  if (s.includes(',')) return s.split(',').map(x => String(x).trim()).filter(Boolean);
+                  return [s];
+                }
+                return [];
+              } catch {
+                return [];
+              }
+            };
+
+            const desiredInitial = getDesired();
+
+            // Defer so DOM is stable
+            Promise.resolve().then(() => Promise.resolve().then(async () => {
+              let roles = [];
+              try {
+                if (typeof loadGlobalRoleOptions === 'function') {
+                  roles = await loadGlobalRoleOptions();
+                }
+              } catch { roles = []; }
+
+              if (!document.getElementById('rolesAnySelect')) return; // modal closed or re-rendered
+
+              const desired = desiredInitial.length ? desiredInitial : getDesired();
+
+              // Preserve any current selection (if user managed to select something after options arrive)
+              const curSel = [];
+              try {
+                Array.from(selEl.selectedOptions || []).forEach(o => {
+                  const v = String(o.value || '').trim();
+                  if (v) curSel.push(v);
+                });
+              } catch {}
+
+              const wantSet = new Set([...(desired || []), ...(curSel || [])].map(s => String(s)));
+
+              // Replace options
+              selEl.innerHTML = (roles || []).map(r => {
+                const v = String(r || '').trim();
+                if (!v) return '';
+                // safe text injection via attribute encoding
+                const vv = v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                return `<option value="${vv}">${vv}</option>`;
+              }).join('');
+
+              // Apply selection
+              try {
+                Array.from(selEl.options || []).forEach(o => {
+                  o.selected = wantSet.has(String(o.value || ''));
+                });
+              } catch {}
+            }));
+          }
+        }
+      } catch {}
+
       // Wire datepickers to *all* DD/MM/YYYY fields (including From/To ranges)
       try {
         if (typeof attachUkDatePicker === 'function') {
@@ -16920,6 +16488,7 @@ function wireAdvancedSearch() {
 // - Keep Search…, add “Saved searches…” shortcut that opens Search modal pre-focused on loading presets
 // -----------------------------
 
+
 function renderTools(){
   const el = byId('toolButtons');
   const canCreate = ['candidates','clients','umbrellas','contracts'].includes(currentSection); // added contracts
@@ -16938,17 +16507,223 @@ function renderTools(){
   addBtn('Search…', () => openSearchModal()); // left toolbar search
 
   // ✅ NEW: Refresh button (forces reload of the current summary view using existing state/filters)
-  addBtn('Refresh', async () => {
+  const btnRefresh = addBtn('Refresh', async () => {
     try {
       const data = await loadSection();
       renderSummary(data);
+
+      // Clear discreet “updates available” marker for this section after successful refresh
+      try {
+        window.__updatesAvailable = window.__updatesAvailable || {};
+        window.__updatesAvailable[currentSection] = false;
+      } catch {}
+      try { renderTools(); } catch {}
     } catch (e) {
       console.error('[TOOLS][REFRESH] failed', e);
       alert(e?.message || 'Refresh failed');
     }
   });
 
+  // ✅ Discreet “updates available” affordance (tiny dot on Refresh)
+  try {
+    const hasUpd = !!(window.__updatesAvailable && window.__updatesAvailable[currentSection]);
+    if (hasUpd && btnRefresh) {
+      const dot = document.createElement('span');
+      dot.textContent = '●';
+      dot.title = 'Updates available';
+      dot.style.cssText = 'margin-left:6px;font-size:10px;opacity:.75;line-height:1;';
+      btnRefresh.appendChild(dot);
+    }
+  } catch {}
+
   if (!canCreate) btnCreate.disabled = true;
+
+  // ── Candidates quick filters box (only when in Candidates summary) ────────────────
+  if (currentSection === 'candidates') {
+    window.__listState = window.__listState || {};
+    const st = (window.__listState['candidates'] ||= {
+      page: 1,
+      pageSize: 50,
+      total: null,
+      hasMore: false,
+      filters: {},
+      sort: { key: null, dir: 'asc' }
+    });
+    const filters = (st.filters && typeof st.filters === 'object') ? st.filters : {};
+    window.__listState['candidates'].filters = filters;
+
+    // Canonicalise current values
+    const curStatus = String(filters.work_status || 'ALL').trim().toUpperCase();
+    const statusSafe = ['ALL','CURRENT','RECENT','NOT'].includes(curStatus) ? curStatus : 'ALL';
+
+    const curMonthsRaw = Number(filters.recent_months);
+    const curMonths = (Number.isFinite(curMonthsRaw) && curMonthsRaw > 0) ? Math.floor(curMonthsRaw) : 1;
+    const presetMonths = (curMonths === 1 || curMonths === 3 || curMonths === 12) ? curMonths : null;
+    const recentPreset = (filters.recent_preset && typeof filters.recent_preset === 'string')
+      ? String(filters.recent_preset).toUpperCase()
+      : (presetMonths ? String(presetMonths) : 'CUSTOM');
+
+    const box = document.createElement('div');
+    box.style.cssText = 'margin-top:10px;padding:8px;border:1px solid var(--line);border-radius:6px;background:#0b152a;';
+    const title = document.createElement('div');
+    title.textContent = 'Candidate Filters';
+    title.className = 'mini';
+    title.style.fontWeight = 'bold';
+    title.style.marginBottom = '6px';
+    box.appendChild(title);
+
+    const mkRow = (labelText, controlEl) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;';
+      const lab = document.createElement('span');
+      lab.className = 'mini';
+      lab.textContent = labelText;
+      row.appendChild(lab);
+      row.appendChild(controlEl);
+      return row;
+    };
+
+    const statusSel = document.createElement('select');
+    statusSel.classList.add('dark-control');
+    [
+      ['ALL','All'],
+      ['CURRENT','Currently Working'],
+      ['RECENT','Recently Working'],
+      ['NOT','Not Working']
+    ].forEach(([v, label]) => {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = label;
+      if (statusSafe === v) o.selected = true;
+      statusSel.appendChild(o);
+    });
+
+    const applyCandidateFilters = async (next) => {
+      const cur = { ...(window.__listState['candidates'].filters || {}) };
+      Object.entries(next || {}).forEach(([k, v]) => {
+        if (v == null) { delete cur[k]; return; }
+        cur[k] = v;
+      });
+      window.__listState['candidates'].filters = cur;
+      window.__listState['candidates'].page = 1;
+
+      const data = await loadSection();
+      renderSummary(data);
+    };
+
+    statusSel.addEventListener('change', async () => {
+      const v = String(statusSel.value || 'ALL').toUpperCase();
+
+      // Always store canonical work_status
+      const patch = { work_status: v };
+
+      if (v !== 'RECENT') {
+        // Remove RECENT-specific keys when not in RECENT mode
+        patch.recent_months = null;
+        patch.recent_preset = null;
+      } else {
+        // Default months when entering RECENT
+        const m = (Number.isFinite(curMonthsRaw) && curMonthsRaw > 0) ? Math.floor(curMonthsRaw) : 1;
+        patch.recent_months = m || 1;
+        patch.recent_preset = (m === 1 || m === 3 || m === 12) ? String(m) : 'CUSTOM';
+      }
+
+      await applyCandidateFilters(patch);
+    });
+
+    box.appendChild(mkRow('Working:', statusSel));
+
+    // RECENT period radios + custom months
+    if (statusSafe === 'RECENT') {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-top:8px;';
+
+      const mkRadio = (value, label) => {
+        const lab = document.createElement('label');
+        lab.className = 'mini';
+        lab.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
+        const r = document.createElement('input');
+        r.type = 'radio';
+        r.name = '__cand_recent_period__';
+        r.value = value;
+        r.checked = (recentPreset === value);
+        lab.appendChild(r);
+        lab.appendChild(document.createTextNode(label));
+        return { lab, r };
+      };
+
+      const r1  = mkRadio('1',      'Past month');
+      const r3  = mkRadio('3',      'Past three months');
+      const r12 = mkRadio('12',     'Past year');
+      const rc  = mkRadio('CUSTOM', 'Custom');
+
+      const customRow = document.createElement('div');
+      customRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-left:20px;';
+      const customLabel = document.createElement('span');
+      customLabel.className = 'mini';
+      customLabel.textContent = 'Months:';
+      const customInp = document.createElement('input');
+      customInp.type = 'number';
+      customInp.min = '1';
+      customInp.step = '1';
+      customInp.classList.add('dark-control');
+      customInp.style.width = '90px';
+      customInp.value = String(presetMonths ? presetMonths : curMonths);
+      customRow.appendChild(customLabel);
+      customRow.appendChild(customInp);
+
+      const refreshRecentUi = () => {
+        const isCustom = !!rc.r.checked;
+        customRow.style.display = isCustom ? 'flex' : 'none';
+      };
+      refreshRecentUi();
+
+      const setMonths = async (months, presetKey) => {
+        const m = Math.max(1, Math.floor(Number(months) || 1));
+        await applyCandidateFilters({
+          work_status: 'RECENT',
+          recent_months: m,
+          recent_preset: presetKey
+        });
+      };
+
+      const onRadioChange = async () => {
+        refreshRecentUi();
+
+        if (r1.r.checked)  return setMonths(1,  '1');
+        if (r3.r.checked)  return setMonths(3,  '3');
+        if (r12.r.checked) return setMonths(12, '12');
+        if (rc.r.checked) {
+          const m = Math.max(1, Math.floor(Number(customInp.value) || 1));
+          return setMonths(m, 'CUSTOM');
+        }
+      };
+
+      [r1.r, r3.r, r12.r, rc.r].forEach(r => {
+        r.addEventListener('change', async () => { await onRadioChange(); });
+      });
+
+      customInp.addEventListener('keydown', async (e) => {
+        if (e.key !== 'Enter') return;
+        if (!rc.r.checked) rc.r.checked = true;
+        await onRadioChange();
+      });
+      customInp.addEventListener('blur', async () => {
+        if (!rc.r.checked) return;
+        await onRadioChange();
+      });
+
+      wrap.appendChild(r1.lab);
+      wrap.appendChild(r3.lab);
+      wrap.appendChild(r12.lab);
+      wrap.appendChild(rc.lab);
+      wrap.appendChild(customRow);
+
+      box.appendChild(wrap);
+    }
+
+    el.appendChild(box);
+  }
 
   // ── Timesheet filters box (only when in Timesheets summary) ────────────────
   if (currentSection === 'timesheets') {
@@ -17096,8 +16871,6 @@ function renderTools(){
   }
 }
 
-
-
 async function showAllRecords(section = currentSection){
   // Reset paging & clear all filters
   window.__listState = window.__listState || {};
@@ -17136,7 +16909,9 @@ function invalidateGlobalRoleOptionsCache(){
 // Load and dedupe all role codes from client defaults across all clients
 // 🔧 CHANGE: truly global roles list (de-duplicated across ALL clients), with a short TTL cache.
 // Works even when there is no active client in context (e.g., Candidate create).
-async function loadGlobalRoleOptions(){
+
+
+async function loadGlobalRoleOptions() {
   const now = Date.now();
   const TTL_MS = 60_000;
 
@@ -17156,23 +16931,37 @@ async function loadGlobalRoleOptions(){
     return arr;
   }
 
-  // Aggregate roles across all clients (enabled client-default windows only)
-  const roles = new Set();
+  // ✅ Single-request roles fetch (backend provides global unique roles)
+  const roles = [];
   try {
-    const clients = await listClientsBasic();
-    for (const c of (clients || [])) {
-      try {
-        const rows = await listClientRates(c.id, { only_enabled: true });
-        for (const r of (rows || [])) {
-          if (r && r.role) roles.add(String(r.role));
-        }
-      } catch { /* ignore per-client errors */ }
+    const resp = await authFetch(API('/api/roles/global'));
+    if (resp && resp.ok) {
+      const json = await resp.json().catch(() => ({}));
+
+      const raw =
+        Array.isArray(json) ? json :
+        (json && Array.isArray(json.roles)) ? json.roles :
+        (json && Array.isArray(json.items)) ? json.items :
+        [];
+
+      const set = new Set();
+      for (const r of raw) {
+        const s = String(r || '').trim();
+        if (!s) continue;
+        set.add(s);
+      }
+      roles.push(...Array.from(set).sort((a,b)=> a.localeCompare(b)));
+    } else {
+      const t = resp ? await resp.text().catch(() => '') : '';
+      throw new Error(t || 'roles/global fetch failed');
     }
-  } catch { /* ignore listClientsBasic error */ }
+  } catch {
+    // If the endpoint fails, fall back to empty list (caller UI handles)
+  }
 
-  const arr = [...roles].sort((a,b)=> a.localeCompare(b));
+  const arr = roles;
 
-  // Save to both the new global cache AND the legacy fallback keys so existing invalidation hooks still help
+  // Save to both the new global cache AND the legacy fallback keys
   window.__GLOBAL_ROLE_CODES_ALL__ = arr;
   window.__GLOBAL_ROLE_CODES_ALL_TS__ = now;
 
@@ -17183,6 +16972,7 @@ async function loadGlobalRoleOptions(){
 
   return arr;
 }
+
 
 
 // Render roles editor into a container; updates modalCtx.rolesState
@@ -18945,17 +18735,53 @@ async function openCandidateAdvancesModal(candidateRow) {
     console.warn('[ADVANCES][MGR] initial wiring failed', e);
   }
 }
-
 function renderCandidateTab(key, row = {}) {
   if (key === 'main') {
     const enc = escapeHtml || ((s) => String(s || ''));
 
+    const optEmail = !!row.opt_in_email;
+    const optSms = !!row.opt_in_sms;
+    const optWa = !!row.opt_in_whatsapp;
+    const optAll = optEmail && optSms && optWa;
+
     return html(`
       <div class="form" id="tab-main">
+        ${select('title','Title', row.title || '', ['', 'Mr', 'Mrs', 'Miss', 'Ms', 'Dr', 'Prof'])}
+
         ${input('first_name','First name', row.first_name)}
         ${input('last_name','Last name', row.last_name)}
         ${input('email','Email', row.email, 'email')}
         ${input('phone','Telephone', row.phone)}
+
+        <div class="row">
+          <label>Mailshots allowed by</label>
+          <div class="controls">
+            <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+              <label class="mini" style="display:flex;gap:6px;align-items:center;cursor:pointer;">
+                <input type="checkbox" name="opt_in_email" ${optEmail ? 'checked' : ''}>
+                Email
+              </label>
+
+              <label class="mini" style="display:flex;gap:6px;align-items:center;cursor:pointer;">
+                <input type="checkbox" name="opt_in_sms" ${optSms ? 'checked' : ''}>
+                SMS
+              </label>
+
+              <label class="mini" style="display:flex;gap:6px;align-items:center;cursor:pointer;">
+                <input type="checkbox" name="opt_in_whatsapp" ${optWa ? 'checked' : ''}>
+                WhatsApp
+              </label>
+
+              <label class="mini" style="display:flex;gap:6px;align-items:center;cursor:pointer;">
+                <input type="checkbox" id="opt_in_all" ${optAll ? 'checked' : ''}>
+                All
+              </label>
+            </div>
+            <div class="hint">
+              “All” will tick/untick Email, SMS and WhatsApp together. (All is UI-only and is not saved to the database.)
+            </div>
+          </div>
+        </div>
 
         ${select(
           'pay_method',
@@ -18967,22 +18793,21 @@ function renderCandidateTab(key, row = {}) {
           { id:'pay-method' }
         )}
 
-     <!-- Global Candidate Key (GCK): editable (so we can correct/clear mappings) -->
-<div class="row">
-  <label>Global Candidate Key (GCK)</label>
-  <div class="controls">
-    <input
-      class="input"
-      name="key_norm"
-      value="${enc(row.key_norm || '')}"
-      placeholder=""
-    />
-    <div class="hint">
-      Links this candidate to the rota identity (GCK). You can correct or clear this if it was mapped incorrectly.
-    </div>
-  </div>
-</div>
-
+        <!-- Global Candidate Key (GCK): editable (so we can correct/clear mappings) -->
+        <div class="row">
+          <label>Global Candidate Key (GCK)</label>
+          <div class="controls">
+            <input
+              class="input"
+              name="key_norm"
+              value="${enc(row.key_norm || '')}"
+              placeholder=""
+            />
+            <div class="hint">
+              Links this candidate to the rota identity (GCK). You can correct or clear this if it was mapped incorrectly.
+            </div>
+          </div>
+        </div>
 
         <!-- NHSP / HealthRoster aliases (from hr_name_mappings) -->
         <div class="row">
@@ -19025,19 +18850,36 @@ function renderCandidateTab(key, row = {}) {
         ${input('date_of_birth','Date of birth', row.date_of_birth)}
         ${select('gender','Gender', row.gender || '', ['', 'Male', 'Female', 'Other'])}
 
-        <!-- New: Job Titles (multi, with bins) -->
+        <!-- Job Titles + Band (Band is to the right of Job Titles) -->
         <div class="row">
           <label>Job Titles</label>
           <div class="controls">
-            <div id="jobTitlesList"
-                 style="display:flex;flex-wrap:wrap;gap:4px;min-height:24px;align-items:flex-start;"></div>
-            <button type="button"
-                    class="btn mini"
-                    data-act="pick-job-title">
-              Add Job Title…
-            </button>
-            <div class="hint">
-              Right click a Job Title in Edit mode to select a Primary Job Role.
+            <div class="grid-2" style="align-items:start;gap:10px;">
+              <div>
+                <div id="jobTitlesList"
+                     style="display:flex;flex-wrap:wrap;gap:4px;min-height:24px;align-items:flex-start;"></div>
+                <button type="button"
+                        class="btn mini"
+                        data-act="pick-job-title">
+                  Add Job Title…
+                </button>
+                <div class="hint">
+                  Right click a Job Title in Edit mode to select a Primary Job Role.
+                </div>
+              </div>
+
+              <div>
+                <div class="mini" style="font-weight:700;margin-bottom:4px;">Band</div>
+                <input
+                  class="input"
+                  name="band"
+                  value="${enc(row.band == null ? '' : row.band)}"
+                  placeholder=""
+                />
+                <div class="hint mini" style="opacity:.85;margin-top:6px;">
+                  Enter the candidate’s band (e.g. 5, 6, 7).
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -19107,31 +18949,51 @@ function renderCandidateTab(key, row = {}) {
     `);
   }
 
+  // ✅ NEW: E-History tab scaffold (mountCandidateHistoryTab() will populate)
+  if (key === 'history') return html(`
+    <div class="tabc">
+      <div class="row" style="margin-bottom:6px;">
+        <label>Legacy Contract History</label>
+        <div class="controls">
+          <div class="mini" style="opacity:.85;">
+            This is legacy contract history imported for this candidate.
+          </div>
+        </div>
+      </div>
+
+      <div
+        class="ehist-wrap"
+        style="max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px;"
+      >
+        <div id="ehistWrap" class="mini">Loading…</div>
+      </div>
+    </div>
+  `);
+
   // Care Packages tab (was "Rates")
- if (key === 'rates') return html(`
-  <div class="form" id="tab-rates" style="grid-template-columns:minmax(0,1fr);">
-    <!-- Rota Roles editor -->
-    <div class="row" style="grid-column:1/-1;">
-      <label>Rota Roles</label>
-      <div class="controls">
-        <div id="rolesEditor" data-init="1"></div>
-        <div class="hint">
-          This links the candidate job role to a Care Package rota only.
-          If this candidate is not working on Care Packages, you can ignore this.
+  if (key === 'rates') return html(`
+    <div class="form" id="tab-rates" style="grid-template-columns:minmax(0,1fr);">
+      <!-- Rota Roles editor -->
+      <div class="row" style="grid-column:1/-1;">
+        <label>Rota Roles</label>
+        <div class="controls">
+          <div id="rolesEditor" data-init="1"></div>
+          <div class="hint">
+            This links the candidate job role to a Care Package rota only.
+            If this candidate is not working on Care Packages, you can ignore this.
+          </div>
+        </div>
+      </div>
+
+      <!-- Candidate rate overrides table -->
+      <div class="row" style="grid-column:1/-1;">
+        <label>Care Package Rates</label>
+        <div class="controls">
+          <div id="ratesTable" class="rates-table-wrap"></div>
         </div>
       </div>
     </div>
-
-    <!-- Candidate rate overrides table -->
-    <div class="row" style="grid-column:1/-1;">
-      <label>Care Package Rates</label>
-      <div class="controls">
-        <div id="ratesTable" class="rates-table-wrap"></div>
-      </div>
-    </div>
-  </div>
-`);
-
+  `);
 
   if (key === 'pay') return html(`
     <div class="form" id="tab-pay" data-candidate-id="${row.id || ''}">
@@ -19203,6 +19065,7 @@ function renderCandidateTab(key, row = {}) {
     </div>
   `);
 }
+
 
 
 async function fetchCandidateAdvances(candidateId) {
@@ -20054,22 +19917,38 @@ async function openCandidate(row) {
       } catch (peekErr) {
         W('[HTTP] raw peek failed', peekErr?.message || peekErr);
       }
-
       if (res.ok) {
         const data       = await res.json().catch((jErr)=>{ W('res.json() failed, using {}', jErr); return {}; });
         const candidate  = data.candidate || unwrapSingle(data, 'candidate');
         const job_titles = Array.isArray(data.job_titles) ? data.job_titles : [];
         const hr_aliases = Array.isArray(data.hr_aliases) ? data.hr_aliases : [];
-        L('hydrated JSON keys', Object.keys(data||{}), 'candidate keys', Object.keys(candidate||{}));
 
-        // Store hr_aliases on the hydrated object under a private key,
-        // so we can seed modalCtx later without changing the DB schema.
+        // ✅ NEW: multi-user candidate header / E-History enablement inputs
+        const has_e_history = !!(data && data.has_e_history);
+        const work_status =
+          (data && data.work_status && typeof data.work_status === 'object')
+            ? data.work_status
+            : null;
+
+        L('hydrated JSON keys', Object.keys(data||{}), 'candidate keys', Object.keys(candidate||{}), {
+          has_e_history,
+          work_status_keys: work_status ? Object.keys(work_status) : []
+        });
+
+        // Store hr_aliases and new meta on the hydrated object under private keys.
         full = candidate
-          ? { ...candidate, job_titles, __hr_aliases: hr_aliases }
+          ? {
+              ...candidate,
+              job_titles,
+              __hr_aliases: hr_aliases,
+              __has_e_history: has_e_history,
+              __work_status: work_status
+            }
           : incoming;
       } else {
         W('non-OK response, using incoming row');
       }
+
 
     } catch (e) {
       W('hydrate failed; using summary row', e);
@@ -20110,7 +19989,6 @@ async function openCandidate(row) {
     } else if (src.nhsp_hr_name_aliases) {
       aliases = [toStr(src.nhsp_hr_name_aliases)];
     }
-
     return {
       // Core identity / contact
       first_name:       toStr(src.first_name),
@@ -20118,6 +19996,13 @@ async function openCandidate(row) {
       email:            toStr(src.email),
       phone:            toStr(src.phone),
       display_name:     toStr(src.display_name),
+
+      // ✅ NEW: Candidate title + band + opt-ins (for staging + binder)
+      title:            toStr(src.title),
+      band:             (src.band == null ? '' : String(src.band)),
+      opt_in_email:     !!src.opt_in_email,
+      opt_in_sms:       !!src.opt_in_sms,
+      opt_in_whatsapp:  !!src.opt_in_whatsapp,
 
       // Pay / rota fields
       pay_method:       src.pay_method || null,
@@ -20151,6 +20036,7 @@ async function openCandidate(row) {
       // Job titles (normalised, primary will be enforced by binder)
       job_titles:       jt
     };
+
   };
 
   // 2) Build modal context from hydrated data
@@ -20171,7 +20057,6 @@ async function openCandidate(row) {
   const selectedAliasId = hrAliasesExisting.length
     ? (hrAliasesExisting[0].id ?? null)
     : null;
-
   window.modalCtx = {
     entity: 'candidates',
     data:   deep(full),
@@ -20180,10 +20065,25 @@ async function openCandidate(row) {
     overrides: { existing: [], stagedNew: [], stagedEdits: {}, stagedDeletes: new Set() },
     clientSettingsState: null,
     openToken: ((full?.id) || 'new') + ':' + Date.now(),
+
     // 🔹 Freeze the DB pay method for the lifetime of this modal
     dbPayMethod,
+
+    // ✅ NEW: E-History + work status (from backend hydrate)
+    has_e_history: !!full?.__has_e_history,
+    work_status: (full?.__work_status && typeof full.__work_status === 'object') ? deep(full.__work_status) : null,
+
+    // ✅ NEW: cache history load so tab switches don’t refetch
+    eHistoryState: {
+      candidate_id: full?.id || null,
+      started: false,
+      rows: null,
+      error: null
+    },
+
     // 🔹 Main candidate model used by bindCandidateMainFormEvents (create + edit)
     candidateMainModel: buildCandidateMainModel(full),
+
     // 🔹 HR name mappings (NHSP / HealthRoster) for this candidate
     hrAliasState: {
       existing: hrAliasesExisting,   // [{ id, hr_name_norm, hospital_or_trust, ... }, ...]
@@ -20191,6 +20091,7 @@ async function openCandidate(row) {
       selectedId: selectedAliasId    // currently selected alias in the dropdown
     }
   };
+
 
   L('window.modalCtx seeded', {
     entity: window.modalCtx.entity,
@@ -20201,20 +20102,83 @@ async function openCandidate(row) {
     dbPayMethod: window.modalCtx.dbPayMethod,
     candidateMainModelKeys: Object.keys(window.modalCtx.candidateMainModel || {})
   });
-
   // 3) Render modal
   L('calling showModal with hasId=', !!full?.id, 'rawHasIdArg=', full?.id);
+
+  // ✅ NEW: title badge pills (uses existing .pill-ok / .pill-warn)
+  const ws = (full && full.__work_status && typeof full.__work_status === 'object') ? full.__work_status : null;
+  const titleBadges = [];
+  try {
+    if (ws && ws.is_currently_working === true) {
+      titleBadges.push({ text: 'Currently Working', className: 'pill-ok' });
+    } else if (ws && ws.is_recently_worked === true) {
+      titleBadges.push({ text: 'Recently Worked', className: 'pill-warn' });
+    }
+  } catch {}
+
+  const hasEHistory = !!(full && full.__has_e_history);
+
   showModal(
     'Candidate',
     [
       { key:'main',     label:'Main Details' },
       { key:'rates',    label:'Care Packages' },
       { key:'pay',      label:'Payment details' },
-      { key:'bookings', label:'Bookings' }
+      { key:'bookings', label:'Bookings' },
+
+      // ✅ NEW: far-right mini tab; disabled when no E-History
+      {
+        key:'history',
+        label:'E-History',
+        alignRight:true,
+        small:true,
+        disabled: !hasEHistory,
+        disabled_reason:'No legacy history for this candidate.'
+      }
     ],
     (k, r) => {
       L('[renderCandidateTab] tab=', k, 'rowKeys=', Object.keys(r||{}), 'sample=', { first: r?.first_name, last: r?.last_name, id: r?.id });
-      return renderCandidateTab(k, r);
+
+      const html = renderCandidateTab(k, r);
+
+      // ✅ NEW: mount E-History once per candidate (cache in modalCtx.eHistoryState)
+      if (k === 'history') {
+        try {
+          const candId = window.modalCtx?.data?.id || null;
+          if (candId && typeof mountCandidateHistoryTab === 'function') {
+            window.modalCtx.eHistoryState = (window.modalCtx.eHistoryState && typeof window.modalCtx.eHistoryState === 'object')
+              ? window.modalCtx.eHistoryState
+              : { candidate_id: candId, started: false, rows: null, error: null };
+
+            const st = window.modalCtx.eHistoryState;
+
+            // Reset cache if candidate changed (defensive)
+            if (st.candidate_id && String(st.candidate_id) !== String(candId)) {
+              st.candidate_id = candId;
+              st.started = false;
+              st.rows = null;
+              st.error = null;
+            } else {
+              st.candidate_id = candId;
+            }
+
+            if (!st.started) {
+              st.started = true;
+
+              // Defer until after setTab() has inserted HTML into #modalBody
+              Promise.resolve().then(() => Promise.resolve().then(async () => {
+                try {
+                  await mountCandidateHistoryTab(candId);
+                } catch (err) {
+                  st.error = err?.message || String(err || 'Failed to load E-History');
+                }
+              }));
+            }
+          }
+        } catch {}
+      }
+
+      return html;
     },
     async () => {
       L('[onSave] begin', { dataId: window.modalCtx?.data?.id, forId: window.modalCtx?.formState?.__forId });
@@ -20240,6 +20204,53 @@ async function openCandidate(row) {
         if (k.startsWith('__')) {
           delete payload[k];
         }
+      }
+
+      // ✅ NEW: canonicalise title/band/opt-ins BEFORE logging or later processing
+      try {
+        if (Object.prototype.hasOwnProperty.call(payload, 'opt_in_all')) delete payload.opt_in_all;
+
+        if (Object.prototype.hasOwnProperty.call(payload, 'title')) {
+          const t = String(payload.title ?? '').trim();
+          payload.title = t ? t : null;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(payload, 'band')) {
+          const raw = (payload.band == null) ? '' : String(payload.band).trim();
+          if (!raw) {
+            payload.band = null;
+          } else {
+            const n = Number(raw);
+            if (!Number.isFinite(n) || Math.floor(n) !== n) {
+              alert('Band must be a whole number (e.g. 5, 6, 7).');
+              return { ok:false };
+            }
+            payload.band = n;
+          }
+        }
+
+        const coerceBool = (v) => {
+          if (v === true) return true;
+          if (v === false) return false;
+          if (v == null) return false;
+          const s = String(v).trim().toLowerCase();
+          return (s === 'on' || s === 'true' || s === '1' || s === 'yes' || s === 'y');
+        };
+
+        const ensureOpt = (key) => {
+          const present =
+            Object.prototype.hasOwnProperty.call(payload, key) ||
+            Object.prototype.hasOwnProperty.call(main, key) ||
+            Object.prototype.hasOwnProperty.call(stateMain, key);
+          if (!present) return;
+          payload[key] = coerceBool(payload[key]);
+        };
+
+        ensureOpt('opt_in_email');
+        ensureOpt('opt_in_sms');
+        ensureOpt('opt_in_whatsapp');
+      } catch (e) {
+        W('canonicalise (title/band/opt_ins) failed', e);
       }
 
       L('[onSave] collected', {
@@ -20278,6 +20289,7 @@ async function openCandidate(row) {
         // Do not allow save; user can correct highlighted fields
         return { ok:false };
       }
+
 
       if (!payload.display_name) {
         const dn = [payload.first_name, payload.last_name].filter(Boolean).join(' ').trim();
@@ -21027,8 +21039,10 @@ for (const k of Object.keys(payload)) {
         roles: mergedRoles,
         job_titles: jobTitlesForCtx
       };
-      window.modalCtx.formState  = { __ForId: candidateId, main: {}, pay: {} };
+       // ✅ FIX: keep canonical __forId key (used by mergedRowForTab / persistCurrentTabState)
+      window.modalCtx.formState  = { __forId: candidateId, main: {}, pay: {} };
       window.modalCtx.rolesState = mergedRoles;
+
 
       // 🔹 Keep dbPayMethod in sync with the latest persisted value (if any)
       try {
@@ -21036,10 +21050,10 @@ for (const k of Object.keys(payload)) {
         window.modalCtx.dbPayMethod = persistedPm ? String(persistedPm).toUpperCase() : null;
       } catch {}
 
-      L('[onSave] final window.modalCtx', {
+         L('[onSave] final window.modalCtx', {
         dataId: window.modalCtx.data?.id,
         rolesCount: Array.isArray(window.modalCtx.data?.roles) ? window.modalCtx.data.roles.length : 0,
-        formStateForId: window.modalCtx.formState?.__ForId,
+        formStateForId: window.modalCtx.formState?.__forId,
         dbPayMethod: window.modalCtx.dbPayMethod,
         finalBank: {
           account_holder: window.modalCtx.data?.account_holder ?? null,
@@ -21049,12 +21063,13 @@ for (const k of Object.keys(payload)) {
         }
       });
 
+
       if (isNew) window.__pendingFocus = { section: 'candidates', ids: [candidateId], primaryIds:[candidateId] };
 
       return { ok: true, saved: window.modalCtx.data };
 
     },
-    full?.id,
+     full?.id,
    () => {
   const fr = window.__getModalFrame?.();
   const isBookings = fr && fr.entity === 'candidates' && fr.currentTabKey === 'bookings';
@@ -21076,9 +21091,11 @@ for (const k of Object.keys(payload)) {
       W('calendar onReturn refresh failed', e);
     }
   }
-}
-
+},
+    // ✅ NEW: title badges are rendered by showModal/renderTop
+    { titleBadges }
   );
+
   L('showModal returned (sync)', { currentOpenToken: window.modalCtx.openToken });
 
   // 4) Optional async companion loads (unchanged)
@@ -22112,8 +22129,272 @@ function mountContractRatesTab() {
 
 // Open preset picker (card grid) and return chosen data
 
+async function fetchClientEHistory(clientId) {
+  const encId = encodeURIComponent(String(clientId || ''));
+  if (!encId) throw new Error('clientId is required');
 
+  const url = API(`/api/clients/${encId}/e-history`);
+  const res = await authFetch(url);
+  if (!res || !res.ok) {
+    let body = '';
+    try { body = await res.text().catch(()=> ''); } catch {}
+    throw new Error(body || `Failed to fetch client e-history (${res ? res.status : 'no response'})`);
+  }
 
+  const json = await res.json().catch(()=> ({}));
+
+  // Expected: { rows:[...] } but allow a few safe shapes.
+  const rows =
+    (Array.isArray(json?.rows) ? json.rows :
+     Array.isArray(json?.data?.rows) ? json.data.rows :
+     Array.isArray(json?.items) ? json.items :
+     Array.isArray(json?.data) ? json.data :
+     []);
+
+  return rows;
+}
+async function mountClientHistoryTab(clientId) {
+  const cid = String(clientId || '').trim();
+  if (!cid) throw new Error('clientId is required');
+
+  // Ensure state exists
+  try {
+    window.modalCtx = window.modalCtx || {};
+    window.modalCtx.clientEHistoryState = window.modalCtx.clientEHistoryState || {
+      loaded: false, loading: false, rows: null, error: null, client_id: null
+    };
+  } catch {}
+
+  const st = window.modalCtx?.clientEHistoryState || null;
+  if (st) {
+    if (st.client_id !== cid) {
+      st.client_id = cid;
+      st.loaded = false;
+      st.loading = false;
+      st.rows = null;
+      st.error = null;
+    }
+  }
+
+  const wrap =
+    (typeof byId === 'function' ? byId('clientEHistWrap') : null) ||
+    (typeof document !== 'undefined' ? document.getElementById('clientEHistWrap') : null);
+
+  const setWrapHtml = (htmlStr) => {
+    try {
+      if (wrap) wrap.innerHTML = htmlStr;
+    } catch {}
+  };
+
+  // Loading state immediately
+  setWrapHtml(`<div style="padding:10px;opacity:.8;">Loading…</div>`);
+
+  // If cached and loaded, render without refetch
+  if (st && st.loaded && Array.isArray(st.rows)) {
+    const rows = st.rows;
+    // Render cached rows
+    const fmt = (typeof fmtGBP2 === 'function')
+      ? fmtGBP2
+      : (v) => {
+          if (v === null || v === undefined || v === '') return '';
+          const n = Number(v);
+          if (!Number.isFinite(n)) return '';
+          return `£${n.toFixed(2)}`;
+        };
+
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+
+    const normPayMethod = (v) => {
+      const s = String(v ?? '').trim().toUpperCase();
+      if (s === 'PAYE') return 'PAYE';
+      if (s === 'UMBRELLA') return 'Umbrella';
+      if (s === 'UMB') return 'Umbrella';
+      return s || '';
+    };
+
+    const getCandidateLabel = (r) => {
+      const cand =
+        r?.candidate_name ??
+        r?.candidate_display_name ??
+        r?.candidate_display ??
+        r?.candidate ??
+        r?.staff ??
+        null;
+
+      if (cand != null && String(cand).trim() !== '') return String(cand).trim();
+
+      const fn = (r?.first_name ?? r?.forename ?? r?.candidate_forename ?? '');
+      const sn = (r?.surname ?? r?.last_name ?? r?.candidate_surname ?? '');
+      const joined = `${String(fn||'').trim()} ${String(sn||'').trim()}`.trim();
+      return joined || '';
+    };
+
+    const cell = (x) => esc(x == null ? '' : x);
+
+    const table = `
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr>
+            ${['Candidate','Start','End','Job Title','Pay Method','Rate type','Pay','Margin','Charge'].map(h =>
+              `<th style="border:1px solid var(--line);padding:6px;text-align:left;white-space:nowrap;">${esc(h)}</th>`
+            ).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            rows.length ? rows.map(r => {
+              const candidate = getCandidateLabel(r);
+              const start = r?.start_date ?? '';
+              const end = r?.end_date ?? '';
+              const job = r?.job_title ?? '';
+              const pm = normPayMethod(r?.pay_method);
+              const rt = r?.label ?? r?.rate_type ?? '';
+              const pay = fmt(r?.pay_rate);
+              const mar = fmt(r?.margin);
+              const chg = fmt(r?.charge_rate);
+
+              return `
+                <tr>
+                  <td style="border:1px solid var(--line);padding:6px;">${cell(candidate)}</td>
+                  <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(start)}</td>
+                  <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(end)}</td>
+                  <td style="border:1px solid var(--line);padding:6px;">${cell(job)}</td>
+                  <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(pm)}</td>
+                  <td style="border:1px solid var(--line);padding:6px;">${cell(rt)}</td>
+                  <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(pay)}</td>
+                  <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(mar)}</td>
+                  <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(chg)}</td>
+                </tr>
+              `;
+            }).join('') : `
+              <tr>
+                <td colspan="9" style="border:1px solid var(--line);padding:10px;opacity:.8;">No legacy history found for this client.</td>
+              </tr>
+            `
+          }
+        </tbody>
+      </table>
+    `;
+
+    setWrapHtml(table);
+    return rows;
+  }
+
+  // Fetch + render
+  if (st) st.loading = true;
+
+  let rows = [];
+  try {
+    rows = await fetchClientEHistory(cid);
+
+    // Cache
+    if (st) {
+      st.rows = Array.isArray(rows) ? rows : [];
+      st.loaded = true;
+      st.loading = false;
+      st.error = null;
+    }
+  } catch (err) {
+    if (st) {
+      st.loaded = false;
+      st.loading = false;
+      st.error = String(err?.message || err || 'Failed to load client history');
+    }
+    setWrapHtml(`<div style="padding:10px;color:#b00020;">${String(st?.error || 'Failed to load client history')}</div>`);
+    throw err;
+  }
+
+  // Render fetched rows
+  const fmt = (typeof fmtGBP2 === 'function')
+    ? fmtGBP2
+    : (v) => {
+        if (v === null || v === undefined || v === '') return '';
+        const n = Number(v);
+        if (!Number.isFinite(n)) return '';
+        return `£${n.toFixed(2)}`;
+      };
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+
+  const normPayMethod = (v) => {
+    const s = String(v ?? '').trim().toUpperCase();
+    if (s === 'PAYE') return 'PAYE';
+    if (s === 'UMBRELLA') return 'Umbrella';
+    if (s === 'UMB') return 'Umbrella';
+    return s || '';
+  };
+
+  const getCandidateLabel = (r) => {
+    const cand =
+      r?.candidate_name ??
+      r?.candidate_display_name ??
+      r?.candidate_display ??
+      r?.candidate ??
+      r?.staff ??
+      null;
+
+    if (cand != null && String(cand).trim() !== '') return String(cand).trim();
+
+    const fn = (r?.first_name ?? r?.forename ?? r?.candidate_forename ?? '');
+    const sn = (r?.surname ?? r?.last_name ?? r?.candidate_surname ?? '');
+    const joined = `${String(fn||'').trim()} ${String(sn||'').trim()}`.trim();
+    return joined || '';
+  };
+
+  const cell = (x) => esc(x == null ? '' : x);
+
+  const table = `
+    <table style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr>
+          ${['Candidate','Start','End','Job Title','Pay Method','Rate type','Pay','Margin','Charge'].map(h =>
+            `<th style="border:1px solid var(--line);padding:6px;text-align:left;white-space:nowrap;">${esc(h)}</th>`
+          ).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${
+          rows.length ? rows.map(r => {
+            const candidate = getCandidateLabel(r);
+            const start = r?.start_date ?? '';
+            const end = r?.end_date ?? '';
+            const job = r?.job_title ?? '';
+            const pm = normPayMethod(r?.pay_method);
+            const rt = r?.label ?? r?.rate_type ?? '';
+            const pay = fmt(r?.pay_rate);
+            const mar = fmt(r?.margin);
+            const chg = fmt(r?.charge_rate);
+
+            return `
+              <tr>
+                <td style="border:1px solid var(--line);padding:6px;">${cell(candidate)}</td>
+                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(start)}</td>
+                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(end)}</td>
+                <td style="border:1px solid var(--line);padding:6px;">${cell(job)}</td>
+                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(pm)}</td>
+                <td style="border:1px solid var(--line);padding:6px;">${cell(rt)}</td>
+                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(pay)}</td>
+                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(mar)}</td>
+                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(chg)}</td>
+              </tr>
+            `;
+          }).join('') : `
+            <tr>
+              <td colspan="9" style="border:1px solid var(--line);padding:10px;opacity:.8;">No legacy history found for this client.</td>
+            </tr>
+          `
+        }
+      </tbody>
+    </table>
+  `;
+
+  setWrapHtml(table);
+  return rows;
+}
 
 async function fetchClientRatePresets({ client_id, role, band, active_on }) {
   if (!client_id) return [];
@@ -23046,6 +23327,9 @@ async function openClient(row) {
   // 1) Hydrate full client if we have an id
   let full = incoming;
   let settingsSeed = null;
+  // ✅ NEW: has_e_history from backend (used to enable/disable E-History mini-tab)
+  let hasEHistory = false;
+
   if (seedId) {
     try {
       const url = API(`/api/clients/${encodeURIComponent(seedId)}`);
@@ -23057,6 +23341,7 @@ async function openClient(row) {
         const raw = await r.clone().text();
         if (LOG) console.debug('[HTTP] raw body (≤2KB):', raw.slice(0, 2048));
       } catch (peekErr) { W('[HTTP] raw peek failed', peekErr?.message || peekErr); }
+
       if (r.ok) {
         const data = await r.json().catch(()=> ({}));
 
@@ -23076,9 +23361,16 @@ async function openClient(row) {
 
         settingsSeed = (settingsObj && typeof settingsObj === 'object') ? deep(settingsObj) : null;
 
-        full = clientObj || incoming;
+        // ✅ NEW: read root-level has_e_history from backend response
+        hasEHistory = !!(data && typeof data === 'object' && data.has_e_history);
 
-        L('hydrated JSON keys', Object.keys(data||{}), 'client keys', Object.keys(clientObj||{}), 'hasSettingsSeed', !!settingsSeed);
+        // Keep full as the client row, but attach has_e_history so tabs can use it safely
+        full = (clientObj || incoming);
+        try {
+          full = { ...(full || {}), has_e_history: hasEHistory };
+        } catch {}
+
+        L('hydrated JSON keys', Object.keys(data||{}), 'client keys', Object.keys(clientObj||{}), 'hasSettingsSeed', !!settingsSeed, 'has_e_history', hasEHistory);
       } else {
         W('non-OK response, using incoming row');
       }
@@ -23089,6 +23381,14 @@ async function openClient(row) {
   } else {
     L('no seedId — create mode');
   }
+
+  // Ensure flag is present even in create mode / fallback mode
+  try {
+    if (!full || typeof full !== 'object') full = incoming || {};
+    if (!Object.prototype.hasOwnProperty.call(full, 'has_e_history')) {
+      full.has_e_history = !!hasEHistory;
+    }
+  } catch {}
 
   // 2) Seed modal context
   const fullKeys = Object.keys(full || {});
@@ -23107,6 +23407,15 @@ async function openClient(row) {
 
     // ✅ State used by UI for edits (starts as DB snapshot)
     clientSettingsState: settingsSeed ? deep(settingsSeed) : {},
+
+    // ✅ NEW: Client E-History cache/state (prevents refetch on tab switches)
+    clientEHistoryState: {
+      loaded: false,
+      loading: false,
+      rows: null,
+      error: null,
+      client_id: full?.id || null
+    },
 
     openToken: ((full?.id) || 'new') + ':' + Date.now(),
     // NEW: persistent set for staged client-rate deletes (survives refresh/merge)
@@ -23155,7 +23464,8 @@ async function openClient(row) {
     dataKeys: Object.keys(window.modalCtx.data||{}),
     formStateForId: window.modalCtx.formState?.__forId,
     openToken: window.modalCtx.openToken,
-    preseededSettings: Object.keys(window.modalCtx.clientSettingsState||{})
+    preseededSettings: Object.keys(window.modalCtx.clientSettingsState||{}),
+    has_e_history: !!window.modalCtx.data?.has_e_history
   });
 
   // 3) Render modal
@@ -23166,9 +23476,69 @@ async function openClient(row) {
       {key:'main',     label:'Main'},
       {key:'rates',    label:'Care Package Rates'},
       {key:'settings', label:'Client settings'},
-      {key:'hospitals',label:'Hospitals & wards'}
+      {key:'hospitals',label:'Hospitals & wards'},
+
+      // ✅ NEW: E-History mini-tab (right-aligned, small, disabled if no E-History)
+      {
+        key: 'history',
+        label: 'E-History',
+        alignRight: true,
+        small: true,
+        disabled: !(window.modalCtx?.data?.id && window.modalCtx?.data?.has_e_history),
+        disabled_reason: 'No legacy history for this client.'
+      }
     ],
-    (k, r) => { L('[renderClientTab] tab=', k, 'rowKeys=', Object.keys(r||{}), 'sample=', { name: r?.name, id: r?.id }); return renderClientTab(k, r); },
+    (k, r) => {
+      L('[renderClientTab] tab=', k, 'rowKeys=', Object.keys(r||{}), 'sample=', { name: r?.name, id: r?.id });
+
+      // ✅ NEW: on switching to History tab, mount once (cached)
+      try {
+        if (k === 'history') {
+          const cid = window.modalCtx?.data?.id || null;
+          const st = window.modalCtx?.clientEHistoryState || null;
+
+          if (cid && st) {
+            if (st.client_id !== cid) {
+              st.client_id = cid;
+              st.loaded = false;
+              st.loading = false;
+              st.rows = null;
+              st.error = null;
+            }
+
+            if (!st.loaded && !st.loading) {
+              if (typeof mountClientHistoryTab === 'function') {
+                st.loading = true;
+                Promise.resolve(mountClientHistoryTab(cid))
+                  .then((rowsMaybe) => {
+                    // Allow mount fn to optionally return rows; cache if so
+                    if (Array.isArray(rowsMaybe)) st.rows = rowsMaybe;
+                    st.loaded = true;
+                    st.loading = false;
+                    st.error = null;
+                  })
+                  .catch((err) => {
+                    st.loaded = false;
+                    st.loading = false;
+                    st.error = String(err?.message || err || 'Failed to load client history');
+                    W('[E-HISTORY] mountClientHistoryTab failed', st.error);
+                  });
+              } else {
+                // If history tab exists but mount function isn't loaded, don't crash the modal
+                st.loaded = false;
+                st.loading = false;
+                st.error = 'mountClientHistoryTab is not available';
+                W('[E-HISTORY] mountClientHistoryTab missing');
+              }
+            }
+          }
+        }
+      } catch (e) {
+        W('[E-HISTORY] history tab mount guard error', e);
+      }
+
+      return renderClientTab(k, r);
+    },
     async ()=> {
       L('[onSave] begin', { dataId: window.modalCtx?.data?.id, forId: window.modalCtx?.formState?.__forId });
       const isNew = !window.modalCtx?.data?.id;
@@ -23774,7 +24144,294 @@ function ensureSelectionStyles(){
   document.head.appendChild(style);
 }
 
+function buildCandidateMainDetailsModel(row) {
+  const r = row || {};
+  const model = {
+    id: r.id || null,
+
+    // ✅ Keep in sync with candidate main-details fields to avoid divergence
+    title: (r.title == null ? '' : String(r.title)),
+    band: (r.band == null ? '' : String(r.band)),
+    opt_in_email: !!r.opt_in_email,
+    opt_in_sms: !!r.opt_in_sms,
+    opt_in_whatsapp: !!r.opt_in_whatsapp,
+
+    // Personal identifiers
+    ni_number: r.ni_number || '',
+    date_of_birth: r.date_of_birth || null, // ISO date string (YYYY-MM-DD)
+    gender: r.gender || '',
+
+    // Registration
+    prof_reg_type: r.prof_reg_type || null,
+    prof_reg_number: r.prof_reg_number || '',
+
+    // Address
+    address_line1: r.address_line1 || '',
+    address_line2: r.address_line2 || '',
+    address_line3: r.address_line3 || '',
+    town_city: r.town_city || '',
+    county: r.county || '',
+    postcode: r.postcode || '',
+    country: r.country || ''
+  };
+
+  // Multi job titles from backend (candidate_job_titles)
+  // shape: [{ job_title_id, is_primary }, ...]
+  let jobs = Array.isArray(r.job_titles)
+    ? r.job_titles
+        .map((jt) => ({
+          job_title_id: jt.job_title_id,
+          is_primary: !!jt.is_primary
+        }))
+        .filter((t) => t.job_title_id)
+    : [];
+
+  // Normalise:
+  // - if none is primary, make the first primary
+  // - if multiple are primary, keep the first as primary and clear the rest
+  // - always move the primary to index 0
+  if (jobs.length) {
+    let primaryIdx = jobs.findIndex((t) => t.is_primary);
+    if (primaryIdx === -1) {
+      primaryIdx = 0;
+    }
+
+    jobs = jobs.map((t, idx) => ({
+      ...t,
+      is_primary: idx === primaryIdx
+    }));
+
+    if (primaryIdx !== 0) {
+      const primary = jobs[primaryIdx];
+      jobs.splice(primaryIdx, 1);
+      jobs.unshift(primary);
+    }
+  }
+
+  model.job_titles = jobs;
+  return model;
+}
+
+// ✅ NEW: format currency as £x.xx (always)
+function fmtGBP2(value) {
+  const n = Number(value);
+  const v = Number.isFinite(n) ? n : 0;
+  return `£${v.toFixed(2)}`;
+}
+
+// ✅ NEW: fetch legacy history rows for a candidate
+async function fetchCandidateEHistory(candidateId) {
+  const id = (candidateId == null) ? '' : String(candidateId).trim();
+  if (!id) throw new Error('candidateId is required');
+
+  if (typeof API !== 'function') throw new Error('API() is not defined');
+  if (typeof authFetch !== 'function') throw new Error('authFetch() is not defined');
+
+  const url = API(`/api/candidates/${encodeURIComponent(id)}/e-history`);
+  const res = await authFetch(url);
+
+  if (!res || !res.ok) {
+    const msg = await (res ? res.text().catch(() => '') : Promise.resolve(''));
+    throw new Error(msg || 'Failed to load E-History');
+  }
+
+  const json = await res.json().catch(() => ({}));
+
+  // Accept common shapes
+  if (Array.isArray(json)) return json;
+  if (json && Array.isArray(json.rows)) return json.rows;
+  if (json && Array.isArray(json.data)) return json.data;
+  if (json && Array.isArray(json.items)) return json.items;
+
+  return [];
+}
+
+// ✅ NEW: build + inject the bordered history table into #ehistWrap (uses cache; fetches once)
+async function mountCandidateHistoryTab(candidateId) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const id = (candidateId == null) ? '' : String(candidateId).trim();
+  if (!id) throw new Error('candidateId is required');
+
+  const mc = window.modalCtx || {};
+  mc.eHistoryState = (mc.eHistoryState && typeof mc.eHistoryState === 'object')
+    ? mc.eHistoryState
+    : { candidate_id: id, started: false, rows: null, error: null };
+
+  const st = mc.eHistoryState;
+
+  // Reset cache if candidate changed
+  if (st.candidate_id && String(st.candidate_id) !== String(id)) {
+    st.candidate_id = id;
+    st.started = false;
+    st.rows = null;
+    st.error = null;
+  } else {
+    st.candidate_id = id;
+  }
+
+  const fmtDate = (iso) => {
+    const v = (iso == null) ? '' : String(iso).slice(0, 10);
+    if (!v) return '';
+    try { if (typeof formatIsoToUk === 'function') return formatIsoToUk(v); } catch {}
+    return v;
+  };
+
+  const normPayMethod = (pm) => {
+    const s = String(pm || '').trim().toUpperCase();
+    if (!s) return '';
+    if (s.includes('UMB')) return 'Umbrella';
+    if (s === 'PAYE') return 'PAYE';
+    return s;
+  };
+
+  const pick = (row, keys) => {
+    for (const k of keys) {
+      if (Object.prototype.hasOwnProperty.call(row, k)) return row[k];
+    }
+    return null;
+  };
+
+  const renderRows = (rows) => {
+    const list = Array.isArray(rows) ? rows.slice() : [];
+
+    // Date ordered (most recent first) by start_date then end_date
+    list.sort((a, b) => {
+      const aS = String(pick(a, ['start_date','start','date_from']) || '');
+      const bS = String(pick(b, ['start_date','start','date_from']) || '');
+      if (aS !== bS) return (aS < bS) ? 1 : -1;
+
+      const aE = String(pick(a, ['end_date','end','date_to']) || '');
+      const bE = String(pick(b, ['end_date','end','date_to']) || '');
+      if (aE !== bE) return (aE < bE) ? 1 : -1;
+      return 0;
+    });
+
+    const rowsHtml = list.map((r) => {
+      const client = pick(r, ['client_name','client','client_display','client_label']) ?? '';
+      const start  = pick(r, ['start_date','start','date_from']) ?? '';
+      const end    = pick(r, ['end_date','end','date_to']) ?? '';
+      const job    = pick(r, ['job_title','role','role_name']) ?? '';
+      const pm     = pick(r, ['pay_method','pay_method_label','pay_channel']) ?? '';
+      const rt     = pick(r, ['label','rate_type_label','rate_label','rate_type']) ?? '';
+
+      const pay    = pick(r, ['pay','pay_rate','pay_amount']) ?? 0;
+      const margin = pick(r, ['margin','margin_amount']) ?? 0;
+      const charge = pick(r, ['charge','charge_rate','charge_amount']) ?? 0;
+
+      return `
+        <tr>
+          <td style="border:1px solid var(--line);padding:6px;vertical-align:top;">${enc(client)}</td>
+          <td style="border:1px solid var(--line);padding:6px;vertical-align:top;">${enc(fmtDate(start))}</td>
+          <td style="border:1px solid var(--line);padding:6px;vertical-align:top;">${enc(fmtDate(end))}</td>
+          <td style="border:1px solid var(--line);padding:6px;vertical-align:top;">${enc(job)}</td>
+          <td style="border:1px solid var(--line);padding:6px;vertical-align:top;">${enc(normPayMethod(pm))}</td>
+          <td style="border:1px solid var(--line);padding:6px;vertical-align:top;">${enc(rt)}</td>
+          <td style="border:1px solid var(--line);padding:6px;vertical-align:top;text-align:right;">${enc(fmtGBP2(pay))}</td>
+          <td style="border:1px solid var(--line);padding:6px;vertical-align:top;text-align:right;">${enc(fmtGBP2(margin))}</td>
+          <td style="border:1px solid var(--line);padding:6px;vertical-align:top;text-align:right;">${enc(fmtGBP2(charge))}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const tableHtml = `
+      <table class="ehist-grid" style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="border:1px solid var(--line);padding:6px;text-align:left;">Client</th>
+            <th style="border:1px solid var(--line);padding:6px;text-align:left;">Start</th>
+            <th style="border:1px solid var(--line);padding:6px;text-align:left;">End</th>
+            <th style="border:1px solid var(--line);padding:6px;text-align:left;">Job Title</th>
+            <th style="border:1px solid var(--line);padding:6px;text-align:left;">Pay Method</th>
+            <th style="border:1px solid var(--line);padding:6px;text-align:left;">Rate type</th>
+            <th style="border:1px solid var(--line);padding:6px;text-align:right;">Pay</th>
+            <th style="border:1px solid var(--line);padding:6px;text-align:right;">Margin</th>
+            <th style="border:1px solid var(--line);padding:6px;text-align:right;">Charge</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml || `
+            <tr>
+              <td colspan="9" style="border:1px solid var(--line);padding:8px;" class="mini">
+                No legacy history rows found for this candidate.
+              </td>
+            </tr>
+          `}
+        </tbody>
+      </table>
+    `;
+
+    return tableHtml;
+  };
+
+  const paint = (rows, errMsg) => {
+    const host = document.getElementById('ehistWrap');
+    if (!host) return;
+
+    if (errMsg) {
+      host.innerHTML = `<div class="mini" style="color:#fca5a5;">${enc(errMsg)}</div>`;
+      return;
+    }
+    host.innerHTML = renderRows(rows);
+  };
+
+  // Ensure a light observer exists so if the History tab is reopened and DOM is reinserted,
+  // cached rows are repainted without refetch.
+  try {
+    if (!st._observer && typeof MutationObserver !== 'undefined') {
+      const modalBody = document.getElementById('modalBody');
+      if (modalBody) {
+        st._observer = new MutationObserver(() => {
+          try {
+            const host = document.getElementById('ehistWrap');
+            if (!host) return;
+            if (st.rows && Array.isArray(st.rows)) {
+              host.innerHTML = renderRows(st.rows);
+            } else if (st.error) {
+              host.innerHTML = `<div class="mini" style="color:#fca5a5;">${enc(st.error)}</div>`;
+            }
+          } catch {}
+        });
+        st._observer.observe(modalBody, { childList: true, subtree: true });
+      }
+    }
+  } catch {}
+
+  // If already cached, paint immediately (no fetch)
+  if (st.rows && Array.isArray(st.rows)) {
+    paint(st.rows, null);
+    return;
+  }
+  if (st.error) {
+    paint([], st.error);
+    return;
+  }
+
+  // Fetch once
+  paint([], 'Loading…');
+  try {
+    const rows = await fetchCandidateEHistory(id);
+    st.rows = Array.isArray(rows) ? rows : [];
+    st.error = null;
+    paint(st.rows, null);
+  } catch (e) {
+    st.rows = [];
+    st.error = e?.message || 'Failed to load E-History';
+    paint([], st.error);
+  }
+}
+
 function renderClientTab(key, row = {}){
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
   if (key==='main') return html(`
     <div class="form" id="tab-main">
       ${input('name','Client name', row.name)}
@@ -23789,7 +24446,71 @@ function renderClientTab(key, row = {}){
                style="opacity:.7" />
       </div>
 
-      <div class="row" style="grid-column:1/-1"><label>Invoice address</label><textarea name="invoice_address">${row.invoice_address || ''}</textarea></div>
+      <div class="row" style="grid-column:1/-1">
+        <label>Invoice address</label>
+        <textarea name="invoice_address">${row.invoice_address || ''}</textarea>
+      </div>
+
+      <!-- ✅ NEW: Client Site Details (client_address) -->
+      <div class="row" style="grid-column:1/-1">
+        <label>Client Site Details</label>
+        <textarea name="client_address">${row.client_address || ''}</textarea>
+      </div>
+
+      <!-- ✅ NEW: Client Site Contact -->
+      <div class="row" style="grid-column:1/-1">
+        <label>Client Site Contact</label>
+        <div class="controls">
+          <div class="grid-2">
+            <div>
+              <div class="mini" style="font-weight:700;margin-bottom:4px;">Title</div>
+              <select class="input" name="contact_title">
+                ${['', 'Mr', 'Mrs', 'Miss', 'Ms', 'Dr', 'Prof'].map(v => {
+                  const sel = String(row.contact_title || '') === String(v) ? 'selected' : '';
+                  const lab = v === '' ? '' : v;
+                  return `<option value="${enc(v)}" ${sel}>${enc(lab)}</option>`;
+                }).join('')}
+              </select>
+            </div>
+
+            <div>
+              <div class="mini" style="font-weight:700;margin-bottom:4px;">Known as</div>
+              <input class="input" name="contact_known_as" value="${enc(row.contact_known_as || '')}" />
+            </div>
+
+            <div>
+              <div class="mini" style="font-weight:700;margin-bottom:4px;">First name</div>
+              <input class="input" name="contact_forename" value="${enc(row.contact_forename || '')}" />
+            </div>
+
+            <div>
+              <div class="mini" style="font-weight:700;margin-bottom:4px;">Surname</div>
+              <input class="input" name="contact_surname" value="${enc(row.contact_surname || '')}" />
+            </div>
+
+            <div>
+              <div class="mini" style="font-weight:700;margin-bottom:4px;">Job Title</div>
+              <input class="input" name="contact_job_title" value="${enc(row.contact_job_title || '')}" />
+            </div>
+
+            <div>
+              <div class="mini" style="font-weight:700;margin-bottom:4px;">Contact Telephone</div>
+              <input class="input" name="contact_tel" value="${enc(row.contact_tel || '')}" />
+            </div>
+
+            <div>
+              <div class="mini" style="font-weight:700;margin-bottom:4px;">Mobile</div>
+              <input class="input" name="contact_mobile" value="${enc(row.contact_mobile || '')}" />
+            </div>
+
+            <div>
+              <div class="mini" style="font-weight:700;margin-bottom:4px;">Email</div>
+              <input class="input" name="contact_email" value="${enc(row.contact_email || '')}" />
+            </div>
+          </div>
+        </div>
+      </div>
+
       ${input('primary_invoice_email','Primary invoice email', row.primary_invoice_email,'email')}
       ${input('ap_phone','A/P phone', row.ap_phone)}
       ${select('vat_chargeable','VAT chargeable', row.vat_chargeable? 'Yes' : 'No', ['Yes','No'])}
@@ -23798,27 +24519,45 @@ function renderClientTab(key, row = {}){
   `);
 
   if (key === 'rates') return html(`
-  <div class="form" id="tab-rates">
-    <div class="row">
-      <label>Care Package Rates</label>
-      <div class="controls">
-        <div id="clientRates"></div>
+    <div class="form" id="tab-rates">
+      <div class="row">
+        <label>Care Package Rates</label>
+        <div class="controls">
+          <div id="clientRates"></div>
+        </div>
       </div>
     </div>
-  </div>
-`);
+  `);
 
-if (key === 'settings') return html(`
-  <div class="form" id="tab-settings">
-    <div class="row">
-      <label>Client settings</label>
-      <div class="controls">
-        <div id="clientSettings"></div>
+  if (key === 'settings') return html(`
+    <div class="form" id="tab-settings">
+      <div class="row">
+        <label>Client settings</label>
+        <div class="controls">
+          <div id="clientSettings"></div>
+        </div>
       </div>
     </div>
-  </div>
-`);
+  `);
 
+  if (key === 'history') {
+    // Scaffold only. Data is populated by mountClientHistoryTab(clientId) (called on tab switch).
+    return html(`
+      <div class="form" id="tab-history">
+        <div class="row" style="grid-column:1/-1">
+          <label>Legacy Client E-History</label>
+          <div class="controls">
+            <div style="font-size:12px;opacity:.8;margin:0 0 8px 0;">
+              Candidates who worked with this client (Eclipse legacy).
+            </div>
+            <div id="clientEHistScroll" style="max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:10px;">
+              <div id="clientEHistWrap" style="padding:10px;opacity:.8;">Loading…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `);
+  }
 
   if (key==='hospitals') {
     // Ensure initial render AND first-mount fetch if needed, then render the table
@@ -23843,7 +24582,6 @@ if (key === 'settings') return html(`
 
   return '';
 }
-
 
 // ===========================
 // 5) mountCandidatePayTab(...)
@@ -25603,6 +26341,787 @@ async function openChangeContractRatesModal(contractId) {
   }, 0);
 }
 
+async function openCandidatePicker(onPick, options) {
+  const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true; // default ON
+  const ctx  = options && options.context ? options.context : null;
+
+  // ✅ NEW options
+  const ignoreMembership = !!(options && options.ignoreMembership);
+  const seedHintRaw      = (options && options.seed_hint && typeof options.seed_hint === 'object' && !Array.isArray(options.seed_hint))
+    ? options.seed_hint
+    : null;
+
+  // ✅ NEW: only pull delta when heartbeat says candidates changed (or forced)
+  if (LOGC) console.log('[PICKER][candidates] ensure dataset primed → start');
+  await ensurePickerDatasetPrimed('candidates', { forceDeltaIfChanged: true }).catch(e => {
+    if (LOGC) console.warn('[PICKER][candidates] priming failed', e);
+  });
+
+  let fp  = getSummaryFingerprint('candidates');
+  let mem = getSummaryMembership('candidates', fp);
+
+  // Keep existing behaviour by default; allow caller to ignore membership (timesheet resolve)
+  if (!ignoreMembership) {
+    if (!mem?.ids?.length || mem?.stale) {
+      if (LOGC) console.log('[PICKER][candidates] membership empty/stale → priming', { fp, mem });
+      await primeSummaryMembership('candidates', fp);
+      fp  = getSummaryFingerprint('candidates');
+      mem = getSummaryMembership('candidates', fp);
+    }
+  }
+
+  const ds    = (window.__pickerData ||= {}).candidates || { since: null, itemsById: {} };
+  const items = ds.itemsById || {};
+
+  // ✅ ignore membership if requested
+  const baseIds  = (!ignoreMembership && (mem?.ids && mem.ids.length)) ? mem.ids : Object.keys(items);
+  const baseRows = baseIds.map(id => items[id]).filter(Boolean);
+
+  // suggested rows based on hint
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const alnum = (s) => norm(s).replace(/[^a-z0-9]+/g, '');
+
+  const hint = (() => {
+    if (!seedHintRaw) return null;
+    return {
+      email: norm(seedHintRaw.email || ''),
+      first: norm(seedHintRaw.first_name || seedHintRaw.firstname || ''),
+      sur:   norm(seedHintRaw.surname || seedHintRaw.last_name || seedHintRaw.lastname || ''),
+      disp:  norm(seedHintRaw.display_name || ''),
+      disp2: alnum(seedHintRaw.display_name || '')
+    };
+  })();
+
+  const scoreCandidate = (r) => {
+    if (!hint) return 0;
+
+    const cEmail = norm(r.email || '');
+    const cFirst = norm(r.first_name || '');
+    const cLast  = norm(r.last_name || '');
+    const cDisp  = norm(r.display_name || `${r.first_name || ''} ${r.last_name || ''}`);
+    const cDisp2 = alnum(r.display_name || `${r.first_name || ''} ${r.last_name || ''}`);
+
+    let score = 0;
+
+    if (hint.email && cEmail) {
+      if (cEmail === hint.email) score += 120;
+      else if (cEmail.includes(hint.email)) score += 60;
+    }
+
+    if (hint.sur && cLast) {
+      if (cLast === hint.sur) score += 50;
+      else if (cLast.startsWith(hint.sur)) score += 30;
+      else if (cLast.includes(hint.sur)) score += 15;
+    }
+
+    if (hint.first && cFirst) {
+      if (cFirst === hint.first) score += 25;
+      else if (cFirst.startsWith(hint.first)) score += 15;
+      else if (cFirst.includes(hint.first)) score += 8;
+    }
+
+    if (hint.disp && cDisp.includes(hint.disp)) score += 12;
+    if (hint.disp2 && cDisp2 && cDisp2 === hint.disp2) score += 25;
+
+    if (hint.first && hint.sur && cDisp) {
+      if (cDisp.includes(hint.first) && cDisp.includes(hint.sur)) score += 18;
+    }
+
+    return score;
+  };
+
+  const suggestedRows = (() => {
+    if (!hint) return [];
+    const scored = baseRows
+      .map(r => ({ r, s: scoreCandidate(r) }))
+      .filter(x => x.s > 0)
+      .sort((a, b) =>
+        (b.s - a.s) ||
+        String(a.r.last_name||'').localeCompare(String(b.r.last_name||'')) ||
+        String(a.r.first_name||'').localeCompare(String(b.r.first_name||''))
+      );
+    return scored.slice(0, 20).map(x => x.r);
+  })();
+
+  const initialRows = (suggestedRows && suggestedRows.length) ? suggestedRows : baseRows;
+
+  if (LOGC) console.log('[PICKER][candidates] dataset snapshot', {
+    fingerprint: fp,
+    total: mem?.total,
+    ids: baseIds.length,
+    stale: !!mem?.stale,
+    since: ds?.since,
+    rowsBase: baseRows.length,
+    missingItems: baseIds.length - baseRows.length,
+    ignoreMembership,
+    suggestedCount: suggestedRows.length
+  });
+
+  const renderRows = (rows) => rows.map(r => {
+    const first = r.first_name || '';
+    const last  = r.last_name || '';
+    const label = (r.display_name || `${first} ${last}`).trim() || (r.tms_ref || r.id || '');
+    return `
+      <tr data-id="${r.id||''}" data-label="${(label||'').replace(/"/g,'&quot;')}" class="pick-row">
+        <td data-k="last_name">${(last)}</td>
+        <td data-k="first_name">${(first)}</td>
+        <td data-k="roles_display" class="mini">${(r.roles_display||'')}</td>
+        <td data-k="email" class="mini">${(r.email||'')}</td>
+      </tr>`;
+  }).join('');
+
+  let ctxHtml = '';
+  if (ctx) {
+    const staff    = ctx.staffName || '';
+    const unit     = ctx.unit || ctx.hospital || '';
+    const ymd      = ctx.dateYmd || '';
+    const nice     = ctx.dateNice || (typeof formatYmdToNiceDate === 'function' ? formatYmdToNiceDate(ymd) : ymd);
+    const importId = ctx.importId || '';
+
+    ctxHtml = `
+      <div class="row">
+        <label>Resolving</label>
+        <div class="controls">
+          <div class="mini">
+            Candidate: <span class="mono">${escapeHtml ? escapeHtml(staff) : staff}</span><br/>
+            Unit / Site: <span class="mono">${escapeHtml ? escapeHtml(unit) : unit}</span><br/>
+            Date: <span class="mono">${escapeHtml ? escapeHtml(nice || '—') : (nice || '—')}</span><br/>
+            Import ID: <span class="mono">${escapeHtml ? escapeHtml(importId || '—') : (importId || '—')}</span>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  const hintLine = (() => {
+    if (ignoreMembership) return `Showing candidates from the full dataset${baseRows.length ? ` (${baseRows.length})` : ''}.`;
+    return `Showing candidates from the current summary list${mem?.total ? ` (${mem.total} total)` : ''}.`;
+  })();
+
+  const hintLine2 = (suggestedRows && suggestedRows.length)
+    ? `<div class="hint mini" style="margin-top:6px;">Suggested matches shown (top ${suggestedRows.length}). Type to search all candidates.</div>`
+    : '';
+
+  const html = `
+    <div class="tabc">
+      ${ctxHtml}
+      <div class="row">
+        <label>Search</label>
+        <div class="controls">
+          <input class="input" type="text" id="pickerSearch"
+                 placeholder="${mem?.stale ? 'Priming list… type to narrow' : 'Type a first name, surname, role or email…'}"/>
+        </div>
+      </div>
+      <div class="hint">
+        ${hintLine}
+      </div>
+      ${hintLine2}
+      <div class="picker-table-wrap">
+        <table class="grid" id="pickerTable">
+          <thead>
+            <tr>
+              <th data-sort="last_name">Surname</th>
+              <th data-sort="first_name">First name</th>
+              <th data-sort="roles_display">Role</th>
+              <th data-sort="email">Email</th>
+            </tr>
+          </thead>
+          <tbody id="pickerTBody">${renderRows(initialRows)}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+  let selectedId     = null;
+  let selectedLabel  = '';
+  let applySelection = null;
+
+  const renderTab = () => html;
+
+  const onSave = async () => {
+    if (typeof applySelection !== 'function') {
+      if (LOGC) console.warn('[PICKER][candidates] onSave called before wiring');
+      return false;
+    }
+    return await applySelection(true);
+  };
+
+  if (LOGC) console.log('[PICKER][candidates] opening modal');
+  showModal(
+    'Pick Candidate',
+    [{ key: 'p', title: 'Candidates' }],
+    renderTab,
+    onSave,
+    false,
+    () => {
+      const tbody  = document.getElementById('pickerTBody');
+      const search = document.getElementById('pickerSearch');
+      const table  = document.getElementById('pickerTable');
+      if (LOGC) console.log('[PICKER][candidates] onReturn', { hasTBody: !!tbody, hasSearch: !!search, hasTable: !!table });
+      if (!tbody || !search || !table) return;
+
+      let sortKey     = 'last_name';
+      let sortDir     = 'asc';
+      let currentRows = initialRows.slice();
+
+      const frame = window.__getModalFrame?.();
+      if (frame && frame.kind === 'candidate-picker') {
+        frame._pickerHasSelection = false;
+        frame._updateButtons && frame._updateButtons();
+      }
+
+      const applyRows = (rows) => {
+        tbody.innerHTML = renderRows(rows);
+        if (selectedId) {
+          const match = tbody.querySelector(`tr[data-id="${selectedId}"]`);
+          if (match) match.classList.add('active');
+        }
+        if (LOGC) console.log('[PICKER][candidates] render()', {
+          count: rows.length,
+          sample: rows.slice(0, 6).map(r => r.display_name || `${r.first_name} ${r.last_name}`)
+        });
+      };
+
+      const doFilter = (q) => {
+        const fn  = (window.pickersLocalFilterAndSort || pickersLocalFilterAndSort);
+        const out = fn('candidates', baseRows, q, sortKey, sortDir);
+        if (LOGC) console.log('[PICKER][candidates] doFilter()', { q, in: baseRows.length, out: out.length });
+        currentRows = out;
+        return out;
+      };
+
+      const setActiveRow = (tr) => {
+        const all = tbody.querySelectorAll('tr[data-id]');
+        all.forEach(r => r.classList.remove('active'));
+        if (!tr) {
+          selectedId = null;
+          selectedLabel = '';
+        } else {
+          tr.classList.add('active');
+          selectedId    = tr.getAttribute('data-id');
+          selectedLabel = tr.getAttribute('data-label') || tr.textContent.trim();
+        }
+
+        const fr = window.__getModalFrame?.();
+        if (fr && fr.kind === 'candidate-picker') {
+          fr._pickerHasSelection = !!selectedId;
+          fr._updateButtons && fr._updateButtons();
+        }
+      };
+
+      applySelection = async (_triggerClose) => {
+        if (!selectedId) {
+          alert('Please select a candidate first.');
+          return false;
+        }
+        if (LOGC) console.log('[PICKER][candidates] applySelection()', { selectedId, selectedLabel });
+        try {
+          await revalidateCandidateOnPick(selectedId);
+          if (typeof onPick === 'function') {
+            await onPick({ id: selectedId, label: selectedLabel });
+          }
+        } catch (err) {
+          console.warn('[PICKER][candidates] selection validation failed', err);
+          alert(err?.message || 'Selection could not be validated.');
+          return false;
+        }
+        return true;
+      };
+
+      if (!tbody.__wiredClick) {
+        tbody.__wiredClick = true;
+        tbody.addEventListener('click', (e) => {
+          const tr = e.target && e.target.closest('tr[data-id]');
+          if (!tr) return;
+          setActiveRow(tr);
+        });
+        tbody.addEventListener('dblclick', async (e) => {
+          const tr = e.target && e.target.closest('tr[data-id]');
+          if (!tr) return;
+          setActiveRow(tr);
+          const btnSave = document.getElementById('btnSave');
+          if (btnSave && !btnSave.disabled) btnSave.click();
+        });
+        if (LOGC) console.log('[PICKER][candidates] wired click + dblclick handler');
+      }
+
+      if (!table.__wiredSort) {
+        table.__wiredSort = true;
+        table.querySelector('thead').addEventListener('click', (e) => {
+          const th = e.target && e.target.closest('th[data-sort]');
+          if (!th) return;
+
+          const key = th.getAttribute('data-sort');
+          sortDir = (sortKey === key && sortDir === 'asc') ? 'desc' : 'asc';
+          sortKey = key;
+
+          const q = search.value.trim();
+
+          if (q) {
+            currentRows = doFilter(q);
+            applyRows(currentRows);
+            if (LOGC) console.log('[PICKER][candidates] sort (filtered)', { sortKey, sortDir, count: currentRows.length });
+            return;
+          }
+
+          const dir = (sortDir === 'desc') ? -1 : 1;
+          currentRows = (currentRows || []).slice().sort((a, b) => {
+            const av = String((a && a[sortKey]) ?? '').toLowerCase();
+            const bv = String((b && b[sortKey]) ?? '').toLowerCase();
+            if (av < bv) return -1 * dir;
+            if (av > bv) return  1 * dir;
+            return 0;
+          });
+          applyRows(currentRows);
+
+          if (LOGC) console.log('[PICKER][candidates] sort (currentRows)', { sortKey, sortDir, count: currentRows.length });
+        });
+        if (LOGC) console.log('[PICKER][candidates] wired sort header');
+      }
+
+      let t = 0;
+      if (!search.__wiredInput) {
+        search.__wiredInput = true;
+        search.addEventListener('input', () => {
+          const q = search.value.trim();
+          if (LOGC) console.log('[PICKER][candidates] search input', { q });
+          if (t) clearTimeout(t);
+          t = setTimeout(() => {
+            currentRows = q ? doFilter(q) : initialRows.slice();
+            applyRows(currentRows);
+            setActiveRow(null);
+          }, 150);
+        });
+        if (LOGC) console.log('[PICKER][candidates] wired search input');
+      }
+
+      if (!search.__wiredKey) {
+        search.__wiredKey = true;
+        search.addEventListener('keydown', (e) => {
+          const itemsEls = Array.from(tbody.querySelectorAll('tr[data-id]'));
+          if (!itemsEls.length) {
+            if (e.key === 'Escape') {
+              const closeBtn = document.getElementById('btnCloseModal');
+              if (closeBtn) closeBtn.click();
+            }
+            return;
+          }
+          const idx = itemsEls.findIndex(tr => tr.classList.contains('active'));
+          const setActiveIdx = (i) => {
+            const safe = Math.max(0, Math.min(i, itemsEls.length - 1));
+            setActiveRow(itemsEls[safe]);
+            itemsEls[safe].scrollIntoView({ block: 'nearest' });
+          };
+
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setActiveIdx(idx < 0 ? 0 : idx + 1);
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActiveIdx(idx < 0 ? 0 : idx - 1);
+          }
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const target = itemsEls[Math.max(idx, 0)];
+            if (target) {
+              setActiveRow(target);
+              const btnSave = document.getElementById('btnSave');
+              if (btnSave && !btnSave.disabled) btnSave.click();
+            }
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            const closeBtn = document.getElementById('btnCloseModal');
+            if (closeBtn) closeBtn.click();
+          }
+        });
+        if (LOGC) console.log('[PICKER][candidates] wired search keydown');
+      }
+
+      try {
+        if (suggestedRows && suggestedRows.length) {
+          applyRows(currentRows);
+        }
+      } catch {}
+
+      setTimeout(() => {
+        try { search.focus(); } catch {}
+      }, 0);
+    },
+    { kind: 'candidate-picker', noParentGate: true }
+  );
+
+  setTimeout(() => {
+    try {
+      const fr = window.__getModalFrame?.();
+      const willCall = !!(fr && fr.kind === 'candidate-picker' && typeof fr.onReturn === 'function' && !fr.__pickerInit);
+      if (LOGC) console.log('[PICKER][candidates] post-render kick', { willCall });
+      if (willCall) {
+        fr.__pickerInit = true;
+        fr.onReturn();
+        if (LOGC) console.log('[PICKER][candidates] initial onReturn() executed');
+      }
+    } catch (e) {
+      if (LOGC) console.warn('[PICKER][candidates] post-render kick failed', e);
+    }
+  }, 0);
+}
+ 
+async function openClientPicker(onPick, opts) {
+  const LOGC       = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true; // default ON
+  const nhspOnly   = !!(opts && opts.nhspOnly);
+  const hrAutoOnly = !!(opts && opts.hrAutoOnly);
+  const ctx        = opts && opts.context ? opts.context : null;
+
+  const ignoreMembership = !!(opts && opts.ignoreMembership);
+  const seedQueryRaw     = (opts && typeof opts.seed_query === 'string') ? String(opts.seed_query).trim() : '';
+  const seedQuery        = seedQueryRaw;
+
+  // ✅ NEW: only pull delta when heartbeat says clients changed (or forced)
+  if (LOGC) console.log('[PICKER][clients] ensure dataset primed → start');
+  await ensurePickerDatasetPrimed('clients', { forceDeltaIfChanged: true }).catch(e => {
+    if (LOGC) console.warn('[PICKER][clients] priming failed', e);
+  });
+
+  let fp  = getSummaryFingerprint('clients');
+  let mem = getSummaryMembership('clients', fp);
+
+  if (!ignoreMembership) {
+    if (!mem?.ids?.length || mem?.stale) {
+      if (LOGC) console.log('[PICKER][clients] membership empty/stale → priming', { fp, mem });
+      await primeSummaryMembership('clients', fp);
+      fp  = getSummaryFingerprint('clients');
+      mem = getSummaryMembership('clients', fp);
+    }
+  }
+
+  const ds    = (window.__pickerData ||= {}).clients || { since: null, itemsById: {} };
+  const items = ds.itemsById || {};
+
+  const baseIds     = (!ignoreMembership && (mem?.ids && mem.ids.length)) ? mem.ids : Object.keys(items);
+  const baseRowsAll = baseIds.map(id => items[id]).filter(Boolean);
+
+  let baseRows = baseRowsAll;
+  if (nhspOnly) {
+    baseRows = baseRows.filter(r => r && (r.is_nhsp === true || r.is_nhsp === 'true'));
+  }
+  if (hrAutoOnly) {
+    baseRows = baseRows.filter(r => r && (r.autoprocess_hr === true || r.autoprocess_hr === 'true'));
+  }
+
+  if (LOGC) console.log('[PICKER][clients] dataset snapshot', {
+    fingerprint: fp,
+    total: mem?.total,
+    ids: baseIds.length,
+    stale: !!mem?.stale,
+    since: ds?.since,
+    rowsBase: baseRows.length,
+    missingItems: baseIds.length - baseRows.length,
+    nhspOnly,
+    hrAutoOnly,
+    ignoreMembership,
+    seedQuery
+  });
+
+  const renderRows = (rows) => rows.map(r => {
+    const label = (r.name || '').trim();
+    const sub   = (r.primary_invoice_email || '').trim();
+    return `
+      <tr data-id="${r.id||''}" data-label="${(label||'').replace(/"/g,'&quot;')}" class="pick-row">
+        <td data-k="name">${label}</td>
+        <td data-k="primary_invoice_email" class="mini">${sub}</td>
+      </tr>`;
+  }).join('');
+
+  let ctxHtml = '';
+  if (ctx) {
+    const staff   = ctx.staffName || '';
+    const unit    = ctx.unit || ctx.hospital || '';
+    const ymd     = ctx.dateYmd || '';
+    const nice    = ctx.dateNice || (typeof formatYmdToNiceDate === 'function' ? formatYmdToNiceDate(ymd) : ymd);
+    const importId= ctx.importId || '';
+
+    ctxHtml = `
+      <div class="row">
+        <label>Resolving</label>
+        <div class="controls">
+          <div class="mini">
+            Candidate: <span class="mono">${escapeHtml ? escapeHtml(staff) : staff}</span><br/>
+            Unit / Site: <span class="mono">${escapeHtml ? escapeHtml(unit) : unit}</span><br/>
+            Date: <span class="mono">${escapeHtml ? escapeHtml(nice || '—') : (nice || '—')}</span><br/>
+            Import ID: <span class="mono">${escapeHtml ? escapeHtml(importId || '—') : (importId || '—')}</span>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  const hintLine = (() => {
+    if (ignoreMembership) return `Showing clients from the full dataset${baseRows.length ? ` (${baseRows.length})` : ''}.`;
+    return `Showing clients from the current summary list${mem?.total ? ` (${mem.total} total)` : ''}.`;
+  })();
+
+  const seedEsc = seedQuery
+    ? ((typeof escapeHtml === 'function')
+        ? String(escapeHtml(seedQuery)).replace(/"/g, '&quot;')
+        : String(seedQuery)
+            .replace(/&/g,'&amp;')
+            .replace(/</g,'&lt;')
+            .replace(/>/g,'&gt;')
+            .replace(/"/g,'&quot;'))
+    : '';
+
+  const html = `
+    <div class="tabc">
+      ${ctxHtml}
+      <div class="row">
+        <label>Search</label>
+        <div class="controls">
+          <input class="input" type="text" id="pickerSearch"
+                 value="${seedEsc}"
+                 placeholder="${mem?.stale ? 'Priming list… type to narrow' : 'Type a client name or email…'}"/>
+        </div>
+      </div>
+      <div class="hint">
+        ${hintLine}
+        ${nhspOnly ? ' (NHSP-only filter)' : ''}${hrAutoOnly ? ' (Auto-process HR only)' : ''}
+        ${seedQuery ? `<span class="mini" style="margin-left:8px;">(prefilled)</span>` : ''}
+      </div>
+      <div class="picker-table-wrap">
+        <table class="grid" id="pickerTable">
+          <thead>
+            <tr>
+              <th data-sort="name">Name</th>
+              <th data-sort="primary_invoice_email">Email</th>
+            </tr>
+          </thead>
+          <tbody id="pickerTBody">${renderRows(baseRows)}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+  let selectedId     = null;
+  let selectedLabel  = '';
+  let applySelection = null;
+
+  const renderTab = () => html;
+
+  const onSave = async () => {
+    if (typeof applySelection !== 'function') {
+      if (LOGC) console.warn('[PICKER][clients] onSave called before wiring');
+      return false;
+    }
+    return await applySelection(true);
+  };
+
+  if (LOGC) console.log('[PICKER][clients] opening modal');
+  showModal(
+    'Pick Client',
+    [{ key: 'p', title: 'Clients' }],
+    renderTab,
+    onSave,
+    false,
+    () => {
+      const tbody  = document.getElementById('pickerTBody');
+      const search = document.getElementById('pickerSearch');
+      const table  = document.getElementById('pickerTable');
+      if (LOGC) console.log('[PICKER][clients] onReturn', { hasTBody: !!tbody, hasSearch: !!search, hasTable: !!table });
+      if (!tbody || !search || !table) return;
+
+      let sortKey     = 'name';
+      let sortDir     = 'asc';
+      let currentRows = baseRows.slice();
+
+      const frame = window.__getModalFrame?.();
+      if (frame && frame.kind === 'client-picker') {
+        frame._pickerHasSelection = false;
+        frame._updateButtons && frame._updateButtons();
+      }
+
+      const applyRows = (rows) => {
+        tbody.innerHTML = renderRows(rows);
+        if (selectedId) {
+          const match = tbody.querySelector(`tr[data-id="${selectedId}"]`);
+          if (match) match.classList.add('active');
+        }
+        if (LOGC) console.log('[PICKER][clients] render()', {
+          count: rows.length,
+          sample: rows.slice(0, 6).map(r => r.name)
+        });
+      };
+
+      const doFilter = (q) => {
+        const fn  = (window.pickersLocalFilterAndSort || pickersLocalFilterAndSort);
+        const out = fn('clients', baseRows, q, sortKey, sortDir);
+        if (LOGC) console.log('[PICKER][clients] doFilter()', { q, in: baseRows.length, out: out.length });
+        currentRows = out;
+        return out;
+      };
+
+      if (seedQuery && !search.__seedApplied) {
+        search.__seedApplied = true;
+        try {
+          search.value = seedQuery;
+          currentRows = doFilter(seedQuery);
+          applyRows(currentRows);
+        } catch {}
+      }
+
+      const setActiveRow = (tr) => {
+        const all = tbody.querySelectorAll('tr[data-id]');
+        all.forEach(r => r.classList.remove('active'));
+        if (!tr) {
+          selectedId = null;
+          selectedLabel = '';
+        } else {
+          tr.classList.add('active');
+          selectedId    = tr.getAttribute('data-id');
+          selectedLabel = tr.getAttribute('data-label') || tr.textContent.trim();
+        }
+
+        const fr = window.__getModalFrame?.();
+        if (fr && fr.kind === 'client-picker') {
+          fr._pickerHasSelection = !!selectedId;
+          fr._updateButtons && fr._updateButtons();
+        }
+      };
+
+      applySelection = async (_triggerClose) => {
+        if (!selectedId) {
+          alert('Please select a client first.');
+          return false;
+        }
+        if (LOGC) console.log('[PICKER][clients] applySelection()', { selectedId, selectedLabel });
+        try {
+          await revalidateClientOnPick(selectedId);
+          if (typeof onPick === 'function') {
+            await onPick({ id: selectedId, label: selectedLabel });
+          }
+        } catch (err) {
+          console.warn('[PICKER][clients] selection validation failed', err);
+          alert(err?.message || 'Selection could not be validated.');
+          return false;
+        }
+        return true;
+      };
+
+      if (!tbody.__wiredClick) {
+        tbody.__wiredClick = true;
+        tbody.addEventListener('click', (e) => {
+          const tr = e.target && e.target.closest('tr[data-id]');
+          if (!tr) return;
+          setActiveRow(tr);
+        });
+        tbody.addEventListener('dblclick', (e) => {
+          const tr = e.target && e.target.closest('tr[data-id]');
+          if (!tr) return;
+          setActiveRow(tr);
+          const btnSave = document.getElementById('btnSave');
+          if (btnSave && !btnSave.disabled) btnSave.click();
+        });
+        if (LOGC) console.log('[PICKER][clients] wired click + dblclick handler');
+      }
+
+      if (!table.__wiredSort) {
+        table.__wiredSort = true;
+        table.querySelector('thead').addEventListener('click', (e) => {
+          const th = e.target && e.target.closest('th[data-sort]');
+          if (!th) return;
+          const key = th.getAttribute('data-sort');
+          sortDir = (sortKey === key && sortDir === 'asc') ? 'desc' : 'asc';
+          sortKey = key;
+          currentRows = doFilter(search.value.trim());
+          applyRows(currentRows);
+          if (LOGC) console.log('[PICKER][clients] sort', { sortKey, sortDir, count: currentRows.length });
+        });
+        if (LOGC) console.log('[PICKER][clients] wired sort header');
+      }
+
+      let t = 0;
+      if (!search.__wiredInput) {
+        search.__wiredInput = true;
+        search.addEventListener('input', () => {
+          const q = search.value.trim();
+          if (LOGC) console.log('[PICKER][clients] search input', { q });
+          if (t) clearTimeout(t);
+          t = setTimeout(() => {
+            currentRows = doFilter(q);
+            applyRows(currentRows);
+            setActiveRow(null);
+          }, 150);
+        });
+        if (LOGC) console.log('[PICKER][clients] wired search input');
+      }
+
+      if (!search.__wiredKey) {
+        search.__wiredKey = true;
+        search.addEventListener('keydown', (e) => {
+          const itemsEls = Array.from(tbody.querySelectorAll('tr[data-id]'));
+          if (!itemsEls.length) {
+            if (e.key === 'Escape') {
+              const closeBtn = document.getElementById('btnCloseModal');
+              if (closeBtn) closeBtn.click();
+            }
+            return;
+          }
+
+          const idx = itemsEls.findIndex(tr => tr.classList.contains('active'));
+          const setActiveIdx = (i) => {
+            const safe = Math.max(0, Math.min(i, itemsEls.length - 1));
+            setActiveRow(itemsEls[safe]);
+            itemsEls[safe].scrollIntoView({ block: 'nearest' });
+          };
+
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setActiveIdx(idx < 0 ? 0 : idx + 1);
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActiveIdx(idx < 0 ? 0 : idx - 1);
+          }
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const target = itemsEls[Math.max(idx, 0)];
+            if (target) {
+              setActiveRow(target);
+              const btnSave = document.getElementById('btnSave');
+              if (btnSave && !btnSave.disabled) btnSave.click();
+            }
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            const closeBtn = document.getElementById('btnCloseModal');
+            if (closeBtn) closeBtn.click();
+          }
+        });
+        if (LOGC) console.log('[PICKER][clients] wired search keydown');
+      }
+
+      setTimeout(() => {
+        try { search.focus(); } catch {}
+      }, 0);
+    },
+    { kind: 'client-picker', noParentGate: true }
+  );
+
+  setTimeout(() => {
+    try {
+      const fr = window.__getModalFrame?.();
+      const willCall = !!(fr && fr.kind === 'client-picker' && typeof fr.onReturn === 'function' && !fr.__pickerInit);
+      if (LOGC) console.log('[PICKER][clients] post-render kick', { willCall });
+      if (willCall) {
+        fr.__pickerInit = true;
+        fr.onReturn();
+        if (LOGC) console.log('[PICKER][clients] initial onReturn() executed');
+      }
+    } catch (e) {
+      if (LOGC) console.warn('[PICKER][clients] post-render kick failed', e);
+    }
+  }, 0);
+}
+
+
+
+
 async function openCandidatePayMethodChangeModal(candidate, context = {}) {
   const LOG = (typeof window.__LOG_CAND === 'boolean')
     ? window.__LOG_CAND
@@ -26513,6 +28032,7 @@ function renderCalendarLegend(container) {
     </div>`;
 }
 
+
 function renderDayGrid(hostEl, opts) {
   if (!hostEl) return;
   const { from, to, itemsByDate, view, bucketKey } = opts;
@@ -26591,10 +28111,9 @@ function renderDayGrid(hostEl, opts) {
     days.className = (view === 'year') ? 'days' : 'days days-large';
 
     // Monday-first offset:
-    // JS: Sun=0..Sat=6  →  Mon-first index: Mon=0..Sun=6
     const first = new Date(Date.UTC(y, m, 1));
-    const jsDow = first.getUTCDay();           // 0..6 (Sun..Sat)
-    const monIndex = (jsDow + 6) % 7;          // 0..6 (Mon..Sun)
+    const jsDow = first.getUTCDay();
+    const monIndex = (jsDow + 6) % 7;
 
     for (let i = 0; i < monIndex; i++) {
       const blank = document.createElement('div');
@@ -26610,7 +28129,6 @@ function renderDayGrid(hostEl, opts) {
       const dYmd = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const items = itemsByDate.get(dYmd) || [];
 
-      // Decide which items are relevant for colouring + overlays
       let relevant = items;
       let ownedByCurrent = false;
 
@@ -26620,7 +28138,6 @@ function renderDayGrid(hostEl, opts) {
         ownedByCurrent = relevant.length > 0;
       }
 
-      // Base state from relevant items (candidate unfiltered = all items; filtered/contract = owned)
       const finalState = (relevant.length > 0)
         ? ((typeof topState === 'function') ? topState(relevant) : 'EMPTY')
         : 'EMPTY';
@@ -26628,13 +28145,11 @@ function renderDayGrid(hostEl, opts) {
       const stateClass = (typeof colorForState === 'function') ? colorForState(finalState) : null;
       if (stateClass) cell.classList.add(stateClass);
 
-      // Per-line hold overlays (only for relevant items)
       const hasPayLineHold = relevant.some(it => it && it.pay_line_on_hold === true);
       const hasInvoiceLineHold = relevant.some(it => it && it.invoice_line_on_hold === true);
       if (hasPayLineHold) cell.classList.add('flag-payline-hold');
       if (hasInvoiceLineHold) cell.classList.add('flag-invoiceline-hold');
 
-      // Grey “occupied by other contract” days in contract-centric views
       let occupiedByOtherOnly = false;
       if (isContractBucket) {
         const keyStr = String(currentKey || '');
@@ -26655,20 +28170,23 @@ function renderDayGrid(hostEl, opts) {
       cell.innerHTML = `<div class="ico"><div class="num">${d}</div></div>`;
       cell.setAttribute('data-date', dYmd);
 
-      // NEW: Hover tooltip shows STATUS in words (and includes the date)
+      // ✅ NEW: prevent text selection while dragging/range selecting
+      if (interactive) {
+        cell.addEventListener('mousedown', (ev) => {
+          try { ev.preventDefault(); } catch {}
+        }, { signal: controller.signal });
+      }
+
+      // Hover tooltip
       try {
         const jsDay = new Date(Date.UTC(y, m, d)).getUTCDay();
         const monDay = (jsDay + 6) % 7;
 
-        // Base label: other-contract overrides everything in contract-centric view
         let statusLabel = occupiedByOtherOnly
           ? 'Other contract'
           : prettyStateLabel(finalState);
 
-        // Add holds/details (only when the date has something meaningful)
         const extras = [];
-
-        // Contract-level holds (these appear on day items in your payloads)
         const hasPayHold = relevant.some(it => it && it.pay_on_hold === true);
         const hasInvoiceHold = relevant.some(it => it && it.invoice_on_hold === true);
 
@@ -26677,7 +28195,6 @@ function renderDayGrid(hostEl, opts) {
         if (hasPayLineHold) extras.push('Pay line held');
         if (hasInvoiceLineHold) extras.push('Invoice line delayed');
 
-        // Candidate view: if multiple different contracts exist on this date, mention it
         if (!isContractBucket) {
           const uniq = new Set(
             (items || [])
@@ -26744,7 +28261,6 @@ function renderDayGrid(hostEl, opts) {
     if (!controller.signal.aborted) opts.onToggleView && opts.onToggleView();
   }, { signal: controller.signal });
 }
-
 
 
 
@@ -28907,16 +30423,13 @@ const stage = (e) => {
 
               const closeMenu = () => { menu.style.display = 'none'; menu.innerHTML = ''; };
               const openMenu  = () => { positionMenu(); menu.style.display = ''; };
-
               const getDataset = () => {
-                const fp  = getSummaryFingerprint(entity);
-                const mem = getSummaryMembership(entity, fp);
                 const ds  = (window.__pickerData ||= {})[entity] || { since:null, itemsById:{} };
                 const items = ds.itemsById || {};
-                let ids = Array.isArray(mem?.ids) ? mem.ids : [];
-                if (!ids.length) ids = Object.keys(items);
+                const ids = Object.keys(items); // ✅ ALWAYS full dataset; never constrained by summary membership
                 return { ids, items };
               };
+
 
               const applyList = (rows) => {
                 menu.innerHTML = rows.slice(0, 10).map(r => {
@@ -29020,65 +30533,281 @@ if (hiddenName === 'candidate_id') {
               inputEl.addEventListener('input', handleInput);
               inputEl.addEventListener('keydown', handleKeyDown);
             };
-
             wireTypeahead('candidates', candInput, 'candidate_id', 'candidatePickLabel');
             wireTypeahead('clients',    cliInput,  'client_id',    'clientPickLabel');
 
-   if (btnPC && !btnPC.__wired) {
-  btnPC.__wired = true;
-  btnPC.addEventListener('click', async () => {
-    if (LOGC) console.log('[CONTRACTS] Pick Candidate clicked');
-    openCandidatePicker(async ({ id, label }) => {
-      if (LOGC) console.log('[CONTRACTS] Pick Candidate → selected', { id, label });
+            // ✅ NEW: wire Pick Candidate (full DB; not constrained by summary membership)
+            if (btnPC && !btnPC.__wired) {
+              btnPC.__wired = true;
+              btnPC.addEventListener('click', async () => {
+                if (LOGC) console.log('[CONTRACTS] Pick Candidate clicked');
 
-      let candRow = null;
-      try {
-        const candRaw = await getCandidate(id);
-        // Support both shapes: { candidate:{...} } or flat row
-        candRow = (candRaw && candRaw.candidate) ? candRaw.candidate : candRaw;
-      } catch (e) {
-        alert('Failed to load candidate details for this contract.');
-        if (LOGC) console.warn('[CONTRACTS] getCandidate failed', e);
-        return;
+                // Ensure datasets are primed before opening picker (fast + up-to-date)
+                try { await ensurePrimed('candidates'); } catch {}
+
+                openCandidatePicker(async ({ id, label }) => {
+                  if (LOGC) console.log('[CONTRACTS] Pick Candidate → selected', { id, label });
+
+                  // Update hidden + visible fields
+                  setContractFormValue('candidate_id', id);
+                  const lab = document.getElementById('candidatePickLabel');
+                  if (lab) lab.textContent = `Chosen: ${label}`;
+
+                  const candInput2 = document.getElementById('candidate_name_display');
+                  if (candInput2) candInput2.value = label || '';
+
+                  // Stage into formState + modalCtx.data
+                  try {
+                    const fs2 = (window.modalCtx.formState ||= {
+                      __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null),
+                      main:{},
+                      pay:{}
+                    });
+                    fs2.main ||= {};
+                    fs2.main.candidate_id = id;
+                    fs2.main.candidate_display = label;
+                  } catch {}
+
+                  try {
+                    window.modalCtx.data = window.modalCtx.data || {};
+                    window.modalCtx.data.candidate_id = id;
+                    window.modalCtx.data.candidate_display = label;
+                  } catch {}
+
+                  // Mark non-calendar dirty (programmatic changes won't trigger input handler reliably)
+                  try {
+                    window.modalCtx = window.modalCtx || {};
+                    window.modalCtx.__nonCalendarDirty = true;
+                    window.modalCtx.__calendarOnly = false;
+                  } catch {}
+
+                  // Derive + lock pay_method_snapshot from candidate (same logic as typeahead selectRow)
+                  (async () => {
+                    try {
+                      const candRaw = await getCandidate(id);
+                      const cand = (candRaw && candRaw.candidate) ? candRaw.candidate : candRaw;
+
+                      const pmRaw = cand && cand.pay_method ? String(cand.pay_method).toUpperCase() : '';
+                      const derived =
+                        (pmRaw === 'UMBRELLA' && cand && cand.umbrella_id)
+                          ? 'UMBRELLA'
+                          : 'PAYE';
+
+                      const fsm = (window.modalCtx.formState ||= { main:{}, pay:{} }).main ||= {};
+                      fsm.pay_method_snapshot = derived;
+                      fsm.__pay_locked = true;
+
+                      const sel = document.querySelector('select[name="pay_method_snapshot"], select[name="default_pay_method_snapshot"]');
+                      if (sel) { sel.value = derived; sel.disabled = true; }
+
+                      try { computeContractMargins(); } catch {}
+                    } catch (e) {
+                      if (LOGC) console.warn('[CONTRACTS] derive pay method failed', e);
+                    }
+                  })();
+
+                  try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+                }, { ignoreMembership: true }); // ✅ ALWAYS full DB candidate picker
+              });
+
+              if (LOGC) console.log('[CONTRACTS] wired btnPickCandidate');
+            }
+
+             if (btnPL && !btnPL.__wired) {
+              btnPL.__wired = true;
+              btnPL.addEventListener('click', async () => {
+                if (LOGC) console.log('[CONTRACTS] Pick Client clicked');
+                openClientPicker(async ({ id, label }) => {
+                  if (LOGC) console.log('[CONTRACTS] Pick Client → selected', { id, label });
+                  setContractFormValue('client_id', id);
+                  const lab = document.getElementById('clientPickLabel'); if (lab) lab.textContent = `Chosen: ${label}`;
+                  try {
+                    const fs2 = (window.modalCtx.formState ||= { __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null), main:{}, pay:{} });
+                    fs2.main ||= {}; fs2.main.client_id = id; fs2.main.client_name = label;
+                    window.modalCtx.data = window.modalCtx.data || {};
+                    window.modalCtx.data.client_id = id; window.modalCtx.data.client_name = label;
+                  } catch {}
+                         try {
+                    const client = await getClient(id);
+
+                    // ✅ NEW: store the latest client_settings snapshot for overrideclientsettings seeding
+                    try {
+                      const cs = client?.client_settings || null;
+                      if (cs && typeof cs === 'object') {
+                        window.modalCtx.client_settings_snapshot = cs;
+                        window.modalCtx.client_settings_snapshot_client_id = String(id);
+                        if (LOGC) console.log('[CONTRACTS] stored client_settings snapshot (client change)', { client_id: id });
+                      } else {
+                        window.modalCtx.client_settings_snapshot = null;
+                        window.modalCtx.client_settings_snapshot_client_id = String(id);
+                        if (LOGC) console.warn('[CONTRACTS] client_settings snapshot missing on client payload (client change)', { client_id: id });
+                      }
+                    } catch {}
+
+                    const h = checkClientInvoiceEmailPresence(client);
+                    if (h) showModalHint(h, 'warn');
+                    const we = (client?.week_ending_weekday ?? (client?.client_settings && client.client_settings.week_ending_weekday)) ?? 0;
+
+                    const fs2 = (window.modalCtx.formState ||= { main:{}, pay:{} });
+                    fs2.main ||= {}; fs2.main.week_ending_weekday_snapshot = String(we);
+                    const weekNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                    const lbl = document.getElementById('weLabel'); if (lbl) lbl.textContent = weekNames[Number(we)] || 'Sunday';
+                    const hidden = form?.querySelector('input[name="week_ending_weekday_snapshot"]'); if (hidden) hidden.value = String(we);
+
+                      // NEW: 2.5 defaults (only on brand new contract and if not manually set yet)
+try {
+  const isNewContract = !window.modalCtx?.data?.id;
+  const cs = client?.client_settings || {};
+  if (isNewContract) {
+    const main = (window.modalCtx.formState ||= {main:{},pay:{}}).main ||= {};
+
+    // NEW: contract route defaults from client settings (only if unset)
+    if (!Object.prototype.hasOwnProperty.call(main, 'is_nhsp')) {
+      const v = !!cs.is_nhsp;
+      setContractFormValue('is_nhsp', v ? 'on' : '');
+      main.is_nhsp = v;
+    }
+    if (!Object.prototype.hasOwnProperty.call(main, 'autoprocess_hr')) {
+      const v = !!cs.autoprocess_hr;
+      setContractFormValue('autoprocess_hr', v ? 'on' : '');
+      main.autoprocess_hr = v;
+    }
+    if (!Object.prototype.hasOwnProperty.call(main, 'requires_hr')) {
+      const v = !!cs.requires_hr;
+      setContractFormValue('requires_hr', v ? 'on' : '');
+      main.requires_hr = v;
+    }
+    if (!Object.prototype.hasOwnProperty.call(main, 'no_timesheet_required')) {
+      const v = !!cs.no_timesheet_required;
+      setContractFormValue('no_timesheet_required', v ? 'on' : '');
+      main.no_timesheet_required = v;
+    }
+       if (!Object.prototype.hasOwnProperty.call(main, 'daily_calc_of_invoices')) {
+      const v = !!cs.daily_calc_of_invoices;
+      setContractFormValue('daily_calc_of_invoices', v ? 'on' : '');
+      main.daily_calc_of_invoices = v;
+    }
+       if (!Object.prototype.hasOwnProperty.call(main, 'group_nightsat_sunbh')) {
+      const v = !!cs.group_nightsat_sunbh;
+      setContractFormValue('group_nightsat_sunbh', v ? 'on' : '');
+      main.group_nightsat_sunbh = v;
+    }
+
+    // NEW: self-bill default (client_settings column is self_bill_no_invoices_sent)
+    if (!Object.prototype.hasOwnProperty.call(main, 'self_bill')) {
+      const v = !!cs.self_bill_no_invoices_sent;
+      setContractFormValue('self_bill', v ? 'on' : '');
+      main.self_bill = v;
+    }
+
+    // NEW: canonicalise route flags (matches brief)
+    const r_isNhsp = !!main.is_nhsp;
+    const r_isHr   = !!main.autoprocess_hr;
+    const r_noTs   = !!main.no_timesheet_required;
+
+    if (r_isNhsp) {
+      if (main.autoprocess_hr) {
+        setContractFormValue('autoprocess_hr', '');
+        main.autoprocess_hr = false;
       }
-
-      const pmRaw = candRow && candRow.pay_method ? String(candRow.pay_method).toUpperCase() : '';
-      const pm    = (pmRaw === 'PAYE' || pmRaw === 'UMBRELLA') ? pmRaw : null;
-
-      if (!pm) {
-        alert('This candidate has no pay method set (Unknown). Please set their pay method to PAYE or UMBRELLA before creating a contract.');
-        if (LOGC) console.warn('[CONTRACTS] blocking contract create for candidate with Unknown pay_method', {
-          candidate_id: id,
-          pay_method: candRow?.pay_method
-        });
-        return;
+      if (main.no_timesheet_required) {
+        setContractFormValue('no_timesheet_required', '');
+        main.no_timesheet_required = false;
       }
-
-      // Only now do we bind candidate + snapshot into the contract form
-      setContractFormValue('candidate_id', id);
-      const lab = document.getElementById('candidatePickLabel'); if (lab) lab.textContent = `Chosen: ${label}`;
-      try {
-        const fs2 = (window.modalCtx.formState ||= { __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null), main:{}, pay:{} });
-        fs2.main ||= {}; fs2.main.candidate_id = id; fs2.main.candidate_display = label;
-        window.modalCtx.data = window.modalCtx.data || {};
-        window.modalCtx.data.candidate_id = id; window.modalCtx.data.candidate_display = label;
-      } catch {}
-
-      try {
-        const fsm = (window.modalCtx.formState ||= { main:{}, pay:{} }).main ||= {};
-        fsm.pay_method_snapshot = pm;
-        fsm.__pay_locked = true;
-        const sel = document.querySelector('select[name="pay_method_snapshot"], select[name="default_pay_method_snapshot"]');
-        if (sel) { sel.value = pm; sel.disabled = true; }
-        computeContractMargins();
-      } catch (e) {
-        if (LOGC) console.warn('[CONTRACTS] prefillPayMethodFromCandidate failed', e);
+    }
+    if (r_noTs) {
+      if (!main.autoprocess_hr) {
+        setContractFormValue('autoprocess_hr', 'on');
+        main.autoprocess_hr = true;
       }
-    });
-  });
+      if (main.is_nhsp) {
+        setContractFormValue('is_nhsp', '');
+        main.is_nhsp = false;
+      }
+    }
+    if (main.autoprocess_hr) {
+      if (main.is_nhsp) {
+        setContractFormValue('is_nhsp', '');
+        main.is_nhsp = false;
+      }
+    }
+    if (!main.autoprocess_hr) {
+      if (main.no_timesheet_required) {
+        setContractFormValue('no_timesheet_required', '');
+        main.no_timesheet_required = false;
+      }
+    }
 
-  if (LOGC) console.log('[CONTRACTS] wired btnPickCandidate');
-}
+    // Optional: update visible route label immediately if present (non-blocking)
+    try {
+      const lbl = document.getElementById('contractRouteLabel');
+      if (lbl) {
+        const isNhsp = !!main.is_nhsp;
+        const isHr   = !!main.autoprocess_hr;
+        const noTs   = !!main.no_timesheet_required;
+        const routeLabel =
+          isNhsp ? 'NHSP' :
+          (isHr && noTs) ? 'HealthRoster (no timesheets)' :
+          (isHr) ? 'HealthRoster (timesheets required)' :
+          'Manual';
+        lbl.innerHTML = `<strong>${routeLabel}</strong>`;
+      }
+    } catch {}
+
+    if (!Object.prototype.hasOwnProperty.call(main, 'require_reference_to_pay')) {
+      const v = !!cs.pay_reference_required;
+      setContractFormValue('require_reference_to_pay', v ? 'on' : '');
+      main.require_reference_to_pay = v;
+    }
+    if (!Object.prototype.hasOwnProperty.call(main, 'require_reference_to_invoice')) {
+      const v = !!cs.invoice_reference_required;
+      setContractFormValue('require_reference_to_invoice', v ? 'on' : '');
+      main.require_reference_to_invoice = v;
+    }
+    if (!Object.prototype.hasOwnProperty.call(main, 'default_submission_mode')) {
+      const mode = String(cs.default_submission_mode || 'ELECTRONIC').toUpperCase();
+      const sel = document.querySelector('select[name="default_submission_mode"]');
+      if (sel) sel.value = mode;
+      main.default_submission_mode = mode;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(main, 'auto_invoice')) {
+      const v = !!cs.auto_invoice_default;
+      setContractFormValue('auto_invoice', v ? 'on' : '');
+      main.auto_invoice = v;
+      const cb = form?.querySelector('input[name="auto_invoice"]');
+      if (cb) cb.checked = v;
+    }
+
+    // NEW: mileage default from client when empty
+    const mcrEl = document.querySelector('#contractRatesTab input[name="mileage_charge_rate"]');
+    const mprEl = document.querySelector('#contractRatesTab input[name="mileage_pay_rate"]');
+    const isBlank = (el) => !el || String(el.value||'').trim()==='';
+    if ((isBlank(mcrEl) && !main.mileage_charge_rate) || (isBlank(mprEl) && !main.mileage_pay_rate)) {
+      const charge = (client?.mileage_charge_rate != null) ? Number(client.mileage_charge_rate) : null;
+      if (charge != null && Number.isFinite(charge)) {
+        const pay = Math.max(0, charge - 0.10);
+        if (mcrEl) mcrEl.value = charge;
+        if (mprEl) mprEl.value = pay;
+        main.mileage_charge_rate = charge;
+        main.mileage_pay_rate    = pay;
+        try {
+          if (mcrEl) { mcrEl.dispatchEvent(new Event('input',{bubbles:true})); mcrEl.dispatchEvent(new Event('change',{bubbles:true})); }
+          if (mprEl) { mprEl.dispatchEvent(new Event('input',{bubbles:true})); mprEl.dispatchEvent(new Event('change',{bubbles:true})); }
+        } catch {}
+      }
+    }
+  }
+} catch (e) { if (LOGC) console.warn('[CONTRACTS] client defaults (gates/submission/mileage) failed', e); }
+
+                    try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+                  } catch (e) { if (LOGC) console.warn('[CONTRACTS] client hint/week-ending check failed', e); }
+                }, { ignoreMembership: true }); // ✅ ALWAYS full DB client picker
+              });
+              if (LOGC) console.log('[CONTRACTS] wired btnPickClient');
+            }
+
+
 
       if (btnCC && !btnCC.__wired) {
   btnCC.__wired = true;
@@ -29909,7 +31638,9 @@ async function fetchAndRenderContractCalendar(contractId, opts) {
       const allEligible = selArr.every(eligibleUnbook);
       const blockMode = isConsecutiveDailyRun(selArr);
 
-      const canBook = selArr.every(d => !ownedByCurrent(d));
+      // ✅ FIX #2: allow "Book" if there exists at least one unowned day in selection
+      const canBook = selArr.some(d => !ownedByCurrent(d));
+
       const canUnbook = blockMode ? anyEligible : allEligible;
 
       const canAddAdditional = selArr.some(d => {
@@ -29930,7 +31661,12 @@ async function fetchAndRenderContractCalendar(contractId, opts) {
               if (anyGrey) {
                 if (!window.confirm('This would clash with an existing contract on some selected dates. Continue?')) return;
               }
-              stageContractCalendarBookings(contractId, selection);
+
+              // ✅ FIX #2 (continued): only book missing (unowned) dates
+              const toBook = (selection || []).filter(d => !ownedByCurrent(d));
+              if (toBook.length) {
+                stageContractCalendarBookings(contractId, toBook);
+              }
             }
             if (type === 'unbook') {
               const toUnbook = selection.filter(eligibleUnbook);
@@ -29976,7 +31712,6 @@ async function fetchAndRenderContractCalendar(contractId, opts) {
   };
   requestAnimationFrame(() => requestAnimationFrame(applyScroll));
 }
-
 
 
 
@@ -44990,7 +46725,6 @@ const summaryCtxOnOpen =
   (typeof captureSummaryContextForModalOpen === 'function')
     ? captureSummaryContextForModalOpen()
     : null;
-
 const frame = {
   _token: `f:${Date.now()}:${Math.random().toString(36).slice(2)}`,
   _ctxRef: ctxForFrame,
@@ -44999,6 +46733,11 @@ const frame = {
   _summaryCtx: summaryCtxOnOpen,
 
   title,
+
+  // ✅ NEW: optional header pills next to title (e.g. Currently Working / Recently Worked)
+  // Expected shape: [{ text, className, title? }, ...] or ['Text', ...]
+  titleBadges: (opts && Array.isArray(opts.titleBadges)) ? deep(opts.titleBadges) : null,
+
   tabs: Array.isArray(tabs) ? tabs.slice() : [],
   renderTab,
   onSave,
@@ -45007,7 +46746,6 @@ const frame = {
   entity: (ctxForFrame && ctxForFrame.entity) || null,
   _showSave: (opts && Object.prototype.hasOwnProperty.call(opts, 'showSave')) ? !!opts.showSave : null,
   _showApply: (opts && Object.prototype.hasOwnProperty.call(opts, 'showApply')) ? !!opts.showApply : null,
-
 
 
   // NEW: optional dismiss hook (called when user closes the modal via Close/ESC)
@@ -45085,7 +46823,6 @@ persistCurrentTabState() {
     });
     return out;
   };
-
   if (this.currentTabKey === 'main') {
   const sel = byId('tab-main') ? '#tab-main' : (byId('contractForm') ? '#contractForm' : null);
   if (sel) {
@@ -45097,6 +46834,53 @@ persistCurrentTabState() {
     if (Object.prototype.hasOwnProperty.call(c, 'key_norm')) {
       merged.key_norm = (c.key_norm == null) ? '' : String(c.key_norm);
     }
+
+    // ✅ Candidates: preserve Title + Band even when cleared; stage opt-ins as booleans (always)
+    try {
+      if (this.entity === 'candidates') {
+        if (Object.prototype.hasOwnProperty.call(c, 'title')) {
+          merged.title = (c.title == null) ? '' : String(c.title);
+        }
+        if (Object.prototype.hasOwnProperty.call(c, 'band')) {
+          // collectForm may return '' or Number(...) depending on input type
+          merged.band = (c.band === '' || c.band == null) ? '' : c.band;
+        }
+
+        // collectForm returns 'on' or '' for checkboxes → stage real booleans (and keep false)
+        if (Object.prototype.hasOwnProperty.call(c, 'opt_in_email')) {
+          merged.opt_in_email = (c.opt_in_email === 'on');
+        }
+        if (Object.prototype.hasOwnProperty.call(c, 'opt_in_sms')) {
+          merged.opt_in_sms = (c.opt_in_sms === 'on');
+        }
+        if (Object.prototype.hasOwnProperty.call(c, 'opt_in_whatsapp')) {
+          merged.opt_in_whatsapp = (c.opt_in_whatsapp === 'on');
+        }
+      }
+    } catch {}
+
+    // ✅ Clients: preserve Site Details + Site Contact fields even when cleared
+    try {
+      if (this.entity === 'clients') {
+        const PRESERVE_CLIENT_KEYS = [
+          'client_address',
+          'contact_title',
+          'contact_known_as',
+          'contact_forename',
+          'contact_surname',
+          'contact_job_title',
+          'contact_tel',
+          'contact_mobile',
+          'contact_email'
+        ];
+
+        for (const key of PRESERVE_CLIENT_KEYS) {
+          if (Object.prototype.hasOwnProperty.call(c, key)) {
+            merged[key] = (c[key] == null) ? '' : String(c[key]);
+          }
+        }
+      }
+    } catch {}
 
     const sched  = keepScheduleBlanks(c);
     fs.main = { ...(fs.main||{}), ...merged, ...sched };
@@ -45264,12 +47048,40 @@ mergedRowForTab(k) {
 
   // Default merge (drops empty strings via stripEmpty)
   const out = { ...base, ...stripEmpty(mainStaged) };
-
   // ✅ Preserve intentional clears for specific fields (blank string should win over base)
-  // Global Candidate Key is stored as candidates.key_norm in your data model.
   try {
     if (this.entity === 'candidates') {
-      const PRESERVE_EMPTY_KEYS = new Set(['key_norm']); // add more here only if needed
+      const PRESERVE_EMPTY_KEYS = new Set(['key_norm', 'title', 'band']);
+
+      for (const key of PRESERVE_EMPTY_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(mainStaged, key)) {
+          const v = mainStaged[key];
+          if (v === '') out[key] = ''; // keep explicit blank
+        }
+      }
+
+      // ✅ Ensure staged opt-ins override base even when false
+      const OPT_KEYS = ['opt_in_email', 'opt_in_sms', 'opt_in_whatsapp'];
+      for (const k2 of OPT_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(mainStaged, k2)) {
+          const v2 = mainStaged[k2];
+          if (typeof v2 === 'boolean') out[k2] = v2;
+        }
+      }
+    }
+
+    if (this.entity === 'clients') {
+      const PRESERVE_EMPTY_KEYS = new Set([
+        'client_address',
+        'contact_title',
+        'contact_known_as',
+        'contact_forename',
+        'contact_surname',
+        'contact_job_title',
+        'contact_tel',
+        'contact_mobile',
+        'contact_email'
+      ]);
 
       for (const key of PRESERVE_EMPTY_KEYS) {
         if (Object.prototype.hasOwnProperty.call(mainStaged, key)) {
@@ -45279,6 +47091,7 @@ mergedRowForTab(k) {
       }
     }
   } catch {}
+
 
   // ✅ FIX: when rendering the Pay tab, rehydrate staged pay fields verbatim
   // (do NOT strip empties, otherwise clearing a bank field will snap back)
@@ -47453,6 +49266,14 @@ function setFrameMode(frameObj, mode) {
       .catch(() => {});
   }
 }
+// ✅ NEW: persist parent staged state before opening child modal
+// Prevents "typed fields disappear" when a child modal opens before parent state is staged.
+try {
+  const p = currentFrame();
+  if (p && typeof p.persistCurrentTabState === 'function') {
+    p.persistCurrentTabState();
+  }
+} catch {}
 
 const parentOnOpen = currentFrame();
 frame._parentModeOnOpen = parentOnOpen ? parentOnOpen.mode : null;
@@ -47499,10 +49320,43 @@ try {
 
   if (typeof top._detachGlobal === 'function') { try { top._detachGlobal(); } catch {} top._wired = false; }
 
-  L('renderTop state (global)', { entity: top?.entity, kind: top?.kind, mode: top?.mode, hasId: top?.hasId, currentTabKey: top?.currentTabKey });
-  byId('modalTitle').textContent = top.title;
+ L('renderTop state (global)', { entity: top?.entity, kind: top?.kind, mode: top?.mode, hasId: top?.hasId, currentTabKey: top?.currentTabKey });
+
+// ✅ NEW: render title + optional titleBadges (pills) safely (no innerHTML from user strings)
+try {
+  const mt = byId('modalTitle');
+  if (mt) {
+    mt.textContent = '';
+    mt.style.display = 'flex';
+    mt.style.alignItems = 'center';
+    mt.style.gap = '6px';
+    mt.style.flexWrap = 'wrap';
+
+    const tSpan = document.createElement('span');
+    tSpan.textContent = String(top.title || '');
+    mt.appendChild(tSpan);
+
+    const badges = Array.isArray(top.titleBadges) ? top.titleBadges : [];
+    badges.forEach((bd) => {
+      const isObj = !!(bd && typeof bd === 'object');
+      const text = isObj ? (bd.text ?? bd.label ?? '') : bd;
+      const cls  = isObj ? (bd.className ?? bd.class ?? '') : '';
+      const tip  = isObj ? (bd.title ?? '') : '';
+
+      const txt = String(text || '').trim();
+      if (!txt) return;
+
+      const pill = document.createElement('span');
+      pill.className = `pill${cls ? ' ' + String(cls) : ''}`;
+      pill.textContent = txt;
+      if (String(tip || '').trim()) pill.title = String(tip).trim();
+      mt.appendChild(pill);
+    });
+  }
+} catch {}
 
 const tabsEl = byId('modalTabs'); tabsEl.innerHTML='';
+
 
 // ✅ Choose a safe active tab (never start on a disabled tab)
 try {
@@ -47519,10 +49373,25 @@ try {
 
   top.currentTabKey = activeKey;
 } catch {}
+let _pushedRight = false;
 
 (top.tabs||[]).forEach((t,i)=>{
   const b = document.createElement('button');
   b.textContent = t.label || t.title || t.key;
+
+  // ✅ NEW: Right-aligned tabs (first one pushes the rest to the far right)
+  const alignRight = !!(t && (t.alignRight === true || t.align_right === true));
+  if (alignRight && !_pushedRight) {
+    b.style.marginLeft = 'auto';
+    _pushedRight = true;
+  }
+
+  // ✅ NEW: Small tab (compact padding/font-size) — for E-History
+  const small = !!(t && (t.small === true || t.isSmall === true));
+  if (small) {
+    b.style.padding = '4px 8px';
+    b.style.fontSize = '11px';
+  }
 
   // ✅ Disabled tab support WITHOUT native disabled (keeps hover/title reliable)
   const isDisabled = !!(t && t.disabled);
@@ -47552,6 +49421,7 @@ try {
 
   tabsEl.appendChild(b);
 });
+
 
 L('renderTop tabs (global)', { count: (top.tabs||[]).length, active: top.currentTabKey });
 
@@ -57653,13 +59523,25 @@ if (btnClear && !btnClear.__wired) {
   root.__wired = true;
 }
 
-
 async function upsertClient(payload, id){
   if ('cli_ref' in payload) delete payload.cli_ref;
 
-  // ✅ Allow explicit clearing for specific client fields (e.g., ts_queries_email):
+  // ✅ Allow explicit clearing for specific client fields:
   // - if provided as '' in UI, send NULL so backend clears it.
-  const CLEAN_NULLABLE_KEYS = new Set(['ts_queries_email']);
+  const CLEAN_NULLABLE_KEYS = new Set([
+    'ts_queries_email',
+
+    // ✅ NEW: client site details + site contact fields must be clearable
+    'client_address',
+    'contact_title',
+    'contact_forename',
+    'contact_surname',
+    'contact_known_as',
+    'contact_job_title',
+    'contact_tel',
+    'contact_mobile',
+    'contact_email'
+  ]);
 
   const clean = {};
   for (const [k, v] of Object.entries(payload || {})) {
@@ -57737,7 +59619,6 @@ async function upsertClient(payload, id){
   if (APILOG) console.log('[upsertClient] fallback', fallback);
   return fallback;
 }
-
 
 
 // =================== HOSPITALS TABLE (UPDATED: staged delete & edit) ===================
@@ -59355,66 +61236,6 @@ function applySelectedJobTitleToCandidate(candidateModel, selection) {
 }
 
 // =============== NEW: buildCandidateMainDetailsModel ===================
-function buildCandidateMainDetailsModel(row) {
-  const r = row || {};
-  const model = {
-    id: r.id || null,
-
-    // Personal identifiers
-    ni_number: r.ni_number || '',
-    date_of_birth: r.date_of_birth || null, // ISO date string (YYYY-MM-DD)
-    gender: r.gender || '',
-
-    // Registration
-    prof_reg_type: r.prof_reg_type || null,
-    prof_reg_number: r.prof_reg_number || '',
-
-    // Address
-    address_line1: r.address_line1 || '',
-    address_line2: r.address_line2 || '',
-    address_line3: r.address_line3 || '',
-    town_city: r.town_city || '',
-    county: r.county || '',
-    postcode: r.postcode || '',
-    country: r.country || ''
-  };
-
-  // Multi job titles from backend (candidate_job_titles)
-  // shape: [{ job_title_id, is_primary }, ...]
-  let jobs = Array.isArray(r.job_titles)
-    ? r.job_titles
-        .map((jt) => ({
-          job_title_id: jt.job_title_id,
-          is_primary: !!jt.is_primary
-        }))
-        .filter((t) => t.job_title_id)
-    : [];
-
-  // Normalise:
-  // - if none is primary, make the first primary
-  // - if multiple are primary, keep the first as primary and clear the rest
-  // - always move the primary to index 0
-  if (jobs.length) {
-    let primaryIdx = jobs.findIndex((t) => t.is_primary);
-    if (primaryIdx === -1) {
-      primaryIdx = 0;
-    }
-
-    jobs = jobs.map((t, idx) => ({
-      ...t,
-      is_primary: idx === primaryIdx
-    }));
-
-    if (primaryIdx !== 0) {
-      const primary = jobs[primaryIdx];
-      jobs.splice(primaryIdx, 1);
-      jobs.unshift(primary);
-    }
-  }
-
-  model.job_titles = jobs;
-  return model;
-}
 
 // =============== NEW: bindCandidateMainFormEvents ======================
 // =============== NEW: bindCandidateMainFormEvents ======================
@@ -59423,15 +61244,6 @@ function bindCandidateMainFormEvents(container, model) {
   if (!container || !model) return;
 
   const q = (sel) => container.querySelector(sel);
-
-  const bind = (selector, key) => {
-    const el = q(selector);
-    if (!el) return;
-    el.value = model[key] || '';
-    el.addEventListener('input', () => {
-      model[key] = el.value;
-    });
-  };
 
   // Small helper to mark current candidate frame dirty
   const markDirty = () => {
@@ -59444,6 +61256,212 @@ function bindCandidateMainFormEvents(container, model) {
       window.dispatchEvent(new Event('modal-dirty'));
     } catch {}
   };
+
+  // Bind text-like inputs WITHOUT clobbering staged DOM values.
+  // Rule:
+  //  - If model has a non-empty value → write it to DOM
+  //  - Else → adopt current DOM value into model (so we don't wipe staged data)
+  const bindText = (selector, key) => {
+    const el = q(selector);
+    if (!el) return;
+
+    const hasModelKey = Object.prototype.hasOwnProperty.call(model, key);
+    const mRaw = hasModelKey ? model[key] : undefined;
+    const mVal = (mRaw == null) ? '' : String(mRaw);
+
+    if (mVal !== '') {
+      el.value = mVal;
+    } else {
+      // adopt DOM into model (preserve what renderCandidateTab/mergedRowForTab produced)
+      model[key] = (el.value == null) ? '' : String(el.value);
+    }
+
+    if (!el.__candBindWired) {
+      el.__candBindWired = {};
+    }
+    if (el.__candBindWired[key]) return;
+    el.__candBindWired[key] = true;
+
+    el.addEventListener('input', () => {
+      model[key] = (el.value == null) ? '' : String(el.value);
+      markDirty();
+    });
+  };
+
+  const bindTextarea = (selector, key) => {
+    const el = q(selector);
+    if (!el) return;
+
+    const hasModelKey = Object.prototype.hasOwnProperty.call(model, key);
+    const mRaw = hasModelKey ? model[key] : undefined;
+    const mVal = (mRaw == null) ? '' : String(mRaw);
+
+    if (mVal !== '') {
+      el.value = mVal;
+    } else {
+      model[key] = (el.value == null) ? '' : String(el.value);
+    }
+
+    if (!el.__candBindWired) {
+      el.__candBindWired = {};
+    }
+    if (el.__candBindWired[key]) return;
+    el.__candBindWired[key] = true;
+
+    el.addEventListener('input', () => {
+      model[key] = (el.value == null) ? '' : String(el.value);
+      markDirty();
+    });
+  };
+
+  const bindSelect = (selector, key) => {
+    const el = q(selector);
+    if (!el) return;
+
+    const hasModelKey = Object.prototype.hasOwnProperty.call(model, key);
+    const mRaw = hasModelKey ? model[key] : undefined;
+    const mVal = (mRaw == null) ? '' : String(mRaw);
+
+    if (mVal !== '') {
+      el.value = mVal;
+    } else {
+      model[key] = (el.value == null) ? '' : String(el.value);
+    }
+
+    if (!el.__candBindWired) {
+      el.__candBindWired = {};
+    }
+    if (el.__candBindWired[key]) return;
+    el.__candBindWired[key] = true;
+
+    el.addEventListener('change', () => {
+      model[key] = (el.value == null) ? '' : String(el.value);
+      markDirty();
+    });
+  };
+
+  const bindCheckbox = (selector, key) => {
+    const el = q(selector);
+    if (!el) return;
+
+    const hasModelKey = Object.prototype.hasOwnProperty.call(model, key);
+    if (hasModelKey && typeof model[key] === 'boolean') {
+      el.checked = !!model[key];
+    } else {
+      // adopt DOM into model
+      model[key] = !!el.checked;
+    }
+
+    if (!el.__candBindWired) {
+      el.__candBindWired = {};
+    }
+    if (el.__candBindWired[key]) return;
+    el.__candBindWired[key] = true;
+
+    el.addEventListener('change', () => {
+      model[key] = !!el.checked;
+      markDirty();
+    });
+  };
+
+  // ───────────────────── REQUIRED: core fields + new fields ─────────────────────
+  bindSelect('select[name="title"]', 'title');
+
+  bindText('input[name="first_name"]', 'first_name');
+  bindText('input[name="last_name"]', 'last_name');
+  bindText('input[name="email"]', 'email');
+  bindText('input[name="phone"]', 'phone');
+  bindText('input[name="display_name"]', 'display_name');
+
+  bindText('input[name="band"]', 'band');
+  bindTextarea('textarea[name="notes"]', 'notes');
+
+  // Optional but safe: keep GCK in model too (does not replace your existing save logic)
+  bindText('input[name="key_norm"]', 'key_norm');
+
+  // ───────────────────── REQUIRED: Mailshots opt-ins + All logic ─────────────────────
+  const cbEmail = q('input[name="opt_in_email"]');
+  const cbSms   = q('input[name="opt_in_sms"]');
+  const cbWa    = q('input[name="opt_in_whatsapp"]');
+  const cbAll   = q('#opt_in_all');
+
+  const recomputeAll = () => {
+    const e = !!model.opt_in_email;
+    const s = !!model.opt_in_sms;
+    const w = !!model.opt_in_whatsapp;
+    if (cbAll) cbAll.checked = !!(e && s && w);
+  };
+
+  const setAllTo = (checked) => {
+    const v = !!checked;
+
+    if (cbEmail) cbEmail.checked = v;
+    if (cbSms)   cbSms.checked   = v;
+    if (cbWa)    cbWa.checked    = v;
+
+    model.opt_in_email    = v;
+    model.opt_in_sms      = v;
+    model.opt_in_whatsapp = v;
+
+    recomputeAll();
+    markDirty();
+  };
+
+  // Adopt initial checkbox state safely (do NOT clobber staged DOM)
+  if (cbEmail) {
+    if (Object.prototype.hasOwnProperty.call(model, 'opt_in_email') && typeof model.opt_in_email === 'boolean') {
+      cbEmail.checked = !!model.opt_in_email;
+    } else {
+      model.opt_in_email = !!cbEmail.checked;
+    }
+  }
+  if (cbSms) {
+    if (Object.prototype.hasOwnProperty.call(model, 'opt_in_sms') && typeof model.opt_in_sms === 'boolean') {
+      cbSms.checked = !!model.opt_in_sms;
+    } else {
+      model.opt_in_sms = !!cbSms.checked;
+    }
+  }
+  if (cbWa) {
+    if (Object.prototype.hasOwnProperty.call(model, 'opt_in_whatsapp') && typeof model.opt_in_whatsapp === 'boolean') {
+      cbWa.checked = !!model.opt_in_whatsapp;
+    } else {
+      model.opt_in_whatsapp = !!cbWa.checked;
+    }
+  }
+  recomputeAll();
+
+  if (cbAll && !cbAll.__optAllWired) {
+    cbAll.__optAllWired = true;
+    cbAll.addEventListener('change', () => {
+      setAllTo(cbAll.checked);
+    });
+  }
+
+  if (cbEmail && !cbEmail.__optWired) {
+    cbEmail.__optWired = true;
+    cbEmail.addEventListener('change', () => {
+      model.opt_in_email = !!cbEmail.checked;
+      recomputeAll();
+      markDirty();
+    });
+  }
+  if (cbSms && !cbSms.__optWired) {
+    cbSms.__optWired = true;
+    cbSms.addEventListener('change', () => {
+      model.opt_in_sms = !!cbSms.checked;
+      recomputeAll();
+      markDirty();
+    });
+  }
+  if (cbWa && !cbWa.__optWired) {
+    cbWa.__optWired = true;
+    cbWa.addEventListener('change', () => {
+      model.opt_in_whatsapp = !!cbWa.checked;
+      recomputeAll();
+      markDirty();
+    });
+  }
 
   // ───────────────────── NHSP / HR aliases (hr_name_mappings) ─────────────────────
   try {
@@ -59588,53 +61606,72 @@ function bindCandidateMainFormEvents(container, model) {
   };
 
   // NI
-  bind('input[name="ni_number"]', 'ni_number');
+  bindText('input[name="ni_number"]', 'ni_number');
 
   // DOB (model holds ISO)
   const dobEl = q('input[name="date_of_birth"]');
   if (dobEl) {
     dobEl.value = model.date_of_birth
       ? (typeof formatIsoToUk === 'function' ? formatIsoToUk(model.date_of_birth) : model.date_of_birth)
-      : '';
-    dobEl.addEventListener('change', () => {
-      const v = dobEl.value.trim();
-      if (!v) {
-        model.date_of_birth = null;
-        markDirty();
-        return;
-      }
-      if (typeof parseUkDateToIso === 'function') {
-        const iso = parseUkDateToIso(v);
-        model.date_of_birth = iso || null;
-      } else {
-        model.date_of_birth = v;
-      }
-      markDirty();
-    });
+      : (dobEl.value || '');
+    if (!model.date_of_birth && dobEl.value) {
+      // adopt
+      model.date_of_birth = dobEl.value;
+    }
 
-    if (typeof attachUkDatePicker === 'function') {
-      attachUkDatePicker(dobEl);
+    if (!dobEl.__dobWired) {
+      dobEl.__dobWired = true;
+
+      dobEl.addEventListener('change', () => {
+        const v = dobEl.value.trim();
+        if (!v) {
+          model.date_of_birth = null;
+          markDirty();
+          return;
+        }
+        if (typeof parseUkDateToIso === 'function') {
+          const iso = parseUkDateToIso(v);
+          model.date_of_birth = iso || null;
+        } else {
+          model.date_of_birth = v;
+        }
+        markDirty();
+      });
+
+      if (typeof attachUkDatePicker === 'function') {
+        attachUkDatePicker(dobEl);
+      }
     }
   }
 
   // Gender
   const genderEl = q('select[name="gender"]');
   if (genderEl) {
-    genderEl.value = model.gender || '';
-    genderEl.addEventListener('change', () => {
-      model.gender = genderEl.value || '';
-      markDirty();
-    });
+    genderEl.value = model.gender || genderEl.value || '';
+    if (!model.gender && genderEl.value) model.gender = genderEl.value || '';
+
+    if (!genderEl.__genderWired) {
+      genderEl.__genderWired = true;
+      genderEl.addEventListener('change', () => {
+        model.gender = genderEl.value || '';
+        markDirty();
+      });
+    }
   }
 
   // Professional registration number
   const profEl = q('input[name="prof_reg_number"]');
   if (profEl) {
-    profEl.value = model.prof_reg_number || '';
-    profEl.addEventListener('input', () => {
-      model.prof_reg_number = profEl.value || '';
-      markDirty();
-    });
+    if (model.prof_reg_number) profEl.value = model.prof_reg_number || '';
+    else model.prof_reg_number = profEl.value || '';
+
+    if (!profEl.__profWired) {
+      profEl.__profWired = true;
+      profEl.addEventListener('input', () => {
+        model.prof_reg_number = profEl.value || '';
+        markDirty();
+      });
+    }
   }
 
   // 🔹 Pay method change handler — nuke bank details / umbrella_id in modal only
@@ -59644,79 +61681,83 @@ function bindCandidateMainFormEvents(container, model) {
     let lastMethod = (model.pay_method || payEl.value || 'UNKNOWN').toString().toUpperCase();
     if (lastMethod === '' || lastMethod === 'UNKNOWN') lastMethod = null;
 
-    payEl.addEventListener('change', () => {
-      const raw = payEl.value || '';
-      let nextMethod = raw.toUpperCase();
-      if (nextMethod === '' || nextMethod === 'UNKNOWN') nextMethod = null;
+    if (!payEl.__payMethodWired) {
+      payEl.__payMethodWired = true;
 
-      const prev = lastMethod;
-      const next = nextMethod;
+      payEl.addEventListener('change', () => {
+        const raw = payEl.value || '';
+        let nextMethod = raw.toUpperCase();
+        if (nextMethod === '' || nextMethod === 'UNKNOWN') nextMethod = null;
 
-      if (prev === next) return;
+        const prev = lastMethod;
+        const next = nextMethod;
 
-      const wasPAYE     = prev === 'PAYE';
-      const wasUMBRELLA = prev === 'UMBRELLA';
-      const nowPAYE     = next === 'PAYE';
-      const nowUMBRELLA = next === 'UMBRELLA';
+        if (prev === next) return;
 
-      // Helper to clear bank fields in the Pay tab + model
-      const clearBankFields = () => {
-        const acc = document.querySelector('#tab-pay input[name="account_holder"]');
-        const bn  = document.querySelector('#tab-pay input[name="bank_name"]');
-        const sc  = document.querySelector('#tab-pay input[name="sort_code"]');
-        const an  = document.querySelector('#tab-pay input[name="account_number"]');
-        if (acc) acc.value = '';
-        if (bn)  bn.value  = '';
-        if (sc)  sc.value  = '';
-        if (an)  an.value  = '';
-        model.account_holder = '';
-        model.bank_name      = '';
-        model.sort_code      = '';
-        model.account_number = '';
-      };
+        const wasPAYE     = prev === 'PAYE';
+        const wasUMBRELLA = prev === 'UMBRELLA';
+        const nowPAYE     = next === 'PAYE';
+        const nowUMBRELLA = next === 'UMBRELLA';
 
-      // Helper to clear umbrella id + text field in Pay tab + model
-      const clearUmbrella = () => {
-        const umbId   = document.getElementById('umbrella_id');
-        const umbName = document.getElementById('umbrella_name');
-        if (umbId)   umbId.value   = '';
-        if (umbName) umbName.value = '';
-        model.umbrella_id = null;
-      };
+        // Helper to clear bank fields in the Pay tab + model
+        const clearBankFields = () => {
+          const acc = document.querySelector('#tab-pay input[name="account_holder"]');
+          const bn  = document.querySelector('#tab-pay input[name="bank_name"]');
+          const sc  = document.querySelector('#tab-pay input[name="sort_code"]');
+          const an  = document.querySelector('#tab-pay input[name="account_number"]');
+          if (acc) acc.value = '';
+          if (bn)  bn.value  = '';
+          if (sc)  sc.value  = '';
+          if (an)  an.value  = '';
+          model.account_holder = '';
+          model.bank_name      = '';
+          model.sort_code      = '';
+          model.account_number = '';
+        };
 
-      // If we are switching channel (PAYE ↔ UMBRELLA), wipe bank details in the modal
-      if ((wasPAYE && nowUMBRELLA) || (wasUMBRELLA && nowPAYE)) {
-        clearBankFields();
-      }
-      // Specifically for UMBRELLA → PAYE, also clear umbrella_id
-      if (wasUMBRELLA && nowPAYE) {
-        clearUmbrella();
-      }
+        // Helper to clear umbrella id + text field in Pay tab + model
+        const clearUmbrella = () => {
+          const umbId   = document.getElementById('umbrella_id');
+          const umbName = document.getElementById('umbrella_name');
+          if (umbId)   umbId.value   = '';
+          if (umbName) umbName.value = '';
+          model.umbrella_id = null;
+        };
 
-      // Update model + modalCtx in-memory only (server-side nuking is handled by what we send)
-      model.pay_method = next;
-      try {
-        window.modalCtx = window.modalCtx || {};
-        window.modalCtx.data = window.modalCtx.data || {};
-        window.modalCtx.data.pay_method = next;
-        window.modalCtx.payMethodState = next; // ✅ NEW: track the current (unsaved) pay method
-
-        if (next === 'PAYE') {
-          // Keep umbrella_id null in the in-memory candidate once PAYE is chosen
-          window.modalCtx.data.umbrella_id = null;
+        // If we are switching channel (PAYE ↔ UMBRELLA), wipe bank details in the modal
+        if ((wasPAYE && nowUMBRELLA) || (wasUMBRELLA && nowPAYE)) {
+          clearBankFields();
         }
-      } catch {}
+        // Specifically for UMBRELLA → PAYE, also clear umbrella_id
+        if (wasUMBRELLA && nowPAYE) {
+          clearUmbrella();
+        }
 
-      // Broadcast so Pay tab can react if it wants to
-      try {
-        window.dispatchEvent(new CustomEvent('pay-method-changed', {
-          detail: { from: prev, to: next }
-        }));
-      } catch {}
+        // Update model + modalCtx in-memory only (server-side nuking is handled by what we send)
+        model.pay_method = next;
+        try {
+          window.modalCtx = window.modalCtx || {};
+          window.modalCtx.data = window.modalCtx.data || {};
+          window.modalCtx.data.pay_method = next;
+          window.modalCtx.payMethodState = next; // ✅ track the current (unsaved) pay method
 
-      lastMethod = next;
-      markDirty();
-    });
+          if (next === 'PAYE') {
+            // Keep umbrella_id null in the in-memory candidate once PAYE is chosen
+            window.modalCtx.data.umbrella_id = null;
+          }
+        } catch {}
+
+        // Broadcast so Pay tab can react if it wants to
+        try {
+          window.dispatchEvent(new CustomEvent('pay-method-changed', {
+            detail: { from: prev, to: next }
+          }));
+        } catch {}
+
+        lastMethod = next;
+        markDirty();
+      });
+    }
   }
 
   // Address fields
@@ -59729,7 +61770,7 @@ function bindCandidateMainFormEvents(container, model) {
     'postcode',
     'country'
   ];
-  addrKeys.forEach((k) => bind(`input[name="${k}"]`, k));
+  addrKeys.forEach((k) => bindText(`input[name="${k}"]`, k));
 
   // Helper to render current job_titles list
   const jobTitlesHost = q('#jobTitlesList');
@@ -72692,12 +74733,199 @@ async function bootstrapApp(){
     }
   } catch {}
 
+  // ✅ NEW: Start lightweight global changes heartbeat (discreet UI + background picker freshness)
+  try {
+    if (typeof window !== 'undefined') {
+      window.__updatesAvailable = window.__updatesAvailable || {}; // sectionKey -> true/false
+
+      // ✅ STANDARDISE: single canonical global = __changesHeartbeat
+      // Keep __changeHeartbeat as an alias for backward compatibility.
+      const hb =
+        (window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object') ? window.__changesHeartbeat :
+        (window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') ? window.__changeHeartbeat :
+        {};
+
+      window.__changesHeartbeat = hb;
+      window.__changeHeartbeat  = hb; // alias
+
+      // Ensure expected shape for downstream readers:
+      // - hb.seqs[entity] is the canonical sequence map
+      // - hb.lastSeenSeqs is also maintained for internal ping payloads
+      hb.seqs = (hb.seqs && typeof hb.seqs === 'object') ? hb.seqs : {};
+      hb.lastSeenSeqs = (hb.lastSeenSeqs && typeof hb.lastSeenSeqs === 'object') ? hb.lastSeenSeqs : {};
+
+      // Keep them in sync (in case a previous session wrote to one but not the other)
+      try {
+        for (const [k, v] of Object.entries(hb.lastSeenSeqs)) {
+          if (hb.seqs[k] == null) hb.seqs[k] = Number(v || 0);
+        }
+        for (const [k, v] of Object.entries(hb.seqs)) {
+          if (hb.lastSeenSeqs[k] == null) hb.lastSeenSeqs[k] = Number(v || 0);
+        }
+      } catch {}
+
+      const stop = () => {
+        try { if (hb._timer) clearInterval(hb._timer); } catch {}
+        hb._timer = null;
+        hb._started = false;
+      };
+      hb.stop = stop;
+
+      // Only start when authenticated
+      if (!hb._started && SESSION?.accessToken) {
+        hb._started = true;
+        hb._disabled = false;
+        hb._wired = !!hb._wired;
+        hb.intervalMs = Number(hb.intervalMs || 15000); // default 15s
+        hb._lastPingAtMs = 0;
+
+        const entityToSection = {
+          candidates: 'candidates',
+          clients: 'clients',
+          contracts: 'contracts',
+          timesheets: 'timesheets',
+          invoices: 'invoices',
+          umbrellas: 'umbrellas',
+          imports: 'imports'
+        };
+
+        const doFetch = async (url, init) => {
+          // Prefer authFetch (handles refresh), fallback to fetch with bearer.
+          if (typeof authFetch === 'function') return await authFetch(url, init || {});
+          const headers = { ...(init && init.headers ? init.headers : {}) };
+          headers['Authorization'] = `Bearer ${SESSION.accessToken}`;
+          return await fetch(url, { ...(init || {}), headers });
+        };
+
+        const pingOnce = async (reason = '') => {
+          if (hb._disabled) return;
+          const now = Date.now();
+          // throttle: never more than once per 1s even if focus + interval collide
+          if (now - (hb._lastPingAtMs || 0) < 1000) return;
+          hb._lastPingAtMs = now;
+
+          let res = null;
+          let json = null;
+
+          // Prefer POST with last-seen seqs (fast + small). If endpoint is missing, disable silently.
+          try {
+            const payload = { last_seen: hb.lastSeenSeqs || {} };
+            res = await doFetch(API('/api/changes/ping'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+          } catch {
+            return;
+          }
+
+          if (!res || !res.ok) {
+            // If endpoint isn't deployed yet, stop trying this session (keep it silent).
+            try {
+              if (res && (res.status === 404 || res.status === 405 || res.status === 501)) {
+                hb._disabled = true;
+                try { if (hb._timer) clearInterval(hb._timer); } catch {}
+                hb._timer = null;
+              }
+            } catch {}
+            return;
+          }
+
+          try { json = await res.json().catch(()=> null); } catch { json = null; }
+          if (!json || typeof json !== 'object') return;
+
+          const seqs =
+            (json.seqs && typeof json.seqs === 'object') ? json.seqs :
+            (json.counters && typeof json.counters === 'object') ? json.counters :
+            (json.state && typeof json.state === 'object') ? json.state :
+            null;
+
+          let changed = Array.isArray(json.changed) ? json.changed.slice() :
+                        Array.isArray(json.changed_entities) ? json.changed_entities.slice() :
+                        Array.isArray(json.entities_changed) ? json.entities_changed.slice() :
+                        [];
+
+          // If backend didn’t provide a changed list, derive it by comparing seqs.
+          if ((!changed || !changed.length) && seqs && typeof seqs === 'object') {
+            changed = [];
+            for (const [k, v] of Object.entries(seqs)) {
+              const prev = Number(hb.lastSeenSeqs?.[k] || hb.seqs?.[k] || 0);
+              const cur  = Number(v || 0);
+              if (cur > prev) changed.push(k);
+            }
+          }
+
+          // Advance last-seen watermark (only for keys we got back)
+          if (seqs && typeof seqs === 'object') {
+            hb.lastSeenSeqs = hb.lastSeenSeqs || {};
+            hb.seqs = hb.seqs || {};
+            for (const [k, v] of Object.entries(seqs)) {
+              const n = Number(v || 0);
+              hb.lastSeenSeqs[k] = n;
+              hb.seqs[k] = n; // ✅ keep canonical seqs in sync for getHeartbeatRevFor()
+            }
+          }
+
+          if (!changed || !changed.length) return;
+
+          // Mark discreet per-section “updates available” (no popups)
+          let touchedCurrent = false;
+          for (const ent of changed) {
+            const s = entityToSection[String(ent || '').toLowerCase()];
+            if (!s) continue;
+            window.__updatesAvailable[s] = true;
+            if (s === currentSection) touchedCurrent = true;
+          }
+
+          // Quietly refresh picker datasets in the background for candidates/clients
+          try {
+            if (changed.some(x => String(x||'').toLowerCase() === 'candidates') &&
+                typeof ensurePickerDatasetPrimed === 'function') {
+              Promise.resolve(ensurePickerDatasetPrimed('candidates')).catch(()=>{});
+            }
+          } catch {}
+          try {
+            if (changed.some(x => String(x||'').tolowerCase?.() === 'clients' || String(x||'').toLowerCase() === 'clients') &&
+                typeof ensurePickerDatasetPrimed === 'function') {
+              Promise.resolve(ensurePickerDatasetPrimed('clients')).catch(()=>{});
+            }
+          } catch {}
+
+          // Repaint Tools if the current section is affected (to show the discreet dot)
+          if (touchedCurrent) {
+            try { renderTools(); } catch {}
+          }
+        };
+
+        hb.pingOnce = pingOnce;
+
+        if (!hb._wired) {
+          hb._wired = true;
+
+          // On tab focus / visibility restore, do an immediate ping
+          window.addEventListener('focus', () => { try { hb.pingOnce && hb.pingOnce('focus'); } catch {} }, true);
+          document.addEventListener('visibilitychange', () => {
+            try {
+              if (!document.hidden) hb.pingOnce && hb.pingOnce('visible');
+            } catch {}
+          }, true);
+        }
+
+        // Start interval loop
+        try { if (hb._timer) clearInterval(hb._timer); } catch {}
+        hb._timer = setInterval(() => { try { hb.pingOnce && hb.pingOnce('interval'); } catch {} }, hb.intervalMs);
+
+        // First ping (non-blocking)
+        try { hb.pingOnce && hb.pingOnce('boot'); } catch {}
+      }
+    }
+  } catch {}
+
   ensureSelectionStyles();   // ← ensure the highlight is clearly visible
   renderTopNav();
   renderTools();
   await renderAll();
 }
-
 // Initialize
 initAuthUI();
 
