@@ -1640,11 +1640,7 @@ async function loadSection() {
 
 
 
-function clearSession(){
-  localStorage.removeItem('cloudtms.session');
-  sessionStorage.removeItem('cloudtms.session');
-  SESSION = null; renderUserChip();
-}
+
 function scheduleRefresh(){
   clearTimeout(refreshTimer);
   if (!SESSION?.exp) return;
@@ -2941,6 +2937,9 @@ async function authFetch(input, init={}){
 }
 
 // ===== Auth API calls =====
+
+// single, de-duplicated definition
+
 async function apiLogin(email, password){
   const res = await fetch(API('/auth/login'), {
     method: 'POST',
@@ -2957,6 +2956,20 @@ async function apiLogin(email, password){
     throw new Error(msg);
   }
 
+  // ✅ 2FA branch: do NOT throw, do NOT saveSession
+  if (data && data.tfa_required === true) {
+    const challengeId = String(data.challenge_id || data.challengeId || '').trim();
+    const expiresIn = Number(data.expires_in ?? data.ttl ?? 300) || 300;
+    if (!challengeId) throw new Error('2FA challenge id missing');
+    return {
+      ok: true,
+      tfa_required: true,
+      challenge_id: challengeId,
+      expires_in: expiresIn,
+      policy: (data && data.policy) || null
+    };
+  }
+
   const token =
     data.access_token ||
     data.token ||
@@ -2969,100 +2982,295 @@ async function apiLogin(email, password){
   const rawTtl = data.expires_in ?? data.token_ttl_sec ?? data.ttl ?? 3600; // seconds
   const ttl    = Math.max(60, Number(rawTtl) || 3600); // floor at 60s
   const skew   = 30; // renew slightly early
+  const policy = (data && data.policy) || null;
 
   saveSession({
     accessToken: token,
     user: data.user || data.profile || null,
+    policy,
     exp: Math.floor(Date.now() / 1000) + (ttl - skew)
   });
 
+  // saveSession() already schedules refresh; keep this as a harmless belt+braces
   if (typeof scheduleRefresh === 'function') {
     scheduleRefresh();
+  }
+
+  // Start idle policy tracking (if provided)
+  try {
+    if (policy && typeof IdleManager === 'object' && typeof IdleManager.startOrReset === 'function') {
+      IdleManager.startOrReset(policy);
+    }
+  } catch {}
+
+  return data;
+}
+
+async function apiVerify2fa(challengeId, code){
+  const cid = String(challengeId || '').trim();
+  const c = String(code || '').trim();
+
+  if (!cid) throw new Error('challenge_id_required');
+  if (!/^\d{6}$/.test(c)) throw new Error('invalid_code_format');
+
+  const res = await fetch(API('/auth/2fa/verify'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ challenge_id: cid, code: c })
+  });
+
+  let data = {};
+  try { data = await res.json(); } catch {}
+
+  if (!res.ok) {
+    const msg = data?.error || data?.message || 'Invalid code';
+    throw new Error(msg);
+  }
+
+  const token = data.access_token || data.token || data.accessToken;
+  if (!token) throw new Error('No access token returned');
+
+  const rawTtl = data.expires_in ?? data.token_ttl_sec ?? data.ttl ?? 3600;
+  const ttl    = Math.max(60, Number(rawTtl) || 3600);
+  const skew   = 30;
+  const policy = (data && data.policy) || null;
+
+  saveSession({
+    accessToken: token,
+    user: data.user || data.profile || null,
+    policy,
+    exp: Math.floor(Date.now() / 1000) + (ttl - skew)
+  });
+
+  if (typeof scheduleRefresh === 'function') scheduleRefresh();
+
+  try {
+    if (typeof IdleManager === 'object' && typeof IdleManager.startOrReset === 'function') {
+      IdleManager.startOrReset(policy || SESSION?.policy || null);
+    }
+  } catch {}
+
+  // Clear any persisted 2FA state
+  try { sessionStorage.removeItem('cloudtms.tfa'); } catch {}
+  try { if (window.__tfaState) window.__tfaState = null; } catch {}
+
+  return data;
+}
+
+async function apiResend2fa(challengeId){
+  const cid = String(challengeId || '').trim();
+  if (!cid) throw new Error('challenge_id_required');
+
+  const res = await fetch(API('/auth/2fa/resend'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ challenge_id: cid })
+  });
+
+  let data = {};
+  try { data = await res.json(); } catch {}
+
+  if (!res.ok) {
+    const msg = data?.error || data?.message || 'Could not resend code';
+    throw new Error(msg);
   }
 
   return data;
 }
 
-// single, de-duplicated definition
-async function refreshToken(){
-  try{
-    const res = await fetch(API('/auth/refresh'), {
-      method:'POST',
-      credentials:'include',
-      headers:{'content-type':'application/json'},
-      body: JSON.stringify({})
-    });
-    if (!res.ok) { clearSession(); return false; }
+async function apiLogout(){
+  const res = await fetch(API('/auth/logout'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({})
+  });
 
-    const data  = await res.json();
-    const token = data.access_token || data.token || data.accessToken;
-    const ttl   = data.expires_in || data.token_ttl_sec || data.ttl || 3600;
+  // Logout is best-effort; if backend errors we still clear local state
+  if (!res.ok) {
+    let txt = '';
+    try { txt = await res.text(); } catch {}
+    throw new Error(txt || `Logout failed (${res.status})`);
+  }
 
-    // Preserve existing user; hydrate if missing id
-    let user = SESSION?.user || data.user || null;
-    if (!user || !user.id) {
-      try {
-        const meRes = await fetch(API('/api/me'), { headers: { 'Authorization': `Bearer ${token}` } });
-        if (meRes.ok) {
-          const meJson = await meRes.json().catch(()=> ({}));
-          user = (meJson && (meJson.user || meJson)) || user;
-        }
-      } catch {}
-      // Extra guard: fall back to persisted user if present
-      if (!user || !user.id) {
-        try {
-          const persisted = JSON.parse(localStorage.getItem('cloudtms.session')
-                           || sessionStorage.getItem('cloudtms.session') || 'null');
-          if (persisted?.user?.id) user = persisted.user;
-        } catch {}
-      }
+  return true;
+}
+
+async function performLogout(reason){
+  try { await apiLogout(); } catch {}
+
+  clearSession();
+
+  // Bring user back to login overlay
+  try {
+    openLogin();
+    const err = byId('loginError');
+    if (err) {
+      if (reason === 'inactivity') err.textContent = 'You were signed out due to inactivity.';
+      else if (reason === 'manual') err.textContent = '';
+      else if (reason) err.textContent = String(reason);
+      err.style.display = err.textContent ? 'block' : 'none';
+    }
+  } catch {}
+}
+
+const IdleManager = (() => {
+  const state = {
+    enabled: false,
+    policy: { idle_logout_seconds: 7200, idle_warning_seconds: 300 },
+    lastActivityMs: Date.now(),
+    warnTimer: 0,
+    logoutTimer: 0,
+    bound: false,
+    _onActivity: null,
+    _onVisibility: null,
+    _mmThrottleMs: 750,
+    _lastMmMs: 0
+  };
+
+  const _normPolicy = (p) => {
+    const idle = Math.max(60, Math.trunc(Number(p?.idle_logout_seconds ?? 7200) || 7200));
+    let warn = Math.max(1, Math.trunc(Number(p?.idle_warning_seconds ?? 300) || 300));
+    if (warn >= idle) warn = Math.max(1, Math.min(300, idle - 1));
+    return { idle_logout_seconds: idle, idle_warning_seconds: warn };
+  };
+
+  const _clearTimers = () => {
+    try { clearTimeout(state.warnTimer); } catch {}
+    try { clearTimeout(state.logoutTimer); } catch {}
+    state.warnTimer = 0;
+    state.logoutTimer = 0;
+  };
+
+  const _schedule = () => {
+    if (!state.enabled) return;
+    _clearTimers();
+
+    const idleMs = state.policy.idle_logout_seconds * 1000;
+    const warnMs = Math.max(0, idleMs - (state.policy.idle_warning_seconds * 1000));
+
+    const now = Date.now();
+    const elapsed = now - state.lastActivityMs;
+
+    if (elapsed >= idleMs) {
+      // already expired
+      performLogout('inactivity');
+      return;
     }
 
-    saveSession({
-      accessToken: token,
-      user,
-      exp: Math.floor(Date.now()/1000) + ttl
-    });
-    return true;
-  }catch{
-    clearSession();
-    return false;
-  }
-}
+    const warnIn = warnMs - elapsed;
+    const logoutIn = idleMs - elapsed;
 
+    if (warnIn <= 0) {
+      // in warning window; fire warning soon
+      state.warnTimer = setTimeout(() => _warn(), 1);
+    } else {
+      state.warnTimer = setTimeout(() => _warn(), warnIn);
+    }
 
+    state.logoutTimer = setTimeout(() => performLogout('inactivity'), logoutIn);
+  };
 
-async function apiForgot(email){
-  const r = await fetch(API('/auth/forgot'), { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ email })});
-  if(!r.ok) throw new Error('Failed to request reset');
-  return true;
-}
-async function apiReset(token, newPassword){
-  const r = await fetch(API('/auth/reset'), { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ token, new_password: newPassword })});
-  if(!r.ok) throw new Error('Failed to reset password');
-  return true;
-}
+  const _warn = () => {
+    if (!state.enabled) return;
 
-// ===== Auth overlays wiring (login / forgot / reset) =====
-function openLogin(){ byId('loginOverlay').style.display='grid'; byId('forgotOverlay').style.display='none'; byId('resetOverlay').style.display='none'; }
-function openForgot(){ byId('loginOverlay').style.display='none'; byId('forgotOverlay').style.display='grid'; byId('resetOverlay').style.display='none'; }
-function openReset(){ byId('loginOverlay').style.display='none'; byId('forgotOverlay').style.display='none'; byId('resetOverlay').style.display='grid'; }
+    // If already logged out, do nothing
+    if (!SESSION?.accessToken) return;
 
-// show/hide password helpers
-function toggleVis(inputId, toggleId){
-  const inp = byId(inputId), t = byId(toggleId);
-  t.onclick = ()=>{ inp.type = inp.type==='password' ? 'text' : 'password'; };
-}
+    // Use a simple confirm-based warning for now (HTML modal can replace later)
+    const mins = Math.max(1, Math.ceil(state.policy.idle_warning_seconds / 60));
+    const msg = `You will be signed out in about ${mins} minute${mins === 1 ? '' : 's'} due to inactivity.\n\nPress OK to stay signed in, or Cancel to sign out now.`;
 
-function renderUserChip(){
-  const chip = byId('userChip');
-  if (SESSION?.user) {
-    chip.textContent = (SESSION.user.display_name || SESSION.user.email || 'User');
-  } else chip.textContent = 'Signed out';
-}
+    let stay = true;
+    try { stay = window.confirm(msg); } catch { stay = true; }
+
+    if (stay) {
+      bump();
+    } else {
+      performLogout('manual');
+    }
+  };
+
+  const bump = () => {
+    state.lastActivityMs = Date.now();
+    _schedule();
+  };
+
+  const _bind = () => {
+    if (state.bound) return;
+
+    state._onActivity = (ev) => {
+      // throttle mousemove hard
+      if (ev && ev.type === 'mousemove') {
+        const now = Date.now();
+        if ((now - state._lastMmMs) < state._mmThrottleMs) return;
+        state._lastMmMs = now;
+      }
+      bump();
+    };
+
+    state._onVisibility = () => {
+      if (!state.enabled) return;
+      // On resume, check expiry
+      const idleMs = state.policy.idle_logout_seconds * 1000;
+      const elapsed = Date.now() - state.lastActivityMs;
+      if (elapsed >= idleMs) performLogout('inactivity');
+      else _schedule();
+    };
+
+    const opts = { passive: true };
+    window.addEventListener('mousedown', state._onActivity, opts);
+    window.addEventListener('keydown', state._onActivity, opts);
+    window.addEventListener('touchstart', state._onActivity, opts);
+    window.addEventListener('scroll', state._onActivity, opts);
+    window.addEventListener('mousemove', state._onActivity, opts);
+    document.addEventListener('visibilitychange', state._onVisibility, opts);
+    window.addEventListener('focus', state._onVisibility, opts);
+
+    state.bound = true;
+  };
+
+  const _unbind = () => {
+    if (!state.bound) return;
+    const opts = { passive: true };
+    try { window.removeEventListener('mousedown', state._onActivity, opts); } catch {}
+    try { window.removeEventListener('keydown', state._onActivity, opts); } catch {}
+    try { window.removeEventListener('touchstart', state._onActivity, opts); } catch {}
+    try { window.removeEventListener('scroll', state._onActivity, opts); } catch {}
+    try { window.removeEventListener('mousemove', state._onActivity, opts); } catch {}
+    try { document.removeEventListener('visibilitychange', state._onVisibility, opts); } catch {}
+    try { window.removeEventListener('focus', state._onVisibility, opts); } catch {}
+    state.bound = false;
+    state._onActivity = null;
+    state._onVisibility = null;
+  };
+
+  const startOrReset = (policy) => {
+    state.enabled = true;
+    state.policy = _normPolicy(policy || SESSION?.policy || {});
+    state.lastActivityMs = Date.now();
+    _bind();
+    _schedule();
+  };
+
+  const stop = () => {
+    state.enabled = false;
+    _clearTimers();
+    _unbind();
+  };
+
+  return {
+    startOrReset,
+    stop,
+    bump: () => bump()
+  };
+})();
+
 function initAuthUI(){
   // Buttons and links
-  byId('btnLogout').onclick = ()=>{ clearSession(); openLogin(); };
+  byId('btnLogout').onclick = ()=>{ performLogout('manual'); };
 
   toggleVis('loginPassword','toggleLoginPw');
   toggleVis('resetPw1','toggleResetPw1'); toggleVis('resetPw2','toggleResetPw2');
@@ -3071,15 +3279,157 @@ function initAuthUI(){
   byId('linkBackToLogin').onclick = openLogin;
   byId('linkResetToLogin').onclick = openLogin;
 
+  const showTfaUi = (challengeId, expiresIn, policy) => {
+    // Persist state (helps if the page reloads while waiting)
+    const st = {
+      challenge_id: String(challengeId || ''),
+      expires_in: Number(expiresIn || 300) || 300,
+      policy: policy || null,
+      started_at_ms: Date.now()
+    };
+    try { sessionStorage.setItem('cloudtms.tfa', JSON.stringify(st)); } catch {}
+    try { window.__tfaState = st; } catch {}
+
+    const tfaOverlay = byId('tfaOverlay');
+    if (tfaOverlay) {
+      // Hide others
+      try { byId('loginOverlay').style.display = 'none'; } catch {}
+      try { byId('forgotOverlay').style.display = 'none'; } catch {}
+      try { byId('resetOverlay').style.display = 'none'; } catch {}
+
+      tfaOverlay.style.display = 'grid';
+
+      // Best-effort: show message/countdown if elements exist
+      const msgEl = byId('tfaMsg');
+      if (msgEl) {
+        msgEl.textContent = 'We sent a verification code to your email. Enter it within 5 minutes.';
+        msgEl.style.display = 'block';
+      }
+      const errEl = byId('tfaError');
+      if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+      const codeEl = byId('tfaCode');
+      if (codeEl) { try { codeEl.value = ''; codeEl.focus(); } catch {} }
+
+      return;
+    }
+
+    // No HTML yet: fallback prompt so you can test immediately
+    (async () => {
+      const entered = String(window.prompt('Enter the 6-digit verification code we emailed you:') || '').trim();
+      if (!entered) return;
+      await apiVerify2fa(st.challenge_id, entered);
+      try { byId('loginOverlay').style.display='none'; } catch {}
+      bootstrapApp();
+    })().catch((e) => {
+      const err = byId('loginError');
+      if (err) {
+        err.textContent = e?.message || 'Verification failed';
+        err.style.display = 'block';
+      }
+      openLogin();
+    });
+  };
+
+  // Bind 2FA overlay events if the HTML exists (safe no-ops otherwise)
+  try {
+    const tfaForm = byId('tfaForm');
+    if (tfaForm) {
+      tfaForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const st = window.__tfaState || (() => {
+          try { return JSON.parse(sessionStorage.getItem('cloudtms.tfa') || 'null'); } catch { return null; }
+        })();
+
+        const errEl = byId('tfaError'); if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+        const codeEl = byId('tfaCode');
+        const code = String(codeEl ? codeEl.value : '').trim();
+
+        if (!st?.challenge_id) {
+          if (errEl) { errEl.textContent = 'Challenge missing. Please sign in again.'; errEl.style.display = 'block'; }
+          openLogin();
+          return;
+        }
+
+        try {
+          await apiVerify2fa(st.challenge_id, code);
+          try { byId('tfaOverlay').style.display = 'none'; } catch {}
+          try { byId('loginOverlay').style.display = 'none'; } catch {}
+          bootstrapApp();
+        } catch (ex) {
+          if (errEl) { errEl.textContent = ex?.message || 'Invalid code'; errEl.style.display = 'block'; }
+        }
+      };
+    }
+
+    const btnResend = byId('btnTfaResend');
+    if (btnResend) {
+      btnResend.onclick = async () => {
+        const st = window.__tfaState || (() => {
+          try { return JSON.parse(sessionStorage.getItem('cloudtms.tfa') || 'null'); } catch { return null; }
+        })();
+
+        const errEl = byId('tfaError'); if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+        const msgEl = byId('tfaMsg');
+
+        if (!st?.challenge_id) {
+          if (errEl) { errEl.textContent = 'Challenge missing. Please sign in again.'; errEl.style.display = 'block'; }
+          openLogin();
+          return;
+        }
+
+        try {
+          btnResend.disabled = true;
+          const r = await apiResend2fa(st.challenge_id);
+
+          const expiresIn = Number(r.expires_in ?? r.ttl ?? 300) || 300;
+          const cooldown = Number(r.resend_cooldown_seconds ?? 30) || 30;
+
+          st.expires_in = expiresIn;
+          st.started_at_ms = Date.now();
+          try { sessionStorage.setItem('cloudtms.tfa', JSON.stringify(st)); } catch {}
+          try { window.__tfaState = st; } catch {}
+
+          if (msgEl) {
+            msgEl.textContent = 'A new verification code has been sent to your email.';
+            msgEl.style.display = 'block';
+          }
+
+          setTimeout(() => { try { btnResend.disabled = false; } catch {} }, Math.max(0, cooldown) * 1000);
+        } catch (ex) {
+          if (errEl) { errEl.textContent = ex?.message || 'Could not resend code'; errEl.style.display = 'block'; }
+          try { btnResend.disabled = false; } catch {}
+        }
+      };
+    }
+
+    const linkBack = byId('linkTfaBackToLogin');
+    if (linkBack) linkBack.onclick = () => { try { byId('tfaOverlay').style.display='none'; } catch {} openLogin(); };
+  } catch {}
+
   byId('loginForm').onsubmit = async (e)=>{
     e.preventDefault();
     const email = byId('loginEmail').value.trim();
     const pw = byId('loginPassword').value;
     const err = byId('loginError'); err.style.display='none';
+
     try{
-      await apiLogin(email, pw);
+      const r = await apiLogin(email, pw);
+
+      if (r && r.tfa_required === true) {
+        showTfaUi(r.challenge_id, r.expires_in, r.policy || null);
+        return;
+      }
+
       if (typeof scheduleRefresh === 'function') scheduleRefresh();
       byId('loginOverlay').style.display='none';
+
+      try {
+        if (typeof IdleManager === 'object' && typeof IdleManager.startOrReset === 'function') {
+          IdleManager.startOrReset(SESSION?.policy || null);
+        }
+      } catch {}
+
       bootstrapApp();
     }catch(ex){
       err.textContent = ex.message || 'Sign in failed'; err.style.display='block';
@@ -3120,6 +3470,117 @@ function initAuthUI(){
   const hasResetToken = url.searchParams.get('k') || url.searchParams.get('token');
   if (hasResetToken && !(typeof getSession === 'function' && getSession()?.accessToken)) openReset();
 }
+
+function clearSession(){
+  // stop refresh timers
+  try { clearTimeout(refreshTimer); } catch {}
+  refreshTimer = 0;
+
+  // stop idle timers
+  try { if (typeof IdleManager === 'object' && typeof IdleManager.stop === 'function') IdleManager.stop(); } catch {}
+
+  // clear any stored challenge state
+  try { sessionStorage.removeItem('cloudtms.tfa'); } catch {}
+  try { if (window.__tfaState) window.__tfaState = null; } catch {}
+
+  localStorage.removeItem('cloudtms.session');
+  sessionStorage.removeItem('cloudtms.session');
+  SESSION = null;
+  renderUserChip();
+}
+
+async function refreshToken(){
+  try{
+    const res = await fetch(API('/auth/refresh'), {
+      method:'POST',
+      credentials:'include',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({})
+    });
+    if (!res.ok) { clearSession(); return false; }
+
+    const data  = await res.json().catch(() => ({}));
+    const token = data.access_token || data.token || data.accessToken;
+    const rawTtl = data.expires_in || data.token_ttl_sec || data.ttl || 3600;
+    const ttl   = Math.max(60, Number(rawTtl) || 3600);
+    const skew  = 30;
+
+    if (!token) { clearSession(); return false; }
+
+    // Preserve existing user; hydrate if missing id
+    let user = SESSION?.user || data.user || null;
+    if (!user || !user.id) {
+      try {
+        const meRes = await fetch(API('/api/me'), { headers: { 'Authorization': `Bearer ${token}` } });
+        if (meRes.ok) {
+          const meJson = await meRes.json().catch(()=> ({}));
+          user = (meJson && (meJson.user || meJson)) || user;
+        }
+      } catch {}
+      // Extra guard: fall back to persisted user if present
+      if (!user || !user.id) {
+        try {
+          const persisted = JSON.parse(localStorage.getItem('cloudtms.session')
+                           || sessionStorage.getItem('cloudtms.session') || 'null');
+          if (persisted?.user?.id) user = persisted.user;
+        } catch {}
+      }
+    }
+
+    // ✅ Persist returned policy and bump idle timers
+    const policy = (data && data.policy) || SESSION?.policy || null;
+
+    saveSession({
+      accessToken: token,
+      user,
+      policy,
+      exp: Math.floor(Date.now()/1000) + (ttl - skew)
+    });
+
+    try {
+      if (typeof IdleManager === 'object' && typeof IdleManager.startOrReset === 'function') {
+        IdleManager.startOrReset(policy || null);
+      }
+    } catch {}
+
+    return true;
+  }catch{
+    clearSession();
+    return false;
+  }
+}
+
+
+
+async function apiForgot(email){
+  const r = await fetch(API('/auth/forgot'), { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ email })});
+  if(!r.ok) throw new Error('Failed to request reset');
+  return true;
+}
+async function apiReset(token, newPassword){
+  const r = await fetch(API('/auth/reset'), { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ token, new_password: newPassword })});
+  if(!r.ok) throw new Error('Failed to reset password');
+  return true;
+}
+
+// ===== Auth overlays wiring (login / forgot / reset) =====
+function openLogin(){ byId('loginOverlay').style.display='grid'; byId('forgotOverlay').style.display='none'; byId('resetOverlay').style.display='none'; }
+function openForgot(){ byId('loginOverlay').style.display='none'; byId('forgotOverlay').style.display='grid'; byId('resetOverlay').style.display='none'; }
+function openReset(){ byId('loginOverlay').style.display='none'; byId('forgotOverlay').style.display='none'; byId('resetOverlay').style.display='grid'; }
+
+// show/hide password helpers
+function toggleVis(inputId, toggleId){
+  const inp = byId(inputId), t = byId(toggleId);
+  t.onclick = ()=>{ inp.type = inp.type==='password' ? 'text' : 'password'; };
+}
+
+function renderUserChip(){
+  const chip = byId('userChip');
+  if (SESSION?.user) {
+    chip.textContent = (SESSION.user.display_name || SESSION.user.email || 'User');
+  } else chip.textContent = 'Signed out';
+}
+
 // ===== App state + rendering =====
 const sections = [
   {key:'candidates', label:'Candidates', icon:'👤'},
@@ -8419,168 +8880,6 @@ function renderImportSummaryModal(importType, summaryState) {
 
 
 
-function ensureWeeklyUiStore(type, importId, previewState) {
-  const T = String(type || '').trim().toUpperCase();
-  const impId = String(importId || '').trim();
-  const p = (previewState && typeof previewState === 'object' && !Array.isArray(previewState)) ? previewState : {};
-
-  // Be safe in the browser: never hard-throw in UI init paths
-  if (!impId) {
-    console.warn('ensureWeeklyUiStore: importId is required');
-    return null;
-  }
-  if (T !== 'HR_WEEKLY' && T !== 'NHSP') {
-    console.warn(`ensureWeeklyUiStore: unsupported type ${T}`);
-    return null;
-  }
-
-  const asYmd = (v) => {
-    if (!v) return null;
-    if (typeof v === 'string') {
-      const s = v.trim();
-      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-      if (s.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-    }
-    try {
-      const d = new Date(v);
-      if (Number.isNaN(d.getTime())) return null;
-      const yyyy = d.getUTCFullYear();
-      const mm   = String(d.getUTCMonth() + 1).padStart(2, '0');
-      const dd   = String(d.getUTCDate()).padStart(2, '0');
-      return `${yyyy}-${mm}-${dd}`;
-    } catch {
-      return null;
-    }
-  };
-
-  // Root stores
-  window.__weeklyImportUi = window.__weeklyImportUi || {};
-  window.__weeklyImportUi[T] = window.__weeklyImportUi[T] || {};
-
-  // If already exists, normalize missing fields (DO NOT clobber existing object)
-  let ui = window.__weeklyImportUi[T][impId];
-  if (!ui || typeof ui !== 'object' || Array.isArray(ui)) {
-    ui = {};
-    window.__weeklyImportUi[T][impId] = ui;
-  }
-
-  // Helpers
-  const ensureSet = (v) => (v instanceof Set ? v : new Set());
-  const ensureMap = (v) => (v instanceof Map ? v : new Map());
-
-  // Derive forced date range: file min/max first, then actions fallback (rare)
-  const sum = (p.summary && typeof p.summary === 'object' && !Array.isArray(p.summary)) ? p.summary : {};
-  const truth =
-    (p.truth_meta && typeof p.truth_meta === 'object' && !Array.isArray(p.truth_meta)) ? p.truth_meta :
-    (sum.truth_meta && typeof sum.truth_meta === 'object' && !Array.isArray(sum.truth_meta)) ? sum.truth_meta :
-    null;
-
-  const fileMin = asYmd(truth?.file_date_min ?? truth?.fileDateMin ?? null);
-  const fileMax = asYmd(truth?.file_date_max ?? truth?.fileDateMax ?? null);
-
-  const actions = Array.isArray(p.actions) ? p.actions : (Array.isArray(sum.actions) ? sum.actions : []);
-  let actMin = null;
-  let actMax = null;
-  for (const a of actions) {
-    const wd = asYmd(a?.work_date || a?.workDate || a?.date_local || a?.date || a?.week_ending_date || null);
-    if (!wd) continue;
-    if (!actMin || wd < actMin) actMin = wd;
-    if (!actMax || wd > actMax) actMax = wd;
-  }
-
-  const forcedFrom = fileMin || actMin || null;
-  const forcedTo   = fileMax || actMax || null;
-
-  // Options (shared)
-  if (!ui.options || typeof ui.options !== 'object' || Array.isArray(ui.options)) ui.options = {};
-
-  // ✅ Forced behaviour for BOTH NHSP and HR_WEEKLY (no options modal anymore)
-  ui.options.missingShiftsEnabled = true;
-
-  // Only set forced dates when we actually have them (avoid wiping a previously seeded value)
-  if (forcedFrom) ui.options.dateFrom = forcedFrom;
-  if (forcedTo)   ui.options.dateTo = forcedTo;
-
-  // Ensure keys exist even if null
-  if (!('dateFrom' in ui.options)) ui.options.dateFrom = null;
-  if (!('dateTo' in ui.options)) ui.options.dateTo = null;
-
-  // Normalise / repair inverted ranges
-  const df0 = asYmd(ui.options.dateFrom);
-  const dt0 = asYmd(ui.options.dateTo);
-  if (df0 && dt0 && df0 > dt0) {
-    // Prefer forced range if available; otherwise swap
-    if (forcedFrom && forcedTo) {
-      ui.options.dateFrom = forcedFrom;
-      ui.options.dateTo = forcedTo;
-    } else {
-      ui.options.dateFrom = dt0;
-      ui.options.dateTo = df0;
-    }
-  } else {
-    ui.options.dateFrom = df0 || ui.options.dateFrom;
-    ui.options.dateTo = dt0 || ui.options.dateTo;
-  }
-
-  // Selections (shared)
-  ui.actionSelection = ensureSet(ui.actionSelection);
-
-  // emailSelection:
-  // - HR_WEEKLY validation requires Map(key -> boolean) so explicit untick survives
-  // - NHSP keeps legacy Set
-  if (T === 'HR_WEEKLY') {
-    if (ui.emailSelection instanceof Set) {
-      const m = new Map();
-      for (const k of Array.from(ui.emailSelection)) {
-        const kk = String(k || '').trim();
-        if (kk) m.set(kk, true);
-      }
-      ui.emailSelection = m;
-    }
-    if (!(ui.emailSelection instanceof Map)) ui.emailSelection = new Map();
-  } else {
-    if (!(ui.emailSelection instanceof Set)) ui.emailSelection = new Set();
-  }
-
-  // invalidationSelection: Map `${timesheet_id}|${comparison_key}` -> boolean
-  ui.invalidationSelection = ensureMap(ui.invalidationSelection);
-
-  // altEmailByKey: Map `${timesheet_id}|${issue_fingerprint}` -> string
-  ui.altEmailByKey = ensureMap(ui.altEmailByKey);
-
-  // Filters (shared)
-  if (!ui.filters || typeof ui.filters !== 'object' || Array.isArray(ui.filters)) ui.filters = {};
-  if (typeof ui.filters.showOnlyRed !== 'boolean') ui.filters.showOnlyRed = false;
-  if (typeof ui.filters.showOnlyUnticked !== 'boolean') ui.filters.showOnlyUnticked = false;
-  if (typeof ui.filters.showOnlyCancellations !== 'boolean') ui.filters.showOnlyCancellations = false;
-  if (typeof ui.filters.search !== 'string') ui.filters.search = '';
-
-  // Hydration flags (shared)
-  if (!ui.hydratedFlags || typeof ui.hydratedFlags !== 'object' || Array.isArray(ui.hydratedFlags)) ui.hydratedFlags = {};
-  if (typeof ui.hydratedFlags.didInitDefaultActionChecks !== 'boolean') ui.hydratedFlags.didInitDefaultActionChecks = false;
-  if (typeof ui.hydratedFlags.didInitDefaultEmailChecks !== 'boolean') ui.hydratedFlags.didInitDefaultEmailChecks = false;
-  if (typeof ui.hydratedFlags.didInitDefaultInvalidationChecks !== 'boolean') ui.hydratedFlags.didInitDefaultInvalidationChecks = false;
-
-  // Optional lightweight preview meta (safe)
-  try {
-    ui.previewMeta = (ui.previewMeta && typeof ui.previewMeta === 'object' && !Array.isArray(ui.previewMeta)) ? ui.previewMeta : {};
-    if (typeof ui.previewMeta.mode_summary !== 'string') {
-      ui.previewMeta.mode_summary = String(p.mode_summary || p.modeSummary || sum.mode_summary || sum.modeSummary || '').trim();
-    }
-    if (typeof ui.previewMeta.client_id !== 'string') {
-      ui.previewMeta.client_id = String(p.client_id || sum.client_id || truth?.client_id || '').trim();
-    }
-    if (!('file_date_min' in ui.previewMeta)) ui.previewMeta.file_date_min = truth?.file_date_min ?? truth?.fileDateMin ?? null;
-    if (!('file_date_max' in ui.previewMeta)) ui.previewMeta.file_date_max = truth?.file_date_max ?? truth?.fileDateMax ?? null;
-  } catch {
-    // ignore
-  }
-
-  window.__weeklyImportUi[T][impId] = ui;
-  return ui;
-}
-
-
 function wireHrWeeklyValidationSummaryActions(type, importId) {
   const T = String(type || '').toUpperCase();
   const impId = String(importId || '').trim();
@@ -8790,6 +9089,29 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
             if (!tsid || !fp) continue;
 
             const k = `${String(tsid).trim()}|${fp}`;
+
+            // ✅ Blocked if email_blocked_reason exists OR failure_reasons contains "Email blocked:"
+            const blocked = (() => {
+              const br0 = String(g?.email_blocked_reason || g?.emailBlockedReason || '').trim();
+              if (br0) return true;
+
+              const frArr = Array.isArray(g?.failure_reasons || g?.failureReasons) ? (g?.failure_reasons || g?.failureReasons) : [];
+              for (const r of frArr) {
+                const s = String(r || '').trim();
+                if (!s) continue;
+                if (s.toLowerCase().indexOf('email blocked:') >= 0) return true;
+              }
+              return false;
+            })();
+
+            if (blocked) {
+              // ✅ Proactively unselect/delete any existing selection for blocked keys
+              if (ui.emailSelection instanceof Map && ui.emailSelection.has(k)) {
+                ui.emailSelection.delete(k);
+              }
+              continue;
+            }
+
             if (ui.emailSelection instanceof Map && ui.emailSelection.has(k)) continue;
 
             const emailedAlready = (g?.emailed_already === true) || (g?.emailedAlready === true);
@@ -9149,9 +9471,226 @@ function wireHrWeeklyValidationSummaryActions(type, importId) {
 }
 
 
+function ensureWeeklyUiStore(type, importId, previewState) {
+  const T = String(type || '').trim().toUpperCase();
+  const impId = String(importId || '').trim();
+  const p = (previewState && typeof previewState === 'object' && !Array.isArray(previewState)) ? previewState : {};
 
+  // Be safe in the browser: never hard-throw in UI init paths
+  if (!impId) {
+    console.warn('ensureWeeklyUiStore: importId is required');
+    return null;
+  }
+  if (T !== 'HR_WEEKLY' && T !== 'NHSP') {
+    console.warn(`ensureWeeklyUiStore: unsupported type ${T}`);
+    return null;
+  }
 
+  const asYmd = (v) => {
+    if (!v) return null;
+    if (typeof v === 'string') {
+      const s = v.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      if (s.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    }
+    try {
+      const d = new Date(v);
+      if (Number.isNaN(d.getTime())) return null;
+      const yyyy = d.getUTCFullYear();
+      const mm   = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd   = String(d.getUTCDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    } catch {
+      return null;
+    }
+  };
 
+  // Root stores
+  window.__weeklyImportUi = window.__weeklyImportUi || {};
+  window.__weeklyImportUi[T] = window.__weeklyImportUi[T] || {};
+
+  // If already exists, normalize missing fields (DO NOT clobber existing object)
+  let ui = window.__weeklyImportUi[T][impId];
+  if (!ui || typeof ui !== 'object' || Array.isArray(ui)) {
+    ui = {};
+    window.__weeklyImportUi[T][impId] = ui;
+  }
+
+  // Helpers
+  const ensureSet = (v) => (v instanceof Set ? v : new Set());
+  const ensureMap = (v) => (v instanceof Map ? v : new Map());
+
+  // Derive forced date range: file min/max first, then actions fallback (rare)
+  const sum = (p.summary && typeof p.summary === 'object' && !Array.isArray(p.summary)) ? p.summary : {};
+  const truth =
+    (p.truth_meta && typeof p.truth_meta === 'object' && !Array.isArray(p.truth_meta)) ? p.truth_meta :
+    (sum.truth_meta && typeof sum.truth_meta === 'object' && !Array.isArray(sum.truth_meta)) ? sum.truth_meta :
+    null;
+
+  const fileMin = asYmd(truth?.file_date_min ?? truth?.fileDateMin ?? null);
+  const fileMax = asYmd(truth?.file_date_max ?? truth?.fileDateMax ?? null);
+
+  const actions = Array.isArray(p.actions) ? p.actions : (Array.isArray(sum.actions) ? sum.actions : []);
+  let actMin = null;
+  let actMax = null;
+  for (const a of actions) {
+    const wd = asYmd(a?.work_date || a?.workDate || a?.date_local || a?.date || a?.week_ending_date || null);
+    if (!wd) continue;
+    if (!actMin || wd < actMin) actMin = wd;
+    if (!actMax || wd > actMax) actMax = wd;
+  }
+
+  const forcedFrom = fileMin || actMin || null;
+  const forcedTo   = fileMax || actMax || null;
+
+  // Options (shared)
+  if (!ui.options || typeof ui.options !== 'object' || Array.isArray(ui.options)) ui.options = {};
+
+  // ✅ Forced behaviour for BOTH NHSP and HR_WEEKLY (no options modal anymore)
+  ui.options.missingShiftsEnabled = true;
+
+  // Only set forced dates when we actually have them (avoid wiping a previously seeded value)
+  if (forcedFrom) ui.options.dateFrom = forcedFrom;
+  if (forcedTo)   ui.options.dateTo = forcedTo;
+
+  // Ensure keys exist even if null
+  if (!('dateFrom' in ui.options)) ui.options.dateFrom = null;
+  if (!('dateTo' in ui.options)) ui.options.dateTo = null;
+
+  // Normalise / repair inverted ranges
+  const df0 = asYmd(ui.options.dateFrom);
+  const dt0 = asYmd(ui.options.dateTo);
+  if (df0 && dt0 && df0 > dt0) {
+    // Prefer forced range if available; otherwise swap
+    if (forcedFrom && forcedTo) {
+      ui.options.dateFrom = forcedFrom;
+      ui.options.dateTo = forcedTo;
+    } else {
+      ui.options.dateFrom = dt0;
+      ui.options.dateTo = df0;
+    }
+  } else {
+    ui.options.dateFrom = df0 || ui.options.dateFrom;
+    ui.options.dateTo = dt0 || ui.options.dateTo;
+  }
+
+  // Selections (shared)
+  ui.actionSelection = ensureSet(ui.actionSelection);
+
+  // emailSelection:
+  // - HR_WEEKLY validation requires Map(key -> boolean) so explicit untick survives
+  // - NHSP keeps legacy Set
+  if (T === 'HR_WEEKLY') {
+    if (ui.emailSelection instanceof Set) {
+      const m = new Map();
+      for (const k of Array.from(ui.emailSelection)) {
+        const kk = String(k || '').trim();
+        if (kk) m.set(kk, true);
+      }
+      ui.emailSelection = m;
+    }
+    if (!(ui.emailSelection instanceof Map)) ui.emailSelection = new Map();
+  } else {
+    if (!(ui.emailSelection instanceof Set)) ui.emailSelection = new Set();
+  }
+
+  // invalidationSelection: Map `${timesheet_id}|${comparison_key}` -> boolean
+  ui.invalidationSelection = ensureMap(ui.invalidationSelection);
+
+  // altEmailByKey: Map `${timesheet_id}|${issue_fingerprint}` -> string
+  ui.altEmailByKey = ensureMap(ui.altEmailByKey);
+
+  // Filters (shared)
+  if (!ui.filters || typeof ui.filters !== 'object' || Array.isArray(ui.filters)) ui.filters = {};
+  if (typeof ui.filters.showOnlyRed !== 'boolean') ui.filters.showOnlyRed = false;
+  if (typeof ui.filters.showOnlyUnticked !== 'boolean') ui.filters.showOnlyUnticked = false;
+  if (typeof ui.filters.showOnlyCancellations !== 'boolean') ui.filters.showOnlyCancellations = false;
+  if (typeof ui.filters.search !== 'string') ui.filters.search = '';
+
+  // Hydration flags (shared)
+  if (!ui.hydratedFlags || typeof ui.hydratedFlags !== 'object' || Array.isArray(ui.hydratedFlags)) ui.hydratedFlags = {};
+  if (typeof ui.hydratedFlags.didInitDefaultActionChecks !== 'boolean') ui.hydratedFlags.didInitDefaultActionChecks = false;
+  if (typeof ui.hydratedFlags.didInitDefaultEmailChecks !== 'boolean') ui.hydratedFlags.didInitDefaultEmailChecks = false;
+  if (typeof ui.hydratedFlags.didInitDefaultInvalidationChecks !== 'boolean') ui.hydratedFlags.didInitDefaultInvalidationChecks = false;
+
+  // Optional lightweight preview meta (safe)
+  try {
+    ui.previewMeta = (ui.previewMeta && typeof ui.previewMeta === 'object' && !Array.isArray(ui.previewMeta)) ? ui.previewMeta : {};
+    if (typeof ui.previewMeta.mode_summary !== 'string') {
+      ui.previewMeta.mode_summary = String(p.mode_summary || p.modeSummary || sum.mode_summary || sum.modeSummary || '').trim();
+    }
+    if (typeof ui.previewMeta.client_id !== 'string') {
+      ui.previewMeta.client_id = String(p.client_id || sum.client_id || truth?.client_id || '').trim();
+    }
+    if (!('file_date_min' in ui.previewMeta)) ui.previewMeta.file_date_min = truth?.file_date_min ?? truth?.fileDateMin ?? null;
+    if (!('file_date_max' in ui.previewMeta)) ui.previewMeta.file_date_max = truth?.file_date_max ?? truth?.fileDateMax ?? null;
+  } catch {
+    // ignore
+  }
+
+  // ✅ Reconcile HR_WEEKLY email selections against refreshed preview:
+  // Keep only keys that are currently valid for selection:
+  //   - hasMismatch true
+  //   - tsid + fp present
+  //   - NOT blocked (email_blocked_reason present OR failure_reasons contains "Email blocked:")
+  if (T === 'HR_WEEKLY') {
+    const vg0 = Array.isArray(p.validation_groups)
+      ? p.validation_groups
+      : (Array.isArray(sum.validation_groups) ? sum.validation_groups : []);
+
+    const validEmailKeys = new Set();
+
+    for (const g of vg0) {
+      if (!g || typeof g !== 'object') continue;
+
+      const hasMismatch = (g.has_mismatch === true) || (g.hasMismatch === true);
+      if (!hasMismatch) continue;
+
+      const tsid = String(g.timesheet_id || g.timesheetId || '').trim();
+      const fp = String(g.issue_fingerprint || g.issueFingerprint || '').trim();
+      if (!tsid || !fp) continue;
+
+      const blocked = (() => {
+        const br = String(g.email_blocked_reason || g.emailBlockedReason || '').trim();
+        if (br) return true;
+
+        const frArr = Array.isArray(g.failure_reasons)
+          ? g.failure_reasons
+          : (Array.isArray(g.failureReasons) ? g.failureReasons : []);
+
+        for (const r of frArr) {
+          const s = String(r || '').trim();
+          if (!s) continue;
+          if (s.toLowerCase().indexOf('email blocked:') >= 0) return true;
+        }
+        return false;
+      })();
+
+      if (blocked) continue;
+
+      validEmailKeys.add(`${tsid}|${fp}`);
+    }
+
+    // Prune emailSelection entries not in current valid set
+    if (ui.emailSelection instanceof Map) {
+      for (const k of Array.from(ui.emailSelection.keys())) {
+        const kk = String(k || '').trim();
+        if (!kk || !validEmailKeys.has(kk)) ui.emailSelection.delete(k);
+      }
+    }
+
+    // Prune altEmailByKey entries not in current valid set
+    if (ui.altEmailByKey instanceof Map) {
+      for (const k of Array.from(ui.altEmailByKey.keys())) {
+        const kk = String(k || '').trim();
+        if (!kk || !validEmailKeys.has(kk)) ui.altEmailByKey.delete(k);
+      }
+    }
+  }
+
+  window.__weeklyImportUi[T][impId] = ui;
+  return ui;
+}
 
 function adaptHrDailyPreviewToWeeklyModeA(preview) {
   const p0 = (preview && typeof preview === 'object') ? preview : {};
@@ -9525,14 +10064,15 @@ function adaptHrDailyPreviewToWeeklyModeA(preview) {
       default_invalidate_checked: !!defaultInv
     }];
 
+    const blocked =
+      safeStr(detail.email_blocked_reason || detail.emailBlockedReason || r?.email_blocked_reason || r?.emailBlockedReason || '');
+
     const failure_reasons = [];
     if (!ok) {
       const nice = reason ? reason.replace(/_/g, ' ') : 'validation failed';
       failure_reasons.push(`Daily validation: ${nice}`);
 
-      // ✅ Surface "email blocked" warning if provided by backend decoration
-      const blocked =
-        safeStr(detail.email_blocked_reason || detail.emailBlockedReason || r?.email_blocked_reason || r?.emailBlockedReason || '');
+      // ✅ Keep existing surface in failure_reasons for back-compat visibility
       if (blocked) {
         failure_reasons.push(blocked);
       }
@@ -9546,6 +10086,9 @@ function adaptHrDailyPreviewToWeeklyModeA(preview) {
       overall_status: ok ? 'VALIDATION_OK' : 'VALIDATION_ERROR',
       has_mismatch: !!hasMismatch,
       failure_reasons: failure_reasons,
+
+      // ✅ Provide group-level email_blocked_reason so weekly renderer can prioritise it
+      email_blocked_reason: (blocked ? blocked : null),
 
       // Fingerprint may be intentionally blank to block emailing; keep value as-is.
       issue_fingerprint: (fp ? fp : null),
@@ -36415,6 +36958,8 @@ function deriveTimesheetInvoicingDisplay(row) {
   if (issueStage === 'INVOICED_ISSUED') return 'INVOICED_ISSUED';
   return 'INVOICED_NOT_ISSUED';
 }
+
+
 function renderTimesheetLinesTab(ctx) {
     const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -36554,7 +37099,8 @@ function renderTimesheetLinesTab(ctx) {
   };
 
   // ─────────────────────────────────────────────────────
-  // SEGMENTS mode (NHSP / HR self-bill) unchanged
+  // SEGMENTS mode (NHSP / HR self-bill)
+  // ✅ Update: prefer time-based view when segment timing exists; fall back to bucketed view otherwise.
   // ─────────────────────────────────────────────────────
   const computeWeekStartFromWeekEnding = (weYmd) => {
     if (!weYmd) return null;
@@ -36586,191 +37132,215 @@ function renderTimesheetLinesTab(ctx) {
 
   const disabledAttr = locked ? 'disabled' : '';
 
-const buildInvoiceWeekSelectHtml = (seg) => {
-  if (!isNhspOrHrSelfBillBasis) return '<span class="mini">—</span>';
-  const segId = String(seg.segment_id || '');
-  if (!segId) return '<span class="mini">—</span>';
-
-  const storedTargetRaw = String(seg.invoice_target_week_start || '').trim();
-  const lockedInvoiceId = String(seg.invoice_locked_invoice_id || '').trim();
-
-  // ✅ IMPORTANT: staged target must be read by key-presence, not truthiness.
-  // This allows an explicit "clear" stage where segTargets[segId] === null.
-  const stagedExplicit = Object.prototype.hasOwnProperty.call(segTargets, segId);
-  const stagedRaw = stagedExplicit ? segTargets[segId] : undefined;
-  const stagedNorm =
-    stagedExplicit
-      ? (stagedRaw == null ? null : String(stagedRaw).trim())
-      : null;
-
-  const hadStagedBefore = stagedExplicit;
-
-  const currentTarget =
-    stagedExplicit
-      ? (stagedNorm == null ? '' : stagedNorm)
-      : (
-          storedTargetRaw ||
-          naturalWeekStart ||
-          currentWeekStart ||
-          ''
-        );
-
-  const opts = [];
-  const seen = new Set();
-
-  if (currentWeekStart) {
-    opts.push({ value: currentWeekStart, label: 'This week' });
-    seen.add(currentWeekStart);
-
-    const nextDate = new Date(`${currentWeekStart}T00:00:00Z`);
-    nextDate.setUTCDate(nextDate.getUTCDate() + 7);
-    const nextWeekStart = toYmd(nextDate);
-    opts.push({ value: nextWeekStart, label: `Week starting ${fmtYmdDmy(nextWeekStart)}` });
-    seen.add(nextWeekStart);
-
-    for (let i = 2; i <= 8; i++) {
-      const d = new Date(`${currentWeekStart}T00:00:00Z`);
-      d.setUTCDate(d.getUTCDate() + i * 7);
-      const ws = toYmd(d);
-      if (!seen.has(ws)) {
-        opts.push({ value: ws, label: `Week starting ${fmtYmdDmy(ws)}` });
-        seen.add(ws);
-      }
+  const asLondonHHMM = (iso) => {
+    try {
+      const d = new Date(String(iso || ''));
+      if (Number.isNaN(d.getTime())) return '';
+      return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Europe/London' });
+    } catch {
+      return '';
     }
-  }
-
-  if (naturalWeekStart && !seen.has(naturalWeekStart)) {
-    opts.push({ value: naturalWeekStart, label: `Natural week (${fmtYmdDmy(naturalWeekStart)})` });
-    seen.add(naturalWeekStart);
-  }
-
-  if (!seen.has(pauseWeekStart)) {
-    opts.push({ value: pauseWeekStart, label: 'Pause (defer)' });
-    seen.add(pauseWeekStart);
-  }
-
-  let selectedVal = currentTarget || naturalWeekStart || currentWeekStart || '';
-  const optionValues = opts.map(o => o.value);
-  if (!optionValues.includes(selectedVal)) {
-    selectedVal =
-      (naturalWeekStart && optionValues.includes(naturalWeekStart)) ? naturalWeekStart :
-      (optionValues.includes(currentWeekStart) ? currentWeekStart : pauseWeekStart);
-  }
-
-  // helper just for the hint text (DD/MM/YYYY)
-  const fmtYmdDmySlash = (ymd) => {
-    const s = String(ymd || '').slice(0, 10);
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return s;
-    const [, y, mo, d] = m;
-    return `${d}/${mo}/${y}`;
   };
 
-  // ✅ Match SQL semantics (and support explicit clear):
-  // delayed if:
-  //   invoice_locked_invoice_id is null/empty AND
-  //   invoice_target_week_start is explicitly present (stored OR staged) AND
-  //   invoice_target_week_start !== baseline week start
-  //
-  // Explicit clear = stagedExplicit && stagedNorm == null  → treated as "no explicit target"
-  const hasExplicitTarget = stagedExplicit ? (stagedNorm != null && stagedNorm !== '') : !!storedTargetRaw;
-  const targetForDelay =
-    stagedExplicit
-      ? (stagedNorm == null ? '' : stagedNorm)
-      : storedTargetRaw;
+  const pickSegStartEnd = (seg) => {
+    const s =
+      String(seg?.start_hhmm || seg?.start_local || seg?.start || '').trim() ||
+      (seg?.start_utc ? asLondonHHMM(seg.start_utc) : '') ||
+      (seg?.worked_start_iso ? asLondonHHMM(seg.worked_start_iso) : '');
 
-  const isPermanentDelay = (targetForDelay === pauseWeekStart);
+    const e =
+      String(seg?.end_hhmm || seg?.end_local || seg?.end || '').trim() ||
+      (seg?.end_utc ? asLondonHHMM(seg.end_utc) : '') ||
+      (seg?.worked_end_iso ? asLondonHHMM(seg.worked_end_iso) : '');
 
-  const isInvoiceDelayed =
-    hasExplicitTarget &&
-    !lockedInvoiceId &&
-    (
-      isPermanentDelay ||
-      (!!naturalWeekStart && !!targetForDelay && targetForDelay !== naturalWeekStart)
-    );
-
-  const delayHint = isInvoiceDelayed
-    ? (isPermanentDelay ? 'Permanently delayed' : `Delayed until ${fmtYmdDmySlash(targetForDelay)}`)
-    : '';
-
-  const isSegLocked = !!lockedInvoiceId;
-
-  const invoiceStateHint = isSegLocked
-    ? fmtInvoiceHint(lockedInvoiceId)
-    : (delayHint ? `⏳ ${delayHint}` : '○ Invoiceable now');
-
-  const disabledAttrSeg = (disabledAttr || isSegLocked) ? 'disabled' : '';
-
-  // ✅ Preferred display: UK date (DD/MM/YYYY) for the picker input
-  const toUk = (ymd) => {
-    const s = String(ymd || '').slice(0, 10);
-    if (!s) return '';
-    if (typeof formatIsoToUk === 'function') return formatIsoToUk(s);
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+    return { start: s, end: e };
   };
 
-  // Only show an explicit selected date if it is explicitly stored or explicitly staged
-  const storedExplicit = !!storedTargetRaw;
+  const pickSegBreakMins = (seg) => {
+    const raw =
+      seg?.break_mins ??
+      seg?.break_minutes ??
+      seg?.break_minutes_total ??
+      seg?.breakMinutes ??
+      null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.floor(n);
+  };
 
-  const explicitTarget =
-    stagedExplicit
-      ? (stagedNorm == null ? '' : stagedNorm)
-      : (storedExplicit ? storedTargetRaw : '');
+  const segHasTiming = (seg) => {
+    const se = pickSegStartEnd(seg);
+    if (se.start && se.end) return true;
+    // also treat start_utc/end_utc presence as timing-capable even if formatted fails
+    if (seg && (seg.start_utc || seg.end_utc || seg.worked_start_iso || seg.worked_end_iso)) return true;
+    return false;
+  };
 
-  const isPaused = (explicitTarget === pauseWeekStart);
-  const valueUk  = (!isPaused && explicitTarget) ? toUk(explicitTarget) : '';
+  const showSegmentsTimeView = !!(
+    isSegments &&
+    segs.length &&
+    isNhspOrHrSelfBillBasis &&
+    segs.some(seg => segHasTiming(seg))
+  );
 
-  // Disable date input if paused or already invoiced/locked
-  const dateDisabled = (disabledAttrSeg || isPaused) ? 'disabled' : '';
-  const pauseDisabled = disabledAttrSeg ? 'disabled' : '';
+  const buildInvoiceWeekSelectHtml = (seg) => {
+    if (!isNhspOrHrSelfBillBasis) return '<span class="mini">—</span>';
+    const segId = String(seg.segment_id || '');
+    if (!segId) return '<span class="mini">—</span>';
 
-  const pauseChecked = isPaused ? 'checked' : '';
+    const storedTargetRaw = String(seg.invoice_target_week_start || '').trim();
+    const lockedInvoiceId = String(seg.invoice_locked_invoice_id || '').trim();
 
-  return `
-    <div style="display:flex;flex-direction:column;gap:4px;">
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <input
-          type="text"
-          class="input mini"
-          name="seg_invoice_week"
-          data-segment-id="${segId}"
-          placeholder="DD/MM/YYYY"
-          value="${valueUk}"
-          ${dateDisabled}
-        />
-        <label class="mini" style="display:flex;gap:6px;align-items:center;user-select:none;">
+    // ✅ IMPORTANT: staged target must be read by key-presence, not truthiness.
+    // This allows an explicit "clear" stage where segTargets[segId] === null.
+    const stagedExplicit = Object.prototype.hasOwnProperty.call(segTargets, segId);
+    const stagedRaw = stagedExplicit ? segTargets[segId] : undefined;
+    const stagedNorm =
+      stagedExplicit
+        ? (stagedRaw == null ? null : String(stagedRaw).trim())
+        : null;
+
+    const currentTarget =
+      stagedExplicit
+        ? (stagedNorm == null ? '' : stagedNorm)
+        : (
+            storedTargetRaw ||
+            naturalWeekStart ||
+            currentWeekStart ||
+            ''
+          );
+
+    // helper just for the hint text (DD/MM/YYYY)
+    const fmtYmdDmySlash = (ymd) => {
+      const s = String(ymd || '').slice(0, 10);
+      const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return s;
+      const [, y, mo, d] = m;
+      return `${d}/${mo}/${y}`;
+    };
+
+    // ✅ Match SQL semantics (and support explicit clear):
+    // delayed if:
+    //   invoice_locked_invoice_id is null/empty AND
+    //   invoice_target_week_start is explicitly present (stored OR staged) AND
+    //   invoice_target_week_start !== baseline week start
+    //
+    // Explicit clear = stagedExplicit && stagedNorm == null  → treated as "no explicit target"
+    const hasExplicitTarget = stagedExplicit ? (stagedNorm != null && stagedNorm !== '') : !!storedTargetRaw;
+    const targetForDelay =
+      stagedExplicit
+        ? (stagedNorm == null ? '' : stagedNorm)
+        : storedTargetRaw;
+
+    const isPermanentDelay = (targetForDelay === pauseWeekStart);
+
+    const isInvoiceDelayed =
+      hasExplicitTarget &&
+      !lockedInvoiceId &&
+      (
+        isPermanentDelay ||
+        (!!naturalWeekStart && !!targetForDelay && targetForDelay !== naturalWeekStart)
+      );
+
+    const delayHint = isInvoiceDelayed
+      ? (isPermanentDelay ? 'Permanently delayed' : `Delayed until ${fmtYmdDmySlash(targetForDelay)}`)
+      : '';
+
+    const isSegLocked = !!lockedInvoiceId;
+
+    const invoiceStateHint = isSegLocked
+      ? fmtInvoiceHint(lockedInvoiceId)
+      : (delayHint ? `⏳ ${delayHint}` : '○ Invoiceable now');
+
+    const disabledAttrSeg = (disabledAttr || isSegLocked) ? 'disabled' : '';
+
+    // ✅ Preferred display: UK date (DD/MM/YYYY) for the picker input
+    const toUk = (ymd) => {
+      const s = String(ymd || '').slice(0, 10);
+      if (!s) return '';
+      if (typeof formatIsoToUk === 'function') return formatIsoToUk(s);
+      const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+    };
+
+    // Only show an explicit selected date if it is explicitly stored or explicitly staged
+    const storedExplicit = !!storedTargetRaw;
+
+    const explicitTarget =
+      stagedExplicit
+        ? (stagedNorm == null ? '' : stagedNorm)
+        : (storedExplicit ? storedTargetRaw : '');
+
+    const isPaused = (explicitTarget === pauseWeekStart);
+    const valueUk  = (!isPaused && explicitTarget) ? toUk(explicitTarget) : '';
+
+    // Disable date input if paused or already invoiced/locked
+    const dateDisabled = (disabledAttrSeg || isPaused) ? 'disabled' : '';
+    const pauseDisabled = disabledAttrSeg ? 'disabled' : '';
+
+    const pauseChecked = isPaused ? 'checked' : '';
+
+    return `
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
           <input
-            type="checkbox"
-            name="seg_invoice_pause"
+            type="text"
+            class="input mini"
+            name="seg_invoice_week"
             data-segment-id="${segId}"
-            ${pauseChecked}
-            ${pauseDisabled}
+            placeholder="DD/MM/YYYY"
+            value="${valueUk}"
+            ${dateDisabled}
           />
-          Delay indefinitely
-        </label>
+          <label class="mini" style="display:flex;gap:6px;align-items:center;user-select:none;">
+            <input
+              type="checkbox"
+              name="seg_invoice_pause"
+              data-segment-id="${segId}"
+              ${pauseChecked}
+              ${pauseDisabled}
+            />
+            Delay indefinitely
+          </label>
+        </div>
+        <span class="mini">${invoiceStateHint}</span>
       </div>
-      <span class="mini">${invoiceStateHint}</span>
-    </div>
-  `;
-};
-
+    `;
+  };
 
   if (isSegments && segs.length && isNhspOrHrSelfBillBasis) {
-    const headHtml = `
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Ref / Request</th>
-          <th>Source</th>
-          <th>Hours</th>
-          <th>Pay</th>
-          <th>Charge</th>
-          <th>Exclude from pay</th>
-          <th>Invoice week / Pause</th>
-        </tr>
-      </thead>
-    `;
+    const headHtml = showSegmentsTimeView
+      ? `
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Ref / Request</th>
+            <th>Start</th>
+            <th>End</th>
+            <th>Break (mins)</th>
+            <th>Source</th>
+            <th>Hours</th>
+            <th>Pay</th>
+            <th>Charge</th>
+            <th>Exclude from pay</th>
+            <th>Invoice week / Pause</th>
+          </tr>
+        </thead>
+      `
+      : `
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Ref / Request</th>
+            <th>Source</th>
+            <th>Hours</th>
+            <th>Pay</th>
+            <th>Charge</th>
+            <th>Exclude from pay</th>
+            <th>Invoice week / Pause</th>
+          </tr>
+        </thead>
+      `;
 
     const bodyRows = segs.map((seg) => {
       const effOverride = state.segmentOverrides && state.segmentOverrides[seg.segment_id];
@@ -36791,62 +37361,95 @@ const buildInvoiceWeekSelectHtml = (seg) => {
       const ref   = seg.ref_num || '';
       const reqId = seg.request_id || '';
 
- const segId = String(seg.segment_id || '');
+      const segId = String(seg.segment_id || '');
 
-// ✅ MUST capture these BEFORE buildInvoiceWeekSelectHtml() mutates segTargets[segId]
-const hadStagedBefore = Object.prototype.hasOwnProperty.call(segTargets, segId);
-const storedTargetRaw = String(seg.invoice_target_week_start || '').trim();
-const lockedInvoiceId = String(seg.invoice_locked_invoice_id || '').trim();
+      // ✅ MUST capture these BEFORE buildInvoiceWeekSelectHtml() mutates segTargets[segId]
+      const hadStagedBefore = Object.prototype.hasOwnProperty.call(segTargets, segId);
+      const storedTargetRaw = String(seg.invoice_target_week_start || '').trim();
+      const lockedInvoiceId = String(seg.invoice_locked_invoice_id || '').trim();
 
-// build HTML (this may write segTargets[segId])
-const invoiceWeekCellHtml = buildInvoiceWeekSelectHtml(seg);
+      // build HTML (this may write segTargets[segId])
+      const invoiceWeekCellHtml = buildInvoiceWeekSelectHtml(seg);
 
-// ✅ Determine delay using SQL semantics (explicit stored OR staged-before)
-const hasExplicitTarget = hadStagedBefore || !!storedTargetRaw;
-const targetForDelay = hadStagedBefore ? String(segTargets[segId] || '').trim() : storedTargetRaw;
+      // ✅ Determine delay using SQL semantics (explicit stored OR staged-before)
+      const hasExplicitTarget = hadStagedBefore || !!storedTargetRaw;
+      const targetForDelay = hadStagedBefore ? String(segTargets[segId] || '').trim() : storedTargetRaw;
 
-const baseline = String(naturalWeekStart || '').trim();
-const isPermanentDelay = (targetForDelay === pauseWeekStart);
+      const baseline = String(naturalWeekStart || '').trim();
+      const isPermanentDelay = (targetForDelay === pauseWeekStart);
 
-const isInvoiceDelayed =
-  hasExplicitTarget &&
-  !lockedInvoiceId &&
-  (
-    isPermanentDelay ||
-    (baseline && targetForDelay && targetForDelay !== baseline)
-  );
+      const isInvoiceDelayed =
+        hasExplicitTarget &&
+        !lockedInvoiceId &&
+        (
+          isPermanentDelay ||
+          (baseline && targetForDelay && targetForDelay !== baseline)
+        );
 
-const rowIsFlagged = !!effExclude || isInvoiceDelayed;
-const rowStyle = rowIsFlagged ? ` style="background: rgba(192, 57, 43, 0.18);"` : '';
+      const rowIsFlagged = !!effExclude || isInvoiceDelayed;
+      const rowStyle = rowIsFlagged ? ` style="background: rgba(192, 57, 43, 0.18);"` : '';
 
-const disabledExcludeAttr = (disabledAttr || lockedInvoiceId) ? 'disabled' : '';
+      const disabledExcludeAttr = (disabledAttr || lockedInvoiceId) ? 'disabled' : '';
 
-return `
-  <tr data-segment-id="${seg.segment_id}"${rowStyle}>
-    <td>${dateCellHtml}</td>
-    <td>
-      ${ref ? `<span class="mini">Ref: ${esc(ref)}</span>` : ''}
-      ${reqId ? `<br><span class="mini">Req: ${esc(reqId)}</span>` : ''}
-      ${(!ref && !reqId) ? '<span class="mini">—</span>' : ''}
-    </td>
-    <td>${src ? esc(src) : '<span class="mini">—</span>'}</td>
-    <td>${hours !== '' ? esc(hours) : '<span class="mini">—</span>'}</td>
-    <td>${pay   !== '' ? esc(pay)   : '<span class="mini">—</span>'}</td>
-    <td>${charge!== '' ? esc(charge): '<span class="mini">—</span>'}</td>
-    <td>
-      <input
-        type="checkbox"
-        name="seg_exclude_from_pay"
-        data-segment-id="${seg.segment_id}"
-        ${effExclude ? 'checked' : ''}
-        ${disabledExcludeAttr}
-      />
-      <span class="mini">Tick = exclude from pay (staged)</span>
-    </td>
-    <td>${invoiceWeekCellHtml}</td>
-  </tr>
-`;
+      const startEnd = pickSegStartEnd(seg);
+      const brMins = pickSegBreakMins(seg);
 
+      if (!showSegmentsTimeView) {
+        return `
+          <tr data-segment-id="${seg.segment_id}"${rowStyle}>
+            <td>${dateCellHtml}</td>
+            <td>
+              ${ref ? `<span class="mini">Ref: ${esc(ref)}</span>` : ''}
+              ${reqId ? `<br><span class="mini">Req: ${esc(reqId)}</span>` : ''}
+              ${(!ref && !reqId) ? '<span class="mini">—</span>' : ''}
+            </td>
+            <td>${src ? esc(src) : '<span class="mini">—</span>'}</td>
+            <td>${hours !== '' ? esc(hours) : '<span class="mini">—</span>'}</td>
+            <td>${pay   !== '' ? esc(pay)   : '<span class="mini">—</span>'}</td>
+            <td>${charge!== '' ? esc(charge): '<span class="mini">—</span>'}</td>
+            <td>
+              <input
+                type="checkbox"
+                name="seg_exclude_from_pay"
+                data-segment-id="${seg.segment_id}"
+                ${effExclude ? 'checked' : ''}
+                ${disabledExcludeAttr}
+              />
+              <span class="mini">Tick = exclude from pay (staged)</span>
+            </td>
+            <td>${invoiceWeekCellHtml}</td>
+          </tr>
+        `;
+      }
+
+      return `
+        <tr data-segment-id="${seg.segment_id}"${rowStyle}>
+          <td>${dateCellHtml}</td>
+          <td>
+            ${ref ? `<span class="mini">Ref: ${esc(ref)}</span>` : ''}
+            ${reqId ? `<br><span class="mini">Req: ${esc(reqId)}</span>` : ''}
+            ${(!ref && !reqId) ? '<span class="mini">—</span>' : ''}
+          </td>
+          <td>${startEnd.start ? esc(startEnd.start) : '<span class="mini">—</span>'}</td>
+          <td>${startEnd.end   ? esc(startEnd.end)   : '<span class="mini">—</span>'}</td>
+          <td>${Number.isFinite(brMins) ? esc(String(brMins)) : '<span class="mini">—</span>'}</td>
+          <td>${src ? esc(src) : '<span class="mini">—</span>'}</td>
+          <td>${hours !== '' ? esc(hours) : '<span class="mini">—</span>'}</td>
+          <td>${pay   !== '' ? esc(pay)   : '<span class="mini">—</span>'}</td>
+          <td>${charge!== '' ? esc(charge): '<span class="mini">—</span>'}</td>
+          <td>
+            <input
+              type="checkbox"
+              name="seg_exclude_from_pay"
+              data-segment-id="${seg.segment_id}"
+              ${effExclude ? 'checked' : ''}
+              ${disabledExcludeAttr}
+            />
+            <span class="mini">Tick = exclude from pay (staged)</span>
+          </td>
+          <td>${invoiceWeekCellHtml}</td>
+        </tr>
+      `;
     }).join('');
 
     return `
@@ -37097,10 +37700,62 @@ return `
     const seedHash  = stable(seedSchedule);
     const priorHash = state.__weeklyLinesSeedHash || '';
 
+    const seedEntityId =
+      (tsId || details.contract_week_id || row.contract_week_id || details.contract_week?.id || '');
+
+    const seedWeKey =
+      String(tsWeekEnding || row.week_ending_date || (details.contract_week && details.contract_week.week_ending_date) || '');
+
+    const seedKey = `${String(seedEntityId || '')}|${String(seedWeKey || '')}`;
+    const priorKey = state.__weeklyLinesSeedKey || '';
+
+    const scheduleHasAnyTimes = (() => {
+      try {
+        return Array.isArray(seedSchedule) && seedSchedule.some(seg => {
+          const s = String(normHHMM(seg, 'start', 'start_utc') || '').trim();
+          const e = String(normHHMM(seg, 'end', 'end_utc') || '').trim();
+          return !!(s && e);
+        });
+      } catch { return false; }
+    })();
+
+    const linesAppearBlank = (() => {
+      try {
+        const by = (state.weeklyLinesByDate && typeof state.weeklyLinesByDate === 'object') ? state.weeklyLinesByDate : null;
+        if (!by) return true;
+        for (const arr of Object.values(by)) {
+          if (!Array.isArray(arr)) continue;
+          for (const ln of arr) {
+            if (!ln || typeof ln !== 'object') continue;
+            if (
+              String(ln.ref || '').trim() ||
+              String(ln.start || '').trim() ||
+              String(ln.end || '').trim() ||
+              String(ln.break_start || '').trim() ||
+              String(ln.break_end || '').trim() ||
+              String(ln.break_mins || '').trim()
+            ) return false;
+          }
+        }
+        return true;
+      } catch {
+        return true;
+      }
+    })();
+
+    const blankGuard = (frameMode === 'view') && scheduleHasAnyTimes && linesAppearBlank;
+
     // Only auto-reseed in VIEW mode (never clobber edits)
-    if (!state.weeklyLinesByDate || (frameMode === 'view' && priorHash !== seedHash)) {
+    const shouldReseed =
+      (!state.weeklyLinesByDate) ||
+      ((frameMode === 'view') && (priorKey !== seedKey)) ||
+      ((frameMode === 'view') && (priorHash !== seedHash)) ||
+      blankGuard;
+
+    if (shouldReseed) {
       state.weeklyLinesByDate = buildLinesFromSchedule();
       state.__weeklyLinesSeedHash = seedHash;
+      state.__weeklyLinesSeedKey  = seedKey;
 
       // derive extraShiftCount so the UI shows all stored lines (including break-only lines)
       let maxLines = 1;
@@ -37342,48 +37997,48 @@ return `
             return { st, fr };
           },
 
-      _ensureLine(st, date, idx) {
-  const d = String(date || '');
-  const i = Number(idx || 0);
-  if (!d || !Number.isFinite(i) || i < 0) return null;
+          _ensureLine(st, date, idx) {
+            const d = String(date || '');
+            const i = Number(idx || 0);
+            if (!d || !Number.isFinite(i) || i < 0) return null;
 
-  st.weeklyLinesByDate[d] = Array.isArray(st.weeklyLinesByDate[d]) ? st.weeklyLinesByDate[d] : [];
-  while (st.weeklyLinesByDate[d].length <= i) {
-    st.weeklyLinesByDate[d].push({ ref:'', start:'', end:'', break_start:'', break_end:'', break_mins:'' });
-  }
-  st.weeklyLinesByDate[d][i] = st.weeklyLinesByDate[d][i] || { ref:'', start:'', end:'', break_start:'', break_end:'', break_mins:'' };
-  if (st.weeklyLinesByDate[d][i].break_mins == null) st.weeklyLinesByDate[d][i].break_mins = '';
-  return st.weeklyLinesByDate[d][i];
-},
+            st.weeklyLinesByDate[d] = Array.isArray(st.weeklyLinesByDate[d]) ? st.weeklyLinesByDate[d] : [];
+            while (st.weeklyLinesByDate[d].length <= i) {
+              st.weeklyLinesByDate[d].push({ ref:'', start:'', end:'', break_start:'', break_end:'', break_mins:'' });
+            }
+            st.weeklyLinesByDate[d][i] = st.weeklyLinesByDate[d][i] || { ref:'', start:'', end:'', break_start:'', break_end:'', break_mins:'' };
+            if (st.weeklyLinesByDate[d][i].break_mins == null) st.weeklyLinesByDate[d][i].break_mins = '';
+            return st.weeklyLinesByDate[d][i];
+          },
 
-_syncBreakMinsLock(date, idx, ln) {
-  try {
-    const d = String(date || '');
-    const i = Number(idx);
-    if (!d || !Number.isFinite(i)) return;
+          _syncBreakMinsLock(date, idx, ln) {
+            try {
+              const d = String(date || '');
+              const i = Number(idx);
+              if (!d || !Number.isFinite(i)) return;
 
-    const hasWindow = !!(String(ln?.break_start || '').trim() || String(ln?.break_end || '').trim());
+              const hasWindow = !!(String(ln?.break_start || '').trim() || String(ln?.break_end || '').trim());
 
-    const minsEl = document.querySelector(
-      `input[data-weekly-field="break_mins"][data-date="${CSS.escape(d)}"][data-line-idx="${i}"]`
-    );
-    if (!minsEl) return;
+              const minsEl = document.querySelector(
+                `input[data-weekly-field="break_mins"][data-date="${CSS.escape(d)}"][data-line-idx="${i}"]`
+              );
+              if (!minsEl) return;
 
-    if (hasWindow) {
-      minsEl.dataset.breaklock = '1';
-      minsEl.disabled = true;
-      minsEl.readOnly = true;
-      return;
-    }
+              if (hasWindow) {
+                minsEl.dataset.breaklock = '1';
+                minsEl.disabled = true;
+                minsEl.readOnly = true;
+                return;
+              }
 
-    // Only re-enable if we were the reason it was disabled (avoid fighting global readonly)
-    if (minsEl.dataset.breaklock === '1') {
-      minsEl.disabled = false;
-      minsEl.readOnly = false;
-      delete minsEl.dataset.breaklock;
-    }
-  } catch {}
-},
+              // Only re-enable if we were the reason it was disabled (avoid fighting global readonly)
+              if (minsEl.dataset.breaklock === '1') {
+                minsEl.disabled = false;
+                minsEl.readOnly = false;
+                delete minsEl.dataset.breaklock;
+              }
+            } catch {}
+          },
 
           _recalcPaidForDate(st, date) {
             const d = String(date || '');
@@ -37484,46 +38139,45 @@ _syncBreakMinsLock(date, idx, ln) {
               const ln = this._ensureLine(st, date, idx);
               if (!ln) return;
 
-           ln[field] = String(el.value || '');
+              ln[field] = String(el.value || '');
 
-// If user is using break start/end on this line:
-// - keep break_mins OUT of state (avoid mixing)
-// - but auto-populate the break_mins *display* so the user can see the duration
-if (field === 'break_start' || field === 'break_end') {
-  const bs = String(ln.break_start || '').trim();
-  const be = String(ln.break_end   || '').trim();
-  const hasWindow = !!(bs || be);
+              // If user is using break start/end on this line:
+              // - keep break_mins OUT of state (avoid mixing)
+              // - but auto-populate the break_mins *display* so the user can see the duration
+              if (field === 'break_start' || field === 'break_end') {
+                const bs = String(ln.break_start || '').trim();
+                const be = String(ln.break_end   || '').trim();
+                const hasWindow = !!(bs || be);
 
-  // Always keep mins empty in state when a window is used
-  if (hasWindow) ln.break_mins = '';
+                // Always keep mins empty in state when a window is used
+                if (hasWindow) ln.break_mins = '';
 
-  // Auto-fill the UI mins box (read-only/disabled is fine; value still shows)
-  try {
-    const minsEl = document.querySelector(
-      `input[data-weekly-field="break_mins"][data-date="${CSS.escape(date)}"][data-line-idx="${idx}"]`
-    );
-    if (minsEl) {
-      // Only show mins when BOTH start+end are present and valid
-      const d = (bs && be) ? this._diff(bs, be) : null; // minutes, supports overnight
-      minsEl.value = (Number.isFinite(d) && d >= 0) ? String(d) : '';
-    }
-  } catch {}
+                // Auto-fill the UI mins box (read-only/disabled is fine; value still shows)
+                try {
+                  const minsEl = document.querySelector(
+                    `input[data-weekly-field="break_mins"][data-date="${CSS.escape(date)}"][data-line-idx="${idx}"]`
+                  );
+                  if (minsEl) {
+                    // Only show mins when BOTH start+end are present and valid
+                    const d = (bs && be) ? this._diff(bs, be) : null; // minutes, supports overnight
+                    minsEl.value = (Number.isFinite(d) && d >= 0) ? String(d) : '';
+                  }
+                } catch {}
 
-  // ✅ lock/unlock break mins for THIS line only
-  this._syncBreakMinsLock(date, idx, ln);
-} else {
-  // keep existing behaviour for other fields
-  this._syncBreakMinsLock(date, idx, ln);
-}
+                // ✅ lock/unlock break mins for THIS line only
+                this._syncBreakMinsLock(date, idx, ln);
+              } else {
+                // keep existing behaviour for other fields
+                this._syncBreakMinsLock(date, idx, ln);
+              }
 
+              // ✅ paid hours updates live, including after tab-away (onBlur calls onInput)
+              this._recalcPaidForDate(st, date);
 
-// ✅ paid hours updates live, including after tab-away (onBlur calls onInput)
-this._recalcPaidForDate(st, date);
+              // ✅ rebuild + validate schedule on every edit (pre-save Finance preview fix)
+              applyScheduleFromLines(st);
 
-// ✅ rebuild + validate schedule on every edit (pre-save Finance preview fix)
-applyScheduleFromLines(st);
-
-this._markDirty();
+              this._markDirty();
 
             } catch {}
           },
@@ -37662,13 +38316,13 @@ this._markDirty();
     // Ensure schedule/errors are computed at least once for this render
     try { applyScheduleFromLines(state); } catch {}
 
-   const badgeHtml = (!tsId)
-  ? (subMode === 'MANUAL'
-      ? '<span class="pill pill-bad">UNPROCESSED (manual)</span>'
-      : '<span class="pill pill-info">UNPROCESSED (electronic, read-only)</span>')
-  : (subMode === 'MANUAL'
-      ? '<span class="pill pill-ok">CONFIRMED HOURS (manual)</span>'
-      : '<span class="pill pill-elec">CONFIRMED HOURS (electronic, read-only)</span>');
+    const badgeHtml = (!tsId)
+      ? (subMode === 'MANUAL'
+          ? '<span class="pill pill-bad">UNPROCESSED (manual)</span>'
+          : '<span class="pill pill-info">UNPROCESSED (electronic, read-only)</span>')
+      : (subMode === 'MANUAL'
+          ? '<span class="pill pill-ok">CONFIRMED HOURS (manual)</span>'
+          : '<span class="pill pill-elec">CONFIRMED HOURS (electronic, read-only)</span>');
 
     const errorsByDate = (state.scheduleErrorsByDate && typeof state.scheduleErrorsByDate === 'object')
       ? state.scheduleErrorsByDate
@@ -37688,13 +38342,12 @@ this._markDirty();
       return dayLines.map((ln, lineIdx) => {
         const keyPaid = paidByKey[`${ymd}:${lineIdx}`] || '';
         const lineNo = lineIdx + 1;
-       // ✅ compute these OUTSIDE the template string
-  const hasBreakWindow = !!(String(ln?.break_start || '').trim() || String(ln?.break_end || '').trim());
-  const breakMinsLockAttr = hasBreakWindow ? 'disabled' : '';
-  const breakMinsLockData = hasBreakWindow ? 'data-breaklock="1"' : ''; 
+        // ✅ compute these OUTSIDE the template string
+        const hasBreakWindow = !!(String(ln?.break_start || '').trim() || String(ln?.break_end || '').trim());
+        const breakMinsLockAttr = hasBreakWindow ? 'disabled' : '';
+        const breakMinsLockData = hasBreakWindow ? 'data-breaklock="1"' : '';
 
         return `
-        
           <tr data-weekly-line="1" data-date="${esc(ymd)}" data-line-idx="${lineIdx}">
             <td>${esc(wd.dow || '') || '<span class="mini">—</span>'}</td>
             <td>${dateCellHtml}</td>
@@ -37764,20 +38417,19 @@ this._markDirty();
                      ${disabledAttrManual} />
             </td>
 
-          <td>
-  <input type="text"
-         class="input${errClass}"
-         name="wl_break_mins_${esc(ymd)}_${lineIdx}"
-         data-weekly-field="break_mins"
-         data-date="${esc(ymd)}"
-         data-line-idx="${lineIdx}"
-         ${breakMinsLockData}
-         value="${esc(ln?.break_mins || '')}"
-         oninput="window.__tsWeeklyLinesHelper&&window.__tsWeeklyLinesHelper.onInput(this)"
-         onblur="window.__tsWeeklyLinesHelper&&window.__tsWeeklyLinesHelper.onBlur(this)"
-         ${disabledAttrManual} ${breakMinsLockAttr} />
-</td>
-
+            <td>
+              <input type="text"
+                     class="input${errClass}"
+                     name="wl_break_mins_${esc(ymd)}_${lineIdx}"
+                     data-weekly-field="break_mins"
+                     data-date="${esc(ymd)}"
+                     data-line-idx="${lineIdx}"
+                     ${breakMinsLockData}
+                     value="${esc(ln?.break_mins || '')}"
+                     oninput="window.__tsWeeklyLinesHelper&&window.__tsWeeklyLinesHelper.onInput(this)"
+                     onblur="window.__tsWeeklyLinesHelper&&window.__tsWeeklyLinesHelper.onBlur(this)"
+                     ${disabledAttrManual} ${breakMinsLockAttr} />
+            </td>
 
             <td>
               <span class="mini sched-paid-hours" data-date="${esc(ymd)}" data-line-idx="${lineIdx}">
@@ -37817,7 +38469,7 @@ this._markDirty();
         </button>
       `;
 
-      const scheduleHelpText = canEditSchedule
+    const scheduleHelpText = canEditSchedule
       ? 'Each line is either: (1) a shift (fill Ref + Start + End), OR (2) an additional break for the most recent shift above (leave Start/End blank). For breaks you may use either Break start/end OR Break (mins) (do not mix). Save applies changes.'
       : 'Schedule is shown read-only. Multiple shifts on the same day appear as multiple lines.';
 
@@ -38021,7 +38673,7 @@ this._markDirty();
     return `
       <div class="tabc">
 
-               <div class="card">
+        <div class="card">
           <div class="row">
             <label>Status</label>
             <div class="controls">
@@ -38049,7 +38701,6 @@ this._markDirty();
             </div>
           ` : ''}
         </div>
-
 
         <div class="card" style="margin-top:10px;">
           <div class="row">
@@ -38182,7 +38833,7 @@ this._markDirty();
 
     return `
       <div class="tabc">
-              <div class="card">
+        <div class="card">
           <div class="row">
             <label>Status</label>
             <div class="controls">${badgeHtml}</div>
@@ -38201,7 +38852,6 @@ this._markDirty();
             </div>
           ` : ''}
         </div>
-
 
         <div class="card" style="margin-top:10px;">
           <div class="row">
@@ -38272,6 +38922,7 @@ this._markDirty();
     </div>
   `;
 }
+
 async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUTH]');
   GC('authoriseTimesheet');
@@ -47424,7 +48075,7 @@ const canProcessNow =
       );
       if (!ok) return;
 
-   try {
+  try {
   // This is your existing “delete-manual-reopen” operation.
   await deleteManualTimesheetAndReopenWeek(tsIdX, cwIdX);
 
@@ -47453,6 +48104,13 @@ const canProcessNow =
     mc.data.qr_status = null;
   } catch {}
   try { fr.hasId = false; } catch {}
+
+  // ✅ FIX (Issue #3): clear stale “moved/current” identity fields so planned-week UI doesn’t think a TS exists
+  try {
+    mc.timesheetDetails = mc.timesheetDetails || {};
+    mc.timesheetDetails.current_timesheet_id = null;
+    mc.timesheetDetails.requested_timesheet_id = null;
+  } catch {}
 
   // ✅ FIX (Issue #1): clear stale TS/TSFIN so Overview badges repaint immediately
   // ✅ ALSO: clear evidence list so planned-week gating never sees old TS evidence
@@ -47483,19 +48141,19 @@ const canProcessNow =
   window.__toast && window.__toast('Timesheet unprocessed.');
   await refreshFooter();
 } catch (e) {
+  try {
+    if (typeof tsHandleMoved409Modal === 'function') {
+      const handled = await tsHandleMoved409Modal(e, {
+        tabKey: 'overview',
+        label: 'footer-unprocess-timesheet',
+        toast: 'This timesheet changed while you were editing; review and try again.'
+      });
+      if (handled) return;
+    }
+  } catch {}
+  alert(e?.message || 'Failed to unprocess timesheet.');
+}
 
-        try {
-          if (typeof tsHandleMoved409Modal === 'function') {
-            const handled = await tsHandleMoved409Modal(e, {
-              tabKey: 'overview',
-              label: 'footer-unprocess-timesheet',
-              toast: 'This timesheet changed while you were editing; review and try again.'
-            });
-            if (handled) return;
-          }
-        } catch {}
-        alert(e?.message || 'Failed to unprocess timesheet.');
-      }
     };
   }
 
@@ -63045,7 +63703,6 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 }
 
 
-
 function renderTimesheetOverviewTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OVERVIEW]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -63074,11 +63731,16 @@ function renderTimesheetOverviewTab(ctx) {
       ''
     ).toUpperCase();
 
-  // ✅ prefer backend-resolved current id
+  // ✅ Timesheet identity for "has real timesheet?" must NOT use details.current_timesheet_id
+  // (it can be stale after unprocess and would incorrectly hide planned-week actions).
+  // Keep details.current_timesheet_id only as informational/debug.
   const tsId =
     ts.timesheet_id ||
-    details.current_timesheet_id ||
     row.timesheet_id ||
+    null;
+
+  const resolvedCurrentTimesheetId =
+    details.current_timesheet_id ||
     null;
 
   // ✅ define effective mode (real TS mode if TS exists; otherwise planned-week snapshot)
@@ -71216,15 +71878,40 @@ function renderHrWeeklyValidationSummary(type, importId, preview) {
         const emailBlock = (() => {
           if (!hasMismatch) return '';
 
-          const hasKeyInputs = !!(String(tsid || '').trim() && String(fp || '').trim());
-          const k = hasKeyInputs ? keyFor(tsid, fp) : '';
+          const tsidStr = String(tsid || '').trim();
+          const fpStr = String(fp || '').trim();
+          const hasKeyInputs = !!(tsidStr && fpStr);
+          const k = hasKeyInputs ? keyFor(tsidStr, fpStr) : '';
+
+          // blockedReason priority:
+          // 1) g.email_blocked_reason
+          // 2) failureReasons contains "Email blocked:"
+          const blockedReason = (() => {
+            const br0 = String(g?.email_blocked_reason || g?.emailBlockedReason || '').trim();
+            if (br0) return br0;
+
+            const frArr = Array.isArray(failureReasons) ? failureReasons : [];
+            for (const r of frArr) {
+              const s = String(r || '').trim();
+              if (!s) continue;
+              const i = s.toLowerCase().indexOf('email blocked:');
+              if (i >= 0) {
+                const rest = s.slice(i + 'email blocked:'.length).trim();
+                return rest || s;
+              }
+            }
+            return '';
+          })();
+
+          // checkboxEnabled = hasMismatch && tsid && fp && !blockedReason
+          const checkboxEnabled = !!(hasMismatch && tsidStr && fpStr && !String(blockedReason || '').trim());
 
           const altVal = (k ? getAltEmailValue(k) : '');
-
           const explicit = k ? getSelectionState(k) : null;
 
           const checked = (() => {
             if (!k) return '';
+            if (!checkboxEnabled) return '';
             if (explicit === true) return 'checked';
             if (explicit === false) return '';
             if (emailedAlready) return '';
@@ -71238,12 +71925,16 @@ function renderHrWeeklyValidationSummary(type, importId, preview) {
           const needsAlt =
             (canEmail !== true) || (!String(recip || '').trim());
 
-          const why =
-            !tsid ? 'Email unavailable (timesheet missing).' :
-            !String(fp || '').trim() ? 'Email unavailable (issue fingerprint missing).' :
-            (needsAlt ? 'Default recipient not available; enter Alternative Email to send.' : 'Email available.');
+          const why = (() => {
+            const br = String(blockedReason || '').trim();
+            if (br) return br;
+            if (!tsidStr) return 'Email unavailable (timesheet missing).';
+            if (!fpStr) return 'Email unavailable (issue fingerprint missing).';
+            if (needsAlt) return 'Default recipient not available; enter Alternative Email to send.';
+            return '';
+          })();
 
-          const showWhy = !!needsAlt;
+          const showWhy = !!String(why || '').trim();
 
           const altId = `hrAltEmail_${impId}_${String(tsid || '').slice(0,8)}_${Math.random().toString(36).slice(2)}`;
 
@@ -71256,7 +71947,7 @@ function renderHrWeeklyValidationSummary(type, importId, preview) {
                          data-timesheet-id="${enc(String(tsid || ''))}"
                          data-issue-fingerprint="${enc(String(fp || ''))}"
                          ${checked}
-                         ${hasKeyInputs ? '' : 'disabled'}/>
+                         ${checkboxEnabled ? '' : 'disabled'}/>
                   <span>${enc(label)}</span>
                 </label>
 
@@ -71277,6 +71968,7 @@ function renderHrWeeklyValidationSummary(type, importId, preview) {
                     data-act="hr-weekly-val-alt-email"
                     data-timesheet-id="${enc(String(tsid || ''))}"
                     data-issue-fingerprint="${enc(String(fp || ''))}"
+                    ${checkboxEnabled ? '' : 'disabled'}
                   />
                 </span>
               </div>
@@ -71367,7 +72059,6 @@ function renderHrWeeklyValidationSummary(type, importId, preview) {
     </div>
   `);
 }
-
 
 async function refuseQrHours(timesheetId, expectedTimesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][QR][REFUSE]');
