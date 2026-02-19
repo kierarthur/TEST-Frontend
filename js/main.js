@@ -3277,7 +3277,17 @@ function initAuthUI(){
 
   byId('linkForgot').onclick = openForgot;
   byId('linkBackToLogin').onclick = openLogin;
-  byId('linkResetToLogin').onclick = openLogin;
+
+  // ✅ If user clicks “Back to login” from reset flow, strip reset token from URL first
+  byId('linkResetToLogin').onclick = () => {
+    try{
+      const u = new URL(location.href);
+      u.searchParams.delete('k');
+      u.searchParams.delete('token');
+      history.replaceState(null, '', u.toString());
+    }catch{}
+    openLogin();
+  };
 
   const showTfaUi = (challengeId, expiresIn, policy) => {
     // Persist state (helps if the page reloads while waiting)
@@ -3459,7 +3469,18 @@ function initAuthUI(){
     if (!token){ err.textContent='Reset token missing. Use the email link again.'; err.style.display='block'; return; }
     try{
       await apiReset(token, p1);
-      ok.textContent='Password updated. You can sign in now.'; ok.style.display='block';
+
+      // ✅ Strip reset token from URL so refresh does NOT reopen the reset overlay
+      try{
+        const u = new URL(location.href);
+        u.searchParams.delete('k');
+        u.searchParams.delete('token');
+        history.replaceState(null, '', u.toString());
+      }catch{}
+
+      // ✅ Brief requirement: after reset, return to login so user signs in again
+      ok.textContent='Password updated. Please sign in.'; ok.style.display='block';
+      setTimeout(() => { try { openLogin(); } catch {} }, 250);
     }catch(ex){
       err.textContent = ex.message || 'Reset failed'; err.style.display='block';
     }
@@ -3468,7 +3489,27 @@ function initAuthUI(){
   // Open reset overlay automatically if URL carries a token (only if not already signed in)
   const url = new URL(location.href);
   const hasResetToken = url.searchParams.get('k') || url.searchParams.get('token');
-  if (hasResetToken && !(typeof getSession === 'function' && getSession()?.accessToken)) openReset();
+
+  // ✅ Determine “already signed in” using persisted session (initAuthUI runs before loadSession())
+  const hasValidPersistedSession = (() => {
+    const now = Math.floor(Date.now() / 1000);
+    const read = (k, store) => {
+      try {
+        const raw = store.getItem(k);
+        if (!raw) return null;
+        const j = JSON.parse(raw);
+        return j && typeof j === 'object' ? j : null;
+      } catch { return null; }
+    };
+    const s = read('cloudtms.session', localStorage) || read('cloudtms.session', sessionStorage);
+    const tok = s && (s.accessToken || s.access_token || s.token);
+    const exp = s && Number(s.exp);
+    if (!tok) return false;
+    if (!Number.isFinite(exp) || exp <= (now + 10)) return false;
+    return true;
+  })();
+
+  if (hasResetToken && !hasValidPersistedSession) openReset();
 }
 
 function clearSession(){
