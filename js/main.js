@@ -72569,8 +72569,16 @@ async function bootstrapApp(){
   await renderAll();
 }
 
-
 // Initialize
 initAuthUI();
-if (loadSession()) { scheduleRefresh(); bootstrapApp(); }
-else openLogin();
+
+if (loadSession()) {
+  scheduleRefresh();
+  bootstrapApp();
+} else {
+  // ✅ If arriving via password-reset link, initAuthUI() already opened the reset overlay.
+  // Do NOT override it by forcing the login overlay.
+  const u = new URL(location.href);
+  const hasResetToken = u.searchParams.get('k') || u.searchParams.get('token');
+  if (!hasResetToken) openLogin();
+}
