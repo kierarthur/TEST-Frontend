@@ -3147,26 +3147,29 @@ const IdleManager = (() => {
     state.logoutTimer = 0;
   };
 
-  const _topFrameIsMine = (token) => {
+  const _topFrameKind = () => {
     try {
       const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      return !!(fr && fr.kind === WARN_KIND && fr._token === token);
+      return fr && fr.kind ? String(fr.kind) : '';
     } catch {
-      return false;
+      return '';
     }
   };
 
+  const _topFrameIsWarn = () => _topFrameKind() === WARN_KIND;
+
   const _closeWarnModalIfOpen = () => {
     try {
-      if (!state.warnToken) return;
-
-      // Only close if our warning is the top frame (never close user modals)
-      if (!_topFrameIsMine(state.warnToken)) return;
+      // Close ONLY if the warning modal is the top frame. Never touch other modals.
+      if (!_topFrameIsWarn()) return false;
 
       const btn = document.getElementById('btnCloseModal');
       if (btn) btn.click();
       else if (typeof closeModal === 'function') closeModal();
-    } catch {}
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   const _schedule = () => {
@@ -3180,6 +3183,8 @@ const IdleManager = (() => {
     const elapsed = now - state.lastActivityMs;
 
     if (elapsed >= idleMs) {
+      // Ensure warning is closed BEFORE logout
+      try { _closeWarnModalIfOpen(); } catch {}
       performLogout('inactivity');
       return;
     }
@@ -3193,7 +3198,11 @@ const IdleManager = (() => {
       state.warnTimer = setTimeout(() => { try { _warn(); } catch {} }, warnIn);
     }
 
-    state.logoutTimer = setTimeout(() => performLogout('inactivity'), logoutIn);
+    // ✅ Close the warning modal BEFORE logging out (prevents it persisting into next login)
+    state.logoutTimer = setTimeout(() => {
+      try { _closeWarnModalIfOpen(); } catch {}
+      performLogout('inactivity');
+    }, logoutIn);
   };
 
   const _warn = async () => {
@@ -3213,7 +3222,6 @@ const IdleManager = (() => {
 
       const msg = `You will be signed out in ${mins} minute${mins === 1 ? '' : 's'} due to inactivity.\n\nClick OK to stay signed in.`;
 
-      // Prefer the programmable modal system (single-button; no cancel)
       if (typeof openUiConfirmModal === 'function') {
         const r = await openUiConfirmModal({
           kind: WARN_KIND,
@@ -3228,7 +3236,6 @@ const IdleManager = (() => {
         // Only “OK” resets timers.
         if (r && r.confirmed) bump();
       } else {
-        // Hard fallback only if modal helper is unavailable
         let stay = true;
         try { stay = window.confirm(msg); } catch { stay = true; }
         if (stay) bump();
@@ -3260,8 +3267,12 @@ const IdleManager = (() => {
       if (!state.enabled) return;
       const idleMs = state.policy.idle_logout_seconds * 1000;
       const elapsed = Date.now() - state.lastActivityMs;
-      if (elapsed >= idleMs) performLogout('inactivity');
-      else _schedule();
+      if (elapsed >= idleMs) {
+        try { _closeWarnModalIfOpen(); } catch {}
+        performLogout('inactivity');
+      } else {
+        _schedule();
+      }
     };
 
     const opts = { passive: true };
@@ -3302,11 +3313,11 @@ const IdleManager = (() => {
   };
 
   const stop = () => {
-    // ✅ Close the inactivity warning modal if it is still on-screen
-    // (prevents it lingering after logout and showing again after next login)
+    // ✅ Close the inactivity warning modal if it is currently the top modal (and it is ours)
+    // This prevents it lingering after logout and becoming unresponsive on next login.
     try { _closeWarnModalIfOpen(); } catch {}
-    state.warnToken = null;
 
+    state.warnToken = null;
     state.enabled = false;
     state.warnOpen = false;
     _clearTimers();
@@ -3319,6 +3330,7 @@ const IdleManager = (() => {
     bump: () => bump()
   };
 })();
+
 
 function initAuthUI(){
   // Buttons and links
@@ -66027,222 +66039,6 @@ async function getTimesheetPdfUrl(timesheetId) {
     rotation_degrees: pdfMeta.rotation_degrees ?? 0,
     meta: pdfMeta
   };
-}
-
-async function openUiConfirmModal(opts = {}) {
-  const enc = (typeof escapeHtml === 'function')
-    ? escapeHtml
-    : (s) => String(s ?? '')
-        .replaceAll('&','&amp;')
-        .replaceAll('<','&lt;')
-        .replaceAll('>','&gt;')
-        .replaceAll('"','&quot;')
-        .replaceAll("'","&#39;");
-
-  const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
-
-  const title = String(opts.title ?? 'Confirm').trim() || 'Confirm';
-
-  // message can be plain text or pre-rendered html
-  const messageHtml =
-    (opts.message_html != null && String(opts.message_html).trim() !== '')
-      ? String(opts.message_html)
-      : (opts.message != null && String(opts.message).trim() !== '')
-        ? `<div class="mini" style="white-space:pre-wrap;">${enc(String(opts.message))}</div>`
-        : `<div class="mini">Are you sure?</div>`;
-
-  const extraHtml =
-    (opts.extra_html != null && String(opts.extra_html).trim() !== '')
-      ? String(opts.extra_html)
-      : '';
-
-  const confirmLabel = String(opts.confirm_label ?? 'Confirm').trim() || 'Confirm';
-
-  // ✅ Allow single-button modals
-  const hideCancel = (opts.hide_cancel === true);
-  const cancelLabelRaw = (opts.cancel_label == null) ? 'Cancel' : String(opts.cancel_label);
-  const cancelLabel = String(cancelLabelRaw ?? '').trim();
-  const showCancel = (!hideCancel) && (cancelLabel !== '');
-
-  const confirmBtnClass = String(opts.confirm_class ?? 'btn btn-primary').trim() || 'btn btn-primary';
-  const cancelBtnClass  = String(opts.cancel_class  ?? 'btn btn-outline').trim() || 'btn btn-outline';
-
-  // ✅ Allow caller to override kind (so we can target-close specific dialogs like inactivity warning)
-  const kind = String(opts.kind ?? 'import-summary-ui-confirm').trim() || 'import-summary-ui-confirm';
-
-  const instanceId = `uicf_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const rootId = `${instanceId}_root`;
-
-  return await new Promise((resolve) => {
-    let done = false;
-    let ownerToken = null;
-    let watchTimer = 0;
-
-    const resolveOnce = (confirmed) => {
-      if (done) return;
-      done = true;
-      try { cleanup(); } catch {}
-      resolve({ confirmed: !!confirmed });
-    };
-
-    const topFrameIsMine = (token) => {
-      try {
-        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-        return !!(fr && fr.kind === kind && fr._token === token);
-      } catch {
-        return false;
-      }
-    };
-
-    const closeModalBtnClick = () => {
-      try {
-        const btn = document.getElementById('btnCloseModal');
-        if (btn) btn.click();
-        else if (typeof closeModal === 'function') closeModal();
-      } catch {
-        try { if (typeof closeModal === 'function') closeModal(); } catch {}
-      }
-    };
-
-    const onBodyClick = (ev) => {
-      if (done) return;
-      if (ownerToken && !topFrameIsMine(ownerToken)) return;
-
-      const btn = ev?.target && ev.target.closest ? ev.target.closest('button[data-act]') : null;
-      if (!btn) return;
-
-      const act = String(btn.getAttribute('data-act') || '');
-      if (act !== 'uicf-confirm' && act !== 'uicf-cancel') return;
-
-      if (act === 'uicf-cancel') {
-        if (!showCancel) return; // safety: ignore if cancel isn't shown
-        resolveOnce(false);
-        closeModalBtnClick();
-        return;
-      }
-
-      // confirm
-      resolveOnce(true);
-      closeModalBtnClick();
-    };
-
-    const onHeaderCloseCapture = (ev) => {
-      if (done) return;
-      const btn = document.getElementById('btnCloseModal');
-      const bound = btn?.dataset?.ownerToken || null;
-      if (!ownerToken || !bound) return;
-      if (String(bound) !== String(ownerToken)) return;
-      if (!topFrameIsMine(ownerToken)) return;
-      resolveOnce(false);
-      // do NOT prevent default; showModal will close it
-    };
-
-    const cleanup = () => {
-      try {
-        const body = document.getElementById('modalBody');
-        if (body) body.removeEventListener('click', onBodyClick);
-      } catch {}
-      try {
-        const closeBtn = document.getElementById('btnCloseModal');
-        if (closeBtn) closeBtn.removeEventListener('click', onHeaderCloseCapture, true);
-      } catch {}
-      try { if (watchTimer) clearInterval(watchTimer); } catch {}
-      watchTimer = 0;
-      try {
-        const closeBtn = document.getElementById('btnCloseModal');
-        if (closeBtn && closeBtn.dataset && closeBtn.dataset.ownerToken) delete closeBtn.dataset.ownerToken;
-      } catch {}
-    };
-
-    const renderTab = (key) => {
-      if (key !== 'main') return '';
-      const extraBlock = extraHtml
-        ? `<div style="margin-top:10px;">${extraHtml}</div>`
-        : '';
-
-      const buttonsHtml = showCancel
-        ? `<div style="display:flex;gap:10px;margin-top:14px;align-items:center;">
-             <button type="button" class="${enc(confirmBtnClass)}" data-act="uicf-confirm">${enc(confirmLabel)}</button>
-             <button type="button" class="${enc(cancelBtnClass)}" data-act="uicf-cancel">${enc(cancelLabel)}</button>
-           </div>`
-        : `<div style="display:flex;gap:10px;margin-top:14px;align-items:center;">
-             <button type="button" class="${enc(confirmBtnClass)}" data-act="uicf-confirm">${enc(confirmLabel)}</button>
-           </div>`;
-
-      return htmlWrap(`
-        <div class="tabc" id="${enc(rootId)}">
-          <div class="card">
-            <div class="row">
-              <label></label>
-              <div class="controls">
-                <div style="font-size:14px;font-weight:700;margin-bottom:6px;">${enc(title)}</div>
-                ${messageHtml}
-                ${extraBlock}
-
-                ${buttonsHtml}
-              </div>
-            </div>
-          </div>
-        </div>
-      `);
-    };
-
-    // Open modal
-    showModal(
-      title,
-      [{ key: 'main', label: 'Confirm' }],
-      renderTab,
-      null,
-      false,
-      null,
-      {
-        kind,
-        noParentGate: true,
-        showSave: false,
-        showApply: false,
-        onDismiss: () => resolveOnce(false)
-      }
-    );
-
-    // Capture token for this frame so we can gate events safely
-    try {
-      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      ownerToken = fr && fr.kind === kind ? fr._token : null;
-    } catch {
-      ownerToken = null;
-    }
-
-    // Tag the header Close button so header-close capture can confirm ownership
-    try {
-      const closeBtn = document.getElementById('btnCloseModal');
-      if (closeBtn && ownerToken) closeBtn.dataset.ownerToken = String(ownerToken);
-    } catch {}
-
-    // Allow caller to learn the token (used by IdleManager to close its warning on logout)
-    try {
-      if (typeof opts.on_open === 'function') opts.on_open({ kind, token: ownerToken || null });
-    } catch {}
-
-    // Wire DOM events (delegated to modalBody; gated by top frame token + kind)
-    try {
-      const body = document.getElementById('modalBody');
-      if (body) body.addEventListener('click', onBodyClick);
-    } catch {}
-
-    // Ensure closing via the header Close button resolves as Cancel too (no hang)
-    try {
-      const closeBtn = document.getElementById('btnCloseModal');
-      if (closeBtn) closeBtn.addEventListener('click', onHeaderCloseCapture, true);
-    } catch {}
-
-    // Safety: if frame is closed by any other route, resolve as Cancel (no hang)
-    watchTimer = setInterval(() => {
-      if (done) return;
-      const stk = window.__modalStack || [];
-      const stillThere = ownerToken && stk.some(fr => fr && fr._token === ownerToken);
-      if (!stillThere) resolveOnce(false);
-    }, 250);
-  });
 }
 
 
