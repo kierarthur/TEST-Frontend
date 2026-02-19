@@ -3115,8 +3115,9 @@ async function performLogout(reason){
     }
   } catch {}
 }
-
 const IdleManager = (() => {
+  const WARN_KIND = 'idle-inactivity-warning';
+
   const state = {
     enabled: false,
     policy: { idle_logout_seconds: 7200, idle_warning_seconds: 300 },
@@ -3125,6 +3126,7 @@ const IdleManager = (() => {
     logoutTimer: 0,
     bound: false,
     warnOpen: false,
+    warnToken: null,
     _onActivity: null,
     _onVisibility: null,
     _mmThrottleMs: 750,
@@ -3145,6 +3147,28 @@ const IdleManager = (() => {
     state.logoutTimer = 0;
   };
 
+  const _topFrameIsMine = (token) => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      return !!(fr && fr.kind === WARN_KIND && fr._token === token);
+    } catch {
+      return false;
+    }
+  };
+
+  const _closeWarnModalIfOpen = () => {
+    try {
+      if (!state.warnToken) return;
+
+      // Only close if our warning is the top frame (never close user modals)
+      if (!_topFrameIsMine(state.warnToken)) return;
+
+      const btn = document.getElementById('btnCloseModal');
+      if (btn) btn.click();
+      else if (typeof closeModal === 'function') closeModal();
+    } catch {}
+  };
+
   const _schedule = () => {
     if (!state.enabled) return;
     _clearTimers();
@@ -3156,7 +3180,6 @@ const IdleManager = (() => {
     const elapsed = now - state.lastActivityMs;
 
     if (elapsed >= idleMs) {
-      // already expired
       performLogout('inactivity');
       return;
     }
@@ -3165,7 +3188,6 @@ const IdleManager = (() => {
     const logoutIn = idleMs - elapsed;
 
     if (warnIn <= 0) {
-      // in warning window; fire warning soon
       state.warnTimer = setTimeout(() => { try { _warn(); } catch {} }, 1);
     } else {
       state.warnTimer = setTimeout(() => { try { _warn(); } catch {} }, warnIn);
@@ -3176,8 +3198,6 @@ const IdleManager = (() => {
 
   const _warn = async () => {
     if (!state.enabled) return;
-
-    // If already logged out, do nothing
     if (!SESSION?.accessToken) return;
 
     // Avoid stacking warning dialogs
@@ -3193,18 +3213,19 @@ const IdleManager = (() => {
 
       const msg = `You will be signed out in ${mins} minute${mins === 1 ? '' : 's'} due to inactivity.\n\nClick OK to stay signed in.`;
 
-      // Prefer the programmable modal system (showModal-based)
+      // Prefer the programmable modal system (single-button; no cancel)
       if (typeof openUiConfirmModal === 'function') {
         const r = await openUiConfirmModal({
+          kind: WARN_KIND,
           title: 'Inactivity warning',
           message: msg,
           confirm_label: 'OK',
-          cancel_label: 'Close',
+          hide_cancel: true,
           confirm_class: 'btn btn-primary',
-          cancel_class: 'btn btn-outline'
+          on_open: ({ token }) => { state.warnToken = token || null; }
         });
 
-        // Only “OK” actively resets the timers.
+        // Only “OK” resets timers.
         if (r && r.confirmed) bump();
       } else {
         // Hard fallback only if modal helper is unavailable
@@ -3214,6 +3235,7 @@ const IdleManager = (() => {
       }
     } finally {
       state.warnOpen = false;
+      state.warnToken = null;
     }
   };
 
@@ -3226,7 +3248,6 @@ const IdleManager = (() => {
     if (state.bound) return;
 
     state._onActivity = (ev) => {
-      // throttle mousemove hard
       if (ev && ev.type === 'mousemove') {
         const now = Date.now();
         if ((now - state._lastMmMs) < state._mmThrottleMs) return;
@@ -3237,7 +3258,6 @@ const IdleManager = (() => {
 
     state._onVisibility = () => {
       if (!state.enabled) return;
-      // On resume, check expiry
       const idleMs = state.policy.idle_logout_seconds * 1000;
       const elapsed = Date.now() - state.lastActivityMs;
       if (elapsed >= idleMs) performLogout('inactivity');
@@ -3276,11 +3296,17 @@ const IdleManager = (() => {
     state.policy = _normPolicy(policy || SESSION?.policy || {});
     state.lastActivityMs = Date.now();
     state.warnOpen = false;
+    state.warnToken = null;
     _bind();
     _schedule();
   };
 
   const stop = () => {
+    // ✅ Close the inactivity warning modal if it is still on-screen
+    // (prevents it lingering after logout and showing again after next login)
+    try { _closeWarnModalIfOpen(); } catch {}
+    state.warnToken = null;
+
     state.enabled = false;
     state.warnOpen = false;
     _clearTimers();
@@ -3293,7 +3319,6 @@ const IdleManager = (() => {
     bump: () => bump()
   };
 })();
-
 
 function initAuthUI(){
   // Buttons and links
@@ -66032,15 +66057,18 @@ async function openUiConfirmModal(opts = {}) {
       : '';
 
   const confirmLabel = String(opts.confirm_label ?? 'Confirm').trim() || 'Confirm';
-  const cancelLabel  = String(opts.cancel_label  ?? 'Cancel').trim()  || 'Cancel';
+
+  // ✅ Allow single-button modals
+  const hideCancel = (opts.hide_cancel === true);
+  const cancelLabelRaw = (opts.cancel_label == null) ? 'Cancel' : String(opts.cancel_label);
+  const cancelLabel = String(cancelLabelRaw ?? '').trim();
+  const showCancel = (!hideCancel) && (cancelLabel !== '');
 
   const confirmBtnClass = String(opts.confirm_class ?? 'btn btn-primary').trim() || 'btn btn-primary';
   const cancelBtnClass  = String(opts.cancel_class  ?? 'btn btn-outline').trim() || 'btn btn-outline';
 
-  // ✅ Use import-summary-* so showModal treats it as a utility child:
-  //  - footer Save hidden by default
-  //  - close does not trigger parent restore beyond renderTop()
-  const kind = 'import-summary-ui-confirm';
+  // ✅ Allow caller to override kind (so we can target-close specific dialogs like inactivity warning)
+  const kind = String(opts.kind ?? 'import-summary-ui-confirm').trim() || 'import-summary-ui-confirm';
 
   const instanceId = `uicf_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const rootId = `${instanceId}_root`;
@@ -66087,6 +66115,7 @@ async function openUiConfirmModal(opts = {}) {
       if (act !== 'uicf-confirm' && act !== 'uicf-cancel') return;
 
       if (act === 'uicf-cancel') {
+        if (!showCancel) return; // safety: ignore if cancel isn't shown
         resolveOnce(false);
         closeModalBtnClick();
         return;
@@ -66119,6 +66148,10 @@ async function openUiConfirmModal(opts = {}) {
       } catch {}
       try { if (watchTimer) clearInterval(watchTimer); } catch {}
       watchTimer = 0;
+      try {
+        const closeBtn = document.getElementById('btnCloseModal');
+        if (closeBtn && closeBtn.dataset && closeBtn.dataset.ownerToken) delete closeBtn.dataset.ownerToken;
+      } catch {}
     };
 
     const renderTab = (key) => {
@@ -66126,6 +66159,15 @@ async function openUiConfirmModal(opts = {}) {
       const extraBlock = extraHtml
         ? `<div style="margin-top:10px;">${extraHtml}</div>`
         : '';
+
+      const buttonsHtml = showCancel
+        ? `<div style="display:flex;gap:10px;margin-top:14px;align-items:center;">
+             <button type="button" class="${enc(confirmBtnClass)}" data-act="uicf-confirm">${enc(confirmLabel)}</button>
+             <button type="button" class="${enc(cancelBtnClass)}" data-act="uicf-cancel">${enc(cancelLabel)}</button>
+           </div>`
+        : `<div style="display:flex;gap:10px;margin-top:14px;align-items:center;">
+             <button type="button" class="${enc(confirmBtnClass)}" data-act="uicf-confirm">${enc(confirmLabel)}</button>
+           </div>`;
 
       return htmlWrap(`
         <div class="tabc" id="${enc(rootId)}">
@@ -66137,14 +66179,7 @@ async function openUiConfirmModal(opts = {}) {
                 ${messageHtml}
                 ${extraBlock}
 
-                <div style="display:flex;gap:10px;margin-top:14px;align-items:center;">
-                  <button type="button" class="${enc(confirmBtnClass)}" data-act="uicf-confirm">${enc(confirmLabel)}</button>
-                  <button type="button" class="${enc(cancelBtnClass)}" data-act="uicf-cancel">${enc(cancelLabel)}</button>
-                </div>
-
-                <div class="mini" style="margin-top:10px;opacity:.75;">
-                  You can also close this dialog to cancel.
-                </div>
+                ${buttonsHtml}
               </div>
             </div>
           </div>
@@ -66176,6 +66211,17 @@ async function openUiConfirmModal(opts = {}) {
     } catch {
       ownerToken = null;
     }
+
+    // Tag the header Close button so header-close capture can confirm ownership
+    try {
+      const closeBtn = document.getElementById('btnCloseModal');
+      if (closeBtn && ownerToken) closeBtn.dataset.ownerToken = String(ownerToken);
+    } catch {}
+
+    // Allow caller to learn the token (used by IdleManager to close its warning on logout)
+    try {
+      if (typeof opts.on_open === 'function') opts.on_open({ kind, token: ownerToken || null });
+    } catch {}
 
     // Wire DOM events (delegated to modalBody; gated by top frame token + kind)
     try {
