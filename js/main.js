@@ -3124,6 +3124,7 @@ const IdleManager = (() => {
     warnTimer: 0,
     logoutTimer: 0,
     bound: false,
+    warnOpen: false,
     _onActivity: null,
     _onVisibility: null,
     _mmThrottleMs: 750,
@@ -3165,31 +3166,54 @@ const IdleManager = (() => {
 
     if (warnIn <= 0) {
       // in warning window; fire warning soon
-      state.warnTimer = setTimeout(() => _warn(), 1);
+      state.warnTimer = setTimeout(() => { try { _warn(); } catch {} }, 1);
     } else {
-      state.warnTimer = setTimeout(() => _warn(), warnIn);
+      state.warnTimer = setTimeout(() => { try { _warn(); } catch {} }, warnIn);
     }
 
     state.logoutTimer = setTimeout(() => performLogout('inactivity'), logoutIn);
   };
 
-  const _warn = () => {
+  const _warn = async () => {
     if (!state.enabled) return;
 
     // If already logged out, do nothing
     if (!SESSION?.accessToken) return;
 
-    // Use a simple confirm-based warning for now (HTML modal can replace later)
-    const mins = Math.max(1, Math.ceil(state.policy.idle_warning_seconds / 60));
-    const msg = `You will be signed out in about ${mins} minute${mins === 1 ? '' : 's'} due to inactivity.\n\nPress OK to stay signed in, or Cancel to sign out now.`;
+    // Avoid stacking warning dialogs
+    if (state.warnOpen) return;
+    state.warnOpen = true;
 
-    let stay = true;
-    try { stay = window.confirm(msg); } catch { stay = true; }
+    try {
+      const idleMs = state.policy.idle_logout_seconds * 1000;
+      const elapsed = Date.now() - state.lastActivityMs;
+      const remainingMs = Math.max(0, idleMs - elapsed);
+      const remainingSecs = Math.max(1, Math.ceil(remainingMs / 1000));
+      const mins = Math.max(1, Math.ceil(remainingSecs / 60));
 
-    if (stay) {
-      bump();
-    } else {
-      performLogout('manual');
+      const msg = `You will be signed out in ${mins} minute${mins === 1 ? '' : 's'} due to inactivity.\n\nClick OK to stay signed in.`;
+
+      // Prefer the programmable modal system (showModal-based)
+      if (typeof openUiConfirmModal === 'function') {
+        const r = await openUiConfirmModal({
+          title: 'Inactivity warning',
+          message: msg,
+          confirm_label: 'OK',
+          cancel_label: 'Close',
+          confirm_class: 'btn btn-primary',
+          cancel_class: 'btn btn-outline'
+        });
+
+        // Only “OK” actively resets the timers.
+        if (r && r.confirmed) bump();
+      } else {
+        // Hard fallback only if modal helper is unavailable
+        let stay = true;
+        try { stay = window.confirm(msg); } catch { stay = true; }
+        if (stay) bump();
+      }
+    } finally {
+      state.warnOpen = false;
     }
   };
 
@@ -3251,12 +3275,14 @@ const IdleManager = (() => {
     state.enabled = true;
     state.policy = _normPolicy(policy || SESSION?.policy || {});
     state.lastActivityMs = Date.now();
+    state.warnOpen = false;
     _bind();
     _schedule();
   };
 
   const stop = () => {
     state.enabled = false;
+    state.warnOpen = false;
     _clearTimers();
     _unbind();
   };
@@ -3267,6 +3293,7 @@ const IdleManager = (() => {
     bump: () => bump()
   };
 })();
+
 
 function initAuthUI(){
   // Buttons and links
