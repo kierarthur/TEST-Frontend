@@ -11557,25 +11557,43 @@ function pickersLocalFilterAndSort(entity, ids, query, sortKey, sortDir){
 // NEW: revalidateCandidateOnPick(id) / revalidateClientOnPick(id)
 // Fetches current detail and refreshes dataset cache before accept
 // ─────────────────────────────────────────────────────────────────────────────
-async function revalidateCandidateOnPick(id){
+async function revalidateCandidateOnPick(id) {
   const url  = API(`/api/candidates/${encodeURIComponent(id)}`);
   const resp = await authFetch(url);
   if (!resp || !resp.ok) throw new Error('Could not fetch candidate.');
-  const r = await resp.json();
-  window.__pickerData = window.__pickerData || { candidates:{ itemsById:{} } };
-  const ds = window.__pickerData.candidates ||= { itemsById:{} };
+
+  const raw = await resp.json();
+
+  // Support both shapes: { candidate:{...} } or flat row
+  const r = (raw && raw.candidate && typeof raw.candidate === 'object') ? raw.candidate : raw;
+
+  window.__pickerData = window.__pickerData || {};
+  const ds = (window.__pickerData.candidates && typeof window.__pickerData.candidates === 'object')
+    ? window.__pickerData.candidates
+    : (window.__pickerData.candidates = { since: null, itemsById: {} });
+
+  ds.itemsById = (ds.itemsById && typeof ds.itemsById === 'object') ? ds.itemsById : {};
+
   const proj = {
     id: r.id,
     display_name: r.display_name || `${r.first_name||''} ${r.last_name||''}`.trim(),
     first_name: r.first_name || '',
     last_name: r.last_name || '',
     email: r.email || '',
-    roles_display: Array.isArray(r.roles)? formatRolesSummary(r.roles) : (r.role||''),
+    roles_display: Array.isArray(r.roles) ? formatRolesSummary(r.roles) : (r.role || ''),
+
+    // ✅ 10.2 Include pay method fields in projection
+    pay_method: (r.pay_method != null ? String(r.pay_method) : null),
+    umbrella_id: (r.umbrella_id != null ? r.umbrella_id : null),
+
     active: r.active !== false
   };
-  ds.itemsById[String(r.id)] = proj;
-}
 
+  ds.itemsById[String(r.id)] = proj;
+
+  // ✅ 10.1 Return candidate details
+  return r;
+}
 async function revalidateClientOnPick(id){
   const url  = API(`/api/clients/${encodeURIComponent(id)}`);
   const resp = await authFetch(url);
@@ -11917,8 +11935,8 @@ function setContractFormValue(name, value) {
   window.modalCtx = window.modalCtx || {};
   const fs = (window.modalCtx.formState ||= {
     __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null),
-    main:{},
-    pay:{}
+    main: {},
+    pay: {}
   });
 
   const isRate = /^(paye_|umb_|charge_)/.test(targetName);
@@ -11935,6 +11953,30 @@ function setContractFormValue(name, value) {
   } else {
     stored = (value == null ? '' : String(value));
     if (el) el.value = stored;
+  }
+
+  // ✅ 6.2 Candidate clear defence (must run even if candidate_id already '' to prevent ghost display)
+  if (targetName === 'candidate_id' && String(stored || '').trim() === '') {
+    try {
+      fs.main = fs.main || {};
+      fs.main.candidate_display = '';
+    } catch {}
+    try {
+      window.modalCtx.data = window.modalCtx.data || {};
+      window.modalCtx.data.candidate_display = '';
+    } catch {}
+  }
+
+  // ✅ 6.1 Mirror rate fields into window.modalCtx.data.rates_json (even if unchanged)
+  if (isRate) {
+    try {
+      window.modalCtx.data = window.modalCtx.data || {};
+      const rz = window.modalCtx.data.rates_json;
+      if (!rz || typeof rz !== 'object' || Array.isArray(rz)) {
+        window.modalCtx.data.rates_json = {};
+      }
+      window.modalCtx.data.rates_json[targetName] = stored;
+    } catch {}
   }
 
   if (prev === stored) {
@@ -11973,7 +12015,6 @@ function setContractFormValue(name, value) {
 
   try { window.dispatchEvent(new CustomEvent('modal-dirty')); } catch {}
 }
-
 
 function applyRatePresetToContractForm(preset, payMethod /* 'PAYE'|'UMBRELLA' */) {
   if (!preset) return;
@@ -13366,17 +13407,24 @@ function renderContractSettingsModal(ctx) {
   `;
 }
 
-
 function snapshotContractForm() {
-  const fs = (window.modalCtx.formState ||= { __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null), main:{}, pay:{} });
+  const fs = (window.modalCtx.formState ||= {
+    __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null),
+    main: {},
+    pay: {}
+  });
 
   const form = document.querySelector('#contractForm');
-  const fromMain  = form ? Array.from(form.querySelectorAll('input, select, textarea')) : [];
+  const fromMain = form ? Array.from(form.querySelectorAll('input, select, textarea')) : [];
 
-  const ratesTab  = document.querySelector('#contractRatesTab');
+  const ratesTab = document.querySelector('#contractRatesTab');
   const fromRates = ratesTab ? Array.from(ratesTab.querySelectorAll('input, select, textarea')) : [];
 
-  const all = [...fromMain, ...fromRates];
+  // ✅ NEW: include Additional Rates tab inputs in snapshot
+  const extrasTab = document.querySelector('#contractAdditionalRatesTab');
+  const fromExtras = extrasTab ? Array.from(extrasTab.querySelectorAll('input, select, textarea')) : [];
+
+  const all = [...fromMain, ...fromRates, ...fromExtras];
 
   for (const el of all) {
     const name = el && el.name;
@@ -13405,8 +13453,76 @@ function snapshotContractForm() {
       fs.main[name] = v;
     }
   }
-}
 
+  // ✅ NEW: build + stage authoritative additional_rates_json from DOM (if Extras tab exists)
+  if (extrasTab) {
+    try {
+      const normaliseFrequency = (raw) => {
+        if (!raw) return null;
+        const s = String(raw).trim().toUpperCase();
+        const ALLOWED = [
+          'ONE_PER_WEEK',
+          'ONE_PER_DAY',
+          'WEEKENDS_AND_BH_ONLY',
+          'WEEKDAYS_EXCL_BH_ONLY'
+        ];
+        return ALLOWED.includes(s) ? s : null;
+      };
+
+      const rows = [];
+
+      for (let i = 1; i <= 5; i++) {
+        const code = `EX${i}`;
+
+        const bnEl = extrasTab.querySelector(`input[name="extra_bucket_name_${i}"]`);
+        const unEl = extrasTab.querySelector(`input[name="extra_unit_name_${i}"]`);
+        const frEl = extrasTab.querySelector(`select[name="extra_frequency_${i}"]`);
+        const prEl = extrasTab.querySelector(`input[name="extra_pay_${i}"]`);
+        const crEl = extrasTab.querySelector(`input[name="extra_charge_${i}"]`);
+
+        const bucket_name = String(bnEl?.value || '').trim();
+        const unit_name_raw = String(unEl?.value || '').trim();
+        const freqRaw = String(frEl?.value || '').trim();
+        const payRaw = String(prEl?.value || '').trim();
+        const chargeRaw = String(crEl?.value || '').trim();
+
+        const hasAny = !!(bucket_name || unit_name_raw || freqRaw || payRaw || chargeRaw);
+        if (!hasAny) continue;
+
+        const payNum = payRaw === '' ? null : Number(payRaw);
+        const chargeNum = chargeRaw === '' ? null : Number(chargeRaw);
+        const frequency = normaliseFrequency(freqRaw) || 'ONE_PER_WEEK';
+
+        rows.push({
+          code,
+          bucket_name,
+          unit_name: unit_name_raw || null,
+          frequency,
+          pay_rate: Number.isFinite(payNum) ? payNum : null,
+          charge_rate: Number.isFinite(chargeNum) ? chargeNum : null
+        });
+      }
+
+      const finalArr = rows.length ? rows : null;
+
+      fs.main.additional_rates_json = finalArr;
+
+      // Mirror into modalCtx.data as safety net
+      try {
+        window.modalCtx.data = window.modalCtx.data || {};
+        window.modalCtx.data.additional_rates_json = (typeof structuredClone === 'function')
+          ? structuredClone(finalArr)
+          : (finalArr ? JSON.parse(JSON.stringify(finalArr)) : null);
+      } catch {
+        // If cloning fails, still at least set a direct reference
+        try {
+          window.modalCtx.data = window.modalCtx.data || {};
+          window.modalCtx.data.additional_rates_json = finalArr;
+        } catch {}
+      }
+    } catch {}
+  }
+}
 
 // Optional helper: align pay_method_snapshot to candidate; return hint if mismatch
 function prefillPayMethodFromCandidate(candidate) {
@@ -26926,9 +27042,14 @@ async function openCandidatePicker(onPick, options) {
   const renderRows = (rows) => rows.map(r => {
     const first = r.first_name || '';
     const last  = r.last_name || '';
-    const label = (r.display_name || `${first} ${last}`).trim() || (r.tms_ref || r.id || '');
+
+    // ✅ 9.1 Canonical label
+    const cLabel = (typeof formatCandidateLabel === 'function')
+      ? formatCandidateLabel(r)
+      : ((r.display_name || `${first} ${last}`).trim() || (r.tms_ref || r.id || ''));
+
     return `
-      <tr data-id="${r.id||''}" data-label="${(label||'').replace(/"/g,'&quot;')}" class="pick-row">
+      <tr data-id="${r.id||''}" data-label="${(cLabel||'').replace(/"/g,'&quot;')}" class="pick-row">
         <td data-k="last_name">${(last)}</td>
         <td data-k="first_name">${(first)}</td>
         <td data-k="roles_display" class="mini">${(r.roles_display||'')}</td>
@@ -27042,7 +27163,11 @@ async function openCandidatePicker(onPick, options) {
         }
         if (LOGC) console.log('[PICKER][candidates] render()', {
           count: rows.length,
-          sample: rows.slice(0, 6).map(r => r.display_name || `${r.first_name} ${r.last_name}`)
+          sample: rows.slice(0, 6).map(r =>
+            (typeof formatCandidateLabel === 'function')
+              ? formatCandidateLabel(r)
+              : (r.display_name || `${r.first_name} ${r.last_name}`)
+          )
         });
       };
 
@@ -27080,9 +27205,10 @@ async function openCandidatePicker(onPick, options) {
         }
         if (LOGC) console.log('[PICKER][candidates] applySelection()', { selectedId, selectedLabel });
         try {
-          await revalidateCandidateOnPick(selectedId);
+          // ✅ 9.2 Return candidate details and pass back to caller
+          const candFull = await revalidateCandidateOnPick(selectedId);
           if (typeof onPick === 'function') {
-            await onPick({ id: selectedId, label: selectedLabel });
+            await onPick({ id: selectedId, label: selectedLabel, candidate: candFull || null });
           }
         } catch (err) {
           console.warn('[PICKER][candidates] selection validation failed', err);
@@ -27231,7 +27357,8 @@ async function openCandidatePicker(onPick, options) {
     }
   }, 0);
 }
- 
+
+
 async function openClientPicker(onPick, opts) {
   const LOGC       = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true; // default ON
   const nhspOnly   = !!(opts && opts.nhspOnly);
@@ -29121,6 +29248,8 @@ function computeContractSaveEligibility() {
     const data = (window.modalCtx && window.modalCtx.data) || {};
     const form = document.querySelector('#contractForm');
 
+    const isCreate = !data || !data.id;
+
     const val = (name) => {
       const staged = fs.main && fs.main[name];
       if (staged !== undefined && staged !== null && String(staged).trim() !== '') return String(staged).trim();
@@ -29131,9 +29260,13 @@ function computeContractSaveEligibility() {
     const hasText = (s) => !!(s && String(s).trim().length);
 
     // -------- Required entities with fallback to saved data
-    const candidateOk = hasText(val('candidate_id')) || !!data.candidate_id;
+    const candidateIdVal = val('candidate_id') || (data.candidate_id ? String(data.candidate_id) : '');
+    const candidateOk = hasText(candidateIdVal) || !!data.candidate_id;
     const clientOk    = hasText(val('client_id'))    || !!data.client_id;
     const roleOk      = hasText(val('role'))         || !!data.role;
+
+    // ✅ 7) Gate: candidate pay method unknown (create mode)
+    const payMethodUnknown = !!(isCreate && fs && fs.main && fs.main.__candidate_pay_method_unknown === true && candidateOk);
 
     // -------- Dates (with fallback to saved row, and awareness of pending auto-expand)
     const toIso = (uk) => {
@@ -29223,6 +29356,10 @@ function computeContractSaveEligibility() {
         const saved = (window.modalCtx && window.modalCtx.data && window.modalCtx.data.rates_json) || {};
         const v = saved[n];
         if (v === 0 || (typeof v === 'number' && Number.isFinite(v))) return Number(v);
+        if (typeof v === 'string' && String(v).trim() !== '') {
+          const ns = Number(v);
+          if (Number.isFinite(ns)) return ns;
+        }
       } catch {}
       return null;
     };
@@ -29298,8 +29435,17 @@ function computeContractSaveEligibility() {
       reasons.push({ code:'TS_BOUNDARY_VIOLATION', message: tsBoundaryMsg || 'Dates exclude existing timesheets.' });
     }
 
+    // ✅ NEW: candidate pay method unknown reason + hard gate (create mode)
+    if (payMethodUnknown) {
+      reasons.push({
+        code: 'CANDIDATE_PAY_METHOD_UNKNOWN',
+        message: 'Candidate payment method is not yet set. Please amend the candidate payment method in the candidate record to PAYE or Umbrella first.'
+      });
+    }
+
     // ✅ FINAL ELIGIBILITY:
     //   • Candidate is NO LONGER a hard requirement here (still warned via reasons).
+    //   • Candidate pay method unknown IS a hard gate for create mode.
     const ok =
       /* candidateOk && */            // <-- removed from hard gate
       clientOk &&
@@ -29313,7 +29459,8 @@ function computeContractSaveEligibility() {
       anyPay &&
       anyCharge &&
       !hasNegativeMargins &&
-      !tsBoundaryViolation;
+      !tsBoundaryViolation &&
+      !payMethodUnknown;
 
     const detail = {
       ok,
@@ -29327,17 +29474,19 @@ function computeContractSaveEligibility() {
         candidateOk, clientOk, roleOk,
         dates: { bothDatesProvided, dateOrderOk, hasStagedCalendar: hasStaged, tsBoundaryOk: !tsBoundaryViolation, willAutoExpand: !!hasWindowExpand },
         schedule: { hasValidPair, hasPendingPair, hasStagedCalendar: hasStaged, hasTemplate },
-        finance: { anyPay, anyCharge, hasNegativeMargins, payMethod }
+        finance: { anyPay, anyCharge, hasNegativeMargins, payMethod },
+        candidatePayMethodUnknown: payMethodUnknown
       },
       reasons,
       tip: pendingTimeFormat ? 'We’ll format times like 0900 → 09:00 when you tab out or save.' : null
     };
 
     window.__contractEligibility = detail;
-    return ok;
+    return detail;
   } catch (e) {
-    window.__contractEligibility = { ok:false, reasons:[{ code:'INTERNAL_ERROR', message:String(e && e.message || e || 'unknown error') }] };
-    return false;
+    const detail = { ok:false, reasons:[{ code:'INTERNAL_ERROR', message:String((e && e.message) || e || 'unknown error') }] };
+    window.__contractEligibility = detail;
+    return detail;
   }
 }
 
@@ -29963,8 +30112,18 @@ try {
         const week_ending_weekday_snapshot = String(
           choose('week_ending_weekday_snapshot', (base.week_ending_weekday_snapshot ?? '0'))
         );
+     const candidate_id = choose('candidate_id', base.candidate_id ?? null) || null;
 
-    const candidate_id = choose('candidate_id', base.candidate_id ?? null) || null;
+// ✅ NEW: hard block — candidate selected but pay method unknown (must fix candidate record first)
+try {
+  const isUnknown = !!(fs && fs.main && fs.main.__candidate_pay_method_unknown === true);
+  if (isCreate && candidate_id && isUnknown) {
+    alert('Candidate payment method is not yet set. Please amend the candidate payment method in the candidate record to PAYE or Umbrella first.');
+    window.modalCtx._saveInFlight = false;
+    if (LOGC) console.groupEnd?.();
+    return { ok: false };
+  }
+} catch {}
 
 // NEW: polite confirmation when saving with no candidate
 if (!candidate_id) {
@@ -30144,12 +30303,10 @@ const mcrDom = document.querySelector('#contractRatesTab input[name="mileage_cha
 const mprDom = document.querySelector('#contractRatesTab input[name="mileage_pay_rate"]');
 const mileage_charge_rate = (mcrDom && mcrDom.value !== '') ? (Number(mcrDom.value) || null) : numOrNull('mileage_charge_rate');
 const mileage_pay_rate    = (mprDom && mprDom.value !== '') ? (Number(mprDom.value) || null) : numOrNull('mileage_pay_rate');
-
-// NEW: collect Additional Rates (up to 5 slots) from "Additional Rates" tab
+// NEW: collect Additional Rates (up to 5 slots) from "Additional Rates" tab OR staged state
 let additional_rates_json = null;
 try {
   const existing = Array.isArray(base.additional_rates_json) ? base.additional_rates_json : null;
-  const rows = [];
 
   const normaliseFrequency = (raw) => {
     if (!raw) return null;
@@ -30164,7 +30321,10 @@ try {
   };
 
   const tab = document.getElementById('contractAdditionalRatesTab');
+
+  // 1) If Extras DOM exists → build from DOM and stage into fs.main.additional_rates_json (single source)
   if (tab) {
+    const rows = [];
     for (let i = 1; i <= 5; i++) {
       const code = `EX${i}`;
       const bnEl = tab.querySelector(`input[name="extra_bucket_name_${i}"]`);
@@ -30173,41 +30333,66 @@ try {
       const prEl = tab.querySelector(`input[name="extra_pay_${i}"]`);
       const crEl = tab.querySelector(`input[name="extra_charge_${i}"]`);
 
-      const bucket_name = (bnEl?.value || '').trim();
-      const unit_name   = (unEl?.value || '').trim();
-      const freqRaw     = (frEl?.value || '').trim();
-      const payRaw      = (prEl?.value || '').trim();
-      const chargeRaw   = (crEl?.value || '').trim();
+      const bucket_name = String(bnEl?.value || '').trim();
+      const unit_name_raw = String(unEl?.value || '').trim();
+      const freqRaw = String(frEl?.value || '').trim();
+      const payRaw = String(prEl?.value || '').trim();
+      const chargeRaw = String(crEl?.value || '').trim();
 
-      const hasAny = !!(bucket_name || unit_name || freqRaw || payRaw || chargeRaw);
+      const hasAny = !!(bucket_name || unit_name_raw || freqRaw || payRaw || chargeRaw);
       if (!hasAny) continue;
 
-      const payNum    = payRaw === '' ? null : Number(payRaw);
+      const payNum = payRaw === '' ? null : Number(payRaw);
       const chargeNum = chargeRaw === '' ? null : Number(chargeRaw);
       const frequency = normaliseFrequency(freqRaw) || 'ONE_PER_WEEK';
 
       rows.push({
         code,
         bucket_name,
-        unit_name: unit_name || null,
+        unit_name: unit_name_raw || null,
         frequency,
         pay_rate: Number.isFinite(payNum) ? payNum : null,
         charge_rate: Number.isFinite(chargeNum) ? chargeNum : null
       });
     }
+
+    additional_rates_json = rows.length ? rows : null;
+
+    // Stage into formState (authoritative)
+    try {
+      const fsm = (window.modalCtx.formState ||= { main:{}, pay:{} }).main ||= {};
+      fsm.additional_rates_json = additional_rates_json;
+    } catch {}
+
+    // Mirror into modalCtx.data (safety net)
+    try {
+      window.modalCtx.data = window.modalCtx.data || {};
+      window.modalCtx.data.additional_rates_json = (typeof structuredClone === 'function')
+        ? structuredClone(additional_rates_json)
+        : (additional_rates_json ? JSON.parse(JSON.stringify(additional_rates_json)) : null);
+    } catch {
+      try {
+        window.modalCtx.data = window.modalCtx.data || {};
+        window.modalCtx.data.additional_rates_json = additional_rates_json;
+      } catch {}
+    }
+
+  // 2) Else if staged exists → use staged
+  } else if (fs && fs.main && Object.prototype.hasOwnProperty.call(fs.main, 'additional_rates_json')) {
+    const staged = fs.main.additional_rates_json;
+    additional_rates_json = Array.isArray(staged) ? staged : null;
+
+  // 3) Else fallback to existing backend value
+  } else {
+    additional_rates_json = existing || null;
   }
 
-  if (rows.length) {
-    additional_rates_json = rows;
-  } else if (existing) {
-    // If the tab was never touched this session, keep what backend sent
-    additional_rates_json = existing;
-  } else {
-    additional_rates_json = null;
-  }
 } catch (e) {
   if (LOGC) console.warn('[CONTRACTS] additional_rates_json build failed', e);
-  const fallback = Array.isArray(base.additional_rates_json) ? base.additional_rates_json : null;
+  const fallback =
+    (fs && fs.main && Object.prototype.hasOwnProperty.call(fs.main, 'additional_rates_json') && Array.isArray(fs.main.additional_rates_json))
+      ? fs.main.additional_rates_json
+      : (Array.isArray(base.additional_rates_json) ? base.additional_rates_json : null);
   additional_rates_json = fallback || null;
 }
 const data = {
@@ -30846,7 +31031,6 @@ const stage = (e) => {
                 }
               } catch (e) { if (LOGC) console.warn('[CONTRACTS] typeahead priming failed', entity, e); }
             };
-
             const buildItemLabel = (entity, r) => {
               if (entity === 'candidates') {
                 const first = (r.first_name||'').trim();
@@ -30857,6 +31041,143 @@ const stage = (e) => {
                 const name  = (r.name||'').trim();
                 return name;
               }
+            };
+
+            // ✅ NEW: canonical candidate label builder (ensures picker + typeahead converge)
+            const _formatCandidateLabel = (cand) => {
+              try {
+                const c = (cand && typeof cand === 'object') ? cand : {};
+                const first = String(c.first_name || c.first || '').trim();
+                const last  = String(c.last_name  || c.last  || '').trim();
+                const role  = String((c.roles_display || '').split(/[•;,]/)[0] || '').trim();
+                return `${last}${last?', ':''}${first}${role?` ${role}`:''}`.trim();
+              } catch { return ''; }
+            };
+
+            // ✅ NEW: derive PAYE/UMBRELLA/UNKNOWN (unknown = must fix candidate record)
+            const _derivePayMethodFromCandidate = (cand) => {
+              const pmRaw = cand && cand.pay_method ? String(cand.pay_method).trim().toUpperCase() : '';
+              if (pmRaw === 'PAYE') return { derived: 'PAYE', locked: true, unknown: false };
+              if (pmRaw === 'UMBRELLA' && cand && cand.umbrella_id) return { derived: 'UMBRELLA', locked: true, unknown: false };
+              return { derived: '', locked: false, unknown: true };
+            };
+
+            // ✅ NEW: single canonical candidate selection handler (typeahead + picker)
+            const applyContractCandidateSelection = ({ id, label, candidate } = {}) => {
+              const cid = String(id || '').trim();
+              if (!cid) return;
+
+              const initialLabel = String(label || '').trim();
+
+              // Immediate stage: id + (temporary) label so UI updates instantly
+              setContractFormValue('candidate_id', cid);
+
+              try {
+                const fs0 = (window.modalCtx.formState ||= {
+                  __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null),
+                  main:{},
+                  pay:{}
+                });
+                fs0.main ||= {};
+                fs0.main.candidate_id = cid;
+                fs0.main.candidate_display = initialLabel;
+              } catch {}
+
+              try {
+                window.modalCtx.data = window.modalCtx.data || {};
+                window.modalCtx.data.candidate_id = cid;
+                window.modalCtx.data.candidate_display = initialLabel;
+              } catch {}
+
+              // Update visible UI immediately
+              try {
+                const labEl = document.getElementById('candidatePickLabel');
+                if (labEl) labEl.textContent = initialLabel ? `Chosen: ${initialLabel}` : '';
+
+                const inp = document.getElementById('candidate_name_display');
+                if (inp) inp.value = initialLabel || '';
+              } catch {}
+
+              // Mark non-calendar dirty (programmatic selection)
+              try {
+                window.modalCtx = window.modalCtx || {};
+                window.modalCtx.__nonCalendarDirty = true;
+                window.modalCtx.__calendarOnly = false;
+              } catch {}
+
+              // Async: fetch full candidate if not provided, then:
+              // - canonicalise label (fixes picker vs typeahead mismatch)
+              // - set pay_method_snapshot deterministically
+              (async () => {
+                try {
+                  let cand = (candidate && typeof candidate === 'object') ? candidate : null;
+
+                  if (!cand) {
+                    const candRaw = await getCandidate(cid);
+                    cand = (candRaw && candRaw.candidate) ? candRaw.candidate : candRaw;
+                  }
+
+                  // Canonical label from candidate row (ensures consistency)
+                  const canonLabel = _formatCandidateLabel(cand);
+                  const finalLabel = canonLabel || initialLabel;
+
+                  // Persist canonical label everywhere + repaint chosen label/input if needed
+                  try {
+                    const fs1 = (window.modalCtx.formState ||= { main:{}, pay:{} });
+                    fs1.main ||= {};
+                    fs1.main.candidate_display = finalLabel;
+
+                    window.modalCtx.data = window.modalCtx.data || {};
+                    window.modalCtx.data.candidate_display = finalLabel;
+
+                    const labEl = document.getElementById('candidatePickLabel');
+                    if (labEl) labEl.textContent = finalLabel ? `Chosen: ${finalLabel}` : '';
+
+                    const inp = document.getElementById('candidate_name_display');
+                    if (inp) inp.value = finalLabel || '';
+                  } catch {}
+
+                  // Derive pay method snapshot (no silent PAYE fallback)
+                  const { derived, locked, unknown } = _derivePayMethodFromCandidate(cand);
+
+                  const fsm = (window.modalCtx.formState ||= { main:{}, pay:{} }).main ||= {};
+                  fsm.pay_method_snapshot = derived; // '' when unknown
+                  fsm.__pay_locked = locked;
+                  fsm.__candidate_pay_method_unknown = unknown;
+
+                  // Apply to select (lock only when known; existing contracts remain locked)
+                  const hasId = !!window.modalCtx?.data?.id;
+                  const sel = document.querySelector('select[name="pay_method_snapshot"], select[name="default_pay_method_snapshot"]');
+                  if (sel) {
+                    if (derived) sel.value = derived;
+                    if (hasId) sel.disabled = true;
+                    else sel.disabled = !!locked;
+                  }
+
+                  if (unknown) {
+                    alert('Candidate payment method is not yet set. Please amend the candidate payment method in the candidate record to PAYE or Umbrella first.');
+                  }
+
+                  try { computeContractMargins(); } catch {}
+                  try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+                } catch (e) {
+                  // Fetch failure is treated as unknown (safety-first)
+                  try {
+                    const fsm = (window.modalCtx.formState ||= { main:{}, pay:{} }).main ||= {};
+                    fsm.pay_method_snapshot = '';
+                    fsm.__pay_locked = false;
+                    fsm.__candidate_pay_method_unknown = true;
+
+                    const hasId = !!window.modalCtx?.data?.id;
+                    const sel = document.querySelector('select[name="pay_method_snapshot"], select[name="default_pay_method_snapshot"]');
+                    if (sel && !hasId) sel.disabled = false;
+
+                    alert('Candidate payment method is not yet set. Please amend the candidate payment method in the candidate record to PAYE or Umbrella first.');
+                  } catch {}
+
+                  if (LOGC) console.warn('[CONTRACTS] candidate selection: pay-method resolve failed (treated as unknown)', e);
+                }
+              })();
             };
 
             const wireTypeahead = async (entity, inputEl, hiddenName, labelElId) => {
@@ -30907,6 +31228,15 @@ const stage = (e) => {
               };
 
               const selectRow = (id, label) => {
+                // ✅ Candidate: use canonical handler (includes pay-method lock + warning)
+                if (hiddenName === 'candidate_id') {
+                  applyContractCandidateSelection({ id, label, candidate: null });
+                  closeMenu();
+                  try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+                  return;
+                }
+
+                // Client (unchanged behaviour)
                 setContractFormValue(hiddenName, id);
                 inputEl.value = label || '';
                 const labEl = document.getElementById(labelElId);
@@ -30916,40 +31246,13 @@ const stage = (e) => {
                   const fs = (window.modalCtx.formState ||= { __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null), main:{}, pay:{} });
                   fs.main ||= {};
                   fs.main[hiddenName] = id;
-                  if (hiddenName === 'candidate_id') fs.main['candidate_display'] = label;
-                  if (hiddenName === 'client_id')    fs.main['client_name']       = label;
+                  if (hiddenName === 'client_id') fs.main['client_name'] = label;
                 } catch {}
 
                 try {
                   window.modalCtx.data = window.modalCtx.data || {};
-                  if (hiddenName === 'candidate_id') { window.modalCtx.data.candidate_id = id; window.modalCtx.data.candidate_display = label; }
-                  if (hiddenName === 'client_id')    { window.modalCtx.data.client_id    = id; window.modalCtx.data.client_name = label; }
+                  if (hiddenName === 'client_id') { window.modalCtx.data.client_id = id; window.modalCtx.data.client_name = label; }
                 } catch {}
-if (hiddenName === 'candidate_id') {
-  (async () => {
-    try {
-      const candRaw = await getCandidate(id);
-      // Support both shapes: { candidate:{...} } or flat row
-      const cand = (candRaw && candRaw.candidate) ? candRaw.candidate : candRaw;
-
-      const pmRaw = cand && cand.pay_method ? String(cand.pay_method).toUpperCase() : '';
-      const derived =
-        (pmRaw === 'UMBRELLA' && cand && cand.umbrella_id)
-          ? 'UMBRELLA'
-          : 'PAYE';
-
-      const fsm = (window.modalCtx.formState ||= { main:{}, pay:{} }).main ||= {};
-      fsm.pay_method_snapshot = derived;
-      fsm.__pay_locked = true;
-      const sel = document.querySelector('select[name="pay_method_snapshot"], select[name="default_pay_method_snapshot"]');
-      if (sel) { sel.value = derived; sel.disabled = true; }
-      computeContractMargins();
-    } catch (e) {
-      if (LOGC) console.warn('[CONTRACTS] derive pay method failed', e);
-    }
-  })();
-}
-
 
                 closeMenu();
                 try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
@@ -31010,69 +31313,11 @@ if (hiddenName === 'candidate_id') {
 
                 // Ensure datasets are primed before opening picker (fast + up-to-date)
                 try { await ensurePrimed('candidates'); } catch {}
-
-                openCandidatePicker(async ({ id, label }) => {
+                openCandidatePicker(async ({ id, label, candidate }) => {
                   if (LOGC) console.log('[CONTRACTS] Pick Candidate → selected', { id, label });
 
-                  // Update hidden + visible fields
-                  setContractFormValue('candidate_id', id);
-                  const lab = document.getElementById('candidatePickLabel');
-                  if (lab) lab.textContent = `Chosen: ${label}`;
-
-                  const candInput2 = document.getElementById('candidate_name_display');
-                  if (candInput2) candInput2.value = label || '';
-
-                  // Stage into formState + modalCtx.data
-                  try {
-                    const fs2 = (window.modalCtx.formState ||= {
-                      __forId: (window.modalCtx.data?.id ?? window.modalCtx.openToken ?? null),
-                      main:{},
-                      pay:{}
-                    });
-                    fs2.main ||= {};
-                    fs2.main.candidate_id = id;
-                    fs2.main.candidate_display = label;
-                  } catch {}
-
-                  try {
-                    window.modalCtx.data = window.modalCtx.data || {};
-                    window.modalCtx.data.candidate_id = id;
-                    window.modalCtx.data.candidate_display = label;
-                  } catch {}
-
-                  // Mark non-calendar dirty (programmatic changes won't trigger input handler reliably)
-                  try {
-                    window.modalCtx = window.modalCtx || {};
-                    window.modalCtx.__nonCalendarDirty = true;
-                    window.modalCtx.__calendarOnly = false;
-                  } catch {}
-
-                  // Derive + lock pay_method_snapshot from candidate (same logic as typeahead selectRow)
-                  (async () => {
-                    try {
-                      const candRaw = await getCandidate(id);
-                      const cand = (candRaw && candRaw.candidate) ? candRaw.candidate : candRaw;
-
-                      const pmRaw = cand && cand.pay_method ? String(cand.pay_method).toUpperCase() : '';
-                      const derived =
-                        (pmRaw === 'UMBRELLA' && cand && cand.umbrella_id)
-                          ? 'UMBRELLA'
-                          : 'PAYE';
-
-                      const fsm = (window.modalCtx.formState ||= { main:{}, pay:{} }).main ||= {};
-                      fsm.pay_method_snapshot = derived;
-                      fsm.__pay_locked = true;
-
-                      const sel = document.querySelector('select[name="pay_method_snapshot"], select[name="default_pay_method_snapshot"]');
-                      if (sel) { sel.value = derived; sel.disabled = true; }
-
-                      try { computeContractMargins(); } catch {}
-                    } catch (e) {
-                      if (LOGC) console.warn('[CONTRACTS] derive pay method failed', e);
-                    }
-                  })();
-
-                  try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+                  // ✅ Use the single canonical handler (label canonicalisation + pay-method lock + unknown warning)
+                  applyContractCandidateSelection({ id, label, candidate: candidate || null });
                 }, { ignoreMembership: true }); // ✅ ALWAYS full DB candidate picker
               });
 
@@ -31887,27 +32132,8 @@ if (chooseBtn && !chooseBtn.__wired) {
         window.addEventListener('contracts-main-rendered', rewire);
         window.addEventListener('contracts-rates-rendered', rewire);
       }
-
- // Re-wire when the user clicks between Main / Rates / Calendar
-      const tabsEl = document.getElementById('modalTabs');
-      if (tabsEl && !tabsEl.__wired_contract_stage) {
-        tabsEl.__wired_contract_stage = true;
-        tabsEl.addEventListener('click', () => {
-          const fr = window.__getModalFrame?.();
-          const prevDirty = fr?.isDirty;
-          if (fr) fr._suppressDirty = true;
-
-          snapshotContractForm();
-          setTimeout(() => {
-            wire();
-            if (fr) {
-              fr._suppressDirty = false;
-              fr.isDirty = prevDirty;
-              fr._updateButtons && fr._updateButtons();
-            }
-          }, 0);
-        });
-      }
+      // ✅ REMOVED: tabs click snapshot/rewire listener (race-prone + redundant)
+      // Tab changes are handled via showModal framework + explicit contracts-*-rendered rewires above.
 
     },
 
@@ -31960,7 +32186,59 @@ if (chooseBtn && !chooseBtn.__wired) {
   }, 0);
 }
 
+function formatCandidateLabel(row) {
+  // Canonical label for candidates used across typeahead + picker:
+  //   "Last, First" + optional role (first role token from roles_display etc.)
+  // Robust to varying row shapes: {first_name,last_name}, {first,last}, {display_name}, etc.
 
+  const r = (row && typeof row === 'object') ? row : {};
+
+  const clean = (v) => String(v ?? '').trim();
+
+  // --- role (optional) ---
+  // Keep the existing UX style: if roles_display exists, take the first token before separators.
+  let role = clean(r.roles_display || r.role_display || r.role || r.role_code || '');
+  if (role) {
+    role = clean(role.split(/[•;,]/)[0] || '');
+  }
+
+  // --- first/last ---
+  let first = clean(r.first_name || r.first || r.forename || r.given_name || '');
+  let last  = clean(r.last_name  || r.last  || r.surname  || r.family_name || '');
+
+  // Fallback: parse from display_name / name / label if needed
+  if (!first && !last) {
+    const dn = clean(r.display_name || r.name || r.label || '');
+    if (dn) {
+      // If already "Last, First"
+      const m = dn.match(/^\s*([^,]+?)\s*,\s*(.+?)\s*$/);
+      if (m) {
+        last = clean(m[1]);
+        first = clean(m[2]);
+      } else {
+        // If "First Last" (or multi-part first): last = last word
+        const parts = dn.split(/\s+/).filter(Boolean);
+        if (parts.length === 1) {
+          // single token; treat as last (best-effort)
+          last = parts[0];
+        } else if (parts.length > 1) {
+          last = parts[parts.length - 1];
+          first = parts.slice(0, -1).join(' ');
+        }
+      }
+    }
+  }
+
+  // Compose canonical label
+  let label = '';
+  if (last && first) label = `${last}, ${first}`;
+  else label = (last || first || '').trim();
+
+  // Optional role suffix (only if we have a base label)
+  if (label && role) label = `${label} ${role}`.trim();
+
+  return label;
+}
 
 // ============================================================================
 // CANDIDATE – RENDER CALENDAR TAB
@@ -47410,22 +47688,24 @@ persistCurrentTabState() {
     // as part of the candidate "main" payload
     fs.main = { ...(fs.main || {}), ...stripEmpty(c) };
   }
-
   // Persist contract-specific state when leaving Rates **or** Additional Rates
 if (this.entity === 'contracts' && (this.currentTabKey === 'rates' || this.currentTabKey === 'extras')) {
   try {
-    // Only bother capturing the paye/umb/charge_* fields from the Rates tab itself
+    // ─────────────────────────────────────────────
+    // RATES TAB: stage paye/umb/charge + mileage
+    // ─────────────────────────────────────────────
     if (this.currentTabKey === 'rates') {
       const rt = byId('contractRatesTab');
       if (rt) {
         const rForm = {};
         rt.querySelectorAll('input, select, textarea').forEach(el => {
-          if (el.name) {
-            rForm[el.name] = (el.type === 'checkbox'
-              ? (el.checked ? 'on' : '')
-              : el.value);
-          }
+          if (!el || !el.name) return;
+          rForm[el.name] = (el.type === 'checkbox')
+            ? (el.checked ? 'on' : '')
+            : el.value;
         });
+
+        // PAYE/UMB/CHARGE buckets → fs.pay
         const onlyRates = {};
         for (const [k, v] of Object.entries(rForm)) {
           if (/^(paye_|umb_|charge_)/.test(k)) {
@@ -47433,18 +47713,92 @@ if (this.entity === 'contracts' && (this.currentTabKey === 'rates' || this.curre
           }
         }
         fs.pay = { ...(fs.pay || {}), ...stripEmpty(onlyRates) };
+
+        // ✅ NEW: mileage fields → fs.main (belt-and-braces)
+        fs.main = fs.main || {};
+        if (Object.prototype.hasOwnProperty.call(rForm, 'mileage_charge_rate')) {
+          fs.main.mileage_charge_rate = (rForm.mileage_charge_rate == null) ? '' : String(rForm.mileage_charge_rate);
+        }
+        if (Object.prototype.hasOwnProperty.call(rForm, 'mileage_pay_rate')) {
+          fs.main.mileage_pay_rate = (rForm.mileage_pay_rate == null) ? '' : String(rForm.mileage_pay_rate);
+        }
       }
     }
 
-    // Always collect the full contract form so Main + Additional Rates fields are staged
-    const mainSel = byId('contractForm') ? '#contractForm' : null;
-    if (mainSel) {
-      const m = collectForm(mainSel);
-      // keep existing behavior for most fields, then re-add schedule blanks explicitly
-      const mergedMain = { ...stripEmpty(m) };
-      const sched      = keepScheduleBlanks(m);
-      fs.main = { ...(fs.main || {}), ...mergedMain, ...sched };
+    // ─────────────────────────────────────────────
+    // EXTRAS TAB: stage authoritative additional_rates_json
+    // ─────────────────────────────────────────────
+    if (this.currentTabKey === 'extras') {
+      const xt = byId('contractAdditionalRatesTab');
+      if (xt) {
+        const normaliseFrequency = (raw) => {
+          if (!raw) return null;
+          const s = String(raw).trim().toUpperCase();
+          const ALLOWED = [
+            'ONE_PER_WEEK',
+            'ONE_PER_DAY',
+            'WEEKENDS_AND_BH_ONLY',
+            'WEEKDAYS_EXCL_BH_ONLY'
+          ];
+          return ALLOWED.includes(s) ? s : null;
+        };
+
+        const rows = [];
+        for (let i = 1; i <= 5; i++) {
+          const code = `EX${i}`;
+
+          const bnEl = xt.querySelector(`input[name="extra_bucket_name_${i}"]`);
+          const unEl = xt.querySelector(`input[name="extra_unit_name_${i}"]`);
+          const frEl = xt.querySelector(`select[name="extra_frequency_${i}"]`);
+          const prEl = xt.querySelector(`input[name="extra_pay_${i}"]`);
+          const crEl = xt.querySelector(`input[name="extra_charge_${i}"]`);
+
+          const bucket_name = String(bnEl?.value || '').trim();
+          const unit_name_raw = String(unEl?.value || '').trim();
+          const freqRaw = String(frEl?.value || '').trim();
+          const payRaw = String(prEl?.value || '').trim();
+          const chargeRaw = String(crEl?.value || '').trim();
+
+          const hasAny = !!(bucket_name || unit_name_raw || freqRaw || payRaw || chargeRaw);
+          if (!hasAny) continue;
+
+          const payNum = payRaw === '' ? null : Number(payRaw);
+          const chargeNum = chargeRaw === '' ? null : Number(chargeRaw);
+          const frequency = normaliseFrequency(freqRaw) || 'ONE_PER_WEEK';
+
+          rows.push({
+            code,
+            bucket_name,
+            unit_name: unit_name_raw || null,
+            frequency,
+            pay_rate: Number.isFinite(payNum) ? payNum : null,
+            charge_rate: Number.isFinite(chargeNum) ? chargeNum : null
+          });
+        }
+
+        // Authoritative JSON (critical)
+        fs.main = fs.main || {};
+        fs.main.additional_rates_json = rows.length ? rows : null;
+
+        // Optional: also stage raw inputs (non-critical, but helps preserve typed values on rerender)
+        xt.querySelectorAll('input, select, textarea').forEach(el => {
+          if (!el || !el.name) return;
+          const nm = String(el.name);
+          if (
+            /^extra_bucket_name_\d+$/.test(nm) ||
+            /^extra_unit_name_\d+$/.test(nm) ||
+            /^extra_frequency_\d+$/.test(nm) ||
+            /^extra_pay_\d+$/.test(nm) ||
+            /^extra_charge_\d+$/.test(nm)
+          ) {
+            fs.main[nm] = (el.type === 'checkbox') ? (el.checked ? 'on' : '') : el.value;
+          }
+        });
+      }
     }
+
+    // ✅ REMOVED: "Always collect the full contract form..." block
+    // It is ineffective when leaving rates/extras because #contractForm is not present on those tabs.
   } catch (e) {
     L('persistCurrentTabState contracts/rates+extras failed', e);
   }
@@ -51430,14 +51784,32 @@ try {
         relatedBtn.onclick = null;
       }
     }
-
-      // Default Save/Edit display logic
+    // Default Save/Edit display logic
     if (top.mode === 'create') {
       btnSave.style.display = '';
-      btnSave.disabled = top._saving;
+
+      // ✅ NEW: Contracts create-mode gating must respect eligibility (incl. unknown pay method)
+      if (top.entity === 'contracts') {
+        let gate = null;
+        let gateOk = true;
+        try {
+          gate = (typeof computeContractSaveEligibility === 'function') ? computeContractSaveEligibility() : null;
+          gateOk = (gate && typeof gate === 'object' && Object.prototype.hasOwnProperty.call(gate, 'ok'))
+            ? !!gate.ok
+            : !!gate;
+        } catch {
+          gateOk = true; // non-fatal fallback (do not brick UI if eligibility throws)
+        }
+
+        btnSave.disabled = !!top._saving || !gateOk;
+      } else {
+        btnSave.disabled = !!top._saving;
+      }
+
     } else if (top.mode === 'view') {
       btnSave.style.display = 'none';
       btnSave.disabled = true;
+
     } else {
       btnSave.style.display = '';
 
@@ -51445,7 +51817,10 @@ try {
 
       if (top.entity === 'contracts') {
         try {
-          gateOK = (typeof computeContractSaveEligibility === 'function') ? !!computeContractSaveEligibility() : true;
+          const gate = (typeof computeContractSaveEligibility === 'function') ? computeContractSaveEligibility() : null;
+          gateOK = (gate && typeof gate === 'object' && Object.prototype.hasOwnProperty.call(gate, 'ok'))
+            ? !!gate.ok
+            : !!gate;
         } catch { gateOK = true; }
       }
 
@@ -60371,7 +60746,6 @@ async function renderSettingsPanel(content) {
 }
 
 
-
 function renderContractAdditionalRatesTab(ctx) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
 
@@ -60379,12 +60753,20 @@ function renderContractAdditionalRatesTab(ctx) {
   const payMethod = String(merged?.pay_method_snapshot || 'PAYE').toUpperCase();
   const payLabel  = (payMethod === 'UMBRELLA') ? 'Pay (Umbrella)' : 'Pay (PAYE)';
 
-  const extras = Array.isArray(merged.additional_rates_json)
-    ? merged.additional_rates_json
-    : [];
+  // ✅ Prefer staged authoritative JSON if present (prevents values “disappearing” on tab switches)
+  const stagedArr = (() => {
+    try {
+      const fs = window.modalCtx?.formState || null;
+      const a = fs?.main?.additional_rates_json;
+      return Array.isArray(a) ? a : null;
+    } catch { return null; }
+  })();
+
+  const extras = stagedArr
+    ? stagedArr
+    : (Array.isArray(merged.additional_rates_json) ? merged.additional_rates_json : []);
 
   const findSlot = (code) => extras.find(e => e && String(e.code || '').toUpperCase() === String(code).toUpperCase()) || null;
-  const num = (v) => (v == null || v === '') ? '' : String(v);
 
   const freqOptions = [
     ['ONE_PER_WEEK',         'One per week'],
@@ -60410,7 +60792,7 @@ function renderContractAdditionalRatesTab(ctx) {
     const payRate    = (cfg.pay_rate != null && Number.isFinite(Number(cfg.pay_rate))) ? Number(cfg.pay_rate) : null;
     const chargeRate = (cfg.charge_rate != null && Number.isFinite(Number(cfg.charge_rate))) ? Number(cfg.charge_rate) : null;
 
-      let marginStr = '';
+    let marginStr = '';
     if (payRate != null && chargeRate != null) {
       const fin = (window.modalCtx && window.modalCtx.finance && typeof window.modalCtx.finance === 'object')
         ? window.modalCtx.finance
@@ -60444,7 +60826,6 @@ function renderContractAdditionalRatesTab(ctx) {
       }
       marginStr = mg.toFixed(2);
     }
-
 
     rowsHtml.push(`
       <div class="row extra-rate-row" data-slot="${esc(code)}">
@@ -60510,13 +60891,13 @@ function renderContractAdditionalRatesTab(ctx) {
     </div>
   `;
 
-  // Wire up margin recalculation + Clear buttons after DOM render
+  // Wire up staging + margin recalculation + Clear buttons after DOM render
   setTimeout(() => {
     try {
       const root = document.getElementById('contractAdditionalRatesTab');
       if (!root) return;
 
-        const getErniMult = () => {
+      const getErniMult = () => {
         try {
           const fin = (window.modalCtx && window.modalCtx.finance && typeof window.modalCtx.finance === 'object')
             ? window.modalCtx.finance
@@ -60530,7 +60911,6 @@ function renderContractAdditionalRatesTab(ctx) {
         } catch {}
         return 1;
       };
-
 
       const getPayMethod = () => {
         try {
@@ -60554,65 +60934,169 @@ function renderContractAdditionalRatesTab(ctx) {
           const span     = root.querySelector(`span[data-role="extra-margin"][data-slot="${code}"]`);
           if (!span) continue;
 
-          const payVal    = payEl ? Number(payEl.value || 0) : 0;
-          const chargeVal = chargeEl ? Number(chargeEl.value || 0) : 0;
-
-          if (!Number.isFinite(payVal) || !Number.isFinite(chargeVal) || (!payEl?.value && !chargeEl?.value)) {
+          const payHas = !!(payEl && String(payEl.value || '').trim() !== '');
+          const chgHas = !!(chargeEl && String(chargeEl.value || '').trim() !== '');
+          if (!payHas && !chgHas) {
             span.textContent = '';
             continue;
           }
 
-          let mg;
-          if (pm === 'PAYE') {
-            mg = chargeVal - (payVal * erniMult);
-          } else {
-            mg = chargeVal - payVal;
+          const payVal = payEl ? Number(payEl.value) : NaN;
+          const chargeVal = chargeEl ? Number(chargeEl.value) : NaN;
+
+          if (!Number.isFinite(payVal) || !Number.isFinite(chargeVal)) {
+            span.textContent = '';
+            continue;
           }
+
+          const mg = (pm === 'PAYE') ? (chargeVal - (payVal * erniMult)) : (chargeVal - payVal);
           span.textContent = `£${mg.toFixed(2)}`;
         }
       };
 
-      // Wire Clear buttons
+      // ✅ NEW: stage authoritative additional_rates_json from DOM + mirror to modalCtx.data
+      const stageAdditionalRatesFromDom = () => {
+        const normaliseFrequency = (raw) => {
+          if (!raw) return null;
+          const s = String(raw).trim().toUpperCase();
+          const ALLOWED = [
+            'ONE_PER_WEEK',
+            'ONE_PER_DAY',
+            'WEEKENDS_AND_BH_ONLY',
+            'WEEKDAYS_EXCL_BH_ONLY'
+          ];
+          return ALLOWED.includes(s) ? s : null;
+        };
+
+        const rows = [];
+        for (let i = 1; i <= 5; i++) {
+          const code = `EX${i}`;
+
+          const bnEl = root.querySelector(`input[name="extra_bucket_name_${i}"]`);
+          const unEl = root.querySelector(`input[name="extra_unit_name_${i}"]`);
+          const frEl = root.querySelector(`select[name="extra_frequency_${i}"]`);
+          const prEl = root.querySelector(`input[name="extra_pay_${i}"]`);
+          const crEl = root.querySelector(`input[name="extra_charge_${i}"]`);
+
+          const bucket_name = String(bnEl?.value || '').trim();
+          const unit_name_raw = String(unEl?.value || '').trim();
+          const freqRaw = String(frEl?.value || '').trim();
+          const payRaw = String(prEl?.value || '').trim();
+          const chargeRaw = String(crEl?.value || '').trim();
+
+          const hasAny = !!(bucket_name || unit_name_raw || freqRaw || payRaw || chargeRaw);
+          if (!hasAny) continue;
+
+          const payNum = payRaw === '' ? null : Number(payRaw);
+          const chargeNum = chargeRaw === '' ? null : Number(chargeRaw);
+          const frequency = normaliseFrequency(freqRaw) || 'ONE_PER_WEEK';
+
+          rows.push({
+            code,
+            bucket_name,
+            unit_name: unit_name_raw || null,
+            frequency,
+            pay_rate: Number.isFinite(payNum) ? payNum : null,
+            charge_rate: Number.isFinite(chargeNum) ? chargeNum : null
+          });
+        }
+
+        const finalArr = rows.length ? rows : null;
+
+        try {
+          const fs = (window.modalCtx.formState ||= { main:{}, pay:{} });
+          fs.main ||= {};
+          fs.main.additional_rates_json = finalArr;
+        } catch {}
+
+        try {
+          window.modalCtx.data = window.modalCtx.data || {};
+          window.modalCtx.data.additional_rates_json = (typeof structuredClone === 'function')
+            ? structuredClone(finalArr)
+            : (finalArr ? JSON.parse(JSON.stringify(finalArr)) : null);
+        } catch {
+          try {
+            window.modalCtx.data = window.modalCtx.data || {};
+            window.modalCtx.data.additional_rates_json = finalArr;
+          } catch {}
+        }
+      };
+
+      // ✅ UPDATED: Wire Clear buttons to also update staged state
       root.querySelectorAll('button[data-extra-clear]').forEach(btn => {
         if (btn.__wiredClear) return;
         btn.__wiredClear = true;
         btn.addEventListener('click', () => {
           const slot = btn.getAttribute('data-extra-clear');
-          const idx  = slot && slot.replace(/^EX/, '');
+          const idx = slot && slot.replace(/^EX/, '');
           if (!idx) return;
-          ['bucket_name','unit_name','pay','charge'].forEach(suffix => {
-            const name = suffix === 'bucket_name'
-              ? `extra_bucket_name_${idx}`
-              : suffix === 'unit_name'
-                ? `extra_unit_name_${idx}`
-                : suffix === 'pay'
-                  ? `extra_pay_${idx}`
-                  : `extra_charge_${idx}`;
+
+          // Clear DOM + stage cleared values
+          const fields = [
+            `extra_bucket_name_${idx}`,
+            `extra_unit_name_${idx}`,
+            `extra_frequency_${idx}`,
+            `extra_pay_${idx}`,
+            `extra_charge_${idx}`
+          ];
+
+          for (const name of fields) {
             const el = root.querySelector(`[name="${name}"]`);
-            if (el) {
+            if (!el) continue;
+
+            if (name.startsWith('extra_frequency_')) {
+              // reset to default option
+              el.value = 'ONE_PER_WEEK';
+              setContractFormValue(name, 'ONE_PER_WEEK');
+            } else {
               el.value = '';
-              try { el.dispatchEvent(new Event('input', { bubbles:true })); } catch {}
-              try { el.dispatchEvent(new Event('change',{ bubbles:true })); } catch {}
+              setContractFormValue(name, '');
             }
-          });
+
+            try { el.dispatchEvent(new Event('input', { bubbles:true })); } catch {}
+            try { el.dispatchEvent(new Event('change', { bubbles:true })); } catch {}
+          }
+
           const span = root.querySelector(`span[data-role="extra-margin"][data-slot="${slot}"]`);
           if (span) span.textContent = '';
+
+          stageAdditionalRatesFromDom();
+          recalcMargins();
           try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
         });
       });
 
-      // Recalc margins on input changes
+      // ✅ UPDATED: Stage ALL extra_* input changes + keep additional_rates_json authoritative
       const onChange = (ev) => {
         const t = ev.target;
         if (!t || !t.name) return;
-        if (/^extra_(pay|charge)_\d+$/.test(t.name)) {
+
+        const nm = String(t.name);
+
+        if (
+          /^extra_bucket_name_\d+$/.test(nm) ||
+          /^extra_unit_name_\d+$/.test(nm) ||
+          /^extra_frequency_\d+$/.test(nm) ||
+          /^extra_pay_\d+$/.test(nm) ||
+          /^extra_charge_\d+$/.test(nm)
+        ) {
+          setContractFormValue(nm, (t.type === 'checkbox') ? (t.checked ? 'on' : '') : t.value);
+
+          // Rebuild authoritative array every time
+          stageAdditionalRatesFromDom();
+
+          // Margin recalc for pay/charge changes (safe to call always, cheap)
           recalcMargins();
+
           try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
         }
       };
+
       root.addEventListener('input', onChange, true);
       root.addEventListener('change', onChange, true);
 
+      // Initialise staged JSON from DOM on first render
+      stageAdditionalRatesFromDom();
       recalcMargins();
 
       // Signal for any wiring that listens for this tab
@@ -60623,7 +61107,7 @@ function renderContractAdditionalRatesTab(ctx) {
         window.dispatchEvent(new Event('contracts-extras-rendered'));
       }
 
-      if (LOGC) console.log('[CONTRACTS] renderContractAdditionalRatesTab wired');
+      if (LOGC) console.log('[CONTRACTS] renderContractAdditionalRatesTab wired (staging+margin)');
     } catch (e) {
       if (LOGC) console.warn('[CONTRACTS] extras tab wiring failed', e);
     }
@@ -60631,7 +61115,6 @@ function renderContractAdditionalRatesTab(ctx) {
 
   return html;
 }
-
 
 
 // ===== Generic modal plumbing =====
