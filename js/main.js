@@ -24722,6 +24722,22 @@ function renderClientTab(key, row = {}){
         '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
       }[c]));
 
+  // ✅ VAT default: YES for brand-new clients (undefined/null), but preserve explicit No/false
+  // Also preserves staged string values ('Yes'/'No') so tab switches don't flip it.
+  const vatChoice = (() => {
+    const v = row?.vat_chargeable;
+
+    if (v === true)  return 'Yes';
+    if (v === false) return 'No';
+
+    const s = String(v ?? '').trim().toLowerCase();
+    if (s === 'yes' || s === 'y' || s === 'true' || s === '1')  return 'Yes';
+    if (s === 'no'  || s === 'n' || s === 'false' || s === '0')  return 'No';
+
+    // Default for create/new (or unknown): YES
+    return 'Yes';
+  })();
+
   if (key==='main') return html(`
     <div class="form" id="tab-main">
       ${input('name','Client name', row.name)}
@@ -24803,7 +24819,7 @@ function renderClientTab(key, row = {}){
 
       ${input('primary_invoice_email','Primary invoice email', row.primary_invoice_email,'email')}
       ${input('ap_phone','A/P phone', row.ap_phone)}
-      ${select('vat_chargeable','VAT chargeable', row.vat_chargeable? 'Yes' : 'No', ['Yes','No'])}
+      ${select('vat_chargeable','VAT chargeable', vatChoice, ['Yes','No'])}
       ${input('payment_terms_days','Payment terms (days)', row.payment_terms_days || 30, 'number')}
     </div>
   `);
@@ -62210,6 +62226,13 @@ function bindCandidateMainFormEvents(container, model) {
         .map((t) => {
           const node = byId[t.job_title_id];
           const isPrimary = !!t.is_primary;
+
+          // ✅ NEW: hover hint on secondary roles (edit/create only)
+          const hoverHint =
+            (canEdit && !isPrimary)
+              ? ` title="${escapeHtml('Right click to change to a primary job title')}"`
+              : '';
+
           // Just the leaf label (no full tree)
           const label = node ? (node.label || '') : String(t.job_title_id || '');
           const regBadge =
@@ -62245,7 +62268,7 @@ function bindCandidateMainFormEvents(container, model) {
           return `
             <div class="pill"
                  data-role-id="${t.job_title_id}"
-                 style="${pillStyle}">
+                 style="${pillStyle}"${hoverHint}>
               ${labelHtml}
               ${primaryTag}
               ${regBadge}
@@ -62450,7 +62473,6 @@ function bindCandidateMainFormEvents(container, model) {
     });
   }
 }
-
 
 // =============== NEW: apiPostcodeLookup (frontend → backend) ===========
 async function apiPostcodeLookup(postcode, house) {
