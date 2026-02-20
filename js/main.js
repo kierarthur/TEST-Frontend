@@ -19195,13 +19195,13 @@ function renderCandidateTab(key, row = {}) {
              style="${row.prof_reg_type ? '' : 'display:none'}">
           <label data-field="prof_reg_label">
             ${row.prof_reg_type
-              ? escapeHtml(\`\${row.prof_reg_type} Number\`)
+              ? enc(String(row.prof_reg_type) + ' Number')
               : 'Registration Number'}
           </label>
           <div class="controls">
             <input class="input"
                    name="prof_reg_number"
-                   value="${escapeHtml(row.prof_reg_number || '')}">
+                   value="${enc(row.prof_reg_number || '')}">
           </div>
         </div>
 
@@ -19214,33 +19214,33 @@ function renderCandidateTab(key, row = {}) {
                      name="address_line1"
                      autocomplete="off"
                      placeholder="Address line 1"
-                     value="${escapeHtml(row.address_line1 || '')}">
+                     value="${enc(row.address_line1 || '')}">
               <input class="input"
                      name="address_line2"
                      autocomplete="off"
                      placeholder="Address line 2"
-                     value="${escapeHtml(row.address_line2 || '')}">
+                     value="${enc(row.address_line2 || '')}">
               <input class="input"
                      name="address_line3"
                      autocomplete="off"
                      placeholder="Address line 3"
-                     value="${escapeHtml(row.address_line3 || '')}">
+                     value="${enc(row.address_line3 || '')}">
               <input class="input"
                      name="town_city"
                      autocomplete="off"
                      placeholder="City / Town"
-                     value="${escapeHtml(row.town_city || '')}">
+                     value="${enc(row.town_city || '')}">
               <input class="input"
                      name="county"
                      autocomplete="off"
                      placeholder="County"
-                     value="${escapeHtml(row.county || '')}">
+                     value="${enc(row.county || '')}">
               <div class="split">
                 <input class="input"
                        name="postcode"
                        autocomplete="off"
                        placeholder="Postcode"
-                       value="${escapeHtml(row.postcode || '')}">
+                       value="${enc(row.postcode || '')}">
                 <button type="button"
                         class="btn mini"
                         data-act="postcode-lookup"
