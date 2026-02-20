@@ -3228,7 +3228,6 @@ const IdleManager = (() => {
 
       const msg = `You will be signed out in ${mins} minute${mins === 1 ? '' : 's'} due to inactivity.\n\nClick OK to stay signed in.`;
 
-      // ✅ Use UI modal only. Do NOT fallback to window.confirm (it can be suppressed in background tabs).
       if (typeof openUiConfirmModal !== 'function') return;
 
       const r = await openUiConfirmModal({
@@ -3244,8 +3243,17 @@ const IdleManager = (() => {
         }
       });
 
-      // Only “OK” resets timers. Closing the modal does nothing; logout timer continues.
-      if (r && r.confirmed) bump();
+      // ✅ Primary UX requirement:
+      // OK OR Close must both stop logout and reset timers.
+      // - confirmed=true (OK) → bump
+      // - via='close' (header close) → bump
+      // - ignore auto-resolve (e.g. modal stack hard-reset during logout)
+      const via = r && typeof r === 'object' ? String(r.via || '') : '';
+      const isUserClose = (via === 'close' || via === 'cancel' || via === 'confirm');
+      if (r && (r.confirmed || isUserClose) && via !== 'auto') {
+        bump();
+      }
+
     } finally {
       state.warnOpen = false;
       state.warnToken = null;
@@ -3254,7 +3262,6 @@ const IdleManager = (() => {
   };
 
   const bump = () => {
-    // If a warning is open, user activity should still reset the timers.
     state.lastActivityMs = Date.now();
     _schedule();
   };
@@ -3324,7 +3331,6 @@ const IdleManager = (() => {
 
   const stop = () => {
     // ✅ Close the inactivity warning modal if it is currently on-screen.
-    // Works even on cold start (no modal-stack introspection required).
     try { _closeWarnModalIfOpen(); } catch {}
 
     state.warnToken = null;
@@ -3342,7 +3348,6 @@ const IdleManager = (() => {
     bump: () => bump()
   };
 })();
-
 
 async function performLogout(reason){
   // Guard against double-fire (timers + visibility + manual)
@@ -14525,28 +14530,38 @@ async function openUiConfirmModal(opts = {}) {
     let ownerToken = null;
     let watchTimer = 0;
 
+    // ✅ Primary fix: do NOT resolve+cleanup before the modal is actually closed.
+    // We stage the intended result, close the modal, then resolve from onDismiss.
+    let pendingConfirmed = null;          // true|false|null
+    let pendingVia = null;               // 'confirm'|'cancel'|null
+
     const hasGetFrame = (typeof window.__getModalFrame === 'function');
     const hasStack = Array.isArray(window.__modalStack);
 
-    const resolveOnce = (confirmed) => {
-      if (done) return;
-      done = true;
-      try { cleanup(); } catch {}
-      resolve({ confirmed: !!confirmed });
-    };
-
-    const topFrameIsMine = (token) => {
-      // If we can't introspect frames, don't gate clicks — allow buttons to work.
-      if (!hasGetFrame) return true;
+    const isThisModalLive = () => {
       try {
-        const fr = window.__getModalFrame();
-        return !!(fr && fr.kind === kind && fr._token === token);
+        const modal = document.getElementById('modal');
+        const mk = modal?.dataset?.uicfKind ? String(modal.dataset.uicfKind) : '';
+        const mr = modal?.dataset?.uicfRootId ? String(modal.dataset.uicfRootId) : '';
+        if (mk === String(kind) && mr === String(rootId)) return true;
+      } catch {}
+
+      try {
+        // fallback: rootId exists in DOM
+        return !!document.getElementById(rootId);
       } catch {
-        return true;
+        return false;
       }
     };
 
-    const closeModalBtnClick = () => {
+    const resolveOnce = (confirmed, via) => {
+      if (done) return;
+      done = true;
+      try { cleanup(); } catch {}
+      resolve({ confirmed: !!confirmed, via: String(via || 'auto') });
+    };
+
+    const requestClose = () => {
       try {
         const btn = document.getElementById('btnCloseModal');
         if (btn) btn.click();
@@ -14556,62 +14571,20 @@ async function openUiConfirmModal(opts = {}) {
       }
     };
 
-    const onBodyClick = (ev) => {
-      if (done) return;
-      if (ownerToken && !topFrameIsMine(ownerToken)) return;
-
-      const btn = ev?.target && ev.target.closest ? ev.target.closest('button[data-act]') : null;
-      if (!btn) return;
-
-      const act = String(btn.getAttribute('data-act') || '');
-      if (act !== 'uicf-confirm' && act !== 'uicf-cancel') return;
-
-      if (act === 'uicf-cancel') {
-        if (!showCancel) return;
-        resolveOnce(false);
-        closeModalBtnClick();
-        return;
-      }
-
-      // confirm
-      resolveOnce(true);
-      closeModalBtnClick();
-    };
-
-    const onHeaderCloseCapture = (ev) => {
-      if (done) return;
-
-      // If we can't bind to a specific token, rely on showModal.onDismiss instead.
-      if (!ownerToken || !hasGetFrame) return;
-
-      const btn = document.getElementById('btnCloseModal');
-      const bound = btn?.dataset?.ownerToken || null;
-      if (!bound) return;
-      if (String(bound) !== String(ownerToken)) return;
-      if (!topFrameIsMine(ownerToken)) return;
-
-      resolveOnce(false);
-      // do NOT prevent default; showModal will close it
-    };
-
     const cleanup = () => {
       try {
         const body = document.getElementById('modalBody');
         if (body) body.removeEventListener('click', onBodyClick);
       } catch {}
 
-      try {
-        const closeBtn = document.getElementById('btnCloseModal');
-        if (closeBtn) closeBtn.removeEventListener('click', onHeaderCloseCapture, true);
-      } catch {}
-
       try { if (watchTimer) clearInterval(watchTimer); } catch {}
       watchTimer = 0;
 
+      // ✅ IMPORTANT: do NOT delete btnCloseModal.dataset.ownerToken.
+      // showModal relies on it for token-gated closing. Removing it can make the modal uncloseable.
       try {
         const closeBtn = document.getElementById('btnCloseModal');
         if (closeBtn && closeBtn.dataset) {
-          if (closeBtn.dataset.ownerToken) delete closeBtn.dataset.ownerToken;
           if (closeBtn.dataset.uicfKind) delete closeBtn.dataset.uicfKind;
           if (closeBtn.dataset.uicfRootId) delete closeBtn.dataset.uicfRootId;
         }
@@ -14624,6 +14597,41 @@ async function openUiConfirmModal(opts = {}) {
           if (modal.dataset.uicfRootId === String(rootId)) delete modal.dataset.uicfRootId;
         }
       } catch {}
+    };
+
+    const onBodyClick = (ev) => {
+      if (done) return;
+      if (!isThisModalLive()) return;
+
+      const btn = ev?.target && ev.target.closest ? ev.target.closest('button[data-act]') : null;
+      if (!btn) return;
+
+      const act = String(btn.getAttribute('data-act') || '');
+      if (act !== 'uicf-confirm' && act !== 'uicf-cancel') return;
+
+      if (act === 'uicf-cancel') {
+        if (!showCancel) return;
+        pendingConfirmed = false;
+        pendingVia = 'cancel';
+        requestClose();
+        return;
+      }
+
+      // confirm
+      pendingConfirmed = true;
+      pendingVia = 'confirm';
+      requestClose();
+    };
+
+    const onDismiss = () => {
+      // ✅ Secondary fix: Close (header X / Close button) must be responsive too.
+      // If user didn't click confirm/cancel, treat as 'close'.
+      if (done) return;
+
+      const via = pendingVia ? pendingVia : 'close';
+      const confirmed = (pendingConfirmed === true);
+
+      resolveOnce(confirmed, via);
     };
 
     const renderTab = (key) => {
@@ -14676,7 +14684,7 @@ async function openUiConfirmModal(opts = {}) {
         noParentGate: true,
         showSave: false,
         showApply: false,
-        onDismiss: () => resolveOnce(false)
+        onDismiss
       }
     );
 
@@ -14689,7 +14697,7 @@ async function openUiConfirmModal(opts = {}) {
       }
     } catch {}
 
-    // Capture token for this frame (only if introspection is available)
+    // Capture token for this frame (only if introspection is available) — used only for the safety watcher
     try {
       if (hasGetFrame) {
         const fr = window.__getModalFrame();
@@ -14701,17 +14709,16 @@ async function openUiConfirmModal(opts = {}) {
       ownerToken = null;
     }
 
-    // Tag the header Close button for ownership (best-effort)
+    // Tag the header Close button with our kind/rootId (do NOT touch ownerToken)
     try {
       const closeBtn = document.getElementById('btnCloseModal');
       if (closeBtn && closeBtn.dataset) {
         closeBtn.dataset.uicfKind = String(kind);
         closeBtn.dataset.uicfRootId = String(rootId);
-        if (ownerToken) closeBtn.dataset.ownerToken = String(ownerToken);
       }
     } catch {}
 
-    // Allow caller to learn identifiers (used by IdleManager to close its warning on logout)
+    // Allow caller to learn identifiers
     try {
       if (typeof opts.on_open === 'function') opts.on_open({ kind, token: ownerToken || null, rootId });
     } catch {}
@@ -14722,26 +14729,25 @@ async function openUiConfirmModal(opts = {}) {
       if (body) body.addEventListener('click', onBodyClick);
     } catch {}
 
-    // Ensure closing via the header Close button resolves too (only when we can safely bind ownership)
-    try {
-      const closeBtn = document.getElementById('btnCloseModal');
-      if (closeBtn && ownerToken && hasGetFrame) closeBtn.addEventListener('click', onHeaderCloseCapture, true);
-    } catch {}
-
-    // Safety watcher: ONLY enable if we can actually introspect the modal stack and we have a token.
-    // On cold start, __getModalFrame/__modalStack are not yet defined; running this watcher would
-    // incorrectly resolve and detach listeners, leaving an unclickable modal on screen.
+    // Safety watcher:
+    // If the modal frame disappears from the stack (e.g., hard reset on logout),
+    // resolve the promise without leaving a dead modal.
     if (ownerToken && hasGetFrame && hasStack) {
       watchTimer = setInterval(() => {
         if (done) return;
+
         const stk = window.__modalStack;
         const stillThere = Array.isArray(stk) && stk.some(fr => fr && fr._token === ownerToken);
-        if (!stillThere) resolveOnce(false);
+
+        if (!stillThere) {
+          // If the DOM is still present, try to close it before resolving.
+          try { if (isThisModalLive()) requestClose(); } catch {}
+          resolveOnce(false, 'auto');
+        }
       }, 250);
     }
   });
 }
-
 
 function openContractSkipWeeks(contract_id) {
   const content = `
@@ -24968,6 +24974,10 @@ async function mountCandidatePayTab() {
     return digits.replace(/(\d{2})(\d{2})(\d{2})/, '$1-$2-$3');
   };
 
+  const escAttr = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+
   function setBankDisabled(disabled) {
     [accHolder, bankName, sortCode, accNum].forEach(el => { if (el) el.disabled = !!disabled; });
     const umbInput = document.getElementById('umbrella_name');
@@ -25052,9 +25062,16 @@ async function mountCandidatePayTab() {
     if (accNum)    accNum.value    = an;
     if (accHolder) accHolder.value = ah;
 
-    if (nameInput && !nameInput.value) {
-      nameInput.placeholder = umb.name || nameInput.placeholder || '';
-    }
+    // Ensure umbrella name is visible as a value (not just placeholder)
+    try {
+      if (nameInput) {
+        const nm = String(umb.name || '').trim();
+        const em = String(umb.remittance_email || '').trim();
+        if (nm) nameInput.value = nm;
+        else if (!nameInput.value && em) nameInput.value = em;
+        if (!nameInput.value) nameInput.placeholder = nm || em || nameInput.placeholder || '';
+      }
+    } catch {}
 
     stagedPay.account_holder = accHolder ? accHolder.value : '';
     stagedPay.bank_name      = bankName  ? bankName.value  : '';
@@ -25083,38 +25100,107 @@ async function mountCandidatePayTab() {
     }
   }
 
-  async function loadUmbrellaList() {
+  // ─────────────────────────────────────────────────────────────
+  // Option A: server-search umbrellas as you type
+  // ─────────────────────────────────────────────────────────────
+
+  let _umbSearchSeq = 0;
+  let _umbSearchTimer = 0;
+  let _umbLastTerm = '';
+
+  const buildUmbOptionValue = (u) => {
+    const nm = String(u?.name || '').trim();
+    const em = String(u?.remittance_email || '').trim();
+    return nm || em || String(u?.id || '').trim();
+  };
+
+  async function loadUmbrellaList(term) {
+    const t = String(term || '').trim();
+    _umbLastTerm = t;
+
+    const qs = new URLSearchParams();
+    qs.set('page', '1');
+    qs.set('page_size', '50');
+    if (t) qs.set('q', t);
+
+    const url = `/api/search/umbrellas?${qs.toString()}`;
+
     let umbrellas = [];
     try {
-      const res = await authFetch(API('/api/umbrellas'));
+      const res = await authFetch(API(url));
       if (res && res.ok) {
-        const j = await res.json().catch(()=>[]);
+        const j = await res.json().catch(()=>null);
         umbrellas = unwrapList(j);
       }
     } catch (e) {
-      if (LOG) console.warn('[PAYTAB] loadUmbrellaList failed', e);
+      if (LOG) console.warn('[PAYTAB] loadUmbrellaList(search) failed', e);
       umbrellas = [];
     }
-    if (LOG) console.log('[PAYTAB] umbrellas list loaded', umbrellas.length);
+
+    if (LOG) console.log('[PAYTAB] umbrellas search loaded', { term: t, count: umbrellas.length });
 
     if (listEl) {
       listEl.innerHTML = (umbrellas || []).map(u => {
-        const label = u.name || u.remittance_email || u.id;
-        return `<option data-id="${u.id}" value="${label}"></option>`;
+        const val = buildUmbOptionValue(u);
+        const id  = String(u?.id || '').trim();
+        if (!id || !val) return '';
+        return `<option data-id="${escAttr(id)}" value="${escAttr(val)}"></option>`;
       }).join('');
+    }
+  }
+
+  function scheduleUmbrellaSearch(term, immediate) {
+    const t = String(term || '').trim();
+    const seq = ++_umbSearchSeq;
+
+    try { if (_umbSearchTimer) clearTimeout(_umbSearchTimer); } catch {}
+    _umbSearchTimer = 0;
+
+    const run = async () => {
+      // Ignore if tab is no longer umbrella mode
+      if ((window.modalCtx?.payMethodState || persistedMethod || 'PAYE').toUpperCase() !== 'UMBRELLA') return;
+
+      // Ignore stale calls
+      if (seq !== _umbSearchSeq) return;
+
+      // Only search if the input still matches the term we scheduled
+      const nowVal = (nameInput && nameInput.value) ? String(nameInput.value).trim() : '';
+      if (t !== nowVal && t !== '') {
+        // If term was non-empty but input has moved, drop this result
+        return;
+      }
+
+      await loadUmbrellaList(t);
+    };
+
+    if (immediate) {
+      run().catch(()=>{});
+    } else {
+      _umbSearchTimer = setTimeout(() => { run().catch(()=>{}); }, 200);
     }
   }
 
   function syncUmbrellaSelection() {
     const val = (nameInput && nameInput.value) ? nameInput.value.trim() : '';
+
     if (!val) {
       if (idHidden) idHidden.value = '';
       stagedPay.umbrella_name = '';
       stagedPay.umbrella_id   = '';
       stagedPay.__forMethod   = payMethod || null;
-      if (LOG) console.log('[PAYTAB] selection cleared (umbrella_name empty)', {
-        stagedPay: { ...stagedPay }
-      });
+
+      // Clear bank fields only if they came from an umbrella selection
+      if (bankName) bankName.value = '';
+      if (sortCode) sortCode.value = '';
+      if (accNum)   accNum.value   = '';
+      if (accHolder) accHolder.value = '';
+
+      stagedPay.account_holder = '';
+      stagedPay.bank_name      = '';
+      stagedPay.sort_code      = '';
+      stagedPay.account_number = '';
+
+      if (LOG) console.log('[PAYTAB] selection cleared (umbrella_name empty)', { stagedPay: { ...stagedPay } });
       return;
     }
 
@@ -25124,24 +25210,39 @@ async function mountCandidatePayTab() {
 
     if (id) {
       if (LOG) console.log('[PAYTAB] selected umbrella', { label: val, id });
+
       if (idHidden) idHidden.value = id;
       stagedPay.umbrella_name = val;
       stagedPay.umbrella_id   = id;
       stagedPay.__forMethod   = payMethod || 'UMBRELLA';
+
       fetchAndPrefill(id);
-    } else {
-      // User typed a label that does not match any option – keep text, but clear id & bank
-      if (LOG) console.warn('[PAYTAB] no exact label match; clearing id & bank fields', { typed: val });
+      return;
+    }
+
+    // Not an exact match yet (user still typing): keep typed text, but clear any previous selection + bank
+    const hadSelected = !!(idHidden && String(idHidden.value || '').trim());
+    if (hadSelected) {
+      if (LOG) console.warn('[PAYTAB] typed diverged from selected umbrella; clearing id & bank fields', { typed: val });
+
       if (idHidden) idHidden.value = '';
+      stagedPay.umbrella_id = '';
       stagedPay.umbrella_name = val;
-      stagedPay.umbrella_id   = '';
+
       if (bankName) bankName.value = '';
       if (sortCode) sortCode.value = '';
       if (accNum)   accNum.value   = '';
+      if (accHolder) accHolder.value = '';
+
+      stagedPay.account_holder = '';
       stagedPay.bank_name      = '';
       stagedPay.sort_code      = '';
       stagedPay.account_number = '';
       stagedPay.__forMethod    = payMethod || null;
+    } else {
+      stagedPay.umbrella_name = val;
+      stagedPay.umbrella_id   = '';
+      stagedPay.__forMethod   = payMethod || null;
     }
   }
 
@@ -25204,6 +25305,12 @@ async function mountCandidatePayTab() {
       if (umbRow) umbRow.style.display = '';
       setBankDisabled(true);
 
+      // Prime suggestions (top 50) when switching into umbrella mode
+      try {
+        if (nameInput && !nameInput.value) scheduleUmbrellaSearch('', true);
+        else scheduleUmbrellaSearch(String(nameInput?.value || '').trim(), true);
+      } catch {}
+
       // Only auto-restore original umbrella if this was originally UMBRELLA and there is no staged state
       if (!nowHasStaged && persistedMethod === 'UMBRELLA' && currentUmbId) {
         if (LOG) console.log('[PAYTAB] pay-method-changed → restore original umbrella from DB');
@@ -25241,14 +25348,12 @@ async function mountCandidatePayTab() {
     if (umbRow) umbRow.style.display = '';
     setBankDisabled(true);
 
-    // Always ensure umbrella dropdown is populated
-    loadUmbrellaList().catch(() => {});
+    // Prime suggestions (top 50) immediately so the datalist isn't empty
+    try { scheduleUmbrellaSearch(String(nameInput?.value || '').trim(), true); } catch {}
 
     if (hadStagedAtEntry) {
       // We already have staged values *for UMBRELLA* – do NOT clear them; just repaint DOM
-      if (LOG) console.log('[PAYTAB] initial UMBRELLA using staged pay', {
-        stagedPay: { ...stagedPay }
-      });
+      if (LOG) console.log('[PAYTAB] initial UMBRELLA using staged pay', { stagedPay: { ...stagedPay } });
       if (accHolder) accHolder.value = stagedPay.account_holder || '';
       if (bankName)  bankName.value  = stagedPay.bank_name      || '';
       if (sortCode)  sortCode.value  = normaliseSort(stagedPay.sort_code || '');
@@ -25269,12 +25374,31 @@ async function mountCandidatePayTab() {
       }
     }
 
-    // Wiring for user selection & future changes
+    // Wiring for server-search-as-you-type + selection
     if (nameInput) {
       nameInput.disabled = !isEdit;
-      nameInput.oninput  = syncUmbrellaSelection;
+
+      nameInput.oninput = () => {
+        const term = String(nameInput.value || '').trim();
+
+        // Keep staged umbrella_name current, but clear any previous selected id if user is editing the text
+        const hadId = !!(idHidden && String(idHidden.value || '').trim());
+        if (hadId && term !== String(stagedPay.umbrella_name || '').trim()) {
+          // User is changing away from an existing selection: clear selection + bank fields
+          syncUmbrellaSelection();
+        } else {
+          stagedPay.umbrella_name = term;
+          stagedPay.umbrella_id = '';
+          stagedPay.__forMethod = payMethod || null;
+        }
+
+        scheduleUmbrellaSearch(term, false);
+      };
+
+      // onchange is where we attempt an exact match and set the umbrella id
       nameInput.onchange = syncUmbrellaSelection;
     }
+
     if (idHidden) {
       idHidden.onchange = () => fetchAndPrefill(idHidden.value);
     }
@@ -25284,11 +25408,16 @@ async function mountCandidatePayTab() {
     if (umbRow) umbRow.style.display = 'none';
     setBankDisabled(!isEdit);
 
+    // Clear umbrella handlers (defensive)
+    try {
+      if (nameInput) { nameInput.oninput = null; nameInput.onchange = null; }
+      if (idHidden)  { idHidden.onchange = null; }
+      if (listEl)    { listEl.innerHTML = ''; }
+    } catch {}
+
     if (hadStagedAtEntry) {
       // Only re-use staged pay when it belongs to PAYE
-      if (LOG) console.log('[PAYTAB] initial PAYE using staged pay', {
-        stagedPay: { ...stagedPay }
-      });
+      if (LOG) console.log('[PAYTAB] initial PAYE using staged pay', { stagedPay: { ...stagedPay } });
       if (accHolder) accHolder.value = stagedPay.account_holder || '';
       if (bankName)  bankName.value  = stagedPay.bank_name      || '';
       if (sortCode)  sortCode.value  = normaliseSort(stagedPay.sort_code || '');
@@ -25304,8 +25433,6 @@ async function mountCandidatePayTab() {
         if (LOG) console.log('[PAYTAB] initial/original PAYE: fill from candidate');
         fillFromCandidate();
       } else if (flipFromUMBRELLAtoPAYE) {
-        // This is the case you care about:
-        // UMBRELLA → PAYE flip → always start BLANK, never reuse umbrella staging.
         if (LOG) console.log('[PAYTAB] UMBRELLA→PAYE flip: start blank');
       } else {
         if (LOG) console.log('[PAYTAB] PAYE/unknown origin: blank');
@@ -25329,7 +25456,6 @@ async function mountCandidatePayTab() {
 
   // IMPORTANT: async function – resolves AFTER any umbrella prefill.
 }
-
 
 // ============================================================================
 // CALENDAR – SHARED HELPERS & STATE
