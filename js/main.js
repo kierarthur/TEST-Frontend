@@ -3081,6 +3081,7 @@ async function apiLogout(){
 
   return true;
 }
+
 const IdleManager = (() => {
   const WARN_KIND = 'idle-inactivity-warning';
 
@@ -3114,6 +3115,33 @@ const IdleManager = (() => {
     state.logoutTimer = 0;
   };
 
+  const _hardCloseAllModalsIfInactivityWarningPresent = () => {
+    try {
+      // If we have the root id and it exists, we know the inactivity modal is currently in the DOM
+      if (state.warnRootId && document.getElementById(state.warnRootId)) {
+        if (typeof discardAllModalsAndState === 'function') {
+          discardAllModalsAndState();
+          return true;
+        }
+      }
+
+      // If the modal DOM is tagged as our kind, also hard-close
+      const modal = document.getElementById('modal');
+      const kind = modal?.dataset?.uicfKind ? String(modal.dataset.uicfKind) : '';
+      if (kind === WARN_KIND) {
+        if (typeof discardAllModalsAndState === 'function') {
+          discardAllModalsAndState();
+          return true;
+        }
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  // Keep this for non-hard-close situations (e.g. stop())
   const _closeWarnModalIfOpen = () => {
     try {
       // Primary (works even on cold start): close if our modal root element is present
@@ -3162,7 +3190,8 @@ const IdleManager = (() => {
     const elapsed = now - state.lastActivityMs;
 
     if (elapsed >= idleMs) {
-      try { _closeWarnModalIfOpen(); } catch {}
+      // ✅ Hard-close modals (token-free) if the inactivity warning is present, then logout
+      try { _hardCloseAllModalsIfInactivityWarningPresent(); } catch {}
       performLogout('inactivity');
       return;
     }
@@ -3176,9 +3205,9 @@ const IdleManager = (() => {
       state.warnTimer = setTimeout(() => { try { _warn(); } catch {} }, warnIn);
     }
 
-    // ✅ Close the warning modal BEFORE logging out (prevents it persisting into next login)
+    // ✅ Hard-close the warning modal BEFORE logging out (token-free)
     state.logoutTimer = setTimeout(() => {
-      try { _closeWarnModalIfOpen(); } catch {}
+      try { _hardCloseAllModalsIfInactivityWarningPresent(); } catch {}
       performLogout('inactivity');
     }, logoutIn);
   };
@@ -3247,7 +3276,8 @@ const IdleManager = (() => {
       const idleMs = state.policy.idle_logout_seconds * 1000;
       const elapsed = Date.now() - state.lastActivityMs;
       if (elapsed >= idleMs) {
-        try { _closeWarnModalIfOpen(); } catch {}
+        // ✅ Hard-close modals (token-free) if warning present, then logout
+        try { _hardCloseAllModalsIfInactivityWarningPresent(); } catch {}
         performLogout('inactivity');
       } else {
         _schedule();
@@ -3313,22 +3343,56 @@ const IdleManager = (() => {
   };
 })();
 
+
 async function performLogout(reason){
-  try { await apiLogout(); } catch {}
-
-  clearSession();
-
-  // Bring user back to login overlay
+  // Guard against double-fire (timers + visibility + manual)
   try {
-    openLogin();
-    const err = byId('loginError');
-    if (err) {
-      if (reason === 'inactivity') err.textContent = 'You were signed out due to inactivity.';
-      else if (reason === 'manual') err.textContent = '';
-      else if (reason) err.textContent = String(reason);
-      err.style.display = err.textContent ? 'block' : 'none';
-    }
+    if (window.__logoutInProgress) return;
+    window.__logoutInProgress = true;
   } catch {}
+
+  try {
+    // ✅ Hard-close modals on inactivity logout (and also if the inactivity modal is currently displayed)
+    try {
+      const wantHardClose =
+        (reason === 'inactivity') ||
+        (() => {
+          try {
+            const modal = document.getElementById('modal');
+            const kind = modal?.dataset?.uicfKind ? String(modal.dataset.uicfKind) : '';
+            return (kind === 'idle-inactivity-warning');
+          } catch { return false; }
+        })();
+
+      if (wantHardClose && typeof discardAllModalsAndState === 'function') {
+        discardAllModalsAndState();
+      }
+    } catch {}
+
+    // ✅ Stop idle timers/listeners so the warning cannot re-open during teardown
+    try {
+      // Accessing IdleManager here is safe: if it is in TDZ for any reason, ReferenceError is caught.
+      if (IdleManager && typeof IdleManager.stop === 'function') IdleManager.stop();
+    } catch {}
+
+    try { await apiLogout(); } catch {}
+
+    clearSession();
+
+    // Bring user back to login overlay
+    try {
+      openLogin();
+      const err = byId('loginError');
+      if (err) {
+        if (reason === 'inactivity') err.textContent = 'You were signed out due to inactivity.';
+        else if (reason === 'manual') err.textContent = '';
+        else if (reason) err.textContent = String(reason);
+        err.style.display = err.textContent ? 'block' : 'none';
+      }
+    } catch {}
+  } finally {
+    try { window.__logoutInProgress = false; } catch {}
+  }
 }
 
 function initAuthUI(){
@@ -21649,6 +21713,9 @@ function discardAllModalsAndState(){
     }
   } catch (_) {}
 
+  // Ensure stack is truly empty (defensive)
+  try { window.__modalStack = []; } catch {}
+
   // Clear any staged calendar changes for open contracts (defensive sweep)
   try {
     if (window.__calStage && typeof clearContractCalendarStageState === 'function') {
@@ -21670,28 +21737,70 @@ function discardAllModalsAndState(){
     modal.style.bottom = '';
     modal.style.transform = '';
     modal.classList.remove('dragging');
+
+    // Remove any confirm-modal tagging (prevents stale kind checks later)
+    try {
+      if (modal.dataset) {
+        if (modal.dataset.uicfKind) delete modal.dataset.uicfKind;
+        if (modal.dataset.uicfRootId) delete modal.dataset.uicfRootId;
+      }
+    } catch {}
+
     // Cancel any document-level drag handlers that might still be live
     document.onmousemove = null;
     document.onmouseup   = null;
   }
 
-  // 🔒 Clear any hidden modal DOM so stale inputs can't be read on next open
-  const modalBody = document.getElementById('modalBody');
-  if (modalBody) modalBody.replaceChildren();
-  const modalTabs = document.getElementById('modalTabs');
-  if (modalTabs) modalTabs.replaceChildren();
+  // 🔒 HARD reset modal DOM nodes to remove any leaked listeners (e.g. openUiConfirmModal on modalBody)
+  try {
+    const mb = document.getElementById('modalBody');
+    if (mb && mb.parentNode) {
+      const fresh = mb.cloneNode(false); // preserves attributes (id/class), drops listeners
+      mb.parentNode.replaceChild(fresh, mb);
+    }
+  } catch {}
+
+  try {
+    const mtabs = document.getElementById('modalTabs');
+    if (mtabs && mtabs.parentNode) {
+      const fresh = mtabs.cloneNode(false);
+      mtabs.parentNode.replaceChild(fresh, mtabs);
+    }
+  } catch {}
+
+  // Clear title + hint (defensive)
+  try {
     const modalTitle = document.getElementById('modalTitle');
-  if (modalTitle) modalTitle.textContent = '';
+    if (modalTitle) modalTitle.textContent = '';
+  } catch {}
 
-  // Clear any lingering bottom-right hint
-  const modalHint = document.getElementById('modalHint');
-  if (modalHint) {
-    modalHint.textContent = '';
-    modalHint.removeAttribute('data-tone');
-    try { modalHint.classList.remove('ok', 'warn', 'err'); } catch {}
-  }
+  try {
+    const modalHint = document.getElementById('modalHint');
+    if (modalHint) {
+      modalHint.textContent = '';
+      modalHint.removeAttribute('data-tone');
+      try { modalHint.classList.remove('ok', 'warn', 'err'); } catch {}
+    }
+  } catch {}
 
-  // Reset modal context
+  // Clear any lingering button ownership tags (defensive)
+  try {
+    const btnClose = document.getElementById('btnCloseModal');
+    if (btnClose && btnClose.dataset) {
+      if (btnClose.dataset.ownerToken) delete btnClose.dataset.ownerToken;
+      if (btnClose.dataset.uicfKind) delete btnClose.dataset.uicfKind;
+      if (btnClose.dataset.uicfRootId) delete btnClose.dataset.uicfRootId;
+    }
+  } catch {}
+
+  try {
+    const btnSave = document.getElementById('btnSave');
+    if (btnSave && btnSave.dataset) {
+      if (btnSave.dataset.ownerToken) delete btnSave.dataset.ownerToken;
+    }
+  } catch {}
+
+  // Reset modal context (both legacy global and window.modalCtx)
   modalCtx = {
     entity: null, data: null,
     formState: null, rolesState: null,
@@ -21699,6 +21808,10 @@ function discardAllModalsAndState(){
     clientSettingsState: null,
     openToken: null
   };
+  try { window.modalCtx = modalCtx; } catch {}
+
+  // Clear modal frame accessor (defensive; showModal will re-seed)
+  try { window.__getModalFrame = () => null; } catch {}
 
   // Hide overlay last
   const back = document.getElementById('modalBack');
@@ -21706,7 +21819,6 @@ function discardAllModalsAndState(){
 
   console.debug('[MODAL] hard reset complete');
 }
-
 
 
 function confirmDiscardChangesIfDirty(){
