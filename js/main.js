@@ -1360,7 +1360,6 @@ function getFriendlyHeaderLabel(section, key) {
 //   (ALL matching ids for current filters) regardless of page size.
 // ─────────────────────────────────────────────────────────────────────────────
 
-
 async function loadSection() {
   const gl = beginGlobalLoading('Loading list…');
 
@@ -1419,10 +1418,15 @@ async function loadSection() {
     const hasFilters = !!st.filters && Object.keys(st.filters).length > 0;
     const hasSort    = !!(st.sort && st.sort.key);
 
-    // ✅ ALWAYS use search for candidates + contracts + invoices
+    // ✅ ALWAYS use search for candidates + contracts + invoices + clients + umbrellas
     // ✅ But related mode is a dedicated branch and does NOT use search()
+    // ✅ Timesheets remain special (handled in fetchOne)
     const useSearch =
-      (currentSection === 'candidates' || currentSection === 'contracts' || currentSection === 'invoices')
+      (currentSection === 'candidates' ||
+       currentSection === 'contracts'  ||
+       currentSection === 'invoices'   ||
+       currentSection === 'clients'    ||
+       currentSection === 'umbrellas')
         ? true
         : (hasFilters || hasSort);
 
@@ -17726,59 +17730,254 @@ async function listCandidates(opts = {}) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function listClients(opts = {}) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
+
   const q = (opts.q || '').trim();
+
   window.__listState = window.__listState || {};
   const st = (window.__listState['clients'] ||= { page: 1, pageSize: 50, total: null, hasMore: false, filters: null });
-  const page = Number(opts.page || st.page || 1);
-  const ps   = String(opts.page_size || st.pageSize || 50);
 
+  const page = Math.max(1, Number(opts.page || st.page || 1));
+  const psRaw = (opts.page_size != null ? opts.page_size : st.pageSize);
+  const psStr = String(psRaw == null ? 50 : psRaw);
+  const isAll = (psStr === 'ALL');
+
+  const chunk = 200;
+
+  const unwrap = (j) => {
+    if (Array.isArray(j)) return { rows: j, count: null };
+    const rows =
+      (j && Array.isArray(j.items)) ? j.items :
+      (j && Array.isArray(j.rows)) ? j.rows :
+      (j && j.data && Array.isArray(j.data.rows)) ? j.data.rows :
+      (j && j.data && Array.isArray(j.data)) ? j.data :
+      [];
+    const count =
+      (j && typeof j.count === 'number') ? Number(j.count) :
+      (j && typeof j.total === 'number') ? Number(j.total) :
+      null;
+    return { rows, count };
+  };
+
+  const safeJson = async (res) => { try { return await res.json(); } catch { return null; } };
+
+  const computeHasMore = (pg, pageSizeNum, totalNum, rowsArr) => {
+    if (typeof totalNum === 'number' && Number.isFinite(totalNum)) return (pg * pageSizeNum) < totalNum;
+    return Array.isArray(rowsArr) && rowsArr.length === pageSizeNum;
+  };
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // q present: prefer server-side search (/api/search/clients)
+  // ───────────────────────────────────────────────────────────────────────────
   if (q) {
-    const qs = new URLSearchParams();
-    if (ps !== 'ALL') { qs.set('page', String(page)); qs.set('page_size', String(ps)); } else { qs.set('page','1'); }
-    qs.set('q', q);
-    const url = `/api/search/clients?${qs.toString()}`;
     try {
+      if (isAll) {
+        // ✅ ALL + q: page through /api/search/clients and accumulate
+        const acc = [];
+        let p = 1;
+
+        while (true) {
+          const qs = new URLSearchParams();
+          qs.set('page', String(p));
+          qs.set('page_size', String(chunk));
+          qs.set('include_count', 'true');
+          qs.set('q', q);
+
+          const url = `/api/search/clients?${qs.toString()}`;
+          if (LOGC) console.log('[PICKER][clients] server-search(all) →', url);
+
+          const r = await authFetch(API(url));
+          if (!r.ok) break;
+
+          const j = await safeJson(r);
+          const { rows } = unwrap(j);
+
+          if (Array.isArray(rows) && rows.length) acc.push(...rows);
+
+          if (!Array.isArray(rows) || rows.length < chunk) break;
+          p += 1;
+        }
+
+        st.page = 1;
+        st.total = acc.length;
+        st.hasMore = false;
+
+        return acc;
+      }
+
+      // ✅ normal paged q-search: include_count for correct totals if backend supports it
+      const qs = new URLSearchParams();
+      qs.set('page', String(page));
+      qs.set('page_size', String(Number(psStr || 50)));
+      qs.set('include_count', 'true');
+      qs.set('q', q);
+
+      const url = `/api/search/clients?${qs.toString()}`;
       if (LOGC) console.log('[PICKER][clients] server-search →', url);
+
       const r = await authFetch(API(url));
       if (r.ok) {
-        const rows = await toList(r);
-        if (LOGC) console.log('[PICKER][clients] server-search OK', { count: rows.length });
-        if (ps !== 'ALL') st.hasMore = Array.isArray(rows) && rows.length === Number(ps || 50);
-        return rows;
+        const j = await safeJson(r);
+        const { rows, count } = unwrap(j);
+
+        if (typeof count === 'number' && Number.isFinite(count)) st.total = count;
+        st.hasMore = computeHasMore(page, Number(psStr || 50), st.total, rows);
+
+        if (LOGC) console.log('[PICKER][clients] server-search OK', { count: Array.isArray(rows) ? rows.length : 0, total: st.total });
+        return Array.isArray(rows) ? rows : [];
       }
     } catch (e) {
       if (LOGC) console.warn('[PICKER][clients] server-search failed, falling back', e);
     }
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // Fallback: list endpoint (/api/clients) — now supports include_count + true ALL paging
+  // ───────────────────────────────────────────────────────────────────────────
+
+  if (isAll) {
+    const acc = [];
+    let p = 1;
+
+    while (true) {
+      const qs = new URLSearchParams();
+      qs.set('page', String(p));
+      qs.set('page_size', String(chunk));
+      qs.set('include_count', 'true');
+
+      const url = `/api/clients?${qs.toString()}`;
+      const r = await authFetch(API(url));
+      const j = await safeJson(r);
+
+      const { rows, count } = unwrap(j);
+
+      if (p === 1 && typeof count === 'number' && Number.isFinite(count)) {
+        st.total = count;
+      }
+
+      if (Array.isArray(rows) && rows.length) acc.push(...rows);
+
+      if (!Array.isArray(rows) || rows.length < chunk) break;
+      p += 1;
+    }
+
+    st.page = 1;
+    st.total = (typeof st.total === 'number' && Number.isFinite(st.total)) ? st.total : acc.length;
+    st.hasMore = false;
+
+    // local filter if q present (only happens when server-search failed)
+    if (!q) return acc;
+    const qn = q.toLowerCase();
+    const filtered = acc.filter(x =>
+      (x.name || '').toLowerCase().includes(qn) ||
+      (x.primary_invoice_email || '').toLowerCase().includes(qn)
+    );
+    if (LOGC) console.log('[PICKER][clients] local-filter(all)', { q, in: acc.length, out: filtered.length });
+    return filtered;
+  }
+
   const qs = new URLSearchParams();
-  if (ps !== 'ALL') { qs.set('page', String(page)); qs.set('page_size', String(ps)); } else { qs.set('page','1'); }
-  const url = qs.toString() ? `/api/clients?${qs}` : '/api/clients';
+  qs.set('page', String(page));
+  qs.set('page_size', String(Number(psStr || 50)));
+  qs.set('include_count', 'true');
+
+  const url = `/api/clients?${qs.toString()}`;
   const r = await authFetch(API(url));
-  const rows = await toList(r);
-  if (ps !== 'ALL') st.hasMore = Array.isArray(rows) && rows.length === Number(ps || 50);
+  const j = await safeJson(r);
+
+  const { rows, count } = unwrap(j);
+
+  if (typeof count === 'number' && Number.isFinite(count)) st.total = count;
+  st.hasMore = computeHasMore(page, Number(psStr || 50), st.total, rows);
 
   // local filter when q present but search route unavailable
-  if (!q) return rows;
+  if (!q) return Array.isArray(rows) ? rows : [];
   const qn = q.toLowerCase();
-  const filtered = rows.filter(x => (x.name || '').toLowerCase().includes(qn) || (x.primary_invoice_email||'').toLowerCase().includes(qn));
-  if (LOGC) console.log('[PICKER][clients] local-filter', { q, in: rows.length, out: filtered.length });
+  const base = Array.isArray(rows) ? rows : [];
+  const filtered = base.filter(x =>
+    (x.name || '').toLowerCase().includes(qn) ||
+    (x.primary_invoice_email || '').toLowerCase().includes(qn)
+  );
+  if (LOGC) console.log('[PICKER][clients] local-filter', { q, in: base.length, out: filtered.length });
   return filtered;
 }
-
 
 async function listUmbrellas(){
   window.__listState = window.__listState || {};
   const st = (window.__listState['umbrellas'] ||= { page: 1, pageSize: 50, total: null, hasMore: false, filters: null });
-  const ps = st.pageSize, pg = st.page;
+
+  const psRaw = (st.pageSize == null ? 50 : st.pageSize);
+  const psStr = String(psRaw);
+  const isAll = (psStr === 'ALL');
+
+  const page = Math.max(1, Number(st.page || 1));
+  const chunk = 200;
+
+  const unwrap = (j) => {
+    if (Array.isArray(j)) return { rows: j, count: null };
+    const rows =
+      (j && Array.isArray(j.items)) ? j.items :
+      (j && Array.isArray(j.rows)) ? j.rows :
+      (j && j.data && Array.isArray(j.data.rows)) ? j.data.rows :
+      (j && j.data && Array.isArray(j.data)) ? j.data :
+      [];
+    const count =
+      (j && typeof j.count === 'number') ? Number(j.count) :
+      (j && typeof j.total === 'number') ? Number(j.total) :
+      null;
+    return { rows, count };
+  };
+
+  const safeJson = async (res) => { try { return await res.json(); } catch { return null; } };
+
+  // ✅ page_size === 'ALL' : fetch all pages and concatenate
+  if (isAll) {
+    const acc = [];
+    let p = 1;
+
+    while (true) {
+      const qs = new URLSearchParams();
+      qs.set('page', String(p));
+      qs.set('page_size', String(chunk));
+
+      const url = `/api/umbrellas?${qs.toString()}`;
+      const r = await authFetch(API(url));
+      const j = await safeJson(r);
+      const { rows } = unwrap(j);
+
+      if (Array.isArray(rows) && rows.length) acc.push(...rows);
+
+      if (!Array.isArray(rows) || rows.length < chunk) break;
+      p += 1;
+    }
+
+    st.page = 1;
+    st.total = acc.length;
+    st.hasMore = false;
+
+    return acc;
+  }
+
+  // ✅ normal paged list: request include_count so callers can rely on total
   const qs = new URLSearchParams();
-  if (ps !== 'ALL') { qs.set('page', String(pg || 1)); qs.set('page_size', String(ps || 50)); }
-  else { qs.set('page', '1'); }
-  const url = qs.toString() ? `/api/umbrellas?${qs}` : '/api/umbrellas';
+  qs.set('page', String(page));
+  qs.set('page_size', String(Number(psStr || 50)));
+  qs.set('include_count', 'true');
+
+  const url = `/api/umbrellas?${qs.toString()}`;
   const r = await authFetch(API(url));
-  const rows = toList(r);
-  if (ps !== 'ALL') st.hasMore = Array.isArray(rows) && rows.length === Number(ps || 50);
-  return rows;
+  const j = await safeJson(r);
+
+  const { rows, count } = unwrap(j);
+
+  if (typeof count === 'number' && Number.isFinite(count)) {
+    st.total = count;
+    st.hasMore = (page * Number(psStr || 50)) < count;
+  } else {
+    st.total = null;
+    st.hasMore = Array.isArray(rows) && rows.length === Number(psStr || 50);
+  }
+
+  return Array.isArray(rows) ? rows : [];
 }
 
 async function listOutbox(){    const r = await authFetch(API('/api/email/outbox')); return toList(r); }
@@ -20140,40 +20339,47 @@ async function openCandidate(row) {
       L('[renderCandidateTab] tab=', k, 'rowKeys=', Object.keys(r||{}), 'sample=', { first: r?.first_name, last: r?.last_name, id: r?.id });
 
       const html = renderCandidateTab(k, r);
-
-      // ✅ NEW: mount E-History once per candidate (cache in modalCtx.eHistoryState)
+      // ✅ E-History: always (re)mount on History tab render.
+      // showModal.setTab() recreates #modalBody each time; mountCandidateHistoryTab is now idempotent and
+      // will repaint from cache without refetch when already loaded.
       if (k === 'history') {
         try {
           const candId = window.modalCtx?.data?.id || null;
           if (candId && typeof mountCandidateHistoryTab === 'function') {
             window.modalCtx.eHistoryState = (window.modalCtx.eHistoryState && typeof window.modalCtx.eHistoryState === 'object')
               ? window.modalCtx.eHistoryState
-              : { candidate_id: candId, started: false, rows: null, error: null };
+              : { candidate_id: candId, loading: false, loaded: false, rows: null, error: null };
 
             const st = window.modalCtx.eHistoryState;
 
             // Reset cache if candidate changed (defensive)
             if (st.candidate_id && String(st.candidate_id) !== String(candId)) {
               st.candidate_id = candId;
-              st.started = false;
+              st.loading = false;
+              st.loaded = false;
               st.rows = null;
               st.error = null;
             } else {
               st.candidate_id = candId;
             }
 
-            if (!st.started) {
-              st.started = true;
+            // Ensure flags exist (safe if older shape persisted in memory)
+            if (typeof st.loading !== 'boolean') st.loading = false;
+            if (typeof st.loaded !== 'boolean') st.loaded = false;
+            if (!('rows' in st)) st.rows = null;
+            if (!('error' in st)) st.error = null;
 
-              // Defer until after setTab() has inserted HTML into #modalBody
-              Promise.resolve().then(() => Promise.resolve().then(async () => {
-                try {
-                  await mountCandidateHistoryTab(candId);
-                } catch (err) {
-                  st.error = err?.message || String(err || 'Failed to load E-History');
-                }
-              }));
-            }
+            // Defer until after setTab() has inserted HTML into #modalBody
+            Promise.resolve().then(() => Promise.resolve().then(async () => {
+              try {
+                await mountCandidateHistoryTab(candId);
+              } catch (err) {
+                st.loading = false;
+                st.loaded = true;
+                st.rows = Array.isArray(st.rows) ? st.rows : [];
+                st.error = err?.message || String(err || 'Failed to load E-History');
+              }
+            }));
           }
         } catch {}
       }
@@ -22174,66 +22380,67 @@ async function mountClientHistoryTab(clientId) {
       st.rows = null;
       st.error = null;
     }
+    // Defensive normalisation in case an older shape exists
+    if (typeof st.loaded !== 'boolean') st.loaded = false;
+    if (typeof st.loading !== 'boolean') st.loading = false;
+    if (!('rows' in st)) st.rows = null;
+    if (!('error' in st)) st.error = null;
   }
 
-  const wrap =
+  const getWrap = () =>
     (typeof byId === 'function' ? byId('clientEHistWrap') : null) ||
     (typeof document !== 'undefined' ? document.getElementById('clientEHistWrap') : null);
 
   const setWrapHtml = (htmlStr) => {
     try {
+      const wrap = getWrap();
       if (wrap) wrap.innerHTML = htmlStr;
     } catch {}
   };
 
-  // Loading state immediately
-  setWrapHtml(`<div style="padding:10px;opacity:.8;">Loading…</div>`);
+  const fmt = (typeof fmtGBP2 === 'function')
+    ? fmtGBP2
+    : (v) => {
+        if (v === null || v === undefined || v === '') return '';
+        const n = Number(v);
+        if (!Number.isFinite(n)) return '';
+        return `£${n.toFixed(2)}`;
+      };
 
-  // If cached and loaded, render without refetch
-  if (st && st.loaded && Array.isArray(st.rows)) {
-    const rows = st.rows;
-    // Render cached rows
-    const fmt = (typeof fmtGBP2 === 'function')
-      ? fmtGBP2
-      : (v) => {
-          if (v === null || v === undefined || v === '') return '';
-          const n = Number(v);
-          if (!Number.isFinite(n)) return '';
-          return `£${n.toFixed(2)}`;
-        };
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
 
-    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-    }[c]));
+  const normPayMethod = (v) => {
+    const s = String(v ?? '').trim().toUpperCase();
+    if (s === 'PAYE') return 'PAYE';
+    if (s === 'UMBRELLA') return 'Umbrella';
+    if (s === 'UMB') return 'Umbrella';
+    return s || '';
+  };
 
-    const normPayMethod = (v) => {
-      const s = String(v ?? '').trim().toUpperCase();
-      if (s === 'PAYE') return 'PAYE';
-      if (s === 'UMBRELLA') return 'Umbrella';
-      if (s === 'UMB') return 'Umbrella';
-      return s || '';
-    };
+  const getCandidateLabel = (r) => {
+    const cand =
+      r?.candidate_name ??
+      r?.candidate_display_name ??
+      r?.candidate_display ??
+      r?.candidate ??
+      r?.staff ??
+      null;
 
-    const getCandidateLabel = (r) => {
-      const cand =
-        r?.candidate_name ??
-        r?.candidate_display_name ??
-        r?.candidate_display ??
-        r?.candidate ??
-        r?.staff ??
-        null;
+    if (cand != null && String(cand).trim() !== '') return String(cand).trim();
 
-      if (cand != null && String(cand).trim() !== '') return String(cand).trim();
+    const fn = (r?.first_name ?? r?.forename ?? r?.candidate_forename ?? '');
+    const sn = (r?.surname ?? r?.last_name ?? r?.candidate_surname ?? '');
+    const joined = `${String(fn||'').trim()} ${String(sn||'').trim()}`.trim();
+    return joined || '';
+  };
 
-      const fn = (r?.first_name ?? r?.forename ?? r?.candidate_forename ?? '');
-      const sn = (r?.surname ?? r?.last_name ?? r?.candidate_surname ?? '');
-      const joined = `${String(fn||'').trim()} ${String(sn||'').trim()}`.trim();
-      return joined || '';
-    };
+  const cell = (x) => esc(x == null ? '' : x);
 
-    const cell = (x) => esc(x == null ? '' : x);
-
-    const table = `
+  const renderTable = (rowsArr) => {
+    const rows = Array.isArray(rowsArr) ? rowsArr : [];
+    return `
       <table style="width:100%;border-collapse:collapse;">
         <thead>
           <tr>
@@ -22277,13 +22484,37 @@ async function mountClientHistoryTab(clientId) {
         </tbody>
       </table>
     `;
+  };
 
-    setWrapHtml(table);
-    return rows;
+  const paintLoading = () => {
+    setWrapHtml(`<div style="padding:10px;opacity:.8;">Loading…</div>`);
+  };
+
+  const paintError = (msg) => {
+    setWrapHtml(`<div style="padding:10px;color:#b00020;">${esc(msg || 'Failed to load client history')}</div>`);
+  };
+
+  // ✅ FIX: If cached and loaded, paint immediately (no Loading flicker, no refetch)
+  if (st && st.loaded && Array.isArray(st.rows)) {
+    setWrapHtml(renderTable(st.rows));
+    return st.rows;
   }
 
-  // Fetch + render
+  // If we have a cached error and marked loaded, show it (no refetch)
+  if (st && st.loaded && st.error) {
+    paintError(st.error);
+    return [];
+  }
+
+  // If a fetch is already in-flight, show loading and exit (avoid duplicate requests)
+  if (st && st.loading) {
+    paintLoading();
+    return Array.isArray(st.rows) ? st.rows : [];
+  }
+
+  // Fetch + render (only show Loading now that we're actually fetching)
   if (st) st.loading = true;
+  paintLoading();
 
   let rows = [];
   try {
@@ -22302,97 +22533,11 @@ async function mountClientHistoryTab(clientId) {
       st.loading = false;
       st.error = String(err?.message || err || 'Failed to load client history');
     }
-    setWrapHtml(`<div style="padding:10px;color:#b00020;">${String(st?.error || 'Failed to load client history')}</div>`);
+    paintError(st?.error || 'Failed to load client history');
     throw err;
   }
 
-  // Render fetched rows
-  const fmt = (typeof fmtGBP2 === 'function')
-    ? fmtGBP2
-    : (v) => {
-        if (v === null || v === undefined || v === '') return '';
-        const n = Number(v);
-        if (!Number.isFinite(n)) return '';
-        return `£${n.toFixed(2)}`;
-      };
-
-  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-  }[c]));
-
-  const normPayMethod = (v) => {
-    const s = String(v ?? '').trim().toUpperCase();
-    if (s === 'PAYE') return 'PAYE';
-    if (s === 'UMBRELLA') return 'Umbrella';
-    if (s === 'UMB') return 'Umbrella';
-    return s || '';
-  };
-
-  const getCandidateLabel = (r) => {
-    const cand =
-      r?.candidate_name ??
-      r?.candidate_display_name ??
-      r?.candidate_display ??
-      r?.candidate ??
-      r?.staff ??
-      null;
-
-    if (cand != null && String(cand).trim() !== '') return String(cand).trim();
-
-    const fn = (r?.first_name ?? r?.forename ?? r?.candidate_forename ?? '');
-    const sn = (r?.surname ?? r?.last_name ?? r?.candidate_surname ?? '');
-    const joined = `${String(fn||'').trim()} ${String(sn||'').trim()}`.trim();
-    return joined || '';
-  };
-
-  const cell = (x) => esc(x == null ? '' : x);
-
-  const table = `
-    <table style="width:100%;border-collapse:collapse;">
-      <thead>
-        <tr>
-          ${['Candidate','Start','End','Job Title','Pay Method','Rate type','Pay','Margin','Charge'].map(h =>
-            `<th style="border:1px solid var(--line);padding:6px;text-align:left;white-space:nowrap;">${esc(h)}</th>`
-          ).join('')}
-        </tr>
-      </thead>
-      <tbody>
-        ${
-          rows.length ? rows.map(r => {
-            const candidate = getCandidateLabel(r);
-            const start = r?.start_date ?? '';
-            const end = r?.end_date ?? '';
-            const job = r?.job_title ?? '';
-            const pm = normPayMethod(r?.pay_method);
-            const rt = r?.label ?? r?.rate_type ?? '';
-            const pay = fmt(r?.pay_rate);
-            const mar = fmt(r?.margin);
-            const chg = fmt(r?.charge_rate);
-
-            return `
-              <tr>
-                <td style="border:1px solid var(--line);padding:6px;">${cell(candidate)}</td>
-                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(start)}</td>
-                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(end)}</td>
-                <td style="border:1px solid var(--line);padding:6px;">${cell(job)}</td>
-                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(pm)}</td>
-                <td style="border:1px solid var(--line);padding:6px;">${cell(rt)}</td>
-                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(pay)}</td>
-                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(mar)}</td>
-                <td style="border:1px solid var(--line);padding:6px;white-space:nowrap;">${cell(chg)}</td>
-              </tr>
-            `;
-          }).join('') : `
-            <tr>
-              <td colspan="9" style="border:1px solid var(--line);padding:10px;opacity:.8;">No legacy history found for this client.</td>
-            </tr>
-          `
-        }
-      </tbody>
-    </table>
-  `;
-
-  setWrapHtml(table);
+  setWrapHtml(renderTable(rows));
   return rows;
 }
 
@@ -23490,46 +23635,50 @@ async function openClient(row) {
     ],
     (k, r) => {
       L('[renderClientTab] tab=', k, 'rowKeys=', Object.keys(r||{}), 'sample=', { name: r?.name, id: r?.id });
-
-      // ✅ NEW: on switching to History tab, mount once (cached)
+      // ✅ E-History: always (re)mount on History tab render.
+      // showModal.setTab() recreates #modalBody each time; mountClientHistoryTab is now cache-aware
+      // and will repaint from cache without refetch when already loaded.
       try {
         if (k === 'history') {
           const cid = window.modalCtx?.data?.id || null;
           const st = window.modalCtx?.clientEHistoryState || null;
 
           if (cid && st) {
+            // Reset cache if client changed (defensive)
             if (st.client_id !== cid) {
               st.client_id = cid;
               st.loaded = false;
               st.loading = false;
               st.rows = null;
               st.error = null;
+            } else {
+              st.client_id = cid;
             }
 
-            if (!st.loaded && !st.loading) {
-              if (typeof mountClientHistoryTab === 'function') {
-                st.loading = true;
-                Promise.resolve(mountClientHistoryTab(cid))
-                  .then((rowsMaybe) => {
-                    // Allow mount fn to optionally return rows; cache if so
-                    if (Array.isArray(rowsMaybe)) st.rows = rowsMaybe;
-                    st.loaded = true;
-                    st.loading = false;
-                    st.error = null;
-                  })
-                  .catch((err) => {
-                    st.loaded = false;
-                    st.loading = false;
-                    st.error = String(err?.message || err || 'Failed to load client history');
-                    W('[E-HISTORY] mountClientHistoryTab failed', st.error);
-                  });
-              } else {
-                // If history tab exists but mount function isn't loaded, don't crash the modal
-                st.loaded = false;
-                st.loading = false;
-                st.error = 'mountClientHistoryTab is not available';
-                W('[E-HISTORY] mountClientHistoryTab missing');
-              }
+            // Defensive normalisation in case an older shape exists
+            if (typeof st.loaded !== 'boolean') st.loaded = false;
+            if (typeof st.loading !== 'boolean') st.loading = false;
+            if (!('rows' in st)) st.rows = null;
+            if (!('error' in st)) st.error = null;
+
+            if (typeof mountClientHistoryTab === 'function') {
+              // Defer until after setTab() has inserted HTML into #modalBody
+              Promise.resolve().then(() => Promise.resolve().then(async () => {
+                try {
+                  await mountClientHistoryTab(cid);
+                } catch (err) {
+                  st.loading = false;
+                  // Keep loaded as-is if we already had cached rows; otherwise mark loaded so error can show
+                  if (!st.loaded && !Array.isArray(st.rows)) st.loaded = true;
+                  st.error = String(err?.message || err || 'Failed to load client history');
+                  W('[E-HISTORY] mountClientHistoryTab failed', st.error);
+                }
+              }));
+            } else {
+              st.error = 'mountClientHistoryTab is not available';
+              st.loaded = true;
+              st.loading = false;
+              W('[E-HISTORY] mountClientHistoryTab missing');
             }
           }
         }
@@ -24258,21 +24407,30 @@ async function mountCandidateHistoryTab(candidateId) {
   if (!id) throw new Error('candidateId is required');
 
   const mc = window.modalCtx || {};
+
+  // Create/normalise state (also migrates old shape that used {started,...})
   mc.eHistoryState = (mc.eHistoryState && typeof mc.eHistoryState === 'object')
     ? mc.eHistoryState
-    : { candidate_id: id, started: false, rows: null, error: null };
+    : {};
 
   const st = mc.eHistoryState;
 
   // Reset cache if candidate changed
   if (st.candidate_id && String(st.candidate_id) !== String(id)) {
     st.candidate_id = id;
-    st.started = false;
+    st.loading = false;
+    st.loaded = false;
     st.rows = null;
     st.error = null;
   } else {
     st.candidate_id = id;
   }
+
+  // Migrate any previous shape safely
+  if (typeof st.loading !== 'boolean') st.loading = false;
+  if (typeof st.loaded !== 'boolean')  st.loaded = false;
+  if (!('rows' in st))  st.rows = null;
+  if (!('error' in st)) st.error = null;
 
   const fmtDate = (iso) => {
     const v = (iso == null) ? '' : String(iso).slice(0, 10);
@@ -24338,7 +24496,7 @@ async function mountCandidateHistoryTab(candidateId) {
       `;
     }).join('');
 
-    const tableHtml = `
+    return `
       <table class="ehist-grid" style="width:100%;border-collapse:collapse;">
         <thead>
           <tr>
@@ -24364,64 +24522,78 @@ async function mountCandidateHistoryTab(candidateId) {
         </tbody>
       </table>
     `;
-
-    return tableHtml;
   };
 
-  const paint = (rows, errMsg) => {
+  const paintLoading = () => {
     const host = document.getElementById('ehistWrap');
     if (!host) return;
+    host.innerHTML = `<div class="mini" style="opacity:.85;">Loading…</div>`;
+  };
 
-    if (errMsg) {
-      host.innerHTML = `<div class="mini" style="color:#fca5a5;">${enc(errMsg)}</div>`;
-      return;
-    }
+  const paintError = (msg) => {
+    const host = document.getElementById('ehistWrap');
+    if (!host) return;
+    host.innerHTML = `<div class="mini" style="color:#fca5a5;">${enc(msg || 'Failed to load E-History')}</div>`;
+  };
+
+  const paintRows = (rows) => {
+    const host = document.getElementById('ehistWrap');
+    if (!host) return;
     host.innerHTML = renderRows(rows);
   };
 
-  // Ensure a light observer exists so if the History tab is reopened and DOM is reinserted,
-  // cached rows are repainted without refetch.
-  try {
-    if (!st._observer && typeof MutationObserver !== 'undefined') {
-      const modalBody = document.getElementById('modalBody');
-      if (modalBody) {
-        st._observer = new MutationObserver(() => {
-          try {
-            const host = document.getElementById('ehistWrap');
-            if (!host) return;
-            if (st.rows && Array.isArray(st.rows)) {
-              host.innerHTML = renderRows(st.rows);
-            } else if (st.error) {
-              host.innerHTML = `<div class="mini" style="color:#fca5a5;">${enc(st.error)}</div>`;
-            }
-          } catch {}
-        });
-        st._observer.observe(modalBody, { childList: true, subtree: true });
-      }
-    }
-  } catch {}
+  // If already loading, just ensure loading UI is shown (no refetch)
+  if (st.loading) {
+    paintLoading();
+    return;
+  }
 
-  // If already cached, paint immediately (no fetch)
-  if (st.rows && Array.isArray(st.rows)) {
-    paint(st.rows, null);
+  // If already loaded, repaint from cache (no refetch)
+  if (st.loaded) {
+    if (Array.isArray(st.rows)) {
+      paintRows(st.rows);
+      return;
+    }
+    if (st.error) {
+      paintError(st.error);
+      return;
+    }
+    // Defensive: loaded but no rows/error -> treat as not loaded
+    st.loaded = false;
+  }
+
+  // If cached rows exist (even if loaded flag wasn't set correctly), paint and mark loaded
+  if (Array.isArray(st.rows)) {
+    st.loaded = true;
+    st.error = null;
+    paintRows(st.rows);
     return;
   }
   if (st.error) {
-    paint([], st.error);
+    st.loaded = true;
+    paintError(st.error);
     return;
   }
 
-  // Fetch once
-  paint([], 'Loading…');
+  // Fetch (once)
+  st.loading = true;
+  st.loaded = false;
+  st.error = null;
+  paintLoading();
+
   try {
     const rows = await fetchCandidateEHistory(id);
     st.rows = Array.isArray(rows) ? rows : [];
     st.error = null;
-    paint(st.rows, null);
+    st.loaded = true;
+    st.loading = false;
+    paintRows(st.rows);
   } catch (e) {
     st.rows = [];
     st.error = e?.message || 'Failed to load E-History';
-    paint([], st.error);
+    st.loaded = true;
+    st.loading = false;
+    paintError(st.error);
   }
 }
 
