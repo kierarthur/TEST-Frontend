@@ -19013,8 +19013,44 @@ function renderCandidateTab(key, row = {}) {
     const optWa = !!row.opt_in_whatsapp;
     const optAll = optEmail && optSms && optWa;
 
+    const displayNameRaw = (row && typeof row.display_name !== 'undefined') ? row.display_name : '';
+    const displayNameStr = String(displayNameRaw == null ? '' : displayNameRaw);
+    const displayNameIsBlank = (displayNameStr.trim() === '');
+
+    const displayNameRow = displayNameIsBlank
+      ? `
+        <div class="row">
+          <label>Display name</label>
+          <div class="controls">
+            <input
+              class="input"
+              name="display_name"
+              value=""
+              disabled
+              readonly
+              style="opacity:.65"
+            />
+            <div class="hint">
+              Display name will be generated automatically when you save this candidate.
+            </div>
+          </div>
+        </div>
+      `
+      : `
+        <div class="row">
+          <label>Display name</label>
+          <div class="controls">
+            <input
+              class="input"
+              name="display_name"
+              value="${enc(displayNameStr)}"
+            />
+          </div>
+        </div>
+      `;
+
     return html(`
-      <div class="form" id="tab-main">
+      <div class="form" id="tab-main" autocomplete="off">
         ${select('title','Title', row.title || '', ['', 'Mr', 'Mrs', 'Miss', 'Ms', 'Dr', 'Prof'])}
 
         ${input('first_name','First name', row.first_name)}
@@ -19112,7 +19148,7 @@ function renderCandidateTab(key, row = {}) {
                  style="opacity:.7" />
         </div>
 
-        ${input('display_name','Display name', row.display_name)}
+        ${displayNameRow}
 
         <!-- New: NI / DOB / Gender -->
         ${input('ni_number','National Insurance Number', row.ni_number)}
@@ -19159,7 +19195,7 @@ function renderCandidateTab(key, row = {}) {
              style="${row.prof_reg_type ? '' : 'display:none'}">
           <label data-field="prof_reg_label">
             ${row.prof_reg_type
-              ? escapeHtml(`${row.prof_reg_type} Number`)
+              ? escapeHtml(\`\${row.prof_reg_type} Number\`)
               : 'Registration Number'}
           </label>
           <div class="controls">
@@ -19176,27 +19212,33 @@ function renderCandidateTab(key, row = {}) {
             <div class="grid-2">
               <input class="input"
                      name="address_line1"
+                     autocomplete="off"
                      placeholder="Address line 1"
                      value="${escapeHtml(row.address_line1 || '')}">
               <input class="input"
                      name="address_line2"
+                     autocomplete="off"
                      placeholder="Address line 2"
                      value="${escapeHtml(row.address_line2 || '')}">
               <input class="input"
                      name="address_line3"
+                     autocomplete="off"
                      placeholder="Address line 3"
                      value="${escapeHtml(row.address_line3 || '')}">
               <input class="input"
                      name="town_city"
+                     autocomplete="off"
                      placeholder="City / Town"
                      value="${escapeHtml(row.town_city || '')}">
               <input class="input"
                      name="county"
+                     autocomplete="off"
                      placeholder="County"
                      value="${escapeHtml(row.county || '')}">
               <div class="split">
                 <input class="input"
                        name="postcode"
+                       autocomplete="off"
                        placeholder="Postcode"
                        value="${escapeHtml(row.postcode || '')}">
                 <button type="button"
@@ -19334,8 +19376,6 @@ function renderCandidateTab(key, row = {}) {
     </div>
   `);
 }
-
-
 
 async function fetchCandidateAdvances(candidateId) {
   if (!candidateId) return;
