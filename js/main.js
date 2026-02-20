@@ -46996,116 +46996,143 @@ function setFormReadOnly(root, ro) {
   const _allBefore = root.querySelectorAll('input, select, textarea, button');
   const beforeDisabled = Array.from(_allBefore).filter(el => el.disabled).length;
 
-  root.querySelectorAll('input, select, textarea, button').forEach((el) => {
-    const isDisplayOnly = el.id === 'tms_ref_display' || el.id === 'cli_ref_display';
+ // AFTER (updated setFormReadOnly loop)
+// ✅ NEW: keep Candidate "display_name" locked whenever it is blank (even in edit/create mode),
+// because create-mode should not allow manual editing; system generates on save.
+root.querySelectorAll('input, select, textarea, button').forEach((el) => {
+  const isDisplayOnly = el.id === 'tms_ref_display' || el.id === 'cli_ref_display';
 
-    // Always lock display-only fields
-    if (isDisplayOnly) {
-      el.setAttribute('disabled','true');
-      el.setAttribute('readonly','true');
-      return;
+  // ✅ NEW: Candidate Display Name auto-lock (only when blank)
+  const shouldAutoLockCandidateDisplayName = (() => {
+    try {
+      const nm = String(el.getAttribute('name') || '');
+      if (nm !== 'display_name') return false;
+
+      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+      const ent = String((top && top.entity) || (window.modalCtx && window.modalCtx.entity) || '');
+      if (ent !== 'candidates') return false;
+
+      const d = (window.modalCtx && window.modalCtx.data && typeof window.modalCtx.data === 'object')
+        ? window.modalCtx.data
+        : {};
+
+      const dn = (Object.prototype.hasOwnProperty.call(d, 'display_name') ? d.display_name : '');
+      const dnBlank = (String(dn == null ? '' : dn).trim() === '');
+
+      const domBlank = (String((el.value == null ? '' : el.value)).trim() === '');
+
+      // Lock if blank by either the canonical row value or the current DOM value
+      return (dnBlank || domBlank);
+    } catch {
+      return false;
     }
+  })();
 
-    // Buttons: in ro mode, keep specific IDs + any timesheet action buttons enabled
-    if (el.type === 'button' || el.tagName === 'BUTTON') {
-      const allow = new Set([
-        'btnCloseModal',
-        'btnDelete',
-        'btnEditModal',
-        'btnSave',
-        'btnRelated',
+  // Always lock display-only fields (and candidate display_name when blank)
+  if (isDisplayOnly || shouldAutoLockCandidateDisplayName) {
+    el.setAttribute('disabled','true');
+    el.setAttribute('readonly','true');
+    return;
+  }
 
-        // ✅ Keep ONLY non-conversion footer actions
-        'btnTsDeleteTimesheet',
-        'btnTsProcessTimesheet',
-        'btnTsUnprocessTimesheet',   // ✅ NEW
-        'btnTsAuthorise',
-        'btnTsUnauthorise'
+  // Buttons: in ro mode, keep specific IDs + any timesheet action buttons enabled
+  if (el.type === 'button' || el.tagName === 'BUTTON') {
+    const allow = new Set([
+      'btnCloseModal',
+      'btnDelete',
+      'btnEditModal',
+      'btnSave',
+      'btnRelated',
+
+      // ✅ Keep ONLY non-conversion footer actions
+      'btnTsDeleteTimesheet',
+      'btnTsProcessTimesheet',
+      'btnTsUnprocessTimesheet',   // ✅ NEW
+      'btnTsAuthorise',
+      'btnTsUnauthorise'
+    ]);
+
+    // Keep Timesheet action buttons enabled in VIEW only if they are "safe view actions".
+    // Do NOT keep weekly schedule edit buttons enabled (reset / add/remove shift lines).
+    try {
+      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+      const isTimesheetFrame = !!(top && top.entity === 'timesheets');
+
+      const tsAction = (el.getAttribute('data-ts-action') || '').toLowerCase();
+
+      // Evidence table actions (View/Delete) are not data-ts-action
+      const hasEvidenceAction =
+        !!el.getAttribute('data-evidence-view') ||
+        !!el.getAttribute('data-evidence-remove');
+
+      // Actions that must NEVER be clickable in VIEW (schedule-driven weekly grid)
+      const scheduleEditActions = new Set([
+        'reset-schedule',
+        'extra-shift-add',
+        'extra-shift-remove',
+        'extra-break-add',
+        'extra-break-remove'
       ]);
 
-      // Keep Timesheet action buttons enabled in VIEW only if they are "safe view actions".
-      // Do NOT keep weekly schedule edit buttons enabled (reset / add/remove shift lines).
-      try {
-        const top = (typeof currentFrame === 'function') ? currentFrame() : null;
-        const isTimesheetFrame = !!(top && top.entity === 'timesheets');
-
-        const tsAction = (el.getAttribute('data-ts-action') || '').toLowerCase();
-
-        // Evidence table actions (View/Delete) are not data-ts-action
-        const hasEvidenceAction =
-          !!el.getAttribute('data-evidence-view') ||
-          !!el.getAttribute('data-evidence-remove');
-
-        // Actions that must NEVER be clickable in VIEW (schedule-driven weekly grid)
-        const scheduleEditActions = new Set([
-          'reset-schedule',
-          'extra-shift-add',
-          'extra-shift-remove',
-          'extra-break-add',
-          'extra-break-remove'
-        ]);
-
-        // Hard block schedule edit actions when read-only
-        if (isTimesheetFrame && ro && tsAction && scheduleEditActions.has(tsAction)) {
-          el.disabled = true;
-          return;
-        }
-
-        if (isTimesheetFrame && hasEvidenceAction) {
-          el.disabled = false;
-          return;
-        }
-
-        // Only auto-enable data-ts-action buttons in VIEW if they are NOT schedule edit actions
-        if (isTimesheetFrame && ro && tsAction && !scheduleEditActions.has(tsAction)) {
-          el.disabled = false;
-          return;
-        }
-      } catch {}
-
-         // ✅ Invoice modal internal buttons must remain clickable in VIEW.
-      // This invoice modal uses data-action="inv-*", so we allow only SAFE view actions.
-      try {
-        const top = (typeof currentFrame === 'function') ? currentFrame() : null;
-        const isInvoiceFrame = !!(top && top.entity === 'invoices');
-
-        const act = String(el.getAttribute('data-action') || '').toLowerCase();
-
-           const safeDataActions = new Set([
-          'inv-open-pdf',
-          'inv-email',
-          'inv-open-reference-numbers',
-          'inv-set-tab',
-          'inv-close',
-          'inv-delete-invoice'
-        ]);
-
-
-        if (isInvoiceFrame && ro && act && safeDataActions.has(act)) {
-          el.disabled = false;
-          return;
-        }
-      } catch {}
-
-
-      // In read-only mode, disable everything except allow-listed buttons
-      if (ro) {
-        el.disabled = !allow.has(el.id);
-      } else {
-        el.disabled = false;
+      // Hard block schedule edit actions when read-only
+      if (isTimesheetFrame && ro && tsAction && scheduleEditActions.has(tsAction)) {
+        el.disabled = true;
+        return;
       }
-      return;
-    }
 
-    // Non-button inputs/selects/textareas
+      if (isTimesheetFrame && hasEvidenceAction) {
+        el.disabled = false;
+        return;
+      }
+
+      // Only auto-enable data-ts-action buttons in VIEW if they are NOT schedule edit actions
+      if (isTimesheetFrame && ro && tsAction && !scheduleEditActions.has(tsAction)) {
+        el.disabled = false;
+        return;
+      }
+    } catch {}
+
+    // ✅ Invoice modal internal buttons must remain clickable in VIEW.
+    // This invoice modal uses data-action="inv-*", so we allow only SAFE view actions.
+    try {
+      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+      const isInvoiceFrame = !!(top && top.entity === 'invoices');
+
+      const act = String(el.getAttribute('data-action') || '').toLowerCase();
+
+      const safeDataActions = new Set([
+        'inv-open-pdf',
+        'inv-email',
+        'inv-open-reference-numbers',
+        'inv-set-tab',
+        'inv-close',
+        'inv-delete-invoice'
+      ]);
+
+      if (isInvoiceFrame && ro && act && safeDataActions.has(act)) {
+        el.disabled = false;
+        return;
+      }
+    } catch {}
+
+    // In read-only mode, disable everything except allow-listed buttons
     if (ro) {
-      el.setAttribute('disabled','true');
-      el.setAttribute('readonly','true');
+      el.disabled = !allow.has(el.id);
     } else {
-      el.removeAttribute('disabled');
-      el.removeAttribute('readonly');
+      el.disabled = false;
     }
-  });
+    return;
+  }
+
+  // Non-button inputs/selects/textareas
+  if (ro) {
+    el.setAttribute('disabled','true');
+    el.setAttribute('readonly','true');
+  } else {
+    el.removeAttribute('disabled');
+    el.removeAttribute('readonly');
+  }
+});
 
   const _allAfter = root.querySelectorAll('input, select, textarea, button');
   const afterDisabled = Array.from(_allAfter).filter(el => el.disabled).length;
