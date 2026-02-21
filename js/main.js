@@ -506,7 +506,15 @@ function getVisibleColumnsForSection(section, rows) {
     };
 
     const selectable = (meta.selectable !== false); // default true
-    const visible    = (p.visible !== false);       // default true
+
+    // ✅ FIX: Visibility must NOT default to true for non-default columns.
+    // - defaults are visible by default
+    // - if user explicitly set visible true/false, respect it
+    // - otherwise hide (prevents "hundreds of columns" explosion)
+    const hasExplicitVisible = Object.prototype.hasOwnProperty.call(p, 'visible');
+    const visible = hasExplicitVisible
+      ? (p.visible !== false)
+      : (defaults.indexOf(k) >= 0);
 
     const order = (typeof p.order === 'number')
       ? p.order
