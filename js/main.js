@@ -50852,6 +50852,21 @@ L('renderTop tabs (global)', { count: (top.tabs||[]).length, active: top.current
 // ✅ NEW: render sequencing token to prevent stale async setTab from wiring wrong frame
 const _renderToken = `rt:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 try { top._renderToken = _renderToken; } catch {}
+// ✅ Cache footer/header nodes OUTSIDE the promise so later code can use them safely
+const modalNode = byId('modal');
+const btnSave   = byId('btnSave');
+const btnClose  = byId('btnCloseModal');
+const btnDel    = byId('btnDelete');
+const header    = byId('modalDrag');
+
+// ✅ If core nodes are missing, abort renderTop early (prevents ReferenceError cascades)
+if (!btnSave || !btnClose || !btnDel || !header) {
+  console.warn('[MODAL][renderTop] missing core modal nodes', {
+    hasSave: !!btnSave, hasClose: !!btnClose, hasDelete: !!btnDel, hasHeader: !!header
+  });
+  GE();
+  return;
+}
 
 // ✅ NEW: kick tab render, but DO NOT run post-render wiring until setTab completes
 const _tabPromise = (() => {
@@ -50865,18 +50880,12 @@ const _tabPromise = (() => {
     return Promise.resolve(false);
   }
 })();
-const modalNode = byId('modal');
 
 _tabPromise.then(() => {
   // ✅ If stack/top changed since we started, abort (prevents cross-frame wiring)
   const topNow = currentFrame();
   if (!topNow || topNow !== top) return;
   if (top._renderToken !== _renderToken) return;
-
-  const btnSave  = byId('btnSave');
-  const btnClose = byId('btnCloseModal');
-  const btnDel   = byId('btnDelete');
-  const header   = byId('modalDrag');
 
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
   if (modalNode) {
@@ -50928,7 +50937,6 @@ _tabPromise.then(() => {
 }).catch((e) => {
   console.warn('[MODAL][renderTop] post-tab wiring failed', e);
 });
-
 
 
 
