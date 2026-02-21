@@ -2893,30 +2893,77 @@ async function refreshOpenWeeklyImportSummariesAfterContractSave() {
   }
 }
 
-async function authFetch(input, init={}){
-  const APILOG = (typeof window !== 'undefined' && !!window.__LOG_API) || (typeof __LOG_API !== 'undefined' && !!__LOG_API);
+async function authFetch(input, init = {}) {
+  const APILOG =
+    (typeof window !== 'undefined' && !!window.__LOG_API) ||
+    (typeof __LOG_API !== 'undefined' && !!__LOG_API);
+
   const headers = new Headers(init.headers || {});
   if (SESSION?.accessToken) headers.set('Authorization', `Bearer ${SESSION.accessToken}`);
+
+  const url = (typeof input === 'string') ? input : (input?.url || '');
+  const method = (init.method || 'GET');
+
   if (APILOG) {
     const safeHeaders = {};
-    headers.forEach((v,k)=>{ safeHeaders[k] = (k.toLowerCase()==='authorization') ? '***' : v; });
-    const bodyPreview = typeof init.body === 'string' ? (init.body.length > 500 ? init.body.slice(0,500)+'…' : init.body) : init.body;
-    console.log('[authFetch] →', { url: typeof input==='string'?input:input?.url, method: (init.method||'GET'), headers: safeHeaders, body: bodyPreview });
+    headers.forEach((v, k) => {
+      safeHeaders[k] = (k.toLowerCase() === 'authorization') ? '***' : v;
+    });
+    const bodyPreview =
+      (typeof init.body === 'string')
+        ? (init.body.length > 500 ? init.body.slice(0, 500) + '…' : init.body)
+        : init.body;
+    console.log('[authFetch] →', { url, method, headers: safeHeaders, body: bodyPreview });
   }
-  let res = await fetch(input, { ...init, headers, credentials: init.credentials || 'omit' });
+
+  const doReq = async (hdrs) => {
+    return await fetch(input, { ...init, headers: hdrs, credentials: init.credentials || 'omit' });
+  };
+
+  let res = await doReq(headers);
+
   if (APILOG) {
-    try { const txt = await res.clone().text(); console.log('[authFetch] ←', res.status, res.ok, txt.slice(0,500)); } catch {}
+    try {
+      const txt = await res.clone().text();
+      console.log('[authFetch] ←', res.status, res.ok, txt.slice(0, 500));
+    } catch {}
   }
+
   if (res.status === 401) {
     const ok = await refreshToken();
+
+    // ✅ If refresh failed, refreshToken() already performed a hard local reset + login overlay.
     if (!ok) throw new Error('Unauthorised');
-    headers.set('Authorization', `Bearer ${SESSION.accessToken}`);
+
+    // Retry once with new access token
+    if (SESSION?.accessToken) headers.set('Authorization', `Bearer ${SESSION.accessToken}`);
+
     if (APILOG) console.log('[authFetch] retrying after 401');
-    res = await fetch(input, { ...init, headers, credentials: init.credentials || 'omit' });
+
+    res = await doReq(headers);
+
     if (APILOG) {
-      try { const txt2 = await res.clone().text(); console.log('[authFetch] ← (retry)', res.status, res.ok, txt2.slice(0,500)); } catch {}
+      try {
+        const txt2 = await res.clone().text();
+        console.log('[authFetch] ← (retry)', res.status, res.ok, txt2.slice(0, 500));
+      } catch {}
+    }
+
+    // ✅ If we still get 401 after a successful refresh, treat as hard-auth-loss and force clean logout UI.
+    if (res.status === 401) {
+      try { clearSession(); } catch {}
+      try { if (typeof openLogin === 'function') openLogin(); } catch {}
+      try {
+        const err = (typeof byId === 'function') ? byId('loginError') : null;
+        if (err) {
+          err.textContent = 'Your session has expired. Please sign in again.';
+          err.style.display = 'block';
+        }
+      } catch {}
+      throw new Error('Unauthorised');
     }
   }
+
   return res;
 }
 
@@ -3399,29 +3446,51 @@ async function performLogout(reason){
     try { window.__logoutInProgress = false; } catch {}
   }
 }
-
-function initAuthUI(){
+function initAuthUI() {
   // Buttons and links
-  byId('btnLogout').onclick = ()=>{ performLogout('manual'); };
+  byId('btnLogout').onclick = () => { performLogout('manual'); };
 
-  toggleVis('loginPassword','toggleLoginPw');
-  toggleVis('resetPw1','toggleResetPw1'); toggleVis('resetPw2','toggleResetPw2');
+  toggleVis('loginPassword', 'toggleLoginPw');
+  toggleVis('resetPw1', 'toggleResetPw1'); toggleVis('resetPw2', 'toggleResetPw2');
 
   byId('linkForgot').onclick = openForgot;
   byId('linkBackToLogin').onclick = openLogin;
 
   // ✅ If user clicks “Back to login” from reset flow, strip reset token from URL first
   byId('linkResetToLogin').onclick = () => {
-    try{
+    try {
       const u = new URL(location.href);
       u.searchParams.delete('k');
       u.searchParams.delete('token');
       history.replaceState(null, '', u.toString());
-    }catch{}
+    } catch {}
     openLogin();
   };
 
+  // ✅ Local helper to hard-clear any pending 2FA attempt (single source of truth)
+  const clearTfaState = () => {
+    try { sessionStorage.removeItem('cloudtms.tfa'); } catch {}
+    try { window.__tfaState = null; } catch {}
+    try {
+      const tfa = byId('tfaOverlay');
+      if (tfa) tfa.style.display = 'none';
+    } catch {}
+  };
+
+  // ✅ On load, drop any stale/expired persisted 2FA attempt (prevents “old attempt id” poisoning a new login)
+  try {
+    const st0 = JSON.parse(sessionStorage.getItem('cloudtms.tfa') || 'null');
+    const started = Number(st0?.started_at_ms || 0);
+    const expSec = Number(st0?.expires_in || 0);
+    if (started && expSec && (started + expSec * 1000) < (Date.now() - 1000)) {
+      clearTfaState();
+    }
+  } catch {}
+
   const showTfaUi = (challengeId, expiresIn, policy) => {
+    // Always replace any previous attempt with the new one
+    clearTfaState();
+
     // Persist state (helps if the page reloads while waiting)
     const st = {
       challenge_id: String(challengeId || ''),
@@ -3441,7 +3510,6 @@ function initAuthUI(){
 
       tfaOverlay.style.display = 'grid';
 
-      // Best-effort: show message/countdown if elements exist
       const msgEl = byId('tfaMsg');
       if (msgEl) {
         msgEl.textContent = 'We sent a verification code to your email. Enter it within 5 minutes.';
@@ -3460,7 +3528,7 @@ function initAuthUI(){
       const entered = String(window.prompt('Enter the 6-digit verification code we emailed you:') || '').trim();
       if (!entered) return;
       await apiVerify2fa(st.challenge_id, entered);
-      try { byId('loginOverlay').style.display='none'; } catch {}
+      try { byId('loginOverlay').style.display = 'none'; } catch {}
       bootstrapApp();
     })().catch((e) => {
       const err = byId('loginError');
@@ -3478,20 +3546,27 @@ function initAuthUI(){
     if (tfaForm) {
       tfaForm.onsubmit = async (e) => {
         e.preventDefault();
+
+        const errEl = byId('tfaError');
+        if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
         const st = window.__tfaState || (() => {
           try { return JSON.parse(sessionStorage.getItem('cloudtms.tfa') || 'null'); } catch { return null; }
         })();
-
-        const errEl = byId('tfaError'); if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
 
         const codeEl = byId('tfaCode');
         const code = String(codeEl ? codeEl.value : '').trim();
 
         if (!st?.challenge_id) {
           if (errEl) { errEl.textContent = 'Challenge missing. Please sign in again.'; errEl.style.display = 'block'; }
+          clearTfaState();
           openLogin();
           return;
         }
+
+        // ✅ Prevent parallel verifies
+        const submitBtn = tfaForm.querySelector ? tfaForm.querySelector('button[type="submit"]') : null;
+        try { if (submitBtn) submitBtn.disabled = true; } catch {}
 
         try {
           await apiVerify2fa(st.challenge_id, code);
@@ -3499,7 +3574,33 @@ function initAuthUI(){
           try { byId('loginOverlay').style.display = 'none'; } catch {}
           bootstrapApp();
         } catch (ex) {
-          if (errEl) { errEl.textContent = ex?.message || 'Invalid code'; errEl.style.display = 'block'; }
+          const msg = String(ex?.message || 'Invalid code');
+
+          // ✅ If backend indicates attempt mismatch/expiry, throw away attempt id and force a new login/code.
+          const looksLikeAttemptInvalid =
+            /expired/i.test(msg) ||
+            /mismatch/i.test(msg) ||
+            /invalid.*challenge/i.test(msg) ||
+            /challenge.*invalid/i.test(msg) ||
+            /challenge.*expired/i.test(msg) ||
+            /attempt/i.test(msg);
+
+          if (looksLikeAttemptInvalid) {
+            clearTfaState();
+            openLogin();
+            try {
+              const loginErr = byId('loginError');
+              if (loginErr) {
+                loginErr.textContent = 'That verification code is no longer valid. Please sign in again to request a new code.';
+                loginErr.style.display = 'block';
+              }
+            } catch {}
+            return;
+          }
+
+          if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
+        } finally {
+          try { if (submitBtn) submitBtn.disabled = false; } catch {}
         }
       };
     }
@@ -3507,28 +3608,43 @@ function initAuthUI(){
     const btnResend = byId('btnTfaResend');
     if (btnResend) {
       btnResend.onclick = async () => {
+        // ✅ Prevent parallel resends
+        try {
+          if (btnResend.dataset && btnResend.dataset.inflight === '1') return;
+          if (btnResend.dataset) btnResend.dataset.inflight = '1';
+        } catch {}
+
+        const errEl = byId('tfaError');
+        if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+        const msgEl = byId('tfaMsg');
+
         const st = window.__tfaState || (() => {
           try { return JSON.parse(sessionStorage.getItem('cloudtms.tfa') || 'null'); } catch { return null; }
         })();
 
-        const errEl = byId('tfaError'); if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-        const msgEl = byId('tfaMsg');
-
         if (!st?.challenge_id) {
           if (errEl) { errEl.textContent = 'Challenge missing. Please sign in again.'; errEl.style.display = 'block'; }
+          clearTfaState();
           openLogin();
+          try { if (btnResend.dataset) btnResend.dataset.inflight = '0'; } catch {}
           return;
         }
 
         try {
           btnResend.disabled = true;
+
           const r = await apiResend2fa(st.challenge_id);
 
-          const expiresIn = Number(r.expires_in ?? r.ttl ?? 300) || 300;
-          const cooldown = Number(r.resend_cooldown_seconds ?? 30) || 30;
+          // ✅ If backend issues a NEW challenge id on resend, we must replace our stored attempt id.
+          const newChallengeId = String(r?.challenge_id || r?.challengeId || '').trim();
+          if (newChallengeId) st.challenge_id = newChallengeId;
+
+          const expiresIn = Number(r?.expires_in ?? r?.ttl ?? 300) || 300;
+          const cooldown = Number(r?.resend_cooldown_seconds ?? 30) || 30;
 
           st.expires_in = expiresIn;
           st.started_at_ms = Date.now();
+
           try { sessionStorage.setItem('cloudtms.tfa', JSON.stringify(st)); } catch {}
           try { window.__tfaState = st; } catch {}
 
@@ -3539,23 +3655,60 @@ function initAuthUI(){
 
           setTimeout(() => { try { btnResend.disabled = false; } catch {} }, Math.max(0, cooldown) * 1000);
         } catch (ex) {
-          if (errEl) { errEl.textContent = ex?.message || 'Could not resend code'; errEl.style.display = 'block'; }
-          try { btnResend.disabled = false; } catch {}
+          const msg = String(ex?.message || 'Could not resend code');
+
+          // If resend fails in a way that implies attempt is invalid, force re-login
+          const looksLikeAttemptInvalid =
+            /expired/i.test(msg) ||
+            /mismatch/i.test(msg) ||
+            /invalid.*challenge/i.test(msg) ||
+            /challenge.*invalid/i.test(msg) ||
+            /challenge.*expired/i.test(msg) ||
+            /attempt/i.test(msg);
+
+          if (looksLikeAttemptInvalid) {
+            clearTfaState();
+            openLogin();
+            try {
+              const loginErr = byId('loginError');
+              if (loginErr) {
+                loginErr.textContent = 'Your verification session has expired. Please sign in again to request a new code.';
+                loginErr.style.display = 'block';
+              }
+            } catch {}
+          } else {
+            if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
+            try { btnResend.disabled = false; } catch {}
+          }
+        } finally {
+          try { if (btnResend.dataset) btnResend.dataset.inflight = '0'; } catch {}
         }
       };
     }
 
     const linkBack = byId('linkTfaBackToLogin');
-    if (linkBack) linkBack.onclick = () => { try { byId('tfaOverlay').style.display='none'; } catch {} openLogin(); };
+    if (linkBack) linkBack.onclick = () => {
+      clearTfaState();
+      openLogin();
+    };
   } catch {}
 
-  byId('loginForm').onsubmit = async (e)=>{
+  byId('loginForm').onsubmit = async (e) => {
     e.preventDefault();
+
+    // ✅ Any new login attempt must discard any previous pending challenge/attempt id.
+    clearTfaState();
+
     const email = byId('loginEmail').value.trim();
     const pw = byId('loginPassword').value;
-    const err = byId('loginError'); err.style.display='none';
+    const err = byId('loginError'); err.style.display = 'none';
 
-    try{
+    // ✅ Prevent parallel login submits (double-challenge creation/races)
+    const form = byId('loginForm');
+    const submitBtn = form && form.querySelector ? form.querySelector('button[type="submit"]') : null;
+    try { if (submitBtn) submitBtn.disabled = true; } catch {}
+
+    try {
       const r = await apiLogin(email, pw);
 
       if (r && r.tfa_required === true) {
@@ -3564,7 +3717,7 @@ function initAuthUI(){
       }
 
       if (typeof scheduleRefresh === 'function') scheduleRefresh();
-      byId('loginOverlay').style.display='none';
+      byId('loginOverlay').style.display = 'none';
 
       try {
         if (typeof IdleManager === 'object' && typeof IdleManager.startOrReset === 'function') {
@@ -3573,48 +3726,53 @@ function initAuthUI(){
       } catch {}
 
       bootstrapApp();
-    }catch(ex){
-      err.textContent = ex.message || 'Sign in failed'; err.style.display='block';
+    } catch (ex) {
+      err.textContent = ex.message || 'Sign in failed';
+      err.style.display = 'block';
+    } finally {
+      try { if (submitBtn) submitBtn.disabled = false; } catch {}
     }
   };
 
-  byId('forgotForm').onsubmit = async (e)=>{
+  byId('forgotForm').onsubmit = async (e) => {
     e.preventDefault();
     const email = byId('forgotEmail').value.trim();
-    byId('forgotError').style.display='none';
-    byId('forgotMsg').style.display='none';
-    try{
+    byId('forgotError').style.display = 'none';
+    byId('forgotMsg').style.display = 'none';
+    try {
       await apiForgot(email);
-      byId('forgotMsg').textContent = 'If that email exists, a reset link has been sent.'; byId('forgotMsg').style.display='block';
-    }catch(ex){
-      byId('forgotError').textContent = ex.message || 'Could not send reset email'; byId('forgotError').style.display='block';
+      byId('forgotMsg').textContent = 'If that email exists, a reset link has been sent.';
+      byId('forgotMsg').style.display = 'block';
+    } catch (ex) {
+      byId('forgotError').textContent = ex.message || 'Could not send reset email';
+      byId('forgotError').style.display = 'block';
     }
   };
 
-  byId('resetForm').onsubmit = async (e)=>{
+  byId('resetForm').onsubmit = async (e) => {
     e.preventDefault();
     const p1 = byId('resetPw1').value, p2 = byId('resetPw2').value;
-    const err = byId('resetError'), ok = byId('resetMsg'); err.style.display='none'; ok.style.display='none';
-    if (p1.length < 8) { err.textContent='Use at least 8 characters'; err.style.display='block'; return; }
-    if (p1 !== p2) { err.textContent='Passwords do not match'; err.style.display='block'; return; }
+    const err = byId('resetError'), ok = byId('resetMsg'); err.style.display = 'none'; ok.style.display = 'none';
+    if (p1.length < 8) { err.textContent = 'Use at least 8 characters'; err.style.display = 'block'; return; }
+    if (p1 !== p2) { err.textContent = 'Passwords do not match'; err.style.display = 'block'; return; }
     const url = new URL(location.href); const token = url.searchParams.get('k') || url.searchParams.get('token');
-    if (!token){ err.textContent='Reset token missing. Use the email link again.'; err.style.display='block'; return; }
-    try{
+    if (!token) { err.textContent = 'Reset token missing. Use the email link again.'; err.style.display = 'block'; return; }
+    try {
       await apiReset(token, p1);
 
       // ✅ Strip reset token from URL so refresh does NOT reopen the reset overlay
-      try{
+      try {
         const u = new URL(location.href);
         u.searchParams.delete('k');
         u.searchParams.delete('token');
         history.replaceState(null, '', u.toString());
-      }catch{}
+      } catch {}
 
-      // ✅ Brief requirement: after reset, return to login so user signs in again
-      ok.textContent='Password updated. Please sign in.'; ok.style.display='block';
+      // ✅ After reset, return to login so user signs in again
+      ok.textContent = 'Password updated. Please sign in.'; ok.style.display = 'block';
       setTimeout(() => { try { openLogin(); } catch {} }, 250);
-    }catch(ex){
-      err.textContent = ex.message || 'Reset failed'; err.style.display='block';
+    } catch (ex) {
+      err.textContent = ex.message || 'Reset failed'; err.style.display = 'block';
     }
   };
 
@@ -3644,7 +3802,7 @@ function initAuthUI(){
   if (hasResetToken && !hasValidPersistedSession) openReset();
 }
 
-function clearSession(){
+function clearSession() {
   // stop refresh timers
   try { clearTimeout(refreshTimer); } catch {}
   refreshTimer = 0;
@@ -3652,77 +3810,153 @@ function clearSession(){
   // stop idle timers
   try { if (typeof IdleManager === 'object' && typeof IdleManager.stop === 'function') IdleManager.stop(); } catch {}
 
+  // ✅ stop background pollers that assume auth (changes heartbeat)
+  try {
+    const hb =
+      (typeof window !== 'undefined' && window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object')
+        ? window.__changesHeartbeat
+        : (typeof window !== 'undefined' && window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object')
+          ? window.__changeHeartbeat
+          : null;
+
+    if (hb) {
+      try { if (typeof hb.stop === 'function') hb.stop(); } catch {}
+      try { if (hb._timer) clearInterval(hb._timer); } catch {}
+      hb._timer = null;
+      hb._started = false;     // allow restart after re-login
+      hb._disabled = false;    // do not permanently disable across sessions
+      hb._lastPingAtMs = 0;
+    }
+  } catch {}
+
   // clear any stored challenge state
   try { sessionStorage.removeItem('cloudtms.tfa'); } catch {}
-  try { if (window.__tfaState) window.__tfaState = null; } catch {}
+  try { if (typeof window !== 'undefined' && window.__tfaState) window.__tfaState = null; } catch {}
 
-  localStorage.removeItem('cloudtms.session');
-  sessionStorage.removeItem('cloudtms.session');
+  try { localStorage.removeItem('cloudtms.session'); } catch {}
+  try { sessionStorage.removeItem('cloudtms.session'); } catch {}
+
   SESSION = null;
-  renderUserChip();
+
+  // ✅ mirror globals so stale code can’t keep using an old window.SESSION/user
+  try {
+    if (typeof window !== 'undefined') {
+      window.SESSION = null;
+      window.__auth = window.__auth || {};
+      window.__auth.user = null;
+      window.__USER_ID = null;
+    }
+  } catch {}
+
+  try { renderUserChip(); } catch {}
 }
+async function refreshToken() {
+  // ✅ Single-flight refresh to prevent parallel refresh storms + races.
+  try {
+    if (refreshToken._inFlight) return await refreshToken._inFlight;
+  } catch {}
 
-async function refreshToken(){
-  try{
-    const res = await fetch(API('/auth/refresh'), {
-      method:'POST',
-      credentials:'include',
-      headers:{'content-type':'application/json'},
-      body: JSON.stringify({})
-    });
-    if (!res.ok) { clearSession(); return false; }
-
-    const data  = await res.json().catch(() => ({}));
-    const token = data.access_token || data.token || data.accessToken;
-    const rawTtl = data.expires_in || data.token_ttl_sec || data.ttl || 3600;
-    const ttl   = Math.max(60, Number(rawTtl) || 3600);
-    const skew  = 30;
-
-    if (!token) { clearSession(); return false; }
-
-    // Preserve existing user; hydrate if missing id
-    let user = SESSION?.user || data.user || null;
-    if (!user || !user.id) {
+  refreshToken._inFlight = (async () => {
+    const forceLoggedOutUi = (msg) => {
+      // Ensure we do this once per “auth lost” episode (avoid UI thrash if many calls fail).
       try {
-        const meRes = await fetch(API('/api/me'), { headers: { 'Authorization': `Bearer ${token}` } });
-        if (meRes.ok) {
-          const meJson = await meRes.json().catch(()=> ({}));
-          user = (meJson && (meJson.user || meJson)) || user;
+        const now = Date.now();
+        const last = Number(window.__authHardResetAtMs || 0);
+        if (now - last < 750) return;
+        window.__authHardResetAtMs = now;
+      } catch {}
+
+      try { clearSession(); } catch {}
+
+      try {
+        if (typeof openLogin === 'function') openLogin();
+      } catch {}
+
+      try {
+        const err = (typeof byId === 'function') ? byId('loginError') : null;
+        if (err) {
+          err.textContent = msg || 'Your session has expired. Please sign in again.';
+          err.style.display = 'block';
         }
       } catch {}
-      // Extra guard: fall back to persisted user if present
-      if (!user || !user.id) {
-        try {
-          const persisted = JSON.parse(localStorage.getItem('cloudtms.session')
-                           || sessionStorage.getItem('cloudtms.session') || 'null');
-          if (persisted?.user?.id) user = persisted.user;
-        } catch {}
-      }
-    }
-
-    // ✅ Persist returned policy and bump idle timers
-    const policy = (data && data.policy) || SESSION?.policy || null;
-
-    saveSession({
-      accessToken: token,
-      user,
-      policy,
-      exp: Math.floor(Date.now()/1000) + (ttl - skew)
-    });
+    };
 
     try {
-      if (typeof IdleManager === 'object' && typeof IdleManager.startOrReset === 'function') {
-        IdleManager.startOrReset(policy || null);
-      }
-    } catch {}
+      const res = await fetch(API('/auth/refresh'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({})
+      });
 
-    return true;
-  }catch{
-    clearSession();
-    return false;
+      if (!res.ok) {
+        forceLoggedOutUi('Your session has expired. Please sign in again.');
+        return false;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      const token = data.access_token || data.token || data.accessToken;
+      const rawTtl = data.expires_in || data.token_ttl_sec || data.ttl || 3600;
+      const ttl = Math.max(60, Number(rawTtl) || 3600);
+      const skew = 30;
+
+      if (!token) {
+        forceLoggedOutUi('Your session has expired. Please sign in again.');
+        return false;
+      }
+
+      // Preserve existing user; hydrate if missing id
+      let user = SESSION?.user || data.user || null;
+      if (!user || !user.id) {
+        try {
+          const meRes = await fetch(API('/api/me'), { headers: { 'Authorization': `Bearer ${token}` } });
+          if (meRes.ok) {
+            const meJson = await meRes.json().catch(() => ({}));
+            user = (meJson && (meJson.user || meJson)) || user;
+          }
+        } catch {}
+
+        // Extra guard: fall back to persisted user if present
+        if (!user || !user.id) {
+          try {
+            const persisted = JSON.parse(
+              localStorage.getItem('cloudtms.session') ||
+              sessionStorage.getItem('cloudtms.session') || 'null'
+            );
+            if (persisted?.user?.id) user = persisted.user;
+          } catch {}
+        }
+      }
+
+      // ✅ Persist returned policy and bump idle timers
+      const policy = (data && data.policy) || SESSION?.policy || null;
+
+      saveSession({
+        accessToken: token,
+        user,
+        policy,
+        exp: Math.floor(Date.now() / 1000) + (ttl - skew)
+      });
+
+      try {
+        if (typeof IdleManager === 'object' && typeof IdleManager.startOrReset === 'function') {
+          IdleManager.startOrReset(policy || null);
+        }
+      } catch {}
+
+      return true;
+    } catch {
+      forceLoggedOutUi('Your session has expired. Please sign in again.');
+      return false;
+    }
+  })();
+
+  try {
+    return await refreshToken._inFlight;
+  } finally {
+    try { refreshToken._inFlight = null; } catch {}
   }
 }
-
 
 
 async function apiForgot(email){
@@ -3737,7 +3971,39 @@ async function apiReset(token, newPassword){
 }
 
 // ===== Auth overlays wiring (login / forgot / reset) =====
-function openLogin(){ byId('loginOverlay').style.display='grid'; byId('forgotOverlay').style.display='none'; byId('resetOverlay').style.display='none'; }
+function openLogin() {
+  // ✅ When showing login, ensure no stale 2FA attempt survives and no auth pollers keep running.
+  try { sessionStorage.removeItem('cloudtms.tfa'); } catch {}
+  try { if (typeof window !== 'undefined' && window.__tfaState) window.__tfaState = null; } catch {}
+
+  try {
+    const hb =
+      (typeof window !== 'undefined' && window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object')
+        ? window.__changesHeartbeat
+        : (typeof window !== 'undefined' && window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object')
+          ? window.__changeHeartbeat
+          : null;
+
+    if (hb) {
+      try { if (typeof hb.stop === 'function') hb.stop(); } catch {}
+      hb._timer = null;
+      hb._started = false; // allow restart after successful login
+      hb._lastPingAtMs = 0;
+    }
+  } catch {}
+
+  // Hide any 2FA overlay if present
+  try {
+    const tfa = byId('tfaOverlay');
+    if (tfa) tfa.style.display = 'none';
+  } catch {}
+
+  byId('loginOverlay').style.display = 'grid';
+  byId('forgotOverlay').style.display = 'none';
+  byId('resetOverlay').style.display = 'none';
+}
+
+
 function openForgot(){ byId('loginOverlay').style.display='none'; byId('forgotOverlay').style.display='grid'; byId('resetOverlay').style.display='none'; }
 function openReset(){ byId('loginOverlay').style.display='none'; byId('forgotOverlay').style.display='none'; byId('resetOverlay').style.display='grid'; }
 
@@ -3776,9 +4042,73 @@ let currentSelection = null;
 // ──────────────────────────────────────────────────────────────────────────────
 // renderTopNav (amended) — adds Contracts quick-search branch { q: text }
 // ──────────────────────────────────────────────────────────────────────────────
-
 function renderTopNav(){
   const nav = byId('nav'); nav.innerHTML = '';
+
+  // ✅ NEW: hard safety reset for the global Delete button when NOT in a candidate/client VIEW modal.
+  // btnDelete is a global footer control that can otherwise retain stale label/onclick/title/class
+  // across section navigation, modal close, and after deletes.
+  try {
+    const btnDelGlobal = byId('btnDelete');
+
+    const hasModalStack = ((window.__modalStack?.length || 0) > 0);
+    const mcEnt = String((window.modalCtx && window.modalCtx.entity) ? window.modalCtx.entity : (typeof modalCtx !== 'undefined' && modalCtx?.entity ? modalCtx.entity : '') || '');
+    const inCandOrClientCtx = (mcEnt === 'candidates' || mcEnt === 'clients');
+
+    // If a modal stack exists, prefer the top frame identity for correctness.
+    const topFrame = hasModalStack ? window.__modalStack[window.__modalStack.length - 1] : null;
+    const topEnt   = String((topFrame && topFrame.entity) ? topFrame.entity : mcEnt || '');
+    const topMode  = String((topFrame && topFrame.mode) ? topFrame.mode : '').toLowerCase();
+
+    const inCandOrClientViewModal =
+      !!hasModalStack &&
+      (topEnt === 'candidates' || topEnt === 'clients') &&
+      (topMode === 'view');
+
+    if (btnDelGlobal) {
+      // If NOT in candidate/client view modal, fully reset/hide.
+      if (!inCandOrClientViewModal) {
+        btnDelGlobal.style.display = 'none';
+        btnDelGlobal.disabled = true;
+        btnDelGlobal.onclick = null;
+
+        // Reset label + styling to safe defaults
+        btnDelGlobal.textContent = 'Delete';
+        btnDelGlobal.className = 'btn btn-outline btn-sm';
+        btnDelGlobal.style.opacity = '';
+        btnDelGlobal.style.filter  = '';
+
+        // Clear tooltip + aria flags
+        btnDelGlobal.removeAttribute('title');
+        btnDelGlobal.removeAttribute('aria-disabled');
+        btnDelGlobal.removeAttribute('data-disabled');
+      }
+
+      // If we ARE in candidate/client view modal, do nothing here.
+      // The modal lifecycle (showModal/renderTop) owns enabling/tooltip/wiring based on eligibility.
+    }
+  } catch {}
+
+  // ✅ NEW: provide a canonical hook delete handlers can call (optional but safe)
+  // Ensures summary refresh after successful delete, and ensures global Delete button is reset.
+  try {
+    if (typeof window.__afterRecordDeleteCleanup !== 'function') {
+      window.__afterRecordDeleteCleanup = async function(entityKey, id) {
+        try {
+          // Close any open modals first (prevents stale modalCtx + prevents “ghost” footer buttons)
+          if ((window.__modalStack?.length || 0) > 0 || (window.modalCtx && window.modalCtx.entity)) {
+            try { discardAllModalsAndState(); } catch {}
+          }
+
+          // Always refresh the current summary view
+          try { await renderAll(); } catch {}
+
+          // Force a nav/header refresh so btnDelete is hidden/reset immediately
+          try { renderTopNav(); } catch {}
+        } catch {}
+      };
+    }
+  } catch {}
 
   // ensure per-section list + selection exist
   window.__listState = window.__listState || {};
@@ -4142,11 +4472,18 @@ function renderTopNav(){
             const [fn, ln] = text.split(' ').filter(Boolean);
             filters = { first_name: fn || text, last_name: ln || '' };
           } else filters = { first_name: text };
+
         } else if (currentSection === 'clients' || currentSection === 'umbrellas') {
           filters = { name: text };
+
         } else if (currentSection === 'contracts') {
           // free-text passthrough for contracts
           filters = { q: text };
+
+        } else if (currentSection === 'invoices') {
+          // ✅ Quick-search uses free-text q; backend expands via invoice_quicksearch_ids RPC
+          filters = { q: text };
+
         } else {
           const data = await loadSection();
           return renderSummary(data);
@@ -4163,7 +4500,6 @@ function renderTopNav(){
     }
   } catch {}
 }
-
 
 
 // NEW: advanced, section-aware search modal
@@ -6261,7 +6597,7 @@ async function search(section, filters = {}) {
     qs.set('order_dir', String(st.sort.dir || 'asc'));
   }
 
-  // ✅ NEW: include_count for correct paging when paging is active (pageSize != ALL)
+  // ✅ include_count for correct paging when paging is active (pageSize != ALL)
   // Applies to candidates, clients, umbrellas, contracts, invoices.
   if (pageSize !== 'ALL') {
     if (section === 'candidates' || section === 'clients' || section === 'umbrellas' || section === 'contracts' || section === 'invoices') {
@@ -6340,8 +6676,6 @@ async function search(section, filters = {}) {
 
   return rows;
 }
-
-
 function defaultColumnsFor(section){
   // No longer read localStorage; server grid prefs are the source of truth.
   switch(section){
@@ -11840,12 +12174,6 @@ function wirePickerLiveFilter(inputEl, tableEl) {
 function setContractFormValue(name, value) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
 
-  // Do not stage ward_hint at all (deprecated)
-  if (name === 'ward_hint') {
-    if (LOGC) console.log('[CONTRACTS] setContractFormValue ignored (ward_hint deprecated)');
-    return;
-  }
-
   let targetName = (name === 'default_pay_method_snapshot') ? 'pay_method_snapshot' : name;
 
   try {
@@ -12015,7 +12343,6 @@ function setContractFormValue(name, value) {
 
   try { window.dispatchEvent(new CustomEvent('modal-dirty')); } catch {}
 }
-
 function applyRatePresetToContractForm(preset, payMethod /* 'PAYE'|'UMBRELLA' */) {
   if (!preset) return;
 
@@ -13430,7 +13757,6 @@ function snapshotContractForm() {
     const name = el && el.name;
     if (!name) continue;
     if (el.disabled || el.readOnly || el.dataset.noCollect === 'true') continue;
-    if (name === 'ward_hint') continue; // do not stage ward_hint
 
     let v;
     if (el.type === 'checkbox') {
@@ -13523,7 +13849,6 @@ function snapshotContractForm() {
     } catch {}
   }
 }
-
 // Optional helper: align pay_method_snapshot to candidate; return hint if mismatch
 function prefillPayMethodFromCandidate(candidate) {
   if (!candidate) return '';
@@ -14394,7 +14719,7 @@ function openContractCloneAndExtend(contract_id) {
       </div>
 
       <div class="mini" style="margin-top:10px">
-        After this, the successor opens in the normal contract modal (Create mode). You can edit Main / Rates / Calendar before saving.
+        This will create the successor contract via the backend Clone & Extend endpoint, then open it in the normal Contract modal.
       </div>
     </div>
   `;
@@ -14404,7 +14729,6 @@ function openContractCloneAndExtend(contract_id) {
     [{ key:'c', title:'Successor window' }],
     () => content,
     async () => {
-      const LOGM = !!window.__LOG_MODAL;
       const root = document.getElementById('cloneExtendForm') || document;
 
       const newStartUk  = root.querySelector('input[name="new_start_date"]')?.value?.trim() || '';
@@ -14419,6 +14743,7 @@ function openContractCloneAndExtend(contract_id) {
       if (!new_start_date || !new_end_date) { alert('Enter both new start and new end.'); return false; }
       if (new_start_date > new_end_date)   { alert('New end must be on or after new start.'); return false; }
 
+      // Client-side validations that mirror backend constraints (backend is authoritative)
       try {
         const oldStartIso = (window.modalCtx?.data?.start_date) || '';
         if (endChk) {
@@ -14428,118 +14753,85 @@ function openContractCloneAndExtend(contract_id) {
         }
       } catch {}
 
-      // === NEW: pre-truncate the existing contract (blocking) BEFORE opening successor ===
-      let effectiveOldEnd = end_existing_on;
-      if (endChk) {
-        const oldId = String(window.modalCtx?.data?.id || '');
-        if (!oldId) { alert('Source contract id missing.'); return false; }
+      const sourceId =
+        String(contract_id || '') ||
+        String(window.modalCtx?.data?.id || '');
 
-        try {
-          console.groupCollapsed('[CLONE][pre-trim gate]');
-          const url  = API(`/api/contracts/${encodeURIComponent(oldId)}/truncate-tail`);
-          const init = {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: oldId, desired_end: end_existing_on })
-          };
-          console.log('request', { url, init, new_start_date, new_end_date });
-          try { window.__LOG_API = true; } catch {}
+      if (!sourceId) { alert('Source contract id missing.'); return false; }
 
-          const res = await (typeof authFetch === 'function' ? authFetch(url, init) : fetch(url, init));
-          let obj = null;
-          try { obj = await res.clone().json(); } catch { obj = null; }
+      // Authoritative: call backend clone-and-extend (no manual truncation, no staged successor)
+      let json = null;
+      try {
+        const url  = API(`/api/contracts/${encodeURIComponent(sourceId)}/clone-and-extend`);
+        const init = {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            new_start_date,
+            new_end_date,
+            end_existing: endChk,
+            end_existing_on: endChk ? end_existing_on : null
+          })
+        };
 
-          const okField =
-            (typeof obj?.ok === 'boolean' ? obj.ok :
-             typeof obj?.success === 'boolean' ? obj.success :
-             (typeof res?.ok === 'boolean' ? res.ok : undefined));
+        if (LOGM) console.log('[CLONE] clone-and-extend →', { url, payload: JSON.parse(init.body) });
 
-          const clamped  = !!obj?.clamped;
-          const safe_end = obj?.safe_end || null;
-          const status   = (typeof res?.status === 'number') ? res.status : (typeof obj?.status === 'number' ? obj.status : undefined);
+        const res = await (typeof authFetch === 'function' ? authFetch(url, init) : fetch(url, init));
+        const text = await res.text().catch(() => '');
 
-          console.log('response', { status, ok: !!okField, clamped, safe_end, obj });
-
-          if (!okField) {
-            alert((obj && (obj.message || obj.error)) || res.statusText || 'Failed to end the existing contract.');
-            console.groupEnd?.();
-            return false;
-          }
-
-          if (clamped && typeof showTailClampWarning === 'function') {
-            try { showTailClampWarning(safe_end, end_existing_on); } catch {}
-          }
-
-          effectiveOldEnd = safe_end || end_existing_on;
-
-          if (effectiveOldEnd >= new_start_date) {
-            alert(`Existing contract now ends on ${effectiveOldEnd}, which overlaps the new start (${new_start_date}). Adjust dates and try again.`);
-            console.groupEnd?.();
-            return false;
-          }
-
-          if (typeof refreshOldContractAfterTruncate === 'function') {
-            try { await refreshOldContractAfterTruncate(oldId); } catch (e) { if (LOGM) console.warn('[CLONE] refresh after truncate failed', e); }
-          }
-          console.groupEnd?.();
-        } catch (e) {
-          console.warn('[CLONE][pre-trim gate] exception', e);
-          alert(`Could not end the existing contract: ${e?.message || e}`);
+        if (!res.ok) {
+          // backend returns {error: "..."} in many paths; fall back to raw text
+          let msg = text || res.statusText || 'Clone & Extend failed.';
+          try {
+            const parsed = text ? JSON.parse(text) : null;
+            if (parsed && typeof parsed === 'object') {
+              msg = parsed.error || parsed.message || msg;
+            }
+          } catch {}
+          alert(msg);
           return false;
         }
-      }
 
-      // Build staged successor row from current contract (no staging of end_existing intent anymore)
-      const old = window.modalCtx?.data || {};
-      const newToken = `contract:new:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-      const stagedRow = {
-        id: null,
-        candidate_id: old.candidate_id || '',
-        client_id:    old.client_id    || '',
-        role:         old.role         || '',
-        band:         (old.band ?? null),
-        display_site: old.display_site || '',
-        start_date:   new_start_date,
-        end_date:     new_end_date,
-        pay_method_snapshot: old.pay_method_snapshot || 'PAYE',
-        default_submission_mode: old.default_submission_mode || 'ELECTRONIC',
-        week_ending_weekday_snapshot: Number(old.week_ending_weekday_snapshot ?? 0),
-        std_schedule_json: old.std_schedule_json || null,
-        std_hours_json:    old.std_hours_json    || null,
-        bucket_labels_json: old.bucket_labels_json || null,
-        rates_json: (old.rates_json && typeof old.rates_json === 'object') ? old.rates_json : {}
-      };
+        try { json = text ? JSON.parse(text) : null; } catch { json = null; }
 
-      // Open successor ONLY AFTER the pre-trim has finished successfully — as a ROOT modal
-      try {
-        if (LOGM) console.log('[CLONE] will open staged successor in Create mode (root, deferred)', { token: newToken, stagedRow, effectiveOldEnd });
-        window.__preOpenToken = newToken;
-        setTimeout(() => {
+        const successor = json?.successor || null;
+        const successorId = successor?.id ? String(successor.id) : null;
+
+        if (!successorId) {
+          alert('Clone & Extend succeeded but no successor id was returned.');
+          return false;
+        }
+
+        // If backend closed the old contract, refresh list (best-effort)
+        try { await renderAll?.(); } catch {}
+
+        // Open successor as a ROOT modal
+        setTimeout(async () => {
           try {
-            // Tear down entire stack so successor opens as root (no parent to resurface)
             try { discardAllModalsAndState(); } catch {}
-            openContract(stagedRow);
-            // After the modal builds its own formState, force-align __forId with our token
-            setTimeout(() => {
-              try {
-                if (window.modalCtx) {
-                  window.modalCtx.openToken = newToken;
-                  const fs2 = (window.modalCtx.formState ||= { __forId: newToken, main:{}, pay:{} });
-                  fs2.__forId = newToken;
-                  if (LOGM) console.log('[CLONE] bound token to create modal', { openToken: window.modalCtx.openToken, forId: fs2.__forId });
-                }
-              } catch (e) { console.warn('[CLONE] bind token failed', e); }
-            }, 0);
+
+            // Prefer fetching the full wrapper/row before opening (openContract expects a real row)
+            let fresh = null;
+            try {
+              if (typeof getContract === 'function') fresh = await getContract(successorId);
+            } catch (e) {
+              if (LOGM) console.warn('[CLONE] getContract failed, will open minimal successor row', e);
+              fresh = null;
+            }
+
+            openContract(fresh || successor || { id: successorId });
           } catch (e) {
-            console.error('[CLONE] openContract failed', e);
-            try { renderAll(); } catch {}
+            console.error('[CLONE] failed to open successor contract', e);
+            try { renderAll?.(); } catch {}
           }
         }, 0);
-      } catch (e) {
-        console.error('[CLONE] schedule open failed', e);
-      }
 
-      return true;
+        return true;
+      } catch (e) {
+        console.warn('[CLONE] clone-and-extend exception', e);
+        alert(`Clone & Extend failed: ${e?.message || e}`);
+        return false;
+      }
     },
     false,
     () => {
@@ -16746,12 +17038,18 @@ function renderTools(){
     const curStatus = String(filters.work_status || 'ALL').trim().toUpperCase();
     const statusSafe = ['ALL','CURRENT','RECENT','NOT'].includes(curStatus) ? curStatus : 'ALL';
 
-    const curMonthsRaw = Number(filters.recent_months);
-    const curMonths = (Number.isFinite(curMonthsRaw) && curMonthsRaw > 0) ? Math.floor(curMonthsRaw) : 1;
-    const presetMonths = (curMonths === 1 || curMonths === 3 || curMonths === 12) ? curMonths : null;
-    const recentPreset = (filters.recent_preset && typeof filters.recent_preset === 'string')
-      ? String(filters.recent_preset).toUpperCase()
-      : (presetMonths ? String(presetMonths) : 'CUSTOM');
+    const allowedRecentPresets = new Set(['1','3','6','9','12','24','ALL']);
+    const rawRecentMonths = filters.recent_months;
+
+    // Normalise to one of: '1','3','6','9','12','24','ALL'
+    const recentPreset = (() => {
+      if (rawRecentMonths == null || rawRecentMonths === '') return '6'; // default when RECENT
+      const s = String(rawRecentMonths).trim().toUpperCase();
+      if (s === 'ALL') return 'ALL';
+      const n = Math.floor(Number(s));
+      if (Number.isFinite(n) && allowedRecentPresets.has(String(n))) return String(n);
+      return '6';
+    })();
 
     const box = document.createElement('div');
     box.style.cssText = 'margin-top:10px;padding:8px;border:1px solid var(--line);border-radius:6px;background:#0b152a;';
@@ -16773,21 +17071,6 @@ function renderTools(){
       return row;
     };
 
-    const statusSel = document.createElement('select');
-    statusSel.classList.add('dark-control');
-    [
-      ['ALL','All'],
-      ['CURRENT','Currently Working'],
-      ['RECENT','Recently Working'],
-      ['NOT','Not Working']
-    ].forEach(([v, label]) => {
-      const o = document.createElement('option');
-      o.value = v;
-      o.textContent = label;
-      if (statusSafe === v) o.selected = true;
-      statusSel.appendChild(o);
-    });
-
     const applyCandidateFilters = async (next) => {
       const cur = { ...(window.__listState['candidates'].filters || {}) };
       Object.entries(next || {}).forEach(([k, v]) => {
@@ -16801,6 +17084,58 @@ function renderTools(){
       renderSummary(data);
     };
 
+    // Working status selector
+    const statusSel = document.createElement('select');
+    statusSel.classList.add('dark-control');
+    [
+      ['ALL','All'],
+      ['CURRENT','Currently working'],
+      ['RECENT','Previously worked'],
+      ['NOT','Not working']
+    ].forEach(([v, label]) => {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = label;
+      if (statusSafe === v) o.selected = true;
+      statusSel.appendChild(o);
+    });
+
+    // Previously worked submenu (only visible when RECENT)
+    const recentWrap = document.createElement('div');
+    recentWrap.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;';
+
+    const recentLab = document.createElement('span');
+    recentLab.className = 'mini';
+    recentLab.textContent = 'Period:';
+
+    const recentSel = document.createElement('select');
+    recentSel.classList.add('dark-control');
+
+    // Exactly: 1,3,6,9,12,24,ALL
+    const recentOpts = [
+      ['1',  'Past 1 month'],
+      ['3',  'Past 3 months'],
+      ['6',  'Past 6 months'],
+      ['9',  'Past 9 months'],
+      ['12', 'Past 1 year'],
+      ['24', 'Past 2 years'],
+      ['ALL','All (since start)']
+    ];
+    recentOpts.forEach(([v, label]) => {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = label;
+      recentSel.appendChild(o);
+    });
+
+    // Ensure UI reflects current / default selection
+    recentSel.value = allowedRecentPresets.has(recentPreset) ? recentPreset : '6';
+
+    const refreshRecentVisibility = () => {
+      recentWrap.style.display = (String(statusSel.value || '').toUpperCase() === 'RECENT') ? 'flex' : 'none';
+    };
+    refreshRecentVisibility();
+
     statusSel.addEventListener('change', async () => {
       const v = String(statusSel.value || 'ALL').toUpperCase();
 
@@ -16808,109 +17143,44 @@ function renderTools(){
       const patch = { work_status: v };
 
       if (v !== 'RECENT') {
-        // Remove RECENT-specific keys when not in RECENT mode
+        // Hide + clear RECENT-specific keys when not in RECENT mode
         patch.recent_months = null;
         patch.recent_preset = null;
-      } else {
-        // Default months when entering RECENT
-        const m = (Number.isFinite(curMonthsRaw) && curMonthsRaw > 0) ? Math.floor(curMonthsRaw) : 1;
-        patch.recent_months = m || 1;
-        patch.recent_preset = (m === 1 || m === 3 || m === 12) ? String(m) : 'CUSTOM';
+
+        // UI: hide + reset selection to default (won’t matter while hidden)
+        recentSel.value = '6';
+        refreshRecentVisibility();
+        return await applyCandidateFilters(patch);
       }
 
+      // Entering RECENT: default to 6 months immediately
+      patch.recent_months = '6';
+      patch.recent_preset = '6';
+      recentSel.value = '6';
+      refreshRecentVisibility();
       await applyCandidateFilters(patch);
     });
 
+    recentSel.addEventListener('change', async () => {
+      const v = String(recentSel.value || '6').toUpperCase();
+      if (!allowedRecentPresets.has(v)) return;
+
+      // Only apply if still in RECENT mode
+      const ws = String(statusSel.value || '').toUpperCase();
+      if (ws !== 'RECENT') return;
+
+      await applyCandidateFilters({
+        work_status: 'RECENT',
+        recent_months: (v === 'ALL') ? 'ALL' : String(v),
+        recent_preset: String(v)
+      });
+    });
+
+    recentWrap.appendChild(recentLab);
+    recentWrap.appendChild(recentSel);
+
     box.appendChild(mkRow('Working:', statusSel));
-
-    // RECENT period radios + custom months
-    if (statusSafe === 'RECENT') {
-      const wrap = document.createElement('div');
-      wrap.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-top:8px;';
-
-      const mkRadio = (value, label) => {
-        const lab = document.createElement('label');
-        lab.className = 'mini';
-        lab.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
-        const r = document.createElement('input');
-        r.type = 'radio';
-        r.name = '__cand_recent_period__';
-        r.value = value;
-        r.checked = (recentPreset === value);
-        lab.appendChild(r);
-        lab.appendChild(document.createTextNode(label));
-        return { lab, r };
-      };
-
-      const r1  = mkRadio('1',      'Past month');
-      const r3  = mkRadio('3',      'Past three months');
-      const r12 = mkRadio('12',     'Past year');
-      const rc  = mkRadio('CUSTOM', 'Custom');
-
-      const customRow = document.createElement('div');
-      customRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-left:20px;';
-      const customLabel = document.createElement('span');
-      customLabel.className = 'mini';
-      customLabel.textContent = 'Months:';
-      const customInp = document.createElement('input');
-      customInp.type = 'number';
-      customInp.min = '1';
-      customInp.step = '1';
-      customInp.classList.add('dark-control');
-      customInp.style.width = '90px';
-      customInp.value = String(presetMonths ? presetMonths : curMonths);
-      customRow.appendChild(customLabel);
-      customRow.appendChild(customInp);
-
-      const refreshRecentUi = () => {
-        const isCustom = !!rc.r.checked;
-        customRow.style.display = isCustom ? 'flex' : 'none';
-      };
-      refreshRecentUi();
-
-      const setMonths = async (months, presetKey) => {
-        const m = Math.max(1, Math.floor(Number(months) || 1));
-        await applyCandidateFilters({
-          work_status: 'RECENT',
-          recent_months: m,
-          recent_preset: presetKey
-        });
-      };
-
-      const onRadioChange = async () => {
-        refreshRecentUi();
-
-        if (r1.r.checked)  return setMonths(1,  '1');
-        if (r3.r.checked)  return setMonths(3,  '3');
-        if (r12.r.checked) return setMonths(12, '12');
-        if (rc.r.checked) {
-          const m = Math.max(1, Math.floor(Number(customInp.value) || 1));
-          return setMonths(m, 'CUSTOM');
-        }
-      };
-
-      [r1.r, r3.r, r12.r, rc.r].forEach(r => {
-        r.addEventListener('change', async () => { await onRadioChange(); });
-      });
-
-      customInp.addEventListener('keydown', async (e) => {
-        if (e.key !== 'Enter') return;
-        if (!rc.r.checked) rc.r.checked = true;
-        await onRadioChange();
-      });
-      customInp.addEventListener('blur', async () => {
-        if (!rc.r.checked) return;
-        await onRadioChange();
-      });
-
-      wrap.appendChild(r1.lab);
-      wrap.appendChild(r3.lab);
-      wrap.appendChild(r12.lab);
-      wrap.appendChild(rc.lab);
-      wrap.appendChild(customRow);
-
-      box.appendChild(wrap);
-    }
+    box.appendChild(recentWrap);
 
     el.appendChild(box);
   }
@@ -20482,7 +20752,7 @@ async function openCandidate(row) {
   const selectedAliasId = hrAliasesExisting.length
     ? (hrAliasesExisting[0].id ?? null)
     : null;
-  window.modalCtx = {
+ window.modalCtx = {
     entity: 'candidates',
     data:   deep(full),
     formState: { __forId: full?.id || null, main: {}, pay: {} },
@@ -20517,6 +20787,79 @@ async function openCandidate(row) {
     }
   };
 
+  // ✅ NEW: Delete eligibility (VIEW-mode only)
+  // - set an immediate placeholder so the Delete button is visibly disabled with a tooltip
+  // - fetch real eligibility in the background
+  // - when it returns, store on modalCtx and trigger a footer repaint via frame._updateButtons()
+  try {
+    const candId = window.modalCtx?.data?.id || null;
+    if (candId) {
+      window.modalCtx.deleteEligibility = {
+        can_delete: false,
+        reason: 'Checking delete eligibility…'
+      };
+
+      const tok = window.modalCtx.openToken;
+      const candIdStr = String(candId);
+
+      (async () => {
+        try {
+          const url = API(`/api/candidates/${encodeURIComponent(candIdStr)}/delete-eligibility`);
+          L('[HTTP] GET delete-eligibility', url);
+
+          const res = await authFetch(url);
+          let elig = null;
+
+          if (res && res.ok) {
+            elig = await res.json().catch(() => null);
+          } else {
+            const msg = await res.text().catch(() => '');
+            elig = {
+              can_delete: false,
+              reason: (msg && String(msg).trim()) ? String(msg).trim() : 'Delete eligibility check failed.'
+            };
+          }
+
+          // Only apply if this modal is still the same candidate (token + id guard)
+          if (
+            window.modalCtx &&
+            window.modalCtx.entity === 'candidates' &&
+            window.modalCtx.openToken === tok &&
+            String(window.modalCtx.data?.id || '') === candIdStr
+          ) {
+            window.modalCtx.deleteEligibility = (elig && typeof elig === 'object') ? elig : null;
+
+            // Trigger immediate footer repaint so btnDelete updates (enabled/disabled + tooltip)
+            const fr = window.__getModalFrame?.();
+            if (fr && fr.entity === 'candidates' && typeof fr._updateButtons === 'function') {
+              fr._updateButtons();
+            }
+          }
+        } catch (e) {
+          W('delete-eligibility fetch failed (non-fatal)', e);
+
+          // If still the same modal, set a safe blocked eligibility with a useful tooltip
+          try {
+            if (
+              window.modalCtx &&
+              window.modalCtx.entity === 'candidates' &&
+              window.modalCtx.openToken === tok &&
+              String(window.modalCtx.data?.id || '') === candIdStr
+            ) {
+              window.modalCtx.deleteEligibility = {
+                can_delete: false,
+                reason: 'Unable to check delete eligibility (network error).'
+              };
+              const fr = window.__getModalFrame?.();
+              if (fr && fr.entity === 'candidates' && typeof fr._updateButtons === 'function') {
+                fr._updateButtons();
+              }
+            }
+          } catch {}
+        }
+      })();
+    }
+  } catch {}
 
   L('window.modalCtx seeded', {
     entity: window.modalCtx.entity,
@@ -20527,6 +20870,7 @@ async function openCandidate(row) {
     dbPayMethod: window.modalCtx.dbPayMethod,
     candidateMainModelKeys: Object.keys(window.modalCtx.candidateMainModel || {})
   });
+
   // 3) Render modal
   L('calling showModal with hasId=', !!full?.id, 'rawHasIdArg=', full?.id);
 
@@ -20565,6 +20909,7 @@ async function openCandidate(row) {
       L('[renderCandidateTab] tab=', k, 'rowKeys=', Object.keys(r||{}), 'sample=', { first: r?.first_name, last: r?.last_name, id: r?.id });
 
       const html = renderCandidateTab(k, r);
+
       // ✅ E-History: always (re)mount on History tab render.
       // showModal.setTab() recreates #modalBody each time; mountCandidateHistoryTab is now idempotent and
       // will repaint from cache without refetch when already loaded.
@@ -21501,29 +21846,29 @@ for (const k of Object.keys(payload)) {
       return { ok: true, saved: window.modalCtx.data };
 
     },
-     full?.id,
-   () => {
-  const fr = window.__getModalFrame?.();
-  const isBookings = fr && fr.entity === 'candidates' && fr.currentTabKey === 'bookings';
-  const candId = window.modalCtx?.data?.id;
+  full?.id,
+    () => {
+      const fr = window.__getModalFrame?.();
+      const isBookings = fr && fr.entity === 'candidates' && fr.currentTabKey === 'bookings';
+      const candId = window.modalCtx?.data?.id;
 
-  if (isBookings && candId) {
-    try {
-      const holder = document.getElementById('candidateCalendarHolder');
-      if (holder && typeof loadCandidateCalendar === 'function') {
-        // Repaint using cached data if available (keeps filter state stable)
-        loadCandidateCalendar(holder, candId, { _reuseLast: true }).catch(e => {
-          W('loadCandidateCalendar(onReturn) failed', e);
-        });
-      } else {
-        // Fallback
-        renderCandidateCalendarTab(candId);
+      if (isBookings && candId) {
+        try {
+          const holder = document.getElementById('candidateCalendarHolder');
+          if (holder && typeof loadCandidateCalendar === 'function') {
+            // Repaint using cached data if available (keeps filter state stable)
+            loadCandidateCalendar(holder, candId, { _reuseLast: true }).catch(e => {
+              W('loadCandidateCalendar(onReturn) failed', e);
+            });
+          } else {
+            // Fallback
+            renderCandidateCalendarTab(candId);
+          }
+        } catch (e) {
+          W('calendar onReturn refresh failed', e);
+        }
       }
-    } catch (e) {
-      W('calendar onReturn refresh failed', e);
-    }
-  }
-},
+    },
     // ✅ NEW: title badges are rendered by showModal/renderTop
     { titleBadges }
   );
@@ -23812,8 +24157,7 @@ async function openClient(row) {
   // 2) Seed modal context
   const fullKeys = Object.keys(full || {});
   L('seeding window.modalCtx', { entity: 'clients', fullId: full?.id, fullKeys });
-
-  window.modalCtx = {
+window.modalCtx = {
     entity: 'clients',
     data: deep(full),
     formState: { __forId: full?.id || null, main: {} },
@@ -23842,6 +24186,80 @@ async function openClient(row) {
       ? window.modalCtx.ratesStagedDeletes
       : new Set()
   };
+
+  // ✅ NEW: Delete eligibility (VIEW-mode only)
+  // - seed an immediate placeholder so Delete is visibly disabled with a tooltip
+  // - fetch real eligibility in the background
+  // - store on modalCtx and trigger a footer repaint so btnDelete updates immediately
+  try {
+    const clientId0 = window.modalCtx?.data?.id || null;
+    if (clientId0) {
+      window.modalCtx.deleteEligibility = {
+        can_delete: false,
+        reason: 'Checking delete eligibility…'
+      };
+
+      const tok = window.modalCtx.openToken;
+      const clientIdStr = String(clientId0);
+
+      (async () => {
+        try {
+          const url = API(`/api/clients/${encodeURIComponent(clientIdStr)}/delete-eligibility`);
+          L('[HTTP] GET delete-eligibility', url);
+
+          const res = await authFetch(url);
+          let elig = null;
+
+          if (res && res.ok) {
+            elig = await res.json().catch(() => null);
+          } else {
+            const msg = await res.text().catch(() => '');
+            elig = {
+              can_delete: false,
+              reason: (msg && String(msg).trim()) ? String(msg).trim() : 'Delete eligibility check failed.'
+            };
+          }
+
+          // Only apply if this modal is still the same client (token + id guard)
+          if (
+            window.modalCtx &&
+            window.modalCtx.entity === 'clients' &&
+            window.modalCtx.openToken === tok &&
+            String(window.modalCtx.data?.id || '') === clientIdStr
+          ) {
+            window.modalCtx.deleteEligibility = (elig && typeof elig === 'object') ? elig : null;
+
+            // Trigger immediate footer repaint so btnDelete updates (enabled/disabled + tooltip)
+            const fr = window.__getModalFrame?.();
+            if (fr && fr.entity === 'clients' && typeof fr._updateButtons === 'function') {
+              fr._updateButtons();
+            }
+          }
+        } catch (e) {
+          W('delete-eligibility fetch failed (non-fatal)', e);
+
+          // If still the same modal, set a safe blocked eligibility with a useful tooltip
+          try {
+            if (
+              window.modalCtx &&
+              window.modalCtx.entity === 'clients' &&
+              window.modalCtx.openToken === tok &&
+              String(window.modalCtx.data?.id || '') === clientIdStr
+            ) {
+              window.modalCtx.deleteEligibility = {
+                can_delete: false,
+                reason: 'Unable to check delete eligibility (network error).'
+              };
+              const fr = window.__getModalFrame?.();
+              if (fr && fr.entity === 'clients' && typeof fr._updateButtons === 'function') {
+                fr._updateButtons();
+              }
+            }
+          } catch {}
+        }
+      })();
+    }
+  } catch {}
 
   // Canonicalise immediately so UI always starts in a consistent state
   // ✅ Preserve manual-invoice routing + auto-invoice + new invoicing/ref-to-issue fields
@@ -24174,6 +24592,7 @@ async function openClient(row) {
 
       const savedClient = clientResp && typeof clientResp === 'object' ? clientResp : { id: clientId, ...payload };
       window.modalCtx.data = { ...(window.modalCtx.data || {}), ...savedClient, id: clientId };
+
 
       // 4) Save Client settings (after client exists)
       try {
@@ -28872,7 +29291,6 @@ function wireContractCalendarSaveControls(contractId, holder, weekIndex) {
 // ============================================================================
 // CONTRACTS – TAB RENDERER
 // ============================================================================
-
 function renderContractCalendarTab(ctx) {
   const LOGM = !!window.__LOG_MODAL;
   const c = ctx?.data || {};
@@ -28888,12 +29306,15 @@ function renderContractCalendarTab(ctx) {
   const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
   const inViewMode = !!(fr && fr.mode === 'view');
 
+  const cloneExtendHint =
+    'Use this to copy an identical contract, apply the same candidate to the contract from specified dates, allowing you to change rates and rules from that date';
+
   // --- actions (includes Duplicate + Change Rates)
   const actionsHtml = (c.id
     ? `<div class="actions" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
          ${inViewMode ? `` : `<button id="btnAddMissing">Add missing weeks</button>
          <button id="btnRemoveAll">Remove all weeks</button>`}
-         ${inViewMode ? `<button id="btnCloneExtend">Clone & Extend…</button>
+         ${inViewMode ? `<button id="btnCloneExtend" title="${escapeHtml(cloneExtendHint)}">Clone & Extend…</button>
          <button id="btnDuplicateContract">Duplicate Contract…</button>
          <button id="btnChangeRatesOutstanding">Change Contract Rates…</button>` : ``}
        </div>`
@@ -29172,7 +29593,6 @@ function renderContractCalendarTab(ctx) {
       ${actionsHtml}
     </div>`;
 }
-
 
 function isConsecutiveDailyRun(dates) {
   if (!Array.isArray(dates) || dates.length < 2) return false;
@@ -42381,7 +42801,6 @@ function renderSummary(rows){
     filters: null,
     sort: { key: null, dir: 'asc' }
   });
-
   // Ensure we always have a sort object
   if (!st.sort || typeof st.sort !== 'object') {
     st.sort = { key: null, dir: 'asc' };
@@ -42390,6 +42809,17 @@ function renderSummary(rows){
 
   const page     = Number(st.page || 1);
   const pageSize = st.pageSize; // 50 | 100 | 200 | 'ALL'
+
+  // ✅ Umbrellas: default filter to enabled=true (show only enabled by default)
+  // Only apply once per section-session so user toggles aren't overwritten.
+  if (currentSection === 'umbrellas') {
+    if (!st._umbrellasFilterInitDone) {
+      const cur = (st.filters && typeof st.filters === 'object') ? { ...(st.filters || {}) } : {};
+      if (!Object.prototype.hasOwnProperty.call(cur, 'enabled')) cur.enabled = true;
+      st.filters = cur;
+      st._umbrellasFilterInitDone = true;
+    }
+  }
 
   // ── selection state (per section) — explicit IDs only
   window.__selection = window.__selection || {};
@@ -42582,9 +43012,61 @@ function renderSummary(rows){
     const data = await loadSection();
     renderSummary(data);
   });
-
   topControls.appendChild(sizeLabel);
   topControls.appendChild(sizeSel);
+
+  // ✅ Umbrellas: checkbox to include disabled (i.e., remove enabled filter)
+  if (currentSection === 'umbrellas') {
+    const lab = document.createElement('label');
+    lab.className = 'mini';
+    lab.style.display = 'flex';
+    lab.style.alignItems = 'center';
+    lab.style.gap = '8px';
+    lab.style.userSelect = 'none';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = 'showDisabledUmbrellas';
+
+    const curFilters0 = (window.__listState[currentSection].filters && typeof window.__listState[currentSection].filters === 'object')
+      ? window.__listState[currentSection].filters
+      : null;
+
+    const enabledIsTrue =
+      !!(curFilters0 &&
+         Object.prototype.hasOwnProperty.call(curFilters0, 'enabled') &&
+         (curFilters0.enabled === true || String(curFilters0.enabled).toLowerCase() === 'true'));
+
+    // unchecked => enabled=true (hide disabled)
+    // checked   => no enabled filter (show all)
+    cb.checked = !enabledIsTrue;
+
+    cb.addEventListener('change', async () => {
+      const cur = { ...(window.__listState[currentSection].filters || {}) };
+
+      if (cb.checked) {
+        if (Object.prototype.hasOwnProperty.call(cur, 'enabled')) delete cur.enabled;
+      } else {
+        cur.enabled = true;
+      }
+
+      window.__listState[currentSection].filters = cur;
+      window.__listState[currentSection].page = 1;
+
+      // Ensure defaults don't overwrite user intent
+      window.__listState[currentSection]._umbrellasFilterInitDone = true;
+
+      const data = await loadSection();
+      renderSummary(data);
+    });
+
+    const txt = document.createElement('span');
+    txt.textContent = 'Show disabled umbrella companies';
+
+    lab.appendChild(cb);
+    lab.appendChild(txt);
+    topControls.appendChild(lab);
+  }
 
   // ─────────────────────────────────────────────────────────────
   // Invoices quick filters row (Status multi + Week ending + Issued + q)
@@ -47878,7 +48360,6 @@ if (this.entity === 'contracts' && (this.currentTabKey === 'rates' || this.curre
   window.modalCtx.formState = fs;
   L('persistCurrentTabState EXIT', { forId: fs.__forId, mainKeys: Object.keys(fs.main||{}), payKeys: Object.keys(fs.pay||{}) });
 },
-
 // inside showModal(...), in the `const frame = { ... }` object:
 mergedRowForTab(k) {
   L('mergedRowForTab ENTER', { k });
@@ -47928,6 +48409,21 @@ mergedRowForTab(k) {
         'contact_tel',
         'contact_mobile',
         'contact_email'
+      ]);
+
+      for (const key of PRESERVE_EMPTY_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(mainStaged, key)) {
+          const v = mainStaged[key];
+          if (v === '') out[key] = ''; // keep explicit blank
+        }
+      }
+    }
+
+    // ✅ NEW: Contracts — preserve clearable nullable text fields (do not drop '')
+    if (this.entity === 'contracts') {
+      const PRESERVE_EMPTY_KEYS = new Set([
+        'display_site',
+        'ward_hint'
       ]);
 
       for (const key of PRESERVE_EMPTY_KEYS) {
@@ -50113,12 +50609,28 @@ function setFrameMode(frameObj, mode) {
       .catch(() => {});
   }
 }
+
 // ✅ NEW: persist parent staged state before opening child modal
-// Prevents "typed fields disappear" when a child modal opens before parent state is staged.
+// FIX: parent persistence must run against the parent's stored ctxRef,
+// because child openers may have re-seeded window.modalCtx before calling showModal().
 try {
   const p = currentFrame();
   if (p && typeof p.persistCurrentTabState === 'function') {
-    p.persistCurrentTabState();
+    const prevCtx = window.modalCtx;
+    const parentCtx = p._ctxRef || null;
+
+    if (parentCtx && typeof parentCtx === 'object') {
+      window.modalCtx = parentCtx;
+      try {
+        p.persistCurrentTabState();
+      } finally {
+        // restore child/new ctx (whatever was active when showModal was invoked)
+        window.modalCtx = prevCtx;
+      }
+    } else {
+      // fallback (should be rare): no ctxRef to bind; run as-is
+      p.persistCurrentTabState();
+    }
   }
 } catch {}
 
@@ -50268,14 +50780,30 @@ let _pushedRight = false;
 
   tabsEl.appendChild(b);
 });
-
-
 L('renderTop tabs (global)', { count: (top.tabs||[]).length, active: top.currentTabKey });
 
+// ✅ NEW: render sequencing token to prevent stale async setTab from wiring wrong frame
+const _renderToken = `rt:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+try { top._renderToken = _renderToken; } catch {}
 
-  if (top.currentTabKey) top.setTab(top.currentTabKey);
-  else if (top.tabs && top.tabs[0]) top.setTab(top.tabs[0].key);
-  else byId('modalBody').innerHTML = top.renderTab('form',{})||'';
+// ✅ NEW: kick tab render, but DO NOT run post-render wiring until setTab completes
+const _tabPromise = (() => {
+  try {
+    if (top.currentTabKey) return Promise.resolve(top.setTab(top.currentTabKey));
+    if (top.tabs && top.tabs[0]) return Promise.resolve(top.setTab(top.tabs[0].key));
+    byId('modalBody').innerHTML = top.renderTab('form', {}) || '';
+    return Promise.resolve(true);
+  } catch (e) {
+    console.warn('[MODAL][renderTop] setTab failed', e);
+    return Promise.resolve(false);
+  }
+})();
+
+_tabPromise.then(() => {
+  // ✅ If stack/top changed since we started, abort (prevents cross-frame wiring)
+  const topNow = currentFrame();
+  if (!topNow || topNow !== top) return;
+  if (top._renderToken !== _renderToken) return;
 
   const btnSave  = byId('btnSave');
   const btnClose = byId('btnCloseModal');
@@ -50283,8 +50811,8 @@ L('renderTop tabs (global)', { count: (top.tabs||[]).length, active: top.current
   const header   = byId('modalDrag');
   const modalNode= byId('modal');
 
-   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
-   if (modalNode) {
+  const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
+  if (modalNode) {
     const parentIsContracts =
       !!(parent && ((parent.entity === 'contracts') || (parent.kind === 'contracts')));
     const isContracts =
@@ -50301,32 +50829,38 @@ L('renderTop tabs (global)', { count: (top.tabs||[]).length, active: top.current
     if (LOGC && isContracts && !isImportSummary) {
       console.log('[CONTRACTS][MODAL] contract-modal class applied to #modal (inherited:', parentIsContracts, ')');
     }
-   // Job Titles: apply narrower modal sizing
-const isJobTitles = (top.kind === 'job-titles');
-modalNode.classList.toggle('jobtitles-modal', !!isJobTitles);
 
-// Evidence replace: temporarily use a larger modal footprint
-const isEvidenceReplace = (top.kind === 'timesheet-evidence-replace');
-modalNode.classList.toggle('evidence-modal', !!isEvidenceReplace);
+    // Job Titles: apply narrower modal sizing
+    const isJobTitles = (top.kind === 'job-titles');
+    modalNode.classList.toggle('jobtitles-modal', !!isJobTitles);
 
-// Candidate Advances: use a slightly wider modal footprint
-const isAdvances = (top.kind === 'candidate-advances');
-modalNode.classList.toggle('advances-modal', !!isAdvances);
+    // Evidence replace: temporarily use a larger modal footprint
+    const isEvidenceReplace = (top.kind === 'timesheet-evidence-replace');
+    modalNode.classList.toggle('evidence-modal', !!isEvidenceReplace);
 
-// ✅ Resolve Timesheets: larger/taller footprint (kills the unnecessary scrollbar)
-const isResolve = (top.kind === 'timesheets-resolve');
-modalNode.classList.toggle('resolve-modal', !!isResolve);
+    // Candidate Advances: use a slightly wider modal footprint
+    const isAdvances = (top.kind === 'candidate-advances');
+    modalNode.classList.toggle('advances-modal', !!isAdvances);
 
-// ✅ Invoice batch modals (Generate/Issue): larger + no outer modal scrollbar (CSS handles overflow)
-const isInvBatch =
-  (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
-  (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'));
+    // ✅ Resolve Timesheets: larger/taller footprint (kills the unnecessary scrollbar)
+    const isResolve = (top.kind === 'timesheets-resolve');
+    modalNode.classList.toggle('resolve-modal', !!isResolve);
 
-modalNode.classList.toggle('invbatch-modal', !!isInvBatch);
-modalNode.classList.toggle('invbatch-generate-modal', !!(typeof top.kind === 'string' && top.kind.includes('generate')));
-modalNode.classList.toggle('invbatch-issue-modal',    !!(typeof top.kind === 'string' && top.kind.includes('issue')));
+    // ✅ Invoice batch modals (Generate/Issue): larger + no outer modal scrollbar (CSS handles overflow)
+    const isInvBatch =
+      (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
+      (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'));
 
+    modalNode.classList.toggle('invbatch-modal', !!isInvBatch);
+    modalNode.classList.toggle('invbatch-generate-modal', !!(typeof top.kind === 'string' && top.kind.includes('generate')));
+    modalNode.classList.toggle('invbatch-issue-modal',    !!(typeof top.kind === 'string' && top.kind.includes('issue')));
   }
+
+  // ... (renderTop continues here exactly as before, but now it runs ONLY after setTab finished)
+
+}).catch((e) => {
+  console.warn('[MODAL][renderTop] post-tab wiring failed', e);
+});
 
 
 
@@ -50357,7 +50891,6 @@ modalNode.classList.toggle('invbatch-issue-modal',    !!(typeof top.kind === 'st
 
   const showChildDelete = isChild && (top.kind==='client-rate' || top.kind==='candidate-override') && top.hasId;
   btnDel.style.display = showChildDelete ? '' : 'none'; btnDel.onclick = null;
-
 let btnEdit = byId('btnEditModal');
 if (!btnEdit) {
   btnEdit = document.createElement('button');
@@ -50370,6 +50903,18 @@ if (!btnEdit) {
   L('renderTop (global): created btnEdit');
 }
 
+// ✅ Ensure footer Delete sits immediately LEFT of Edit (not header)
+try {
+  const bar2 = btnSave?.parentElement || btnClose?.parentElement;
+  if (bar2 && btnDel && btnEdit) {
+    // If it's not already immediately before Edit, move it there
+    if (btnDel.parentElement === bar2 && btnDel.nextSibling !== btnEdit) {
+      bar2.insertBefore(btnDel, btnEdit);
+    } else if (btnDel.parentElement !== bar2) {
+      bar2.insertBefore(btnDel, btnEdit);
+    }
+  }
+} catch {}
 // ─────────────────────────────────────────────────────────────
 // NEW: Timesheet footer buttons (created once; shown/hidden in _updateButtons)
 // ─────────────────────────────────────────────────────────────
@@ -51838,9 +52383,7 @@ try {
     }
 
 
-  // 🔹 Top-level Invoice Modal → wire global Delete button (VIEW mode only, eligible only)
-// NOTE: This aligns with your brief: delete is only possible AFTER unissue + remove all lines + Save.
-// We DO NOT delete in edit mode; we only show the delete button in VIEW when invoice is eligible.
+ // 🔹 Top-level Invoice Modal → wire global Delete button (VIEW mode only, eligible only)
 if (!isChild && top.entity === 'invoices' && top.kind === 'invoice-modal') {
   const mc = window.modalCtx || {};
   const det = mc.data || mc.dataLoaded || mc.invoiceDetail || null;
@@ -51881,8 +52424,108 @@ if (!isChild && top.entity === 'invoices' && top.kind === 'invoice-modal') {
     btnDel.style.display = 'none';
     btnDel.disabled = true;
     btnDel.onclick = null;
-    // restore default label if other flows rely on it
     btnDel.textContent = 'Delete';
+  }
+
+} else
+
+// ✅ NEW: Top-level Candidate/Client → Delete in FOOTER (VIEW mode only)
+// - Visible only when entity is candidates or clients AND mode=view AND hasId
+// - Red when eligible
+// - Greyed + tooltip when blocked (without using native disabled so title works)
+if (!isChild && (top.entity === 'candidates' || top.entity === 'clients')) {
+  const mc = window.modalCtx || {};
+  const ent = String(top.entity || '');
+  const show = (top.mode === 'view' && top.hasId);
+
+  // Eligibility can be stored by the modal opener on modalCtx.deleteEligibility (or delete_eligibility)
+  const elig =
+    (mc && typeof mc.deleteEligibility === 'object' && mc.deleteEligibility) ? mc.deleteEligibility :
+    (mc && typeof mc.delete_eligibility === 'object' && mc.delete_eligibility) ? mc.delete_eligibility :
+    null;
+
+  const canDelete = !!(elig && (elig.can_delete === true || String(elig.can_delete).toLowerCase() === 'true'));
+  const reason = String((elig && (elig.reason || elig.block_reason || elig.message)) || '').trim();
+
+  if (show) {
+    btnDel.style.display = '';
+
+    // Label per entity
+    btnDel.textContent = (ent === 'candidates') ? 'Delete Candidate' : 'Delete Client';
+
+    // Ensure footer styling: red when eligible; greyed when not
+    // (keep title hover reliable by NOT using native disabled)
+    btnDel.disabled = false;
+    btnDel.className = canDelete ? 'btn btn-warn' : 'btn btn-outline btn-sm';
+    btnDel.style.opacity = canDelete ? '' : '0.45';
+    btnDel.style.filter  = canDelete ? '' : 'grayscale(60%)';
+    btnDel.setAttribute('aria-disabled', canDelete ? 'false' : 'true');
+    btnDel.setAttribute('data-disabled', canDelete ? '' : '1');
+
+    if (!canDelete && reason) btnDel.setAttribute('title', reason);
+    else if (!canDelete) btnDel.setAttribute('title', 'This record cannot be deleted.');
+    else btnDel.removeAttribute('title');
+
+ btnDel.onclick = async (ev) => {
+  try { ev && ev.preventDefault && ev.preventDefault(); } catch {}
+  try { ev && ev.stopPropagation && ev.stopPropagation(); } catch {}
+
+  // Block click when not eligible (but still show tooltip)
+  if (!canDelete) {
+    const msg = btnDel.getAttribute('title') || 'This record cannot be deleted.';
+    if (window.__toast) window.__toast(msg);
+    else alert(msg);
+    return;
+  }
+
+  const id = window.modalCtx?.data?.id || null;
+  if (!id) {
+    alert('Missing id; cannot delete.');
+    return;
+  }
+
+  const label = (ent === 'candidates') ? 'candidate' : 'client';
+  const ok = window.confirm(`Permanently delete this ${label}? This cannot be undone.`);
+  if (!ok) return;
+
+  try {
+    // ✅ Prefer explicit handlers if you already have them
+    if (ent === 'candidates' && typeof deleteCandidate === 'function') {
+      await deleteCandidate(id);
+    } else if (ent === 'clients' && typeof deleteClient === 'function') {
+      await deleteClient(id);
+
+    // ✅ Fallback to generic handler names if those are what your codebase uses
+    } else if (ent === 'candidates' && typeof handleCandidateDelete === 'function') {
+      await handleCandidateDelete(id);
+    } else if (ent === 'clients' && typeof handleClientDelete === 'function') {
+      await handleClientDelete(id);
+
+    } else {
+      alert('Delete handler is not available (no deleteCandidate/deleteClient/handleCandidateDelete/handleClientDelete function found).');
+      return;
+    }
+
+    try { discardAllModalsAndState(); } catch {}
+    try { await renderAll(); } catch {}
+    try { window.__toast && window.__toast('Deleted'); } catch {}
+
+  } catch (e) {
+    alert(e?.message || 'Delete failed');
+  }
+};
+
+  } else {
+    btnDel.style.display = 'none';
+    btnDel.disabled = true;
+    btnDel.onclick = null;
+    btnDel.textContent = 'Delete';
+    btnDel.className = 'btn btn-outline btn-sm';
+    btnDel.style.opacity = '';
+    btnDel.style.filter  = '';
+    btnDel.removeAttribute('title');
+    btnDel.removeAttribute('aria-disabled');
+    btnDel.removeAttribute('data-disabled');
   }
 
 } else
@@ -51924,20 +52567,21 @@ if (!isChild && top.entity === 'contracts') {
     btnDel.style.display = 'none';
     btnDel.disabled = true;
     btnDel.onclick = null;
-
-    // ✅ FIX: reset label when hidden so it can’t carry over from other entities
     btnDel.textContent = 'Delete';
   }
 } else if (!isChild) {
+  // ✅ Default: any other TOP-LEVEL modal → hide + fully reset Delete button state
   btnDel.style.display = 'none';
   btnDel.disabled = true;
   btnDel.onclick = null;
-
-  // ✅ FIX: reset label on any non-child non-contract/non-invoice top frame
   btnDel.textContent = 'Delete';
+  btnDel.className = 'btn btn-outline btn-sm';
+  btnDel.style.opacity = '';
+  btnDel.style.filter  = '';
+  btnDel.removeAttribute('title');
+  btnDel.removeAttribute('aria-disabled');
+  btnDel.removeAttribute('data-disabled');
 }
-
-
   }
 
   setCloseLabel();
@@ -61451,15 +62095,34 @@ async function apiDeleteJson(urlPath, bodyObj) {
   return (json != null ? json : {});
 }
 
-
 async function apiDeleteJobTitle(id) {
   const url = API(`/api/job-titles/${encodeURIComponent(id)}`);
   const res = await authFetch(url, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Failed to delete job title');
+
+  if (!res.ok) {
+    let msg = '';
+    try {
+      const txt = await res.text();
+      if (txt && txt.trim()) {
+        try {
+          const j = JSON.parse(txt);
+          if (j && typeof j === 'object') {
+            if (typeof j.message === 'string' && j.message.trim()) msg = j.message.trim();
+            else if (typeof j.error === 'string' && j.error.trim()) msg = j.error.trim();
+          }
+        } catch {
+          msg = txt.trim();
+        }
+      }
+    } catch {}
+
+    if (!msg) msg = 'Failed to delete job title';
+    throw new Error(msg);
+  }
+
   const data = (await res.json().catch(() => ({}))) || {};
   return data;
 }
-
 function openJobTitleSettingsModal() {
   const S = {
     loading: false,
@@ -61947,7 +62610,8 @@ function openJobTitleSettingsModal() {
           await refreshFromCache();
         } catch (err) {
           console.error('job title delete failed', err);
-          alert('Failed to delete job title – it may still be in use.');
+          const msg = (err && err.message) ? String(err.message) : 'Failed to delete job title – it may still be in use.';
+          alert(msg);
         }
       };
     }
@@ -61997,7 +62661,6 @@ function openJobTitleSettingsModal() {
   // Initial load after modal is mounted
   refreshFromCache().catch((e) => console.error('[JOB_TITLES] initial refresh failed', e));
 }
-
 
 // =============== NEW: Job Titles Settings modal (side panel) ===========
 // =============== NEW: Job Titles Settings modal (side panel) ===========
@@ -63618,6 +64281,10 @@ function buildQuickFilters(section, text) {
       // backend supports ?q=... (ilike on name / invoice_no depending on endpoint)
       return { q: q };
 
+    case 'contracts':
+      // ✅ NEW: contracts quick search uses free-text q
+      return { q: q };
+
     case 'timesheets': {
       // Pick ONE field to avoid AND-ing and missing matches
       const looksLikeUUID   = /^[0-9a-f-]{10,}$/i.test(q);
@@ -63630,13 +64297,13 @@ function buildQuickFilters(section, text) {
     }
 
     case 'candidates':
-      return { first_name: q, last_name: q, email: q, phone: q };
+      // ✅ FIX: single free-text key so backend can OR-match first/surname properly
+      return { q: q };
 
     default:
       return {};
   }
 }
-
 // ✅ Quick search: use heuristic builder (includes timesheets fix)
 
 async function openSearch() {
