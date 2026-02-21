@@ -4533,15 +4533,19 @@ function renderTopNav(){
         // Minimal quick-search filters by section
         let filters = null;
         if (currentSection === 'candidates') {
-          if (text.includes('@'))       filters = { email: text };
-          else if (text.replace(/\D/g,'').length >= 7) filters = { phone: text };
-          else if (text.includes(' ')) {
-            const [fn, ln] = text.split(' ').filter(Boolean);
-            filters = { first_name: fn || text, last_name: ln || '' };
-          } else filters = { first_name: text };
+          if (text.includes('@')) {
+            filters = { email: text };
+          } else if (text.replace(/\D/g,'').length >= 7) {
+            filters = { phone: text };
+          } else {
+            // ✅ FIX: single-token (and multi-token) candidate quick search must be free-text
+            // so searching "arthur" finds "Kier Arthur" (surname match).
+            filters = { q: text };
+          }
 
         } else if (currentSection === 'clients' || currentSection === 'umbrellas') {
-          filters = { name: text };
+          // ✅ FIX: use free-text q for consistent behaviour with backend quick-search
+          filters = { q: text };
 
         } else if (currentSection === 'contracts') {
           // free-text passthrough for contracts
@@ -4567,7 +4571,6 @@ function renderTopNav(){
     }
   } catch {}
 }
-
 
 // NEW: advanced, section-aware search modal
 // === UPDATED: Advanced Search — add Roles (any) multi-select, use UK date pickers ===
@@ -50721,469 +50724,2760 @@ frame._parentModeOnOpen = parentOnOpen ? parentOnOpen.mode : null;
 stack().push(frame);
 byId('modalBack').style.display='flex';
 
-function renderTopNav(){
-  const nav = byId('nav'); nav.innerHTML = '';
 
-  // ✅ NEW: hard safety reset for the global Delete button when NOT in a candidate/client VIEW modal.
-  // btnDelete is a global footer control that can otherwise retain stale label/onclick/title/class
-  // across section navigation, modal close, and after deletes.
+function renderTop() {
+  const LOG = (typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : true;
+  const L  = (...a)=> { if (LOG) console.log('[MODAL]', ...a); };
+  const GC = (label)=> { if (LOG) console.groupCollapsed('[MODAL]', label); };
+  const GE = ()=> { if (LOG) console.groupEnd(); };
+
+  GC('renderTop()');
+
+  const hintEl = document.getElementById('modalHint');
+  if (hintEl) {
+    hintEl.textContent = '';
+    hintEl.removeAttribute('data-tone');
+    try { hintEl.classList.remove('ok','warn','err'); } catch {}
+  }
+
+   const isChild = (stack().length > 1);
+  const top     = currentFrame();
+  const parent  = parentFrame();
+
+  // ✅ Force: these invoice child modals must never show the global footer Save button
+try {
+  const k = (top && typeof top.kind === 'string') ? String(top.kind) : '';
+  if (
+    k === 'invoice-batch-add-timesheets' ||
+    k === 'invoice-batch-add-adjustment' ||
+    k === 'invoice-reference-numbers'
+  ) {
+    top._showSave = false;
+    top._showApply = true;
+  }
+} catch {}
+
+  // restore the parent/owner context for whatever frame is now on top
+  if (top && top._ctxRef) window.modalCtx = top._ctxRef;
+
+
+  if (typeof top._detachGlobal === 'function') { try { top._detachGlobal(); } catch {} top._wired = false; }
+
+ L('renderTop state (global)', { entity: top?.entity, kind: top?.kind, mode: top?.mode, hasId: top?.hasId, currentTabKey: top?.currentTabKey });
+
+// ✅ NEW: render title + optional titleBadges (pills) safely (no innerHTML from user strings)
+try {
+  const mt = byId('modalTitle');
+  if (mt) {
+    mt.textContent = '';
+    mt.style.display = 'flex';
+    mt.style.alignItems = 'center';
+    mt.style.gap = '6px';
+    mt.style.flexWrap = 'wrap';
+
+    const tSpan = document.createElement('span');
+    tSpan.textContent = String(top.title || '');
+    mt.appendChild(tSpan);
+
+    const badges = Array.isArray(top.titleBadges) ? top.titleBadges : [];
+    badges.forEach((bd) => {
+      const isObj = !!(bd && typeof bd === 'object');
+      const text = isObj ? (bd.text ?? bd.label ?? '') : bd;
+      const cls  = isObj ? (bd.className ?? bd.class ?? '') : '';
+      const tip  = isObj ? (bd.title ?? '') : '';
+
+      const txt = String(text || '').trim();
+      if (!txt) return;
+
+      const pill = document.createElement('span');
+      pill.className = `pill${cls ? ' ' + String(cls) : ''}`;
+      pill.textContent = txt;
+      if (String(tip || '').trim()) pill.title = String(tip).trim();
+      mt.appendChild(pill);
+    });
+  }
+} catch {}
+
+const tabsEl = byId('modalTabs'); tabsEl.innerHTML='';
+
+
+// ✅ Choose a safe active tab (never start on a disabled tab)
+try {
+  const list = Array.isArray(top.tabs) ? top.tabs : [];
+  const findTab = (k) => list.find(x => String(x?.key || '') === String(k || '')) || null;
+
+  let activeKey = top.currentTabKey || (list[0] ? list[0].key : null);
+  const t0 = findTab(activeKey);
+
+  if (t0 && t0.disabled) {
+    const firstEnabled = list.find(x => !x?.disabled) || list[0] || null;
+    activeKey = firstEnabled ? firstEnabled.key : activeKey;
+  }
+
+  top.currentTabKey = activeKey;
+} catch {}
+let _pushedRight = false;
+
+(top.tabs||[]).forEach((t,i)=>{
+  const b = document.createElement('button');
+  b.textContent = t.label || t.title || t.key;
+
+  // ✅ NEW: Right-aligned tabs (first one pushes the rest to the far right)
+  const alignRight = !!(t && (t.alignRight === true || t.align_right === true));
+  if (alignRight && !_pushedRight) {
+    b.style.marginLeft = 'auto';
+    _pushedRight = true;
+  }
+
+  // ✅ NEW: Small tab (compact padding/font-size) — for E-History
+  const small = !!(t && (t.small === true || t.isSmall === true));
+  if (small) {
+    b.style.padding = '4px 8px';
+    b.style.fontSize = '11px';
+  }
+
+  // ✅ Disabled tab support WITHOUT native disabled (keeps hover/title reliable)
+  const isDisabled = !!(t && t.disabled);
+  if (isDisabled) {
+    b.classList.add('disabled');
+    b.dataset.disabled = '1';
+    const why = String(t.disabled_reason || window.modalCtx?.expenses_tab_reason || 'This tab is currently unavailable.');
+    b.setAttribute('title', why);
+  } else {
+    b.classList.remove('disabled');
+    b.dataset.disabled = '';
+    b.removeAttribute('title');
+  }
+
+  if (t.key === top.currentTabKey) b.classList.add('active');
+
+  b.onclick = () => {
+    if (top.mode === 'saving') return;
+
+    // ✅ Click-block disabled tabs (non-responsive on click)
+    if (isDisabled) return;
+
+    tabsEl.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    top.setTab(t.key);
+  };
+
+  tabsEl.appendChild(b);
+});
+L('renderTop tabs (global)', { count: (top.tabs||[]).length, active: top.currentTabKey });
+
+// ✅ NEW: render sequencing token to prevent stale async setTab from wiring wrong frame
+const _renderToken = `rt:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+try { top._renderToken = _renderToken; } catch {}
+
+// ✅ NEW: kick tab render, but DO NOT run post-render wiring until setTab completes
+const _tabPromise = (() => {
   try {
-    const btnDelGlobal = byId('btnDelete');
+    if (top.currentTabKey) return Promise.resolve(top.setTab(top.currentTabKey));
+    if (top.tabs && top.tabs[0]) return Promise.resolve(top.setTab(top.tabs[0].key));
+    byId('modalBody').innerHTML = top.renderTab('form', {}) || '';
+    return Promise.resolve(true);
+  } catch (e) {
+    console.warn('[MODAL][renderTop] setTab failed', e);
+    return Promise.resolve(false);
+  }
+})();
+const modalNode = byId('modal');
 
-    const hasModalStack = ((window.__modalStack?.length || 0) > 0);
-    const mcEnt = String((window.modalCtx && window.modalCtx.entity) ? window.modalCtx.entity : (typeof modalCtx !== 'undefined' && modalCtx?.entity ? modalCtx.entity : '') || '');
-    const inCandOrClientCtx = (mcEnt === 'candidates' || mcEnt === 'clients');
+_tabPromise.then(() => {
+  // ✅ If stack/top changed since we started, abort (prevents cross-frame wiring)
+  const topNow = currentFrame();
+  if (!topNow || topNow !== top) return;
+  if (top._renderToken !== _renderToken) return;
 
-    // If a modal stack exists, prefer the top frame identity for correctness.
-    const topFrame = hasModalStack ? window.__modalStack[window.__modalStack.length - 1] : null;
-    const topEnt   = String((topFrame && topFrame.entity) ? topFrame.entity : mcEnt || '');
-    const topMode  = String((topFrame && topFrame.mode) ? topFrame.mode : '').toLowerCase();
+  const btnSave  = byId('btnSave');
+  const btnClose = byId('btnCloseModal');
+  const btnDel   = byId('btnDelete');
+  const header   = byId('modalDrag');
 
-    const inCandOrClientViewModal =
-      !!hasModalStack &&
-      (topEnt === 'candidates' || topEnt === 'clients') &&
-      (topMode === 'view');
+  const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
+  if (modalNode) {
+    const parentIsContracts =
+      !!(parent && ((parent.entity === 'contracts') || (parent.kind === 'contracts')));
+    const isContracts =
+      (top.entity === 'contracts') ||
+      (top.kind === 'contracts')  ||
+      parentIsContracts;
 
-    if (btnDelGlobal) {
-      // If NOT in candidate/client view modal, fully reset/hide.
-      if (!inCandOrClientViewModal) {
-        btnDelGlobal.style.display = 'none';
-        btnDelGlobal.disabled = true;
-        btnDelGlobal.onclick = null;
+    // Import summary utility panels must not be styled as "contract" modals,
+    // even if opened from Contracts.
+    const isImportSummary =
+      typeof top.kind === 'string' && top.kind.startsWith('import-summary-');
 
-        // Reset label + styling to safe defaults
-        btnDelGlobal.textContent = 'Delete';
-        btnDelGlobal.className = 'btn btn-outline btn-sm';
-        btnDelGlobal.style.opacity = '';
-        btnDelGlobal.style.filter  = '';
-
-        // Clear tooltip + aria flags
-        btnDelGlobal.removeAttribute('title');
-        btnDelGlobal.removeAttribute('aria-disabled');
-        btnDelGlobal.removeAttribute('data-disabled');
-      }
-
-      // If we ARE in candidate/client view modal, do nothing here.
-      // The modal lifecycle (showModal/renderTop) owns enabling/tooltip/wiring based on eligibility.
+    modalNode.classList.toggle('contract-modal', !!(isContracts && !isImportSummary));
+    if (LOGC && isContracts && !isImportSummary) {
+      console.log('[CONTRACTS][MODAL] contract-modal class applied to #modal (inherited:', parentIsContracts, ')');
     }
-  } catch {}
 
-  // ✅ NEW: provide a canonical hook delete handlers can call (optional but safe)
-  // Ensures summary refresh after successful delete, and ensures global Delete button is reset.
-  try {
-    if (typeof window.__afterRecordDeleteCleanup !== 'function') {
-      window.__afterRecordDeleteCleanup = async function(entityKey, id) {
-        try {
-          // Close any open modals first (prevents stale modalCtx + prevents “ghost” footer buttons)
-          if ((window.__modalStack?.length || 0) > 0 || (window.modalCtx && window.modalCtx.entity)) {
-            try { discardAllModalsAndState(); } catch {}
-          }
+    // Job Titles: apply narrower modal sizing
+    const isJobTitles = (top.kind === 'job-titles');
+    modalNode.classList.toggle('jobtitles-modal', !!isJobTitles);
 
-          // Always refresh the current summary view
-          try { await renderAll(); } catch {}
+    // Evidence replace: temporarily use a larger modal footprint
+    const isEvidenceReplace = (top.kind === 'timesheet-evidence-replace');
+    modalNode.classList.toggle('evidence-modal', !!isEvidenceReplace);
 
-          // Force a nav/header refresh so btnDelete is hidden/reset immediately
-          try { renderTopNav(); } catch {}
-        } catch {}
+    // Candidate Advances: use a slightly wider modal footprint
+    const isAdvances = (top.kind === 'candidate-advances');
+    modalNode.classList.toggle('advances-modal', !!isAdvances);
+
+    // ✅ Resolve Timesheets: larger/taller footprint (kills the unnecessary scrollbar)
+    const isResolve = (top.kind === 'timesheets-resolve');
+    modalNode.classList.toggle('resolve-modal', !!isResolve);
+
+    // ✅ Invoice batch modals (Generate/Issue): larger + no outer modal scrollbar (CSS handles overflow)
+    const isInvBatch =
+      (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
+      (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'));
+
+    modalNode.classList.toggle('invbatch-modal', !!isInvBatch);
+    modalNode.classList.toggle('invbatch-generate-modal', !!(typeof top.kind === 'string' && top.kind.includes('generate')));
+    modalNode.classList.toggle('invbatch-issue-modal',    !!(typeof top.kind === 'string' && top.kind.includes('issue')));
+  }
+
+  // ... (renderTop continues here exactly as before, but now it runs ONLY after setTab finished)
+
+}).catch((e) => {
+  console.warn('[MODAL][renderTop] post-tab wiring failed', e);
+});
+
+
+
+
+
+  if (modalNode) {
+    const anchor = (window.__modalAnchor || null);
+    if (!anchor) {
+      const R = modalNode.getBoundingClientRect();
+      window.__modalAnchor = { left: R.left, top: R.top };
+      modalNode.style.position = 'fixed';
+      modalNode.style.left = R.left + 'px';
+      modalNode.style.top  = R.top  + 'px';
+      modalNode.style.right = 'auto';
+      modalNode.style.bottom= 'auto';
+      modalNode.style.transform = 'none';
+      L('renderTop: anchored modal (global/new)', window.__modalAnchor);
+    } else {
+      modalNode.style.position = 'fixed';
+      modalNode.style.left = window.__modalAnchor.left + 'px';
+      modalNode.style.top  = window.__modalAnchor.top  + 'px';
+      modalNode.style.right = 'auto';
+      modalNode.style.bottom= 'auto';
+      modalNode.style.transform = 'none';
+      L('renderTop: anchored modal (global/reuse)', window.__modalAnchor);
+    }
+  }
+
+  const showChildDelete = isChild && (top.kind==='client-rate' || top.kind==='candidate-override') && top.hasId;
+  btnDel.style.display = showChildDelete ? '' : 'none'; btnDel.onclick = null;
+let btnEdit = byId('btnEditModal');
+if (!btnEdit) {
+  btnEdit = document.createElement('button');
+  btnEdit.id = 'btnEditModal';
+  btnEdit.type = 'button';
+  btnEdit.className = 'btn btn-outline btn-sm';
+  btnEdit.textContent = 'Edit';
+  const bar = btnSave?.parentElement || btnClose?.parentElement;
+  if (bar) bar.insertBefore(btnEdit, btnSave);
+  L('renderTop (global): created btnEdit');
+}
+// ✅ Ensure footer Delete sits immediately LEFT of Edit (not header)
+try {
+  const bar2 = btnSave?.parentElement || btnClose?.parentElement;
+  if (bar2 && btnDel && btnEdit) {
+    // If it's not already immediately before Edit, move it there
+    if (btnDel.parentElement === bar2 && btnDel.nextSibling !== btnEdit) {
+      bar2.insertBefore(btnDel, btnEdit);
+    } else if (btnDel.parentElement !== bar2) {
+      bar2.insertBefore(btnDel, btnEdit);
+    }
+  }
+} catch {}
+// ─────────────────────────────────────────────────────────────
+// NEW: Timesheet footer buttons (created once; shown/hidden in _updateButtons)
+// ─────────────────────────────────────────────────────────────
+const bar = btnSave?.parentElement || btnClose?.parentElement;
+
+const ensureFooterBtn = (id, text, className, beforeEl) => {
+  let b = byId(id);
+  if (!b) {
+    b = document.createElement('button');
+    b.id = id;
+    b.type = 'button';
+    b.className = className || 'btn btn-outline btn-sm';
+    b.textContent = text;
+    if (bar) bar.insertBefore(b, beforeEl || btnSave);
+    L('renderTop: created footer button', { id });
+  }
+  return b;
+};
+
+const hintEl2 = document.getElementById('modalHint');
+const setHint = (txt, tone) => {
+  if (!hintEl2) return;
+  hintEl2.textContent = String(txt || '');
+  if (tone) hintEl2.setAttribute('data-tone', tone);
+  else hintEl2.removeAttribute('data-tone');
+  try { hintEl2.classList.remove('ok','warn','err'); } catch {}
+  if (tone === 'warn') try { hintEl2.classList.add('warn'); } catch {}
+  if (tone === 'err')  try { hintEl2.classList.add('err'); } catch {}
+  if (tone === 'ok')   try { hintEl2.classList.add('ok'); } catch {}
+};
+
+// ✅ Legacy footer conversion buttons are removed.
+// If any old DOM button exists from previous sessions, hide/disable it.
+['btnTsConvertManual','btnTsRestoreElectronic','btnTsRequestNewElectronic'].forEach(id => {
+  const b = byId(id);
+  if (b) { b.style.display = 'none'; b.disabled = true; }
+});
+
+
+// ✅ NEW: VIEW-mode Authorise / Unauthorise (footer, next to Save/Edit)
+const btnTsAuthorise = ensureFooterBtn(
+  'btnTsAuthorise',
+  'Authorise',
+  'btn btn-outline btn-sm',
+  btnSave
+);
+
+const btnTsUnauthorise = ensureFooterBtn(
+  'btnTsUnauthorise',
+  'Unauthorise',
+  'btn btn-outline btn-sm',
+  btnSave
+);
+
+// ✅ NEW: VIEW-mode planned weekly manual → process into a real timesheet
+const btnTsProcess = ensureFooterBtn(
+  'btnTsProcessTimesheet',
+  'Process Timesheet',
+  'btn btn-outline btn-sm',
+  btnSave
+);
+
+// ✅ NEW: footer-only Unprocess
+const btnTsUnprocess = ensureFooterBtn(
+  'btnTsUnprocessTimesheet',
+  'Unprocess Timesheet',
+  'btn btn-outline btn-sm',
+  btnSave
+);
+
+const btnTsDelete = ensureFooterBtn(
+  'btnTsDeleteTimesheet',
+  'Delete timesheet',
+  'btn btn-warn',
+  btnSave
+);
+
+// Default hidden; _updateButtons decides
+btnTsAuthorise.style.display   = 'none';
+btnTsUnauthorise.style.display = 'none';
+btnTsProcess.style.display     = 'none';
+btnTsUnprocess.style.display   = 'none'; // ✅ NEW
+btnTsDelete.style.display      = 'none';
+
+
+// Hover hint: Process only
+btnTsProcess.onmouseenter = () => setHint(
+  'Process this planned MANUAL week into a real timesheet using the stored schedule/hours.',
+  'warn'
+);
+btnTsProcess.onmouseleave = () => setHint('', null);
+
+
+  (function dragWire() {
+    if (!header || !modalNode) return;
+
+    const onDown = (e) => {
+      if ((e.button !== 0 && e.type === 'mousedown') || e.target.closest('button')) return;
+
+      const R = modalNode.getBoundingClientRect();
+      modalNode.style.position = 'fixed';
+      modalNode.style.left     = R.left + 'px';
+      modalNode.style.top      = R.top  + 'px';
+      modalNode.style.right    = 'auto';
+      modalNode.style.bottom   = 'auto';
+      modalNode.style.transform= 'none';
+      modalNode.classList.add('dragging');
+
+      const ox = e.clientX - R.left;
+      const oy = e.clientY - R.top;
+
+      // Measure header relative to the modal so we can keep it mostly visible
+      const headerRect    = header.getBoundingClientRect();
+      const headerOffsetY = headerRect.top - R.top;   // distance from modal top to header top
+      const headerHeight  = headerRect.height || 0;
+
+      document.onmousemove = (ev) => {
+        let l = ev.clientX - ox;
+        let t = ev.clientY - oy;
+
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+
+        // Horizontal: allow up to ~80% off-screen, keep ~20% visible
+        const minLeft = -R.width * 0.8;         // up to ~80% off the left
+        const maxLeft = vw - R.width * 0.2;     // leave ~20% visible on the right
+
+        // Vertical (critical bit):
+        // Ensure the header top never goes above -20% of its height.
+        // i.e. at least 80% of the header remains visible.
+        // headerTopInViewport = t + headerOffsetY
+        const minTop = -headerOffsetY - headerHeight * 0.2;
+
+        // Bottom clamp: keep the whole modal roughly within the viewport height
+        const maxTop = vh - R.height;
+
+        if (l < minLeft) l = minLeft;
+        if (l > maxLeft) l = maxLeft;
+        if (t < minTop)  t = minTop;
+        if (t > maxTop)  t = maxTop;
+
+        modalNode.style.left = l + 'px';
+        modalNode.style.top  = t + 'px';
       };
+
+      document.onmouseup = () => {
+        modalNode.classList.remove('dragging');
+        const R2 = modalNode.getBoundingClientRect();
+        window.__modalAnchor = { left: R2.left, top: R2.top };
+        document.onmousemove = null;
+        document.onmouseup   = null;
+        L('dragWire (global): saved new anchor', window.__modalAnchor);
+      };
+
+      e.preventDefault();
+    };
+
+    const onDbl = (e) => {
+      if (!e.target.closest('button')) sanitizeModalGeometry();
+    };
+
+    header.addEventListener('mousedown', onDown);
+    header.addEventListener('dblclick',  onDbl);
+
+    const prev = top._detachGlobal;
+    top._detachGlobal = () => {
+      try { header.removeEventListener('mousedown', onDown); } catch {}
+      try { header.removeEventListener('dblclick',  onDbl); } catch {}
+      document.onmousemove = null;
+      document.onmouseup   = null;
+      if (typeof prev === 'function') {
+        try { prev(); } catch {}
+      }
+    };
+  })();
+
+ const wantApply =
+  (isChild && !top.noParentGate) ||
+  (
+    top.kind === 'client-rate'       ||
+    top.kind === 'candidate-override'||
+    top.kind === 'rate-presets-picker' ||
+    top.kind === 'candidate-picker'  ||
+    top.kind === 'client-picker'     ||
+    top.kind === 'qr-decision'       ||
+    top.kind === 'contract_settings' // ✅ NEW: always an Apply-style staging child
+  );
+
+
+
+  const defaultPrimary =
+    (top.kind === 'contract-clone-extend')      ? 'Create'
+  : (top.kind === 'advanced-search')            ? 'Search'
+  : (top.kind === 'selection-load')             ? 'Load'
+  : (top.kind === 'timesheet-evidence-replace') ? 'Save evidence'
+  : (wantApply ? 'Apply' : 'Save');
+
+
+
+  btnSave.textContent = defaultPrimary; btnSave.setAttribute('aria-label', defaultPrimary);
+  L('showModal defaultPrimary', { kind: top.kind, defaultPrimary });
+const setCloseLabel = ()=> {
+const isUtilityKind =
+  top.kind === 'timesheets-resolve' ||
+  top.kind === 'resolve-candidate'  ||
+  top.kind === 'resolve-client'     ||
+  top.kind === 'invoice-reference-numbers' ||
+  top.kind === 'invoice-send-email-confirm' ||
+  (typeof top.kind === 'string' && top.kind.startsWith('import-summary-')) ||
+  (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
+  (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'));
+
+
+
+ const label =
+  (top.kind === 'advanced-search')
+    ? 'Close'
+  : (top.kind === 'timesheet-evidence-replace')
+    ? 'Discard'
+  : (top.kind === 'timesheet-evidence-viewer')
+    ? (top.isDirty ? 'Discard' : 'Close')
+  : isUtilityKind
+    ? 'Close'
+    : (top.isDirty ? 'Discard' : 'Close');
+
+
+  btnClose.textContent = label;
+  btnClose.setAttribute('aria-label', label);
+  btnClose.setAttribute('title', label);
+};
+
+top._updateButtons = ()=> {
+  try {
+    const h = document.getElementById('modalHint');
+    if (h) {
+      h.textContent = '';
+      h.removeAttribute('data-tone');
+      h.classList.remove('ok','warn','err');
     }
   } catch {}
 
-  // ensure per-section list + selection exist
-  window.__listState = window.__listState || {};
-  window.__selection = window.__selection || {};
+  const parentEditable = top.noParentGate ? true : (parent ? (parent.mode==='edit' || parent.mode==='create') : true);
+  const relatedBtn = byId('btnRelated');
 
-  // helper: common section switch (mirrors original behaviour)
-  const switchToSection = (sectionKey) => {
-    if (!confirmDiscardChangesIfDirty()) return;
+  if (top && top._showSave === false) {
+    btnSave.style.display = 'none';
+    btnSave.disabled = true;
+    btnEdit.style.display = 'none';
 
-    // ✅ Settings is modal-only: do NOT change the summary section
-    if (sectionKey === 'settings') {
-      if ((window.__modalStack?.length || 0) > 0 || modalCtx?.entity) {
-        discardAllModalsAndState();
+    if (relatedBtn) {
+      relatedBtn.style.display = 'none';
+      relatedBtn.disabled = true;
+    }
+
+    btnClose.textContent = 'Close';
+    btnClose.setAttribute('aria-label', 'Close');
+    btnClose.setAttribute('title', 'Close');
+
+    L('_updateButtons snapshot (forced no-save)', {
+      kind: top.kind,
+      isChild,
+      mode: top.mode,
+      btnSave: { display: btnSave.style.display, disabled: btnSave.disabled },
+      btnEdit: { display: btnEdit.style.display }
+    });
+    return;
+  }
+
+
+  // NEW: hide Preset Manager's "New" button whenever a child is open or when the top frame isn't the manager
+  try {
+    const rpNew = byId('btnRpNew');
+    if (rpNew) {
+      const shouldShow = (!isChild && top.kind === 'rates-presets');
+      rpNew.style.display = shouldShow ? '' : 'none';
+    }
+  } catch {}
+
+  if (top.kind === 'advanced-search') {
+    btnEdit.style.display='none';
+    btnSave.style.display='';
+    btnSave.disabled=!!top._saving;
+    if (relatedBtn) {
+      relatedBtn.style.display = 'none';
+      relatedBtn.disabled = true;
+    }
+
+  } else if (top.kind === 'rates-presets') {
+    btnEdit.style.display='none';
+    btnSave.style.display='none';
+    btnSave.disabled=true;
+    if (relatedBtn) {
+      relatedBtn.style.display = 'none';
+      relatedBtn.disabled = true;
+    }
+
+    // Always show “Close” for the Preset Rates manager (never “Discard”)
+    btnClose.textContent = 'Close';
+    btnClose.setAttribute('aria-label', 'Close');
+    btnClose.setAttribute('title', 'Close');
+
+    L('_updateButtons snapshot (global)', {
+      kind: top.kind, isChild, parentEditable, mode: top.mode,
+      btnSave: { display: btnSave.style.display, disabled: btnSave.disabled },
+      btnEdit: { display: btnEdit.style.display }
+    });
+    return;
+
+  } else if (top.kind === 'candidate-picker' || top.kind === 'client-picker') {
+    // NEW: candidate/client pickers – explicit Apply, gated by row selection
+    btnEdit.style.display = 'none';
+    btnSave.style.display = '';
+    btnSave.disabled = !!top._saving || !top._pickerHasSelection;
+
+    if (relatedBtn) {
+      relatedBtn.style.display = 'none';
+      relatedBtn.disabled = true;
+    }
+
+    L('_updateButtons snapshot (picker)', {
+      kind: top.kind,
+      isChild,
+      hasSelection: !!top._pickerHasSelection,
+      btnSave: { display: btnSave.style.display, disabled: btnSave.disabled }
+    });
+    return;
+
+  } else if (top.kind === 'qr-decision') {
+    // NEW: QR decision modal – Apply gated by selected radio
+    btnEdit.style.display = 'none';
+    btnSave.style.display = '';
+    btnSave.disabled      = !!top._saving || !top._qrChoice;
+
+    if (relatedBtn) {
+      relatedBtn.style.display = 'none';
+      relatedBtn.disabled = true;
+    }
+
+    btnClose.textContent = 'Cancel';
+    btnClose.setAttribute('aria-label', 'Cancel');
+    btnClose.setAttribute('title', 'Cancel');
+    return;
+
+     } else if (
+    top.kind === 'timesheets-resolve' ||
+    top.kind === 'resolve-candidate'  ||
+    top.kind === 'resolve-client'     ||
+    top.kind === 'invoice-reference-numbers' ||
+    (typeof top.kind === 'string' && top.kind.startsWith('import-summary-')) ||
+    (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
+    (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'))
+  ) {
+    // NEW: utility modals (resolve/import/invoice-batch) — hide Save/Edit, Close-only
+
+    // No Save/Edit on these; everything happens via inline buttons in the modal body
+    btnSave.style.display = 'none';
+    btnSave.disabled      = true;
+    btnEdit.style.display = 'none';
+
+    if (relatedBtn) {
+      relatedBtn.style.display = 'none';
+      relatedBtn.disabled = true;
+    }
+
+    // Always simple "Close" label (never "Discard")
+    btnClose.textContent = 'Close';
+    btnClose.setAttribute('aria-label', 'Close');
+    btnClose.setAttribute('title', 'Close');
+
+    L('_updateButtons snapshot (utility)', {
+      kind: top.kind,
+      isChild,
+      mode: top.mode,
+      btnSave: { display: btnSave.style.display, disabled: btnSave.disabled },
+      btnEdit: { display: btnEdit.style.display }
+    });
+    return;
+
+
+  } else if (isChild && !top.noParentGate) {
+
+    if (top.mode === 'view') {
+      btnSave.style.display = 'none';
+      btnSave.disabled = true;
+      btnEdit.style.display = 'none';
+      if (relatedBtn) {
+        relatedBtn.style.display = 'none';
+        relatedBtn.disabled = true;
       }
-      try { openSettings(); } catch (e) { alert('Could not open settings'); }
+    } else {
+      btnSave.style.display = parentEditable ? '' : 'none';
+
+      // Child apply gating:
+      // - rate-presets-picker: gate by __canSave
+      // - client-rate / candidate-override: gate by _applyDesired
+      // - address-lookup (and other simple children): always allow Apply if parent is editable
+      let wantApply;
+      if (top.kind === 'rate-presets-picker') {
+        wantApply = !!top.__canSave;
+      } else if (top.kind === 'client-rate' || top.kind === 'candidate-override') {
+        wantApply = (top._applyDesired === true);
+      } else {
+        wantApply = true;
+      }
+
+      btnSave.disabled = (!parentEditable) || top._saving || !wantApply;
+      btnEdit.style.display='none';
+      if (relatedBtn) {
+        relatedBtn.style.display = 'none';
+        relatedBtn.disabled = true;
+      }
+      if (LOG) console.log('[MODAL] child _updateButtons()', {
+        parentEditable, wantApply, disabled: btnSave.disabled, kind: top.kind
+      });
+    }
+
+  } else {
+
+    // ── Edit gating (Timesheets + generic entities) ──
+    let canEdit = false;
+
+    const mcTs = (window.modalCtx || {});
+    const meta = (mcTs && mcTs.timesheetMeta) || {};
+    const det  = (mcTs && mcTs.timesheetDetails) || {};
+    const tsfin= det.tsfin || {};
+
+    // Timesheet identity + status
+    const tsId   = mcTs?.data?.timesheet_id || null;
+    const weekId = mcTs?.data?.contract_week_id || null;
+
+    const sheetScope = String(meta.sheetScope || '').toUpperCase();
+    const subMode    = String(meta.subMode    || '').toUpperCase();
+    const cwMode     = String(meta.cw_submission_mode_snapshot || '').toUpperCase();
+
+    const isWeekly   = (sheetScope === 'WEEKLY');
+    const isDaily    = (sheetScope === 'DAILY');
+
+    const locked =
+      !!meta.isPaid ||
+      !!meta.isInvoiced ||
+      !!tsfin.locked_by_invoice_id ||
+      !!tsfin.paid_at_utc;
+
+ if (top.entity === 'timesheets') {
+  const hasTsMeta  = !!meta.hasTs;
+  const isPlanned  = !!meta.isPlannedWeek;
+
+  const isWeeklyManualTs =
+    hasTsMeta && isWeekly && subMode === 'MANUAL' && !locked;
+
+  const isPlannedManualWeek =
+    !hasTsMeta && isPlanned && isWeekly && !!weekId && !locked && (cwMode === 'MANUAL');
+
+  const isDailyManualTs =
+    hasTsMeta && isDaily && subMode === 'MANUAL' && !locked;
+
+  // ✅ NEW: import-authoritative (from SUMMARY row)
+  const boolish = (v) => {
+    if (v === true) return true;
+    if (v === false) return false;
+    if (v == null) return false;
+    const s = String(v).trim().toLowerCase();
+    return (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on');
+  };
+
+  const isImportAuthoritativeFromSummary = (routeType, noTimesheetRequired) => {
+    const rt = String(routeType || '').toUpperCase();
+    const noTs = boolish(noTimesheetRequired);
+    return (
+      rt === 'WEEKLY_NHSP' ||
+      rt === 'WEEKLY_NHSP_ADJUSTMENT' ||
+      (rt === 'WEEKLY_HEALTHROSTER' && noTs === true)
+    );
+  };
+
+  const dSum = (mcTs && mcTs.data) ? mcTs.data : {};
+const importAuthoritative =
+  isImportAuthoritativeFromSummary(dSum.route_type, dSum.client_no_timesheet_required);
+
+// ✅ Allow Edit for import-authoritative *real timesheets* (for deferrals)
+const isImportAuthEditable =
+  hasTsMeta && !locked && importAuthoritative;
+
+// ✅ NEW: import-authoritative planned stub → cannot Edit
+const isImportAuthPlannedStub =
+  (!hasTsMeta && isPlanned && importAuthoritative);
+
+canEdit =
+  (top.mode === 'view') &&
+  !isImportAuthPlannedStub &&
+  (isWeeklyManualTs || isPlannedManualWeek || isDailyManualTs || isImportAuthEditable);
+
+} else {
+  canEdit = (top.mode === 'view' && top.hasId);
+}
+
+
+    // Footer placement: ONLY show Edit when allowed (no convert replacement)
+    btnEdit.style.display = (canEdit ? '' : 'none');
+
+    // ✅ Hard-hide any legacy footer conversion buttons (all converts live in Overview Actions now)
+    ['btnTsConvertManual','btnTsRestoreElectronic','btnTsRequestNewElectronic'].forEach(id => {
+      const b = byId(id);
+      if (b) { b.style.display = 'none'; b.disabled = true; }
+    });
+
+    // Helper: kill old addEventListener closures by cloning once, then use onclick + ownerToken forever
+    const staleSafeBtn = (btn) => {
+      if (!btn) return null;
+      if (btn.dataset && btn.dataset.staleSafe === '1') return btn;
+      const clone = btn.cloneNode(true);
+      btn.parentNode && btn.parentNode.replaceChild(clone, btn);
+      clone.dataset.staleSafe = '1';
+      return clone;
+    };
+
+       // ── Footer buttons for timesheets: Authorise / Unauthorise / Process / Delete ──
+   let btnTsAuthorise   = byId('btnTsAuthorise');
+let btnTsUnauthorise = byId('btnTsUnauthorise');
+let btnTsProcess     = byId('btnTsProcessTimesheet');
+let btnTsUnprocess   = byId('btnTsUnprocessTimesheet'); // ✅ NEW
+let btnTsDelete      = byId('btnTsDeleteTimesheet');
+
+btnTsAuthorise   = staleSafeBtn(btnTsAuthorise);
+btnTsUnauthorise = staleSafeBtn(btnTsUnauthorise);
+btnTsProcess     = staleSafeBtn(btnTsProcess);
+btnTsUnprocess   = staleSafeBtn(btnTsUnprocess);       // ✅ NEW
+btnTsDelete      = staleSafeBtn(btnTsDelete);
+
+
+if (!isChild && top.entity === 'timesheets') {
+  const mcNow    = window.modalCtx || {};
+  const metaNow  = (mcNow && mcNow.timesheetMeta) || {};
+  const detNow   = (mcNow && mcNow.timesheetDetails) || {};
+  const tsNowObj = detNow.timesheet || {};
+  const tsfinNow = detNow.tsfin || {};
+  const cwNow    = detNow.contract_week || {};
+  const policyNow = detNow.policy || {};
+
+  const tsIdNow   = mcNow.data?.timesheet_id || null;          // real TS id (if exists)
+  const weekIdNow = mcNow.data?.contract_week_id || null;      // planned CW id (if any)
+
+  const lockedNow = !!(
+    metaNow.isPaid ||
+    metaNow.isInvoiced ||
+    tsfinNow.locked_by_invoice_id ||
+    tsfinNow.paid_at_utc
+  );
+
+  const isAuthorisedNow = !!(
+    tsNowObj.authorised_at_server ||
+    mcNow.data?.authorised_at_server
+  );
+
+  // requiresAuth: prefer helper if available, else fallback
+let requiresAuthNow = false;
+try {
+  if (typeof computeRequiresTimesheetAuthorisation === 'function') {
+    const x = computeRequiresTimesheetAuthorisation(detNow, (mcNow.data || {}));
+    requiresAuthNow = !!(x && x.requires); // ✅ apply helper output
+  } else {
+    const stageRawNow = String(tsfinNow.processing_status || mcNow.data?.processing_status || '').toUpperCase();
+
+    const asBool = (v) => {
+      if (v === true) return true;
+      if (v === false) return false;
+      if (v == null) return false;
+      const s = String(v).trim().toLowerCase();
+      return (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on');
+    };
+
+    // Prefer summary-row fields (contract-resolved) when present; otherwise fallback to policy
+    const d = mcNow.data || {};
+    const requiresHrNow =
+      (Object.prototype.hasOwnProperty.call(d, 'client_requires_hr'))
+        ? asBool(d.client_requires_hr)
+        : !!policyNow.requires_hr;
+
+    const autoprocessHrNow =
+      (Object.prototype.hasOwnProperty.call(d, 'client_autoprocess_hr'))
+        ? asBool(d.client_autoprocess_hr)
+        : !!policyNow.autoprocess_hr;
+
+    requiresAuthNow =
+      (stageRawNow === 'PENDING_AUTH') ||
+      (requiresHrNow && !autoprocessHrNow && stageRawNow === 'READY_FOR_HR');
+  }
+} catch {
+  requiresAuthNow = false;
+}
+
+  // ✅ NEW: unsigned QR gating for Authorise button (show shaded + tooltip; do not allow click)
+  let qrUnsignedNow = false;
+  try {
+    const qrStatusU = String(tsNowObj.qr_status ?? mcNow.data?.qr_status ?? '').trim().toUpperCase();
+    const qrToken = (tsNowObj.qr_token != null ? String(tsNowObj.qr_token).trim() : (mcNow.data?.qr_token != null ? String(mcNow.data.qr_token).trim() : ''));
+    const qrGen = (tsNowObj.qr_generated_at ?? mcNow.data?.qr_generated_at ?? null);
+    const qrLastSentHash = (tsNowObj.qr_last_sent_hash != null ? String(tsNowObj.qr_last_sent_hash).trim() : (mcNow.data?.qr_last_sent_hash != null ? String(mcNow.data.qr_last_sent_hash).trim() : ''));
+    const qrScannedAt = (tsNowObj.qr_scanned_at ?? mcNow.data?.qr_scanned_at ?? null);
+
+    const hasIssuedProof = (
+      ((qrToken && qrGen) ? true : false) ||
+      (!!qrLastSentHash)
+    );
+
+    const byTruthModel = (qrStatusU === 'PENDING' && hasIssuedProof && !qrScannedAt);
+
+    let byIssueCode = false;
+    try {
+      const codes = Array.isArray(mcNow.data?.issue_codes) ? mcNow.data.issue_codes : [];
+      byIssueCode = codes.map(x => String(x || '').trim()).includes('Awaiting signed QR timesheet');
+    } catch {}
+
+    qrUnsignedNow = (byTruthModel || byIssueCode);
+  } catch {
+    qrUnsignedNow = false;
+  }
+
+  const canAuthoriseNowBase =
+    (top.mode === 'view') &&
+    !!tsIdNow &&
+    !lockedNow &&
+    requiresAuthNow &&
+    !isAuthorisedNow;
+
+  const canAuthoriseNow = canAuthoriseNowBase && !qrUnsignedNow;
+
+  const showAuthoriseDisabled = canAuthoriseNowBase && qrUnsignedNow;
+
+  const canUnauthoriseNow =
+    (top.mode === 'view') &&
+    !!tsIdNow &&
+    !lockedNow &&
+    isAuthorisedNow;
+
+  // Process Timesheet (planned weekly MANUAL week → create real timesheet)
+  const sheetScopeNow = String(metaNow.sheetScope || '').toUpperCase();
+  const cwModeNow     = String(
+    metaNow.cw_submission_mode_snapshot ||
+    cwNow.submission_mode_snapshot ||
+    ''
+  ).toUpperCase();
+  const isWeeklyNow   = (sheetScopeNow === 'WEEKLY');
+
+const boolish = (v) => {
+  if (v === true) return true;
+  if (v === false) return false;
+  if (v == null) return false;
+  const s = String(v).trim().toLowerCase();
+  return (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on');
+};
+
+const isImportAuthoritativeFromSummary = (routeType, noTimesheetRequired) => {
+  const rt = String(routeType || '').toUpperCase();
+  const noTs = boolish(noTimesheetRequired);
+  return (
+    rt === 'WEEKLY_NHSP' ||
+    rt === 'WEEKLY_NHSP_ADJUSTMENT' ||
+    (rt === 'WEEKLY_HEALTHROSTER' && noTs === true)
+  );
+};
+
+const dSum = (mcNow && mcNow.data) ? mcNow.data : {};
+const importAuthoritativeNow =
+  isImportAuthoritativeFromSummary(dSum.route_type, dSum.client_no_timesheet_required);
+
+const canProcessNow =
+  (top.mode === 'view') &&
+  isWeeklyNow &&
+  !lockedNow &&
+  !importAuthoritativeNow &&   // ✅ NEW
+  !tsIdNow &&
+  !!weekIdNow &&
+  (cwModeNow === 'MANUAL');
+
+
+ // ✅ NEW: delete-preview policy (backend-authoritative; do NOT replace existing UI gating — only tighten delete)
+  const dpNow =
+    (mcNow && mcNow.timesheetDeletePreview && typeof mcNow.timesheetDeletePreview === 'object')
+      ? mcNow.timesheetDeletePreview
+      : null;
+
+  const dpKindNow = String((dpNow && dpNow.kind) ? dpNow.kind : '').toUpperCase();
+  const dpEligibleNow = (dpNow && typeof dpNow.eligible === 'boolean') ? dpNow.eligible : false;
+
+  // Delete (real OR planned)
+  const isPlannedOnlyNow = (!tsIdNow && !!weekIdNow);
+
+  const canDeleteNowBase =
+    ((top.mode === 'edit' || top.mode === 'view') && !lockedNow && (!!tsIdNow || !!weekIdNow));
+
+  const canDeleteNow =
+    canDeleteNowBase &&
+    (
+      isPlannedOnlyNow ||
+      (dpEligibleNow === true && dpKindNow !== 'IMPORT_CHILD_ADJUSTMENT')
+    );
+
+  // ✅ Unprocess eligibility:
+  // - real TS exists
+  // - WEEKLY + MANUAL
+  // - has contract week
+  // - not locked
+  // - NOT authorised (user must unauthorise first)
+  const subModeNow = String(metaNow.subMode || '').toUpperCase();
+  const isWeeklyNow2 = (String(metaNow.sheetScope || '').toUpperCase() === 'WEEKLY');
+  const hasCwNow = !!(detNow.contract_week_id || cwNow.id || weekIdNow);
+
+  const canUnprocessNow =
+    (top.mode === 'view') &&
+    !!tsIdNow &&
+    isWeeklyNow2 &&
+    (subModeNow === 'MANUAL') &&
+    hasCwNow &&
+    !lockedNow &&
+    !isAuthorisedNow;
+
+  const refreshFooter = async () => {
+    const fn = ensureTsRefreshAndRepaintOverview();
+    await fn();
+  };
+
+  if (btnTsUnprocess) {
+    btnTsUnprocess.style.display = canUnprocessNow ? '' : 'none';
+    btnTsUnprocess.disabled      = !!top._saving;
+
+    btnTsUnprocess.dataset.ownerToken = top._token;
+    btnTsUnprocess.onclick = async () => {
+      const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
+      if (!fr || btnTsUnprocess.dataset.ownerToken !== fr._token) return;
+
+      const mc = window.modalCtx || {};
+      const det = mc.timesheetDetails || {};
+
+      const tsIdX = mc.data?.timesheet_id || null;
+      const cwIdX = det.contract_week_id || mc.data?.contract_week_id || null;
+
+      if (!tsIdX) { alert('Timesheet id missing.'); return; }
+      if (!cwIdX) { alert('Contract week id missing.'); return; }
+
+      const ok = window.confirm(
+        'Unprocess Timesheet?\n\n' +
+        'This will delete the processed MANUAL timesheet and revert back to the planned week.'
+      );
+      if (!ok) return;
+
+  try {
+  // This is your existing “delete-manual-reopen” operation.
+  await deleteManualTimesheetAndReopenWeek(tsIdX, cwIdX);
+
+  // ✅ flip modal context into planned-week shape BEFORE refresh
+  try {
+    mc.data = mc.data || {};
+    mc.data.timesheet_id = null;
+    mc.data.contract_week_id = cwIdX; // planned-week identity
+    mc.data.id = cwIdX;
+
+    // ✅ FIX: clear row-level TSFIN-derived fields so badges do NOT read stale row.* values
+    mc.data.processing_status     = null;
+    mc.data.ready_to_pay          = null;
+    mc.data.paid_at_utc           = null;
+    mc.data.locked_by_invoice_id  = null;
+    mc.data.locked_by_invoice_number = null;
+    mc.data.total_hours           = null;
+    mc.data.total_pay_ex_vat      = null;
+    mc.data.total_charge_ex_vat   = null;
+    mc.data.margin_ex_vat         = null;
+    mc.data.pay_on_hold           = null;
+    mc.data.authorised_at_server  = null;
+
+    // ✅ Prevent planned week being treated as QR via row flags
+    mc.data.is_qr     = false;
+    mc.data.qr_status = null;
+  } catch {}
+  try { fr.hasId = false; } catch {}
+
+  // ✅ FIX (Issue #3): clear stale “moved/current” identity fields so planned-week UI doesn’t think a TS exists
+  try {
+    mc.timesheetDetails = mc.timesheetDetails || {};
+    mc.timesheetDetails.current_timesheet_id = null;
+    mc.timesheetDetails.requested_timesheet_id = null;
+  } catch {}
+
+  // ✅ FIX (Issue #1): clear stale TS/TSFIN so Overview badges repaint immediately
+  // ✅ ALSO: clear evidence list so planned-week gating never sees old TS evidence
+  try {
+    mc.timesheetDetails = mc.timesheetDetails || {};
+    mc.timesheetDetails.timesheet = null;
+    mc.timesheetDetails.tsfin = null;
+
+    // clear fields that make the UI think it’s still “processed/QR”
+    mc.timesheetDetails.qr_status = null;
+    mc.timesheetDetails.qr_generated_at = null;
+    mc.timesheetDetails.qr_scanned_at = null;
+    mc.timesheetDetails.qr_r2_key = null;
+    mc.timesheetDetails.manual_pdf_r2_key = null;
+
+    // keep the week pointer consistent
+    mc.timesheetDetails.contract_week_id = cwIdX;
+
+    // clear evidence cache (prevents old SYS:NHSP:* / NHSP kind leaking into planned-week gating)
+    mc.timesheetState = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
+    mc.timesheetState.evidence = [];
+
+    // optional: clear related caches (prevents old invoice badge/data)
+    mc.timesheetRelated = mc.timesheetRelated || {};
+    mc.timesheetRelated.invoice = null;
+  } catch {}
+
+  window.__toast && window.__toast('Timesheet unprocessed.');
+  await refreshFooter();
+} catch (e) {
+  try {
+    if (typeof tsHandleMoved409Modal === 'function') {
+      const handled = await tsHandleMoved409Modal(e, {
+        tabKey: 'overview',
+        label: 'footer-unprocess-timesheet',
+        toast: 'This timesheet changed while you were editing; review and try again.'
+      });
+      if (handled) return;
+    }
+  } catch {}
+  alert(e?.message || 'Failed to unprocess timesheet.');
+}
+
+    };
+  }
+
+
+      // ── Authorise ──
+      if (btnTsAuthorise) {
+        const showBtn = (canAuthoriseNow || showAuthoriseDisabled);
+        btnTsAuthorise.style.display = showBtn ? '' : 'none';
+
+        // clear any previous disabled shading/hint
+        try {
+          btnTsAuthorise.style.opacity = '';
+          btnTsAuthorise.style.filter = '';
+          btnTsAuthorise.style.pointerEvents = '';
+          btnTsAuthorise.removeAttribute('aria-disabled');
+          btnTsAuthorise.removeAttribute('data-disabled');
+          btnTsAuthorise.removeAttribute('title');
+        } catch {}
+
+        if (showAuthoriseDisabled) {
+          // ✅ Shade out (do NOT remove), keep hover title working (avoid native disabled)
+          btnTsAuthorise.disabled = false;
+          btnTsAuthorise.style.opacity = '0.45';
+          btnTsAuthorise.style.filter = 'grayscale(40%)';
+          btnTsAuthorise.style.pointerEvents = 'auto';
+          btnTsAuthorise.setAttribute('aria-disabled', 'true');
+          btnTsAuthorise.setAttribute('data-disabled', '1');
+          btnTsAuthorise.setAttribute('title', 'QR Timesheet has not been signed by manager yet');
+
+          btnTsAuthorise.dataset.ownerToken = top._token;
+          btnTsAuthorise.onclick = async (ev) => {
+            try { ev && ev.preventDefault && ev.preventDefault(); } catch {}
+            try { ev && ev.stopPropagation && ev.stopPropagation(); } catch {}
+            const msg = 'QR Timesheet has not been signed by manager yet';
+            if (window.__toast) window.__toast(msg);
+            else alert(msg);
+            return;
+          };
+        } else if (canAuthoriseNow) {
+          btnTsAuthorise.disabled = !!top._saving;
+
+          btnTsAuthorise.dataset.ownerToken = top._token;
+          btnTsAuthorise.onclick = async () => {
+            const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
+            if (!fr || btnTsAuthorise.dataset.ownerToken !== fr._token) return;
+
+            const id = (window.modalCtx?.data?.timesheet_id || null);
+            if (!id) { alert('Timesheet id missing.'); return; }
+
+            try {
+              await authoriseTimesheet(id);
+              window.__toast && window.__toast('Timesheet authorised');
+              await refreshFooter();
+            } catch (e) {
+              try {
+                if (typeof tsHandleMoved409Modal === 'function') {
+                  const handled = await tsHandleMoved409Modal(e, {
+                    tabKey: 'overview',
+                    label: 'footer-authorise',
+                    toast: 'This timesheet changed while you were editing; review and try again.'
+                  });
+                  if (handled) return;
+                }
+              } catch {}
+              alert(e?.message || 'Failed to authorise timesheet.');
+            }
+          };
+        }
+      }
+
+      // ── Unauthorise ──
+      if (btnTsUnauthorise) {
+        btnTsUnauthorise.style.display = canUnauthoriseNow ? '' : 'none';
+        btnTsUnauthorise.disabled      = !!top._saving;
+
+        btnTsUnauthorise.dataset.ownerToken = top._token;
+        btnTsUnauthorise.onclick = async () => {
+          const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
+          if (!fr || btnTsUnauthorise.dataset.ownerToken !== fr._token) return;
+
+          const id = (window.modalCtx?.data?.timesheet_id || null);
+          if (!id) { alert('Timesheet id missing.'); return; }
+
+          const ok = window.confirm('Unauthorise this timesheet? It will return to a pending state.');
+          if (!ok) return;
+
+          try {
+            await unauthoriseTimesheet(id);
+            window.__toast && window.__toast('Timesheet unauthorised');
+            await refreshFooter();
+          } catch (e) {
+            try {
+              if (typeof tsHandleMoved409Modal === 'function') {
+                const handled = await tsHandleMoved409Modal(e, {
+                  tabKey: 'overview',
+                  label: 'footer-unauthorise',
+                  toast: 'This timesheet changed while you were editing; review and try again.'
+                });
+                if (handled) return;
+              }
+            } catch {}
+            alert(e?.message || 'Failed to unauthorise timesheet.');
+          }
+        };
+      }
+
+   // ── Process Timesheet ──
+if (btnTsProcess) {
+  btnTsProcess.style.display = canProcessNow ? '' : 'none';
+  btnTsProcess.disabled      = !!top._saving;
+
+  btnTsProcess.dataset.ownerToken = top._token;
+  btnTsProcess.onclick = async () => {
+    const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
+    if (!fr || btnTsProcess.dataset.ownerToken !== fr._token) return;
+
+    const mc = window.modalCtx || {};
+    const det = mc.timesheetDetails || {};
+    const tsfin = det.tsfin || {};
+    const cw = det.contract_week || {};
+
+    const lockedX = !!(tsfin.locked_by_invoice_id || tsfin.paid_at_utc);
+    if (lockedX) { alert('This timesheet is locked (paid or invoiced).'); return; }
+
+    const weekIdX = mc.data?.contract_week_id || null;
+    if (!weekIdX) { alert('Contract week id missing.'); return; }
+
+    const ok = window.confirm(
+      'Process Timesheet?\n\n' +
+      'This will create a real timesheet from the saved MANUAL planned week.'
+    );
+    if (!ok) return;
+
+    const tryParseSchedule = (src) => {
+      if (!src) return null;
+      if (Array.isArray(src)) return JSON.parse(JSON.stringify(src));
+      if (typeof src === 'string') {
+        try { const p = JSON.parse(src); if (Array.isArray(p)) return p; } catch {}
+      }
+      if (typeof src === 'object') return JSON.parse(JSON.stringify(src));
+      return null;
+    };
+
+    const scheduleX = tryParseSchedule(cw && cw.planned_schedule_json) || null;
+
+    if (!Array.isArray(scheduleX) || !scheduleX.length) {
+      alert('No planned schedule is saved for this week. Click Edit, enter the schedule, then Save before processing.');
       return;
     }
 
-    if ((window.__modalStack?.length || 0) > 0 || modalCtx?.entity) {
+    // pull draft extras from contract_weeks.totals_json.additional_units_week
+    let auWeek = null;
+    try {
+      auWeek = (cw && cw.totals_json && typeof cw.totals_json === 'object')
+        ? cw.totals_json.additional_units_week
+        : null;
+
+      if (typeof auWeek === 'string') {
+        try { auWeek = JSON.parse(auWeek); } catch { auWeek = null; }
+      }
+
+      if (!auWeek || typeof auWeek !== 'object') auWeek = {};
+    } catch {
+      auWeek = {};
+    }
+const sanitizeSchedule = (arr) => {
+  const out = Array.isArray(arr) ? JSON.parse(JSON.stringify(arr)) : [];
+  for (const seg of out) {
+    if (!seg || typeof seg !== 'object') continue;
+
+    const breaksArr = Array.isArray(seg.breaks) ? seg.breaks.filter(b => b && (b.start || b.end)) : [];
+    const hasBreakWindows =
+      breaksArr.length > 0 ||
+      String(seg.break_start || '').trim() ||
+      String(seg.break_end || '').trim();
+
+    if (hasBreakWindows) {
+      // ✅ Break windows win → strip mins fields
+      delete seg.break_minutes;
+      delete seg.break_mins;
+
+      // also strip legacy mins aliases if you have any
+      delete seg.breakMin;
+      delete seg.breakMinutes;
+
+      // if legacy break_start/end exist, ensure they are represented in breaks[]
+      if (!breaksArr.length) {
+        const bs = String(seg.break_start || '').trim();
+        const be = String(seg.break_end || '').trim();
+        if (bs || be) seg.breaks = [{ start: bs, end: be }];
+      } else {
+        seg.breaks = breaksArr;
+      }
+    } else {
+      // ✅ No windows → keep minutes if present, strip breaks fields
+      if (seg.break_minutes != null) {
+        const n = Number(seg.break_minutes);
+        if (!Number.isFinite(n) || n <= 0) delete seg.break_minutes;
+        else seg.break_minutes = Math.floor(n);
+      }
+      delete seg.breaks;
+      delete seg.break_start;
+      delete seg.break_end;
+      delete seg.break_mins;
+    }
+  }
+  return out;
+};
+
+const payload = {
+  actual_schedule_json: sanitizeSchedule(scheduleX),
+  additional_units_week: auWeek
+};
+    
+
+    try {
+      const result = await manualUpsertContractWeek(weekIdX, payload);
+      const newTsId = result?.timesheet_id || null;
+
+    if (newTsId) {
+  try {
+    if (window.modalCtx && window.modalCtx.data) {
+      window.modalCtx.data.timesheet_id = newTsId;
+      window.modalCtx.data.id = newTsId;
+    }
+  } catch {}
+  window.__toast && window.__toast('Timesheet processed.');
+} else {
+  alert('Processed, but no timesheet_id was returned.');
+}
+
+// ✅ Keep modal open and ALWAYS do canonical refresh
+await refreshFooter();
+
+    } catch (e) {
+      alert(e?.message || 'Process Timesheet failed');
+    }
+  };
+}
+
+
+      // ── Delete Timesheet ──
+      if (btnTsDelete) {
+        btnTsDelete.style.display = canDeleteNow ? '' : 'none';
+        btnTsDelete.disabled      = !!top._saving;
+
+        btnTsDelete.dataset.ownerToken = top._token;
+        btnTsDelete.onclick = async () => {
+          const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
+          if (!fr || btnTsDelete.dataset.ownerToken !== fr._token) return;
+
+          const mc = window.modalCtx || {};
+          const det = mc.timesheetDetails || {};
+          const tsfin = det.tsfin || {};
+          const tsIdX = mc.data?.timesheet_id || null;
+          const weekIdX = mc.data?.contract_week_id || null;
+
+          const lockedX = !!(tsfin.locked_by_invoice_id || tsfin.paid_at_utc);
+          if (lockedX) { alert('This timesheet is locked (paid or invoiced).'); return; }
+
+          const isPlannedOnly = (!tsIdX && !!weekIdX);
+
+          // ✅ Enforce backend delete-preview policy for real timesheets (planned weeks keep existing behaviour)
+          const dpX =
+            (mc && mc.timesheetDeletePreview && typeof mc.timesheetDeletePreview === 'object')
+              ? mc.timesheetDeletePreview
+              : null;
+
+          const dpKindX = String((dpX && dpX.kind) ? dpX.kind : '').toUpperCase();
+          const dpEligibleX = (dpX && typeof dpX.eligible === 'boolean') ? dpX.eligible : false;
+
+          if (!isPlannedOnly) {
+            if (dpKindX === 'IMPORT_CHILD_ADJUSTMENT') {
+              alert("This is an NHSP/HR child adjustment and can't be deleted directly. Delete must be performed via the parent timesheet (if eligible).");
+              return;
+            }
+            if (dpEligibleX !== true) {
+              alert('Delete is not available for this timesheet (it may be locked, invoiced/paid, or not eligible).');
+              return;
+            }
+          }
+
+          // Friendly confirm modal (uses preview.delete_items for details)
+          const enc2 = escapeHtml;
+
+          const fmtGBP = (n) => {
+            const x = Number(n || 0);
+            const v = Number.isFinite(x) ? x : 0;
+            return `£${v.toFixed(2)}`;
+          };
+
+          const fmtHours = (n) => {
+            const x = Number(n || 0);
+            const v = Number.isFinite(x) ? x : 0;
+            return v.toFixed(2);
+          };
+
+          const roleLabel = (it) => {
+            const r = String(it?.display_role || '').toUpperCase();
+            if (r === 'PARENT') return 'Parent';
+            if (r === 'MANUAL_ADJUSTMENT') return 'Manual Adjustment';
+            if (r === 'IMPORT_CHILD_ADJUSTMENT') return 'Import Adjustment';
+            if (r === 'ADJUSTMENT') return 'Adjustment';
+            return 'Timesheet';
+          };
+
+          const buildDeleteTableHtml = (items) => {
+            const list = Array.isArray(items) ? items : [];
+            if (!list.length) return '';
+
+            let sumH = 0, sumPay = 0, sumChg = 0;
+            const rows = list.map(it => {
+              const h = Number(it?.total_hours || 0) || 0;
+              const p = Number(it?.total_pay_ex_vat || 0) || 0;
+              const c = Number(it?.total_charge_ex_vat || 0) || 0;
+              sumH += h; sumPay += p; sumChg += c;
+
+              const id8 = String(it?.timesheet_id || '').slice(0, 8);
+              return `
+                <tr>
+                  <td style="padding:6px 8px;border-bottom:1px solid var(--line);">${enc2(roleLabel(it))}</td>
+                  <td style="padding:6px 8px;border-bottom:1px solid var(--line);font-family:monospace;">${enc2(id8 ? `${id8}…` : '')}</td>
+                  <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;">${enc2(fmtHours(h))}</td>
+                  <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;">${enc2(fmtGBP(p))}</td>
+                  <td style="padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;">${enc2(fmtGBP(c))}</td>
+                </tr>
+              `;
+            }).join('');
+
+            const totalRow = `
+              <tr>
+                <td style="padding:6px 8px;font-weight:700;">Total</td>
+                <td style="padding:6px 8px;"></td>
+                <td style="padding:6px 8px;text-align:right;font-weight:700;">${enc2(fmtHours(sumH))}</td>
+                <td style="padding:6px 8px;text-align:right;font-weight:700;">${enc2(fmtGBP(sumPay))}</td>
+                <td style="padding:6px 8px;text-align:right;font-weight:700;">${enc2(fmtGBP(sumChg))}</td>
+              </tr>
+            `;
+
+            return `
+              <div style="margin-top:10px;">
+                <div class="mini" style="margin-bottom:6px;opacity:.85;">
+                  The following timesheet(s) will be deleted:
+                </div>
+                <table style="width:100%;border-collapse:collapse;border:1px solid var(--line);border-radius:10px;overflow:hidden;">
+                  <thead>
+                    <tr>
+                      <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);">Type</th>
+                      <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);">ID</th>
+                      <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);">Hours</th>
+                      <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);">Net pay</th>
+                      <th style="text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);">Net charge</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rows}
+                    ${totalRow}
+                  </tbody>
+                </table>
+              </div>
+            `;
+          };
+
+          const dpItems = (!isPlannedOnly && dpX && Array.isArray(dpX.delete_items)) ? dpX.delete_items : [];
+          const weYmdX =
+            (dpItems[0] && dpItems[0].week_ending_date) ? String(dpItems[0].week_ending_date) :
+            (det?.timesheet?.week_ending_date) ? String(det.timesheet.week_ending_date) :
+            (mc.data?.week_ending_date) ? String(mc.data.week_ending_date) :
+            '';
+
+          const title =
+            isPlannedOnly ? 'Delete planned week?' : 'Delete timesheet(s)?';
+
+          const messageHtml =
+            isPlannedOnly
+              ? `
+                <div style="font-size:14px;font-weight:700;margin-bottom:6px;">
+                  Delete this planned week?
+                </div>
+                <div class="mini" style="white-space:pre-wrap;">
+                  This is a planned week (no timesheet has been created yet).
+                  Deleting will remove the planned contract week.
+                </div>
+                <div class="mini" style="margin-top:10px;opacity:.8;">
+                  This action cannot be undone.
+                </div>
+              `
+              : `
+                <div style="font-size:14px;font-weight:700;margin-bottom:6px;">
+                  Delete timesheet(s) for week ending ${enc2(weYmdX || 'Unknown')}?
+                </div>
+                <div class="mini" style="white-space:pre-wrap;">
+                  This will permanently delete the timesheet(s) listed below.
+                </div>
+                <div class="mini" style="margin-top:10px;opacity:.8;">
+                  This action cannot be undone.
+                </div>
+              `;
+
+          const extraHtml =
+            isPlannedOnly ? '' : buildDeleteTableHtml(dpItems);
+
+          const confirmLabel =
+            isPlannedOnly ? 'Delete planned week' : 'Delete timesheet(s)';
+
+          const confirmRes = await openUiConfirmModal({
+            title,
+            message_html: messageHtml,
+            extra_html: extraHtml,
+            confirm_label: confirmLabel,
+            cancel_label: 'Cancel',
+            confirm_class: 'btn btn-warn',
+            cancel_class: 'btn btn-outline'
+          });
+
+          if (!confirmRes || !confirmRes.confirmed) return;
+
+          // OK-only info modal (utility child)
+          const showOkInfoModal = async (infoTitle, infoHtml) => {
+            const modalKind = 'import-summary-ui-info';
+            const btnId = `btnUiInfoOk_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+            return await new Promise((resolve) => {
+              let done = false;
+              const finish = () => { if (done) return; done = true; resolve(true); };
+
+              showModal(
+                String(infoTitle || 'Done'),
+                [{ key: 'ok', label: 'OK' }],
+                () => `
+                  <div style="padding: 6px 2px;">
+                    ${String(infoHtml || '')}
+                    <div style="display:flex; gap:10px; margin-top:14px;">
+                      <button id="${enc2(btnId)}" type="button" class="btn btn-primary">OK</button>
+                    </div>
+                  </div>
+                `,
+                null,
+                true,
+                null,
+                {
+                  kind: modalKind,
+                  noParentGate: true,
+                  showSave: false,
+                  showApply: false,
+                  onDismiss: () => finish()
+                }
+              );
+
+              const wire = () => {
+                const okBtn = document.getElementById(btnId);
+                if (okBtn && !okBtn.__wired) {
+                  okBtn.__wired = true;
+                  okBtn.onclick = () => {
+                    finish();
+                    try { document.getElementById('btnCloseModal')?.click(); } catch {}
+                  };
+                }
+              };
+
+              try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
+            });
+          };
+
+          // Capture summary ctx (if available) BEFORE closing anything
+          let summaryCtx = null;
+          try { summaryCtx = fr._summaryCtx || top._summaryCtx || mc.__summaryCtx || null; } catch { summaryCtx = null; }
+          try { mc.__summaryCtx = summaryCtx || null; } catch {}
+
+          try {
+            if (isPlannedOnly) {
+              if (!weekIdX) throw new Error('Contract week id missing.');
+              await deletePlannedContractWeek(weekIdX);
+            } else {
+              if (!tsIdX) throw new Error('Timesheet id missing.');
+              await deleteTimesheetPermanent(tsIdX);
+            }
+
+            await showOkInfoModal(
+              'Deleted',
+              `<div style="font-size:14px;font-weight:700;margin-bottom:6px;">Deleted successfully.</div>
+               <div class="mini">The selected timesheet(s) have been deleted.</div>`
+            );
+
+                  // Update summary behind (use helper; fallback to renderAll only if needed)
+            try {
+              if (typeof applyTimesheetDeleteImpactToSummary === 'function') {
+                await applyTimesheetDeleteImpactToSummary({
+                  entity: 'timesheets',
+                  preview: dpX || null,
+                  opened_timesheet_id: tsIdX || null,
+                  planned_contract_week_id: (isPlannedOnly ? (weekIdX || null) : null),
+                  summaryCtx: summaryCtx || null,
+                  fallbackFullRefresh: true
+                });
+              } else {
+                try { await renderAll(); } catch {}
+              }
+            } catch {
+              try { await renderAll(); } catch {}
+            }
+
+    // Close the timesheet modal after the user confirms OK
+// ✅ Do NOT rely on btnCloseModal.click() here (token-guarded, can no-op after utility child modals).
+// ✅ Hard-close the modal stack (timesheet no longer exists).
+try {
+  discardAllModalsAndState();
+} catch {
+  // fallback: attempt normal close
+  try { byId('btnCloseModal')?.click(); } catch {}
+}
+
+
+
+          } catch (e) {
+            try {
+              if (typeof tsHandleMoved409Modal === 'function') {
+                const handled = await tsHandleMoved409Modal(e, {
+                  tabKey: (currentFrame?.() && currentFrame().currentTabKey) ? currentFrame().currentTabKey : 'overview',
+                  label: 'footer-delete-timesheet',
+                  toast: 'This timesheet changed while you were editing; review and try again.'
+                });
+                if (handled) return;
+              }
+            } catch {}
+            alert(e?.message || 'Delete failed');
+          }
+        };
+      }
+
+
+  } else {
+  // not a top-level timesheet → hide footer actions
+  if (btnTsAuthorise)   { btnTsAuthorise.style.display   = 'none'; btnTsAuthorise.disabled   = true; }
+  if (btnTsUnauthorise) { btnTsUnauthorise.style.display = 'none'; btnTsUnauthorise.disabled = true; }
+  if (btnTsProcess)     { btnTsProcess.style.display     = 'none'; btnTsProcess.disabled     = true; }
+  if (btnTsUnprocess)   { btnTsUnprocess.style.display   = 'none'; btnTsUnprocess.disabled   = true; } // ✅ NEW
+  if (btnTsDelete)      { btnTsDelete.style.display      = 'none'; btnTsDelete.disabled      = true; }
+}
+
+
+
+    // Related button (unchanged)
+    if (relatedBtn) {
+      const relatedEntity =
+        top.entity === 'candidates' ? 'candidate' :
+        top.entity === 'clients'    ? 'client'    :
+        top.entity === 'contracts'  ? 'contract'  :
+        top.entity === 'timesheets' ? 'timesheet' :
+        top.entity === 'invoices'   ? 'invoice'   :
+        top.entity === 'umbrellas'  ? 'umbrella'  :
+        null;
+
+      const showRelated =
+        !isChild &&
+        top.hasId &&
+        !!relatedEntity;
+
+      relatedBtn.style.display = showRelated ? '' : 'none';
+
+      const canClick = showRelated && top.mode === 'view';
+      relatedBtn.disabled = !canClick;
+
+      if (canClick) {
+        relatedBtn.onclick = async (ev) => {
+          try {
+            ev.preventDefault();
+            ev.stopPropagation();
+
+            const ctxId = window.modalCtx?.data?.id || null;
+            if (!ctxId) {
+              console.warn('[RELATED] no id on modalCtx.data; cannot open related menu');
+              return;
+            }
+
+            const counts = await fetchRelatedCounts(relatedEntity, ctxId);
+
+            const x = ev.clientX;
+            const y = ev.clientY + 8;
+
+            showRelatedMenu(x, y, counts, relatedEntity, ctxId);
+          } catch (e) {
+            console.warn('[RELATED] failed to open related menu', e);
+          }
+        };
+      } else {
+        relatedBtn.onclick = null;
+      }
+    }
+    // Default Save/Edit display logic
+    if (top.mode === 'create') {
+      btnSave.style.display = '';
+
+      // ✅ NEW: Contracts create-mode gating must respect eligibility (incl. unknown pay method)
+      if (top.entity === 'contracts') {
+        let gate = null;
+        let gateOk = true;
+        try {
+          gate = (typeof computeContractSaveEligibility === 'function') ? computeContractSaveEligibility() : null;
+          gateOk = (gate && typeof gate === 'object' && Object.prototype.hasOwnProperty.call(gate, 'ok'))
+            ? !!gate.ok
+            : !!gate;
+        } catch {
+          gateOk = true; // non-fatal fallback (do not brick UI if eligibility throws)
+        }
+
+        btnSave.disabled = !!top._saving || !gateOk;
+      } else {
+        btnSave.disabled = !!top._saving;
+      }
+
+    } else if (top.mode === 'view') {
+      btnSave.style.display = 'none';
+      btnSave.disabled = true;
+
+    } else {
+      btnSave.style.display = '';
+
+      let gateOK = true;
+
+      if (top.entity === 'contracts') {
+        try {
+          const gate = (typeof computeContractSaveEligibility === 'function') ? computeContractSaveEligibility() : null;
+          gateOK = (gate && typeof gate === 'object' && Object.prototype.hasOwnProperty.call(gate, 'ok'))
+            ? !!gate.ok
+            : !!gate;
+        } catch { gateOK = true; }
+      }
+
+      // ✅ Invoice modal: enable Save ONLY when there are staged edits (top.isDirty is driven externally)
+      if (top.entity === 'invoices' && top.kind === 'invoice-modal') {
+        btnSave.disabled = !!top._saving || !top.isDirty;
+      } else {
+        btnSave.disabled = (top.entity === 'contracts')
+          ? (top._saving || ((top.kind !== 'contract-clone-extend') && !top.isDirty) || !gateOK)
+          : (
+              top._saving ||
+              (top.kind === 'timesheet-evidence-viewer' && !top.isDirty)
+            );
+      }
+    }
+
+
+ // 🔹 Top-level Invoice Modal → wire global Delete button (VIEW mode only, eligible only)
+if (!isChild && top.entity === 'invoices' && top.kind === 'invoice-modal') {
+  const mc = window.modalCtx || {};
+  const det = mc.data || mc.dataLoaded || mc.invoiceDetail || null;
+
+  const inv = det && typeof det === 'object'
+    ? (det.invoice || det.invoice_row || det.invoiceRow || null)
+    : null;
+
+  const items = (det && Array.isArray(det.items)) ? det.items : [];
+
+  const status = String(inv?.status || '').toUpperCase();
+  const eligible =
+    !!inv &&
+    (inv.paid_at_utc == null) &&
+    (inv.issued_at_utc == null) &&
+    (status === 'DRAFT') &&
+    (items.length === 0);
+
+  if (top.mode === 'view' && eligible) {
+    btnDel.style.display = '';
+    btnDel.disabled = !!top._saving;
+    btnDel.textContent = 'Delete Invoice';
+    btnDel.onclick = async () => {
+      try {
+        if (typeof handleInvoiceDelete === 'function') {
+          await handleInvoiceDelete(mc);
+        } else {
+          alert('Delete invoice action is not available.');
+          return;
+        }
+        try { byId('btnCloseModal')?.click(); } catch {}
+        try { await renderAll(); } catch {}
+      } catch (e) {
+        alert(e?.message || 'Delete failed');
+      }
+    };
+  } else {
+    btnDel.style.display = 'none';
+    btnDel.disabled = true;
+    btnDel.onclick = null;
+    btnDel.textContent = 'Delete';
+  }
+
+} else
+
+// ✅ NEW: Top-level Candidate/Client → Delete in FOOTER (VIEW mode only)
+// - Visible only when entity is candidates or clients AND mode=view AND hasId
+// - Red when eligible
+// - Greyed + tooltip when blocked (without using native disabled so title works)
+if (!isChild && (top.entity === 'candidates' || top.entity === 'clients')) {
+  const mc = window.modalCtx || {};
+  const ent = String(top.entity || '');
+  const show = (top.mode === 'view' && top.hasId);
+
+  // Eligibility can be stored by the modal opener on modalCtx.deleteEligibility (or delete_eligibility)
+  const elig =
+    (mc && typeof mc.deleteEligibility === 'object' && mc.deleteEligibility) ? mc.deleteEligibility :
+    (mc && typeof mc.delete_eligibility === 'object' && mc.delete_eligibility) ? mc.delete_eligibility :
+    null;
+
+  const canDelete = !!(elig && (elig.can_delete === true || String(elig.can_delete).toLowerCase() === 'true'));
+  const reason = String((elig && (elig.reason || elig.block_reason || elig.message)) || '').trim();
+
+  if (show) {
+    btnDel.style.display = '';
+
+    // Label per entity
+    btnDel.textContent = (ent === 'candidates') ? 'Delete Candidate' : 'Delete Client';
+
+    // Ensure footer styling: red when eligible; greyed when not
+    // (keep title hover reliable by NOT using native disabled)
+    btnDel.disabled = false;
+    btnDel.className = canDelete ? 'btn btn-warn' : 'btn btn-outline btn-sm';
+    btnDel.style.opacity = canDelete ? '' : '0.45';
+    btnDel.style.filter  = canDelete ? '' : 'grayscale(60%)';
+    btnDel.setAttribute('aria-disabled', canDelete ? 'false' : 'true');
+    btnDel.setAttribute('data-disabled', canDelete ? '' : '1');
+
+    if (!canDelete && reason) btnDel.setAttribute('title', reason);
+    else if (!canDelete) btnDel.setAttribute('title', 'This record cannot be deleted.');
+    else btnDel.removeAttribute('title');
+
+ btnDel.onclick = async (ev) => {
+  try { ev && ev.preventDefault && ev.preventDefault(); } catch {}
+  try { ev && ev.stopPropagation && ev.stopPropagation(); } catch {}
+
+  // Block click when not eligible (but still show tooltip)
+  if (!canDelete) {
+    const msg = btnDel.getAttribute('title') || 'This record cannot be deleted.';
+    if (window.__toast) window.__toast(msg);
+    else alert(msg);
+    return;
+  }
+
+  const id = window.modalCtx?.data?.id || null;
+  if (!id) {
+    alert('Missing id; cannot delete.');
+    return;
+  }
+
+  const label = (ent === 'candidates') ? 'candidate' : 'client';
+  const ok = window.confirm(`Permanently delete this ${label}? This cannot be undone.`);
+  if (!ok) return;
+
+  try {
+    // ✅ Prefer explicit handlers if you already have them
+    if (ent === 'candidates' && typeof deleteCandidate === 'function') {
+      await deleteCandidate(id);
+    } else if (ent === 'clients' && typeof deleteClient === 'function') {
+      await deleteClient(id);
+
+    // ✅ Fallback to generic handler names if those are what your codebase uses
+    } else if (ent === 'candidates' && typeof handleCandidateDelete === 'function') {
+      await handleCandidateDelete(id);
+    } else if (ent === 'clients' && typeof handleClientDelete === 'function') {
+      await handleClientDelete(id);
+
+    } else {
+      alert('Delete handler is not available (no deleteCandidate/deleteClient/handleCandidateDelete/handleClientDelete function found).');
+      return;
+    }
+
+    try { discardAllModalsAndState(); } catch {}
+    try { await renderAll(); } catch {}
+    try { window.__toast && window.__toast('Deleted'); } catch {}
+
+  } catch (e) {
+    alert(e?.message || 'Delete failed');
+  }
+};
+
+  } else {
+    btnDel.style.display = 'none';
+    btnDel.disabled = true;
+    btnDel.onclick = null;
+    btnDel.textContent = 'Delete';
+    btnDel.className = 'btn btn-outline btn-sm';
+    btnDel.style.opacity = '';
+    btnDel.style.filter  = '';
+    btnDel.removeAttribute('title');
+    btnDel.removeAttribute('aria-disabled');
+    btnDel.removeAttribute('data-disabled');
+  }
+
+} else
+
+// 🔹 Top-level Edit Contract → wire global Delete button
+if (!isChild && top.entity === 'contracts') {
+  const canDelete = !!(window.modalCtx?.data && window.modalCtx.data.can_delete);
+  const showDelete = (top.mode === 'edit' && top.hasId && canDelete);
+
+  if (showDelete) {
+    btnDel.style.display = '';
+    btnDel.disabled = !!top._saving;
+
+    // ✅ FIX: ensure label is correct for Contracts (prevents “Delete Invoice” bleed)
+    btnDel.textContent = 'Delete Contract';
+
+    btnDel.onclick = async () => {
+      const id = window.modalCtx?.data?.id;
+      if (!id) return;
+
+      const ok = window.confirm('Do you want to permanently delete this contract?');
+      if (!ok) return;
+
+      try {
+        if (typeof deleteContract === 'function') {
+          if (LOG) console.log('[MODAL][CONTRACTS] delete via btnDelete', { id });
+          await deleteContract(id);
+        } else {
+          alert('Delete contract action is not available.');
+          return;
+        }
+        try { discardAllModalsAndState(); } catch {}
+        try { await renderAll(); } catch {}
+      } catch (e) {
+        alert(e?.message || 'Delete failed');
+      }
+    };
+  } else {
+    btnDel.style.display = 'none';
+    btnDel.disabled = true;
+    btnDel.onclick = null;
+    btnDel.textContent = 'Delete';
+  }
+} else if (!isChild) {
+  // ✅ Default: any other TOP-LEVEL modal → hide + fully reset Delete button state
+  btnDel.style.display = 'none';
+  btnDel.disabled = true;
+  btnDel.onclick = null;
+  btnDel.textContent = 'Delete';
+  btnDel.className = 'btn btn-outline btn-sm';
+  btnDel.style.opacity = '';
+  btnDel.style.filter  = '';
+  btnDel.removeAttribute('title');
+  btnDel.removeAttribute('aria-disabled');
+  btnDel.removeAttribute('data-disabled');
+}
+  }
+
+  setCloseLabel();
+  L('_updateButtons snapshot (global)', {
+    kind: top.kind, isChild, parentEditable, mode: top.mode,
+    btnSave: { display: btnSave.style.display, disabled: btnSave.disabled },
+    btnEdit: { display: btnEdit.style.display }
+  });
+};
+
+
+
+   top._updateButtons();
+  btnEdit.onclick = ()=> {
+    const isChildNow    = (stack().length > 1);
+    const isRatePreset  = (top.kind === 'rate-preset');
+
+    // Block Edit for search & normal child-apply modals,
+    // but allow Edit for rate-preset even when opened as a child.
+    if (!isRatePreset && (isChildNow || top.kind === 'advanced-search')) return;
+
+   if (top.mode === 'view') {
+  top._snapshot = {
+    data               : deep(window.modalCtx?.data || null),
+    formState          : deep(window.modalCtx?.formState || null),
+    rolesState         : deep(window.modalCtx?.rolesState || null),
+    ratesState         : deep(window.modalCtx?.ratesState || null),
+    hospitalsState     : deep(window.modalCtx?.hospitalsState || null),
+    clientSettingsState: deep(window.modalCtx?.clientSettingsState || null),
+    overrides          : deep(window.modalCtx?.overrides || { existing:[], stagedNew:[], stagedEdits:{}, stagedDeletes:[] }),
+    candidateMainModel : deep(window.modalCtx?.candidateMainModel || null),
+
+    // NEW: snapshot any timesheet-specific staging (lines, issues, etc.)
+    timesheetState     : deep(window.modalCtx?.timesheetState || null),
+
+    // ✅ NEW: snapshot invoice modal state so discard/no-change doesn't leave stale staged state
+    invoiceDetail      : deep(window.modalCtx?.invoiceDetail || null),
+    invoiceState       : deep(window.modalCtx?.invoiceState || null),
+    invoiceUi          : deep(window.modalCtx?.invoiceUi || null),
+
+    // invoiceRemove contains a Set → store as array and rebuild on restore
+    invoiceRemoveSelectedTimesheetIds: Array.from(
+      (window.modalCtx?.invoiceRemove?.selectedTimesheetIds instanceof Set)
+        ? window.modalCtx.invoiceRemove.selectedTimesheetIds
+        : []
+    )
+  };
+  top.isDirty = false;
+  setFrameMode(top, 'edit');
+  L('btnEdit (global) → switch to edit (snapshot includes timesheetState)', {
+    hasTimesheetState: !!top._snapshot.timesheetState,
+    keys: Object.keys(top._snapshot || {})
+  });
+}
+
+
+  };
+
+
+
+  const handleSecondary = (ev)=>{
+    if (currentFrame && currentFrame() !== top) return;
+    if (top._confirmingDiscard || top._closing) return;
+
+    if (top.kind==='advanced-search') {
+      top._closing=true;
+      document.onmousemove=null; document.onmouseup=null; byId('modal')?.classList.remove('dragging'); sanitizeModalGeometry();
+      const closing=stack().pop(); 
+
+try { if (closing && typeof closing._onDismiss === 'function') closing._onDismiss(); } catch {}
+      if (closing?._detachDirty){ try{closing._detachDirty();}catch{} closing._detachDirty=null; }
+      if (closing?._detachGlobal){ try{closing._detachGlobal();}catch{} closing._detachGlobal=null; } top._wired=false;
+      if (stack().length>0) {
+        const p = currentFrame();
+        if (p && p._ctxRef) window.modalCtx = p._ctxRef;
+
+        const resumeMode =
+          (typeof closing !== 'undefined' && closing && closing._parentModeOnOpen)
+            ? closing._parentModeOnOpen
+            : p.mode;
+
+        try { setFrameMode(p, resumeMode); } catch {}
+        p._updateButtons?.();
+
+        renderTop();
+        try { p.onReturn && p.onReturn(); } catch {}
+      } else {
+        discardAllModalsAndState(); if (window.__pendingFocus) { try{ renderAll(); } catch(e){ console.error('refresh after modal close failed',e); } }
+      }
+      return;
+    }
+
+    const isChildNow = (stack().length > 1);
+
+    // Child frames with noParentGate: if dirty in edit/create, confirm discard before closing.
+    // Never prompt for the Rate Presets picker or the candidate/client pickers – they are
+    // selection utilities, not real edit forms.
+ const suppressChildDiscardPrompt =
+  top.kind === 'rate-presets-picker' ||
+  top.kind === 'candidate-picker'    ||
+  top.kind === 'client-picker'       ||
+  top.kind === 'qr-decision';
+
+    if (isChildNow &&
+        top.noParentGate &&
+        (top.mode === 'edit' || top.mode === 'create') &&
+        top.isDirty &&
+        !suppressChildDiscardPrompt) {
+      let ok = false;
+      try {
+        top._confirmingDiscard = true;
+        btnClose.disabled = true;
+        ok = window.confirm('Discard changes and close?');
+      } finally {
+        top._confirmingDiscard = false;
+        btnClose.disabled = false;
+      }
+      if (!ok) return;
+    }
+
+
+
+       if (!isChildNow && !top.noParentGate && top.mode==='edit' && top.kind!=='rates-presets') {
+    if (!top.isDirty) {
+  if (top._snapshot && window.modalCtx) {
+    window.modalCtx.data                = deep(top._snapshot.data);
+    window.modalCtx.formState           = deep(top._snapshot.formState);
+    window.modalCtx.rolesState          = deep(top._snapshot.rolesState);
+    window.modalCtx.ratesState          = deep(top._snapshot.ratesState);
+    window.modalCtx.hospitalsState      = deep(top._snapshot.hospitalsState);
+    window.modalCtx.clientSettingsState = deep(top._snapshot.clientSettingsState);
+    if (top._snapshot.overrides)         window.modalCtx.overrides          = deep(top._snapshot.overrides);
+    window.modalCtx.candidateMainModel  = deep(top._snapshot.candidateMainModel || null);
+
+    // NEW: restore timesheetState so staged Lines/Issues state is rolled back
+    window.modalCtx.timesheetState      = deep(top._snapshot.timesheetState || null);
+
+    // ✅ NEW: restore invoice modal state
+    window.modalCtx.invoiceDetail       = deep(top._snapshot.invoiceDetail || null);
+    window.modalCtx.invoiceState        = deep(top._snapshot.invoiceState || null);
+    window.modalCtx.invoiceUi           = deep(top._snapshot.invoiceUi || null);
+
+    // rebuild Set for invoiceRemove selection (safe default)
+    window.modalCtx.invoiceRemove       = window.modalCtx.invoiceRemove || {};
+    window.modalCtx.invoiceRemove.selectedTimesheetIds =
+      new Set(Array.isArray(top._snapshot.invoiceRemoveSelectedTimesheetIds) ? top._snapshot.invoiceRemoveSelectedTimesheetIds : []);
+
+    if (LOG) {
+      console.log('[MODAL][RESTORE][no-change]', {
+        entity: top.entity,
+        hasTimesheetState: !!top._snapshot.timesheetState
+      });
+    }
+
+   try {
+  const frNow = currentFrame();
+  if (frNow && frNow.entity === 'candidates' && frNow.currentTabKey === 'rates') {
+    renderCandidateRatesTable?.();
+  }
+} catch {}
+
+  }
+  try {
+    if (top.entity === 'contracts') {
+      const cid = window.modalCtx?.data?.id;
+      if (cid && typeof discardContractCalendarStage === 'function') discardContractCalendarStage(cid);
+    }
+  } catch {}
+  top.isDirty=false; setFrameMode(top,'view'); top._snapshot=null;
+  try{ window.__toast?.('No changes'); }catch{}; return;
+}
+
+  else {
+        let ok=false; try{ top._confirmingDiscard=true; btnClose.disabled=true; ok=window.confirm('Discard changes and return to view?'); } finally { top._confirmingDiscard=false; btnClose.disabled=false; }
+        if (!ok) return;
+     if (top._snapshot && window.modalCtx) {
+  window.modalCtx.data                = deep(top._snapshot.data);
+  window.modalCtx.formState           = deep(top._snapshot.formState);
+  window.modalCtx.rolesState          = deep(top._snapshot.rolesState);
+  window.modalCtx.ratesState          = deep(top._snapshot.ratesState);
+  window.modalCtx.hospitalsState      = deep(top._snapshot.hospitalsState);
+  window.modalCtx.clientSettingsState = deep(top._snapshot.clientSettingsState);
+  if (top._snapshot.overrides) window.modalCtx.overrides = deep(top._snapshot.overrides);
+  // 🔹 restore candidateMainModel as well so job titles (and primary) roll back
+  window.modalCtx.candidateMainModel  = deep(top._snapshot.candidateMainModel || null);
+
+  // NEW: restore timesheetState so staged per-line changes are discarded
+  window.modalCtx.timesheetState      = deep(top._snapshot.timesheetState || null);
+
+  // ✅ NEW: restore invoice modal state
+  window.modalCtx.invoiceDetail       = deep(top._snapshot.invoiceDetail || null);
+  window.modalCtx.invoiceState        = deep(top._snapshot.invoiceState || null);
+  window.modalCtx.invoiceUi           = deep(top._snapshot.invoiceUi || null);
+
+  // rebuild Set for invoiceRemove selection (safe default)
+  window.modalCtx.invoiceRemove       = window.modalCtx.invoiceRemove || {};
+  window.modalCtx.invoiceRemove.selectedTimesheetIds =
+    new Set(Array.isArray(top._snapshot.invoiceRemoveSelectedTimesheetIds) ? top._snapshot.invoiceRemoveSelectedTimesheetIds : []);
+
+  if (LOG) {
+    console.log('[MODAL][RESTORE][discard]', {
+      entity: top.entity,
+      hasTimesheetState: !!top._snapshot.timesheetState
+    });
+  }
+
+  try { renderCandidateRatesTable?.(); } catch {}
+}
+
+        try {
+          if (top.entity === 'contracts') {
+            const cid = window.modalCtx?.data?.id;
+            if (cid && typeof discardContractCalendarStage === 'function') discardContractCalendarStage(cid);
+          }
+        } catch {}
+        top.isDirty=false; top._snapshot=null; setFrameMode(top,'view'); return;
+      }
+    }
+
+
+
+    if (top._closing) return;
+    top._closing=true;
+    document.onmousemove=null; document.onmouseup=null; byId('modal')?.classList.remove('dragging');
+
+    if (!isChildNow && !top.noParentGate && top.mode==='create' && top.isDirty && top.kind!=='rates-presets') {
+      let ok=false; try{ top._confirmingDiscard=true; btnClose.disabled=true; ok=window.confirm('You have unsaved changes. Discard them and close?'); } finally { top._confirmingDiscard=false; btnClose.disabled=false; }
+      if (!ok) { top._closing=false; return; }
+    }
+
+
+    try {
+      if (top.entity === 'contracts' && (top.mode==='edit' || top.mode==='create')) {
+        const cid = window.modalCtx?.data?.id;
+        if (cid && typeof discardContractCalendarStage === 'function') discardContractCalendarStage(cid);
+      }
+    } catch {}
+   sanitizeModalGeometry();
+const closing = stack().pop();
+
+// ✅ NEW: call onDismiss for ALL modal kinds (not just advanced-search)
+try { if (closing && typeof closing._onDismiss === 'function') closing._onDismiss(); } catch {}
+
+// ✅ NEW: prevent MutationObserver leaks from invoice modal wiring
+try {
+  const ctx = closing && closing._ctxRef ? closing._ctxRef : null;
+  if (ctx && ctx._invoiceObserver) {
+    try { ctx._invoiceObserver.disconnect(); } catch {}
+    ctx._invoiceObserver = null;
+  }
+} catch {}
+
+// ✅ NEW: detach invoice delegated click handler (bound to #modalBody)
+try {
+  const ctx = closing && closing._ctxRef ? closing._ctxRef : null;
+  if (ctx && ctx.__invDelegated && ctx.__invDelegated.targetEl) {
+    try {
+      if (ctx.__invDelegated.handler) {
+        ctx.__invDelegated.targetEl.removeEventListener('click', ctx.__invDelegated.handler, true);
+      }
+    } catch {}
+    try {
+      if (ctx.__invDelegated.changeHandler) {
+        ctx.__invDelegated.targetEl.removeEventListener('change', ctx.__invDelegated.changeHandler, true);
+      }
+    } catch {}
+    ctx.__invDelegated = null;
+  }
+} catch {}
+
+
+
+if (closing?._detachDirty){ try{closing._detachDirty();}catch{} closing._detachDirty=null; }
+
+    if (closing?._detachGlobal){ try{closing._detachGlobal();}catch{} closing._detachGlobal=null; } top._wired=false;
+   if (stack().length>0) {
+  const p = currentFrame();
+
+  // restore parent context for the frame now on top
+  if (p && p._ctxRef) window.modalCtx = p._ctxRef;
+
+  const closingKind = (closing && typeof closing.kind === 'string') ? closing.kind : '';
+  const closingIsUtility =
+    (typeof closingKind === 'string' && (
+      closingKind === 'invoice-reference-numbers' ||
+      closingKind === 'invoice-send-email-confirm' ||
+      closingKind.startsWith('import-summary-') ||
+      closingKind.startsWith('invoice-batch-') ||
+      closingKind.startsWith('import-summary-invoice-batch-')
+    ));
+
+
+  // ✅ Utility modal rule:
+  // Closing a utility child should NOT trigger parent "restore" work beyond renderTop().
+  // This prevents unrelated redraws (e.g., rates table) and modal stack corruption.
+  if (closingIsUtility) {
+    renderTop();
+    try { p.onReturn && p.onReturn(); } catch {}
+    return;
+  }
+
+  // Non-utility children: resume parent mode normally
+  const resumeMode =
+    (typeof closing !== 'undefined' &&
+     closing &&
+     closing._parentModeOnOpen &&
+     closing.kind !== 'rate-presets-picker')
+      ? closing._parentModeOnOpen
+      : p.mode;
+
+  try { setFrameMode(p, resumeMode); } catch {}
+  p._updateButtons && p._updateButtons();
+  renderTop();
+
+  try { p.onReturn && p.onReturn(); } catch {}
+} else {
+  discardAllModalsAndState();
+  if (window.__pendingFocus) { try { renderAll(); } catch(e) { console.error('refresh after modal close failed', e); } }
+}
+
+
+  };
+  // AFTER
+  const onCloseClick = (ev) => {
+    const btn = ev?.currentTarget || byId('btnCloseModal');
+    const bound = btn?.dataset?.ownerToken;
+    const topNow = currentFrame();
+    if (!topNow || bound !== topNow._token) return;
+    handleSecondary(ev);
+  };
+
+  const bindClose = (btn, fr) => {
+    if (!btn || !fr) return;
+    btn.dataset.ownerToken = fr._token;
+    btn.onclick = onCloseClick;
+  };
+
+  bindClose(btnClose, top);
+
+  const hasStagedClientDeletes = ()=> {
+    try {
+      const anyFlag = Array.isArray(window.modalCtx?.ratesState) && window.modalCtx.ratesState.some(w => w && w.__delete === true);
+      const anySet  = (window.modalCtx?.ratesStagedDeletes instanceof Set) && window.modalCtx.ratesStagedDeletes.size > 0;
+      const ovDel   = (window.modalCtx?.overrides?.stagedDeletes instanceof Set) && window.modalCtx.overrides.stagedDeletes.size > 0;
+      return !!(anyFlag || anySet || ovDel);
+    } catch { return false; }
+  };
+
+async function saveForFrame(fr) {
+  if (!fr || fr._saving) return;
+  const onlyDel    = hasStagedClientDeletes();
+  const allowApply = (fr.kind === 'candidate-override' || fr.kind === 'client-rate') && fr._applyDesired === true;
+
+  L('saveForFrame ENTER (global)', {
+    kind: fr.kind,
+    mode: fr.mode,
+    noParentGate: fr.noParentGate,
+    isDirty: fr.isDirty,
+    onlyDel,
+    allowApply
+  });
+
+ const isChildNow = (window.__modalStack?.length > 1);
+const isTimesheetFrame = (fr.entity === 'timesheets');
+
+const shouldNoop =
+  (fr.kind !== 'advanced-search') &&
+  !fr.noParentGate &&
+  fr.mode === 'edit' &&
+  !fr.isDirty &&
+  !onlyDel &&
+  !allowApply &&
+  !isTimesheetFrame;
+
+if (shouldNoop) {
+  L('saveForFrame GUARD (global): no-op (no changes and apply not allowed)');
+  if (isChildNow) {
+    sanitizeModalGeometry();
+
+    const closing = window.__modalStack.pop();
+
+    // ✅ Cleanup (mirror the Close/ESC path) so we don't leak listeners/observers
+    try { if (closing && typeof closing._onDismiss === 'function') closing._onDismiss(); } catch {}
+
+    // Prevent MutationObserver leaks from invoice modal wiring
+    try {
+      const ctx = closing && closing._ctxRef ? closing._ctxRef : null;
+      if (ctx && ctx._invoiceObserver) {
+        try { ctx._invoiceObserver.disconnect(); } catch {}
+        ctx._invoiceObserver = null;
+      }
+    } catch {}
+
+    // Detach invoice delegated click handler (bound to #modalBody)
+    try {
+      const ctx = closing && closing._ctxRef ? closing._ctxRef : null;
+      if (ctx && ctx.__invDelegated && ctx.__invDelegated.targetEl) {
+        try {
+          if (ctx.__invDelegated.handler) {
+            ctx.__invDelegated.targetEl.removeEventListener('click', ctx.__invDelegated.handler, true);
+          }
+        } catch {}
+        try {
+          if (ctx.__invDelegated.changeHandler) {
+            ctx.__invDelegated.targetEl.removeEventListener('change', ctx.__invDelegated.changeHandler, true);
+          }
+        } catch {}
+        ctx.__invDelegated = null;
+      }
+    } catch {}
+
+    if (closing?._detachDirty) { try { closing._detachDirty(); } catch {} closing._detachDirty = null; }
+    if (closing?._detachGlobal){ try { closing._detachGlobal(); } catch {} closing._detachGlobal = null; }
+    try { if (closing) closing._wired = false; } catch {}
+
+    if (window.__modalStack.length > 0) {
+      const p = window.__modalStack[window.__modalStack.length - 1];
+      renderTop();
+      try { p.onReturn && p.onReturn(); } catch {}
+    } else {
+      discardAllModalsAndState();
+      if (window.__pendingFocus) {
+        try { renderAll(); } catch(e) { console.error('refresh after modal close failed', e); }
+      }
+    }
+
+  } else {
+    fr.isDirty = false;
+    fr._snapshot = null;
+    setFrameMode(fr, 'view');
+    fr._updateButtons && fr._updateButtons();
+  }
+  try { window.__toast?.('No changes'); } catch {};
+  return;
+}
+
+// ✅ IMPORTANT: do NOT re-declare setFrameMode() inside saveForFrame.
+// saveForFrame must always use the single authoritative setFrameMode() defined in showModal scope.
+
+
+
+  fr.persistCurrentTabState();
+
+  if (isChildNow && !fr.noParentGate && fr.kind !== 'advanced-search') {
+    const p = window.__modalStack[window.__modalStack.length - 2];
+    if (!p || !(p.mode === 'edit' || p.mode === 'create')) {
+      L('saveForFrame GUARD (global): parent not editable');
+      return;
+    }
+  }
+
+  fr._saving = true;
+  fr._updateButtons && fr._updateButtons();
+
+  let ok = false, saved = null;
+  if (typeof fr.onSave === 'function') {
+    try {
+      const res = await fr.onSave();
+      ok = (res === true) || (res && res.ok === true);
+      if (res && res.saved) saved = res.saved;
+    } catch (e) {
+      L('saveForFrame onSave threw (global)', e);
+      ok = false;
+    }
+  }
+  fr._saving = false;
+  if (!ok) {
+    L('saveForFrame RESULT not ok (global)');
+    fr._updateButtons && fr._updateButtons();
+    return;
+  }
+
+   // ✅ NEW: Patch Summary in-place (filter parity + obey current sort), with minimal server calls.
+  // This runs BEFORE modal close/view flip so the grid updates immediately.
+  try {
+    if (saved && typeof summaryApplySavedRecordToActiveSummary === 'function') {
+      const sctx = fr._summaryCtx || null;
+
+      // Only patch if the saved modal entity maps to the captured summary section.
+      const ent = String(fr.entity || window.modalCtx?.entity || '').trim();
+
+      // ✅ OPTION A: Timesheets already refresh/patch Summary via their own post-save refresh pipeline.
+      // Skipping the generic patch here prevents the visible "flip back then forward" bounce.
+      if (String(ent).toLowerCase() !== 'timesheets') {
+        const secEnt = (typeof getSectionForEntity === 'function')
+          ? getSectionForEntity(ent)
+          : String(currentSection || '');
+
+        if (sctx && secEnt && String(sctx.section || '') === String(secEnt)) {
+          // Prefer common wrapper shapes but fall back to saved as-is
+          const savedRoot = (saved && typeof saved === 'object')
+            ? (saved.contract || saved.candidate || saved.client || saved.invoice || saved.timesheet || saved.umbrella || saved)
+            : saved;
+
+          await summaryApplySavedRecordToActiveSummary(ent, savedRoot, sctx);
+        }
+      }
+    }
+  } catch (e) {
+    // Never break save/close flow if Summary patch fails
+    try { console.warn('[SUMMARY][PATCH] failed (non-fatal)', e); } catch {}
+  }
+
+
+
+  // ─────────────────────────────────────────────
+  // Existing post-save logic (unchanged)
+  // ─────────────────────────────────────────────
+
+  if (fr.kind === 'advanced-search') {
+    sanitizeModalGeometry();
+    const closing = window.__modalStack.pop();
+    if (closing?._detachDirty) { try { closing._detachDirty(); } catch {} closing._detachDirty = null; }
+    if (closing?._detachGlobal) { try { closing._detachGlobal(); } catch {} closing._detachGlobal = null; }
+    fr._wired = false;
+
+
+    if (window.__modalStack.length > 0) {
+      const p = window.__modalStack[window.__modalStack.length - 1];
+      renderTop();
+      try { p.onReturn && p.onReturn(); } catch {}
+    } else {
       discardAllModalsAndState();
     }
 
-    if (!window.__listState[sectionKey]) {
-      window.__listState[sectionKey] = { page: 1, pageSize: 50, total: null, hasMore: false, filters: null };
+    L('saveForFrame EXIT (global advanced-search closed)');
+    return;
+  }
+
+  if (isChildNow) {
+    // If this child should remain open after save (successor contract),
+    // flip it in-place to view mode and keep it on screen.
+    if (fr.stayOpenOnSave) {
+      try {
+        if (saved && window.modalCtx) {
+          window.modalCtx.data = { ...(window.modalCtx.data || {}), ...(saved.contract || saved) };
+          fr.hasId = !!window.modalCtx.data?.id;
+        }
+        setFrameMode(fr, 'view');
+        fr._updateButtons && fr._updateButtons();
+        renderTop();
+      } catch {}
+      L('saveForFrame EXIT (child kept open)');
+    } else {
+      if (!fr.noParentGate) {
+        try { window.dispatchEvent(new CustomEvent('modal-dirty')); } catch {}
+      }
+
+      sanitizeModalGeometry();
+      window.__modalStack.pop();
+
+      if (window.__modalStack.length > 0) {
+        const p = window.__modalStack[window.__modalStack.length - 1];
+
+        let resumeMode =
+          (typeof fr !== 'undefined' &&
+           fr &&
+           fr._parentModeOnOpen &&
+           fr.kind !== 'rate-presets-picker')
+            ? fr._parentModeOnOpen
+            : p.mode;
+
+        // SPECIAL CASE: candidate pay-method change → treat as successful parent save
+        if (fr.kind === 'candidate-pay-method-change' && p.entity === 'candidates') {
+          resumeMode   = 'view';
+          p.isDirty    = false;
+          p._snapshot  = null;
+
+          try {
+            if (saved && window.modalCtx && window.modalCtx.entity === 'candidates') {
+              window.modalCtx.data = {
+                ...(window.modalCtx.data || {}),
+                ...(saved || {})
+              };
+            }
+          } catch {}
+        }
+
+        try { setFrameMode(p, resumeMode); } catch {}
+        p._updateButtons && p._updateButtons();
+        renderTop();
+
+        try { window.dispatchEvent(new Event('contracts-main-rendered')); } catch {}
+        try { p.onReturn && p.onReturn(); } catch {}
+      }
+
+      L('saveForFrame EXIT (global child)');
+    }
+  } else {
+    // parent branch...
+    try {
+      const savedContract = (saved && (saved.contract || saved)) || null;
+      const id = savedContract?.id || window.modalCtx?.data?.id || null;
+      if (id && savedContract) {
+        const idx = Array.isArray(currentRows)
+          ? currentRows.findIndex(x => String(x.id) === String(id))
+          : -1;
+        if (idx >= 0) currentRows[idx] = savedContract;
+        (window.__lastSavedAtById ||= {})[String(id)] = Date.now();
+      }
+    } catch (e) {
+      console.warn('[SAVE] list cache merge failed', e);
     }
 
-    // IDs-only selection seed for the new section
-    window.__selection[sectionKey] = window.__selection[sectionKey] || { fingerprint:'', ids:new Set() };
+    if (saved && window.modalCtx) {
+      window.modalCtx.data = { ...(window.modalCtx.data || {}), ...(saved.contract || saved) };
+      fr.hasId = !!window.modalCtx.data?.id;
+    }
+    fr.isDirty = false;
+    fr._snapshot = null;
+    setFrameMode(fr, 'view');
+    L('saveForFrame EXIT (global parent, kept open)');
+  }
+}
 
-    currentSection   = sectionKey;
-    currentRows      = [];
-    currentSelection = null;
+const onSaveClick = async (ev)=>{
+  const btn = ev?.currentTarget || byId('btnSave');
 
-    renderAll();
-  };
+  // ✅ Guard: utility/hidden Save must not fire (prevents Enter / stale handler surprises)
+  try {
+    if (!btn) return;
+    if (btn.disabled) return;
+    const disp = (btn.style && btn.style.display) ? String(btn.style.display) : '';
+    if (disp === 'none') return;
+  } catch {}
 
-  // Helper: close any open settings dropdown
-  const closeSettingsMenu = () => {
-    const m = document.getElementById('__settingsMenu');
-    if (m) m.remove();
-    const btn = document.querySelector('button.__settingsBtn');
-    if (btn) btn.classList.remove('active');
-    document.removeEventListener('click', onAnyDocClick, true);
-    document.removeEventListener('keydown', onEsc, true);
-  };
-  const onAnyDocClick = (e) => {
-    const menu = document.getElementById('__settingsMenu');
-    const anchor = document.querySelector('button.__settingsBtn');
-    if (!menu) return;
-    if (menu.contains(e.target) || anchor?.contains(e.target)) return;
-    closeSettingsMenu();
-  };
-  const onEsc = (e) => { if (e.key === 'Escape') closeSettingsMenu(); };
+  const topNow = currentFrame();
+  const bound  = btn?.dataset?.ownerToken;
 
-  // Helper: close any open invoices dropdown
-  const closeInvoicesMenu = () => {
-    const m = document.getElementById('__invoicesMenu');
-    if (m) m.remove();
-    const btn = document.querySelector('button.__invoicesCaret');
-    if (btn) btn.classList.remove('active');
-    document.removeEventListener('click', onAnyDocClickInv, true);
-    document.removeEventListener('keydown', onEscInv, true);
-  };
-  const onAnyDocClickInv = (e) => {
-    const menu = document.getElementById('__invoicesMenu');
-    const anchor = document.querySelector('button.__invoicesCaret');
-    if (!menu) return;
-    if (menu.contains(e.target) || anchor?.contains(e.target)) return;
-    closeInvoicesMenu();
-  };
-  const onEscInv = (e) => { if (e.key === 'Escape') closeInvoicesMenu(); };
+  if (LOG) console.log('[MODAL] click #btnSave (global)', {
+    boundToken: bound,
+    topToken: topNow?._token,
+    topKind: topNow?.kind,
+    topTitle: topNow?.title
+  });
 
-  // Build buttons
-  sections.forEach(s => {
-    // ─────────────────────────────────────────────────────────────
-    // INVOICES: split button (main click opens invoices; caret opens batch menu)
-    // ─────────────────────────────────────────────────────────────
-    if (s.key === 'invoices') {
-      const wrap = document.createElement('div');
-      wrap.style.display = 'flex';
-      wrap.style.gap = '6px';
-      wrap.style.alignItems = 'center';
+  if (!topNow) return;
+  if (bound !== topNow._token) {
+    if (LOG) console.warn('[MODAL] token mismatch (global); using top frame');
+  }
 
-      const main = document.createElement('button');
-      main.innerHTML = `<span class="ico">${s.icon}</span> ${s.label}`;
-      if (s.key === currentSection) main.classList.add('active');
-      main.onclick = () => switchToSection('invoices');
+  await saveForFrame(topNow);
+};
 
-      const caret = document.createElement('button');
-      caret.classList.add('__invoicesCaret');
-      caret.innerHTML = `▾`;
-      caret.title = 'Invoice actions';
-      caret.onclick = (ev) => {
-        ev.preventDefault();
+const bindSave = (btn, fr) => {
+  if (!btn || !fr) return;
 
-        // toggle
-        const existing = document.getElementById('__invoicesMenu');
-        if (existing) { closeInvoicesMenu(); return; }
+  // ✅ If Save is hidden, clear any previous handler so it cannot trigger via Enter/stale state.
+  let hidden = false;
+  try {
+    if (btn.hidden) hidden = true;
+    const disp = (btn.style && btn.style.display) ? String(btn.style.display) : '';
+    if (disp === 'none') hidden = true;
+  } catch {}
 
-        // avoid dual menus
-        try { closeSettingsMenu(); } catch {}
+  if (hidden) {
+    try { btn.onclick = null; } catch {}
+    try { btn.dataset.ownerToken = ''; } catch {}
+    return;
+  }
 
-        const m = document.createElement('div');
-        m.id = '__invoicesMenu';
-        m.style.position      = 'absolute';
-        m.style.zIndex        = '1000';
-        m.style.background    = 'var(--panel, #0b1221)';
-        m.style.border        = '1px solid var(--line, #334155)';
-        m.style.borderRadius  = '10px';
-        m.style.boxShadow     = 'var(--shadow, 0 6px 20px rgba(0,0,0,.25))';
-        m.style.padding       = '6px';
-        m.style.minWidth      = '220px';
-        m.style.userSelect    = 'none';
+  btn.dataset.ownerToken = fr._token;
+  btn.onclick = onSaveClick;
 
-        m.innerHTML = `
-          <button type="button" class="inv-menu-item" data-k="batch-generate"
-                  style="display:flex;gap:8px;align-items:center;width:100%;
-                         background:#0b1427;border:1px solid var(--line);color:#fff;
-                         padding:8px 10px;border-radius:8px;cursor:pointer;margin:4px 0;">
-            🧾 Batch Generate
-          </button>
-          <button type="button" class="inv-menu-item" data-k="batch-issue"
-                  style="display:flex;gap:8px;align-items:center;width:100%;
-                         background:#0b1427;border:1px solid var(--line);color:#fff;
-                         padding:8px 10px;border-radius:8px;cursor:pointer;margin:4px 0;">
-            📤 Batch Issue
-          </button>
-        `;
+  if (LOG) console.log('[MODAL] bind #btnSave → (global)', {
+    ownerToken: fr._token,
+    kind: fr.kind || '(parent)',
+    title: fr.title,
+    mode: fr.mode
+  });
+};
 
-        document.body.appendChild(m);
-        const r = caret.getBoundingClientRect();
-        m.style.left = `${Math.round(window.scrollX + r.left)}px`;
-        m.style.top  = `${Math.round(window.scrollY + r.bottom + 6)}px`;
+bindSave(btnSave, top);
 
-        m.addEventListener('click', (e) => {
-          const it = e.target.closest('.inv-menu-item');
-          if (!it) return;
-          const k = it.getAttribute('data-k');
-          closeInvoicesMenu();
+  // FIX: ignore programmatic "dirty" while suppression is active
+   const onDirtyEvt = ()=> {
+    const fr = currentFrame();
+    if (!fr) return;
+    if (fr._suppressDirty) return;
 
-          if (!confirmDiscardChangesIfDirty()) return;
-
-          if (k === 'batch-generate') {
-            if (typeof openInvoiceBatchGenerateModal !== 'function') {
-              alert('Batch Generate modal not yet implemented.');
-              return;
-            }
-            openInvoiceBatchGenerateModal();
-            return;
-          }
-
-          if (k === 'batch-issue') {
-            if (typeof openInvoiceBatchIssueModal !== 'function') {
-              alert('Batch Issue modal not yet implemented.');
-              return;
-            }
-            openInvoiceBatchIssueModal();
-            return;
-          }
-        });
-
-        // Close on outside click / Esc
-        setTimeout(() => {
-          document.addEventListener('click', onAnyDocClickInv, true);
-          document.addEventListener('keydown', onEscInv, true);
-        }, 0);
-
-        caret.classList.add('active');
-      };
-
-      wrap.appendChild(main);
-      wrap.appendChild(caret);
-      nav.appendChild(wrap);
+    // Special case: candidate/client pickers
+    // When they fire a `modal-dirty` (e.g. via setContractFormValue in the
+    // Contracts editor), we want the *parent* frame to become dirty so its
+    // Save button enables – the picker itself is just a selector.
+    if (fr.kind === 'candidate-picker' || fr.kind === 'client-picker') {
+      const p = parentFrame();
+      if (p && (p.mode === 'edit' || p.mode === 'create')) {
+        p.isDirty = true;
+        p._updateButtons && p._updateButtons();
+      }
+      // Do NOT mark the picker dirty – that avoids “Discard changes?” prompts
+      // when closing the picker.
       return;
     }
 
-    // Normal button for all other sections
-    const b = document.createElement('button');
-    b.innerHTML = `<span class="ico">${s.icon}</span> ${s.label}`;
-    if (s.key === currentSection) b.classList.add('active');
+    // Allow presets picker dirty → parent (ignore only truly load-only frames)
+    if (fr._loadOnly === true) return;
 
-    if (s.key === 'imports') {
-      // IMPORTS: launch the Imports modal (NHSP / HR weekly / HR rota)
-      b.onclick = () => {
-        if (!confirmDiscardChangesIfDirty()) return;
-        try {
-          openImportsModal();          // <-- your existing imports UI entry point
-        } catch (e) {
-          console.error('[NAV][IMPORTS] openImportsModal failed', e);
-          alert(e?.message || 'Failed to open Imports.');
+    const isChildNow = (stack().length > 1);
+    if (isChildNow) {
+      if (fr.noParentGate) {
+        if (fr.mode === 'edit' || fr.mode === 'create') {
+          fr.isDirty = true;
+          fr._updateButtons && fr._updateButtons();
         }
-      };
-    } else if (s.key !== 'settings') {
-      // normal buttons keep the original click behaviour
-      b.onclick = () => switchToSection(s.key);
-    } else {
-      // SETTINGS: small dropdown instead of direct navigation
-      b.classList.add('__settingsBtn');
-      b.onclick = (ev) => {
-        ev.preventDefault();
-        // toggle
-        const existing = document.getElementById('__settingsMenu');
-        if (existing) { closeSettingsMenu(); return; }
-
-        // avoid dual menus
-        try { closeInvoicesMenu(); } catch {}
-
-        // Build a light menu styled with your palette
-        const m = document.createElement('div');
-        m.id = '__settingsMenu';
-        m.style.position      = 'absolute';
-        m.style.zIndex        = '1000';
-        m.style.background    = 'var(--panel, #0b1221)';
-        m.style.border        = '1px solid var(--line, #334155)';
-        m.style.borderRadius  = '10px';
-        m.style.boxShadow     = 'var(--shadow, 0 6px 20px rgba(0,0,0,.25))';
-        m.style.padding       = '6px';
-        m.style.minWidth      = '220px';
-        m.style.userSelect    = 'none';
-
-        m.innerHTML = `
-          <button type="button" class="menu-item" data-k="global"
-                  style="display:flex;gap:8px;align-items:center;width:100%;
-                         background:#0b1427;border:1px solid var(--line);color:#fff;
-                         padding:8px 10px;border-radius:8px;cursor:pointer;margin:4px 0;">
-            🌐 Global settings
-          </button>
-          <button type="button" class="menu-item" data-k="rates"
-                  style="display:flex;gap:8px;align-items:center;width:100%;
-                         background:#0b1427;border:1px solid var(--line);color:#fff;
-                         padding:8px 10px;border-radius:8px;cursor:pointer;margin:4px 0;">
-            💱 Preset Rates
-          </button>
-          <button type="button" class="menu-item" data-k="job-titles"
-                  style="display:flex;gap:8px;align-items:center;width:100%;
-                         background:#0b1427;border:1px solid var(--line);color:#fff;
-                         padding:8px 10px;border-radius:8px;cursor:pointer;margin:4px 0;">
-            🏷 Job Titles
-          </button>
-          <button type="button" class="menu-item" data-k="user-management"
-                  style="display:flex;gap:8px;align-items:center;width:100%;
-                         background:#0b1427;border:1px solid var(--line);color:#fff;
-                         padding:8px 10px;border-radius:8px;cursor:pointer;margin:4px 0;">
-            👤 User Management
-          </button>
-
-          <div style="height:1px;background:var(--line,#334155);margin:8px 4px;"></div>
-
-          <button type="button" class="menu-item" data-k="band-mappings"
-                  style="display:flex;gap:8px;align-items:center;width:100%;
-                         background:#0b1427;border:1px solid var(--line);color:#fff;
-                         padding:8px 10px;border-radius:8px;cursor:pointer;margin:4px 0;">
-            🧩 Weekly band mappings
-          </button>
-          <button type="button" class="menu-item" data-k="import-col-aliases"
-                  style="display:flex;gap:8px;align-items:center;width:100%;
-                         background:#0b1427;border:1px solid var(--line);color:#fff;
-                         padding:8px 10px;border-radius:8px;cursor:pointer;margin:4px 0;">
-            🧾 Import column aliases
-          </button>
-        `;
-
-        // Position under the button
-        document.body.appendChild(m);
-        const r = b.getBoundingClientRect();
-        m.style.left = `${Math.round(window.scrollX + r.left)}px`;
-        m.style.top  = `${Math.round(window.scrollY + r.bottom + 6)}px`;
-
-        // Wire actions
-        m.addEventListener('click', (e) => {
-          const it = e.target.closest('.menu-item');
-          if (!it) return;
-          const k = it.getAttribute('data-k');
-          closeSettingsMenu();
-
-          if (k === 'global') {
-            // ✅ Open global settings modal WITHOUT switching the summary section
-            if (!confirmDiscardChangesIfDirty()) return;
-            try { openSettings(); } catch (err) { alert('Could not open settings'); }
-            return;
-
-          } else if (k === 'rates') {
-            if (!confirmDiscardChangesIfDirty()) return;
-            openPresetRatesManager();
-
-          } else if (k === 'job-titles') {
-            if (!confirmDiscardChangesIfDirty()) return;
-            openJobTitleSettingsModal();
-
-          } else if (k === 'user-management') {
-            if (!confirmDiscardChangesIfDirty()) return;
-            if (typeof openUserManagementModal !== 'function') {
-              alert('User Management modal not yet implemented.');
-              return;
-            }
-            openUserManagementModal();
-
-          } else if (k === 'band-mappings') {
-            if (!confirmDiscardChangesIfDirty()) return;
-            if (typeof openAssignmentBandMappingsModal !== 'function') {
-              alert('Band mappings modal not yet implemented.');
-              return;
-            }
-            openAssignmentBandMappingsModal();
-
-          } else if (k === 'import-col-aliases') {
-            if (!confirmDiscardChangesIfDirty()) return;
-            if (typeof openImportColumnAliasesModal !== 'function') {
-              alert('Import column aliases modal not yet implemented.');
-              return;
-            }
-            openImportColumnAliasesModal();
-          }
-        });
-
-        // Close on outside click / Esc
-        setTimeout(() => {
-          document.addEventListener('click', onAnyDocClick, true);
-          document.addEventListener('keydown', onEsc, true);
-        }, 0);
-
-        // Visual cue
-        b.classList.add('active');
-      };
+      } else {
+        const p = parentFrame();
+        if (p && (p.mode === 'edit' || p.mode === 'create')) {
+          p.isDirty = true;
+          p._updateButtons && p._updateButtons();
+        }
+      }
+    } else if (fr.mode === 'edit' || fr.mode === 'create') {
+      fr.isDirty = true;
+      fr._updateButtons && fr._updateButtons();
     }
+    try {
+      const t = currentFrame();
+      if (t && t.entity === 'candidates' && t.currentTabKey === 'rates') {
+        renderCandidateRatesTable?.();
+      }
+    } catch {}
+  };
 
-    nav.appendChild(b);
-  });
 
-  // Quick search: Enter runs a search and resets to page 1
+
+  const onApplyEvt = ev=>{
+    const isChildNow=(stack().length>1); if(!isChildNow) return;
+    const t=currentFrame(); if(!(t && (t.kind==='client-rate'||t.kind==='candidate-override'))) return;
+    const enabled=!!(ev && ev.detail && ev.detail.enabled);
+    t._applyDesired=enabled;
+    t._updateButtons&&t._updateButtons();
+    bindSave(byId('btnSave'), t);
+    if(LOG) console.log('[MODAL] onApplyEvt (global) → _applyDesired =', enabled,'rebound save to top frame');
+  };
+
+ const onModeChanged = ev=>{
+  const t = currentFrame();
+  if (!t) return;
+
+  const isChildNow = (stack().length > 1);
+
+  // ✅ Existing behavior: parent mode change should update/rebind the child frame
+  if (isChildNow) {
+    const parentIdx = stack().length - 2;
+    const changed   = ev?.detail?.frameIndex ?? -1;
+
+    if (changed === parentIdx) {
+      if (LOG) console.log('[MODAL] parent mode changed (global) → child _updateButtons()');
+      const topChild = currentFrame();
+      topChild._updateButtons && topChild._updateButtons();
+      bindSave(byId('btnSave'), topChild);
+      bindClose(byId('btnCloseModal'), topChild);
+    }
+    return;
+  }
+
+  // ✅ NEW: top-level mode flips (e.g. View→Edit) must rebind Save/Close
+  // because bindSave() clears onclick/token when Save was hidden in view mode.
   try {
-    const q = byId('quickSearch');
-    if (q && !q.__wired) {
-      q.addEventListener('keydown', async (e) => {
-        if (e.key !== 'Enter') return;
-        if (!confirmDiscardChangesIfDirty()) return;
+    const changed = ev?.detail?.frameIndex ?? -1;
+    const topIdx  = stack().length - 1;
 
-        window.__listState = window.__listState || {};
-        window.__selection = window.__selection || {};
-
-        const st  = (window.__listState[currentSection]  ||= { page: 1, pageSize: 50, total: null, hasMore: false, filters: null });
-        const sel = (window.__selection[currentSection] ||= { fingerprint:'', ids:new Set() });
-
-        st.page = 1;
-        const text = (q.value || '').trim();
-
-        if (!text) {
-          st.filters = null;
-          sel.fingerprint = JSON.stringify({ section: currentSection, filters: {} });
-          sel.ids.clear();
-          const data = await loadSection();
-          return renderSummary(data);
-        }
-
-        // Minimal quick-search filters by section
-        let filters = null;
-        if (currentSection === 'candidates') {
-          if (text.includes('@')) {
-            filters = { email: text };
-          } else if (text.replace(/\D/g,'').length >= 7) {
-            filters = { phone: text };
-          } else {
-            // ✅ FIX: single-token (and multi-token) candidate quick search must be free-text
-            // so searching "arthur" finds "Kier Arthur" (surname match).
-            filters = { q: text };
-          }
-
-        } else if (currentSection === 'clients' || currentSection === 'umbrellas') {
-          // ✅ FIX: use free-text q for consistent behaviour with backend quick-search
-          filters = { q: text };
-
-        } else if (currentSection === 'contracts') {
-          // free-text passthrough for contracts
-          filters = { q: text };
-
-        } else if (currentSection === 'invoices') {
-          // ✅ Quick-search uses free-text q; backend expands via invoice_quicksearch_ids RPC
-          filters = { q: text };
-
-        } else {
-          const data = await loadSection();
-          return renderSummary(data);
-        }
-
-        st.filters = filters;
-        sel.fingerprint = JSON.stringify({ section: currentSection, filters });
-        sel.ids.clear();
-
-        const rows = await search(currentSection, filters);
-        renderSummary(rows);
-      });
-      q.__wired = true;
+    if (changed === topIdx) {
+      if (LOG) console.log('[MODAL] top mode changed (global) → rebind Save/Close');
+      t._updateButtons && t._updateButtons();
+      bindSave(byId('btnSave'), t);
+      bindClose(byId('btnCloseModal'), t);
     }
   } catch {}
-}
+};
 
+
+  const onMarginsEvt = ()=>{ try { const t=currentFrame(); if (t && (t.mode==='edit'||t.mode==='create')) t._updateButtons(); } catch {} };
+
+  if (!top._wired) {
+    window.addEventListener('modal-dirty', onDirtyEvt);
+    window.addEventListener('modal-apply-enabled', onApplyEvt);
+    window.addEventListener('modal-frame-mode-changed', onModeChanged);
+    window.addEventListener('contract-margins-updated', onMarginsEvt);
+    const onEsc=e=>{ if(e.key==='Escape'){ if(top._confirmingDiscard||top._closing) return; e.preventDefault(); byId('btnCloseModal').click(); } };
+    window.addEventListener('keydown', onEsc);
+    const onOverlayClick=e=>{ if(top._confirmingDiscard||top._closing) return; if(e.target===byId('modalBack')) { e.preventDefault(); e.stopPropagation(); return; } };
+    byId('modalBack').addEventListener('click', onOverlayClick, true);
+
+    top._detachGlobal = ()=>{ try{window.removeEventListener('modal-dirty',onDirtyEvt);}catch{} try{window.removeEventListener('modal-apply-enabled',onApplyEvt);}catch{} try{window.removeEventListener('modal-frame-mode-changed',onModeChanged);}catch{} try{window.removeEventListener('contract-margins-updated',onMarginsEvt);}catch{} try{window.removeEventListener('keydown',onEsc);}catch{} try{byId('modalBack').removeEventListener('click', onOverlayClick, true);}catch{}; };
+    top._wired = true;
+    L('renderTop (global): listeners wired');
+  }
+
+
+  const parentEditable = parent && (parent.mode==='edit' || parent.mode==='create');
+  const isChildNow = (stack().length > 1);
+  if (isChildNow && !top.noParentGate) setFormReadOnly(byId('modalBody'), !parentEditable);
+  else                                 setFrameMode(top, top.mode);
+
+  top._updateButtons && top._updateButtons();
+  bindSave(btnSave, top);
+
+  try {
+    const pc = document.getElementById('btnPickCandidate');
+    const pl = document.getElementById('btnPickClient');
+    L('renderTop final snapshot (global)', {
+      entity: top.entity, mode: top.mode, currentTabKey: top.currentTabKey,
+      pickButtons: {
+        btnPickCandidate: { exists: !!pc, disabled: !!(pc && pc.disabled) },
+        btnPickClient:    { exists: !!pl, disabled: !!(pl && pl.disabled) }
+      }
+    });
+  } catch {}
+
+  GE();
+}
 
 
   byId('modalBack').style.display='flex';
