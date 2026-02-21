@@ -484,8 +484,16 @@ function getVisibleColumnsForSection(section, rows) {
     (typeof GRID_COLUMN_META_DEFAULTS === 'object' &&
      GRID_COLUMN_META_DEFAULTS[section]) || {};
 
-  // Build catalog of known columns: defaults + first row's keys
+  // ✅ Build catalog of known columns: defaults + grid prefs keys + meta keys + first row's keys
+  // This keeps the visible column set stable even when rows is empty.
   const known = new Set(defaults);
+
+  // Include any keys the user has ever saved prefs for (even if data is currently empty)
+  try { Object.keys(colPrefs || {}).forEach((k) => known.add(k)); } catch {}
+  try { Object.keys(userMeta || {}).forEach((k) => known.add(k)); } catch {}
+  try { Object.keys(globalMeta || {}).forEach((k) => known.add(k)); } catch {}
+
+  // Also include keys from current dataset (when present)
   if (Array.isArray(rows) && rows.length > 0 && rows[0] && typeof rows[0] === 'object') {
     Object.keys(rows[0]).forEach((k) => known.add(k));
   }
@@ -4109,6 +4117,7 @@ let currentSelection = null;
 // ──────────────────────────────────────────────────────────────────────────────
 // renderTopNav (amended) — adds Contracts quick-search branch { q: text }
 // ──────────────────────────────────────────────────────────────────────────────
+
 function renderTopNav(){
   const nav = byId('nav'); nav.innerHTML = '';
 
@@ -4551,6 +4560,10 @@ function renderTopNav(){
           // free-text passthrough for contracts
           filters = { q: text };
 
+        } else if (currentSection === 'timesheets') {
+          // ✅ FIX: timesheets quick search must pass q into /api/timesheets/summary via listTimesheetsSummary
+          filters = { q: text };
+
         } else if (currentSection === 'invoices') {
           // ✅ Quick-search uses free-text q; backend expands via invoice_quicksearch_ids RPC
           filters = { q: text };
@@ -4564,6 +4577,11 @@ function renderTopNav(){
         sel.fingerprint = JSON.stringify({ section: currentSection, filters });
         sel.ids.clear();
 
+        if (currentSection === 'timesheets') {
+          const data = await loadSection();
+          return renderSummary(data);
+        }
+
         const rows = await search(currentSection, filters);
         renderSummary(rows);
       });
@@ -4571,6 +4589,7 @@ function renderTopNav(){
     }
   } catch {}
 }
+
 
 // NEW: advanced, section-aware search modal
 // === UPDATED: Advanced Search — add Roles (any) multi-select, use UK date pickers ===
@@ -6684,8 +6703,52 @@ async function search(section, filters = {}) {
 
   const safeJson = async (res) => { try { return await res.json(); } catch { return null; } };
 
+  const toast = (msg) => {
+    try {
+      if (typeof window.toast === 'function') return window.toast(msg);
+      if (typeof window.showToast === 'function') return window.showToast(msg);
+      if (typeof window.notify === 'function') return window.notify(msg);
+      if (typeof window.__toast === 'function') return window.__toast(msg);
+      console.log('[SEARCH][TOAST]', msg);
+    } catch {}
+  };
+
   const r = await authFetch(API(url));
   const j = await safeJson(r);
+
+  // ✅ Treat backend payload errors as failures (prevents silent empty-table + stuck sort)
+  // If candidates list breaks due to sort, auto-reset sort and retry once.
+  try {
+    const hasPayloadError = !!(j && typeof j === 'object' && !Array.isArray(j) && j.error);
+    const retryKey = sel.fingerprint;
+    const alreadyRetriedForThisFingerprint = (st && st.__searchRetryFingerprint === retryKey);
+
+    if (hasPayloadError) {
+      const errMsg = String(j.error || 'Search failed');
+      const sortKey = (st && st.sort && st.sort.key) ? String(st.sort.key) : '';
+
+      // Only auto-recover once per fingerprint, and only for candidates when a sort key is involved
+      if (section === 'candidates' && sortKey && !alreadyRetriedForThisFingerprint) {
+        st.__searchRetryFingerprint = retryKey;
+
+        // Reset sort to safe default (no order_by/order_dir sent → backend default order)
+        st.sort = { key: null, dir: 'asc' };
+
+        toast(`Sorting reset due to backend error: ${errMsg}`);
+
+        // Retry once with same filters (selection fingerprint will update inside the retry call)
+        return await search(section, filters);
+      }
+
+      // For all other cases, surface the error to the user and return empty rows.
+      toast(`Search failed: ${errMsg}`);
+    }
+
+    // Clear retry marker when response is clean (or array) so future requests can recover again
+    if (!hasPayloadError && st && st.__searchRetryFingerprint) {
+      st.__searchRetryFingerprint = null;
+    }
+  } catch {}
 
   // Normalize rows
   const rows =
@@ -6746,6 +6809,8 @@ async function search(section, filters = {}) {
 
   return rows;
 }
+
+
 function defaultColumnsFor(section){
   // No longer read localStorage; server grid prefs are the source of truth.
   switch(section){
@@ -28201,9 +28266,6 @@ async function openClientPicker(onPick, opts) {
   }, 0);
 }
 
-
-
-
 async function openCandidatePayMethodChangeModal(candidate, context = {}) {
   const LOG = (typeof window.__LOG_CAND === 'boolean')
     ? window.__LOG_CAND
@@ -28296,6 +28358,10 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
         summary: resp?.summary || null
       });
       focusContractsAfterBulkChange(resp);
+
+      // Ensure UI refresh so candidate pay_method + any related panels are consistent
+      try { await renderAll(); } catch {}
+
       try { window.__toast && window.__toast('Pay method changed.'); } catch {}
       // Flip confirmed
       return true;
@@ -28423,6 +28489,77 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
           // Prepare Contracts section to focus the before/after contracts
           focusContractsAfterBulkChange(resp);
 
+          // ✅ NEW: if old contracts now have zero timesheets, prompt to delete them
+          try {
+            let migrations = resp?.migrations;
+            if (typeof migrations === 'string') {
+              try { migrations = JSON.parse(migrations); } catch { migrations = null; }
+            }
+            migrations = Array.isArray(migrations) ? migrations : [];
+
+            const deletableOldIds = Array.from(new Set(
+              migrations
+                .map(m => {
+                  const oldId = String(m?.old_contract_id || '').trim();
+                  const rem = (m && (m.old_contract_timesheets_remaining != null)) ? Number(m.old_contract_timesheets_remaining) : null;
+                  const can = (m && (m.old_contract_can_delete === true || String(m.old_contract_can_delete).toLowerCase() === 'true'));
+                  if (!oldId) return null;
+                  if (can) return oldId;
+                  if (rem != null && Number.isFinite(rem) && rem === 0) return oldId;
+                  return null;
+                })
+                .filter(Boolean)
+            ));
+
+            if (deletableOldIds.length > 0) {
+              const msg = [
+                `Old contract(s) now have zero timesheets after the ${origMethod} → ${newMethod} change.`,
+                '',
+                `Delete old contract(s)?`,
+                deletableOldIds.map(x => `• ${x}`).join('\n'),
+                '',
+                'If you choose "No", the old contracts will remain (with updated dates).'
+              ].join('\n');
+
+              let okDel = false;
+              if (typeof window.uiConfirmModal === 'function') {
+                okDel = await window.uiConfirmModal({
+                  title: 'Delete old contract(s)?',
+                  message: msg,
+                  yesText: 'Yes, delete',
+                  noText: 'No, keep'
+                });
+              } else {
+                okDel = window.confirm(msg);
+              }
+
+              if (okDel) {
+                for (const oldId of deletableOldIds) {
+                  try {
+                    if (typeof deleteContract === 'function') {
+                      await deleteContract(oldId);
+                    } else {
+                      const rr = await authFetch(API(`/api/contracts/${encodeURIComponent(oldId)}`), { method: 'DELETE' });
+                      if (!rr.ok) {
+                        const t = await rr.text().catch(() => '');
+                        throw new Error(t || `Delete failed (${rr.status})`);
+                      }
+                    }
+                  } catch (de) {
+                    console.error('[CAND][PAY-METHOD] delete old contract failed', oldId, de);
+                    alert(de?.message || `Failed to delete old contract ${oldId}`);
+                    break;
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('[CAND][PAY-METHOD] delete-old prompt failed (non-fatal)', e);
+          }
+
+          // ✅ NEW: force a refresh so newly hydrated schedules (planned_schedule_json) show immediately
+          try { await renderAll(); } catch {}
+
           try { window.__toast && window.__toast('Pay method changed and contracts updated.'); } catch {}
 
           done(true);   // flip confirmed
@@ -28445,6 +28582,10 @@ async function openCandidatePayMethodChangeModal(candidate, context = {}) {
     );
   });
 }
+
+
+
+
 function focusContractsAfterBulkChange(info) {
   if (!info || typeof info !== 'object') info = {};
   const newIds = Array.isArray(info.new_contract_ids) ? info.new_contract_ids.map(String) : [];
@@ -74690,6 +74831,7 @@ async function saveNhspDeferrals(ctxOrId, deferrals) {
   return { ok: true };
 }
 
+
 async function listTimesheetsSummary(filters = {}) {
   window.__listState = window.__listState || {};
   const st = (window.__listState['timesheets'] ||= {
@@ -74718,6 +74860,16 @@ async function listTimesheetsSummary(filters = {}) {
   // Work on a safe copy
   const f0 = (filters && typeof filters === 'object') ? filters : {};
   const f = { ...(f0 || {}) };
+
+  // ✅ Quick-search passthrough: serialize q (or name) into the summary endpoint
+  try {
+    const rawQ =
+      (Object.prototype.hasOwnProperty.call(f, 'q') ? f.q : null) ||
+      (Object.prototype.hasOwnProperty.call(f, 'name') ? f.name : null) ||
+      null;
+    const txt = (rawQ != null) ? String(rawQ || '').trim() : '';
+    if (txt) qs.set('q', txt);
+  } catch {}
 
   // ─────────────────────────────────────────────────────────────
   // Canonical filters:
@@ -74899,6 +75051,170 @@ async function listTimesheetsSummary(filters = {}) {
 
   return rows;
 }
+
+
+async function deleteCandidate(candidateId) {
+  const id = String(candidateId || '').trim();
+  if (!id) throw new Error('Missing candidateId');
+
+  // Optional eligibility pre-check (blocks with a readable reason if cannot delete)
+  try {
+    const er = await authFetch(API(`/api/candidates/${encodeURIComponent(id)}/delete-eligibility`));
+    const etxt = await er.text().catch(() => '');
+    let ej = null;
+    try { ej = etxt ? JSON.parse(etxt) : null; } catch { ej = null; }
+
+    if (er.ok && ej && typeof ej === 'object') {
+      const can = (ej.can_delete === true) || (String(ej.can_delete).toLowerCase() === 'true');
+      if (!can) {
+        const reason =
+          (typeof ej.reason === 'string' && ej.reason.trim()) ? ej.reason.trim() :
+          (typeof ej.message === 'string' && ej.message.trim()) ? ej.message.trim() :
+          (typeof ej.error === 'string' && ej.error.trim()) ? ej.error.trim() :
+          'This candidate cannot be deleted.';
+        alert(reason);
+        return false;
+      }
+    } else if (!er.ok && etxt && etxt.trim()) {
+      // If eligibility endpoint fails, we still allow the delete attempt (eligibility is a UX layer),
+      // but surface the failure quietly in console for diagnosis.
+      try { console.warn('[deleteCandidate] delete-eligibility failed (non-blocking)', { status: er.status, body: etxt.slice(0, 400) }); } catch {}
+    }
+  } catch (e) {
+    // Non-blocking: proceed to delete attempt even if eligibility check fails
+    try { console.warn('[deleteCandidate] delete-eligibility error (non-blocking)', e); } catch {}
+  }
+
+  // Confirm destructive action
+  if (!confirm('Delete this candidate? This cannot be undone.')) return false;
+
+  // Apply delete
+  const res = await authFetch(API(`/api/candidates/${encodeURIComponent(id)}`), { method: 'DELETE' });
+  const txt = await res.text().catch(() => '');
+
+  let json = null;
+  try { json = txt ? JSON.parse(txt) : null; } catch { json = null; }
+
+  if (!res.ok) {
+    const msg =
+      (json && typeof json === 'object' && (json.message || json.error))
+        ? String(json.message || json.error)
+        : (txt || `Delete failed (${res.status})`);
+    alert(msg);
+    return false;
+  }
+
+  // Clear selection state for this section (remove id if present)
+  try {
+    window.__selection = window.__selection || {};
+    const sel = window.__selection['candidates'];
+    if (sel && sel.ids && typeof sel.ids.delete === 'function') sel.ids.delete(id);
+  } catch {}
+
+  // Remove from currentRows cache if present (best-effort)
+  try {
+    if (Array.isArray(window.currentRows)) {
+      window.currentRows = window.currentRows.filter(r => String(r?.id || '') !== id);
+    }
+  } catch {}
+
+  // Central post-delete cleanup hook (preferred)
+  try {
+    if (typeof window.__afterRecordDeleteCleanup === 'function') {
+      await window.__afterRecordDeleteCleanup('candidates', id);
+      return true;
+    }
+  } catch {}
+
+  // Fallback: close modals + refresh summary
+  try { discardAllModalsAndState(); } catch {}
+  try { await renderAll(); } catch {}
+  try { renderTopNav(); } catch {}
+
+  return true;
+}
+
+
+async function deleteClient(clientId) {
+  const id = String(clientId || '').trim();
+  if (!id) throw new Error('Missing clientId');
+
+  // Optional eligibility pre-check (blocks with a readable reason if cannot delete)
+  try {
+    const er = await authFetch(API(`/api/clients/${encodeURIComponent(id)}/delete-eligibility`));
+    const etxt = await er.text().catch(() => '');
+    let ej = null;
+    try { ej = etxt ? JSON.parse(etxt) : null; } catch { ej = null; }
+
+    if (er.ok && ej && typeof ej === 'object') {
+      const can = (ej.can_delete === true) || (String(ej.can_delete).toLowerCase() === 'true');
+      if (!can) {
+        const reason =
+          (typeof ej.reason === 'string' && ej.reason.trim()) ? ej.reason.trim() :
+          (typeof ej.message === 'string' && ej.message.trim()) ? ej.message.trim() :
+          (typeof ej.error === 'string' && ej.error.trim()) ? ej.error.trim() :
+          'This client cannot be deleted.';
+        alert(reason);
+        return false;
+      }
+    } else if (!er.ok && etxt && etxt.trim()) {
+      // Non-blocking: still allow delete attempt, but log
+      try { console.warn('[deleteClient] delete-eligibility failed (non-blocking)', { status: er.status, body: etxt.slice(0, 400) }); } catch {}
+    }
+  } catch (e) {
+    // Non-blocking: proceed to delete attempt even if eligibility check fails
+    try { console.warn('[deleteClient] delete-eligibility error (non-blocking)', e); } catch {}
+  }
+
+  // Confirm destructive action
+  if (!confirm('Delete this client? This cannot be undone.')) return false;
+
+  // Apply delete
+  const res = await authFetch(API(`/api/clients/${encodeURIComponent(id)}`), { method: 'DELETE' });
+  const txt = await res.text().catch(() => '');
+
+  let json = null;
+  try { json = txt ? JSON.parse(txt) : null; } catch { json = null; }
+
+  if (!res.ok) {
+    const msg =
+      (json && typeof json === 'object' && (json.message || json.error))
+        ? String(json.message || json.error)
+        : (txt || `Delete failed (${res.status})`);
+    alert(msg);
+    return false;
+  }
+
+  // Clear selection state for this section (remove id if present)
+  try {
+    window.__selection = window.__selection || {};
+    const sel = window.__selection['clients'];
+    if (sel && sel.ids && typeof sel.ids.delete === 'function') sel.ids.delete(id);
+  } catch {}
+
+  // Remove from currentRows cache if present (best-effort)
+  try {
+    if (Array.isArray(window.currentRows)) {
+      window.currentRows = window.currentRows.filter(r => String(r?.id || '') !== id);
+    }
+  } catch {}
+
+  // Central post-delete cleanup hook (preferred)
+  try {
+    if (typeof window.__afterRecordDeleteCleanup === 'function') {
+      await window.__afterRecordDeleteCleanup('clients', id);
+      return true;
+    }
+  } catch {}
+
+  // Fallback: close modals + refresh summary
+  try { discardAllModalsAndState(); } catch {}
+  try { await renderAll(); } catch {}
+  try { renderTopNav(); } catch {}
+
+  return true;
+}
+
 
 
 
