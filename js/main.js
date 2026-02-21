@@ -2930,9 +2930,19 @@ async function authFetch(input, init = {}) {
   }
 
   if (res.status === 401) {
+    // ✅ If we are logged out or logging in, do NOT attempt refresh (prevents stale pollers breaking login UX)
+    try {
+      const st = String((typeof window !== 'undefined' && window.__authState) ? window.__authState : '');
+      if (st === 'LOGGED_OUT' || st === 'LOGIN_IN_PROGRESS' || !SESSION?.accessToken) {
+        return res;
+      }
+    } catch {
+      if (!SESSION?.accessToken) return res;
+    }
+
     const ok = await refreshToken();
 
-    // ✅ If refresh failed, refreshToken() already performed a hard local reset + login overlay.
+    // ✅ If refresh failed, refreshToken() may have performed a hard local reset + login overlay (only when appropriate).
     if (!ok) throw new Error('Unauthorised');
 
     // Retry once with new access token
@@ -2952,7 +2962,7 @@ async function authFetch(input, init = {}) {
     // ✅ If we still get 401 after a successful refresh, treat as hard-auth-loss and force clean logout UI.
     if (res.status === 401) {
       try { clearSession(); } catch {}
-      try { if (typeof openLogin === 'function') openLogin(); } catch {}
+      try { if (typeof openLogin === 'function') openLogin('Your session has expired. Please sign in again.'); } catch {}
       try {
         const err = (typeof byId === 'function') ? byId('loginError') : null;
         if (err) {
@@ -2966,7 +2976,6 @@ async function authFetch(input, init = {}) {
 
   return res;
 }
-
 // ===== Auth API calls =====
 
 // single, de-duplicated definition
@@ -3446,6 +3455,7 @@ async function performLogout(reason){
     try { window.__logoutInProgress = false; } catch {}
   }
 }
+
 function initAuthUI() {
   // Buttons and links
   byId('btnLogout').onclick = () => { performLogout('manual'); };
@@ -3501,6 +3511,8 @@ function initAuthUI() {
     try { sessionStorage.setItem('cloudtms.tfa', JSON.stringify(st)); } catch {}
     try { window.__tfaState = st; } catch {}
 
+    try { window.__authState = 'LOGIN_IN_PROGRESS'; } catch {}
+
     const tfaOverlay = byId('tfaOverlay');
     if (tfaOverlay) {
       // Hide others
@@ -3528,6 +3540,7 @@ function initAuthUI() {
       const entered = String(window.prompt('Enter the 6-digit verification code we emailed you:') || '').trim();
       if (!entered) return;
       await apiVerify2fa(st.challenge_id, entered);
+      try { window.__authState = 'AUTHENTICATED'; } catch {}
       try { byId('loginOverlay').style.display = 'none'; } catch {}
       bootstrapApp();
     })().catch((e) => {
@@ -3536,6 +3549,7 @@ function initAuthUI() {
         err.textContent = e?.message || 'Verification failed';
         err.style.display = 'block';
       }
+      try { window.__authState = 'LOGGED_OUT'; } catch {}
       openLogin();
     });
   };
@@ -3560,6 +3574,7 @@ function initAuthUI() {
         if (!st?.challenge_id) {
           if (errEl) { errEl.textContent = 'Challenge missing. Please sign in again.'; errEl.style.display = 'block'; }
           clearTfaState();
+          try { window.__authState = 'LOGGED_OUT'; } catch {}
           openLogin();
           return;
         }
@@ -3570,6 +3585,7 @@ function initAuthUI() {
 
         try {
           await apiVerify2fa(st.challenge_id, code);
+          try { window.__authState = 'AUTHENTICATED'; } catch {}
           try { byId('tfaOverlay').style.display = 'none'; } catch {}
           try { byId('loginOverlay').style.display = 'none'; } catch {}
           bootstrapApp();
@@ -3587,6 +3603,7 @@ function initAuthUI() {
 
           if (looksLikeAttemptInvalid) {
             clearTfaState();
+            try { window.__authState = 'LOGGED_OUT'; } catch {}
             openLogin();
             try {
               const loginErr = byId('loginError');
@@ -3625,6 +3642,7 @@ function initAuthUI() {
         if (!st?.challenge_id) {
           if (errEl) { errEl.textContent = 'Challenge missing. Please sign in again.'; errEl.style.display = 'block'; }
           clearTfaState();
+          try { window.__authState = 'LOGGED_OUT'; } catch {}
           openLogin();
           try { if (btnResend.dataset) btnResend.dataset.inflight = '0'; } catch {}
           return;
@@ -3668,6 +3686,7 @@ function initAuthUI() {
 
           if (looksLikeAttemptInvalid) {
             clearTfaState();
+            try { window.__authState = 'LOGGED_OUT'; } catch {}
             openLogin();
             try {
               const loginErr = byId('loginError');
@@ -3689,6 +3708,7 @@ function initAuthUI() {
     const linkBack = byId('linkTfaBackToLogin');
     if (linkBack) linkBack.onclick = () => {
       clearTfaState();
+      try { window.__authState = 'LOGGED_OUT'; } catch {}
       openLogin();
     };
   } catch {}
@@ -3698,6 +3718,8 @@ function initAuthUI() {
 
     // ✅ Any new login attempt must discard any previous pending challenge/attempt id.
     clearTfaState();
+
+    try { window.__authState = 'LOGIN_IN_PROGRESS'; } catch {}
 
     const email = byId('loginEmail').value.trim();
     const pw = byId('loginPassword').value;
@@ -3716,6 +3738,8 @@ function initAuthUI() {
         return;
       }
 
+      try { window.__authState = 'AUTHENTICATED'; } catch {}
+
       if (typeof scheduleRefresh === 'function') scheduleRefresh();
       byId('loginOverlay').style.display = 'none';
 
@@ -3727,6 +3751,7 @@ function initAuthUI() {
 
       bootstrapApp();
     } catch (ex) {
+      try { window.__authState = 'LOGGED_OUT'; } catch {}
       err.textContent = ex.message || 'Sign in failed';
       err.style.display = 'block';
     } finally {
@@ -3802,6 +3827,7 @@ function initAuthUI() {
   if (hasResetToken && !hasValidPersistedSession) openReset();
 }
 
+
 function clearSession() {
   // stop refresh timers
   try { clearTimeout(refreshTimer); } catch {}
@@ -3824,7 +3850,7 @@ function clearSession() {
       try { if (hb._timer) clearInterval(hb._timer); } catch {}
       hb._timer = null;
       hb._started = false;     // allow restart after re-login
-      hb._disabled = false;    // do not permanently disable across sessions
+      hb._disabled = true;     // ✅ prevent focus/visibility wired pings from firing while logged out
       hb._lastPingAtMs = 0;
     }
   } catch {}
@@ -3845,11 +3871,16 @@ function clearSession() {
       window.__auth = window.__auth || {};
       window.__auth.user = null;
       window.__USER_ID = null;
+
+      // ✅ canonical auth state
+      window.__authState = 'LOGGED_OUT';
     }
   } catch {}
 
   try { renderUserChip(); } catch {}
 }
+
+
 async function refreshToken() {
   // ✅ Single-flight refresh to prevent parallel refresh storms + races.
   try {
@@ -3858,6 +3889,12 @@ async function refreshToken() {
 
   refreshToken._inFlight = (async () => {
     const forceLoggedOutUi = (msg) => {
+      // ✅ If we are already logged out, or a login is in progress, NEVER show "session expired" (prevents double-click login).
+      try {
+        const st = String((typeof window !== 'undefined' && window.__authState) ? window.__authState : '');
+        if (st === 'LOGGED_OUT' || st === 'LOGIN_IN_PROGRESS') return;
+      } catch {}
+
       // Ensure we do this once per “auth lost” episode (avoid UI thrash if many calls fail).
       try {
         const now = Date.now();
@@ -3869,7 +3906,7 @@ async function refreshToken() {
       try { clearSession(); } catch {}
 
       try {
-        if (typeof openLogin === 'function') openLogin();
+        if (typeof openLogin === 'function') openLogin(msg || 'Your session has expired. Please sign in again.');
       } catch {}
 
       try {
@@ -3882,6 +3919,12 @@ async function refreshToken() {
     };
 
     try {
+      // ✅ Do not attempt refresh if we are not in an authenticated state.
+      try {
+        const st = String((typeof window !== 'undefined' && window.__authState) ? window.__authState : '');
+        if (st === 'LOGGED_OUT' || st === 'LOGIN_IN_PROGRESS') return false;
+      } catch {}
+
       const res = await fetch(API('/auth/refresh'), {
         method: 'POST',
         credentials: 'include',
@@ -3939,6 +3982,10 @@ async function refreshToken() {
       });
 
       try {
+        if (typeof window !== 'undefined') window.__authState = 'AUTHENTICATED';
+      } catch {}
+
+      try {
         if (typeof IdleManager === 'object' && typeof IdleManager.startOrReset === 'function') {
           IdleManager.startOrReset(policy || null);
         }
@@ -3958,7 +4005,6 @@ async function refreshToken() {
   }
 }
 
-
 async function apiForgot(email){
   const r = await fetch(API('/auth/forgot'), { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ email })});
   if(!r.ok) throw new Error('Failed to request reset');
@@ -3971,10 +4017,14 @@ async function apiReset(token, newPassword){
 }
 
 // ===== Auth overlays wiring (login / forgot / reset) =====
-function openLogin() {
+
+function openLogin(msg) {
   // ✅ When showing login, ensure no stale 2FA attempt survives and no auth pollers keep running.
   try { sessionStorage.removeItem('cloudtms.tfa'); } catch {}
   try { if (typeof window !== 'undefined' && window.__tfaState) window.__tfaState = null; } catch {}
+
+  // ✅ Mark logged out state (suppresses "session expired" UI from stale background calls)
+  try { if (typeof window !== 'undefined') window.__authState = 'LOGGED_OUT'; } catch {}
 
   try {
     const hb =
@@ -3986,8 +4036,10 @@ function openLogin() {
 
     if (hb) {
       try { if (typeof hb.stop === 'function') hb.stop(); } catch {}
+      try { if (hb._timer) clearInterval(hb._timer); } catch {}
       hb._timer = null;
       hb._started = false; // allow restart after successful login
+      hb._disabled = true; // ✅ prevent wired focus/visibility pings while on login
       hb._lastPingAtMs = 0;
     }
   } catch {}
@@ -4001,6 +4053,21 @@ function openLogin() {
   byId('loginOverlay').style.display = 'grid';
   byId('forgotOverlay').style.display = 'none';
   byId('resetOverlay').style.display = 'none';
+
+  // ✅ Only show a message if explicitly provided; otherwise clear any stale error.
+  try {
+    const err = byId('loginError');
+    if (err) {
+      const m = String(msg || '').trim();
+      if (m) {
+        err.textContent = m;
+        err.style.display = 'block';
+      } else {
+        err.textContent = '';
+        err.style.display = 'none';
+      }
+    }
+  } catch {}
 }
 
 
@@ -50798,6 +50865,7 @@ const _tabPromise = (() => {
     return Promise.resolve(false);
   }
 })();
+const modalNode = byId('modal');
 
 _tabPromise.then(() => {
   // ✅ If stack/top changed since we started, abort (prevents cross-frame wiring)
@@ -50809,7 +50877,6 @@ _tabPromise.then(() => {
   const btnClose = byId('btnCloseModal');
   const btnDel   = byId('btnDelete');
   const header   = byId('modalDrag');
-  const modalNode= byId('modal');
 
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
   if (modalNode) {
@@ -50902,7 +50969,6 @@ if (!btnEdit) {
   if (bar) bar.insertBefore(btnEdit, btnSave);
   L('renderTop (global): created btnEdit');
 }
-
 // ✅ Ensure footer Delete sits immediately LEFT of Edit (not header)
 try {
   const bar2 = btnSave?.parentElement || btnClose?.parentElement;
@@ -76365,6 +76431,9 @@ async function bootstrapApp(){
       window.__auth = window.__auth || {};
       if (!window.__auth.user && SESSION?.user) window.__auth.user = SESSION.user;
       if (!window.__USER_ID && SESSION?.user?.id) window.__USER_ID = SESSION.user.id;
+
+      // ✅ Mark authenticated state for downstream guards (heartbeat / refresh fail UI suppression)
+      if (SESSION?.accessToken) window.__authState = 'AUTHENTICATED';
     }
 
     // If token exists but user.id is missing, hydrate via /api/me (non-blocking safety)
@@ -76448,6 +76517,14 @@ async function bootstrapApp(){
 
         const pingOnce = async (reason = '') => {
           if (hb._disabled) return;
+
+          // ✅ Hard gate: never ping unless we are definitely authenticated right now
+          try {
+            if (!SESSION?.accessToken) return;
+            const st = String(window.__authState || '');
+            if (st && st !== 'AUTHENTICATED') return;
+          } catch {}
+
           const now = Date.now();
           // throttle: never more than once per 1s even if focus + interval collide
           if (now - (hb._lastPingAtMs || 0) < 1000) return;
@@ -76464,11 +76541,32 @@ async function bootstrapApp(){
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload)
             });
-          } catch {
+          } catch (e) {
+            // ✅ If auth is gone, stop heartbeat immediately (no retry loop)
+            try {
+              const msg = String(e?.message || e || '');
+              if (/unauthor/i.test(msg)) {
+                hb._disabled = true;
+                try { if (hb._timer) clearInterval(hb._timer); } catch {}
+                hb._timer = null;
+                hb._started = false;
+              }
+            } catch {}
             return;
           }
 
           if (!res || !res.ok) {
+            // ✅ If auth is gone, stop heartbeat immediately (no retry loop)
+            try {
+              if (res && res.status === 401) {
+                hb._disabled = true;
+                try { if (hb._timer) clearInterval(hb._timer); } catch {}
+                hb._timer = null;
+                hb._started = false;
+                return;
+              }
+            } catch {}
+
             // If endpoint isn't deployed yet, stop trying this session (keep it silent).
             try {
               if (res && (res.status === 404 || res.status === 405 || res.status === 501)) {
@@ -76575,6 +76673,9 @@ async function bootstrapApp(){
   renderTools();
   await renderAll();
 }
+
+
+
 // Initialize
 initAuthUI();
 
