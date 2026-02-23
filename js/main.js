@@ -8979,19 +8979,38 @@ function renderBucketLabelsEditor(ctx /* modalCtx */) {
     </div>`;
 }
 
-
 function _collectBucketLabelsFromForm(rootSel = '#contractForm') {
   const root = document.querySelector(rootSel);
   if (!root) return null;
-  const day   = root.querySelector('input[name="bucket_day"]')?.value?.trim();
-  const night = root.querySelector('input[name="bucket_night"]')?.value?.trim();
-  const sat   = root.querySelector('input[name="bucket_sat"]')?.value?.trim();
-  const sun   = root.querySelector('input[name="bucket_sun"]')?.value?.trim();
-  const bh    = root.querySelector('input[name="bucket_bh"]')?.value?.trim();
+
+  const dayEl   = root.querySelector('input[name="bucket_day"]');
+  const nightEl = root.querySelector('input[name="bucket_night"]');
+  const satEl   = root.querySelector('input[name="bucket_sat"]');
+  const sunEl   = root.querySelector('input[name="bucket_sun"]');
+  const bhEl    = root.querySelector('input[name="bucket_bh"]');
+
+  // ✅ Post-removal safety:
+  // If the bucket label inputs do not exist (UI removed), this must mean "no update" (NOT clear).
+  // Returning undefined ensures typical payload builders/JSON stringify omit the field.
+  const anyPresent = !!(dayEl || nightEl || satEl || sunEl || bhEl);
+  if (!anyPresent) return undefined;
+
+  // If UI exists but is incomplete, also treat as "no update" to avoid accidental clears.
+  const allPresent = !!(dayEl && nightEl && satEl && sunEl && bhEl);
+  if (!allPresent) return undefined;
+
+  const day   = dayEl.value?.trim();
+  const night = nightEl.value?.trim();
+  const sat   = satEl.value?.trim();
+  const sun   = sunEl.value?.trim();
+  const bh    = bhEl.value?.trim();
+
   const raw = { day, night, sat, sun, bh };
+
   // If all empty → treat as null; if partially filled → require full 5, else clear to null
   const filled = Object.values(raw).filter(Boolean).length;
   if (filled === 0) return null;
+
   const norm = normaliseBucketLabelsInput(raw);
   return norm || null;
 }
@@ -12530,17 +12549,50 @@ function setContractFormValue(name, value) {
   const isRate = /^(paye_|umb_|charge_)/.test(targetName);
   const prev = isRate ? fs.pay[targetName] : fs.main[targetName];
 
+  const isAdHocField = (targetName === 'is_ad_hoc');
+
   let stored;
   if (el && el.type === 'checkbox') {
-    el.checked = !!value && value !== 'false' && value !== '0';
-    stored = el.checked ? 'on' : '';
+    if (isAdHocField) {
+      // ✅ Store a real boolean so explicit false survives stripEmpty() merges.
+      const v = (value === true) || (value === 1) ||
+        (String(value ?? '').trim().toLowerCase() === 'true') ||
+        (String(value ?? '').trim().toLowerCase() === 'on') ||
+        (String(value ?? '').trim().toLowerCase() === 'yes') ||
+        (String(value ?? '').trim() === '1');
+
+      el.checked = !!v;
+      stored = !!v;
+    } else {
+      el.checked = !!value && value !== 'false' && value !== '0';
+      stored = el.checked ? 'on' : '';
+    }
   } else if (el && el.type === 'radio') {
     stored = String(value ?? '');
     const group = form ? Array.from(form.querySelectorAll(`input[type="radio"][name="${CSS.escape(el.name)}"]`)) : [];
     for (const r of group) r.checked = (String(r.value) === stored);
   } else {
-    stored = (value == null ? '' : String(value));
+    if (isAdHocField) {
+      // ✅ Even if the checkbox element isn't found, keep boolean semantics for staging.
+      const v = (value === true) || (value === 1) ||
+        (String(value ?? '').trim().toLowerCase() === 'true') ||
+        (String(value ?? '').trim().toLowerCase() === 'on') ||
+        (String(value ?? '').trim().toLowerCase() === 'yes') ||
+        (String(value ?? '').trim() === '1');
+
+      stored = !!v;
+    } else {
+      stored = (value == null ? '' : String(value));
+    }
     if (el) el.value = stored;
+  }
+
+  // ✅ Mirror ad-hoc into modalCtx.data so render paths that read the row stay aligned immediately
+  if (isAdHocField) {
+    try {
+      window.modalCtx.data = window.modalCtx.data || {};
+      window.modalCtx.data.is_ad_hoc = stored;
+    } catch {}
   }
 
   // ✅ 6.2 Candidate clear defence (must run even if candidate_id already '' to prevent ghost display)
@@ -12873,9 +12925,29 @@ function applyRatePresetToContractForm(preset, payMethod /* 'PAYE'|'UMBRELLA' */
     });
   }
 }
-
 function mergeContractStateIntoRow(row, formState) {
   const base = { ...(row || {}) };
+
+  // ✅ Normalise std_schedule_json so renderers can safely index it (object, not string/null)
+  try {
+    const ss = base.std_schedule_json;
+    if (ss == null || ss === '') {
+      base.std_schedule_json = {};
+    } else if (typeof ss === 'string') {
+      const t = ss.trim();
+      if (!t) {
+        base.std_schedule_json = {};
+      } else {
+        const parsed = JSON.parse(t);
+        base.std_schedule_json =
+          (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+      }
+    } else if (typeof ss !== 'object' || Array.isArray(ss)) {
+      base.std_schedule_json = {};
+    }
+  } catch {
+    base.std_schedule_json = {};
+  }
 
   // Allow explicit formState injection (for testability), but keep backward compatibility.
   const fs =
@@ -14150,7 +14222,6 @@ function renderContractMainTab(ctx) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
 
   const d = mergeContractStateIntoRow(ctx?.data || {});
-  const labelsBlock = renderBucketLabelsEditor({ data: d });
 
   const candVal   = d.candidate_id || '';
   const clientVal = d.client_id || '';
@@ -14211,11 +14282,28 @@ function renderContractMainTab(ctx) {
   const startUk = (d.start_date && /^\d{2}\/\d{2}\/\d{4}$/.test(d.start_date)) ? d.start_date : toUk(d.start_date);
   const endUk   = (d.end_date && /^\d{2}\/\d{2}\/\d{4}$/.test(d.end_date)) ? d.end_date : toUk(d.end_date);
 
-  const SS = d.std_schedule_json || {};
+  // Ensure std_schedule_json is usable as an object (defensive: sometimes arrives as JSON string)
+  let SS = d.std_schedule_json || {};
+  try {
+    if (typeof SS === 'string') {
+      const parsed = JSON.parse(SS);
+      SS = (parsed && typeof parsed === 'object') ? parsed : {};
+    }
+  } catch {
+    SS = {};
+  }
 
   const pick = (day, part) => {
-    const staged = d[`${day}_${part}`];
-    if (staged !== undefined && staged !== null && String(staged).trim() !== '') return String(staged).trim();
+    const key = `${day}_${part}`;
+
+    // ✅ IMPORTANT: if the staged field exists (even if blank), it must win (preserves clears)
+    if (Object.prototype.hasOwnProperty.call(d || {}, key)) {
+      const staged = d[key];
+      if (staged === null || staged === undefined) return '';
+      return String(staged).trim();
+    }
+
+    // fallback to template schedule
     if (part === 'break') {
       const v = SS?.[day]?.break_minutes;
       return (v === 0 || v) ? String(v) : '';
@@ -14330,8 +14418,33 @@ function renderContractMainTab(ctx) {
   const weVal = Number(d.week_ending_weekday_snapshot ?? 0);
   const weLabel = weekNames[isNaN(weVal) ? 0 : weVal];
 
+  // ✅ Ad hoc state must follow staged formState first, and accept 'on' / booleans consistently
+  const adHocRaw = triVal('is_ad_hoc');
+  const isAdHocChecked =
+    (adHocRaw === true) ||
+    (adHocRaw === 1) ||
+    (String(adHocRaw ?? '').trim().toLowerCase() === 'true') ||
+    (String(adHocRaw ?? '').trim() === '1') ||
+    (String(adHocRaw ?? '').trim().toLowerCase() === 'on') ||
+    (String(adHocRaw ?? '').trim().toLowerCase() === 'yes');
+
+  const adHocHint =
+    'Tick this box if shifts are ad hoc. This is important because schedules are not prepopulated into the workers timesheet in the app if this is ticked, because hours/days are not fixed';
+
   const schedGrid = `
     <div class="row"><label class="section">Proposed schedule (Mon–Sun)</label></div>
+    ${
+      isAdHocChecked
+        ? `<div class="row" style="margin-top:2px">
+             <label></label>
+             <div class="controls">
+               <div class="mini" style="opacity:.85">
+                 <strong>Ad hoc is enabled:</strong> this schedule is kept for reference, but it will not be prepopulated into the worker app timesheet.
+               </div>
+             </div>
+           </div>`
+        : ``
+    }
     <div class="sched-grid" style="min-width:0;flex:1">
       ${DAYS.map(([k,l]) => dayRow(k,l)).join('')}
     </div>
@@ -14401,15 +14514,6 @@ function renderContractMainTab(ctx) {
         }
       }catch(e){}
     })(this)"`;
-
-  // ✅ NEW: Ad hoc flag (contract-level) with hover hint + staging on change
-  const isAdHocChecked =
-    (d.is_ad_hoc === true) ||
-    (String(d.is_ad_hoc || '').toLowerCase() === 'true') ||
-    (String(d.is_ad_hoc || '') === '1');
-
-  const adHocHint =
-    'Tick this box if shifts are ad hoc. This is important because schedules are not prepopulated into the workers timesheet in the app if this is ticked, because hours/days are not fixed';
 
   return `
     <form id="contractForm" class="tabc form">
@@ -14513,11 +14617,8 @@ function renderContractMainTab(ctx) {
       </div>
 
       ${schedGrid}
-
-      ${labelsBlock}
     </form>`;
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UPDATED: renderContractRatesTab (adds logging only)
@@ -48224,18 +48325,37 @@ persistCurrentTabState() {
   const initial  = (window.modalCtx.data?.id ?? sentinel);
   const fs = window.modalCtx.formState || { __forId: initial, main:{}, pay:{} };
   if (fs.__forId == null) fs.__forId = initial;
-
   // Preserve schedule inputs even when blank ('') so cleared days don't get dropped
-  const keepScheduleBlanks = (obj) => {
+  // ✅ DO NOT rely on collectForm() including empty keys; read schedule inputs directly from DOM.
+  const keepScheduleBlanks = (obj, rootEl) => {
     const out = {};
     const days = ['mon','tue','wed','thu','fri','sat','sun'];
     const parts = ['start','end','break'];
     days.forEach(d => {
       parts.forEach(p => {
         const k = `${d}_${p}`;
-        if (Object.prototype.hasOwnProperty.call(obj, k)) {
-          out[k] = (obj[k] == null ? '' : String(obj[k]));
+
+        let has = false;
+        let v;
+
+        // Prefer DOM value if the input exists (captures clears even when collectForm omits the key)
+        try {
+          if (rootEl && typeof rootEl.querySelector === 'function') {
+            const el = rootEl.querySelector(`[name="${k}"]`);
+            if (el) {
+              has = true;
+              v = el.value;
+            }
+          }
+        } catch {}
+
+        // Fallback: only if collectForm included it
+        if (!has && Object.prototype.hasOwnProperty.call(obj, k)) {
+          has = true;
+          v = obj[k];
         }
+
+        if (has) out[k] = (v == null ? '' : String(v));
       });
     });
     return out;
@@ -48299,11 +48419,11 @@ persistCurrentTabState() {
       }
     } catch {}
 
-    const sched  = keepScheduleBlanks(c);
+    const rootEl = document.querySelector(sel);
+    const sched  = keepScheduleBlanks(c, rootEl);
     fs.main = { ...(fs.main||{}), ...merged, ...sched };
   }
 }
-
 
  if (this.currentTabKey === 'pay' && byId('tab-pay')) {
   const c = collectForm('#tab-pay');
