@@ -18086,6 +18086,9 @@ async function showAllRecords(section = currentSection){
   // Reload full list for the section and render
   const rows = await loadSection();
   renderSummary(rows);
+
+  // ✅ Ensure toolbar filter UI reflects cleared filters (dropdowns reset to "All")
+  try { renderTools(); } catch {}
 }
 // Optional alias if other code calls clearFilters()
 function clearFilters(section = currentSection){
