@@ -6890,8 +6890,6 @@ async function getContract(contract_id) {
   return j || null;
 }
 
-
-
 async function upsertContract(payload, id /* optional */) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
   const patch = { ...payload };
@@ -7002,7 +7000,7 @@ async function upsertContract(payload, id /* optional */) {
     if (LOGC) console.warn('[CONTRACTS][UPSERT] logging/pre-seed failed', e);
   }
 
-   // ✅ CRITICAL: never send default_submission_mode unless overrideclientsettings is TRUE.
+  // ✅ CRITICAL: never send default_submission_mode unless overrideclientsettings is TRUE.
   // This prevents “Cannot change default_submission_mode after timesheets have been submitted”
   // when the user is only adding/removing weeks (calendar workflow) and the contract inherits client settings.
   try {
@@ -7023,17 +7021,76 @@ async function upsertContract(payload, id /* optional */) {
     if (LOGC) console.warn('[CONTRACTS][UPSERT] overrideclientsettings gate failed (non-fatal)', e);
   }
 
-  const res = await authFetch(API(url), {
-    method,
-    headers: { 'content-type': 'application/json' },
-    body: _json(patch)
-  });
+  const doReq = async (bodyObj) => {
+    const res = await authFetch(API(url), {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: _json(bodyObj)
+    });
+    return res;
+  };
 
+  const uiConfirm = async (title, message) => {
+    try {
+      if (typeof uiConfirmModal === 'function') {
+        return await uiConfirmModal(title, message, { kind: 'warn' });
+      }
+    } catch {}
+    return window.confirm(`${title}\n\n${message}`);
+  };
 
-  let data = null;
-  try { data = await res.json(); } catch (_) {}
+  const fmtClashes = (cl) => {
+    const arr = Array.isArray(cl) ? cl : [];
+    if (!arr.length) return '';
+    const lines = arr.slice(0, 12).map(x => {
+      const d = x?.date || x?.a_date || x?.b_date || '';
+      const a = `${x?.a_start || x?.proposed_start || ''}-${x?.a_end || x?.proposed_end || ''}`.replace(/^-|-$/g,'');
+      const b = `${x?.b_start || x?.existing_start || ''}-${x?.b_end || x?.existing_end || ''}`.replace(/^-|-$/g,'');
+      const cid = x?.b_contract_id || x?.existing_contract_id || x?.a_contract_id || '';
+      return `• ${d} ${a}${b ? ` overlaps ${b}` : ''}${cid ? ` (contract ${cid})` : ''}`;
+    });
+    return lines.join('\n') + (arr.length > 12 ? `\n…and ${arr.length - 12} more.` : '');
+  };
+
+  const tryParse = async (res) => {
+    let data = null;
+    let txt = '';
+    try { data = await res.json(); return { data, txt: '' }; } catch {}
+    try { txt = await res.text(); } catch {}
+    try { data = txt ? JSON.parse(txt) : null; } catch { data = null; }
+    return { data, txt };
+  };
+
+  let res = await doReq(patch);
+  let parsed = await tryParse(res);
+
+  // ✅ NEW: 409 SCHEDULE_CLASH handling (warn-only; user can continue)
+  if (res && res.status === 409) {
+    const err = parsed?.data?.error || parsed?.data?.code || null;
+    if (String(err || '').toUpperCase() === 'SCHEDULE_CLASH') {
+      const clashes = parsed?.data?.clashes || [];
+      const clashCount = Number(parsed?.data?.clash_count || clashes.length || 0);
+      const detail = fmtClashes(clashes);
+
+      const proceed = await uiConfirm(
+        'Schedule clash warning',
+        `Schedule clashes detected (${clashCount}).\n\n${detail}\n\nContinue anyway?`
+      );
+
+      if (!proceed) {
+        const msg = (parsed?.data && (parsed.data.error_message || parsed.data.message)) || 'Cancelled due to schedule clashes';
+        throw new Error(msg);
+      }
+
+      // Retry with force flag
+      const retryBody = { ...patch, force_schedule_clashes: true };
+      res = await doReq(retryBody);
+      parsed = await tryParse(res);
+    }
+  }
 
   if (!res || !res.ok) {
+    const data = parsed?.data || null;
     const msg =
       (data && (data.error || data.message || data.detail)) ||
       (res && res.statusText) ||
@@ -7041,6 +7098,8 @@ async function upsertContract(payload, id /* optional */) {
     if (LOGC) console.error('[CONTRACTS][UPSERT] error', { status: res?.status, msg, data });
     throw new Error(msg);
   }
+
+  const data = parsed?.data || null;
 
   if (LOGC) {
     console.log('[CONTRACTS][UPSERT] success', { method, id, status: res.status });
@@ -7102,7 +7161,65 @@ async function checkContractOverlap(payload /* {candidate_id,start_date,end_date
 }
 
 async function generateContractWeeks(contract_id) {
-  const r = await authFetch(API(`/api/contracts/${_enc(contract_id)}/generate-weeks`), { method: 'POST' });
+  const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
+
+  const uiConfirm = async (title, message) => {
+    try {
+      if (typeof uiConfirmModal === 'function') {
+        return await uiConfirmModal(title, message, { kind: 'warn' });
+      }
+    } catch {}
+    return window.confirm(`${title}\n\n${message}`);
+  };
+
+  const fmtClashes = (cl) => {
+    const arr = Array.isArray(cl) ? cl : [];
+    if (!arr.length) return '';
+    const lines = arr.slice(0, 12).map(x => {
+      const d = x?.date || x?.a_date || x?.b_date || '';
+      const a = `${x?.a_start || x?.proposed_start || ''}-${x?.a_end || x?.proposed_end || ''}`.replace(/^-|-$/g,'');
+      const b = `${x?.b_start || x?.existing_start || ''}-${x?.b_end || x?.existing_end || ''}`.replace(/^-|-$/g,'');
+      const cid = x?.b_contract_id || x?.existing_contract_id || x?.a_contract_id || '';
+      return `• ${d} ${a}${b ? ` overlaps ${b}` : ''}${cid ? ` (contract ${cid})` : ''}`;
+    });
+    return lines.join('\n') + (arr.length > 12 ? `\n…and ${arr.length - 12} more.` : '');
+  };
+
+  const doReq = async (payload) => {
+    return await authFetch(API(`/api/contracts/${_enc(contract_id)}/generate-weeks`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload || {})
+    });
+  };
+
+  let r = await doReq({});
+
+  // ✅ 409 schedule clash handling (warn-only; retry with force)
+  if (r && r.status === 409) {
+    let txt = '';
+    let j = null;
+    try { txt = await r.text(); } catch {}
+    try { j = txt ? JSON.parse(txt) : null; } catch { j = null; }
+
+    const err = j?.error || j?.code || null;
+    if (String(err || '').toUpperCase() === 'SCHEDULE_CLASH') {
+      const clashes = j?.clashes || [];
+      const clashCount = Number(j?.clash_count || clashes.length || 0);
+      const detail = fmtClashes(clashes);
+
+      const proceed = await uiConfirm(
+        'Schedule clash warning',
+        `Schedule clashes detected (${clashCount}).\n\n${detail}\n\nContinue anyway?`
+      );
+
+      if (!proceed) throw new Error('Generate weeks cancelled due to schedule clashes.');
+      r = await doReq({ force_schedule_clashes: true });
+    } else {
+      if (LOGC) console.warn('[CONTRACTS][generate-weeks] 409 without SCHEDULE_CLASH', { txt, j });
+    }
+  }
+
   if (!r?.ok) throw new Error('Generate weeks failed');
   return r.json();
 }
@@ -14285,6 +14402,15 @@ function renderContractMainTab(ctx) {
       }catch(e){}
     })(this)"`;
 
+  // ✅ NEW: Ad hoc flag (contract-level) with hover hint + staging on change
+  const isAdHocChecked =
+    (d.is_ad_hoc === true) ||
+    (String(d.is_ad_hoc || '').toLowerCase() === 'true') ||
+    (String(d.is_ad_hoc || '') === '1');
+
+  const adHocHint =
+    'Tick this box if shifts are ad hoc. This is important because schedules are not prepopulated into the workers timesheet in the app if this is ticked, because hours/days are not fixed';
+
   return `
     <form id="contractForm" class="tabc form">
       <input type="hidden" name="candidate_id" value="${candVal}">
@@ -14373,12 +14499,24 @@ function renderContractMainTab(ctx) {
         }
       </div>
 
+      <div class="row" style="margin-top:6px">
+        <label title="${escapeHtml(adHocHint)}" style="display:flex;align-items:center;gap:6px;cursor:help">
+          <input type="checkbox" name="is_ad_hoc" ${isAdHocChecked ? 'checked' : ''}
+            onchange="try{ if(typeof setContractFormValue==='function') setContractFormValue('is_ad_hoc', this.checked); }catch(e){}" />
+          Ad hoc shifts
+        </label>
+        <div class="controls">
+          <div class="mini" title="${escapeHtml(adHocHint)}" style="cursor:help">
+            ${adHocHint}
+          </div>
+        </div>
+      </div>
+
       ${schedGrid}
 
       ${labelsBlock}
     </form>`;
 }
-
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -14837,63 +14975,411 @@ function openContractCloneAndExtend(contract_id) {
   const oldEnd   = iso(old?.end_date);
 
   // Defaults for the wizard
-  const defaultStart = (() => { const d=new Date((oldEnd||toYmd(new Date()))+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+1); return toYmd(d); })();
-  const defaultEnd   = (() => { const d=new Date(defaultStart+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+84); return toYmd(d); })();
-  const defaultEndOld= (() => { const d=new Date(defaultStart+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-1); return toYmd(d); })();
+  const defaultStartIso = (() => { const d=new Date((oldEnd||toYmd(new Date()))+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+1); return toYmd(d); })();
+  const defaultEndIso   = (() => { const d=new Date(defaultStartIso+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+84); return toYmd(d); })();
+  const defaultEndOldIso= (() => { const d=new Date(defaultStartIso+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-1); return toYmd(d); })();
 
-  const content = `
-    <div class="tabc" id="cloneExtendForm">
-      <div class="row"><label>New start</label>
-        <div class="controls"><input class="input" type="text" name="new_start_date" placeholder="DD/MM/YYYY" value="${formatIsoToUk(defaultStart)}" /></div>
-      </div>
-      <div class="row"><label>New end</label>
-        <div class="controls"><input class="input" type="text" name="new_end_date" placeholder="DD/MM/YYYY" value="${formatIsoToUk(defaultEnd)}" /></div>
-      </div>
+  // ✅ Persisted modal state (survives child picker modals because renderTab uses this)
+  const state = {
+    new_start_date_iso: defaultStartIso,
+    new_end_date_iso: defaultEndIso,
+    end_existing_on_iso: defaultEndOldIso,
 
-      <div class="row" style="margin-top:6px">
-        <label style="display:flex;align-items:center;gap:6px">
-          <input type="checkbox" name="end_existing_checked" checked />
-          End existing contract on
-        </label>
-        <div class="controls" style="margin-top:6px">
-          <input class="input" type="text" name="end_existing_on" placeholder="DD/MM/YYYY" value="${formatIsoToUk(defaultEndOld)}" />
-          <div class="mini" style="margin-top:4px">Default is New start − 1 day. Untick to keep the existing contract running.</div>
+    assign_existing_candidate: true,
+    leave_unassigned: false,
+
+    new_candidate_id: '',
+    candidate_label: '<Same as existing>'
+  };
+
+  const escHtml = (s) => String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  const escAttr = (s) => escHtml(s).replace(/`/g, '&#96;');
+
+  const renderContent = () => {
+    const candControlsDisplay = state.assign_existing_candidate ? 'none' : 'flex';
+    const assignChecked = state.assign_existing_candidate ? 'checked' : '';
+    const unassignedChecked = (!state.assign_existing_candidate && state.leave_unassigned) ? 'checked' : '';
+    const label = state.candidate_label || (state.assign_existing_candidate ? '<Same as existing>' : (state.leave_unassigned ? '<Unassigned>' : '<Pick candidate or leave unassigned>'));
+
+    return `
+      <div class="tabc" id="cloneExtendForm">
+        <div class="row"><label>New start</label>
+          <div class="controls"><input class="input" type="text" name="new_start_date" placeholder="DD/MM/YYYY" value="${escAttr(formatIsoToUk(state.new_start_date_iso))}" /></div>
+        </div>
+        <div class="row"><label>New end</label>
+          <div class="controls"><input class="input" type="text" name="new_end_date" placeholder="DD/MM/YYYY" value="${escAttr(formatIsoToUk(state.new_end_date_iso))}" /></div>
+        </div>
+
+        <div class="row" style="margin-top:10px">
+          <label style="display:flex;align-items:center;gap:6px">
+            <input type="checkbox" name="assign_existing_candidate" ${assignChecked} />
+            Assign existing candidate
+          </label>
+          <div class="controls" style="margin-top:6px">
+            <div id="__ceCandidateControls" style="display:${candControlsDisplay};gap:8px;align-items:center;flex-wrap:wrap">
+              <button type="button" id="__cePickCandidate" class="btn">Choose replacement candidate…</button>
+              <label style="display:flex;align-items:center;gap:6px">
+                <input type="checkbox" id="__ceLeaveUnassigned" ${unassignedChecked} />
+                Leave unassigned
+              </label>
+              <div class="mini" style="margin-top:4px;flex-basis:100%">
+                If unassigned, the new contract will have no candidate.
+              </div>
+            </div>
+
+            <input type="hidden" name="new_candidate_id" value="${escAttr(state.new_candidate_id || '')}" />
+            <div class="mini" style="margin-top:6px">
+              <strong>Selected:</strong> <span id="__ceCandidateLabel">${escHtml(label)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:10px">
+          <label>End existing on</label>
+          <div class="controls">
+            <input class="input" type="text" name="end_existing_on" placeholder="DD/MM/YYYY" value="${escAttr(formatIsoToUk(state.end_existing_on_iso))}" />
+            <div class="mini" style="margin-top:4px">Must be on or before New start − 1 day.</div>
+          </div>
+        </div>
+
+        <div class="mini" style="margin-top:10px">
+          This will create the successor contract via the backend Clone & Extend endpoint, then open it in the normal Contract modal.
         </div>
       </div>
+    `;
+  };
 
-      <div class="mini" style="margin-top:10px">
-        This will create the successor contract via the backend Clone & Extend endpoint, then open it in the normal Contract modal.
-      </div>
-    </div>
-  `;
+  const uiConfirm = async (title, message, opts = {}) => {
+    try {
+      if (typeof uiConfirmModal === 'function') {
+        return await uiConfirmModal(title, message, opts);
+      }
+    } catch {}
+    return window.confirm(`${title}\n\n${message}`);
+  };
+
+  const openWorkerNotePromptModalLocal = async ({ defaultText }) => {
+    const initial = String(defaultText || '').trim();
+    const res = window.prompt('Worker note (required):', initial || '');
+    if (res == null) return null;
+    const note = String(res || '').trim();
+    if (!note) {
+      alert('Worker note is required to split a week.');
+      return null;
+    }
+    return note;
+  };
+
+  const fmtClashes = (cl) => {
+    const arr = Array.isArray(cl) ? cl : [];
+    if (!arr.length) return '';
+    const lines = arr.slice(0, 12).map(x => {
+      const d = x?.date || x?.a_date || x?.b_date || '';
+      const a = `${x?.a_start || x?.proposed_start || ''}-${x?.a_end || x?.proposed_end || ''}`.replace(/^-|-$/g,'');
+      const b = `${x?.b_start || x?.existing_start || ''}-${x?.b_end || x?.existing_end || ''}`.replace(/^-|-$/g,'');
+      const cid = x?.b_contract_id || x?.existing_contract_id || x?.a_contract_id || '';
+      return `• ${d} ${a}${b ? ` overlaps ${b}` : ''}${cid ? ` (contract ${cid})` : ''}`;
+    });
+    return lines.join('\n') + (arr.length > 12 ? `\n…and ${arr.length - 12} more.` : '');
+  };
+
+  const tryParseJson = async (res) => {
+    const text = await res.text().catch(() => '');
+    let j = null;
+    try { j = text ? JSON.parse(text) : null; } catch { j = null; }
+    return { text, json: j };
+  };
+
+  const getErrCode = (json, text, fallback) => {
+    const c = (json && (json.error || json.code)) ? String(json.error || json.code) : null;
+    if (c) return c;
+    const t = String(text || '').toUpperCase();
+    if (t.includes('SCHEDULE_CLASH')) return 'SCHEDULE_CLASH';
+    if (t.includes('ALREADY_SPLIT_WEEK')) return 'ALREADY_SPLIT_WEEK';
+    if (t.includes('SPLIT_WEEK_CONFIRM_REQUIRED')) return 'SPLIT_WEEK_CONFIRM_REQUIRED';
+    if (t.includes('SUBMITTED_BEYOND_CLOSE')) return 'SUBMITTED_BEYOND_CLOSE';
+    if (t.includes('BOUNDARY_WEEK_TIMESHEET_ALREADY_SUBMITTED')) return 'BOUNDARY_WEEK_TIMESHEET_ALREADY_SUBMITTED';
+    if (t.includes('ENDING_WEEK_SUBMITTED_CANNOT_TRUNCATE')) return 'ENDING_WEEK_SUBMITTED_CANNOT_TRUNCATE';
+    return fallback || null;
+  };
+
+  const prettyFailureMessage = (r) => {
+    const j = r?.json || {};
+    const code = String(r?.errCode || '').trim();
+
+    if (code === 'SUBMITTED_BEYOND_CLOSE') {
+      const we = j?.end_week_ending_date || j?.week_ending_date || '';
+      return `Cannot end/close the existing contract on that date because there are submitted timesheets after the requested end week${we ? ` (week ending ${we})` : ''}.`;
+    }
+    if (code === 'ENDING_WEEK_SUBMITTED_CANNOT_TRUNCATE') {
+      const closeTo = j?.close_to || j?.end_existing_on || '';
+      const we = j?.week_ending_date || j?.end_week_ending_date || '';
+      return `Cannot end the contract on ${closeTo || 'that date'} because the week${we ? ` ending ${we}` : ''} is already submitted.`;
+    }
+    if (code === 'BOUNDARY_WEEK_TIMESHEET_ALREADY_SUBMITTED') {
+      const we = j?.boundary_week_end || j?.week_end || j?.week_ending_date || '';
+      return `Cannot split this week because a timesheet has already been submitted for the boundary week${we ? ` (week ending ${we})` : ''}.`;
+    }
+    if (code === 'CONTRACT_NOT_FOUND') return 'Contract not found.';
+    if (code === 'INVALID_INPUT') {
+      const msg = j?.message ? String(j.message) : '';
+      return msg || 'Some of the dates/options are invalid. Please check and try again.';
+    }
+
+    const msg = (j && (j.message || j.error_message || j.detail)) ? String(j.message || j.error_message || j.detail) : '';
+    if (msg) return msg;
+
+    const txt = String(r?.text || '').trim();
+    if (txt && txt[0] !== '{' && txt[0] !== '[') return txt;
+
+    return 'Clone & Extend failed. Please check your inputs and try again.';
+  };
+
+  const wire = () => {
+    const root = document.getElementById('cloneExtendForm');
+    if (!root) return;
+    if (root.__ceWired) return;
+    root.__ceWired = true;
+
+    const startEl = root.querySelector('input[name="new_start_date"]');
+    const endEl   = root.querySelector('input[name="new_end_date"]');
+    const endOld  = root.querySelector('input[name="end_existing_on"]');
+
+    const chkAssign = root.querySelector('input[name="assign_existing_candidate"]');
+    const candControls = root.querySelector('#__ceCandidateControls');
+    const btnPick = root.querySelector('#__cePickCandidate');
+    const chkUnassigned = root.querySelector('#__ceLeaveUnassigned');
+    const hidCandId = root.querySelector('input[name="new_candidate_id"]');
+    const labelEl = root.querySelector('#__ceCandidateLabel');
+
+    // Guard: if DOM is missing, do nothing
+    if (!startEl || !endEl || !endOld || !chkAssign || !hidCandId || !labelEl) return;
+
+    try { attachUkDatePicker(startEl, { minDate: formatIsoToUk(oldStart) }); } catch {}
+    try { attachUkDatePicker(endEl,   { minDate: startEl.value, maxDate: null }); } catch {}
+    try { attachUkDatePicker(endOld,  { minDate: formatIsoToUk(oldStart), maxDate: startEl.value }); } catch {}
+
+    const isoMinusOne = (isoStr) => {
+      try {
+        const d = new Date(isoStr + 'T00:00:00Z');
+        d.setUTCDate(d.getUTCDate() - 1);
+        return toYmd(d);
+      } catch { return null; }
+    };
+
+    const syncDatesFromInputs = () => {
+      const sIso = parseUkDateToIso(startEl.value || '') || state.new_start_date_iso;
+      const eIso = parseUkDateToIso(endEl.value || '')   || state.new_end_date_iso;
+      const oIso = parseUkDateToIso(endOld.value || '')  || state.end_existing_on_iso;
+
+      state.new_start_date_iso = sIso;
+      state.new_end_date_iso = eIso;
+      state.end_existing_on_iso = oIso;
+    };
+
+    const clampEndOldToStartMinusOne = () => {
+      syncDatesFromInputs();
+
+      const startIso = state.new_start_date_iso || defaultStartIso;
+      const maxOldEndIso = isoMinusOne(startIso) || defaultEndOldIso;
+      const maxOldEndUk  = formatIsoToUk(maxOldEndIso);
+
+      endOld._maxIso = maxOldEndIso;
+      try { if (typeof endOld.__ukdpRepaint === 'function') endOld.__ukdpRepaint(); } catch {}
+
+      const eIso = parseUkDateToIso(endOld.value || '') || '';
+      if (!eIso || eIso > maxOldEndIso) {
+        endOld.value = maxOldEndUk;
+        state.end_existing_on_iso = maxOldEndIso;
+      }
+
+      if (LOGM) console.log('[CLONE] clampEndOldToStartMinusOne', { startIso, maxOldEndIso, endOldUk: endOld.value });
+    };
+
+    const updateCandidateUi = () => {
+      const assign = !!chkAssign.checked;
+      state.assign_existing_candidate = assign;
+
+      if (candControls) candControls.style.display = assign ? 'none' : 'flex';
+
+      if (assign) {
+        state.leave_unassigned = false;
+        state.new_candidate_id = '';
+        state.candidate_label = '<Same as existing>';
+
+        if (labelEl) labelEl.textContent = '<Same as existing>';
+        if (hidCandId) hidCandId.value = '';
+        if (chkUnassigned) chkUnassigned.checked = false;
+        if (btnPick) btnPick.disabled = false;
+        return;
+      }
+
+      const unassigned = !!(chkUnassigned && chkUnassigned.checked);
+      state.leave_unassigned = unassigned;
+
+      if (unassigned) {
+        state.new_candidate_id = '';
+        state.candidate_label = '<Unassigned>';
+
+        if (labelEl) labelEl.textContent = '<Unassigned>';
+        if (hidCandId) hidCandId.value = '';
+        if (btnPick) btnPick.disabled = true;
+        return;
+      }
+
+      if (btnPick) btnPick.disabled = false;
+
+      const id = String(hidCandId.value || '').trim() || String(state.new_candidate_id || '').trim();
+      if (id) {
+        state.new_candidate_id = id;
+        if (!state.candidate_label || state.candidate_label === '<Same as existing>' || state.candidate_label === '<Unassigned>' || state.candidate_label === '<Pick candidate or leave unassigned>') {
+          state.candidate_label = id;
+        }
+        if (labelEl) labelEl.textContent = state.candidate_label || id;
+      } else {
+        state.candidate_label = '<Pick candidate or leave unassigned>';
+        if (labelEl) labelEl.textContent = '<Pick candidate or leave unassigned>';
+      }
+    };
+
+    const pickCandidate = async () => {
+      // ✅ Correct integration: openCandidatePicker(onPick, options)
+      try {
+        if (typeof openCandidatePicker === 'function') {
+          await openCandidatePicker(async (picked) => {
+            const id = String(picked?.id || picked?.candidate?.id || '').trim();
+            const cand = picked?.candidate || null;
+
+            const label =
+              String(picked?.label || '').trim() ||
+              String(cand?.display_name || '').trim() ||
+              String(cand?.name || '').trim() ||
+              id;
+
+            if (!id) return;
+
+            // Persist selection into state (so it survives parent re-render)
+            state.assign_existing_candidate = false;
+            state.leave_unassigned = false;
+            state.new_candidate_id = id;
+            state.candidate_label = label || id;
+          }, { title: 'Select replacement candidate' });
+
+          return;
+        }
+      } catch (e) {
+        if (LOGM) console.warn('[CLONE] openCandidatePicker failed; falling back to prompt', e);
+      }
+
+      // Fallback prompt
+      const id = window.prompt('Enter replacement candidate id (or cancel):', '');
+      if (id == null) return;
+      const v = String(id || '').trim();
+      if (!v) return;
+
+      state.assign_existing_candidate = false;
+      state.leave_unassigned = false;
+      state.new_candidate_id = v;
+      state.candidate_label = v;
+    };
+
+    const onStartChange = () => {
+      // Sync start into state first
+      const sIso = parseUkDateToIso(startEl.value || '') || state.new_start_date_iso || defaultStartIso;
+      state.new_start_date_iso = sIso;
+
+      clampEndOldToStartMinusOne();
+
+      // Keep end date picker min synced
+      try { if (typeof endEl.setMinDate === 'function') endEl.setMinDate(startEl.value); } catch {}
+
+      if (LOGM) console.log('[CLONE] onStartChange', { newStartUk: startEl.value, endOldUk: endOld.value });
+    };
+
+    const onEndChange = () => {
+      const eIso = parseUkDateToIso(endEl.value || '') || state.new_end_date_iso || defaultEndIso;
+      state.new_end_date_iso = eIso;
+    };
+
+    const onEndOldChange = () => {
+      const oIso = parseUkDateToIso(endOld.value || '') || state.end_existing_on_iso || defaultEndOldIso;
+      state.end_existing_on_iso = oIso;
+    };
+
+    startEl.addEventListener('change', onStartChange, true);
+    startEl.addEventListener('blur',   onStartChange, true);
+
+    endEl.addEventListener('change', onEndChange, true);
+    endEl.addEventListener('blur',   onEndChange, true);
+
+    endOld.addEventListener('change', onEndOldChange, true);
+    endOld.addEventListener('blur',   onEndOldChange, true);
+
+    chkAssign.addEventListener('change', updateCandidateUi, true);
+    if (chkUnassigned) chkUnassigned.addEventListener('change', updateCandidateUi, true);
+    if (btnPick) btnPick.addEventListener('click', (e) => { e.preventDefault(); pickCandidate(); }, true);
+
+    clampEndOldToStartMinusOne();
+    updateCandidateUi();
+  };
 
   showModal(
     'Clone & Extend',
     [{ key:'c', title:'Successor window' }],
-    () => content,
+    () => renderContent(),
     async () => {
       const root = document.getElementById('cloneExtendForm') || document;
 
       const newStartUk  = root.querySelector('input[name="new_start_date"]')?.value?.trim() || '';
       const newEndUk    = root.querySelector('input[name="new_end_date"]')?.value?.trim()   || '';
-      const endChk      = !!root.querySelector('input[name="end_existing_checked"]')?.checked;
       const endOldUk    = root.querySelector('input[name="end_existing_on"]')?.value?.trim() || '';
+
+      const assignExisting = !!root.querySelector('input[name="assign_existing_candidate"]')?.checked;
+      const leaveUnassigned = !!root.querySelector('#__ceLeaveUnassigned')?.checked;
+      const newCandidateId = (root.querySelector('input[name="new_candidate_id"]')?.value || '').trim() || null;
 
       const new_start_date = parseUkDateToIso(newStartUk);
       const new_end_date   = parseUkDateToIso(newEndUk);
-      const end_existing_on= endChk ? parseUkDateToIso(endOldUk) : null;
+      const end_existing_on= parseUkDateToIso(endOldUk);
 
-      if (!new_start_date || !new_end_date) { alert('Enter both new start and new end.'); return false; }
+      // Persist into state (so failed attempts keep what the user typed)
+      if (new_start_date) state.new_start_date_iso = new_start_date;
+      if (new_end_date)   state.new_end_date_iso = new_end_date;
+      if (end_existing_on) state.end_existing_on_iso = end_existing_on;
+
+      state.assign_existing_candidate = !!assignExisting;
+      state.leave_unassigned = !!leaveUnassigned;
+      state.new_candidate_id = (!assignExisting && !leaveUnassigned) ? (newCandidateId || '') : '';
+
+      if (!new_start_date || !new_end_date) { alert('Please enter both a New start date and a New end date.'); return false; }
       if (new_start_date > new_end_date)   { alert('New end must be on or after new start.'); return false; }
 
-      // Client-side validations that mirror backend constraints (backend is authoritative)
+      // End existing is hard-on; enforce <= new_start_date - 1
+      if (!end_existing_on) { alert('Please pick a valid end date for the existing contract.'); return false; }
+      try {
+        const d = new Date(new_start_date + 'T00:00:00Z');
+        d.setUTCDate(d.getUTCDate() - 1);
+        const maxOldEndIso = toYmd(d);
+        if (end_existing_on > maxOldEndIso) {
+          alert('End existing on must be on or before New start − 1 day.');
+          return false;
+        }
+      } catch {
+        alert('Invalid dates.');
+        return false;
+      }
+
+      // Mirror backend constraint: existing cannot end before its original start
       try {
         const oldStartIso = (window.modalCtx?.data?.start_date) || '';
-        if (endChk) {
-          if (!end_existing_on) { alert('Pick a valid end date for the existing contract.'); return false; }
-          if (oldStartIso && end_existing_on < oldStartIso) { alert('Existing contract cannot end before its original start.'); return false; }
-          if (end_existing_on >= new_start_date) { alert('Existing contract end must be before the new start.'); return false; }
-        }
+        if (oldStartIso && end_existing_on < oldStartIso) { alert('Existing contract cannot end before its original start.'); return false; }
+        if (end_existing_on >= new_start_date) { alert('Existing contract end must be before the new start.'); return false; }
       } catch {}
 
       const sourceId =
@@ -14902,136 +15388,148 @@ function openContractCloneAndExtend(contract_id) {
 
       if (!sourceId) { alert('Source contract id missing.'); return false; }
 
-      // Authoritative: call backend clone-and-extend (no manual truncation, no staged successor)
-      let json = null;
-      try {
-        const url  = API(`/api/contracts/${encodeURIComponent(sourceId)}/clone-and-extend`);
+      const basePayload = {
+        new_start_date,
+        new_end_date,
+        end_existing_on,
+        assign_existing_candidate: !!assignExisting,
+        new_candidate_id: (!assignExisting && !leaveUnassigned) ? newCandidateId : null
+      };
+
+      const attempt = async (extra = {}) => {
+        const url = API(`/api/contracts/${encodeURIComponent(sourceId)}/clone-and-extend`);
+        const payload = { ...basePayload, ...extra };
+
         const init = {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            new_start_date,
-            new_end_date,
-            end_existing: endChk,
-            end_existing_on: endChk ? end_existing_on : null
-          })
+          body: JSON.stringify(payload)
         };
 
-        if (LOGM) console.log('[CLONE] clone-and-extend →', { url, payload: JSON.parse(init.body) });
+        if (LOGM) console.log('[CLONE] clone-and-extend →', { url, payload });
 
         const res = await (typeof authFetch === 'function' ? authFetch(url, init) : fetch(url, init));
-        const text = await res.text().catch(() => '');
+        const { text, json } = await tryParseJson(res);
 
-        if (!res.ok) {
-          // backend returns {error: "..."} in many paths; fall back to raw text
-          let msg = text || res.statusText || 'Clone & Extend failed.';
-          try {
-            const parsed = text ? JSON.parse(text) : null;
-            if (parsed && typeof parsed === 'object') {
-              msg = parsed.error || parsed.message || msg;
-            }
-          } catch {}
-          alert(msg);
-          return false;
-        }
+        if (res.ok) return { ok: true, json, text, res };
 
-        try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+        const status = res.status;
+        const errCode = getErrCode(json, text, null);
+        const msg = (json && (json.message || json.error_message || json.detail))
+          ? String(json.message || json.error_message || json.detail)
+          : '';
 
-        const successor = json?.successor || null;
-        const successorId = successor?.id ? String(successor.id) : null;
+        return { ok: false, status, json, text, errCode, msg, res };
+      };
 
-        if (!successorId) {
-          alert('Clone & Extend succeeded but no successor id was returned.');
-          return false;
-        }
+      // Retry loop
+      let r = await attempt({});
 
-        // If backend closed the old contract, refresh list (best-effort)
-        try { await renderAll?.(); } catch {}
+      // 1) Schedule clash confirm -> retry with force_schedule_clashes:true
+      if (!r.ok && (r.status === 409 || r.status === 400) && r.errCode === 'SCHEDULE_CLASH') {
+        const clashes =
+          (Array.isArray(r.json?.clashes) ? r.json.clashes : null) ||
+          (Array.isArray(r.json?.schedule_clashes?.clashes) ? r.json.schedule_clashes.clashes : null) ||
+          (Array.isArray(r.json?.warnings?.schedule_clashes?.clashes) ? r.json.warnings.schedule_clashes.clashes : null) ||
+          (Array.isArray(r.json?.data?.clashes) ? r.json.data.clashes : null) ||
+          [];
 
-        // Open successor as a ROOT modal
-        setTimeout(async () => {
-          try {
-            try { discardAllModalsAndState(); } catch {}
+        const clashCount =
+          Number(r.json?.clash_count ?? r.json?.schedule_clashes?.clash_count ?? r.json?.warnings?.schedule_clashes?.clash_count ?? clashes.length ?? 0) || 0;
 
-            // Prefer fetching the full wrapper/row before opening (openContract expects a real row)
-            let fresh = null;
-            try {
-              if (typeof getContract === 'function') fresh = await getContract(successorId);
-            } catch (e) {
-              if (LOGM) console.warn('[CLONE] getContract failed, will open minimal successor row', e);
-              fresh = null;
-            }
+        const detail = fmtClashes(clashes);
 
-            openContract(fresh || successor || { id: successorId });
-          } catch (e) {
-            console.error('[CLONE] failed to open successor contract', e);
-            try { renderAll?.(); } catch {}
-          }
-        }, 0);
+        const proceed = await uiConfirm(
+          'Schedule clash warning',
+          `Schedule clashes detected (${clashCount}).\n\n${detail}\n\nDo you want to continue anyway?`,
+          { kind: 'warn' }
+        );
+        if (!proceed) return false;
+        r = await attempt({ force_schedule_clashes: true });
+      }
 
-        return true;
-      } catch (e) {
-        console.warn('[CLONE] clone-and-extend exception', e);
-        alert(`Clone & Extend failed: ${e?.message || e}`);
+      // 2) Already-split warning -> retry with force_already_split_week:true
+      if (!r.ok && (r.status === 409 || r.status === 400) && r.errCode === 'ALREADY_SPLIT_WEEK') {
+        const proceed = await uiConfirm(
+          'Split-week warning',
+          'This week appears to already be split for this candidate/client. Continuing may result in multiple weekly timesheets for the same week.\n\nDo you want to continue anyway?',
+          { kind: 'warn' }
+        );
+        if (!proceed) return false;
+        r = await attempt({ force_already_split_week: true });
+      }
+
+      // 3) Split-week confirm required -> show confirm + worker note prompt -> retry
+      if (!r.ok && (r.status === 409 || r.status === 400) && r.errCode === 'SPLIT_WEEK_CONFIRM_REQUIRED') {
+        const confirmText =
+          'This will force a split-week: the candidate will need to submit TWO timesheets for the same week because you are ending one contract and starting another mid-week.\n\nIf there is no rate change, cancel and set the new contract start to the beginning of the week instead.\n\nDo you want to continue?';
+
+        const proceed = await uiConfirm('Split week confirmation', confirmText, { kind: 'warn' });
+        if (!proceed) return false;
+
+        const suggested =
+          (r.json && (r.json.suggested_worker_note || r.json.data?.suggested_worker_note)) ||
+          'Contract rates have changed this week and therefore you need to submit two timesheets. One timesheet for work completed for <first part> and another timesheet for <second part>.';
+
+        const note = await openWorkerNotePromptModalLocal({ defaultText: suggested });
+        if (!note) return false;
+
+        r = await attempt({ confirmed_split_week: true, split_worker_note: note });
+      }
+
+      if (!r.ok) {
+        alert(prettyFailureMessage(r));
         return false;
       }
+
+      const json = r.json || null;
+      const successor = json?.successor || null;
+      const successorId = successor?.id ? String(successor.id) : null;
+
+      if (!successorId) {
+        alert('Clone & Extend succeeded but no successor id was returned.');
+        return false;
+      }
+
+      // If backend closed the old contract, refresh list (best-effort)
+      try { await renderAll?.(); } catch {}
+
+      // Open successor as a ROOT modal
+      setTimeout(async () => {
+        try {
+          try { discardAllModalsAndState(); } catch {}
+
+          // Prefer fetching the full wrapper/row before opening (openContract expects a real row)
+          let fresh = null;
+          try {
+            if (typeof getContract === 'function') fresh = await getContract(successorId);
+          } catch (e) {
+            if (LOGM) console.warn('[CLONE] getContract failed, will open minimal successor row', e);
+            fresh = null;
+          }
+
+          openContract(fresh || successor || { id: successorId });
+        } catch (e) {
+          console.error('[CLONE] failed to open successor contract', e);
+          try { renderAll?.(); } catch {}
+        }
+      }, 0);
+
+      return true;
     },
     false,
     () => {
+      try { wire(); } catch {}
       try { window.dispatchEvent(new Event('contracts-main-rendered')); } catch {}
     },
     { kind:'contract-clone-extend', forceEdit:true, noParentGate:true }
   );
 
-  // Wire pickers & auto-sync after mount
+  // Initial wiring (and ensures wiring after first render)
   setTimeout(() => {
-    const root = document.getElementById('cloneExtendForm');
-    if (!root) return;
-
-    const startEl = root.querySelector('input[name="new_start_date"]');
-    const endEl   = root.querySelector('input[name="new_end_date"]');
-    const endChk  = root.querySelector('input[name="end_existing_checked"]');
-    const endOld  = root.querySelector('input[name="end_existing_on"]');
-
-    attachUkDatePicker(startEl, { minDate: formatIsoToUk(oldStart) });
-    attachUkDatePicker(endEl,   { minDate: startEl.value, maxDate: null });
-    attachUkDatePicker(endOld,  { minDate: formatIsoToUk(oldStart), maxDate: startEl.value });
-
-    const isoMinusOne = (isoStr) => { try { const d=new Date(isoStr+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-1); return toYmd(d); } catch { return null; } };
-
-    const onStartChange = () => {
-      const startIso = parseUkDateToIso(startEl.value || '') || defaultStart;
-      const maxOldEndIso = isoMinusOne(startIso);
-      const maxOldEndUk  = formatIsoToUk(maxOldEndIso);
-      if (typeof endOld.setMinDate === 'function') endOld.setMinDate(formatIsoToUk(oldStart));
-      endOld._maxIso = maxOldEndIso;
-      if (typeof endOld.__ukdpRepaint === 'function') endOld.__ukdpRepaint();
-      if (endChk.checked) endOld.value = maxOldEndUk;
-      if (LOGM) console.log('[CLONE] onStartChange', { startIso, endOldUk: endOld.value, maxOldEndIso });
-    };
-
-    const onChkToggle = () => {
-      const checked = !!endChk.checked;
-      endOld.disabled = !checked;
-      if (checked) {
-        const sIso = parseUkDateToIso(startEl.value || '') || oldEnd;
-        const maxIso = isoMinusOne(sIso);
-        const maxUk  = formatIsoToUk(maxIso);
-        const eIso   = parseUkDateToIso(endOld.value || '') || '';
-        if (!eIso || eIso >= sIso || eIso < oldStart) endOld.value = maxUk;
-      }
-      if (LOGM) console.log('[CLONE] onChkToggle', { checked, endOldUk: endOld.value });
-    };
-
-    startEl.addEventListener('change', onStartChange, true);
-    startEl.addEventListener('blur',   onStartChange, true);
-    endChk.addEventListener('change',  onChkToggle,   true);
-
-    onChkToggle();
-    onStartChange();
+    try { wire(); } catch {}
   }, 0);
 }
-
 async function openUiConfirmModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -22495,6 +22993,7 @@ function confirmDiscardChangesIfDirty(){
   return true;
 }
 
+
 async function commitContractCalendarStageIfPending(contractId) {
   const LOG_CAL = (typeof window.__LOG_CAL === 'boolean') ? window.__LOG_CAL : true;
   const L = (...a)=> { if (LOG_CAL) console.log('[CAL][commitIfPending]', ...a); };
@@ -22738,8 +23237,6 @@ async function commitContractCalendarStageIfPending(contractId) {
     return { ok: false, message: e?.message || 'Calendar commit failed', removedAll: false };
   }
 }
-
-
 
 // Stage a full-window delete of all TS-free weeks (committed on Save).
 
@@ -26743,119 +27240,6 @@ async function discardContractCalendarStage(contractId) {
 
 
 
-
-
-
-async function fetchContractChangeRatesPreview(contract_id, cutoff_we) {
-  const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
-
-  if (!contract_id) {
-    throw new Error('fetchContractChangeRatesPreview: contract_id is required');
-  }
-
-  const qs = new URLSearchParams();
-  if (cutoff_we) {
-    qs.set('cutoff_week_ending_date', String(cutoff_we));
-  }
-
-  const path = `/api/contracts/${_enc(contract_id)}/change-rates-outstanding${qs.toString() ? `?${qs.toString()}` : ''}`;
-  const url  = API(path);
-
-  if (LOGC) {
-    console.log('[CONTRACTS] fetchContractChangeRatesPreview →', { contract_id, cutoff_we, url });
-  }
-
-  let res;
-  try {
-    res = await authFetch(url);
-  } catch (err) {
-    if (LOGC) console.error('[CONTRACTS] change-rates-outstanding preview network error', { url, err });
-    throw err;
-  }
-
-  const text = await res.text().catch(() => '');
-  if (!res.ok) {
-    if (LOGC) {
-      console.error('[CONTRACTS] change-rates-outstanding preview failed', {
-        status: res.status,
-        url,
-        body: text
-      });
-    }
-    throw new Error(text || 'Failed to load outstanding weeks for this contract');
-  }
-
-  let json;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch (e) {
-    if (LOGC) console.warn('[CONTRACTS] change-rates-outstanding preview: non-JSON body', { text });
-    json = null;
-  }
-
-  if (LOGC) {
-    console.log('[CONTRACTS] fetchContractChangeRatesPreview ←', json);
-  }
-
-  // Backend returns { contract_id, weeks:[...], ... }; normalise to object
-  return json || { contract_id, weeks: [] };
-}
-
-async function applyChangeContractRates(contract_id, payload) {
-  const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
-
-  if (!contract_id) {
-    throw new Error('applyChangeContractRates: contract_id is required');
-  }
-
-  const path = `/api/contracts/${_enc(contract_id)}/change-rates-outstanding`;
-  const url  = API(path);
-
-  const body = payload || {};
-  if (LOGC) {
-    console.log('[CONTRACTS] applyChangeContractRates →', { contract_id, url, body });
-  }
-
-  let res;
-  try {
-    res = await authFetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: _json(body)
-    });
-  } catch (err) {
-    if (LOGC) console.error('[CONTRACTS] applyChangeContractRates network error', { url, err });
-    throw err;
-  }
-
-  const text = await res.text().catch(() => '');
-  if (!res.ok) {
-    if (LOGC) {
-      console.error('[CONTRACTS] applyChangeContractRates failed', {
-        status: res.status,
-        url,
-        body: text
-      });
-    }
-    throw new Error(text || 'Failed to change contract rates for outstanding weeks');
-  }
-
-  let json;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch (e) {
-    if (LOGC) console.warn('[CONTRACTS] applyChangeContractRates: non-JSON body', { text });
-    json = null;
-  }
-
-  if (LOGC) {
-    console.log('[CONTRACTS] applyChangeContractRates ←', json);
-  }
-
-  // Backend returns { old_contract_id, new_contract_id, weeks_migrated, timesheets_migrated, ... }
-  return json || {};
-}
-
 async function fetchCandidatePayMethodChangePreview(candidate_id, newMethod) {
   const LOG = (typeof window.__LOG_CAND === 'boolean')
     ? window.__LOG_CAND
@@ -26988,502 +27372,6 @@ async function applyCandidatePayMethodChange(candidate_id, body) {
   };
 }
 
-async function openChangeContractRatesModal(contractId) {
-  const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
-  const L    = (...a)=> { if (LOGC) console.log('[CONTRACTS][CHANGE-RATES]', ...a); };
-  const W    = (...a)=> { if (LOGC) console.warn('[CONTRACTS][CHANGE-RATES]', ...a); };
-  const E    = (...a)=> { if (LOGC) console.error('[CONTRACTS][CHANGE-RATES]', ...a); };
-
-  if (!contractId) {
-    alert('No contract selected.');
-    return;
-  }
-
-  let preview;
-  try {
-    preview = await fetchContractChangeRatesPreview(contractId, null);
-  } catch (err) {
-    E('preview failed', err);
-    alert(err?.message || 'Could not load outstanding weeks for this contract.');
-    return;
-  }
-
-  const weeks = Array.isArray(preview?.weeks) ? preview.weeks.slice() : [];
-  if (!weeks.length) {
-    alert('There are no outstanding weeks on this contract. Nothing to change.');
-    return;
-  }
-
-  weeks.sort((a, b) => String(a.week_ending_date).localeCompare(String(b.week_ending_date)));
-
-  const defaultCutoff = preview.cutoff_week_ending_date || weeks[0].week_ending_date;
-
-  // Seed rates + schedule from current contract modalCtx if available
-  const deep = (o)=> JSON.parse(JSON.stringify(o || {}));
-  const baseContract =
-    (window.modalCtx &&
-     window.modalCtx.entity === 'contracts' &&
-     window.modalCtx.data &&
-     String(window.modalCtx.data.id || '') === String(contractId))
-      ? deep(window.modalCtx.data)
-      : deep(preview || {});
-
-  const R = baseContract.rates_json || {};
-  const payMethod = String(baseContract.pay_method_snapshot || 'PAYE').toUpperCase();
-  const showPAYE = (payMethod === 'PAYE');
-  const LBL = baseContract.bucket_labels_json || {};
-  const labelOf = (k) => {
-    if (k==='day') return (LBL.day||'Day');
-    if (k==='night') return (LBL.night||'Night');
-    if (k==='sat') return (LBL.sat||'Sat');
-    if (k==='sun') return (LBL.sun||'Sun');
-    if (k==='bh') return (LBL.bh||'BH');
-    return k;
-  };
-  const numStr = (v) => (v == null ? '' : String(v));
-
-  const sched = (() => {
-    const src = baseContract.std_schedule_json || {};
-    const out = {};
-    ['mon','tue','wed','thu','fri','sat','sun'].forEach(d => {
-      const day = src[d] || {};
-      out[d] = {
-        start: day.start || '',
-        end:   day.end   || '',
-        break_minutes: (day.break_minutes != null ? String(day.break_minutes) : '')
-      };
-    });
-    return out;
-  })();
-
-  const weeksTableHtml = `
-    <div class="group">
-      <div class="row">
-        <label>Outstanding weeks</label>
-        <div class="controls">
-          <div class="hint">Only weeks that are not invoiced and not paid will be moved onto the new contract.</div>
-          <div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;margin-top:6px">
-            <table class="grid compact">
-              <thead>
-                <tr>
-                  <th>Week ending</th>
-                  <th>Status</th>
-                  <th>Timesheet</th>
-                  <th>Invoiced?</th>
-                  <th>Paid?</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${weeks.map(w => `
-                  <tr>
-                    <td>${w.week_ending_date || ''}</td>
-                    <td>${w.status || ''}</td>
-                    <td>${w.timesheet_id ? 'Yes' : 'No'}</td>
-                    <td>${w.is_invoiced ? 'Yes' : 'No'}</td>
-                    <td>${w.is_paid ? 'Yes' : 'No'}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-      <div class="row">
-        <label>Apply new rates from</label>
-        <div class="controls">
-          <select class="input" name="cutoff_we">
-            ${weeks.map(w => `
-              <option value="${w.week_ending_date}" ${w.week_ending_date === defaultCutoff ? 'selected' : ''}>
-                ${w.week_ending_date}
-              </option>
-            `).join('')}
-          </select>
-          <span class="mini">Weeks on or after this week-ending date will be moved to a new contract with the updated rates and schedule.</span>
-          <div class="mini" id="cutoffSummary" style="margin-top:4px;"></div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const ratesHtml = `
-    <div class="group">
-      <div class="row">
-        <label>Rates</label>
-        <div class="controls small">
-          <div class="grid-5" style="margin-bottom:4px">
-            <div></div>
-            <div class="mini">PAYE</div>
-            <div class="mini">Umbrella</div>
-            <div class="mini">Charge</div>
-            <div class="mini">Margin (info only)</div>
-          </div>
-
-          ${['day','night','sat','sun','bh'].map(b => `
-            <div class="grid-5" data-bucket="${b}" style="margin-bottom:4px">
-              <div class="split"><span class="mini">${labelOf(b)}</span></div>
-              <div><input class="input" name="paye_${b}"   placeholder="PAYE"     value="${numStr(R[`paye_${b}`])}" ${showPAYE ? '' : 'disabled'} /></div>
-              <div><input class="input" name="umb_${b}"    placeholder="Umbrella" value="${numStr(R[`umb_${b}`])}"  ${showPAYE ? 'disabled' : ''} /></div>
-              <div><input class="input" name="charge_${b}" placeholder="Charge"   value="${numStr(R[`charge_${b}`])}" /></div>
-              <div class="mini" data-role="margin-note"></div>
-            </div>
-          `).join('')}
-          <div class="mini">You can change any pay/charge buckets here. Margins will be checked before applying, and recomputed automatically in TSFIN after the change.</div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const scheduleHtml = `
-    <div class="group">
-      <div class="row"><label>Default weekly schedule (Mon–Sun)</label>
-        <div class="controls small">
-          <div class="grid-3">
-            ${['mon','tue','wed','thu','fri','sat','sun'].map(d => {
-              const lab = d.charAt(0).toUpperCase() + d.slice(1);
-              const day = sched[d] || {};
-              return `
-                <div class="rp-day" data-day="${d}" style="margin-bottom:6px">
-                  <div class="split">
-                    <span class="mini">${lab} start</span>
-                    <input class="input" name="${d}_start" value="${day.start || ''}" placeholder="HH:MM" />
-                  </div>
-                  <div class="split">
-                    <span class="mini">${lab} end</span>
-                    <input class="input" name="${d}_end" value="${day.end || ''}" placeholder="HH:MM" />
-                  </div>
-                  <div class="split">
-                    <span class="mini">Break (min)</span>
-                    <input class="input" type="number" min="0" step="1" name="${d}_break" value="${day.break_minutes || ''}" placeholder="0" />
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
-          <div class="mini" style="margin-top:4px">Leave a day blank to clear it from the schedule on the new contract.</div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const modalHtml = html(`
-    <div class="tabc" id="changeContractRatesForm">
-      <div class="hint" style="margin-bottom:8px">
-        This will create a <strong>new successor contract</strong> with the updated rates and schedule.
-        All outstanding weeks from the chosen cut-off week onward will be moved to the new contract.
-        Historic (paid/invoiced) weeks stay on the original contract.
-      </div>
-      ${weeksTableHtml}
-      ${ratesHtml}
-      ${scheduleHtml}
-    </div>
-  `);
-
-  const timeNorm = (raw) => {
-    const t = String(raw || '').trim();
-    if (!t) return '';
-    const m = t.match(/^(\d{1,2})(?::?(\d{2}))$/);
-    if (!m) return '';
-    const h = +m[1], mi = +m[2];
-    if (!Number.isFinite(h) || !Number.isFinite(mi) || h < 0 || h > 23 || mi < 0 || mi > 59) return '';
-    return String(h).padStart(2, '0') + ':' + String(mi).padStart(2, '0');
-  };
-
-  const buildPayloadFromDom = () => {
-    const root = document.getElementById('changeContractRatesForm');
-    if (!root) return null;
-
-    const cutoffSel = root.querySelector('select[name="cutoff_we"]');
-    const cutoff_we = cutoffSel ? (cutoffSel.value || '').trim() : '';
-    if (!cutoff_we) {
-      if (typeof showModalHint === 'function') showModalHint('Choose a cut-off week ending date.', 'warn');
-      else alert('Choose a cut-off week ending date.');
-      return null;
-    }
-
-    // Collect rates
-    const BUCKETS = ['day','night','sat','sun','bh'];
-    const rateInputs = {};
-    BUCKETS.forEach(b => {
-      rateInputs[`paye_${b}`]   = root.querySelector(`input[name="paye_${b}"]`);
-      rateInputs[`umb_${b}`]    = root.querySelector(`input[name="umb_${b}"]`);
-      rateInputs[`charge_${b}`] = root.querySelector(`input[name="charge_${b}"]`);
-    });
-
-    const parseRate = (name) => {
-      const el = rateInputs[name];
-      if (!el) return null;
-      const raw = (el.value || '').trim();
-      if (!raw) return null;
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : null;
-    };
-
-    const rates_json = {};
-    BUCKETS.forEach(b => {
-      const pd = parseRate(`paye_${b}`);
-      const ud = parseRate(`umb_${b}`);
-      const cd = parseRate(`charge_${b}`);
-      if (pd != null) rates_json[`paye_${b}`] = pd;
-      if (ud != null) rates_json[`umb_${b}`] = ud;
-      if (cd != null) rates_json[`charge_${b}`] = cd;
-    });
-
-    // Schedule
-    const days = ['mon','tue','wed','thu','fri','sat','sun'];
-    const schedOut = {};
-    let hasAny = false;
-
-    days.forEach(d => {
-      const sEl = root.querySelector(`input[name="${d}_start"]`);
-      const eEl = root.querySelector(`input[name="${d}_end"]`);
-      const bEl = root.querySelector(`input[name="${d}_break"]`);
-
-      const sNorm = timeNorm(sEl ? sEl.value : '');
-      const eNorm = timeNorm(eEl ? eEl.value : '');
-      const brRaw = bEl ? (bEl.value || '').trim() : '';
-
-      if (sNorm && eNorm) {
-        const brNum = Math.max(0, Number(brRaw || 0) || 0);
-        schedOut[d] = { start: sNorm, end: eNorm, break_minutes: brNum };
-        hasAny = true;
-      }
-    });
-
-    const std_schedule_json = hasAny ? schedOut : null;
-
-    return {
-      cutoff_week_ending_date: cutoff_we,
-      rates_json,
-      std_schedule_json
-    };
-  };
-
-    // Helper to ensure we have ERNI multiplier from settings (used for margin check)
-  // UPDATED:
-  // - getSettingsCached() returns { settings, finance_windows }
-  // - ERNI comes from finance_windows window in-scope for an anchor date
-  // - Anchor date rule:
-  //    - if contract ongoing -> today (Europe/London)
-  //    - if contract finished (end_date < today) -> contract start_date
-  const ensureErniMult = async () => {
-    // Today (Europe/London)
-    const todayIso = (() => {
-      try {
-        const s = new Intl.DateTimeFormat('en-GB', {
-          timeZone: 'Europe/London',
-          year:'numeric', month:'2-digit', day:'2-digit'
-        }).format(new Date());
-        const [dd, mm, yyyy] = s.split('/');
-        return `${yyyy}-${mm}-${dd}`;
-      } catch {
-        const d = new Date();
-        const y = d.getFullYear();
-        const m = String(d.getMonth()+1).padStart(2,'0');
-        const day = String(d.getDate()).padStart(2,'0');
-        return `${y}-${m}-${day}`;
-      }
-    })();
-
-    const asYmd = (v) => {
-      if (!v) return null;
-      const ss = String(v).slice(0, 10);
-      return /^\d{4}-\d{2}-\d{2}$/.test(ss) ? ss : null;
-    };
-
-    // Determine anchor date from baseContract start/end
-    const startIso = asYmd(baseContract?.start_date) || null;
-    const endIso   = asYmd(baseContract?.end_date)   || null;
-    const isFinished = !!(endIso && endIso < todayIso);
-    const anchorIso = (isFinished && startIso) ? startIso : todayIso;
-
-    // Cache ERNI_MULT per anchor date (so we don't recompute repeatedly)
-    window.__ERNI_MULT_BY_DATE__ = window.__ERNI_MULT_BY_DATE__ || Object.create(null);
-    if (typeof window.__ERNI_MULT_BY_DATE__[anchorIso] === 'number' && window.__ERNI_MULT_BY_DATE__[anchorIso] > 0) {
-      window.__ERNI_MULT__ = window.__ERNI_MULT_BY_DATE__[anchorIso]; // keep legacy cache aligned
-      return window.__ERNI_MULT_BY_DATE__[anchorIso];
-    }
-
-    try {
-      if (typeof getSettingsCached === 'function') {
-        const s = await getSettingsCached();
-
-        // New shape: { settings: {...}, finance_windows: [...] }
-        const fws = Array.isArray(s?.finance_windows) ? s.finance_windows : [];
-
-        // Pick finance window in-scope for anchorIso (prefer latest date_from)
-        let chosen = null;
-        for (const w of fws) {
-          const df = asYmd(w?.date_from);
-          const dt = asYmd(w?.date_to);
-          if (!df) continue;
-          if (df > anchorIso) continue;
-          if (dt && dt < anchorIso) continue;
-
-          if (!chosen) {
-            chosen = w;
-          } else {
-            const cdf = asYmd(chosen?.date_from);
-            if (cdf && df > cdf) chosen = w;
-          }
-        }
-
-        // ERNI pct from finance window; fallback to legacy fields if needed
-        let p = chosen?.erni_pct ?? null;
-        if (p == null) p = s?.settings?.erni_pct ?? null;
-        if (p == null) p = s?.erni_pct ?? null;
-        if (p == null) p = s?.employers_ni_percent ?? null;
-        if (p == null) p = 0;
-
-        p = Number(p) || 0;
-        if (p > 1) p = p / 100;
-
-        let mult = 1 + p;
-        if (!Number.isFinite(mult) || mult <= 0) mult = 1;
-
-        window.__ERNI_MULT_BY_DATE__[anchorIso] = mult;
-        window.__ERNI_MULT__ = mult;
-
-        return mult;
-      }
-    } catch (e) {
-      W('ensureErniMult failed, defaulting to 1', e);
-    }
-
-    window.__ERNI_MULT_BY_DATE__[anchorIso] = 1;
-    window.__ERNI_MULT__ = 1;
-    return 1;
-  };
-
-
-  // Margin validation before submit (per bucket)
-  const validateMargins = async (ratesOverride) => {
-    const BUCKETS = ['day','night','sat','sun','bh'];
-    const erniMult = await ensureErniMult();
-    const bad = [];
-
-    for (const b of BUCKETS) {
-      const chargeKey  = `charge_${b}`;
-      const payPayeKey = `paye_${b}`;
-      const payUmbKey  = `umb_${b}`;
-
-      const rawCharge =
-        (ratesOverride && ratesOverride.hasOwnProperty(chargeKey))
-          ? ratesOverride[chargeKey]
-          : R[chargeKey];
-
-      const rawPay =
-        payMethod === 'PAYE'
-          ? ((ratesOverride && ratesOverride.hasOwnProperty(payPayeKey)) ? ratesOverride[payPayeKey] : R[payPayeKey])
-          : ((ratesOverride && ratesOverride.hasOwnProperty(payUmbKey))  ? ratesOverride[payUmbKey]  : R[payUmbKey]);
-
-      const ch = Number(rawCharge);
-      const pa = Number(rawPay);
-
-      if (!Number.isFinite(ch) || !Number.isFinite(pa)) continue;
-
-      let margin;
-      if (payMethod === 'PAYE') {
-        margin = ch - pa * erniMult;
-      } else {
-        margin = ch - pa;
-      }
-
-      // Allow tiny floating point wiggle; treat anything < -0.001 as negative
-      if (margin < -0.001) {
-        bad.push(labelOf(b));
-      }
-    }
-
-    return bad;
-  };
-
-  showModal(
-    'Change Contract Rates',
-    [{ key:'main', label:'Change' }],
-    () => modalHtml,
-    async () => {
-      const payload = buildPayloadFromDom();
-      if (!payload) return false;
-
-      // 🔹 Validate margins before applying
-      try {
-        const badBuckets = await validateMargins(payload.rates_json || {});
-        if (badBuckets.length) {
-          const msg =
-            'One or more buckets would have a negative margin with the new rates:\n\n' +
-            badBuckets.map(b => `• ${b}`).join('\n') +
-            '\n\nPlease adjust pay and/or charge so that margins remain non-negative.';
-          alert(msg);
-          return false;
-        }
-      } catch (err) {
-        W('margin validation failed (non-fatal, but blocking apply)', err);
-        alert('Could not validate margins. Please try again or adjust rates.');
-        return false;
-      }
-
-      try {
-        const resp = await applyChangeContractRates(contractId, payload);
-        L('applyChangeContractRates success', resp);
-
-        // Seed pending focus so when user closes out, Contracts summary highlights old/new contracts
-        try {
-          const oldId = resp?.old_contract_id;
-          const newId = resp?.new_contract_id;
-          const ids = [];
-          if (newId) ids.push(newId);
-          if (oldId && oldId !== newId) ids.push(oldId);
-
-          if (ids.length) {
-            window.__pendingFocus = {
-              section: 'contracts',
-              ids: ids,
-              primaryIds: newId ? [newId] : []
-            };
-          }
-        } catch (e) {
-          W('failed to set pending focus (non-fatal)', e);
-        }
-
-        try { window.__toast && window.__toast('New contract created; outstanding weeks moved.'); } catch {}
-
-        return true; // close child modal
-      } catch (err) {
-        E('applyChangeContractRates failed', err);
-        alert(err?.message || 'Failed to change contract rates.');
-        return false;
-      }
-    },
-    false,
-    null,
-    { kind:'contract-change-rates', noParentGate:true, forceEdit:true }
-  );
-
-  // 🔹 After the modal is mounted, wire up the cut-off summary text
-  setTimeout(() => {
-    try {
-      const root = document.getElementById('changeContractRatesForm');
-      if (!root) return;
-      const sel = root.querySelector('select[name="cutoff_we"]');
-      const summary = root.querySelector('#cutoffSummary');
-      if (!sel || !summary) return;
-
-      const updateSummary = () => {
-        const v = sel.value || '';
-        if (!v) {
-          summary.textContent = 'Choose a week ending date for the new contract to start applying.';
-        } else {
-          summary.textContent = `New rates and schedule will apply to weeks on or after week ending ${v}.`;
-        }
-      };
-
-      sel.addEventListener('change', updateSummary);
-      updateSummary();
-    } catch (e) {
-      W('failed to wire cutoffSummary (non-fatal)', e);
-    }
-  }, 0);
-}
 
 async function openCandidatePicker(onPick, options) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true; // default ON
@@ -29143,8 +29031,65 @@ async function getCandidateCalendar(candidate_id, from, to) {
   return r.json();
 }
 async function contractsPlanRanges(contract_id, payload) {
-  const r = await authFetch(API(`/api/contracts/${_enc(contract_id)}/plan-ranges`), { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(payload) });
-  if (!r?.ok) throw new Error(await r.text()); return r.json();
+  const uiConfirm = async (title, message) => {
+    try {
+      if (typeof uiConfirmModal === 'function') {
+        return await uiConfirmModal(title, message, { kind: 'warn' });
+      }
+    } catch {}
+    return window.confirm(`${title}\n\n${message}`);
+  };
+
+  const fmtClashes = (cl) => {
+    const arr = Array.isArray(cl) ? cl : [];
+    if (!arr.length) return '';
+    const lines = arr.slice(0, 12).map(x => {
+      const d = x?.date || x?.a_date || x?.b_date || '';
+      const a = `${x?.a_start || x?.proposed_start || ''}-${x?.a_end || x?.proposed_end || ''}`.replace(/^-|-$/g,'');
+      const b = `${x?.b_start || x?.existing_start || ''}-${x?.b_end || x?.existing_end || ''}`.replace(/^-|-$/g,'');
+      const cid = x?.b_contract_id || x?.existing_contract_id || x?.a_contract_id || '';
+      return `• ${d} ${a}${b ? ` overlaps ${b}` : ''}${cid ? ` (contract ${cid})` : ''}`;
+    });
+    return lines.join('\n') + (arr.length > 12 ? `\n…and ${arr.length - 12} more.` : '');
+  };
+
+  const doReq = async (pl) => {
+    return await authFetch(API(`/api/contracts/${_enc(contract_id)}/plan-ranges`), {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify(pl || {})
+    });
+  };
+
+  let r = await doReq(payload);
+
+  // ✅ 409 schedule clash handling (warn-only; retry with force)
+  if (r && r.status === 409) {
+    let txt = '';
+    let j = null;
+    try { txt = await r.text(); } catch {}
+    try { j = txt ? JSON.parse(txt) : null; } catch { j = null; }
+
+    const err = j?.error || j?.code || null;
+    if (String(err || '').toUpperCase() === 'SCHEDULE_CLASH') {
+      const clashes = j?.clashes || [];
+      const clashCount = Number(j?.clash_count || clashes.length || 0);
+      const detail = fmtClashes(clashes);
+
+      const proceed = await uiConfirm(
+        'Schedule clash warning',
+        `Schedule clashes detected (${clashCount}).\n\n${detail}\n\nContinue anyway?`
+      );
+
+      if (!proceed) throw new Error('Calendar apply cancelled due to schedule clashes.');
+
+      const retryPayload = { ...(payload || {}), force_schedule_clashes: true };
+      r = await doReq(retryPayload);
+    }
+  }
+
+  if (!r?.ok) throw new Error(await r.text());
+  return r.json();
 }
 async function contractsUnplanRanges(contract_id, payload) {
   const r = await authFetch(API(`/api/contracts/${_enc(contract_id)}/plan-ranges`), { method:'DELETE', headers:{'content-type':'application/json'}, body: JSON.stringify(payload) });
@@ -29528,14 +29473,13 @@ function renderContractCalendarTab(ctx) {
   const cloneExtendHint =
     'Use this to copy an identical contract, apply the same candidate to the contract from specified dates, allowing you to change rates and rules from that date';
 
-  // --- actions (includes Duplicate + Change Rates)
+  // --- actions (includes Duplicate)
   const actionsHtml = (c.id
     ? `<div class="actions" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
          ${inViewMode ? `` : `<button id="btnAddMissing">Add missing weeks</button>
          <button id="btnRemoveAll">Remove all weeks</button>`}
          ${inViewMode ? `<button id="btnCloneExtend" title="${escapeHtml(cloneExtendHint)}">Clone & Extend…</button>
-         <button id="btnDuplicateContract">Duplicate Contract…</button>
-         <button id="btnChangeRatesOutstanding">Change Contract Rates…</button>` : ``}
+         <button id="btnDuplicateContract">Duplicate Contract…</button>` : ``}
        </div>`
     : ``);
 
@@ -29735,20 +29679,6 @@ function renderContractCalendarTab(ctx) {
           });
         }
 
-        // NEW: Change Contract Rates (outstanding weeks)
-        const btnCR = el.querySelector('#btnChangeRatesOutstanding');
-        if (btnCR && !btnCR.__wired) {
-          btnCR.__wired = true;
-          btnCR.addEventListener('click', () => {
-            if (typeof openChangeContractRatesModal === 'function') {
-              if (LOGM) console.log('[CAL][contract] open change contract rates', { id: c.id });
-              openChangeContractRatesModal(c.id);
-            } else {
-              alert('Change Contract Rates is not available in this build.');
-            }
-          });
-        }
-
         // Duplicate Contract…
         const btnDup = el.querySelector('#btnDuplicateContract');
         if (btnDup && !btnDup.__wired) {
@@ -29812,6 +29742,7 @@ function renderContractCalendarTab(ctx) {
       ${actionsHtml}
     </div>`;
 }
+
 
 function isConsecutiveDailyRun(dates) {
   if (!Array.isArray(dates) || dates.length < 2) return false;
@@ -30401,11 +30332,14 @@ if (m.__seeded !== true) {
   if (base.auto_invoice != null)                 m.auto_invoice = base.auto_invoice;
   if (base.require_reference_to_pay != null)     m.require_reference_to_pay = base.require_reference_to_pay;
   if (base.require_reference_to_invoice != null) m.require_reference_to_invoice = base.require_reference_to_invoice;
-
-  if (base.week_ending_weekday_snapshot != null) m.week_ending_weekday_snapshot = String(base.week_ending_weekday_snapshot);
+ if (base.week_ending_weekday_snapshot != null) m.week_ending_weekday_snapshot = String(base.week_ending_weekday_snapshot);
   if (base.bucket_labels_json)   m.__bucket_labels = base.bucket_labels_json;
   if (base.std_schedule_json)    m.__template      = base.std_schedule_json;
   if (base.std_hours_json)       m.__hours         = base.std_hours_json;
+
+  // ✅ NEW: seed contract.is_ad_hoc so checkbox reflects persisted state
+  if (base.is_ad_hoc != null)    m.is_ad_hoc       = base.is_ad_hoc;
+
   // Seed mileage if present on row
   if (base.mileage_charge_rate != null) m.mileage_charge_rate = base.mileage_charge_rate;
   if (base.mileage_pay_rate != null)    m.mileage_pay_rate    = base.mileage_pay_rate;
@@ -30779,7 +30713,6 @@ const role         = choose('role', base.role ?? null);
 const band         = choose('band', base.band ?? null);
 const display_site = choose('display_site', base.display_site ?? '');
 
-
          const boolFromFS = (name, baseVal=false) => {
           if (fs && fs.main && Object.prototype.hasOwnProperty.call(fs.main, name)) {
             const v = fs.main[name];
@@ -30787,6 +30720,9 @@ const display_site = choose('display_site', base.display_site ?? '');
           }
           return !!base[name];
         };
+
+        // ✅ NEW: contract-level ad hoc flag (boolean)
+        const is_ad_hoc = boolFromFS('is_ad_hoc', !!base.is_ad_hoc);
 
         // NEW: tri-state boolean (preserve NULL contract overrides unless explicitly set)
            const boolTriFromFS = (name) => {
@@ -31045,6 +30981,9 @@ const data = {
   end_date:     endIso,
   pay_method_snapshot: payMethodSnap,
 
+  // ✅ NEW: contract-level ad hoc flag
+  is_ad_hoc,
+
   // ✅ UPDATED: nullable (inherit) supported
   default_submission_mode,
 
@@ -31052,7 +30991,6 @@ const data = {
 
   // ✅ NEW: overrideclientsettings gate
   overrideclientsettings,
-
   // contract route/settings overrides (nullable)
   is_nhsp,
   autoprocess_hr,
@@ -71686,10 +71624,18 @@ const onSaveTimesheet = async () => {
   const shouldChangeHold =
     (payHoldDesired === true  && !currentOnHold) ||
     (payHoldDesired === false &&  currentOnHold);
-
   const alreadyPaid      = !!tsfinLocal.paid_at_utc;
   const wantsMarkPaid    = !!st.markPaid;
-  const shouldMarkPaid   = wantsMarkPaid && !alreadyPaid;
+
+  // ✅ MARK-PAID BYPASS REMOVED:
+  // Settlement must be snapshot-based via Banking → External Reconcile (or normal rail settlement).
+  if (wantsMarkPaid) {
+    const msg = alreadyPaid
+      ? 'This timesheet is already marked paid. To reconcile payments, use Banking → External Reconcile (snapshot-based).'
+      : 'Mark Paid is no longer available here. Use Banking → External Reconcile (snapshot-based) instead.';
+    alert(msg);
+    try { st.markPaid = false; } catch {}
+  }
 
   L('staged state', {
     tsIdSave,
@@ -71714,8 +71660,7 @@ const onSaveTimesheet = async () => {
 
     refChanged,
     lockedNow,
-    shouldChangeHold,
-    shouldMarkPaid
+    shouldChangeHold
   });
 
   const tasks = [];
@@ -71977,14 +71922,7 @@ if (det.isSegmentsMode && (hasSegOverrides || hasSegTargets) && (tsIdSave || row
       await toggleTimesheetPayHold(tsIdSave, onHold, reason, expected);
     });
   }
-
-  // Mark paid
-  if (shouldMarkPaid && tsIdSave) {
-    tasks.push(async () => {
-      const expected = window.modalCtx?.timesheetMeta?.expected_timesheet_id || tsIdSave;
-      await markTimesheetPaid(tsIdSave, expected);
-    });
-  }
+  // ✅ Mark Paid removed: use Banking → External Reconcile (snapshot-based)
 
   // ─────────────────────────────────────────────────────────────
   // ✅ Expenses save (NEW)
@@ -74338,94 +74276,6 @@ async function toggleTimesheetPayHold(ctxOrId, onHold, reason = '', expectedTime
 }
 
 
-async function markTimesheetPaid(ctxOrId, expectedTimesheetId, paymentReference) {
-  const { LOGM, L, GC, GE } = getTsLoggers('[TS][MARK-PAID]');
-  GC('markTimesheetPaid');
-
-  const mc  = window.modalCtx || {};
-  const row = (mc.data && mc.data.timesheet_id) ? mc.data : (ctxOrId && ctxOrId.row ? ctxOrId.row : {});
-  const tsId = (typeof ctxOrId === 'string') ? ctxOrId : (row.timesheet_id || row.id || mc.data?.id || null);
-
-  if (!tsId) {
-    L('ERROR: missing timesheetId');
-    GE();
-    throw new Error('markTimesheetPaid: timesheetId is required');
-  }
-
-  const expected =
-    (expectedTimesheetId != null ? String(expectedTimesheetId) : '') ||
-    (mc.timesheetMeta && mc.timesheetMeta.expected_timesheet_id) ||
-    tsId;
-
-  const encId   = encodeURIComponent(tsId);
-  const urlPath = `/api/timesheets/${encId}/mark-paid`;
-
-  const payload = {
-    paid: true,
-    expected_timesheet_id: expected
-  };
-  if (paymentReference != null && String(paymentReference).trim()) {
-    payload.payment_reference = String(paymentReference).trim();
-  }
-
-  L('REQUEST', { url: API(urlPath), tsId, payload });
-
-  // ✅ FIX: backend route is PATCH, not POST (preserves err.status + err.json for TIMESHEET_MOVED handling upstream)
-  const json = await apiPatchJson(urlPath, payload);
-
-  L('mark-paid result', json);
-
-  // Refresh details
-  const resolvedId =
-    (json && (json.current_timesheet_id || json.timesheet_id))
-      ? (json.current_timesheet_id || json.timesheet_id)
-      : tsId;
-
-  let newDetails = mc.timesheetDetails;
-  try {
-    newDetails = await fetchTimesheetDetails(resolvedId);
-    window.modalCtx.timesheetDetails = newDetails;
-  } catch (err) {
-    L('refresh details failed (non-fatal)', err);
-  }
-
-  const tsfin = newDetails?.tsfin || {};
-  const updatedRow = {
-    ...(mc.data || row),
-    paid_at_utc: tsfin.paid_at_utc || mc.data?.paid_at_utc,
-    summary_stage: 'PAID',
-    timesheet_id: resolvedId,
-    id: resolvedId
-  };
-
-  window.modalCtx.data = updatedRow;
-
-  if (window.modalCtx?.timesheetMeta) {
-    window.modalCtx.timesheetMeta.expected_timesheet_id = resolvedId;
-  }
-
-  try {
-    window.__pendingFocus = {
-      section: 'timesheets',
-      ids: [String(resolvedId)],
-      primaryIds: [String(resolvedId)]
-    };
-  } catch {}
-
-  // ✅ Keep the summary grid consistent
-  try {
-    if (typeof refreshTimesheetsSummaryAfterRotation === 'function') {
-      await refreshTimesheetsSummaryAfterRotation(resolvedId);
-    }
-  } catch (e) {
-    L('summary refresh failed (non-fatal)', e);
-  }
-
-  L('UPDATED ROW', updatedRow);
-  GE();
-  return { ok: true, updatedRow, details: newDetails };
-}
-
 
 
 
@@ -75093,8 +74943,8 @@ async function deleteCandidate(candidateId) {
     try { console.warn('[deleteCandidate] delete-eligibility error (non-blocking)', e); } catch {}
   }
 
-  // Confirm destructive action
-  if (!confirm('Delete this candidate? This cannot be undone.')) return false;
+  // ✅ FIX: do NOT show an additional confirm here.
+  // Confirmation must be handled by the caller (modal footer / UI flow) to avoid double prompts.
 
   // Apply delete
   const res = await authFetch(API(`/api/candidates/${encodeURIComponent(id)}`), { method: 'DELETE' });
@@ -75142,7 +74992,6 @@ async function deleteCandidate(candidateId) {
   return true;
 }
 
-
 async function deleteClient(clientId) {
   const id = String(clientId || '').trim();
   if (!id) throw new Error('Missing clientId');
@@ -75174,8 +75023,8 @@ async function deleteClient(clientId) {
     try { console.warn('[deleteClient] delete-eligibility error (non-blocking)', e); } catch {}
   }
 
-  // Confirm destructive action
-  if (!confirm('Delete this client? This cannot be undone.')) return false;
+  // ✅ FIX: do NOT show an additional confirm here.
+  // Confirmation must be handled by the caller (modal footer / UI flow) to avoid double prompts.
 
   // Apply delete
   const res = await authFetch(API(`/api/clients/${encodeURIComponent(id)}`), { method: 'DELETE' });
@@ -75222,8 +75071,6 @@ async function deleteClient(clientId) {
 
   return true;
 }
-
-
 
 
 // ======== Switch a timesheet to MANUAL (weekly) ========
