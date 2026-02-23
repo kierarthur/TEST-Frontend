@@ -14432,10 +14432,10 @@ function renderContractMainTab(ctx) {
     'Tick this box if shifts are ad hoc. This is important because schedules are not prepopulated into the workers timesheet in the app if this is ticked, because hours/days are not fixed';
 
   const schedGrid = `
-    <div class="row"><label class="section">Proposed schedule (Mon–Sun)</label></div>
+    <div class="row" style="grid-column:1 / -1"><label class="section">Proposed schedule (Mon–Sun)</label></div>
     ${
       isAdHocChecked
-        ? `<div class="row" style="margin-top:2px">
+        ? `<div class="row" style="grid-column:1 / -1;margin-top:2px">
              <label></label>
              <div class="controls">
                <div class="mini" style="opacity:.85">
@@ -14445,7 +14445,7 @@ function renderContractMainTab(ctx) {
            </div>`
         : ``
     }
-    <div class="sched-grid" style="min-width:0;flex:1">
+    <div class="sched-grid" style="grid-column:1 / -1;min-width:0">
       ${DAYS.map(([k,l]) => dayRow(k,l)).join('')}
     </div>
   `;
@@ -14575,7 +14575,17 @@ function renderContractMainTab(ctx) {
       </div>
 
       <div class="grid-2">
-        <div class="row"><label>Start date</label><div class="controls"><input class="input" name="start_date" value="${startUk}" placeholder="DD/MM/YYYY" required ${overlapChangeAttr} /></div></div>
+        <div class="row"><label>Start date</label><div class="controls">
+          <input class="input" name="start_date" value="${startUk}" placeholder="DD/MM/YYYY" required ${overlapChangeAttr} />
+          <div style="display:flex;align-items:center;gap:18px;margin-top:8px">
+            <span title="${escapeHtml(adHocHint)}" style="cursor:help">Ad hoc shifts</span>
+            <input type="checkbox" name="is_ad_hoc" ${isAdHocChecked ? 'checked' : ''}
+              onchange="try{ if(typeof setContractFormValue==='function') setContractFormValue('is_ad_hoc', this.checked); }catch(e){}" />
+          </div>
+          <div class="mini" title="${escapeHtml(adHocHint)}" style="cursor:help;margin-top:4px">
+            ${adHocHint}
+          </div>
+        </div></div>
         <div class="row"><label>End date</label><div class="controls"><input class="input" name="end_date" value="${endUk}" placeholder="DD/MM/YYYY" required ${overlapChangeAttr} /></div></div>
       </div>
 
@@ -14603,23 +14613,9 @@ function renderContractMainTab(ctx) {
         }
       </div>
 
-      <div class="row" style="margin-top:6px">
-        <label title="${escapeHtml(adHocHint)}" style="display:flex;align-items:center;gap:6px;cursor:help">
-          <input type="checkbox" name="is_ad_hoc" ${isAdHocChecked ? 'checked' : ''}
-            onchange="try{ if(typeof setContractFormValue==='function') setContractFormValue('is_ad_hoc', this.checked); }catch(e){}" />
-          Ad hoc shifts
-        </label>
-        <div class="controls">
-          <div class="mini" title="${escapeHtml(adHocHint)}" style="cursor:help">
-            ${adHocHint}
-          </div>
-        </div>
-      </div>
-
       ${schedGrid}
     </form>`;
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 // UPDATED: renderContractRatesTab (adds logging only)
 // ─────────────────────────────────────────────────────────────────────────────
