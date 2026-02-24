@@ -64634,6 +64634,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ================== NEW: openSettings (parent modal; opens in View) ==================
+
 async function openSettings() {
   const deep = (o)=> JSON.parse(JSON.stringify(o || {}));
 
@@ -64666,6 +64667,12 @@ async function openSettings() {
       ? deep(prevCtx.finance_new_draft)
       : { date_from:'', date_to:'', vat:'', hol:'', erni:'' };
 
+  // ✅ Preserve remittance draft across re-opens (so tab state survives)
+  const prevRemDraft =
+    (prevCtx && prevCtx.entity === 'settings' && prevCtx.remittanceDraft)
+      ? deep(prevCtx.remittanceDraft)
+      : null;
+
   // Seed modal context (IMPORTANT: showModal reads window.modalCtx)
   window.modalCtx = modalCtx = {
     entity: 'settings',
@@ -64676,10 +64683,18 @@ async function openSettings() {
     openToken: 'settings:' + Date.now()
   };
 
-  // Open in VIEW mode (hasId=true) and let showModal manage Edit/Cancel/Discard/Save
+  // ✅ Restore remittance draft (if any), otherwise it will be initialised by renderSettingsTab('remittances', ...)
+  if (prevRemDraft && typeof prevRemDraft === 'object') {
+    modalCtx.remittanceDraft = prevRemDraft;
+  }
+
+  // ✅ Add the Remittances tab to the Settings modal tabs list
   showModal(
     'Settings',
-    [{ key:'main', label:'Defaults' }],
+    [
+      { key:'main', label:'Defaults' },
+      { key:'remittances', label:'Remittances' }
+    ],
     renderSettingsTab,
     handleSaveSettings,
     true // hasId → opens in View mode
@@ -64690,6 +64705,8 @@ async function openSettings() {
   // Best-effort: initial sync/bounds after render
   setTimeout(() => { try { __settingsFinanceSync(); } catch {} }, 0);
 }
+
+
 function __ensureSettingsFinanceWindowsWiring() {
   if (window.__settingsFinanceWindowsWired) return;
   window.__settingsFinanceWindowsWired = true;
@@ -64891,10 +64908,14 @@ function __settingsFinanceSync() {
 
 // ================== NEW: renderSettingsTab (tab renderer; showModal controls read-only) ==================
 function renderSettingsTab(key, s = {}) {
+  // Normalize tab key (back-compat: allow singular)
+  const k0 = String(key || '').trim().toLowerCase();
+  const k = (k0 === 'remittance') ? 'remittances' : k0;
+
   // ─────────────────────────────────────────────────────────────
   // Tab: Defaults (existing)
   // ─────────────────────────────────────────────────────────────
-  if (key === 'main') {
+  if (k === 'main') {
     // Finance windows are now loaded separately (handleGetSettings returns { settings, finance_windows }).
     // We keep settings_defaults fields here for non-finance settings only.
     const fws = (modalCtx && Array.isArray(modalCtx.finance_windows)) ? modalCtx.finance_windows : [];
@@ -65153,7 +65174,7 @@ function renderSettingsTab(key, s = {}) {
   //  - Header/Footer message (persisted; collected by collectForm)
   //  - No JSON shown
   // ─────────────────────────────────────────────────────────────
-  if (key === 'remittances') {
+  if (k === 'remittances') {
     const deep = (o)=> JSON.parse(JSON.stringify(o || {}));
     const isObj = (v) => !!(v && typeof v === 'object' && !Array.isArray(v));
 
@@ -65234,7 +65255,6 @@ function renderSettingsTab(key, s = {}) {
             dirty: false
           };
         } else {
-          // If draft exists but has never been initialised with current server values, do it once.
           if (!('remittance_includes_json' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_includes_json = deep(cfg);
           if (!('remittance_header_message' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_header_message = (s.remittance_header_message == null ? '' : String(s.remittance_header_message));
           if (!('remittance_footer_message' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_footer_message = (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message));
@@ -65344,62 +65364,6 @@ function renderSettingsTab(key, s = {}) {
               if (dEl) dEl.style.display = (up === 'DAILY') ? '' : 'none';
             };
 
-            const syncDraftFromDom = () => {
-              try {
-                const hdr = document.getElementById('remittance_header_message');
-                const ftr = document.getElementById('remittance_footer_message');
-
-                if (modalCtx && modalCtx.remittanceDraft) {
-                  if (hdr) modalCtx.remittanceDraft.remittance_header_message = String(hdr.value ?? '');
-                  if (ftr) modalCtx.remittanceDraft.remittance_footer_message = String(ftr.value ?? '');
-                }
-
-                let inc = null;
-                try {
-                  if (typeof buildRemittanceIncludesJsonFromUi === 'function') {
-                    inc = buildRemittanceIncludesJsonFromUi();
-                  }
-                } catch {}
-
-                if (!inc) {
-                  const out = deep(defaultCfg);
-                  const scopes = ['weekly', 'daily'];
-
-                  const readCk = (id, defVal) => {
-                    const el = document.getElementById(id);
-                    if (!el) return !!defVal;
-                    return !!el.checked;
-                  };
-
-                  scopes.forEach((sc) => {
-                    const S = sc.toUpperCase();
-                    itemTypes.forEach((it) => {
-                      const id = `rem_${sc}_item_${it.key}`;
-                      out[sc].include_item_types[it.key] = readCk(id, true);
-                    });
-                    fields.forEach((fd) => {
-                      const id = `rem_${sc}_field_${fd.key}`;
-                      out[sc].include_fields[fd.key] = readCk(id, true);
-                    });
-                  });
-
-                  inc = out;
-                }
-
-                if (modalCtx && modalCtx.remittanceDraft) {
-                  modalCtx.remittanceDraft.remittance_includes_json = inc;
-                  modalCtx.remittanceDraft.dirty = true;
-
-                  // Mirror onto modalCtx.data so Save from any tab can pick it up.
-                  if (modalCtx.data && typeof modalCtx.data === 'object') {
-                    modalCtx.data.remittance_includes_json = inc;
-                    modalCtx.data.remittance_header_message = modalCtx.remittanceDraft.remittance_header_message;
-                    modalCtx.data.remittance_footer_message = modalCtx.remittanceDraft.remittance_footer_message;
-                  }
-                }
-              } catch {}
-            };
-
             if (sel) {
               sel.addEventListener('change', () => {
                 applyScope(sel.value);
@@ -65409,7 +65373,6 @@ function renderSettingsTab(key, s = {}) {
               applyScope(scopeUi);
             }
 
-            // Prefill checkboxes using helper (if provided later), otherwise HTML checked attrs already handle it.
             try {
               if (typeof applyRemittanceIncludesJsonToUi === 'function') {
                 const baseJson = (modalCtx && modalCtx.remittanceDraft && modalCtx.remittanceDraft.remittance_includes_json)
@@ -65421,6 +65384,36 @@ function renderSettingsTab(key, s = {}) {
 
             const root = document.getElementById('settingsRemittancesRoot');
             if (root) {
+              const syncDraftFromDom = () => {
+                try {
+                  const hdr = document.getElementById('remittance_header_message');
+                  const ftr = document.getElementById('remittance_footer_message');
+
+                  if (modalCtx && modalCtx.remittanceDraft) {
+                    if (hdr) modalCtx.remittanceDraft.remittance_header_message = String(hdr.value ?? '');
+                    if (ftr) modalCtx.remittanceDraft.remittance_footer_message = String(ftr.value ?? '');
+                  }
+
+                  let inc = null;
+                  try {
+                    if (typeof buildRemittanceIncludesJsonFromUi === 'function') {
+                      inc = buildRemittanceIncludesJsonFromUi();
+                    }
+                  } catch {}
+
+                  if (inc && modalCtx && modalCtx.remittanceDraft) {
+                    modalCtx.remittanceDraft.remittance_includes_json = inc;
+                    modalCtx.remittanceDraft.dirty = true;
+
+                    if (modalCtx.data && typeof modalCtx.data === 'object') {
+                      modalCtx.data.remittance_includes_json = inc;
+                      modalCtx.data.remittance_header_message = modalCtx.remittanceDraft.remittance_header_message;
+                      modalCtx.data.remittance_footer_message = modalCtx.remittanceDraft.remittance_footer_message;
+                    }
+                  }
+                } catch {}
+              };
+
               root.addEventListener('change', (e) => {
                 const t = e && e.target;
                 if (!t) return;
