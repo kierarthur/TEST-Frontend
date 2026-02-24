@@ -64891,257 +64891,617 @@ function __settingsFinanceSync() {
 
 // ================== NEW: renderSettingsTab (tab renderer; showModal controls read-only) ==================
 function renderSettingsTab(key, s = {}) {
-  if (key !== 'main') return '';
+  // ─────────────────────────────────────────────────────────────
+  // Tab: Defaults (existing)
+  // ─────────────────────────────────────────────────────────────
+  if (key === 'main') {
+    // Finance windows are now loaded separately (handleGetSettings returns { settings, finance_windows }).
+    // We keep settings_defaults fields here for non-finance settings only.
+    const fws = (modalCtx && Array.isArray(modalCtx.finance_windows)) ? modalCtx.finance_windows : [];
 
-  // Finance windows are now loaded separately (handleGetSettings returns { settings, finance_windows }).
-  // We keep settings_defaults fields here for non-finance settings only.
-  const fws = (modalCtx && Array.isArray(modalCtx.finance_windows)) ? modalCtx.finance_windows : [];
+    // Determine "today" (YYYY-MM-DD). Prefer existing helper if present.
+    let todayYmd = null;
+    try { todayYmd = (typeof toLocalParts === 'function') ? (toLocalParts(new Date().toISOString(), null)?.ymd || null) : null; } catch {}
+    if (!todayYmd) todayYmd = new Date().toISOString().slice(0, 10);
 
-  // Determine "today" (YYYY-MM-DD). Prefer existing helper if present.
-  let todayYmd = null;
-  try { todayYmd = (typeof toLocalParts === 'function') ? (toLocalParts(new Date().toISOString(), null)?.ymd || null) : null; } catch {}
-  if (!todayYmd) todayYmd = new Date().toISOString().slice(0, 10);
+    const asYmd = (v) => {
+      if (!v) return null;
+      const s = String(v).slice(0, 10);
+      return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+    };
 
-  const asYmd = (v) => {
-    if (!v) return null;
-    const s = String(v).slice(0, 10);
-    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
-  };
+    const sortDesc = (a, b) => (asYmd(b?.date_from) || '').localeCompare(asYmd(a?.date_from) || '');
+    const sortAsc  = (a, b) => (asYmd(a?.date_from) || '').localeCompare(asYmd(b?.date_from) || '');
 
-  const sortDesc = (a, b) => (asYmd(b?.date_from) || '').localeCompare(asYmd(a?.date_from) || '');
-  const sortAsc  = (a, b) => (asYmd(a?.date_from) || '').localeCompare(asYmd(b?.date_from) || '');
+    const current = (fws || [])
+      .filter(w => {
+        const df = asYmd(w?.date_from);
+        const dt = asYmd(w?.date_to);
+        return df && df <= todayYmd && (!dt || dt >= todayYmd);
+      })
+      .sort(sortDesc)[0] || null;
 
-  const current = (fws || [])
-    .filter(w => {
-      const df = asYmd(w?.date_from);
-      const dt = asYmd(w?.date_to);
-      return df && df <= todayYmd && (!dt || dt >= todayYmd);
-    })
-    .sort(sortDesc)[0] || null;
+    const futureList = (fws || [])
+      .filter(w => {
+        const df = asYmd(w?.date_from);
+        return df && df > todayYmd;
+      })
+      .sort(sortAsc);
 
-  const futureList = (fws || [])
-    .filter(w => {
-      const df = asYmd(w?.date_from);
-      return df && df > todayYmd;
-    })
-    .sort(sortAsc);
+    const future = futureList[0] || null;
+    const futureExtraCount = Math.max(0, futureList.length - 1);
 
-  const future = futureList[0] || null;
-  const futureExtraCount = Math.max(0, futureList.length - 1);
+    const uk = (iso) => {
+      try { return iso ? formatIsoToUk(String(iso).slice(0, 10)) : ''; } catch { return iso ? String(iso).slice(0, 10) : ''; }
+    };
 
-  const uk = (iso) => {
-    try { return iso ? formatIsoToUk(String(iso).slice(0, 10)) : ''; } catch { return iso ? String(iso).slice(0, 10) : ''; }
-  };
+    const fmt2 = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(2) : '';
+    };
 
-  const fmt2 = (v) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n.toFixed(2) : '';
-  };
+    const cur = {
+      id: current?.id || null,
+      date_from: uk(current?.date_from || ''),
+      date_to: uk(current?.date_to || ''),
+      vat: (current?.vat_rate_pct ?? ''),
+      hol: (current?.holiday_pay_pct ?? ''),
+      erni: (current?.erni_pct ?? ''),
 
-  const cur = {
-    id: current?.id || null,
-    date_from: uk(current?.date_from || ''),
-    date_to: uk(current?.date_to || ''),
-    vat: (current?.vat_rate_pct ?? ''),
-    hol: (current?.holiday_pay_pct ?? ''),
-    erni: (current?.erni_pct ?? ''),
+      // ✅ NEW (date-linked per finance window)
+      mpay: (current?.mileage_pay_defaults ?? ''),
+      mchg: (current?.mileage_charge_defaults ?? '')
+    };
 
-    // ✅ NEW (date-linked per finance window)
-    mpay: (current?.mileage_pay_defaults ?? ''),
-    mchg: (current?.mileage_charge_defaults ?? '')
-  };
+    const fut = {
+      id: future?.id || null,
+      date_from: uk(future?.date_from || ''),
+      date_to: uk(future?.date_to || ''),
+      vat: (future?.vat_rate_pct ?? ''),
+      hol: (future?.holiday_pay_pct ?? ''),
+      erni: (future?.erni_pct ?? ''),
 
-  const fut = {
-    id: future?.id || null,
-    date_from: uk(future?.date_from || ''),
-    date_to: uk(future?.date_to || ''),
-    vat: (future?.vat_rate_pct ?? ''),
-    hol: (future?.holiday_pay_pct ?? ''),
-    erni: (future?.erni_pct ?? ''),
+      // ✅ NEW (date-linked per finance window)
+      mpay: (future?.mileage_pay_defaults ?? ''),
+      mchg: (future?.mileage_charge_defaults ?? '')
+    };
 
-    // ✅ NEW (date-linked per finance window)
-    mpay: (future?.mileage_pay_defaults ?? ''),
-    mchg: (future?.mileage_charge_defaults ?? '')
-  };
+    // Draft "Add new" values live on modalCtx so they survive re-renders
+    const draft = (modalCtx && modalCtx.finance_new_draft && typeof modalCtx.finance_new_draft === 'object')
+      ? modalCtx.finance_new_draft
+      : (modalCtx.finance_new_draft = { date_from: '', date_to: '', vat: '', hol: '', erni: '', mpay: '', mchg: '' });
 
-  // Draft "Add new" values live on modalCtx so they survive re-renders
-  const draft = (modalCtx && modalCtx.finance_new_draft && typeof modalCtx.finance_new_draft === 'object')
-    ? modalCtx.finance_new_draft
-    : (modalCtx.finance_new_draft = { date_from: '', date_to: '', vat: '', hol: '', erni: '', mpay: '', mchg: '' });
-
-  const financeCard = `
-    <div class="row" style="grid-column:1/-1">
-      <div id="settingsFinanceWindows" style="padding:12px;border:1px solid rgba(255,255,255,0.12);border-radius:12px;background:rgba(255,255,255,0.04)">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px">
-          <div>
-            <div style="font-weight:700;font-size:14px">Finance windows</div>
-            <div style="font-size:12px;color:rgba(255,255,255,0.7)">
-              VAT / Holiday pay / ERNI / Mileage defaults are controlled by date windows. Windows cannot overlap.
-              ${futureExtraCount ? `<span style="margin-left:6px;color:rgba(255,200,120,0.95)">(+${futureExtraCount} more future window${futureExtraCount>1?'s':''} not shown)</span>` : ``}
+    const financeCard = `
+      <div class="row" style="grid-column:1/-1">
+        <div id="settingsFinanceWindows" style="padding:12px;border:1px solid rgba(255,255,255,0.12);border-radius:12px;background:rgba(255,255,255,0.04)">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px">
+            <div>
+              <div style="font-weight:700;font-size:14px">Finance windows</div>
+              <div style="font-size:12px;color:rgba(255,255,255,0.7)">
+                VAT / Holiday pay / ERNI / Mileage defaults are controlled by date windows. Windows cannot overlap.
+                ${futureExtraCount ? `<span style="margin-left:6px;color:rgba(255,200,120,0.95)">(+${futureExtraCount} more future window${futureExtraCount>1?'s':''} not shown)</span>` : ``}
+              </div>
+            </div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.6);text-align:right">
+              Today: <strong>${todayYmd}</strong><br/>
+              UK dates (DD/MM/YYYY)
             </div>
           </div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.6);text-align:right">
-            Today: <strong>${todayYmd}</strong><br/>
-            UK dates (DD/MM/YYYY)
+
+          <div style="display:grid;grid-template-columns: 140px 150px 150px 95px 110px 95px 140px 140px;gap:8px;align-items:end">
+            <div style="font-size:12px;color:rgba(255,255,255,0.7)">Type</div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.7)">Start</div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.7)">End</div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.7)">VAT %</div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.7)">Holiday %</div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.7)">ERNI %</div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.7)">Mileage Pay</div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.7)">Mileage Charge</div>
+
+            <!-- CURRENT -->
+            <div style="font-weight:600">Current</div>
+            <input id="fw_cur_from" class="js-ukdp" type="text" value="${cur.date_from}" placeholder="DD/MM/YYYY" disabled
+                   style="opacity:0.7" />
+            <input id="fw_cur_to" class="js-ukdp" type="text" value="${cur.date_to}" placeholder="(open)"
+                   data-row="current" />
+            <input id="fw_cur_vat" type="number" step="0.01" value="${cur.vat}" placeholder="e.g. 20" data-row="current" />
+            <input id="fw_cur_hol" type="number" step="0.01" value="${cur.hol}" placeholder="e.g. 12.07" data-row="current" />
+            <input id="fw_cur_erni" type="number" step="0.01" value="${cur.erni}" placeholder="e.g. 15" data-row="current" />
+
+            <input
+              id="fw_cur_mpay"
+              type="number"
+              inputmode="decimal"
+              step="0.01"
+              min="0.01"
+              placeholder="0.00"
+              value="${fmt2(cur.mpay)}"
+              data-row="current"
+              data-norm="pence2dp_nonzero"
+              onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
+            />
+            <input
+              id="fw_cur_mcharge"
+              type="number"
+              inputmode="decimal"
+              step="0.01"
+              min="0.01"
+              placeholder="0.00"
+              value="${fmt2(cur.mchg)}"
+              data-row="current"
+              data-norm="pence2dp_nonzero"
+              onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
+            />
+
+            <!-- FUTURE (next upcoming only) -->
+            <div style="font-weight:600">Future</div>
+            <input id="fw_fut_from" class="js-ukdp" type="text" value="${fut.date_from}" placeholder="DD/MM/YYYY"
+                   data-row="future" ${fut.id ? '' : 'disabled style="opacity:0.6"'} />
+            <input id="fw_fut_to" class="js-ukdp" type="text" value="${fut.date_to}" placeholder="(open)"
+                   data-row="future" ${fut.id ? '' : 'disabled style="opacity:0.6"'} />
+            <input id="fw_fut_vat" type="number" step="0.01" value="${fut.vat}" placeholder="e.g. 20"
+                   data-row="future" ${fut.id ? '' : 'disabled style="opacity:0.6"'} />
+            <input id="fw_fut_hol" type="number" step="0.01" value="${fut.hol}" placeholder="e.g. 12.07"
+                   data-row="future" ${fut.id ? '' : 'disabled style="opacity:0.6"'} />
+            <input id="fw_fut_erni" type="number" step="0.01" value="${fut.erni}" placeholder="e.g. 15"
+                   data-row="future" ${fut.id ? '' : 'disabled style="opacity:0.6"'} />
+
+            <input
+              id="fw_fut_mpay"
+              type="number"
+              inputmode="decimal"
+              step="0.01"
+              min="0.01"
+              placeholder="0.00"
+              value="${fmt2(fut.mpay)}"
+              data-row="future"
+              ${fut.id ? '' : 'disabled style="opacity:0.6"'}
+              data-norm="pence2dp_nonzero"
+              onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
+            />
+            <input
+              id="fw_fut_mcharge"
+              type="number"
+              inputmode="decimal"
+              step="0.01"
+              min="0.01"
+              placeholder="0.00"
+              value="${fmt2(fut.mchg)}"
+              data-row="future"
+              ${fut.id ? '' : 'disabled style="opacity:0.6"'}
+              data-norm="pence2dp_nonzero"
+              onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
+            />
+
+            <!-- ADD NEW (draft) -->
+            <div style="font-weight:600">Add new</div>
+            <input id="fw_new_from" class="js-ukdp" type="text" value="${draft.date_from || ''}" placeholder="DD/MM/YYYY"
+                   data-row="new" />
+            <input id="fw_new_to" class="js-ukdp" type="text" value="${draft.date_to || ''}" placeholder="(open)"
+                   data-row="new" />
+            <input id="fw_new_vat" type="number" step="0.01" value="${draft.vat ?? ''}" placeholder="e.g. 20" data-row="new" />
+            <input id="fw_new_hol" type="number" step="0.01" value="${draft.hol ?? ''}" placeholder="e.g. 12.07" data-row="new" />
+            <input id="fw_new_erni" type="number" step="0.01" value="${draft.erni ?? ''}" placeholder="e.g. 15" data-row="new" />
+
+            <input
+              id="fw_new_mpay"
+              type="number"
+              inputmode="decimal"
+              step="0.01"
+              min="0.01"
+              placeholder="0.00"
+              value="${fmt2(draft.mpay ?? '')}"
+              data-row="new"
+              data-norm="pence2dp_nonzero"
+              onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
+            />
+            <input
+              id="fw_new_mcharge"
+              type="number"
+              inputmode="decimal"
+              step="0.01"
+              min="0.01"
+              placeholder="0.00"
+              value="${fmt2(draft.mchg ?? '')}"
+              data-row="new"
+              data-norm="pence2dp_nonzero"
+              onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
+            />
+          </div>
+
+          <div id="fw_hint" style="margin-top:10px;font-size:12px;color:rgba(255,255,255,0.65)">
+            Tip: selecting a new Start date will automatically adjust the Current End date to avoid overlaps.
+          </div>
+
+          <!-- hidden ids for save logic (handled in handleSaveSettings later) -->
+          <input type="hidden" id="fw_cur_id" value="${cur.id || ''}" />
+          <input type="hidden" id="fw_fut_id" value="${fut.id || ''}" />
+        </div>
+      </div>
+    `;
+
+    return html(`
+      <div class="form" id="settingsForm">
+        ${input('timezone_id','Timezone', s.timezone_id || 'Europe/London')}
+
+        ${input('day_start','Day shift starts',  s.day_start  || '06:00')}
+        ${input('day_end','Day shift ends',      s.day_end    || '20:00')}
+        ${input('night_start','Night shift starts', s.night_start || '20:00')}
+        ${input('night_end','Night shift ends',     s.night_end   || '06:00')}
+
+        ${input('sat_start','Saturday starts',  s.sat_start || '00:00')}
+        ${input('sat_end','Saturday ends',      s.sat_end   || '00:00')}
+        ${input('sun_start','Sunday starts',    s.sun_start || '00:00')}
+        ${input('sun_end','Sunday ends',        s.sun_end   || '00:00')}
+
+        ${select('bh_source','Bank Holidays source', s.bh_source || 'MANUAL', ['MANUAL','FEED'])}
+        <div class="row" style="grid-column:1/-1">
+          <label>Bank Holidays list (JSON dates)</label>
+          <textarea name="bh_list">${JSON.stringify(s.bh_list || [], null, 2)}</textarea>
+        </div>
+        ${input('bh_feed_url','BH feed URL', s.bh_feed_url || '')}
+
+        ${financeCard}
+      </div>
+    `);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Tab: Remittances (new)
+  //  - Weekly/Daily dropdown (UI-only)
+  //  - Checkbox groups (UI-only; NOT collected by collectForm)
+  //  - Header/Footer message (persisted; collected by collectForm)
+  //  - No JSON shown
+  // ─────────────────────────────────────────────────────────────
+  if (key === 'remittances') {
+    const deep = (o)=> JSON.parse(JSON.stringify(o || {}));
+    const isObj = (v) => !!(v && typeof v === 'object' && !Array.isArray(v));
+
+    const defaultCfg = {
+      weekly: {
+        include_item_types: {
+          SEGMENT_DELTA: true,
+          EXPENSE_DELTA: true,
+          MILEAGE_DELTA: true,
+          ADJUSTMENT_DELTA: true,
+          LOAN_REPAYMENT: true,
+          DEBT_CREATED: true
+        },
+        include_fields: {
+          client: true,
+          week_ending_date: true,
+          work_date: false,
+          job_title: true,
+          band: true,
+          reference_number: true,
+          worked_times: true
+        }
+      },
+      daily: {
+        include_item_types: {
+          SEGMENT_DELTA: true,
+          EXPENSE_DELTA: true,
+          MILEAGE_DELTA: true,
+          ADJUSTMENT_DELTA: true,
+          LOAN_REPAYMENT: true,
+          DEBT_CREATED: true
+        },
+        include_fields: {
+          client: true,
+          week_ending_date: true,
+          work_date: true,
+          job_title: true,
+          band: true,
+          reference_number: true,
+          worked_times: true
+        }
+      },
+      defaults: {
+        unknown_item_type: true,
+        missing_scope: 'WEEKLY'
+      }
+    };
+
+    const cfgIn = isObj(s.remittance_includes_json) ? s.remittance_includes_json : null;
+
+    const cfg = (() => {
+      const out = deep(defaultCfg);
+      if (!cfgIn) return out;
+
+      try {
+        if (isObj(cfgIn.weekly)) {
+          if (isObj(cfgIn.weekly.include_item_types)) out.weekly.include_item_types = { ...out.weekly.include_item_types, ...cfgIn.weekly.include_item_types };
+          if (isObj(cfgIn.weekly.include_fields)) out.weekly.include_fields = { ...out.weekly.include_fields, ...cfgIn.weekly.include_fields };
+        }
+        if (isObj(cfgIn.daily)) {
+          if (isObj(cfgIn.daily.include_item_types)) out.daily.include_item_types = { ...out.daily.include_item_types, ...cfgIn.daily.include_item_types };
+          if (isObj(cfgIn.daily.include_fields)) out.daily.include_fields = { ...out.daily.include_fields, ...cfgIn.daily.include_fields };
+        }
+        if (isObj(cfgIn.defaults)) out.defaults = { ...out.defaults, ...cfgIn.defaults };
+      } catch {}
+      return out;
+    })();
+
+    // Seed a stable draft store for the remittances tab so values survive tab switches/re-renders.
+    try {
+      if (modalCtx && typeof modalCtx === 'object') {
+        if (!modalCtx.remittanceDraft || typeof modalCtx.remittanceDraft !== 'object') {
+          modalCtx.remittanceDraft = {
+            ui_scope: 'WEEKLY',
+            remittance_includes_json: deep(cfg),
+            remittance_header_message: (s.remittance_header_message == null ? '' : String(s.remittance_header_message)),
+            remittance_footer_message: (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message)),
+            dirty: false
+          };
+        } else {
+          // If draft exists but has never been initialised with current server values, do it once.
+          if (!('remittance_includes_json' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_includes_json = deep(cfg);
+          if (!('remittance_header_message' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_header_message = (s.remittance_header_message == null ? '' : String(s.remittance_header_message));
+          if (!('remittance_footer_message' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_footer_message = (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message));
+          if (!('ui_scope' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.ui_scope = 'WEEKLY';
+          if (!('dirty' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.dirty = false;
+        }
+      }
+    } catch {}
+
+    const draft = (modalCtx && modalCtx.remittanceDraft && typeof modalCtx.remittanceDraft === 'object') ? modalCtx.remittanceDraft : {
+      ui_scope: 'WEEKLY',
+      remittance_includes_json: deep(cfg),
+      remittance_header_message: (s.remittance_header_message == null ? '' : String(s.remittance_header_message)),
+      remittance_footer_message: (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message)),
+      dirty: false
+    };
+
+    const scopeUi = String(draft.ui_scope || 'WEEKLY').trim().toUpperCase();
+    const scopeSelWeekly = (scopeUi === 'WEEKLY') ? 'selected' : '';
+    const scopeSelDaily  = (scopeUi === 'DAILY') ? 'selected' : '';
+
+    const itemTypes = [
+      { key: 'SEGMENT_DELTA',    label: 'Hours / rate adjustments' },
+      { key: 'EXPENSE_DELTA',    label: 'Expenses' },
+      { key: 'MILEAGE_DELTA',    label: 'Mileage' },
+      { key: 'ADJUSTMENT_DELTA', label: 'Adjustments' },
+      { key: 'LOAN_REPAYMENT',   label: 'Loan repayments' },
+      { key: 'DEBT_CREATED',     label: 'Overpayment correction' }
+    ];
+
+    const fields = [
+      { key: 'client',           label: 'Client' },
+      { key: 'week_ending_date', label: 'Week ending date' },
+      { key: 'work_date',        label: 'Work date (daily only where applicable)' },
+      { key: 'job_title',        label: 'Job title / role' },
+      { key: 'band',             label: 'Band' },
+      { key: 'reference_number', label: 'Reference number' },
+      { key: 'worked_times',     label: 'Worked times (start/end/break/minutes)' }
+    ];
+
+    const boolish = (v, dflt) => {
+      if (typeof v === 'boolean') return v;
+      if (v === 1 || v === '1') return true;
+      if (v === 0 || v === '0') return false;
+      if (v == null) return !!dflt;
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+      return !!dflt;
+    };
+
+    const getCfg = (scope, group, k, dflt) => {
+      try {
+        const S = (scope === 'DAILY') ? 'daily' : 'weekly';
+        const o = draft?.remittance_includes_json || cfg;
+        const v = o?.[S]?.[group]?.[k];
+        return boolish(v, dflt);
+      } catch {
+        return !!dflt;
+      }
+    };
+
+    const mkCheck = (id, text, checked) => `
+      <label class="inline chk-tight" style="display:flex;align-items:center;gap:8px;margin:6px 0;cursor:pointer;">
+        <input type="checkbox" id="${id}" data-noCollect="true" ${checked ? 'checked' : ''} />
+        <span>${escapeHtml(text)}</span>
+      </label>
+    `;
+
+    const mkGroup = (scope, title, list, kind) => {
+      const bits = list.map((x) => {
+        const id = `rem_${scope.toLowerCase()}_${kind}_${x.key}`;
+        const checked = (kind === 'item')
+          ? getCfg(scope, 'include_item_types', x.key, true)
+          : getCfg(scope, 'include_fields', x.key, true);
+        return mkCheck(id, x.label, checked);
+      }).join('');
+
+      return `
+        <div style="padding:12px;border:1px solid rgba(255,255,255,0.12);border-radius:12px;background:rgba(255,255,255,0.04);margin-top:10px">
+          <div style="font-weight:700;font-size:14px;margin-bottom:6px">${escapeHtml(title)}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.7);margin-bottom:6px">
+            Applies to <strong>${escapeHtml(scope)}</strong> timesheets.
+          </div>
+          ${bits}
+        </div>
+      `;
+    };
+
+    // Wire UI behaviours + draft syncing (safe, idempotent per openToken).
+    try {
+      const token = String(modalCtx?.openToken || '');
+      const wireKey = `remit:${token}`;
+      if (modalCtx && modalCtx.__remittanceWiredKey !== wireKey) {
+        modalCtx.__remittanceWiredKey = wireKey;
+
+        setTimeout(() => {
+          try {
+            const sel = document.getElementById('remScopeSelect');
+            const wEl = document.getElementById('remScopeWeekly');
+            const dEl = document.getElementById('remScopeDaily');
+
+            const applyScope = (sc) => {
+              const up = String(sc || '').trim().toUpperCase();
+              if (modalCtx && modalCtx.remittanceDraft) modalCtx.remittanceDraft.ui_scope = (up === 'DAILY') ? 'DAILY' : 'WEEKLY';
+              if (wEl) wEl.style.display = (up === 'DAILY') ? 'none' : '';
+              if (dEl) dEl.style.display = (up === 'DAILY') ? '' : 'none';
+            };
+
+            const syncDraftFromDom = () => {
+              try {
+                const hdr = document.getElementById('remittance_header_message');
+                const ftr = document.getElementById('remittance_footer_message');
+
+                if (modalCtx && modalCtx.remittanceDraft) {
+                  if (hdr) modalCtx.remittanceDraft.remittance_header_message = String(hdr.value ?? '');
+                  if (ftr) modalCtx.remittanceDraft.remittance_footer_message = String(ftr.value ?? '');
+                }
+
+                let inc = null;
+                try {
+                  if (typeof buildRemittanceIncludesJsonFromUi === 'function') {
+                    inc = buildRemittanceIncludesJsonFromUi();
+                  }
+                } catch {}
+
+                if (!inc) {
+                  const out = deep(defaultCfg);
+                  const scopes = ['weekly', 'daily'];
+
+                  const readCk = (id, defVal) => {
+                    const el = document.getElementById(id);
+                    if (!el) return !!defVal;
+                    return !!el.checked;
+                  };
+
+                  scopes.forEach((sc) => {
+                    const S = sc.toUpperCase();
+                    itemTypes.forEach((it) => {
+                      const id = `rem_${sc}_item_${it.key}`;
+                      out[sc].include_item_types[it.key] = readCk(id, true);
+                    });
+                    fields.forEach((fd) => {
+                      const id = `rem_${sc}_field_${fd.key}`;
+                      out[sc].include_fields[fd.key] = readCk(id, true);
+                    });
+                  });
+
+                  inc = out;
+                }
+
+                if (modalCtx && modalCtx.remittanceDraft) {
+                  modalCtx.remittanceDraft.remittance_includes_json = inc;
+                  modalCtx.remittanceDraft.dirty = true;
+
+                  // Mirror onto modalCtx.data so Save from any tab can pick it up.
+                  if (modalCtx.data && typeof modalCtx.data === 'object') {
+                    modalCtx.data.remittance_includes_json = inc;
+                    modalCtx.data.remittance_header_message = modalCtx.remittanceDraft.remittance_header_message;
+                    modalCtx.data.remittance_footer_message = modalCtx.remittanceDraft.remittance_footer_message;
+                  }
+                }
+              } catch {}
+            };
+
+            if (sel) {
+              sel.addEventListener('change', () => {
+                applyScope(sel.value);
+              });
+              applyScope(sel.value || scopeUi);
+            } else {
+              applyScope(scopeUi);
+            }
+
+            // Prefill checkboxes using helper (if provided later), otherwise HTML checked attrs already handle it.
+            try {
+              if (typeof applyRemittanceIncludesJsonToUi === 'function') {
+                const baseJson = (modalCtx && modalCtx.remittanceDraft && modalCtx.remittanceDraft.remittance_includes_json)
+                  ? modalCtx.remittanceDraft.remittance_includes_json
+                  : deep(cfg);
+                applyRemittanceIncludesJsonToUi(baseJson);
+              }
+            } catch {}
+
+            const root = document.getElementById('settingsRemittancesRoot');
+            if (root) {
+              root.addEventListener('change', (e) => {
+                const t = e && e.target;
+                if (!t) return;
+                if (t && t.id && String(t.id).startsWith('rem_')) syncDraftFromDom();
+              }, true);
+
+              root.addEventListener('input', (e) => {
+                const t = e && e.target;
+                if (!t) return;
+                const id = String(t.id || '');
+                if (id === 'remittance_header_message' || id === 'remittance_footer_message') {
+                  syncDraftFromDom();
+                }
+              }, true);
+            }
+          } catch {}
+        }, 0);
+      }
+    } catch {}
+
+    const wkWrapStyle = (scopeUi === 'DAILY') ? 'display:none;' : '';
+    const dyWrapStyle = (scopeUi === 'DAILY') ? '' : 'display:none;';
+
+    return html(`
+      <div class="form" id="settingsForm">
+        <div class="row" style="grid-column:1/-1">
+          <div id="settingsRemittancesRoot" style="padding:12px;border:1px solid rgba(255,255,255,0.12);border-radius:12px;background:rgba(255,255,255,0.04)">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px">
+              <div>
+                <div style="font-weight:700;font-size:14px">Remittances</div>
+                <div style="font-size:12px;color:rgba(255,255,255,0.7)">
+                  Configure what appears in remittance advice. No JSON is shown — use the tick boxes below.
+                </div>
+              </div>
+              <div style="display:flex;gap:10px;align-items:center">
+                <div style="font-size:12px;color:rgba(255,255,255,0.7)">Edit:</div>
+                <select id="remScopeSelect" data-noCollect="true" style="min-width:130px">
+                  <option value="WEEKLY" ${scopeSelWeekly}>Weekly</option>
+                  <option value="DAILY" ${scopeSelDaily}>Daily</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1">
+              <label>Header message</label>
+              <div class="controls">
+                <textarea id="remittance_header_message" name="remittance_header_message" placeholder="e.g. Please see below remittance advice:">${escapeHtml(draft.remittance_header_message || '')}</textarea>
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1">
+              <label>Footer message</label>
+              <div class="controls">
+                <textarea id="remittance_footer_message" name="remittance_footer_message" placeholder="e.g. Many thanks, Arthur Rai Medical Services">${escapeHtml(draft.remittance_footer_message || '')}</textarea>
+              </div>
+            </div>
+
+            <div id="remScopeWeekly" style="${wkWrapStyle}">
+              ${mkGroup('WEEKLY', 'Include item types', itemTypes, 'item')}
+              ${mkGroup('WEEKLY', 'Include details', fields, 'field')}
+            </div>
+
+            <div id="remScopeDaily" style="${dyWrapStyle}">
+              ${mkGroup('DAILY', 'Include item types', itemTypes, 'item')}
+              ${mkGroup('DAILY', 'Include details', fields, 'field')}
+            </div>
+
+            <div style="margin-top:10px;font-size:12px;color:rgba(255,255,255,0.65)">
+              Notes:
+              <ul style="margin:6px 0 0 18px;padding:0">
+                <li>Job title / band will be included only when present and enabled.</li>
+                <li>Daily timesheets do not rely on contracts; values are sourced from the best available timesheet context.</li>
+              </ul>
+            </div>
           </div>
         </div>
-
-        <div style="display:grid;grid-template-columns: 140px 150px 150px 95px 110px 95px 140px 140px;gap:8px;align-items:end">
-          <div style="font-size:12px;color:rgba(255,255,255,0.7)">Type</div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.7)">Start</div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.7)">End</div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.7)">VAT %</div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.7)">Holiday %</div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.7)">ERNI %</div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.7)">Mileage Pay</div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.7)">Mileage Charge</div>
-
-          <!-- CURRENT -->
-          <div style="font-weight:600">Current</div>
-          <input id="fw_cur_from" class="js-ukdp" type="text" value="${cur.date_from}" placeholder="DD/MM/YYYY" disabled
-                 style="opacity:0.7" />
-          <input id="fw_cur_to" class="js-ukdp" type="text" value="${cur.date_to}" placeholder="(open)"
-                 data-row="current" />
-          <input id="fw_cur_vat" type="number" step="0.01" value="${cur.vat}" placeholder="e.g. 20" data-row="current" />
-          <input id="fw_cur_hol" type="number" step="0.01" value="${cur.hol}" placeholder="e.g. 12.07" data-row="current" />
-          <input id="fw_cur_erni" type="number" step="0.01" value="${cur.erni}" placeholder="e.g. 15" data-row="current" />
-
-          <input
-            id="fw_cur_mpay"
-            type="number"
-            inputmode="decimal"
-            step="0.01"
-            min="0.01"
-            placeholder="0.00"
-            value="${fmt2(cur.mpay)}"
-            data-row="current"
-            data-norm="pence2dp_nonzero"
-            onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
-          />
-          <input
-            id="fw_cur_mcharge"
-            type="number"
-            inputmode="decimal"
-            step="0.01"
-            min="0.01"
-            placeholder="0.00"
-            value="${fmt2(cur.mchg)}"
-            data-row="current"
-            data-norm="pence2dp_nonzero"
-            onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
-          />
-
-          <!-- FUTURE (next upcoming only) -->
-          <div style="font-weight:600">Future</div>
-          <input id="fw_fut_from" class="js-ukdp" type="text" value="${fut.date_from}" placeholder="DD/MM/YYYY"
-                 data-row="future" ${fut.id ? '' : 'disabled style="opacity:0.6"'} />
-          <input id="fw_fut_to" class="js-ukdp" type="text" value="${fut.date_to}" placeholder="(open)"
-                 data-row="future" ${fut.id ? '' : 'disabled style="opacity:0.6"'} />
-          <input id="fw_fut_vat" type="number" step="0.01" value="${fut.vat}" placeholder="e.g. 20"
-                 data-row="future" ${fut.id ? '' : 'disabled style="opacity:0.6"'} />
-          <input id="fw_fut_hol" type="number" step="0.01" value="${fut.hol}" placeholder="e.g. 12.07"
-                 data-row="future" ${fut.id ? '' : 'disabled style="opacity:0.6"'} />
-          <input id="fw_fut_erni" type="number" step="0.01" value="${fut.erni}" placeholder="e.g. 15"
-                 data-row="future" ${fut.id ? '' : 'disabled style="opacity:0.6"'} />
-
-          <input
-            id="fw_fut_mpay"
-            type="number"
-            inputmode="decimal"
-            step="0.01"
-            min="0.01"
-            placeholder="0.00"
-            value="${fmt2(fut.mpay)}"
-            data-row="future"
-            ${fut.id ? '' : 'disabled style="opacity:0.6"'}
-            data-norm="pence2dp_nonzero"
-            onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
-          />
-          <input
-            id="fw_fut_mcharge"
-            type="number"
-            inputmode="decimal"
-            step="0.01"
-            min="0.01"
-            placeholder="0.00"
-            value="${fmt2(fut.mchg)}"
-            data-row="future"
-            ${fut.id ? '' : 'disabled style="opacity:0.6"'}
-            data-norm="pence2dp_nonzero"
-            onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
-          />
-
-          <!-- ADD NEW (draft) -->
-          <div style="font-weight:600">Add new</div>
-          <input id="fw_new_from" class="js-ukdp" type="text" value="${draft.date_from || ''}" placeholder="DD/MM/YYYY"
-                 data-row="new" />
-          <input id="fw_new_to" class="js-ukdp" type="text" value="${draft.date_to || ''}" placeholder="(open)"
-                 data-row="new" />
-          <input id="fw_new_vat" type="number" step="0.01" value="${draft.vat ?? ''}" placeholder="e.g. 20" data-row="new" />
-          <input id="fw_new_hol" type="number" step="0.01" value="${draft.hol ?? ''}" placeholder="e.g. 12.07" data-row="new" />
-          <input id="fw_new_erni" type="number" step="0.01" value="${draft.erni ?? ''}" placeholder="e.g. 15" data-row="new" />
-
-          <input
-            id="fw_new_mpay"
-            type="number"
-            inputmode="decimal"
-            step="0.01"
-            min="0.01"
-            placeholder="0.00"
-            value="${fmt2(draft.mpay ?? '')}"
-            data-row="new"
-            data-norm="pence2dp_nonzero"
-            onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
-          />
-          <input
-            id="fw_new_mcharge"
-            type="number"
-            inputmode="decimal"
-            step="0.01"
-            min="0.01"
-            placeholder="0.00"
-            value="${fmt2(draft.mchg ?? '')}"
-            data-row="new"
-            data-norm="pence2dp_nonzero"
-            onblur="window.__normPence2dpNonZero && window.__normPence2dpNonZero(this)"
-          />
-        </div>
-
-        <div id="fw_hint" style="margin-top:10px;font-size:12px;color:rgba(255,255,255,0.65)">
-          Tip: selecting a new Start date will automatically adjust the Current End date to avoid overlaps.
-        </div>
-
-        <!-- hidden ids for save logic (handled in handleSaveSettings later) -->
-        <input type="hidden" id="fw_cur_id" value="${cur.id || ''}" />
-        <input type="hidden" id="fw_fut_id" value="${fut.id || ''}" />
       </div>
-    </div>
-  `;
+    `);
+  }
 
-  return html(`
-    <div class="form" id="settingsForm">
-      ${input('timezone_id','Timezone', s.timezone_id || 'Europe/London')}
-
-      ${input('day_start','Day shift starts',  s.day_start  || '06:00')}
-      ${input('day_end','Day shift ends',      s.day_end    || '20:00')}
-      ${input('night_start','Night shift starts', s.night_start || '20:00')}
-      ${input('night_end','Night shift ends',     s.night_end   || '06:00')}
-
-      ${input('sat_start','Saturday starts',  s.sat_start || '00:00')}
-      ${input('sat_end','Saturday ends',      s.sat_end   || '00:00')}
-      ${input('sun_start','Sunday starts',    s.sun_start || '00:00')}
-      ${input('sun_end','Sunday ends',        s.sun_end   || '00:00')}
-
-      ${select('bh_source','Bank Holidays source', s.bh_source || 'MANUAL', ['MANUAL','FEED'])}
-      <div class="row" style="grid-column:1/-1">
-        <label>Bank Holidays list (JSON dates)</label>
-        <textarea name="bh_list">${JSON.stringify(s.bh_list || [], null, 2)}</textarea>
-      </div>
-      ${input('bh_feed_url','BH feed URL', s.bh_feed_url || '')}
-
-      ${financeCard}
-    </div>
-  `);
+  return '';
 }
 
 /**
@@ -65223,6 +65583,120 @@ async function handleSaveSettings() {
 
   // ✅ Never send modal-only id to backend
   try { delete payload.id; } catch {}
+
+  // ─────────────────────────────────────────────
+  // ✅ Remittances (new tab): build JSON from UI (checkboxes) + messages
+  // - No JSON shown to user.
+  // - Wire-in points for:
+  //   buildRemittanceIncludesJsonFromUi()
+  //   applyRemittanceIncludesJsonToUi(json) (used at render time)
+  // - We only include remittance settings when:
+  //   (a) the user changed them (modalCtx.remittanceDraft.dirty), OR
+  //   (b) the remittances UI is currently mounted.
+  // ─────────────────────────────────────────────
+  const remRootMounted = !!byId('settingsRemittancesRoot');
+
+  const getRemDraft = () => {
+    try {
+      const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : (modalCtx || null);
+      const d = mc && mc.remittanceDraft && typeof mc.remittanceDraft === 'object' ? mc.remittanceDraft : null;
+      return d;
+    } catch { return null; }
+  };
+
+  const buildRemittanceIncludesFallback = () => {
+    const isObj = (v) => !!(v && typeof v === 'object' && !Array.isArray(v));
+
+    const def = {
+      weekly: { include_item_types: {}, include_fields: {} },
+      daily:  { include_item_types: {}, include_fields: {} },
+      defaults: { unknown_item_type: true, missing_scope: 'WEEKLY' }
+    };
+
+    const itemTypes = ['SEGMENT_DELTA','EXPENSE_DELTA','MILEAGE_DELTA','ADJUSTMENT_DELTA','LOAN_REPAYMENT','DEBT_CREATED'];
+    const fields = ['client','week_ending_date','work_date','job_title','band','reference_number','worked_times'];
+
+    itemTypes.forEach(k => { def.weekly.include_item_types[k] = true; def.daily.include_item_types[k] = true; });
+    fields.forEach(k => { def.weekly.include_fields[k] = true; def.daily.include_fields[k] = true; });
+
+    // default: daily work_date on; weekly work_date off
+    def.weekly.include_fields.work_date = false;
+    def.daily.include_fields.work_date = true;
+
+    const readCk = (id, dflt) => {
+      const el = byId(id);
+      if (!el) return !!dflt;
+      return !!el.checked;
+    };
+
+    itemTypes.forEach((it) => {
+      def.weekly.include_item_types[it] = readCk(`rem_weekly_item_${it}`, true);
+      def.daily.include_item_types[it]  = readCk(`rem_daily_item_${it}`, true);
+    });
+
+    fields.forEach((f) => {
+      def.weekly.include_fields[f] = readCk(`rem_weekly_field_${f}`, def.weekly.include_fields[f]);
+      def.daily.include_fields[f]  = readCk(`rem_daily_field_${f}`, def.daily.include_fields[f]);
+    });
+
+    // Preserve defaults if present in an existing draft object (if any)
+    const d = getRemDraft();
+    if (d && isObj(d.remittance_includes_json) && isObj(d.remittance_includes_json.defaults)) {
+      def.defaults = { ...def.defaults, ...d.remittance_includes_json.defaults };
+    }
+
+    return def;
+  };
+
+  const buildRemittanceIncludes = () => {
+    try {
+      if (typeof buildRemittanceIncludesJsonFromUi === 'function') {
+        const j = buildRemittanceIncludesJsonFromUi();
+        if (j && typeof j === 'object' && !Array.isArray(j)) return j;
+      }
+    } catch {}
+    return buildRemittanceIncludesFallback();
+  };
+
+  try {
+    const rd = getRemDraft();
+
+    const shouldIncludeRem = !!(remRootMounted || (rd && rd.dirty === true));
+    if (shouldIncludeRem) {
+      // Prefer draft values if present (persists across tab switches)
+      let hdr = null;
+      let ftr = null;
+      if (rd && ('remittance_header_message' in rd)) hdr = rd.remittance_header_message;
+      if (rd && ('remittance_footer_message' in rd)) ftr = rd.remittance_footer_message;
+
+      // If UI mounted, prefer live DOM values (captures last edits)
+      if (remRootMounted) {
+        const hEl = byId('remittance_header_message');
+        const fEl = byId('remittance_footer_message');
+        if (hEl) hdr = String(hEl.value ?? '');
+        if (fEl) ftr = String(fEl.value ?? '');
+      }
+
+      // Include messages (backend will trim/normalise to null if blank)
+      if (hdr !== null && hdr !== undefined) payload.remittance_header_message = hdr;
+      if (ftr !== null && ftr !== undefined) payload.remittance_footer_message = ftr;
+
+      // Includes JSON
+      let inc = null;
+      if (rd && rd.remittance_includes_json && typeof rd.remittance_includes_json === 'object') {
+        inc = rd.remittance_includes_json;
+      }
+      if (remRootMounted) {
+        inc = buildRemittanceIncludes();
+      }
+      if (!inc) inc = buildRemittanceIncludes();
+
+      payload.remittance_includes_json = inc;
+
+      // Mark clean post-save (the refresh below will re-seed)
+      if (rd) rd.dirty = true; // keep true until save succeeds
+    }
+  } catch {}
 
   // ─────────────────────────────────────────────
   // Read finance window inputs (Current / Future / Add new)
@@ -65385,8 +65859,14 @@ async function handleSaveSettings() {
   // Save (minimise calls; enforce safe order)
   // ─────────────────────────────────────────────
   try {
-    // 1) Save non-finance settings_defaults
+    // 1) Save non-finance settings_defaults (including remittances settings if present)
     await saveSettings(payload);
+
+    // If remittance draft existed, mark clean after successful saveSettings call
+    try {
+      const rd = getRemDraft();
+      if (rd) rd.dirty = false;
+    } catch {}
 
     // 2) Finance windows updates (order matters)
     if (curId && patchCurrent) {
@@ -65424,6 +65904,19 @@ async function handleSaveSettings() {
     // ✅ Clear draft "Add new" row after successful save (including mileage)
     modalCtx.finance_new_draft = { date_from:'', date_to:'', vat:'', hol:'', erni:'', mpay:'', mcharge:'' };
 
+    // ✅ Refresh remittance draft baseline after successful save
+    try {
+      const rd = (modalCtx && modalCtx.remittanceDraft && typeof modalCtx.remittanceDraft === 'object') ? modalCtx.remittanceDraft : null;
+      if (rd) {
+        const keepScope = String(rd.ui_scope || 'WEEKLY').toUpperCase();
+        rd.ui_scope = (keepScope === 'DAILY') ? 'DAILY' : 'WEEKLY';
+        rd.remittance_includes_json = (modalCtx.data && modalCtx.data.remittance_includes_json) ? modalCtx.data.remittance_includes_json : (rd.remittance_includes_json || null);
+        rd.remittance_header_message = (modalCtx.data && modalCtx.data.remittance_header_message != null) ? String(modalCtx.data.remittance_header_message) : (rd.remittance_header_message || '');
+        rd.remittance_footer_message = (modalCtx.data && modalCtx.data.remittance_footer_message != null) ? String(modalCtx.data.remittance_footer_message) : (rd.remittance_footer_message || '');
+        rd.dirty = false;
+      }
+    } catch {}
+
     return { ok:true, saved: modalCtx.data };
   } catch {
     // Fallback: keep current modalCtx.data and return merged payload (non-finance only)
@@ -65438,6 +65931,170 @@ async function handleSaveSettings() {
     return { ok:true, saved };
   }
 }
+
+function buildRemittanceIncludesJsonFromUi() {
+  const byId = (id) => document.getElementById(id);
+
+  const itemTypes = [
+    'SEGMENT_DELTA',
+    'EXPENSE_DELTA',
+    'MILEAGE_DELTA',
+    'ADJUSTMENT_DELTA',
+    'LOAN_REPAYMENT',
+    'DEBT_CREATED'
+  ];
+
+  const fields = [
+    'client',
+    'week_ending_date',
+    'work_date',
+    'job_title',
+    'band',
+    'reference_number',
+    'worked_times'
+  ];
+
+  const readCk = (id, dflt) => {
+    const el = byId(id);
+    if (!el) return !!dflt;
+    return !!el.checked;
+  };
+
+  // Preserve defaults if present (so we don't stomp future keys)
+  const existingDefaults = (() => {
+    try {
+      const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : (typeof modalCtx !== 'undefined' ? modalCtx : null);
+      const d1 = mc?.remittanceDraft?.remittance_includes_json?.defaults;
+      const d2 = mc?.data?.remittance_includes_json?.defaults;
+      const d = (d1 && typeof d1 === 'object' && !Array.isArray(d1)) ? d1
+            : (d2 && typeof d2 === 'object' && !Array.isArray(d2)) ? d2
+            : null;
+      return d ? JSON.parse(JSON.stringify(d)) : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  const out = {
+    weekly: { include_item_types: {}, include_fields: {} },
+    daily:  { include_item_types: {}, include_fields: {} },
+    defaults: existingDefaults || { unknown_item_type: true, missing_scope: 'WEEKLY' }
+  };
+
+  // Weekly
+  itemTypes.forEach((k) => {
+    out.weekly.include_item_types[k] = readCk(`rem_weekly_item_${k}`, true);
+  });
+  fields.forEach((k) => {
+    // Default weekly.work_date false unless explicitly ticked
+    const defVal = (k === 'work_date') ? false : true;
+    out.weekly.include_fields[k] = readCk(`rem_weekly_field_${k}`, defVal);
+  });
+
+  // Daily
+  itemTypes.forEach((k) => {
+    out.daily.include_item_types[k] = readCk(`rem_daily_item_${k}`, true);
+  });
+  fields.forEach((k) => {
+    // Default daily.work_date true unless explicitly unticked
+    const defVal = (k === 'work_date') ? true : true;
+    out.daily.include_fields[k] = readCk(`rem_daily_field_${k}`, defVal);
+  });
+
+  // Normalise defaults a little (safe, deterministic)
+  try {
+    if (out.defaults && typeof out.defaults === 'object' && !Array.isArray(out.defaults)) {
+      if (out.defaults.unknown_item_type === undefined || out.defaults.unknown_item_type === null) out.defaults.unknown_item_type = true;
+      const ms = String(out.defaults.missing_scope || 'WEEKLY').trim().toUpperCase();
+      out.defaults.missing_scope = (ms === 'DAILY') ? 'DAILY' : 'WEEKLY';
+    } else {
+      out.defaults = { unknown_item_type: true, missing_scope: 'WEEKLY' };
+    }
+  } catch {
+    out.defaults = { unknown_item_type: true, missing_scope: 'WEEKLY' };
+  }
+
+  return out;
+}
+
+function applyRemittanceIncludesJsonToUi(json) {
+  const byId = (id) => document.getElementById(id);
+
+  const itemTypes = [
+    'SEGMENT_DELTA',
+    'EXPENSE_DELTA',
+    'MILEAGE_DELTA',
+    'ADJUSTMENT_DELTA',
+    'LOAN_REPAYMENT',
+    'DEBT_CREATED'
+  ];
+
+  const fields = [
+    'client',
+    'week_ending_date',
+    'work_date',
+    'job_title',
+    'band',
+    'reference_number',
+    'worked_times'
+  ];
+
+  const isObj = (v) => !!(v && typeof v === 'object' && !Array.isArray(v));
+
+  const toBoolMaybe = (v) => {
+    if (typeof v === 'boolean') return v;
+    if (v === 1 || v === '1') return true;
+    if (v === 0 || v === '0') return false;
+    if (v == null) return null;
+    const s = String(v).trim().toLowerCase();
+    if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+    if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+    return null;
+  };
+
+  const getVal = (scope, group, key) => {
+    try {
+      if (!isObj(json)) return null;
+      const node = (scope === 'DAILY') ? json.daily : json.weekly;
+      if (!isObj(node)) return null;
+      const grp = node[group];
+      if (!isObj(grp)) return null;
+      return toBoolMaybe(grp[key]);
+    } catch {
+      return null;
+    }
+  };
+
+  const setCkIfExists = (id, v) => {
+    const el = byId(id);
+    if (!el) return;
+    if (v === null) return; // leave as-is (keeps HTML defaults)
+    el.checked = !!v;
+  };
+
+  // Weekly
+  itemTypes.forEach((k) => {
+    const v = getVal('WEEKLY', 'include_item_types', k);
+    setCkIfExists(`rem_weekly_item_${k}`, v);
+  });
+  fields.forEach((k) => {
+    const v = getVal('WEEKLY', 'include_fields', k);
+    setCkIfExists(`rem_weekly_field_${k}`, v);
+  });
+
+  // Daily
+  itemTypes.forEach((k) => {
+    const v = getVal('DAILY', 'include_item_types', k);
+    setCkIfExists(`rem_daily_item_${k}`, v);
+  });
+  fields.forEach((k) => {
+    const v = getVal('DAILY', 'include_fields', k);
+    setCkIfExists(`rem_daily_field_${k}`, v);
+  });
+}
+
+
+
 
 
 // ================== NEW: handleSaveSettings (parent onSave; persist then stay open in View) ==================
