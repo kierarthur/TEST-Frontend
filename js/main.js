@@ -64969,7 +64969,6 @@ function __settingsFinanceSync() {
 
 // ================== NEW: renderSettingsTab (tab renderer; showModal controls read-only) ==================
 
-
 function renderSettingsTab(key, s = {}) {
   // Normalize tab key (back-compat: allow singular)
   const k0 = String(key || '').trim().toLowerCase();
@@ -65209,12 +65208,12 @@ function renderSettingsTab(key, s = {}) {
         ${input('timezone_id','Timezone', s.timezone_id || 'Europe/London')}
 
         ${input('day_start','Day shift starts',  s.day_start  || '06:00')}
-        ${input('day_end','Day shift ends',      s.day_end    || '20:00')}
+        ${input('day_end','Day shift ends',      s.day_end    || '20:00')}}
         ${input('night_start','Night shift starts', s.night_start || '20:00')}
         ${input('night_end','Night shift ends',     s.night_end   || '06:00')}
 
         ${input('sat_start','Saturday starts',  s.sat_start || '00:00')}
-        ${input('sat_end','Saturday ends',      s.sat_end   || '00:00')}
+        ${input('sat_end','Saturday ends',      s.sat_end   || '00:00')}}
         ${input('sun_start','Sunday starts',    s.sun_start || '00:00')}
         ${input('sun_end','Sunday ends',        s.sun_end   || '00:00')}
 
@@ -65384,13 +65383,16 @@ function renderSettingsTab(key, s = {}) {
       }
     };
 
+    // ✅ FIX: checkbox row layout must be *grid*, not flex, and must not use shared "inline" styles
+    // (prevents large spacing + misalignment from inherited label styles in other parts of the app)
     const mkCheck = (id, text, checked) => `
-      <label class="inline" style="display:flex;align-items:center;gap:8px;justify-content:flex-start;margin:0;cursor:pointer;">
-        <input type="checkbox" id="${id}" data-noCollect="true" ${checked ? 'checked' : ''} />
-        <span style="display:inline-block;min-width:0;">${escapeHtml(text)}</span>
+      <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:center;margin:0;cursor:pointer;min-width:0;">
+        <input type="checkbox" id="${id}" data-noCollect="true" ${checked ? 'checked' : ''} style="margin:0;justify-self:start;" />
+        <span style="display:block;min-width:0;line-height:1.25;">${escapeHtml(text)}</span>
       </label>
     `;
 
+    // ✅ FIX: use an auto-fit grid so it becomes 2–3 columns depending on modal width
     const mkGroup = (scope, title, list, kind) => {
       const scopeUpper = String(scope || '').toUpperCase();
       const pillClass = (scopeUpper === 'DAILY') ? 'pill pill-daily' : 'pill pill-weekly';
@@ -65412,7 +65414,7 @@ function renderSettingsTab(key, s = {}) {
           <div style="font-size:12px;color:rgba(255,255,255,0.7);margin-bottom:8px;">
             Applies to <strong>${escapeHtml(scopeUpper)}</strong> timesheets.
           </div>
-          <div class="grid-3" style="gap:10px;">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px 14px;align-items:start;">
             ${bits}
           </div>
         </div>
@@ -65571,9 +65573,9 @@ function renderSettingsTab(key, s = {}) {
             <div class="row" style="grid-column:1/-1;margin-top:2px;">
               <label style="white-space:normal;">Enable PAYE remittances</label>
               <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
-                <label class="inline" style="display:flex;align-items:center;gap:8px;justify-content:flex-start;margin:0;cursor:pointer;">
-                  <input type="checkbox" id="payeRemittancesEnabledCk" data-noCollect="true" ${payeEnabledInit ? 'checked' : ''} />
-                  <span>If disabled, PAYE remittances send is blocked.</span>
+                <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:center;margin:0;cursor:pointer;min-width:0;">
+                  <input type="checkbox" id="payeRemittancesEnabledCk" data-noCollect="true" ${payeEnabledInit ? 'checked' : ''} style="margin:0;justify-self:start;" />
+                  <span style="display:block;min-width:0;line-height:1.25;">If disabled, PAYE remittances send is blocked.</span>
                 </label>
                 <div style="font-size:12px;color:rgba(255,255,255,0.65);">
                   This does not affect Umbrella remittances.
@@ -65621,7 +65623,6 @@ function renderSettingsTab(key, s = {}) {
 
   return '';
 }
-
 /**
  * ✅ Add this once (global) somewhere in your FE file:
  * - If user enters "45" => "0.45"
