@@ -65203,17 +65203,90 @@ function renderSettingsTab(key, s = {}) {
       </div>
     `;
 
+    const boolish = (v, dflt) => {
+      if (typeof v === 'boolean') return v;
+      if (v === 1 || v === '1') return true;
+      if (v === 0 || v === '0') return false;
+      if (v == null) return !!dflt;
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+      return !!dflt;
+    };
+
+    const payrollTestingOn = boolish(s.payroll_testing, false);
+
+    // Neat Banking/Payments card: checkbox is UI-only; hidden field is collected by collectForm
+    // so backend receives "true"/"false" (not "on").
+    const bankingCard = `
+      <div class="row" style="grid-column:1/-1">
+        <div id="settingsBankingRoot" style="padding:12px;border:1px solid rgba(255,255,255,0.12);border-radius:12px;background:rgba(255,255,255,0.04)">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px">
+            <div>
+              <div style="font-weight:700;font-size:14px">Banking</div>
+              <div style="font-size:12px;color:rgba(255,255,255,0.7)">
+                Controls safe testing mode for banking execution.
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;min-width:0;">
+            <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:start;margin:0;cursor:pointer;min-width:0;">
+              <input type="checkbox" id="payrollTestingCk" data-noCollect="true" ${payrollTestingOn ? 'checked' : ''} style="margin-top:2px;justify-self:start;" />
+              <div style="min-width:0;">
+                <div style="line-height:1.2;white-space:normal;overflow-wrap:break-word;">Payroll testing (simulate payments)</div>
+                <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+                  When enabled, banking execution may be simulated and remittance sending is blocked.
+                </div>
+              </div>
+            </label>
+
+            <input type="hidden" id="payroll_testing" name="payroll_testing" value="${payrollTestingOn ? 'true' : 'false'}" />
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Wire checkbox -> hidden value + mirror into modalCtx.data so rerenders stay aligned.
+    try {
+      setTimeout(() => {
+        try {
+          const root = document.getElementById('settingsBankingRoot');
+          if (!root) return;
+
+          if (root.dataset && root.dataset.bankWired === '1') return;
+          if (root.dataset) root.dataset.bankWired = '1';
+
+          const ck = document.getElementById('payrollTestingCk');
+          const hid = document.getElementById('payroll_testing');
+
+          const sync = () => {
+            const on = !!(ck && ck.checked);
+            if (hid) hid.value = on ? 'true' : 'false';
+            try {
+              if (modalCtx && modalCtx.data && typeof modalCtx.data === 'object') {
+                modalCtx.data.payroll_testing = on;
+              }
+            } catch {}
+          };
+
+          if (ck) ck.addEventListener('change', sync, true);
+          sync();
+        } catch {}
+      }, 0);
+    } catch {}
+
     return html(`
       <div class="form" id="settingsForm">
         ${input('timezone_id','Timezone', s.timezone_id || 'Europe/London')}
 
         ${input('day_start','Day shift starts',  s.day_start  || '06:00')}
-        ${input('day_end','Day shift ends',      s.day_end    || '20:00')}}
+        ${input('day_end','Day shift ends',      s.day_end    || '20:00')}
         ${input('night_start','Night shift starts', s.night_start || '20:00')}
         ${input('night_end','Night shift ends',     s.night_end   || '06:00')}
 
         ${input('sat_start','Saturday starts',  s.sat_start || '00:00')}
-        ${input('sat_end','Saturday ends',      s.sat_end   || '00:00')}}
+        ${input('sat_end','Saturday ends',      s.sat_end   || '00:00')}
         ${input('sun_start','Sunday starts',    s.sun_start || '00:00')}
         ${input('sun_end','Sunday ends',        s.sun_end   || '00:00')}
 
@@ -65223,6 +65296,8 @@ function renderSettingsTab(key, s = {}) {
           <textarea name="bh_list">${JSON.stringify(s.bh_list || [], null, 2)}</textarea>
         </div>
         ${input('bh_feed_url','BH feed URL', s.bh_feed_url || '')}
+
+        ${bankingCard}
 
         ${financeCard}
       </div>
