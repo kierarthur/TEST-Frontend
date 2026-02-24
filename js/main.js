@@ -48146,8 +48146,31 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
     }
     return;
   }
-
   // Non-button inputs/selects/textareas
+  const allowReadOnlyUiControl = (() => {
+    try {
+      if (!ro) return false;
+
+      // ✅ Settings → Remittances scope selector must remain usable in VIEW mode
+      // (pure UI selector; not a persisted field)
+      const id = String(el.id || '');
+      if (id !== 'remScopeSelect') return false;
+
+      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+      const ent = String((top && top.entity) || (window.modalCtx && window.modalCtx.entity) || '');
+      return ent === 'settings';
+    } catch {
+      return false;
+    }
+  })();
+
+  if (allowReadOnlyUiControl) {
+    try { el.removeAttribute('disabled'); } catch {}
+    try { el.removeAttribute('readonly'); } catch {}
+    try { el.disabled = false; } catch {}
+    return;
+  }
+
   if (ro) {
     el.setAttribute('disabled','true');
     el.setAttribute('readonly','true');
@@ -48156,7 +48179,6 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
     el.removeAttribute('readonly');
   }
 });
-
   const _allAfter = root.querySelectorAll('input, select, textarea, button');
   const afterDisabled = Array.from(_allAfter).filter(el => el.disabled).length;
   try {
@@ -48324,6 +48346,46 @@ persistCurrentTabState() {
   const initial  = (window.modalCtx.data?.id ?? sentinel);
   const fs = window.modalCtx.formState || { __forId: initial, main:{}, pay:{} };
   if (fs.__forId == null) fs.__forId = initial;
+
+  // ✅ Settings modal: persist current Settings form values across tab switches
+  // Reason: showModal replaces DOM on setTab(), so unsaved edits vanish unless staged.
+  try {
+    if (this.entity === 'settings' && typeof collectForm === 'function') {
+      const hasSettingsForm = !!document.getElementById('settingsForm');
+      if (hasSettingsForm) {
+        const c = collectForm('#settingsForm', true) || {};
+
+        // Stage into formState.main (safe; Settings is a singleton row)
+        fs.main = { ...(fs.main || {}), ...c };
+
+        // Also mirror into modalCtx.data so renderSettingsTab sees latest values immediately
+        try {
+          window.modalCtx.data = { ...(window.modalCtx.data || {}), ...c };
+        } catch {}
+      }
+
+      // If leaving Remittances tab, force-snapshot include JSON (checkboxes are data-noCollect)
+      if (this.currentTabKey === 'remittances') {
+        try {
+          if (typeof buildRemittanceIncludesJsonFromUi === 'function') {
+            const inc = buildRemittanceIncludesJsonFromUi();
+            if (inc && typeof inc === 'object') {
+              window.modalCtx.remittanceDraft = (window.modalCtx.remittanceDraft && typeof window.modalCtx.remittanceDraft === 'object')
+                ? window.modalCtx.remittanceDraft
+                : { ui_scope: 'WEEKLY', remittance_includes_json: null, remittance_header_message: '', remittance_footer_message: '', dirty: false };
+
+              window.modalCtx.remittanceDraft.remittance_includes_json = inc;
+              window.modalCtx.remittanceDraft.dirty = true;
+
+              window.modalCtx.data = window.modalCtx.data || {};
+              window.modalCtx.data.remittance_includes_json = inc;
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+
   // Preserve schedule inputs even when blank ('') so cleared days don't get dropped
   // ✅ DO NOT rely on collectForm() including empty keys; read schedule inputs directly from DOM.
   const keepScheduleBlanks = (obj, rootEl) => {
@@ -48333,7 +48395,6 @@ persistCurrentTabState() {
     days.forEach(d => {
       parts.forEach(p => {
         const k = `${d}_${p}`;
-
         let has = false;
         let v;
 
@@ -64907,6 +64968,8 @@ function __settingsFinanceSync() {
 
 
 // ================== NEW: renderSettingsTab (tab renderer; showModal controls read-only) ==================
+
+
 function renderSettingsTab(key, s = {}) {
   // Normalize tab key (back-compat: allow singular)
   const k0 = String(key || '').trim().toLowerCase();
@@ -65172,6 +65235,7 @@ function renderSettingsTab(key, s = {}) {
   //  - Weekly/Daily dropdown (UI-only)
   //  - Checkbox groups (UI-only; NOT collected by collectForm)
   //  - Header/Footer message (persisted; collected by collectForm)
+  //  - PAYE enable gate checkbox (persisted via hidden field collected by collectForm)
   //  - No JSON shown
   // ─────────────────────────────────────────────────────────────
   if (k === 'remittances') {
@@ -65243,6 +65307,17 @@ function renderSettingsTab(key, s = {}) {
       return out;
     })();
 
+    const boolish = (v, dflt) => {
+      if (typeof v === 'boolean') return v;
+      if (v === 1 || v === '1') return true;
+      if (v === 0 || v === '0') return false;
+      if (v == null) return !!dflt;
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+      return !!dflt;
+    };
+
     // Seed a stable draft store for the remittances tab so values survive tab switches/re-renders.
     try {
       if (modalCtx && typeof modalCtx === 'object') {
@@ -65252,12 +65327,14 @@ function renderSettingsTab(key, s = {}) {
             remittance_includes_json: deep(cfg),
             remittance_header_message: (s.remittance_header_message == null ? '' : String(s.remittance_header_message)),
             remittance_footer_message: (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message)),
+            paye_remittances_enabled: boolish(s.paye_remittances_enabled, false),
             dirty: false
           };
         } else {
           if (!('remittance_includes_json' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_includes_json = deep(cfg);
           if (!('remittance_header_message' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_header_message = (s.remittance_header_message == null ? '' : String(s.remittance_header_message));
           if (!('remittance_footer_message' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_footer_message = (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message));
+          if (!('paye_remittances_enabled' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.paye_remittances_enabled = boolish(s.paye_remittances_enabled, false);
           if (!('ui_scope' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.ui_scope = 'WEEKLY';
           if (!('dirty' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.dirty = false;
         }
@@ -65269,6 +65346,7 @@ function renderSettingsTab(key, s = {}) {
       remittance_includes_json: deep(cfg),
       remittance_header_message: (s.remittance_header_message == null ? '' : String(s.remittance_header_message)),
       remittance_footer_message: (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message)),
+      paye_remittances_enabled: boolish(s.paye_remittances_enabled, false),
       dirty: false
     };
 
@@ -65295,22 +65373,11 @@ function renderSettingsTab(key, s = {}) {
       { key: 'worked_times',     label: 'Worked times (start/end/break/minutes)' }
     ];
 
-    const boolish = (v, dflt) => {
-      if (typeof v === 'boolean') return v;
-      if (v === 1 || v === '1') return true;
-      if (v === 0 || v === '0') return false;
-      if (v == null) return !!dflt;
-      const s = String(v).trim().toLowerCase();
-      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
-      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
-      return !!dflt;
-    };
-
-    const getCfg = (scope, group, k, dflt) => {
+    const getCfg = (scope, group, kk, dflt) => {
       try {
         const S = (scope === 'DAILY') ? 'daily' : 'weekly';
         const o = draft?.remittance_includes_json || cfg;
-        const v = o?.[S]?.[group]?.[k];
+        const v = o?.[S]?.[group]?.[kk];
         return boolish(v, dflt);
       } catch {
         return !!dflt;
@@ -65318,129 +65385,173 @@ function renderSettingsTab(key, s = {}) {
     };
 
     const mkCheck = (id, text, checked) => `
-      <label class="inline chk-tight" style="display:flex;align-items:center;gap:8px;margin:6px 0;cursor:pointer;">
+      <label class="inline" style="display:flex;align-items:center;gap:8px;justify-content:flex-start;margin:0;cursor:pointer;">
         <input type="checkbox" id="${id}" data-noCollect="true" ${checked ? 'checked' : ''} />
-        <span>${escapeHtml(text)}</span>
+        <span style="display:inline-block;min-width:0;">${escapeHtml(text)}</span>
       </label>
     `;
 
     const mkGroup = (scope, title, list, kind) => {
+      const scopeUpper = String(scope || '').toUpperCase();
+      const pillClass = (scopeUpper === 'DAILY') ? 'pill pill-daily' : 'pill pill-weekly';
+
       const bits = list.map((x) => {
-        const id = `rem_${scope.toLowerCase()}_${kind}_${x.key}`;
+        const id = `rem_${scopeUpper.toLowerCase()}_${kind}_${x.key}`;
         const checked = (kind === 'item')
-          ? getCfg(scope, 'include_item_types', x.key, true)
-          : getCfg(scope, 'include_fields', x.key, true);
+          ? getCfg(scopeUpper, 'include_item_types', x.key, true)
+          : getCfg(scopeUpper, 'include_fields', x.key, true);
         return mkCheck(id, x.label, checked);
       }).join('');
 
       return `
-        <div style="padding:12px;border:1px solid rgba(255,255,255,0.12);border-radius:12px;background:rgba(255,255,255,0.04);margin-top:10px">
-          <div style="font-weight:700;font-size:14px;margin-bottom:6px">${escapeHtml(title)}</div>
-          <div style="font-size:12px;color:rgba(255,255,255,0.7);margin-bottom:6px">
-            Applies to <strong>${escapeHtml(scope)}</strong> timesheets.
+        <div class="card" style="margin-top:10px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;">
+            <div style="font-weight:700;font-size:14px;">${escapeHtml(title)}</div>
+            <span class="${pillClass}" style="white-space:nowrap;">${escapeHtml(scopeUpper)}</span>
           </div>
-          ${bits}
+          <div style="font-size:12px;color:rgba(255,255,255,0.7);margin-bottom:8px;">
+            Applies to <strong>${escapeHtml(scopeUpper)}</strong> timesheets.
+          </div>
+          <div class="grid-3" style="gap:10px;">
+            ${bits}
+          </div>
         </div>
       `;
     };
 
-    // Wire UI behaviours + draft syncing (safe, idempotent per openToken).
+    // Wire UI behaviours + draft syncing
     try {
-      const token = String(modalCtx?.openToken || '');
-      const wireKey = `remit:${token}`;
-      if (modalCtx && modalCtx.__remittanceWiredKey !== wireKey) {
-        modalCtx.__remittanceWiredKey = wireKey;
+      setTimeout(() => {
+        try {
+          const root = document.getElementById('settingsRemittancesRoot');
+          if (!root) return;
 
-        setTimeout(() => {
-          try {
-            const sel = document.getElementById('remScopeSelect');
-            const wEl = document.getElementById('remScopeWeekly');
-            const dEl = document.getElementById('remScopeDaily');
+          if (root.dataset && root.dataset.remitWired === '1') return;
+          if (root.dataset) root.dataset.remitWired = '1';
 
-            const applyScope = (sc) => {
-              const up = String(sc || '').trim().toUpperCase();
-              if (modalCtx && modalCtx.remittanceDraft) modalCtx.remittanceDraft.ui_scope = (up === 'DAILY') ? 'DAILY' : 'WEEKLY';
-              if (wEl) wEl.style.display = (up === 'DAILY') ? 'none' : '';
-              if (dEl) dEl.style.display = (up === 'DAILY') ? '' : 'none';
-            };
+          const sel = document.getElementById('remScopeSelect');
+          const wEl = document.getElementById('remScopeWeekly');
+          const dEl = document.getElementById('remScopeDaily');
 
-            if (sel) {
-              sel.addEventListener('change', () => {
-                applyScope(sel.value);
-              });
-              applyScope(sel.value || scopeUi);
-            } else {
-              applyScope(scopeUi);
-            }
+          const applyScope = (sc) => {
+            const up = String(sc || '').trim().toUpperCase();
+            const next = (up === 'DAILY') ? 'DAILY' : 'WEEKLY';
 
             try {
-              if (typeof applyRemittanceIncludesJsonToUi === 'function') {
-                const baseJson = (modalCtx && modalCtx.remittanceDraft && modalCtx.remittanceDraft.remittance_includes_json)
-                  ? modalCtx.remittanceDraft.remittance_includes_json
-                  : deep(cfg);
-                applyRemittanceIncludesJsonToUi(baseJson);
-              }
+              if (modalCtx && modalCtx.remittanceDraft) modalCtx.remittanceDraft.ui_scope = next;
             } catch {}
 
-            const root = document.getElementById('settingsRemittancesRoot');
-            if (root) {
-              const syncDraftFromDom = () => {
-                try {
-                  const hdr = document.getElementById('remittance_header_message');
-                  const ftr = document.getElementById('remittance_footer_message');
+            if (wEl) wEl.style.display = (next === 'DAILY') ? 'none' : '';
+            if (dEl) dEl.style.display = (next === 'DAILY') ? '' : 'none';
+          };
 
-                  if (modalCtx && modalCtx.remittanceDraft) {
-                    if (hdr) modalCtx.remittanceDraft.remittance_header_message = String(hdr.value ?? '');
-                    if (ftr) modalCtx.remittanceDraft.remittance_footer_message = String(ftr.value ?? '');
-                  }
+          const syncDraftFromDom = () => {
+            try {
+              const hdr = document.getElementById('remittance_header_message');
+              const ftr = document.getElementById('remittance_footer_message');
 
-                  let inc = null;
-                  try {
-                    if (typeof buildRemittanceIncludesJsonFromUi === 'function') {
-                      inc = buildRemittanceIncludesJsonFromUi();
-                    }
-                  } catch {}
+              const payeCk = document.getElementById('payeRemittancesEnabledCk');
+              const payeHidden = document.getElementById('paye_remittances_enabled');
 
-                  if (inc && modalCtx && modalCtx.remittanceDraft) {
-                    modalCtx.remittanceDraft.remittance_includes_json = inc;
-                    modalCtx.remittanceDraft.dirty = true;
+              const payeEnabled = !!(payeCk && payeCk.checked);
 
-                    if (modalCtx.data && typeof modalCtx.data === 'object') {
-                      modalCtx.data.remittance_includes_json = inc;
-                      modalCtx.data.remittance_header_message = modalCtx.remittanceDraft.remittance_header_message;
-                      modalCtx.data.remittance_footer_message = modalCtx.remittanceDraft.remittance_footer_message;
-                    }
-                  }
-                } catch {}
-              };
+              if (modalCtx && modalCtx.remittanceDraft) {
+                if (hdr) modalCtx.remittanceDraft.remittance_header_message = String(hdr.value ?? '');
+                if (ftr) modalCtx.remittanceDraft.remittance_footer_message = String(ftr.value ?? '');
+                modalCtx.remittanceDraft.paye_remittances_enabled = payeEnabled;
+              }
 
-              root.addEventListener('change', (e) => {
-                const t = e && e.target;
-                if (!t) return;
-                if (t && t.id && String(t.id).startsWith('rem_')) syncDraftFromDom();
-              }, true);
+              if (payeHidden) {
+                payeHidden.value = payeEnabled ? 'true' : 'false';
+              }
 
-              root.addEventListener('input', (e) => {
-                const t = e && e.target;
-                if (!t) return;
-                const id = String(t.id || '');
-                if (id === 'remittance_header_message' || id === 'remittance_footer_message') {
-                  syncDraftFromDom();
+              let inc = null;
+              try {
+                if (typeof buildRemittanceIncludesJsonFromUi === 'function') {
+                  inc = buildRemittanceIncludesJsonFromUi();
                 }
-              }, true);
+              } catch {}
+
+              if (modalCtx && modalCtx.data && typeof modalCtx.data === 'object') {
+                modalCtx.data.paye_remittances_enabled = payeEnabled;
+                if (hdr) modalCtx.data.remittance_header_message = String(hdr.value ?? '');
+                if (ftr) modalCtx.data.remittance_footer_message = String(ftr.value ?? '');
+              }
+
+              if (inc && modalCtx && modalCtx.remittanceDraft) {
+                modalCtx.remittanceDraft.remittance_includes_json = inc;
+                modalCtx.remittanceDraft.dirty = true;
+
+                if (modalCtx.data && typeof modalCtx.data === 'object') {
+                  modalCtx.data.remittance_includes_json = inc;
+                  modalCtx.data.remittance_header_message = modalCtx.remittanceDraft.remittance_header_message;
+                  modalCtx.data.remittance_footer_message = modalCtx.remittanceDraft.remittance_footer_message;
+                }
+              } else {
+                if (modalCtx && modalCtx.remittanceDraft) {
+                  modalCtx.remittanceDraft.dirty = true;
+                }
+              }
+            } catch {}
+          };
+
+          if (sel) {
+            sel.addEventListener('change', () => {
+              applyScope(sel.value);
+              syncDraftFromDom();
+            }, true);
+
+            applyScope(sel.value || scopeUi);
+          } else {
+            applyScope(scopeUi);
+          }
+
+          try {
+            const payeCk = document.getElementById('payeRemittancesEnabledCk');
+            const payeHidden = document.getElementById('paye_remittances_enabled');
+            const payeEnabled = !!(modalCtx && modalCtx.remittanceDraft && modalCtx.remittanceDraft.paye_remittances_enabled);
+            if (payeCk) payeCk.checked = payeEnabled;
+            if (payeHidden) payeHidden.value = payeEnabled ? 'true' : 'false';
+          } catch {}
+
+          try {
+            if (typeof applyRemittanceIncludesJsonToUi === 'function') {
+              const baseJson = (modalCtx && modalCtx.remittanceDraft && modalCtx.remittanceDraft.remittance_includes_json)
+                ? modalCtx.remittanceDraft.remittance_includes_json
+                : deep(cfg);
+              applyRemittanceIncludesJsonToUi(baseJson);
             }
           } catch {}
-        }, 0);
-      }
+
+          root.addEventListener('change', (e) => {
+            const t = e && e.target;
+            if (!t) return;
+            const id = String(t.id || '');
+            if (id.startsWith('rem_') || id === 'payeRemittancesEnabledCk') syncDraftFromDom();
+          }, true);
+
+          root.addEventListener('input', (e) => {
+            const t = e && e.target;
+            if (!t) return;
+            const id = String(t.id || '');
+            if (id === 'remittance_header_message' || id === 'remittance_footer_message') {
+              syncDraftFromDom();
+            }
+          }, true);
+        } catch {}
+      }, 0);
     } catch {}
 
     const wkWrapStyle = (scopeUi === 'DAILY') ? 'display:none;' : '';
     const dyWrapStyle = (scopeUi === 'DAILY') ? '' : 'display:none;';
 
+    const payeEnabledInit = !!draft.paye_remittances_enabled;
+
     return html(`
       <div class="form" id="settingsForm">
         <div class="row" style="grid-column:1/-1">
-          <div id="settingsRemittancesRoot" style="padding:12px;border:1px solid rgba(255,255,255,0.12);border-radius:12px;background:rgba(255,255,255,0.04)">
+          <div id="settingsRemittancesRoot" class="card" style="padding:12px;">
+
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px">
               <div>
                 <div style="font-weight:700;font-size:14px">Remittances</div>
@@ -65454,6 +65565,20 @@ function renderSettingsTab(key, s = {}) {
                   <option value="WEEKLY" ${scopeSelWeekly}>Weekly</option>
                   <option value="DAILY" ${scopeSelDaily}>Daily</option>
                 </select>
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1;margin-top:2px;">
+              <label style="white-space:normal;">Enable PAYE remittances</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
+                <label class="inline" style="display:flex;align-items:center;gap:8px;justify-content:flex-start;margin:0;cursor:pointer;">
+                  <input type="checkbox" id="payeRemittancesEnabledCk" data-noCollect="true" ${payeEnabledInit ? 'checked' : ''} />
+                  <span>If disabled, PAYE remittances send is blocked.</span>
+                </label>
+                <div style="font-size:12px;color:rgba(255,255,255,0.65);">
+                  This does not affect Umbrella remittances.
+                </div>
+                <input type="hidden" id="paye_remittances_enabled" name="paye_remittances_enabled" value="${payeEnabledInit ? 'true' : 'false'}" />
               </div>
             </div>
 
@@ -65583,16 +65708,21 @@ async function handleSaveSettings() {
   // - Wire-in points for:
   //   buildRemittanceIncludesJsonFromUi()
   //   applyRemittanceIncludesJsonToUi(json) (used at render time)
-  // - We only include remittance settings when:
-  //   (a) the user changed them (modalCtx.remittanceDraft.dirty), OR
-  //   (b) the remittances UI is currently mounted.
+  // - Guarantee:
+  //   • switching tabs does not lose edits (draft + modalCtx.data)
+  //   • if user does NOT switch Weekly→Daily, Daily still persists (we always store both scopes)
+  //   • if user edits Remittances then saves from another tab, values still save (rd.dirty)
   // ─────────────────────────────────────────────
   const remRootMounted = !!byId('settingsRemittancesRoot');
 
   const getRemDraft = () => {
     try {
-      const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : (modalCtx || null);
-      const d = mc && mc.remittanceDraft && typeof mc.remittanceDraft === 'object' ? mc.remittanceDraft : null;
+      const mc =
+        (window.modalCtx && typeof window.modalCtx === 'object')
+          ? window.modalCtx
+          : ((typeof modalCtx !== 'undefined' && modalCtx && typeof modalCtx === 'object') ? modalCtx : null);
+
+      const d = (mc && mc.remittanceDraft && typeof mc.remittanceDraft === 'object') ? mc.remittanceDraft : null;
       return d;
     } catch { return null; }
   };
@@ -65654,13 +65784,81 @@ async function handleSaveSettings() {
   try {
     const rd = getRemDraft();
 
-    const shouldIncludeRem = !!(remRootMounted || (rd && rd.dirty === true));
+    const mc =
+      (window.modalCtx && typeof window.modalCtx === 'object')
+        ? window.modalCtx
+        : ((typeof modalCtx !== 'undefined' && modalCtx && typeof modalCtx === 'object') ? modalCtx : null);
+
+    const baseData = (mc && mc.data && typeof mc.data === 'object') ? mc.data : {};
+
+    const boolish = (v, dflt) => {
+      if (typeof v === 'boolean') return v;
+      if (v === 1 || v === '1') return true;
+      if (v === 0 || v === '0') return false;
+      if (v == null) return !!dflt;
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+      return !!dflt;
+    };
+
+    const hasExistingRemValues = (() => {
+      try {
+        const inc = baseData && baseData.remittance_includes_json;
+        const incOk = !!(inc && typeof inc === 'object' && !Array.isArray(inc));
+
+        const hdr = (baseData && Object.prototype.hasOwnProperty.call(baseData, 'remittance_header_message'))
+          ? baseData.remittance_header_message
+          : null;
+        const ftr = (baseData && Object.prototype.hasOwnProperty.call(baseData, 'remittance_footer_message'))
+          ? baseData.remittance_footer_message
+          : null;
+
+        const payeHas = !!(baseData && Object.prototype.hasOwnProperty.call(baseData, 'paye_remittances_enabled'));
+
+        const hdrOk = (hdr != null && String(hdr).trim().length > 0);
+        const ftrOk = (ftr != null && String(ftr).trim().length > 0);
+
+        return incOk || hdrOk || ftrOk || payeHas;
+      } catch {
+        return false;
+      }
+    })();
+
+    // Only include remittance fields if:
+    // - user is on Remittances tab (explicit intent), OR
+    // - user changed remittances (rd.dirty), OR
+    // - remittance values already exist in DB (idempotent echo on save)
+    const shouldIncludeRem = !!(
+      remRootMounted ||
+      (rd && rd.dirty === true) ||
+      hasExistingRemValues
+    );
+
     if (shouldIncludeRem) {
       // Prefer draft values if present (persists across tab switches)
       let hdr = null;
       let ftr = null;
+
       if (rd && ('remittance_header_message' in rd)) hdr = rd.remittance_header_message;
       if (rd && ('remittance_footer_message' in rd)) ftr = rd.remittance_footer_message;
+
+      // Fall back to modalCtx.data (staged) if draft absent
+      if ((hdr === null || hdr === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'remittance_header_message')) {
+        hdr = baseData.remittance_header_message;
+      }
+      if ((ftr === null || ftr === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'remittance_footer_message')) {
+        ftr = baseData.remittance_footer_message;
+      }
+
+      // PAYE remittances enabled: prefer draft, else modalCtx.data, else DOM
+      let payeEnabled = null;
+
+      if (rd && Object.prototype.hasOwnProperty.call(rd, 'paye_remittances_enabled')) {
+        payeEnabled = boolish(rd.paye_remittances_enabled, false);
+      } else if (baseData && Object.prototype.hasOwnProperty.call(baseData, 'paye_remittances_enabled')) {
+        payeEnabled = boolish(baseData.paye_remittances_enabled, false);
+      }
 
       // If UI mounted, prefer live DOM values (captures last edits)
       if (remRootMounted) {
@@ -65668,26 +65866,48 @@ async function handleSaveSettings() {
         const fEl = byId('remittance_footer_message');
         if (hEl) hdr = String(hEl.value ?? '');
         if (fEl) ftr = String(fEl.value ?? '');
+
+        const ck = byId('payeRemittancesEnabledCk');
+        if (ck) {
+          payeEnabled = !!ck.checked;
+        } else {
+          const hid = byId('paye_remittances_enabled');
+          if (hid) payeEnabled = boolish(hid.value, false);
+        }
       }
 
       // Include messages (backend will trim/normalise to null if blank)
       if (hdr !== null && hdr !== undefined) payload.remittance_header_message = hdr;
       if (ftr !== null && ftr !== undefined) payload.remittance_footer_message = ftr;
 
-      // Includes JSON
+      // Include PAYE remittances enabled flag (backend accepts boolean or "true"/"false")
+      if (payeEnabled !== null && payeEnabled !== undefined) payload.paye_remittances_enabled = !!payeEnabled;
+
+      // Includes JSON (must include BOTH weekly + daily)
       let inc = null;
-      if (rd && rd.remittance_includes_json && typeof rd.remittance_includes_json === 'object') {
+
+      if (rd && rd.remittance_includes_json && typeof rd.remittance_includes_json === 'object' && !Array.isArray(rd.remittance_includes_json)) {
         inc = rd.remittance_includes_json;
+      } else if (baseData && baseData.remittance_includes_json && typeof baseData.remittance_includes_json === 'object' && !Array.isArray(baseData.remittance_includes_json)) {
+        inc = baseData.remittance_includes_json;
       }
+
       if (remRootMounted) {
+        // DOM exists (both weekly + daily checkbox sets exist even if one is hidden)
         inc = buildRemittanceIncludes();
       }
-      if (!inc) inc = buildRemittanceIncludes();
+
+      if (!inc) {
+        // As a last resort, use deterministic defaults (but this path only triggers when shouldIncludeRem is true)
+        inc = buildRemittanceIncludesFallback();
+      }
 
       payload.remittance_includes_json = inc;
 
-      // Mark clean post-save (the refresh below will re-seed)
-      if (rd) rd.dirty = true; // keep true until save succeeds
+      // Keep dirty until save succeeds
+      try {
+        if (rd) rd.dirty = true;
+      } catch {}
     }
   } catch {}
 
@@ -65906,6 +66126,7 @@ async function handleSaveSettings() {
         rd.remittance_includes_json = (modalCtx.data && modalCtx.data.remittance_includes_json) ? modalCtx.data.remittance_includes_json : (rd.remittance_includes_json || null);
         rd.remittance_header_message = (modalCtx.data && modalCtx.data.remittance_header_message != null) ? String(modalCtx.data.remittance_header_message) : (rd.remittance_header_message || '');
         rd.remittance_footer_message = (modalCtx.data && modalCtx.data.remittance_footer_message != null) ? String(modalCtx.data.remittance_footer_message) : (rd.remittance_footer_message || '');
+        rd.paye_remittances_enabled = !!(modalCtx.data && (modalCtx.data.paye_remittances_enabled === true || String(modalCtx.data.paye_remittances_enabled).trim().toLowerCase() === 'true'));
         rd.dirty = false;
       }
     } catch {}
@@ -65990,7 +66211,7 @@ function buildRemittanceIncludesJsonFromUi() {
   });
   fields.forEach((k) => {
     // Default daily.work_date true unless explicitly unticked
-    const defVal = (k === 'work_date') ? true : true;
+    const defVal = true;
     out.daily.include_fields[k] = readCk(`rem_daily_field_${k}`, defVal);
   });
 
@@ -66009,6 +66230,7 @@ function buildRemittanceIncludesJsonFromUi() {
 
   return out;
 }
+
 
 function applyRemittanceIncludesJsonToUi(json) {
   const byId = (id) => document.getElementById(id);
@@ -66085,7 +66307,6 @@ function applyRemittanceIncludesJsonToUi(json) {
     setCkIfExists(`rem_daily_field_${k}`, v);
   });
 }
-
 
 
 
