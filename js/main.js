@@ -8420,8 +8420,6 @@ function renderBankingBanners() {
 }
 
 
-
-
 function renderBankingTab(key, row) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -8464,43 +8462,115 @@ function renderBankingTab(key, row) {
 
   const isTestMode = (caps.isTestMode === true) || (capsRaw.payroll_testing === true);
 
+  const railsArr = Array.isArray(capsRaw.rails) ? capsRaw.rails : [];
+  const providerDefault = String(capsRaw.rail_provider_default || '').trim().toUpperCase();
+
+  const defaultRail = (() => {
+    const want = providerDefault || provider || '';
+    if (!want) return null;
+    const r = railsArr.find(x => x && String(x.rail_provider || '').trim().toUpperCase() === want);
+    return r || null;
+  })();
+
+  const defaultAvailable = (defaultRail && defaultRail.available === true);
+  const defaultEnvMismatch = (defaultRail && defaultRail.env_mismatch === true) || (capsRaw.env_mismatch === true) || (caps.isEnvMismatch === true);
+  const defaultReason = (defaultRail && defaultRail.reason != null) ? String(defaultRail.reason) : '';
+  const defaultApiBase = (defaultRail && defaultRail.api_base != null) ? String(defaultRail.api_base) : (capsRaw.default_api_base != null ? String(capsRaw.default_api_base) : '');
+  const defaultWorkerEnv = (defaultRail && defaultRail.worker_env != null) ? String(defaultRail.worker_env).trim().toUpperCase() : workerEnv;
+
+  const isHealthy = !!(defaultAvailable === true && defaultEnvMismatch !== true);
+
   const envMismatch =
     (caps.isEnvMismatch === true) ||
     (capsRaw.env_mismatch === true) ||
-    (Array.isArray(capsRaw.rails) ? capsRaw.rails.some(r => r && r.env_mismatch === true) : false);
+    railsArr.some(r => r && r.env_mismatch === true);
 
   const railLabel = (() => {
-    if (provider === 'REVOLUT') {
-      const isSandbox = (workerEnv === 'SANDBOX');
-      const envTxt = isSandbox ? 'Test' : 'Live';
-      const icon = isSandbox ? '🧪' : '✅';
-      return `Revolut (${envTxt}) ${icon}`;
+    const prov = provider || '—';
+    const envTxt = (defaultWorkerEnv && defaultWorkerEnv !== '—')
+      ? (defaultWorkerEnv === 'SANDBOX' ? 'Test' : 'Live')
+      : ((dbEnv && dbEnv !== '—') ? dbEnv : '');
+
+    if (!isHealthy) {
+      const statusTxt = envMismatch ? 'Blocked' : (defaultAvailable ? 'Unhealthy' : 'Not connected');
+      const baseName = (prov === 'REVOLUT') ? 'Revolut' : prov;
+      return `${baseName} (${statusTxt}) ❌`;
     }
-    if (provider && provider !== '—') {
-      const envTxt =
-        (workerEnv && workerEnv !== '—')
-          ? workerEnv
-          : (dbEnv && dbEnv !== '—') ? dbEnv : '';
-      return envTxt ? `${provider} (${envTxt})` : `${provider}`;
+
+    if (prov === 'REVOLUT') {
+      const icon = (defaultWorkerEnv === 'SANDBOX') ? '🧪' : '✅';
+      const envNice = (defaultWorkerEnv === 'SANDBOX') ? 'Test' : 'Live';
+      return `Revolut (${envNice}) ${icon}`;
     }
-    return 'Rail';
+
+    if (prov && prov !== '—') {
+      return envTxt ? `${prov} (${envTxt}) ✅` : `${prov} ✅`;
+    }
+
+    return 'Rail ❌';
   })();
 
-  const topChipClass = envMismatch ? 'pill-warn' : 'pill-ok';
+  const topChipClass = (!isHealthy || envMismatch) ? 'pill-warn' : 'pill-ok';
   const testChipClass = isTestMode ? 'pill-warn' : 'pill';
+
+  const diagLines = (() => {
+    const lines = [];
+    const want = providerDefault || provider || '';
+    lines.push(`Provider default: ${want || '—'}`);
+    lines.push(`DB env: ${dbEnv || '—'}`);
+    lines.push(`Default worker env: ${defaultWorkerEnv || '—'}`);
+    lines.push(`Default available: ${defaultAvailable ? 'true' : 'false'}`);
+    lines.push(`Env mismatch: ${envMismatch ? 'true' : 'false'}`);
+    if (!isHealthy) {
+      lines.push(`Health: NOT OK`);
+    } else {
+      lines.push(`Health: OK`);
+    }
+    if (defaultReason) {
+      lines.push(`Default reason: ${defaultReason}`);
+    }
+    lines.push(`Server UTC: ${String(capsRaw.server_utc || '').trim() || '—'}`);
+    lines.push(`API base: ${String(defaultApiBase || '').trim() || '—'}`);
+    lines.push('');
+    lines.push('Rails:');
+    if (!railsArr.length) {
+      lines.push('- (none)');
+    } else {
+      for (const r of railsArr) {
+        if (!r || typeof r !== 'object') continue;
+        const rp = String(r.rail_provider || '').trim().toUpperCase() || '—';
+        const rk = String(r.rail_kind || '').trim().toUpperCase() || '—';
+        const av = (r.available === true) ? 'true' : 'false';
+        const mm = (r.env_mismatch === true) ? 'true' : 'false';
+        const we = (r.worker_env != null) ? String(r.worker_env).trim().toUpperCase() : '—';
+        const ab = (r.api_base != null) ? String(r.api_base).trim() : '';
+        const rs = (r.reason != null && String(r.reason).trim()) ? String(r.reason).trim() : '';
+        const tail = [
+          `kind=${rk}`,
+          `available=${av}`,
+          `env_mismatch=${mm}`,
+          `worker_env=${we}`,
+          ab ? `api_base=${ab}` : null,
+          rs ? `reason=${rs}` : null
+        ].filter(Boolean).join(' | ');
+        lines.push(`- ${rp}: ${tail}`);
+      }
+    }
+    return lines.join('\n');
+  })();
 
   const headerChips = `
     <div class="card">
       <div class="row">
         <label>Status</label>
         <div class="controls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <span class="pill ${enc(topChipClass)}" title="${enc(envMismatch ? 'Payments are blocked until the environment mismatch is fixed.' : 'Banking is connected and ready.')}">${enc(railLabel)}</span>
+          <span class="pill ${enc(topChipClass)}" title="${enc(isHealthy ? 'Banking is connected and ready.' : (defaultReason || 'Banking connection is not healthy. See Diagnostics for details.'))}">${enc(railLabel)}</span>
           <span class="pill ${enc(testChipClass)}" title="${enc(isTestMode ? 'TEST MODE is ON' : 'TEST MODE is OFF')}">${enc(`Test mode: ${isTestMode ? 'On' : 'Off'}`)}</span>
 
           <details style="margin-left:6px;">
             <summary class="mini" style="cursor:pointer;opacity:.9;">Diagnostics ▸</summary>
             <div class="mini" style="margin-top:6px;opacity:.9;white-space:pre-wrap;">
-              ${enc(`Provider: ${provider}\nDB env: ${dbEnv}\nWorker env: ${workerEnv}\nEnv mismatch: ${envMismatch ? 'true' : 'false'}\nServer UTC: ${String(capsRaw.server_utc || '').trim() || '—'}\nAPI base: ${String(capsRaw.default_api_base || '').trim() || '—'}`)}
+              ${enc(diagLines)}
             </div>
           </details>
 
@@ -8679,8 +8749,6 @@ function renderBankingTab(key, row) {
     </div>
   `;
 }
-
-
 function renderBankingPayTab(scopePreset) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -9275,7 +9343,6 @@ function renderPayBatchDetailPanel() {
   `;
 }
 
-
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -9301,7 +9368,9 @@ function renderPayNewBatchWizard() {
   st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {
     pay_date: '',
     candidate_filter_id: '',
+    candidate_filter_label: '',
     client_filter_id: '',
+    client_filter_label: '',
     preview: { data: null, loading: false, error: '' },
     decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
     createDraftBusy: false,
@@ -9309,6 +9378,9 @@ function renderPayNewBatchWizard() {
   };
 
   const wiz = st.pay.draftWizard;
+
+  if (!('candidate_filter_label' in wiz)) wiz.candidate_filter_label = '';
+  if (!('client_filter_label' in wiz)) wiz.client_filter_label = '';
 
   // ✅ UK “today” (ISO) + default pay date = nearest Friday (today if Friday, else next Friday)
   const getUkTodayIso = () => {
@@ -9380,8 +9452,13 @@ function renderPayNewBatchWizard() {
     return payDateIso;
   })();
 
-  const candFilterVal = String(wiz.candidate_filter_id || '').trim();
-  const clientFilterVal = String(wiz.client_filter_id || '').trim();
+  const candFilterId = String(wiz.candidate_filter_id || '').trim();
+  const clientFilterId = String(wiz.client_filter_id || '').trim();
+  const candFilterLabel = String(wiz.candidate_filter_label || '').trim();
+  const clientFilterLabel = String(wiz.client_filter_label || '').trim();
+
+  const candDisplay = candFilterId ? (candFilterLabel || candFilterId) : 'ALL candidates';
+  const clientDisplay = clientFilterId ? (clientFilterLabel || clientFilterId) : 'ALL clients';
 
   const preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : { data: null, loading: false, error: '' };
   const pv = (preview.data && typeof preview.data === 'object') ? preview.data : null;
@@ -9536,11 +9613,6 @@ function renderPayNewBatchWizard() {
   const previewBtnDisabled = pvLoading || cdBusy;
   const createBtnDisabled = cdBusy || pvLoading || !payDateIso;
 
-  const syncCandFilterJs =
-    "try{const st=(typeof bankingGetState==='function')?bankingGetState():null;if(st&&st.pay&&st.pay.draftWizard){st.pay.draftWizard.candidate_filter_id=String(this.value||'').trim();}}catch{}";
-  const syncClientFilterJs =
-    "try{const st=(typeof bankingGetState==='function')?bankingGetState():null;if(st&&st.pay&&st.pay.draftWizard){st.pay.draftWizard.client_filter_id=String(this.value||'').trim();}}catch{}";
-
   return `
     <div class="card" id="bankingPayNewBatchWizard">
       <div class="row" style="gap:10px;">
@@ -9565,32 +9637,36 @@ function renderPayNewBatchWizard() {
               />
             </div>
 
-            <div style="min-width:260px;max-width:360px;">
-              <label class="inline mini" style="opacity:.85;">Candidate filter (optional)</label>
-              <input
-                id="bankingPayCandidateFilterInput"
-                class="input"
-                type="text"
-                value="${enc(candFilterVal)}"
-                placeholder="ALL (candidate_id UUID)"
-                title="Optional candidate_id UUID filter (leave blank for ALL)"
-                oninput="${syncCandFilterJs}"
-                onchange="${syncCandFilterJs}"
-              />
+            <div style="min-width:320px;max-width:420px;">
+              <label class="inline mini" style="opacity:.85;">Candidate filter</label>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input
+                  class="input"
+                  type="text"
+                  value="${enc(candDisplay)}"
+                  readonly
+                  title="Candidate filter (defaults to ALL candidates)"
+                  style="min-width:220px;flex:1;"
+                />
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:pickCandidateFilter" title="Pick a candidate (optional)">Pick…</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearCandidateFilter" title="Clear candidate filter (ALL candidates)">Clear</button>
+              </div>
             </div>
 
-            <div style="min-width:260px;max-width:360px;">
-              <label class="inline mini" style="opacity:.85;">Client filter (optional)</label>
-              <input
-                id="bankingPayClientFilterInput"
-                class="input"
-                type="text"
-                value="${enc(clientFilterVal)}"
-                placeholder="ALL (client_id UUID)"
-                title="Optional client_id UUID filter (leave blank for ALL)"
-                oninput="${syncClientFilterJs}"
-                onchange="${syncClientFilterJs}"
-              />
+            <div style="min-width:320px;max-width:420px;">
+              <label class="inline mini" style="opacity:.85;">Client filter</label>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input
+                  class="input"
+                  type="text"
+                  value="${enc(clientDisplay)}"
+                  readonly
+                  title="Client filter (defaults to ALL clients)"
+                  style="min-width:220px;flex:1;"
+                />
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:pickClientFilter" title="Pick a client (optional)">Pick…</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearClientFilter" title="Clear client filter (ALL clients)">Clear</button>
+              </div>
             </div>
 
             <div class="actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -9645,7 +9721,6 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
-
 
 function renderPayPreparePanel() {
   const enc = (typeof escapeHtml === 'function')
@@ -11242,6 +11317,8 @@ function renderBankingRemittancesStatusTab() {
 }
 
 
+
+
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -11362,6 +11439,11 @@ function attachBankingModalDelegatedHandlers() {
     try { st.pay.draftWizard.preview = (st.pay.draftWizard.preview && typeof st.pay.draftWizard.preview === 'object') ? st.pay.draftWizard.preview : { data:null, loading:false, error:'' }; } catch {}
     try { st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : { candidate_ids: [], mismatch_choices: {}, loan_caps: {} }; } catch {}
 
+    if (!('candidate_filter_id' in st.pay.draftWizard)) st.pay.draftWizard.candidate_filter_id = '';
+    if (!('candidate_filter_label' in st.pay.draftWizard)) st.pay.draftWizard.candidate_filter_label = '';
+    if (!('client_filter_id' in st.pay.draftWizard)) st.pay.draftWizard.client_filter_id = '';
+    if (!('client_filter_label' in st.pay.draftWizard)) st.pay.draftWizard.client_filter_label = '';
+
     const getUkTodayIso = () => {
       try {
         const ymd = (typeof toLocalParts === 'function')
@@ -11382,6 +11464,28 @@ function attachBankingModalDelegatedHandlers() {
         if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
       } catch {}
       return new Date().toISOString().slice(0, 10);
+    };
+
+    const applyPickedCandidate = async (picked) => {
+      const p = (picked && typeof picked === 'object') ? picked : null;
+      const id = p ? String(p.id || p.candidate_id || p.value || '').trim() : '';
+      const label =
+        p ? String(p.display_name || p.label || p.name || '').trim() : '';
+      if (!id) return;
+      st.pay.draftWizard.candidate_filter_id = id;
+      st.pay.draftWizard.candidate_filter_label = label || '';
+      await safeRerender(null);
+    };
+
+    const applyPickedClient = async (picked) => {
+      const p = (picked && typeof picked === 'object') ? picked : null;
+      const id = p ? String(p.id || p.client_id || p.value || '').trim() : '';
+      const label =
+        p ? String(p.name || p.label || p.display_name || '').trim() : '';
+      if (!id) return;
+      st.pay.draftWizard.client_filter_id = id;
+      st.pay.draftWizard.client_filter_label = label || '';
+      await safeRerender(null);
     };
 
     // Local safe setters (do NOT rerender on input typing)
@@ -11573,6 +11677,60 @@ function attachBankingModalDelegatedHandlers() {
         }
       } catch {}
       toast('Unable to open Global Settings.');
+      return;
+    }
+
+    if (a === 'banking:pay:pickCandidateFilter') {
+      try {
+        if (typeof openCandidatePicker === 'function') {
+          if (openCandidatePicker.length >= 1) {
+            openCandidatePicker(async (picked) => { try { await applyPickedCandidate(picked); } catch {} });
+            return;
+          }
+          const r = openCandidatePicker();
+          if (r && typeof r.then === 'function') {
+            const picked = await r;
+            await applyPickedCandidate(picked);
+            return;
+          }
+          return;
+        }
+      } catch {}
+      toast('Candidate picker not available.');
+      return;
+    }
+
+    if (a === 'banking:pay:clearCandidateFilter') {
+      st.pay.draftWizard.candidate_filter_id = '';
+      st.pay.draftWizard.candidate_filter_label = '';
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:pay:pickClientFilter') {
+      try {
+        if (typeof openClientPicker === 'function') {
+          if (openClientPicker.length >= 1) {
+            openClientPicker(async (picked) => { try { await applyPickedClient(picked); } catch {} });
+            return;
+          }
+          const r = openClientPicker();
+          if (r && typeof r.then === 'function') {
+            const picked = await r;
+            await applyPickedClient(picked);
+            return;
+          }
+          return;
+        }
+      } catch {}
+      toast('Client picker not available.');
+      return;
+    }
+
+    if (a === 'banking:pay:clearClientFilter') {
+      st.pay.draftWizard.client_filter_id = '';
+      st.pay.draftWizard.client_filter_label = '';
+      await safeRerender(null);
       return;
     }
 
@@ -11873,11 +12031,6 @@ function attachBankingModalDelegatedHandlers() {
 
   return { ok: true };
 }
-
-
-
-
-
 
 
 
