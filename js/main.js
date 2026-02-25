@@ -5562,6 +5562,7 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
 }
 
 
+
 async function openBanking() {
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
 
@@ -5618,6 +5619,8 @@ async function openBanking() {
       },
       draftWizard: {
         pay_date: '',
+        candidate_filter_id: '',
+        client_filter_id: '',
         preview: {
           data: null,
           loading: false,
@@ -5732,11 +5735,11 @@ async function openBanking() {
     return renderSkeleton(key);
   };
 
+  // ✅ Payment settings moved to Global Settings; Banking modal no longer has a settings tab.
   const tabs = [
     { key: 'pay',        label: 'Pay' },
     { key: 'umbrella',   label: 'Umbrella Pay' },
     { key: 'paye',       label: 'PAYE History' },
-    { key: 'settings',   label: 'Payment Settings' },
     { key: 'id',         label: 'Invoice Discounting (ID)' },
     { key: 'id_history', label: 'ID History' },
     { key: 'rem_status', label: 'Remittances Status' }
@@ -5944,6 +5947,9 @@ async function openBanking() {
   }, 0);
 }
 
+
+
+
 function bankingGetState() {
   try {
     const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
@@ -5982,6 +5988,10 @@ async function bankingRerender(tabKey = null) {
     // Re-attach UK date picker widgets after rerender (best-effort)
     try {
       if (typeof attachUkDatePicker === 'function') {
+        let todayIso = null;
+        try { todayIso = (typeof toLocalParts === 'function') ? (toLocalParts(new Date().toISOString(), null)?.ymd || null) : null; } catch {}
+        if (!todayIso || !/^\d{4}-\d{2}-\d{2}$/.test(String(todayIso))) todayIso = new Date().toISOString().slice(0, 10);
+
         const ids = [
           'bankingPayDateInput',
           'bankingScheduleDateUk'
@@ -5989,7 +5999,7 @@ async function bankingRerender(tabKey = null) {
         for (const id of ids) {
           const el = document.getElementById(id);
           if (el) {
-            try { attachUkDatePicker(el); } catch {}
+            try { attachUkDatePicker(el, { minDate: todayIso }); } catch {}
           }
         }
       }
@@ -6007,6 +6017,7 @@ async function bankingRerender(tabKey = null) {
     return false;
   }
 }
+
 
 
 
@@ -6792,7 +6803,6 @@ async function bankingPayBatchGet(payBatchId) {
   }
 }
 
-
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const pd = (pay_date == null) ? '' : String(pay_date).trim();
@@ -6804,6 +6814,8 @@ async function bankingPayPreview(pay_date) {
   mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
   mc.banking.pay.draftWizard = (mc.banking.pay.draftWizard && typeof mc.banking.pay.draftWizard === 'object') ? mc.banking.pay.draftWizard : {
     pay_date: '',
+    candidate_filter_id: '',
+    client_filter_id: '',
     preview: { data: null, loading: false, error: '' },
     decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
     createDraftBusy: false,
@@ -6832,8 +6844,15 @@ async function bankingPayPreview(pay_date) {
   pay.draftWizard.preview.loading = true;
   pay.draftWizard.preview.error = '';
 
+  const candidateId = String(pay.draftWizard.candidate_filter_id || '').trim();
+  const clientId = String(pay.draftWizard.client_filter_id || '').trim();
+
+  const reqBody = { pay_date: pd };
+  if (candidateId) reqBody.candidate_id = candidateId;
+  if (clientId) reqBody.client_id = clientId;
+
   try {
-    const obj = await apiPostJson('/api/banking/pay/preview', { pay_date: pd });
+    const obj = await apiPostJson('/api/banking/pay/preview', reqBody);
 
     pay.draftWizard.preview.data = deep(obj);
     pay.draftWizard.preview.loading = false;
@@ -6857,7 +6876,6 @@ async function bankingPayPreview(pay_date) {
   }
 }
 
-
 async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const pd = (pay_date == null) ? '' : String(pay_date).trim();
@@ -6872,6 +6890,8 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
   mc.banking.pay.draftWizard = (mc.banking.pay.draftWizard && typeof mc.banking.pay.draftWizard === 'object') ? mc.banking.pay.draftWizard : {
     pay_date: '',
+    candidate_filter_id: '',
+    client_filter_id: '',
     preview: { data: null, loading: false, error: '' },
     decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
     createDraftBusy: false,
@@ -6899,11 +6919,18 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   pay.draftWizard.createDraftBusy = true;
   pay.draftWizard.createDraftError = '';
 
+  const candidateId = String(pay.draftWizard.candidate_filter_id || '').trim();
+  const clientId = String(pay.draftWizard.client_filter_id || '').trim();
+
+  const reqBody = {
+    pay_date: pd,
+    preview_decisions_json: decisions
+  };
+  if (candidateId) reqBody.candidate_id = candidateId;
+  if (clientId) reqBody.client_id = clientId;
+
   try {
-    const obj = await apiPostJson('/api/banking/pay/batch/create-draft', {
-      pay_date: pd,
-      preview_decisions_json: decisions
-    });
+    const obj = await apiPostJson('/api/banking/pay/batch/create-draft', reqBody);
 
     // Heuristic extraction of new batch id
     const newId =
@@ -8205,6 +8232,7 @@ async function bankingOutboxList({ reference_prefix = '', reference_contains = '
   }
 }
 
+
 function renderBankingBanners() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -8295,7 +8323,7 @@ function renderBankingBanners() {
     const hasTestEmail = !!(remTestEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(remTestEmail));
     const msg = hasTestEmail
       ? `TEST MODE is ON — remittances will be sent to the test recipient: ${remTestEmail}`
-      : 'TEST MODE is ON — to send remittances, set a test remittance email in Payment Settings.';
+      : 'TEST MODE is ON — to send remittances, set a test remittance email in Global Settings → Banking & Payments.';
 
     banners.push(`
       <div class="card" style="border-color:rgba(251,191,36,.35); background:rgba(245,158,11,.08);">
@@ -8308,7 +8336,7 @@ function renderBankingBanners() {
               </div>
               ${hasTestEmail ? '' : `
                 <div class="mini" style="margin-top:6px;opacity:.85;">
-                  Go to Payment Settings and set “Test remittance recipient email”.
+                  Open Global Settings and set “Test remittance recipient email”.
                 </div>
               `}
             </div>
@@ -8317,10 +8345,9 @@ function renderBankingBanners() {
                 <button
                   type="button"
                   class="btn btn-sm btn-outline"
-                  data-action="banking:goTab"
-                  data-tab="settings"
-                  title="Open Payment Settings tab"
-                >Go to Payment Settings</button>
+                  data-action="banking:openGlobalSettingsBankingPayments"
+                  title="Open Global Settings → Banking & Payments"
+                >Open Global Settings</button>
               </div>
             `}
           </div>
@@ -8358,17 +8385,16 @@ function renderBankingBanners() {
                 ${enc(msg)}
               </div>
               <div class="mini" style="margin-top:6px;opacity:.85;">
-                Set a default funding account in Payment Settings (or choose one when scheduling the batch).
+                Set a default funding account in Global Settings → Banking & Payments (or choose one when scheduling the batch).
               </div>
             </div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <button
                 type="button"
                 class="btn btn-sm btn-outline"
-                data-action="banking:goTab"
-                data-tab="settings"
-                title="Open Payment Settings tab"
-              >Go to Payment Settings</button>
+                data-action="banking:openGlobalSettingsBankingPayments"
+                title="Open Global Settings → Banking & Payments"
+              >Open Global Settings</button>
             </div>
           </div>
         </div>
@@ -8392,6 +8418,7 @@ function renderBankingBanners() {
     </div>
   `;
 }
+
 
 
 
@@ -8561,15 +8588,26 @@ function renderBankingTab(key, row) {
       `;
     }
 
+    // ✅ Settings tab removed from Banking modal; keep a safe fallback if linked directly.
     if (safeKey === 'settings') {
-      const out = callIfFn('renderBankingPaymentSettingsTab');
-      if (typeof out === 'string' && out.trim()) return out;
       return `
-        <div class="card">
+        <div class="card" style="border-color:rgba(59,130,246,.45); background:rgba(59,130,246,.06);">
           <div class="row">
-            <label>Payment Settings</label>
-            <div class="controls">
-              <span class="mini">UI not implemented yet for this tab.</span>
+            <label>Moved</label>
+            <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+              <div style="min-width:260px;flex:1;">
+                <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
+                  Banking / Payment Settings have moved to <strong>Global Settings → Banking &amp; Payments</strong>.
+                </div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:openGlobalSettingsBankingPayments"
+                  title="Open Global Settings → Banking & Payments"
+                >Open Global Settings</button>
+              </div>
             </div>
           </div>
         </div>
@@ -9237,6 +9275,7 @@ function renderPayBatchDetailPanel() {
   `;
 }
 
+
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -9261,6 +9300,8 @@ function renderPayNewBatchWizard() {
   st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
   st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {
     pay_date: '',
+    candidate_filter_id: '',
+    client_filter_id: '',
     preview: { data: null, loading: false, error: '' },
     decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
     createDraftBusy: false,
@@ -9268,7 +9309,66 @@ function renderPayNewBatchWizard() {
   };
 
   const wiz = st.pay.draftWizard;
-  const payDateIso = String(wiz.pay_date || '').trim();
+
+  // ✅ UK “today” (ISO) + default pay date = nearest Friday (today if Friday, else next Friday)
+  const getUkTodayIso = () => {
+    try {
+      const ymd = (typeof toLocalParts === 'function')
+        ? (toLocalParts(new Date().toISOString(), null)?.ymd || null)
+        : null;
+      if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return String(ymd);
+    } catch {}
+    try {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).formatToParts(new Date());
+      const g = (t) => (parts.find(p => p.type === t)?.value || '');
+      const y = g('year'), m = g('month'), d = g('day');
+      const iso = `${y}-${m}-${d}`;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+    } catch {}
+    return new Date().toISOString().slice(0, 10);
+  };
+
+  const addDaysIso = (iso, addDays) => {
+    const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (isNaN(dt.getTime())) return '';
+    dt.setUTCDate(dt.getUTCDate() + Number(addDays || 0));
+    const yy = dt.getUTCFullYear();
+    const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getUTCDate()).padStart(2, '0');
+    return `${yy}-${mm}-${dd}`;
+  };
+
+  const nextFridayIsoFrom = (todayIso) => {
+    const m = String(todayIso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (isNaN(dt.getTime())) return '';
+    const dow = dt.getUTCDay(); // 0=Sun ... 5=Fri
+    const target = 5; // Friday
+    const add = (target - dow + 7) % 7; // 0 if already Friday
+    return addDaysIso(todayIso, add);
+  };
+
+  const ukTodayIso = getUkTodayIso();
+  const defaultIso = nextFridayIsoFrom(ukTodayIso) || ukTodayIso;
+
+  let payDateIso = String(wiz.pay_date || '').trim();
+  const isIso = /^\d{4}-\d{2}-\d{2}$/.test(payDateIso);
+
+  // ✅ If missing/invalid OR in the past => force default Friday (never allow past date)
+  if (!isIso || payDateIso < ukTodayIso) {
+    payDateIso = defaultIso;
+    try { wiz.pay_date = payDateIso; } catch {}
+  }
 
   const payDateDisplay = (() => {
     if (!payDateIso) return '';
@@ -9279,6 +9379,9 @@ function renderPayNewBatchWizard() {
     if (m) return `${m[3]}/${m[2]}/${m[1]}`;
     return payDateIso;
   })();
+
+  const candFilterVal = String(wiz.candidate_filter_id || '').trim();
+  const clientFilterVal = String(wiz.client_filter_id || '').trim();
 
   const preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : { data: null, loading: false, error: '' };
   const pv = (preview.data && typeof preview.data === 'object') ? preview.data : null;
@@ -9295,7 +9398,6 @@ function renderPayNewBatchWizard() {
 
   const payeCands = Array.isArray(pv?.paye_candidates) ? pv.paye_candidates : [];
   const nonPaye = Array.isArray(pv?.non_paye_payees) ? pv.non_paye_payees : [];
-
   const allCands = [...payeCands, ...nonPaye];
 
   const mismatchList = allCands.filter(c => {
@@ -9406,9 +9508,22 @@ function renderPayNewBatchWizard() {
     <tr><td colspan="4" class="mini" style="opacity:.85;">No mismatch decisions required.</td></tr>
   `;
 
+  const ymdToUk = (ymd) => {
+    const s = String(ymd || '').trim();
+    if (!s) return '';
+    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+    return s;
+  };
+
+  const elig = (pv && typeof pv === 'object' && pv.eligibility && typeof pv.eligibility === 'object') ? pv.eligibility : null;
+  const eligFrom = elig ? String(elig.from_date || '').trim() : '';
+  const eligTo   = elig ? String(elig.to_date || '').trim() : '';
+
   const previewSummaryHtml = pv ? `
     <div class="mini" style="opacity:.9;">
-      Week start: <span class="mono">${enc(String(pv.pay_week_start || '') || '—')}</span>
+      Eligible Timesheet period: <span class="mono">${enc((eligFrom && eligTo) ? `${ymdToUk(eligFrom)} → ${ymdToUk(eligTo)}` : '—')}</span>
       • PAYE candidates: <span class="mono">${enc(String(payeCands.length))}</span>
       • Umbrella payees: <span class="mono">${enc(String(nonPaye.length))}</span>
       • Mismatches: <span class="mono">${enc(String(mismatchList.length))}</span>
@@ -9420,6 +9535,11 @@ function renderPayNewBatchWizard() {
 
   const previewBtnDisabled = pvLoading || cdBusy;
   const createBtnDisabled = cdBusy || pvLoading || !payDateIso;
+
+  const syncCandFilterJs =
+    "try{const st=(typeof bankingGetState==='function')?bankingGetState():null;if(st&&st.pay&&st.pay.draftWizard){st.pay.draftWizard.candidate_filter_id=String(this.value||'').trim();}}catch{}";
+  const syncClientFilterJs =
+    "try{const st=(typeof bankingGetState==='function')?bankingGetState():null;if(st&&st.pay&&st.pay.draftWizard){st.pay.draftWizard.client_filter_id=String(this.value||'').trim();}}catch{}";
 
   return `
     <div class="card" id="bankingPayNewBatchWizard">
@@ -9441,257 +9561,35 @@ function renderPayNewBatchWizard() {
                 value="${enc(payDateDisplay)}"
                 data-action="banking:pay:setPayDate"
                 data-uk-date="1"
-                title="Pay date (DD/MM/YYYY)"
+                title="Pay date (DD/MM/YYYY) — cannot be in the past"
               />
             </div>
 
-            <div class="actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-              <button
-                type="button"
-                class="btn btn-sm btn-outline ${previewBtnDisabled ? 'disabled' : ''}"
-                ${previewBtnDisabled ? 'aria-disabled="true"' : ''}
-                data-action="banking:pay:preview"
-                title="Run pay preview (deltas, blockers, mismatches)"
-              >${pvLoading ? 'Previewing…' : 'Preview'}</button>
-
-              <button
-                type="button"
-                class="btn btn-sm btn-primary ${createBtnDisabled ? 'disabled' : ''}"
-                ${createBtnDisabled ? 'aria-disabled="true"' : ''}
-                data-action="banking:pay:createDraft"
-                title="Create a DRAFT pay batch using current preview decisions"
-              >${cdBusy ? 'Creating…' : 'Create draft'}</button>
-
-              <button
-                type="button"
-                class="btn btn-sm btn-outline"
-                data-action="banking:pay:clearPreview"
-                title="Clear preview results"
-              >Clear</button>
-            </div>
-          </div>
-
-          ${previewSummaryHtml}
-
-          <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-            <table class="grid" style="min-width:980px; table-layout:auto;">
-              <thead>
-                <tr>
-                  <th style="width:90px;">Include</th>
-                  <th>Candidate</th>
-                  <th style="width:220px;">Mismatch choice</th>
-                  <th style="width:260px;">Loan caps (optional)</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${mismatchRowsHtml}
-              </tbody>
-            </table>
-          </div>
-
-          <div class="mini" style="opacity:.8;">
-            Notes: mismatch choices are required for candidates flagged with mismatches. Blocked/Do-not-pay items are excluded from payable deltas unless resolved.
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-
-function renderPayNewBatchWizard() {
-  const enc = (typeof escapeHtml === 'function')
-    ? escapeHtml
-    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-      }[c]));
-
-  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
-  if (!st) {
-    return `
-      <div class="card" id="bankingPayNewBatchWizard">
-        <div class="row">
-          <label>New pay batch</label>
-          <div class="controls">
-            <span class="mini">Banking state not available.</span>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
-  st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {
-    pay_date: '',
-    preview: { data: null, loading: false, error: '' },
-    decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
-    createDraftBusy: false,
-    createDraftError: ''
-  };
-
-  const wiz = st.pay.draftWizard;
-  const payDate = String(wiz.pay_date || '').trim();
-  const preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : { data: null, loading: false, error: '' };
-  const pv = (preview.data && typeof preview.data === 'object') ? preview.data : null;
-
-  const pvErr = String(preview.error || '').trim();
-  const pvLoading = !!preview.loading;
-
-  const cdErr = String(wiz.createDraftError || '').trim();
-  const cdBusy = !!wiz.createDraftBusy;
-
-  const decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : { candidate_ids: [], mismatch_choices: {}, loan_caps: {} };
-  const mismatchChoices = (decisions.mismatch_choices && typeof decisions.mismatch_choices === 'object') ? decisions.mismatch_choices : {};
-  const loanCaps = (decisions.loan_caps && typeof decisions.loan_caps === 'object') ? decisions.loan_caps : {};
-
-  const payeCands = Array.isArray(pv?.paye_candidates) ? pv.paye_candidates : [];
-  const nonPaye = Array.isArray(pv?.non_paye_payees) ? pv.non_paye_payees : [];
-
-  const allCands = [...payeCands, ...nonPaye];
-
-  const mismatchList = allCands.filter(c => {
-    try {
-      const m = c && typeof c === 'object' ? c.mismatch : null;
-      const hm = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true'));
-      return !!hm;
-    } catch {
-      return false;
-    }
-  });
-
-  const blockedItems = Array.isArray(pv?.blocked_items) ? pv.blocked_items : [];
-  const doNotPayItems = Array.isArray(pv?.do_not_pay_items) ? pv.do_not_pay_items : [];
-  const snoozedItems = Array.isArray(pv?.snoozed_items) ? pv.snoozed_items : [];
-
-  const candidateIdsArr = Array.isArray(decisions.candidate_ids) ? decisions.candidate_ids : [];
-  const candidateSet = new Set(candidateIdsArr.map(x => String(x || '').trim()).filter(Boolean));
-  const useCandidateFilter = candidateSet.size > 0;
-
-  const mismatchRowsHtml = mismatchList.length ? mismatchList.map((c) => {
-    const cid = String(c?.candidate_id || '').trim();
-    const name = String(c?.display_name || '').trim() || '—';
-    const tms = String(c?.tms_ref || '').trim();
-    const method = String(c?.current_pay_method || '').trim().toUpperCase() || '—';
-
-    const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
-    const srcPaye = (m.source_paye_ex_vat != null) ? String(m.source_paye_ex_vat) : '';
-    const srcUmb  = (m.source_umbrella_ex_vat != null) ? String(m.source_umbrella_ex_vat) : '';
-
-    const choiceNow = String(mismatchChoices[cid] || '').trim().toUpperCase();
-    const includeChecked = useCandidateFilter ? candidateSet.has(cid) : true;
-
-    const capNow = (loanCaps[cid] && typeof loanCaps[cid] === 'object') ? loanCaps[cid] : {};
-    const minTakeHome = (capNow.min_take_home != null) ? String(capNow.min_take_home) : '';
-    const maxDed = (capNow.max_deduction != null) ? String(capNow.max_deduction) : '';
-
-    return `
-      <tr>
-        <td style="white-space:nowrap;">
-          <label class="inline mini" title="Include this candidate in the batch">
-            <input
-              type="checkbox"
-              data-action="banking:pay:setCandidateInclude"
-              data-candidate-id="${enc(cid)}"
-              ${includeChecked ? 'checked' : ''}
-            />
-            Include
-          </label>
-        </td>
-        <td>
-          <div style="display:flex;flex-direction:column;gap:2px;">
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-              <span class="mono">${enc(tms || '')}</span>
-              <span>${enc(name)}</span>
-              <span class="pill">${enc(method)}</span>
-            </div>
-            <div class="mini" style="opacity:.85;">
-              Mismatch sources — PAYE: <span class="mono">${enc(srcPaye || '0')}</span> • Umbrella: <span class="mono">${enc(srcUmb || '0')}</span>
-            </div>
-          </div>
-        </td>
-        <td style="min-width:200px;">
-          <select
-            class="input"
-            data-action="banking:pay:setMismatchChoice"
-            data-candidate-id="${enc(cid)}"
-            title="Choose how to settle mismatch amounts for this candidate"
-          >
-            <option value="" ${choiceNow ? '' : 'selected'}>Choose…</option>
-            <option value="PAYE" ${choiceNow === 'PAYE' ? 'selected' : ''}>Settle via PAYE</option>
-            <option value="UMBRELLA" ${choiceNow === 'UMBRELLA' ? 'selected' : ''}>Settle via Umbrella</option>
-          </select>
-        </td>
-        <td style="min-width:220px;">
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <input
-              class="input"
-              style="max-width:130px;"
-              type="number"
-              step="0.01"
-              min="0"
-              data-action="banking:pay:setLoanCap"
-              data-candidate-id="${enc(cid)}"
-              data-cap-field="min_take_home"
-              placeholder="Min take-home"
-              value="${enc(minTakeHome)}"
-              title="Optional: minimum take-home after loan repayment"
-            />
-            <input
-              class="input"
-              style="max-width:130px;"
-              type="number"
-              step="0.01"
-              min="0"
-              data-action="banking:pay:setLoanCap"
-              data-candidate-id="${enc(cid)}"
-              data-cap-field="max_deduction"
-              placeholder="Max deduction"
-              value="${enc(maxDed)}"
-              title="Optional: cap total deductions for loans"
-            />
-          </div>
-        </td>
-      </tr>
-    `;
-  }).join('') : `
-    <tr><td colspan="4" class="mini" style="opacity:.85;">No mismatch decisions required.</td></tr>
-  `;
-
-  const previewSummaryHtml = pv ? `
-    <div class="mini" style="opacity:.9;">
-      Week start: <span class="mono">${enc(String(pv.pay_week_start || '') || '—')}</span>
-      • PAYE candidates: <span class="mono">${enc(String(payeCands.length))}</span>
-      • Umbrella payees: <span class="mono">${enc(String(nonPaye.length))}</span>
-      • Mismatches: <span class="mono">${enc(String(mismatchList.length))}</span>
-      • Blocked: <span class="mono">${enc(String(blockedItems.length))}</span>
-      • Do-not-pay: <span class="mono">${enc(String(doNotPayItems.length))}</span>
-      • Snoozed: <span class="mono">${enc(String(snoozedItems.length))}</span>
-    </div>
-  ` : `<div class="mini" style="opacity:.85;">Run Preview to compute deltas, blockers, and mismatch decisions.</div>`;
-
-  const previewBtnDisabled = pvLoading || cdBusy;
-  const createBtnDisabled = cdBusy || pvLoading || !payDate;
-
-  return `
-    <div class="card" id="bankingPayNewBatchWizard">
-      <div class="row" style="gap:10px;">
-        <label>Create / Preview</label>
-        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-          ${pvErr ? `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>` : ''}
-          ${cdErr ? `<div class="error" style="white-space:pre-wrap;">${enc(cdErr)}</div>` : ''}
-
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <div style="min-width:220px;max-width:260px;">
-              <label class="inline mini" style="opacity:.85;">Pay date</label>
+            <div style="min-width:260px;max-width:360px;">
+              <label class="inline mini" style="opacity:.85;">Candidate filter (optional)</label>
               <input
-                id="bankingPayDateInput"
+                id="bankingPayCandidateFilterInput"
                 class="input"
                 type="text"
-                name="pay_date"
-                placeholder="YYYY-MM-DD"
-                value="${enc(payDate)}"
-                data-action="banking:pay:setPayDate"
-                title="Pay date (YYYY-MM-DD)"
+                value="${enc(candFilterVal)}"
+                placeholder="ALL (candidate_id UUID)"
+                title="Optional candidate_id UUID filter (leave blank for ALL)"
+                oninput="${syncCandFilterJs}"
+                onchange="${syncCandFilterJs}"
+              />
+            </div>
+
+            <div style="min-width:260px;max-width:360px;">
+              <label class="inline mini" style="opacity:.85;">Client filter (optional)</label>
+              <input
+                id="bankingPayClientFilterInput"
+                class="input"
+                type="text"
+                value="${enc(clientFilterVal)}"
+                placeholder="ALL (client_id UUID)"
+                title="Optional client_id UUID filter (leave blank for ALL)"
+                oninput="${syncClientFilterJs}"
+                onchange="${syncClientFilterJs}"
               />
             </div>
 
@@ -9747,6 +9645,7 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
+
 
 function renderPayPreparePanel() {
   const enc = (typeof escapeHtml === 'function')
@@ -11342,6 +11241,7 @@ function renderBankingRemittancesStatusTab() {
   `;
 }
 
+
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -11456,6 +11356,34 @@ function attachBankingModalDelegatedHandlers() {
       }
     };
 
+    // Ensure pay state scaffolding exists
+    try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; } catch {}
+    try { st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {}; } catch {}
+    try { st.pay.draftWizard.preview = (st.pay.draftWizard.preview && typeof st.pay.draftWizard.preview === 'object') ? st.pay.draftWizard.preview : { data:null, loading:false, error:'' }; } catch {}
+    try { st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : { candidate_ids: [], mismatch_choices: {}, loan_caps: {} }; } catch {}
+
+    const getUkTodayIso = () => {
+      try {
+        const ymd = (typeof toLocalParts === 'function')
+          ? (toLocalParts(new Date().toISOString(), null)?.ymd || null)
+          : null;
+        if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return String(ymd);
+      } catch {}
+      try {
+        const parts = new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Europe/London',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).formatToParts(new Date());
+        const g = (t) => (parts.find(p => p.type === t)?.value || '');
+        const y = g('year'), m = g('month'), d = g('day');
+        const iso = `${y}-${m}-${d}`;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+      } catch {}
+      return new Date().toISOString().slice(0, 10);
+    };
+
     // Local safe setters (do NOT rerender on input typing)
     const setPayDate = (v) => {
       try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; } catch {}
@@ -11466,8 +11394,14 @@ function attachBankingModalDelegatedHandlers() {
       // Prefer existing helper if present
       try {
         if (typeof parseUkDateToIso === 'function') {
-          const iso = parseUkDateToIso(raw);
-          st.pay.draftWizard.pay_date = String(iso || '').trim();
+          const iso0 = parseUkDateToIso(raw);
+          const iso = String(iso0 || '').trim();
+          if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+            const todayIso = getUkTodayIso();
+            st.pay.draftWizard.pay_date = (iso < todayIso) ? todayIso : iso;
+          } else {
+            st.pay.draftWizard.pay_date = '';
+          }
           return;
         }
       } catch {}
@@ -11475,12 +11409,15 @@ function attachBankingModalDelegatedHandlers() {
       // Accept DD/MM/YYYY or YYYY-MM-DD
       const mUk = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
       if (mUk) {
-        st.pay.draftWizard.pay_date = `${mUk[3]}-${mUk[2]}-${mUk[1]}`;
+        const iso = `${mUk[3]}-${mUk[2]}-${mUk[1]}`;
+        const todayIso = getUkTodayIso();
+        st.pay.draftWizard.pay_date = (iso < todayIso) ? todayIso : iso;
         return;
       }
       const mIso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
       if (mIso) {
-        st.pay.draftWizard.pay_date = raw;
+        const todayIso = getUkTodayIso();
+        st.pay.draftWizard.pay_date = (raw < todayIso) ? todayIso : raw;
         return;
       }
 
@@ -11518,6 +11455,93 @@ function attachBankingModalDelegatedHandlers() {
       try { st.remittances.filters[k] = String(v || '').trim(); } catch {}
     };
 
+    const updateCandidateIncludeSet = (candidateId, includeChecked) => {
+      const cid = String(candidateId || '').trim();
+      if (!cid) return;
+
+      const pv = (st.pay && st.pay.draftWizard && st.pay.draftWizard.preview && st.pay.draftWizard.preview.data && typeof st.pay.draftWizard.preview.data === 'object')
+        ? st.pay.draftWizard.preview.data
+        : null;
+
+      const payeCands = Array.isArray(pv?.paye_candidates) ? pv.paye_candidates : [];
+      const nonPaye = Array.isArray(pv?.non_paye_payees) ? pv.non_paye_payees : [];
+      const all = [...payeCands, ...nonPaye]
+        .map(x => (x && typeof x === 'object' ? String(x.candidate_id || '').trim() : ''))
+        .filter(Boolean);
+
+      const allSet = new Set(all);
+
+      const curArr = Array.isArray(st.pay.draftWizard.decisions.candidate_ids) ? st.pay.draftWizard.decisions.candidate_ids : [];
+      const curSet = new Set(curArr.map(x => String(x || '').trim()).filter(Boolean));
+
+      // If no filter is currently set => default is "ALL candidates"
+      const effectiveSet = (curSet.size > 0) ? new Set(curSet) : new Set(allSet);
+
+      if (includeChecked) effectiveSet.add(cid);
+      else effectiveSet.delete(cid);
+
+      // If effective set equals ALL => store empty array to represent "ALL"
+      let isAll = true;
+      for (const x of allSet) {
+        if (!effectiveSet.has(x)) { isAll = false; break; }
+      }
+      for (const x of effectiveSet) {
+        if (!allSet.has(x)) { isAll = false; break; }
+      }
+
+      st.pay.draftWizard.decisions.candidate_ids = isAll ? [] : Array.from(effectiveSet);
+    };
+
+    const setMismatchChoice = (candidateId, choice) => {
+      const cid = String(candidateId || '').trim();
+      const v = String(choice || '').trim().toUpperCase();
+      if (!cid) return;
+
+      st.pay.draftWizard.decisions.mismatch_choices =
+        (st.pay.draftWizard.decisions.mismatch_choices && typeof st.pay.draftWizard.decisions.mismatch_choices === 'object')
+          ? st.pay.draftWizard.decisions.mismatch_choices
+          : {};
+
+      if (!v) {
+        try { delete st.pay.draftWizard.decisions.mismatch_choices[cid]; } catch {}
+      } else {
+        st.pay.draftWizard.decisions.mismatch_choices[cid] = v;
+      }
+    };
+
+    const setLoanCap = (candidateId, field, valueRaw) => {
+      const cid = String(candidateId || '').trim();
+      const f = String(field || '').trim();
+      if (!cid) return;
+      if (!(f === 'min_take_home' || f === 'max_deduction')) return;
+
+      st.pay.draftWizard.decisions.loan_caps =
+        (st.pay.draftWizard.decisions.loan_caps && typeof st.pay.draftWizard.decisions.loan_caps === 'object')
+          ? st.pay.draftWizard.decisions.loan_caps
+          : {};
+
+      const cur = (st.pay.draftWizard.decisions.loan_caps[cid] && typeof st.pay.draftWizard.decisions.loan_caps[cid] === 'object')
+        ? st.pay.draftWizard.decisions.loan_caps[cid]
+        : {};
+
+      const raw = (valueRaw == null) ? '' : String(valueRaw).trim();
+      if (!raw) {
+        const next = { ...cur };
+        delete next[f];
+        st.pay.draftWizard.decisions.loan_caps[cid] = next;
+        return;
+      }
+
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        // Store as-is to preserve user input; backend will validate on create
+        st.pay.draftWizard.decisions.loan_caps[cid] = { ...cur, [f]: raw };
+        return;
+      }
+
+      st.pay.draftWizard.decisions.loan_caps[cid] = { ...cur, [f]: Math.round(n * 100) / 100 };
+    };
+
     // --- ACTION ROUTES ---
     // IMPORTANT: do NOT gate actions required to recover from mismatch (refreshCaps, goTab)
     if (a === 'banking:refreshCaps') {
@@ -11541,6 +11565,17 @@ function attachBankingModalDelegatedHandlers() {
       return;
     }
 
+    if (a === 'banking:openGlobalSettingsBankingPayments') {
+      try {
+        if (typeof openSettings === 'function') {
+          await openSettings('banking_payments');
+          return;
+        }
+      } catch {}
+      toast('Unable to open Global Settings.');
+      return;
+    }
+
     if (a === 'banking:retry-boot') {
       try {
         st.ui = (st.ui && typeof st.ui === 'object') ? st.ui : {};
@@ -11553,6 +11588,76 @@ function attachBankingModalDelegatedHandlers() {
       try { await bankingFetchSettingsDefaults?.(); } catch (e) { try { bankingHandleApiError?.(e, { action: 'BOOT_SETTINGS', errorPath: ['ui', 'globalError'] }); } catch {} }
       try { st.ui.busy.booting = false; } catch {}
       await safeRerender(null);
+      return;
+    }
+
+    // PAY DRAFT WIZARD: preview/create decisions
+    if (a === 'banking:pay:setPayDate') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setPayDate(v);
+
+      // ✅ Clamp UI value on change to prevent “past” display sticking
+      if (kind === 'change') {
+        try {
+          const todayIso = getUkTodayIso();
+          const iso = String(st.pay?.draftWizard?.pay_date || '').trim();
+          if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) && iso >= todayIso) {
+            if (typeof formatIsoToUk === 'function') {
+              el.value = formatIsoToUk(iso);
+            }
+          }
+        } catch {}
+      }
+      return;
+    }
+
+    if (a === 'banking:pay:preview') {
+      const g = safeGate('PREVIEW');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
+      await bankingPayPreview?.(pd);
+      return;
+    }
+
+    if (a === 'banking:pay:createDraft') {
+      const g = safeGate('CREATE_DRAFT');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
+      const dec = (st.pay?.draftWizard?.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
+      await bankingPayCreateDraft?.({ pay_date: pd, preview_decisions_json: dec });
+      return;
+    }
+
+    if (a === 'banking:pay:clearPreview') {
+      try {
+        st.pay.draftWizard.preview = { data: null, loading: false, error: '' };
+        st.pay.draftWizard.decisions = { candidate_ids: [], mismatch_choices: {}, loan_caps: {} };
+        st.pay.draftWizard.createDraftError = '';
+        st.pay.draftWizard.createDraftBusy = false;
+      } catch {}
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:pay:setCandidateInclude') {
+      const cid = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+      const checked = !!(el && el.checked === true);
+      updateCandidateIncludeSet(cid, checked);
+      return;
+    }
+
+    if (a === 'banking:pay:setMismatchChoice') {
+      const cid = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setMismatchChoice(cid, v);
+      return;
+    }
+
+    if (a === 'banking:pay:setLoanCap') {
+      const cid = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+      const field = String(ds('capField') || dget('data-cap-field') || '').trim();
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setLoanCap(cid, field, v);
       return;
     }
 
@@ -11711,6 +11816,43 @@ function attachBankingModalDelegatedHandlers() {
   targetEl.addEventListener('change', onChange, true);
   targetEl.addEventListener('input', onInput, true);
 
+  // ✅ Ensure pay date picker is always wired with minDate=today (prevents picking past dates)
+  try {
+    setTimeout(() => {
+      try {
+        if (!isActiveBankingFrame()) return;
+        const st = getState();
+        if (!st) return;
+
+        const todayIso = (() => {
+          try {
+            const ymd = (typeof toLocalParts === 'function')
+              ? (toLocalParts(new Date().toISOString(), null)?.ymd || null)
+              : null;
+            if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return String(ymd);
+          } catch {}
+          return new Date().toISOString().slice(0, 10);
+        })();
+
+        const elPay = document.getElementById('bankingPayDateInput');
+        if (elPay && typeof attachUkDatePicker === 'function') {
+          try { attachUkDatePicker(elPay, { minDate: todayIso }); } catch {}
+          try {
+            const iso = String(st?.pay?.draftWizard?.pay_date || '').trim();
+            if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) && iso >= todayIso && typeof formatIsoToUk === 'function') {
+              elPay.value = formatIsoToUk(iso);
+            }
+          } catch {}
+        }
+
+        const elSched = document.getElementById('bankingScheduleDateUk');
+        if (elSched && typeof attachUkDatePicker === 'function') {
+          try { attachUkDatePicker(elSched, { minDate: todayIso }); } catch {}
+        }
+      } catch {}
+    }, 0);
+  } catch {}
+
   // Store detach hook on modalCtx for later cleanup (e.g. onDismiss)
   try {
     const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
@@ -11731,8 +11873,6 @@ function attachBankingModalDelegatedHandlers() {
 
   return { ok: true };
 }
-
-
 
 
 
@@ -71964,7 +72104,7 @@ document.addEventListener('keydown', (e) => {
 
 // ================== NEW: openSettings (parent modal; opens in View) ==================
 
-async function openSettings() {
+async function openSettings(initialTabKey) {
   const deep = (o)=> JSON.parse(JSON.stringify(o || {}));
 
   // Hydrate settings + finance windows
@@ -72017,11 +72157,12 @@ async function openSettings() {
     modalCtx.remittanceDraft = prevRemDraft;
   }
 
-  // ✅ Add the Remittances tab to the Settings modal tabs list
+  // ✅ Add Banking & Payments tab to Settings modal (single home for all banking/payment settings)
   showModal(
     'Settings',
     [
       { key:'main', label:'Defaults' },
+      { key:'banking_payments', label:'Banking & Payments' },
       { key:'remittances', label:'Remittances' }
     ],
     renderSettingsTab,
@@ -72029,12 +72170,26 @@ async function openSettings() {
     true // hasId → opens in View mode
   );
 
+  // Best-effort: jump to requested tab
+  try {
+    const want = String(initialTabKey || '').trim();
+    if (want) {
+      setTimeout(() => {
+        try {
+          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (fr && String(fr.entity || '') === 'settings' && typeof fr.setTab === 'function') {
+            fr.setTab(want);
+          }
+        } catch {}
+      }, 0);
+    }
+  } catch {}
+
   // Wire finance window behaviours (delegated, survives re-renders)
   try { __ensureSettingsFinanceWindowsWiring(); } catch {}
   // Best-effort: initial sync/bounds after render
   setTimeout(() => { try { __settingsFinanceSync(); } catch {} }, 0);
 }
-
 
 function __ensureSettingsFinanceWindowsWiring() {
   if (window.__settingsFinanceWindowsWired) return;
@@ -72471,79 +72626,6 @@ function renderSettingsTab(key, s = {}) {
       </div>
     `;
 
-    const boolish = (v, dflt) => {
-      if (typeof v === 'boolean') return v;
-      if (v === 1 || v === '1') return true;
-      if (v === 0 || v === '0') return false;
-      if (v == null) return !!dflt;
-      const s = String(v).trim().toLowerCase();
-      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
-      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
-      return !!dflt;
-    };
-
-    const payrollTestingOn = boolish(s.payroll_testing, false);
-
-    // Neat Banking/Payments card: checkbox is UI-only; hidden field is collected by collectForm
-    // so backend receives "true"/"false" (not "on").
-    const bankingCard = `
-      <div class="row" style="grid-column:1/-1">
-        <div id="settingsBankingRoot" style="padding:12px;border:1px solid rgba(255,255,255,0.12);border-radius:12px;background:rgba(255,255,255,0.04)">
-          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px">
-            <div>
-              <div style="font-weight:700;font-size:14px">Banking</div>
-              <div style="font-size:12px;color:rgba(255,255,255,0.7)">
-                Controls safe testing mode for banking execution.
-              </div>
-            </div>
-          </div>
-
-          <div style="display:flex;flex-direction:column;gap:6px;min-width:0;">
-            <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:start;margin:0;cursor:pointer;min-width:0;">
-              <input type="checkbox" id="payrollTestingCk" data-noCollect="true" ${payrollTestingOn ? 'checked' : ''} style="margin-top:2px;justify-self:start;" />
-              <div style="min-width:0;">
-                <div style="line-height:1.2;white-space:normal;overflow-wrap:break-word;">Payroll testing (simulate payments)</div>
-                <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
-                  When enabled, banking execution may be simulated and remittance sending is blocked.
-                </div>
-              </div>
-            </label>
-
-            <input type="hidden" id="payroll_testing" name="payroll_testing" value="${payrollTestingOn ? 'true' : 'false'}" />
-          </div>
-        </div>
-      </div>
-    `;
-
-    // Wire checkbox -> hidden value + mirror into modalCtx.data so rerenders stay aligned.
-    try {
-      setTimeout(() => {
-        try {
-          const root = document.getElementById('settingsBankingRoot');
-          if (!root) return;
-
-          if (root.dataset && root.dataset.bankWired === '1') return;
-          if (root.dataset) root.dataset.bankWired = '1';
-
-          const ck = document.getElementById('payrollTestingCk');
-          const hid = document.getElementById('payroll_testing');
-
-          const sync = () => {
-            const on = !!(ck && ck.checked);
-            if (hid) hid.value = on ? 'true' : 'false';
-            try {
-              if (modalCtx && modalCtx.data && typeof modalCtx.data === 'object') {
-                modalCtx.data.payroll_testing = on;
-              }
-            } catch {}
-          };
-
-          if (ck) ck.addEventListener('change', sync, true);
-          sync();
-        } catch {}
-      }, 0);
-    } catch {}
-
     return html(`
       <div class="form" id="settingsForm">
         ${input('timezone_id','Timezone', s.timezone_id || 'Europe/London')}
@@ -72565,9 +72647,303 @@ function renderSettingsTab(key, s = {}) {
         </div>
         ${input('bh_feed_url','BH feed URL', s.bh_feed_url || '')}
 
-        ${bankingCard}
-
         ${financeCard}
+      </div>
+    `);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Tab: Banking & Payments (new; single home for banking/payment settings)
+  // ─────────────────────────────────────────────────────────────
+  if (k === 'banking_payments') {
+    const boolish = (v, dflt) => {
+      if (typeof v === 'boolean') return v;
+      if (v === 1 || v === '1') return true;
+      if (v === 0 || v === '0') return false;
+      if (v == null) return !!dflt;
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+      return !!dflt;
+    };
+
+    const toStr = (v) => (v == null ? '' : String(v));
+    const trimStr = (v) => String(v == null ? '' : v).trim();
+
+    const payrollTestingOn = boolish(s.payroll_testing, false);
+    const payeRemOn = boolish(s.paye_remittances_enabled, false);
+
+    const testEmail = trimStr(s.remittance_test_recipient_email || '');
+    const authoriserQty = (s.payment_authoriser_quantity == null) ? '' : String(s.payment_authoriser_quantity);
+    const defaultFundingRef = trimStr(s.rail_default_funding_account_ref || '');
+
+    const monthsBack = (s.pay_eligibility_months_back == null) ? '' : String(s.pay_eligibility_months_back);
+    const weeksAhead = (s.pay_eligibility_weeks_ahead == null) ? '' : String(s.pay_eligibility_weeks_ahead);
+
+    // Seed a stable draft store so values survive tab switches/re-renders
+    try {
+      if (modalCtx && typeof modalCtx === 'object') {
+        if (!modalCtx.bankingPaymentsDraft || typeof modalCtx.bankingPaymentsDraft !== 'object') {
+          modalCtx.bankingPaymentsDraft = {
+            payroll_testing: payrollTestingOn,
+            paye_remittances_enabled: payeRemOn,
+            remittance_test_recipient_email: testEmail,
+            payment_authoriser_quantity: authoriserQty,
+            rail_default_funding_account_ref: defaultFundingRef,
+            pay_eligibility_months_back: monthsBack,
+            pay_eligibility_weeks_ahead: weeksAhead,
+            dirty: false
+          };
+        } else {
+          const d = modalCtx.bankingPaymentsDraft;
+          if (!('payroll_testing' in d)) d.payroll_testing = payrollTestingOn;
+          if (!('paye_remittances_enabled' in d)) d.paye_remittances_enabled = payeRemOn;
+          if (!('remittance_test_recipient_email' in d)) d.remittance_test_recipient_email = testEmail;
+          if (!('payment_authoriser_quantity' in d)) d.payment_authoriser_quantity = authoriserQty;
+          if (!('rail_default_funding_account_ref' in d)) d.rail_default_funding_account_ref = defaultFundingRef;
+          if (!('pay_eligibility_months_back' in d)) d.pay_eligibility_months_back = monthsBack;
+          if (!('pay_eligibility_weeks_ahead' in d)) d.pay_eligibility_weeks_ahead = weeksAhead;
+          if (!('dirty' in d)) d.dirty = false;
+        }
+      }
+    } catch {}
+
+    const draft = (modalCtx && modalCtx.bankingPaymentsDraft && typeof modalCtx.bankingPaymentsDraft === 'object')
+      ? modalCtx.bankingPaymentsDraft
+      : {
+          payroll_testing: payrollTestingOn,
+          paye_remittances_enabled: payeRemOn,
+          remittance_test_recipient_email: testEmail,
+          payment_authoriser_quantity: authoriserQty,
+          rail_default_funding_account_ref: defaultFundingRef,
+          pay_eligibility_months_back: monthsBack,
+          pay_eligibility_weeks_ahead: weeksAhead,
+          dirty: false
+        };
+
+    // Wire checkbox -> hidden value + mirror into modalCtx.data so rerenders stay aligned.
+    try {
+      setTimeout(() => {
+        try {
+          const root = document.getElementById('settingsBankingPaymentsRoot');
+          if (!root) return;
+
+          if (root.dataset && root.dataset.bankPayWired === '1') return;
+          if (root.dataset) root.dataset.bankPayWired = '1';
+
+          const ckTest = document.getElementById('payrollTestingCk');
+          const hidTest = document.getElementById('payroll_testing');
+
+          const ckPaye = document.getElementById('payeRemittancesEnabledCk');
+          const hidPaye = document.getElementById('paye_remittances_enabled');
+
+          const inTestEmail = document.getElementById('remittance_test_recipient_email');
+          const inQty = document.getElementById('payment_authoriser_quantity');
+          const inFunding = document.getElementById('rail_default_funding_account_ref');
+          const inMonths = document.getElementById('pay_eligibility_months_back');
+          const inWeeks = document.getElementById('pay_eligibility_weeks_ahead');
+
+          const sync = () => {
+            const tOn = !!(ckTest && ckTest.checked);
+            const pOn = !!(ckPaye && ckPaye.checked);
+
+            if (hidTest) hidTest.value = tOn ? 'true' : 'false';
+            if (hidPaye) hidPaye.value = pOn ? 'true' : 'false';
+
+            const te = (inTestEmail && inTestEmail.value != null) ? String(inTestEmail.value).trim() : '';
+            const qty = (inQty && inQty.value != null) ? String(inQty.value).trim() : '';
+            const fund = (inFunding && inFunding.value != null) ? String(inFunding.value).trim() : '';
+            const mb = (inMonths && inMonths.value != null) ? String(inMonths.value).trim() : '';
+            const wa = (inWeeks && inWeeks.value != null) ? String(inWeeks.value).trim() : '';
+
+            try {
+              if (modalCtx && modalCtx.bankingPaymentsDraft && typeof modalCtx.bankingPaymentsDraft === 'object') {
+                modalCtx.bankingPaymentsDraft.payroll_testing = tOn;
+                modalCtx.bankingPaymentsDraft.paye_remittances_enabled = pOn;
+                modalCtx.bankingPaymentsDraft.remittance_test_recipient_email = te;
+                modalCtx.bankingPaymentsDraft.payment_authoriser_quantity = qty;
+                modalCtx.bankingPaymentsDraft.rail_default_funding_account_ref = fund;
+                modalCtx.bankingPaymentsDraft.pay_eligibility_months_back = mb;
+                modalCtx.bankingPaymentsDraft.pay_eligibility_weeks_ahead = wa;
+                modalCtx.bankingPaymentsDraft.dirty = true;
+              }
+            } catch {}
+
+            try {
+              if (modalCtx && modalCtx.data && typeof modalCtx.data === 'object') {
+                modalCtx.data.payroll_testing = tOn;
+                modalCtx.data.paye_remittances_enabled = pOn;
+                modalCtx.data.remittance_test_recipient_email = te;
+                modalCtx.data.payment_authoriser_quantity = qty;
+                modalCtx.data.rail_default_funding_account_ref = fund;
+                modalCtx.data.pay_eligibility_months_back = mb;
+                modalCtx.data.pay_eligibility_weeks_ahead = wa;
+              }
+            } catch {}
+          };
+
+          if (ckTest) ckTest.addEventListener('change', sync, true);
+          if (ckPaye) ckPaye.addEventListener('change', sync, true);
+
+          if (inTestEmail) inTestEmail.addEventListener('input', sync, true);
+          if (inQty) inQty.addEventListener('input', sync, true);
+          if (inFunding) inFunding.addEventListener('input', sync, true);
+          if (inMonths) inMonths.addEventListener('input', sync, true);
+          if (inWeeks) inWeeks.addEventListener('input', sync, true);
+
+          sync();
+        } catch {}
+      }, 0);
+    } catch {}
+
+    const asEmailHint = `
+      <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+        When <strong>Payroll testing</strong> is enabled, remittances are only allowed if a test email is set here.
+        All remittances will be routed to this test recipient, and the intended recipient is recorded for audit.
+      </div>
+    `;
+
+    const asFundingHint = `
+      <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+        Default funding account reference used to preselect scheduling. Backend validates it against the current rail and requires GBP.
+      </div>
+    `;
+
+    const asEligHint = `
+      <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+        Pay Preview and Create Draft scan eligible timesheets across this window relative to UK “today” — it is <strong>not</strong> scoped by the selected pay date.
+      </div>
+    `;
+
+    return html(`
+      <div class="form" id="settingsForm">
+        <div class="row" style="grid-column:1/-1">
+          <div id="settingsBankingPaymentsRoot" class="card" style="padding:12px;">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px">
+              <div>
+                <div style="font-weight:700;font-size:14px">Banking & Payments</div>
+                <div style="font-size:12px;color:rgba(255,255,255,0.7)">
+                  Banking execution / remittance routing / pay eligibility window.
+                </div>
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1;margin-top:2px;">
+              <label style="white-space:normal;">Payroll testing</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
+                <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:start;margin:0;cursor:pointer;min-width:0;">
+                  <input type="checkbox" id="payrollTestingCk" data-noCollect="true" ${draft.payroll_testing ? 'checked' : ''} style="margin-top:2px;justify-self:start;" />
+                  <div style="min-width:0;">
+                    <div style="line-height:1.2;white-space:normal;overflow-wrap:break-word;">Simulate payments (no real bank execution)</div>
+                    <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+                      In test mode, settlement artifacts are still created, but rail execution should be simulated. Remittances are routed to the test recipient below.
+                    </div>
+                  </div>
+                </label>
+                <input type="hidden" id="payroll_testing" name="payroll_testing" value="${draft.payroll_testing ? 'true' : 'false'}" />
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1;margin-top:2px;">
+              <label style="white-space:normal;">Enable PAYE remittances</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
+                <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:center;margin:0;cursor:pointer;min-width:0;">
+                  <input type="checkbox" id="payeRemittancesEnabledCk" data-noCollect="true" ${draft.paye_remittances_enabled ? 'checked' : ''} style="margin:0;justify-self:start;" />
+                  <span style="display:block;min-width:0;line-height:1.25;">If disabled, PAYE remittance send is blocked.</span>
+                </label>
+                <input type="hidden" id="paye_remittances_enabled" name="paye_remittances_enabled" value="${draft.paye_remittances_enabled ? 'true' : 'false'}" />
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1;">
+              <label>Test remittance recipient email</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
+                <input
+                  id="remittance_test_recipient_email"
+                  name="remittance_test_recipient_email"
+                  class="input"
+                  type="text"
+                  value="${escapeHtml(toStr(draft.remittance_test_recipient_email || ''))}"
+                  placeholder="e.g. test@yourdomain.com"
+                />
+                ${asEmailHint}
+              </div>
+            </div>
+
+            <div class="row">
+              <label>Payment authoriser quantity</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
+                <input
+                  id="payment_authoriser_quantity"
+                  name="payment_authoriser_quantity"
+                  class="input"
+                  type="number"
+                  min="1"
+                  max="10"
+                  step="1"
+                  value="${escapeHtml(toStr(draft.payment_authoriser_quantity || ''))}"
+                  placeholder="1"
+                />
+                <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+                  Number of approvals required before a scheduled pay batch becomes eligible for cron execution.
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <label>Default funding account ref</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
+                <input
+                  id="rail_default_funding_account_ref"
+                  name="rail_default_funding_account_ref"
+                  class="input"
+                  type="text"
+                  value="${escapeHtml(toStr(draft.rail_default_funding_account_ref || ''))}"
+                  placeholder="(optional)"
+                />
+                ${asFundingHint}
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1;margin-top:8px;">
+              <label style="white-space:normal;">Pay eligibility window</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:8px;">
+                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+                  <div style="min-width:220px;">
+                    <label class="inline mini" style="opacity:.85;">Months back</label>
+                    <input
+                      id="pay_eligibility_months_back"
+                      name="pay_eligibility_months_back"
+                      class="input"
+                      type="number"
+                      min="0"
+                      max="120"
+                      step="1"
+                      value="${escapeHtml(toStr(draft.pay_eligibility_months_back || ''))}"
+                      placeholder="6"
+                    />
+                  </div>
+                  <div style="min-width:220px;">
+                    <label class="inline mini" style="opacity:.85;">Weeks ahead</label>
+                    <input
+                      id="pay_eligibility_weeks_ahead"
+                      name="pay_eligibility_weeks_ahead"
+                      class="input"
+                      type="number"
+                      min="0"
+                      max="52"
+                      step="1"
+                      value="${escapeHtml(toStr(draft.pay_eligibility_weeks_ahead || ''))}"
+                      placeholder="2"
+                    />
+                  </div>
+                </div>
+                ${asEligHint}
+              </div>
+            </div>
+
+          </div>
+        </div>
       </div>
     `);
   }
@@ -72577,7 +72953,6 @@ function renderSettingsTab(key, s = {}) {
   //  - Weekly/Daily dropdown (UI-only)
   //  - Checkbox groups (UI-only; NOT collected by collectForm)
   //  - Header/Footer message (persisted; collected by collectForm)
-  //  - PAYE enable gate checkbox (persisted via hidden field collected by collectForm)
   //  - No JSON shown
   // ─────────────────────────────────────────────────────────────
   if (k === 'remittances') {
@@ -72649,17 +73024,6 @@ function renderSettingsTab(key, s = {}) {
       return out;
     })();
 
-    const boolish = (v, dflt) => {
-      if (typeof v === 'boolean') return v;
-      if (v === 1 || v === '1') return true;
-      if (v === 0 || v === '0') return false;
-      if (v == null) return !!dflt;
-      const s = String(v).trim().toLowerCase();
-      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
-      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
-      return !!dflt;
-    };
-
     // Seed a stable draft store for the remittances tab so values survive tab switches/re-renders.
     try {
       if (modalCtx && typeof modalCtx === 'object') {
@@ -72669,14 +73033,12 @@ function renderSettingsTab(key, s = {}) {
             remittance_includes_json: deep(cfg),
             remittance_header_message: (s.remittance_header_message == null ? '' : String(s.remittance_header_message)),
             remittance_footer_message: (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message)),
-            paye_remittances_enabled: boolish(s.paye_remittances_enabled, false),
             dirty: false
           };
         } else {
           if (!('remittance_includes_json' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_includes_json = deep(cfg);
           if (!('remittance_header_message' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_header_message = (s.remittance_header_message == null ? '' : String(s.remittance_header_message));
           if (!('remittance_footer_message' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_footer_message = (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message));
-          if (!('paye_remittances_enabled' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.paye_remittances_enabled = boolish(s.paye_remittances_enabled, false);
           if (!('ui_scope' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.ui_scope = 'WEEKLY';
           if (!('dirty' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.dirty = false;
         }
@@ -72688,7 +73050,6 @@ function renderSettingsTab(key, s = {}) {
       remittance_includes_json: deep(cfg),
       remittance_header_message: (s.remittance_header_message == null ? '' : String(s.remittance_header_message)),
       remittance_footer_message: (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message)),
-      paye_remittances_enabled: boolish(s.paye_remittances_enabled, false),
       dirty: false
     };
 
@@ -72715,6 +73076,17 @@ function renderSettingsTab(key, s = {}) {
       { key: 'worked_times',     label: 'Worked times (start/end/break/minutes)' }
     ];
 
+    const boolish = (v, dflt) => {
+      if (typeof v === 'boolean') return v;
+      if (v === 1 || v === '1') return true;
+      if (v === 0 || v === '0') return false;
+      if (v == null) return !!dflt;
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+      return !!dflt;
+    };
+
     const getCfg = (scope, group, kk, dflt) => {
       try {
         const S = (scope === 'DAILY') ? 'daily' : 'weekly';
@@ -72726,8 +73098,7 @@ function renderSettingsTab(key, s = {}) {
       }
     };
 
-    // ✅ FIX: checkbox row layout must be *grid*, not flex, and must not use shared "inline" styles
-    // (prevents large spacing + misalignment from inherited label styles in other parts of the app)
+    // ✅ FIX: checkbox row layout must be *grid*, not flex
     const mkCheck = (id, text, checked) => `
       <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:center;margin:0;cursor:pointer;min-width:0;">
         <input type="checkbox" id="${id}" data-noCollect="true" ${checked ? 'checked' : ''} style="margin:0;justify-self:start;" />
@@ -72735,7 +73106,7 @@ function renderSettingsTab(key, s = {}) {
       </label>
     `;
 
-    // ✅ FIX: use an auto-fit grid so it becomes 2–3 columns depending on modal width
+    // ✅ FIX: auto-fit grid => 2–3 columns depending on width
     const mkGroup = (scope, title, list, kind) => {
       const scopeUpper = String(scope || '').toUpperCase();
       const pillClass = (scopeUpper === 'DAILY') ? 'pill pill-daily' : 'pill pill-weekly';
@@ -72795,19 +73166,9 @@ function renderSettingsTab(key, s = {}) {
               const hdr = document.getElementById('remittance_header_message');
               const ftr = document.getElementById('remittance_footer_message');
 
-              const payeCk = document.getElementById('payeRemittancesEnabledCk');
-              const payeHidden = document.getElementById('paye_remittances_enabled');
-
-              const payeEnabled = !!(payeCk && payeCk.checked);
-
               if (modalCtx && modalCtx.remittanceDraft) {
                 if (hdr) modalCtx.remittanceDraft.remittance_header_message = String(hdr.value ?? '');
                 if (ftr) modalCtx.remittanceDraft.remittance_footer_message = String(ftr.value ?? '');
-                modalCtx.remittanceDraft.paye_remittances_enabled = payeEnabled;
-              }
-
-              if (payeHidden) {
-                payeHidden.value = payeEnabled ? 'true' : 'false';
               }
 
               let inc = null;
@@ -72818,7 +73179,6 @@ function renderSettingsTab(key, s = {}) {
               } catch {}
 
               if (modalCtx && modalCtx.data && typeof modalCtx.data === 'object') {
-                modalCtx.data.paye_remittances_enabled = payeEnabled;
                 if (hdr) modalCtx.data.remittance_header_message = String(hdr.value ?? '');
                 if (ftr) modalCtx.data.remittance_footer_message = String(ftr.value ?? '');
               }
@@ -72852,14 +73212,6 @@ function renderSettingsTab(key, s = {}) {
           }
 
           try {
-            const payeCk = document.getElementById('payeRemittancesEnabledCk');
-            const payeHidden = document.getElementById('paye_remittances_enabled');
-            const payeEnabled = !!(modalCtx && modalCtx.remittanceDraft && modalCtx.remittanceDraft.paye_remittances_enabled);
-            if (payeCk) payeCk.checked = payeEnabled;
-            if (payeHidden) payeHidden.value = payeEnabled ? 'true' : 'false';
-          } catch {}
-
-          try {
             if (typeof applyRemittanceIncludesJsonToUi === 'function') {
               const baseJson = (modalCtx && modalCtx.remittanceDraft && modalCtx.remittanceDraft.remittance_includes_json)
                 ? modalCtx.remittanceDraft.remittance_includes_json
@@ -72872,7 +73224,7 @@ function renderSettingsTab(key, s = {}) {
             const t = e && e.target;
             if (!t) return;
             const id = String(t.id || '');
-            if (id.startsWith('rem_') || id === 'payeRemittancesEnabledCk') syncDraftFromDom();
+            if (id.startsWith('rem_')) syncDraftFromDom();
           }, true);
 
           root.addEventListener('input', (e) => {
@@ -72889,8 +73241,6 @@ function renderSettingsTab(key, s = {}) {
 
     const wkWrapStyle = (scopeUi === 'DAILY') ? 'display:none;' : '';
     const dyWrapStyle = (scopeUi === 'DAILY') ? '' : 'display:none;';
-
-    const payeEnabledInit = !!draft.paye_remittances_enabled;
 
     return html(`
       <div class="form" id="settingsForm">
@@ -72910,20 +73260,6 @@ function renderSettingsTab(key, s = {}) {
                   <option value="WEEKLY" ${scopeSelWeekly}>Weekly</option>
                   <option value="DAILY" ${scopeSelDaily}>Daily</option>
                 </select>
-              </div>
-            </div>
-
-            <div class="row" style="grid-column:1/-1;margin-top:2px;">
-              <label style="white-space:normal;">Enable PAYE remittances</label>
-              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
-                <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:center;margin:0;cursor:pointer;min-width:0;">
-                  <input type="checkbox" id="payeRemittancesEnabledCk" data-noCollect="true" ${payeEnabledInit ? 'checked' : ''} style="margin:0;justify-self:start;" />
-                  <span style="display:block;min-width:0;line-height:1.25;">If disabled, PAYE remittances send is blocked.</span>
-                </label>
-                <div style="font-size:12px;color:rgba(255,255,255,0.65);">
-                  This does not affect Umbrella remittances.
-                </div>
-                <input type="hidden" id="paye_remittances_enabled" name="paye_remittances_enabled" value="${payeEnabledInit ? 'true' : 'false'}" />
               </div>
             </div>
 
@@ -72954,6 +73290,7 @@ function renderSettingsTab(key, s = {}) {
             <div style="margin-top:10px;font-size:12px;color:rgba(255,255,255,0.65)">
               Notes:
               <ul style="margin:6px 0 0 18px;padding:0">
+                <li>PAYE remittance enable/disable is controlled in <strong>Global Settings → Banking &amp; Payments</strong>.</li>
                 <li>Job title / band will be included only when present and enabled.</li>
                 <li>Daily timesheets do not rely on contracts; values are sourced from the best available timesheet context.</li>
               </ul>
@@ -72966,6 +73303,10 @@ function renderSettingsTab(key, s = {}) {
 
   return '';
 }
+
+
+
+
 /**
  * ✅ Add this once (global) somewhere in your FE file:
  * - If user enters "45" => "0.45"
@@ -73047,15 +73388,7 @@ async function handleSaveSettings() {
   try { delete payload.id; } catch {}
 
   // ─────────────────────────────────────────────
-  // ✅ Remittances (new tab): build JSON from UI (checkboxes) + messages
-  // - No JSON shown to user.
-  // - Wire-in points for:
-  //   buildRemittanceIncludesJsonFromUi()
-  //   applyRemittanceIncludesJsonToUi(json) (used at render time)
-  // - Guarantee:
-  //   • switching tabs does not lose edits (draft + modalCtx.data)
-  //   • if user does NOT switch Weekly→Daily, Daily still persists (we always store both scopes)
-  //   • if user edits Remittances then saves from another tab, values still save (rd.dirty)
+  // ✅ Remittances (tab): build JSON from UI (checkboxes) + messages
   // ─────────────────────────────────────────────
   const remRootMounted = !!byId('settingsRemittancesRoot');
 
@@ -73135,17 +73468,6 @@ async function handleSaveSettings() {
 
     const baseData = (mc && mc.data && typeof mc.data === 'object') ? mc.data : {};
 
-    const boolish = (v, dflt) => {
-      if (typeof v === 'boolean') return v;
-      if (v === 1 || v === '1') return true;
-      if (v === 0 || v === '0') return false;
-      if (v == null) return !!dflt;
-      const s = String(v).trim().toLowerCase();
-      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
-      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
-      return !!dflt;
-    };
-
     const hasExistingRemValues = (() => {
       try {
         const inc = baseData && baseData.remittance_includes_json;
@@ -73158,21 +73480,19 @@ async function handleSaveSettings() {
           ? baseData.remittance_footer_message
           : null;
 
-        const payeHas = !!(baseData && Object.prototype.hasOwnProperty.call(baseData, 'paye_remittances_enabled'));
-
         const hdrOk = (hdr != null && String(hdr).trim().length > 0);
         const ftrOk = (ftr != null && String(ftr).trim().length > 0);
 
-        return incOk || hdrOk || ftrOk || payeHas;
+        return incOk || hdrOk || ftrOk;
       } catch {
         return false;
       }
     })();
 
-    // Only include remittance fields if:
-    // - user is on Remittances tab (explicit intent), OR
+    // Include remittance fields if:
+    // - tab mounted, OR
     // - user changed remittances (rd.dirty), OR
-    // - remittance values already exist in DB (idempotent echo on save)
+    // - remittance values already exist (idempotent echo)
     const shouldIncludeRem = !!(
       remRootMounted ||
       (rd && rd.dirty === true) ||
@@ -73180,14 +73500,14 @@ async function handleSaveSettings() {
     );
 
     if (shouldIncludeRem) {
-      // Prefer draft values if present (persists across tab switches)
+      // Prefer draft values if present
       let hdr = null;
       let ftr = null;
 
       if (rd && ('remittance_header_message' in rd)) hdr = rd.remittance_header_message;
       if (rd && ('remittance_footer_message' in rd)) ftr = rd.remittance_footer_message;
 
-      // Fall back to modalCtx.data (staged) if draft absent
+      // Fall back to modalCtx.data if draft absent
       if ((hdr === null || hdr === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'remittance_header_message')) {
         hdr = baseData.remittance_header_message;
       }
@@ -73195,37 +73515,16 @@ async function handleSaveSettings() {
         ftr = baseData.remittance_footer_message;
       }
 
-      // PAYE remittances enabled: prefer draft, else modalCtx.data, else DOM
-      let payeEnabled = null;
-
-      if (rd && Object.prototype.hasOwnProperty.call(rd, 'paye_remittances_enabled')) {
-        payeEnabled = boolish(rd.paye_remittances_enabled, false);
-      } else if (baseData && Object.prototype.hasOwnProperty.call(baseData, 'paye_remittances_enabled')) {
-        payeEnabled = boolish(baseData.paye_remittances_enabled, false);
-      }
-
-      // If UI mounted, prefer live DOM values (captures last edits)
+      // If UI mounted, prefer live DOM values
       if (remRootMounted) {
         const hEl = byId('remittance_header_message');
         const fEl = byId('remittance_footer_message');
         if (hEl) hdr = String(hEl.value ?? '');
         if (fEl) ftr = String(fEl.value ?? '');
-
-        const ck = byId('payeRemittancesEnabledCk');
-        if (ck) {
-          payeEnabled = !!ck.checked;
-        } else {
-          const hid = byId('paye_remittances_enabled');
-          if (hid) payeEnabled = boolish(hid.value, false);
-        }
       }
 
-      // Include messages (backend will trim/normalise to null if blank)
       if (hdr !== null && hdr !== undefined) payload.remittance_header_message = hdr;
       if (ftr !== null && ftr !== undefined) payload.remittance_footer_message = ftr;
-
-      // Include PAYE remittances enabled flag (backend accepts boolean or "true"/"false")
-      if (payeEnabled !== null && payeEnabled !== undefined) payload.paye_remittances_enabled = !!payeEnabled;
 
       // Includes JSON (must include BOTH weekly + daily)
       let inc = null;
@@ -73237,21 +73536,143 @@ async function handleSaveSettings() {
       }
 
       if (remRootMounted) {
-        // DOM exists (both weekly + daily checkbox sets exist even if one is hidden)
         inc = buildRemittanceIncludes();
       }
 
       if (!inc) {
-        // As a last resort, use deterministic defaults (but this path only triggers when shouldIncludeRem is true)
         inc = buildRemittanceIncludesFallback();
       }
 
       payload.remittance_includes_json = inc;
 
-      // Keep dirty until save succeeds
       try {
         if (rd) rd.dirty = true;
       } catch {}
+    }
+  } catch {}
+
+  // ─────────────────────────────────────────────
+  // ✅ Banking & Payments (tab): ensure fields persist even if saving from another tab
+  // ─────────────────────────────────────────────
+  const bankRootMounted = !!byId('settingsBankingPaymentsRoot');
+
+  const getBankDraft = () => {
+    try {
+      const mc =
+        (window.modalCtx && typeof window.modalCtx === 'object')
+          ? window.modalCtx
+          : ((typeof modalCtx !== 'undefined' && modalCtx && typeof modalCtx === 'object') ? modalCtx : null);
+
+      const d = (mc && mc.bankingPaymentsDraft && typeof mc.bankingPaymentsDraft === 'object') ? mc.bankingPaymentsDraft : null;
+      return d;
+    } catch { return null; }
+  };
+
+  try {
+    const bd = getBankDraft();
+
+    const mc =
+      (window.modalCtx && typeof window.modalCtx === 'object')
+        ? window.modalCtx
+        : ((typeof modalCtx !== 'undefined' && modalCtx && typeof modalCtx === 'object') ? modalCtx : null);
+
+    const baseData = (mc && mc.data && typeof mc.data === 'object') ? mc.data : {};
+
+    const boolish = (v, dflt) => {
+      if (typeof v === 'boolean') return v;
+      if (v === 1 || v === '1') return true;
+      if (v === 0 || v === '0') return false;
+      if (v == null) return !!dflt;
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+      return !!dflt;
+    };
+
+    const hasExistingBankValues = (() => {
+      try {
+        return !!(
+          Object.prototype.hasOwnProperty.call(baseData, 'payroll_testing') ||
+          Object.prototype.hasOwnProperty.call(baseData, 'paye_remittances_enabled') ||
+          Object.prototype.hasOwnProperty.call(baseData, 'remittance_test_recipient_email') ||
+          Object.prototype.hasOwnProperty.call(baseData, 'payment_authoriser_quantity') ||
+          Object.prototype.hasOwnProperty.call(baseData, 'rail_default_funding_account_ref') ||
+          Object.prototype.hasOwnProperty.call(baseData, 'pay_eligibility_months_back') ||
+          Object.prototype.hasOwnProperty.call(baseData, 'pay_eligibility_weeks_ahead')
+        );
+      } catch {
+        return false;
+      }
+    })();
+
+    const shouldIncludeBank = !!(
+      bankRootMounted ||
+      (bd && bd.dirty === true) ||
+      hasExistingBankValues
+    );
+
+    if (shouldIncludeBank) {
+      let payrollTesting = null;
+      let payeEnabled = null;
+
+      let testEmail = null;
+      let qty = null;
+      let fundingRef = null;
+      let monthsBack = null;
+      let weeksAhead = null;
+
+      if (bd && typeof bd === 'object') {
+        if ('payroll_testing' in bd) payrollTesting = boolish(bd.payroll_testing, false);
+        if ('paye_remittances_enabled' in bd) payeEnabled = boolish(bd.paye_remittances_enabled, false);
+
+        if ('remittance_test_recipient_email' in bd) testEmail = bd.remittance_test_recipient_email;
+        if ('payment_authoriser_quantity' in bd) qty = bd.payment_authoriser_quantity;
+        if ('rail_default_funding_account_ref' in bd) fundingRef = bd.rail_default_funding_account_ref;
+        if ('pay_eligibility_months_back' in bd) monthsBack = bd.pay_eligibility_months_back;
+        if ('pay_eligibility_weeks_ahead' in bd) weeksAhead = bd.pay_eligibility_weeks_ahead;
+      }
+
+      if (payrollTesting === null && Object.prototype.hasOwnProperty.call(baseData, 'payroll_testing')) payrollTesting = boolish(baseData.payroll_testing, false);
+      if (payeEnabled === null && Object.prototype.hasOwnProperty.call(baseData, 'paye_remittances_enabled')) payeEnabled = boolish(baseData.paye_remittances_enabled, false);
+
+      if ((testEmail === null || testEmail === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'remittance_test_recipient_email')) testEmail = baseData.remittance_test_recipient_email;
+      if ((qty === null || qty === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'payment_authoriser_quantity')) qty = baseData.payment_authoriser_quantity;
+      if ((fundingRef === null || fundingRef === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'rail_default_funding_account_ref')) fundingRef = baseData.rail_default_funding_account_ref;
+      if ((monthsBack === null || monthsBack === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'pay_eligibility_months_back')) monthsBack = baseData.pay_eligibility_months_back;
+      if ((weeksAhead === null || weeksAhead === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'pay_eligibility_weeks_ahead')) weeksAhead = baseData.pay_eligibility_weeks_ahead;
+
+      if (bankRootMounted) {
+        const ckTest = byId('payrollTestingCk');
+        const ckPaye = byId('payeRemittancesEnabledCk');
+
+        const inTestEmail = byId('remittance_test_recipient_email');
+        const inQty = byId('payment_authoriser_quantity');
+        const inFunding = byId('rail_default_funding_account_ref');
+        const inMonths = byId('pay_eligibility_months_back');
+        const inWeeks = byId('pay_eligibility_weeks_ahead');
+
+        if (ckTest) payrollTesting = !!ckTest.checked;
+        if (ckPaye) payeEnabled = !!ckPaye.checked;
+
+        if (inTestEmail) testEmail = String(inTestEmail.value ?? '').trim();
+        if (inQty) qty = String(inQty.value ?? '').trim();
+        if (inFunding) fundingRef = String(inFunding.value ?? '').trim();
+        if (inMonths) monthsBack = String(inMonths.value ?? '').trim();
+        if (inWeeks) weeksAhead = String(inWeeks.value ?? '').trim();
+      }
+
+      payload.payroll_testing = (payrollTesting === true);
+
+      if (payeEnabled !== null && payeEnabled !== undefined) payload.paye_remittances_enabled = (payeEnabled === true);
+
+      payload.remittance_test_recipient_email = (testEmail == null) ? null : (String(testEmail).trim() || null);
+      payload.payment_authoriser_quantity = (qty == null) ? null : String(qty).trim();
+      payload.rail_default_funding_account_ref = (fundingRef == null) ? null : (String(fundingRef).trim() || null);
+
+      payload.pay_eligibility_months_back = (monthsBack == null) ? null : String(monthsBack).trim();
+      payload.pay_eligibility_weeks_ahead = (weeksAhead == null) ? null : String(weeksAhead).trim();
+
+      try { if (bd) bd.dirty = true; } catch {}
     }
   } catch {}
 
@@ -73416,13 +73837,17 @@ async function handleSaveSettings() {
   // Save (minimise calls; enforce safe order)
   // ─────────────────────────────────────────────
   try {
-    // 1) Save non-finance settings_defaults (including remittances settings if present)
+    // 1) Save non-finance settings_defaults (includes Banking & Payments + Remittances + eligibility window fields)
     await saveSettings(payload);
 
-    // If remittance draft existed, mark clean after successful saveSettings call
+    // Mark drafts clean after successful saveSettings call
     try {
       const rd = getRemDraft();
       if (rd) rd.dirty = false;
+    } catch {}
+    try {
+      const bd = getBankDraft();
+      if (bd) bd.dirty = false;
     } catch {}
 
     // 2) Finance windows updates (order matters)
@@ -73470,8 +73895,22 @@ async function handleSaveSettings() {
         rd.remittance_includes_json = (modalCtx.data && modalCtx.data.remittance_includes_json) ? modalCtx.data.remittance_includes_json : (rd.remittance_includes_json || null);
         rd.remittance_header_message = (modalCtx.data && modalCtx.data.remittance_header_message != null) ? String(modalCtx.data.remittance_header_message) : (rd.remittance_header_message || '');
         rd.remittance_footer_message = (modalCtx.data && modalCtx.data.remittance_footer_message != null) ? String(modalCtx.data.remittance_footer_message) : (rd.remittance_footer_message || '');
-        rd.paye_remittances_enabled = !!(modalCtx.data && (modalCtx.data.paye_remittances_enabled === true || String(modalCtx.data.paye_remittances_enabled).trim().toLowerCase() === 'true'));
         rd.dirty = false;
+      }
+    } catch {}
+
+    // ✅ Refresh banking/payments draft baseline after successful save
+    try {
+      const bd = (modalCtx && modalCtx.bankingPaymentsDraft && typeof modalCtx.bankingPaymentsDraft === 'object') ? modalCtx.bankingPaymentsDraft : null;
+      if (bd) {
+        bd.payroll_testing = !!(modalCtx.data && (modalCtx.data.payroll_testing === true || String(modalCtx.data.payroll_testing).trim().toLowerCase() === 'true'));
+        bd.paye_remittances_enabled = !!(modalCtx.data && (modalCtx.data.paye_remittances_enabled === true || String(modalCtx.data.paye_remittances_enabled).trim().toLowerCase() === 'true'));
+        bd.remittance_test_recipient_email = (modalCtx.data && modalCtx.data.remittance_test_recipient_email != null) ? String(modalCtx.data.remittance_test_recipient_email).trim() : '';
+        bd.payment_authoriser_quantity = (modalCtx.data && modalCtx.data.payment_authoriser_quantity != null) ? String(modalCtx.data.payment_authoriser_quantity).trim() : '';
+        bd.rail_default_funding_account_ref = (modalCtx.data && modalCtx.data.rail_default_funding_account_ref != null) ? String(modalCtx.data.rail_default_funding_account_ref).trim() : '';
+        bd.pay_eligibility_months_back = (modalCtx.data && modalCtx.data.pay_eligibility_months_back != null) ? String(modalCtx.data.pay_eligibility_months_back).trim() : '';
+        bd.pay_eligibility_weeks_ahead = (modalCtx.data && modalCtx.data.pay_eligibility_weeks_ahead != null) ? String(modalCtx.data.pay_eligibility_weeks_ahead).trim() : '';
+        bd.dirty = false;
       }
     } catch {}
 
