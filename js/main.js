@@ -4622,6 +4622,946 @@ function renderTopNav(){
   } catch {}
 }
 
+async function openBankingReauthModal(opts = {}) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const purpose = String(opts.purpose || 'PAYMENT_SCHEDULE').trim() || 'PAYMENT_SCHEDULE';
+  const kind = String(opts.kind || 'import-summary-banking-reauth').trim() || 'import-summary-banking-reauth';
+
+  const closeTop = () => {
+    try {
+      const btn = document.getElementById('btnCloseModal');
+      if (btn && typeof btn.click === 'function') { btn.click(); return; }
+    } catch {}
+    try { if (typeof closeModal === 'function') closeModal(); } catch {}
+  };
+
+  const safeJson = async (res) => { try { return await res.json(); } catch { return null; } };
+
+  const apiPost = async (path, payload) => {
+    const res = await authFetch(API(path), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload || {})
+    });
+    const j = await safeJson(res);
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      const msg = (j && (j.error || j.message)) ? (j.error || j.message) : (t || `Request failed (${res.status})`);
+      throw new Error(String(msg || 'Request failed'));
+    }
+    return j;
+  };
+
+  const rootId = `bankingReauth_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  const state = {
+    step: 'password',            // 'password' | 'code'
+    password: '',
+    code: '',
+    challenge_id: '',
+    expires_in: 0,
+    busySend: false,
+    busyVerify: false,
+    err: '',
+    notice: ''
+  };
+
+  const render = () => {
+    const stepPwd = (state.step === 'password');
+    const stepCode = (state.step === 'code');
+
+    const disSend = state.busySend || state.busyVerify;
+    const disVerify = state.busyVerify || !stepCode;
+
+    return `
+      <div id="${enc(rootId)}">
+        <div class="card">
+          <div class="row">
+            <label>Confirm it’s you</label>
+            <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+              <div class="mini" style="opacity:.9;">
+                To schedule payments, please re-enter your password and confirm the 6-digit code we email you.
+              </div>
+
+              ${state.err ? `<div class="error" style="white-space:pre-wrap;">${enc(state.err)}</div>` : ''}
+              ${state.notice ? `<div class="mini" style="color:#bbf7d0;white-space:pre-wrap;">${enc(state.notice)}</div>` : ''}
+
+              <div class="card" style="padding:10px;">
+                <div class="row">
+                  <label>Password</label>
+                  <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <input
+                      id="bankingReauthPassword"
+                      class="input"
+                      type="password"
+                      placeholder="Enter your password"
+                      value="${enc(state.password)}"
+                      style="min-width:260px;max-width:420px;"
+                      ${stepPwd ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);min-width:260px;max-width:420px;"'}
+                    />
+                    <button
+                      id="bankingReauthSendCode"
+                      type="button"
+                      class="btn btn-primary"
+                      ${disSend ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
+                      title="Send a 6-digit code to your email"
+                    >${state.busySend ? 'Sending…' : (stepCode ? 'Resend code' : 'Send code')}</button>
+                  </div>
+                </div>
+
+                <div class="row" style="margin-top:8px;">
+                  <label>Verification code</label>
+                  <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <input
+                      id="bankingReauthCode"
+                      class="input"
+                      type="text"
+                      inputmode="numeric"
+                      placeholder="6-digit code"
+                      value="${enc(state.code)}"
+                      style="max-width:180px;"
+                      ${stepCode ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);max-width:180px;"'}
+                    />
+                    <button
+                      id="bankingReauthVerify"
+                      type="button"
+                      class="btn btn-outline"
+                      ${disVerify ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
+                      title="Verify code"
+                    >${state.busyVerify ? 'Verifying…' : 'Verify'}</button>
+
+                    <button
+                      id="bankingReauthCancel"
+                      type="button"
+                      class="btn btn-outline"
+                      title="Cancel"
+                    >Cancel</button>
+
+                    <span class="mini" style="opacity:.8;">
+                      ${stepCode && state.expires_in ? `Code expires in ~${enc(String(Math.max(1, Math.round(state.expires_in / 60))))} min.` : ''}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mini" style="opacity:.75;">
+                You won’t be logged out. This just verifies you before scheduling.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
+  try {
+    const ctxSeed = { entity: 'reauth', openToken: `reauth:${Date.now()}:${Math.random().toString(36).slice(2)}` };
+    window.modalCtx = ctxSeed;
+    try { if (typeof modalCtx !== 'undefined') modalCtx = ctxSeed; } catch {}
+  } catch {}
+
+  return await new Promise((resolve) => {
+    let done = false;
+    const finish = (tokenOrNull) => {
+      if (done) return;
+      done = true;
+      resolve(tokenOrNull || null);
+    };
+
+    const onDismiss = () => finish(null);
+
+    const renderTab = (k) => {
+      if (k !== 'main') return '';
+      return render();
+    };
+
+    showModal(
+      'Payment verification',
+      [{ key: 'main', label: 'Verify' }],
+      renderTab,
+      null,
+      true,
+      null,
+      {
+        kind,
+        noParentGate: true,
+        showSave: false,
+        showApply: false,
+        stayOpenOnSave: false,
+        onDismiss
+      }
+    );
+
+    const wire = () => {
+      const body = document.getElementById('modalBody');
+      if (!body) return;
+
+      const root = body.querySelector(`#${CSS.escape(rootId)}`);
+      if (!root) return;
+
+      if (root.__wired) return;
+      root.__wired = true;
+
+      const rerender = () => {
+        try {
+          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (fr && typeof fr.setTab === 'function') fr.setTab('main');
+        } catch {
+          try { body.innerHTML = render(); } catch {}
+        }
+      };
+
+      const pwdEl = root.querySelector('#bankingReauthPassword');
+      const codeEl = root.querySelector('#bankingReauthCode');
+      const btnSend = root.querySelector('#bankingReauthSendCode');
+      const btnVerify = root.querySelector('#bankingReauthVerify');
+      const btnCancel = root.querySelector('#bankingReauthCancel');
+
+      if (pwdEl && !pwdEl.__wired) {
+        pwdEl.__wired = true;
+        pwdEl.addEventListener('input', () => {
+          state.password = String(pwdEl.value || '');
+        });
+      }
+
+      if (codeEl && !codeEl.__wired) {
+        codeEl.__wired = true;
+        codeEl.addEventListener('input', () => {
+          state.code = String(codeEl.value || '').replace(/\s+/g, '');
+        });
+      }
+
+      if (btnCancel && !btnCancel.__wired) {
+        btnCancel.__wired = true;
+        btnCancel.onclick = () => {
+          closeTop();
+          finish(null);
+        };
+      }
+
+      if (btnSend && !btnSend.__wired) {
+        btnSend.__wired = true;
+        btnSend.onclick = async () => {
+          if (state.busySend || state.busyVerify) return;
+
+          state.err = '';
+          state.notice = '';
+
+          const pw = String(state.password || '');
+          if (!pw) {
+            state.err = 'Password is required.';
+            rerender();
+            return;
+          }
+
+          state.busySend = true;
+          rerender();
+
+          try {
+            const j = await apiPost('/auth/reauth/start', { password: pw });
+            const cid = String(j?.challenge_id || '').trim();
+            const exp = Number(j?.expires_in || 0);
+
+            if (!cid) throw new Error('challenge_id missing');
+
+            state.challenge_id = cid;
+            state.expires_in = Number.isFinite(exp) ? Math.trunc(exp) : 0;
+            state.step = 'code';
+            state.notice = 'Code sent. Check your email.';
+          } catch (e) {
+            state.err = String(e?.message || e || 'Failed to send code');
+          } finally {
+            state.busySend = false;
+            rerender();
+          }
+        };
+      }
+
+      if (btnVerify && !btnVerify.__wired) {
+        btnVerify.__wired = true;
+        btnVerify.onclick = async () => {
+          if (state.busyVerify) return;
+
+          state.err = '';
+          state.notice = '';
+
+          const cid = String(state.challenge_id || '').trim();
+          if (!cid) {
+            state.err = 'Please send a code first.';
+            rerender();
+            return;
+          }
+
+          const code = String(state.code || '').trim();
+          if (!/^\d{6}$/.test(code)) {
+            state.err = 'Enter the 6-digit code.';
+            rerender();
+            return;
+          }
+
+          state.busyVerify = true;
+          rerender();
+
+          try {
+            const j = await apiPost('/auth/reauth/verify', { challenge_id: cid, code });
+            const tok = String(j?.reauth_token || '').trim();
+            if (!tok) throw new Error('reauth_token missing');
+
+            closeTop();
+            finish(tok);
+          } catch (e) {
+            state.err = String(e?.message || e || 'Verification failed');
+          } finally {
+            state.busyVerify = false;
+            rerender();
+          }
+        };
+      }
+    };
+
+    try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
+  });
+}
+
+async function openPayBatchPasswordConfirmModal(opts = {}) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const kind = String(opts.kind || 'import-summary-banking-cancel-pay').trim() || 'import-summary-banking-cancel-pay';
+  const title = String(opts.title || 'Cancel payment').trim() || 'Cancel payment';
+  const subtitle = String(opts.subtitle || 'Enter your password and a reason. No 2FA is required to cancel.').trim();
+  const defaultReason = String(opts.defaultReason || '').trim();
+
+  const closeTop = () => {
+    try {
+      const btn = document.getElementById('btnCloseModal');
+      if (btn && typeof btn.click === 'function') { btn.click(); return; }
+    } catch {}
+    try { if (typeof closeModal === 'function') closeModal(); } catch {}
+  };
+
+  const rootId = `bankingCancel_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  const state = {
+    password: '',
+    reason: defaultReason,
+    busy: false,
+    err: '',
+    notice: ''
+  };
+
+  const render = () => {
+    return `
+      <div id="${enc(rootId)}">
+        <div class="card">
+          <div class="row">
+            <label>${enc(title)}</label>
+            <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+              ${subtitle ? `<div class="mini" style="opacity:.9;">${enc(subtitle)}</div>` : ''}
+
+              ${state.err ? `<div class="error" style="white-space:pre-wrap;">${enc(state.err)}</div>` : ''}
+              ${state.notice ? `<div class="mini" style="color:#bbf7d0;white-space:pre-wrap;">${enc(state.notice)}</div>` : ''}
+
+              <div class="card" style="padding:10px;">
+                <div class="row">
+                  <label>Password</label>
+                  <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <input
+                      id="bankingCancelPassword"
+                      class="input"
+                      type="password"
+                      placeholder="Enter your password"
+                      value="${enc(state.password)}"
+                      style="min-width:260px;max-width:420px;"
+                      ${state.busy ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);min-width:260px;max-width:420px;"' : ''}
+                    />
+                  </div>
+                </div>
+
+                <div class="row" style="margin-top:8px;">
+                  <label>Reason</label>
+                  <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <input
+                      id="bankingCancelReason"
+                      class="input"
+                      type="text"
+                      placeholder="Why are you cancelling this payment?"
+                      value="${enc(state.reason)}"
+                      style="min-width:360px;max-width:720px;"
+                      ${state.busy ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);min-width:360px;max-width:720px;"' : ''}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                <button
+                  id="bankingCancelConfirm"
+                  type="button"
+                  class="btn btn-primary"
+                  ${state.busy ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
+                  title="Confirm cancellation"
+                >${state.busy ? 'Working…' : 'Confirm cancel'}</button>
+
+                <button
+                  id="bankingCancelClose"
+                  type="button"
+                  class="btn btn-outline"
+                  title="Close"
+                >Close</button>
+              </div>
+
+              <div class="mini" style="opacity:.75;">
+                Cancelling is audit-tracked and removes the payment from the schedule.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
+  try {
+    const ctxSeed = { entity: 'cancel-pay', openToken: `cancel-pay:${Date.now()}:${Math.random().toString(36).slice(2)}` };
+    window.modalCtx = ctxSeed;
+    try { if (typeof modalCtx !== 'undefined') modalCtx = ctxSeed; } catch {}
+  } catch {}
+
+  return await new Promise((resolve) => {
+    let done = false;
+    const finish = (res) => {
+      if (done) return;
+      done = true;
+      resolve(res || null);
+    };
+
+    const onDismiss = () => finish(null);
+
+    const renderTab = (k) => {
+      if (k !== 'main') return '';
+      return render();
+    };
+
+    showModal(
+      'Cancel payment',
+      [{ key: 'main', label: 'Confirm' }],
+      renderTab,
+      null,
+      true,
+      null,
+      {
+        kind,
+        noParentGate: true,
+        showSave: false,
+        showApply: false,
+        stayOpenOnSave: false,
+        onDismiss
+      }
+    );
+
+    const wire = () => {
+      const body = document.getElementById('modalBody');
+      if (!body) return;
+
+      const root = body.querySelector(`#${CSS.escape(rootId)}`);
+      if (!root) return;
+
+      if (root.__wired) return;
+      root.__wired = true;
+
+      const rerender = () => {
+        try {
+          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (fr && typeof fr.setTab === 'function') fr.setTab('main');
+        } catch {
+          try { body.innerHTML = render(); } catch {}
+        }
+      };
+
+      const pwEl = root.querySelector('#bankingCancelPassword');
+      const rsEl = root.querySelector('#bankingCancelReason');
+      const btnOk = root.querySelector('#bankingCancelConfirm');
+      const btnClose = root.querySelector('#bankingCancelClose');
+
+      if (pwEl && !pwEl.__wired) {
+        pwEl.__wired = true;
+        pwEl.addEventListener('input', () => { state.password = String(pwEl.value || ''); });
+      }
+
+      if (rsEl && !rsEl.__wired) {
+        rsEl.__wired = true;
+        rsEl.addEventListener('input', () => { state.reason = String(rsEl.value || ''); });
+      }
+
+      if (btnClose && !btnClose.__wired) {
+        btnClose.__wired = true;
+        btnClose.onclick = () => { closeTop(); finish(null); };
+      }
+
+      if (btnOk && !btnOk.__wired) {
+        btnOk.__wired = true;
+        btnOk.onclick = () => {
+          if (state.busy) return;
+
+          state.err = '';
+          state.notice = '';
+
+          const pw = String(state.password || '');
+          const reason = String(state.reason || '').trim();
+
+          if (!pw) {
+            state.err = 'Password is required.';
+            rerender();
+            return;
+          }
+          if (!reason) {
+            state.err = 'Reason is required.';
+            rerender();
+            return;
+          }
+
+          closeTop();
+          finish({ password: pw, reason });
+        };
+      }
+    };
+
+    try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
+  });
+}
+
+
+
+
+async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const kind = String(opts.kind || 'import-summary-banking-auth-requests').trim() || 'import-summary-banking-auth-requests';
+  const authId = String(authRequestId || '').trim();
+  if (!authId) throw new Error('authRequestId required');
+
+  const closeTop = () => {
+    try {
+      const btn = document.getElementById('btnCloseModal');
+      if (btn && typeof btn.click === 'function') { btn.click(); return; }
+    } catch {}
+    try { if (typeof closeModal === 'function') closeModal(); } catch {}
+  };
+
+  const safeJson = async (res) => { try { return await res.json(); } catch { return null; } };
+
+  const apiGet = async (path) => {
+    const res = await authFetch(API(path));
+    const j = await safeJson(res);
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      const msg = (j && (j.error || j.message)) ? (j.error || j.message) : (t || `Request failed (${res.status})`);
+      throw new Error(String(msg || 'Request failed'));
+    }
+    return j;
+  };
+
+  const apiPost = async (path, payload) => {
+    const res = await authFetch(API(path), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload || {})
+    });
+    const j = await safeJson(res);
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      const msg = (j && (j.error || j.message)) ? (j.error || j.message) : (t || `Request failed (${res.status})`);
+      throw new Error(String(msg || 'Request failed'));
+    }
+    return j;
+  };
+
+  const rootId = `bankingAuthReq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  const state = {
+    loading: true,
+    busy: false,
+    err: '',
+    notice: '',
+    users: [],           // eligible authorisers
+    invitedSet: new Set(),// already-invited (disable)
+    selectedSet: new Set(),
+    selectAll: false
+  };
+
+  // Pull invited list from current Banking state if available (best-effort)
+  try {
+    const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+    const invited = st?.pay?.selected?.data?.auth?.invited_to;
+    const currentReq = String(st?.pay?.selected?.data?.auth?.auth_request_id || '').trim();
+    if (currentReq && currentReq === authId && Array.isArray(invited)) {
+      for (const it of invited) {
+        const uid = String(it?.target_user_id || '').trim();
+        if (uid) state.invitedSet.add(uid);
+      }
+    }
+  } catch {}
+
+  const render = () => {
+    const rows = state.users.map(u => {
+      const uid = String(u?.id || '').trim();
+      const dn  = String(u?.display_name || '').trim() || uid;
+      const isAuth = (u?.payment_authoriser === true);
+      const isGold = (u?.payment_golden_key === true);
+      const flagTxt = `${isAuth ? '🔓' : ''}${isGold ? ' 🔑' : ''}`.trim();
+
+      const already = state.invitedSet.has(uid);
+      const checked = already ? true : state.selectedSet.has(uid);
+
+      return `
+        <tr>
+          <td style="width:44px;">
+            <input
+              type="checkbox"
+              data-uid="${enc(uid)}"
+              ${checked ? 'checked' : ''}
+              ${already ? 'data-disabled="1" aria-disabled="true"' : ''}
+              title="${enc(already ? 'Already requested' : 'Select authoriser')}"
+            />
+          </td>
+          <td>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span>${enc(dn)}</span>
+              ${flagTxt ? `<span class="mini" style="opacity:.9;" title="Permissions">${enc(flagTxt)}</span>` : ''}
+              ${already ? `<span class="pill pill-info" title="Already requested">Requested</span>` : ``}
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    const topErr = state.err ? `<div class="error" style="white-space:pre-wrap;">${enc(state.err)}</div>` : '';
+    const topOk  = state.notice ? `<div class="mini" style="color:#bbf7d0;white-space:pre-wrap;">${enc(state.notice)}</div>` : '';
+
+    const disabledSend = state.busy || state.loading;
+    const disabledAll  = state.loading;
+
+    return `
+      <div id="${enc(rootId)}">
+        <div class="card">
+          <div class="row">
+            <label>Request payment authorisation</label>
+            <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+              <div class="mini" style="opacity:.9;">
+                Select who to email for authorisation. Already requested users are ticked and locked.
+              </div>
+
+              ${topErr}
+              ${topOk}
+
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button
+                  id="bankingAuthReqSelectAll"
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  ${disabledAll ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
+                  title="Select all eligible authorisers"
+                >Select all</button>
+
+                <button
+                  id="bankingAuthReqClearAll"
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  ${disabledAll ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
+                  title="Clear selection"
+                >Clear</button>
+
+                <button
+                  id="bankingAuthReqRequestAll"
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  ${disabledAll ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
+                  title="Request all authorisers (emails everyone eligible)"
+                >Request all authorisers</button>
+
+                <span class="mini" style="opacity:.8;margin-left:auto;">
+                  Selected: <span class="mono" id="bankingAuthReqSelectedCount">${enc(String(state.selectedSet.size))}</span>
+                </span>
+              </div>
+
+              <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+                <table class="grid" style="min-width:560px; table-layout:auto;">
+                  <thead>
+                    <tr>
+                      <th style="width:44px;"></th>
+                      <th>Authoriser</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${state.loading ? `<tr><td colspan="2" class="mini" style="opacity:.85;">Loading…</td></tr>` : (rows || `<tr><td colspan="2" class="mini" style="opacity:.85;">No eligible authorisers found.</td></tr>`)}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                <button
+                  id="bankingAuthReqSend"
+                  type="button"
+                  class="btn btn-primary"
+                  ${disabledSend ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
+                  title="Send authorisation request emails"
+                >${state.busy ? 'Sending…' : 'Send Payment Authorisation Request'}</button>
+
+                <button
+                  id="bankingAuthReqClose"
+                  type="button"
+                  class="btn btn-outline"
+                  title="Close"
+                >Close</button>
+              </div>
+
+              <div class="mini" style="opacity:.75;">
+                Tip: You can send requests again later if people are on leave.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
+  try {
+    const ctxSeed = { entity: 'auth-requests', openToken: `auth-requests:${Date.now()}:${Math.random().toString(36).slice(2)}` };
+    window.modalCtx = ctxSeed;
+    try { if (typeof modalCtx !== 'undefined') modalCtx = ctxSeed; } catch {}
+  } catch {}
+
+  return await new Promise((resolve) => {
+    let done = false;
+    const finish = (res) => {
+      if (done) return;
+      done = true;
+      resolve(res || null);
+    };
+
+    const onDismiss = () => finish(null);
+
+    const renderTab = (k) => {
+      if (k !== 'main') return '';
+      return render();
+    };
+
+    showModal(
+      'Payment authorisation',
+      [{ key: 'main', label: 'Request' }],
+      renderTab,
+      null,
+      true,
+      null,
+      {
+        kind,
+        noParentGate: true,
+        showSave: false,
+        showApply: false,
+        stayOpenOnSave: false,
+        onDismiss
+      }
+    );
+
+    const wire = () => {
+      const body = document.getElementById('modalBody');
+      if (!body) return;
+
+      const root = body.querySelector(`#${CSS.escape(rootId)}`);
+      if (!root) return;
+
+      if (root.__wired) return;
+      root.__wired = true;
+
+      const rerender = () => {
+        try {
+          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (fr && typeof fr.setTab === 'function') fr.setTab('main');
+        } catch {
+          try { body.innerHTML = render(); } catch {}
+        }
+      };
+
+      const updateSelectedCount = () => {
+        const el = root.querySelector('#bankingAuthReqSelectedCount');
+        if (el) el.textContent = String(state.selectedSet.size);
+      };
+
+      // Load eligible users once
+      const load = async () => {
+        state.loading = true;
+        state.err = '';
+        state.notice = '';
+        rerender();
+
+        try {
+          const j = await apiGet('/api/banking/pay/authorisers');
+          const list = Array.isArray(j?.users) ? j.users : [];
+          state.users = list;
+
+          // Default selection: none (as per brief). Already requested stay locked.
+          state.selectedSet.clear();
+          updateSelectedCount();
+        } catch (e) {
+          state.err = String(e?.message || e || 'Failed to load authorisers');
+        } finally {
+          state.loading = false;
+          rerender();
+        }
+      };
+
+      // Wire checkbox changes (event delegation)
+      if (!root.__wiredTable) {
+        root.__wiredTable = true;
+        root.addEventListener('change', (ev) => {
+          const cb = ev.target && ev.target.closest ? ev.target.closest('input[type="checkbox"][data-uid]') : null;
+          if (!cb) return;
+
+          const uid = String(cb.getAttribute('data-uid') || '').trim();
+          if (!uid) return;
+
+          const disabled = String(cb.getAttribute('data-disabled') || '').trim();
+          if (disabled === '1') {
+            cb.checked = true;
+            return;
+          }
+
+          if (cb.checked) state.selectedSet.add(uid);
+          else state.selectedSet.delete(uid);
+
+          updateSelectedCount();
+        }, true);
+      }
+
+      const btnClose = root.querySelector('#bankingAuthReqClose');
+      if (btnClose && !btnClose.__wired) {
+        btnClose.__wired = true;
+        btnClose.onclick = () => {
+          closeTop();
+          finish(null);
+        };
+      }
+
+      const btnSelAll = root.querySelector('#bankingAuthReqSelectAll');
+      if (btnSelAll && !btnSelAll.__wired) {
+        btnSelAll.__wired = true;
+        btnSelAll.onclick = () => {
+          if (state.loading) return;
+          for (const u of state.users) {
+            const uid = String(u?.id || '').trim();
+            if (!uid) continue;
+            if (state.invitedSet.has(uid)) continue;
+            state.selectedSet.add(uid);
+          }
+          rerender();
+        };
+      }
+
+      const btnClear = root.querySelector('#bankingAuthReqClearAll');
+      if (btnClear && !btnClear.__wired) {
+        btnClear.__wired = true;
+        btnClear.onclick = () => {
+          if (state.loading) return;
+          state.selectedSet.clear();
+          rerender();
+        };
+      }
+
+      const btnReqAll = root.querySelector('#bankingAuthReqRequestAll');
+      if (btnReqAll && !btnReqAll.__wired) {
+        btnReqAll.__wired = true;
+        btnReqAll.onclick = async () => {
+          if (state.loading || state.busy) return;
+
+          state.busy = true;
+          state.err = '';
+          state.notice = '';
+          rerender();
+
+          try {
+            const res = await apiPost(`/api/banking/pay/auth-requests/${encodeURIComponent(authId)}/invites`, { all: true });
+            state.notice = `Requests sent. Queued emails: ${Number(res?.queued_emails || 0)}.`;
+            // Update invited set so UI locks them
+            try {
+              const toks = Array.isArray(res?.tokens) ? res.tokens : [];
+              for (const t of toks) {
+                const uid = String(t?.target_user_id || '').trim();
+                if (uid) state.invitedSet.add(uid);
+              }
+            } catch {}
+            state.selectedSet.clear();
+            rerender();
+          } catch (e) {
+            state.err = String(e?.message || e || 'Failed to send requests');
+            rerender();
+          } finally {
+            state.busy = false;
+            rerender();
+          }
+        };
+      }
+
+      const btnSend = root.querySelector('#bankingAuthReqSend');
+      if (btnSend && !btnSend.__wired) {
+        btnSend.__wired = true;
+        btnSend.onclick = async () => {
+          if (state.loading || state.busy) return;
+
+          const ids = Array.from(state.selectedSet);
+          if (!ids.length) {
+            state.err = 'Select at least one authoriser (or use “Request all authorisers”).';
+            rerender();
+            return;
+          }
+
+          state.busy = true;
+          state.err = '';
+          state.notice = '';
+          rerender();
+
+          try {
+            const res = await apiPost(`/api/banking/pay/auth-requests/${encodeURIComponent(authId)}/invites`, { target_user_ids: ids });
+            state.notice = `Requests sent. Queued emails: ${Number(res?.queued_emails || 0)}.`;
+
+            // Mark these as invited in UI
+            for (const uid of ids) state.invitedSet.add(uid);
+            state.selectedSet.clear();
+
+            rerender();
+          } catch (e) {
+            state.err = String(e?.message || e || 'Failed to send requests');
+            rerender();
+          } finally {
+            state.busy = false;
+            rerender();
+          }
+        };
+      }
+
+      // First load
+      load().catch(() => {});
+    };
+
+    try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
+  });
+}
+
+
 async function openBanking() {
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
 
@@ -5016,6 +5956,7 @@ function bankingGetState() {
   }
 }
 
+
 async function bankingRerender(tabKey = null) {
   try {
     const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
@@ -5038,6 +5979,22 @@ async function bankingRerender(tabKey = null) {
     try { fr._suppressDirty = false; } catch {}
     try { fr._updateButtons && fr._updateButtons(); } catch {}
 
+    // Re-attach UK date picker widgets after rerender (best-effort)
+    try {
+      if (typeof attachUkDatePicker === 'function') {
+        const ids = [
+          'bankingPayDateInput',
+          'bankingScheduleDateUk'
+        ];
+        for (const id of ids) {
+          const el = document.getElementById(id);
+          if (el) {
+            try { attachUkDatePicker(el); } catch {}
+          }
+        }
+      }
+    } catch {}
+
     return true;
   } catch {
     try {
@@ -5050,6 +6007,8 @@ async function bankingRerender(tabKey = null) {
     return false;
   }
 }
+
+
 
 function bankingIsActionBlocked(actionKind) {
   const asUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -5075,29 +6034,52 @@ function bankingIsActionBlocked(actionKind) {
       const wkEnv = asUpper(capsRaw.worker_env || capsRaw.default_worker_env || '');
       const msg =
         (dbEnv && wkEnv)
-          ? `Environment mismatch: DB env is ${dbEnv} but Worker env is ${wkEnv}. Click Re-check.`
-          : 'Environment mismatch: bank actions are blocked until Worker env matches DB env snapshot. Click Re-check.';
+          ? `Payments blocked: expected ${dbEnv} but connected to ${wkEnv}. Click Re-check.`
+          : 'Payments blocked: wrong bank environment. Click Re-check.';
       return { blocked: true, reasonCode: 'RAIL_ENV_MISMATCH', message: msg };
     }
 
     const ak = asUpper(actionKind);
 
-    // Test mode blocks remittances send only (payments may still simulate)
+    const setRaw = (st.settings && typeof st.settings === 'object') ? st.settings.raw : null;
+
+    // Test mode: remittances are allowed only if a test recipient email is set
     const isTestMode = (caps.isTestMode === true) || (capsRaw.payroll_testing === true);
     if (isTestMode && (ak === 'SEND_REMITTANCES' || ak === 'SEND_REMITTANCES_PAYE' || ak === 'SEND_REMITTANCES_UMBRELLA')) {
-      return {
-        blocked: true,
-        reasonCode: 'REMITTANCES_DISABLED_IN_PAYROLL_TESTING',
-        message: 'TEST MODE active — remittances sending is disabled.'
-      };
+      const testEmail =
+        (setRaw && typeof setRaw === 'object')
+          ? String(setRaw.remittance_test_recipient_email || '').trim()
+          : '';
+
+      const valid =
+        !!(testEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(testEmail));
+
+      if (!valid) {
+        return {
+          blocked: true,
+          reasonCode: 'REMITTANCE_TEST_RECIPIENT_EMAIL_REQUIRED_IN_PAYROLL_TESTING',
+          message: 'TEST MODE is ON — set a test remittance email in Payment Settings to send remittances.'
+        };
+      }
     }
 
     // Funding account missing blocks schedule
     if (ak === 'SCHEDULE') {
+      // Best-effort: if session user ever includes payment_authoriser, enforce; otherwise allow and let backend enforce.
+      try {
+        const u = (typeof SESSION === 'object' && SESSION && SESSION.user && typeof SESSION.user === 'object') ? SESSION.user : null;
+        if (u && typeof u.payment_authoriser === 'boolean' && u.payment_authoriser !== true) {
+          return {
+            blocked: true,
+            reasonCode: 'PAYMENT_AUTHORISER_REQUIRED',
+            message: 'Only Payment Authorisers can schedule payments.'
+          };
+        }
+      } catch {}
+
       const sched = (st.pay && st.pay.scheduleForm && typeof st.pay.scheduleForm === 'object') ? st.pay.scheduleForm : {};
       const fundingNow = String(sched.funding_account_ref || '').trim();
 
-      const setRaw = (st.settings && typeof st.settings === 'object') ? st.settings.raw : null;
       const defaultFunding =
         (setRaw && typeof setRaw === 'object')
           ? String(setRaw.rail_default_funding_account_ref || '').trim()
@@ -5107,13 +6089,12 @@ function bankingIsActionBlocked(actionKind) {
         return {
           blocked: true,
           reasonCode: 'FUNDING_ACCOUNT_MISSING',
-          message: 'Funding account is required before scheduling. Set a default funding account in Payment Settings.'
+          message: 'A funding account is required before scheduling. Set a default funding account in Payment Settings.'
         };
       }
     }
 
     // PAYE gate blocks PAYE remittances send (caller must pass actionKind that indicates PAYE send)
-    // NOTE: Per brief, this function reads only caps/settings/scheduleForm; it does NOT infer scope from other state.
     if (ak === 'SEND_REMITTANCES_PAYE') {
       const enabled =
         (capsRaw.paye_remittances_enabled === true) ||
@@ -5124,7 +6105,7 @@ function bankingIsActionBlocked(actionKind) {
         return {
           blocked: true,
           reasonCode: 'PAYE_REMITTANCES_DISABLED',
-          message: 'PAYE remittances are disabled. Enable PAYE remittances in Settings.'
+          message: 'PAYE remittances are disabled. Enable PAYE remittances in Payment Settings.'
         };
       }
     }
@@ -7224,7 +8205,6 @@ async function bankingOutboxList({ reference_prefix = '', reference_contains = '
   }
 }
 
-
 function renderBankingBanners() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -7261,6 +8241,12 @@ function renderBankingBanners() {
   const isTestMode = (caps.isTestMode === true) || (capsRaw.payroll_testing === true);
   const copAvailable = (capsRaw.cop_available === true);
 
+  const setRaw = (st.settings && typeof st.settings === 'object') ? st.settings.raw : null;
+  const remTestEmail =
+    (setRaw && typeof setRaw === 'object')
+      ? String(setRaw.remittance_test_recipient_email || '').trim()
+      : '';
+
   const scheduleGate = (typeof bankingIsActionBlocked === 'function')
     ? bankingIsActionBlocked('SCHEDULE')
     : { blocked: false, reasonCode: '', message: '' };
@@ -7269,24 +8255,24 @@ function renderBankingBanners() {
 
   const banners = [];
 
-  // Env mismatch banner (BLOCKING)
+  // Payments blocked banner (env mismatch)
   if (envMismatch) {
     const msg =
       (dbEnv && wkEnv)
-        ? `Bank actions are blocked until Worker env matches DB env snapshot. DB: ${dbEnv} • Worker: ${wkEnv}`
-        : 'Bank actions are blocked until Worker env matches DB env snapshot.';
+        ? `Payments are blocked because the system is connected to the wrong bank environment. Expected: ${dbEnv} • Connected: ${wkEnv}`
+        : 'Payments are blocked because the system is connected to the wrong bank environment.';
 
     banners.push(`
       <div class="card" style="border-color:rgba(248,113,113,.4); background:rgba(239,68,68,.08);">
         <div class="row">
-          <label>Env mismatch</label>
+          <label>Payments blocked</label>
           <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
             <div style="min-width:260px;flex:1;">
               <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
                 ${enc(msg)}
               </div>
               <div class="mini" style="margin-top:6px;opacity:.85;">
-                Fix the Worker configuration (Revolut API base / credentials) so the Worker environment matches the DB snapshot.
+                Fix the bank connection settings, then click Re-check.
               </div>
             </div>
 
@@ -7295,7 +8281,7 @@ function renderBankingBanners() {
                 type="button"
                 class="btn btn-sm btn-outline"
                 data-action="banking:refreshCaps"
-                title="Re-check capabilities and environment"
+                title="Re-check banking connection"
               >Re-check</button>
             </div>
           </div>
@@ -7306,19 +8292,37 @@ function renderBankingBanners() {
 
   // TEST MODE banner
   if (isTestMode) {
+    const hasTestEmail = !!(remTestEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(remTestEmail));
+    const msg = hasTestEmail
+      ? `TEST MODE is ON — remittances will be sent to the test recipient: ${remTestEmail}`
+      : 'TEST MODE is ON — to send remittances, set a test remittance email in Payment Settings.';
+
     banners.push(`
       <div class="card" style="border-color:rgba(251,191,36,.35); background:rgba(245,158,11,.08);">
         <div class="row">
-          <label>TEST MODE</label>
+          <label>Test mode</label>
           <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
             <div style="min-width:260px;flex:1;">
               <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
-                TEST MODE active — payments may be simulated; remittances sending is disabled.
+                ${enc(msg)}
               </div>
-              <div class="mini" style="margin-top:6px;opacity:.85;">
-                Attempting to send remittances will be rejected with <span class="mono">REMITTANCES_DISABLED_IN_PAYROLL_TESTING</span>.
-              </div>
+              ${hasTestEmail ? '' : `
+                <div class="mini" style="margin-top:6px;opacity:.85;">
+                  Go to Payment Settings and set “Test remittance recipient email”.
+                </div>
+              `}
             </div>
+            ${hasTestEmail ? '' : `
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:goTab"
+                  data-tab="settings"
+                  title="Open Payment Settings tab"
+                >Go to Payment Settings</button>
+              </div>
+            `}
           </div>
         </div>
       </div>
@@ -7330,10 +8334,10 @@ function renderBankingBanners() {
     banners.push(`
       <div class="card" style="border-color:rgba(59,130,246,.45); background:rgba(59,130,246,.08);">
         <div class="row">
-          <label>CoP</label>
+          <label>Name check</label>
           <div class="controls">
             <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
-              Confirmation of Payee (name-check) is not available for the default rail. You can continue, but scheduling may proceed without name checks.
+              Name-check (Confirmation of Payee) is not available for the current rail. You can continue, but the bank may not validate recipient names.
             </div>
           </div>
         </div>
@@ -7343,18 +8347,18 @@ function renderBankingBanners() {
 
   // Funding account missing blocker
   if (!envMismatch && fundingMissing) {
-    const msg = String(scheduleGate.message || '').trim() || 'Funding account is required before scheduling.';
+    const msg = String(scheduleGate.message || '').trim() || 'A funding account is required before scheduling.';
     banners.push(`
       <div class="card" style="border-color:rgba(251,191,36,.35); background:rgba(245,158,11,.06);">
         <div class="row">
-          <label>Funding</label>
+          <label>Funding required</label>
           <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
             <div style="min-width:260px;flex:1;">
               <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
                 ${enc(msg)}
               </div>
               <div class="mini" style="margin-top:6px;opacity:.85;">
-                Set a default funding account in <strong>Payment Settings</strong> (or choose a funding account when scheduling a batch).
+                Set a default funding account in Payment Settings (or choose one when scheduling the batch).
               </div>
             </div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -7388,6 +8392,7 @@ function renderBankingBanners() {
     </div>
   `;
 }
+
 
 
 function renderBankingTab(key, row) {
@@ -7427,7 +8432,8 @@ function renderBankingTab(key, row) {
 
   const workerEnv = String(capsRaw.worker_env || capsRaw.default_worker_env || '').trim().toUpperCase() || '—';
   const dbEnv = String(capsRaw.db_rail_env_default || capsRaw.rail_env_default || '').trim().toUpperCase() || '—';
-  const provider = String(capsRaw.rail_provider_default || '').trim().toUpperCase() || '—';
+  const providerRaw = String(capsRaw.rail_provider_default || '').trim().toUpperCase() || '—';
+  const provider = (providerRaw === 'REV') ? 'REVOLUT' : providerRaw;
 
   const isTestMode = (caps.isTestMode === true) || (capsRaw.payroll_testing === true);
 
@@ -7436,21 +8442,42 @@ function renderBankingTab(key, row) {
     (capsRaw.env_mismatch === true) ||
     (Array.isArray(capsRaw.rails) ? capsRaw.rails.some(r => r && r.env_mismatch === true) : false);
 
-  const chipEnvClass = envMismatch ? 'pill-bad' : 'pill-ok';
+  const railLabel = (() => {
+    if (provider === 'REVOLUT') {
+      const isSandbox = (workerEnv === 'SANDBOX');
+      const envTxt = isSandbox ? 'Test' : 'Live';
+      const icon = isSandbox ? '🧪' : '✅';
+      return `Revolut (${envTxt}) ${icon}`;
+    }
+    if (provider && provider !== '—') {
+      const envTxt =
+        (workerEnv && workerEnv !== '—')
+          ? workerEnv
+          : (dbEnv && dbEnv !== '—') ? dbEnv : '';
+      return envTxt ? `${provider} (${envTxt})` : `${provider}`;
+    }
+    return 'Rail';
+  })();
 
-  const chipDefaultRailClass = 'pill-info';
-  const chipTestClass = isTestMode ? 'pill-warn' : 'pill';
+  const topChipClass = envMismatch ? 'pill-warn' : 'pill-ok';
+  const testChipClass = isTestMode ? 'pill-warn' : 'pill';
 
   const headerChips = `
     <div class="card">
       <div class="row">
         <label>Status</label>
         <div class="controls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <span class="pill ${enc(chipEnvClass)}" title="Worker env (derived from rail credentials/base URL)">${enc(workerEnv)}</span>
-          <span class="pill ${enc(chipEnvClass)}" title="DB env snapshot (partition key for payee-map/name-check)">${enc(dbEnv)}</span>
-          <span class="pill ${enc(chipDefaultRailClass)}" title="Default rail provider">${enc(provider)}</span>
-          ${isTestMode ? `<span class="pill ${enc(chipTestClass)}" title="TEST MODE enabled">TEST MODE</span>` : ``}
-          <span class="mini" style="margin-left:6px;opacity:.85;">Operator modal (actions are rail-generic)</span>
+          <span class="pill ${enc(topChipClass)}" title="${enc(envMismatch ? 'Payments are blocked until the environment mismatch is fixed.' : 'Banking is connected and ready.')}">${enc(railLabel)}</span>
+          <span class="pill ${enc(testChipClass)}" title="${enc(isTestMode ? 'TEST MODE is ON' : 'TEST MODE is OFF')}">${enc(`Test mode: ${isTestMode ? 'On' : 'Off'}`)}</span>
+
+          <details style="margin-left:6px;">
+            <summary class="mini" style="cursor:pointer;opacity:.9;">Diagnostics ▸</summary>
+            <div class="mini" style="margin-top:6px;opacity:.9;white-space:pre-wrap;">
+              ${enc(`Provider: ${provider}\nDB env: ${dbEnv}\nWorker env: ${workerEnv}\nEnv mismatch: ${envMismatch ? 'true' : 'false'}\nServer UTC: ${String(capsRaw.server_utc || '').trim() || '—'}\nAPI base: ${String(capsRaw.default_api_base || '').trim() || '—'}`)}
+            </div>
+          </details>
+
+          <span class="mini" style="margin-left:6px;opacity:.85;">Operator modal</span>
         </div>
       </div>
     </div>
@@ -7616,8 +8643,6 @@ function renderBankingTab(key, row) {
 }
 
 
-
-
 function renderBankingPayTab(scopePreset) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -7672,7 +8697,7 @@ function renderBankingPayTab(scopePreset) {
 
             <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
               <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:listRefresh" title="Refresh pay batch list">Refresh</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:recheckCaps" title="Re-check env/capabilities">Re-check</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:refreshCaps" title="Re-check env/capabilities">Re-check</button>
             </div>
           </div>
         </div>
@@ -7691,7 +8716,6 @@ function renderBankingPayTab(scopePreset) {
     </div>
   `;
 }
-
 
 function renderPayBatchListPanel() {
   const enc = (typeof escapeHtml === 'function')
@@ -7752,6 +8776,8 @@ function renderPayBatchListPanel() {
     { v: '', label: 'All statuses' },
     { v: 'DRAFT', label: 'DRAFT' },
     { v: 'SCHEDULED', label: 'SCHEDULED' },
+    { v: 'AWAITING_AUTHORISATION', label: 'AWAITING_AUTHORISATION' },
+    { v: 'AUTHORISED_FOR_PAYMENT', label: 'AUTHORISED_FOR_PAYMENT' },
     { v: 'EXECUTING', label: 'EXECUTING' },
     { v: 'PARTIAL', label: 'PARTIAL' },
     { v: 'SETTLED', label: 'SETTLED' }
@@ -7767,6 +8793,11 @@ function renderPayBatchListPanel() {
     const env = String(r?.rail_env_snapshot || r?.rail_env || '').trim().toUpperCase();
     const created = fmtUtcToUk(r?.created_at_utc || r?.created_at || '');
 
+    const authState = String(r?.auth_state || '').trim().toUpperCase();
+    const authLabel = String(r?.auth_label || '').trim();
+    const authReq = (r?.auth_required_quantity != null) ? Number(r.auth_required_quantity) : null;
+    const authApproved = (r?.auth_approved_count != null) ? Number(r.auth_approved_count) : null;
+
     const isActive = (id && selectedId && id === selectedId);
 
     const pillClass =
@@ -7774,6 +8805,29 @@ function renderPayBatchListPanel() {
       : (stx === 'EXECUTING' || stx === 'PARTIAL') ? 'pill-warn'
       : (stx === 'DRAFT') ? 'pill-info'
       : 'pill';
+
+    const authPill = (() => {
+      const has = (authLabel && authLabel.includes('/')) || (Number.isFinite(authReq) && Number.isFinite(authApproved));
+      if (!has) return '';
+      const label = authLabel && authLabel.includes('/')
+        ? authLabel
+        : `${Number.isFinite(authApproved) ? authApproved : 0}/${Number.isFinite(authReq) ? authReq : '?'}`;
+
+      const cls =
+        (authState === 'AUTHORISED') ? 'pill pill-ok'
+        : (authState === 'AWAITING') ? 'pill pill-warn'
+        : 'pill';
+
+      const txt =
+        (authState === 'AUTHORISED') ? `Authorised ${label}`
+        : `Authorised ${label}`;
+
+      const title =
+        (authState === 'AUTHORISED') ? 'Authorisation complete'
+        : 'Authorisation in progress';
+
+      return ` <span class="${enc(cls)}" title="${enc(title)}">${enc(txt)}</span>`;
+    })();
 
     return `
       <tr
@@ -7785,7 +8839,7 @@ function renderPayBatchListPanel() {
       >
         <td class="mono">${enc(id ? (id.slice(0, 8) + '…') : '')}</td>
         <td>${enc(payDate ? (typeof formatIsoToUk === 'function' ? formatIsoToUk(payDate) : payDate) : '—')}</td>
-        <td><span class="pill ${enc(pillClass)}">${enc(stx)}</span></td>
+        <td><span class="pill ${enc(pillClass)}">${enc(stx)}</span>${authPill}</td>
         <td class="mini">${enc((prov || '—') + (env ? `/${env}` : ''))}</td>
         <td class="mini">${enc(created || '')}</td>
       </tr>
@@ -7813,7 +8867,7 @@ function renderPayBatchListPanel() {
                 class="input"
                 id="bankingPayBatchStatusFilter"
                 data-action="banking:pay:setStatusFilter"
-                style="max-width:220px;"
+                style="max-width:260px;"
               >
                 ${statusOptions.map(o => `<option value="${enc(o.v)}" ${o.v === statusNow ? 'selected' : ''}>${enc(o.label)}</option>`).join('')}
               </select>
@@ -7863,7 +8917,7 @@ function renderPayBatchListPanel() {
           </div>
 
           <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-            <table class="grid" style="min-width:760px; table-layout:auto;">
+            <table class="grid" style="min-width:820px; table-layout:auto;">
               <thead>
                 <tr>
                   <th>ID</th>
@@ -8007,12 +9061,32 @@ function renderPayBatchDetailPanel() {
     : (status === 'DRAFT') ? 'pill-info'
     : 'pill';
 
+  const pollTooltip = 'This speaks to the bank and checks the latest status on pending payments. Use this to confirm if pending payments have now been made successfully by the bank.';
+
+  const canCancel = (status === 'SCHEDULED' || status === 'AWAITING_AUTHORISATION' || status === 'AUTHORISED_FOR_PAYMENT');
+
+  const cancelBtn = canCancel
+    ? btn('Cancel payment', 'banking:pay:cancel', {
+        'data-batch-id': batchId,
+        title: 'Cancel this payment (password required, no 2FA)'
+      }, gate('CANCEL'))
+    : '';
+
+  const executeGate = gate('EXECUTE_BANK');
+  const executeAllBtn = btn('Execute bank (ALL)', 'banking:pay:executeBank', { 'data-batch-id': batchId, 'data-scope': 'ALL', title: 'Create bank transfers for this batch (ALL)' }, executeGate);
+  const executePayeBtn = btn('Execute bank (PAYE)', 'banking:pay:executeBank', { 'data-batch-id': batchId, 'data-scope': 'PAYE', title: 'Create bank transfers for this batch (PAYE)' }, executeGate);
+  const executeUmbBtn = btn('Execute bank (UMB)', 'banking:pay:executeBank', { 'data-batch-id': batchId, 'data-scope': 'UMBRELLA', title: 'Create bank transfers for this batch (UMBRELLA)' }, executeGate);
+
   const actionsTop = `
     <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      ${btn('Poll', 'banking:pay:poll', { 'data-batch-id': batchId }, gate('POLL'))}
+      ${btn('Pending Payment Check', 'banking:pay:poll', { 'data-batch-id': batchId, title: pollTooltip }, gate('POLL'))}
+      ${executeAllBtn}
+      ${executePayeBtn}
+      ${executeUmbBtn}
       ${btn('Export CSV (ALL)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'ALL' }, gate('EXPORT_CSV'))}
       ${btn('Export CSV (PAYE)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'PAYE' }, gate('EXPORT_CSV'))}
       ${btn('Export CSV (UMB)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'UMBRELLA' }, gate('EXPORT_CSV'))}
+      ${cancelBtn}
     </div>
   `;
 
@@ -8117,6 +9191,7 @@ function renderPayBatchDetailPanel() {
                   name="bank_confirm_ref"
                   placeholder="Bank confirmation reference (optional if no pending transfers)"
                   value="${enc(String(st.pay.manualConfirmForm.bank_confirm_ref || ''))}"
+                  data-action="banking:pay:setManualConfirmRef"
                   style="min-width:320px;max-width:520px;"
                   title="${enc(manualConfirmTitle)}"
                 />
@@ -8193,7 +9268,18 @@ function renderPayNewBatchWizard() {
   };
 
   const wiz = st.pay.draftWizard;
-  const payDate = String(wiz.pay_date || '').trim();
+  const payDateIso = String(wiz.pay_date || '').trim();
+
+  const payDateDisplay = (() => {
+    if (!payDateIso) return '';
+    try {
+      if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(payDateIso) || '');
+    } catch {}
+    const m = payDateIso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+    return payDateIso;
+  })();
+
   const preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : { data: null, loading: false, error: '' };
   const pv = (preview.data && typeof preview.data === 'object') ? preview.data : null;
 
@@ -8333,7 +9419,7 @@ function renderPayNewBatchWizard() {
   ` : `<div class="mini" style="opacity:.85;">Run Preview to compute deltas, blockers, and mismatch decisions.</div>`;
 
   const previewBtnDisabled = pvLoading || cdBusy;
-  const createBtnDisabled = cdBusy || pvLoading || !payDate;
+  const createBtnDisabled = cdBusy || pvLoading || !payDateIso;
 
   return `
     <div class="card" id="bankingPayNewBatchWizard">
@@ -8351,10 +9437,11 @@ function renderPayNewBatchWizard() {
                 class="input"
                 type="text"
                 name="pay_date"
-                placeholder="YYYY-MM-DD"
-                value="${enc(payDate)}"
+                placeholder="DD/MM/YYYY"
+                value="${enc(payDateDisplay)}"
                 data-action="banking:pay:setPayDate"
-                title="Pay date (YYYY-MM-DD)"
+                data-uk-date="1"
+                title="Pay date (DD/MM/YYYY)"
               />
             </div>
 
@@ -8410,6 +9497,7 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
+
 
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
@@ -8750,7 +9838,7 @@ function renderPayPreparePanel() {
         <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <span class="mini" style="opacity:.85;">
-              Prepare checks payee-map + name-check readiness for the selected batch.
+              Prepare checks whether each payee is ready (payee mapping + name checks) before you schedule payments.
             </span>
             <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
 
@@ -8760,7 +9848,7 @@ function renderPayPreparePanel() {
                 class="btn btn-sm btn-outline"
                 data-action="banking:pay:prepare"
                 data-batch-id="${enc(batchId)}"
-                ${batchId ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'}
+                ${batchId ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' }
                 title="${batchId ? 'Run prepare for this batch' : 'Select a batch first'}"
               >${preparing ? 'Preparing…' : 'Run prepare'}</button>
             </div>
@@ -8819,7 +9907,7 @@ function renderPayPreparePanel() {
                 >Add override</button>
               </div>
               <div class="mini" style="opacity:.8;margin-top:6px;">
-                Overrides are applied on the next <strong>Run prepare</strong>.
+                Overrides are applied the next time you click <strong>Run prepare</strong>.
               </div>
             </div>
           </div>
@@ -8842,14 +9930,13 @@ function renderPayPreparePanel() {
           </div>
 
           <div class="mini" style="opacity:.8;">
-            Detailed prepare results will be shown here once backend response fields are standardised in the UI (Phase 6 wiring will populate and drill into rows).
+            Tip: if “Ready” is not high enough, fix payee mapping or name-check issues before scheduling.
           </div>
         </div>
       </div>
     </div>
   `;
 }
-
 
 function renderPaySchedulePanel() {
   const enc = (typeof escapeHtml === 'function')
@@ -8906,6 +9993,44 @@ function renderPaySchedulePanel() {
 
   const scheduledLocal = String(st.pay.scheduleForm.scheduled_at_local || '').trim();
 
+  const parsedLocal = (() => {
+    const out = { dateUk: '', timeHm: '' };
+    if (!scheduledLocal) return out;
+
+    const mUk = scheduledLocal.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
+    if (mUk) {
+      out.dateUk = `${mUk[1]}/${mUk[2]}/${mUk[3]}`;
+      out.timeHm = `${mUk[4]}:${mUk[5]}`;
+      return out;
+    }
+
+    const mIso = scheduledLocal.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+    if (mIso) {
+      out.dateUk = `${mIso[3]}/${mIso[2]}/${mIso[1]}`;
+      out.timeHm = `${mIso[4]}:${mIso[5]}`;
+      return out;
+    }
+
+    const dIso = scheduledLocal.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dIso) {
+      out.dateUk = `${dIso[3]}/${dIso[2]}/${dIso[1]}`;
+      return out;
+    }
+    const dUk = scheduledLocal.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (dUk) {
+      out.dateUk = `${dUk[1]}/${dUk[2]}/${dUk[3]}`;
+      return out;
+    }
+
+    const t = scheduledLocal.match(/^(\d{2}):(\d{2})$/);
+    if (t) {
+      out.timeHm = `${t[1]}:${t[2]}`;
+      return out;
+    }
+
+    return out;
+  })();
+
   const currentWarn = Array.isArray(st.pay.scheduleForm.warning_hours_json) ? st.pay.scheduleForm.warning_hours_json : [];
   const warnSet = new Set(currentWarn.map(x => String(x)));
 
@@ -8921,12 +10046,10 @@ function renderPaySchedulePanel() {
       seen.add(k);
       uniq.push(n);
     }
-    // Ensure common values exist
     [48, 24, 12, 6, 3, 1].forEach(n => {
       const k = String(n);
       if (!seen.has(k)) { seen.add(k); uniq.push(n); }
     });
-    // Sort descending
     uniq.sort((a,b) => b - a);
     return uniq;
   })();
@@ -8939,7 +10062,34 @@ function renderPaySchedulePanel() {
 
   const scheduleTitle = scheduleDisabled
     ? String(gate.message || gate.reasonCode || 'Action blocked')
-    : 'Schedule this batch (immediate or at time)';
+    : 'Continue to authorisation (password + code) before scheduling';
+
+  const hiddenValue = (() => {
+    const d = String(parsedLocal.dateUk || '').trim();
+    const t = String(parsedLocal.timeHm || '').trim();
+    if (d && t) return `${d} ${t}`;
+    if (d) return d;
+    if (t) return t;
+    return '';
+  })();
+
+  const dateDisabled = (scheduleKind !== 'SCHEDULED');
+  const timeDisabled = (scheduleKind !== 'SCHEDULED');
+
+  const syncJs = `
+    try{
+      var dEl=document.getElementById('bankingScheduleDateUk');
+      var tEl=document.getElementById('bankingScheduleTimeHm');
+      var hEl=document.getElementById('bankingScheduleAtLocal');
+      if(!hEl) return;
+      var d=(dEl&&dEl.value?String(dEl.value).trim():'');
+      var t=(tEl&&tEl.value?String(tEl.value).trim():'');
+      var v=(d&&t)?(d+' '+t):(d||t||'');
+      hEl.value=v;
+      try{ hEl.dispatchEvent(new Event('input',{bubbles:true})); }catch(e){}
+      try{ hEl.dispatchEvent(new Event('change',{bubbles:true})); }catch(e){}
+    }catch(e){}
+  `;
 
   return `
     <div class="card" id="bankingPaySchedulePanel">
@@ -8948,7 +10098,7 @@ function renderPaySchedulePanel() {
         <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <span class="mini" style="opacity:.85;">
-              Scheduling requires a funding account ref (explicit or default). Legacy <span class="mono">AT_TIME</span> maps to <span class="mono">SCHEDULED</span>.
+              Pay now adds the payment to the next scheduled run. Pay later schedules a specific UK time.
             </span>
             <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
             <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -8982,34 +10132,57 @@ function renderPaySchedulePanel() {
             </div>
 
             <div class="row">
-              <label>Schedule kind</label>
+              <label>When to pay</label>
               <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                 <select
                   id="bankingScheduleKind"
                   class="input"
                   data-action="banking:pay:schedule:setKind"
-                  title="IMMEDIATE or SCHEDULED"
-                  style="max-width:220px;"
+                  title="Pay now or pay later"
+                  style="max-width:240px;"
                 >
-                  <option value="IMMEDIATE" ${scheduleKind === 'IMMEDIATE' ? 'selected' : ''}>IMMEDIATE</option>
-                  <option value="SCHEDULED" ${scheduleKind === 'SCHEDULED' ? 'selected' : ''}>SCHEDULED</option>
+                  <option value="IMMEDIATE" ${scheduleKind === 'IMMEDIATE' ? 'selected' : ''}>Pay now (next run)</option>
+                  <option value="SCHEDULED" ${scheduleKind === 'SCHEDULED' ? 'selected' : ''}>Pay later (choose time)</option>
                 </select>
+
+                <input
+                  id="bankingScheduleDateUk"
+                  class="input"
+                  type="text"
+                  placeholder="DD/MM/YYYY"
+                  value="${enc(parsedLocal.dateUk)}"
+                  data-uk-date="1"
+                  style="min-width:150px;max-width:180px; ${dateDisabled ? 'opacity:.45;' : ''}"
+                  ${dateDisabled ? 'data-disabled="1" aria-disabled="true"' : ''}
+                  title="Date (UK) — used only when Pay later is selected"
+                  oninput="${syncJs}"
+                  onchange="${syncJs}"
+                />
+
+                <input
+                  id="bankingScheduleTimeHm"
+                  class="input"
+                  type="text"
+                  placeholder="HH:MM"
+                  value="${enc(parsedLocal.timeHm)}"
+                  style="min-width:120px;max-width:140px; ${timeDisabled ? 'opacity:.45;' : ''}"
+                  ${timeDisabled ? 'data-disabled="1" aria-disabled="true"' : ''}
+                  title="Time (UK) — used only when Pay later is selected"
+                  oninput="${syncJs}"
+                  onchange="${syncJs}"
+                />
 
                 <input
                   id="bankingScheduleAtLocal"
                   class="input"
                   type="text"
-                  placeholder="DD/MM/YYYY HH:MM (Europe/London)"
-                  value="${enc(scheduledLocal)}"
+                  placeholder="DD/MM/YYYY HH:MM"
+                  value="${enc(hiddenValue)}"
                   data-action="banking:pay:schedule:setLocalTime"
-                  style="min-width:260px;max-width:320px; ${scheduleKind === 'SCHEDULED' ? '' : 'opacity:.45;'}"
-                  ${scheduleKind === 'SCHEDULED' ? '' : 'data-disabled="1" aria-disabled="true"'}
-                  title="Local date/time (Europe/London) — used only when SCHEDULED"
+                  style="position:absolute; left:-9999px; width:1px; height:1px; opacity:0;"
+                  aria-hidden="true"
+                  tabindex="-1"
                 />
-
-                <span class="mini" style="opacity:.75;">
-                  Tip: use <span class="mono">YYYY-MM-DD HH:MM</span> or <span class="mono">DD/MM/YYYY HH:MM</span>.
-                </span>
               </div>
             </div>
 
@@ -9050,7 +10223,7 @@ function renderPaySchedulePanel() {
                   data-batch-id="${enc(batchId)}"
                   ${(!batchId || scheduleDisabled) ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
                   title="${enc(!batchId ? 'Select a batch first' : scheduleTitle)}"
-                >${scheduleBusy ? 'Scheduling…' : 'Schedule batch'}</button>
+                >${scheduleBusy ? 'Working…' : 'Continue to authorisation'}</button>
 
                 <button
                   type="button"
@@ -9067,13 +10240,14 @@ function renderPaySchedulePanel() {
           </div>
 
           <div class="mini" style="opacity:.8;">
-            Phase 6 wiring will bind these inputs to <span class="mono">modalCtx.banking.pay.scheduleForm</span> and call the schedule endpoint.
+            Dates are UK format (DD/MM/YYYY). Times are UK time (HH:MM).
           </div>
         </div>
       </div>
     </div>
   `;
 }
+
 
 function renderPayManualRailPanel() {
   const enc = (typeof escapeHtml === 'function')
@@ -9210,7 +10384,6 @@ function renderPayManualRailPanel() {
   `;
 }
 
-
 function renderPayRemittancesPanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -9272,7 +10445,6 @@ function renderPayRemittancesPanel() {
     </div>
   `;
 
-  // Friendly gate message
   const gateMsg = (() => {
     if (gateAll.blocked) return String(gateAll.message || gateAll.reasonCode || '').trim();
     if (gatePaye.blocked) return String(gatePaye.message || gatePaye.reasonCode || '').trim();
@@ -9286,7 +10458,7 @@ function renderPayRemittancesPanel() {
         <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <span class="mini" style="opacity:.85;">
-              Send remittance emails for this pay batch (gated by TEST MODE and PAYE remittance enablement).
+              Send remittance emails for this pay batch (gated by TEST MODE and PAYE remittance settings).
             </span>
             <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
 
@@ -9333,13 +10505,16 @@ function renderPayRemittancesPanel() {
           ${summaryHtml}
 
           <div class="mini" style="opacity:.8;">
-            Phase 6 wiring will call <span class="mono">bankingPayBatchRemittancesSend</span> and then refresh Outbox list in Remittances Status.
+            After sending, use the <strong>Status</strong> button to view queued/sent emails and any failures.
           </div>
         </div>
       </div>
     </div>
   `;
 }
+
+
+
 
 function renderBankingPaymentSettingsTab() {
   const enc = (typeof escapeHtml === 'function')
@@ -9384,6 +10559,11 @@ function renderBankingPaymentSettingsTab() {
   const payeGate = !!s.paye_remittances_enabled;
   const defaultFunding = String(s.rail_default_funding_account_ref || '').trim();
 
+  const paymentAuthoriserQtyRaw = (s.payment_authoriser_quantity == null) ? 1 : Number(s.payment_authoriser_quantity);
+  const paymentAuthoriserQty = Number.isFinite(paymentAuthoriserQtyRaw) ? Math.max(1, Math.min(10, Math.trunc(paymentAuthoriserQtyRaw))) : 1;
+
+  const testRemitEmail = String(s.remittance_test_recipient_email || '').trim();
+
   const accounts = Array.isArray(st.paymentSettings.accounts) ? st.paymentSettings.accounts : [];
   const acctLoading = !!st.paymentSettings.loading;
   const acctErr = String(st.paymentSettings.error || '').trim();
@@ -9417,6 +10597,34 @@ function renderBankingPaymentSettingsTab() {
     </select>
   `;
 
+  const qtyOptions = [1,2,3,4,5].map(n => `<option value="${enc(String(n))}" ${n === paymentAuthoriserQty ? 'selected' : ''}>${enc(String(n))}</option>`).join('');
+
+  const testEmailBlock = payrollTesting ? `
+    <div class="card" style="padding:10px; margin-bottom:10px;">
+      <div class="row">
+        <label>Remittances in TEST MODE</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:8px;">
+          <div class="mini" style="opacity:.85;">
+            When TEST MODE is on, remittances can still be sent, but they are routed to a single test recipient email (candidate/umbrella emails are ignored).
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <input
+              id="bankingRemittanceTestRecipientEmail"
+              class="input"
+              type="email"
+              placeholder="test.remittances@yourdomain.com"
+              value="${enc(testRemitEmail)}"
+              data-action="banking:settings:setRemittanceTestRecipientEmail"
+              style="min-width:360px;max-width:620px;"
+              title="Test remittance recipient email (required to send remittances in TEST MODE)"
+            />
+            <span class="mini" style="opacity:.85;">Current: <span class="mono">${enc(testRemitEmail || '—')}</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  ` : '';
+
   return `
     <div id="bankingPaymentSettingsTab">
       <div class="card" style="margin-bottom:10px;">
@@ -9424,7 +10632,7 @@ function renderBankingPaymentSettingsTab() {
           <label>Payment Settings</label>
           <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <span class="mini" style="opacity:.85;">
-              Configure TEST MODE, PAYE remittance gate, and default funding account.
+              Configure payment authorisation rules, TEST MODE, remittance gates, and default funding account.
             </span>
             ${envMismatch ? `<span class="pill pill-bad" title="Environment mismatch is active">ENV MISMATCH</span>` : ``}
             <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -9437,9 +10645,37 @@ function renderBankingPaymentSettingsTab() {
 
       <div class="card" style="padding:10px; margin-bottom:10px;">
         <div class="row">
+          <label>Payment authorisation</label>
+          <div class="controls" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+            <label class="inline mini" style="opacity:.9;">Authorisers required</label>
+            <select
+              id="bankingPaymentAuthoriserQuantity"
+              class="input"
+              data-action="banking:settings:setPaymentAuthoriserQuantity"
+              style="max-width:120px;"
+              title="How many authorisers are required (includes the initiating authoriser)"
+            >
+              ${qtyOptions}
+            </select>
+            <span class="mini" style="opacity:.8;">
+              Includes the initiating authoriser. Golden Key can bypass if chosen.
+            </span>
+
+            <button
+              type="button"
+              class="btn btn-sm btn-primary"
+              data-action="banking:settings:save"
+              title="Save settings defaults"
+            >Save</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
           <label>Modes & gates</label>
           <div class="controls" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
-            <label class="inline mini" style="opacity:.95;" title="Enable TEST MODE (simulated payments; remittances sending disabled)">
+            <label class="inline mini" style="opacity:.95;" title="Enable TEST MODE (simulated payments)">
               <input
                 type="checkbox"
                 id="bankingTogglePayrollTesting"
@@ -9458,16 +10694,11 @@ function renderBankingPaymentSettingsTab() {
               />
               Enable PAYE remittances
             </label>
-
-            <button
-              type="button"
-              class="btn btn-sm btn-primary"
-              data-action="banking:settings:save"
-              title="Save settings defaults"
-            >Save</button>
           </div>
         </div>
       </div>
+
+      ${testEmailBlock}
 
       <div class="card" style="padding:10px; margin-bottom:10px;">
         <div class="row">
@@ -9520,10 +10751,6 @@ function renderBankingPaymentSettingsTab() {
             >Open remittance settings</button>
           </div>
         </div>
-      </div>
-
-      <div class="mini" style="opacity:.8;margin-top:10px;">
-        Phase 6 wiring will call <span class="mono">bankingListFundingAccounts</span> and <span class="mono">bankingUpdateSettingsDefaults</span>.
       </div>
     </div>
   `;
@@ -9579,7 +10806,7 @@ function renderBankingIdTab() {
         <div class="row">
           <label>Invoice Discounting (ID)</label>
           <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <span class="mini" style="opacity:.85;">Preview current ID position and apply a “balance now” run.</span>
+            <span class="mini" style="opacity:.85;">Preview the current ID position and apply a “balance now” run.</span>
             <div style="margin-left:auto; display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <button
                 type="button"
@@ -9650,7 +10877,7 @@ ${enc(pvJson || 'No preview loaded yet.')}
             </div>
 
             <div class="mini" style="opacity:.8;">
-              Phase 6 wiring will call <span class="mono">bankingIdBalanceNow</span>, then refresh preview, ledger and runs.
+              After applying, refresh Preview, Ledger and Runs to confirm the result.
             </div>
           </div>
         </div>
@@ -9783,7 +11010,7 @@ ${enc(JSON.stringify(runSelData, null, 2))}
         <div class="row">
           <label>ID History</label>
           <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <span class="mini" style="opacity:.85;">Ledger + runs history. Only-reportable excludes ON_HOLD only (per backend semantics).</span>
+            <span class="mini" style="opacity:.85;">Ledger + runs history.</span>
             <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
               <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:ledgerRefresh" title="Refresh ledger">Refresh ledger</button>
               <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:runsRefresh" title="Refresh runs">Refresh runs</button>
@@ -9801,7 +11028,7 @@ ${enc(JSON.stringify(runSelData, null, 2))}
                 ${ledErr ? `<div class="error" style="white-space:pre-wrap;">${enc(ledErr)}</div>` : ''}
 
                 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-                  <label class="inline mini" style="opacity:.95;" title="Only reportable (excludes ON_HOLD only)">
+                  <label class="inline mini" style="opacity:.95;" title="Only reportable">
                     <input
                       type="checkbox"
                       id="bankingIdOnlyReportable"
@@ -9927,7 +11154,7 @@ ${enc(JSON.stringify(runSelData, null, 2))}
           </div>
 
           <div class="mini" style="opacity:.8;">
-            Phase 6 wiring will call <span class="mono">bankingIdLedgerList</span>, <span class="mono">bankingIdRunsList</span>, and <span class="mono">bankingIdRunGet</span>.
+            Tip: use Refresh buttons above after making changes.
           </div>
         </div>
       </div>
@@ -10106,7 +11333,7 @@ function renderBankingRemittancesStatusTab() {
             </div>
 
             <div class="mini" style="opacity:.8;">
-              Phase 6 wiring will call <span class="mono">bankingOutboxList</span> with <span class="mono">reference_prefix</span> and <span class="mono">reference_contains</span>.
+              Tip: click Refresh after changing filters to reload the list.
             </div>
           </div>
         </div>
@@ -10114,8 +11341,6 @@ function renderBankingRemittancesStatusTab() {
     </div>
   `;
 }
-
-
 
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
@@ -10235,7 +11460,32 @@ function attachBankingModalDelegatedHandlers() {
     const setPayDate = (v) => {
       try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; } catch {}
       try { st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {}; } catch {}
-      try { st.pay.draftWizard.pay_date = String(v || '').trim(); } catch {}
+
+      const raw = String(v || '').trim();
+
+      // Prefer existing helper if present
+      try {
+        if (typeof parseUkDateToIso === 'function') {
+          const iso = parseUkDateToIso(raw);
+          st.pay.draftWizard.pay_date = String(iso || '').trim();
+          return;
+        }
+      } catch {}
+
+      // Accept DD/MM/YYYY or YYYY-MM-DD
+      const mUk = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (mUk) {
+        st.pay.draftWizard.pay_date = `${mUk[3]}-${mUk[2]}-${mUk[1]}`;
+        return;
+      }
+      const mIso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (mIso) {
+        st.pay.draftWizard.pay_date = raw;
+        return;
+      }
+
+      // Unknown format: store raw (backend will reject; user will see error on Preview)
+      st.pay.draftWizard.pay_date = raw;
     };
 
     const setManualConfirmRef = (v) => {
@@ -10356,6 +11606,17 @@ function attachBankingModalDelegatedHandlers() {
       return;
     }
 
+    if (a === 'banking:pay:executeBank') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      const scope = String(ds('scope') || dget('data-scope') || 'ALL').trim().toUpperCase();
+      if (!id) return;
+      const g = safeGate('EXECUTE_BANK');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingPayBatchExecute?.(id, scope);
+      await bankingPayBatchGet?.(id);
+      return;
+    }
+
     if (a === 'banking:pay:exportCsv') {
       const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
       const scope = String(ds('scope') || dget('data-scope') || 'ALL').trim().toUpperCase();
@@ -10391,489 +11652,6 @@ function attachBankingModalDelegatedHandlers() {
       const g = safeGate(actionKind);
       if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
       await bankingPayBatchRemittancesSend?.(id, scope);
-      return;
-    }
-
-    // PAY: Wizard (preview/create)
-    if (a === 'banking:pay:setPayDate') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setPayDate(v);
-      return;
-    }
-
-    if (a === 'banking:pay:preview') {
-      const g = safeGate('PREVIEW');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
-      await bankingPayPreview?.(pd);
-      return;
-    }
-
-    if (a === 'banking:pay:createDraft') {
-      const g = safeGate('CREATE_DRAFT');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
-      const decisions = (st.pay?.draftWizard?.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
-      const payload = {
-        pay_date: pd,
-        preview_decisions_json: {
-          candidate_ids: Array.isArray(decisions.candidate_ids) ? decisions.candidate_ids : [],
-          mismatch_choices: (decisions.mismatch_choices && typeof decisions.mismatch_choices === 'object') ? decisions.mismatch_choices : {},
-          loan_caps: (decisions.loan_caps && typeof decisions.loan_caps === 'object') ? decisions.loan_caps : {}
-        }
-      };
-      await bankingPayCreateDraft?.(payload);
-      return;
-    }
-
-    if (a === 'banking:pay:clearPreview') {
-      try {
-        if (st.pay && st.pay.draftWizard && st.pay.draftWizard.preview) {
-          st.pay.draftWizard.preview.data = null;
-          st.pay.draftWizard.preview.error = '';
-          st.pay.draftWizard.createDraftError = '';
-        }
-      } catch {}
-      await safeRerender(null);
-      return;
-    }
-
-    if (a === 'banking:pay:setCandidateInclude') {
-      const cid = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
-      if (!cid) return;
-
-      const checked = !!(el && el.checked);
-
-      try {
-        st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
-        st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
-        const dec = st.pay.draftWizard.decisions;
-
-        const pv = st.pay.draftWizard.preview && st.pay.draftWizard.preview.data ? st.pay.draftWizard.preview.data : null;
-        const idsAll = new Set();
-        try {
-          const a1 = Array.isArray(pv?.paye_candidates) ? pv.paye_candidates : [];
-          const a2 = Array.isArray(pv?.non_paye_payees) ? pv.non_paye_payees : [];
-          [...a1, ...a2].forEach(x => {
-            const id = String(x?.candidate_id || '').trim();
-            if (id) idsAll.add(id);
-          });
-        } catch {}
-
-        let ids = Array.isArray(dec.candidate_ids) ? dec.candidate_ids.map(x => String(x || '').trim()).filter(Boolean) : [];
-        let set = new Set(ids);
-
-        // If empty means "include all" (default). On first toggle, materialize.
-        if (set.size === 0 && idsAll.size > 0) set = new Set(idsAll);
-
-        if (checked) set.add(cid);
-        else set.delete(cid);
-
-        dec.candidate_ids = Array.from(set);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:pay:setMismatchChoice') {
-      const cid = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
-      if (!cid) return;
-      const v = (el && el.value != null) ? String(el.value) : '';
-      const vv = String(v || '').trim().toUpperCase();
-      try {
-        st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
-        st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
-        st.pay.draftWizard.decisions.mismatch_choices = (st.pay.draftWizard.decisions.mismatch_choices && typeof st.pay.draftWizard.decisions.mismatch_choices === 'object') ? st.pay.draftWizard.decisions.mismatch_choices : {};
-        if (!vv) delete st.pay.draftWizard.decisions.mismatch_choices[cid];
-        else st.pay.draftWizard.decisions.mismatch_choices[cid] = vv;
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:pay:setLoanCap') {
-      const cid = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
-      const fld = String(ds('capField') || dget('data-cap-field') || '').trim();
-      if (!cid || !fld) return;
-      const raw = (el && el.value != null) ? String(el.value) : '';
-      const n = raw === '' ? null : Number(raw);
-      try {
-        st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
-        st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
-        st.pay.draftWizard.decisions.loan_caps = (st.pay.draftWizard.decisions.loan_caps && typeof st.pay.draftWizard.decisions.loan_caps === 'object') ? st.pay.draftWizard.decisions.loan_caps : {};
-        const lc = st.pay.draftWizard.decisions.loan_caps;
-
-        lc[cid] = (lc[cid] && typeof lc[cid] === 'object') ? lc[cid] : {};
-        if (n == null || !Number.isFinite(n)) {
-          delete lc[cid][fld];
-        } else {
-          lc[cid][fld] = n;
-        }
-
-        if (Object.keys(lc[cid]).length === 0) delete lc[cid];
-      } catch {}
-      return;
-    }
-
-    // PREPARE panel actions
-    if (a === 'banking:pay:prepare:setOverrideKind') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setPrepareDraftField('entity_kind', v);
-      return;
-    }
-
-    if (a === 'banking:pay:prepare:setOverrideEntityId') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setPrepareDraftField('entity_id', v);
-      return;
-    }
-
-    if (a === 'banking:pay:prepare:setOverrideReason') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setPrepareDraftField('reason', v);
-      return;
-    }
-
-    if (a === 'banking:pay:prepare:addOverride') {
-      try {
-        st.pay.prepareOverrides = (st.pay.prepareOverrides && typeof st.pay.prepareOverrides === 'object') ? st.pay.prepareOverrides : { items: [] };
-        st.pay.prepareOverrides.items = Array.isArray(st.pay.prepareOverrides.items) ? st.pay.prepareOverrides.items : [];
-        st.pay.prepareOverridesDraft = (st.pay.prepareOverridesDraft && typeof st.pay.prepareOverridesDraft === 'object') ? st.pay.prepareOverridesDraft : { entity_kind:'', entity_id:'', reason:'' };
-
-        const ek = String(st.pay.prepareOverridesDraft.entity_kind || '').trim();
-        const eid = String(st.pay.prepareOverridesDraft.entity_id || '').trim();
-        const rs = String(st.pay.prepareOverridesDraft.reason || '').trim();
-
-        if (!ek || !eid || !rs) {
-          toast('Override requires entity kind, entity id, and reason.');
-          return;
-        }
-
-        st.pay.prepareOverrides.items.push({ entity_kind: ek, entity_id: eid, reason: rs });
-
-        // clear draft inputs (UI will stay as-is until rerender; Phase 6 may choose to rerender)
-        st.pay.prepareOverridesDraft.entity_kind = '';
-        st.pay.prepareOverridesDraft.entity_id = '';
-        st.pay.prepareOverridesDraft.reason = '';
-
-        await safeRerender(null);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:pay:prepare:removeOverride') {
-      const idxRaw = String(ds('overrideIndex') || dget('data-override-index') || '').trim();
-      const idx = Number(idxRaw);
-      if (!Number.isFinite(idx)) return;
-      try {
-        const arr = st.pay?.prepareOverrides?.items;
-        if (Array.isArray(arr) && idx >= 0 && idx < arr.length) {
-          arr.splice(idx, 1);
-          await safeRerender(null);
-        }
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:pay:prepare') {
-      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
-      if (!id) return;
-      const g = safeGate('PREPARE');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      const overrides = Array.isArray(st.pay?.prepareOverrides?.items) ? st.pay.prepareOverrides.items : [];
-      await bankingPayBatchPrepare?.(id, overrides);
-      return;
-    }
-
-    // SCHEDULE panel actions
-    if (a === 'banking:pay:schedule:loadAccounts' || a === 'banking:settings:loadAccounts') {
-      // listing accounts is a bank action and should be gated (blocked on env mismatch)
-      const g = safeGate('LIST_ACCOUNTS');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingListFundingAccounts?.();
-      await safeRerender(null);
-      return;
-    }
-
-    if (a === 'banking:pay:schedule:setFundingRef') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setScheduleField('funding_account_ref', String(v || '').trim());
-      return;
-    }
-
-    if (a === 'banking:pay:schedule:setKind') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      const vv = String(v || '').trim().toUpperCase();
-      setScheduleField('schedule_kind', (vv === 'SCHEDULED' ? 'SCHEDULED' : 'IMMEDIATE'));
-      await safeRerender(null);
-      return;
-    }
-
-    if (a === 'banking:pay:schedule:setLocalTime') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setScheduleField('scheduled_at_local', String(v || ''));
-      return;
-    }
-
-    if (a === 'banking:pay:schedule:toggleWarnHour') {
-      const h = String(ds('hour') || dget('data-hour') || '').trim();
-      if (!h) return;
-      try {
-        st.pay.scheduleForm = (st.pay.scheduleForm && typeof st.pay.scheduleForm === 'object') ? st.pay.scheduleForm : {};
-        const arr = Array.isArray(st.pay.scheduleForm.warning_hours_json) ? st.pay.scheduleForm.warning_hours_json : [];
-        const set = new Set(arr.map(x => String(x)));
-        const checked = !!(el && el.checked);
-        if (checked) set.add(h);
-        else set.delete(h);
-        st.pay.scheduleForm.warning_hours_json = Array.from(set).map(x => {
-          const n = Number(x);
-          return Number.isFinite(n) ? n : null;
-        }).filter(x => x !== null);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:pay:schedule:useDefaultWarn') {
-      try {
-        const sraw = (st.settings && st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
-        const def = Array.isArray(sraw.funds_warning_hours_json) ? sraw.funds_warning_hours_json : [24, 12];
-        st.pay.scheduleForm.warning_hours_json = def.slice();
-        await safeRerender(null);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:pay:schedule:clear') {
-      try {
-        st.pay.scheduleForm.funding_account_ref = '';
-        st.pay.scheduleForm.schedule_kind = 'IMMEDIATE';
-        st.pay.scheduleForm.scheduled_at_local = '';
-        st.pay.scheduleForm.warning_hours_json = [];
-        await safeRerender(null);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:pay:schedule') {
-      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
-      if (!id) return;
-      const g = safeGate('SCHEDULE');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingPayBatchSchedule?.(id, st.pay.scheduleForm);
-      return;
-    }
-
-    // Payment Settings: toggles + default funding selection + save
-    if (a === 'banking:settings:togglePayrollTesting') {
-      try {
-        st.settings.raw = (st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
-        st.settings.raw.payroll_testing = !!(el && el.checked);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:settings:togglePayeRemittances') {
-      try {
-        st.settings.raw = (st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
-        st.settings.raw.paye_remittances_enabled = !!(el && el.checked);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:settings:setDefaultFunding') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      try {
-        st.settings.raw = (st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
-        st.settings.raw.rail_default_funding_account_ref = String(v || '').trim() || null;
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:settings:clearDefaultFunding') {
-      try {
-        st.settings.raw = (st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
-        st.settings.raw.rail_default_funding_account_ref = null;
-        await safeRerender(null);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:settings:save') {
-      // Saving settings is not blocked by env mismatch unless you later decide; the backend validates defaults via adapter.
-      const sraw = (st.settings && st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
-      const patch = {
-        rail_default_funding_account_ref: (sraw.rail_default_funding_account_ref == null) ? null : String(sraw.rail_default_funding_account_ref).trim(),
-        payroll_testing: !!sraw.payroll_testing,
-        paye_remittances_enabled: !!sraw.paye_remittances_enabled
-      };
-      await bankingUpdateSettingsDefaults?.(patch);
-      return;
-    }
-
-    if (a === 'banking:openGlobalSettingsRemittances') {
-      try {
-        if (typeof openSettings === 'function') {
-          openSettings();
-          setTimeout(() => {
-            try {
-              const fr = getTopFrame();
-              if (fr && String(fr.entity || '') === 'settings' && typeof fr.setTab === 'function') {
-                fr.setTab('remittances');
-              }
-            } catch {}
-          }, 0);
-        }
-      } catch {}
-      return;
-    }
-
-    // ID tab actions
-    if (a === 'banking:id:preview') {
-      const g = safeGate('ID_PREVIEW');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingIdPreview?.();
-      return;
-    }
-
-    if (a === 'banking:id:setBankUploadCode') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setIdApplyField('bank_upload_code', String(v || '').trim());
-      return;
-    }
-
-    if (a === 'banking:id:setNote') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setIdApplyField('note', String(v || ''));
-      return;
-    }
-
-    if (a === 'banking:id:clearApplyForm') {
-      try {
-        st.id.applyForm.bank_upload_code = '';
-        st.id.applyForm.note = '';
-        st.id.applyForm.error = '';
-        await safeRerender(null);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:id:balanceNow') {
-      const g = safeGate('ID_BALANCE_NOW');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      const code = String(st.id?.applyForm?.bank_upload_code || '').trim();
-      const note = String(st.id?.applyForm?.note || '').trim();
-      await bankingIdBalanceNow?.({ bank_upload_code: code, note });
-      return;
-    }
-
-    // ID history: ledger filters + refresh
-    if (a === 'banking:id:setOnlyReportable') {
-      try { st.id.ledger.filters.only_reportable = !!(el && el.checked); } catch {}
-      return;
-    }
-
-    if (a === 'banking:id:setLedgerSearch') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      try { st.id.ledger.filters.search = String(v || '').trim(); } catch {}
-      return;
-    }
-
-    if (a === 'banking:id:setLedgerClientId') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      try { st.id.ledger.filters.client_id = String(v || '').trim(); } catch {}
-      return;
-    }
-
-    if (a === 'banking:id:toggleLedgerStatus') {
-      const s = String(ds('status') || dget('data-status') || '').trim().toUpperCase();
-      if (!s) return;
-      try {
-        const arr = Array.isArray(st.id.ledger.filters.status) ? st.id.ledger.filters.status : [];
-        const set = new Set(arr.map(x => String(x || '').trim().toUpperCase()).filter(Boolean));
-        if (set.has(s)) set.delete(s); else set.add(s);
-        st.id.ledger.filters.status = Array.from(set);
-        await safeRerender(null);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:id:clearLedgerFilters') {
-      try {
-        st.id.ledger.filters.only_reportable = true;
-        st.id.ledger.filters.status = [];
-        st.id.ledger.filters.client_id = '';
-        st.id.ledger.filters.search = '';
-        await safeRerender(null);
-      } catch {}
-      return;
-    }
-
-    if (a === 'banking:id:ledgerRefresh') {
-      const g = safeGate('ID_LEDGER_LIST');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingIdLedgerList?.(null);
-      return;
-    }
-
-    if (a === 'banking:id:runsRefresh') {
-      const g = safeGate('ID_RUNS_LIST');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingIdRunsList?.(null);
-      return;
-    }
-
-    if (a === 'banking:id:runSelect') {
-      const idRef = String(ds('idRef') || dget('data-id-ref') || '').trim();
-      if (!idRef) return;
-      const g = safeGate('ID_RUN_GET');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingIdRunGet?.(idRef);
-      return;
-    }
-
-    if (a === 'banking:id:runRefresh') {
-      const idRef = String(ds('idRef') || dget('data-id-ref') || st.id?.runs?.selected?.id_ref || '').trim();
-      if (!idRef) return;
-      const g = safeGate('ID_RUN_GET');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingIdRunGet?.(idRef);
-      return;
-    }
-
-    // Outbox / Remittances Status tab
-    if (a === 'banking:outbox:setPrefix') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setOutboxFilter('reference_prefix', v);
-      return;
-    }
-
-    if (a === 'banking:outbox:setContains') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setOutboxFilter('reference_contains', v);
-      return;
-    }
-
-    if (a === 'banking:outbox:useBatchPrefix') {
-      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
-      if (!id) return;
-      setOutboxFilter('reference_prefix', `remit:pay_batch:${id}:`);
-      await safeRerender(null);
-      return;
-    }
-
-    if (a === 'banking:outbox:clearFilters') {
-      setOutboxFilter('reference_prefix', '');
-      setOutboxFilter('reference_contains', '');
-      await safeRerender(null);
-      return;
-    }
-
-    if (a === 'banking:outbox:refresh') {
-      const g = safeGate('OUTBOX_LIST');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      const fp = String(st.remittances?.filters?.reference_prefix || '').trim();
-      const fc = String(st.remittances?.filters?.reference_contains || '').trim();
-      const lim = Number(st.remittances?.list?.limit || 50);
-      const off = Number(st.remittances?.list?.offset || 0);
-      await bankingOutboxList?.({ reference_prefix: fp, reference_contains: fc, limit: lim, offset: off });
       return;
     }
 
@@ -10953,9 +11731,6 @@ function attachBankingModalDelegatedHandlers() {
 
   return { ok: true };
 }
-
-
-
 
 
 
@@ -52790,7 +53565,9 @@ async function openUserManagementModal() {
       display_name: '',
       role: 'admin',
       password: '',
-      email_settings_text: '{}'
+      email_settings_text: '{}',
+      payment_authoriser: false,
+      payment_golden_key: false
     },
 
     // edit panel
@@ -52803,7 +53580,9 @@ async function openUserManagementModal() {
       role: 'admin',
       is_active: true,
       email_settings_text: '{}',
-      new_password: '' // optional
+      new_password: '', // optional
+      payment_authoriser: false,
+      payment_golden_key: false
     },
 
     // edit close/discard support
@@ -52941,7 +53720,6 @@ async function openUserManagementModal() {
       return false;
     }
 
-    const norm = (v) => String(v ?? '');
     const normTrim = (v) => String(v ?? '').trim();
     const normLowerTrim = (v) => String(v ?? '').trim().toLowerCase();
 
@@ -52951,6 +53729,9 @@ async function openUserManagementModal() {
     if (normTrim(m.display_name) !== normTrim(b.display_name)) dirty = true;
     if (normLowerTrim(m.role) !== normLowerTrim(b.role)) dirty = true;
     if (!!m.is_active !== !!b.is_active) dirty = true;
+
+    if (!!m.payment_authoriser !== !!b.payment_authoriser) dirty = true;
+    if (!!m.payment_golden_key !== !!b.payment_golden_key) dirty = true;
 
     // email settings text: compare trimmed
     if (normTrim(m.email_settings_text) !== normTrim(b.email_settings_text)) dirty = true;
@@ -52978,8 +53759,13 @@ async function openUserManagementModal() {
       role: String(u.role || 'admin'),
       is_active: !!u.is_active,
       email_settings_text: JSON.stringify((u.email_settings && typeof u.email_settings === 'object') ? u.email_settings : {}, null, 2),
-      new_password: ''
+      new_password: '',
+      payment_authoriser: !!u.payment_authoriser,
+      payment_golden_key: !!u.payment_golden_key
     };
+
+    // Golden implies authoriser (mirror DB CHECK)
+    if (state.editModel.payment_golden_key) state.editModel.payment_authoriser = true;
 
     state.editBaseline = deepClone(state.editModel);
     state.editDirty = false;
@@ -53254,10 +54040,56 @@ async function openUserManagementModal() {
         inEmailSettings.value = state.createModel.email_settings_text;
         inEmailSettings.addEventListener('input', () => { state.createModel.email_settings_text = inEmailSettings.value; });
 
+        const privWrap = document.createElement('div');
+        privWrap.style.display = 'flex';
+        privWrap.style.flexWrap = 'wrap';
+        privWrap.style.gap = '12px';
+        privWrap.style.alignItems = 'center';
+
+        const cbAuth = document.createElement('input');
+        cbAuth.type = 'checkbox';
+        cbAuth.checked = !!state.createModel.payment_authoriser;
+        cbAuth.addEventListener('change', () => {
+          state.createModel.payment_authoriser = !!cbAuth.checked;
+          if (!state.createModel.payment_authoriser) {
+            state.createModel.payment_golden_key = false;
+            cbGold.checked = false;
+          }
+        });
+
+        const cbGold = document.createElement('input');
+        cbGold.type = 'checkbox';
+        cbGold.checked = !!state.createModel.payment_golden_key;
+        cbGold.addEventListener('change', () => {
+          state.createModel.payment_golden_key = !!cbGold.checked;
+          if (state.createModel.payment_golden_key) {
+            state.createModel.payment_authoriser = true;
+            cbAuth.checked = true;
+          }
+        });
+
+        const labAuth = document.createElement('label');
+        labAuth.className = 'inline mini';
+        labAuth.style.opacity = '0.95';
+        labAuth.title = 'Payment Authoriser (can approve payments)';
+        labAuth.appendChild(cbAuth);
+        labAuth.appendChild(document.createTextNode(' 🔓 Authoriser'));
+
+        const labGold = document.createElement('label');
+        labGold.className = 'inline mini';
+        labGold.style.opacity = '0.95';
+        labGold.title = 'Payment Golden Key (can bypass authoriser count if chosen)';
+        labGold.appendChild(cbGold);
+        labGold.appendChild(document.createTextNode(' 🔑 Golden Key'));
+
+        privWrap.appendChild(labAuth);
+        privWrap.appendChild(labGold);
+
         grid.appendChild(mkRow('Email', inEmail));
         grid.appendChild(mkRow('Display name', inDN));
         grid.appendChild(mkRow('Role', inRole));
         grid.appendChild(mkRow('Default password', inPw));
+        grid.appendChild(mkRow('Payment permissions', privWrap));
 
         const rowJson = document.createElement('div');
         rowJson.className = 'row';
@@ -53307,6 +54139,10 @@ async function openUserManagementModal() {
             return;
           }
 
+          let paymentAuthoriser = !!state.createModel.payment_authoriser;
+          const paymentGoldenKey = !!state.createModel.payment_golden_key;
+          if (paymentGoldenKey) paymentAuthoriser = true;
+
           state.creating = true;
           paint();
 
@@ -53316,7 +54152,9 @@ async function openUserManagementModal() {
               display_name: dn || null,
               role,
               password: pw,
-              email_settings: emailSettingsObj
+              email_settings: emailSettingsObj,
+              payment_authoriser: paymentAuthoriser,
+              payment_golden_key: paymentGoldenKey
             });
 
             setNotice('User created.');
@@ -53326,6 +54164,8 @@ async function openUserManagementModal() {
             state.createModel.role = 'admin';
             state.createModel.password = '';
             state.createModel.email_settings_text = '{}';
+            state.createModel.payment_authoriser = false;
+            state.createModel.payment_golden_key = false;
 
             await loadUsers();
           } catch (e) {
@@ -53465,6 +54305,53 @@ async function openUserManagementModal() {
         inActive.value = state.editModel.is_active ? 'true' : 'false';
         inActive.addEventListener('change', () => { state.editModel.is_active = (inActive.value === 'true'); markDirtyAndSync(); });
 
+        const privWrap = document.createElement('div');
+        privWrap.style.display = 'flex';
+        privWrap.style.flexWrap = 'wrap';
+        privWrap.style.gap = '12px';
+        privWrap.style.alignItems = 'center';
+
+        const cbAuthE = document.createElement('input');
+        cbAuthE.type = 'checkbox';
+        cbAuthE.checked = !!state.editModel.payment_authoriser;
+        cbAuthE.addEventListener('change', () => {
+          state.editModel.payment_authoriser = !!cbAuthE.checked;
+          if (!state.editModel.payment_authoriser) {
+            state.editModel.payment_golden_key = false;
+            cbGoldE.checked = false;
+          }
+          markDirtyAndSync();
+        });
+
+        const cbGoldE = document.createElement('input');
+        cbGoldE.type = 'checkbox';
+        cbGoldE.checked = !!state.editModel.payment_golden_key;
+        cbGoldE.addEventListener('change', () => {
+          state.editModel.payment_golden_key = !!cbGoldE.checked;
+          if (state.editModel.payment_golden_key) {
+            state.editModel.payment_authoriser = true;
+            cbAuthE.checked = true;
+          }
+          markDirtyAndSync();
+        });
+
+        const labAuthE = document.createElement('label');
+        labAuthE.className = 'inline mini';
+        labAuthE.style.opacity = '0.95';
+        labAuthE.title = 'Payment Authoriser (can approve payments)';
+        labAuthE.appendChild(cbAuthE);
+        labAuthE.appendChild(document.createTextNode(' 🔓 Authoriser'));
+
+        const labGoldE = document.createElement('label');
+        labGoldE.className = 'inline mini';
+        labGoldE.style.opacity = '0.95';
+        labGoldE.title = 'Payment Golden Key (can bypass authoriser count if chosen)';
+        labGoldE.appendChild(cbGoldE);
+        labGoldE.appendChild(document.createTextNode(' 🔑 Golden Key'));
+
+        privWrap.appendChild(labAuthE);
+        privWrap.appendChild(labGoldE);
+
         const inEmailSettings = document.createElement('textarea');
         inEmailSettings.className = 'input';
         inEmailSettings.style.minHeight = '140px';
@@ -53482,6 +54369,7 @@ async function openUserManagementModal() {
         grid.appendChild(mkRow('Display name', inDN));
         grid.appendChild(mkRow('Role', inRole));
         grid.appendChild(mkRow('Status', inActive));
+        grid.appendChild(mkRow('Payment permissions', privWrap));
 
         const rowPw = document.createElement('div');
         rowPw.className = 'row';
@@ -53549,6 +54437,10 @@ async function openUserManagementModal() {
           const role = String(state.editModel.role || '').trim().toLowerCase();
           const isActive = !!state.editModel.is_active;
 
+          let paymentAuthoriser = !!state.editModel.payment_authoriser;
+          const paymentGoldenKey = !!state.editModel.payment_golden_key;
+          if (paymentGoldenKey) paymentAuthoriser = true;
+
           if (!email) { setError('Email is required.'); paint(); return; }
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError('Invalid email address.'); paint(); return; }
           if (!(role === 'admin' || role === 'user')) { setError('Role must be admin or user.'); paint(); return; }
@@ -53581,7 +54473,9 @@ async function openUserManagementModal() {
               display_name: dn || null,
               role,
               is_active: isActive,
-              email_settings: emailSettingsObj
+              email_settings: emailSettingsObj,
+              payment_authoriser: paymentAuthoriser,
+              payment_golden_key: paymentGoldenKey
             });
 
             // 2) Optional password reset
@@ -53673,10 +54567,16 @@ async function openUserManagementModal() {
                   const active = !!u.is_active;
                   const last = fmtIso(u.last_login_at_utc);
 
+                  const isAuth = !!u.payment_authoriser;
+                  const isGold = !!u.payment_golden_key;
+                  const flags = (isAuth || isGold)
+                    ? `<span class="mini" style="opacity:.9;margin-left:6px;" title="${escapeHtml((isGold ? 'Golden Key' : '') + (isGold && isAuth ? ' · ' : '') + (isAuth ? 'Authoriser' : ''))}">${isAuth ? '🔓' : ''}${isGold ? ' 🔑' : ''}</span>`
+                    : '';
+
                   return `
                     <tr data-uid="${escapeHtml(id)}">
                       <td>${email}</td>
-                      <td>${dn || '—'}</td>
+                      <td>${dn || '—'}${flags}</td>
                       <td>${role || '—'}</td>
                       <td>${fmtBoolPill(active, 'Active', 'Inactive')}</td>
                       <td>${escapeHtml(last)}</td>
@@ -53988,9 +54888,6 @@ async function openUserManagementModal() {
   // Initial paint
   try { paint(); } catch {}
 }
-
-
-
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -84065,6 +84962,7 @@ async function renderAll(){
   renderSummary(data);
 }
 
+
 async function bootstrapApp(){
   // Belt & braces: if loadSession() ran but globals are not mirrored, mirror now
   try {
@@ -84090,6 +84988,38 @@ async function bootstrapApp(){
           }
         }
       } catch {}
+    }
+  } catch {}
+
+  // ✅ NEW: pay_auth_token deep link (payment authorisation) — open approval modal on boot
+  try {
+    const u = new URL(location.href);
+    const tok = String(u.searchParams.get('pay_auth_token') || '').trim();
+    if (tok) {
+      // Prevent double-trigger if bootstrapApp is called twice in a session
+      if (!window.__payAuthTokenHandled) {
+        window.__payAuthTokenHandled = true;
+        window.__pendingPayAuthToken = tok;
+
+        // Remove token from URL (avoid leaking via screenshots / copy-paste)
+        try {
+          u.searchParams.delete('pay_auth_token');
+          history.replaceState({}, '', u.toString());
+        } catch {}
+
+        // Open the dedicated approval modal (implemented elsewhere). Non-blocking.
+        setTimeout(() => {
+          try {
+            if (typeof openPayAuthTokenApprovalModal === 'function') {
+              Promise.resolve(openPayAuthTokenApprovalModal(tok)).catch(()=>{});
+            } else if (typeof handlePayAuthTokenOnLoad === 'function') {
+              Promise.resolve(handlePayAuthTokenOnLoad(tok)).catch(()=>{});
+            } else {
+              try { if (typeof window.__toast === 'function') window.__toast('Payment authorisation link detected, but approval UI is not available yet.'); } catch {}
+            }
+          } catch {}
+        }, 0);
+      }
     }
   } catch {}
 
@@ -84315,7 +85245,6 @@ async function bootstrapApp(){
   renderTools();
   await renderAll();
 }
-
 
 
 // Initialize
