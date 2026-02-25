@@ -4109,14 +4109,16 @@ const sections = [
   {key:'clients', label:'Clients', icon:'🏥'},
   {key:'contracts', label:'Contracts', icon:'📄'},
   {key:'timesheets', label:'Timesheets', icon:'🗒️'},
- {key:'imports', label:'Imports', icon:'📥'},
+  {key:'imports', label:'Imports', icon:'📥'},
 
   {key:'invoices', label:'Invoices', icon:'📄'},
+
+  {key:'banking', label:'Banking', icon:'🏦'},
+
   {key:'umbrellas', label:'Umbrellas', icon:'☂️'},
   {key:'settings', label:'Settings', icon:'⚙️'},
   {key:'audit', label:'Audit', icon:'🛡️'}
 ];
-
 let currentSection = 'candidates';
 let currentRows = [];
 let currentSelection = null;
