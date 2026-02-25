@@ -9184,16 +9184,28 @@ function renderPayBatchDetailPanel() {
   const executePayeBtn = btn('Execute bank (PAYE)', 'banking:pay:executeBank', { 'data-batch-id': batchId, 'data-scope': 'PAYE', title: 'Create bank transfers for this batch (PAYE)' }, executeGate);
   const executeUmbBtn = btn('Execute bank (UMB)', 'banking:pay:executeBank', { 'data-batch-id': batchId, 'data-scope': 'UMBRELLA', title: 'Create bank transfers for this batch (UMBRELLA)' }, executeGate);
 
+  const csvSupported = (() => {
+    const p = String(provider || '').trim().toUpperCase();
+    return !!p && p.includes('CSV');
+  })();
+
+  const exportBtnsHtml = csvSupported
+    ? `
+      ${btn('Export CSV (ALL)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'ALL' }, gate('EXPORT_CSV'))}
+      ${btn('Export CSV (PAYE)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'PAYE' }, gate('EXPORT_CSV'))}
+      ${btn('Export CSV (UMB)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'UMBRELLA' }, gate('EXPORT_CSV'))}
+    `
+    : '';
+
   const actionsTop = `
     <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
       ${btn('Pending Payment Check', 'banking:pay:poll', { 'data-batch-id': batchId, title: pollTooltip }, gate('POLL'))}
       ${executeAllBtn}
       ${executePayeBtn}
       ${executeUmbBtn}
-      ${btn('Export CSV (ALL)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'ALL' }, gate('EXPORT_CSV'))}
-      ${btn('Export CSV (PAYE)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'PAYE' }, gate('EXPORT_CSV'))}
-      ${btn('Export CSV (UMB)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'UMBRELLA' }, gate('EXPORT_CSV'))}
+      ${exportBtnsHtml}
       ${cancelBtn}
+      ${!csvSupported ? `<span class="mini" style="opacity:.75;">CSV export not available for rail: <span class="mono">${enc(provider || '—')}</span></span>` : ``}
     </div>
   `;
 
@@ -9496,6 +9508,207 @@ function renderPayNewBatchWizard() {
   const candidateSet = new Set(candidateIdsArr.map(x => String(x || '').trim()).filter(Boolean));
   const useCandidateFilter = candidateSet.size > 0;
 
+  const isIncludedCandidate = (cid) => {
+    const id = String(cid || '').trim();
+    if (!id) return false;
+    return useCandidateFilter ? candidateSet.has(id) : true;
+  };
+
+  const ymdToUk = (ymd) => {
+    const s = String(ymd || '').trim();
+    if (!s) return '';
+    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+    return s;
+  };
+
+  const fmtMoney = (v) => {
+    if (v === null || v === undefined) return '0.00';
+    const n = Number(v);
+    if (!Number.isFinite(n)) {
+      const s = String(v).trim();
+      if (!s) return '0.00';
+      return s;
+    }
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const renderItemisationTable = (cand, mode) => {
+    const c = (cand && typeof cand === 'object') ? cand : {};
+    const items = Array.isArray(c.itemisation) ? c.itemisation : [];
+    const candMethod = String(c.current_pay_method || '').trim().toUpperCase();
+
+    let rows = items
+      .filter(it => it && typeof it === 'object')
+      .map(it => ({
+        week_ending_date: String(it.week_ending_date || '').trim(),
+        client_name: String(it.client_name || '').trim(),
+        payment_amount: (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0)),
+        source_pay_method: String(it.source_pay_method || '').trim().toUpperCase()
+      }))
+      .filter(r => {
+        const amt = Number(r.payment_amount);
+        const nonZero = Number.isFinite(amt) ? Math.round(amt * 100) / 100 !== 0 : String(r.payment_amount || '').trim() !== '' && String(r.payment_amount) !== '0';
+        if (!nonZero) return false;
+        if (mode === 'MISMATCH_ONLY') {
+          if (!candMethod) return true;
+          return r.source_pay_method && r.source_pay_method !== candMethod;
+        }
+        if (mode === 'NON_MISMATCH_ONLY') {
+          if (!candMethod) return true;
+          return !r.source_pay_method || r.source_pay_method === candMethod;
+        }
+        return true;
+      });
+
+    if (mode === 'MISMATCH_ONLY' && rows.length === 0) {
+      // Fallback: if candidate is marked mismatch but we couldn't isolate rows, show all non-zero rows
+      rows = items
+        .filter(it => it && typeof it === 'object')
+        .map(it => ({
+          week_ending_date: String(it.week_ending_date || '').trim(),
+          client_name: String(it.client_name || '').trim(),
+          payment_amount: (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0)),
+          source_pay_method: String(it.source_pay_method || '').trim().toUpperCase()
+        }))
+        .filter(r => {
+          const amt = Number(r.payment_amount);
+          return Number.isFinite(amt) ? Math.round(amt * 100) / 100 !== 0 : String(r.payment_amount || '').trim() !== '' && String(r.payment_amount) !== '0';
+        });
+    }
+
+    if (!rows.length) {
+      return `<div class="mini" style="opacity:.8;">No payable line items.</div>`;
+    }
+
+    const rowsHtml = rows.map(r => `
+      <tr>
+        <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(r.week_ending_date) || '—')}</td>
+        <td class="mini">${enc(r.client_name || '—')}</td>
+        <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(r.payment_amount))}</td>
+      </tr>
+    `).join('');
+
+    return `
+      <div style="margin-top:6px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
+        <table class="grid" style="min-width:520px; table-layout:auto;">
+          <thead>
+            <tr>
+              <th style="width:140px;">Week ending</th>
+              <th>Client</th>
+              <th style="width:140px; text-align:right;">Payment amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
+    `;
+  };
+
+  // ✅ Ready-to-pay list: candidates with no mismatch, included, and with non-zero itemisation lines
+  const readyCands = allCands.filter(c => {
+    const cid = String(c?.candidate_id || '').trim();
+    if (!cid) return false;
+    if (!isIncludedCandidate(cid)) return false;
+
+    const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
+    const hm = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true'));
+    if (hm) return false;
+
+    const items = Array.isArray(c?.itemisation) ? c.itemisation : [];
+    if (!items.length) return false;
+
+    // Any non-zero amount line?
+    for (const it of items) {
+      if (!it || typeof it !== 'object') continue;
+      const v = (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0));
+      const n = Number(v);
+      if (Number.isFinite(n) && Math.round(n * 100) / 100 !== 0) return true;
+      if (!Number.isFinite(n) && String(v || '').trim() && String(v) !== '0') return true;
+    }
+    return false;
+  });
+
+  const readyRows = [];
+  for (const c of readyCands) {
+    const cid = String(c?.candidate_id || '').trim();
+    const name = String(c?.display_name || '').trim() || '—';
+    const tms = String(c?.tms_ref || '').trim();
+    const items = Array.isArray(c?.itemisation) ? c.itemisation : [];
+    const candMethod = String(c?.current_pay_method || '').trim().toUpperCase();
+
+    for (const it of items) {
+      if (!it || typeof it !== 'object') continue;
+      const srcMethod = String(it.source_pay_method || '').trim().toUpperCase();
+      if (candMethod && srcMethod && srcMethod !== candMethod) continue; // non-mismatch only
+
+      const v = (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0));
+      const n = Number(v);
+      const nonZero = Number.isFinite(n) ? Math.round(n * 100) / 100 !== 0 : String(v || '').trim() && String(v) !== '0';
+      if (!nonZero) continue;
+
+      readyRows.push({
+        cid,
+        tms,
+        name,
+        week_ending_date: String(it.week_ending_date || '').trim(),
+        client_name: String(it.client_name || '').trim(),
+        payment_amount: v
+      });
+    }
+  }
+
+  const readyTotal = readyRows.reduce((acc, r) => {
+    const n = Number(r.payment_amount);
+    if (!Number.isFinite(n)) return acc;
+    return acc + (Math.round(n * 100) / 100);
+  }, 0);
+
+  const readyTableHtml = pv ? `
+    <details style="border:1px solid var(--line); border-radius:10px; padding:10px;">
+      <summary style="cursor:pointer; user-select:none;">
+        <span class="mini" style="opacity:.9;">
+          Ready to pay (no mismatches): <span class="mono">${enc(String(readyRows.length))}</span> item(s)
+          • Total: <span class="mono">${enc(fmtMoney(readyTotal))}</span>
+        </span>
+      </summary>
+      <div style="margin-top:10px; overflow:auto;">
+        <table class="grid" style="min-width:980px; table-layout:auto;">
+          <thead>
+            <tr>
+              <th>Candidate</th>
+              <th style="width:140px;">Week ending</th>
+              <th>Client</th>
+              <th style="width:160px; text-align:right;">Payment amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              readyRows.length
+                ? readyRows.map(r => `
+                    <tr>
+                      <td>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                          <span class="mono">${enc(r.tms || '')}</span>
+                          <span>${enc(r.name)}</span>
+                        </div>
+                      </td>
+                      <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(r.week_ending_date) || '—')}</td>
+                      <td class="mini">${enc(r.client_name || '—')}</td>
+                      <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(r.payment_amount))}</td>
+                    </tr>
+                  `).join('')
+                : `<tr><td colspan="4" class="mini" style="opacity:.85;">No ready-to-pay items.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+    </details>
+  ` : ``;
+
   const mismatchRowsHtml = mismatchList.length ? mismatchList.map((c) => {
     const cid = String(c?.candidate_id || '').trim();
     const name = String(c?.display_name || '').trim() || '—';
@@ -9513,6 +9726,8 @@ function renderPayNewBatchWizard() {
     const minTakeHome = (capNow.min_take_home != null) ? String(capNow.min_take_home) : '';
     const maxDed = (capNow.max_deduction != null) ? String(capNow.max_deduction) : '';
 
+    const mismatchLinesHtml = renderItemisationTable(c, 'MISMATCH_ONLY');
+
     return `
       <tr>
         <td style="white-space:nowrap;">
@@ -9527,7 +9742,7 @@ function renderPayNewBatchWizard() {
           </label>
         </td>
         <td>
-          <div style="display:flex;flex-direction:column;gap:2px;">
+          <div style="display:flex;flex-direction:column;gap:6px;">
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <span class="mono">${enc(tms || '')}</span>
               <span>${enc(name)}</span>
@@ -9536,6 +9751,8 @@ function renderPayNewBatchWizard() {
             <div class="mini" style="opacity:.85;">
               Mismatch sources — PAYE: <span class="mono">${enc(srcPaye || '0')}</span> • Umbrella: <span class="mono">${enc(srcUmb || '0')}</span>
             </div>
+            <div class="mini" style="opacity:.85;">Affected lines:</div>
+            ${mismatchLinesHtml}
           </div>
         </td>
         <td style="min-width:200px;">
@@ -9585,15 +9802,6 @@ function renderPayNewBatchWizard() {
   }).join('') : `
     <tr><td colspan="4" class="mini" style="opacity:.85;">No mismatch decisions required.</td></tr>
   `;
-
-  const ymdToUk = (ymd) => {
-    const s = String(ymd || '').trim();
-    if (!s) return '';
-    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
-    return s;
-  };
 
   const elig = (pv && typeof pv === 'object' && pv.eligibility && typeof pv.eligibility === 'object') ? pv.eligibility : null;
   const eligFrom = elig ? String(elig.from_date || '').trim() : '';
@@ -9698,12 +9906,14 @@ function renderPayNewBatchWizard() {
 
           ${previewSummaryHtml}
 
+          ${readyTableHtml}
+
           <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
             <table class="grid" style="min-width:980px; table-layout:auto;">
               <thead>
                 <tr>
                   <th style="width:90px;">Include</th>
-                  <th>Candidate</th>
+                  <th>Mismatch candidates (includes affected lines)</th>
                   <th style="width:220px;">Mismatch choice</th>
                   <th style="width:260px;">Loan caps (optional)</th>
                 </tr>
@@ -9722,6 +9932,7 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
+
 
 function renderPayPreparePanel() {
   const enc = (typeof escapeHtml === 'function')
@@ -11445,6 +11656,11 @@ function attachBankingModalDelegatedHandlers() {
     if (!('client_filter_id' in st.pay.draftWizard)) st.pay.draftWizard.client_filter_id = '';
     if (!('client_filter_label' in st.pay.draftWizard)) st.pay.draftWizard.client_filter_label = '';
 
+    // Ensure ID state scaffolding exists (Invoice Discounting tab)
+    try { st.id = (st.id && typeof st.id === 'object') ? st.id : {}; } catch {}
+    try { st.id.preview = (st.id.preview && typeof st.id.preview === 'object') ? st.id.preview : { data: null, loading: false, error: '' }; } catch {}
+    try { st.id.applyForm = (st.id.applyForm && typeof st.id.applyForm === 'object') ? st.id.applyForm : { bank_upload_code: '', note: '', busy: false, error: '' }; } catch {}
+
     const getUkTodayIso = () => {
       try {
         const ymd = (typeof toLocalParts === 'function')
@@ -11820,6 +12036,46 @@ function attachBankingModalDelegatedHandlers() {
       return;
     }
 
+    // INVOICE DISCOUNTING (ID): make buttons live
+    if (a === 'banking:id:setBankUploadCode') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setIdApplyField('bank_upload_code', v);
+      return;
+    }
+
+    if (a === 'banking:id:setNote') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setIdApplyField('note', v);
+      return;
+    }
+
+    if (a === 'banking:id:clearApplyForm') {
+      try {
+        st.id.applyForm.bank_upload_code = '';
+        st.id.applyForm.note = '';
+        st.id.applyForm.error = '';
+        st.id.applyForm.busy = false;
+      } catch {}
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:id:preview') {
+      const g = safeGate('ID_PREVIEW');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingIdPreview?.();
+      return;
+    }
+
+    if (a === 'banking:id:balanceNow') {
+      const g = safeGate('ID_BALANCE_NOW');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      const bankUploadCode = String(st.id?.applyForm?.bank_upload_code || '').trim();
+      const note = String(st.id?.applyForm?.note || '');
+      await bankingIdBalanceNow?.({ bank_upload_code: bankUploadCode, note });
+      return;
+    }
+
     // PAY TAB: list filters + paging
     if (a === 'banking:pay:setStatusFilter') {
       const v = (el && el.value != null) ? String(el.value) : '';
@@ -12032,10 +12288,6 @@ function attachBankingModalDelegatedHandlers() {
 
   return { ok: true };
 }
-
-
-
-
 
 
 
