@@ -4374,7 +4374,29 @@ function renderTopNav(){
     b.innerHTML = `<span class="ico">${s.icon}</span> ${s.label}`;
     if (s.key === currentSection) b.classList.add('active');
 
-    if (s.key === 'imports') {
+    if (s.key === 'banking') {
+      // BANKING: modal-only (like Imports/Settings) — do NOT switch summary section
+      b.onclick = () => {
+        if (!confirmDiscardChangesIfDirty()) return;
+
+        // Close any open modal stack first (keeps nav/modal state deterministic)
+        if ((window.__modalStack?.length || 0) > 0 || modalCtx?.entity) {
+          try { discardAllModalsAndState(); } catch {}
+        }
+
+        try {
+          if (typeof openBanking !== 'function') {
+            alert('Banking modal not yet implemented.');
+            return;
+          }
+          openBanking();
+        } catch (e) {
+          console.error('[NAV][BANKING] openBanking failed', e);
+          alert(e?.message || 'Failed to open Banking.');
+        }
+      };
+
+    } else if (s.key === 'imports') {
       // IMPORTS: launch the Imports modal (NHSP / HR weekly / HR rota)
       b.onclick = () => {
         if (!confirmDiscardChangesIfDirty()) return;
@@ -4597,6 +4619,6353 @@ function renderTopNav(){
     }
   } catch {}
 }
+
+async function openBanking() {
+  const deep = (o) => JSON.parse(JSON.stringify(o || {}));
+
+  // Unique token for this modal open (used to prevent late async writes after close)
+  const openToken = `banking:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
+  const initState = {
+    _detach: null,
+
+    caps: {
+      raw: null,
+      isEnvMismatch: null,
+      isTestMode: null,
+      copAvailable: null,
+      defaultRail: { provider: null, env: null }
+    },
+    settings: {
+      raw: null
+    },
+    ui: {
+      activeTabKey: 'pay',
+      globalError: '',
+      globalToastQueue: [],
+      busy: {
+        booting: true,
+        refreshingCaps: false,
+        refreshingSettings: false
+      }
+    },
+    pay: {
+      scopePreset: 'ALL',
+      list: {
+        items: [],
+        limit: 50,
+        offset: 0,
+        statusFilter: '',
+        loading: false,
+        error: ''
+      },
+      selectedBatchId: null,
+      selected: {
+        data: null,
+        loading: false,
+        error: ''
+      },
+      actionsBusy: {
+        executingBank: false,
+        preparing: false,
+        scheduling: false,
+        polling: false,
+        exporting: false,
+        manualConfirming: false,
+        sendingRemittances: false
+      },
+      draftWizard: {
+        pay_date: '',
+        preview: {
+          data: null,
+          loading: false,
+          error: ''
+        },
+        decisions: {
+          candidate_ids: [],
+          mismatch_choices: {},
+          loan_caps: {}
+        },
+        createDraftBusy: false,
+        createDraftError: ''
+      },
+      scheduleForm: {
+        funding_account_ref: '',
+        schedule_kind: 'IMMEDIATE',
+        scheduled_at_local: '',
+        warning_hours_json: []
+      },
+      prepareOverrides: {
+        items: []
+      },
+      manualConfirmForm: {
+        bank_confirm_ref: ''
+      }
+    },
+    id: {
+      preview: { data: null, loading: false, error: '' },
+      applyForm: { bank_upload_code: '', note: '', busy: false, error: '' },
+      ledger: {
+        filters: { only_reportable: true, status: [], client_id: '', search: '' },
+        paging: { limit: 50, offset: 0 },
+        data: { items: [], total: null },
+        loading: false,
+        error: ''
+      },
+      runs: {
+        list: { paging: { limit: 50, offset: 0 }, data: { items: [], total: null }, loading: false, error: '' },
+        selected: { id_ref: '', data: null, loading: false, error: '' }
+      }
+    },
+    remittances: {
+      filters: { reference_prefix: '', reference_contains: '' },
+      list: { items: [], limit: 50, offset: 0, loading: false, error: '' }
+    }
+  };
+
+  // Seed modal context (IMPORTANT: showModal reads window.modalCtx)
+  window.modalCtx = modalCtx = {
+    entity: 'banking',
+    data: {},
+    banking: deep(initState),
+    formState: { __forId: openToken, main: {}, pay: {} },
+    openToken
+  };
+
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const renderSkeleton = (tabKey) => {
+    const st = (window.modalCtx && window.modalCtx.banking && typeof window.modalCtx.banking === 'object')
+      ? window.modalCtx.banking
+      : null;
+
+    const busy = !!(st && st.ui && st.ui.busy && st.ui.busy.booting);
+    const err  = String((st && st.ui && st.ui.globalError) ? st.ui.globalError : '').trim();
+
+    const hint = busy
+      ? 'Loading banking capabilities and settings…'
+      : (err ? err : 'Banking UI is initialising.');
+
+    const retryBtn = (!busy && err)
+      ? `<button type="button" class="btn btn-outline btn-sm" data-action="banking:retry-boot">Retry</button>`
+      : '';
+
+    return `
+      <div class="form">
+        <div class="card">
+          <div class="row">
+            <label>Banking</label>
+            <div class="controls">
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <span class="mini" style="opacity:.85;">Tab: ${enc(String(tabKey || ''))}</span>
+                ${retryBtn}
+              </div>
+              <div class="mini" style="margin-top:8px;white-space:pre-wrap;opacity:.9;">
+                ${enc(hint)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  const renderTab = (key, mergedRow) => {
+    try {
+      if (window.modalCtx && window.modalCtx.banking && window.modalCtx.banking.ui) {
+        window.modalCtx.banking.ui.activeTabKey = String(key || '').trim() || window.modalCtx.banking.ui.activeTabKey || 'pay';
+      }
+    } catch {}
+
+    // Prefer the dedicated renderer once it exists (future-proof: no need to revisit openBanking).
+    if (typeof renderBankingTab === 'function') {
+      return renderBankingTab(key, mergedRow);
+    }
+
+    // Fallback skeleton until renderBankingTab is implemented.
+    return renderSkeleton(key);
+  };
+
+  const tabs = [
+    { key: 'pay',        label: 'Pay' },
+    { key: 'umbrella',   label: 'Umbrella Pay' },
+    { key: 'paye',       label: 'PAYE History' },
+    { key: 'settings',   label: 'Payment Settings' },
+    { key: 'id',         label: 'Invoice Discounting (ID)' },
+    { key: 'id_history', label: 'ID History' },
+    { key: 'rem_status', label: 'Remittances Status' }
+  ];
+
+  const onDismiss = () => {
+    try {
+      const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      if (!ctx || String(ctx.entity || '') !== 'banking') return;
+      if (String(ctx.openToken || '') !== String(openToken)) return;
+
+      // Prefer the stored hook on banking state
+      const st = (ctx.banking && typeof ctx.banking === 'object') ? ctx.banking : null;
+      const det = st && typeof st._detach === 'function' ? st._detach : null;
+
+      if (typeof det === 'function') {
+        try { det(); } catch {}
+      } else {
+        // Fallback: detach stored by attachBankingModalDelegatedHandlers()
+        try {
+          const d2 = (ctx.__bankingDelegated && typeof ctx.__bankingDelegated.detach === 'function') ? ctx.__bankingDelegated.detach : null;
+          if (typeof d2 === 'function') d2();
+        } catch {}
+      }
+
+      try { if (ctx.__bankingDelegated) ctx.__bankingDelegated = null; } catch {}
+      try { if (st) st._detach = null; } catch {}
+    } catch {}
+  };
+
+  showModal(
+    'Banking',
+    tabs,
+    renderTab,
+    null,    // no onSave (action-driven modal)
+    false,   // hasId (false = modal starts as create unless forceEdit)
+    null,    // onReturn
+    {
+      kind: 'banking',
+      noParentGate: true,
+      showSave: false,
+      showApply: false,
+      forceEdit: true,
+      stayOpenOnSave: false,
+      onDismiss
+    }
+  );
+
+  // Attach delegated handlers ONCE for this banking modal instance and store detach hook
+  try {
+    if (typeof attachBankingModalDelegatedHandlers === 'function') {
+      attachBankingModalDelegatedHandlers();
+
+      const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      if (ctx && String(ctx.entity || '') === 'banking' && String(ctx.openToken || '') === String(openToken)) {
+        const d =
+          (ctx.__bankingDelegated && typeof ctx.__bankingDelegated.detach === 'function')
+            ? ctx.__bankingDelegated.detach
+            : null;
+
+        if (ctx.banking && typeof ctx.banking === 'object') {
+          ctx.banking._detach = (typeof d === 'function') ? d : null;
+        }
+      }
+    }
+  } catch {}
+
+  const stillActive = () => {
+    try {
+      return !!(window.modalCtx && window.modalCtx.entity === 'banking' && String(window.modalCtx.openToken || '') === String(openToken));
+    } catch {
+      return false;
+    }
+  };
+
+  const safeRerender = async () => {
+    if (!stillActive()) return;
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (fr && fr.entity === 'banking' && typeof fr.setTab === 'function') {
+        const k = String(fr.currentTabKey || window.modalCtx?.banking?.ui?.activeTabKey || 'pay');
+        fr._suppressDirty = true;
+        await fr.setTab(k);
+        fr._suppressDirty = false;
+        fr._updateButtons && fr._updateButtons();
+      }
+    } catch {}
+  };
+
+  const fetchJson = async (path) => {
+    const r = await authFetch(API(path));
+    const txt = await r.text().catch(() => '');
+    let j = null;
+    try { j = txt ? JSON.parse(txt) : null; } catch { j = null; }
+    if (!r.ok) {
+      const msg = (j && typeof j === 'object' && (j.message || j.error))
+        ? String(j.message || j.error)
+        : (txt || `Request failed (${r.status})`);
+      throw new Error(msg);
+    }
+    return (j != null) ? j : {};
+  };
+
+  const applyDerivedCaps = (capsObj) => {
+    const caps = (capsObj && typeof capsObj === 'object') ? capsObj : {};
+    const rails = Array.isArray(caps.rails) ? caps.rails : [];
+
+    const envMismatch =
+      (caps.env_mismatch === true) ||
+      rails.some(r => r && r.env_mismatch === true);
+
+    const isTestMode = (caps.payroll_testing === true);
+
+    const copAvail = (caps.cop_available === true);
+
+    const providerDefault =
+      (caps.rail_provider_default != null) ? String(caps.rail_provider_default).trim().toUpperCase()
+      : null;
+
+    const envDefault =
+      (caps.db_rail_env_default != null) ? String(caps.db_rail_env_default).trim().toUpperCase()
+      : (caps.rail_env_default != null) ? String(caps.rail_env_default).trim().toUpperCase()
+      : null;
+
+    window.modalCtx.banking.caps.raw = deep(caps);
+    window.modalCtx.banking.caps.isEnvMismatch = !!envMismatch;
+    window.modalCtx.banking.caps.isTestMode = !!isTestMode;
+    window.modalCtx.banking.caps.copAvailable = !!copAvail;
+    window.modalCtx.banking.caps.defaultRail = { provider: providerDefault, env: envDefault };
+  };
+
+  const applySettings = (settingsObj) => {
+    const s = (settingsObj && typeof settingsObj === 'object') ? settingsObj : {};
+    window.modalCtx.banking.settings.raw = deep(s);
+  };
+
+  const setBootError = (msg) => {
+    try {
+      window.modalCtx.banking.ui.globalError = String(msg || 'Failed to load Banking data.');
+    } catch {}
+  };
+
+  // Bootstrapping: load capabilities + settings, then re-render.
+  setTimeout(() => {
+    (async () => {
+      try {
+        if (!stillActive()) return;
+
+        try {
+          window.modalCtx.banking.ui.busy.booting = true;
+          window.modalCtx.banking.ui.busy.refreshingCaps = true;
+          window.modalCtx.banking.ui.busy.refreshingSettings = true;
+          window.modalCtx.banking.ui.globalError = '';
+        } catch {}
+
+        await safeRerender();
+
+        // 1) Capabilities
+        let capsRes = null;
+        if (typeof bankingFetchCapabilities === 'function') {
+          try { capsRes = await bankingFetchCapabilities(); } catch (e) { capsRes = null; }
+        }
+        if (!capsRes) {
+          capsRes = await fetchJson('/api/banking/capabilities');
+        }
+        if (!stillActive()) return;
+        applyDerivedCaps(capsRes);
+
+        // 2) Settings defaults
+        let setRes = null;
+        if (typeof bankingFetchSettingsDefaults === 'function') {
+          try { setRes = await bankingFetchSettingsDefaults(); } catch (e) { setRes = null; }
+        }
+        if (!setRes) {
+          const got = await getSettings(); // { settings, finance_windows }
+          setRes = (got && typeof got === 'object' && got.settings && typeof got.settings === 'object') ? got.settings : (got || {});
+        }
+        if (!stillActive()) return;
+        applySettings(setRes);
+
+        // 3) Done
+        try {
+          window.modalCtx.banking.ui.busy.booting = false;
+          window.modalCtx.banking.ui.busy.refreshingCaps = false;
+          window.modalCtx.banking.ui.busy.refreshingSettings = false;
+        } catch {}
+
+        await safeRerender();
+
+      } catch (e) {
+        if (!stillActive()) return;
+
+        const msg = String(e?.message || e || 'Failed to load Banking data.');
+        setBootError(msg);
+
+        try {
+          window.modalCtx.banking.ui.busy.booting = false;
+          window.modalCtx.banking.ui.busy.refreshingCaps = false;
+          window.modalCtx.banking.ui.busy.refreshingSettings = false;
+        } catch {}
+
+        await safeRerender();
+      }
+    })();
+  }, 0);
+}
+
+function bankingGetState() {
+  try {
+    const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+    const st = (mc.banking && typeof mc.banking === 'object') ? mc.banking : null;
+    return st || null;
+  } catch {
+    return null;
+  }
+}
+
+async function bankingRerender(tabKey = null) {
+  try {
+    const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    if (!mc || String(mc.entity || '') !== 'banking') return false;
+
+    const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+    if (!fr || String(fr.entity || '') !== 'banking' || typeof fr.setTab !== 'function') return false;
+
+    const st = (mc.banking && typeof mc.banking === 'object') ? mc.banking : null;
+
+    const k =
+      (tabKey != null && String(tabKey).trim())
+        ? String(tabKey).trim()
+        : (String(fr.currentTabKey || '').trim()
+            ? String(fr.currentTabKey).trim()
+            : (String(st?.ui?.activeTabKey || '').trim() ? String(st.ui.activeTabKey).trim() : 'pay'));
+
+    try { fr._suppressDirty = true; } catch {}
+    await fr.setTab(k);
+    try { fr._suppressDirty = false; } catch {}
+    try { fr._updateButtons && fr._updateButtons(); } catch {}
+
+    return true;
+  } catch {
+    try {
+      const fr2 = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (fr2) {
+        try { fr2._suppressDirty = false; } catch {}
+        try { fr2._updateButtons && fr2._updateButtons(); } catch {}
+      }
+    } catch {}
+    return false;
+  }
+}
+
+function bankingIsActionBlocked(actionKind) {
+  const asUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
+
+  try {
+    const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    if (!mc || String(mc.entity || '') !== 'banking') {
+      return { blocked: true, reasonCode: 'NOT_IN_BANKING_MODAL', message: 'Banking modal is not active.' };
+    }
+
+    const st = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+    const caps = (st.caps && typeof st.caps === 'object') ? st.caps : {};
+    const capsRaw = (caps.raw && typeof caps.raw === 'object') ? caps.raw : {};
+    const rails = Array.isArray(capsRaw.rails) ? capsRaw.rails : [];
+
+    const envMismatch =
+      (caps.isEnvMismatch === true) ||
+      (capsRaw.env_mismatch === true) ||
+      rails.some(r => r && r.env_mismatch === true);
+
+    if (envMismatch) {
+      const dbEnv = asUpper(capsRaw.db_rail_env_default || capsRaw.rail_env_default || '');
+      const wkEnv = asUpper(capsRaw.worker_env || capsRaw.default_worker_env || '');
+      const msg =
+        (dbEnv && wkEnv)
+          ? `Environment mismatch: DB env is ${dbEnv} but Worker env is ${wkEnv}. Click Re-check.`
+          : 'Environment mismatch: bank actions are blocked until Worker env matches DB env snapshot. Click Re-check.';
+      return { blocked: true, reasonCode: 'RAIL_ENV_MISMATCH', message: msg };
+    }
+
+    const ak = asUpper(actionKind);
+
+    // Test mode blocks remittances send only (payments may still simulate)
+    const isTestMode = (caps.isTestMode === true) || (capsRaw.payroll_testing === true);
+    if (isTestMode && (ak === 'SEND_REMITTANCES' || ak === 'SEND_REMITTANCES_PAYE' || ak === 'SEND_REMITTANCES_UMBRELLA')) {
+      return {
+        blocked: true,
+        reasonCode: 'REMITTANCES_DISABLED_IN_PAYROLL_TESTING',
+        message: 'TEST MODE active — remittances sending is disabled.'
+      };
+    }
+
+    // Funding account missing blocks schedule
+    if (ak === 'SCHEDULE') {
+      const sched = (st.pay && st.pay.scheduleForm && typeof st.pay.scheduleForm === 'object') ? st.pay.scheduleForm : {};
+      const fundingNow = String(sched.funding_account_ref || '').trim();
+
+      const setRaw = (st.settings && typeof st.settings === 'object') ? st.settings.raw : null;
+      const defaultFunding =
+        (setRaw && typeof setRaw === 'object')
+          ? String(setRaw.rail_default_funding_account_ref || '').trim()
+          : '';
+
+      if (!fundingNow && !defaultFunding) {
+        return {
+          blocked: true,
+          reasonCode: 'FUNDING_ACCOUNT_MISSING',
+          message: 'Funding account is required before scheduling. Set a default funding account in Payment Settings.'
+        };
+      }
+    }
+
+    // PAYE gate blocks PAYE remittances send (caller must pass actionKind that indicates PAYE send)
+    // NOTE: Per brief, this function reads only caps/settings/scheduleForm; it does NOT infer scope from other state.
+    if (ak === 'SEND_REMITTANCES_PAYE') {
+      const enabled =
+        (capsRaw.paye_remittances_enabled === true) ||
+        (capsRaw.paye_remittances_enabled === 1) ||
+        (capsRaw.paye_remittances_enabled === 'true');
+
+      if (!enabled) {
+        return {
+          blocked: true,
+          reasonCode: 'PAYE_REMITTANCES_DISABLED',
+          message: 'PAYE remittances are disabled. Enable PAYE remittances in Settings.'
+        };
+      }
+    }
+
+    return { blocked: false, reasonCode: '', message: '' };
+  } catch {
+    return { blocked: true, reasonCode: 'BANKING_GATE_ERROR', message: 'Unable to determine whether this action is allowed.' };
+  }
+}
+
+function bankingHandleApiError(err, context) {
+  const asStr = (v) => String(v == null ? '' : v);
+  const pickMsg = () => {
+    try {
+      const j = (err && typeof err === 'object' && err.json && typeof err.json === 'object') ? err.json : null;
+      const m1 = j ? (j.error || j.message || j.detail || '') : '';
+      if (String(m1 || '').trim()) return String(m1).trim();
+    } catch {}
+    try {
+      const m2 = (err && typeof err === 'object' && err.message) ? String(err.message) : '';
+      if (String(m2 || '').trim()) return String(m2).trim();
+    } catch {}
+    try {
+      const m3 = asStr(err);
+      if (String(m3 || '').trim()) return String(m3).trim();
+    } catch {}
+    return 'Request failed.';
+  };
+
+  const msg = pickMsg();
+  const msgU = String(msg || '').trim().toUpperCase();
+
+  const isEnvMismatch =
+    (msgU === 'RAIL_ENV_MISMATCH') ||
+    (msgU === 'ENV_MISMATCH') ||
+    msgU.includes('RAIL_ENV_MISMATCH') ||
+    msgU.includes('ENV_MISMATCH');
+
+  // Safe access to banking state
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  const isBanking = !!(mc && String(mc.entity || '') === 'banking' && mc.banking && typeof mc.banking === 'object');
+  const st = isBanking ? mc.banking : null;
+
+  // Default: set global error (Banking) or alert (non-banking)
+  const setGlobal = (m) => {
+    if (st && st.ui && typeof st.ui === 'object') {
+      st.ui.globalError = String(m || '').trim();
+    }
+  };
+
+  // Inline setter: supports either context.setError(fn) or context.errorPath (e.g., ['pay','list','error'])
+  const setInline = (m) => {
+    if (!st) return false;
+
+    try {
+      if (context && typeof context.setError === 'function') {
+        context.setError(String(m || '').trim());
+        return true;
+      }
+    } catch {}
+
+    const path = (() => {
+      if (!context) return null;
+      if (Array.isArray(context.errorPath)) return context.errorPath.slice();
+      if (typeof context.errorPath === 'string' && context.errorPath.trim()) {
+        return context.errorPath.split('.').map(x => String(x || '').trim()).filter(Boolean);
+      }
+      if (typeof context.area === 'string' && context.area.trim()) {
+        // convention: area "pay.list" -> write to "...error"
+        const parts = context.area.split('.').map(x => String(x || '').trim()).filter(Boolean);
+        if (parts.length) return parts.concat(['error']);
+      }
+      return null;
+    })();
+
+    if (!path || !path.length) return false;
+
+    try {
+      let cur = st;
+      for (let i = 0; i < path.length - 1; i++) {
+        const k = path[i];
+        if (!cur || typeof cur !== 'object') return false;
+        if (!Object.prototype.hasOwnProperty.call(cur, k) || cur[k] == null || typeof cur[k] !== 'object') {
+          // do not invent deep objects; bail out safely
+          return false;
+        }
+        cur = cur[k];
+      }
+      const last = path[path.length - 1];
+      if (!cur || typeof cur !== 'object') return false;
+      if (!Object.prototype.hasOwnProperty.call(cur, last)) {
+        // do not invent keys; bail out safely
+        return false;
+      }
+      cur[last] = String(m || '').trim();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Toast helper
+  const toast = (m) => {
+    try {
+      if (typeof window.__toast === 'function') window.__toast(String(m || '').trim());
+    } catch {}
+  };
+
+  if (!isBanking) {
+    toast(msg);
+    try { alert(msg); } catch {}
+    return { ok: false, message: msg };
+  }
+
+  // Environment mismatch UX hint
+  if (isEnvMismatch) {
+    const hint = 'Environment mismatch — click Re-check.';
+    // Prefer to keep the original error visible, but also add the hint.
+    const combined = msgU === 'RAIL_ENV_MISMATCH' ? hint : `${msg}\n${hint}`;
+    // Attempt inline first if caller provided a target; otherwise global
+    const didInline = setInline(combined);
+    if (!didInline) setGlobal(combined);
+    toast(hint);
+
+    // Optional soft refresh: capabilities
+    try {
+      const busy = st.ui && st.ui.busy && typeof st.ui.busy === 'object' ? st.ui.busy : null;
+      const canRefresh = !!(busy && busy.refreshingCaps === false);
+
+      if (canRefresh && typeof bankingFetchCapabilities === 'function') {
+        busy.refreshingCaps = true;
+        Promise.resolve()
+          .then(() => bankingFetchCapabilities())
+          .catch(() => {})
+          .finally(() => {
+            try { if (busy) busy.refreshingCaps = false; } catch {}
+            try { if (typeof bankingRerender === 'function') bankingRerender(null); } catch {}
+          });
+      }
+    } catch {}
+
+    return { ok: false, message: msg };
+  }
+
+  // Normal error path
+  const didInline = setInline(msg);
+  if (!didInline) setGlobal(msg);
+
+  toast(msg);
+
+  return { ok: false, message: msg };
+}
+
+async function bankingFetchCapabilities() {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const asUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.caps = (mc.banking.caps && typeof mc.banking.caps === 'object') ? mc.banking.caps : {
+    raw: null,
+    isEnvMismatch: null,
+    isTestMode: null,
+    copAvailable: null,
+    defaultRail: { provider: null, env: null }
+  };
+
+  const st = mc.banking;
+  const caps = st.caps;
+
+  // Preserve last-known caps on error
+  const lastKnown = (caps.raw && typeof caps.raw === 'object') ? deep(caps.raw) : null;
+
+  // Busy flag (best-effort)
+  try {
+    st.ui = (st.ui && typeof st.ui === 'object') ? st.ui : {};
+    st.ui.busy = (st.ui.busy && typeof st.ui.busy === 'object') ? st.ui.busy : {};
+    st.ui.busy.refreshingCaps = true;
+  } catch {}
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  try {
+    const res = await authFetch(API('/api/banking/capabilities'));
+    const txt = await res.text().catch(() => '');
+    const parsed = safeParse(txt);
+
+    if (!res.ok) {
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Failed to load banking capabilities'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const capsObj = (parsed && typeof parsed === 'object') ? parsed : {};
+    const rails = Array.isArray(capsObj.rails) ? capsObj.rails : [];
+
+    const envMismatch =
+      (capsObj.env_mismatch === true) ||
+      rails.some(r => r && r.env_mismatch === true);
+
+    const isTestMode = (capsObj.payroll_testing === true);
+    const copAvailable = (capsObj.cop_available === true);
+
+    const providerDefault = capsObj.rail_provider_default != null ? asUpper(capsObj.rail_provider_default) : null;
+    const envDefault =
+      (capsObj.db_rail_env_default != null) ? asUpper(capsObj.db_rail_env_default)
+      : (capsObj.rail_env_default != null) ? asUpper(capsObj.rail_env_default)
+      : null;
+
+    caps.raw = deep(capsObj);
+    caps.isEnvMismatch = !!envMismatch;
+    caps.isTestMode = !!isTestMode;
+    caps.copAvailable = !!copAvailable;
+    caps.defaultRail = { provider: providerDefault, env: envDefault };
+
+    return deep(capsObj);
+
+  } catch (e) {
+    // Keep last-known caps (do not clobber)
+    if (lastKnown) {
+      try { caps.raw = deep(lastKnown); } catch {}
+    }
+
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { errorPath: ['ui', 'globalError'] });
+      }
+    } catch {}
+
+    return lastKnown;
+
+  } finally {
+    try {
+      st.ui = (st.ui && typeof st.ui === 'object') ? st.ui : {};
+      st.ui.busy = (st.ui.busy && typeof st.ui.busy === 'object') ? st.ui.busy : {};
+      st.ui.busy.refreshingCaps = false;
+    } catch {}
+  }
+}
+
+async function bankingFetchSettingsDefaults() {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.settings = (mc.banking.settings && typeof mc.banking.settings === 'object') ? mc.banking.settings : { raw: null };
+
+  const st = mc.banking;
+  const lastKnown = (st.settings.raw && typeof st.settings.raw === 'object') ? deep(st.settings.raw) : null;
+
+  // Busy flag (best-effort)
+  try {
+    st.ui = (st.ui && typeof st.ui === 'object') ? st.ui : {};
+    st.ui.busy = (st.ui.busy && typeof st.ui.busy === 'object') ? st.ui.busy : {};
+    st.ui.busy.refreshingSettings = true;
+  } catch {}
+
+  try {
+    const res = await getSettings(); // returns { settings, finance_windows }
+    const settingsObj =
+      (res && typeof res === 'object' && res.settings && typeof res.settings === 'object')
+        ? res.settings
+        : (res && typeof res === 'object') ? res : {};
+
+    st.settings.raw = deep(settingsObj);
+    return deep(settingsObj);
+
+  } catch (e) {
+    // Keep last-known settings (do not clobber)
+    if (lastKnown) {
+      try { st.settings.raw = deep(lastKnown); } catch {}
+    }
+
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { errorPath: ['ui', 'globalError'] });
+      }
+    } catch {}
+
+    return lastKnown;
+
+  } finally {
+    try {
+      st.ui = (st.ui && typeof st.ui === 'object') ? st.ui : {};
+      st.ui.busy = (st.ui.busy && typeof st.ui.busy === 'object') ? st.ui.busy : {};
+      st.ui.busy.refreshingSettings = false;
+    } catch {}
+  }
+}
+
+
+async function bankingListFundingAccounts() {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  const st = mc.banking;
+
+  st.paymentSettings = (st.paymentSettings && typeof st.paymentSettings === 'object') ? st.paymentSettings : {
+    accounts: [],
+    loading: false,
+    error: '',
+    provider: '',
+    rail_env_default: ''
+  };
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('LIST_ACCOUNTS')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { st.paymentSettings.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  st.paymentSettings.loading = true;
+  st.paymentSettings.error = '';
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  try {
+    const res = await authFetch(API('/api/banking/rail/accounts'));
+    const txt = await res.text().catch(() => '');
+    const parsed = safeParse(txt);
+
+    if (!res.ok) {
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Failed to list funding accounts'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const obj = (parsed && typeof parsed === 'object') ? parsed : {};
+    const accountsRaw = Array.isArray(obj.accounts) ? obj.accounts : [];
+
+    st.paymentSettings.accounts = deep(accountsRaw) || [];
+    st.paymentSettings.provider = String(obj.provider || '').trim();
+    st.paymentSettings.rail_env_default = String(obj.rail_env_default || '').trim();
+
+    return deep(obj);
+
+  } catch (e) {
+    try { st.paymentSettings.error = String(e?.message || 'Failed to list funding accounts'); } catch {}
+
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { errorPath: ['paymentSettings', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { st.paymentSettings.loading = false; } catch {}
+  }
+}
+async function bankingUpdateSettingsDefaults(patchObj) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return { ok: false, error: 'NOT_IN_BANKING_MODAL' };
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  const st = mc.banking;
+
+  const in0 = (patchObj && typeof patchObj === 'object') ? patchObj : {};
+
+  // Allow only the requested keys
+  const out = {};
+  const has = (k) => Object.prototype.hasOwnProperty.call(in0, k);
+
+  if (has('rail_default_funding_account_ref')) {
+    const v0 = (in0.rail_default_funding_account_ref === null || in0.rail_default_funding_account_ref === undefined)
+      ? null
+      : (String(in0.rail_default_funding_account_ref).trim() || null);
+    out.rail_default_funding_account_ref = v0;
+  }
+
+  if (has('payroll_testing')) {
+    const v = in0.payroll_testing;
+    let b = null;
+    if (typeof v === 'boolean') b = v;
+    else if (v == null) b = null;
+    else {
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === '1' || s === 'yes' || s === 'on') b = true;
+      else if (s === 'false' || s === '0' || s === 'no' || s === '') b = false;
+      else b = null;
+    }
+    if (b !== null) out.payroll_testing = b;
+  }
+
+  if (has('paye_remittances_enabled')) {
+    const v = in0.paye_remittances_enabled;
+    let b = null;
+    if (typeof v === 'boolean') b = v;
+    else if (v == null) b = null;
+    else {
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === '1' || s === 'yes' || s === 'on') b = true;
+      else if (s === 'false' || s === '0' || s === 'no' || s === '') b = false;
+      else b = null;
+    }
+    if (b !== null) out.paye_remittances_enabled = b;
+  }
+
+  if (!Object.keys(out).length) {
+    return { ok: false, error: 'NO_FIELDS_TO_UPDATE' };
+  }
+
+  // Busy flag (best-effort)
+  try {
+    st.ui = (st.ui && typeof st.ui === 'object') ? st.ui : {};
+    st.ui.busy = (st.ui.busy && typeof st.ui.busy === 'object') ? st.ui.busy : {};
+    st.ui.busy.refreshingSettings = true;
+  } catch {}
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  try {
+    const res = await authFetch(API('/api/settings/defaults'), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(out)
+    });
+
+    const txt = await res.text().catch(() => '');
+    const parsed = safeParse(txt);
+
+    if (!res.ok) {
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Failed to update settings'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    // Refresh both settings + caps (required by brief)
+    if (typeof bankingFetchSettingsDefaults === 'function') {
+      await bankingFetchSettingsDefaults();
+    }
+    if (typeof bankingFetchCapabilities === 'function') {
+      await bankingFetchCapabilities();
+    }
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return { ok: true, updated: deep(out) };
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { errorPath: ['ui', 'globalError'] });
+      }
+    } catch {}
+
+    return { ok: false, error: String(e?.message || 'UPDATE_FAILED') };
+
+  } finally {
+    try {
+      st.ui = (st.ui && typeof st.ui === 'object') ? st.ui : {};
+      st.ui.busy = (st.ui.busy && typeof st.ui.busy === 'object') ? st.ui.busy : {};
+      st.ui.busy.refreshingSettings = false;
+    } catch {}
+  }
+}
+
+async function bankingPayBatchesList({ status = null, limit = null, offset = null } = {}) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.list = (mc.banking.pay.list && typeof mc.banking.pay.list === 'object') ? mc.banking.pay.list : {
+    items: [],
+    limit: 50,
+    offset: 0,
+    statusFilter: '',
+    loading: false,
+    error: ''
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('LIST_BATCHES')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.list.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  const clampInt = (v, dflt, lo, hi) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return dflt;
+    const x = Math.trunc(n);
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+  };
+
+  const lim = clampInt(limit, clampInt(pay.list.limit, 50, 1, 500), 1, 500);
+  const off = clampInt(offset, clampInt(pay.list.offset, 0, 0, 1_000_000), 0, 1_000_000);
+
+  const stRaw =
+    (status === null || status === undefined)
+      ? String(pay.list.statusFilter || '')
+      : String(status || '');
+
+  const statusNorm = String(stRaw || '').trim().toUpperCase();
+
+  const qs = new URLSearchParams();
+  qs.set('limit', String(lim));
+  qs.set('offset', String(off));
+  if (statusNorm) qs.set('status', statusNorm);
+
+  pay.list.loading = true;
+  pay.list.error = '';
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  try {
+    const res = await authFetch(API(`/api/banking/pay/batches?${qs.toString()}`));
+    const txt = await res.text().catch(() => '');
+    const parsed = safeParse(txt);
+
+    if (!res.ok) {
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Failed to load pay batches'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const obj = (parsed && typeof parsed === 'object') ? parsed : {};
+    const items = Array.isArray(obj.items) ? obj.items : [];
+    const count = Number.isFinite(Number(obj.count)) ? Math.trunc(Number(obj.count)) : items.length;
+
+    pay.list.items = deep(items) || [];
+    pay.list.limit = lim;
+    pay.list.offset = off;
+    pay.list.statusFilter = statusNorm;
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep({ ok: true, items, count, limit: lim, offset: off, status: statusNorm });
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'LIST_BATCHES', scope: null, batchId: null, errorPath: ['pay', 'list', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { pay.list.loading = false; } catch {}
+  }
+}
+
+
+async function bankingPayBatchGet(payBatchId) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const id = (payBatchId == null) ? '' : String(payBatchId).trim();
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.selected = (mc.banking.pay.selected && typeof mc.banking.pay.selected === 'object') ? mc.banking.pay.selected : {
+    data: null,
+    loading: false,
+    error: ''
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  if (!id) {
+    try { pay.selected.error = 'pay_batch_id is required'; } catch {}
+    return null;
+  }
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('GET_BATCH')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  pay.selected.loading = true;
+  pay.selected.error = '';
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  try {
+    const res = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}`));
+    const txt = await res.text().catch(() => '');
+    const parsed = safeParse(txt);
+
+    if (!res.ok) {
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Failed to load pay batch'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const obj = (parsed && typeof parsed === 'object') ? parsed : {};
+    pay.selected.data = deep(obj);
+    pay.selected.loading = false;
+    pay.selected.error = '';
+    pay.selectedBatchId = id;
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'GET_BATCH', scope: null, batchId: id, errorPath: ['pay', 'selected', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { pay.selected.loading = false; } catch {}
+  }
+}
+
+
+async function bankingPayPreview(pay_date) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const pd = (pay_date == null) ? '' : String(pay_date).trim();
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.draftWizard = (mc.banking.pay.draftWizard && typeof mc.banking.pay.draftWizard === 'object') ? mc.banking.pay.draftWizard : {
+    pay_date: '',
+    preview: { data: null, loading: false, error: '' },
+    decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
+    createDraftBusy: false,
+    createDraftError: ''
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  if (!pd) {
+    try { pay.draftWizard.preview.error = 'pay_date is required (YYYY-MM-DD)'; } catch {}
+    return null;
+  }
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('PREVIEW')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.draftWizard.preview.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  pay.draftWizard.pay_date = pd;
+  pay.draftWizard.preview.loading = true;
+  pay.draftWizard.preview.error = '';
+
+  try {
+    const obj = await apiPostJson('/api/banking/pay/preview', { pay_date: pd });
+
+    pay.draftWizard.preview.data = deep(obj);
+    pay.draftWizard.preview.loading = false;
+    pay.draftWizard.preview.error = '';
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'PREVIEW', scope: null, batchId: null, errorPath: ['pay', 'draftWizard', 'preview', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { pay.draftWizard.preview.loading = false; } catch {}
+  }
+}
+
+
+async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const pd = (pay_date == null) ? '' : String(pay_date).trim();
+  const decisions = (preview_decisions_json && typeof preview_decisions_json === 'object' && !Array.isArray(preview_decisions_json))
+    ? preview_decisions_json
+    : {};
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.draftWizard = (mc.banking.pay.draftWizard && typeof mc.banking.pay.draftWizard === 'object') ? mc.banking.pay.draftWizard : {
+    pay_date: '',
+    preview: { data: null, loading: false, error: '' },
+    decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
+    createDraftBusy: false,
+    createDraftError: ''
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  if (!pd) {
+    try { pay.draftWizard.createDraftError = 'pay_date is required (YYYY-MM-DD)'; } catch {}
+    return null;
+  }
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('CREATE_DRAFT')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.draftWizard.createDraftError = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  pay.draftWizard.createDraftBusy = true;
+  pay.draftWizard.createDraftError = '';
+
+  try {
+    const obj = await apiPostJson('/api/banking/pay/batch/create-draft', {
+      pay_date: pd,
+      preview_decisions_json: decisions
+    });
+
+    // Heuristic extraction of new batch id
+    const newId =
+      (obj && (obj.pay_batch_id || obj.batch_id || obj.id)) ? String(obj.pay_batch_id || obj.batch_id || obj.id).trim()
+      : (obj && obj.batch && (obj.batch.id || obj.batch.pay_batch_id)) ? String(obj.batch.id || obj.batch.pay_batch_id).trim()
+      : '';
+
+    if (!newId) {
+      // keep response but surface a meaningful UI error
+      try { pay.draftWizard.createDraftError = 'Create draft succeeded but no pay_batch_id was returned.'; } catch {}
+      try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+      return deep(obj);
+    }
+
+    pay.selectedBatchId = newId;
+
+    // Refresh list + selected detail (best UX)
+    try {
+      if (typeof bankingPayBatchesList === 'function') {
+        await bankingPayBatchesList({
+          status: pay.list ? pay.list.statusFilter : null,
+          limit: pay.list ? pay.list.limit : null,
+          offset: pay.list ? pay.list.offset : null
+        });
+      }
+    } catch {}
+
+    try {
+      if (typeof bankingPayBatchGet === 'function') {
+        await bankingPayBatchGet(newId);
+      }
+    } catch {}
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'CREATE_DRAFT', scope: null, batchId: null, errorPath: ['pay', 'draftWizard', 'createDraftError'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { pay.draftWizard.createDraftBusy = false; } catch {}
+  }
+}
+
+
+
+async function bankingPayBatchExecute(payBatchId, scope = 'ALL') {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const id = (payBatchId == null) ? '' : String(payBatchId).trim();
+  const sc = String(scope || 'ALL').trim().toUpperCase();
+  const scopeNorm = (sc === 'PAYE' || sc === 'UMBRELLA' || sc === 'ALL') ? sc : 'ALL';
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.actionsBusy = (mc.banking.pay.actionsBusy && typeof mc.banking.pay.actionsBusy === 'object') ? mc.banking.pay.actionsBusy : {
+    executingBank: false,
+    preparing: false,
+    scheduling: false,
+    polling: false,
+    exporting: false,
+    manualConfirming: false,
+    sendingRemittances: false
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  if (!id) return null;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('EXECUTE')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  pay.actionsBusy.executingBank = true;
+
+  try {
+    const obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute`, {
+      scope: scopeNorm
+    });
+
+    // refresh selected details (authoritative)
+    try {
+      if (typeof bankingPayBatchGet === 'function') {
+        await bankingPayBatchGet(id);
+      } else {
+        pay.selected.data = deep(obj);
+      }
+    } catch {}
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'EXECUTE', scope: scopeNorm, batchId: id, errorPath: ['pay', 'selected', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { pay.actionsBusy.executingBank = false; } catch {}
+  }
+}
+
+
+async function bankingPayBatchPrepare(payBatchId, nameCheckOverrides = []) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const id = (payBatchId == null) ? '' : String(payBatchId).trim();
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.actionsBusy = (mc.banking.pay.actionsBusy && typeof mc.banking.pay.actionsBusy === 'object') ? mc.banking.pay.actionsBusy : {
+    executingBank: false,
+    preparing: false,
+    scheduling: false,
+    polling: false,
+    exporting: false,
+    manualConfirming: false,
+    sendingRemittances: false
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  if (!id) return null;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('PREPARE')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  pay.actionsBusy.preparing = true;
+
+  // Backend expects: { name_check_overrides: [ {entity_kind, entity_id, reason, rail_provider?, rail_env?}, ... ] }
+  const overridesArr = Array.isArray(nameCheckOverrides) ? nameCheckOverrides : [];
+  const cleanOverrides = overridesArr
+    .filter(o => o && typeof o === 'object' && !Array.isArray(o))
+    .map(o => {
+      const out = {};
+      if (Object.prototype.hasOwnProperty.call(o, 'rail_provider')) out.rail_provider = String(o.rail_provider || '').trim();
+      if (Object.prototype.hasOwnProperty.call(o, 'provider')) out.provider = String(o.provider || '').trim();
+      if (Object.prototype.hasOwnProperty.call(o, 'rail_env')) out.rail_env = String(o.rail_env || '').trim();
+      if (Object.prototype.hasOwnProperty.call(o, 'env')) out.env = String(o.env || '').trim();
+
+      if (Object.prototype.hasOwnProperty.call(o, 'entity_kind')) out.entity_kind = String(o.entity_kind || '').trim();
+      if (Object.prototype.hasOwnProperty.call(o, 'payee_entity_kind')) out.payee_entity_kind = String(o.payee_entity_kind || '').trim();
+
+      if (Object.prototype.hasOwnProperty.call(o, 'entity_id')) out.entity_id = String(o.entity_id || '').trim();
+      if (Object.prototype.hasOwnProperty.call(o, 'payee_entity_id')) out.payee_entity_id = String(o.payee_entity_id || '').trim();
+
+      if (Object.prototype.hasOwnProperty.call(o, 'reason')) out.reason = String(o.reason || '').trim();
+      return out;
+    });
+
+  try {
+    const obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/prepare`, {
+      name_check_overrides: cleanOverrides
+    });
+
+    // refresh selected detail (authoritative)
+    try {
+      if (typeof bankingPayBatchGet === 'function') {
+        await bankingPayBatchGet(id);
+      } else {
+        pay.selected.data = deep(obj);
+      }
+    } catch {}
+
+    // Keep a copy of prepare result in selected (if UI wants it)
+    try {
+      pay.selected = (pay.selected && typeof pay.selected === 'object') ? pay.selected : { data: null, loading: false, error: '' };
+      pay.selected.prepareResult = deep(obj);
+    } catch {}
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'PREPARE', scope: null, batchId: id, errorPath: ['pay', 'selected', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { pay.actionsBusy.preparing = false; } catch {}
+  }
+}
+
+
+async function bankingPayBatchSchedule(payBatchId, scheduleFormIn = null) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const id = (payBatchId == null) ? '' : String(payBatchId).trim();
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.actionsBusy = (mc.banking.pay.actionsBusy && typeof mc.banking.pay.actionsBusy === 'object') ? mc.banking.pay.actionsBusy : {
+    executingBank: false,
+    preparing: false,
+    scheduling: false,
+    polling: false,
+    exporting: false,
+    manualConfirming: false,
+    sendingRemittances: false
+  };
+  mc.banking.pay.scheduleForm = (mc.banking.pay.scheduleForm && typeof mc.banking.pay.scheduleForm === 'object') ? mc.banking.pay.scheduleForm : {
+    funding_account_ref: '',
+    schedule_kind: 'IMMEDIATE',
+    scheduled_at_local: '',
+    warning_hours_json: []
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  if (!id) return null;
+
+  // Keep state in sync if caller provided schedule form
+  if (scheduleFormIn && typeof scheduleFormIn === 'object' && !Array.isArray(scheduleFormIn)) {
+    try { pay.scheduleForm = { ...(pay.scheduleForm || {}), ...(scheduleFormIn || {}) }; } catch {}
+  }
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('SCHEDULE')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  const scheduleKindRaw = String(pay.scheduleForm.schedule_kind || '').trim().toUpperCase();
+  const scheduleKind = (scheduleKindRaw === 'AT_TIME') ? 'SCHEDULED' : scheduleKindRaw;
+
+  const fundingAccountRef = String(pay.scheduleForm.funding_account_ref || '').trim() || null;
+
+  const warnIn = pay.scheduleForm.warning_hours_json;
+  const warningHoursJson = Array.isArray(warnIn)
+    ? warnIn.map(x => {
+        const n = Number(x);
+        return Number.isFinite(n) ? n : null;
+      }).filter(x => x !== null)
+    : null;
+
+  const parseLocalDateTime = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return null;
+
+    // Accept "YYYY-MM-DDTHH:MM" or "YYYY-MM-DD HH:MM"
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+    if (m) {
+      return { ymd: `${m[1]}-${m[2]}-${m[3]}`, hh: Number(m[4]), mi: Number(m[5]) };
+    }
+
+    // Accept "DD/MM/YYYY HH:MM"
+    m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})[ T](\d{2}):(\d{2})/);
+    if (m) {
+      return { ymd: `${m[3]}-${m[2]}-${m[1]}`, hh: Number(m[4]), mi: Number(m[5]) };
+    }
+
+    return null;
+  };
+
+  const tzParts = (dateObj, tzId) => {
+    const fmt = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tzId,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+    const parts = fmt.formatToParts(dateObj);
+    const get = (t) => parts.find(p => p.type === t)?.value || '';
+    return {
+      y: Number(get('year')),
+      mo: Number(get('month')),
+      d: Number(get('day')),
+      h: Number(get('hour')),
+      mi: Number(get('minute'))
+    };
+  };
+
+  const localYmdHmToUtcIso = (ymd, hh, mi, tzId) => {
+    const sY = String(ymd || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(sY)) return null;
+    if (!Number.isInteger(hh) || hh < 0 || hh > 23) return null;
+    if (!Number.isInteger(mi) || mi < 0 || mi > 59) return null;
+
+    const [yy, mm, dd] = sY.split('-').map(Number);
+    const desiredAsUtcMs = Date.UTC(yy, mm - 1, dd, hh, mi, 0, 0);
+
+    const guess1 = new Date(desiredAsUtcMs);
+    const p1 = tzParts(guess1, tzId);
+    const asUtcOfParts1 = Date.UTC(p1.y, p1.mo - 1, p1.d, p1.h, p1.mi, 0, 0);
+    const offsetMs1 = asUtcOfParts1 - guess1.getTime();
+    const utcMs1 = desiredAsUtcMs - offsetMs1;
+
+    const guess2 = new Date(utcMs1);
+    const p2 = tzParts(guess2, tzId);
+    const asUtcOfParts2 = Date.UTC(p2.y, p2.mo - 1, p2.d, p2.h, p2.mi, 0, 0);
+    const offsetMs2 = asUtcOfParts2 - guess2.getTime();
+    const utcMs2 = desiredAsUtcMs - offsetMs2;
+
+    return new Date(utcMs2).toISOString();
+  };
+
+  let scheduledAtUtc = null;
+
+  if (scheduleKind === 'SCHEDULED') {
+    const localRaw = String(pay.scheduleForm.scheduled_at_local || '').trim();
+    const parsedLocal = parseLocalDateTime(localRaw);
+
+    if (!parsedLocal) {
+      try { pay.selected.error = 'scheduled_at_local must be a valid date/time (YYYY-MM-DD HH:MM, YYYY-MM-DDTHH:MM, or DD/MM/YYYY HH:MM).'; } catch {}
+      return null;
+    }
+
+    scheduledAtUtc = localYmdHmToUtcIso(parsedLocal.ymd, parsedLocal.hh, parsedLocal.mi, 'Europe/London');
+    if (!scheduledAtUtc) {
+      try { pay.selected.error = 'Unable to convert scheduled_at_local to UTC timestamp.'; } catch {}
+      return null;
+    }
+  }
+
+  pay.actionsBusy.scheduling = true;
+
+  try {
+    const obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/schedule`, {
+      schedule_kind: scheduleKind,
+      scheduled_at_utc: scheduledAtUtc,
+      funding_account_ref: fundingAccountRef,
+      warning_hours_json: warningHoursJson
+    });
+
+    // refresh selected detail (authoritative)
+    try {
+      if (typeof bankingPayBatchGet === 'function') {
+        await bankingPayBatchGet(id);
+      } else {
+        pay.selected.data = deep(obj);
+      }
+    } catch {}
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'SCHEDULE', scope: null, batchId: id, errorPath: ['pay', 'selected', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { pay.actionsBusy.scheduling = false; } catch {}
+  }
+}
+
+
+async function bankingPayBatchPoll(payBatchId) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const id = (payBatchId == null) ? '' : String(payBatchId).trim();
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.actionsBusy = (mc.banking.pay.actionsBusy && typeof mc.banking.pay.actionsBusy === 'object') ? mc.banking.pay.actionsBusy : {
+    executingBank: false,
+    preparing: false,
+    scheduling: false,
+    polling: false,
+    exporting: false,
+    manualConfirming: false,
+    sendingRemittances: false
+  };
+  mc.banking.pay.selected = (mc.banking.pay.selected && typeof mc.banking.pay.selected === 'object') ? mc.banking.pay.selected : {
+    data: null,
+    loading: false,
+    error: ''
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  if (!id) return null;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('POLL')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  pay.actionsBusy.polling = true;
+
+  try {
+    const obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/poll`, {});
+
+    pay.selected.data = deep(obj);
+    pay.selected.lastPollResult = deep(obj && obj.poll_result ? obj.poll_result : null);
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'POLL', scope: null, batchId: id, errorPath: ['pay', 'selected', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { pay.actionsBusy.polling = false; } catch {}
+  }
+}
+
+async function bankingPayBatchExportCsv(payBatchId, scope = 'ALL') {
+  const id = (payBatchId == null) ? '' : String(payBatchId).trim();
+  const sc = String(scope || 'ALL').trim().toUpperCase();
+  const scopeNorm = (sc === 'PAYE' || sc === 'UMBRELLA' || sc === 'ALL') ? sc : 'ALL';
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return false;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.actionsBusy = (mc.banking.pay.actionsBusy && typeof mc.banking.pay.actionsBusy === 'object') ? mc.banking.pay.actionsBusy : {
+    executingBank: false,
+    preparing: false,
+    scheduling: false,
+    polling: false,
+    exporting: false,
+    manualConfirming: false,
+    sendingRemittances: false
+  };
+  mc.banking.pay.selected = (mc.banking.pay.selected && typeof mc.banking.pay.selected === 'object') ? mc.banking.pay.selected : {
+    data: null,
+    loading: false,
+    error: ''
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  if (!id) return false;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('EXPORT_CSV')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return false;
+  }
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  const parseFilename = (cd, fallbackName) => {
+    const s = String(cd || '').trim();
+    if (!s) return fallbackName;
+    const m1 = s.match(/filename\*=(?:UTF-8'')?([^;]+)/i);
+    if (m1 && m1[1]) {
+      try {
+        const v = m1[1].trim().replace(/^"|"$/g, '');
+        return decodeURIComponent(v) || fallbackName;
+      } catch {
+        return m1[1].trim().replace(/^"|"$/g, '') || fallbackName;
+      }
+    }
+    const m2 = s.match(/filename=([^;]+)/i);
+    if (m2 && m2[1]) return m2[1].trim().replace(/^"|"$/g, '') || fallbackName;
+    return fallbackName;
+  };
+
+  pay.actionsBusy.exporting = true;
+
+  try {
+    const url = API(`/api/banking/pay/batch/${encodeURIComponent(id)}/export-csv?scope=${encodeURIComponent(scopeNorm)}`);
+    const res = await authFetch(url, { method: 'GET' });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      const parsed = safeParse(txt);
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Export failed'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const blob = await res.blob();
+    const cd = res.headers.get('content-disposition') || '';
+    const fallback = `pay_batch_${id}_${scopeNorm}.csv`;
+    const filename = parseFilename(cd, fallback);
+
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => { try { URL.revokeObjectURL(objUrl); } catch {} }, 2_000);
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+    return true;
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'EXPORT_CSV', scope: scopeNorm, batchId: id, errorPath: ['pay', 'selected', 'error'] });
+      }
+    } catch {}
+
+    return false;
+
+  } finally {
+    try { pay.actionsBusy.exporting = false; } catch {}
+  }
+}
+
+async function bankingPayBatchManualConfirm(payBatchId, scope = 'ALL', bank_confirm_ref = '') {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const id = (payBatchId == null) ? '' : String(payBatchId).trim();
+  const sc = String(scope || 'ALL').trim().toUpperCase();
+  const scopeNorm = (sc === 'PAYE' || sc === 'UMBRELLA' || sc === 'ALL') ? sc : 'ALL';
+  const ref = String(bank_confirm_ref || '').trim();
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.actionsBusy = (mc.banking.pay.actionsBusy && typeof mc.banking.pay.actionsBusy === 'object') ? mc.banking.pay.actionsBusy : {
+    executingBank: false,
+    preparing: false,
+    scheduling: false,
+    polling: false,
+    exporting: false,
+    manualConfirming: false,
+    sendingRemittances: false
+  };
+  mc.banking.pay.selected = (mc.banking.pay.selected && typeof mc.banking.pay.selected === 'object') ? mc.banking.pay.selected : {
+    data: null,
+    loading: false,
+    error: ''
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  if (!id) return null;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('MANUAL_CONFIRM')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  pay.actionsBusy.manualConfirming = true;
+
+  try {
+    const obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/settle/manual-confirm`, {
+      scope: scopeNorm,
+      bank_confirm_ref: ref
+    });
+
+    // refresh selected detail (authoritative)
+    try {
+      if (typeof bankingPayBatchGet === 'function') {
+        await bankingPayBatchGet(id);
+      } else {
+        pay.selected.data = deep(obj);
+      }
+    } catch {}
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'MANUAL_CONFIRM', scope: scopeNorm, batchId: id, errorPath: ['pay', 'selected', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { pay.actionsBusy.manualConfirming = false; } catch {}
+  }
+}
+
+
+async function bankingPayBatchRemittancesSend(payBatchId, scope = 'ALL') {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const id = (payBatchId == null) ? '' : String(payBatchId).trim();
+  const sc = String(scope || 'ALL').trim().toUpperCase();
+  const scopeNorm = (sc === 'PAYE' || sc === 'UMBRELLA' || sc === 'ALL') ? sc : 'ALL';
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+  mc.banking.pay.actionsBusy = (mc.banking.pay.actionsBusy && typeof mc.banking.pay.actionsBusy === 'object') ? mc.banking.pay.actionsBusy : {
+    executingBank: false,
+    preparing: false,
+    scheduling: false,
+    polling: false,
+    exporting: false,
+    manualConfirming: false,
+    sendingRemittances: false
+  };
+  mc.banking.pay.selected = (mc.banking.pay.selected && typeof mc.banking.pay.selected === 'object') ? mc.banking.pay.selected : {
+    data: null,
+    loading: false,
+    error: ''
+  };
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  if (!id) return null;
+
+  const actionKind = (scopeNorm === 'PAYE') ? 'SEND_REMITTANCES_PAYE' : 'SEND_REMITTANCES';
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked(actionKind)
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  pay.actionsBusy.sendingRemittances = true;
+
+  try {
+    const obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/remittances/send`, {
+      scope: scopeNorm
+    });
+
+    // Store last send result for UI
+    try {
+      pay.selected = (pay.selected && typeof pay.selected === 'object') ? pay.selected : { data: null, loading: false, error: '' };
+      pay.selected.lastRemittanceSendResult = deep(obj);
+    } catch {}
+
+    // refresh batch details (optional but useful)
+    try {
+      if (typeof bankingPayBatchGet === 'function') {
+        await bankingPayBatchGet(id);
+      }
+    } catch {}
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'SEND_REMITTANCES', scope: scopeNorm, batchId: id, errorPath: ['pay', 'selected', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { pay.actionsBusy.sendingRemittances = false; } catch {}
+  }
+}
+
+
+async function bankingIdPreview() {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.id = (mc.banking.id && typeof mc.banking.id === 'object') ? mc.banking.id : {};
+  mc.banking.id.preview = (mc.banking.id.preview && typeof mc.banking.id.preview === 'object') ? mc.banking.id.preview : { data: null, loading: false, error: '' };
+
+  const st = mc.banking;
+  const idSt = st.id;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('ID_PREVIEW')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { idSt.preview.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  idSt.preview.loading = true;
+  idSt.preview.error = '';
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  try {
+    const res = await authFetch(API('/api/banking/id/preview'));
+    const txt = await res.text().catch(() => '');
+    const parsed = safeParse(txt);
+
+    if (!res.ok) {
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Failed to load ID preview'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const obj = (parsed && typeof parsed === 'object') ? parsed : {};
+    idSt.preview.data = deep(obj);
+    idSt.preview.loading = false;
+    idSt.preview.error = '';
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'ID_PREVIEW', scope: null, batchId: null, errorPath: ['id', 'preview', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { idSt.preview.loading = false; } catch {}
+  }
+} 
+
+async function bankingIdBalanceNow(payload) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.id = (mc.banking.id && typeof mc.banking.id === 'object') ? mc.banking.id : {};
+  mc.banking.id.applyForm = (mc.banking.id.applyForm && typeof mc.banking.id.applyForm === 'object')
+    ? mc.banking.id.applyForm
+    : { bank_upload_code: '', note: '', busy: false, error: '' };
+
+  const st = mc.banking;
+  const idSt = st.id;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('ID_BALANCE_NOW')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { idSt.applyForm.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  const in0 = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
+  const bankUploadCode = String(in0.bank_upload_code || '').trim();
+  const noteRaw = (in0.note === null || in0.note === undefined) ? '' : String(in0.note);
+
+  if (!bankUploadCode) {
+    try { idSt.applyForm.error = 'bank_upload_code is required'; } catch {}
+    return null;
+  }
+
+  // Keep form state aligned
+  try { idSt.applyForm.bank_upload_code = bankUploadCode; } catch {}
+  try { idSt.applyForm.note = String(noteRaw || ''); } catch {}
+
+  idSt.applyForm.busy = true;
+  idSt.applyForm.error = '';
+
+  try {
+    const obj = await apiPostJson('/api/banking/id/balance-now', {
+      bank_upload_code: bankUploadCode,
+      note: (String(noteRaw || '').trim() ? String(noteRaw || '').trim() : null)
+    });
+
+    // Store last result (non-breaking if UI doesn't use it yet)
+    try { idSt.lastBalanceNowResult = deep(obj); } catch {}
+
+    // Refresh preview + ledger + runs (best UX; safe if wrappers exist)
+    try { if (typeof bankingIdPreview === 'function') await bankingIdPreview(); } catch {}
+    try { if (typeof bankingIdLedgerList === 'function') await bankingIdLedgerList(null); } catch {}
+    try { if (typeof bankingIdRunsList === 'function') await bankingIdRunsList(null); } catch {}
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'ID_BALANCE_NOW', scope: null, batchId: null, errorPath: ['id', 'applyForm', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { idSt.applyForm.busy = false; } catch {}
+  }
+}
+
+async function bankingIdLedgerList(filters = null) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.id = (mc.banking.id && typeof mc.banking.id === 'object') ? mc.banking.id : {};
+  mc.banking.id.ledger = (mc.banking.id.ledger && typeof mc.banking.id.ledger === 'object') ? mc.banking.id.ledger : {
+    filters: { only_reportable: true, status: [], client_id: '', search: '' },
+    paging: { limit: 50, offset: 0 },
+    data: { items: [], total: null },
+    loading: false,
+    error: ''
+  };
+
+  const st = mc.banking;
+  const idSt = st.id;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('ID_LEDGER_LIST')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { idSt.ledger.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  const in0 = (filters && typeof filters === 'object' && !Array.isArray(filters)) ? filters : null;
+
+  // Apply provided filters into state (best-effort)
+  try {
+    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'only_reportable')) {
+      idSt.ledger.filters.only_reportable = !!in0.only_reportable;
+    }
+    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'status')) {
+      idSt.ledger.filters.status = Array.isArray(in0.status) ? in0.status.slice() : [];
+    }
+    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'client_id')) {
+      idSt.ledger.filters.client_id = String(in0.client_id || '').trim();
+    }
+    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'search')) {
+      idSt.ledger.filters.search = String(in0.search || '').trim();
+    }
+    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'limit')) {
+      const n = Number(in0.limit);
+      if (Number.isFinite(n)) idSt.ledger.paging.limit = Math.max(1, Math.min(500, Math.trunc(n)));
+    }
+    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'offset')) {
+      const n = Number(in0.offset);
+      if (Number.isFinite(n)) idSt.ledger.paging.offset = Math.max(0, Math.trunc(n));
+    }
+  } catch {}
+
+  const lim = Math.max(1, Math.min(500, Math.trunc(Number(idSt.ledger.paging.limit || 50))));
+  const off = Math.max(0, Math.trunc(Number(idSt.ledger.paging.offset || 0)));
+
+  const qs = new URLSearchParams();
+  qs.set('limit', String(lim));
+  qs.set('offset', String(off));
+
+  const onlyReportable = !!idSt.ledger.filters.only_reportable;
+  if (onlyReportable) qs.set('only_reportable', 'true');
+
+  const clientId = String(idSt.ledger.filters.client_id || '').trim();
+  if (clientId) qs.set('client_id', clientId);
+
+  const search = String(idSt.ledger.filters.search || '').trim();
+  if (search) qs.set('search', search);
+
+  // status can be repeated or comma-separated; we send repeated (cleanest)
+  const statuses = Array.isArray(idSt.ledger.filters.status) ? idSt.ledger.filters.status : [];
+  const seen = new Set();
+  for (const s of statuses) {
+    const v = String(s || '').trim().toUpperCase();
+    if (!v) continue;
+    if (seen.has(v)) continue;
+    seen.add(v);
+    qs.append('status', v);
+  }
+
+  idSt.ledger.loading = true;
+  idSt.ledger.error = '';
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  try {
+    const res = await authFetch(API(`/api/banking/id/ledger?${qs.toString()}`));
+    const txt = await res.text().catch(() => '');
+    const parsed = safeParse(txt);
+
+    if (!res.ok) {
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Failed to load ID ledger'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const obj = (parsed && typeof parsed === 'object') ? parsed : {};
+    const items = Array.isArray(obj.items) ? obj.items : [];
+    const count = Number.isFinite(Number(obj.count)) ? Math.trunc(Number(obj.count)) : items.length;
+
+    idSt.ledger.data.items = deep(items) || [];
+    idSt.ledger.data.total = count;
+    idSt.ledger.paging.limit = Number.isFinite(Number(obj.limit)) ? Math.trunc(Number(obj.limit)) : lim;
+    idSt.ledger.paging.offset = Number.isFinite(Number(obj.offset)) ? Math.trunc(Number(obj.offset)) : off;
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'ID_LEDGER_LIST', scope: null, batchId: null, errorPath: ['id', 'ledger', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { idSt.ledger.loading = false; } catch {}
+  }
+}
+
+
+async function bankingIdRunsList(opts = null) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.id = (mc.banking.id && typeof mc.banking.id === 'object') ? mc.banking.id : {};
+  mc.banking.id.runs = (mc.banking.id.runs && typeof mc.banking.id.runs === 'object') ? mc.banking.id.runs : {
+    list: { paging: { limit: 50, offset: 0 }, data: { items: [], total: null }, loading: false, error: '' },
+    selected: { id_ref: '', data: null, loading: false, error: '' }
+  };
+
+  const st = mc.banking;
+  const idSt = st.id;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('ID_RUNS_LIST')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { idSt.runs.list.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  const in0 = (opts && typeof opts === 'object' && !Array.isArray(opts)) ? opts : null;
+
+  try {
+    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'limit')) {
+      const n = Number(in0.limit);
+      if (Number.isFinite(n)) idSt.runs.list.paging.limit = Math.max(1, Math.min(500, Math.trunc(n)));
+    }
+    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'offset')) {
+      const n = Number(in0.offset);
+      if (Number.isFinite(n)) idSt.runs.list.paging.offset = Math.max(0, Math.trunc(n));
+    }
+  } catch {}
+
+  const lim = Math.max(1, Math.min(500, Math.trunc(Number(idSt.runs.list.paging.limit || 50))));
+  const off = Math.max(0, Math.trunc(Number(idSt.runs.list.paging.offset || 0)));
+
+  const qs = new URLSearchParams();
+  qs.set('limit', String(lim));
+  qs.set('offset', String(off));
+
+  idSt.runs.list.loading = true;
+  idSt.runs.list.error = '';
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  try {
+    const res = await authFetch(API(`/api/banking/id/runs?${qs.toString()}`));
+    const txt = await res.text().catch(() => '');
+    const parsed = safeParse(txt);
+
+    if (!res.ok) {
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Failed to load ID runs'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const obj = (parsed && typeof parsed === 'object') ? parsed : {};
+    const runs = Array.isArray(obj.runs) ? obj.runs : [];
+    const total = Number.isFinite(Number(obj.total_count)) ? Math.trunc(Number(obj.total_count)) : runs.length;
+
+    idSt.runs.list.data.items = deep(runs) || [];
+    idSt.runs.list.data.total = total;
+    idSt.runs.list.paging.limit = Number.isFinite(Number(obj.limit)) ? Math.trunc(Number(obj.limit)) : lim;
+    idSt.runs.list.paging.offset = Number.isFinite(Number(obj.offset)) ? Math.trunc(Number(obj.offset)) : off;
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'ID_RUNS_LIST', scope: null, batchId: null, errorPath: ['id', 'runs', 'list', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { idSt.runs.list.loading = false; } catch {}
+  }
+}
+
+
+async function bankingIdRunGet(id_ref) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+  const idRef = String(id_ref || '').trim();
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.id = (mc.banking.id && typeof mc.banking.id === 'object') ? mc.banking.id : {};
+  mc.banking.id.runs = (mc.banking.id.runs && typeof mc.banking.id.runs === 'object') ? mc.banking.id.runs : {
+    list: { paging: { limit: 50, offset: 0 }, data: { items: [], total: null }, loading: false, error: '' },
+    selected: { id_ref: '', data: null, loading: false, error: '' }
+  };
+  mc.banking.id.runs.selected = (mc.banking.id.runs.selected && typeof mc.banking.id.runs.selected === 'object')
+    ? mc.banking.id.runs.selected
+    : { id_ref: '', data: null, loading: false, error: '' };
+
+  const st = mc.banking;
+  const idSt = st.id;
+
+  if (!/^[0-9]{6}$/.test(idRef)) {
+    try { idSt.runs.selected.error = 'id_ref must be 6 digits'; } catch {}
+    return null;
+  }
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('ID_RUN_GET')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { idSt.runs.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  idSt.runs.selected.loading = true;
+  idSt.runs.selected.error = '';
+  idSt.runs.selected.id_ref = idRef;
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  try {
+    const res = await authFetch(API(`/api/banking/id/runs/${encodeURIComponent(idRef)}`));
+    const txt = await res.text().catch(() => '');
+    const parsed = safeParse(txt);
+
+    if (!res.ok) {
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Failed to load ID run'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const obj = (parsed && typeof parsed === 'object') ? parsed : {};
+    idSt.runs.selected.data = deep(obj);
+    idSt.runs.selected.loading = false;
+    idSt.runs.selected.error = '';
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep(obj);
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'ID_RUN_GET', scope: null, batchId: null, errorPath: ['id', 'runs', 'selected', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { idSt.runs.selected.loading = false; } catch {}
+  }
+}
+
+
+async function bankingOutboxList({ reference_prefix = '', reference_contains = '', limit = 50, offset = 0 } = {}) {
+  const deep = (o) => JSON.parse(JSON.stringify(o || null));
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') return null;
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.remittances = (mc.banking.remittances && typeof mc.banking.remittances === 'object') ? mc.banking.remittances : {
+    filters: { reference_prefix: '', reference_contains: '' },
+    list: { items: [], limit: 50, offset: 0, loading: false, error: '' }
+  };
+
+  const st = mc.banking;
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('OUTBOX_LIST')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  if (gate && gate.blocked) {
+    try { st.remittances.list.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    return null;
+  }
+
+  const refPrefix = String(reference_prefix || '').trim();
+  const refContains = String(reference_contains || '').trim();
+
+  const limReq = (() => {
+    const l = Number(limit);
+    const o = Number(offset);
+    const lim = Number.isFinite(l) ? Math.max(1, Math.min(200, Math.trunc(l))) : 50;
+    const off = Number.isFinite(o) ? Math.max(0, Math.trunc(o)) : 0;
+    // backend supports limit only (no offset), so we over-fetch and slice client-side
+    const want = lim + off;
+    return Math.max(1, Math.min(200, want));
+  })();
+
+  const offNorm = Number.isFinite(Number(offset)) ? Math.max(0, Math.trunc(Number(offset))) : 0;
+  const limNorm = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(200, Math.trunc(Number(limit)))) : 50;
+
+  // Persist filters/paging in state
+  try { st.remittances.filters.reference_prefix = refPrefix; } catch {}
+  try { st.remittances.filters.reference_contains = refContains; } catch {}
+  try { st.remittances.list.limit = limNorm; } catch {}
+  try { st.remittances.list.offset = offNorm; } catch {}
+
+  st.remittances.list.loading = true;
+  st.remittances.list.error = '';
+
+  const safeParse = (txt) => {
+    try { return txt ? JSON.parse(txt) : null; } catch { return null; }
+  };
+
+  try {
+    const qs = new URLSearchParams();
+    qs.set('limit', String(limReq));
+    if (refPrefix) qs.set('reference_prefix', refPrefix);
+    if (refContains) qs.set('reference_contains', refContains);
+
+    const res = await authFetch(API(`/api/email/outbox?${qs.toString()}`));
+    const txt = await res.text().catch(() => '');
+    const parsed = safeParse(txt);
+
+    if (!res.ok) {
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Failed to load outbox'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const obj = (parsed && typeof parsed === 'object') ? parsed : {};
+    const itemsRaw = Array.isArray(obj.items) ? obj.items : (Array.isArray(obj.rows) ? obj.rows : (Array.isArray(obj) ? obj : []));
+    const slice = itemsRaw.slice(offNorm, offNorm + limNorm);
+
+    st.remittances.list.items = deep(slice) || [];
+    st.remittances.list.loading = false;
+    st.remittances.list.error = '';
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+    return deep({ ok: true, items: slice, fetched: itemsRaw.length, limit: limNorm, offset: offNorm });
+
+  } catch (e) {
+    try {
+      if (typeof bankingHandleApiError === 'function') {
+        bankingHandleApiError(e, { action: 'OUTBOX_LIST', scope: null, batchId: null, errorPath: ['remittances', 'list', 'error'] });
+      }
+    } catch {}
+
+    return null;
+
+  } finally {
+    try { st.remittances.list.loading = false; } catch {}
+  }
+}
+
+
+function renderBankingBanners() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card">
+        <div class="row">
+          <label>Banking</label>
+          <div class="controls">
+            <span class="mini">Banking state is not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const caps = (st.caps && typeof st.caps === 'object') ? st.caps : {};
+  const capsRaw = (caps.raw && typeof caps.raw === 'object') ? caps.raw : {};
+  const rails = Array.isArray(capsRaw.rails) ? capsRaw.rails : [];
+
+  const envMismatch =
+    (caps.isEnvMismatch === true) ||
+    (capsRaw.env_mismatch === true) ||
+    rails.some(r => r && r.env_mismatch === true);
+
+  const dbEnv = String(capsRaw.db_rail_env_default || capsRaw.rail_env_default || '').trim().toUpperCase();
+  const wkEnv = String(capsRaw.worker_env || capsRaw.default_worker_env || '').trim().toUpperCase();
+
+  const isTestMode = (caps.isTestMode === true) || (capsRaw.payroll_testing === true);
+  const copAvailable = (capsRaw.cop_available === true);
+
+  const scheduleGate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('SCHEDULE')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  const fundingMissing = !!(scheduleGate && scheduleGate.blocked && String(scheduleGate.reasonCode || '').toUpperCase() === 'FUNDING_ACCOUNT_MISSING');
+
+  const banners = [];
+
+  // Env mismatch banner (BLOCKING)
+  if (envMismatch) {
+    const msg =
+      (dbEnv && wkEnv)
+        ? `Bank actions are blocked until Worker env matches DB env snapshot. DB: ${dbEnv} • Worker: ${wkEnv}`
+        : 'Bank actions are blocked until Worker env matches DB env snapshot.';
+
+    banners.push(`
+      <div class="card" style="border-color:rgba(248,113,113,.4); background:rgba(239,68,68,.08);">
+        <div class="row">
+          <label>Env mismatch</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+            <div style="min-width:260px;flex:1;">
+              <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
+                ${enc(msg)}
+              </div>
+              <div class="mini" style="margin-top:6px;opacity:.85;">
+                Fix the Worker configuration (Revolut API base / credentials) so the Worker environment matches the DB snapshot.
+              </div>
+            </div>
+
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:refreshCaps"
+                title="Re-check capabilities and environment"
+              >Re-check</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `);
+  }
+
+  // TEST MODE banner
+  if (isTestMode) {
+    banners.push(`
+      <div class="card" style="border-color:rgba(251,191,36,.35); background:rgba(245,158,11,.08);">
+        <div class="row">
+          <label>TEST MODE</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+            <div style="min-width:260px;flex:1;">
+              <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
+                TEST MODE active — payments may be simulated; remittances sending is disabled.
+              </div>
+              <div class="mini" style="margin-top:6px;opacity:.85;">
+                Attempting to send remittances will be rejected with <span class="mono">REMITTANCES_DISABLED_IN_PAYROLL_TESTING</span>.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `);
+  }
+
+  // CoP availability banner (warning)
+  if (!envMismatch && copAvailable === false) {
+    banners.push(`
+      <div class="card" style="border-color:rgba(59,130,246,.45); background:rgba(59,130,246,.08);">
+        <div class="row">
+          <label>CoP</label>
+          <div class="controls">
+            <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
+              Confirmation of Payee (name-check) is not available for the default rail. You can continue, but scheduling may proceed without name checks.
+            </div>
+          </div>
+        </div>
+      </div>
+    `);
+  }
+
+  // Funding account missing blocker
+  if (!envMismatch && fundingMissing) {
+    const msg = String(scheduleGate.message || '').trim() || 'Funding account is required before scheduling.';
+    banners.push(`
+      <div class="card" style="border-color:rgba(251,191,36,.35); background:rgba(245,158,11,.06);">
+        <div class="row">
+          <label>Funding</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+            <div style="min-width:260px;flex:1;">
+              <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
+                ${enc(msg)}
+              </div>
+              <div class="mini" style="margin-top:6px;opacity:.85;">
+                Set a default funding account in <strong>Payment Settings</strong> (or choose a funding account when scheduling a batch).
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:goTab"
+                data-tab="settings"
+                title="Open Payment Settings tab"
+              >Go to Payment Settings</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `);
+  }
+
+  // Global error banner (non-blocking but prominent)
+  const globalErr = String(st?.ui?.globalError || '').trim();
+  if (globalErr) {
+    banners.unshift(`
+      <div class="error" style="margin-bottom:10px; white-space:pre-wrap;">${enc(globalErr)}</div>
+    `);
+  }
+
+  if (!banners.length) return '';
+
+  return `
+    <div style="display:flex;flex-direction:column;gap:10px; margin-bottom:10px;">
+      ${banners.join('')}
+    </div>
+  `;
+}
+
+
+function renderBankingTab(key, row) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+
+  const safeKey = String(key || '').trim() || 'pay';
+
+  // Keep active tab key in state (safe; helps rerender)
+  try {
+    if (st && st.ui && typeof st.ui === 'object') st.ui.activeTabKey = safeKey;
+  } catch {}
+
+  if (!st) {
+    return `
+      <div class="tabc">
+        <div class="card">
+          <div class="row">
+            <label>Banking</label>
+            <div class="controls">
+              <span class="mini">Banking state is not available.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const caps = (st.caps && typeof st.caps === 'object') ? st.caps : {};
+  const capsRaw = (caps.raw && typeof caps.raw === 'object') ? caps.raw : {};
+  const busy = !!(st.ui && st.ui.busy && st.ui.busy.booting);
+
+  const workerEnv = String(capsRaw.worker_env || capsRaw.default_worker_env || '').trim().toUpperCase() || '—';
+  const dbEnv = String(capsRaw.db_rail_env_default || capsRaw.rail_env_default || '').trim().toUpperCase() || '—';
+  const provider = String(capsRaw.rail_provider_default || '').trim().toUpperCase() || '—';
+
+  const isTestMode = (caps.isTestMode === true) || (capsRaw.payroll_testing === true);
+
+  const envMismatch =
+    (caps.isEnvMismatch === true) ||
+    (capsRaw.env_mismatch === true) ||
+    (Array.isArray(capsRaw.rails) ? capsRaw.rails.some(r => r && r.env_mismatch === true) : false);
+
+  const chipEnvClass = envMismatch ? 'pill-bad' : 'pill-ok';
+
+  const chipDefaultRailClass = 'pill-info';
+  const chipTestClass = isTestMode ? 'pill-warn' : 'pill';
+
+  const headerChips = `
+    <div class="card">
+      <div class="row">
+        <label>Status</label>
+        <div class="controls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <span class="pill ${enc(chipEnvClass)}" title="Worker env (derived from rail credentials/base URL)">${enc(workerEnv)}</span>
+          <span class="pill ${enc(chipEnvClass)}" title="DB env snapshot (partition key for payee-map/name-check)">${enc(dbEnv)}</span>
+          <span class="pill ${enc(chipDefaultRailClass)}" title="Default rail provider">${enc(provider)}</span>
+          ${isTestMode ? `<span class="pill ${enc(chipTestClass)}" title="TEST MODE enabled">TEST MODE</span>` : ``}
+          <span class="mini" style="margin-left:6px;opacity:.85;">Operator modal (actions are rail-generic)</span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const bannersHtml = (typeof renderBankingBanners === 'function') ? renderBankingBanners() : '';
+
+  const skeletonHtml = `
+    <div class="card">
+      <div class="row">
+        <label>Loading</label>
+        <div class="controls">
+          <span class="mini">Loading banking capabilities and settings…</span>
+          <div class="mini" style="margin-top:6px;opacity:.85;">
+            If this takes too long, click <strong>Re-check</strong> above.
+          </div>
+          <div style="margin-top:10px;">
+            <button type="button" class="btn btn-sm btn-outline" data-action="banking:refreshCaps">Re-check</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const notReady = busy || !capsRaw || !st.settings || !st.settings.raw;
+
+  const tabContent = (() => {
+    if (notReady) return skeletonHtml;
+
+    const callIfFn = (fnName, ...args) => {
+      try {
+        const fn = (typeof window[fnName] === 'function') ? window[fnName] : (typeof globalThis[fnName] === 'function' ? globalThis[fnName] : null);
+        if (fn) return fn(...args);
+      } catch {}
+      return null;
+    };
+
+    // Pay / Umbrella / PAYE tabs share the same renderer with different scope presets
+    if (safeKey === 'pay') {
+      const out = callIfFn('renderBankingPayTab', 'ALL');
+      if (typeof out === 'string' && out.trim()) return out;
+      return `
+        <div class="card">
+          <div class="row">
+            <label>Pay</label>
+            <div class="controls">
+              <span class="mini">UI not implemented yet for this tab.</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (safeKey === 'umbrella') {
+      const out = callIfFn('renderBankingPayTab', 'UMBRELLA');
+      if (typeof out === 'string' && out.trim()) return out;
+      return `
+        <div class="card">
+          <div class="row">
+            <label>Umbrella Pay</label>
+            <div class="controls">
+              <span class="mini">UI not implemented yet for this tab.</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (safeKey === 'paye') {
+      const out = callIfFn('renderBankingPayTab', 'PAYE');
+      if (typeof out === 'string' && out.trim()) return out;
+      return `
+        <div class="card">
+          <div class="row">
+            <label>PAYE History</label>
+            <div class="controls">
+              <span class="mini">UI not implemented yet for this tab.</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (safeKey === 'settings') {
+      const out = callIfFn('renderBankingPaymentSettingsTab');
+      if (typeof out === 'string' && out.trim()) return out;
+      return `
+        <div class="card">
+          <div class="row">
+            <label>Payment Settings</label>
+            <div class="controls">
+              <span class="mini">UI not implemented yet for this tab.</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (safeKey === 'id') {
+      const out = callIfFn('renderBankingIdTab');
+      if (typeof out === 'string' && out.trim()) return out;
+      return `
+        <div class="card">
+          <div class="row">
+            <label>Invoice Discounting (ID)</label>
+            <div class="controls">
+              <span class="mini">UI not implemented yet for this tab.</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (safeKey === 'id_history') {
+      const out = callIfFn('renderBankingIdHistoryTab');
+      if (typeof out === 'string' && out.trim()) return out;
+      return `
+        <div class="card">
+          <div class="row">
+            <label>ID History</label>
+            <div class="controls">
+              <span class="mini">UI not implemented yet for this tab.</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (safeKey === 'rem_status') {
+      const out = callIfFn('renderBankingRemittancesStatusTab');
+      if (typeof out === 'string' && out.trim()) return out;
+      return `
+        <div class="card">
+          <div class="row">
+            <label>Remittances Status</label>
+            <div class="controls">
+              <span class="mini">UI not implemented yet for this tab.</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="card">
+        <div class="row">
+          <label>Banking</label>
+          <div class="controls">
+            <span class="mini">Unknown tab: ${enc(safeKey)}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  })();
+
+  return `
+    <div class="tabc">
+      ${headerChips}
+      ${bannersHtml}
+      ${tabContent}
+    </div>
+  `;
+}
+
+
+
+
+function renderBankingPayTab(scopePreset) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card">
+        <div class="row">
+          <label>Pay</label>
+          <div class="controls">
+            <span class="mini">Banking state not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const presetRaw = String(scopePreset || '').trim().toUpperCase();
+  const preset = (presetRaw === 'PAYE' || presetRaw === 'UMBRELLA' || presetRaw === 'ALL') ? presetRaw : 'ALL';
+
+  // Persist preset for the UI (safe, no side effects)
+  try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; st.pay.scopePreset = preset; } catch {}
+
+  const payListHtml = (typeof renderPayBatchListPanel === 'function') ? renderPayBatchListPanel() : '';
+  const payDetailHtml = (typeof renderPayBatchDetailPanel === 'function') ? renderPayBatchDetailPanel() : '';
+  const wizardHtml = (typeof renderPayNewBatchWizard === 'function') ? renderPayNewBatchWizard() : '';
+
+  const title =
+    (preset === 'PAYE') ? 'PAYE History'
+    : (preset === 'UMBRELLA') ? 'Umbrella Pay'
+    : 'Pay';
+
+  const subtitle =
+    (preset === 'PAYE')
+      ? 'PAYE-only pay batches and settlement.'
+      : (preset === 'UMBRELLA')
+        ? 'Umbrella-only pay batches and settlement.'
+        : 'Unified Pay batches (PAYE + Umbrella).';
+
+  return `
+    <div id="bankingPayTabRoot">
+      <div class="card" style="margin-bottom:10px;">
+        <div class="row">
+          <label>${enc(title)}</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">${enc(subtitle)}</span>
+            <span class="pill pill-info" title="Scope preset for this tab">${enc(preset)}</span>
+
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:listRefresh" title="Refresh pay batch list">Refresh</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:recheckCaps" title="Re-check env/capabilities">Re-check</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="align-items:start;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          ${wizardHtml}
+          ${payListHtml}
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          ${payDetailHtml}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+
+function renderPayBatchListPanel() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const fmtUtcToUk = (iso) => {
+    try {
+      if (!iso) return '';
+      const d = new Date(String(iso));
+      if (Number.isNaN(d.getTime())) return String(iso);
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      return fmt.format(d).replace(',', '');
+    } catch {
+      return String(iso || '');
+    }
+  };
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPayBatchListPanel">
+        <div class="row">
+          <label>Batches</label>
+          <div class="controls">
+            <span class="mini">Banking state not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.list = (st.pay.list && typeof st.pay.list === 'object') ? st.pay.list : { items: [], limit: 50, offset: 0, statusFilter: '', loading: false, error: '' };
+
+  const items = Array.isArray(st.pay.list.items) ? st.pay.list.items : [];
+  const loading = !!st.pay.list.loading;
+  const err = String(st.pay.list.error || '').trim();
+
+  const selectedId = String(st.pay.selectedBatchId || '').trim();
+
+  const statusNow = String(st.pay.list.statusFilter || '').trim().toUpperCase();
+  const limitNow = Number.isFinite(Number(st.pay.list.limit)) ? Math.trunc(Number(st.pay.list.limit)) : 50;
+  const offsetNow = Number.isFinite(Number(st.pay.list.offset)) ? Math.max(0, Math.trunc(Number(st.pay.list.offset))) : 0;
+
+  const statusOptions = [
+    { v: '', label: 'All statuses' },
+    { v: 'DRAFT', label: 'DRAFT' },
+    { v: 'SCHEDULED', label: 'SCHEDULED' },
+    { v: 'EXECUTING', label: 'EXECUTING' },
+    { v: 'PARTIAL', label: 'PARTIAL' },
+    { v: 'SETTLED', label: 'SETTLED' }
+  ];
+
+  const limitOptions = [25, 50, 100, 200];
+
+  const rowsHtml = items.map((r) => {
+    const id = String(r?.id || r?.pay_batch_id || '').trim();
+    const payDate = String(r?.pay_date || '').trim();
+    const stx = String(r?.status || '').trim().toUpperCase() || '—';
+    const prov = String(r?.rail_provider_snapshot || r?.rail_provider || '').trim().toUpperCase();
+    const env = String(r?.rail_env_snapshot || r?.rail_env || '').trim().toUpperCase();
+    const created = fmtUtcToUk(r?.created_at_utc || r?.created_at || '');
+
+    const isActive = (id && selectedId && id === selectedId);
+
+    const pillClass =
+      (stx === 'SETTLED') ? 'pill-ok'
+      : (stx === 'EXECUTING' || stx === 'PARTIAL') ? 'pill-warn'
+      : (stx === 'DRAFT') ? 'pill-info'
+      : 'pill';
+
+    return `
+      <tr
+        ${isActive ? 'class="active"' : ''}
+        style="cursor:pointer;"
+        data-action="banking:pay:selectBatch"
+        data-batch-id="${enc(id)}"
+        title="${enc(id)}"
+      >
+        <td class="mono">${enc(id ? (id.slice(0, 8) + '…') : '')}</td>
+        <td>${enc(payDate ? (typeof formatIsoToUk === 'function' ? formatIsoToUk(payDate) : payDate) : '—')}</td>
+        <td><span class="pill ${enc(pillClass)}">${enc(stx)}</span></td>
+        <td class="mini">${enc((prov || '—') + (env ? `/${env}` : ''))}</td>
+        <td class="mini">${enc(created || '')}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const emptyHtml = (!loading && items.length === 0)
+    ? `<tr><td colspan="5" class="mini" style="opacity:.85;">No batches found for current filters.</td></tr>`
+    : '';
+
+  const prevOffset = Math.max(0, offsetNow - limitNow);
+  const nextOffset = offsetNow + limitNow;
+
+  return `
+    <div class="card" id="bankingPayBatchListPanel">
+      <div class="row" style="gap:10px;">
+        <label>Batches</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:8px;">
+          ${err ? `<div class="error" style="white-space:pre-wrap;">${enc(err)}</div>` : ''}
+
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <label class="inline mini" style="opacity:.85;">Status</label>
+              <select
+                class="input"
+                id="bankingPayBatchStatusFilter"
+                data-action="banking:pay:setStatusFilter"
+                style="max-width:220px;"
+              >
+                ${statusOptions.map(o => `<option value="${enc(o.v)}" ${o.v === statusNow ? 'selected' : ''}>${enc(o.label)}</option>`).join('')}
+              </select>
+
+              <label class="inline mini" style="opacity:.85;">Page size</label>
+              <select
+                class="input"
+                id="bankingPayBatchPageSize"
+                data-action="banking:pay:setPageSize"
+                style="max-width:140px;"
+              >
+                ${limitOptions.map(n => `<option value="${enc(String(n))}" ${n === limitNow ? 'selected' : ''}>${enc(String(n))}</option>`).join('')}
+              </select>
+            </div>
+
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:listRefresh"
+                data-limit="${enc(String(limitNow))}"
+                data-offset="${enc(String(offsetNow))}"
+                title="Refresh list"
+              >Refresh</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:listPrev"
+                data-limit="${enc(String(limitNow))}"
+                data-offset="${enc(String(prevOffset))}"
+                ${offsetNow <= 0 ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
+                title="${offsetNow <= 0 ? 'Already at first page' : 'Previous page'}"
+              >Prev</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:listNext"
+                data-limit="${enc(String(limitNow))}"
+                data-offset="${enc(String(nextOffset))}"
+                title="Next page"
+              >Next</button>
+
+              <span class="mini" style="opacity:.75;">Offset: ${enc(String(offsetNow))}</span>
+            </div>
+          </div>
+
+          <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+            <table class="grid" style="min-width:760px; table-layout:auto;">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Pay date</th>
+                  <th>Status</th>
+                  <th>Rail</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml || ''}
+                ${emptyHtml}
+              </tbody>
+            </table>
+          </div>
+
+          ${loading ? `<div class="mini" style="opacity:.8;">Loading…</div>` : ``}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPayBatchDetailPanel() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const fmtUtcToUk = (iso) => {
+    try {
+      if (!iso) return '';
+      const d = new Date(String(iso));
+      if (Number.isNaN(d.getTime())) return String(iso);
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      return fmt.format(d).replace(',', '');
+    } catch {
+      return String(iso || '');
+    }
+  };
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPayBatchDetailPanel">
+        <div class="row">
+          <label>Batch detail</label>
+          <div class="controls">
+            <span class="mini">Banking state not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.selected = (st.pay.selected && typeof st.pay.selected === 'object') ? st.pay.selected : { data: null, loading: false, error: '' };
+  st.pay.manualConfirmForm = (st.pay.manualConfirmForm && typeof st.pay.manualConfirmForm === 'object') ? st.pay.manualConfirmForm : { bank_confirm_ref: '' };
+
+  const loading = !!st.pay.selected.loading;
+  const err = String(st.pay.selected.error || '').trim();
+
+  const sel = (st.pay.selected.data && typeof st.pay.selected.data === 'object') ? st.pay.selected.data : null;
+  const batch = (sel && sel.batch && typeof sel.batch === 'object') ? sel.batch : null;
+  const transfers = (sel && Array.isArray(sel.transfers)) ? sel.transfers : [];
+  const scheduleRec = (sel && sel.schedule_recommendations && typeof sel.schedule_recommendations === 'object') ? sel.schedule_recommendations : null;
+
+  const batchId = String(batch?.id || '').trim() || String(st.pay.selectedBatchId || '').trim();
+  const status = String(batch?.status || '').trim().toUpperCase();
+  const payDate = String(batch?.pay_date || '').trim();
+  const provider = String(batch?.rail_provider_snapshot || '').trim().toUpperCase();
+  const env = String(batch?.rail_env_snapshot || '').trim().toUpperCase();
+
+  const scheduledAt = fmtUtcToUk(batch?.scheduled_at_utc || '');
+  const executingAt = fmtUtcToUk(batch?.executing_started_at_utc || '');
+  const checkedAt = fmtUtcToUk(batch?.last_status_checked_at_utc || '');
+
+  const counts = (() => {
+    const map = {};
+    for (const t of transfers) {
+      const s = String(t?.status || '').trim().toUpperCase() || '—';
+      map[s] = (map[s] || 0) + 1;
+    }
+    const keys = Object.keys(map).sort((a,b) => a.localeCompare(b));
+    return { map, keys };
+  })();
+
+  const gate = (kind) => {
+    try {
+      if (typeof bankingIsActionBlocked !== 'function') return { blocked:false, reasonCode:'', message:'' };
+      return bankingIsActionBlocked(kind);
+    } catch {
+      return { blocked:false, reasonCode:'', message:'' };
+    }
+  };
+
+  const btn = (text, action, attrs, gateObj) => {
+    const a = (attrs && typeof attrs === 'object') ? attrs : {};
+    const g = (gateObj && typeof gateObj === 'object') ? gateObj : { blocked:false, reasonCode:'', message:'' };
+
+    const disabled = !!g.blocked;
+    const title = String((disabled ? (g.message || g.reasonCode || 'Action blocked') : (a.title || '')) || '').trim();
+
+    const extraAttrs = Object.entries(a)
+      .filter(([k,v]) => k !== 'title' && v !== undefined && v !== null)
+      .map(([k,v]) => ` ${enc(k)}="${enc(String(v))}"`)
+      .join('');
+
+    const disAttrs = disabled ? ` data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"` : '';
+    const tAttr = title ? ` title="${enc(title)}"` : '';
+
+    return `<button type="button" class="btn btn-sm btn-outline" data-action="${enc(action)}"${extraAttrs}${disAttrs}${tAttr}>${enc(text)}</button>`;
+  };
+
+  if (!sel || !batchId) {
+    return `
+      <div class="card" id="bankingPayBatchDetailPanel">
+        <div class="row">
+          <label>Batch detail</label>
+          <div class="controls">
+            <div class="mini" style="opacity:.85;">Select a batch from the list to view details and actions.</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const pillClass =
+    (status === 'SETTLED') ? 'pill-ok'
+    : (status === 'EXECUTING' || status === 'PARTIAL') ? 'pill-warn'
+    : (status === 'DRAFT') ? 'pill-info'
+    : 'pill';
+
+  const actionsTop = `
+    <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      ${btn('Poll', 'banking:pay:poll', { 'data-batch-id': batchId }, gate('POLL'))}
+      ${btn('Export CSV (ALL)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'ALL' }, gate('EXPORT_CSV'))}
+      ${btn('Export CSV (PAYE)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'PAYE' }, gate('EXPORT_CSV'))}
+      ${btn('Export CSV (UMB)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'UMBRELLA' }, gate('EXPORT_CSV'))}
+    </div>
+  `;
+
+  const manualConfirmGate = gate('MANUAL_CONFIRM');
+  const manualConfirmTitle = manualConfirmGate.blocked ? (manualConfirmGate.message || manualConfirmGate.reasonCode || 'Action blocked') : 'Confirm settlement for manual/CSV rails';
+  const manualConfirmBtn = btn('Manual confirm', 'banking:pay:manualConfirm', { 'data-batch-id': batchId, 'data-scope': 'ALL' }, manualConfirmGate);
+
+  const remitGateAll = gate('SEND_REMITTANCES');
+  const remitGatePaye = gate('SEND_REMITTANCES_PAYE');
+  const remitAllBtn = btn('Send remittances (ALL)', 'banking:pay:sendRemittances', { 'data-batch-id': batchId, 'data-scope': 'ALL' }, remitGateAll);
+  const remitPayeBtn = btn('Send remittances (PAYE)', 'banking:pay:sendRemittances', { 'data-batch-id': batchId, 'data-scope': 'PAYE' }, remitGatePaye);
+  const remitUmbBtn = btn('Send remittances (UMB)', 'banking:pay:sendRemittances', { 'data-batch-id': batchId, 'data-scope': 'UMBRELLA' }, remitGateAll);
+
+  const transfersHtml = `
+    <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+      <table class="grid" style="min-width:860px; table-layout:auto;">
+        <thead>
+          <tr>
+            <th>Channel</th>
+            <th>Amount</th>
+            <th>Status</th>
+            <th>Rail</th>
+            <th>Payment ref</th>
+            <th>Payee</th>
+            <th>Completed</th>
+            <th>Failed reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            transfers.length
+              ? transfers.map(t => {
+                  const ch = String(t?.pay_channel || '').trim().toUpperCase() || '—';
+                  const amt = (t?.amount != null && t?.currency) ? `${t.amount} ${String(t.currency).toUpperCase()}` : (t?.amount != null ? String(t.amount) : '—');
+                  const stx = String(t?.status || '').trim().toUpperCase() || '—';
+                  const rprov = String(t?.rail_provider || '').trim().toUpperCase();
+                  const renv  = String(t?.rail_env || '').trim().toUpperCase();
+                  const pref  = String(t?.payment_reference || '').trim();
+                  const payee = String(t?.payee_name || '').trim();
+                  const done  = fmtUtcToUk(t?.completed_at_utc || '');
+                  const fail  = String(t?.failed_reason || '').trim();
+                  return `
+                    <tr>
+                      <td>${enc(ch)}</td>
+                      <td class="mono">${enc(String(amt || '—'))}</td>
+                      <td><span class="pill">${enc(stx)}</span></td>
+                      <td class="mini">${enc((rprov || '—') + (renv ? `/${renv}` : ''))}</td>
+                      <td class="mini">${enc(pref || '')}</td>
+                      <td class="mini">${enc(payee || '')}</td>
+                      <td class="mini">${enc(done || '')}</td>
+                      <td class="mini">${enc(fail || '')}</td>
+                    </tr>
+                  `;
+                }).join('')
+              : `<tr><td colspan="8" class="mini" style="opacity:.85;">No transfers yet.</td></tr>`
+          }
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  const countsHtml = counts.keys.length
+    ? counts.keys.map(k => `<span class="pill" title="Transfers in this status">${enc(k)}: ${enc(String(counts.map[k] || 0))}</span>`).join(' ')
+    : `<span class="mini" style="opacity:.85;">No transfer statuses yet.</span>`;
+
+  return `
+    <div class="card" id="bankingPayBatchDetailPanel">
+      <div class="row" style="gap:10px;">
+        <label>Batch detail</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+          ${err ? `<div class="error" style="white-space:pre-wrap;">${enc(err)}</div>` : ''}
+
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="pill ${enc(pillClass)}">${enc(status || '—')}</span>
+            <span class="mono" title="${enc(batchId)}">${enc(batchId ? (batchId.slice(0, 8) + '…') : '')}</span>
+            <span class="mini">${enc(provider || '—')}${env ? enc('/' + env) : ''}</span>
+            <span class="mini">Pay date: ${enc(payDate ? (typeof formatIsoToUk === 'function' ? formatIsoToUk(payDate) : payDate) : '—')}</span>
+            ${loading ? `<span class="mini" style="opacity:.8;">Loading…</span>` : ``}
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:refreshSelected" data-batch-id="${enc(batchId)}" title="Refresh batch detail">Refresh</button>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            ${countsHtml}
+          </div>
+
+          <div class="mini" style="opacity:.85;">
+            Scheduled: ${enc(scheduledAt || '—')} • Executing: ${enc(executingAt || '—')} • Last check: ${enc(checkedAt || '—')}
+          </div>
+
+          ${actionsTop}
+
+          <div class="card" style="padding:10px;">
+            <div class="row">
+              <label>Manual confirm (CSV/manual rails)</label>
+              <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <input
+                  id="bankingManualConfirmRef"
+                  class="input"
+                  type="text"
+                  name="bank_confirm_ref"
+                  placeholder="Bank confirmation reference (optional if no pending transfers)"
+                  value="${enc(String(st.pay.manualConfirmForm.bank_confirm_ref || ''))}"
+                  style="min-width:320px;max-width:520px;"
+                  title="${enc(manualConfirmTitle)}"
+                />
+                <span class="mini" style="opacity:.85;">Scope: ALL</span>
+                ${manualConfirmBtn}
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="padding:10px;">
+            <div class="row">
+              <label>Remittances</label>
+              <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                ${remitAllBtn}
+                ${remitPayeBtn}
+                ${remitUmbBtn}
+                <span class="mini" style="opacity:.8;">Outbox status is shown in the Remittances Status tab.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <label>Transfers</label>
+            <div class="controls">
+              ${transfersHtml}
+            </div>
+          </div>
+
+          ${scheduleRec ? `
+            <div class="row">
+              <label>Schedule defaults</label>
+              <div class="controls">
+                <div class="mini" style="opacity:.85;white-space:normal;overflow-wrap:break-word;">
+                  Default funding ref: <span class="mono">${enc(String(scheduleRec.rail_default_funding_account_ref || '') || '—')}</span>
+                  • Warning hours: <span class="mono">${enc(JSON.stringify(scheduleRec.funds_warning_hours_json || []))}</span>
+                </div>
+              </div>
+            </div>
+          ` : ``}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPayNewBatchWizard() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPayNewBatchWizard">
+        <div class="row">
+          <label>New pay batch</label>
+          <div class="controls">
+            <span class="mini">Banking state not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {
+    pay_date: '',
+    preview: { data: null, loading: false, error: '' },
+    decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
+    createDraftBusy: false,
+    createDraftError: ''
+  };
+
+  const wiz = st.pay.draftWizard;
+  const payDate = String(wiz.pay_date || '').trim();
+  const preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : { data: null, loading: false, error: '' };
+  const pv = (preview.data && typeof preview.data === 'object') ? preview.data : null;
+
+  const pvErr = String(preview.error || '').trim();
+  const pvLoading = !!preview.loading;
+
+  const cdErr = String(wiz.createDraftError || '').trim();
+  const cdBusy = !!wiz.createDraftBusy;
+
+  const decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : { candidate_ids: [], mismatch_choices: {}, loan_caps: {} };
+  const mismatchChoices = (decisions.mismatch_choices && typeof decisions.mismatch_choices === 'object') ? decisions.mismatch_choices : {};
+  const loanCaps = (decisions.loan_caps && typeof decisions.loan_caps === 'object') ? decisions.loan_caps : {};
+
+  const payeCands = Array.isArray(pv?.paye_candidates) ? pv.paye_candidates : [];
+  const nonPaye = Array.isArray(pv?.non_paye_payees) ? pv.non_paye_payees : [];
+
+  const allCands = [...payeCands, ...nonPaye];
+
+  const mismatchList = allCands.filter(c => {
+    try {
+      const m = c && typeof c === 'object' ? c.mismatch : null;
+      const hm = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true'));
+      return !!hm;
+    } catch {
+      return false;
+    }
+  });
+
+  const blockedItems = Array.isArray(pv?.blocked_items) ? pv.blocked_items : [];
+  const doNotPayItems = Array.isArray(pv?.do_not_pay_items) ? pv.do_not_pay_items : [];
+  const snoozedItems = Array.isArray(pv?.snoozed_items) ? pv.snoozed_items : [];
+
+  const candidateIdsArr = Array.isArray(decisions.candidate_ids) ? decisions.candidate_ids : [];
+  const candidateSet = new Set(candidateIdsArr.map(x => String(x || '').trim()).filter(Boolean));
+  const useCandidateFilter = candidateSet.size > 0;
+
+  const mismatchRowsHtml = mismatchList.length ? mismatchList.map((c) => {
+    const cid = String(c?.candidate_id || '').trim();
+    const name = String(c?.display_name || '').trim() || '—';
+    const tms = String(c?.tms_ref || '').trim();
+    const method = String(c?.current_pay_method || '').trim().toUpperCase() || '—';
+
+    const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
+    const srcPaye = (m.source_paye_ex_vat != null) ? String(m.source_paye_ex_vat) : '';
+    const srcUmb  = (m.source_umbrella_ex_vat != null) ? String(m.source_umbrella_ex_vat) : '';
+
+    const choiceNow = String(mismatchChoices[cid] || '').trim().toUpperCase();
+    const includeChecked = useCandidateFilter ? candidateSet.has(cid) : true;
+
+    const capNow = (loanCaps[cid] && typeof loanCaps[cid] === 'object') ? loanCaps[cid] : {};
+    const minTakeHome = (capNow.min_take_home != null) ? String(capNow.min_take_home) : '';
+    const maxDed = (capNow.max_deduction != null) ? String(capNow.max_deduction) : '';
+
+    return `
+      <tr>
+        <td style="white-space:nowrap;">
+          <label class="inline mini" title="Include this candidate in the batch">
+            <input
+              type="checkbox"
+              data-action="banking:pay:setCandidateInclude"
+              data-candidate-id="${enc(cid)}"
+              ${includeChecked ? 'checked' : ''}
+            />
+            Include
+          </label>
+        </td>
+        <td>
+          <div style="display:flex;flex-direction:column;gap:2px;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span class="mono">${enc(tms || '')}</span>
+              <span>${enc(name)}</span>
+              <span class="pill">${enc(method)}</span>
+            </div>
+            <div class="mini" style="opacity:.85;">
+              Mismatch sources — PAYE: <span class="mono">${enc(srcPaye || '0')}</span> • Umbrella: <span class="mono">${enc(srcUmb || '0')}</span>
+            </div>
+          </div>
+        </td>
+        <td style="min-width:200px;">
+          <select
+            class="input"
+            data-action="banking:pay:setMismatchChoice"
+            data-candidate-id="${enc(cid)}"
+            title="Choose how to settle mismatch amounts for this candidate"
+          >
+            <option value="" ${choiceNow ? '' : 'selected'}>Choose…</option>
+            <option value="PAYE" ${choiceNow === 'PAYE' ? 'selected' : ''}>Settle via PAYE</option>
+            <option value="UMBRELLA" ${choiceNow === 'UMBRELLA' ? 'selected' : ''}>Settle via Umbrella</option>
+          </select>
+        </td>
+        <td style="min-width:220px;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input
+              class="input"
+              style="max-width:130px;"
+              type="number"
+              step="0.01"
+              min="0"
+              data-action="banking:pay:setLoanCap"
+              data-candidate-id="${enc(cid)}"
+              data-cap-field="min_take_home"
+              placeholder="Min take-home"
+              value="${enc(minTakeHome)}"
+              title="Optional: minimum take-home after loan repayment"
+            />
+            <input
+              class="input"
+              style="max-width:130px;"
+              type="number"
+              step="0.01"
+              min="0"
+              data-action="banking:pay:setLoanCap"
+              data-candidate-id="${enc(cid)}"
+              data-cap-field="max_deduction"
+              placeholder="Max deduction"
+              value="${enc(maxDed)}"
+              title="Optional: cap total deductions for loans"
+            />
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('') : `
+    <tr><td colspan="4" class="mini" style="opacity:.85;">No mismatch decisions required.</td></tr>
+  `;
+
+  const previewSummaryHtml = pv ? `
+    <div class="mini" style="opacity:.9;">
+      Week start: <span class="mono">${enc(String(pv.pay_week_start || '') || '—')}</span>
+      • PAYE candidates: <span class="mono">${enc(String(payeCands.length))}</span>
+      • Umbrella payees: <span class="mono">${enc(String(nonPaye.length))}</span>
+      • Mismatches: <span class="mono">${enc(String(mismatchList.length))}</span>
+      • Blocked: <span class="mono">${enc(String(blockedItems.length))}</span>
+      • Do-not-pay: <span class="mono">${enc(String(doNotPayItems.length))}</span>
+      • Snoozed: <span class="mono">${enc(String(snoozedItems.length))}</span>
+    </div>
+  ` : `<div class="mini" style="opacity:.85;">Run Preview to compute deltas, blockers, and mismatch decisions.</div>`;
+
+  const previewBtnDisabled = pvLoading || cdBusy;
+  const createBtnDisabled = cdBusy || pvLoading || !payDate;
+
+  return `
+    <div class="card" id="bankingPayNewBatchWizard">
+      <div class="row" style="gap:10px;">
+        <label>Create / Preview</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+          ${pvErr ? `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>` : ''}
+          ${cdErr ? `<div class="error" style="white-space:pre-wrap;">${enc(cdErr)}</div>` : ''}
+
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div style="min-width:220px;max-width:260px;">
+              <label class="inline mini" style="opacity:.85;">Pay date</label>
+              <input
+                id="bankingPayDateInput"
+                class="input"
+                type="text"
+                name="pay_date"
+                placeholder="YYYY-MM-DD"
+                value="${enc(payDate)}"
+                data-action="banking:pay:setPayDate"
+                title="Pay date (YYYY-MM-DD)"
+              />
+            </div>
+
+            <div class="actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline ${previewBtnDisabled ? 'disabled' : ''}"
+                ${previewBtnDisabled ? 'aria-disabled="true"' : ''}
+                data-action="banking:pay:preview"
+                title="Run pay preview (deltas, blockers, mismatches)"
+              >${pvLoading ? 'Previewing…' : 'Preview'}</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-primary ${createBtnDisabled ? 'disabled' : ''}"
+                ${createBtnDisabled ? 'aria-disabled="true"' : ''}
+                data-action="banking:pay:createDraft"
+                title="Create a DRAFT pay batch using current preview decisions"
+              >${cdBusy ? 'Creating…' : 'Create draft'}</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:clearPreview"
+                title="Clear preview results"
+              >Clear</button>
+            </div>
+          </div>
+
+          ${previewSummaryHtml}
+
+          <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+            <table class="grid" style="min-width:980px; table-layout:auto;">
+              <thead>
+                <tr>
+                  <th style="width:90px;">Include</th>
+                  <th>Candidate</th>
+                  <th style="width:220px;">Mismatch choice</th>
+                  <th style="width:260px;">Loan caps (optional)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${mismatchRowsHtml}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mini" style="opacity:.8;">
+            Notes: mismatch choices are required for candidates flagged with mismatches. Blocked/Do-not-pay items are excluded from payable deltas unless resolved.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPayNewBatchWizard() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPayNewBatchWizard">
+        <div class="row">
+          <label>New pay batch</label>
+          <div class="controls">
+            <span class="mini">Banking state not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {
+    pay_date: '',
+    preview: { data: null, loading: false, error: '' },
+    decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
+    createDraftBusy: false,
+    createDraftError: ''
+  };
+
+  const wiz = st.pay.draftWizard;
+  const payDate = String(wiz.pay_date || '').trim();
+  const preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : { data: null, loading: false, error: '' };
+  const pv = (preview.data && typeof preview.data === 'object') ? preview.data : null;
+
+  const pvErr = String(preview.error || '').trim();
+  const pvLoading = !!preview.loading;
+
+  const cdErr = String(wiz.createDraftError || '').trim();
+  const cdBusy = !!wiz.createDraftBusy;
+
+  const decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : { candidate_ids: [], mismatch_choices: {}, loan_caps: {} };
+  const mismatchChoices = (decisions.mismatch_choices && typeof decisions.mismatch_choices === 'object') ? decisions.mismatch_choices : {};
+  const loanCaps = (decisions.loan_caps && typeof decisions.loan_caps === 'object') ? decisions.loan_caps : {};
+
+  const payeCands = Array.isArray(pv?.paye_candidates) ? pv.paye_candidates : [];
+  const nonPaye = Array.isArray(pv?.non_paye_payees) ? pv.non_paye_payees : [];
+
+  const allCands = [...payeCands, ...nonPaye];
+
+  const mismatchList = allCands.filter(c => {
+    try {
+      const m = c && typeof c === 'object' ? c.mismatch : null;
+      const hm = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true'));
+      return !!hm;
+    } catch {
+      return false;
+    }
+  });
+
+  const blockedItems = Array.isArray(pv?.blocked_items) ? pv.blocked_items : [];
+  const doNotPayItems = Array.isArray(pv?.do_not_pay_items) ? pv.do_not_pay_items : [];
+  const snoozedItems = Array.isArray(pv?.snoozed_items) ? pv.snoozed_items : [];
+
+  const candidateIdsArr = Array.isArray(decisions.candidate_ids) ? decisions.candidate_ids : [];
+  const candidateSet = new Set(candidateIdsArr.map(x => String(x || '').trim()).filter(Boolean));
+  const useCandidateFilter = candidateSet.size > 0;
+
+  const mismatchRowsHtml = mismatchList.length ? mismatchList.map((c) => {
+    const cid = String(c?.candidate_id || '').trim();
+    const name = String(c?.display_name || '').trim() || '—';
+    const tms = String(c?.tms_ref || '').trim();
+    const method = String(c?.current_pay_method || '').trim().toUpperCase() || '—';
+
+    const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
+    const srcPaye = (m.source_paye_ex_vat != null) ? String(m.source_paye_ex_vat) : '';
+    const srcUmb  = (m.source_umbrella_ex_vat != null) ? String(m.source_umbrella_ex_vat) : '';
+
+    const choiceNow = String(mismatchChoices[cid] || '').trim().toUpperCase();
+    const includeChecked = useCandidateFilter ? candidateSet.has(cid) : true;
+
+    const capNow = (loanCaps[cid] && typeof loanCaps[cid] === 'object') ? loanCaps[cid] : {};
+    const minTakeHome = (capNow.min_take_home != null) ? String(capNow.min_take_home) : '';
+    const maxDed = (capNow.max_deduction != null) ? String(capNow.max_deduction) : '';
+
+    return `
+      <tr>
+        <td style="white-space:nowrap;">
+          <label class="inline mini" title="Include this candidate in the batch">
+            <input
+              type="checkbox"
+              data-action="banking:pay:setCandidateInclude"
+              data-candidate-id="${enc(cid)}"
+              ${includeChecked ? 'checked' : ''}
+            />
+            Include
+          </label>
+        </td>
+        <td>
+          <div style="display:flex;flex-direction:column;gap:2px;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span class="mono">${enc(tms || '')}</span>
+              <span>${enc(name)}</span>
+              <span class="pill">${enc(method)}</span>
+            </div>
+            <div class="mini" style="opacity:.85;">
+              Mismatch sources — PAYE: <span class="mono">${enc(srcPaye || '0')}</span> • Umbrella: <span class="mono">${enc(srcUmb || '0')}</span>
+            </div>
+          </div>
+        </td>
+        <td style="min-width:200px;">
+          <select
+            class="input"
+            data-action="banking:pay:setMismatchChoice"
+            data-candidate-id="${enc(cid)}"
+            title="Choose how to settle mismatch amounts for this candidate"
+          >
+            <option value="" ${choiceNow ? '' : 'selected'}>Choose…</option>
+            <option value="PAYE" ${choiceNow === 'PAYE' ? 'selected' : ''}>Settle via PAYE</option>
+            <option value="UMBRELLA" ${choiceNow === 'UMBRELLA' ? 'selected' : ''}>Settle via Umbrella</option>
+          </select>
+        </td>
+        <td style="min-width:220px;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input
+              class="input"
+              style="max-width:130px;"
+              type="number"
+              step="0.01"
+              min="0"
+              data-action="banking:pay:setLoanCap"
+              data-candidate-id="${enc(cid)}"
+              data-cap-field="min_take_home"
+              placeholder="Min take-home"
+              value="${enc(minTakeHome)}"
+              title="Optional: minimum take-home after loan repayment"
+            />
+            <input
+              class="input"
+              style="max-width:130px;"
+              type="number"
+              step="0.01"
+              min="0"
+              data-action="banking:pay:setLoanCap"
+              data-candidate-id="${enc(cid)}"
+              data-cap-field="max_deduction"
+              placeholder="Max deduction"
+              value="${enc(maxDed)}"
+              title="Optional: cap total deductions for loans"
+            />
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('') : `
+    <tr><td colspan="4" class="mini" style="opacity:.85;">No mismatch decisions required.</td></tr>
+  `;
+
+  const previewSummaryHtml = pv ? `
+    <div class="mini" style="opacity:.9;">
+      Week start: <span class="mono">${enc(String(pv.pay_week_start || '') || '—')}</span>
+      • PAYE candidates: <span class="mono">${enc(String(payeCands.length))}</span>
+      • Umbrella payees: <span class="mono">${enc(String(nonPaye.length))}</span>
+      • Mismatches: <span class="mono">${enc(String(mismatchList.length))}</span>
+      • Blocked: <span class="mono">${enc(String(blockedItems.length))}</span>
+      • Do-not-pay: <span class="mono">${enc(String(doNotPayItems.length))}</span>
+      • Snoozed: <span class="mono">${enc(String(snoozedItems.length))}</span>
+    </div>
+  ` : `<div class="mini" style="opacity:.85;">Run Preview to compute deltas, blockers, and mismatch decisions.</div>`;
+
+  const previewBtnDisabled = pvLoading || cdBusy;
+  const createBtnDisabled = cdBusy || pvLoading || !payDate;
+
+  return `
+    <div class="card" id="bankingPayNewBatchWizard">
+      <div class="row" style="gap:10px;">
+        <label>Create / Preview</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+          ${pvErr ? `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>` : ''}
+          ${cdErr ? `<div class="error" style="white-space:pre-wrap;">${enc(cdErr)}</div>` : ''}
+
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div style="min-width:220px;max-width:260px;">
+              <label class="inline mini" style="opacity:.85;">Pay date</label>
+              <input
+                id="bankingPayDateInput"
+                class="input"
+                type="text"
+                name="pay_date"
+                placeholder="YYYY-MM-DD"
+                value="${enc(payDate)}"
+                data-action="banking:pay:setPayDate"
+                title="Pay date (YYYY-MM-DD)"
+              />
+            </div>
+
+            <div class="actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline ${previewBtnDisabled ? 'disabled' : ''}"
+                ${previewBtnDisabled ? 'aria-disabled="true"' : ''}
+                data-action="banking:pay:preview"
+                title="Run pay preview (deltas, blockers, mismatches)"
+              >${pvLoading ? 'Previewing…' : 'Preview'}</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-primary ${createBtnDisabled ? 'disabled' : ''}"
+                ${createBtnDisabled ? 'aria-disabled="true"' : ''}
+                data-action="banking:pay:createDraft"
+                title="Create a DRAFT pay batch using current preview decisions"
+              >${cdBusy ? 'Creating…' : 'Create draft'}</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:clearPreview"
+                title="Clear preview results"
+              >Clear</button>
+            </div>
+          </div>
+
+          ${previewSummaryHtml}
+
+          <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+            <table class="grid" style="min-width:980px; table-layout:auto;">
+              <thead>
+                <tr>
+                  <th style="width:90px;">Include</th>
+                  <th>Candidate</th>
+                  <th style="width:220px;">Mismatch choice</th>
+                  <th style="width:260px;">Loan caps (optional)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${mismatchRowsHtml}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mini" style="opacity:.8;">
+            Notes: mismatch choices are required for candidates flagged with mismatches. Blocked/Do-not-pay items are excluded from payable deltas unless resolved.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPayPreparePanel() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPayPreparePanel">
+        <div class="row">
+          <label>Prepare</label>
+          <div class="controls">
+            <span class="mini">Banking state not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.selected = (st.pay.selected && typeof st.pay.selected === 'object') ? st.pay.selected : { data: null, loading: false, error: '' };
+  st.pay.actionsBusy = (st.pay.actionsBusy && typeof st.pay.actionsBusy === 'object') ? st.pay.actionsBusy : {
+    executingBank: false,
+    preparing: false,
+    scheduling: false,
+    polling: false,
+    exporting: false,
+    manualConfirming: false,
+    sendingRemittances: false
+  };
+  st.pay.prepareOverrides = (st.pay.prepareOverrides && typeof st.pay.prepareOverrides === 'object') ? st.pay.prepareOverrides : { items: [] };
+
+  const preparing = !!st.pay.actionsBusy.preparing;
+
+  const sel = (st.pay.selected.data && typeof st.pay.selected.data === 'object') ? st.pay.selected.data : null;
+  const batch = (sel && sel.batch && typeof sel.batch === 'object') ? sel.batch : null;
+  const batchId = String(batch?.id || '').trim() || String(st.pay.selectedBatchId || '').trim();
+
+  const prepResult =
+    (st.pay.selected && typeof st.pay.selected === 'object' && st.pay.selected.prepareResult && typeof st.pay.selected.prepareResult === 'object')
+      ? st.pay.selected.prepareResult
+      : null;
+
+  const overrides = Array.isArray(st.pay.prepareOverrides.items) ? st.pay.prepareOverrides.items : [];
+
+  const counts = (() => {
+    const obj = (prepResult && typeof prepResult === 'object') ? prepResult : {};
+    const keys = ['missing_payee_map', 'name_check_failed', 'name_check_pending', 'ready', 'blocked'];
+    const out = {};
+    for (const k of keys) {
+      const arr = Array.isArray(obj[k]) ? obj[k] : [];
+      out[k] = arr.length;
+    }
+    return out;
+  })();
+
+  const overrideRowsHtml = overrides.length ? overrides.map((o, i) => {
+    const ek = String(o?.entity_kind || '').trim();
+    const eid = String(o?.entity_id || '').trim();
+    const reason = String(o?.reason || '').trim();
+    return `
+      <tr>
+        <td class="mini">${enc(String(i + 1))}</td>
+        <td class="mini">${enc(ek || '—')}</td>
+        <td class="mono">${enc(eid || '—')}</td>
+        <td class="mini" style="white-space:normal;overflow-wrap:break-word;">${enc(reason || '—')}</td>
+        <td style="white-space:nowrap;">
+          <button
+            type="button"
+            class="btn btn-sm btn-outline"
+            data-action="banking:pay:prepare:removeOverride"
+            data-override-index="${enc(String(i))}"
+            title="Remove this override"
+          >Remove</button>
+        </td>
+      </tr>
+    `;
+  }).join('') : `
+    <tr><td colspan="5" class="mini" style="opacity:.85;">No overrides staged.</td></tr>
+  `;
+
+  return `
+    <div class="card" id="bankingPayPreparePanel">
+      <div class="row" style="gap:10px;">
+        <label>Prepare</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">
+              Prepare checks payee-map + name-check readiness for the selected batch.
+            </span>
+            <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
+
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:prepare"
+                data-batch-id="${enc(batchId)}"
+                ${batchId ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'}
+                title="${batchId ? 'Run prepare for this batch' : 'Select a batch first'}"
+              >${preparing ? 'Preparing…' : 'Run prepare'}</button>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <span class="pill" title="Missing payee map">${enc('Missing payee-map: ' + String(counts.missing_payee_map || 0))}</span>
+            <span class="pill" title="Name-check failed">${enc('Name-check failed: ' + String(counts.name_check_failed || 0))}</span>
+            <span class="pill" title="Name-check pending">${enc('Name-check pending: ' + String(counts.name_check_pending || 0))}</span>
+            <span class="pill" title="Ready">${enc('Ready: ' + String(counts.ready || 0))}</span>
+            <span class="pill" title="Blocked">${enc('Blocked: ' + String(counts.blocked || 0))}</span>
+          </div>
+
+          <div class="card" style="padding:10px;">
+            <div class="row">
+              <label>Stage an override</label>
+              <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select
+                  class="input"
+                  id="bankingPrepareOverrideKind"
+                  data-action="banking:pay:prepare:setOverrideKind"
+                  style="max-width:220px;"
+                  title="Entity kind"
+                >
+                  <option value="">Entity kind…</option>
+                  <option value="CANDIDATE">Candidate</option>
+                  <option value="UMBRELLA">Umbrella</option>
+                  <option value="PAYEE">Payee</option>
+                </select>
+
+                <input
+                  class="input"
+                  id="bankingPrepareOverrideEntityId"
+                  type="text"
+                  placeholder="Entity ID"
+                  data-action="banking:pay:prepare:setOverrideEntityId"
+                  style="min-width:260px;max-width:360px;"
+                  title="Entity id (UUID or stable key)"
+                />
+
+                <input
+                  class="input"
+                  id="bankingPrepareOverrideReason"
+                  type="text"
+                  placeholder="Reason (required)"
+                  data-action="banking:pay:prepare:setOverrideReason"
+                  style="min-width:280px;max-width:520px;"
+                  title="Reason for override (audit)"
+                />
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:pay:prepare:addOverride"
+                  title="Add override to the staged list"
+                >Add override</button>
+              </div>
+              <div class="mini" style="opacity:.8;margin-top:6px;">
+                Overrides are applied on the next <strong>Run prepare</strong>.
+              </div>
+            </div>
+          </div>
+
+          <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+            <table class="grid" style="min-width:820px; table-layout:auto;">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Entity kind</th>
+                  <th>Entity id</th>
+                  <th>Reason</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${overrideRowsHtml}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mini" style="opacity:.8;">
+            Detailed prepare results will be shown here once backend response fields are standardised in the UI (Phase 6 wiring will populate and drill into rows).
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+
+function renderPaySchedulePanel() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPaySchedulePanel">
+        <div class="row">
+          <label>Schedule</label>
+          <div class="controls">
+            <span class="mini">Banking state not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.selected = (st.pay.selected && typeof st.pay.selected === 'object') ? st.pay.selected : { data: null, loading: false, error: '' };
+  st.pay.actionsBusy = (st.pay.actionsBusy && typeof st.pay.actionsBusy === 'object') ? st.pay.actionsBusy : {
+    executingBank: false,
+    preparing: false,
+    scheduling: false,
+    polling: false,
+    exporting: false,
+    manualConfirming: false,
+    sendingRemittances: false
+  };
+  st.pay.scheduleForm = (st.pay.scheduleForm && typeof st.pay.scheduleForm === 'object') ? st.pay.scheduleForm : {
+    funding_account_ref: '',
+    schedule_kind: 'IMMEDIATE',
+    scheduled_at_local: '',
+    warning_hours_json: []
+  };
+
+  const sel = (st.pay.selected.data && typeof st.pay.selected.data === 'object') ? st.pay.selected.data : null;
+  const batch = (sel && sel.batch && typeof sel.batch === 'object') ? sel.batch : null;
+  const batchId = String(batch?.id || '').trim() || String(st.pay.selectedBatchId || '').trim();
+
+  const scheduleBusy = !!st.pay.actionsBusy.scheduling;
+
+  const settingsRaw = (st.settings && typeof st.settings === 'object' && st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
+  const defaultFunding = String(settingsRaw.rail_default_funding_account_ref || '').trim();
+  const defaultWarn = Array.isArray(settingsRaw.funds_warning_hours_json) ? settingsRaw.funds_warning_hours_json : null;
+
+  const currentFunding = String(st.pay.scheduleForm.funding_account_ref || '').trim();
+  const scheduleKindRaw = String(st.pay.scheduleForm.schedule_kind || '').trim().toUpperCase();
+  const scheduleKind = (scheduleKindRaw === 'SCHEDULED' || scheduleKindRaw === 'IMMEDIATE') ? scheduleKindRaw : 'IMMEDIATE';
+
+  const scheduledLocal = String(st.pay.scheduleForm.scheduled_at_local || '').trim();
+
+  const currentWarn = Array.isArray(st.pay.scheduleForm.warning_hours_json) ? st.pay.scheduleForm.warning_hours_json : [];
+  const warnSet = new Set(currentWarn.map(x => String(x)));
+
+  const warnChoices = (() => {
+    const base = Array.isArray(defaultWarn) ? defaultWarn : [24, 12];
+    const uniq = [];
+    const seen = new Set();
+    for (const x of base) {
+      const n = Number(x);
+      if (!Number.isFinite(n)) continue;
+      const k = String(n);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      uniq.push(n);
+    }
+    // Ensure common values exist
+    [48, 24, 12, 6, 3, 1].forEach(n => {
+      const k = String(n);
+      if (!seen.has(k)) { seen.add(k); uniq.push(n); }
+    });
+    // Sort descending
+    uniq.sort((a,b) => b - a);
+    return uniq;
+  })();
+
+  const gate = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('SCHEDULE')
+    : { blocked:false, reasonCode:'', message:'' };
+
+  const scheduleDisabled = !!(gate && gate.blocked);
+
+  const scheduleTitle = scheduleDisabled
+    ? String(gate.message || gate.reasonCode || 'Action blocked')
+    : 'Schedule this batch (immediate or at time)';
+
+  return `
+    <div class="card" id="bankingPaySchedulePanel">
+      <div class="row" style="gap:10px;">
+        <label>Schedule</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">
+              Scheduling requires a funding account ref (explicit or default). Legacy <span class="mono">AT_TIME</span> maps to <span class="mono">SCHEDULED</span>.
+            </span>
+            <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:schedule:loadAccounts"
+                title="Load funding accounts for selection"
+              >Load accounts</button>
+            </div>
+          </div>
+
+          <div class="card" style="padding:10px;">
+            <div class="row">
+              <label>Funding account</label>
+              <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input
+                  id="bankingScheduleFundingRef"
+                  class="input"
+                  type="text"
+                  placeholder="Funding account ref (leave blank to use default)"
+                  value="${enc(currentFunding)}"
+                  data-action="banking:pay:schedule:setFundingRef"
+                  style="min-width:360px;max-width:620px;"
+                  title="Funding account ref (required if no default is set)"
+                />
+                <span class="mini" style="opacity:.85;">
+                  Default: <span class="mono">${enc(defaultFunding || '—')}</span>
+                </span>
+              </div>
+            </div>
+
+            <div class="row">
+              <label>Schedule kind</label>
+              <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <select
+                  id="bankingScheduleKind"
+                  class="input"
+                  data-action="banking:pay:schedule:setKind"
+                  title="IMMEDIATE or SCHEDULED"
+                  style="max-width:220px;"
+                >
+                  <option value="IMMEDIATE" ${scheduleKind === 'IMMEDIATE' ? 'selected' : ''}>IMMEDIATE</option>
+                  <option value="SCHEDULED" ${scheduleKind === 'SCHEDULED' ? 'selected' : ''}>SCHEDULED</option>
+                </select>
+
+                <input
+                  id="bankingScheduleAtLocal"
+                  class="input"
+                  type="text"
+                  placeholder="DD/MM/YYYY HH:MM (Europe/London)"
+                  value="${enc(scheduledLocal)}"
+                  data-action="banking:pay:schedule:setLocalTime"
+                  style="min-width:260px;max-width:320px; ${scheduleKind === 'SCHEDULED' ? '' : 'opacity:.45;'}"
+                  ${scheduleKind === 'SCHEDULED' ? '' : 'data-disabled="1" aria-disabled="true"'}
+                  title="Local date/time (Europe/London) — used only when SCHEDULED"
+                />
+
+                <span class="mini" style="opacity:.75;">
+                  Tip: use <span class="mono">YYYY-MM-DD HH:MM</span> or <span class="mono">DD/MM/YYYY HH:MM</span>.
+                </span>
+              </div>
+            </div>
+
+            <div class="row">
+              <label>Warning hours</label>
+              <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                ${warnChoices.map(n => {
+                  const k = String(n);
+                  const checked = warnSet.has(k) ? 'checked' : '';
+                  return `
+                    <label class="inline mini" style="opacity:.9;" title="Warn if funding is low within ${enc(k)}h">
+                      <input
+                        type="checkbox"
+                        data-action="banking:pay:schedule:toggleWarnHour"
+                        data-hour="${enc(k)}"
+                        ${checked}
+                      />
+                      ${enc(k)}h
+                    </label>
+                  `;
+                }).join('')}
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:pay:schedule:useDefaultWarn"
+                  title="Reset warning hours to defaults"
+                >Use defaults</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <label>Apply</label>
+              <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-primary"
+                  data-action="banking:pay:schedule"
+                  data-batch-id="${enc(batchId)}"
+                  ${(!batchId || scheduleDisabled) ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
+                  title="${enc(!batchId ? 'Select a batch first' : scheduleTitle)}"
+                >${scheduleBusy ? 'Scheduling…' : 'Schedule batch'}</button>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:pay:schedule:clear"
+                  title="Clear schedule inputs"
+                >Clear</button>
+
+                <span class="mini" style="opacity:.8;">
+                  Scheduling will be rejected if funding ref is missing and no default is set.
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="mini" style="opacity:.8;">
+            Phase 6 wiring will bind these inputs to <span class="mono">modalCtx.banking.pay.scheduleForm</span> and call the schedule endpoint.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPayManualRailPanel() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPayManualRailPanel">
+        <div class="row">
+          <label>Manual rail</label>
+          <div class="controls"><span class="mini">Banking state not available.</span></div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.selected = (st.pay.selected && typeof st.pay.selected === 'object') ? st.pay.selected : { data: null, loading: false, error: '' };
+  st.pay.manualConfirmForm = (st.pay.manualConfirmForm && typeof st.pay.manualConfirmForm === 'object') ? st.pay.manualConfirmForm : { bank_confirm_ref: '' };
+
+  const sel = (st.pay.selected.data && typeof st.pay.selected.data === 'object') ? st.pay.selected.data : null;
+  const batch = (sel && sel.batch && typeof sel.batch === 'object') ? sel.batch : null;
+
+  const batchId = String(batch?.id || '').trim() || String(st.pay.selectedBatchId || '').trim();
+  const railProvider = String(batch?.rail_provider_snapshot || '').trim().toUpperCase();
+  const railEnv = String(batch?.rail_env_snapshot || '').trim().toUpperCase();
+  const status = String(batch?.status || '').trim().toUpperCase();
+
+  const refVal = String(st.pay.manualConfirmForm.bank_confirm_ref || '').trim();
+
+  const gateManual = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('MANUAL_CONFIRM')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  const disabledManual = !!(gateManual && gateManual.blocked);
+  const manualTitle = String((disabledManual ? (gateManual.message || gateManual.reasonCode || 'Action blocked') : 'Confirm settlement (bank reference optional if there are no pending transfers).') || '');
+
+  const gateExport = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('EXPORT_CSV')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  const disabledExport = !!(gateExport && gateExport.blocked);
+  const exportTitle = String((disabledExport ? (gateExport.message || gateExport.reasonCode || 'Action blocked') : 'Export a CSV for manual upload.') || '');
+
+  const disAttrs = (d, t) => d
+    ? ` data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);" title="${enc(String(t || 'Action blocked'))}"`
+    : (t ? ` title="${enc(String(t))}"` : '');
+
+  const hint = (!batchId)
+    ? 'Select a batch to export and confirm settlement.'
+    : `Rail: ${railProvider || '—'}${railEnv ? `/${railEnv}` : ''} • Status: ${status || '—'}`;
+
+  return `
+    <div class="card" id="bankingPayManualRailPanel">
+      <div class="row" style="gap:10px;">
+        <label>Manual rail (CSV)</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">${enc(hint)}</span>
+            <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
+
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:exportCsv"
+                data-batch-id="${enc(batchId)}"
+                data-scope="ALL"
+                ${(!batchId || disabledExport) ? disAttrs(true, exportTitle) : disAttrs(false, exportTitle)}
+              >Export CSV (ALL)</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:exportCsv"
+                data-batch-id="${enc(batchId)}"
+                data-scope="PAYE"
+                ${(!batchId || disabledExport) ? disAttrs(true, exportTitle) : disAttrs(false, exportTitle)}
+              >Export CSV (PAYE)</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:exportCsv"
+                data-batch-id="${enc(batchId)}"
+                data-scope="UMBRELLA"
+                ${(!batchId || disabledExport) ? disAttrs(true, exportTitle) : disAttrs(false, exportTitle)}
+              >Export CSV (UMB)</button>
+            </div>
+          </div>
+
+          <div class="card" style="padding:10px;">
+            <div class="row">
+              <label>Settlement confirm</label>
+              <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <input
+                  id="bankingManualConfirmRefInput"
+                  class="input"
+                  type="text"
+                  name="bank_confirm_ref"
+                  value="${enc(refVal)}"
+                  placeholder="Bank confirmation ref (optional if no pending transfers)"
+                  data-action="banking:pay:setManualConfirmRef"
+                  style="min-width:340px;max-width:560px;"
+                  title="${enc(manualTitle)}"
+                />
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-primary"
+                  data-action="banking:pay:manualConfirm"
+                  data-batch-id="${enc(batchId)}"
+                  data-scope="ALL"
+                  ${(!batchId || disabledManual) ? disAttrs(true, manualTitle) : disAttrs(false, manualTitle)}
+                >Confirm / settle</button>
+
+                <span class="mini" style="opacity:.8;">
+                  If there are no pending transfers, backend will settle-only even with a blank ref.
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="mini" style="opacity:.8;">
+            Phase 6 wiring will read the ref input, call <span class="mono">bankingPayBatchManualConfirm</span>, and refresh the selected batch.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+
+function renderPayRemittancesPanel() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPayRemittancesPanel">
+        <div class="row">
+          <label>Remittances</label>
+          <div class="controls"><span class="mini">Banking state not available.</span></div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.selected = (st.pay.selected && typeof st.pay.selected === 'object') ? st.pay.selected : { data: null, loading: false, error: '' };
+
+  const sel = (st.pay.selected.data && typeof st.pay.selected.data === 'object') ? st.pay.selected.data : null;
+  const batch = (sel && sel.batch && typeof sel.batch === 'object') ? sel.batch : null;
+
+  const batchId = String(batch?.id || '').trim() || String(st.pay.selectedBatchId || '').trim();
+  const lastSend = (st.pay.selected && typeof st.pay.selected === 'object' && st.pay.selected.lastRemittanceSendResult && typeof st.pay.selected.lastRemittanceSendResult === 'object')
+    ? st.pay.selected.lastRemittanceSendResult
+    : null;
+
+  const gateAll = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('SEND_REMITTANCES')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  const gatePaye = (typeof bankingIsActionBlocked === 'function')
+    ? bankingIsActionBlocked('SEND_REMITTANCES_PAYE')
+    : { blocked: false, reasonCode: '', message: '' };
+
+  const disAttrs = (d, t) => d
+    ? ` data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);" title="${enc(String(t || 'Action blocked'))}"`
+    : (t ? ` title="${enc(String(t))}"` : '');
+
+  const titleAll = gateAll.blocked ? (gateAll.message || gateAll.reasonCode || 'Action blocked') : 'Send remittances (ALL)';
+  const titleUmb = gateAll.blocked ? (gateAll.message || gateAll.reasonCode || 'Action blocked') : 'Send remittances (UMBRELLA)';
+  const titlePaye = gatePaye.blocked ? (gatePaye.message || gatePaye.reasonCode || 'Action blocked') : 'Send remittances (PAYE)';
+
+  const summaryHtml = lastSend ? `
+    <div class="card" style="padding:10px;">
+      <div class="row">
+        <label>Last send</label>
+        <div class="controls">
+          <div class="mini" style="opacity:.9;white-space:pre-wrap;">${enc(JSON.stringify(lastSend, null, 2))}</div>
+        </div>
+      </div>
+    </div>
+  ` : `
+    <div class="mini" style="opacity:.8;">
+      No remittance send result yet. Sent/queued emails appear in <strong>Remittances Status</strong>.
+    </div>
+  `;
+
+  // Friendly gate message
+  const gateMsg = (() => {
+    if (gateAll.blocked) return String(gateAll.message || gateAll.reasonCode || '').trim();
+    if (gatePaye.blocked) return String(gatePaye.message || gatePaye.reasonCode || '').trim();
+    return '';
+  })();
+
+  return `
+    <div class="card" id="bankingPayRemittancesPanel">
+      <div class="row" style="gap:10px;">
+        <label>Remittances</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">
+              Send remittance emails for this pay batch (gated by TEST MODE and PAYE remittance enablement).
+            </span>
+            <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
+
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-primary"
+                data-action="banking:pay:sendRemittances"
+                data-batch-id="${enc(batchId)}"
+                data-scope="ALL"
+                ${(!batchId || gateAll.blocked) ? disAttrs(true, titleAll) : disAttrs(false, titleAll)}
+              >Send (ALL)</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:sendRemittances"
+                data-batch-id="${enc(batchId)}"
+                data-scope="PAYE"
+                ${(!batchId || gatePaye.blocked) ? disAttrs(true, titlePaye) : disAttrs(false, titlePaye)}
+              >Send (PAYE)</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:sendRemittances"
+                data-batch-id="${enc(batchId)}"
+                data-scope="UMBRELLA"
+                ${(!batchId || gateAll.blocked) ? disAttrs(true, titleUmb) : disAttrs(false, titleUmb)}
+              >Send (UMB)</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:goTab"
+                data-tab="rem_status"
+                title="Open Remittances Status"
+              >Status</button>
+            </div>
+          </div>
+
+          ${gateMsg ? `<div class="mini" style="opacity:.85;">${enc(gateMsg)}</div>` : ``}
+
+          ${summaryHtml}
+
+          <div class="mini" style="opacity:.8;">
+            Phase 6 wiring will call <span class="mono">bankingPayBatchRemittancesSend</span> and then refresh Outbox list in Remittances Status.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderBankingPaymentSettingsTab() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPaymentSettingsTab">
+        <div class="row">
+          <label>Payment Settings</label>
+          <div class="controls"><span class="mini">Banking state not available.</span></div>
+        </div>
+      </div>
+    `;
+  }
+
+  const capsRaw = (st.caps && st.caps.raw && typeof st.caps.raw === 'object') ? st.caps.raw : {};
+  const rails = Array.isArray(capsRaw.rails) ? capsRaw.rails : [];
+
+  const envMismatch =
+    (st.caps && st.caps.isEnvMismatch === true) ||
+    (capsRaw.env_mismatch === true) ||
+    rails.some(r => r && r.env_mismatch === true);
+
+  st.settings = (st.settings && typeof st.settings === 'object') ? st.settings : { raw: null };
+  const s = (st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
+
+  // paymentSettings subtree is created by bankingListFundingAccounts(), but we keep UI safe if not loaded yet.
+  st.paymentSettings = (st.paymentSettings && typeof st.paymentSettings === 'object') ? st.paymentSettings : {
+    accounts: [],
+    loading: false,
+    error: '',
+    provider: '',
+    rail_env_default: ''
+  };
+
+  const payrollTesting = !!s.payroll_testing;
+  const payeGate = !!s.paye_remittances_enabled;
+  const defaultFunding = String(s.rail_default_funding_account_ref || '').trim();
+
+  const accounts = Array.isArray(st.paymentSettings.accounts) ? st.paymentSettings.accounts : [];
+  const acctLoading = !!st.paymentSettings.loading;
+  const acctErr = String(st.paymentSettings.error || '').trim();
+
+  const gateList = envMismatch
+    ? { blocked: true, reasonCode: 'RAIL_ENV_MISMATCH', message: 'Environment mismatch — account listing is blocked until fixed.' }
+    : { blocked: false, reasonCode: '', message: '' };
+
+  const disAttrs = (d, t) => d
+    ? ` data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);" title="${enc(String(t || 'Action blocked'))}"`
+    : (t ? ` title="${enc(String(t))}"` : '');
+
+  const fundingSelectHtml = `
+    <select
+      id="bankingDefaultFundingSelect"
+      class="input"
+      data-action="banking:settings:setDefaultFunding"
+      style="min-width:320px;max-width:560px;"
+      title="Default funding account reference"
+    >
+      <option value="">(none)</option>
+      ${
+        accounts.map(a => {
+          const ref = String(a?.account_id || '').trim();
+          const ccy = String(a?.currency || '').trim().toUpperCase();
+          const lbl = String(a?.label || '').trim();
+          const optLabel = `${lbl ? lbl + ' — ' : ''}${ref}${ccy ? ` (${ccy})` : ''}`;
+          return `<option value="${enc(ref)}" ${ref && ref === defaultFunding ? 'selected' : ''}>${enc(optLabel)}</option>`;
+        }).join('')
+      }
+    </select>
+  `;
+
+  return `
+    <div id="bankingPaymentSettingsTab">
+      <div class="card" style="margin-bottom:10px;">
+        <div class="row">
+          <label>Payment Settings</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">
+              Configure TEST MODE, PAYE remittance gate, and default funding account.
+            </span>
+            ${envMismatch ? `<span class="pill pill-bad" title="Environment mismatch is active">ENV MISMATCH</span>` : ``}
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:refreshCaps" title="Re-check capabilities and env">Re-check</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:refreshSettings" title="Reload settings defaults">Reload</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
+          <label>Modes & gates</label>
+          <div class="controls" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+            <label class="inline mini" style="opacity:.95;" title="Enable TEST MODE (simulated payments; remittances sending disabled)">
+              <input
+                type="checkbox"
+                id="bankingTogglePayrollTesting"
+                data-action="banking:settings:togglePayrollTesting"
+                ${payrollTesting ? 'checked' : ''}
+              />
+              TEST MODE (payroll_testing)
+            </label>
+
+            <label class="inline mini" style="opacity:.95;" title="Enable PAYE remittances sending">
+              <input
+                type="checkbox"
+                id="bankingTogglePayeRemittances"
+                data-action="banking:settings:togglePayeRemittances"
+                ${payeGate ? 'checked' : ''}
+              />
+              Enable PAYE remittances
+            </label>
+
+            <button
+              type="button"
+              class="btn btn-sm btn-primary"
+              data-action="banking:settings:save"
+              title="Save settings defaults"
+            >Save</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
+          <label>Default funding</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:8px;">
+            ${acctErr ? `<div class="error" style="white-space:pre-wrap;">${enc(acctErr)}</div>` : ''}
+
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:settings:loadAccounts"
+                ${gateList.blocked ? disAttrs(true, gateList.message) : disAttrs(false, 'Load funding accounts')}
+              >${acctLoading ? 'Loading…' : 'Load accounts'}</button>
+
+              ${fundingSelectHtml}
+
+              <span class="mini" style="opacity:.85;">
+                Current: <span class="mono">${enc(defaultFunding || '—')}</span>
+              </span>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:settings:clearDefaultFunding"
+                title="Clear default funding account"
+              >Clear</button>
+            </div>
+
+            <div class="mini" style="opacity:.8;">
+              The default funding account is used when scheduling a batch if no funding ref is provided.
+              Account listing is blocked during env mismatch because it relies on the rail adapter.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px;">
+        <div class="row">
+          <label>Remittance content</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">
+              Remittance include-columns and header/footer are configured in Global Settings → Remittances.
+            </span>
+            <button
+              type="button"
+              class="btn btn-sm btn-outline"
+              data-action="banking:openGlobalSettingsRemittances"
+              title="Open Settings modal at Remittances tab"
+            >Open remittance settings</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="mini" style="opacity:.8;margin-top:10px;">
+        Phase 6 wiring will call <span class="mono">bankingListFundingAccounts</span> and <span class="mono">bankingUpdateSettingsDefaults</span>.
+      </div>
+    </div>
+  `;
+}
+
+function renderBankingIdTab() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingIdTab">
+        <div class="row">
+          <label>Invoice Discounting (ID)</label>
+          <div class="controls"><span class="mini">Banking state not available.</span></div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.id = (st.id && typeof st.id === 'object') ? st.id : {};
+  st.id.preview = (st.id.preview && typeof st.id.preview === 'object') ? st.id.preview : { data: null, loading: false, error: '' };
+  st.id.applyForm = (st.id.applyForm && typeof st.id.applyForm === 'object') ? st.id.applyForm : { bank_upload_code: '', note: '', busy: false, error: '' };
+
+  const pvLoading = !!st.id.preview.loading;
+  const pvErr = String(st.id.preview.error || '').trim();
+  const pv = (st.id.preview.data && typeof st.id.preview.data === 'object') ? st.id.preview.data : null;
+
+  const applyBusy = !!st.id.applyForm.busy;
+  const applyErr = String(st.id.applyForm.error || '').trim();
+  const bankUploadCode = String(st.id.applyForm.bank_upload_code || '').trim();
+  const note = String(st.id.applyForm.note || '');
+
+  const gatePreview = (typeof bankingIsActionBlocked === 'function') ? bankingIsActionBlocked('ID_PREVIEW') : { blocked:false, reasonCode:'', message:'' };
+  const gateApply = (typeof bankingIsActionBlocked === 'function') ? bankingIsActionBlocked('ID_BALANCE_NOW') : { blocked:false, reasonCode:'', message:'' };
+
+  const disAttrs = (d, t) => d
+    ? ` data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);" title="${enc(String(t || 'Action blocked'))}"`
+    : (t ? ` title="${enc(String(t))}"` : '');
+
+  const previewBtnTitle = gatePreview.blocked ? (gatePreview.message || gatePreview.reasonCode || 'Action blocked') : 'Refresh ID preview';
+  const applyBtnTitle = gateApply.blocked ? (gateApply.message || gateApply.reasonCode || 'Action blocked') : 'Apply ID balance-now (requires bank upload code)';
+
+  const pvJson = pv ? JSON.stringify(pv, null, 2) : '';
+
+  return `
+    <div id="bankingIdTab">
+      <div class="card" style="margin-bottom:10px;">
+        <div class="row">
+          <label>Invoice Discounting (ID)</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">Preview current ID position and apply a “balance now” run.</span>
+            <div style="margin-left:auto; display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:id:preview"
+                ${gatePreview.blocked ? disAttrs(true, previewBtnTitle) : disAttrs(false, previewBtnTitle)}
+              >${pvLoading ? 'Refreshing…' : 'Refresh preview'}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      ${pvErr ? `<div class="error" style="white-space:pre-wrap; margin-bottom:10px;">${enc(pvErr)}</div>` : ''}
+
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
+          <label>Preview</label>
+          <div class="controls">
+            <pre class="mono" style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:10px;background:rgba(0,0,0,.12);">
+${enc(pvJson || 'No preview loaded yet.')}
+            </pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px;">
+        <div class="row">
+          <label>Balance now</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${applyErr ? `<div class="error" style="white-space:pre-wrap;">${enc(applyErr)}</div>` : ''}
+
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+              <input
+                id="bankingIdBankUploadCode"
+                class="input"
+                type="text"
+                value="${enc(bankUploadCode)}"
+                placeholder="Bank upload code (required)"
+                data-action="banking:id:setBankUploadCode"
+                style="min-width:260px;max-width:360px;"
+                title="Bank upload code (required)"
+              />
+
+              <input
+                id="bankingIdNote"
+                class="input"
+                type="text"
+                value="${enc(note)}"
+                placeholder="Note (optional)"
+                data-action="banking:id:setNote"
+                style="min-width:360px;max-width:620px;"
+                title="Optional note"
+              />
+
+              <button
+                type="button"
+                class="btn btn-sm btn-primary"
+                data-action="banking:id:balanceNow"
+                ${gateApply.blocked ? disAttrs(true, applyBtnTitle) : disAttrs(false, applyBtnTitle)}
+              >${applyBusy ? 'Applying…' : 'Apply balance now'}</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:id:clearApplyForm"
+                title="Clear bank upload code and note"
+              >Clear</button>
+            </div>
+
+            <div class="mini" style="opacity:.8;">
+              Phase 6 wiring will call <span class="mono">bankingIdBalanceNow</span>, then refresh preview, ledger and runs.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderBankingIdHistoryTab() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const fmtUtcToUk = (iso) => {
+    try {
+      if (!iso) return '';
+      const d = new Date(String(iso));
+      if (Number.isNaN(d.getTime())) return String(iso);
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      return fmt.format(d).replace(',', '');
+    } catch {
+      return String(iso || '');
+    }
+  };
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingIdHistoryTab">
+        <div class="row">
+          <label>ID History</label>
+          <div class="controls"><span class="mini">Banking state not available.</span></div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.id = (st.id && typeof st.id === 'object') ? st.id : {};
+
+  st.id.ledger = (st.id.ledger && typeof st.id.ledger === 'object') ? st.id.ledger : {
+    filters: { only_reportable: true, status: [], client_id: '', search: '' },
+    paging: { limit: 50, offset: 0 },
+    data: { items: [], total: null },
+    loading: false,
+    error: ''
+  };
+
+  st.id.runs = (st.id.runs && typeof st.id.runs === 'object') ? st.id.runs : {
+    list: { paging: { limit: 50, offset: 0 }, data: { items: [], total: null }, loading: false, error: '' },
+    selected: { id_ref: '', data: null, loading: false, error: '' }
+  };
+
+  const ledErr = String(st.id.ledger.error || '').trim();
+  const ledLoading = !!st.id.ledger.loading;
+  const ledItems = Array.isArray(st.id.ledger.data?.items) ? st.id.ledger.data.items : [];
+  const onlyRep = !!st.id.ledger.filters.only_reportable;
+  const search = String(st.id.ledger.filters.search || '').trim();
+  const clientId = String(st.id.ledger.filters.client_id || '').trim();
+  const statuses = Array.isArray(st.id.ledger.filters.status) ? st.id.ledger.filters.status : [];
+
+  const runsErr = String(st.id.runs.list?.error || '').trim();
+  const runsLoading = !!st.id.runs.list?.loading;
+  const runs = Array.isArray(st.id.runs.list?.data?.items) ? st.id.runs.list.data.items : [];
+  const runSel = (st.id.runs.selected && typeof st.id.runs.selected === 'object') ? st.id.runs.selected : { id_ref:'', data:null, loading:false, error:'' };
+  const runSelErr = String(runSel.error || '').trim();
+  const runSelLoading = !!runSel.loading;
+  const runSelData = (runSel.data && typeof runSel.data === 'object') ? runSel.data : null;
+
+  const statusChips = ['DRAFT', 'ISSUED', 'PAID', 'ON_HOLD'];
+
+  const ledRowsHtml = ledItems.length ? ledItems.map((it) => {
+    const ref = String(it?.id_ref || it?.id || '').trim();
+    const status = String(it?.status || '').trim().toUpperCase();
+    const client = String(it?.client_name || it?.client || '').trim();
+    const amount = (it?.amount != null) ? String(it.amount) : '';
+    const created = fmtUtcToUk(it?.created_at_utc || it?.created_at || '');
+
+    return `
+      <tr>
+        <td class="mono">${enc(ref || '')}</td>
+        <td><span class="pill">${enc(status || '—')}</span></td>
+        <td class="mini">${enc(client || '')}</td>
+        <td class="mono">${enc(amount || '')}</td>
+        <td class="mini">${enc(created || '')}</td>
+      </tr>
+    `;
+  }).join('') : `<tr><td colspan="5" class="mini" style="opacity:.85;">No ledger rows.</td></tr>`;
+
+  const runsRowsHtml = runs.length ? runs.map((r) => {
+    const idRef = String(r?.id_ref || r?.ref || '').trim();
+    const created = fmtUtcToUk(r?.created_at_utc || r?.created_at || '');
+    const note = String(r?.note || '').trim();
+    const kind = String(r?.kind || r?.run_kind || '').trim().toUpperCase();
+
+    return `
+      <tr
+        style="cursor:pointer;"
+        data-action="banking:id:runSelect"
+        data-id-ref="${enc(idRef)}"
+        title="Open run ${enc(idRef)}"
+      >
+        <td class="mono">${enc(idRef || '')}</td>
+        <td class="mini">${enc(kind || '')}</td>
+        <td class="mini">${enc(created || '')}</td>
+        <td class="mini" style="white-space:normal;overflow-wrap:anywhere;">${enc(note || '')}</td>
+      </tr>
+    `;
+  }).join('') : `<tr><td colspan="4" class="mini" style="opacity:.85;">No runs.</td></tr>`;
+
+  const runDetailHtml = runSelData ? `
+    <pre class="mono" style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:10px;background:rgba(0,0,0,.12);">
+${enc(JSON.stringify(runSelData, null, 2))}
+    </pre>
+  ` : `<div class="mini" style="opacity:.85;">Select a run to view details.</div>`;
+
+  return `
+    <div id="bankingIdHistoryTab">
+      <div class="card" style="margin-bottom:10px;">
+        <div class="row">
+          <label>ID History</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">Ledger + runs history. Only-reportable excludes ON_HOLD only (per backend semantics).</span>
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:ledgerRefresh" title="Refresh ledger">Refresh ledger</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:runsRefresh" title="Refresh runs">Refresh runs</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="align-items:start;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div class="card" style="padding:10px;">
+            <div class="row">
+              <label>Ledger filters</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+                ${ledErr ? `<div class="error" style="white-space:pre-wrap;">${enc(ledErr)}</div>` : ''}
+
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                  <label class="inline mini" style="opacity:.95;" title="Only reportable (excludes ON_HOLD only)">
+                    <input
+                      type="checkbox"
+                      id="bankingIdOnlyReportable"
+                      data-action="banking:id:setOnlyReportable"
+                      ${onlyRep ? 'checked' : ''}
+                    />
+                    only_reportable
+                  </label>
+
+                  <input
+                    id="bankingIdLedgerSearch"
+                    class="input"
+                    type="text"
+                    value="${enc(search)}"
+                    placeholder="Search"
+                    data-action="banking:id:setLedgerSearch"
+                    style="min-width:220px;max-width:320px;"
+                    title="Search"
+                  />
+
+                  <input
+                    id="bankingIdLedgerClientId"
+                    class="input"
+                    type="text"
+                    value="${enc(clientId)}"
+                    placeholder="Client id (optional)"
+                    data-action="banking:id:setLedgerClientId"
+                    style="min-width:220px;max-width:320px;"
+                    title="Client id"
+                  />
+                </div>
+
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  ${statusChips.map(s => {
+                    const on = statuses.map(x => String(x || '').toUpperCase()).includes(s);
+                    return `
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-outline"
+                        data-action="banking:id:toggleLedgerStatus"
+                        data-status="${enc(s)}"
+                        ${on ? 'style="border-color:rgba(59,130,246,.6);background:rgba(59,130,246,.10);"' : ''}
+                        title="Toggle status filter ${enc(s)}"
+                      >${enc(s)}</button>
+                    `;
+                  }).join('')}
+                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:clearLedgerFilters" title="Clear filters">Clear</button>
+                  <button type="button" class="btn btn-sm btn-primary" data-action="banking:id:ledgerRefresh" title="Apply filters">Apply</button>
+                </div>
+
+                <div class="mini" style="opacity:.8;">${ledLoading ? 'Loading ledger…' : ' '}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="padding:10px;">
+            <div class="row">
+              <label>Ledger</label>
+              <div class="controls">
+                <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+                  <table class="grid" style="min-width:760px; table-layout:auto;">
+                    <thead>
+                      <tr>
+                        <th>ID ref</th>
+                        <th>Status</th>
+                        <th>Client</th>
+                        <th>Amount</th>
+                        <th>Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>${ledRowsHtml}</tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div class="card" style="padding:10px;">
+            <div class="row">
+              <label>Runs</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+                ${runsErr ? `<div class="error" style="white-space:pre-wrap;">${enc(runsErr)}</div>` : ''}
+
+                <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+                  <table class="grid" style="min-width:680px; table-layout:auto;">
+                    <thead>
+                      <tr>
+                        <th>ID ref</th>
+                        <th>Kind</th>
+                        <th>Created</th>
+                        <th>Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>${runsRowsHtml}</tbody>
+                  </table>
+                </div>
+
+                <div class="mini" style="opacity:.8;">${runsLoading ? 'Loading runs…' : ' '}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="padding:10px;">
+            <div class="row">
+              <label>Run detail</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+                ${runSelErr ? `<div class="error" style="white-space:pre-wrap;">${enc(runSelErr)}</div>` : ''}
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <span class="pill pill-info">Selected: ${enc(String(runSel.id_ref || '') || '—')}</span>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline"
+                    data-action="banking:id:runRefresh"
+                    data-id-ref="${enc(String(runSel.id_ref || '').trim())}"
+                    title="Refresh selected run"
+                  >${runSelLoading ? 'Refreshing…' : 'Refresh run'}</button>
+                </div>
+                ${runDetailHtml}
+              </div>
+            </div>
+          </div>
+
+          <div class="mini" style="opacity:.8;">
+            Phase 6 wiring will call <span class="mono">bankingIdLedgerList</span>, <span class="mono">bankingIdRunsList</span>, and <span class="mono">bankingIdRunGet</span>.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderBankingRemittancesStatusTab() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const fmtUtcToUk = (iso) => {
+    try {
+      if (!iso) return '';
+      const d = new Date(String(iso));
+      if (Number.isNaN(d.getTime())) return String(iso);
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      return fmt.format(d).replace(',', '');
+    } catch {
+      return String(iso || '');
+    }
+  };
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingRemittancesStatusTab">
+        <div class="row">
+          <label>Remittances Status</label>
+          <div class="controls"><span class="mini">Banking state not available.</span></div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.remittances = (st.remittances && typeof st.remittances === 'object') ? st.remittances : {
+    filters: { reference_prefix: '', reference_contains: '' },
+    list: { items: [], limit: 50, offset: 0, loading: false, error: '' }
+  };
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.selected = (st.pay.selected && typeof st.pay.selected === 'object') ? st.pay.selected : { data: null, loading: false, error: '' };
+
+  const sel = (st.pay.selected.data && typeof st.pay.selected.data === 'object') ? st.pay.selected.data : null;
+  const batch = (sel && sel.batch && typeof sel.batch === 'object') ? sel.batch : null;
+  const batchId = String(batch?.id || '').trim() || String(st.pay.selectedBatchId || '').trim();
+
+  const defaultPrefix = batchId ? `remit:pay_batch:${batchId}:` : '';
+
+  const refPrefix = String(st.remittances.filters.reference_prefix || defaultPrefix || '').trim();
+  const refContains = String(st.remittances.filters.reference_contains || '').trim();
+
+  const list = (st.remittances.list && typeof st.remittances.list === 'object') ? st.remittances.list : { items: [], limit: 50, offset: 0, loading: false, error: '' };
+  const items = Array.isArray(list.items) ? list.items : [];
+  const loading = !!list.loading;
+  const err = String(list.error || '').trim();
+
+  const rowsHtml = items.length ? items.map((it) => {
+    const created = fmtUtcToUk(it?.created_at_utc || it?.created_at || '');
+    const sent = fmtUtcToUk(it?.sent_at_utc || it?.sent_at || '');
+    const status = String(it?.status || it?.state || '').trim().toUpperCase() || '—';
+    const to = String(it?.to_email || it?.to || '').trim();
+    const subject = String(it?.subject || '').trim();
+    const ref = String(it?.reference || '').trim();
+    const fail = String(it?.failed_reason || it?.error || '').trim();
+
+    const pillClass =
+      (status === 'SENT') ? 'pill-ok'
+      : (status === 'FAILED') ? 'pill-bad'
+      : (status === 'QUEUED') ? 'pill-warn'
+      : 'pill';
+
+    return `
+      <tr>
+        <td class="mini">${enc(created || '')}</td>
+        <td><span class="pill ${enc(pillClass)}">${enc(status)}</span></td>
+        <td class="mini">${enc(sent || '')}</td>
+        <td class="mini">${enc(to || '')}</td>
+        <td class="mini" style="white-space:normal;overflow-wrap:anywhere;">${enc(subject || '')}</td>
+        <td class="mono" style="white-space:normal;overflow-wrap:anywhere;">${enc(ref || '')}</td>
+        <td class="mini" style="white-space:normal;overflow-wrap:anywhere;">${enc(fail || '')}</td>
+      </tr>
+    `;
+  }).join('') : `<tr><td colspan="7" class="mini" style="opacity:.85;">No outbox rows.</td></tr>`;
+
+  return `
+    <div id="bankingRemittancesStatusTab">
+      <div class="card" style="margin-bottom:10px;">
+        <div class="row">
+          <label>Remittances Status</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">
+              View remittance email outbox rows filtered by reference prefix / contains.
+            </span>
+            <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
+
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:outbox:refresh" title="Refresh outbox">Refresh</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      ${err ? `<div class="error" style="white-space:pre-wrap; margin-bottom:10px;">${enc(err)}</div>` : ''}
+
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
+          <label>Filters</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <input
+              id="bankingOutboxRefPrefix"
+              class="input"
+              type="text"
+              value="${enc(refPrefix || '')}"
+              placeholder="reference_prefix (e.g. remit:pay_batch:...:)"
+              data-action="banking:outbox:setPrefix"
+              style="min-width:420px;max-width:720px;"
+              title="Filter by reference prefix"
+            />
+
+            <input
+              id="bankingOutboxRefContains"
+              class="input"
+              type="text"
+              value="${enc(refContains || '')}"
+              placeholder="reference_contains"
+              data-action="banking:outbox:setContains"
+              style="min-width:260px;max-width:420px;"
+              title="Filter by substring"
+            />
+
+            <button type="button" class="btn btn-sm btn-outline" data-action="banking:outbox:useBatchPrefix" data-batch-id="${enc(batchId)}" title="Set prefix from selected batch">
+              Use batch prefix
+            </button>
+
+            <button type="button" class="btn btn-sm btn-outline" data-action="banking:outbox:clearFilters" title="Clear filters">Clear</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px;">
+        <div class="row">
+          <label>Outbox</label>
+          <div class="controls">
+            <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+              <table class="grid" style="min-width:1120px; table-layout:auto;">
+                <thead>
+                  <tr>
+                    <th>Created</th>
+                    <th>Status</th>
+                    <th>Sent</th>
+                    <th>To</th>
+                    <th>Subject</th>
+                    <th>Reference</th>
+                    <th>Failed reason</th>
+                  </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+              </table>
+            </div>
+
+            <div class="mini" style="opacity:.8; margin-top:8px;">
+              ${loading ? 'Loading…' : ' '}
+            </div>
+
+            <div class="mini" style="opacity:.8;">
+              Phase 6 wiring will call <span class="mono">bankingOutboxList</span> with <span class="mono">reference_prefix</span> and <span class="mono">reference_contains</span>.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+
+
+function attachBankingModalDelegatedHandlers() {
+  const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
+  const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
+
+  const getTopFrame = () => {
+    try { return (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null; } catch { return null; }
+  };
+
+  const isActiveBankingFrame = () => {
+    try {
+      const fr = getTopFrame();
+      if (!fr) return false;
+      if (String(fr.entity || '') !== 'banking') return false;
+      if (!window.modalCtx || String(window.modalCtx.entity || '') !== 'banking') return false;
+      if (fr._ctxRef !== window.modalCtx) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const getState = () => {
+    try { return (typeof bankingGetState === 'function') ? bankingGetState() : null; } catch { return null; }
+  };
+
+  const isDisabledEl = (el) => {
+    try {
+      if (!el) return false;
+      const d = String(el.getAttribute('data-disabled') || '').trim();
+      if (d === '1' || d.toLowerCase() === 'true') return true;
+      const aria = String(el.getAttribute('aria-disabled') || '').trim().toLowerCase();
+      if (aria === 'true') return true;
+      if (el.classList && el.classList.contains('disabled')) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  const findActionEl = (ev) => {
+    try {
+      const t = ev && ev.target ? ev.target : null;
+      if (!t || typeof t.closest !== 'function') return null;
+      return t.closest('[data-action]');
+    } catch {
+      return null;
+    }
+  };
+
+  const safeRerender = async (tabKey) => {
+    try {
+      if (typeof bankingRerender === 'function') {
+        await bankingRerender(tabKey == null ? null : tabKey);
+      }
+    } catch {}
+  };
+
+  const safeGate = (actionKind) => {
+    try {
+      if (typeof bankingIsActionBlocked !== 'function') return { blocked: false, reasonCode: '', message: '' };
+      return bankingIsActionBlocked(actionKind);
+    } catch {
+      return { blocked: false, reasonCode: '', message: '' };
+    }
+  };
+
+  const toast = (msg) => {
+    try { if (typeof window.__toast === 'function') window.__toast(String(msg || '').trim()); } catch {}
+  };
+
+  const targetEl = document.getElementById('modalBody');
+  if (!targetEl) return { ok: false, error: 'modalBody not found' };
+
+  // Prevent double-binding for the same modal ctx
+  try {
+    const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    if (mc && mc.__bankingDelegated && mc.__bankingDelegated.targetEl === targetEl) {
+      // If already wired, do nothing
+      return { ok: true, already: true };
+    }
+  } catch {}
+
+  const dispatch = async (action, el, ev, kind) => {
+    if (!isActiveBankingFrame()) return;
+    const st = getState();
+    if (!st) return;
+
+    const a = String(action || '').trim();
+    if (!a.startsWith('banking:')) return;
+
+    // Do not fire disabled controls (we use data-disabled instead of native disabled)
+    if (isDisabledEl(el)) return;
+
+    // Helpers for reading element dataset
+    const dget = (k) => {
+      try {
+        if (!el || !el.getAttribute) return '';
+        const v = el.getAttribute(k);
+        return (v == null) ? '' : String(v);
+      } catch {
+        return '';
+      }
+    };
+
+    const ds = (k) => {
+      try {
+        if (!el || !el.dataset) return '';
+        const v = el.dataset[k];
+        return (v == null) ? '' : String(v);
+      } catch {
+        return '';
+      }
+    };
+
+    // Local safe setters (do NOT rerender on input typing)
+    const setPayDate = (v) => {
+      try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; } catch {}
+      try { st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {}; } catch {}
+      try { st.pay.draftWizard.pay_date = String(v || '').trim(); } catch {}
+    };
+
+    const setManualConfirmRef = (v) => {
+      try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; } catch {}
+      try { st.pay.manualConfirmForm = (st.pay.manualConfirmForm && typeof st.pay.manualConfirmForm === 'object') ? st.pay.manualConfirmForm : {}; } catch {}
+      try { st.pay.manualConfirmForm.bank_confirm_ref = String(v || '').trim(); } catch {}
+    };
+
+    const setScheduleField = (k, v) => {
+      try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; } catch {}
+      try { st.pay.scheduleForm = (st.pay.scheduleForm && typeof st.pay.scheduleForm === 'object') ? st.pay.scheduleForm : {}; } catch {}
+      try { st.pay.scheduleForm[k] = v; } catch {}
+    };
+
+    const setPrepareDraftField = (k, v) => {
+      try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; } catch {}
+      try { st.pay.prepareOverridesDraft = (st.pay.prepareOverridesDraft && typeof st.pay.prepareOverridesDraft === 'object') ? st.pay.prepareOverridesDraft : { entity_kind:'', entity_id:'', reason:'' }; } catch {}
+      try { st.pay.prepareOverridesDraft[k] = String(v || '').trim(); } catch {}
+    };
+
+    const setIdApplyField = (k, v) => {
+      try { st.id = (st.id && typeof st.id === 'object') ? st.id : {}; } catch {}
+      try { st.id.applyForm = (st.id.applyForm && typeof st.id.applyForm === 'object') ? st.id.applyForm : {}; } catch {}
+      try { st.id.applyForm[k] = v; } catch {}
+    };
+
+    const setOutboxFilter = (k, v) => {
+      try { st.remittances = (st.remittances && typeof st.remittances === 'object') ? st.remittances : {}; } catch {}
+      try { st.remittances.filters = (st.remittances.filters && typeof st.remittances.filters === 'object') ? st.remittances.filters : {}; } catch {}
+      try { st.remittances.filters[k] = String(v || '').trim(); } catch {}
+    };
+
+    // --- ACTION ROUTES ---
+    // IMPORTANT: do NOT gate actions required to recover from mismatch (refreshCaps, goTab)
+    if (a === 'banking:refreshCaps') {
+      try { await bankingFetchCapabilities?.(); } catch (e) { try { bankingHandleApiError?.(e, { action: 'REFRESH_CAPS', errorPath: ['ui', 'globalError'] }); } catch {} }
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:refreshSettings') {
+      try { await bankingFetchSettingsDefaults?.(); } catch (e) { try { bankingHandleApiError?.(e, { action: 'REFRESH_SETTINGS', errorPath: ['ui', 'globalError'] }); } catch {} }
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:goTab') {
+      const tab = String(ds('tab') || '').trim();
+      if (tab) {
+        try { st.ui = (st.ui && typeof st.ui === 'object') ? st.ui : {}; st.ui.activeTabKey = tab; } catch {}
+        await safeRerender(tab);
+      }
+      return;
+    }
+
+    if (a === 'banking:retry-boot') {
+      try {
+        st.ui = (st.ui && typeof st.ui === 'object') ? st.ui : {};
+        st.ui.busy = (st.ui.busy && typeof st.ui.busy === 'object') ? st.ui.busy : {};
+        st.ui.busy.booting = true;
+        st.ui.globalError = '';
+      } catch {}
+      await safeRerender(null);
+      try { await bankingFetchCapabilities?.(); } catch (e) { try { bankingHandleApiError?.(e, { action: 'BOOT_CAPS', errorPath: ['ui', 'globalError'] }); } catch {} }
+      try { await bankingFetchSettingsDefaults?.(); } catch (e) { try { bankingHandleApiError?.(e, { action: 'BOOT_SETTINGS', errorPath: ['ui', 'globalError'] }); } catch {} }
+      try { st.ui.busy.booting = false; } catch {}
+      await safeRerender(null);
+      return;
+    }
+
+    // PAY TAB: list filters + paging
+    if (a === 'banking:pay:setStatusFilter') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      try { st.pay.list.statusFilter = String(v || '').trim().toUpperCase(); st.pay.list.offset = 0; } catch {}
+      await bankingPayBatchesList?.({ status: st.pay.list.statusFilter, limit: st.pay.list.limit, offset: 0 });
+      return;
+    }
+
+    if (a === 'banking:pay:setPageSize') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      const n = Number(v);
+      const lim = Number.isFinite(n) ? Math.max(1, Math.min(500, Math.trunc(n))) : (Number(st.pay?.list?.limit) || 50);
+      try { st.pay.list.limit = lim; st.pay.list.offset = 0; } catch {}
+      await bankingPayBatchesList?.({ status: st.pay.list.statusFilter, limit: lim, offset: 0 });
+      return;
+    }
+
+    if (a === 'banking:pay:listRefresh' || a === 'banking:pay:listPrev' || a === 'banking:pay:listNext') {
+      const lim = Number(ds('limit') || st.pay?.list?.limit || 50);
+      const off = Number(ds('offset') || st.pay?.list?.offset || 0);
+      const lim2 = Number.isFinite(lim) ? Math.max(1, Math.min(500, Math.trunc(lim))) : 50;
+      const off2 = Number.isFinite(off) ? Math.max(0, Math.trunc(off)) : 0;
+      try { st.pay.list.limit = lim2; st.pay.list.offset = off2; } catch {}
+      await bankingPayBatchesList?.({ status: st.pay.list.statusFilter, limit: lim2, offset: off2 });
+      return;
+    }
+
+    if (a === 'banking:pay:selectBatch') {
+      const id = String(ds('batchId') || dget('data-batch-id') || '').trim();
+      if (!id) return;
+      await bankingPayBatchGet?.(id);
+      return;
+    }
+
+    if (a === 'banking:pay:refreshSelected') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      if (!id) return;
+      await bankingPayBatchGet?.(id);
+      return;
+    }
+
+    if (a === 'banking:pay:poll') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      if (!id) return;
+      const g = safeGate('POLL');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingPayBatchPoll?.(id);
+      return;
+    }
+
+    if (a === 'banking:pay:exportCsv') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      const scope = String(ds('scope') || dget('data-scope') || 'ALL').trim().toUpperCase();
+      if (!id) return;
+      const g = safeGate('EXPORT_CSV');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingPayBatchExportCsv?.(id, scope);
+      return;
+    }
+
+    if (a === 'banking:pay:setManualConfirmRef') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setManualConfirmRef(v);
+      return;
+    }
+
+    if (a === 'banking:pay:manualConfirm') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      const scope = String(ds('scope') || dget('data-scope') || 'ALL').trim().toUpperCase();
+      if (!id) return;
+      const g = safeGate('MANUAL_CONFIRM');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      const ref = String(st.pay?.manualConfirmForm?.bank_confirm_ref || '').trim();
+      await bankingPayBatchManualConfirm?.(id, scope, ref);
+      return;
+    }
+
+    if (a === 'banking:pay:sendRemittances') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      const scope = String(ds('scope') || dget('data-scope') || 'ALL').trim().toUpperCase();
+      if (!id) return;
+      const actionKind = (scope === 'PAYE') ? 'SEND_REMITTANCES_PAYE' : 'SEND_REMITTANCES';
+      const g = safeGate(actionKind);
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingPayBatchRemittancesSend?.(id, scope);
+      return;
+    }
+
+    // PAY: Wizard (preview/create)
+    if (a === 'banking:pay:setPayDate') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setPayDate(v);
+      return;
+    }
+
+    if (a === 'banking:pay:preview') {
+      const g = safeGate('PREVIEW');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
+      await bankingPayPreview?.(pd);
+      return;
+    }
+
+    if (a === 'banking:pay:createDraft') {
+      const g = safeGate('CREATE_DRAFT');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
+      const decisions = (st.pay?.draftWizard?.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
+      const payload = {
+        pay_date: pd,
+        preview_decisions_json: {
+          candidate_ids: Array.isArray(decisions.candidate_ids) ? decisions.candidate_ids : [],
+          mismatch_choices: (decisions.mismatch_choices && typeof decisions.mismatch_choices === 'object') ? decisions.mismatch_choices : {},
+          loan_caps: (decisions.loan_caps && typeof decisions.loan_caps === 'object') ? decisions.loan_caps : {}
+        }
+      };
+      await bankingPayCreateDraft?.(payload);
+      return;
+    }
+
+    if (a === 'banking:pay:clearPreview') {
+      try {
+        if (st.pay && st.pay.draftWizard && st.pay.draftWizard.preview) {
+          st.pay.draftWizard.preview.data = null;
+          st.pay.draftWizard.preview.error = '';
+          st.pay.draftWizard.createDraftError = '';
+        }
+      } catch {}
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:pay:setCandidateInclude') {
+      const cid = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+      if (!cid) return;
+
+      const checked = !!(el && el.checked);
+
+      try {
+        st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+        st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
+        const dec = st.pay.draftWizard.decisions;
+
+        const pv = st.pay.draftWizard.preview && st.pay.draftWizard.preview.data ? st.pay.draftWizard.preview.data : null;
+        const idsAll = new Set();
+        try {
+          const a1 = Array.isArray(pv?.paye_candidates) ? pv.paye_candidates : [];
+          const a2 = Array.isArray(pv?.non_paye_payees) ? pv.non_paye_payees : [];
+          [...a1, ...a2].forEach(x => {
+            const id = String(x?.candidate_id || '').trim();
+            if (id) idsAll.add(id);
+          });
+        } catch {}
+
+        let ids = Array.isArray(dec.candidate_ids) ? dec.candidate_ids.map(x => String(x || '').trim()).filter(Boolean) : [];
+        let set = new Set(ids);
+
+        // If empty means "include all" (default). On first toggle, materialize.
+        if (set.size === 0 && idsAll.size > 0) set = new Set(idsAll);
+
+        if (checked) set.add(cid);
+        else set.delete(cid);
+
+        dec.candidate_ids = Array.from(set);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:pay:setMismatchChoice') {
+      const cid = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+      if (!cid) return;
+      const v = (el && el.value != null) ? String(el.value) : '';
+      const vv = String(v || '').trim().toUpperCase();
+      try {
+        st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+        st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
+        st.pay.draftWizard.decisions.mismatch_choices = (st.pay.draftWizard.decisions.mismatch_choices && typeof st.pay.draftWizard.decisions.mismatch_choices === 'object') ? st.pay.draftWizard.decisions.mismatch_choices : {};
+        if (!vv) delete st.pay.draftWizard.decisions.mismatch_choices[cid];
+        else st.pay.draftWizard.decisions.mismatch_choices[cid] = vv;
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:pay:setLoanCap') {
+      const cid = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+      const fld = String(ds('capField') || dget('data-cap-field') || '').trim();
+      if (!cid || !fld) return;
+      const raw = (el && el.value != null) ? String(el.value) : '';
+      const n = raw === '' ? null : Number(raw);
+      try {
+        st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+        st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
+        st.pay.draftWizard.decisions.loan_caps = (st.pay.draftWizard.decisions.loan_caps && typeof st.pay.draftWizard.decisions.loan_caps === 'object') ? st.pay.draftWizard.decisions.loan_caps : {};
+        const lc = st.pay.draftWizard.decisions.loan_caps;
+
+        lc[cid] = (lc[cid] && typeof lc[cid] === 'object') ? lc[cid] : {};
+        if (n == null || !Number.isFinite(n)) {
+          delete lc[cid][fld];
+        } else {
+          lc[cid][fld] = n;
+        }
+
+        if (Object.keys(lc[cid]).length === 0) delete lc[cid];
+      } catch {}
+      return;
+    }
+
+    // PREPARE panel actions
+    if (a === 'banking:pay:prepare:setOverrideKind') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setPrepareDraftField('entity_kind', v);
+      return;
+    }
+
+    if (a === 'banking:pay:prepare:setOverrideEntityId') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setPrepareDraftField('entity_id', v);
+      return;
+    }
+
+    if (a === 'banking:pay:prepare:setOverrideReason') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setPrepareDraftField('reason', v);
+      return;
+    }
+
+    if (a === 'banking:pay:prepare:addOverride') {
+      try {
+        st.pay.prepareOverrides = (st.pay.prepareOverrides && typeof st.pay.prepareOverrides === 'object') ? st.pay.prepareOverrides : { items: [] };
+        st.pay.prepareOverrides.items = Array.isArray(st.pay.prepareOverrides.items) ? st.pay.prepareOverrides.items : [];
+        st.pay.prepareOverridesDraft = (st.pay.prepareOverridesDraft && typeof st.pay.prepareOverridesDraft === 'object') ? st.pay.prepareOverridesDraft : { entity_kind:'', entity_id:'', reason:'' };
+
+        const ek = String(st.pay.prepareOverridesDraft.entity_kind || '').trim();
+        const eid = String(st.pay.prepareOverridesDraft.entity_id || '').trim();
+        const rs = String(st.pay.prepareOverridesDraft.reason || '').trim();
+
+        if (!ek || !eid || !rs) {
+          toast('Override requires entity kind, entity id, and reason.');
+          return;
+        }
+
+        st.pay.prepareOverrides.items.push({ entity_kind: ek, entity_id: eid, reason: rs });
+
+        // clear draft inputs (UI will stay as-is until rerender; Phase 6 may choose to rerender)
+        st.pay.prepareOverridesDraft.entity_kind = '';
+        st.pay.prepareOverridesDraft.entity_id = '';
+        st.pay.prepareOverridesDraft.reason = '';
+
+        await safeRerender(null);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:pay:prepare:removeOverride') {
+      const idxRaw = String(ds('overrideIndex') || dget('data-override-index') || '').trim();
+      const idx = Number(idxRaw);
+      if (!Number.isFinite(idx)) return;
+      try {
+        const arr = st.pay?.prepareOverrides?.items;
+        if (Array.isArray(arr) && idx >= 0 && idx < arr.length) {
+          arr.splice(idx, 1);
+          await safeRerender(null);
+        }
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:pay:prepare') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      if (!id) return;
+      const g = safeGate('PREPARE');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      const overrides = Array.isArray(st.pay?.prepareOverrides?.items) ? st.pay.prepareOverrides.items : [];
+      await bankingPayBatchPrepare?.(id, overrides);
+      return;
+    }
+
+    // SCHEDULE panel actions
+    if (a === 'banking:pay:schedule:loadAccounts' || a === 'banking:settings:loadAccounts') {
+      // listing accounts is a bank action and should be gated (blocked on env mismatch)
+      const g = safeGate('LIST_ACCOUNTS');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingListFundingAccounts?.();
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:pay:schedule:setFundingRef') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setScheduleField('funding_account_ref', String(v || '').trim());
+      return;
+    }
+
+    if (a === 'banking:pay:schedule:setKind') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      const vv = String(v || '').trim().toUpperCase();
+      setScheduleField('schedule_kind', (vv === 'SCHEDULED' ? 'SCHEDULED' : 'IMMEDIATE'));
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:pay:schedule:setLocalTime') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setScheduleField('scheduled_at_local', String(v || ''));
+      return;
+    }
+
+    if (a === 'banking:pay:schedule:toggleWarnHour') {
+      const h = String(ds('hour') || dget('data-hour') || '').trim();
+      if (!h) return;
+      try {
+        st.pay.scheduleForm = (st.pay.scheduleForm && typeof st.pay.scheduleForm === 'object') ? st.pay.scheduleForm : {};
+        const arr = Array.isArray(st.pay.scheduleForm.warning_hours_json) ? st.pay.scheduleForm.warning_hours_json : [];
+        const set = new Set(arr.map(x => String(x)));
+        const checked = !!(el && el.checked);
+        if (checked) set.add(h);
+        else set.delete(h);
+        st.pay.scheduleForm.warning_hours_json = Array.from(set).map(x => {
+          const n = Number(x);
+          return Number.isFinite(n) ? n : null;
+        }).filter(x => x !== null);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:pay:schedule:useDefaultWarn') {
+      try {
+        const sraw = (st.settings && st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
+        const def = Array.isArray(sraw.funds_warning_hours_json) ? sraw.funds_warning_hours_json : [24, 12];
+        st.pay.scheduleForm.warning_hours_json = def.slice();
+        await safeRerender(null);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:pay:schedule:clear') {
+      try {
+        st.pay.scheduleForm.funding_account_ref = '';
+        st.pay.scheduleForm.schedule_kind = 'IMMEDIATE';
+        st.pay.scheduleForm.scheduled_at_local = '';
+        st.pay.scheduleForm.warning_hours_json = [];
+        await safeRerender(null);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:pay:schedule') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      if (!id) return;
+      const g = safeGate('SCHEDULE');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingPayBatchSchedule?.(id, st.pay.scheduleForm);
+      return;
+    }
+
+    // Payment Settings: toggles + default funding selection + save
+    if (a === 'banking:settings:togglePayrollTesting') {
+      try {
+        st.settings.raw = (st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
+        st.settings.raw.payroll_testing = !!(el && el.checked);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:settings:togglePayeRemittances') {
+      try {
+        st.settings.raw = (st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
+        st.settings.raw.paye_remittances_enabled = !!(el && el.checked);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:settings:setDefaultFunding') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      try {
+        st.settings.raw = (st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
+        st.settings.raw.rail_default_funding_account_ref = String(v || '').trim() || null;
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:settings:clearDefaultFunding') {
+      try {
+        st.settings.raw = (st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
+        st.settings.raw.rail_default_funding_account_ref = null;
+        await safeRerender(null);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:settings:save') {
+      // Saving settings is not blocked by env mismatch unless you later decide; the backend validates defaults via adapter.
+      const sraw = (st.settings && st.settings.raw && typeof st.settings.raw === 'object') ? st.settings.raw : {};
+      const patch = {
+        rail_default_funding_account_ref: (sraw.rail_default_funding_account_ref == null) ? null : String(sraw.rail_default_funding_account_ref).trim(),
+        payroll_testing: !!sraw.payroll_testing,
+        paye_remittances_enabled: !!sraw.paye_remittances_enabled
+      };
+      await bankingUpdateSettingsDefaults?.(patch);
+      return;
+    }
+
+    if (a === 'banking:openGlobalSettingsRemittances') {
+      try {
+        if (typeof openSettings === 'function') {
+          openSettings();
+          setTimeout(() => {
+            try {
+              const fr = getTopFrame();
+              if (fr && String(fr.entity || '') === 'settings' && typeof fr.setTab === 'function') {
+                fr.setTab('remittances');
+              }
+            } catch {}
+          }, 0);
+        }
+      } catch {}
+      return;
+    }
+
+    // ID tab actions
+    if (a === 'banking:id:preview') {
+      const g = safeGate('ID_PREVIEW');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingIdPreview?.();
+      return;
+    }
+
+    if (a === 'banking:id:setBankUploadCode') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setIdApplyField('bank_upload_code', String(v || '').trim());
+      return;
+    }
+
+    if (a === 'banking:id:setNote') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setIdApplyField('note', String(v || ''));
+      return;
+    }
+
+    if (a === 'banking:id:clearApplyForm') {
+      try {
+        st.id.applyForm.bank_upload_code = '';
+        st.id.applyForm.note = '';
+        st.id.applyForm.error = '';
+        await safeRerender(null);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:id:balanceNow') {
+      const g = safeGate('ID_BALANCE_NOW');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      const code = String(st.id?.applyForm?.bank_upload_code || '').trim();
+      const note = String(st.id?.applyForm?.note || '').trim();
+      await bankingIdBalanceNow?.({ bank_upload_code: code, note });
+      return;
+    }
+
+    // ID history: ledger filters + refresh
+    if (a === 'banking:id:setOnlyReportable') {
+      try { st.id.ledger.filters.only_reportable = !!(el && el.checked); } catch {}
+      return;
+    }
+
+    if (a === 'banking:id:setLedgerSearch') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      try { st.id.ledger.filters.search = String(v || '').trim(); } catch {}
+      return;
+    }
+
+    if (a === 'banking:id:setLedgerClientId') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      try { st.id.ledger.filters.client_id = String(v || '').trim(); } catch {}
+      return;
+    }
+
+    if (a === 'banking:id:toggleLedgerStatus') {
+      const s = String(ds('status') || dget('data-status') || '').trim().toUpperCase();
+      if (!s) return;
+      try {
+        const arr = Array.isArray(st.id.ledger.filters.status) ? st.id.ledger.filters.status : [];
+        const set = new Set(arr.map(x => String(x || '').trim().toUpperCase()).filter(Boolean));
+        if (set.has(s)) set.delete(s); else set.add(s);
+        st.id.ledger.filters.status = Array.from(set);
+        await safeRerender(null);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:id:clearLedgerFilters') {
+      try {
+        st.id.ledger.filters.only_reportable = true;
+        st.id.ledger.filters.status = [];
+        st.id.ledger.filters.client_id = '';
+        st.id.ledger.filters.search = '';
+        await safeRerender(null);
+      } catch {}
+      return;
+    }
+
+    if (a === 'banking:id:ledgerRefresh') {
+      const g = safeGate('ID_LEDGER_LIST');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingIdLedgerList?.(null);
+      return;
+    }
+
+    if (a === 'banking:id:runsRefresh') {
+      const g = safeGate('ID_RUNS_LIST');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingIdRunsList?.(null);
+      return;
+    }
+
+    if (a === 'banking:id:runSelect') {
+      const idRef = String(ds('idRef') || dget('data-id-ref') || '').trim();
+      if (!idRef) return;
+      const g = safeGate('ID_RUN_GET');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingIdRunGet?.(idRef);
+      return;
+    }
+
+    if (a === 'banking:id:runRefresh') {
+      const idRef = String(ds('idRef') || dget('data-id-ref') || st.id?.runs?.selected?.id_ref || '').trim();
+      if (!idRef) return;
+      const g = safeGate('ID_RUN_GET');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      await bankingIdRunGet?.(idRef);
+      return;
+    }
+
+    // Outbox / Remittances Status tab
+    if (a === 'banking:outbox:setPrefix') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setOutboxFilter('reference_prefix', v);
+      return;
+    }
+
+    if (a === 'banking:outbox:setContains') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setOutboxFilter('reference_contains', v);
+      return;
+    }
+
+    if (a === 'banking:outbox:useBatchPrefix') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      if (!id) return;
+      setOutboxFilter('reference_prefix', `remit:pay_batch:${id}:`);
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:outbox:clearFilters') {
+      setOutboxFilter('reference_prefix', '');
+      setOutboxFilter('reference_contains', '');
+      await safeRerender(null);
+      return;
+    }
+
+    if (a === 'banking:outbox:refresh') {
+      const g = safeGate('OUTBOX_LIST');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+      const fp = String(st.remittances?.filters?.reference_prefix || '').trim();
+      const fc = String(st.remittances?.filters?.reference_contains || '').trim();
+      const lim = Number(st.remittances?.list?.limit || 50);
+      const off = Number(st.remittances?.list?.offset || 0);
+      await bankingOutboxList?.({ reference_prefix: fp, reference_contains: fc, limit: lim, offset: off });
+      return;
+    }
+
+    // Default: unknown banking action
+    L('Unhandled action', a);
+  };
+
+  const onClick = async (ev) => {
+    try {
+      if (!isActiveBankingFrame()) return;
+      const el = findActionEl(ev);
+      if (!el) return;
+
+      const action = String(el.getAttribute('data-action') || '').trim();
+      if (!action.startsWith('banking:')) return;
+
+      // Prevent default for button-like actions
+      try {
+        const tag = String(el.tagName || '').toUpperCase();
+        if (tag === 'BUTTON' || tag === 'A' || el.closest('button') || el.closest('a')) {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
+      } catch {}
+
+      await dispatch(action, el, ev, 'click');
+    } catch {}
+  };
+
+  const onChange = async (ev) => {
+    try {
+      if (!isActiveBankingFrame()) return;
+      const el = findActionEl(ev);
+      if (!el) return;
+
+      const action = String(el.getAttribute('data-action') || '').trim();
+      if (!action.startsWith('banking:')) return;
+
+      await dispatch(action, el, ev, 'change');
+    } catch {}
+  };
+
+  const onInput = async (ev) => {
+    try {
+      if (!isActiveBankingFrame()) return;
+      const el = findActionEl(ev);
+      if (!el) return;
+
+      const action = String(el.getAttribute('data-action') || '').trim();
+      if (!action.startsWith('banking:')) return;
+
+      await dispatch(action, el, ev, 'input');
+    } catch {}
+  };
+
+  targetEl.addEventListener('click', onClick, true);
+  targetEl.addEventListener('change', onChange, true);
+  targetEl.addEventListener('input', onInput, true);
+
+  // Store detach hook on modalCtx for later cleanup (e.g. onDismiss)
+  try {
+    const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    if (mc) {
+      mc.__bankingDelegated = {
+        targetEl,
+        onClick,
+        onChange,
+        onInput,
+        detach: () => {
+          try { targetEl.removeEventListener('click', onClick, true); } catch {}
+          try { targetEl.removeEventListener('change', onChange, true); } catch {}
+          try { targetEl.removeEventListener('input', onInput, true); } catch {}
+        }
+      };
+    }
+  } catch {}
+
+  return { ok: true };
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 // NEW: advanced, section-aware search modal
