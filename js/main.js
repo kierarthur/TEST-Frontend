@@ -6815,7 +6815,9 @@ async function bankingPayPreview(pay_date) {
   mc.banking.pay.draftWizard = (mc.banking.pay.draftWizard && typeof mc.banking.pay.draftWizard === 'object') ? mc.banking.pay.draftWizard : {
     pay_date: '',
     candidate_filter_id: '',
+    candidate_filter_label: '',
     client_filter_id: '',
+    client_filter_label: '',
     preview: { data: null, loading: false, error: '' },
     decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
     createDraftBusy: false,
@@ -6875,7 +6877,6 @@ async function bankingPayPreview(pay_date) {
     try { pay.draftWizard.preview.loading = false; } catch {}
   }
 }
-
 async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const pd = (pay_date == null) ? '' : String(pay_date).trim();
