@@ -8407,6 +8407,295 @@ async function bankingOutboxList({ reference_prefix = '', reference_contains = '
   }
 }
 
+function renderBankingTab(key, row) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+
+  const safeKey = String(key || '').trim() || 'pay';
+
+  // Keep active tab key in state (safe; helps rerender)
+  try {
+    if (st && st.ui && typeof st.ui === 'object') st.ui.activeTabKey = safeKey;
+  } catch {}
+
+  if (!st) {
+    return `
+      <div class="tabc">
+        <div class="card">
+          <div class="row">
+            <label>Banking</label>
+            <div class="controls">
+              <span class="mini">Banking state is not available.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const caps = (st.caps && typeof st.caps === 'object') ? st.caps : {};
+  const capsRaw = (caps.raw && typeof caps.raw === 'object') ? caps.raw : {};
+  const busy = !!(st.ui && st.ui.busy && st.ui.busy.booting);
+
+  const workerEnv = String(capsRaw.worker_env || capsRaw.default_worker_env || '').trim().toUpperCase() || '—';
+  const dbEnv = String(capsRaw.db_rail_env_default || capsRaw.rail_env_default || '').trim().toUpperCase() || '—';
+  const providerRaw = String(capsRaw.rail_provider_default || '').trim().toUpperCase() || '—';
+  const provider = (providerRaw === 'REV') ? 'REVOLUT' : providerRaw;
+
+  const isTestMode = (caps.isTestMode === true) || (capsRaw.payroll_testing === true);
+
+  const railsArr = Array.isArray(capsRaw.rails) ? capsRaw.rails : [];
+  const providerDefault = String(capsRaw.rail_provider_default || '').trim().toUpperCase();
+
+  const defaultRail = (() => {
+    const want = providerDefault || provider || '';
+    if (!want) return null;
+    const r = railsArr.find(x => x && String(x.rail_provider || '').trim().toUpperCase() === want);
+    return r || null;
+  })();
+
+  const defaultAvailable = (defaultRail && defaultRail.available === true);
+  const defaultEnvMismatch = (defaultRail && defaultRail.env_mismatch === true) || (capsRaw.env_mismatch === true) || (caps.isEnvMismatch === true);
+  const defaultReason = (defaultRail && defaultRail.reason != null) ? String(defaultRail.reason) : '';
+  const defaultApiBase = (defaultRail && defaultRail.api_base != null) ? String(defaultRail.api_base) : (capsRaw.default_api_base != null ? String(capsRaw.default_api_base) : '');
+  const defaultWorkerEnv = (defaultRail && defaultRail.worker_env != null) ? String(defaultRail.worker_env).trim().toUpperCase() : workerEnv;
+
+  const isHealthy = !!(defaultAvailable === true && defaultEnvMismatch !== true);
+
+  const envMismatch =
+    (caps.isEnvMismatch === true) ||
+    (capsRaw.env_mismatch === true) ||
+    railsArr.some(r => r && r.env_mismatch === true);
+
+  const railLabel = (() => {
+    const prov = provider || '—';
+    const envTxt = (defaultWorkerEnv && defaultWorkerEnv !== '—')
+      ? (defaultWorkerEnv === 'SANDBOX' ? 'Test' : 'Live')
+      : ((dbEnv && dbEnv !== '—') ? dbEnv : '');
+
+    if (!isHealthy) {
+      const statusTxt = envMismatch ? 'Blocked' : (defaultAvailable ? 'Unhealthy' : 'Not connected');
+      const baseName = (prov === 'REVOLUT') ? 'Revolut' : prov;
+      return `${baseName} (${statusTxt}) ❌`;
+    }
+
+    if (prov === 'REVOLUT') {
+      const icon = (defaultWorkerEnv === 'SANDBOX') ? '🧪' : '✅';
+      const envNice = (defaultWorkerEnv === 'SANDBOX') ? 'Test' : 'Live';
+      return `Revolut (${envNice}) ${icon}`;
+    }
+
+    if (prov && prov !== '—') {
+      return envTxt ? `${prov} (${envTxt}) ✅` : `${prov} ✅`;
+    }
+
+    return 'Rail ❌';
+  })();
+
+  const topChipClass = (!isHealthy || envMismatch) ? 'pill-warn' : 'pill-ok';
+  const testChipClass = isTestMode ? 'pill-warn' : 'pill';
+
+  const diagLines = (() => {
+    const lines = [];
+    const want = providerDefault || provider || '';
+    lines.push(`Provider default: ${want || '—'}`);
+    lines.push(`DB env: ${dbEnv || '—'}`);
+    lines.push(`Default worker env: ${defaultWorkerEnv || '—'}`);
+    lines.push(`Default available: ${defaultAvailable ? 'true' : 'false'}`);
+    lines.push(`Env mismatch: ${envMismatch ? 'true' : 'false'}`);
+    if (!isHealthy) {
+      lines.push(`Health: NOT OK`);
+    } else {
+      lines.push(`Health: OK`);
+    }
+    if (defaultReason) {
+      lines.push(`Default reason: ${defaultReason}`);
+    }
+    lines.push(`Server UTC: ${String(capsRaw.server_utc || '').trim() || '—'}`);
+    lines.push(`API base: ${String(defaultApiBase || '').trim() || '—'}`);
+    lines.push('');
+    lines.push('Rails:');
+    if (!railsArr.length) {
+      lines.push('- (none)');
+    } else {
+      for (const r of railsArr) {
+        if (!r || typeof r !== 'object') continue;
+        const rp = String(r.rail_provider || '').trim().toUpperCase() || '—';
+        const rk = String(r.rail_kind || '').trim().toUpperCase() || '—';
+        const av = (r.available === true) ? 'true' : 'false';
+        const mm = (r.env_mismatch === true) ? 'true' : 'false';
+        const we = (r.worker_env != null) ? String(r.worker_env).trim().toUpperCase() : '—';
+        const ab = (r.api_base != null) ? String(r.api_base).trim() : '';
+        const rs = (r.reason != null && String(r.reason).trim()) ? String(r.reason).trim() : '';
+        const tail = [
+          `kind=${rk}`,
+          `available=${av}`,
+          `env_mismatch=${mm}`,
+          `worker_env=${we}`,
+          ab ? `api_base=${ab}` : null,
+          rs ? `reason=${rs}` : null
+        ].filter(Boolean).join(' | ');
+        lines.push(`- ${rp}: ${tail}`);
+      }
+    }
+    return lines.join('\n');
+  })();
+
+  const headerChips = `
+    <div class="card">
+      <div class="row">
+        <label>Status</label>
+        <div class="controls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <span class="pill ${enc(topChipClass)}" title="${enc(isHealthy ? 'Banking is connected and ready.' : (defaultReason || 'Banking connection is not healthy. See Diagnostics for details.'))}">${enc(railLabel)}</span>
+          <span class="pill ${enc(testChipClass)}" title="${enc(isTestMode ? 'TEST MODE is ON' : 'TEST MODE is OFF')}">${enc(`Test mode: ${isTestMode ? 'On' : 'Off'}`)}</span>
+
+          <details style="margin-left:6px;">
+            <summary class="mini" style="cursor:pointer;opacity:.9;">Diagnostics ▸</summary>
+            <div class="mini" style="margin-top:6px;opacity:.9;white-space:pre-wrap;">
+              ${enc(diagLines)}
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const bannersHtml = (typeof renderBankingBanners === 'function') ? renderBankingBanners() : '';
+
+  const skeletonHtml = `
+    <div class="card">
+      <div class="row">
+        <label>Loading</label>
+        <div class="controls">
+          <span class="mini">Loading banking capabilities and settings…</span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const notReady = busy || !capsRaw || !st.settings || !st.settings.raw;
+
+  const tabContent = (() => {
+    if (notReady) return skeletonHtml;
+
+    const callIfFn = (fnName, ...args) => {
+      try {
+        const fn = (typeof window[fnName] === 'function') ? window[fnName] : (typeof globalThis[fnName] === 'function' ? globalThis[fnName] : null);
+        if (fn) return fn(...args);
+      } catch {}
+      return null;
+    };
+
+    if (safeKey === 'pay') {
+      const out = callIfFn('renderBankingPayTab', 'ALL');
+      if (typeof out === 'string' && out.trim()) return out;
+      return `
+        <div class="card">
+          <div class="row">
+            <label>Pay</label>
+            <div class="controls">
+              <span class="mini">UI not implemented yet for this tab.</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (safeKey === 'id') {
+      const out = callIfFn('renderBankingIdTab');
+      if (typeof out === 'string' && out.trim()) return out;
+      return `
+        <div class="card">
+          <div class="row">
+            <label>Invoice Discounting (ID)</label>
+            <div class="controls">
+              <span class="mini">UI not implemented yet for this tab.</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (safeKey === 'id_history') {
+      const out = callIfFn('renderBankingIdHistoryTab');
+      if (typeof out === 'string' && out.trim()) return out;
+      return `
+        <div class="card">
+          <div class="row">
+            <label>ID History</label>
+            <div class="controls">
+              <span class="mini">UI not implemented yet for this tab.</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (safeKey === 'settings') {
+      return `
+        <div class="card" style="border-color:rgba(59,130,246,.45); background:rgba(59,130,246,.06);">
+          <div class="row">
+            <label>Moved</label>
+            <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+              <div style="min-width:260px;flex:1;">
+                <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
+                  Banking / Payment Settings have moved to <strong>Global Settings → Banking &amp; Payments</strong>.
+                </div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:openGlobalSettingsBankingPayments"
+                  title="Open Global Settings → Banking & Payments"
+                >Open Global Settings</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (safeKey === 'umbrella' || safeKey === 'paye' || safeKey === 'rem_status') {
+      return `
+        <div class="card" style="border-color:rgba(251,191,36,.35); background:rgba(245,158,11,.06);">
+          <div class="row">
+            <label>Moved</label>
+            <div class="controls">
+              <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
+                This tab has been removed from the main Banking modal. Use <strong>Pay</strong> (and open a batch to manage execution, CSV, and remittances).
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="card">
+        <div class="row">
+          <label>Banking</label>
+          <div class="controls">
+            <span class="mini">Unknown tab: ${enc(safeKey)}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  })();
+
+  return `
+    <div class="tabc">
+      ${headerChips}
+      ${bannersHtml}
+      ${tabContent}
+    </div>
+  `;
+}
 function renderBankingBanners() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
