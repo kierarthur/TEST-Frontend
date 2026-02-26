@@ -6803,6 +6803,7 @@ async function bankingPayBatchGet(payBatchId) {
   }
 }
 
+
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const pd = (pay_date == null) ? '' : String(pay_date).trim();
@@ -6814,6 +6815,7 @@ async function bankingPayPreview(pay_date) {
   mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
   mc.banking.pay.draftWizard = (mc.banking.pay.draftWizard && typeof mc.banking.pay.draftWizard === 'object') ? mc.banking.pay.draftWizard : {
     pay_date: '',
+    week_ending_cutoff_date: '',
     candidate_filter_id: '',
     candidate_filter_label: '',
     client_filter_id: '',
@@ -6829,6 +6831,12 @@ async function bankingPayPreview(pay_date) {
 
   if (!pd) {
     try { pay.draftWizard.preview.error = 'pay_date is required (YYYY-MM-DD)'; } catch {}
+    return null;
+  }
+
+  const cutoffIso = String(pay.draftWizard.week_ending_cutoff_date || '').trim();
+  if (!cutoffIso || !/^\d{4}-\d{2}-\d{2}$/.test(cutoffIso)) {
+    try { pay.draftWizard.preview.error = 'week_ending_cutoff_date is required (YYYY-MM-DD)'; } catch {}
     return null;
   }
 
@@ -6849,7 +6857,7 @@ async function bankingPayPreview(pay_date) {
   const candidateId = String(pay.draftWizard.candidate_filter_id || '').trim();
   const clientId = String(pay.draftWizard.client_filter_id || '').trim();
 
-  const reqBody = { pay_date: pd };
+  const reqBody = { pay_date: pd, week_ending_cutoff_date: cutoffIso };
   if (candidateId) reqBody.candidate_id = candidateId;
   if (clientId) reqBody.client_id = clientId;
 
@@ -6877,6 +6885,7 @@ async function bankingPayPreview(pay_date) {
     try { pay.draftWizard.preview.loading = false; } catch {}
   }
 }
+
 async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const pd = (pay_date == null) ? '' : String(pay_date).trim();
@@ -6891,6 +6900,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
   mc.banking.pay.draftWizard = (mc.banking.pay.draftWizard && typeof mc.banking.pay.draftWizard === 'object') ? mc.banking.pay.draftWizard : {
     pay_date: '',
+    week_ending_cutoff_date: '',
     candidate_filter_id: '',
     client_filter_id: '',
     preview: { data: null, loading: false, error: '' },
@@ -6904,6 +6914,12 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
 
   if (!pd) {
     try { pay.draftWizard.createDraftError = 'pay_date is required (YYYY-MM-DD)'; } catch {}
+    return null;
+  }
+
+  const cutoffIso = String(pay.draftWizard.week_ending_cutoff_date || '').trim();
+  if (!cutoffIso || !/^\d{4}-\d{2}-\d{2}$/.test(cutoffIso)) {
+    try { pay.draftWizard.createDraftError = 'week_ending_cutoff_date is required (YYYY-MM-DD)'; } catch {}
     return null;
   }
 
@@ -6925,6 +6941,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
 
   const reqBody = {
     pay_date: pd,
+    week_ending_cutoff_date: cutoffIso,
     preview_decisions_json: decisions
   };
   if (candidateId) reqBody.candidate_id = candidateId;
@@ -6933,22 +6950,20 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   try {
     const obj = await apiPostJson('/api/banking/pay/batch/create-draft', reqBody);
 
-    // Heuristic extraction of new batch id
-    const newId =
-      (obj && (obj.pay_batch_id || obj.batch_id || obj.id)) ? String(obj.pay_batch_id || obj.batch_id || obj.id).trim()
-      : (obj && obj.batch && (obj.batch.id || obj.batch.pay_batch_id)) ? String(obj.batch.id || obj.batch.pay_batch_id).trim()
-      : '';
+    const umbrellaId = (obj && (obj.umbrella_pay_batch_id || obj.umbrella_batch_id)) ? String(obj.umbrella_pay_batch_id || obj.umbrella_batch_id).trim() : '';
+    const payeId = (obj && (obj.paye_pay_batch_id || obj.paye_batch_id)) ? String(obj.paye_pay_batch_id || obj.paye_batch_id).trim() : '';
 
-    if (!newId) {
-      // keep response but surface a meaningful UI error
-      try { pay.draftWizard.createDraftError = 'Create draft succeeded but no pay_batch_id was returned.'; } catch {}
+    const pickId = umbrellaId || payeId;
+
+    if (!pickId) {
+      try { pay.draftWizard.createDraftError = 'Create drafts succeeded but no batch ids were returned.'; } catch {}
       try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
       return deep(obj);
     }
 
-    pay.selectedBatchId = newId;
+    pay.selectedBatchId = pickId;
 
-    // Refresh list + selected detail (best UX)
+    // Refresh list (best UX)
     try {
       if (typeof bankingPayBatchesList === 'function') {
         await bankingPayBatchesList({
@@ -6959,11 +6974,15 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
       }
     } catch {}
 
+    // Refresh preview so drafted items disappear immediately (preview RPC already excludes drafted items)
     try {
-      if (typeof bankingPayBatchGet === 'function') {
-        await bankingPayBatchGet(newId);
+      if (typeof bankingPayPreview === 'function') {
+        await bankingPayPreview(pd);
       }
     } catch {}
+
+    // Clear any previous create error and keep decisions intact; user may create again after changing filters/cutoff.
+    try { pay.draftWizard.createDraftError = ''; } catch {}
 
     try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
 
@@ -6982,7 +7001,6 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
     try { pay.draftWizard.createDraftBusy = false; } catch {}
   }
 }
-
 
 
 async function bankingPayBatchExecute(payBatchId, scope = 'ALL') {
@@ -7329,10 +7347,10 @@ async function bankingPayBatchSchedule(payBatchId, scheduleFormIn = null) {
   }
 }
 
-
-async function bankingPayBatchPoll(payBatchId) {
+async function bankingPayBatchPoll(payBatchId, opts = {}) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const id = (payBatchId == null) ? '' : String(payBatchId).trim();
+  const silent = !!(opts && typeof opts === 'object' && opts.silent === true);
 
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
   if (!mc || String(mc.entity || '') !== 'banking') return null;
@@ -7359,13 +7377,17 @@ async function bankingPayBatchPoll(payBatchId) {
 
   if (!id) return null;
 
+  // NOTE: Poll is now intended for automatic use by the child modal.
+  // We keep the gate, but allow callers to bypass noisy UI error writes via opts.silent.
   const gate = (typeof bankingIsActionBlocked === 'function')
     ? bankingIsActionBlocked('POLL')
     : { blocked: false, reasonCode: '', message: '' };
 
   if (gate && gate.blocked) {
-    try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
-    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    if (!silent) {
+      try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+      try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    }
     return null;
   }
 
@@ -7374,20 +7396,24 @@ async function bankingPayBatchPoll(payBatchId) {
   try {
     const obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/poll`, {});
 
-    pay.selected.data = deep(obj);
-    pay.selected.lastPollResult = deep(obj && obj.poll_result ? obj.poll_result : null);
+    // Keep legacy behavior: update selected if it matches, so main UI remains consistent if still used.
+    try {
+      pay.selected.data = deep(obj);
+      pay.selected.lastPollResult = deep(obj && obj.poll_result ? obj.poll_result : null);
+    } catch {}
 
     try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
 
     return deep(obj);
 
   } catch (e) {
-    try {
-      if (typeof bankingHandleApiError === 'function') {
-        bankingHandleApiError(e, { action: 'POLL', scope: null, batchId: id, errorPath: ['pay', 'selected', 'error'] });
-      }
-    } catch {}
-
+    if (!silent) {
+      try {
+        if (typeof bankingHandleApiError === 'function') {
+          bankingHandleApiError(e, { action: 'POLL', scope: null, batchId: id, errorPath: ['pay', 'selected', 'error'] });
+        }
+      } catch {}
+    }
     return null;
 
   } finally {
@@ -7508,12 +7534,52 @@ async function bankingPayBatchExportCsv(payBatchId, scope = 'ALL') {
   }
 }
 
-async function bankingPayBatchManualConfirm(payBatchId, scope = 'ALL', bank_confirm_ref = '') {
+async function bankingPayBatchManualConfirm(payBatchId, scope = 'ALL', bank_confirm_ref = '', payment_date = '') {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const id = (payBatchId == null) ? '' : String(payBatchId).trim();
   const sc = String(scope || 'ALL').trim().toUpperCase();
   const scopeNorm = (sc === 'PAYE' || sc === 'UMBRELLA' || sc === 'ALL') ? sc : 'ALL';
   const ref = String(bank_confirm_ref || '').trim();
+
+  const parseIsoOrUkDateToIso = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    return '';
+  };
+
+  const getUkTodayIso = () => {
+    try {
+      const ymd = (typeof toLocalParts === 'function')
+        ? (toLocalParts(new Date().toISOString(), null)?.ymd || null)
+        : null;
+      if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return String(ymd);
+    } catch {}
+    try {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).formatToParts(new Date());
+      const g = (t) => (parts.find(p => p.type === t)?.value || '');
+      const y = g('year'), m = g('month'), d = g('day');
+      const iso = `${y}-${m}-${d}`;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+    } catch {}
+    return new Date().toISOString().slice(0, 10);
+  };
+
+  const payDateIso = (() => {
+    const iso = parseIsoOrUkDateToIso(payment_date);
+    if (iso) return iso;
+
+    // If the caller didn't pass a payment_date, default to UK today.
+    // Backend requires payment_date only when there are PENDING transfers, so providing a sensible default is safest.
+    return getUkTodayIso();
+  })();
 
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
   if (!mc || String(mc.entity || '') !== 'banking') return null;
@@ -7555,7 +7621,8 @@ async function bankingPayBatchManualConfirm(payBatchId, scope = 'ALL', bank_conf
   try {
     const obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/settle/manual-confirm`, {
       scope: scopeNorm,
-      bank_confirm_ref: ref
+      bank_confirm_ref: ref,
+      payment_date: payDateIso
     });
 
     // refresh selected detail (authoritative)
@@ -7585,12 +7652,12 @@ async function bankingPayBatchManualConfirm(payBatchId, scope = 'ALL', bank_conf
   }
 }
 
-
-async function bankingPayBatchRemittancesSend(payBatchId, scope = 'ALL') {
+async function bankingPayBatchRemittancesSend(payBatchId, scope = 'ALL', opts = {}) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const id = (payBatchId == null) ? '' : String(payBatchId).trim();
   const sc = String(scope || 'ALL').trim().toUpperCase();
   const scopeNorm = (sc === 'PAYE' || sc === 'UMBRELLA' || sc === 'ALL') ? sc : 'ALL';
+  const silent = !!(opts && typeof opts === 'object' && opts.silent === true);
 
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
   if (!mc || String(mc.entity || '') !== 'banking') return null;
@@ -7617,6 +7684,8 @@ async function bankingPayBatchRemittancesSend(payBatchId, scope = 'ALL') {
 
   if (!id) return null;
 
+  // NOTE: This function is now intended for INTERNAL use after Execute/Confirm flows.
+  // We keep the gate, but allow callers to bypass noisy UI error writes via opts.silent.
   const actionKind = (scopeNorm === 'PAYE') ? 'SEND_REMITTANCES_PAYE' : 'SEND_REMITTANCES';
 
   const gate = (typeof bankingIsActionBlocked === 'function')
@@ -7624,8 +7693,10 @@ async function bankingPayBatchRemittancesSend(payBatchId, scope = 'ALL') {
     : { blocked: false, reasonCode: '', message: '' };
 
   if (gate && gate.blocked) {
-    try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
-    try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    if (!silent) {
+      try { pay.selected.error = String(gate.message || gate.reasonCode || 'Action blocked'); } catch {}
+      try { if (typeof window.__toast === 'function') window.__toast(String(gate.message || gate.reasonCode || 'Action blocked')); } catch {}
+    }
     return null;
   }
 
@@ -7636,7 +7707,7 @@ async function bankingPayBatchRemittancesSend(payBatchId, scope = 'ALL') {
       scope: scopeNorm
     });
 
-    // Store last send result for UI
+    // Store last send result for UI / debug
     try {
       pay.selected = (pay.selected && typeof pay.selected === 'object') ? pay.selected : { data: null, loading: false, error: '' };
       pay.selected.lastRemittanceSendResult = deep(obj);
@@ -7654,12 +7725,13 @@ async function bankingPayBatchRemittancesSend(payBatchId, scope = 'ALL') {
     return deep(obj);
 
   } catch (e) {
-    try {
-      if (typeof bankingHandleApiError === 'function') {
-        bankingHandleApiError(e, { action: 'SEND_REMITTANCES', scope: scopeNorm, batchId: id, errorPath: ['pay', 'selected', 'error'] });
-      }
-    } catch {}
-
+    if (!silent) {
+      try {
+        if (typeof bankingHandleApiError === 'function') {
+          bankingHandleApiError(e, { action: 'SEND_REMITTANCES', scope: scopeNorm, batchId: id, errorPath: ['pay', 'selected', 'error'] });
+        }
+      } catch {}
+    }
     return null;
 
   } finally {
@@ -8750,6 +8822,7 @@ function renderBankingTab(key, row) {
     </div>
   `;
 }
+
 function renderBankingPayTab(scopePreset) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -8778,7 +8851,6 @@ function renderBankingPayTab(scopePreset) {
   try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; st.pay.scopePreset = preset; } catch {}
 
   const payListHtml = (typeof renderPayBatchListPanel === 'function') ? renderPayBatchListPanel() : '';
-  const payDetailHtml = (typeof renderPayBatchDetailPanel === 'function') ? renderPayBatchDetailPanel() : '';
   const wizardHtml = (typeof renderPayNewBatchWizard === 'function') ? renderPayNewBatchWizard() : '';
 
   const title =
@@ -8792,6 +8864,19 @@ function renderBankingPayTab(scopePreset) {
       : (preset === 'UMBRELLA')
         ? 'Umbrella-only pay batches and settlement.'
         : 'Unified Pay batches (PAYE + Umbrella).';
+
+  const hintHtml = `
+    <div class="card" style="margin-top:10px;">
+      <div class="row">
+        <label>Batch details</label>
+        <div class="controls">
+          <div class="mini" style="opacity:.9;">
+            Double-click a batch in the list to open the child modal with full breakdown and actions (Execute / CSV / Confirm).
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 
   return `
     <div id="bankingPayTabRoot">
@@ -8810,15 +8895,10 @@ function renderBankingPayTab(scopePreset) {
         </div>
       </div>
 
-      <div class="grid-2" style="align-items:start;">
-        <div style="display:flex;flex-direction:column;gap:10px;">
-          ${wizardHtml}
-          ${payListHtml}
-        </div>
-
-        <div style="display:flex;flex-direction:column;gap:10px;">
-          ${payDetailHtml}
-        </div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        ${wizardHtml}
+        ${payListHtml}
+        ${hintHtml}
       </div>
     </div>
   `;
@@ -8905,6 +8985,9 @@ function renderPayBatchListPanel() {
     const authReq = (r?.auth_required_quantity != null) ? Number(r.auth_required_quantity) : null;
     const authApproved = (r?.auth_approved_count != null) ? Number(r.auth_approved_count) : null;
 
+    const batchKindRaw = String(r?.batch_kind || r?.batchKind || '').trim().toUpperCase();
+    const batchKind = (batchKindRaw === 'PAYE' || batchKindRaw === 'UMBRELLA' || batchKindRaw === 'MIXED') ? batchKindRaw : '';
+
     const isActive = (id && selectedId && id === selectedId);
 
     const pillClass =
@@ -8946,6 +9029,7 @@ function renderPayBatchListPanel() {
       >
         <td class="mono">${enc(id ? (id.slice(0, 8) + '…') : '')}</td>
         <td>${enc(payDate ? (typeof formatIsoToUk === 'function' ? formatIsoToUk(payDate) : payDate) : '—')}</td>
+        <td>${batchKind ? `<span class="pill pill-info" title="Batch kind">${enc(batchKind)}</span>` : `<span class="mini" style="opacity:.75;">—</span>`}</td>
         <td><span class="pill ${enc(pillClass)}">${enc(stx)}</span>${authPill}</td>
         <td class="mini">${enc((prov || '—') + (env ? `/${env}` : ''))}</td>
         <td class="mini">${enc(created || '')}</td>
@@ -8954,7 +9038,7 @@ function renderPayBatchListPanel() {
   }).join('');
 
   const emptyHtml = (!loading && items.length === 0)
-    ? `<tr><td colspan="5" class="mini" style="opacity:.85;">No batches found for current filters.</td></tr>`
+    ? `<tr><td colspan="6" class="mini" style="opacity:.85;">No batches found for current filters.</td></tr>`
     : '';
 
   const prevOffset = Math.max(0, offsetNow - limitNow);
@@ -9023,12 +9107,17 @@ function renderPayBatchListPanel() {
             </div>
           </div>
 
+          <div class="mini" style="opacity:.85;">
+            Tip: double-click a batch row to open the batch modal (coming next).
+          </div>
+
           <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-            <table class="grid" style="min-width:820px; table-layout:auto;">
+            <table class="grid" style="min-width:900px; table-layout:auto;">
               <thead>
                 <tr>
                   <th>ID</th>
                   <th>Pay date</th>
+                  <th>Kind</th>
                   <th>Status</th>
                   <th>Rail</th>
                   <th>Created</th>
@@ -9055,27 +9144,6 @@ function renderPayBatchDetailPanel() {
         '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
       }[c]));
 
-  const fmtUtcToUk = (iso) => {
-    try {
-      if (!iso) return '';
-      const d = new Date(String(iso));
-      if (Number.isNaN(d.getTime())) return String(iso);
-      const fmt = new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Europe/London',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      });
-      return fmt.format(d).replace(',', '');
-    } catch {
-      return String(iso || '');
-    }
-  };
-
   const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
   if (!st) {
     return `
@@ -9091,265 +9159,22 @@ function renderPayBatchDetailPanel() {
   }
 
   st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
-  st.pay.selected = (st.pay.selected && typeof st.pay.selected === 'object') ? st.pay.selected : { data: null, loading: false, error: '' };
-  st.pay.manualConfirmForm = (st.pay.manualConfirmForm && typeof st.pay.manualConfirmForm === 'object') ? st.pay.manualConfirmForm : { bank_confirm_ref: '' };
-
-  const loading = !!st.pay.selected.loading;
-  const err = String(st.pay.selected.error || '').trim();
-
-  const sel = (st.pay.selected.data && typeof st.pay.selected.data === 'object') ? st.pay.selected.data : null;
-  const batch = (sel && sel.batch && typeof sel.batch === 'object') ? sel.batch : null;
-  const transfers = (sel && Array.isArray(sel.transfers)) ? sel.transfers : [];
-  const scheduleRec = (sel && sel.schedule_recommendations && typeof sel.schedule_recommendations === 'object') ? sel.schedule_recommendations : null;
-
-  const batchId = String(batch?.id || '').trim() || String(st.pay.selectedBatchId || '').trim();
-  const status = String(batch?.status || '').trim().toUpperCase();
-  const payDate = String(batch?.pay_date || '').trim();
-  const provider = String(batch?.rail_provider_snapshot || '').trim().toUpperCase();
-  const env = String(batch?.rail_env_snapshot || '').trim().toUpperCase();
-
-  const scheduledAt = fmtUtcToUk(batch?.scheduled_at_utc || '');
-  const executingAt = fmtUtcToUk(batch?.executing_started_at_utc || '');
-  const checkedAt = fmtUtcToUk(batch?.last_status_checked_at_utc || '');
-
-  const counts = (() => {
-    const map = {};
-    for (const t of transfers) {
-      const s = String(t?.status || '').trim().toUpperCase() || '—';
-      map[s] = (map[s] || 0) + 1;
-    }
-    const keys = Object.keys(map).sort((a,b) => a.localeCompare(b));
-    return { map, keys };
-  })();
-
-  const gate = (kind) => {
-    try {
-      if (typeof bankingIsActionBlocked !== 'function') return { blocked:false, reasonCode:'', message:'' };
-      return bankingIsActionBlocked(kind);
-    } catch {
-      return { blocked:false, reasonCode:'', message:'' };
-    }
-  };
-
-  const btn = (text, action, attrs, gateObj) => {
-    const a = (attrs && typeof attrs === 'object') ? attrs : {};
-    const g = (gateObj && typeof gateObj === 'object') ? gateObj : { blocked:false, reasonCode:'', message:'' };
-
-    const disabled = !!g.blocked;
-    const title = String((disabled ? (g.message || g.reasonCode || 'Action blocked') : (a.title || '')) || '').trim();
-
-    const extraAttrs = Object.entries(a)
-      .filter(([k,v]) => k !== 'title' && v !== undefined && v !== null)
-      .map(([k,v]) => ` ${enc(k)}="${enc(String(v))}"`)
-      .join('');
-
-    const disAttrs = disabled ? ` data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"` : '';
-    const tAttr = title ? ` title="${enc(title)}"` : '';
-
-    return `<button type="button" class="btn btn-sm btn-outline" data-action="${enc(action)}"${extraAttrs}${disAttrs}${tAttr}>${enc(text)}</button>`;
-  };
-
-  if (!sel || !batchId) {
-    return `
-      <div class="card" id="bankingPayBatchDetailPanel">
-        <div class="row">
-          <label>Batch detail</label>
-          <div class="controls">
-            <div class="mini" style="opacity:.85;">Select a batch from the list to view details and actions.</div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  const pillClass =
-    (status === 'SETTLED') ? 'pill-ok'
-    : (status === 'EXECUTING' || status === 'PARTIAL') ? 'pill-warn'
-    : (status === 'DRAFT') ? 'pill-info'
-    : 'pill';
-
-  const pollTooltip = 'This speaks to the bank and checks the latest status on pending payments. Use this to confirm if pending payments have now been made successfully by the bank.';
-
-  const canCancel = (status === 'SCHEDULED' || status === 'AWAITING_AUTHORISATION' || status === 'AUTHORISED_FOR_PAYMENT');
-
-  const cancelBtn = canCancel
-    ? btn('Cancel payment', 'banking:pay:cancel', {
-        'data-batch-id': batchId,
-        title: 'Cancel this payment (password required, no 2FA)'
-      }, gate('CANCEL'))
-    : '';
-
-  const executeGate = gate('EXECUTE_BANK');
-  const executeAllBtn = btn('Execute bank (ALL)', 'banking:pay:executeBank', { 'data-batch-id': batchId, 'data-scope': 'ALL', title: 'Create bank transfers for this batch (ALL)' }, executeGate);
-  const executePayeBtn = btn('Execute bank (PAYE)', 'banking:pay:executeBank', { 'data-batch-id': batchId, 'data-scope': 'PAYE', title: 'Create bank transfers for this batch (PAYE)' }, executeGate);
-  const executeUmbBtn = btn('Execute bank (UMB)', 'banking:pay:executeBank', { 'data-batch-id': batchId, 'data-scope': 'UMBRELLA', title: 'Create bank transfers for this batch (UMBRELLA)' }, executeGate);
-
-  const csvSupported = (() => {
-    const p = String(provider || '').trim().toUpperCase();
-    return !!p && p.includes('CSV');
-  })();
-
-  const exportBtnsHtml = csvSupported
-    ? `
-      ${btn('Export CSV (ALL)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'ALL' }, gate('EXPORT_CSV'))}
-      ${btn('Export CSV (PAYE)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'PAYE' }, gate('EXPORT_CSV'))}
-      ${btn('Export CSV (UMB)', 'banking:pay:exportCsv', { 'data-batch-id': batchId, 'data-scope': 'UMBRELLA' }, gate('EXPORT_CSV'))}
-    `
-    : '';
-
-  const actionsTop = `
-    <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      ${btn('Pending Payment Check', 'banking:pay:poll', { 'data-batch-id': batchId, title: pollTooltip }, gate('POLL'))}
-      ${executeAllBtn}
-      ${executePayeBtn}
-      ${executeUmbBtn}
-      ${exportBtnsHtml}
-      ${cancelBtn}
-      ${!csvSupported ? `<span class="mini" style="opacity:.75;">CSV export not available for rail: <span class="mono">${enc(provider || '—')}</span></span>` : ``}
-    </div>
-  `;
-
-  const manualConfirmGate = gate('MANUAL_CONFIRM');
-  const manualConfirmTitle = manualConfirmGate.blocked ? (manualConfirmGate.message || manualConfirmGate.reasonCode || 'Action blocked') : 'Confirm settlement for manual/CSV rails';
-  const manualConfirmBtn = btn('Manual confirm', 'banking:pay:manualConfirm', { 'data-batch-id': batchId, 'data-scope': 'ALL' }, manualConfirmGate);
-
-  const remitGateAll = gate('SEND_REMITTANCES');
-  const remitGatePaye = gate('SEND_REMITTANCES_PAYE');
-  const remitAllBtn = btn('Send remittances (ALL)', 'banking:pay:sendRemittances', { 'data-batch-id': batchId, 'data-scope': 'ALL' }, remitGateAll);
-  const remitPayeBtn = btn('Send remittances (PAYE)', 'banking:pay:sendRemittances', { 'data-batch-id': batchId, 'data-scope': 'PAYE' }, remitGatePaye);
-  const remitUmbBtn = btn('Send remittances (UMB)', 'banking:pay:sendRemittances', { 'data-batch-id': batchId, 'data-scope': 'UMBRELLA' }, remitGateAll);
-
-  const transfersHtml = `
-    <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-      <table class="grid" style="min-width:860px; table-layout:auto;">
-        <thead>
-          <tr>
-            <th>Channel</th>
-            <th>Amount</th>
-            <th>Status</th>
-            <th>Rail</th>
-            <th>Payment ref</th>
-            <th>Payee</th>
-            <th>Completed</th>
-            <th>Failed reason</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${
-            transfers.length
-              ? transfers.map(t => {
-                  const ch = String(t?.pay_channel || '').trim().toUpperCase() || '—';
-                  const amt = (t?.amount != null && t?.currency) ? `${t.amount} ${String(t.currency).toUpperCase()}` : (t?.amount != null ? String(t.amount) : '—');
-                  const stx = String(t?.status || '').trim().toUpperCase() || '—';
-                  const rprov = String(t?.rail_provider || '').trim().toUpperCase();
-                  const renv  = String(t?.rail_env || '').trim().toUpperCase();
-                  const pref  = String(t?.payment_reference || '').trim();
-                  const payee = String(t?.payee_name || '').trim();
-                  const done  = fmtUtcToUk(t?.completed_at_utc || '');
-                  const fail  = String(t?.failed_reason || '').trim();
-                  return `
-                    <tr>
-                      <td>${enc(ch)}</td>
-                      <td class="mono">${enc(String(amt || '—'))}</td>
-                      <td><span class="pill">${enc(stx)}</span></td>
-                      <td class="mini">${enc((rprov || '—') + (renv ? `/${renv}` : ''))}</td>
-                      <td class="mini">${enc(pref || '')}</td>
-                      <td class="mini">${enc(payee || '')}</td>
-                      <td class="mini">${enc(done || '')}</td>
-                      <td class="mini">${enc(fail || '')}</td>
-                    </tr>
-                  `;
-                }).join('')
-              : `<tr><td colspan="8" class="mini" style="opacity:.85;">No transfers yet.</td></tr>`
-          }
-        </tbody>
-      </table>
-    </div>
-  `;
-
-  const countsHtml = counts.keys.length
-    ? counts.keys.map(k => `<span class="pill" title="Transfers in this status">${enc(k)}: ${enc(String(counts.map[k] || 0))}</span>`).join(' ')
-    : `<span class="mini" style="opacity:.85;">No transfer statuses yet.</span>`;
+  const selectedId = String(st.pay.selectedBatchId || '').trim();
 
   return `
     <div class="card" id="bankingPayBatchDetailPanel">
-      <div class="row" style="gap:10px;">
+      <div class="row">
         <label>Batch detail</label>
-        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-          ${err ? `<div class="error" style="white-space:pre-wrap;">${enc(err)}</div>` : ''}
-
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <span class="pill ${enc(pillClass)}">${enc(status || '—')}</span>
-            <span class="mono" title="${enc(batchId)}">${enc(batchId ? (batchId.slice(0, 8) + '…') : '')}</span>
-            <span class="mini">${enc(provider || '—')}${env ? enc('/' + env) : ''}</span>
-            <span class="mini">Pay date: ${enc(payDate ? (typeof formatIsoToUk === 'function' ? formatIsoToUk(payDate) : payDate) : '—')}</span>
-            ${loading ? `<span class="mini" style="opacity:.8;">Loading…</span>` : ``}
-            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:refreshSelected" data-batch-id="${enc(batchId)}" title="Refresh batch detail">Refresh</button>
-            </div>
+        <div class="controls" style="display:flex;flex-direction:column;gap:8px;">
+          <div class="mini" style="opacity:.9;">
+            Batch actions (Execute, CSV export, Confirm CSV, status refresh, remittances, etc.) have moved to the batch child modal.
           </div>
-
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-            ${countsHtml}
-          </div>
-
           <div class="mini" style="opacity:.85;">
-            Scheduled: ${enc(scheduledAt || '—')} • Executing: ${enc(executingAt || '—')} • Last check: ${enc(checkedAt || '—')}
+            Double-click a batch in the list to open it.
           </div>
-
-          ${actionsTop}
-
-          <div class="card" style="padding:10px;">
-            <div class="row">
-              <label>Manual confirm (CSV/manual rails)</label>
-              <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                <input
-                  id="bankingManualConfirmRef"
-                  class="input"
-                  type="text"
-                  name="bank_confirm_ref"
-                  placeholder="Bank confirmation reference (optional if no pending transfers)"
-                  value="${enc(String(st.pay.manualConfirmForm.bank_confirm_ref || ''))}"
-                  data-action="banking:pay:setManualConfirmRef"
-                  style="min-width:320px;max-width:520px;"
-                  title="${enc(manualConfirmTitle)}"
-                />
-                <span class="mini" style="opacity:.85;">Scope: ALL</span>
-                ${manualConfirmBtn}
-              </div>
-            </div>
+          <div class="mini" style="opacity:.75;">
+            Selected: <span class="mono">${enc(selectedId ? (selectedId.slice(0, 8) + '…') : 'None')}</span>
           </div>
-
-          <div class="card" style="padding:10px;">
-            <div class="row">
-              <label>Remittances</label>
-              <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                ${remitAllBtn}
-                ${remitPayeBtn}
-                ${remitUmbBtn}
-                <span class="mini" style="opacity:.8;">Outbox status is shown in the Remittances Status tab.</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="row">
-            <label>Transfers</label>
-            <div class="controls">
-              ${transfersHtml}
-            </div>
-          </div>
-
-          ${scheduleRec ? `
-            <div class="row">
-              <label>Schedule defaults</label>
-              <div class="controls">
-                <div class="mini" style="opacity:.85;white-space:normal;overflow-wrap:break-word;">
-                  Default funding ref: <span class="mono">${enc(String(scheduleRec.rail_default_funding_account_ref || '') || '—')}</span>
-                  • Warning hours: <span class="mono">${enc(JSON.stringify(scheduleRec.funds_warning_hours_json || []))}</span>
-                </div>
-              </div>
-            </div>
-          ` : ``}
         </div>
       </div>
     </div>
@@ -9380,6 +9205,7 @@ function renderPayNewBatchWizard() {
   st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
   st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {
     pay_date: '',
+    week_ending_cutoff_date: '',
     candidate_filter_id: '',
     candidate_filter_label: '',
     client_filter_id: '',
@@ -9394,6 +9220,7 @@ function renderPayNewBatchWizard() {
 
   if (!('candidate_filter_label' in wiz)) wiz.candidate_filter_label = '';
   if (!('client_filter_label' in wiz)) wiz.client_filter_label = '';
+  if (!('week_ending_cutoff_date' in wiz)) wiz.week_ending_cutoff_date = '';
 
   // ✅ UK “today” (ISO) + default pay date = nearest Friday (today if Friday, else next Friday)
   const getUkTodayIso = () => {
@@ -9443,27 +9270,49 @@ function renderPayNewBatchWizard() {
     return addDaysIso(todayIso, add);
   };
 
+  const prevSundayCutoffIsoFrom = (todayIso) => {
+    const m = String(todayIso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (isNaN(dt.getTime())) return '';
+    const dow = dt.getUTCDay(); // 0=Sun ... 6=Sat
+    const daysBack = (dow === 0) ? 7 : dow; // Sun => previous Sunday (7 days back), Mon => 1 day back, ...
+    return addDaysIso(todayIso, -daysBack);
+  };
+
   const ukTodayIso = getUkTodayIso();
-  const defaultIso = nextFridayIsoFrom(ukTodayIso) || ukTodayIso;
+  const defaultPayIso = nextFridayIsoFrom(ukTodayIso) || ukTodayIso;
 
   let payDateIso = String(wiz.pay_date || '').trim();
-  const isIso = /^\d{4}-\d{2}-\d{2}$/.test(payDateIso);
+  const isIsoPay = /^\d{4}-\d{2}-\d{2}$/.test(payDateIso);
 
   // ✅ If missing/invalid OR in the past => force default Friday (never allow past date)
-  if (!isIso || payDateIso < ukTodayIso) {
-    payDateIso = defaultIso;
+  if (!isIsoPay || payDateIso < ukTodayIso) {
+    payDateIso = defaultPayIso;
     try { wiz.pay_date = payDateIso; } catch {}
   }
 
-  const payDateDisplay = (() => {
-    if (!payDateIso) return '';
-    try {
-      if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(payDateIso) || '');
-    } catch {}
-    const m = payDateIso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  let cutoffIso = String(wiz.week_ending_cutoff_date || '').trim();
+  const isIsoCutoff = /^\d{4}-\d{2}-\d{2}$/.test(cutoffIso);
+
+  // ✅ Default cutoff = previous Sunday (strictly before today); user can change later
+  if (!isIsoCutoff) {
+    cutoffIso = prevSundayCutoffIsoFrom(ukTodayIso) || ukTodayIso;
+    try { wiz.week_ending_cutoff_date = cutoffIso; } catch {}
+  }
+
+  const ymdToUk = (ymd) => {
+    const s = String(ymd || '').trim();
+    if (!s) return '';
+    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (m) return `${m[3]}/${m[2]}/${m[1]}`;
-    return payDateIso;
-  })();
+    return s;
+  };
+
+  const payDateDisplay = ymdToUk(payDateIso);
+  const cutoffDisplay = ymdToUk(cutoffIso);
 
   const candFilterId = String(wiz.candidate_filter_id || '').trim();
   const clientFilterId = String(wiz.client_filter_id || '').trim();
@@ -9512,15 +9361,6 @@ function renderPayNewBatchWizard() {
     const id = String(cid || '').trim();
     if (!id) return false;
     return useCandidateFilter ? candidateSet.has(id) : true;
-  };
-
-  const ymdToUk = (ymd) => {
-    const s = String(ymd || '').trim();
-    if (!s) return '';
-    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
-    return s;
   };
 
   const fmtMoney = (v) => {
@@ -9807,9 +9647,12 @@ function renderPayNewBatchWizard() {
   const eligFrom = elig ? String(elig.from_date || '').trim() : '';
   const eligTo   = elig ? String(elig.to_date || '').trim() : '';
 
+  const pvCutoff = pv ? String(pv.week_ending_cutoff_date || '').trim() : '';
+
   const previewSummaryHtml = pv ? `
     <div class="mini" style="opacity:.9;">
       Eligible Timesheet period: <span class="mono">${enc((eligFrom && eligTo) ? `${ymdToUk(eligFrom)} → ${ymdToUk(eligTo)}` : '—')}</span>
+      • W/E cutoff: <span class="mono">${enc(ymdToUk(pvCutoff || cutoffIso) || '—')}</span>
       • PAYE candidates: <span class="mono">${enc(String(payeCands.length))}</span>
       • Umbrella payees: <span class="mono">${enc(String(nonPaye.length))}</span>
       • Mismatches: <span class="mono">${enc(String(mismatchList.length))}</span>
@@ -9820,7 +9663,7 @@ function renderPayNewBatchWizard() {
   ` : `<div class="mini" style="opacity:.85;">Run Preview to compute deltas, blockers, and mismatch decisions.</div>`;
 
   const previewBtnDisabled = pvLoading || cdBusy;
-  const createBtnDisabled = cdBusy || pvLoading || !payDateIso;
+  const createBtnDisabled = cdBusy || pvLoading || !payDateIso || !cutoffIso;
 
   return `
     <div class="card" id="bankingPayNewBatchWizard">
@@ -9843,6 +9686,21 @@ function renderPayNewBatchWizard() {
                 data-action="banking:pay:setPayDate"
                 data-uk-date="1"
                 title="Pay date (DD/MM/YYYY) — cannot be in the past"
+              />
+            </div>
+
+            <div style="min-width:260px;max-width:320px;">
+              <label class="inline mini" style="opacity:.85;">Only process timesheets where W/E is up to</label>
+              <input
+                id="bankingWeekEndingCutoffInput"
+                class="input"
+                type="text"
+                name="week_ending_cutoff_date"
+                placeholder="DD/MM/YYYY"
+                value="${enc(cutoffDisplay)}"
+                data-action="banking:pay:setWeekEndingCutoff"
+                data-uk-date="1"
+                title="Week ending cutoff (DD/MM/YYYY). Default is previous Sunday (strictly before today)."
               />
             </div>
 
@@ -9892,8 +9750,8 @@ function renderPayNewBatchWizard() {
                 class="btn btn-sm btn-primary ${createBtnDisabled ? 'disabled' : ''}"
                 ${createBtnDisabled ? 'aria-disabled="true"' : ''}
                 data-action="banking:pay:createDraft"
-                title="Create a DRAFT pay batch using current preview decisions"
-              >${cdBusy ? 'Creating…' : 'Create draft'}</button>
+                title="Create draft batches (PAYE + Umbrella) using current preview decisions"
+              >${cdBusy ? 'Creating…' : 'Create drafts'}</button>
 
               <button
                 type="button"
@@ -9932,7 +9790,6 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
-
 
 function renderPayPreparePanel() {
   const enc = (typeof escapeHtml === 'function')
@@ -11528,8 +11385,1733 @@ function renderBankingRemittancesStatusTab() {
   `;
 }
 
+async function openBankingPayBatchChildModal(batchId) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
 
+  const deep = (o) => {
+    try { return JSON.parse(JSON.stringify(o || null)); } catch { return o; }
+  };
 
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') {
+    try { if (typeof window.__toast === 'function') window.__toast('Banking modal is not active.'); } catch {}
+    return;
+  }
+
+  mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
+  mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
+
+  const st = mc.banking;
+  const pay = st.pay;
+
+  const id = String(batchId || '').trim();
+  if (!id) {
+    try { if (typeof window.__toast === 'function') window.__toast('pay_batch_id is required'); } catch {}
+    return;
+  }
+
+  const KIND = 'import-summary-banking-pay-batch-child';
+  const rootId = `bankingPayBatchChild_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  // Child state (stored on banking state so it survives tab switches)
+  pay.child = (pay.child && typeof pay.child === 'object') ? pay.child : {};
+  pay.child = {
+    openToken: `pay-batch-child:${id}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    batchId: id,
+    rootId,
+    loading: true,
+    error: '',
+    data: null,
+
+    // UI state
+    ui: {
+      expanded: {},               // { [candidate_id]: true/false }
+      expandAllDefault: true
+    },
+
+    // CSV confirm state
+    csv: {
+      generated_at_utc: null,
+      confirmed_at_utc: null,
+      payment_date_iso: null,
+      bank_confirm_ref: ''
+    },
+
+    // PAYE worksheet state
+    paye: {
+      filterCandidateId: 'ALL',
+      editing: false,
+      netDraft: {},               // { [candidate_id]: '123.45' }
+      importBusy: false,
+      importError: '',
+      saveBusy: false,
+      saveError: '',
+      lastImportFilename: ''
+    },
+
+    // Action busy flags
+    actionsBusy: {
+      refreshing: false,
+      polling: false,
+      executing: false,
+      exportingCsv: false,
+      confirmingCsv: false,
+      exportingWorksheet: false,
+      printingWorksheet: false
+    }
+  };
+
+  const child = pay.child;
+
+  const fmtUtcToUk = (iso) => {
+    try {
+      if (!iso) return '';
+      const d = new Date(String(iso));
+      if (Number.isNaN(d.getTime())) return String(iso);
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      return fmt.format(d).replace(',', '');
+    } catch {
+      return String(iso || '');
+    }
+  };
+
+  const formatIsoToUkLocal = (ymd) => {
+    const s = String(ymd || '').trim();
+    if (!s) return '';
+    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+    return s;
+  };
+
+  const parseUkDateToIsoLocal = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    try {
+      if (typeof parseUkDateToIso === 'function') {
+        const iso0 = parseUkDateToIso(s);
+        const iso = String(iso0 || '').trim();
+        return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : '';
+      }
+    } catch {}
+    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+  };
+
+  const stillTopIsThisChild = () => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (!fr) return false;
+      if (String(fr.kind || '') !== KIND) return false;
+      const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      if (!ctx || String(ctx.entity || '') !== 'banking') return false;
+      if (fr._ctxRef !== ctx) return false;
+      const c2 = (ctx.banking && ctx.banking.pay && ctx.banking.pay.child && typeof ctx.banking.pay.child === 'object') ? ctx.banking.pay.child : null;
+      if (!c2) return false;
+      if (String(c2.openToken || '') !== String(child.openToken || '')) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const rerenderChild = async () => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (!fr) return;
+      if (String(fr.kind || '') !== KIND) return;
+      fr._suppressDirty = true;
+      await fr.setTab(fr.currentTabKey || 'overview');
+      fr._suppressDirty = false;
+      fr._updateButtons && fr._updateButtons();
+    } catch {}
+  };
+
+  const fetchJsonGet = async (path) => {
+    if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
+    const res = await authFetch(API(path), { method: 'GET' });
+    const txt = await res.text().catch(() => '');
+    let parsed = null;
+    try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = null; }
+    if (!res.ok) {
+      const msg = (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+        ? String(parsed.error || parsed.message)
+        : (txt || `Request failed (${res.status})`);
+      const err = new Error(String(msg || 'Request failed'));
+      err.status = res.status;
+      err.body = txt;
+      err.json = parsed;
+      throw err;
+    }
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  };
+
+  const postJson = async (path, payload) => {
+    if (typeof apiPostJson !== 'function') throw new Error('apiPostJson missing');
+    return await apiPostJson(path, payload || {});
+  };
+
+  const deriveBatchObj = (data) => {
+    const d = (data && typeof data === 'object') ? data : null;
+    const b = d && d.batch && typeof d.batch === 'object' ? d.batch : null;
+    return b || null;
+  };
+
+  const deriveTransfers = (data) => {
+    const d = (data && typeof data === 'object') ? data : null;
+    return Array.isArray(d?.transfers) ? d.transfers : [];
+  };
+
+  const deriveItems = (data) => {
+    const d = (data && typeof data === 'object') ? data : null;
+    return Array.isArray(d?.items) ? d.items : [];
+  };
+
+  const deriveCandidates = (data) => {
+    const d = (data && typeof data === 'object') ? data : null;
+    return Array.isArray(d?.candidates) ? d.candidates : [];
+  };
+
+  const deriveBatchKind = (data) => {
+    const d = (data && typeof data === 'object') ? data : null;
+    const rawTop = String(d?.batch_kind || d?.batchKind || '').trim().toUpperCase();
+    if (rawTop === 'PAYE' || rawTop === 'UMBRELLA' || rawTop === 'MIXED') return rawTop;
+
+    const b = deriveBatchObj(d);
+    const rawB = String(b?.batch_kind || b?.batchKind || '').trim().toUpperCase();
+    if (rawB === 'PAYE' || rawB === 'UMBRELLA' || rawB === 'MIXED') return rawB;
+
+    const chans = Array.isArray(d?.pay_channels_present) ? d.pay_channels_present : (Array.isArray(b?.pay_channels_present) ? b.pay_channels_present : null);
+    if (Array.isArray(chans) && chans.length) {
+      const uniq = Array.from(new Set(chans.map(x => String(x || '').trim().toUpperCase()).filter(Boolean)));
+      if (uniq.length === 1 && (uniq[0] === 'PAYE' || uniq[0] === 'UMBRELLA')) return uniq[0];
+      if (uniq.length > 1) return 'MIXED';
+    }
+
+    const items = deriveItems(d);
+    const uniq = Array.from(new Set(items.map(x => String(x?.pay_channel || '').trim().toUpperCase()).filter(Boolean)));
+    if (uniq.length === 1 && (uniq[0] === 'PAYE' || uniq[0] === 'UMBRELLA')) return uniq[0];
+    if (uniq.length > 1) return 'MIXED';
+
+    return '';
+  };
+
+  const deriveScopeForBatch = (data) => {
+    const k = deriveBatchKind(data);
+    if (k === 'PAYE') return 'PAYE';
+    if (k === 'UMBRELLA') return 'UMBRELLA';
+    return 'ALL';
+  };
+
+  const hasPendingTransfers = (data) => {
+    const transfers = deriveTransfers(data);
+    for (const t of transfers) {
+      const stx = String(t?.status || '').trim().toUpperCase();
+      if (stx === 'PENDING') return true;
+    }
+    return false;
+  };
+
+  const shouldAutoPoll = (data) => {
+    const b = deriveBatchObj(data);
+    if (!b) return false;
+    if (!hasPendingTransfers(data)) return false;
+
+    const last = String(b.last_status_checked_at_utc || '').trim();
+    if (!last) return true;
+
+    const t = new Date(last).getTime();
+    if (!Number.isFinite(t)) return true;
+
+    const ageMs = Date.now() - t;
+    return ageMs > 2 * 60 * 1000;
+  };
+
+  const loadBatch = async (opts = {}) => {
+    const forcePoll = !!opts.forcePoll;
+
+    child.loading = true;
+    child.error = '';
+    await rerenderChild();
+
+    try {
+      const obj = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
+      child.data = deep(obj);
+      child.loading = false;
+      child.error = '';
+
+      // Default CSV payment date to batch pay_date if present, else today (UK)
+      try {
+        const b = deriveBatchObj(child.data);
+        const pd = String(b?.pay_date || '').trim();
+        const iso = pd && /^\d{4}-\d{2}-\d{2}$/.test(pd) ? pd : '';
+        if (!child.csv.payment_date_iso) {
+          child.csv.payment_date_iso = iso || '';
+        }
+      } catch {}
+
+      await rerenderChild();
+
+      if (forcePoll || shouldAutoPoll(child.data)) {
+        try {
+          child.actionsBusy.polling = true;
+          await rerenderChild();
+
+          const polled = await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/poll`, {});
+          child.data = deep(polled);
+          child.actionsBusy.polling = false;
+          await rerenderChild();
+        } catch (e) {
+          child.actionsBusy.polling = false;
+          await rerenderChild();
+        }
+      }
+
+    } catch (e) {
+      child.loading = false;
+      child.error = String(e?.message || e || 'Failed to load batch');
+      await rerenderChild();
+    }
+  };
+
+  const downloadCsvFromExportEndpoint = async (scopeNorm) => {
+    const sc = String(scopeNorm || 'ALL').trim().toUpperCase();
+    const scope = (sc === 'PAYE' || sc === 'UMBRELLA' || sc === 'ALL') ? sc : 'ALL';
+
+    if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
+
+    const safeParse = (txt) => { try { return txt ? JSON.parse(txt) : null; } catch { return null; } };
+
+    const parseFilename = (cd, fallbackName) => {
+      const s = String(cd || '').trim();
+      if (!s) return fallbackName;
+      const m1 = s.match(/filename\*=(?:UTF-8'')?([^;]+)/i);
+      if (m1 && m1[1]) {
+        try {
+          const v = m1[1].trim().replace(/^"|"$/g, '');
+          return decodeURIComponent(v) || fallbackName;
+        } catch {
+          return m1[1].trim().replace(/^"|"$/g, '') || fallbackName;
+        }
+      }
+      const m2 = s.match(/filename=([^;]+)/i);
+      if (m2 && m2[1]) return m2[1].trim().replace(/^"|"$/g, '') || fallbackName;
+      return fallbackName;
+    };
+
+    const url = API(`/api/banking/pay/batch/${encodeURIComponent(id)}/export-csv?scope=${encodeURIComponent(scope)}`);
+    const res = await authFetch(url, { method: 'GET' });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      const parsed = safeParse(txt);
+      const msg =
+        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+          ? String(parsed.error || parsed.message)
+          : (txt || `Request failed (${res.status})`);
+
+      const err = new Error(String(msg || 'Export failed'));
+      err.status = res.status;
+      err.body = txt || '';
+      err.json = parsed;
+      throw err;
+    }
+
+    const blob = await res.blob();
+    const cd = res.headers.get('content-disposition') || '';
+    const fallback = `pay_batch_${id}_${scope}.csv`;
+    const filename = parseFilename(cd, fallback);
+
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => { try { URL.revokeObjectURL(objUrl); } catch {} }, 2_000);
+
+    return { ok: true, filename };
+  };
+
+  const executePaymentPipeline = async () => {
+    if (child.actionsBusy.executing) return;
+
+    child.actionsBusy.executing = true;
+    child.error = '';
+    await rerenderChild();
+
+    try {
+      // Step 1: execute (creates transfers)
+      const scope = deriveScopeForBatch(child.data);
+      await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute`, { scope });
+
+      // Step 2: prepare (name check / payee map)
+      await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/prepare`, { name_check_overrides: [] });
+
+      // Step 3: schedule for API rails (CSV does not schedule)
+      const b = deriveBatchObj(child.data) || {};
+      const provider = String(b.rail_provider_snapshot || '').trim().toUpperCase();
+      if (provider && provider !== 'CSV') {
+        let tok = null;
+        try {
+          if (typeof openBankingReauthModal === 'function') {
+            tok = await openBankingReauthModal({ purpose: 'PAYMENT_SCHEDULE' });
+          }
+        } catch {
+          tok = null;
+        }
+
+        const reauthToken = String(tok?.reauth_token || tok?.token || tok || '').trim();
+        if (!reauthToken) {
+          throw new Error('Scheduling requires re-auth (reauth_token missing or cancelled).');
+        }
+
+        await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/schedule`, {
+          schedule_kind: 'IMMEDIATE',
+          scheduled_at_utc: null,
+          funding_account_ref: null,
+          warning_hours_json: null,
+          reauth_token: reauthToken
+        });
+      }
+
+      await loadBatch({ forcePoll: true });
+
+    } catch (e) {
+      child.error = String(e?.message || e || 'Execute payment failed');
+    } finally {
+      child.actionsBusy.executing = false;
+      await rerenderChild();
+    }
+  };
+
+  const generateCsv = async () => {
+    if (child.actionsBusy.exportingCsv) return;
+
+    child.actionsBusy.exportingCsv = true;
+    child.error = '';
+    await rerenderChild();
+
+    try {
+      // Ensure transfers exist (CSV export requires them)
+      if (!hasPendingTransfers(child.data)) {
+        const scope = deriveScopeForBatch(child.data);
+        await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute`, { scope });
+        await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/prepare`, { name_check_overrides: [] });
+        await loadBatch({ forcePoll: false });
+      }
+
+      const scope = deriveScopeForBatch(child.data);
+      const out = await downloadCsvFromExportEndpoint(scope);
+
+      child.csv.generated_at_utc = new Date().toISOString();
+      child.csv.confirmed_at_utc = null;
+
+      // Default payment_date_iso to batch pay_date (if present), else leave as-is
+      try {
+        const b = deriveBatchObj(child.data);
+        const pd = String(b?.pay_date || '').trim();
+        const iso = pd && /^\d{4}-\d{2}-\d{2}$/.test(pd) ? pd : '';
+        if (!child.csv.payment_date_iso) child.csv.payment_date_iso = iso || '';
+      } catch {}
+
+      await rerenderChild();
+
+      try { if (typeof window.__toast === 'function') window.__toast(`CSV generated${out && out.filename ? ` (${out.filename})` : ''}`); } catch {}
+
+    } catch (e) {
+      child.error = String(e?.message || e || 'CSV export failed');
+    } finally {
+      child.actionsBusy.exportingCsv = false;
+      await rerenderChild();
+    }
+  };
+
+  const confirmCsvPayment = async () => {
+    if (child.actionsBusy.confirmingCsv) return;
+
+    child.actionsBusy.confirmingCsv = true;
+    child.error = '';
+    await rerenderChild();
+
+    try {
+      const ref = String(child.csv.bank_confirm_ref || '').trim();
+      if (!ref) throw new Error('Bank confirm reference is required.');
+
+      const iso = String(child.csv.payment_date_iso || '').trim();
+      if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) throw new Error('Payment date is required (YYYY-MM-DD).');
+
+      const scope = deriveScopeForBatch(child.data);
+
+      await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/settle/manual-confirm`, {
+        scope,
+        bank_confirm_ref: ref,
+        payment_date: iso,
+        p_payment_date: iso
+      });
+
+      child.csv.confirmed_at_utc = new Date().toISOString();
+
+      await loadBatch({ forcePoll: false });
+
+    } catch (e) {
+      child.error = String(e?.message || e || 'CSV confirm failed');
+    } finally {
+      child.actionsBusy.confirmingCsv = false;
+      await rerenderChild();
+    }
+  };
+
+  const exportPayeWorksheetCsv = async () => {
+    if (child.actionsBusy.exportingWorksheet) return;
+
+    child.actionsBusy.exportingWorksheet = true;
+    child.paye.saveError = '';
+    await rerenderChild();
+
+    try {
+      const data = child.data;
+      const candidates = deriveCandidates(data);
+
+      const batchKind = deriveBatchKind(data);
+      if (batchKind !== 'PAYE') throw new Error('This is not a PAYE batch.');
+
+      // Filter candidates by dropdown (ALL or single)
+      const filterId = String(child.paye.filterCandidateId || 'ALL').trim();
+      const list = (filterId && filterId !== 'ALL')
+        ? candidates.filter(c => String(c?.candidate_id || '').trim() === filterId)
+        : candidates;
+
+      // Pull candidate_lines if present (new RPC), else fall back to empty
+      const linesRaw = (data && typeof data === 'object' && Array.isArray(data.candidate_lines)) ? data.candidate_lines : [];
+      const lines = Array.isArray(linesRaw) ? linesRaw : [];
+
+      const byCand = new Map();
+      for (const ln of lines) {
+        const cid = String(ln?.candidate_id || '').trim();
+        if (!cid) continue;
+        if (!byCand.has(cid)) byCand.set(cid, []);
+        byCand.get(cid).push(ln);
+      }
+
+      const escCsv = (v) => {
+        const s = (v == null) ? '' : String(v);
+        return /[,"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+
+      const asMoney = (v) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return '';
+        return (Math.round(n * 100) / 100).toFixed(2);
+      };
+
+      const header = [
+        'Candidate Name',
+        'TMS Ref',
+        'Week Ending',
+        'Client',
+        'Unit Name',
+        'Units',
+        'Rate',
+        'Subtotal',
+        'Gross Grand Total',
+        'Net Payment'
+      ];
+
+      const rows = [];
+      rows.push(header.map(escCsv).join(','));
+
+      for (const c of list) {
+        const cid = String(c?.candidate_id || '').trim();
+        const name = String(c?.candidate_display_name || c?.display_name || '').trim();
+        const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
+        const gross = (c?.gross_preview != null) ? asMoney(c.gross_preview) : '';
+        const net = (c?.paye_net_amount != null) ? asMoney(c.paye_net_amount) : '';
+
+        const candLines = byCand.get(cid) || [];
+        if (!candLines.length) {
+          rows.push([
+            name, tms, '', '', '', '', '', '', gross, net
+          ].map(escCsv).join(','));
+          continue;
+        }
+
+        for (const ln of candLines) {
+          const we = String(ln?.week_ending_date || ln?.week_ending_bucket || '').trim();
+          const clientName = String(ln?.client_name || '').trim();
+          const unitName = String(ln?.unit_name || ln?.unit || ln?.ward_name || '').trim();
+          const units = (ln?.units != null) ? String(ln.units) : '';
+          const rate = (ln?.rate != null) ? String(ln.rate) : '';
+          const subtotal =
+            (ln?.subtotal != null) ? asMoney(ln.subtotal)
+            : (ln?.payment_amount != null) ? asMoney(ln.payment_amount)
+            : (ln?.amount != null) ? asMoney(ln.amount)
+            : '';
+
+          rows.push([
+            name,
+            tms,
+            we ? formatIsoToUkLocal(we) : '',
+            clientName,
+            unitName,
+            units,
+            rate,
+            subtotal,
+            gross,
+            net
+          ].map(escCsv).join(','));
+        }
+      }
+
+      const csvText = rows.join('\n');
+
+      const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8' });
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = `paye_worksheet_${id.slice(0, 8)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(objUrl); } catch {} }, 2_000);
+
+      try { if (typeof window.__toast === 'function') window.__toast('PAYE worksheet exported'); } catch {}
+
+    } catch (e) {
+      child.paye.saveError = String(e?.message || e || 'Export failed');
+    } finally {
+      child.actionsBusy.exportingWorksheet = false;
+      await rerenderChild();
+    }
+  };
+
+  const printPayeWorksheet = async () => {
+    if (child.actionsBusy.printingWorksheet) return;
+
+    child.actionsBusy.printingWorksheet = true;
+    await rerenderChild();
+
+    try {
+      const data = child.data;
+      const batchKind = deriveBatchKind(data);
+      if (batchKind !== 'PAYE') throw new Error('This is not a PAYE batch.');
+
+      const candidates = deriveCandidates(data);
+      const filterId = String(child.paye.filterCandidateId || 'ALL').trim();
+      const list = (filterId && filterId !== 'ALL')
+        ? candidates.filter(c => String(c?.candidate_id || '').trim() === filterId)
+        : candidates;
+
+      const htmlRows = list.map((c) => {
+        const name = String(c?.candidate_display_name || c?.display_name || '').trim() || '—';
+        const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
+        const gross = (c?.gross_preview != null) ? Number(c.gross_preview) : NaN;
+        const grossTxt = Number.isFinite(gross) ? `£${(Math.round(gross * 100) / 100).toFixed(2)}` : '—';
+        return `
+          <tr>
+            <td>${enc(name)}</td>
+            <td class="mono">${enc(tms || '')}</td>
+            <td class="mono" style="text-align:right;">${enc(grossTxt)}</td>
+            <td style="min-width:180px;border-bottom:1px solid #ddd;"></td>
+          </tr>
+        `;
+      }).join('');
+
+      const title = `PAYE Worksheet — ${id.slice(0, 8)}`;
+      const w = window.open('', '_blank', 'noopener,noreferrer,width=980,height=720');
+      if (!w) throw new Error('Popup blocked');
+
+      w.document.open();
+      w.document.write(`
+        <html>
+          <head>
+            <title>${enc(title)}</title>
+            <style>
+              body { font-family: Arial, sans-serif; padding: 18px; }
+              h1 { font-size: 16px; margin: 0 0 10px 0; }
+              .meta { font-size: 12px; color: #555; margin-bottom: 12px; }
+              table { width: 100%; border-collapse: collapse; }
+              th, td { padding: 8px; border: 1px solid #ddd; font-size: 12px; }
+              th { background: #f6f6f6; text-align: left; }
+              .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+            </style>
+          </head>
+          <body>
+            <h1>${enc(title)}</h1>
+            <div class="meta">Printed: ${enc(fmtUtcToUk(new Date().toISOString()))}</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Candidate</th>
+                  <th>TMS Ref</th>
+                  <th style="text-align:right;">Gross Grand Total</th>
+                  <th>Net Payment</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${htmlRows}
+              </tbody>
+            </table>
+            <script>
+              setTimeout(() => { try { window.print(); } catch(e) {} }, 50);
+            </script>
+          </body>
+        </html>
+      `);
+      w.document.close();
+
+    } catch (e) {
+      child.paye.saveError = String(e?.message || e || 'Print failed');
+    } finally {
+      child.actionsBusy.printingWorksheet = false;
+      await rerenderChild();
+    }
+  };
+
+  const savePayeNet = async () => {
+    if (child.paye.saveBusy) return;
+
+    child.paye.saveBusy = true;
+    child.paye.saveError = '';
+    await rerenderChild();
+
+    try {
+      const data = child.data;
+      const batchKind = deriveBatchKind(data);
+      if (batchKind !== 'PAYE') throw new Error('This is not a PAYE batch.');
+
+      const candidates = deriveCandidates(data);
+
+      // Build entries preserving existing MANUAL_ENTRY values + any drafts
+      const entries = [];
+      for (const c of candidates) {
+        const cid = String(c?.candidate_id || '').trim();
+        if (!cid) continue;
+
+        const draftRaw = (child.paye.netDraft && Object.prototype.hasOwnProperty.call(child.paye.netDraft, cid))
+          ? String(child.paye.netDraft[cid] || '').trim()
+          : '';
+
+        const existingSource = String(c?.paye_net_source || '').trim().toUpperCase();
+        const existingAmount = (c?.paye_net_amount != null) ? Number(c.paye_net_amount) : NaN;
+
+        let useAmount = null;
+
+        if (draftRaw) {
+          const n = Number(draftRaw);
+          if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid net amount for ${String(c?.candidate_display_name || c?.display_name || cid)}`);
+          useAmount = Math.round(n * 100) / 100;
+        } else if (existingSource === 'MANUAL_ENTRY' && Number.isFinite(existingAmount)) {
+          useAmount = Math.round(existingAmount * 100) / 100;
+        } else {
+          useAmount = null;
+        }
+
+        if (useAmount != null) {
+          entries.push({
+            candidate_id: cid,
+            tms_ref: String(c?.candidate_tms_ref || c?.tms_ref || '').trim() || null,
+            net_amount: useAmount
+          });
+        }
+      }
+
+      if (!entries.length) throw new Error('No manual net amounts to save. Enter at least one net payment.');
+
+      await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/manual`, { entries });
+
+      // Clear drafts that were applied
+      try { child.paye.netDraft = {}; } catch {}
+
+      await loadBatch({ forcePoll: false });
+
+      try { if (typeof window.__toast === 'function') window.__toast('PAYE net amounts saved'); } catch {}
+
+    } catch (e) {
+      child.paye.saveError = String(e?.message || e || 'Save failed');
+    } finally {
+      child.paye.saveBusy = false;
+      await rerenderChild();
+    }
+  };
+
+  const importSageCsv = async (file) => {
+    if (child.paye.importBusy) return;
+
+    child.paye.importBusy = true;
+    child.paye.importError = '';
+    await rerenderChild();
+
+    try {
+      const f = file;
+      if (!f) throw new Error('No file selected');
+
+      const name = String(f.name || 'sage_export.csv');
+      const text = await f.text();
+      if (!String(text || '').trim()) throw new Error('File is empty');
+
+      await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/sage`, {
+        csv_raw: text,
+        source_filename: name
+      });
+
+      child.paye.lastImportFilename = name;
+
+      await loadBatch({ forcePoll: false });
+
+      try { if (typeof window.__toast === 'function') window.__toast('Sage import applied'); } catch {}
+
+    } catch (e) {
+      child.paye.importError = String(e?.message || e || 'Import failed');
+    } finally {
+      child.paye.importBusy = false;
+      await rerenderChild();
+    }
+  };
+
+  // Render tab callback used by showModal
+  const renderTab = (key) => {
+    try {
+      // Keep tab key on child state (for debugging)
+      child.ui.activeTabKey = String(key || '').trim() || 'overview';
+    } catch {}
+
+    if (String(key || '') === 'paye') {
+      return renderBankingPayBatchChildModalPayeWorksheetTab();
+    }
+    return renderBankingPayBatchChildModalOverview();
+  };
+
+  const onDismiss = () => {
+    try {
+      const body = document.getElementById('modalBody');
+      if (body && body.__bankingPayBatchChildHandler) {
+        const h = body.__bankingPayBatchChildHandler;
+        body.removeEventListener('click', h.onClick, true);
+        body.removeEventListener('change', h.onChange, true);
+        body.removeEventListener('input', h.onInput, true);
+        delete body.__bankingPayBatchChildHandler;
+      }
+    } catch {}
+  };
+
+  // Open modal
+  showModal(
+    `Pay Batch — ${id.slice(0, 8)}`,
+    [
+      { key: 'overview', label: 'Overview' },
+      { key: 'paye',     label: 'PAYE Worksheet' }
+    ],
+    renderTab,
+    null,
+    true,
+    null,
+    {
+      kind: KIND,
+      noParentGate: true,
+      showSave: false,
+      showApply: false,
+      stayOpenOnSave: false,
+      onDismiss
+    }
+  );
+
+  // Wire child modal events (self-contained; does not depend on banking delegated handler)
+  const wire = () => {
+    const body = document.getElementById('modalBody');
+    if (!body) return;
+
+    // Prevent double-wire for this child open
+    if (body.__bankingPayBatchChildHandler && body.__bankingPayBatchChildHandler.openToken === child.openToken) return;
+
+    const findRoot = (t) => {
+      try {
+        if (!t || typeof t.closest !== 'function') return null;
+        return t.closest(`#${CSS.escape(rootId)}`);
+      } catch {
+        // Fallback without CSS.escape
+        try { return t.closest(`#${rootId}`); } catch { return null; }
+      }
+    };
+
+    const findActionEl = (ev) => {
+      try {
+        const t = ev && ev.target ? ev.target : null;
+        if (!t || typeof t.closest !== 'function') return null;
+        return t.closest('[data-action]');
+      } catch {
+        return null;
+      }
+    };
+
+    const onClick = async (ev) => {
+      try {
+        if (!stillTopIsThisChild()) return;
+        const root = findRoot(ev.target);
+        if (!root) return;
+
+        const el = findActionEl(ev);
+        if (!el) return;
+
+        const act = String(el.getAttribute('data-action') || '').trim();
+        if (!act) return;
+
+        if (isDisabledEl(el)) return;
+
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        if (act === 'banking:pay:child:refresh') {
+          await loadBatch({ forcePoll: false });
+          return;
+        }
+
+        if (act === 'banking:pay:child:poll') {
+          await loadBatch({ forcePoll: true });
+          return;
+        }
+
+        if (act === 'banking:pay:child:executePayment') {
+          await executePaymentPipeline();
+          return;
+        }
+
+        if (act === 'banking:pay:child:generateCsv') {
+          await generateCsv();
+          return;
+        }
+
+        if (act === 'banking:pay:child:confirmCsv') {
+          await confirmCsvPayment();
+          return;
+        }
+
+        if (act === 'banking:pay:child:expandAll') {
+          const data = child.data;
+          const cands = deriveCandidates(data);
+          const next = {};
+          for (const c of cands) {
+            const cid = String(c?.candidate_id || '').trim();
+            if (cid) next[cid] = true;
+          }
+          child.ui.expanded = next;
+          child.ui.expandAllDefault = true;
+          await rerenderChild();
+          return;
+        }
+
+        if (act === 'banking:pay:child:collapseAll') {
+          child.ui.expanded = {};
+          child.ui.expandAllDefault = false;
+          await rerenderChild();
+          return;
+        }
+
+        if (act === 'banking:pay:child:toggleExpandCandidate') {
+          const cid = String(el.getAttribute('data-candidate-id') || '').trim();
+          if (!cid) return;
+          const cur = !!child.ui.expanded[cid];
+          child.ui.expanded[cid] = !cur;
+          await rerenderChild();
+          return;
+        }
+
+        // PAYE worksheet actions
+        if (act === 'banking:pay:child:paye:toggleEdit') {
+          child.paye.editing = !child.paye.editing;
+          await rerenderChild();
+          return;
+        }
+
+        if (act === 'banking:pay:child:paye:saveNet') {
+          await savePayeNet();
+          return;
+        }
+
+        if (act === 'banking:pay:child:paye:exportWorksheet') {
+          await exportPayeWorksheetCsv();
+          return;
+        }
+
+        if (act === 'banking:pay:child:paye:printWorksheet') {
+          await printPayeWorksheet();
+          return;
+        }
+
+        if (act === 'banking:pay:child:paye:importSage') {
+          const inp = document.getElementById(`${rootId}__payeFile`);
+          if (inp && typeof inp.click === 'function') inp.click();
+          return;
+        }
+
+      } catch {}
+    };
+
+    const onChange = async (ev) => {
+      try {
+        if (!stillTopIsThisChild()) return;
+        const root = findRoot(ev.target);
+        if (!root) return;
+
+        const el = ev.target;
+
+        // Candidate filter dropdown
+        try {
+          if (el && el.getAttribute && String(el.getAttribute('data-action') || '') === 'banking:pay:child:paye:setFilterCandidate') {
+            const v = String(el.value || '').trim();
+            child.paye.filterCandidateId = v || 'ALL';
+            await rerenderChild();
+            return;
+          }
+        } catch {}
+
+        // CSV confirm fields
+        try {
+          if (el && el.getAttribute && String(el.getAttribute('data-action') || '') === 'banking:pay:child:setCsvPaymentDate') {
+            const iso = parseUkDateToIsoLocal(String(el.value || ''));
+            child.csv.payment_date_iso = iso || '';
+            await rerenderChild();
+            return;
+          }
+        } catch {}
+
+        // PAYE import file selected
+        try {
+          if (el && el.id === `${rootId}__payeFile`) {
+            const f = (el.files && el.files[0]) ? el.files[0] : null;
+            // reset input to allow re-selecting same file later
+            try { el.value = ''; } catch {}
+            if (f) await importSageCsv(f);
+            return;
+          }
+        } catch {}
+      } catch {}
+    };
+
+    const onInput = async (ev) => {
+      try {
+        if (!stillTopIsThisChild()) return;
+        const root = findRoot(ev.target);
+        if (!root) return;
+
+        const el = ev.target;
+
+        // Bank confirm ref
+        try {
+          if (el && el.getAttribute && String(el.getAttribute('data-action') || '') === 'banking:pay:child:setCsvConfirmRef') {
+            child.csv.bank_confirm_ref = String(el.value || '').trim();
+            return;
+          }
+        } catch {}
+
+        // PAYE net draft inputs
+        try {
+          if (el && el.getAttribute && String(el.getAttribute('data-action') || '') === 'banking:pay:child:paye:setNetDraft') {
+            const cid = String(el.getAttribute('data-candidate-id') || '').trim();
+            if (!cid) return;
+            child.paye.netDraft = (child.paye.netDraft && typeof child.paye.netDraft === 'object') ? child.paye.netDraft : {};
+            child.paye.netDraft[cid] = String(el.value || '').trim();
+            return;
+          }
+        } catch {}
+      } catch {}
+    };
+
+    body.addEventListener('click', onClick, true);
+    body.addEventListener('change', onChange, true);
+    body.addEventListener('input', onInput, true);
+
+    body.__bankingPayBatchChildHandler = { openToken: child.openToken, onClick, onChange, onInput };
+  };
+
+  // Small helper borrowed from existing banking delegated handler
+  function isDisabledEl(el) {
+    try {
+      if (!el) return false;
+      const d = String(el.getAttribute('data-disabled') || '').trim();
+      if (d === '1' || d.toLowerCase() === 'true') return true;
+      const aria = String(el.getAttribute('aria-disabled') || '').trim().toLowerCase();
+      if (aria === 'true') return true;
+      if (el.classList && el.classList.contains('disabled')) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
+
+  // Initial load
+  await loadBatch({ forcePoll: true });
+}
+
+function renderBankingPayBatchChildModalOverview() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+
+  const fmtUtcToUk = (iso) => {
+    try {
+      if (!iso) return '';
+      const d = new Date(String(iso));
+      if (Number.isNaN(d.getTime())) return String(iso);
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      return fmt.format(d).replace(',', '');
+    } catch {
+      return String(iso || '');
+    }
+  };
+
+  const formatIsoToUkLocal = (ymd) => {
+    const s = String(ymd || '').trim();
+    if (!s) return '';
+    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+    return s;
+  };
+
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '0.00';
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  const st = (mc && mc.banking && typeof mc.banking === 'object') ? mc.banking : null;
+  const pay = (st && st.pay && typeof st.pay === 'object') ? st.pay : null;
+  const child = (pay && pay.child && typeof pay.child === 'object') ? pay.child : null;
+
+  if (!mc || String(mc.entity || '') !== 'banking' || !child) {
+    return `
+      <div class="tabc">
+        <div class="card">
+          <div class="row">
+            <label>Pay batch</label>
+            <div class="controls">
+              <div class="mini" style="opacity:.85;">Child modal state not available.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const rootId = String(child.rootId || '').trim();
+  const id = String(child.batchId || '').trim();
+
+  const data = (child.data && typeof child.data === 'object') ? child.data : null;
+  const batch = (data && data.batch && typeof data.batch === 'object') ? data.batch : null;
+  const transfers = (data && Array.isArray(data.transfers)) ? data.transfers : [];
+  const candidates = (data && Array.isArray(data.candidates)) ? data.candidates : [];
+
+  const status = String(batch?.status || '').trim().toUpperCase() || '—';
+  const provider = String(batch?.rail_provider_snapshot || '').trim().toUpperCase();
+  const env = String(batch?.rail_env_snapshot || '').trim().toUpperCase();
+  const payDate = String(batch?.pay_date || '').trim();
+  const lastCheck = fmtUtcToUk(batch?.last_status_checked_at_utc || '');
+
+  const batchKindRaw = String(data?.batch_kind || batch?.batch_kind || '').trim().toUpperCase();
+  const batchKind = (batchKindRaw === 'PAYE' || batchKindRaw === 'UMBRELLA' || batchKindRaw === 'MIXED') ? batchKindRaw : '';
+
+  const isCsvRail = !!provider && provider === 'CSV';
+
+  const pillStatus =
+    (status === 'SETTLED') ? 'pill pill-ok'
+    : (status === 'EXECUTING' || status === 'PARTIAL' || status === 'AWAITING_AUTHORISATION') ? 'pill pill-warn'
+    : (status === 'DRAFT' || status === 'READY' || status === 'WAITING_BANK_CONFIRM') ? 'pill pill-info'
+    : 'pill';
+
+  const pendingCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'PENDING').length;
+  const completedCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'COMPLETED').length;
+  const failedCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'FAILED').length;
+  const blockedCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'BLOCKED').length;
+
+  const canShowConfirm = isCsvRail && !!child.csv && !!child.csv.generated_at_utc;
+
+  const confirmPayDateUk = (() => {
+    const iso = String(child?.csv?.payment_date_iso || '').trim();
+    if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) return formatIsoToUkLocal(iso);
+    return '';
+  })();
+
+  const confirmRef = String(child?.csv?.bank_confirm_ref || '').trim();
+
+  const expanded = (child.ui && typeof child.ui === 'object' && child.ui.expanded && typeof child.ui.expanded === 'object') ? child.ui.expanded : {};
+
+  const candidateRowsHtml = candidates.length
+    ? candidates.map((c) => {
+        const cid = String(c?.candidate_id || '').trim();
+        const name = String(c?.candidate_display_name || c?.display_name || '').trim() || '—';
+        const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
+        const payeState = String(c?.paye_state || '').trim().toUpperCase();
+        const payeNet = (c?.paye_net_amount != null) ? fmtMoney(c.paye_net_amount) : '';
+        const gross = (c?.gross_preview != null) ? fmtMoney(c.gross_preview) : '';
+        const net = (c?.net_bank_amount != null) ? fmtMoney(c.net_bank_amount) : '';
+
+        // Candidate transfer status rollup
+        const candTransfers = transfers.filter(t => String(t?.candidate_id || '').trim() === cid);
+        const roll = (() => {
+          if (!candTransfers.length) return { pill: '', sub: '' };
+          const sts = candTransfers.map(t => String(t?.status || '').trim().toUpperCase()).filter(Boolean);
+          const rs  = candTransfers.map(t => String(t?.rail_state || '').trim().toUpperCase()).filter(Boolean);
+          const hasPending = sts.includes('PENDING');
+          const hasFailed  = sts.includes('FAILED');
+          const hasBlocked = sts.includes('BLOCKED');
+          const allDone    = sts.length > 0 && sts.every(x => x === 'COMPLETED');
+
+          if (allDone) {
+            const sub = rs.includes('MANUAL_CONFIRM') ? 'CSV payment' : (rs.includes('BANK_CONFIRMED') ? 'Bank confirmed' : '');
+            return { pill: `<span class="pill pill-ok">PAID</span>`, sub: sub ? `<div class="mini" style="opacity:.8;">${enc(sub)}</div>` : '' };
+          }
+          if (hasFailed) return { pill: `<span class="pill pill-warn">FAILED</span>`, sub: '' };
+          if (hasBlocked) return { pill: `<span class="pill pill-warn">BLOCKED</span>`, sub: '' };
+          if (hasPending) return { pill: `<span class="pill pill-info">SENT</span>`, sub: '' };
+          return { pill: `<span class="pill pill-info">IN_PROGRESS</span>`, sub: '' };
+        })();
+
+        const isExpanded = !!expanded[cid];
+
+        const linesRaw = (data && Array.isArray(data.candidate_lines)) ? data.candidate_lines : [];
+        const lines = Array.isArray(linesRaw) ? linesRaw.filter(x => String(x?.candidate_id || '').trim() === cid) : [];
+
+        const linesHtml = isExpanded ? `
+          <div style="margin-top:8px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
+            <table class="grid" style="min-width:980px; table-layout:auto;">
+              <thead>
+                <tr>
+                  <th style="width:140px;">Week ending</th>
+                  <th>Client</th>
+                  <th>Unit</th>
+                  <th style="width:90px; text-align:right;">Units</th>
+                  <th style="width:110px; text-align:right;">Rate</th>
+                  <th style="width:140px; text-align:right;">Subtotal</th>
+                  <th style="width:160px;">Type</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${
+                  lines.length
+                    ? lines.map(ln => {
+                        const we = String(ln?.week_ending_date || ln?.week_ending_bucket || '').trim();
+                        const cl = String(ln?.client_name || '').trim();
+                        const un = String(ln?.unit_name || ln?.unit || ln?.ward_name || '').trim();
+                        const units = (ln?.units != null) ? String(ln.units) : '';
+                        const rate = (ln?.rate != null) ? String(ln.rate) : '';
+                        const sub =
+                          (ln?.subtotal != null) ? fmtMoney(ln.subtotal)
+                          : (ln?.payment_amount != null) ? fmtMoney(ln.payment_amount)
+                          : (ln?.amount != null) ? fmtMoney(ln.amount)
+                          : '';
+                        const kind = String(ln?.line_kind || ln?.kind || ln?.item_type || '').trim() || '—';
+                        return `
+                          <tr>
+                            <td class="mini" style="white-space:nowrap;">${enc(we ? formatIsoToUkLocal(we) : '—')}</td>
+                            <td class="mini">${enc(cl || '—')}</td>
+                            <td class="mini">${enc(un || '—')}</td>
+                            <td class="mono" style="text-align:right;">${enc(units || '')}</td>
+                            <td class="mono" style="text-align:right;">${enc(rate || '')}</td>
+                            <td class="mono" style="text-align:right;">${enc(sub || '')}</td>
+                            <td class="mini">${enc(kind)}</td>
+                          </tr>
+                        `;
+                      }).join('')
+                    : `<tr><td colspan="7" class="mini" style="opacity:.85;">No line breakdown available in this response.</td></tr>`
+                }
+              </tbody>
+            </table>
+          </div>
+        ` : '';
+
+        const rightAmt = (batchKind === 'PAYE')
+          ? (payeNet ? `£${payeNet}` : `£${gross || '0.00'}`)
+          : `£${net || '0.00'}`;
+
+        const payeBadge = (batchKind === 'PAYE')
+          ? ((payeState && payeState !== 'READY')
+              ? `<span class="pill pill-warn">Awaiting Net amount</span>`
+              : `<span class="pill pill-ok">READY</span>`)
+          : '';
+
+        return `
+          <div class="card" style="padding:10px; margin-top:10px;">
+            <div style="display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap;">
+              <div style="flex:1; min-width:360px;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline"
+                    data-action="banking:pay:child:toggleExpandCandidate"
+                    data-candidate-id="${enc(cid)}"
+                    title="${isExpanded ? 'Collapse' : 'Expand'}"
+                  >${isExpanded ? '▾' : '▸'}</button>
+
+                  <div style="font-weight:700;">${enc(name)}</div>
+                  ${tms ? `<span class="mono">${enc(tms)}</span>` : ``}
+                  ${payeBadge}
+                </div>
+
+                <div class="mini" style="opacity:.85; margin-top:6px;">
+                  ${roll.pill}${roll.sub}
+                </div>
+              </div>
+
+              <div style="min-width:220px; text-align:right;">
+                <div class="mini" style="opacity:.8;">Amount</div>
+                <div class="mono" style="font-size:16px;">${enc(rightAmt)}</div>
+              </div>
+            </div>
+
+            ${linesHtml}
+          </div>
+        `;
+      }).join('')
+    : `<div class="mini" style="opacity:.85;">No candidates found in this batch.</div>`;
+
+  const errHtml = String(child.error || '').trim()
+    ? `<div class="error" style="white-space:pre-wrap;">${enc(String(child.error || '').trim())}</div>`
+    : '';
+
+  const busyLine = (() => {
+    const bits = [];
+    if (child.loading) bits.push('Loading…');
+    if (child.actionsBusy && child.actionsBusy.polling) bits.push('Polling…');
+    if (child.actionsBusy && child.actionsBusy.executing) bits.push('Executing…');
+    if (child.actionsBusy && child.actionsBusy.exportingCsv) bits.push('Exporting CSV…');
+    if (child.actionsBusy && child.actionsBusy.confirmingCsv) bits.push('Confirming…');
+    return bits.length ? `<span class="mini" style="opacity:.8;">${enc(bits.join(' '))}</span>` : '';
+  })();
+
+  return `
+    <div class="tabc" id="${enc(rootId)}">
+      <div class="card">
+        <div class="row">
+          <label>Overview</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${errHtml}
+
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+              <span class="${enc(pillStatus)}">${enc(status)}</span>
+              ${batchKind ? `<span class="pill pill-info" title="Batch kind">${enc(batchKind)}</span>` : ``}
+              <span class="mini">${enc((provider || '—') + (env ? `/${env}` : ''))}</span>
+              <span class="mini">Pay date: <span class="mono">${enc(payDate ? formatIsoToUkLocal(payDate) : '—')}</span></span>
+              <span class="mini">Last check: <span class="mono">${enc(lastCheck || '—')}</span></span>
+              <span class="mini" style="opacity:.8;">Transfers: <span class="mono">${enc(String(transfers.length))}</span> (PENDING ${enc(String(pendingCount))} • DONE ${enc(String(completedCount))} • FAILED ${enc(String(failedCount))} • BLOCKED ${enc(String(blockedCount))})</span>
+              <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:poll" title="Poll bank status (throttled by backend)">Refresh status</button>
+                ${busyLine}
+              </div>
+            </div>
+
+            <div class="grid-2" style="align-items:start;">
+              <div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:expandAll">Expand all</button>
+                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:collapseAll">Collapse all</button>
+                </div>
+
+                ${candidateRowsHtml}
+              </div>
+
+              <div>
+                <div class="card" style="padding:10px; margin-bottom:10px;">
+                  <div class="row">
+                    <label>Actions</label>
+                    <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-primary"
+                        data-action="banking:pay:child:executePayment"
+                        ${child.loading ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
+                        title="Execute → Prepare → Schedule (may require re-auth for scheduling)"
+                      >Execute Payment</button>
+
+                      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-outline"
+                          data-action="banking:pay:child:generateCsv"
+                          ${(!isCsvRail ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : '')}
+                          title="${!isCsvRail ? 'CSV export is only available for CSV rail batches' : 'Generate and download CSV'}"
+                        >Generate CSV export</button>
+
+                        ${child.csv && child.csv.generated_at_utc ? `<span class="mini" style="opacity:.85;">Generated: <span class="mono">${enc(fmtUtcToUk(child.csv.generated_at_utc))}</span></span>` : ``}
+                      </div>
+
+                      ${
+                        canShowConfirm
+                          ? `
+                            <div class="card" style="padding:10px;">
+                              <div class="mini" style="opacity:.9; font-weight:700; margin-bottom:8px;">Confirm payment to bank by CSV</div>
+
+                              <div style="display:flex; flex-direction:column; gap:8px;">
+                                <div>
+                                  <label class="inline mini" style="opacity:.85;">Payment date</label>
+                                  <input
+                                    class="input"
+                                    type="text"
+                                    placeholder="DD/MM/YYYY"
+                                    value="${enc(confirmPayDateUk || '')}"
+                                    data-action="banking:pay:child:setCsvPaymentDate"
+                                    data-uk-date="1"
+                                    title="Date the CSV payment was confirmed/processed"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label class="inline mini" style="opacity:.85;">Bank confirm reference</label>
+                                  <input
+                                    class="input"
+                                    type="text"
+                                    placeholder="Reference from bank"
+                                    value="${enc(confirmRef || '')}"
+                                    data-action="banking:pay:child:setCsvConfirmRef"
+                                  />
+                                </div>
+
+                                <button
+                                  type="button"
+                                  class="btn btn-sm btn-primary"
+                                  data-action="banking:pay:child:confirmCsv"
+                                  title="Mark transfers as completed by CSV confirm (also triggers remittances)"
+                                >Confirm by CSV</button>
+
+                                ${child.csv && child.csv.confirmed_at_utc ? `<div class="mini" style="opacity:.85;">Confirmed: <span class="mono">${enc(fmtUtcToUk(child.csv.confirmed_at_utc))}</span></div>` : ``}
+                              </div>
+                            </div>
+                          `
+                          : `
+                            <div class="mini" style="opacity:.8;">
+                              Confirm by CSV appears after you generate the CSV export.
+                            </div>
+                          `
+                      }
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mini" style="opacity:.8;">
+                  Notes: “Refresh status” calls the rail poll endpoint (backend throttles repeated calls using last_status_checked_at_utc).
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+function renderBankingPayBatchChildModalPayeWorksheetTab() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '0.00';
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const formatIsoToUkLocal = (ymd) => {
+    const s = String(ymd || '').trim();
+    if (!s) return '';
+    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+    return s;
+  };
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  const st = (mc && mc.banking && typeof mc.banking === 'object') ? mc.banking : null;
+  const pay = (st && st.pay && typeof st.pay === 'object') ? st.pay : null;
+  const child = (pay && pay.child && typeof pay.child === 'object') ? pay.child : null;
+
+  if (!mc || String(mc.entity || '') !== 'banking' || !child) {
+    return `
+      <div class="tabc">
+        <div class="card">
+          <div class="row">
+            <label>PAYE Worksheet</label>
+            <div class="controls">
+              <div class="mini" style="opacity:.85;">Child modal state not available.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const rootId = String(child.rootId || '').trim();
+  const id = String(child.batchId || '').trim();
+
+  const data = (child.data && typeof child.data === 'object') ? child.data : null;
+  const batch = (data && data.batch && typeof data.batch === 'object') ? data.batch : null;
+
+  const batchKindRaw = String(data?.batch_kind || batch?.batch_kind || '').trim().toUpperCase();
+  const batchKind = (batchKindRaw === 'PAYE' || batchKindRaw === 'UMBRELLA' || batchKindRaw === 'MIXED') ? batchKindRaw : '';
+
+  if (batchKind && batchKind !== 'PAYE') {
+    return `
+      <div class="tabc" id="${enc(rootId)}">
+        <div class="card">
+          <div class="row">
+            <label>PAYE Worksheet</label>
+            <div class="controls">
+              <div class="mini" style="opacity:.85;">This batch is not a PAYE batch.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const candidates = (data && Array.isArray(data.candidates)) ? data.candidates : [];
+  const linesRaw = (data && Array.isArray(data.candidate_lines)) ? data.candidate_lines : [];
+  const lines = Array.isArray(linesRaw) ? linesRaw : [];
+
+  const filterId = String(child?.paye?.filterCandidateId || 'ALL').trim() || 'ALL';
+
+  const list = (filterId !== 'ALL')
+    ? candidates.filter(c => String(c?.candidate_id || '').trim() === filterId)
+    : candidates;
+
+  const byCand = new Map();
+  for (const ln of lines) {
+    const cid = String(ln?.candidate_id || '').trim();
+    if (!cid) continue;
+    if (!byCand.has(cid)) byCand.set(cid, []);
+    byCand.get(cid).push(ln);
+  }
+
+  const editing = !!child?.paye?.editing;
+  const netDraft = (child?.paye?.netDraft && typeof child.paye.netDraft === 'object') ? child.paye.netDraft : {};
+  const importBusy = !!child?.paye?.importBusy;
+  const saveBusy = !!child?.paye?.saveBusy;
+
+  const importErr = String(child?.paye?.importError || '').trim();
+  const saveErr = String(child?.paye?.saveError || '').trim();
+
+  const optionsHtml = [
+    `<option value="ALL"${filterId === 'ALL' ? ' selected' : ''}>All</option>`,
+    ...candidates.map(c => {
+      const cid = String(c?.candidate_id || '').trim();
+      if (!cid) return '';
+      const name = String(c?.candidate_display_name || c?.display_name || '').trim();
+      const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
+      const label = `${name || '—'}${tms ? ` (${tms})` : ''}`;
+      return `<option value="${enc(cid)}"${cid === filterId ? ' selected' : ''}>${enc(label)}</option>`;
+    }).filter(Boolean)
+  ].join('');
+
+  const rowsHtml = list.length
+    ? list.map((c) => {
+        const cid = String(c?.candidate_id || '').trim();
+        const name = String(c?.candidate_display_name || c?.display_name || '').trim() || '—';
+        const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
+        const gross = (c?.gross_preview != null) ? fmtMoney(c.gross_preview) : '0.00';
+
+        const payeState = String(c?.paye_state || '').trim().toUpperCase();
+        const existingNet = (c?.paye_net_amount != null) ? fmtMoney(c.paye_net_amount) : '';
+        const existingSource = String(c?.paye_net_source || '').trim().toUpperCase();
+
+        const draftRaw = Object.prototype.hasOwnProperty.call(netDraft, cid) ? String(netDraft[cid] || '').trim() : '';
+        const displayNet = draftRaw ? draftRaw : (existingNet ? existingNet : '');
+
+        const statusPill = (payeState && payeState !== 'READY')
+          ? `<span class="pill pill-warn">Awaiting Net amount</span>`
+          : `<span class="pill pill-ok">READY</span>`;
+
+        const linesForCand = byCand.get(cid) || [];
+
+        const lineRows = linesForCand.length
+          ? linesForCand.map(ln => {
+              const we = String(ln?.week_ending_date || ln?.week_ending_bucket || '').trim();
+              const cl = String(ln?.client_name || '').trim();
+              const un = String(ln?.unit_name || ln?.unit || ln?.ward_name || '').trim();
+              const units = (ln?.units != null) ? String(ln.units) : '';
+              const rate = (ln?.rate != null) ? String(ln.rate) : '';
+              const sub =
+                (ln?.subtotal != null) ? fmtMoney(ln.subtotal)
+                : (ln?.payment_amount != null) ? fmtMoney(ln.payment_amount)
+                : (ln?.amount != null) ? fmtMoney(ln.amount)
+                : '';
+              const kind = String(ln?.line_kind || ln?.kind || ln?.item_type || '').trim() || '—';
+
+              return `
+                <tr>
+                  <td class="mini" style="white-space:nowrap;">${enc(we ? formatIsoToUkLocal(we) : '—')}</td>
+                  <td class="mini">${enc(cl || '—')}</td>
+                  <td class="mini">${enc(un || '—')}</td>
+                  <td class="mono" style="text-align:right;">${enc(units || '')}</td>
+                  <td class="mono" style="text-align:right;">${enc(rate || '')}</td>
+                  <td class="mono" style="text-align:right;">${enc(sub || '')}</td>
+                  <td class="mini">${enc(kind)}</td>
+                </tr>
+              `;
+            }).join('')
+          : `<tr><td colspan="7" class="mini" style="opacity:.85;">No line breakdown available in this response.</td></tr>`;
+
+        return `
+          <div class="card" style="padding:10px; margin-top:10px;">
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+              <div style="flex:1; min-width:360px;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <div style="font-weight:700;">${enc(name)}</div>
+                  ${tms ? `<span class="mono">${enc(tms)}</span>` : ``}
+                  ${statusPill}
+                  ${existingSource ? `<span class="mini" style="opacity:.75;">(Net source: ${enc(existingSource)})</span>` : ``}
+                </div>
+              </div>
+
+              <div style="min-width:220px; text-align:right;">
+                <div class="mini" style="opacity:.8;">Gross Grand Total</div>
+                <div class="mono" style="font-size:16px;">£${enc(gross)}</div>
+              </div>
+
+              <div style="min-width:260px;">
+                <div class="mini" style="opacity:.8;">Net Payment</div>
+                <input
+                  class="input"
+                  style="width:100%;"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  ${editing ? '' : 'readonly data-disabled="1" aria-disabled="true"'}
+                  value="${enc(displayNet)}"
+                  data-action="banking:pay:child:paye:setNetDraft"
+                  data-candidate-id="${enc(cid)}"
+                  title="${editing ? 'Enter net payment for this candidate' : 'Click Edit to change'}"
+                />
+              </div>
+            </div>
+
+            <div style="margin-top:10px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
+              <table class="grid" style="min-width:980px; table-layout:auto;">
+                <thead>
+                  <tr>
+                    <th style="width:140px;">Week ending</th>
+                    <th>Client</th>
+                    <th>Unit</th>
+                    <th style="width:90px; text-align:right;">Units</th>
+                    <th style="width:110px; text-align:right;">Rate</th>
+                    <th style="width:140px; text-align:right;">Subtotal</th>
+                    <th style="width:160px;">Type</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${lineRows}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      }).join('')
+    : `<div class="mini" style="opacity:.85;">No PAYE candidates found.</div>`;
+
+  return `
+    <div class="tabc" id="${enc(rootId)}">
+      <input id="${enc(rootId)}__payeFile" type="file" accept=".csv,text/csv" style="display:none;" />
+
+      <div class="card">
+        <div class="row">
+          <label>PAYE Worksheet</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${saveErr ? `<div class="error" style="white-space:pre-wrap;">${enc(saveErr)}</div>` : ''}
+            ${importErr ? `<div class="error" style="white-space:pre-wrap;">${enc(importErr)}</div>` : ''}
+
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+              <label class="inline mini" style="opacity:.85;">Candidate</label>
+              <select
+                class="input"
+                style="min-width:320px;max-width:520px;"
+                data-action="banking:pay:child:paye:setFilterCandidate"
+              >
+                ${optionsHtml}
+              </select>
+
+              <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:pay:child:paye:exportWorksheet"
+                  ${child.actionsBusy.exportingWorksheet ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
+                  title="Export worksheet CSV (client-side)"
+                >Export</button>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:pay:child:paye:importSage"
+                  ${importBusy ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
+                  title="Import Sage net amounts (CSV)"
+                >${importBusy ? 'Importing…' : 'Import CSV'}</button>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:pay:child:paye:printWorksheet"
+                  ${child.actionsBusy.printingWorksheet ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
+                  title="Print worksheet (gross totals + blank net fields)"
+                >Print</button>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:pay:child:paye:toggleEdit"
+                  title="Toggle edit mode"
+                >${editing ? 'Stop editing' : 'Edit'}</button>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-primary"
+                  data-action="banking:pay:child:paye:saveNet"
+                  ${(!editing || saveBusy) ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
+                  title="Save manual net amounts (preserves prior manual entries)"
+                >${saveBusy ? 'Saving…' : 'Save'}</button>
+              </div>
+            </div>
+
+            <div class="mini" style="opacity:.8;">
+              Notes: Net Payment is one value per candidate. Execution is blocked until all PAYE candidates are READY.
+            </div>
+
+            ${rowsHtml}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
 
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
@@ -12103,75 +13685,273 @@ function attachBankingModalDelegatedHandlers() {
       return;
     }
 
+    const openBatchChild = async (batchId) => {
+      const id0 = String(batchId || '').trim();
+      if (!id0) return;
+      try {
+        if (typeof openBankingPayBatchChildModal === 'function') {
+          await openBankingPayBatchChildModal(id0);
+          return;
+        }
+      } catch {}
+      toast('Open batch: child modal not available yet.');
+    };
+
+    if (a === 'banking:pay:openChild') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      if (!id) return;
+      await openBatchChild(id);
+      return;
+    }
+
+    if (a === 'banking:pay:cancel' || a === 'banking:pay:deleteDraft') {
+      const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
+      if (!id) return;
+
+      const g = safeGate('CANCEL');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+
+      let creds = null;
+      try {
+        if (typeof openPayBatchPasswordConfirmModal === 'function') {
+          creds = await openPayBatchPasswordConfirmModal({
+            title: 'Delete draft batch',
+            subtitle: 'Enter your password and a reason. This releases reserved items back into preview.',
+            defaultReason: 'Delete draft batch'
+          });
+        }
+      } catch {}
+
+      const pw = String(creds?.password || '').trim();
+      const reason = String(creds?.reason || '').trim();
+      if (!pw || !reason) return;
+
+      try {
+        await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel`, { password: pw, reason });
+
+        try {
+          if (String(st.pay?.selectedBatchId || '').trim() === id) {
+            st.pay.selectedBatchId = null;
+            if (st.pay.selected && typeof st.pay.selected === 'object') st.pay.selected.data = null;
+          }
+        } catch {}
+
+        try {
+          if (typeof bankingPayBatchesList === 'function') {
+            await bankingPayBatchesList({
+              status: st.pay.list ? st.pay.list.statusFilter : null,
+              limit: st.pay.list ? st.pay.list.limit : null,
+              offset: st.pay.list ? st.pay.list.offset : null
+            });
+          }
+        } catch {}
+
+        try {
+          const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
+          if (pd && typeof bankingPayPreview === 'function') await bankingPayPreview(pd);
+        } catch {}
+
+        await safeRerender(null);
+      } catch (e) {
+        try {
+          if (typeof bankingHandleApiError === 'function') {
+            bankingHandleApiError(e, { action: 'CANCEL', scope: null, batchId: id, errorPath: ['pay', 'list', 'error'] });
+          }
+        } catch {}
+      }
+      return;
+    }
+
+    if (a === 'banking:pay:snoozeUpsert') {
+      const candidate_id = String(ds('candidateId') || dget('data-candidate-id') || '').trim();
+      if (!candidate_id) { toast('candidate_id is required'); return; }
+
+      const timesheet_id_raw = String(ds('timesheetId') || dget('data-timesheet-id') || '').trim();
+      const timesheet_id = timesheet_id_raw ? timesheet_id_raw : null;
+
+      const segment_id_raw = String(ds('segmentId') || dget('data-segment-id') || '').trim();
+      const segment_id = segment_id_raw ? segment_id_raw : null;
+
+      const source_ref_raw = String(ds('sourceRef') || dget('data-source-ref') || '').trim();
+      const source_ref = source_ref_raw ? source_ref_raw : null;
+
+      const snooze_kind_raw = String(ds('snoozeKind') || dget('data-snooze-kind') || 'DO_NOT_PAY').trim().toUpperCase();
+      const snooze_kind = (snooze_kind_raw === 'BLOCKED' || snooze_kind_raw === 'DO_NOT_PAY') ? snooze_kind_raw : 'DO_NOT_PAY';
+
+      const snooze_until_raw = String(ds('snoozeUntilDate') || dget('data-snooze-until-date') || '').trim();
+      const snooze_until_date = snooze_until_raw ? snooze_until_raw : null;
+
+      const note_raw = String(ds('note') || dget('data-note') || '').trim();
+      const note = note_raw ? note_raw : null;
+
+      try {
+        await apiPostJson('/api/banking/pay/snooze/upsert', {
+          candidate_id,
+          timesheet_id,
+          segment_id,
+          source_ref,
+          snooze_kind,
+          snooze_until_date,
+          note
+        });
+
+        try {
+          const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
+          if (pd && typeof bankingPayPreview === 'function') await bankingPayPreview(pd);
+        } catch {}
+
+        await safeRerender(null);
+      } catch (e) {
+        try {
+          if (typeof bankingHandleApiError === 'function') {
+            bankingHandleApiError(e, { action: 'SNOOZE_UPSERT', scope: null, batchId: null, errorPath: ['pay', 'draftWizard', 'preview', 'error'] });
+          }
+        } catch {}
+      }
+      return;
+    }
+
+    if (a === 'banking:pay:snoozeClear') {
+      const snooze_id = String(ds('snoozeId') || dget('data-snooze-id') || '').trim();
+      if (!snooze_id) { toast('snooze_id is required'); return; }
+
+      try {
+        await apiPostJson('/api/banking/pay/snooze/clear', { snooze_id });
+
+        try {
+          const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
+          if (pd && typeof bankingPayPreview === 'function') await bankingPayPreview(pd);
+        } catch {}
+
+        await safeRerender(null);
+      } catch (e) {
+        try {
+          if (typeof bankingHandleApiError === 'function') {
+            bankingHandleApiError(e, { action: 'SNOOZE_CLEAR', scope: null, batchId: null, errorPath: ['pay', 'draftWizard', 'preview', 'error'] });
+          }
+        } catch {}
+      }
+      return;
+    }
+
+    if (a === 'banking:pay:bankNameCheckSetOverride' || a === 'banking:pay:acceptBankDetails') {
+      const entity_kind = String(ds('entityKind') || dget('data-entity-kind') || '').trim().toUpperCase();
+      const entity_id = String(ds('entityId') || dget('data-entity-id') || '').trim();
+      const reason = String(ds('reason') || dget('data-reason') || '').trim();
+
+      if (!entity_kind || !(entity_kind === 'CANDIDATE' || entity_kind === 'UMBRELLA')) { toast('entity_kind must be CANDIDATE or UMBRELLA'); return; }
+      if (!entity_id) { toast('entity_id is required'); return; }
+      if (!reason) { toast('reason is required'); return; }
+
+      const provider = String(ds('provider') || dget('data-provider') || '').trim();
+      const env0 = String(ds('env') || dget('data-env') || '').trim();
+
+      try {
+        await apiPostJson('/api/banking/pay/bank-name-check/override', {
+          provider: provider || null,
+          env: env0 || null,
+          entity_kind,
+          entity_id,
+          reason
+        });
+
+        await safeRerender(null);
+      } catch (e) {
+        try {
+          if (typeof bankingHandleApiError === 'function') {
+            bankingHandleApiError(e, { action: 'BANK_NAME_CHECK_OVERRIDE', scope: null, batchId: null, errorPath: ['ui', 'globalError'] });
+          }
+        } catch {}
+      }
+      return;
+    }
+
+    if (a === 'banking:pay:bankNameCheckClearOverride') {
+      const entity_kind = String(ds('entityKind') || dget('data-entity-kind') || '').trim().toUpperCase();
+      const entity_id = String(ds('entityId') || dget('data-entity-id') || '').trim();
+
+      if (!entity_kind || !(entity_kind === 'CANDIDATE' || entity_kind === 'UMBRELLA')) { toast('entity_kind must be CANDIDATE or UMBRELLA'); return; }
+      if (!entity_id) { toast('entity_id is required'); return; }
+
+      const provider = String(ds('provider') || dget('data-provider') || '').trim();
+      const env0 = String(ds('env') || dget('data-env') || '').trim();
+
+      try {
+        await apiPostJson('/api/banking/pay/bank-name-check/clear-override', {
+          provider: provider || null,
+          env: env0 || null,
+          entity_kind,
+          entity_id
+        });
+
+        await safeRerender(null);
+      } catch (e) {
+        try {
+          if (typeof bankingHandleApiError === 'function') {
+            bankingHandleApiError(e, { action: 'BANK_NAME_CHECK_CLEAR_OVERRIDE', scope: null, batchId: null, errorPath: ['ui', 'globalError'] });
+          }
+        } catch {}
+      }
+      return;
+    }
+
     if (a === 'banking:pay:selectBatch') {
       const id = String(ds('batchId') || dget('data-batch-id') || '').trim();
       if (!id) return;
-      await bankingPayBatchGet?.(id);
+      try { st.pay.selectedBatchId = id; } catch {}
+      await safeRerender(null);
       return;
     }
 
     if (a === 'banking:pay:refreshSelected') {
       const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
       if (!id) return;
-      await bankingPayBatchGet?.(id);
+      await openBatchChild(id);
       return;
     }
 
     if (a === 'banking:pay:poll') {
       const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
       if (!id) return;
-      const g = safeGate('POLL');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingPayBatchPoll?.(id);
+      toast('Pending status check has moved to the batch child modal.');
+      await openBatchChild(id);
       return;
     }
 
     if (a === 'banking:pay:executeBank') {
       const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
-      const scope = String(ds('scope') || dget('data-scope') || 'ALL').trim().toUpperCase();
       if (!id) return;
-      const g = safeGate('EXECUTE_BANK');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingPayBatchExecute?.(id, scope);
-      await bankingPayBatchGet?.(id);
+      toast('Execute payment has moved to the batch child modal.');
+      await openBatchChild(id);
       return;
     }
 
     if (a === 'banking:pay:exportCsv') {
       const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
-      const scope = String(ds('scope') || dget('data-scope') || 'ALL').trim().toUpperCase();
       if (!id) return;
-      const g = safeGate('EXPORT_CSV');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingPayBatchExportCsv?.(id, scope);
+      toast('CSV export has moved to the batch child modal.');
+      await openBatchChild(id);
       return;
     }
 
     if (a === 'banking:pay:setManualConfirmRef') {
-      const v = (el && el.value != null) ? String(el.value) : '';
-      setManualConfirmRef(v);
+      toast('CSV confirm has moved to the batch child modal.');
       return;
     }
 
     if (a === 'banking:pay:manualConfirm') {
       const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
-      const scope = String(ds('scope') || dget('data-scope') || 'ALL').trim().toUpperCase();
       if (!id) return;
-      const g = safeGate('MANUAL_CONFIRM');
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      const ref = String(st.pay?.manualConfirmForm?.bank_confirm_ref || '').trim();
-      await bankingPayBatchManualConfirm?.(id, scope, ref);
+      toast('CSV confirm has moved to the batch child modal.');
+      await openBatchChild(id);
       return;
     }
 
     if (a === 'banking:pay:sendRemittances') {
       const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
-      const scope = String(ds('scope') || dget('data-scope') || 'ALL').trim().toUpperCase();
       if (!id) return;
-      const actionKind = (scope === 'PAYE') ? 'SEND_REMITTANCES_PAYE' : 'SEND_REMITTANCES';
-      const g = safeGate(actionKind);
-      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
-      await bankingPayBatchRemittancesSend?.(id, scope);
+      toast('Remittances have moved to the batch child modal.');
+      await openBatchChild(id);
       return;
     }
 
@@ -12227,9 +14007,44 @@ function attachBankingModalDelegatedHandlers() {
     } catch {}
   };
 
+  const onDblClick = async (ev) => {
+    try {
+      if (!isActiveBankingFrame()) return;
+
+      const t = ev && ev.target ? ev.target : null;
+      if (!t || typeof t.closest !== 'function') return;
+
+      const row = t.closest('tr[data-batch-id]');
+      if (!row) return;
+
+      const id = String(row.getAttribute('data-batch-id') || '').trim();
+      if (!id) return;
+
+      try { ev.preventDefault(); ev.stopPropagation(); } catch {}
+
+      try {
+        const st = getState();
+        if (st && st.pay && typeof st.pay === 'object') {
+          st.pay.selectedBatchId = id;
+        }
+      } catch {}
+
+      try {
+        if (typeof openBankingPayBatchChildModal === 'function') {
+          await openBankingPayBatchChildModal(id);
+          return;
+        }
+      } catch {}
+
+      toast('Open batch: child modal not available yet.');
+      await safeRerender(null);
+    } catch {}
+  };
+
   targetEl.addEventListener('click', onClick, true);
   targetEl.addEventListener('change', onChange, true);
   targetEl.addEventListener('input', onInput, true);
+  targetEl.addEventListener('dblclick', onDblClick, true);
 
   // ✅ Ensure pay date picker is always wired with minDate=today (prevents picking past dates)
   try {
@@ -12277,10 +14092,12 @@ function attachBankingModalDelegatedHandlers() {
         onClick,
         onChange,
         onInput,
+        onDblClick,
         detach: () => {
           try { targetEl.removeEventListener('click', onClick, true); } catch {}
           try { targetEl.removeEventListener('change', onChange, true); } catch {}
           try { targetEl.removeEventListener('input', onInput, true); } catch {}
+          try { targetEl.removeEventListener('dblclick', onDblClick, true); } catch {}
         }
       };
     }
@@ -12288,7 +14105,6 @@ function attachBankingModalDelegatedHandlers() {
 
   return { ok: true };
 }
-
 
 
 // NEW: advanced, section-aware search modal
@@ -73086,6 +74902,52 @@ function renderSettingsTab(key, s = {}) {
     const monthsBack = (s.pay_eligibility_months_back == null) ? '' : String(s.pay_eligibility_months_back);
     const weeksAhead = (s.pay_eligibility_weeks_ahead == null) ? '' : String(s.pay_eligibility_weeks_ahead);
 
+    // ✅ Export CSV columns config (authoritative list must match DB allowed keys)
+    const CSV_ALLOWED = [
+      { key:'transfer_id', label:'Transfer id' },
+      { key:'payment_reference', label:'Payment reference' },
+      { key:'payee_name', label:'Payee name' },
+      { key:'sort_code', label:'Sort code' },
+      { key:'account_number', label:'Bank account number' },
+      { key:'account_type', label:'Bank account type' },
+      { key:'amount', label:'Amount' },
+      { key:'currency', label:'Currency' },
+      { key:'pay_channel', label:'Channel' },
+      { key:'rail_provider', label:'Rail provider' },
+      { key:'rail_env', label:'Rail env' },
+      { key:'request_id', label:'Request id' },
+      { key:'transfer_group_key', label:'Transfer group key' },
+      { key:'grouping_mode_used', label:'Grouping mode' },
+      { key:'week_ending_bucket', label:'Week ending bucket' },
+      { key:'candidate_id', label:'Candidate id' },
+      { key:'umbrella_id', label:'Umbrella id' },
+      { key:'payee_entity_kind', label:'Payee entity kind' },
+      { key:'payee_entity_id', label:'Payee entity id' },
+      { key:'bank_details_hash_snapshot', label:'Bank details hash' }
+    ];
+
+    const CSV_DEFAULT_ORDER = ['payment_reference','payee_name','sort_code','account_number','account_type','amount'];
+
+    const csvAllowedKeys = CSV_ALLOWED.map(x => x.key);
+
+    const sanitizeCsvCols = (rawArr) => {
+      const arr = Array.isArray(rawArr) ? rawArr : [];
+      const out = [];
+      const seen = new Set();
+      for (const it of arr) {
+        const k0 = String(it == null ? '' : it).trim();
+        if (!k0) continue;
+        if (!csvAllowedKeys.includes(k0)) continue;
+        if (seen.has(k0)) continue;
+        seen.add(k0);
+        out.push(k0);
+      }
+      return out;
+    };
+
+    const csvFromSettings = sanitizeCsvCols(s.pay_export_csv_columns_json);
+    const csvInitial = csvFromSettings.length ? csvFromSettings : CSV_DEFAULT_ORDER.slice(0);
+
     // Seed a stable draft store so values survive tab switches/re-renders
     try {
       if (modalCtx && typeof modalCtx === 'object') {
@@ -73098,6 +74960,7 @@ function renderSettingsTab(key, s = {}) {
             rail_default_funding_account_ref: defaultFundingRef,
             pay_eligibility_months_back: monthsBack,
             pay_eligibility_weeks_ahead: weeksAhead,
+            pay_export_csv_columns_json: csvInitial,
             dirty: false
           };
         } else {
@@ -73109,8 +74972,15 @@ function renderSettingsTab(key, s = {}) {
           if (!('rail_default_funding_account_ref' in d)) d.rail_default_funding_account_ref = defaultFundingRef;
           if (!('pay_eligibility_months_back' in d)) d.pay_eligibility_months_back = monthsBack;
           if (!('pay_eligibility_weeks_ahead' in d)) d.pay_eligibility_weeks_ahead = weeksAhead;
+          if (!('pay_export_csv_columns_json' in d)) d.pay_export_csv_columns_json = csvInitial;
           if (!('dirty' in d)) d.dirty = false;
         }
+
+        // Keep modalCtx.data aligned for re-renders
+        try {
+          modalCtx.data = (modalCtx.data && typeof modalCtx.data === 'object') ? modalCtx.data : {};
+          if (!('pay_export_csv_columns_json' in modalCtx.data)) modalCtx.data.pay_export_csv_columns_json = csvInitial;
+        } catch {}
       }
     } catch {}
 
@@ -73124,8 +74994,99 @@ function renderSettingsTab(key, s = {}) {
           rail_default_funding_account_ref: defaultFundingRef,
           pay_eligibility_months_back: monthsBack,
           pay_eligibility_weeks_ahead: weeksAhead,
+          pay_export_csv_columns_json: csvInitial,
           dirty: false
         };
+
+    const draftCsv = sanitizeCsvCols(draft.pay_export_csv_columns_json);
+    if (!draftCsv.length) draft.pay_export_csv_columns_json = CSV_DEFAULT_ORDER.slice(0);
+
+    const renderCsvPicker = (colsArr) => {
+      const cols = sanitizeCsvCols(colsArr);
+      const pos = new Map();
+      cols.forEach((k, i) => pos.set(k, i));
+
+      const rows = CSV_ALLOWED.map((m) => {
+        const isOn = pos.has(m.key);
+        const idx = isOn ? (pos.get(m.key) + 1) : null;
+
+        const upDisabled = !isOn || idx === 1;
+        const dnDisabled = !isOn || idx === cols.length;
+
+        const disStyle = 'opacity:.45;filter:saturate(0.6) brightness(0.9);';
+        const disAttrs = `data-disabled="1" aria-disabled="true" style="${disStyle}"`;
+
+        return `
+          <div style="display:grid;grid-template-columns:24px 1fr 120px;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.08);">
+            <div class="mono" style="text-align:right;opacity:${isOn ? '0.95' : '0.35'};">${isOn ? idx : ''}</div>
+
+            <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:center;margin:0;cursor:pointer;min-width:0;">
+              <input
+                type="checkbox"
+                data-noCollect="true"
+                data-csv-col-key="${escapeHtml(m.key)}"
+                ${isOn ? 'checked' : ''}
+                style="margin:0;justify-self:start;"
+              />
+              <span style="display:block;min-width:0;line-height:1.25;">
+                <span style="font-weight:600;">${escapeHtml(m.label)}</span>
+                <span class="mono" style="opacity:.7;margin-left:6px;">${escapeHtml(m.key)}</span>
+              </span>
+            </label>
+
+            <div style="display:flex;gap:6px;justify-content:flex-end;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="settings:csvcols:moveUp"
+                data-csv-col-key="${escapeHtml(m.key)}"
+                ${upDisabled ? disAttrs : ''}
+                title="${upDisabled ? 'Move up (not available)' : 'Move up'}"
+              >↑</button>
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="settings:csvcols:moveDown"
+                data-csv-col-key="${escapeHtml(m.key)}"
+                ${dnDisabled ? disAttrs : ''}
+                title="${dnDisabled ? 'Move down (not available)' : 'Move down'}"
+              >↓</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      const warn = cols.length === 0
+        ? `<div class="mini" style="opacity:.85;margin-top:8px;">No columns selected — export will fall back to the default order.</div>`
+        : `<div class="mini" style="opacity:.85;margin-top:8px;">Selected columns are exported in the numbered order above.</div>`;
+
+      return `
+        <div class="card" style="padding:12px;">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">
+            <div>
+              <div style="font-weight:700;font-size:14px;">CSV export columns</div>
+              <div style="font-size:12px;color:rgba(255,255,255,0.7);">
+                Choose which columns are included in bank CSV exports and reorder them.
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="settings:csvcols:resetDefault"
+                title="Reset to default export order"
+              >Reset</button>
+            </div>
+          </div>
+
+          <div id="settingsPayExportCsvColsList">
+            ${rows}
+          </div>
+
+          ${warn}
+        </div>
+      `;
+    };
 
     // Wire checkbox -> hidden value + mirror into modalCtx.data so rerenders stay aligned.
     try {
@@ -73149,6 +75110,69 @@ function renderSettingsTab(key, s = {}) {
           const inMonths = document.getElementById('pay_eligibility_months_back');
           const inWeeks = document.getElementById('pay_eligibility_weeks_ahead');
 
+          const colsBox = document.getElementById('settingsPayExportCsvCols');
+          const hidCols = document.getElementById('pay_export_csv_columns_json');
+
+          const sanitize = (rawArr) => {
+            const arr = Array.isArray(rawArr) ? rawArr : [];
+            const out = [];
+            const seen = new Set();
+            for (const it of arr) {
+              const k0 = String(it == null ? '' : it).trim();
+              if (!k0) continue;
+              if (!csvAllowedKeys.includes(k0)) continue;
+              if (seen.has(k0)) continue;
+              seen.add(k0);
+              out.push(k0);
+            }
+            return out;
+          };
+
+          const getDraftCols = () => {
+            try {
+              const d = (modalCtx && modalCtx.bankingPaymentsDraft && typeof modalCtx.bankingPaymentsDraft === 'object')
+                ? modalCtx.bankingPaymentsDraft
+                : null;
+              const arr = d && Array.isArray(d.pay_export_csv_columns_json) ? d.pay_export_csv_columns_json : [];
+              const out = sanitize(arr);
+              return out.length ? out : CSV_DEFAULT_ORDER.slice(0);
+            } catch {
+              return CSV_DEFAULT_ORDER.slice(0);
+            }
+          };
+
+          const setDraftCols = (arr) => {
+            const out = sanitize(arr);
+            const finalArr = out.length ? out : [];
+
+            try {
+              if (modalCtx && modalCtx.bankingPaymentsDraft && typeof modalCtx.bankingPaymentsDraft === 'object') {
+                modalCtx.bankingPaymentsDraft.pay_export_csv_columns_json = finalArr;
+                modalCtx.bankingPaymentsDraft.dirty = true;
+              }
+            } catch {}
+
+            try {
+              if (modalCtx && modalCtx.data && typeof modalCtx.data === 'object') {
+                modalCtx.data.pay_export_csv_columns_json = finalArr;
+              }
+            } catch {}
+
+            try {
+              if (hidCols) hidCols.value = JSON.stringify(finalArr);
+            } catch {}
+
+            try {
+              if (colsBox) colsBox.innerHTML = renderCsvPicker(finalArr);
+            } catch {}
+          };
+
+          // Initial render into box + hidden
+          try {
+            if (colsBox) colsBox.innerHTML = renderCsvPicker(getDraftCols());
+            if (hidCols) hidCols.value = JSON.stringify(getDraftCols());
+          } catch {}
+
           const sync = () => {
             const tOn = !!(ckTest && ckTest.checked);
             const pOn = !!(ckPaye && ckPaye.checked);
@@ -73171,6 +75195,12 @@ function renderSettingsTab(key, s = {}) {
                 modalCtx.bankingPaymentsDraft.rail_default_funding_account_ref = fund;
                 modalCtx.bankingPaymentsDraft.pay_eligibility_months_back = mb;
                 modalCtx.bankingPaymentsDraft.pay_eligibility_weeks_ahead = wa;
+
+                // preserve csv config
+                if (!Array.isArray(modalCtx.bankingPaymentsDraft.pay_export_csv_columns_json)) {
+                  modalCtx.bankingPaymentsDraft.pay_export_csv_columns_json = getDraftCols();
+                }
+
                 modalCtx.bankingPaymentsDraft.dirty = true;
               }
             } catch {}
@@ -73184,6 +75214,10 @@ function renderSettingsTab(key, s = {}) {
                 modalCtx.data.rail_default_funding_account_ref = fund;
                 modalCtx.data.pay_eligibility_months_back = mb;
                 modalCtx.data.pay_eligibility_weeks_ahead = wa;
+
+                if (!Array.isArray(modalCtx.data.pay_export_csv_columns_json)) {
+                  modalCtx.data.pay_export_csv_columns_json = getDraftCols();
+                }
               }
             } catch {}
           };
@@ -73196,6 +75230,80 @@ function renderSettingsTab(key, s = {}) {
           if (inFunding) inFunding.addEventListener('input', sync, true);
           if (inMonths) inMonths.addEventListener('input', sync, true);
           if (inWeeks) inWeeks.addEventListener('input', sync, true);
+
+          // CSV columns: checkbox toggle + reorder
+          if (colsBox) {
+            colsBox.addEventListener('change', (ev) => {
+              try {
+                const t = ev && ev.target ? ev.target : null;
+                if (!t) return;
+                const key = String(t.getAttribute('data-csv-col-key') || '').trim();
+                if (!key) return;
+                if (!csvAllowedKeys.includes(key)) return;
+
+                const cur = getDraftCols();
+                const isOn = cur.includes(key);
+                const checked = !!t.checked;
+
+                if (checked && !isOn) {
+                  setDraftCols([...cur, key]);
+                } else if (!checked && isOn) {
+                  setDraftCols(cur.filter(x => x !== key));
+                } else {
+                  // no-op
+                  setDraftCols(cur);
+                }
+              } catch {}
+            }, true);
+
+            colsBox.addEventListener('click', (ev) => {
+              try {
+                const t0 = ev && ev.target ? ev.target : null;
+                if (!t0 || typeof t0.closest !== 'function') return;
+
+                const btn = t0.closest('button[data-action]');
+                if (!btn) return;
+
+                const act = String(btn.getAttribute('data-action') || '').trim();
+                const key = String(btn.getAttribute('data-csv-col-key') || '').trim();
+
+                if (act === 'settings:csvcols:resetDefault') {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  setDraftCols(CSV_DEFAULT_ORDER.slice(0));
+                  return;
+                }
+
+                if (!key || !csvAllowedKeys.includes(key)) return;
+
+                const cur = getDraftCols();
+                const idx = cur.indexOf(key);
+                if (idx < 0) return;
+
+                if (act === 'settings:csvcols:moveUp') {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  if (idx === 0) return;
+                  const next = cur.slice(0);
+                  next.splice(idx, 1);
+                  next.splice(idx - 1, 0, key);
+                  setDraftCols(next);
+                  return;
+                }
+
+                if (act === 'settings:csvcols:moveDown') {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  if (idx === cur.length - 1) return;
+                  const next = cur.slice(0);
+                  next.splice(idx, 1);
+                  next.splice(idx + 1, 0, key);
+                  setDraftCols(next);
+                  return;
+                }
+              } catch {}
+            }, true);
+          }
 
           sync();
         } catch {}
@@ -73345,6 +75453,24 @@ function renderSettingsTab(key, s = {}) {
                   </div>
                 </div>
                 ${asEligHint}
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1;margin-top:8px;">
+              <label style="white-space:normal;">Bank CSV export columns</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:8px;">
+                <div id="settingsPayExportCsvCols">
+                  ${renderCsvPicker(draft.pay_export_csv_columns_json)}
+                </div>
+                <input
+                  type="hidden"
+                  id="pay_export_csv_columns_json"
+                  name="pay_export_csv_columns_json"
+                  value="${escapeHtml(JSON.stringify(sanitizeCsvCols(draft.pay_export_csv_columns_json))) }"
+                />
+                <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+                  This config controls the export order used by <strong>Banking → Generate CSV export</strong>. Unknown/invalid keys are rejected by the export RPC.
+                </div>
               </div>
             </div>
 
@@ -73712,7 +75838,6 @@ function renderSettingsTab(key, s = {}) {
 
 
 
-
 /**
  * ✅ Add this once (global) somewhere in your FE file:
  * - If user enters "45" => "0.45"
@@ -73995,6 +76120,25 @@ async function handleSaveSettings() {
       return !!dflt;
     };
 
+    const parseCsvCols = (raw) => {
+      try {
+        if (raw == null) return null;
+        if (Array.isArray(raw)) {
+          return raw.map(x => String(x == null ? '' : x).trim()).filter(Boolean);
+        }
+        if (typeof raw === 'string') {
+          const s = raw.trim();
+          if (!s) return null;
+          const j = JSON.parse(s);
+          if (Array.isArray(j)) return j.map(x => String(x == null ? '' : x).trim()).filter(Boolean);
+          return null;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    };
+
     const hasExistingBankValues = (() => {
       try {
         return !!(
@@ -74004,7 +76148,8 @@ async function handleSaveSettings() {
           Object.prototype.hasOwnProperty.call(baseData, 'payment_authoriser_quantity') ||
           Object.prototype.hasOwnProperty.call(baseData, 'rail_default_funding_account_ref') ||
           Object.prototype.hasOwnProperty.call(baseData, 'pay_eligibility_months_back') ||
-          Object.prototype.hasOwnProperty.call(baseData, 'pay_eligibility_weeks_ahead')
+          Object.prototype.hasOwnProperty.call(baseData, 'pay_eligibility_weeks_ahead') ||
+          Object.prototype.hasOwnProperty.call(baseData, 'pay_export_csv_columns_json')
         );
       } catch {
         return false;
@@ -74027,6 +76172,8 @@ async function handleSaveSettings() {
       let monthsBack = null;
       let weeksAhead = null;
 
+      let csvCols = null;
+
       if (bd && typeof bd === 'object') {
         if ('payroll_testing' in bd) payrollTesting = boolish(bd.payroll_testing, false);
         if ('paye_remittances_enabled' in bd) payeEnabled = boolish(bd.paye_remittances_enabled, false);
@@ -74036,6 +76183,8 @@ async function handleSaveSettings() {
         if ('rail_default_funding_account_ref' in bd) fundingRef = bd.rail_default_funding_account_ref;
         if ('pay_eligibility_months_back' in bd) monthsBack = bd.pay_eligibility_months_back;
         if ('pay_eligibility_weeks_ahead' in bd) weeksAhead = bd.pay_eligibility_weeks_ahead;
+
+        if ('pay_export_csv_columns_json' in bd) csvCols = parseCsvCols(bd.pay_export_csv_columns_json);
       }
 
       if (payrollTesting === null && Object.prototype.hasOwnProperty.call(baseData, 'payroll_testing')) payrollTesting = boolish(baseData.payroll_testing, false);
@@ -74047,6 +76196,10 @@ async function handleSaveSettings() {
       if ((monthsBack === null || monthsBack === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'pay_eligibility_months_back')) monthsBack = baseData.pay_eligibility_months_back;
       if ((weeksAhead === null || weeksAhead === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'pay_eligibility_weeks_ahead')) weeksAhead = baseData.pay_eligibility_weeks_ahead;
 
+      if ((csvCols === null || csvCols === undefined) && Object.prototype.hasOwnProperty.call(baseData, 'pay_export_csv_columns_json')) {
+        csvCols = parseCsvCols(baseData.pay_export_csv_columns_json);
+      }
+
       if (bankRootMounted) {
         const ckTest = byId('payrollTestingCk');
         const ckPaye = byId('payeRemittancesEnabledCk');
@@ -74057,6 +76210,8 @@ async function handleSaveSettings() {
         const inMonths = byId('pay_eligibility_months_back');
         const inWeeks = byId('pay_eligibility_weeks_ahead');
 
+        const hidCols = byId('pay_export_csv_columns_json');
+
         if (ckTest) payrollTesting = !!ckTest.checked;
         if (ckPaye) payeEnabled = !!ckPaye.checked;
 
@@ -74065,6 +76220,8 @@ async function handleSaveSettings() {
         if (inFunding) fundingRef = String(inFunding.value ?? '').trim();
         if (inMonths) monthsBack = String(inMonths.value ?? '').trim();
         if (inWeeks) weeksAhead = String(inWeeks.value ?? '').trim();
+
+        if (hidCols && hidCols.value != null) csvCols = parseCsvCols(String(hidCols.value || '').trim());
       }
 
       payload.payroll_testing = (payrollTesting === true);
@@ -74077,6 +76234,9 @@ async function handleSaveSettings() {
 
       payload.pay_eligibility_months_back = (monthsBack == null) ? null : String(monthsBack).trim();
       payload.pay_eligibility_weeks_ahead = (weeksAhead == null) ? null : String(weeksAhead).trim();
+
+      // ✅ NEW: include export column config
+      payload.pay_export_csv_columns_json = (csvCols == null) ? null : csvCols;
 
       try { if (bd) bd.dirty = true; } catch {}
     }
@@ -74243,7 +76403,7 @@ async function handleSaveSettings() {
   // Save (minimise calls; enforce safe order)
   // ─────────────────────────────────────────────
   try {
-    // 1) Save non-finance settings_defaults (includes Banking & Payments + Remittances + eligibility window fields)
+    // 1) Save non-finance settings_defaults (includes Banking & Payments + Remittances + eligibility window fields + CSV export config)
     await saveSettings(payload);
 
     // Mark drafts clean after successful saveSettings call
@@ -74316,6 +76476,7 @@ async function handleSaveSettings() {
         bd.rail_default_funding_account_ref = (modalCtx.data && modalCtx.data.rail_default_funding_account_ref != null) ? String(modalCtx.data.rail_default_funding_account_ref).trim() : '';
         bd.pay_eligibility_months_back = (modalCtx.data && modalCtx.data.pay_eligibility_months_back != null) ? String(modalCtx.data.pay_eligibility_months_back).trim() : '';
         bd.pay_eligibility_weeks_ahead = (modalCtx.data && modalCtx.data.pay_eligibility_weeks_ahead != null) ? String(modalCtx.data.pay_eligibility_weeks_ahead).trim() : '';
+        bd.pay_export_csv_columns_json = (modalCtx.data && Array.isArray(modalCtx.data.pay_export_csv_columns_json)) ? modalCtx.data.pay_export_csv_columns_json : (bd.pay_export_csv_columns_json || null);
         bd.dirty = false;
       }
     } catch {}
