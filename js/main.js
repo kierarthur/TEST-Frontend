@@ -13243,6 +13243,40 @@ function attachBankingModalDelegatedHandlers() {
     try { st.id.preview = (st.id.preview && typeof st.id.preview === 'object') ? st.id.preview : { data: null, loading: false, error: '' }; } catch {}
     try { st.id.applyForm = (st.id.applyForm && typeof st.id.applyForm === 'object') ? st.id.applyForm : { bank_upload_code: '', note: '', busy: false, error: '' }; } catch {}
 
+    // ✅ NEW: ID History state scaffolding
+    try { st.id.ledger = (st.id.ledger && typeof st.id.ledger === 'object') ? st.id.ledger : { items: [], loading: false, error: '' }; } catch {}
+    try { st.id.runs = (st.id.runs && typeof st.id.runs === 'object') ? st.id.runs : { items: [], loading: false, error: '' }; } catch {}
+    try { st.id.selectedRun = (st.id.selectedRun && typeof st.id.selectedRun === 'object') ? st.id.selectedRun : null; } catch {}
+    try { st.id.selectedRunLines = Array.isArray(st.id.selectedRunLines) ? st.id.selectedRunLines : []; } catch { try { st.id.selectedRunLines = []; } catch {} }
+    try { st.id.selectedRunIdRef = String(st.id.selectedRunIdRef || '').trim(); } catch { try { st.id.selectedRunIdRef = ''; } catch {} }
+
+    // Ledger filters used by ID History UI
+    try {
+      st.id.ledgerFilters = (st.id.ledgerFilters && typeof st.id.ledgerFilters === 'object') ? st.id.ledgerFilters : {
+        only_reportable: true,
+        search: '',
+        client_id: '',
+        statuses: { DRAFT: true, ISSUED: true, PAID: true, ON_HOLD: true },
+        limit: 50,
+        offset: 0
+      };
+
+      st.id.ledgerFilters.statuses = (st.id.ledgerFilters.statuses && typeof st.id.ledgerFilters.statuses === 'object')
+        ? st.id.ledgerFilters.statuses
+        : { DRAFT: true, ISSUED: true, PAID: true, ON_HOLD: true };
+
+      if (!('only_reportable' in st.id.ledgerFilters)) st.id.ledgerFilters.only_reportable = true;
+      if (!('search' in st.id.ledgerFilters)) st.id.ledgerFilters.search = '';
+      if (!('client_id' in st.id.ledgerFilters)) st.id.ledgerFilters.client_id = '';
+      if (!('limit' in st.id.ledgerFilters)) st.id.ledgerFilters.limit = 50;
+      if (!('offset' in st.id.ledgerFilters)) st.id.ledgerFilters.offset = 0;
+
+      if (!('DRAFT' in st.id.ledgerFilters.statuses)) st.id.ledgerFilters.statuses.DRAFT = true;
+      if (!('ISSUED' in st.id.ledgerFilters.statuses)) st.id.ledgerFilters.statuses.ISSUED = true;
+      if (!('PAID' in st.id.ledgerFilters.statuses)) st.id.ledgerFilters.statuses.PAID = true;
+      if (!('ON_HOLD' in st.id.ledgerFilters.statuses)) st.id.ledgerFilters.statuses.ON_HOLD = true;
+    } catch {}
+
     const getUkTodayIso = () => {
       try {
         const ymd = (typeof toLocalParts === 'function')
@@ -13445,6 +13479,159 @@ function attachBankingModalDelegatedHandlers() {
       st.pay.draftWizard.decisions.loan_caps[cid] = { ...cur, [f]: Math.round(n * 100) / 100 };
     };
 
+    // ✅ NEW: ID history helpers
+    const idGetFilters = () => {
+      const f = (st.id && st.id.ledgerFilters && typeof st.id.ledgerFilters === 'object') ? st.id.ledgerFilters : {};
+      const onlyReportable = !!f.only_reportable;
+      const search = String(f.search || '').trim();
+      const clientId = String(f.client_id || '').trim();
+      const limit = Number.isFinite(Number(f.limit)) ? Math.max(1, Math.min(500, Math.trunc(Number(f.limit)))) : 50;
+      const offset = Number.isFinite(Number(f.offset)) ? Math.max(0, Math.trunc(Number(f.offset))) : 0;
+
+      const sts = (f.statuses && typeof f.statuses === 'object') ? f.statuses : {};
+      const statusFlags = {
+        DRAFT: !!sts.DRAFT,
+        ISSUED: !!sts.ISSUED,
+        PAID: !!sts.PAID,
+        ON_HOLD: !!sts.ON_HOLD
+      };
+
+      return { onlyReportable, search, clientId, limit, offset, statusFlags };
+    };
+
+    const idSetDefaults = () => {
+      try {
+        st.id.ledgerFilters = {
+          only_reportable: true,
+          search: '',
+          client_id: '',
+          statuses: { DRAFT: true, ISSUED: true, PAID: true, ON_HOLD: true },
+          limit: 50,
+          offset: 0
+        };
+      } catch {}
+    };
+
+    const idRefreshLedger = async () => {
+      try {
+        const { onlyReportable, search, clientId, limit, offset, statusFlags } = idGetFilters();
+
+        st.id.ledger.loading = true;
+        st.id.ledger.error = '';
+        await safeRerender(null);
+
+        if (typeof bankingIdLedgerList !== 'function') {
+          throw new Error('bankingIdLedgerList is not available');
+        }
+
+        const args = {
+          limit,
+          offset,
+          only_reportable: onlyReportable,
+          onlyReportable: onlyReportable,
+          search: search || null,
+          client_id: clientId || null,
+          clientId: clientId || null,
+          statuses: statusFlags
+        };
+
+        let res = null;
+        try { res = await bankingIdLedgerList(args); } catch { res = await bankingIdLedgerList(); }
+
+        // Accept either {items:[]} or {rows:[]} or {lines:[]} or a raw array
+        let items = [];
+        if (Array.isArray(res)) items = res;
+        else if (res && typeof res === 'object' && Array.isArray(res.items)) items = res.items;
+        else if (res && typeof res === 'object' && Array.isArray(res.rows)) items = res.rows;
+        else if (res && typeof res === 'object' && Array.isArray(res.lines)) items = res.lines;
+        else items = [];
+
+        st.id.ledger.items = items;
+        st.id.ledger.loading = false;
+        st.id.ledger.error = '';
+        await safeRerender(null);
+      } catch (e) {
+        try { st.id.ledger.loading = false; } catch {}
+        try { st.id.ledger.error = String(e?.message || e || 'Ledger refresh failed'); } catch {}
+        await safeRerender(null);
+      }
+    };
+
+    const idRefreshRuns = async () => {
+      try {
+        st.id.runs.loading = true;
+        st.id.runs.error = '';
+        await safeRerender(null);
+
+        if (typeof bankingIdRunsList !== 'function') {
+          throw new Error('bankingIdRunsList is not available');
+        }
+
+        const limit = Number.isFinite(Number(st.id?.runs?.limit)) ? Math.max(1, Math.min(500, Math.trunc(Number(st.id.runs.limit)))) : 50;
+        const offset = Number.isFinite(Number(st.id?.runs?.offset)) ? Math.max(0, Math.trunc(Number(st.id.runs.offset))) : 0;
+
+        let res = null;
+        try { res = await bankingIdRunsList({ limit, offset }); } catch { res = await bankingIdRunsList(); }
+
+        let runs = [];
+        if (Array.isArray(res)) runs = res;
+        else if (res && typeof res === 'object' && Array.isArray(res.runs)) runs = res.runs;
+        else if (res && typeof res === 'object' && Array.isArray(res.items)) runs = res.items;
+        else if (res && typeof res === 'object' && Array.isArray(res.rows)) runs = res.rows;
+        else runs = [];
+
+        st.id.runs.items = runs;
+        st.id.runs.loading = false;
+        st.id.runs.error = '';
+        await safeRerender(null);
+      } catch (e) {
+        try { st.id.runs.loading = false; } catch {}
+        try { st.id.runs.error = String(e?.message || e || 'Runs refresh failed'); } catch {}
+        await safeRerender(null);
+      }
+    };
+
+    const idRunSelect = async (idRef) => {
+      const ref = String(idRef || '').trim();
+      if (!ref) return;
+
+      try {
+        if (typeof bankingIdRunGet !== 'function') {
+          throw new Error('bankingIdRunGet is not available');
+        }
+
+        st.id.selectedRunIdRef = ref;
+        st.id.selectedRun = null;
+        st.id.selectedRunLines = [];
+        await safeRerender(null);
+
+        let res = null;
+        try { res = await bankingIdRunGet(ref); } catch { res = await bankingIdRunGet({ id_ref: ref, idRef: ref }); }
+
+        // Expect {run, lines} or {header, lines} or {items}
+        let run = null;
+        let lines = [];
+
+        if (res && typeof res === 'object') {
+          if (res.run && typeof res.run === 'object') run = res.run;
+          else if (res.header && typeof res.header === 'object') run = res.header;
+          else if (res.selected && typeof res.selected === 'object') run = res.selected;
+
+          if (Array.isArray(res.lines)) lines = res.lines;
+          else if (Array.isArray(res.items)) lines = res.items;
+          else if (Array.isArray(res.rows)) lines = res.rows;
+        }
+
+        st.id.selectedRun = run;
+        st.id.selectedRunLines = lines;
+
+        await safeRerender(null);
+      } catch (e) {
+        try { st.id.runs.error = String(e?.message || e || 'Run load failed'); } catch {}
+        await safeRerender(null);
+      }
+    };
+
     // --- ACTION ROUTES ---
     // IMPORTANT: do NOT gate actions required to recover from mismatch (refreshCaps, goTab)
     if (a === 'banking:refreshCaps') {
@@ -13618,7 +13805,7 @@ function attachBankingModalDelegatedHandlers() {
       return;
     }
 
-    // INVOICE DISCOUNTING (ID): make buttons live
+    // INVOICE DISCOUNTING (ID): apply-form actions (existing)
     if (a === 'banking:id:setBankUploadCode') {
       const v = (el && el.value != null) ? String(el.value) : '';
       setIdApplyField('bank_upload_code', v);
@@ -13655,6 +13842,70 @@ function attachBankingModalDelegatedHandlers() {
       const bankUploadCode = String(st.id?.applyForm?.bank_upload_code || '').trim();
       const note = String(st.id?.applyForm?.note || '');
       await bankingIdBalanceNow?.({ bank_upload_code: bankUploadCode, note });
+      return;
+    }
+
+    // ✅ NEW: ID HISTORY actions (ledger + runs)
+    if (a === 'banking:id:ledgerRefresh') {
+      await idRefreshLedger();
+      return;
+    }
+
+    if (a === 'banking:id:runsRefresh') {
+      await idRefreshRuns();
+      return;
+    }
+
+    if (a === 'banking:id:runSelect') {
+      const idRef = String(ds('idRef') || dget('data-id-ref') || '').trim();
+      await idRunSelect(idRef);
+      return;
+    }
+
+    if (a === 'banking:id:clearLedgerFilters') {
+      idSetDefaults();
+      await idRefreshLedger();
+      return;
+    }
+
+    if (a === 'banking:id:apply') {
+      await idRefreshLedger();
+      return;
+    }
+
+    if (a === 'banking:id:setOnlyReportable') {
+      const checked = !!(el && (el.checked === true || String(el.value || '').trim().toLowerCase() === 'true'));
+      try { st.id.ledgerFilters.only_reportable = checked; st.id.ledgerFilters.offset = 0; } catch {}
+      await idRefreshLedger();
+      return;
+    }
+
+    if (a === 'banking:id:setLedgerSearch') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      try { st.id.ledgerFilters.search = String(v || '').trim(); } catch {}
+      // Do NOT auto-refresh on every keystroke; refresh happens on Apply or explicit refresh.
+      return;
+    }
+
+    if (a === 'banking:id:setLedgerClientId') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      try { st.id.ledgerFilters.client_id = String(v || '').trim(); st.id.ledgerFilters.offset = 0; } catch {}
+      // Prefer Apply to refresh, but safe to refresh immediately if this came from a change event.
+      if (kind === 'change') await idRefreshLedger();
+      return;
+    }
+
+    if (a === 'banking:id:toggleLedgerStatus') {
+      const key = String(ds('status') || ds('statusKey') || dget('data-status') || dget('data-status-key') || '').trim().toUpperCase();
+      if (!(key === 'DRAFT' || key === 'ISSUED' || key === 'PAID' || key === 'ON_HOLD')) return;
+      try {
+        st.id.ledgerFilters.statuses = (st.id.ledgerFilters.statuses && typeof st.id.ledgerFilters.statuses === 'object')
+          ? st.id.ledgerFilters.statuses
+          : { DRAFT: true, ISSUED: true, PAID: true, ON_HOLD: true };
+        st.id.ledgerFilters.statuses[key] = !st.id.ledgerFilters.statuses[key];
+        st.id.ledgerFilters.offset = 0;
+      } catch {}
+      await idRefreshLedger();
       return;
     }
 
@@ -13732,7 +13983,6 @@ function attachBankingModalDelegatedHandlers() {
         try {
           if (String(st.pay?.selectedBatchId || '').trim() === id) {
             st.pay.selectedBatchId = null;
-            if (st.pay.selected && typeof st.pay.selected === 'object') st.pay.selected.data = null;
           }
         } catch {}
 
@@ -14014,6 +14264,10 @@ function attachBankingModalDelegatedHandlers() {
       const t = ev && ev.target ? ev.target : null;
       if (!t || typeof t.closest !== 'function') return;
 
+      // Only react to double-clicks on the Pay batch list table (prevents accidental triggers elsewhere)
+      const panel = t.closest('#bankingPayBatchListPanel');
+      if (!panel) return;
+
       const row = t.closest('tr[data-batch-id]');
       if (!row) return;
 
@@ -14105,7 +14359,6 @@ function attachBankingModalDelegatedHandlers() {
 
   return { ok: true };
 }
-
 
 // NEW: advanced, section-aware search modal
 // === UPDATED: Advanced Search — add Roles (any) multi-select, use UK date pickers ===
