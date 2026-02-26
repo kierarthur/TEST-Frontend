@@ -5562,7 +5562,6 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
 }
 
 
-
 async function openBanking() {
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
 
@@ -5735,14 +5734,11 @@ async function openBanking() {
     return renderSkeleton(key);
   };
 
-  // ✅ Payment settings moved to Global Settings; Banking modal no longer has a settings tab.
+  // ✅ Main Banking modal simplified: only Pay workbench + ID tabs.
   const tabs = [
     { key: 'pay',        label: 'Pay' },
-    { key: 'umbrella',   label: 'Umbrella Pay' },
-    { key: 'paye',       label: 'PAYE History' },
     { key: 'id',         label: 'Invoice Discounting (ID)' },
-    { key: 'id_history', label: 'ID History' },
-    { key: 'rem_status', label: 'Remittances Status' }
+    { key: 'id_history', label: 'ID History' }
   ];
 
   const onDismiss = () => {
@@ -5946,8 +5942,6 @@ async function openBanking() {
     })();
   }, 0);
 }
-
-
 
 
 function bankingGetState() {
@@ -8413,7 +8407,6 @@ async function bankingOutboxList({ reference_prefix = '', reference_contains = '
   }
 }
 
-
 function renderBankingBanners() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -8447,14 +8440,7 @@ function renderBankingBanners() {
   const dbEnv = String(capsRaw.db_rail_env_default || capsRaw.rail_env_default || '').trim().toUpperCase();
   const wkEnv = String(capsRaw.worker_env || capsRaw.default_worker_env || '').trim().toUpperCase();
 
-  const isTestMode = (caps.isTestMode === true) || (capsRaw.payroll_testing === true);
   const copAvailable = (capsRaw.cop_available === true);
-
-  const setRaw = (st.settings && typeof st.settings === 'object') ? st.settings.raw : null;
-  const remTestEmail =
-    (setRaw && typeof setRaw === 'object')
-      ? String(setRaw.remittance_test_recipient_email || '').trim()
-      : '';
 
   const scheduleGate = (typeof bankingIsActionBlocked === 'function')
     ? bankingIsActionBlocked('SCHEDULE')
@@ -8493,44 +8479,6 @@ function renderBankingBanners() {
                 title="Re-check banking connection"
               >Re-check</button>
             </div>
-          </div>
-        </div>
-      </div>
-    `);
-  }
-
-  // TEST MODE banner
-  if (isTestMode) {
-    const hasTestEmail = !!(remTestEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(remTestEmail));
-    const msg = hasTestEmail
-      ? `TEST MODE is ON — remittances will be sent to the test recipient: ${remTestEmail}`
-      : 'TEST MODE is ON — to send remittances, set a test remittance email in Global Settings → Banking & Payments.';
-
-    banners.push(`
-      <div class="card" style="border-color:rgba(251,191,36,.35); background:rgba(245,158,11,.08);">
-        <div class="row">
-          <label>Test mode</label>
-          <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
-            <div style="min-width:260px;flex:1;">
-              <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
-                ${enc(msg)}
-              </div>
-              ${hasTestEmail ? '' : `
-                <div class="mini" style="margin-top:6px;opacity:.85;">
-                  Open Global Settings and set “Test remittance recipient email”.
-                </div>
-              `}
-            </div>
-            ${hasTestEmail ? '' : `
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                <button
-                  type="button"
-                  class="btn btn-sm btn-outline"
-                  data-action="banking:openGlobalSettingsBankingPayments"
-                  title="Open Global Settings → Banking & Payments"
-                >Open Global Settings</button>
-              </div>
-            `}
           </div>
         </div>
       </div>
@@ -8600,333 +8548,559 @@ function renderBankingBanners() {
   `;
 }
 
-
-function renderBankingTab(key, row) {
+function renderBankingIdHistoryTab() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
         '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
       }[c]));
 
+  const fmtUtcToUk = (iso) => {
+    try {
+      if (!iso) return '';
+      const d = new Date(String(iso));
+      if (Number.isNaN(d.getTime())) return String(iso);
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      return fmt.format(d).replace(',', '');
+    } catch {
+      return String(iso || '');
+    }
+  };
+
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const fmtSigned = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    const x = Math.round(n * 100) / 100;
+    const s = x.toFixed(2);
+    return (x > 0) ? `+${s}` : s;
+  };
+
   const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
-
-  const safeKey = String(key || '').trim() || 'pay';
-
-  // Keep active tab key in state (safe; helps rerender)
-  try {
-    if (st && st.ui && typeof st.ui === 'object') st.ui.activeTabKey = safeKey;
-  } catch {}
-
   if (!st) {
     return `
-      <div class="tabc">
-        <div class="card">
-          <div class="row">
-            <label>Banking</label>
-            <div class="controls">
-              <span class="mini">Banking state is not available.</span>
-            </div>
-          </div>
+      <div class="card" id="bankingIdHistoryTab">
+        <div class="row">
+          <label>ID History</label>
+          <div class="controls"><span class="mini">Banking state not available.</span></div>
         </div>
       </div>
     `;
   }
 
-  const caps = (st.caps && typeof st.caps === 'object') ? st.caps : {};
-  const capsRaw = (caps.raw && typeof caps.raw === 'object') ? caps.raw : {};
-  const busy = !!(st.ui && st.ui.busy && st.ui.busy.booting);
+  st.id = (st.id && typeof st.id === 'object') ? st.id : {};
 
-  const workerEnv = String(capsRaw.worker_env || capsRaw.default_worker_env || '').trim().toUpperCase() || '—';
-  const dbEnv = String(capsRaw.db_rail_env_default || capsRaw.rail_env_default || '').trim().toUpperCase() || '—';
-  const providerRaw = String(capsRaw.rail_provider_default || '').trim().toUpperCase() || '—';
-  const provider = (providerRaw === 'REV') ? 'REVOLUT' : providerRaw;
+  // Ensure the new dispatcher-driven state exists
+  st.id.ledgerFilters = (st.id.ledgerFilters && typeof st.id.ledgerFilters === 'object') ? st.id.ledgerFilters : {
+    only_reportable: true,
+    search: '',
+    client_id: '',
+    statuses: { DRAFT: true, ISSUED: true, PAID: true, ON_HOLD: true },
+    limit: 50,
+    offset: 0
+  };
+  st.id.ledgerFilters.statuses = (st.id.ledgerFilters.statuses && typeof st.id.ledgerFilters.statuses === 'object')
+    ? st.id.ledgerFilters.statuses
+    : { DRAFT: true, ISSUED: true, PAID: true, ON_HOLD: true };
 
-  const isTestMode = (caps.isTestMode === true) || (capsRaw.payroll_testing === true);
-
-  const railsArr = Array.isArray(capsRaw.rails) ? capsRaw.rails : [];
-  const providerDefault = String(capsRaw.rail_provider_default || '').trim().toUpperCase();
-
-  const defaultRail = (() => {
-    const want = providerDefault || provider || '';
-    if (!want) return null;
-    const r = railsArr.find(x => x && String(x.rail_provider || '').trim().toUpperCase() === want);
-    return r || null;
-  })();
-
-  const defaultAvailable = (defaultRail && defaultRail.available === true);
-  const defaultEnvMismatch = (defaultRail && defaultRail.env_mismatch === true) || (capsRaw.env_mismatch === true) || (caps.isEnvMismatch === true);
-  const defaultReason = (defaultRail && defaultRail.reason != null) ? String(defaultRail.reason) : '';
-  const defaultApiBase = (defaultRail && defaultRail.api_base != null) ? String(defaultRail.api_base) : (capsRaw.default_api_base != null ? String(capsRaw.default_api_base) : '');
-  const defaultWorkerEnv = (defaultRail && defaultRail.worker_env != null) ? String(defaultRail.worker_env).trim().toUpperCase() : workerEnv;
-
-  const isHealthy = !!(defaultAvailable === true && defaultEnvMismatch !== true);
-
-  const envMismatch =
-    (caps.isEnvMismatch === true) ||
-    (capsRaw.env_mismatch === true) ||
-    railsArr.some(r => r && r.env_mismatch === true);
-
-  const railLabel = (() => {
-    const prov = provider || '—';
-    const envTxt = (defaultWorkerEnv && defaultWorkerEnv !== '—')
-      ? (defaultWorkerEnv === 'SANDBOX' ? 'Test' : 'Live')
-      : ((dbEnv && dbEnv !== '—') ? dbEnv : '');
-
-    if (!isHealthy) {
-      const statusTxt = envMismatch ? 'Blocked' : (defaultAvailable ? 'Unhealthy' : 'Not connected');
-      const baseName = (prov === 'REVOLUT') ? 'Revolut' : prov;
-      return `${baseName} (${statusTxt}) ❌`;
+  // Ensure ledger container exists (support both shapes: {items} and legacy {data:{items}})
+  st.id.ledger = (st.id.ledger && typeof st.id.ledger === 'object') ? st.id.ledger : { items: [], loading: false, error: '' };
+  if (!Array.isArray(st.id.ledger.items)) st.id.ledger.items = [];
+  if (!st.id.ledger.data || typeof st.id.ledger.data !== 'object') st.id.ledger.data = { items: [], total: null };
+  if (!Array.isArray(st.id.ledger.data.items)) st.id.ledger.data.items = [];
+  try {
+    if (Array.isArray(st.id.ledger.items) && st.id.ledger.items.length && (!st.id.ledger.data.items || !st.id.ledger.data.items.length)) {
+      st.id.ledger.data.items = st.id.ledger.items;
+    } else if (Array.isArray(st.id.ledger.data.items) && st.id.ledger.data.items.length && (!st.id.ledger.items || !st.id.ledger.items.length)) {
+      st.id.ledger.items = st.id.ledger.data.items;
     }
+  } catch {}
 
-    if (prov === 'REVOLUT') {
-      const icon = (defaultWorkerEnv === 'SANDBOX') ? '🧪' : '✅';
-      const envNice = (defaultWorkerEnv === 'SANDBOX') ? 'Test' : 'Live';
-      return `Revolut (${envNice}) ${icon}`;
+  // Ensure runs container exists (support both shapes: {items} and legacy {list:{data:{items}}})
+  st.id.runs = (st.id.runs && typeof st.id.runs === 'object') ? st.id.runs : { items: [], loading: false, error: '' };
+  if (!Array.isArray(st.id.runs.items)) st.id.runs.items = [];
+  if (!st.id.runs.list || typeof st.id.runs.list !== 'object') st.id.runs.list = { paging: { limit: 50, offset: 0 }, data: { items: [], total: null }, loading: false, error: '' };
+  if (!st.id.runs.list.data || typeof st.id.runs.list.data !== 'object') st.id.runs.list.data = { items: [], total: null };
+  if (!Array.isArray(st.id.runs.list.data.items)) st.id.runs.list.data.items = [];
+  try {
+    if (Array.isArray(st.id.runs.items) && st.id.runs.items.length && (!st.id.runs.list.data.items || !st.id.runs.list.data.items.length)) {
+      st.id.runs.list.data.items = st.id.runs.items;
+    } else if (Array.isArray(st.id.runs.list.data.items) && st.id.runs.list.data.items.length && (!st.id.runs.items || !st.id.runs.items.length)) {
+      st.id.runs.items = st.id.runs.list.data.items;
     }
+  } catch {}
 
-    if (prov && prov !== '—') {
-      return envTxt ? `${prov} (${envTxt}) ✅` : `${prov} ✅`;
-    }
+  // Auto-load runs + ledger once, when this tab becomes active
+  try {
+    if (!st.id.__idHistoryAutoLoaded) {
+      st.id.__idHistoryAutoLoaded = true;
 
-    return 'Rail ❌';
-  })();
+      const hasAnyRuns = (Array.isArray(st.id.runs.items) && st.id.runs.items.length) || (Array.isArray(st.id.runs.list.data.items) && st.id.runs.list.data.items.length);
+      const hasAnyLedger = (Array.isArray(st.id.ledger.items) && st.id.ledger.items.length) || (Array.isArray(st.id.ledger.data.items) && st.id.ledger.data.items.length);
 
-  const topChipClass = (!isHealthy || envMismatch) ? 'pill-warn' : 'pill-ok';
-  const testChipClass = isTestMode ? 'pill-warn' : 'pill';
+      if ((!hasAnyRuns || !hasAnyLedger) && typeof setTimeout === 'function') {
+        setTimeout(() => {
+          (async () => {
+            try {
+              const canFetch = (typeof bankingIdRunsList === 'function') || (typeof bankingIdLedgerList === 'function');
+              if (!canFetch) return;
 
-  const diagLines = (() => {
-    const lines = [];
-    const want = providerDefault || provider || '';
-    lines.push(`Provider default: ${want || '—'}`);
-    lines.push(`DB env: ${dbEnv || '—'}`);
-    lines.push(`Default worker env: ${defaultWorkerEnv || '—'}`);
-    lines.push(`Default available: ${defaultAvailable ? 'true' : 'false'}`);
-    lines.push(`Env mismatch: ${envMismatch ? 'true' : 'false'}`);
-    if (!isHealthy) {
-      lines.push(`Health: NOT OK`);
-    } else {
-      lines.push(`Health: OK`);
-    }
-    if (defaultReason) {
-      lines.push(`Default reason: ${defaultReason}`);
-    }
-    lines.push(`Server UTC: ${String(capsRaw.server_utc || '').trim() || '—'}`);
-    lines.push(`API base: ${String(defaultApiBase || '').trim() || '—'}`);
-    lines.push('');
-    lines.push('Rails:');
-    if (!railsArr.length) {
-      lines.push('- (none)');
-    } else {
-      for (const r of railsArr) {
-        if (!r || typeof r !== 'object') continue;
-        const rp = String(r.rail_provider || '').trim().toUpperCase() || '—';
-        const rk = String(r.rail_kind || '').trim().toUpperCase() || '—';
-        const av = (r.available === true) ? 'true' : 'false';
-        const mm = (r.env_mismatch === true) ? 'true' : 'false';
-        const we = (r.worker_env != null) ? String(r.worker_env).trim().toUpperCase() : '—';
-        const ab = (r.api_base != null) ? String(r.api_base).trim() : '';
-        const rs = (r.reason != null && String(r.reason).trim()) ? String(r.reason).trim() : '';
-        const tail = [
-          `kind=${rk}`,
-          `available=${av}`,
-          `env_mismatch=${mm}`,
-          `worker_env=${we}`,
-          ab ? `api_base=${ab}` : null,
-          rs ? `reason=${rs}` : null
-        ].filter(Boolean).join(' | ');
-        lines.push(`- ${rp}: ${tail}`);
+              // Runs
+              if (!hasAnyRuns && typeof bankingIdRunsList === 'function' && !st.id.runs.loading && !st.id.runs.list.loading) {
+                try {
+                  st.id.runs.loading = true;
+                  st.id.runs.list.loading = true;
+                  st.id.runs.error = '';
+                  st.id.runs.list.error = '';
+                } catch {}
+                try {
+                  const limit = Number.isFinite(Number(st.id.runs.list.paging?.limit)) ? Math.max(1, Math.min(500, Math.trunc(Number(st.id.runs.list.paging.limit)))) : 50;
+                  const offset = Number.isFinite(Number(st.id.runs.list.paging?.offset)) ? Math.max(0, Math.trunc(Number(st.id.runs.list.paging.offset))) : 0;
+                  let res = null;
+                  try { res = await bankingIdRunsList({ limit, offset }); } catch { res = await bankingIdRunsList(); }
+
+                  let runs = [];
+                  if (Array.isArray(res)) runs = res;
+                  else if (res && typeof res === 'object' && Array.isArray(res.runs)) runs = res.runs;
+                  else if (res && typeof res === 'object' && Array.isArray(res.items)) runs = res.items;
+                  else if (res && typeof res === 'object' && Array.isArray(res.rows)) runs = res.rows;
+                  else runs = [];
+
+                  st.id.runs.items = runs;
+                  st.id.runs.list.data.items = runs;
+                } catch (e) {
+                  try { st.id.runs.error = String(e?.message || e || 'Runs refresh failed'); } catch {}
+                  try { st.id.runs.list.error = String(e?.message || e || 'Runs refresh failed'); } catch {}
+                } finally {
+                  try { st.id.runs.loading = false; } catch {}
+                  try { st.id.runs.list.loading = false; } catch {}
+                }
+              }
+
+              // Ledger
+              if (!hasAnyLedger && typeof bankingIdLedgerList === 'function' && !st.id.ledger.loading) {
+                try {
+                  st.id.ledger.loading = true;
+                  st.id.ledger.error = '';
+                } catch {}
+
+                try {
+                  const f = (st.id.ledgerFilters && typeof st.id.ledgerFilters === 'object') ? st.id.ledgerFilters : {};
+                  const sts = (f.statuses && typeof f.statuses === 'object') ? f.statuses : {};
+                  const statusFlags = {
+                    DRAFT: !!sts.DRAFT,
+                    ISSUED: !!sts.ISSUED,
+                    PAID: !!sts.PAID,
+                    ON_HOLD: !!sts.ON_HOLD
+                  };
+
+                  const limit = Number.isFinite(Number(f.limit)) ? Math.max(1, Math.min(500, Math.trunc(Number(f.limit)))) : 50;
+                  const offset = Number.isFinite(Number(f.offset)) ? Math.max(0, Math.trunc(Number(f.offset))) : 0;
+
+                  const args = {
+                    limit,
+                    offset,
+                    only_reportable: !!f.only_reportable,
+                    onlyReportable: !!f.only_reportable,
+                    search: String(f.search || '').trim() || null,
+                    client_id: String(f.client_id || '').trim() || null,
+                    clientId: String(f.client_id || '').trim() || null,
+                    statuses: statusFlags
+                  };
+
+                  let res = null;
+                  try { res = await bankingIdLedgerList(args); } catch { res = await bankingIdLedgerList(); }
+
+                  let items = [];
+                  if (Array.isArray(res)) items = res;
+                  else if (res && typeof res === 'object' && Array.isArray(res.items)) items = res.items;
+                  else if (res && typeof res === 'object' && Array.isArray(res.rows)) items = res.rows;
+                  else if (res && typeof res === 'object' && Array.isArray(res.lines)) items = res.lines;
+                  else items = [];
+
+                  st.id.ledger.items = items;
+                  st.id.ledger.data.items = items;
+                } catch (e) {
+                  try { st.id.ledger.error = String(e?.message || e || 'Ledger refresh failed'); } catch {}
+                } finally {
+                  try { st.id.ledger.loading = false; } catch {}
+                }
+              }
+
+              try {
+                if (typeof bankingRerender === 'function') {
+                  await bankingRerender(null);
+                }
+              } catch {}
+            } catch {}
+          })();
+        }, 0);
       }
     }
-    return lines.join('\n');
-  })();
+  } catch {}
 
-  const headerChips = `
-    <div class="card">
-      <div class="row">
-        <label>Status</label>
-        <div class="controls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <span class="pill ${enc(topChipClass)}" title="${enc(isHealthy ? 'Banking is connected and ready.' : (defaultReason || 'Banking connection is not healthy. See Diagnostics for details.'))}">${enc(railLabel)}</span>
-          <span class="pill ${enc(testChipClass)}" title="${enc(isTestMode ? 'TEST MODE is ON' : 'TEST MODE is OFF')}">${enc(`Test mode: ${isTestMode ? 'On' : 'Off'}`)}</span>
+  const ledErr = String(st.id.ledger.error || '').trim();
+  const ledLoading = !!st.id.ledger.loading;
+  const ledItems = Array.isArray(st.id.ledger.items) ? st.id.ledger.items : (Array.isArray(st.id.ledger.data?.items) ? st.id.ledger.data.items : []);
 
-          <details style="margin-left:6px;">
-            <summary class="mini" style="cursor:pointer;opacity:.9;">Diagnostics ▸</summary>
-            <div class="mini" style="margin-top:6px;opacity:.9;white-space:pre-wrap;">
-              ${enc(diagLines)}
-            </div>
-          </details>
+  const onlyRep = !!st.id.ledgerFilters.only_reportable;
+  const search = String(st.id.ledgerFilters.search || '').trim();
+  const clientId = String(st.id.ledgerFilters.client_id || '').trim();
+  const statusChips = ['DRAFT', 'ISSUED', 'PAID', 'ON_HOLD'];
 
-          <span class="mini" style="margin-left:6px;opacity:.85;">Operator modal</span>
-        </div>
-      </div>
-    </div>
-  `;
+  const runsErr = String(st.id.runs.error || st.id.runs.list?.error || '').trim();
+  const runsLoading = !!(st.id.runs.loading || st.id.runs.list?.loading);
+  const runs = Array.isArray(st.id.runs.items) ? st.id.runs.items : (Array.isArray(st.id.runs.list?.data?.items) ? st.id.runs.list.data.items : []);
 
-  const bannersHtml = (typeof renderBankingBanners === 'function') ? renderBankingBanners() : '';
+  const runSel = (st.id.runs.selected && typeof st.id.runs.selected === 'object') ? st.id.runs.selected : { id_ref: '', data: null, loading: false, error: '' };
+  const runSelErr = String(runSel.error || '').trim();
+  const runSelLoading = !!runSel.loading;
+  const runSelData = (runSel.data && typeof runSel.data === 'object') ? runSel.data : null;
 
-  const skeletonHtml = `
-    <div class="card">
-      <div class="row">
-        <label>Loading</label>
-        <div class="controls">
-          <span class="mini">Loading banking capabilities and settings…</span>
-          <div class="mini" style="margin-top:6px;opacity:.85;">
-            If this takes too long, click <strong>Re-check</strong> above.
-          </div>
-          <div style="margin-top:10px;">
-            <button type="button" class="btn btn-sm btn-outline" data-action="banking:refreshCaps">Re-check</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
+  // Prefer "new" run selection fields if present (dispatcher may populate these)
+  const selRunIdRef = String(st.id.selectedRunIdRef || runSel.id_ref || '').trim();
+  const selRunObj = (st.id.selectedRun && typeof st.id.selectedRun === 'object') ? st.id.selectedRun : null;
+  const selRunLines = Array.isArray(st.id.selectedRunLines) ? st.id.selectedRunLines : [];
 
-  const notReady = busy || !capsRaw || !st.settings || !st.settings.raw;
+  const ledRowsHtml = (typeof renderBankingIdLedgerTable === 'function')
+    ? renderBankingIdLedgerTable(ledItems)
+    : (ledItems.length ? ledItems.map((it) => {
+        const invNum = String(it?.invoice_number || '').trim();
+        const invId = String(it?.invoice_id || '').trim();
+        const primary = invNum || invId || '—';
 
-  const tabContent = (() => {
-    if (notReady) return skeletonHtml;
+        const invStatus = String(it?.invoice_status || '').trim().toUpperCase() || '—';
+        const invType = String(it?.invoice_type || '').trim().toUpperCase();
+        const client = String(it?.client_name || '').trim() || String(it?.client_id || '').trim() || '—';
 
-    const callIfFn = (fnName, ...args) => {
-      try {
-        const fn = (typeof window[fnName] === 'function') ? window[fnName] : (typeof globalThis[fnName] === 'function' ? globalThis[fnName] : null);
-        if (fn) return fn(...args);
-      } catch {}
-      return null;
-    };
+        const delta = (it?.delta_inc_vat != null) ? it.delta_inc_vat
+          : (it?.delta_ex_vat != null) ? it.delta_ex_vat
+          : (it?.delta_vat != null) ? it.delta_vat
+          : null;
 
-    // Pay / Umbrella / PAYE tabs share the same renderer with different scope presets
-    if (safeKey === 'pay') {
-      const out = callIfFn('renderBankingPayTab', 'ALL');
-      if (typeof out === 'string' && out.trim()) return out;
-      return `
-        <div class="card">
-          <div class="row">
-            <label>Pay</label>
-            <div class="controls">
-              <span class="mini">UI not implemented yet for this tab.</span>
-            </div>
-          </div>
-        </div>
-      `;
-    }
+        const curr = (it?.current_inc_vat != null) ? it.current_inc_vat
+          : (it?.current_ex_vat != null) ? it.current_ex_vat
+          : (it?.current_vat != null) ? it.current_vat
+          : null;
 
-    if (safeKey === 'umbrella') {
-      const out = callIfFn('renderBankingPayTab', 'UMBRELLA');
-      if (typeof out === 'string' && out.trim()) return out;
-      return `
-        <div class="card">
-          <div class="row">
-            <label>Umbrella Pay</label>
-            <div class="controls">
-              <span class="mini">UI not implemented yet for this tab.</span>
-            </div>
-          </div>
-        </div>
-      `;
-    }
+        const ts = String(it?.updated_at_utc || it?.status_date || it?.issued_at_utc || it?.paid_at_utc || '').trim();
+        const when = fmtUtcToUk(ts);
 
-    if (safeKey === 'paye') {
-      const out = callIfFn('renderBankingPayTab', 'PAYE');
-      if (typeof out === 'string' && out.trim()) return out;
-      return `
-        <div class="card">
-          <div class="row">
-            <label>PAYE History</label>
-            <div class="controls">
-              <span class="mini">UI not implemented yet for this tab.</span>
-            </div>
-          </div>
-        </div>
-      `;
-    }
+        return `
+          <tr>
+            <td class="mono" title="${enc(invId || invNum || '')}">${enc(primary)}</td>
+            <td><span class="pill" title="${enc(invType || '')}">${enc(invStatus)}</span></td>
+            <td class="mini">${enc(client)}</td>
+            <td class="mono" style="text-align:right; white-space:nowrap;">${enc(delta == null ? '' : fmtSigned(delta))}</td>
+            <td class="mono" style="text-align:right; white-space:nowrap;">${enc(curr == null ? '' : fmtMoney(curr))}</td>
+            <td class="mini">${enc(when || '')}</td>
+          </tr>
+        `;
+      }).join('') : `<tr><td colspan="6" class="mini" style="opacity:.85;">No ledger rows.</td></tr>`);
 
-    // ✅ Settings tab removed from Banking modal; keep a safe fallback if linked directly.
-    if (safeKey === 'settings') {
-      return `
-        <div class="card" style="border-color:rgba(59,130,246,.45); background:rgba(59,130,246,.06);">
-          <div class="row">
-            <label>Moved</label>
-            <div class="controls" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
-              <div style="min-width:260px;flex:1;">
-                <div class="mini" style="opacity:.95;white-space:normal;overflow-wrap:break-word;">
-                  Banking / Payment Settings have moved to <strong>Global Settings → Banking &amp; Payments</strong>.
-                </div>
-              </div>
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                <button
-                  type="button"
-                  class="btn btn-sm btn-outline"
-                  data-action="banking:openGlobalSettingsBankingPayments"
-                  title="Open Global Settings → Banking & Payments"
-                >Open Global Settings</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    if (safeKey === 'id') {
-      const out = callIfFn('renderBankingIdTab');
-      if (typeof out === 'string' && out.trim()) return out;
-      return `
-        <div class="card">
-          <div class="row">
-            <label>Invoice Discounting (ID)</label>
-            <div class="controls">
-              <span class="mini">UI not implemented yet for this tab.</span>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    if (safeKey === 'id_history') {
-      const out = callIfFn('renderBankingIdHistoryTab');
-      if (typeof out === 'string' && out.trim()) return out;
-      return `
-        <div class="card">
-          <div class="row">
-            <label>ID History</label>
-            <div class="controls">
-              <span class="mini">UI not implemented yet for this tab.</span>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    if (safeKey === 'rem_status') {
-      const out = callIfFn('renderBankingRemittancesStatusTab');
-      if (typeof out === 'string' && out.trim()) return out;
-      return `
-        <div class="card">
-          <div class="row">
-            <label>Remittances Status</label>
-            <div class="controls">
-              <span class="mini">UI not implemented yet for this tab.</span>
-            </div>
-          </div>
-        </div>
-      `;
-    }
+  const runsRowsHtml = runs.length ? runs.map((r) => {
+    const idRef = String(r?.id_ref || r?.ref || '').trim();
+    const created = fmtUtcToUk(r?.created_at_utc || r?.created_at || '');
+    const note = String(r?.note || '').trim();
+    const bankUploadCode = String(r?.bank_upload_code || '').trim();
+    const totalDeltaInc = (r?.total_delta_inc_vat != null) ? fmtMoney(r.total_delta_inc_vat) : '';
 
     return `
-      <div class="card">
-        <div class="row">
-          <label>Banking</label>
-          <div class="controls">
-            <span class="mini">Unknown tab: ${enc(safeKey)}</span>
-          </div>
-        </div>
+      <tr
+        style="cursor:pointer;"
+        data-action="banking:id:runSelect"
+        data-id-ref="${enc(idRef)}"
+        title="Open run ${enc(idRef)}"
+      >
+        <td class="mono">${enc(idRef || '')}</td>
+        <td class="mini">${enc(created || '')}</td>
+        <td class="mono" style="text-align:right;white-space:nowrap;">${enc(totalDeltaInc ? totalDeltaInc : '')}</td>
+        <td class="mini">${enc(bankUploadCode || '')}</td>
+        <td class="mini" style="white-space:normal;overflow-wrap:anywhere;">${enc(note || '')}</td>
+      </tr>
+    `;
+  }).join('') : `<tr><td colspan="5" class="mini" style="opacity:.85;">No runs.</td></tr>`;
+
+  // Build run detail panel (header + lines table) from either new fields or legacy runSelData
+  const pickRunAndLines = () => {
+    if (selRunObj || (selRunLines && selRunLines.length)) {
+      return { run: selRunObj, lines: selRunLines };
+    }
+    const d = runSelData;
+    if (!d) return { run: null, lines: [] };
+
+    const run = (d.run && typeof d.run === 'object') ? d.run
+      : (d.header && typeof d.header === 'object') ? d.header
+      : d;
+
+    const lines = Array.isArray(d.lines) ? d.lines
+      : Array.isArray(d.items) ? d.items
+      : Array.isArray(d.rows) ? d.rows
+      : [];
+
+    return { run: (run && typeof run === 'object') ? run : null, lines };
+  };
+
+  const { run: runObj, lines: runLines } = pickRunAndLines();
+
+  const runHeaderHtml = (() => {
+    if (!runObj) return `<div class="mini" style="opacity:.85;">Select a run to view details.</div>`;
+
+    const idRef = String(runObj?.id_ref || selRunIdRef || '').trim();
+    const created = fmtUtcToUk(runObj?.created_at_utc || runObj?.created_at || '');
+    const bankUploadCode = String(runObj?.bank_upload_code || '').trim();
+    const note = String(runObj?.note || '').trim();
+
+    const tInc = (runObj?.total_delta_inc_vat != null) ? fmtMoney(runObj.total_delta_inc_vat) : '';
+    const tEx  = (runObj?.total_delta_ex_vat != null) ? fmtMoney(runObj.total_delta_ex_vat) : '';
+    const tVat = (runObj?.total_delta_vat != null) ? fmtMoney(runObj.total_delta_vat) : '';
+
+    return `
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+        <span class="pill pill-info">Run: <span class="mono">${enc(idRef || '—')}</span></span>
+        <span class="mini">Created: <span class="mono">${enc(created || '—')}</span></span>
+        ${bankUploadCode ? `<span class="mini">Bank upload code: <span class="mono">${enc(bankUploadCode)}</span></span>` : ``}
+        ${tInc ? `<span class="mini">Δ inc VAT: <span class="mono">${enc(tInc)}</span></span>` : ``}
+        ${tEx ? `<span class="mini">Δ ex VAT: <span class="mono">${enc(tEx)}</span></span>` : ``}
+        ${tVat ? `<span class="mini">Δ VAT: <span class="mono">${enc(tVat)}</span></span>` : ``}
+      </div>
+      ${note ? `<div class="mini" style="opacity:.85;margin-top:6px;white-space:normal;overflow-wrap:anywhere;">Note: ${enc(note)}</div>` : ``}
+    `;
+  })();
+
+  const runLinesTableHtml = (() => {
+    if (!runObj) return '';
+    const lines = Array.isArray(runLines) ? runLines : [];
+
+    const rows = lines.length ? lines.map((it) => {
+      const invNum = String(it?.invoice_number || '').trim();
+      const invId = String(it?.invoice_id || '').trim();
+      const primary = invNum || invId || '—';
+
+      const invStatus = String(it?.invoice_status || '').trim().toUpperCase() || '—';
+      const invType = String(it?.invoice_type || '').trim().toUpperCase();
+      const client = String(it?.client_name || '').trim() || String(it?.client_id || '').trim() || '—';
+
+      const delta = (it?.delta_inc_vat != null) ? it.delta_inc_vat
+        : (it?.delta_ex_vat != null) ? it.delta_ex_vat
+        : (it?.delta_vat != null) ? it.delta_vat
+        : null;
+
+      const curr = (it?.current_inc_vat != null) ? it.current_inc_vat
+        : (it?.current_ex_vat != null) ? it.current_ex_vat
+        : (it?.current_vat != null) ? it.current_vat
+        : null;
+
+      return `
+        <tr>
+          <td class="mono" title="${enc(invId || invNum || '')}">${enc(primary)}</td>
+          <td><span class="pill" title="${enc(invType || '')}">${enc(invStatus)}</span></td>
+          <td class="mini">${enc(client)}</td>
+          <td class="mono" style="text-align:right; white-space:nowrap;">${enc(delta == null ? '' : fmtSigned(delta))}</td>
+          <td class="mono" style="text-align:right; white-space:nowrap;">${enc(curr == null ? '' : fmtMoney(curr))}</td>
+        </tr>
+      `;
+    }).join('') : `<tr><td colspan="5" class="mini" style="opacity:.85;">No run lines.</td></tr>`;
+
+    return `
+      <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+        <table class="grid" style="min-width:860px; table-layout:auto;">
+          <thead>
+            <tr>
+              <th>Invoice #</th>
+              <th>Status</th>
+              <th>Client</th>
+              <th style="text-align:right;">Delta (inc VAT)</th>
+              <th style="text-align:right;">Current (inc VAT)</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
       </div>
     `;
   })();
 
+  const selectedRunRefreshAction = selRunIdRef ? `
+    <button
+      type="button"
+      class="btn btn-sm btn-outline"
+      data-action="banking:id:runSelect"
+      data-id-ref="${enc(selRunIdRef)}"
+      title="Refresh selected run"
+    >${runSelLoading ? 'Refreshing…' : 'Refresh run'}</button>
+  ` : `
+    <button
+      type="button"
+      class="btn btn-sm btn-outline"
+      data-action="banking:id:runSelect"
+      data-id-ref="${enc(String(runSel.id_ref || '').trim())}"
+      title="Refresh selected run"
+      data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"
+    >Refresh run</button>
+  `;
+
   return `
-    <div class="tabc">
-      ${headerChips}
-      ${bannersHtml}
-      ${tabContent}
+    <div id="bankingIdHistoryTab">
+      <div class="card" style="margin-bottom:10px;">
+        <div class="row">
+          <label>ID History</label>
+          <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">Runs + ledger history.</span>
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:runsRefresh" title="Refresh runs">Refresh runs</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:ledgerRefresh" title="Refresh ledger">Refresh ledger</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
+          <label>Runs</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${runsErr ? `<div class="error" style="white-space:pre-wrap;">${enc(runsErr)}</div>` : ''}
+
+            <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+              <table class="grid" style="min-width:980px; table-layout:auto;">
+                <thead>
+                  <tr>
+                    <th>ID ref</th>
+                    <th>Created</th>
+                    <th style="text-align:right;">Δ inc VAT</th>
+                    <th>Bank upload</th>
+                    <th>Note</th>
+                  </tr>
+                </thead>
+                <tbody>${runsRowsHtml}</tbody>
+              </table>
+            </div>
+
+            <div class="mini" style="opacity:.8;">${runsLoading ? 'Loading runs…' : ' '}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
+          <label>Run detail</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${runSelErr ? `<div class="error" style="white-space:pre-wrap;">${enc(runSelErr)}</div>` : ''}
+
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span class="pill pill-info">Selected: ${enc(selRunIdRef || '—')}</span>
+              ${selectedRunRefreshAction}
+              <span class="mini" style="opacity:.8;">${runSelLoading ? 'Loading…' : ' '}</span>
+            </div>
+
+            ${runHeaderHtml}
+            ${runLinesTableHtml}
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
+          <label>Ledger filters</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${ledErr ? `<div class="error" style="white-space:pre-wrap;">${enc(ledErr)}</div>` : ''}
+
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+              <label class="inline mini" style="opacity:.95;" title="Only reportable">
+                <input
+                  type="checkbox"
+                  id="bankingIdOnlyReportable"
+                  data-action="banking:id:setOnlyReportable"
+                  ${onlyRep ? 'checked' : ''}
+                />
+                only_reportable
+              </label>
+
+              <input
+                id="bankingIdLedgerSearch"
+                class="input"
+                type="text"
+                value="${enc(search)}"
+                placeholder="Search"
+                data-action="banking:id:setLedgerSearch"
+                style="min-width:220px;max-width:320px;"
+                title="Search"
+              />
+
+              <input
+                id="bankingIdLedgerClientId"
+                class="input"
+                type="text"
+                value="${enc(clientId)}"
+                placeholder="Client id (optional)"
+                data-action="banking:id:setLedgerClientId"
+                style="min-width:220px;max-width:320px;"
+                title="Client id"
+              />
+            </div>
+
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              ${statusChips.map(sx => {
+                const on = !!(st.id.ledgerFilters && st.id.ledgerFilters.statuses && st.id.ledgerFilters.statuses[sx]);
+                return `
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline"
+                    data-action="banking:id:toggleLedgerStatus"
+                    data-status="${enc(sx)}"
+                    ${on ? 'style="border-color:rgba(59,130,246,.6);background:rgba(59,130,246,.10);"' : ''}
+                    title="Toggle status filter ${enc(sx)}"
+                  >${enc(sx)}</button>
+                `;
+              }).join('')}
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:clearLedgerFilters" title="Clear filters">Clear</button>
+              <button type="button" class="btn btn-sm btn-primary" data-action="banking:id:apply" title="Apply filters">Apply</button>
+            </div>
+
+            <div class="mini" style="opacity:.8;">${ledLoading ? 'Loading ledger…' : ' '}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px;">
+        <div class="row">
+          <label>Ledger</label>
+          <div class="controls">
+            <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+              <table class="grid" style="min-width:1080px; table-layout:auto;">
+                <thead>
+                  <tr>
+                    <th>Invoice #</th>
+                    <th>Status</th>
+                    <th>Client</th>
+                    <th style="text-align:right;">Delta (inc VAT)</th>
+                    <th style="text-align:right;">Current (inc VAT)</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody>${ledRowsHtml}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mini" style="opacity:.8; margin-top:10px;">
+        Tip: Runs + ledger auto-load once when you open this tab; use Refresh buttons to re-fetch.
+      </div>
     </div>
   `;
 }
@@ -10560,25 +10734,10 @@ function renderPayRemittancesPanel() {
   const batch = (sel && sel.batch && typeof sel.batch === 'object') ? sel.batch : null;
 
   const batchId = String(batch?.id || '').trim() || String(st.pay.selectedBatchId || '').trim();
+
   const lastSend = (st.pay.selected && typeof st.pay.selected === 'object' && st.pay.selected.lastRemittanceSendResult && typeof st.pay.selected.lastRemittanceSendResult === 'object')
     ? st.pay.selected.lastRemittanceSendResult
     : null;
-
-  const gateAll = (typeof bankingIsActionBlocked === 'function')
-    ? bankingIsActionBlocked('SEND_REMITTANCES')
-    : { blocked: false, reasonCode: '', message: '' };
-
-  const gatePaye = (typeof bankingIsActionBlocked === 'function')
-    ? bankingIsActionBlocked('SEND_REMITTANCES_PAYE')
-    : { blocked: false, reasonCode: '', message: '' };
-
-  const disAttrs = (d, t) => d
-    ? ` data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);" title="${enc(String(t || 'Action blocked'))}"`
-    : (t ? ` title="${enc(String(t))}"` : '');
-
-  const titleAll = gateAll.blocked ? (gateAll.message || gateAll.reasonCode || 'Action blocked') : 'Send remittances (ALL)';
-  const titleUmb = gateAll.blocked ? (gateAll.message || gateAll.reasonCode || 'Action blocked') : 'Send remittances (UMBRELLA)';
-  const titlePaye = gatePaye.blocked ? (gatePaye.message || gatePaye.reasonCode || 'Action blocked') : 'Send remittances (PAYE)';
 
   const summaryHtml = lastSend ? `
     <div class="card" style="padding:10px;">
@@ -10591,15 +10750,9 @@ function renderPayRemittancesPanel() {
     </div>
   ` : `
     <div class="mini" style="opacity:.8;">
-      No remittance send result yet. Sent/queued emails appear in <strong>Remittances Status</strong>.
+      No remittance send result recorded for this session.
     </div>
   `;
-
-  const gateMsg = (() => {
-    if (gateAll.blocked) return String(gateAll.message || gateAll.reasonCode || '').trim();
-    if (gatePaye.blocked) return String(gatePaye.message || gatePaye.reasonCode || '').trim();
-    return '';
-  })();
 
   return `
     <div class="card" id="bankingPayRemittancesPanel">
@@ -10608,61 +10761,21 @@ function renderPayRemittancesPanel() {
         <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <span class="mini" style="opacity:.85;">
-              Send remittance emails for this pay batch (gated by TEST MODE and PAYE remittance settings).
+              Remittances are triggered automatically after executing a pay batch (API rails) or confirming payment by CSV (CSV rail) from the <strong>pay batch child modal</strong>.
             </span>
             <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
-
-            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-              <button
-                type="button"
-                class="btn btn-sm btn-primary"
-                data-action="banking:pay:sendRemittances"
-                data-batch-id="${enc(batchId)}"
-                data-scope="ALL"
-                ${(!batchId || gateAll.blocked) ? disAttrs(true, titleAll) : disAttrs(false, titleAll)}
-              >Send (ALL)</button>
-
-              <button
-                type="button"
-                class="btn btn-sm btn-outline"
-                data-action="banking:pay:sendRemittances"
-                data-batch-id="${enc(batchId)}"
-                data-scope="PAYE"
-                ${(!batchId || gatePaye.blocked) ? disAttrs(true, titlePaye) : disAttrs(false, titlePaye)}
-              >Send (PAYE)</button>
-
-              <button
-                type="button"
-                class="btn btn-sm btn-outline"
-                data-action="banking:pay:sendRemittances"
-                data-batch-id="${enc(batchId)}"
-                data-scope="UMBRELLA"
-                ${(!batchId || gateAll.blocked) ? disAttrs(true, titleUmb) : disAttrs(false, titleUmb)}
-              >Send (UMB)</button>
-
-              <button
-                type="button"
-                class="btn btn-sm btn-outline"
-                data-action="banking:goTab"
-                data-tab="rem_status"
-                title="Open Remittances Status"
-              >Status</button>
-            </div>
           </div>
 
-          ${gateMsg ? `<div class="mini" style="opacity:.85;">${enc(gateMsg)}</div>` : ``}
+          <div class="mini" style="opacity:.85;">
+            Manual “Send remittances” buttons have been removed from the main Banking modal to prevent duplicate/incorrect sends.
+          </div>
 
           ${summaryHtml}
-
-          <div class="mini" style="opacity:.8;">
-            After sending, use the <strong>Status</strong> button to view queued/sent emails and any failures.
-          </div>
         </div>
       </div>
     </div>
   `;
 }
-
 
 
 
@@ -11808,7 +11921,6 @@ function renderBankingIdHistoryTab() {
   `;
 }
 
-
 function renderBankingRemittancesStatusTab() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -11906,7 +12018,7 @@ function renderBankingRemittancesStatusTab() {
           <label>Remittances Status</label>
           <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <span class="mini" style="opacity:.85;">
-              View remittance email outbox rows filtered by reference prefix / contains.
+              Read-only view of remittance email outbox rows. Remittances are triggered automatically from the pay batch child modal.
             </span>
             <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
 
@@ -11988,8 +12100,6 @@ function renderBankingRemittancesStatusTab() {
     </div>
   `;
 }
-
-
 async function openBankingPayBatchChildModal(batchId) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -13739,7 +13849,7 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
                   value="${enc(displayNet)}"
                   data-action="banking:pay:child:paye:setNetDraft"
                   data-candidate-id="${enc(cid)}"
-                  title="${editing ? 'Enter net payment for this candidate' : 'Click Edit to change'}"
+                  title="${editing ? 'Enter net payment for this candidate (save via modal footer Save)' : 'Click Edit to change'}"
                 />
               </div>
             </div>
@@ -13817,21 +13927,16 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
                   type="button"
                   class="btn btn-sm btn-outline"
                   data-action="banking:pay:child:paye:toggleEdit"
+                  ${saveBusy ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
                   title="Toggle edit mode"
                 >${editing ? 'Stop editing' : 'Edit'}</button>
 
-                <button
-                  type="button"
-                  class="btn btn-sm btn-primary"
-                  data-action="banking:pay:child:paye:saveNet"
-                  ${(!editing || saveBusy) ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
-                  title="Save manual net amounts (preserves prior manual entries)"
-                >${saveBusy ? 'Saving…' : 'Save'}</button>
+                ${saveBusy ? `<span class="mini" style="opacity:.8;">Saving…</span>` : ``}
               </div>
             </div>
 
             <div class="mini" style="opacity:.8;">
-              Notes: Net Payment is one value per candidate. Execution is blocked until all PAYE candidates are READY.
+              Enter net amounts after clicking <strong>Edit</strong>. Use the modal footer <strong>Save</strong> to commit changes (Close becomes Discard when dirty).
             </div>
 
             ${rowsHtml}
@@ -15178,6 +15283,9 @@ function attachBankingModalDelegatedHandlers() {
 
   return { ok: true };
 }
+
+
+
 // NEW: advanced, section-aware search modal
 // === UPDATED: Advanced Search — add Roles (any) multi-select, use UK date pickers ===
 // -----------------------------
