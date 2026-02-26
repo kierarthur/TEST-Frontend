@@ -7915,27 +7915,87 @@ async function bankingIdLedgerList(filters = null) {
 
   const in0 = (filters && typeof filters === 'object' && !Array.isArray(filters)) ? filters : null;
 
+  // Support both:
+  // - legacy: { status: ['DRAFT',...], only_reportable, client_id, search, limit, offset }
+  // - new dispatcher: { statuses: {DRAFT:true,...}, only_reportable / onlyReportable, client_id / clientId, search, limit, offset }
+  const statusFromStatusesObj = (obj) => {
+    const o = (obj && typeof obj === 'object') ? obj : null;
+    if (!o) return [];
+    const out = [];
+    for (const k of ['DRAFT','ISSUED','PAID','ON_HOLD']) {
+      if (o[k] === true) out.push(k);
+    }
+    return out;
+  };
+
   // Apply provided filters into state (best-effort)
   try {
-    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'only_reportable')) {
-      idSt.ledger.filters.only_reportable = !!in0.only_reportable;
+    if (in0 && (Object.prototype.hasOwnProperty.call(in0, 'only_reportable') || Object.prototype.hasOwnProperty.call(in0, 'onlyReportable'))) {
+      const v = Object.prototype.hasOwnProperty.call(in0, 'only_reportable') ? in0.only_reportable : in0.onlyReportable;
+      idSt.ledger.filters.only_reportable = !!v;
+      try {
+        idSt.ledgerFilters = (idSt.ledgerFilters && typeof idSt.ledgerFilters === 'object') ? idSt.ledgerFilters : {};
+        idSt.ledgerFilters.only_reportable = !!v;
+      } catch {}
     }
-    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'status')) {
+
+    // Status selection
+    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'statuses') && in0.statuses && typeof in0.statuses === 'object' && !Array.isArray(in0.statuses)) {
+      const arr = statusFromStatusesObj(in0.statuses);
+      idSt.ledger.filters.status = arr.slice();
+
+      try {
+        idSt.ledgerFilters = (idSt.ledgerFilters && typeof idSt.ledgerFilters === 'object') ? idSt.ledgerFilters : {};
+        idSt.ledgerFilters.statuses = (idSt.ledgerFilters.statuses && typeof idSt.ledgerFilters.statuses === 'object') ? idSt.ledgerFilters.statuses : {};
+        for (const k of ['DRAFT','ISSUED','PAID','ON_HOLD']) {
+          idSt.ledgerFilters.statuses[k] = !!in0.statuses[k];
+        }
+      } catch {}
+    } else if (in0 && Object.prototype.hasOwnProperty.call(in0, 'status')) {
       idSt.ledger.filters.status = Array.isArray(in0.status) ? in0.status.slice() : [];
+      try {
+        idSt.ledgerFilters = (idSt.ledgerFilters && typeof idSt.ledgerFilters === 'object') ? idSt.ledgerFilters : {};
+        idSt.ledgerFilters.statuses = (idSt.ledgerFilters.statuses && typeof idSt.ledgerFilters.statuses === 'object') ? idSt.ledgerFilters.statuses : {};
+        const arr = Array.isArray(idSt.ledger.filters.status) ? idSt.ledger.filters.status : [];
+        const set = new Set(arr.map(x => String(x || '').trim().toUpperCase()).filter(Boolean));
+        for (const k of ['DRAFT','ISSUED','PAID','ON_HOLD']) {
+          idSt.ledgerFilters.statuses[k] = set.has(k);
+        }
+      } catch {}
     }
-    if (in0 && Object.prototype.hasOwnProperty.call(in0, 'client_id')) {
-      idSt.ledger.filters.client_id = String(in0.client_id || '').trim();
+
+    if (in0 && (Object.prototype.hasOwnProperty.call(in0, 'client_id') || Object.prototype.hasOwnProperty.call(in0, 'clientId'))) {
+      const v = Object.prototype.hasOwnProperty.call(in0, 'client_id') ? in0.client_id : in0.clientId;
+      idSt.ledger.filters.client_id = String(v || '').trim();
+      try {
+        idSt.ledgerFilters = (idSt.ledgerFilters && typeof idSt.ledgerFilters === 'object') ? idSt.ledgerFilters : {};
+        idSt.ledgerFilters.client_id = String(v || '').trim();
+      } catch {}
     }
+
     if (in0 && Object.prototype.hasOwnProperty.call(in0, 'search')) {
       idSt.ledger.filters.search = String(in0.search || '').trim();
+      try {
+        idSt.ledgerFilters = (idSt.ledgerFilters && typeof idSt.ledgerFilters === 'object') ? idSt.ledgerFilters : {};
+        idSt.ledgerFilters.search = String(in0.search || '').trim();
+      } catch {}
     }
+
     if (in0 && Object.prototype.hasOwnProperty.call(in0, 'limit')) {
       const n = Number(in0.limit);
       if (Number.isFinite(n)) idSt.ledger.paging.limit = Math.max(1, Math.min(500, Math.trunc(n)));
+      try {
+        idSt.ledgerFilters = (idSt.ledgerFilters && typeof idSt.ledgerFilters === 'object') ? idSt.ledgerFilters : {};
+        if (Number.isFinite(n)) idSt.ledgerFilters.limit = Math.max(1, Math.min(500, Math.trunc(n)));
+      } catch {}
     }
     if (in0 && Object.prototype.hasOwnProperty.call(in0, 'offset')) {
       const n = Number(in0.offset);
       if (Number.isFinite(n)) idSt.ledger.paging.offset = Math.max(0, Math.trunc(n));
+      try {
+        idSt.ledgerFilters = (idSt.ledgerFilters && typeof idSt.ledgerFilters === 'object') ? idSt.ledgerFilters : {};
+        if (Number.isFinite(n)) idSt.ledgerFilters.offset = Math.max(0, Math.trunc(n));
+      } catch {}
     }
   } catch {}
 
@@ -7993,12 +8053,28 @@ async function bankingIdLedgerList(filters = null) {
 
     const obj = (parsed && typeof parsed === 'object') ? parsed : {};
     const items = Array.isArray(obj.items) ? obj.items : [];
-    const count = Number.isFinite(Number(obj.count)) ? Math.trunc(Number(obj.count)) : items.length;
+
+    const count =
+      Number.isFinite(Number(obj.count)) ? Math.trunc(Number(obj.count))
+      : Number.isFinite(Number(obj.total_count)) ? Math.trunc(Number(obj.total_count))
+      : items.length;
 
     idSt.ledger.data.items = deep(items) || [];
     idSt.ledger.data.total = count;
-    idSt.ledger.paging.limit = Number.isFinite(Number(obj.limit)) ? Math.trunc(Number(obj.limit)) : lim;
-    idSt.ledger.paging.offset = Number.isFinite(Number(obj.offset)) ? Math.trunc(Number(obj.offset)) : off;
+
+    if (Object.prototype.hasOwnProperty.call(obj, 'limit')) {
+      idSt.ledger.paging.limit = Number.isFinite(Number(obj.limit)) ? Math.trunc(Number(obj.limit)) : lim;
+    }
+    if (Object.prototype.hasOwnProperty.call(obj, 'offset')) {
+      idSt.ledger.paging.offset = Number.isFinite(Number(obj.offset)) ? Math.trunc(Number(obj.offset)) : off;
+    }
+
+    // Mirror paging back into ledgerFilters for dispatcher-driven UI
+    try {
+      idSt.ledgerFilters = (idSt.ledgerFilters && typeof idSt.ledgerFilters === 'object') ? idSt.ledgerFilters : {};
+      idSt.ledgerFilters.limit = idSt.ledger.paging.limit;
+      idSt.ledgerFilters.offset = idSt.ledger.paging.offset;
+    } catch {}
 
     try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
 
@@ -8017,7 +8093,6 @@ async function bankingIdLedgerList(filters = null) {
     try { idSt.ledger.loading = false; } catch {}
   }
 }
-
 
 async function bankingIdRunsList(opts = null) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
@@ -8117,10 +8192,19 @@ async function bankingIdRunsList(opts = null) {
   }
 }
 
-
 async function bankingIdRunGet(id_ref) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
-  const idRef = String(id_ref || '').trim();
+
+  // Support callers passing either:
+  // - '100003'
+  // - { id_ref: '100003' } / { idRef: '100003' }
+  const idRef = (() => {
+    if (id_ref && typeof id_ref === 'object' && !Array.isArray(id_ref)) {
+      const v = (Object.prototype.hasOwnProperty.call(id_ref, 'id_ref') ? id_ref.id_ref : (Object.prototype.hasOwnProperty.call(id_ref, 'idRef') ? id_ref.idRef : ''));
+      return String(v || '').trim();
+    }
+    return String(id_ref || '').trim();
+  })();
 
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
   if (!mc || String(mc.entity || '') !== 'banking') return null;
@@ -8184,6 +8268,24 @@ async function bankingIdRunGet(id_ref) {
     idSt.runs.selected.loading = false;
     idSt.runs.selected.error = '';
 
+    // Also populate the newer “selected run” fields if present (used by upgraded renderers/dispatchers)
+    try {
+      idSt.selectedRunIdRef = idRef;
+
+      const runObj = (obj.run && typeof obj.run === 'object') ? obj.run
+        : (obj.header && typeof obj.header === 'object') ? obj.header
+        : (obj && typeof obj === 'object') ? obj
+        : null;
+
+      const linesArr = Array.isArray(obj.lines) ? obj.lines
+        : Array.isArray(obj.items) ? obj.items
+        : Array.isArray(obj.rows) ? obj.rows
+        : [];
+
+      idSt.selectedRun = runObj && typeof runObj === 'object' ? deep(runObj) : null;
+      idSt.selectedRunLines = deep(linesArr) || [];
+    } catch {}
+
     try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
 
     return deep(obj);
@@ -8201,7 +8303,6 @@ async function bankingIdRunGet(id_ref) {
     try { idSt.runs.selected.loading = false; } catch {}
   }
 }
-
 
 async function bankingOutboxList({ reference_prefix = '', reference_contains = '', limit = 50, offset = 0 } = {}) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
@@ -10929,6 +11030,88 @@ ${enc(pvJson || 'No preview loaded yet.')}
   `;
 }
 
+function renderBankingIdLedgerTable(items) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const fmtUtcToUk = (iso) => {
+    try {
+      if (!iso) return '';
+      const d = new Date(String(iso));
+      if (Number.isNaN(d.getTime())) return String(iso);
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      return fmt.format(d).replace(',', '');
+    } catch {
+      return String(iso || '');
+    }
+  };
+
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const fmtSigned = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    const x = Math.round(n * 100) / 100;
+    const s = x.toFixed(2);
+    return (x > 0) ? `+${s}` : s;
+  };
+
+  const arr = Array.isArray(items) ? items : [];
+  if (!arr.length) {
+    return `<tr><td colspan="6" class="mini" style="opacity:.85;">No ledger rows.</td></tr>`;
+  }
+
+  return arr.map((it) => {
+    const invNum = String(it?.invoice_number || '').trim();
+    const invId = String(it?.invoice_id || '').trim();
+    const primary = invNum || invId || '—';
+
+    const invStatus = String(it?.invoice_status || '').trim().toUpperCase() || '—';
+    const invType = String(it?.invoice_type || '').trim().toUpperCase();
+    const client = String(it?.client_name || '').trim() || String(it?.client_id || '').trim() || '—';
+
+    const delta = (it?.delta_inc_vat != null) ? it.delta_inc_vat
+      : (it?.delta_ex_vat != null) ? it.delta_ex_vat
+      : (it?.delta_vat != null) ? it.delta_vat
+      : null;
+
+    const curr = (it?.current_inc_vat != null) ? it.current_inc_vat
+      : (it?.current_ex_vat != null) ? it.current_ex_vat
+      : (it?.current_vat != null) ? it.current_vat
+      : null;
+
+    const ts = String(it?.updated_at_utc || it?.status_date || it?.issued_at_utc || it?.paid_at_utc || '').trim();
+    const when = fmtUtcToUk(ts);
+
+    return `
+      <tr>
+        <td class="mono" title="${enc(invId || invNum || '')}">${enc(primary)}</td>
+        <td><span class="pill" title="${enc(invType || '')}">${enc(invStatus)}</span></td>
+        <td class="mini">${enc(client)}</td>
+        <td class="mono" style="text-align:right; white-space:nowrap;">${enc(delta == null ? '' : fmtSigned(delta))}</td>
+        <td class="mono" style="text-align:right; white-space:nowrap;">${enc(curr == null ? '' : fmtMoney(curr))}</td>
+        <td class="mini">${enc(when || '')}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
 function renderBankingIdHistoryTab() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -10957,6 +11140,20 @@ function renderBankingIdHistoryTab() {
     }
   };
 
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const fmtSigned = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    const x = Math.round(n * 100) / 100;
+    const s = x.toFixed(2);
+    return (x > 0) ? `+${s}` : s;
+  };
+
   const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
   if (!st) {
     return `
@@ -10971,6 +11168,7 @@ function renderBankingIdHistoryTab() {
 
   st.id = (st.id && typeof st.id === 'object') ? st.id : {};
 
+  // Legacy ID history state (kept for back-compat with existing helpers)
   st.id.ledger = (st.id.ledger && typeof st.id.ledger === 'object') ? st.id.ledger : {
     filters: { only_reportable: true, status: [], client_id: '', search: '' },
     paging: { limit: 50, offset: 0 },
@@ -10984,47 +11182,98 @@ function renderBankingIdHistoryTab() {
     selected: { id_ref: '', data: null, loading: false, error: '' }
   };
 
+  // New dispatcher-driven state (added in attachBankingModalDelegatedHandlers patch)
+  st.id.ledgerFilters = (st.id.ledgerFilters && typeof st.id.ledgerFilters === 'object') ? st.id.ledgerFilters : {
+    only_reportable: true,
+    search: '',
+    client_id: '',
+    statuses: { DRAFT: true, ISSUED: true, PAID: true, ON_HOLD: true },
+    limit: 50,
+    offset: 0
+  };
+  st.id.ledgerFilters.statuses = (st.id.ledgerFilters.statuses && typeof st.id.ledgerFilters.statuses === 'object')
+    ? st.id.ledgerFilters.statuses
+    : { DRAFT: true, ISSUED: true, PAID: true, ON_HOLD: true };
+
+  // Keep legacy ledger state roughly mirrored so existing helpers keep working
+  try {
+    st.id.ledger.filters.only_reportable = !!st.id.ledgerFilters.only_reportable;
+    st.id.ledger.filters.search = String(st.id.ledgerFilters.search || '');
+    st.id.ledger.filters.client_id = String(st.id.ledgerFilters.client_id || '');
+    const arr = [];
+    for (const k of ['DRAFT','ISSUED','PAID','ON_HOLD']) {
+      if (st.id.ledgerFilters.statuses && st.id.ledgerFilters.statuses[k]) arr.push(k);
+    }
+    st.id.ledger.filters.status = arr;
+    st.id.ledger.paging.limit = Number.isFinite(Number(st.id.ledgerFilters.limit)) ? Math.trunc(Number(st.id.ledgerFilters.limit)) : st.id.ledger.paging.limit;
+    st.id.ledger.paging.offset = Number.isFinite(Number(st.id.ledgerFilters.offset)) ? Math.trunc(Number(st.id.ledgerFilters.offset)) : st.id.ledger.paging.offset;
+  } catch {}
+
   const ledErr = String(st.id.ledger.error || '').trim();
   const ledLoading = !!st.id.ledger.loading;
+
   const ledItems = Array.isArray(st.id.ledger.data?.items) ? st.id.ledger.data.items : [];
-  const onlyRep = !!st.id.ledger.filters.only_reportable;
-  const search = String(st.id.ledger.filters.search || '').trim();
-  const clientId = String(st.id.ledger.filters.client_id || '').trim();
-  const statuses = Array.isArray(st.id.ledger.filters.status) ? st.id.ledger.filters.status : [];
+  const onlyRep = !!st.id.ledgerFilters.only_reportable;
+  const search = String(st.id.ledgerFilters.search || '').trim();
+  const clientId = String(st.id.ledgerFilters.client_id || '').trim();
+  const statusChips = ['DRAFT', 'ISSUED', 'PAID', 'ON_HOLD'];
 
   const runsErr = String(st.id.runs.list?.error || '').trim();
   const runsLoading = !!st.id.runs.list?.loading;
   const runs = Array.isArray(st.id.runs.list?.data?.items) ? st.id.runs.list.data.items : [];
+
   const runSel = (st.id.runs.selected && typeof st.id.runs.selected === 'object') ? st.id.runs.selected : { id_ref:'', data:null, loading:false, error:'' };
   const runSelErr = String(runSel.error || '').trim();
   const runSelLoading = !!runSel.loading;
   const runSelData = (runSel.data && typeof runSel.data === 'object') ? runSel.data : null;
 
-  const statusChips = ['DRAFT', 'ISSUED', 'PAID', 'ON_HOLD'];
+  // Prefer "new" run selection fields if present (dispatcher may populate these)
+  const selRunIdRef = String(st.id.selectedRunIdRef || runSel.id_ref || '').trim();
+  const selRunObj = (st.id.selectedRun && typeof st.id.selectedRun === 'object') ? st.id.selectedRun : null;
+  const selRunLines = Array.isArray(st.id.selectedRunLines) ? st.id.selectedRunLines : [];
 
-  const ledRowsHtml = ledItems.length ? ledItems.map((it) => {
-    const ref = String(it?.id_ref || it?.id || '').trim();
-    const status = String(it?.status || '').trim().toUpperCase();
-    const client = String(it?.client_name || it?.client || '').trim();
-    const amount = (it?.amount != null) ? String(it.amount) : '';
-    const created = fmtUtcToUk(it?.created_at_utc || it?.created_at || '');
+  const ledRowsHtml = (typeof renderBankingIdLedgerTable === 'function')
+    ? renderBankingIdLedgerTable(ledItems)
+    : (ledItems.length ? ledItems.map((it) => {
+        const invNum = String(it?.invoice_number || '').trim();
+        const invId = String(it?.invoice_id || '').trim();
+        const primary = invNum || invId || '—';
 
-    return `
-      <tr>
-        <td class="mono">${enc(ref || '')}</td>
-        <td><span class="pill">${enc(status || '—')}</span></td>
-        <td class="mini">${enc(client || '')}</td>
-        <td class="mono">${enc(amount || '')}</td>
-        <td class="mini">${enc(created || '')}</td>
-      </tr>
-    `;
-  }).join('') : `<tr><td colspan="5" class="mini" style="opacity:.85;">No ledger rows.</td></tr>`;
+        const invStatus = String(it?.invoice_status || '').trim().toUpperCase() || '—';
+        const invType = String(it?.invoice_type || '').trim().toUpperCase();
+        const client = String(it?.client_name || '').trim() || String(it?.client_id || '').trim() || '—';
+
+        const delta = (it?.delta_inc_vat != null) ? it.delta_inc_vat
+          : (it?.delta_ex_vat != null) ? it.delta_ex_vat
+          : (it?.delta_vat != null) ? it.delta_vat
+          : null;
+
+        const curr = (it?.current_inc_vat != null) ? it.current_inc_vat
+          : (it?.current_ex_vat != null) ? it.current_ex_vat
+          : (it?.current_vat != null) ? it.current_vat
+          : null;
+
+        const ts = String(it?.updated_at_utc || it?.status_date || it?.issued_at_utc || it?.paid_at_utc || '').trim();
+        const when = fmtUtcToUk(ts);
+
+        return `
+          <tr>
+            <td class="mono" title="${enc(invId || invNum || '')}">${enc(primary)}</td>
+            <td><span class="pill" title="${enc(invType || '')}">${enc(invStatus)}</span></td>
+            <td class="mini">${enc(client)}</td>
+            <td class="mono" style="text-align:right; white-space:nowrap;">${enc(delta == null ? '' : fmtSigned(delta))}</td>
+            <td class="mono" style="text-align:right; white-space:nowrap;">${enc(curr == null ? '' : fmtMoney(curr))}</td>
+            <td class="mini">${enc(when || '')}</td>
+          </tr>
+        `;
+      }).join('') : `<tr><td colspan="6" class="mini" style="opacity:.85;">No ledger rows.</td></tr>`);
 
   const runsRowsHtml = runs.length ? runs.map((r) => {
     const idRef = String(r?.id_ref || r?.ref || '').trim();
     const created = fmtUtcToUk(r?.created_at_utc || r?.created_at || '');
     const note = String(r?.note || '').trim();
-    const kind = String(r?.kind || r?.run_kind || '').trim().toUpperCase();
+    const bankUploadCode = String(r?.bank_upload_code || '').trim();
+    const totalDeltaInc = (r?.total_delta_inc_vat != null) ? fmtMoney(r.total_delta_inc_vat) : '';
 
     return `
       <tr
@@ -11034,18 +11283,136 @@ function renderBankingIdHistoryTab() {
         title="Open run ${enc(idRef)}"
       >
         <td class="mono">${enc(idRef || '')}</td>
-        <td class="mini">${enc(kind || '')}</td>
         <td class="mini">${enc(created || '')}</td>
+        <td class="mono" style="text-align:right;white-space:nowrap;">${enc(totalDeltaInc ? totalDeltaInc : '')}</td>
+        <td class="mini">${enc(bankUploadCode || '')}</td>
         <td class="mini" style="white-space:normal;overflow-wrap:anywhere;">${enc(note || '')}</td>
       </tr>
     `;
-  }).join('') : `<tr><td colspan="4" class="mini" style="opacity:.85;">No runs.</td></tr>`;
+  }).join('') : `<tr><td colspan="5" class="mini" style="opacity:.85;">No runs.</td></tr>`;
 
-  const runDetailHtml = runSelData ? `
-    <pre class="mono" style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:10px;background:rgba(0,0,0,.12);">
-${enc(JSON.stringify(runSelData, null, 2))}
-    </pre>
-  ` : `<div class="mini" style="opacity:.85;">Select a run to view details.</div>`;
+  // Build run detail panel (header + lines table) from either new fields or legacy runSelData
+  const pickRunAndLines = () => {
+    if (selRunObj || (selRunLines && selRunLines.length)) {
+      return { run: selRunObj, lines: selRunLines };
+    }
+    const d = runSelData;
+    if (!d) return { run: null, lines: [] };
+
+    // Common shapes:
+    // { run: {...}, lines: [...] }
+    // { header: {...}, lines: [...] }
+    // { lines: [...] , ...headerFields }
+    // { items: [...] , ...headerFields }
+    const run = (d.run && typeof d.run === 'object') ? d.run
+      : (d.header && typeof d.header === 'object') ? d.header
+      : d;
+
+    const lines = Array.isArray(d.lines) ? d.lines
+      : Array.isArray(d.items) ? d.items
+      : Array.isArray(d.rows) ? d.rows
+      : [];
+
+    return { run: (run && typeof run === 'object') ? run : null, lines };
+  };
+
+  const { run: runObj, lines: runLines } = pickRunAndLines();
+
+  const runHeaderHtml = (() => {
+    if (!runObj) return `<div class="mini" style="opacity:.85;">Select a run to view details.</div>`;
+
+    const idRef = String(runObj?.id_ref || selRunIdRef || '').trim();
+    const created = fmtUtcToUk(runObj?.created_at_utc || runObj?.created_at || '');
+    const bankUploadCode = String(runObj?.bank_upload_code || '').trim();
+    const note = String(runObj?.note || '').trim();
+
+    const tInc = (runObj?.total_delta_inc_vat != null) ? fmtMoney(runObj.total_delta_inc_vat) : '';
+    const tEx  = (runObj?.total_delta_ex_vat != null) ? fmtMoney(runObj.total_delta_ex_vat) : '';
+    const tVat = (runObj?.total_delta_vat != null) ? fmtMoney(runObj.total_delta_vat) : '';
+
+    return `
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+        <span class="pill pill-info">Run: <span class="mono">${enc(idRef || '—')}</span></span>
+        <span class="mini">Created: <span class="mono">${enc(created || '—')}</span></span>
+        ${bankUploadCode ? `<span class="mini">Bank upload code: <span class="mono">${enc(bankUploadCode)}</span></span>` : ``}
+        ${tInc ? `<span class="mini">Δ inc VAT: <span class="mono">${enc(tInc)}</span></span>` : ``}
+        ${tEx ? `<span class="mini">Δ ex VAT: <span class="mono">${enc(tEx)}</span></span>` : ``}
+        ${tVat ? `<span class="mini">Δ VAT: <span class="mono">${enc(tVat)}</span></span>` : ``}
+      </div>
+      ${note ? `<div class="mini" style="opacity:.85;margin-top:6px;white-space:normal;overflow-wrap:anywhere;">Note: ${enc(note)}</div>` : ``}
+    `;
+  })();
+
+  const runLinesTableHtml = (() => {
+    if (!runObj) return '';
+    const lines = Array.isArray(runLines) ? runLines : [];
+
+    const rows = lines.length ? lines.map((it) => {
+      const invNum = String(it?.invoice_number || '').trim();
+      const invId = String(it?.invoice_id || '').trim();
+      const primary = invNum || invId || '—';
+
+      const invStatus = String(it?.invoice_status || '').trim().toUpperCase() || '—';
+      const invType = String(it?.invoice_type || '').trim().toUpperCase();
+      const client = String(it?.client_name || '').trim() || String(it?.client_id || '').trim() || '—';
+
+      const delta = (it?.delta_inc_vat != null) ? it.delta_inc_vat
+        : (it?.delta_ex_vat != null) ? it.delta_ex_vat
+        : (it?.delta_vat != null) ? it.delta_vat
+        : null;
+
+      const curr = (it?.current_inc_vat != null) ? it.current_inc_vat
+        : (it?.current_ex_vat != null) ? it.current_ex_vat
+        : (it?.current_vat != null) ? it.current_vat
+        : null;
+
+      return `
+        <tr>
+          <td class="mono" title="${enc(invId || invNum || '')}">${enc(primary)}</td>
+          <td><span class="pill" title="${enc(invType || '')}">${enc(invStatus)}</span></td>
+          <td class="mini">${enc(client)}</td>
+          <td class="mono" style="text-align:right; white-space:nowrap;">${enc(delta == null ? '' : fmtSigned(delta))}</td>
+          <td class="mono" style="text-align:right; white-space:nowrap;">${enc(curr == null ? '' : fmtMoney(curr))}</td>
+        </tr>
+      `;
+    }).join('') : `<tr><td colspan="5" class="mini" style="opacity:.85;">No run lines.</td></tr>`;
+
+    return `
+      <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+        <table class="grid" style="min-width:860px; table-layout:auto;">
+          <thead>
+            <tr>
+              <th>Invoice #</th>
+              <th>Status</th>
+              <th>Client</th>
+              <th style="text-align:right;">Delta (inc VAT)</th>
+              <th style="text-align:right;">Current (inc VAT)</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  })();
+
+  const selectedRunRefreshAction = selRunIdRef ? `
+    <button
+      type="button"
+      class="btn btn-sm btn-outline"
+      data-action="banking:id:runSelect"
+      data-id-ref="${enc(selRunIdRef)}"
+      title="Refresh selected run"
+    >${runSelLoading ? 'Refreshing…' : 'Refresh run'}</button>
+  ` : `
+    <button
+      type="button"
+      class="btn btn-sm btn-outline"
+      data-action="banking:id:runSelect"
+      data-id-ref="${enc(String(runSel.id_ref || '').trim())}"
+      title="Refresh selected run"
+      data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"
+    >Refresh run</button>
+  `;
 
   return `
     <div id="bankingIdHistoryTab">
@@ -11105,21 +11472,21 @@ ${enc(JSON.stringify(runSelData, null, 2))}
                 </div>
 
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                  ${statusChips.map(s => {
-                    const on = statuses.map(x => String(x || '').toUpperCase()).includes(s);
+                  ${statusChips.map(sx => {
+                    const on = !!(st.id.ledgerFilters && st.id.ledgerFilters.statuses && st.id.ledgerFilters.statuses[sx]);
                     return `
                       <button
                         type="button"
                         class="btn btn-sm btn-outline"
                         data-action="banking:id:toggleLedgerStatus"
-                        data-status="${enc(s)}"
+                        data-status="${enc(sx)}"
                         ${on ? 'style="border-color:rgba(59,130,246,.6);background:rgba(59,130,246,.10);"' : ''}
-                        title="Toggle status filter ${enc(s)}"
-                      >${enc(s)}</button>
+                        title="Toggle status filter ${enc(sx)}"
+                      >${enc(sx)}</button>
                     `;
                   }).join('')}
                   <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:clearLedgerFilters" title="Clear filters">Clear</button>
-                  <button type="button" class="btn btn-sm btn-primary" data-action="banking:id:ledgerRefresh" title="Apply filters">Apply</button>
+                  <button type="button" class="btn btn-sm btn-primary" data-action="banking:id:apply" title="Apply filters">Apply</button>
                 </div>
 
                 <div class="mini" style="opacity:.8;">${ledLoading ? 'Loading ledger…' : ' '}</div>
@@ -11132,14 +11499,15 @@ ${enc(JSON.stringify(runSelData, null, 2))}
               <label>Ledger</label>
               <div class="controls">
                 <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-                  <table class="grid" style="min-width:760px; table-layout:auto;">
+                  <table class="grid" style="min-width:920px; table-layout:auto;">
                     <thead>
                       <tr>
-                        <th>ID ref</th>
+                        <th>Invoice #</th>
                         <th>Status</th>
                         <th>Client</th>
-                        <th>Amount</th>
-                        <th>Created</th>
+                        <th style="text-align:right;">Delta (inc VAT)</th>
+                        <th style="text-align:right;">Current (inc VAT)</th>
+                        <th>Updated</th>
                       </tr>
                     </thead>
                     <tbody>${ledRowsHtml}</tbody>
@@ -11158,12 +11526,13 @@ ${enc(JSON.stringify(runSelData, null, 2))}
                 ${runsErr ? `<div class="error" style="white-space:pre-wrap;">${enc(runsErr)}</div>` : ''}
 
                 <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-                  <table class="grid" style="min-width:680px; table-layout:auto;">
+                  <table class="grid" style="min-width:780px; table-layout:auto;">
                     <thead>
                       <tr>
                         <th>ID ref</th>
-                        <th>Kind</th>
                         <th>Created</th>
+                        <th style="text-align:right;">Δ inc VAT</th>
+                        <th>Bank upload</th>
                         <th>Note</th>
                       </tr>
                     </thead>
@@ -11181,30 +11550,27 @@ ${enc(JSON.stringify(runSelData, null, 2))}
               <label>Run detail</label>
               <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
                 ${runSelErr ? `<div class="error" style="white-space:pre-wrap;">${enc(runSelErr)}</div>` : ''}
+
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                  <span class="pill pill-info">Selected: ${enc(String(runSel.id_ref || '') || '—')}</span>
-                  <button
-                    type="button"
-                    class="btn btn-sm btn-outline"
-                    data-action="banking:id:runRefresh"
-                    data-id-ref="${enc(String(runSel.id_ref || '').trim())}"
-                    title="Refresh selected run"
-                  >${runSelLoading ? 'Refreshing…' : 'Refresh run'}</button>
+                  <span class="pill pill-info">Selected: ${enc(selRunIdRef || '—')}</span>
+                  ${selectedRunRefreshAction}
+                  <span class="mini" style="opacity:.8;">${runSelLoading ? 'Loading…' : ' '}</span>
                 </div>
-                ${runDetailHtml}
+
+                ${runHeaderHtml}
+                ${runLinesTableHtml}
               </div>
             </div>
           </div>
 
           <div class="mini" style="opacity:.8;">
-            Tip: use Refresh buttons above after making changes.
+            Tip: Refresh ledger/runs after applying a balance-now run.
           </div>
         </div>
       </div>
     </div>
   `;
 }
-
 function renderBankingRemittancesStatusTab() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
