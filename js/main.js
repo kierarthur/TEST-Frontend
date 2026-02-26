@@ -5994,12 +5994,19 @@ async function bankingRerender(tabKey = null) {
 
         const ids = [
           'bankingPayDateInput',
+          'bankingWeekEndingCutoffInput',
           'bankingScheduleDateUk'
         ];
         for (const id of ids) {
           const el = document.getElementById(id);
           if (el) {
-            try { attachUkDatePicker(el, { minDate: todayIso }); } catch {}
+            try {
+              if (id === 'bankingWeekEndingCutoffInput') {
+                attachUkDatePicker(el, { maxDate: todayIso });
+              } else {
+                attachUkDatePicker(el, { minDate: todayIso });
+              }
+            } catch {}
           }
         }
       }
@@ -9124,7 +9131,6 @@ function renderPayBatchListPanel() {
       <tr
         ${isActive ? 'class="active"' : ''}
         style="cursor:pointer;"
-        data-action="banking:pay:selectBatch"
         data-batch-id="${enc(id)}"
         title="${enc(id)}"
       >
@@ -9164,7 +9170,7 @@ function renderPayBatchListPanel() {
                 ${statusOptions.map(o => `<option value="${enc(o.v)}" ${o.v === statusNow ? 'selected' : ''}>${enc(o.label)}</option>`).join('')}
               </select>
 
-              <label class="inline mini" style="opacity:.85;">Page size</label>
+              <label class="inline mini" style="opacity:.85;">Display latest</label>
               <select
                 class="input"
                 id="bankingPayBatchPageSize"
@@ -9209,7 +9215,7 @@ function renderPayBatchListPanel() {
           </div>
 
           <div class="mini" style="opacity:.85;">
-            Tip: double-click a batch row to open the batch modal (coming next).
+            Tip: double-click a batch row to open the batch modal.
           </div>
 
           <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
@@ -10942,7 +10948,140 @@ function renderBankingIdTab() {
   const previewBtnTitle = gatePreview.blocked ? (gatePreview.message || gatePreview.reasonCode || 'Action blocked') : 'Refresh ID preview';
   const applyBtnTitle = gateApply.blocked ? (gateApply.message || gateApply.reasonCode || 'Action blocked') : 'Apply ID balance-now (requires bank upload code)';
 
-  const pvJson = pv ? JSON.stringify(pv, null, 2) : '';
+  const pvSummaryRows = (() => {
+    if (!pv) return [];
+    const out = [];
+    try {
+      const keys = Object.keys(pv);
+      for (const k of keys) {
+        const v = pv[k];
+        const t = typeof v;
+        if (v == null || t === 'string' || t === 'number' || t === 'boolean') {
+          out.push([String(k), (v == null) ? '' : String(v)]);
+        } else if (Array.isArray(v)) {
+          out.push([String(k), `Array (${v.length})`]);
+        } else if (t === 'object') {
+          out.push([String(k), 'Object']);
+        } else {
+          out.push([String(k), String(v)]);
+        }
+      }
+    } catch {}
+    return out;
+  })();
+
+  const pvFirstArray = (() => {
+    if (!pv) return { key: '', items: [] };
+    const prefer = ['items', 'rows', 'invoices', 'ledger', 'lines'];
+    for (const k of prefer) {
+      try {
+        if (Array.isArray(pv[k])) return { key: k, items: pv[k] };
+      } catch {}
+    }
+    try {
+      for (const [k, v] of Object.entries(pv)) {
+        if (Array.isArray(v)) return { key: String(k), items: v };
+      }
+    } catch {}
+    return { key: '', items: [] };
+  })();
+
+  const pvTableHtml = (() => {
+    if (!pv) {
+      return `<div class="mini" style="opacity:.85;">No preview loaded yet.</div>`;
+    }
+
+    const sumRows = pvSummaryRows.length
+      ? pvSummaryRows.map(([k, v]) => `
+          <tr>
+            <td class="mini" style="white-space:nowrap;">${enc(k)}</td>
+            <td class="mono" style="white-space:normal;overflow-wrap:anywhere;">${enc(v)}</td>
+          </tr>
+        `).join('')
+      : `<tr><td colspan="2" class="mini" style="opacity:.85;">No preview summary fields.</td></tr>`;
+
+    const { key: arrKey, items } = pvFirstArray;
+    const hasRows = Array.isArray(items) && items.length > 0;
+
+    const rows = hasRows ? items.map((it) => {
+      const invNum = String(it?.invoice_number || it?.invoice_no || '').trim();
+      const invId = String(it?.invoice_id || it?.id || '').trim();
+      const primary = invNum || invId || '—';
+
+      const invStatus = String(it?.invoice_status || it?.status || '').trim().toUpperCase() || '—';
+      const invType = String(it?.invoice_type || it?.type || '').trim().toUpperCase();
+      const client = String(it?.client_name || it?.client || '').trim() || String(it?.client_id || '').trim() || '—';
+
+      const delta = (it?.delta_inc_vat != null) ? it.delta_inc_vat
+        : (it?.delta_ex_vat != null) ? it.delta_ex_vat
+        : (it?.delta_vat != null) ? it.delta_vat
+        : null;
+
+      const curr = (it?.current_inc_vat != null) ? it.current_inc_vat
+        : (it?.current_ex_vat != null) ? it.current_ex_vat
+        : (it?.current_vat != null) ? it.current_vat
+        : null;
+
+      const ts = String(it?.updated_at_utc || it?.status_date || it?.issued_at_utc || it?.paid_at_utc || it?.created_at_utc || it?.created_at || '').trim();
+
+      const fmtMoney = (v) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return '';
+        return (Math.round(n * 100) / 100).toFixed(2);
+      };
+
+      const fmtSigned = (v) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return '';
+        const x = Math.round(n * 100) / 100;
+        const s = x.toFixed(2);
+        return (x > 0) ? `+${s}` : s;
+      };
+
+      return `
+        <tr>
+          <td class="mono" title="${enc(invId || invNum || '')}">${enc(primary)}</td>
+          <td><span class="pill" title="${enc(invType || '')}">${enc(invStatus)}</span></td>
+          <td class="mini">${enc(client)}</td>
+          <td class="mono" style="text-align:right; white-space:nowrap;">${enc(delta == null ? '' : fmtSigned(delta))}</td>
+          <td class="mono" style="text-align:right; white-space:nowrap;">${enc(curr == null ? '' : fmtMoney(curr))}</td>
+          <td class="mini">${enc(ts || '')}</td>
+        </tr>
+      `;
+    }).join('') : `<tr><td colspan="6" class="mini" style="opacity:.85;">No preview rows found${arrKey ? ` (array: ${enc(arrKey)})` : ''}.</td></tr>`;
+
+    return `
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+          <table class="grid" style="min-width:620px; table-layout:auto;">
+            <thead>
+              <tr>
+                <th style="width:220px;">Field</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody>${sumRows}</tbody>
+          </table>
+        </div>
+
+        <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+          <table class="grid" style="min-width:920px; table-layout:auto;">
+            <thead>
+              <tr>
+                <th>Invoice #</th>
+                <th>Status</th>
+                <th>Client</th>
+                <th style="text-align:right;">Delta</th>
+                <th style="text-align:right;">Current</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  })();
 
   return `
     <div id="bankingIdTab">
@@ -10969,9 +11108,7 @@ function renderBankingIdTab() {
         <div class="row">
           <label>Preview</label>
           <div class="controls">
-            <pre class="mono" style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:10px;background:rgba(0,0,0,.12);">
-${enc(pvJson || 'No preview loaded yet.')}
-            </pre>
+            ${pvTableHtml}
           </div>
         </div>
       </div>
@@ -11029,6 +11166,7 @@ ${enc(pvJson || 'No preview loaded yet.')}
     </div>
   `;
 }
+
 
 function renderBankingIdLedgerTable(items) {
   const enc = (typeof escapeHtml === 'function')
@@ -11112,6 +11250,7 @@ function renderBankingIdLedgerTable(items) {
   }).join('');
 }
 
+
 function renderBankingIdHistoryTab() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -11168,21 +11307,7 @@ function renderBankingIdHistoryTab() {
 
   st.id = (st.id && typeof st.id === 'object') ? st.id : {};
 
-  // Legacy ID history state (kept for back-compat with existing helpers)
-  st.id.ledger = (st.id.ledger && typeof st.id.ledger === 'object') ? st.id.ledger : {
-    filters: { only_reportable: true, status: [], client_id: '', search: '' },
-    paging: { limit: 50, offset: 0 },
-    data: { items: [], total: null },
-    loading: false,
-    error: ''
-  };
-
-  st.id.runs = (st.id.runs && typeof st.id.runs === 'object') ? st.id.runs : {
-    list: { paging: { limit: 50, offset: 0 }, data: { items: [], total: null }, loading: false, error: '' },
-    selected: { id_ref: '', data: null, loading: false, error: '' }
-  };
-
-  // New dispatcher-driven state (added in attachBankingModalDelegatedHandlers patch)
+  // Ensure the new dispatcher-driven state exists
   st.id.ledgerFilters = (st.id.ledgerFilters && typeof st.id.ledgerFilters === 'object') ? st.id.ledgerFilters : {
     only_reportable: true,
     search: '',
@@ -11195,34 +11320,156 @@ function renderBankingIdHistoryTab() {
     ? st.id.ledgerFilters.statuses
     : { DRAFT: true, ISSUED: true, PAID: true, ON_HOLD: true };
 
-  // Keep legacy ledger state roughly mirrored so existing helpers keep working
+  // Ensure ledger container exists (support both shapes: {items} and legacy {data:{items}})
+  st.id.ledger = (st.id.ledger && typeof st.id.ledger === 'object') ? st.id.ledger : { items: [], loading: false, error: '' };
+  if (!Array.isArray(st.id.ledger.items)) st.id.ledger.items = [];
+  if (!st.id.ledger.data || typeof st.id.ledger.data !== 'object') st.id.ledger.data = { items: [], total: null };
+  if (!Array.isArray(st.id.ledger.data.items)) st.id.ledger.data.items = [];
   try {
-    st.id.ledger.filters.only_reportable = !!st.id.ledgerFilters.only_reportable;
-    st.id.ledger.filters.search = String(st.id.ledgerFilters.search || '');
-    st.id.ledger.filters.client_id = String(st.id.ledgerFilters.client_id || '');
-    const arr = [];
-    for (const k of ['DRAFT','ISSUED','PAID','ON_HOLD']) {
-      if (st.id.ledgerFilters.statuses && st.id.ledgerFilters.statuses[k]) arr.push(k);
+    if (Array.isArray(st.id.ledger.items) && st.id.ledger.items.length && (!st.id.ledger.data.items || !st.id.ledger.data.items.length)) {
+      st.id.ledger.data.items = st.id.ledger.items;
+    } else if (Array.isArray(st.id.ledger.data.items) && st.id.ledger.data.items.length && (!st.id.ledger.items || !st.id.ledger.items.length)) {
+      st.id.ledger.items = st.id.ledger.data.items;
     }
-    st.id.ledger.filters.status = arr;
-    st.id.ledger.paging.limit = Number.isFinite(Number(st.id.ledgerFilters.limit)) ? Math.trunc(Number(st.id.ledgerFilters.limit)) : st.id.ledger.paging.limit;
-    st.id.ledger.paging.offset = Number.isFinite(Number(st.id.ledgerFilters.offset)) ? Math.trunc(Number(st.id.ledgerFilters.offset)) : st.id.ledger.paging.offset;
+  } catch {}
+
+  // Ensure runs container exists (support both shapes: {items} and legacy {list:{data:{items}}})
+  st.id.runs = (st.id.runs && typeof st.id.runs === 'object') ? st.id.runs : { items: [], loading: false, error: '' };
+  if (!Array.isArray(st.id.runs.items)) st.id.runs.items = [];
+  if (!st.id.runs.list || typeof st.id.runs.list !== 'object') st.id.runs.list = { paging: { limit: 50, offset: 0 }, data: { items: [], total: null }, loading: false, error: '' };
+  if (!st.id.runs.list.data || typeof st.id.runs.list.data !== 'object') st.id.runs.list.data = { items: [], total: null };
+  if (!Array.isArray(st.id.runs.list.data.items)) st.id.runs.list.data.items = [];
+  try {
+    if (Array.isArray(st.id.runs.items) && st.id.runs.items.length && (!st.id.runs.list.data.items || !st.id.runs.list.data.items.length)) {
+      st.id.runs.list.data.items = st.id.runs.items;
+    } else if (Array.isArray(st.id.runs.list.data.items) && st.id.runs.list.data.items.length && (!st.id.runs.items || !st.id.runs.items.length)) {
+      st.id.runs.items = st.id.runs.list.data.items;
+    }
+  } catch {}
+
+  // Auto-load runs + ledger once, when this tab becomes active
+  try {
+    if (!st.id.__idHistoryAutoLoaded) {
+      st.id.__idHistoryAutoLoaded = true;
+
+      const hasAnyRuns = (Array.isArray(st.id.runs.items) && st.id.runs.items.length) || (Array.isArray(st.id.runs.list.data.items) && st.id.runs.list.data.items.length);
+      const hasAnyLedger = (Array.isArray(st.id.ledger.items) && st.id.ledger.items.length) || (Array.isArray(st.id.ledger.data.items) && st.id.ledger.data.items.length);
+
+      if ((!hasAnyRuns || !hasAnyLedger) && typeof setTimeout === 'function') {
+        setTimeout(() => {
+          (async () => {
+            try {
+              const canFetch = (typeof bankingIdRunsList === 'function') || (typeof bankingIdLedgerList === 'function');
+              if (!canFetch) return;
+
+              // Runs
+              if (!hasAnyRuns && typeof bankingIdRunsList === 'function' && !st.id.runs.loading && !st.id.runs.list.loading) {
+                try {
+                  st.id.runs.loading = true;
+                  st.id.runs.list.loading = true;
+                  st.id.runs.error = '';
+                  st.id.runs.list.error = '';
+                } catch {}
+                try {
+                  const limit = Number.isFinite(Number(st.id.runs.list.paging?.limit)) ? Math.max(1, Math.min(500, Math.trunc(Number(st.id.runs.list.paging.limit)))) : 50;
+                  const offset = Number.isFinite(Number(st.id.runs.list.paging?.offset)) ? Math.max(0, Math.trunc(Number(st.id.runs.list.paging.offset))) : 0;
+                  let res = null;
+                  try { res = await bankingIdRunsList({ limit, offset }); } catch { res = await bankingIdRunsList(); }
+
+                  let runs = [];
+                  if (Array.isArray(res)) runs = res;
+                  else if (res && typeof res === 'object' && Array.isArray(res.runs)) runs = res.runs;
+                  else if (res && typeof res === 'object' && Array.isArray(res.items)) runs = res.items;
+                  else if (res && typeof res === 'object' && Array.isArray(res.rows)) runs = res.rows;
+                  else runs = [];
+
+                  st.id.runs.items = runs;
+                  st.id.runs.list.data.items = runs;
+                } catch (e) {
+                  try { st.id.runs.error = String(e?.message || e || 'Runs refresh failed'); } catch {}
+                  try { st.id.runs.list.error = String(e?.message || e || 'Runs refresh failed'); } catch {}
+                } finally {
+                  try { st.id.runs.loading = false; } catch {}
+                  try { st.id.runs.list.loading = false; } catch {}
+                }
+              }
+
+              // Ledger
+              if (!hasAnyLedger && typeof bankingIdLedgerList === 'function' && !st.id.ledger.loading) {
+                try {
+                  st.id.ledger.loading = true;
+                  st.id.ledger.error = '';
+                } catch {}
+
+                try {
+                  const f = (st.id.ledgerFilters && typeof st.id.ledgerFilters === 'object') ? st.id.ledgerFilters : {};
+                  const sts = (f.statuses && typeof f.statuses === 'object') ? f.statuses : {};
+                  const statusFlags = {
+                    DRAFT: !!sts.DRAFT,
+                    ISSUED: !!sts.ISSUED,
+                    PAID: !!sts.PAID,
+                    ON_HOLD: !!sts.ON_HOLD
+                  };
+
+                  const limit = Number.isFinite(Number(f.limit)) ? Math.max(1, Math.min(500, Math.trunc(Number(f.limit)))) : 50;
+                  const offset = Number.isFinite(Number(f.offset)) ? Math.max(0, Math.trunc(Number(f.offset))) : 0;
+
+                  const args = {
+                    limit,
+                    offset,
+                    only_reportable: !!f.only_reportable,
+                    onlyReportable: !!f.only_reportable,
+                    search: String(f.search || '').trim() || null,
+                    client_id: String(f.client_id || '').trim() || null,
+                    clientId: String(f.client_id || '').trim() || null,
+                    statuses: statusFlags
+                  };
+
+                  let res = null;
+                  try { res = await bankingIdLedgerList(args); } catch { res = await bankingIdLedgerList(); }
+
+                  let items = [];
+                  if (Array.isArray(res)) items = res;
+                  else if (res && typeof res === 'object' && Array.isArray(res.items)) items = res.items;
+                  else if (res && typeof res === 'object' && Array.isArray(res.rows)) items = res.rows;
+                  else if (res && typeof res === 'object' && Array.isArray(res.lines)) items = res.lines;
+                  else items = [];
+
+                  st.id.ledger.items = items;
+                  st.id.ledger.data.items = items;
+                } catch (e) {
+                  try { st.id.ledger.error = String(e?.message || e || 'Ledger refresh failed'); } catch {}
+                } finally {
+                  try { st.id.ledger.loading = false; } catch {}
+                }
+              }
+
+              try {
+                if (typeof bankingRerender === 'function') {
+                  await bankingRerender(null);
+                }
+              } catch {}
+            } catch {}
+          })();
+        }, 0);
+      }
+    }
   } catch {}
 
   const ledErr = String(st.id.ledger.error || '').trim();
   const ledLoading = !!st.id.ledger.loading;
+  const ledItems = Array.isArray(st.id.ledger.items) ? st.id.ledger.items : (Array.isArray(st.id.ledger.data?.items) ? st.id.ledger.data.items : []);
 
-  const ledItems = Array.isArray(st.id.ledger.data?.items) ? st.id.ledger.data.items : [];
   const onlyRep = !!st.id.ledgerFilters.only_reportable;
   const search = String(st.id.ledgerFilters.search || '').trim();
   const clientId = String(st.id.ledgerFilters.client_id || '').trim();
   const statusChips = ['DRAFT', 'ISSUED', 'PAID', 'ON_HOLD'];
 
-  const runsErr = String(st.id.runs.list?.error || '').trim();
-  const runsLoading = !!st.id.runs.list?.loading;
-  const runs = Array.isArray(st.id.runs.list?.data?.items) ? st.id.runs.list.data.items : [];
+  const runsErr = String(st.id.runs.error || st.id.runs.list?.error || '').trim();
+  const runsLoading = !!(st.id.runs.loading || st.id.runs.list?.loading);
+  const runs = Array.isArray(st.id.runs.items) ? st.id.runs.items : (Array.isArray(st.id.runs.list?.data?.items) ? st.id.runs.list.data.items : []);
 
-  const runSel = (st.id.runs.selected && typeof st.id.runs.selected === 'object') ? st.id.runs.selected : { id_ref:'', data:null, loading:false, error:'' };
+  const runSel = (st.id.runs.selected && typeof st.id.runs.selected === 'object') ? st.id.runs.selected : { id_ref: '', data: null, loading: false, error: '' };
   const runSelErr = String(runSel.error || '').trim();
   const runSelLoading = !!runSel.loading;
   const runSelData = (runSel.data && typeof runSel.data === 'object') ? runSel.data : null;
@@ -11299,11 +11546,6 @@ function renderBankingIdHistoryTab() {
     const d = runSelData;
     if (!d) return { run: null, lines: [] };
 
-    // Common shapes:
-    // { run: {...}, lines: [...] }
-    // { header: {...}, lines: [...] }
-    // { lines: [...] , ...headerFields }
-    // { items: [...] , ...headerFields }
     const run = (d.run && typeof d.run === 'object') ? d.run
       : (d.header && typeof d.header === 'object') ? d.header
       : d;
@@ -11420,157 +11662,153 @@ function renderBankingIdHistoryTab() {
         <div class="row">
           <label>ID History</label>
           <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <span class="mini" style="opacity:.85;">Ledger + runs history.</span>
+            <span class="mini" style="opacity:.85;">Runs + ledger history.</span>
             <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:ledgerRefresh" title="Refresh ledger">Refresh ledger</button>
               <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:runsRefresh" title="Refresh runs">Refresh runs</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:ledgerRefresh" title="Refresh ledger">Refresh ledger</button>
             </div>
           </div>
         </div>
       </div>
 
-      <div class="grid-2" style="align-items:start;">
-        <div style="display:flex;flex-direction:column;gap:10px;">
-          <div class="card" style="padding:10px;">
-            <div class="row">
-              <label>Ledger filters</label>
-              <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-                ${ledErr ? `<div class="error" style="white-space:pre-wrap;">${enc(ledErr)}</div>` : ''}
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
+          <label>Runs</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${runsErr ? `<div class="error" style="white-space:pre-wrap;">${enc(runsErr)}</div>` : ''}
 
-                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-                  <label class="inline mini" style="opacity:.95;" title="Only reportable">
-                    <input
-                      type="checkbox"
-                      id="bankingIdOnlyReportable"
-                      data-action="banking:id:setOnlyReportable"
-                      ${onlyRep ? 'checked' : ''}
-                    />
-                    only_reportable
-                  </label>
-
-                  <input
-                    id="bankingIdLedgerSearch"
-                    class="input"
-                    type="text"
-                    value="${enc(search)}"
-                    placeholder="Search"
-                    data-action="banking:id:setLedgerSearch"
-                    style="min-width:220px;max-width:320px;"
-                    title="Search"
-                  />
-
-                  <input
-                    id="bankingIdLedgerClientId"
-                    class="input"
-                    type="text"
-                    value="${enc(clientId)}"
-                    placeholder="Client id (optional)"
-                    data-action="banking:id:setLedgerClientId"
-                    style="min-width:220px;max-width:320px;"
-                    title="Client id"
-                  />
-                </div>
-
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                  ${statusChips.map(sx => {
-                    const on = !!(st.id.ledgerFilters && st.id.ledgerFilters.statuses && st.id.ledgerFilters.statuses[sx]);
-                    return `
-                      <button
-                        type="button"
-                        class="btn btn-sm btn-outline"
-                        data-action="banking:id:toggleLedgerStatus"
-                        data-status="${enc(sx)}"
-                        ${on ? 'style="border-color:rgba(59,130,246,.6);background:rgba(59,130,246,.10);"' : ''}
-                        title="Toggle status filter ${enc(sx)}"
-                      >${enc(sx)}</button>
-                    `;
-                  }).join('')}
-                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:clearLedgerFilters" title="Clear filters">Clear</button>
-                  <button type="button" class="btn btn-sm btn-primary" data-action="banking:id:apply" title="Apply filters">Apply</button>
-                </div>
-
-                <div class="mini" style="opacity:.8;">${ledLoading ? 'Loading ledger…' : ' '}</div>
-              </div>
+            <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+              <table class="grid" style="min-width:980px; table-layout:auto;">
+                <thead>
+                  <tr>
+                    <th>ID ref</th>
+                    <th>Created</th>
+                    <th style="text-align:right;">Δ inc VAT</th>
+                    <th>Bank upload</th>
+                    <th>Note</th>
+                  </tr>
+                </thead>
+                <tbody>${runsRowsHtml}</tbody>
+              </table>
             </div>
-          </div>
 
-          <div class="card" style="padding:10px;">
-            <div class="row">
-              <label>Ledger</label>
-              <div class="controls">
-                <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-                  <table class="grid" style="min-width:920px; table-layout:auto;">
-                    <thead>
-                      <tr>
-                        <th>Invoice #</th>
-                        <th>Status</th>
-                        <th>Client</th>
-                        <th style="text-align:right;">Delta (inc VAT)</th>
-                        <th style="text-align:right;">Current (inc VAT)</th>
-                        <th>Updated</th>
-                      </tr>
-                    </thead>
-                    <tbody>${ledRowsHtml}</tbody>
-                  </table>
-                </div>
-              </div>
+            <div class="mini" style="opacity:.8;">${runsLoading ? 'Loading runs…' : ' '}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
+          <label>Run detail</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${runSelErr ? `<div class="error" style="white-space:pre-wrap;">${enc(runSelErr)}</div>` : ''}
+
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span class="pill pill-info">Selected: ${enc(selRunIdRef || '—')}</span>
+              ${selectedRunRefreshAction}
+              <span class="mini" style="opacity:.8;">${runSelLoading ? 'Loading…' : ' '}</span>
+            </div>
+
+            ${runHeaderHtml}
+            ${runLinesTableHtml}
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px; margin-bottom:10px;">
+        <div class="row">
+          <label>Ledger filters</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${ledErr ? `<div class="error" style="white-space:pre-wrap;">${enc(ledErr)}</div>` : ''}
+
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+              <label class="inline mini" style="opacity:.95;" title="Only reportable">
+                <input
+                  type="checkbox"
+                  id="bankingIdOnlyReportable"
+                  data-action="banking:id:setOnlyReportable"
+                  ${onlyRep ? 'checked' : ''}
+                />
+                only_reportable
+              </label>
+
+              <input
+                id="bankingIdLedgerSearch"
+                class="input"
+                type="text"
+                value="${enc(search)}"
+                placeholder="Search"
+                data-action="banking:id:setLedgerSearch"
+                style="min-width:220px;max-width:320px;"
+                title="Search"
+              />
+
+              <input
+                id="bankingIdLedgerClientId"
+                class="input"
+                type="text"
+                value="${enc(clientId)}"
+                placeholder="Client id (optional)"
+                data-action="banking:id:setLedgerClientId"
+                style="min-width:220px;max-width:320px;"
+                title="Client id"
+              />
+            </div>
+
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              ${statusChips.map(sx => {
+                const on = !!(st.id.ledgerFilters && st.id.ledgerFilters.statuses && st.id.ledgerFilters.statuses[sx]);
+                return `
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline"
+                    data-action="banking:id:toggleLedgerStatus"
+                    data-status="${enc(sx)}"
+                    ${on ? 'style="border-color:rgba(59,130,246,.6);background:rgba(59,130,246,.10);"' : ''}
+                    title="Toggle status filter ${enc(sx)}"
+                  >${enc(sx)}</button>
+                `;
+              }).join('')}
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:clearLedgerFilters" title="Clear filters">Clear</button>
+              <button type="button" class="btn btn-sm btn-primary" data-action="banking:id:apply" title="Apply filters">Apply</button>
+            </div>
+
+            <div class="mini" style="opacity:.8;">${ledLoading ? 'Loading ledger…' : ' '}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px;">
+        <div class="row">
+          <label>Ledger</label>
+          <div class="controls">
+            <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+              <table class="grid" style="min-width:1080px; table-layout:auto;">
+                <thead>
+                  <tr>
+                    <th>Invoice #</th>
+                    <th>Status</th>
+                    <th>Client</th>
+                    <th style="text-align:right;">Delta (inc VAT)</th>
+                    <th style="text-align:right;">Current (inc VAT)</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody>${ledRowsHtml}</tbody>
+              </table>
             </div>
           </div>
         </div>
+      </div>
 
-        <div style="display:flex;flex-direction:column;gap:10px;">
-          <div class="card" style="padding:10px;">
-            <div class="row">
-              <label>Runs</label>
-              <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-                ${runsErr ? `<div class="error" style="white-space:pre-wrap;">${enc(runsErr)}</div>` : ''}
-
-                <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-                  <table class="grid" style="min-width:780px; table-layout:auto;">
-                    <thead>
-                      <tr>
-                        <th>ID ref</th>
-                        <th>Created</th>
-                        <th style="text-align:right;">Δ inc VAT</th>
-                        <th>Bank upload</th>
-                        <th>Note</th>
-                      </tr>
-                    </thead>
-                    <tbody>${runsRowsHtml}</tbody>
-                  </table>
-                </div>
-
-                <div class="mini" style="opacity:.8;">${runsLoading ? 'Loading runs…' : ' '}</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="card" style="padding:10px;">
-            <div class="row">
-              <label>Run detail</label>
-              <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-                ${runSelErr ? `<div class="error" style="white-space:pre-wrap;">${enc(runSelErr)}</div>` : ''}
-
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                  <span class="pill pill-info">Selected: ${enc(selRunIdRef || '—')}</span>
-                  ${selectedRunRefreshAction}
-                  <span class="mini" style="opacity:.8;">${runSelLoading ? 'Loading…' : ' '}</span>
-                </div>
-
-                ${runHeaderHtml}
-                ${runLinesTableHtml}
-              </div>
-            </div>
-          </div>
-
-          <div class="mini" style="opacity:.8;">
-            Tip: Refresh ledger/runs after applying a balance-now run.
-          </div>
-        </div>
+      <div class="mini" style="opacity:.8; margin-top:10px;">
+        Tip: Runs + ledger auto-load once when you open this tab; use Refresh buttons to re-fetch.
       </div>
     </div>
   `;
 }
+
+
 function renderBankingRemittancesStatusTab() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -11751,6 +11989,7 @@ function renderBankingRemittancesStatusTab() {
   `;
 }
 
+
 async function openBankingPayBatchChildModal(batchId) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -11780,7 +12019,7 @@ async function openBankingPayBatchChildModal(batchId) {
     return;
   }
 
-  const KIND = 'import-summary-banking-pay-batch-child';
+  const KIND = 'banking-pay-batch-child';
   const rootId = `bankingPayBatchChild_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
   // Child state (stored on banking state so it survives tab switches)
@@ -11878,6 +12117,18 @@ async function openBankingPayBatchChildModal(batchId) {
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
   };
 
+  const closeTop = () => {
+    try {
+      const btn = document.getElementById('btnCloseModal');
+      if (btn && typeof btn.click === 'function') { btn.click(); return; }
+    } catch {}
+    try { if (typeof closeModal === 'function') closeModal(); } catch {}
+  };
+
+  const markDirty = () => {
+    try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+  };
+
   const stillTopIsThisChild = () => {
     try {
       const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
@@ -11904,6 +12155,17 @@ async function openBankingPayBatchChildModal(batchId) {
       await fr.setTab(fr.currentTabKey || 'overview');
       fr._suppressDirty = false;
       fr._updateButtons && fr._updateButtons();
+
+      // Re-attach UK date pickers inside the child modal after any rerender (best-effort)
+      try {
+        if (typeof attachUkDatePicker === 'function') {
+          const root = document.getElementById(rootId);
+          const els = root ? root.querySelectorAll('[data-uk-date="1"]') : [];
+          for (const el of els) {
+            try { attachUkDatePicker(el, {}); } catch {}
+          }
+        }
+      } catch {}
     } catch {}
   };
 
@@ -12009,15 +12271,22 @@ async function openBankingPayBatchChildModal(batchId) {
 
   const loadBatch = async (opts = {}) => {
     const forcePoll = !!opts.forcePoll;
+    const silent = !!opts.silent;
 
-    child.loading = true;
+    if (silent) {
+      try { child.actionsBusy.refreshing = true; } catch {}
+    } else {
+      child.loading = true;
+    }
+
     child.error = '';
     await rerenderChild();
 
     try {
       const obj = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
       child.data = deep(obj);
-      child.loading = false;
+      if (!silent) child.loading = false;
+      try { child.actionsBusy.refreshing = false; } catch {}
       child.error = '';
 
       // Default CSV payment date to batch pay_date if present, else today (UK)
@@ -12048,10 +12317,52 @@ async function openBankingPayBatchChildModal(batchId) {
       }
 
     } catch (e) {
-      child.loading = false;
+      if (!silent) child.loading = false;
+      try { child.actionsBusy.refreshing = false; } catch {}
       child.error = String(e?.message || e || 'Failed to load batch');
       await rerenderChild();
     }
+  };
+
+  const stopAutoPoll = () => {
+    try {
+      if (child.__autoPollTimer) {
+        clearInterval(child.__autoPollTimer);
+        child.__autoPollTimer = null;
+      }
+    } catch {}
+  };
+
+  const startAutoPoll = () => {
+    stopAutoPoll();
+
+    try { child.__autoPollLastRefreshAt = 0; } catch {}
+
+    // Poll/refresh every 30s, but throttle real network refresh to ~60s
+    // The backend poll endpoint is already throttled via last_status_checked_at_utc.
+    try {
+      child.__autoPollTimer = setInterval(async () => {
+        try {
+          if (!stillTopIsThisChild()) return;
+
+          const b = deriveBatchObj(child.data) || {};
+          const status = String(b.status || '').trim().toUpperCase();
+
+          // Only auto-refresh for non-draft, non-final batches
+          if (!status || status === 'DRAFT' || status === 'DRAFT_CREATED' || status === 'CANCELLED' || status === 'SETTLED') return;
+
+          if (child.loading || child.actionsBusy.polling || child.actionsBusy.refreshing) return;
+
+          const now = Date.now();
+          const last = Number(child.__autoPollLastRefreshAt || 0);
+          if (last && (now - last) < 60_000) return;
+
+          child.__autoPollLastRefreshAt = now;
+
+          await loadBatch({ forcePoll: false, silent: true });
+        } catch {}
+      }, 30_000);
+    } catch {}
   };
 
   const downloadCsvFromExportEndpoint = async (scopeNorm) => {
@@ -12122,38 +12433,25 @@ async function openBankingPayBatchChildModal(batchId) {
     await rerenderChild();
 
     try {
-      // Step 1: execute (creates transfers)
       const scope = deriveScopeForBatch(child.data);
-      await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute`, { scope });
 
-      // Step 2: prepare (name check / payee map)
-      await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/prepare`, { name_check_overrides: [] });
+      const b0 = deriveBatchObj(child.data) || {};
+      const provider = String(b0.rail_provider_snapshot || 'CSV').trim().toUpperCase();
 
-      // Step 3: schedule for API rails (CSV does not schedule)
-      const b = deriveBatchObj(child.data) || {};
-      const provider = String(b.rail_provider_snapshot || '').trim().toUpperCase();
       if (provider && provider !== 'CSV') {
-        let tok = null;
-        try {
-          if (typeof openBankingReauthModal === 'function') {
-            tok = await openBankingReauthModal({ purpose: 'PAYMENT_SCHEDULE' });
-          }
-        } catch {
-          tok = null;
-        }
-
-        const reauthToken = String(tok?.reauth_token || tok?.token || tok || '').trim();
-        if (!reauthToken) {
-          throw new Error('Scheduling requires re-auth (reauth_token missing or cancelled).');
-        }
-
-        await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/schedule`, {
+        // ✅ API rails: use the consolidated execute-payment path (execute-bank + prepare + authorisation start)
+        await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute-payment`, {
+          scope,
+          pay_channel_scope: scope,
           schedule_kind: 'IMMEDIATE',
           scheduled_at_utc: null,
           funding_account_ref: null,
-          warning_hours_json: null,
-          reauth_token: reauthToken
+          warning_hours_json: null
         });
+      } else {
+        // ✅ Manual rail (CSV): create transfers + prepare so CSV export/confirm can proceed
+        await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute`, { scope });
+        await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/prepare`, { name_check_overrides: [] });
       }
 
       await loadBatch({ forcePoll: true });
@@ -12564,6 +12862,7 @@ async function openBankingPayBatchChildModal(batchId) {
   };
 
   const onDismiss = () => {
+    try { stopAutoPoll(); } catch {}
     try {
       const body = document.getElementById('modalBody');
       if (body && body.__bankingPayBatchChildHandler) {
@@ -12592,10 +12891,14 @@ async function openBankingPayBatchChildModal(batchId) {
       noParentGate: true,
       showSave: false,
       showApply: false,
+      forceEdit: true,
       stayOpenOnSave: false,
       onDismiss
     }
   );
+
+  // Start timer-based polling/refresh (throttled) for non-draft batches
+  try { startAutoPoll(); } catch {}
 
   // Wire child modal events (self-contained; does not depend on banking delegated handler)
   const wire = () => {
@@ -12664,6 +12967,63 @@ async function openBankingPayBatchChildModal(batchId) {
 
         if (act === 'banking:pay:child:confirmCsv') {
           await confirmCsvPayment();
+          return;
+        }
+
+        if (act === 'banking:pay:child:deleteDraft') {
+          try {
+            const b = deriveBatchObj(child.data) || {};
+            const stx = String(b.status || '').trim().toUpperCase();
+
+            if (stx && stx !== 'DRAFT' && stx !== 'DRAFT_CREATED') {
+              const ok = window.confirm('This batch is not a draft. Cancel it anyway?');
+              if (!ok) return;
+            }
+
+            let creds = null;
+            try {
+              if (typeof openPayBatchPasswordConfirmModal === 'function') {
+                creds = await openPayBatchPasswordConfirmModal({
+                  title: 'Delete draft batch',
+                  subtitle: 'Enter your password and a reason. This releases reserved items back into preview.',
+                  defaultReason: 'Delete draft batch'
+                });
+              }
+            } catch {}
+
+            const pw = String(creds?.password || '').trim();
+            const reason = String(creds?.reason || '').trim();
+            if (!pw || !reason) return;
+
+            await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel`, { password: pw, reason });
+
+            // Refresh parent list + preview so reservations reappear immediately
+            try {
+              if (st && st.pay && typeof st.pay === 'object') {
+                if (String(st.pay.selectedBatchId || '').trim() === id) st.pay.selectedBatchId = null;
+              }
+            } catch {}
+
+            try {
+              if (typeof bankingPayBatchesList === 'function') {
+                await bankingPayBatchesList({
+                  status: (st && st.pay && st.pay.list) ? st.pay.list.statusFilter : null,
+                  limit: (st && st.pay && st.pay.list) ? st.pay.list.limit : null,
+                  offset: (st && st.pay && st.pay.list) ? st.pay.list.offset : null
+                });
+              }
+            } catch {}
+
+            try {
+              const pd = String(st?.pay?.draftWizard?.pay_date || '').trim();
+              if (pd && typeof bankingPayPreview === 'function') await bankingPayPreview(pd);
+            } catch {}
+
+            closeTop();
+          } catch (e) {
+            child.error = String(e?.message || e || 'Delete draft failed');
+            await rerenderChild();
+          }
           return;
         }
 
@@ -12751,6 +13111,7 @@ async function openBankingPayBatchChildModal(batchId) {
           if (el && el.getAttribute && String(el.getAttribute('data-action') || '') === 'banking:pay:child:setCsvPaymentDate') {
             const iso = parseUkDateToIsoLocal(String(el.value || ''));
             child.csv.payment_date_iso = iso || '';
+            markDirty();
             await rerenderChild();
             return;
           }
@@ -12781,6 +13142,7 @@ async function openBankingPayBatchChildModal(batchId) {
         try {
           if (el && el.getAttribute && String(el.getAttribute('data-action') || '') === 'banking:pay:child:setCsvConfirmRef') {
             child.csv.bank_confirm_ref = String(el.value || '').trim();
+            markDirty();
             return;
           }
         } catch {}
@@ -12792,6 +13154,7 @@ async function openBankingPayBatchChildModal(batchId) {
             if (!cid) return;
             child.paye.netDraft = (child.paye.netDraft && typeof child.paye.netDraft === 'object') ? child.paye.netDraft : {};
             child.paye.netDraft[cid] = String(el.value || '').trim();
+            markDirty();
             return;
           }
         } catch {}
@@ -13491,6 +13854,11 @@ function attachBankingModalDelegatedHandlers() {
     try {
       const fr = getTopFrame();
       if (!fr) return false;
+
+      // ✅ IMPORTANT: only the parent Banking modal frame should handle these actions.
+      // Child modals under Banking reuse the same ctxRef/entity but have a different frame.kind.
+      if (String(fr.kind || '') !== 'banking') return false;
+
       if (String(fr.entity || '') !== 'banking') return false;
       if (!window.modalCtx || String(window.modalCtx.entity || '') !== 'banking') return false;
       if (fr._ctxRef !== window.modalCtx) return false;
@@ -13598,6 +13966,9 @@ function attachBankingModalDelegatedHandlers() {
     try { st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {}; } catch {}
     try { st.pay.draftWizard.preview = (st.pay.draftWizard.preview && typeof st.pay.draftWizard.preview === 'object') ? st.pay.draftWizard.preview : { data:null, loading:false, error:'' }; } catch {}
     try { st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : { candidate_ids: [], mismatch_choices: {}, loan_caps: {} }; } catch {}
+
+    if (!('pay_date' in st.pay.draftWizard)) st.pay.draftWizard.pay_date = '';
+    if (!('week_ending_cutoff_date' in st.pay.draftWizard)) st.pay.draftWizard.week_ending_cutoff_date = '';
 
     if (!('candidate_filter_id' in st.pay.draftWizard)) st.pay.draftWizard.candidate_filter_id = '';
     if (!('candidate_filter_label' in st.pay.draftWizard)) st.pay.draftWizard.candidate_filter_label = '';
@@ -13726,6 +14097,46 @@ function attachBankingModalDelegatedHandlers() {
 
       // Unknown format: store raw (backend will reject; user will see error on Preview)
       st.pay.draftWizard.pay_date = raw;
+    };
+
+    const setWeekEndingCutoff = (v) => {
+      try { st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {}; } catch {}
+      try { st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {}; } catch {}
+
+      const raw = String(v || '').trim();
+
+      // Prefer existing helper if present
+      try {
+        if (typeof parseUkDateToIso === 'function') {
+          const iso0 = parseUkDateToIso(raw);
+          const iso = String(iso0 || '').trim();
+          if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+            const todayIso = getUkTodayIso();
+            st.pay.draftWizard.week_ending_cutoff_date = (iso > todayIso) ? todayIso : iso;
+          } else {
+            st.pay.draftWizard.week_ending_cutoff_date = '';
+          }
+          return;
+        }
+      } catch {}
+
+      // Accept DD/MM/YYYY or YYYY-MM-DD
+      const mUk = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (mUk) {
+        const iso = `${mUk[3]}-${mUk[2]}-${mUk[1]}`;
+        const todayIso = getUkTodayIso();
+        st.pay.draftWizard.week_ending_cutoff_date = (iso > todayIso) ? todayIso : iso;
+        return;
+      }
+      const mIso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (mIso) {
+        const todayIso = getUkTodayIso();
+        st.pay.draftWizard.week_ending_cutoff_date = (raw > todayIso) ? todayIso : raw;
+        return;
+      }
+
+      // Unknown format: store raw (backend will reject; user will see error on Preview)
+      st.pay.draftWizard.week_ending_cutoff_date = raw;
     };
 
     const setManualConfirmRef = (v) => {
@@ -14115,6 +14526,26 @@ function attachBankingModalDelegatedHandlers() {
             if (typeof formatIsoToUk === 'function') {
               el.value = formatIsoToUk(iso);
             }
+          }
+        } catch {}
+      }
+      return;
+    }
+
+    if (a === 'banking:pay:setWeekEndingCutoff') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      setWeekEndingCutoff(v);
+
+      // ✅ Clamp UI value on change (cutoff cannot be in the future)
+      if (kind === 'change') {
+        try {
+          const todayIso = getUkTodayIso();
+          const iso0 = String(st.pay?.draftWizard?.week_ending_cutoff_date || '').trim();
+          const iso = (iso0 && /^\d{4}-\d{2}-\d{2}$/.test(iso0)) ? iso0 : '';
+          const eff = (iso && iso > todayIso) ? todayIso : iso;
+          if (eff) {
+            st.pay.draftWizard.week_ending_cutoff_date = eff;
+            if (typeof formatIsoToUk === 'function') el.value = formatIsoToUk(eff);
           }
         } catch {}
       }
@@ -14515,7 +14946,7 @@ function attachBankingModalDelegatedHandlers() {
       const id = String(ds('batchId') || dget('data-batch-id') || '').trim();
       if (!id) return;
       try { st.pay.selectedBatchId = id; } catch {}
-      await safeRerender(null);
+      // ✅ Do NOT rerender here: row-click rerender breaks dblclick-to-open.
       return;
     }
 
@@ -14583,6 +15014,12 @@ function attachBankingModalDelegatedHandlers() {
 
       const action = String(el.getAttribute('data-action') || '').trim();
       if (!action.startsWith('banking:')) return;
+
+      // ✅ Do not dispatch click actions for <select> (use change handler instead)
+      try {
+        const tag0 = String(el.tagName || '').toUpperCase();
+        if (tag0 === 'SELECT') return;
+      } catch {}
 
       // Prevent default for button-like actions
       try {
@@ -14666,7 +15103,7 @@ function attachBankingModalDelegatedHandlers() {
   targetEl.addEventListener('input', onInput, true);
   targetEl.addEventListener('dblclick', onDblClick, true);
 
-  // ✅ Ensure pay date picker is always wired with minDate=today (prevents picking past dates)
+  // ✅ Ensure pay date + cutoff date pickers are always wired with min/max constraints
   try {
     setTimeout(() => {
       try {
@@ -14691,6 +15128,22 @@ function attachBankingModalDelegatedHandlers() {
             const iso = String(st?.pay?.draftWizard?.pay_date || '').trim();
             if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) && iso >= todayIso && typeof formatIsoToUk === 'function') {
               elPay.value = formatIsoToUk(iso);
+            }
+          } catch {}
+        }
+
+        const elCutoff = document.getElementById('bankingWeekEndingCutoffInput');
+        if (elCutoff && typeof attachUkDatePicker === 'function') {
+          try { attachUkDatePicker(elCutoff, { maxDate: todayIso }); } catch {}
+          try {
+            const iso0 = String(st?.pay?.draftWizard?.week_ending_cutoff_date || '').trim();
+            const iso = (iso0 && /^\d{4}-\d{2}-\d{2}$/.test(iso0)) ? iso0 : '';
+            const eff = (iso && iso > todayIso) ? todayIso : iso;
+            if (eff) {
+              try { st.pay.draftWizard.week_ending_cutoff_date = eff; } catch {}
+              if (typeof formatIsoToUk === 'function') {
+                elCutoff.value = formatIsoToUk(eff);
+              }
             }
           } catch {}
         }
@@ -14725,7 +15178,6 @@ function attachBankingModalDelegatedHandlers() {
 
   return { ok: true };
 }
-
 // NEW: advanced, section-aware search modal
 // === UPDATED: Advanced Search — add Roles (any) multi-select, use UK date pickers ===
 // -----------------------------
@@ -51316,7 +51768,7 @@ function renderTimesheetLinesTab(ctx) {
     const seedKey = `${String(seedEntityId || '')}|${String(seedWeKey || '')}`;
     const priorKey = state.__weeklyLinesSeedKey || '';
 
-    const scheduleHasAnyTimes = (() => {
+        const scheduleHasAnyTimes = (() => {
       try {
         return Array.isArray(seedSchedule) && seedSchedule.some(seg => {
           const s = String(normHHMM(seg, 'start', 'start_utc') || '').trim();
@@ -51350,11 +51802,31 @@ function renderTimesheetLinesTab(ctx) {
       }
     })();
 
+    const looksSeededForWeek = (() => {
+      try {
+        const by = (state.weeklyLinesByDate && typeof state.weeklyLinesByDate === 'object') ? state.weeklyLinesByDate : null;
+        if (!by) return false;
+        for (const wd of weekDays) {
+          const ymd = String(wd?.ymd || '').trim();
+          if (!ymd) continue;
+          if (Array.isArray(by[ymd])) return true;
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    })();
+
+    const treatAsUnseeded =
+      (!state.weeklyLinesByDate) ||
+      (!looksSeededForWeek && linesAppearBlank);
+
     const blankGuard = (frameMode === 'view') && scheduleHasAnyTimes && linesAppearBlank;
 
-    // Only auto-reseed in VIEW mode (never clobber edits)
+    // Only auto-reseed in VIEW mode (never clobber edits),
+    // EXCEPT: allow reseed in edit/create ONLY when the model is clearly unseeded.
     const shouldReseed =
-      (!state.weeklyLinesByDate) ||
+      treatAsUnseeded ||
       ((frameMode === 'view') && (priorKey !== seedKey)) ||
       ((frameMode === 'view') && (priorHash !== seedHash)) ||
       blankGuard;
@@ -78125,7 +78597,6 @@ function getTsLoggers(ns) {
   };
 }
 
-
 function normaliseTimesheetCtx(ctx) {
   const baseCtx = ctx || {};
   const mc = window.modalCtx || {};
@@ -78192,7 +78663,7 @@ function normaliseTimesheetCtx(ctx) {
       nhspDeferrals: {},
       additionalRates: {},
 
-      weeklyLinesByDate: {},
+      weeklyLinesByDate: null,
       extraShiftCount: 0,
 
       scheduleHasErrors: false,
@@ -78210,8 +78681,27 @@ function normaliseTimesheetCtx(ctx) {
       mc.timesheetState.additionalRates = {};
     }
 
-    if (!mc.timesheetState.weeklyLinesByDate || typeof mc.timesheetState.weeklyLinesByDate !== 'object') {
-      mc.timesheetState.weeklyLinesByDate = {};
+    // weeklyLinesByDate contract:
+    // - null => unseeded (Lines tab will seed from schedule)
+    // - object keyed by YYYY-MM-DD => seeded/active
+    const wlb = mc.timesheetState.weeklyLinesByDate;
+    if (typeof wlb === 'undefined') {
+      mc.timesheetState.weeklyLinesByDate = null;
+    } else if (wlb === null) {
+      // keep as unseeded sentinel
+    } else if (typeof wlb !== 'object' || Array.isArray(wlb)) {
+      mc.timesheetState.weeklyLinesByDate = null;
+      mc.timesheetState.__weeklyLinesSeedKey = '';
+      mc.timesheetState.__weeklyLinesSeedHash = '';
+    } else {
+      // If it's an empty object (legacy init), treat as unseeded so Lines can seed safely
+      try {
+        if (Object.keys(wlb).length === 0) {
+          mc.timesheetState.weeklyLinesByDate = null;
+          mc.timesheetState.__weeklyLinesSeedKey = '';
+          mc.timesheetState.__weeklyLinesSeedHash = '';
+        }
+      } catch {}
     }
 
     if (!Number.isFinite(Number(mc.timesheetState.extraShiftCount))) {
@@ -78375,7 +78865,6 @@ function normaliseTimesheetCtx(ctx) {
 
   return { row, details, related, state };
 }
-
 
 function renderTimesheetExpensesTab(ctx) {
   const c = normaliseTimesheetCtx(ctx);
