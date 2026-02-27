@@ -5561,7 +5561,6 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
   });
 }
 
-
 async function openBanking() {
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
 
@@ -5878,6 +5877,132 @@ async function openBanking() {
     } catch {}
   };
 
+  const getUkTodayIsoFallback = () => {
+    try {
+      if (typeof getUkTodayIso === 'function') {
+        const iso = String(getUkTodayIso() || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+      }
+    } catch {}
+    try {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).formatToParts(new Date());
+      const g = (t) => (parts.find(p => p.type === t)?.value || '');
+      const y = g('year'), m = g('month'), d = g('day');
+      const iso = `${y}-${m}-${d}`;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+    } catch {}
+    return new Date().toISOString().slice(0, 10);
+  };
+
+  const addDaysIso = (iso, addDays) => {
+    const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (isNaN(dt.getTime())) return '';
+    dt.setUTCDate(dt.getUTCDate() + Number(addDays || 0));
+    const yy = dt.getUTCFullYear();
+    const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getUTCDate()).padStart(2, '0');
+    return `${yy}-${mm}-${dd}`;
+  };
+
+  const nextFridayIsoFrom = (todayIso) => {
+    const m = String(todayIso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (isNaN(dt.getTime())) return '';
+    const dow = dt.getUTCDay(); // 0=Sun . 5=Fri
+    const target = 5; // Friday
+    const add = (target - dow + 7) % 7; // 0 if already Friday
+    return addDaysIso(todayIso, add);
+  };
+
+  const prevSundayCutoffIsoFrom = (todayIso) => {
+    const m = String(todayIso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (isNaN(dt.getTime())) return '';
+    const dow = dt.getUTCDay(); // 0=Sun . 6=Sat
+    const daysBack = (dow === 0) ? 7 : dow; // Sun => previous Sunday (7 days back), Mon => 1 day back, .
+    return addDaysIso(todayIso, -daysBack);
+  };
+
+  const ensurePayWizardDefaults = () => {
+    try {
+      const st = window.modalCtx?.banking;
+      if (!st || typeof st !== 'object') return { payDateIso: '', cutoffIso: '' };
+
+      st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+      st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+      const wiz = st.pay.draftWizard;
+
+      const todayIso = getUkTodayIsoFallback();
+      const defaultPayIso = nextFridayIsoFrom(todayIso) || todayIso;
+
+      let payDateIso = String(wiz.pay_date || '').trim();
+      const isIsoPay = /^\d{4}-\d{2}-\d{2}$/.test(payDateIso);
+
+      // If missing/invalid OR in the past => force default Friday (never allow past date)
+      if (!isIsoPay || payDateIso < todayIso) {
+        payDateIso = defaultPayIso;
+        wiz.pay_date = payDateIso;
+      }
+
+      let cutoffIso = String(wiz.week_ending_cutoff_date || '').trim();
+      const isIsoCutoff = /^\d{4}-\d{2}-\d{2}$/.test(cutoffIso);
+
+      // Default cutoff = previous Sunday (strictly before today)
+      if (!isIsoCutoff) {
+        cutoffIso = prevSundayCutoffIsoFrom(todayIso) || todayIso;
+        wiz.week_ending_cutoff_date = cutoffIso;
+      }
+
+      return { payDateIso, cutoffIso };
+    } catch {
+      return { payDateIso: '', cutoffIso: '' };
+    }
+  };
+
+  const maybeAutoloadPayWorkbench = async () => {
+    if (!stillActive()) return;
+
+    try {
+      const st = window.modalCtx?.banking;
+      if (!st || typeof st !== 'object') return;
+
+      // Guard: autoload only once per modal open
+      if (st.ui && st.ui.__pay_autoload_done === true) return;
+      if (st.ui && typeof st.ui === 'object') st.ui.__pay_autoload_done = true;
+
+      const { payDateIso } = ensurePayWizardDefaults();
+
+      // Load batches list (same as refresh)
+      try {
+        if (typeof bankingPayBatchesList === 'function') {
+          const lim = Number.isFinite(Number(st.pay?.list?.limit)) ? Math.trunc(Number(st.pay.list.limit)) : 50;
+          const off = Number.isFinite(Number(st.pay?.list?.offset)) ? Math.max(0, Math.trunc(Number(st.pay.list.offset))) : 0;
+          const status = String(st.pay?.list?.statusFilter || '').trim();
+          await bankingPayBatchesList({ status, limit: lim, offset: off });
+        }
+      } catch {}
+
+      // Load preview (requires pay_date + cutoff in state)
+      try {
+        if (payDateIso && typeof bankingPayPreview === 'function') {
+          await bankingPayPreview(payDateIso);
+        }
+      } catch {}
+    } catch {}
+  };
+
   // Bootstrapping: load capabilities + settings, then re-render.
   setTimeout(() => {
     (async () => {
@@ -5923,6 +6048,15 @@ async function openBanking() {
           window.modalCtx.banking.ui.busy.refreshingSettings = false;
         } catch {}
 
+        // Ensure sensible default dates before first render/preview
+        ensurePayWizardDefaults();
+
+        await safeRerender();
+
+        // ✅ Auto-load: batches list + preview (once per modal open)
+        await maybeAutoloadPayWorkbench();
+
+        // Final rerender in case list/preview updated state without re-rendering
         await safeRerender();
 
       } catch (e) {
@@ -5943,7 +6077,6 @@ async function openBanking() {
   }, 0);
 }
 
-
 function bankingGetState() {
   try {
     const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
@@ -5955,7 +6088,6 @@ function bankingGetState() {
     return null;
   }
 }
-
 
 async function bankingRerender(tabKey = null) {
   try {
@@ -5986,6 +6118,21 @@ async function bankingRerender(tabKey = null) {
         try { todayIso = (typeof toLocalParts === 'function') ? (toLocalParts(new Date().toISOString(), null)?.ymd || null) : null; } catch {}
         if (!todayIso || !/^\d{4}-\d{2}-\d{2}$/.test(String(todayIso))) todayIso = new Date().toISOString().slice(0, 10);
 
+        const addDaysIso = (iso, addDays) => {
+          const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (!m) return '';
+          const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+          const dt = new Date(Date.UTC(y, mo - 1, d));
+          if (isNaN(dt.getTime())) return '';
+          dt.setUTCDate(dt.getUTCDate() + Number(addDays || 0));
+          const yy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+          const dd = String(dt.getUTCDate()).padStart(2, '0');
+          return `${yy}-${mm}-${dd}`;
+        };
+
+        const maxCutoffIso = addDaysIso(todayIso, 14) || todayIso;
+
         const ids = [
           'bankingPayDateInput',
           'bankingWeekEndingCutoffInput',
@@ -5996,7 +6143,7 @@ async function bankingRerender(tabKey = null) {
           if (el) {
             try {
               if (id === 'bankingWeekEndingCutoffInput') {
-                attachUkDatePicker(el, { maxDate: todayIso });
+                attachUkDatePicker(el, { maxDate: maxCutoffIso });
               } else {
                 attachUkDatePicker(el, { minDate: todayIso });
               }
@@ -6146,16 +6293,71 @@ function bankingHandleApiError(err, context) {
     } catch {}
     return 'Request failed.';
   };
+  let msg = pickMsg();
+  let msgU = String(msg || '').trim().toUpperCase();
 
-  const msg = pickMsg();
-  const msgU = String(msg || '').trim().toUpperCase();
+  // ✅ Normalise common wrapped RPC errors + structured error payloads
+  let errCode = null;
+
+  // Prefer structured backend payloads when present
+  try {
+    const j0 = (err && typeof err === 'object' && err.json && typeof err.json === 'object') ? err.json : null;
+    const code0 = j0 ? (j0.error_code || j0.code || '') : '';
+    const m0 = j0 ? (j0.message || j0.error || j0.detail || '') : '';
+    if (String(code0 || '').trim()) errCode = String(code0).trim().toUpperCase();
+    if (String(m0 || '').trim()) {
+      msg = String(m0).trim();
+      msgU = String(msg).trim().toUpperCase();
+    }
+  } catch {}
+
+  // Strip "RPC ... failed 400: {json}" wrapper when the message contains a JSON object
+  try {
+    const s = String(msg || '');
+    const hasRpcWrap = s.includes('RPC ') && s.includes(' failed ');
+    const idx = s.indexOf('{');
+    if (hasRpcWrap && idx >= 0) {
+      const tail = s.slice(idx);
+      try {
+        const j = JSON.parse(tail);
+        if (j && typeof j === 'object') {
+          const code1 = j.error_code || j.code || null;
+          const m1 = j.message || j.error || j.detail || null;
+          if (!errCode && String(code1 || '').trim()) errCode = String(code1).trim().toUpperCase();
+          if (String(m1 || '').trim()) {
+            msg = String(m1).trim();
+            msgU = String(msg).trim().toUpperCase();
+          }
+        }
+      } catch {}
+    } else if (hasRpcWrap) {
+      // If it's wrapped but not JSON, drop the leading "RPC ... failed 400:" prefix
+      const p = s.indexOf(':');
+      if (p >= 0 && p < s.length - 1) {
+        msg = String(s.slice(p + 1)).trim() || msg;
+        msgU = String(msg).trim().toUpperCase();
+      }
+    }
+  } catch {}
+
+  // Derive error_code from raw message if not explicitly provided
+  if (!errCode) {
+    if (msgU.startsWith('PAYE_NOT_READY')) errCode = 'PAYE_NOT_READY';
+    else if (msgU.startsWith('PAYE_NET_MISSING')) errCode = 'PAYE_NET_MISSING';
+  }
+
+  // Friendly UX messages for known banking validation errors
+  if (errCode === 'PAYE_NOT_READY' || errCode === 'PAYE_NET_MISSING') {
+    msg =
+      'PAYE batch is not ready. Open the PAYE Worksheet, enter missing net amounts, click Save, then execute payment.';
+    msgU = String(msg).trim().toUpperCase();
+  }
 
   const isEnvMismatch =
     (msgU === 'RAIL_ENV_MISMATCH') ||
     (msgU === 'ENV_MISMATCH') ||
     msgU.includes('RAIL_ENV_MISMATCH') ||
     msgU.includes('ENV_MISMATCH');
-
   // Safe access to banking state
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
   const isBanking = !!(mc && String(mc.entity || '') === 'banking' && mc.banking && typeof mc.banking === 'object');
@@ -9590,6 +9792,18 @@ function renderPayBatchListPanel() {
       return ` <span class="${enc(cls)}" title="${enc(title)}">${enc(txt)}</span>`;
     })();
 
+    const deleteDraftBtn = (stx === 'DRAFT' && id)
+      ? `
+        <button
+          type="button"
+          class="btn btn-sm btn-outline"
+          data-action="banking:pay:deleteDraft"
+          data-batch-id="${enc(id)}"
+          title="Delete draft batch (releases reservations)"
+        >Delete draft</button>
+      `
+      : `<span class="mini" style="opacity:.65;">—</span>`;
+
     return `
       <tr
         ${isActive ? 'class="active"' : ''}
@@ -9603,12 +9817,13 @@ function renderPayBatchListPanel() {
         <td><span class="pill ${enc(pillClass)}">${enc(stx)}</span>${authPill}</td>
         <td class="mini">${enc((prov || '—') + (env ? `/${env}` : ''))}</td>
         <td class="mini">${enc(created || '')}</td>
+        <td style="white-space:nowrap;">${deleteDraftBtn}</td>
       </tr>
     `;
   }).join('');
 
   const emptyHtml = (!loading && items.length === 0)
-    ? `<tr><td colspan="6" class="mini" style="opacity:.85;">No batches found for current filters.</td></tr>`
+    ? `<tr><td colspan="7" class="mini" style="opacity:.85;">No batches found for current filters.</td></tr>`
     : '';
 
   const prevOffset = Math.max(0, offsetNow - limitNow);
@@ -9682,7 +9897,7 @@ function renderPayBatchListPanel() {
           </div>
 
           <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-            <table class="grid" style="min-width:900px; table-layout:auto;">
+            <table class="grid" style="min-width:980px; table-layout:auto;">
               <thead>
                 <tr>
                   <th>ID</th>
@@ -9691,6 +9906,7 @@ function renderPayBatchListPanel() {
                   <th>Status</th>
                   <th>Rail</th>
                   <th>Created</th>
+                  <th style="width:140px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -10018,11 +10234,53 @@ function renderPayNewBatchWizard() {
     `;
   };
 
-  // ✅ Ready-to-pay list: candidates with no mismatch, included, and with non-zero itemisation lines
+  const asBool = (v) => (v === true) || (v === 1) || (v === '1') || (String(v).trim().toLowerCase() === 'true');
+
+  const toBlockers = (c) => {
+    const b = c && typeof c === 'object' ? c.blockers : null;
+    if (Array.isArray(b)) return b.map(x => String(x || '').trim().toUpperCase()).filter(Boolean);
+    if (typeof b === 'string') {
+      const s = b.trim();
+      if (!s) return [];
+      try {
+        const j = JSON.parse(s);
+        if (Array.isArray(j)) return j.map(x => String(x || '').trim().toUpperCase()).filter(Boolean);
+      } catch {}
+      return s.split(',').map(x => String(x || '').trim().toUpperCase()).filter(Boolean);
+    }
+    return [];
+  };
+
+  const bankPillForCandidate = (c) => {
+    const cc = (c && typeof c === 'object') ? c : {};
+    const ready = asBool(cc.is_ready_for_draft);
+    const blockers = toBlockers(cc);
+    const mapPresent = asBool(cc.payee_map_present);
+    const ncStatus = String(cc.name_check_status || '').trim().toUpperCase();
+    const hasOverride = asBool(cc.name_check_has_override);
+
+    if (!ready) {
+      const title = blockers.length ? `Blocked: ${blockers.join(', ')}` : 'Not ready for drafting';
+      return `<span class="pill pill-bad" title="${enc(title)}">${enc('Blocked')}</span>`;
+    }
+
+    // Ready: distinguish "Verified" vs "Ready" (e.g., CSV rail may not require CoP/map)
+    if (mapPresent && (ncStatus === 'PASS' || hasOverride)) {
+      const title = hasOverride ? 'Verified (override applied)' : 'Verified';
+      return `<span class="pill pill-ok" title="${enc(title)}">${enc('Verified')}</span>`;
+    }
+
+    return `<span class="pill pill-ok" title="${enc('Ready for drafting')}">${enc('Ready')}</span>`;
+  };
+
+  // ✅ Ready-to-pay list: candidates with no mismatch, included, ready-for-draft, and with non-zero itemisation lines
   const readyCands = allCands.filter(c => {
     const cid = String(c?.candidate_id || '').trim();
     if (!cid) return false;
     if (!isIncludedCandidate(cid)) return false;
+
+    // Must be ready for drafting (bank/COP readiness etc.)
+    if (!asBool(c?.is_ready_for_draft)) return false;
 
     const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
     const hm = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true'));
@@ -10049,6 +10307,7 @@ function renderPayNewBatchWizard() {
     const tms = String(c?.tms_ref || '').trim();
     const items = Array.isArray(c?.itemisation) ? c.itemisation : [];
     const candMethod = String(c?.current_pay_method || '').trim().toUpperCase();
+    const bankPillHtml = bankPillForCandidate(c);
 
     for (const it of items) {
       if (!it || typeof it !== 'object') continue;
@@ -10064,6 +10323,7 @@ function renderPayNewBatchWizard() {
         cid,
         tms,
         name,
+        bank_pill_html: bankPillHtml,
         week_ending_date: String(it.week_ending_date || '').trim(),
         client_name: String(it.client_name || '').trim(),
         payment_amount: v
@@ -10086,10 +10346,11 @@ function renderPayNewBatchWizard() {
         </span>
       </summary>
       <div style="margin-top:10px; overflow:auto;">
-        <table class="grid" style="min-width:980px; table-layout:auto;">
+        <table class="grid" style="min-width:1080px; table-layout:auto;">
           <thead>
             <tr>
               <th>Candidate</th>
+              <th style="width:120px;">Bank</th>
               <th style="width:140px;">Week ending</th>
               <th>Client</th>
               <th style="width:160px; text-align:right;">Payment amount</th>
@@ -10106,12 +10367,13 @@ function renderPayNewBatchWizard() {
                           <span>${enc(r.name)}</span>
                         </div>
                       </td>
+                      <td style="white-space:nowrap;">${r.bank_pill_html}</td>
                       <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(r.week_ending_date) || '—')}</td>
                       <td class="mini">${enc(r.client_name || '—')}</td>
                       <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(r.payment_amount))}</td>
                     </tr>
                   `).join('')
-                : `<tr><td colspan="4" class="mini" style="opacity:.85;">No ready-to-pay items.</td></tr>`
+                : `<tr><td colspan="5" class="mini" style="opacity:.85;">No ready-to-pay items.</td></tr>`
             }
           </tbody>
         </table>
@@ -12854,9 +13116,17 @@ async function openBankingPayBatchChildModal(batchId) {
       }
 
       await loadBatch({ forcePoll: true });
-
     } catch (e) {
-      child.error = String(e?.message || e || 'Execute payment failed');
+      // ✅ Route through friendly banking error normaliser (prevents raw RPC blobs leaking to UI)
+      try {
+        if (typeof bankingHandleApiError === 'function') {
+          bankingHandleApiError(e, { errorPath: ['pay', 'child', 'error'] });
+        } else {
+          child.error = String(e?.message || e || 'Execute payment failed');
+        }
+      } catch {
+        child.error = String(e?.message || e || 'Execute payment failed');
+      }
     } finally {
       child.actionsBusy.executing = false;
       await rerenderChild();
@@ -12896,9 +13166,17 @@ async function openBankingPayBatchChildModal(batchId) {
       await rerenderChild();
 
       try { if (typeof window.__toast === 'function') window.__toast(`CSV generated${out && out.filename ? ` (${out.filename})` : ''}`); } catch {}
-
     } catch (e) {
-      child.error = String(e?.message || e || 'CSV export failed');
+      // ✅ Friendly normalised error
+      try {
+        if (typeof bankingHandleApiError === 'function') {
+          bankingHandleApiError(e, { errorPath: ['pay', 'child', 'error'] });
+        } else {
+          child.error = String(e?.message || e || 'CSV export failed');
+        }
+      } catch {
+        child.error = String(e?.message || e || 'CSV export failed');
+      }
     } finally {
       child.actionsBusy.exportingCsv = false;
       await rerenderChild();
@@ -12931,9 +13209,17 @@ async function openBankingPayBatchChildModal(batchId) {
       child.csv.confirmed_at_utc = new Date().toISOString();
 
       await loadBatch({ forcePoll: false });
-
     } catch (e) {
-      child.error = String(e?.message || e || 'CSV confirm failed');
+      // ✅ Friendly normalised error
+      try {
+        if (typeof bankingHandleApiError === 'function') {
+          bankingHandleApiError(e, { errorPath: ['pay', 'child', 'error'] });
+        } else {
+          child.error = String(e?.message || e || 'CSV confirm failed');
+        }
+      } catch {
+        child.error = String(e?.message || e || 'CSV confirm failed');
+      }
     } finally {
       child.actionsBusy.confirmingCsv = false;
       await rerenderChild();
@@ -13207,6 +13493,7 @@ async function openBankingPayBatchChildModal(batchId) {
 
     } catch (e) {
       child.paye.saveError = String(e?.message || e || 'Save failed');
+      child.error = child.paye.saveError;
     } finally {
       child.paye.saveBusy = false;
       await rerenderChild();
@@ -13274,6 +13561,34 @@ async function openBankingPayBatchChildModal(batchId) {
     } catch {}
   };
 
+  const onSave = async () => {
+    try {
+      const data = child.data;
+      const batchKind = deriveBatchKind(data);
+
+      // Persist PAYE net drafts when applicable (footer Save)
+      if (batchKind === 'PAYE' || batchKind === 'MIXED') {
+        const nd = (child.paye && child.paye.netDraft && typeof child.paye.netDraft === 'object') ? child.paye.netDraft : {};
+        const hasDraft = Object.keys(nd).some(k => String(nd[k] || '').trim().length > 0);
+
+        if (hasDraft) {
+          await savePayeNet();
+        } else {
+          // If Save is clicked but nothing is staged for PAYE, just refresh to ensure readiness is up to date.
+          await loadBatch({ forcePoll: false, silent: true });
+        }
+      } else {
+        await loadBatch({ forcePoll: false, silent: true });
+      }
+
+      return true;
+    } catch (e) {
+      child.error = String(e?.message || e || 'Save failed');
+      await rerenderChild();
+      return false;
+    }
+  };
+
   // Open modal
   showModal(
     `Pay Batch — ${id.slice(0, 8)}`,
@@ -13282,16 +13597,16 @@ async function openBankingPayBatchChildModal(batchId) {
       { key: 'paye',     label: 'PAYE Worksheet' }
     ],
     renderTab,
-    null,
+    onSave,
     true,
     null,
     {
       kind: KIND,
       noParentGate: true,
-      showSave: false,
+      showSave: true,
       showApply: false,
       forceEdit: true,
-      stayOpenOnSave: false,
+      stayOpenOnSave: true,
       onDismiss
     }
   );
@@ -13587,7 +13902,6 @@ async function openBankingPayBatchChildModal(batchId) {
   // Initial load
   await loadBatch({ forcePoll: true });
 }
-
 function renderBankingPayBatchChildModalOverview() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -13669,6 +13983,7 @@ function renderBankingPayBatchChildModalOverview() {
   const batchKind = (batchKindRaw === 'PAYE' || batchKindRaw === 'UMBRELLA' || batchKindRaw === 'MIXED') ? batchKindRaw : '';
 
   const isCsvRail = !!provider && provider === 'CSV';
+  const isDraftLike = (status === 'DRAFT' || status === 'DRAFT_CREATED');
 
   const pillStatus =
     (status === 'SETTLED') ? 'pill pill-ok'
@@ -13873,6 +14188,21 @@ function renderBankingPayBatchChildModalOverview() {
                   <div class="row">
                     <label>Actions</label>
                     <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+                      ${
+                        isDraftLike
+                          ? `
+                            <button
+                              type="button"
+                              class="btn btn-sm btn-outline"
+                              data-action="banking:pay:child:deleteDraft"
+                              data-batch-id="${enc(id)}"
+                              ${child.loading ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
+                              title="Delete draft batch (releases reservations)"
+                            >Delete draft</button>
+                          `
+                          : ``
+                      }
+
                       <button
                         type="button"
                         class="btn btn-sm btn-primary"
@@ -13957,6 +14287,8 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
+
+
 function renderBankingPayBatchChildModalPayeWorksheetTab() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -14048,6 +14380,34 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
 
   const importErr = String(child?.paye?.importError || '').trim();
   const saveErr = String(child?.paye?.saveError || '').trim();
+
+  const normMoney2 = (v) => {
+    const s = String(v == null ? '' : v).trim();
+    if (!s) return null;
+    const n = Number(s);
+    if (!Number.isFinite(n)) return null;
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const unsaved = (() => {
+    let any = false;
+    let changedCount = 0;
+    for (const c of candidates) {
+      const cid = String(c?.candidate_id || '').trim();
+      if (!cid) continue;
+      if (!Object.prototype.hasOwnProperty.call(netDraft, cid)) continue;
+
+      const draftRaw = String(netDraft[cid] || '').trim();
+      if (!draftRaw) continue;
+
+      any = true;
+
+      const existingNet = (c?.paye_net_amount != null) ? fmtMoney(c.paye_net_amount) : '';
+      const d2 = normMoney2(draftRaw);
+      if (d2 != null && d2 !== String(existingNet || '').trim()) changedCount += 1;
+    }
+    return { any, changedCount };
+  })();
 
   const optionsHtml = [
     `<option value="ALL"${filterId === 'ALL' ? ' selected' : ''}>All</option>`,
@@ -14177,6 +14537,19 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
             ${saveErr ? `<div class="error" style="white-space:pre-wrap;">${enc(saveErr)}</div>` : ''}
             ${importErr ? `<div class="error" style="white-space:pre-wrap;">${enc(importErr)}</div>` : ''}
 
+            ${
+              unsaved.any
+                ? `
+                  <div class="mini" style="opacity:.9;">
+                    <span class="pill pill-warn">Unsaved</span>
+                    <span style="margin-left:6px;">
+                      You have ${enc(String(unsaved.changedCount || 0))} unsaved net change(s). Click the modal footer <strong>Save</strong> to commit.
+                    </span>
+                  </div>
+                `
+                : ``
+            }
+
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
               <label class="inline mini" style="opacity:.85;">Candidate</label>
               <select
@@ -14235,7 +14608,6 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
     </div>
   `;
 }
-
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -14430,6 +14802,24 @@ function attachBankingModalDelegatedHandlers() {
       return new Date().toISOString().slice(0, 10);
     };
 
+    const addDaysIso = (iso, addDays) => {
+      const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) return '';
+      const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+      const dt = new Date(Date.UTC(y, mo - 1, d));
+      if (isNaN(dt.getTime())) return '';
+      dt.setUTCDate(dt.getUTCDate() + Number(addDays || 0));
+      const yy = dt.getUTCFullYear();
+      const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(dt.getUTCDate()).padStart(2, '0');
+      return `${yy}-${mm}-${dd}`;
+    };
+
+    const maxCutoffIsoFromToday = () => {
+      const todayIso = getUkTodayIso();
+      return addDaysIso(todayIso, 14) || todayIso;
+    };
+
     const applyPickedCandidate = async (picked) => {
       const p = (picked && typeof picked === 'object') ? picked : null;
       const id = p ? String(p.id || p.candidate_id || p.value || '').trim() : '';
@@ -14498,6 +14888,7 @@ function attachBankingModalDelegatedHandlers() {
       try { st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {}; } catch {}
 
       const raw = String(v || '').trim();
+      const maxIso = maxCutoffIsoFromToday();
 
       // Prefer existing helper if present
       try {
@@ -14505,8 +14896,7 @@ function attachBankingModalDelegatedHandlers() {
           const iso0 = parseUkDateToIso(raw);
           const iso = String(iso0 || '').trim();
           if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
-            const todayIso = getUkTodayIso();
-            st.pay.draftWizard.week_ending_cutoff_date = (iso > todayIso) ? todayIso : iso;
+            st.pay.draftWizard.week_ending_cutoff_date = (iso > maxIso) ? maxIso : iso;
           } else {
             st.pay.draftWizard.week_ending_cutoff_date = '';
           }
@@ -14518,14 +14908,12 @@ function attachBankingModalDelegatedHandlers() {
       const mUk = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
       if (mUk) {
         const iso = `${mUk[3]}-${mUk[2]}-${mUk[1]}`;
-        const todayIso = getUkTodayIso();
-        st.pay.draftWizard.week_ending_cutoff_date = (iso > todayIso) ? todayIso : iso;
+        st.pay.draftWizard.week_ending_cutoff_date = (iso > maxIso) ? maxIso : iso;
         return;
       }
       const mIso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
       if (mIso) {
-        const todayIso = getUkTodayIso();
-        st.pay.draftWizard.week_ending_cutoff_date = (raw > todayIso) ? todayIso : raw;
+        st.pay.draftWizard.week_ending_cutoff_date = (raw > maxIso) ? maxIso : raw;
         return;
       }
 
@@ -14930,13 +15318,13 @@ function attachBankingModalDelegatedHandlers() {
       const v = (el && el.value != null) ? String(el.value) : '';
       setWeekEndingCutoff(v);
 
-      // ✅ Clamp UI value on change (cutoff cannot be in the future)
+      // ✅ Clamp UI value on change (cutoff can be up to today+14 days)
       if (kind === 'change') {
         try {
-          const todayIso = getUkTodayIso();
+          const maxIso = maxCutoffIsoFromToday();
           const iso0 = String(st.pay?.draftWizard?.week_ending_cutoff_date || '').trim();
           const iso = (iso0 && /^\d{4}-\d{2}-\d{2}$/.test(iso0)) ? iso0 : '';
-          const eff = (iso && iso > todayIso) ? todayIso : iso;
+          const eff = (iso && iso > maxIso) ? maxIso : iso;
           if (eff) {
             st.pay.draftWizard.week_ending_cutoff_date = eff;
             if (typeof formatIsoToUk === 'function') el.value = formatIsoToUk(eff);
@@ -15515,6 +15903,21 @@ function attachBankingModalDelegatedHandlers() {
           return new Date().toISOString().slice(0, 10);
         })();
 
+        const addDaysIso2 = (iso, addDays) => {
+          const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (!m) return '';
+          const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+          const dt = new Date(Date.UTC(y, mo - 1, d));
+          if (isNaN(dt.getTime())) return '';
+          dt.setUTCDate(dt.getUTCDate() + Number(addDays || 0));
+          const yy = dt.getUTCFullYear();
+          const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+          const dd = String(dt.getUTCDate()).padStart(2, '0');
+          return `${yy}-${mm}-${dd}`;
+        };
+
+        const maxCutoffIso = addDaysIso2(todayIso, 14) || todayIso;
+
         const elPay = document.getElementById('bankingPayDateInput');
         if (elPay && typeof attachUkDatePicker === 'function') {
           try { attachUkDatePicker(elPay, { minDate: todayIso }); } catch {}
@@ -15528,11 +15931,11 @@ function attachBankingModalDelegatedHandlers() {
 
         const elCutoff = document.getElementById('bankingWeekEndingCutoffInput');
         if (elCutoff && typeof attachUkDatePicker === 'function') {
-          try { attachUkDatePicker(elCutoff, { maxDate: todayIso }); } catch {}
+          try { attachUkDatePicker(elCutoff, { maxDate: maxCutoffIso }); } catch {}
           try {
             const iso0 = String(st?.pay?.draftWizard?.week_ending_cutoff_date || '').trim();
             const iso = (iso0 && /^\d{4}-\d{2}-\d{2}$/.test(iso0)) ? iso0 : '';
-            const eff = (iso && iso > todayIso) ? todayIso : iso;
+            const eff = (iso && iso > maxCutoffIso) ? maxCutoffIso : iso;
             if (eff) {
               try { st.pay.draftWizard.week_ending_cutoff_date = eff; } catch {}
               if (typeof formatIsoToUk === 'function') {
@@ -51955,7 +52358,15 @@ function renderTimesheetLinesTab(ctx) {
       'view';
 
     const isEditMode = (frameMode === 'edit' || frameMode === 'create');
-    const canEditSchedule = isEditMode && !locked && subMode === 'MANUAL';
+
+    // ✅ NEW: authorised guard — schedule/hours/extras must NOT be editable while authorised
+    const isAuthorised = !!(ts.authorised_at_server || row.authorised_at_server);
+
+    const canEditSchedule = isEditMode && !locked && !isAuthorised && subMode === 'MANUAL';
+
+    const authorisedMsgHtml = isAuthorised
+      ? '<span class="mini">This timesheet is authorised. Unauthorise it before changing hours.</span>'
+      : '';
 
     // Build full 7-day week list (always show all days)
     const dowShort = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -53210,12 +53621,13 @@ function renderTimesheetLinesTab(ctx) {
                   </tbody>
                 </table>
               </div>
-
               <span class="mini" style="display:block;margin-top:4px;">
                 ${scheduleHelpText}
               </span>
 
               ${locked ? '<span class="mini">This timesheet is locked (paid/invoiced); schedule is read-only.</span>' : ''}
+
+              ${authorisedMsgHtml}
 
               <div style="margin-top:8px;">
                 ${resetButtonHtml}
@@ -84373,6 +84785,17 @@ const onSaveTimesheet = async () => {
     !!stagedSchedule &&
     !deepEqualJson(stagedSchedule, currentSchedule);
 
+  // ✅ NEW: Frontend enforcement — cannot change hours/schedule/extras/expenses while authorised
+  const isAuthorisedNow = !!(tsLocal.authorised_at_server || rowNow.authorised_at_server);
+  const isAuthorisedContentChangeAttempt =
+    (scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily || expensesChanged);
+
+  if (isAuthorisedNow && isAuthorisedContentChangeAttempt) {
+    alert('This timesheet is authorised. Unauthorise it before changing hours.');
+    GE();
+    return { ok: false };
+  }
+
   const lockedNow = !!(tsfinLocal.locked_by_invoice_id || tsfinLocal.paid_at_utc);
 
   // Segments staging
@@ -84380,7 +84803,6 @@ const onSaveTimesheet = async () => {
   const segTargets      = st.segmentInvoiceTargets || {};
   const hasSegOverrides = !!Object.keys(segOverrides).length;
   const hasSegTargets   = !!Object.keys(segTargets).length;
-
   // QR-sensitive change (weekly schedule + weekly extras + daily schedule)
   const qrSensitiveChange = scheduleChangedWeekly || scheduleChangedDaily || extrasChangedWeekly;
 
