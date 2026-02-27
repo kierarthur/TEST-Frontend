@@ -7597,7 +7597,6 @@ async function bankingPayBatchSchedule(payBatchId, scheduleFormIn = null) {
     try { pay.actionsBusy.scheduling = false; } catch {}
   }
 }
-
 async function bankingPayBatchPoll(payBatchId, opts = {}) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const id = (payBatchId == null) ? '' : String(payBatchId).trim();
@@ -7651,6 +7650,7 @@ async function bankingPayBatchPoll(payBatchId, opts = {}) {
     try {
       pay.selected.data = deep(obj);
       pay.selected.lastPollResult = deep(obj && obj.poll_result ? obj.poll_result : null);
+      pay.selected.error = '';
     } catch {}
 
     try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
@@ -7669,6 +7669,7 @@ async function bankingPayBatchPoll(payBatchId, opts = {}) {
 
   } finally {
     try { pay.actionsBusy.polling = false; } catch {}
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
   }
 }
 
@@ -12879,6 +12880,7 @@ function renderBankingRemittancesStatusTab() {
     </div>
   `;
 }
+
 async function openBankingPayBatchChildModal(batchId) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -12938,7 +12940,6 @@ async function openBankingPayBatchChildModal(batchId) {
     // PAYE worksheet state
     paye: {
       filterCandidateId: 'ALL',
-      editing: false,
       netDraft: {},               // { [candidate_id]: '123.45' }
       importBusy: false,
       importError: '',
@@ -13162,6 +13163,19 @@ async function openBankingPayBatchChildModal(batchId) {
     const forcePoll = !!opts.forcePoll;
     const silent = !!opts.silent;
 
+    // ✅ Poll only when at least one PENDING transfer has a pollable rail id (rail_tx_id).
+    // This prevents repeated REVOLUT 3006 loops when transfers are PENDING but have no rail id yet.
+    const hasPollablePendingTransfers = (data) => {
+      const transfers = (typeof deriveTransfers === 'function') ? deriveTransfers(data) : [];
+      for (const t of transfers) {
+        const stx = String(t?.status || '').trim().toUpperCase();
+        if (stx !== 'PENDING') continue;
+        const railTx = String(t?.rail_tx_id || '').trim();
+        if (railTx) return true;
+      }
+      return false;
+    };
+
     if (silent) {
       try { child.actionsBusy.refreshing = true; } catch {}
     } else {
@@ -13190,18 +13204,30 @@ async function openBankingPayBatchChildModal(batchId) {
 
       await rerenderChild();
 
-      if (forcePoll || shouldAutoPoll(child.data)) {
-        try {
-          child.actionsBusy.polling = true;
-          await rerenderChild();
+      const wantPoll = (forcePoll || shouldAutoPoll(child.data));
+      if (wantPoll) {
+        const pollable = hasPollablePendingTransfers(child.data);
 
-          const polled = await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/poll`, {});
-          child.data = deep(polled);
-          child.actionsBusy.polling = false;
-          await rerenderChild();
-        } catch (e) {
-          child.actionsBusy.polling = false;
-          await rerenderChild();
+        // ✅ Skip poll if nothing pollable yet (prevents UI churn + backend 500 loops)
+        if (!pollable) {
+          try {
+            if (!silent && forcePoll && typeof window.__toast === 'function') {
+              window.__toast('Nothing to poll yet (no rail transaction id).');
+            }
+          } catch {}
+        } else {
+          try {
+            child.actionsBusy.polling = true;
+            await rerenderChild();
+
+            const polled = await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/poll`, {});
+            child.data = deep(polled);
+            child.actionsBusy.polling = false;
+            await rerenderChild();
+          } catch (e) {
+            child.actionsBusy.polling = false;
+            await rerenderChild();
+          }
         }
       }
 
@@ -13227,8 +13253,20 @@ async function openBankingPayBatchChildModal(batchId) {
 
     try { child.__autoPollLastRefreshAt = 0; } catch {}
 
+    const hasPollablePendingTransfers = (data) => {
+      const transfers = (typeof deriveTransfers === 'function') ? deriveTransfers(data) : [];
+      for (const t of transfers) {
+        const stx = String(t?.status || '').trim().toUpperCase();
+        if (stx !== 'PENDING') continue;
+        const railTx = String(t?.rail_tx_id || '').trim();
+        if (railTx) return true;
+      }
+      return false;
+    };
+
     // Poll/refresh every 30s, but throttle real network refresh to ~60s
     // The backend poll endpoint is already throttled via last_status_checked_at_utc.
+    // ✅ IMPORTANT: auto-poll must not run when nothing is pollable (prevents 3006 loops + UI churn).
     try {
       child.__autoPollTimer = setInterval(async () => {
         try {
@@ -13239,6 +13277,9 @@ async function openBankingPayBatchChildModal(batchId) {
 
           // Only auto-refresh for non-draft, non-final batches
           if (!status || status === 'DRAFT' || status === 'DRAFT_CREATED' || status === 'CANCELLED' || status === 'SETTLED') return;
+
+          // ✅ If there is nothing pollable, do not auto-refresh at all.
+          if (!hasPollablePendingTransfers(child.data)) return;
 
           if (child.loading || child.actionsBusy.polling || child.actionsBusy.refreshing) return;
 
@@ -13317,6 +13358,17 @@ async function openBankingPayBatchChildModal(batchId) {
   const executePaymentPipeline = async () => {
     if (child.actionsBusy.executing) return;
 
+    // ✅ Hard UI guard: do not allow execute twice after refresh / status changes.
+    try {
+      const bGuard = deriveBatchObj(child.data) || {};
+      const stx = String(bGuard.status || '').trim().toUpperCase();
+      const allowed = (stx === 'DRAFT' || stx === 'DRAFT_CREATED' || stx === 'READY');
+      if (!allowed) {
+        try { if (typeof window.__toast === 'function') window.__toast(`Execute not allowed in status: ${stx || '—'}`); } catch {}
+        return;
+      }
+    } catch {}
+
     child.actionsBusy.executing = true;
     child.error = '';
     await rerenderChild();
@@ -13343,7 +13395,8 @@ async function openBankingPayBatchChildModal(batchId) {
         await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/prepare`, { name_check_overrides: [] });
       }
 
-      await loadBatch({ forcePoll: true });
+      // ✅ Do NOT force poll immediately after execute (poll is now conditional + pollable-gated).
+      await loadBatch({ forcePoll: false });
     } catch (e) {
       // ✅ Route through friendly banking error normaliser (prevents raw RPC blobs leaking to UI)
       try {
@@ -14000,12 +14053,6 @@ async function openBankingPayBatchChildModal(batchId) {
         }
 
         // PAYE worksheet actions
-        if (act === 'banking:pay:child:paye:toggleEdit') {
-          child.paye.editing = !child.paye.editing;
-          await rerenderChild();
-          return;
-        }
-
         if (act === 'banking:pay:child:paye:saveNet') {
           await savePayeNet();
           return;
@@ -14127,9 +14174,10 @@ async function openBankingPayBatchChildModal(batchId) {
 
   try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
 
-  // Initial load
-  await loadBatch({ forcePoll: true });
+  // Initial load (do not force poll on open; poll is conditional + pollable-gated)
+  await loadBatch({ forcePoll: false });
 }
+
 function renderBankingPayBatchChildModalOverview() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -14515,8 +14563,6 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
-
-
 function renderBankingPayBatchChildModalPayeWorksheetTab() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -14601,7 +14647,6 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
     byCand.get(cid).push(ln);
   }
 
-  const editing = !!child?.paye?.editing;
   const netDraft = (child?.paye?.netDraft && typeof child.paye.netDraft === 'object') ? child.paye.netDraft : {};
   const importBusy = !!child?.paye?.importBusy;
   const saveBusy = !!child?.paye?.saveBusy;
@@ -14722,11 +14767,10 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
                   type="number"
                   step="0.01"
                   min="0"
-                  ${editing ? '' : 'readonly data-disabled="1" aria-disabled="true"'}
                   value="${enc(displayNet)}"
                   data-action="banking:pay:child:paye:setNetDraft"
                   data-candidate-id="${enc(cid)}"
-                  title="${editing ? 'Enter net payment for this candidate (save via modal footer Save)' : 'Click Edit to change'}"
+                  title="Enter net payment for this candidate (save via modal footer Save). Use modal footer Edit to enable changes."
                 />
               </div>
             </div>
@@ -14813,20 +14857,12 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
                   title="Print worksheet (gross totals + blank net fields)"
                 >Print</button>
 
-                <button
-                  type="button"
-                  class="btn btn-sm btn-outline"
-                  data-action="banking:pay:child:paye:toggleEdit"
-                  ${saveBusy ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
-                  title="Toggle edit mode"
-                >${editing ? 'Stop editing' : 'Edit'}</button>
-
                 ${saveBusy ? `<span class="mini" style="opacity:.8;">Saving…</span>` : ``}
               </div>
             </div>
 
             <div class="mini" style="opacity:.8;">
-              Enter net amounts after clicking <strong>Edit</strong>. Use the modal footer <strong>Save</strong> to commit changes (Close becomes Discard when dirty).
+              Use the modal footer <strong>Edit</strong> to enable changes. Use the modal footer <strong>Save</strong> to commit changes (Close becomes Discard when dirty).
             </div>
 
             ${rowsHtml}
