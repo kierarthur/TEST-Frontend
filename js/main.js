@@ -10208,12 +10208,46 @@ function renderPayNewBatchWizard() {
     return (Math.round(n * 100) / 100).toFixed(2);
   };
 
-  const renderItemisationTable = (cand, mode) => {
-    const c = (cand && typeof cand === 'object') ? cand : {};
-    const items = Array.isArray(c.itemisation) ? c.itemisation : [];
-    const candMethod = String(c.current_pay_method || '').trim().toUpperCase();
+const renderItemisationTable = (cand, mode) => {
+  const c = (cand && typeof cand === 'object') ? cand : {};
+  const items = Array.isArray(c.itemisation) ? c.itemisation : [];
+  const candMethod = String(c.current_pay_method || '').trim().toUpperCase();
 
-    let rows = items
+  const modeKey = String(mode || '').trim().toUpperCase();
+  const isMismatchOnly = (modeKey === 'MISMATCH_ONLY');
+  const isNonMismatchOnly = (modeKey === 'NON_MISMATCH_ONLY');
+  const isReviewAllNonZero = (modeKey === 'REVIEW_ALL_NONZERO' || modeKey === 'ALL' || modeKey === '');
+
+  let rows = items
+    .filter(it => it && typeof it === 'object')
+    .map(it => ({
+      week_ending_date: String(it.week_ending_date || '').trim(),
+      client_name: String(it.client_name || '').trim(),
+      payment_amount: (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0)),
+      source_pay_method: String(it.source_pay_method || '').trim().toUpperCase()
+    }))
+    .filter(r => {
+      const amt = Number(r.payment_amount);
+      const nonZero = Number.isFinite(amt) ? Math.round(amt * 100) / 100 !== 0 : String(r.payment_amount || '').trim() !== '' && String(r.payment_amount) !== '0';
+      if (!nonZero) return false;
+
+      if (isMismatchOnly) {
+        if (!candMethod) return true;
+        return r.source_pay_method && r.source_pay_method !== candMethod;
+      }
+
+      if (isNonMismatchOnly) {
+        if (!candMethod) return true;
+        return !r.source_pay_method || r.source_pay_method === candMethod;
+      }
+
+      if (isReviewAllNonZero) return true;
+      return true;
+    });
+
+  if (isMismatchOnly && rows.length === 0) {
+    // Fallback: if candidate is marked mismatch but we couldn't isolate rows, show all non-zero rows
+    rows = items
       .filter(it => it && typeof it === 'object')
       .map(it => ({
         week_ending_date: String(it.week_ending_date || '').trim(),
@@ -10223,66 +10257,50 @@ function renderPayNewBatchWizard() {
       }))
       .filter(r => {
         const amt = Number(r.payment_amount);
-        const nonZero = Number.isFinite(amt) ? Math.round(amt * 100) / 100 !== 0 : String(r.payment_amount || '').trim() !== '' && String(r.payment_amount) !== '0';
-        if (!nonZero) return false;
-        if (mode === 'MISMATCH_ONLY') {
-          if (!candMethod) return true;
-          return r.source_pay_method && r.source_pay_method !== candMethod;
-        }
-        if (mode === 'NON_MISMATCH_ONLY') {
-          if (!candMethod) return true;
-          return !r.source_pay_method || r.source_pay_method === candMethod;
-        }
-        return true;
+        return Number.isFinite(amt) ? Math.round(amt * 100) / 100 !== 0 : String(r.payment_amount || '').trim() !== '' && String(r.payment_amount) !== '0';
       });
+  }
 
-    if (mode === 'MISMATCH_ONLY' && rows.length === 0) {
-      // Fallback: if candidate is marked mismatch but we couldn't isolate rows, show all non-zero rows
-      rows = items
-        .filter(it => it && typeof it === 'object')
-        .map(it => ({
-          week_ending_date: String(it.week_ending_date || '').trim(),
-          client_name: String(it.client_name || '').trim(),
-          payment_amount: (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0)),
-          source_pay_method: String(it.source_pay_method || '').trim().toUpperCase()
-        }))
-        .filter(r => {
-          const amt = Number(r.payment_amount);
-          return Number.isFinite(amt) ? Math.round(amt * 100) / 100 !== 0 : String(r.payment_amount || '').trim() !== '' && String(r.payment_amount) !== '0';
-        });
-    }
+  if (!rows.length) {
+    return `<div class="mini" style="opacity:.8;">No payable line items.</div>`;
+  }
 
-    if (!rows.length) {
-      return `<div class="mini" style="opacity:.8;">No payable line items.</div>`;
-    }
+  const rowsHtml = rows.map(r => `
+    <tr>
+      <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(r.week_ending_date) || '—')}</td>
+      <td class="mini">${enc(r.client_name || '—')}</td>
+      <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(r.payment_amount))}</td>
+    </tr>
+  `).join('');
 
-    const rowsHtml = rows.map(r => `
-      <tr>
-        <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(r.week_ending_date) || '—')}</td>
-        <td class="mini">${enc(r.client_name || '—')}</td>
-        <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(r.payment_amount))}</td>
-      </tr>
-    `).join('');
-
-    return `
-      <div style="margin-top:6px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
-        <table class="grid" style="min-width:520px; table-layout:auto;">
-          <thead>
-            <tr>
-              <th style="width:140px;">Week ending</th>
-              <th>Client</th>
-              <th style="width:140px; text-align:right;">Payment amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
-        </table>
-      </div>
-    `;
-  };
+  return `
+    <div style="margin-top:6px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
+      <table class="grid" style="min-width:520px; table-layout:auto;">
+        <thead>
+          <tr>
+            <th style="width:140px;">Week ending</th>
+            <th>Client</th>
+            <th style="width:140px; text-align:right;">Payment amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+    </div>
+  `;
+};
 
   const asBool = (v) => (v === true) || (v === 1) || (v === '1') || (String(v).trim().toLowerCase() === 'true');
+
+  const toInt = (v, def = 0) => {
+    if (v == null) return def;
+    if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : def;
+    const s = String(v).trim();
+    if (!s) return def;
+    const n = Number(s);
+    return Number.isFinite(n) ? Math.trunc(n) : def;
+  };
 
   const toBlockers = (c) => {
     const b = c && typeof c === 'object' ? c.blockers : null;
@@ -10321,7 +10339,73 @@ function renderPayNewBatchWizard() {
     return `<span class="pill pill-ok" title="${enc('Ready for drafting')}">${enc('Ready')}</span>`;
   };
 
-  // ✅ Ready-to-pay list: candidates with no mismatch, included, ready-for-draft, and with non-zero itemisation lines
+  const getCandidateIdFromItem = (it) => {
+    if (!it || typeof it !== 'object') return '';
+    const cid =
+      (it.candidate_id != null ? it.candidate_id : (it.candidateId != null ? it.candidateId : (it.candidate != null ? it.candidate : '')));
+    return String(cid || '').trim();
+  };
+
+  const buildCandidateIdSetFromItems = (arr) => {
+    const out = new Set();
+    if (!Array.isArray(arr)) return out;
+    for (const it of arr) {
+      const cid = getCandidateIdFromItem(it);
+      if (cid) out.add(cid);
+    }
+    return out;
+  };
+
+  const blockedCandIdSet = buildCandidateIdSetFromItems(blockedItems);
+  const doNotPayCandIdSet = buildCandidateIdSetFromItems(doNotPayItems);
+  const snoozedCandIdSet = buildCandidateIdSetFromItems(snoozedItems);
+
+  const hasAnyPayableLines = (c) => {
+    const items = Array.isArray(c?.itemisation) ? c.itemisation : [];
+    if (!items.length) return false;
+    for (const it of items) {
+      if (!it || typeof it !== 'object') continue;
+      const v = (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0));
+      const n = Number(v);
+      if (Number.isFinite(n) && Math.round(n * 100) / 100 !== 0) return true;
+      if (!Number.isFinite(n) && String(v || '').trim() && String(v) !== '0') return true;
+    }
+    return false;
+  };
+
+  const renderInlineItemsForCandidate = (items, cid, titleText) => {
+    const id = String(cid || '').trim();
+    if (!id || !Array.isArray(items) || !items.length) return '';
+    const rows = items.filter(it => String(getCandidateIdFromItem(it) || '') === id);
+    if (!rows.length) return '';
+
+    const lines = rows.slice(0, 12).map((it) => {
+      const tId = String(it.timesheet_id || it.timesheetId || '').trim();
+      const sId = String(it.segment_id || it.segmentId || '').trim();
+      const ref = String(it.source_ref || it.sourceRef || it.ref || '').trim();
+      const reason = String(it.reason || it.reason_code || it.code || it.blocker || '').trim();
+      const amt = (it.amount != null) ? it.amount : (it.payment_amount != null ? it.payment_amount : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : null)));
+      const bits = [];
+      if (reason) bits.push(reason);
+      if (tId) bits.push(`ts ${tId}`);
+      if (sId) bits.push(`seg ${sId}`);
+      if (!tId && !sId && ref) bits.push(ref);
+      if (amt != null) bits.push(`£${fmtMoney(amt)}`);
+      return `<div class="mini" style="opacity:.9; margin-top:2px;">• ${enc(bits.join(' • ') || '—')}</div>`;
+    }).join('');
+
+    const more = rows.length > 12 ? `<div class="mini" style="opacity:.8; margin-top:2px;">… and ${enc(String(rows.length - 12))} more</div>` : '';
+
+    return `
+      <div style="margin-top:8px;">
+        <div class="mini" style="opacity:.85;">${enc(titleText || 'Items')}:</div>
+        ${lines}
+        ${more}
+      </div>
+    `;
+  };
+
+  // ✅ Ready-to-pay list: candidates with no mismatch, included, ready-for-draft, no blocked/do-not-pay flags, and with non-zero itemisation lines
   const readyCands = allCands.filter(c => {
     const cid = String(c?.candidate_id || '').trim();
     if (!cid) return false;
@@ -10333,6 +10417,14 @@ function renderPayNewBatchWizard() {
     const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
     const hm = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true'));
     if (hm) return false;
+
+    // Explicit: ready means no blocked/do-not-pay signals (candidate-level and preview-level)
+    const blockedCount = toInt(c?.blocked_count, 0);
+    const dnpCount = toInt(c?.do_not_pay_count, 0);
+    if (blockedCount > 0) return false;
+    if (dnpCount > 0) return false;
+    if (blockedCandIdSet.has(cid)) return false;
+    if (doNotPayCandIdSet.has(cid)) return false;
 
     const items = Array.isArray(c?.itemisation) ? c.itemisation : [];
     if (!items.length) return false;
@@ -10429,13 +10521,52 @@ function renderPayNewBatchWizard() {
     </details>
   ` : ``;
 
-  const mismatchRowsHtml = mismatchList.length ? mismatchList.map((c) => {
+  // ✅ Review required list: mismatches + blocked items + do-not-pay + payee readiness blockers (with actionability guard)
+  const reviewCands = allCands.filter((c) => {
+    const cid = String(c?.candidate_id || '').trim();
+    if (!cid) return false;
+    if (!isIncludedCandidate(cid)) return false;
+
+    const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
+    const hasMismatch = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true')) ? true : false;
+
+    const blockers = toBlockers(c);
+    const hasPayeeReadinessBlockers = (!asBool(c?.is_ready_for_draft)) || (blockers.length > 0);
+
+    const blockedCount = toInt(c?.blocked_count, 0);
+    const dnpCount = toInt(c?.do_not_pay_count, 0);
+
+    const hasBlockedItems = (blockedCount > 0) || blockedCandIdSet.has(cid);
+    const hasDoNotPayItems = (dnpCount > 0) || doNotPayCandIdSet.has(cid);
+
+    const anyLines = hasAnyPayableLines(c);
+
+    return (
+      hasMismatch ||
+      hasBlockedItems ||
+      hasDoNotPayItems ||
+      (hasPayeeReadinessBlockers && anyLines)
+    );
+  });
+
+  const reviewRowsHtml = reviewCands.length ? reviewCands.map((c) => {
     const cid = String(c?.candidate_id || '').trim();
     const name = String(c?.display_name || '').trim() || '—';
     const tms = String(c?.tms_ref || '').trim();
     const method = String(c?.current_pay_method || '').trim().toUpperCase() || '—';
 
     const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
+    const hasMismatch = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true')) ? true : false;
+
+    const blockers = toBlockers(c);
+    const hasPayeeReadinessBlockers = (!asBool(c?.is_ready_for_draft)) || (blockers.length > 0);
+
+    const blockedCount = toInt(c?.blocked_count, 0);
+    const dnpCount = toInt(c?.do_not_pay_count, 0);
+
+    const hasBlockedItems = (blockedCount > 0) || blockedCandIdSet.has(cid);
+    const hasDoNotPayItems = (dnpCount > 0) || doNotPayCandIdSet.has(cid);
+
     const srcPaye = (m.source_paye_ex_vat != null) ? String(m.source_paye_ex_vat) : '';
     const srcUmb  = (m.source_umbrella_ex_vat != null) ? String(m.source_umbrella_ex_vat) : '';
 
@@ -10446,7 +10577,87 @@ function renderPayNewBatchWizard() {
     const minTakeHome = (capNow.min_take_home != null) ? String(capNow.min_take_home) : '';
     const maxDed = (capNow.max_deduction != null) ? String(capNow.max_deduction) : '';
 
-    const mismatchLinesHtml = renderItemisationTable(c, 'MISMATCH_ONLY');
+    const bankPillHtml = bankPillForCandidate(c);
+
+    const whyBadges = (() => {
+      const bits = [];
+      if (hasMismatch) bits.push(`<span class="pill pill-warn" title="Candidate has mismatched pay channel deltas">Mismatch</span>`);
+      if (hasPayeeReadinessBlockers) {
+        bits.push(`<span class="pill pill-bad" title="Candidate is blocked for drafting (payee readiness)">Payee blocked</span>`);
+        if (blockers.length) {
+          bits.push(blockers.map(b => `<span class="pill" title="${enc(b)}">${enc(b)}</span>`).join(''));
+        }
+      }
+      if (hasBlockedItems) {
+        const t = (blockedCount > 0) ? `Blocked items: ${blockedCount}` : 'Blocked items present';
+        const lbl = (blockedCount > 0) ? `Blocked items: ${blockedCount}` : 'Blocked items';
+        bits.push(`<span class="pill pill-bad" title="${enc(t)}">${enc(lbl)}</span>`);
+      }
+      if (hasDoNotPayItems) {
+        const t = (dnpCount > 0) ? `Do-not-pay items: ${dnpCount}` : 'Do-not-pay items present';
+        const lbl = (dnpCount > 0) ? `Do not pay: ${dnpCount}` : 'Do not pay';
+        bits.push(`<span class="pill pill-warn" title="${enc(t)}">${enc(lbl)}</span>`);
+      }
+      if (!bits.length) return '';
+      return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${bits.join('')}</div>`;
+    })();
+
+    const linesHtml = hasMismatch
+      ? renderItemisationTable(c, 'MISMATCH_ONLY')
+      : renderItemisationTable(c, 'ALL');
+
+    const blockedInline = renderInlineItemsForCandidate(blockedItems, cid, 'Blocked items');
+    const dnpInline = renderInlineItemsForCandidate(doNotPayItems, cid, 'Do-not-pay items');
+
+    const mismatchChoiceCell = hasMismatch ? `
+      <select
+        class="input"
+        data-action="banking:pay:setMismatchChoice"
+        data-candidate-id="${enc(cid)}"
+        title="Choose how to settle mismatch amounts for this candidate"
+      >
+        <option value="" ${choiceNow ? '' : 'selected'}>Choose…</option>
+        <option value="PAYE" ${choiceNow === 'PAYE' ? 'selected' : ''}>Settle via PAYE</option>
+        <option value="UMBRELLA" ${choiceNow === 'UMBRELLA' ? 'selected' : ''}>Settle via Umbrella</option>
+      </select>
+    ` : `<div class="mini" style="opacity:.85;">—</div>`;
+
+    const loanCapsCell = hasMismatch ? `
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input
+          class="input"
+          style="max-width:130px;"
+          type="number"
+          step="0.01"
+          min="0"
+          data-action="banking:pay:setLoanCap"
+          data-candidate-id="${enc(cid)}"
+          data-cap-field="min_take_home"
+          placeholder="Min take-home"
+          value="${enc(minTakeHome)}"
+          title="Optional: minimum take-home after loan repayment"
+        />
+        <input
+          class="input"
+          style="max-width:130px;"
+          type="number"
+          step="0.01"
+          min="0"
+          data-action="banking:pay:setLoanCap"
+          data-candidate-id="${enc(cid)}"
+          data-cap-field="max_deduction"
+          placeholder="Max deduction"
+          value="${enc(maxDed)}"
+          title="Optional: cap total deductions for loans"
+        />
+      </div>
+    ` : `<div class="mini" style="opacity:.85;">—</div>`;
+
+    const mismatchSourcesLine = hasMismatch ? `
+      <div class="mini" style="opacity:.85;">
+        Mismatch sources — PAYE: <span class="mono">${enc(srcPaye || '0')}</span> • Umbrella: <span class="mono">${enc(srcUmb || '0')}</span>
+      </div>
+    ` : ``;
 
     return `
       <tr>
@@ -10467,60 +10678,30 @@ function renderPayNewBatchWizard() {
               <span class="mono">${enc(tms || '')}</span>
               <span>${enc(name)}</span>
               <span class="pill">${enc(method)}</span>
+              <span style="white-space:nowrap;">${bankPillHtml}</span>
             </div>
-            <div class="mini" style="opacity:.85;">
-              Mismatch sources — PAYE: <span class="mono">${enc(srcPaye || '0')}</span> • Umbrella: <span class="mono">${enc(srcUmb || '0')}</span>
-            </div>
+
+            ${whyBadges ? `<div class="mini" style="opacity:.95;">${whyBadges}</div>` : ``}
+
+            ${mismatchSourcesLine}
+
             <div class="mini" style="opacity:.85;">Affected lines:</div>
-            ${mismatchLinesHtml}
+            ${linesHtml}
+
+            ${blockedInline}
+            ${dnpInline}
           </div>
         </td>
         <td style="min-width:200px;">
-          <select
-            class="input"
-            data-action="banking:pay:setMismatchChoice"
-            data-candidate-id="${enc(cid)}"
-            title="Choose how to settle mismatch amounts for this candidate"
-          >
-            <option value="" ${choiceNow ? '' : 'selected'}>Choose…</option>
-            <option value="PAYE" ${choiceNow === 'PAYE' ? 'selected' : ''}>Settle via PAYE</option>
-            <option value="UMBRELLA" ${choiceNow === 'UMBRELLA' ? 'selected' : ''}>Settle via Umbrella</option>
-          </select>
+          ${mismatchChoiceCell}
         </td>
         <td style="min-width:220px;">
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <input
-              class="input"
-              style="max-width:130px;"
-              type="number"
-              step="0.01"
-              min="0"
-              data-action="banking:pay:setLoanCap"
-              data-candidate-id="${enc(cid)}"
-              data-cap-field="min_take_home"
-              placeholder="Min take-home"
-              value="${enc(minTakeHome)}"
-              title="Optional: minimum take-home after loan repayment"
-            />
-            <input
-              class="input"
-              style="max-width:130px;"
-              type="number"
-              step="0.01"
-              min="0"
-              data-action="banking:pay:setLoanCap"
-              data-candidate-id="${enc(cid)}"
-              data-cap-field="max_deduction"
-              placeholder="Max deduction"
-              value="${enc(maxDed)}"
-              title="Optional: cap total deductions for loans"
-            />
-          </div>
+          ${loanCapsCell}
         </td>
       </tr>
     `;
   }).join('') : `
-    <tr><td colspan="4" class="mini" style="opacity:.85;">No mismatch decisions required.</td></tr>
+    <tr><td colspan="4" class="mini" style="opacity:.85;">No review required.</td></tr>
   `;
 
   const elig = (pv && typeof pv === 'object' && pv.eligibility && typeof pv.eligibility === 'object') ? pv.eligibility : null;
@@ -10651,26 +10832,25 @@ function renderPayNewBatchWizard() {
               <thead>
                 <tr>
                   <th style="width:90px;">Include</th>
-                  <th>Mismatch candidates (includes affected lines)</th>
+                  <th>Review required (mismatches + blocked items)</th>
                   <th style="width:220px;">Mismatch choice</th>
                   <th style="width:260px;">Loan caps (optional)</th>
                 </tr>
               </thead>
               <tbody>
-                ${mismatchRowsHtml}
+                ${reviewRowsHtml}
               </tbody>
             </table>
           </div>
 
           <div class="mini" style="opacity:.8;">
-            Notes: mismatch choices are required for candidates flagged with mismatches. Blocked/Do-not-pay items are excluded from payable deltas unless resolved.
+            Notes: mismatch choices are required for candidates flagged with mismatches. Candidates can also appear here due to payee readiness blockers (CoP/name-check/payee map) and/or blocked/do-not-pay items; these items are excluded from payable deltas unless resolved.
           </div>
         </div>
       </div>
     </div>
   `;
 }
-
 function renderPayPreparePanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -14656,6 +14836,7 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
     </div>
   `;
 }
+
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -14828,6 +15009,15 @@ function attachBankingModalDelegatedHandlers() {
       if (!('ON_HOLD' in st.id.ledgerFilters.statuses)) st.id.ledgerFilters.statuses.ON_HOLD = true;
     } catch {}
 
+    const resetPayPreviewAndDecisions = () => {
+      try {
+        st.pay.draftWizard.preview = { data: null, loading: false, error: '' };
+        st.pay.draftWizard.decisions = { candidate_ids: [], mismatch_choices: {}, loan_caps: {} };
+      } catch {}
+      try { st.pay.draftWizard.createDraftError = ''; } catch {}
+      try { st.pay.draftWizard.createDraftBusy = false; } catch {}
+    };
+
     const getUkTodayIso = () => {
       try {
         const ymd = (typeof toLocalParts === 'function')
@@ -14876,6 +15066,7 @@ function attachBankingModalDelegatedHandlers() {
       if (!id) return;
       st.pay.draftWizard.candidate_filter_id = id;
       st.pay.draftWizard.candidate_filter_label = label || '';
+      resetPayPreviewAndDecisions();
       await safeRerender(null);
     };
 
@@ -14887,6 +15078,7 @@ function attachBankingModalDelegatedHandlers() {
       if (!id) return;
       st.pay.draftWizard.client_filter_id = id;
       st.pay.draftWizard.client_filter_label = label || '';
+      resetPayPreviewAndDecisions();
       await safeRerender(null);
     };
 
@@ -15014,12 +15206,19 @@ function attachBankingModalDelegatedHandlers() {
         .filter(Boolean);
 
       const allSet = new Set(all);
+      if (allSet.size === 0) return;
 
       const curArr = Array.isArray(st.pay.draftWizard.decisions.candidate_ids) ? st.pay.draftWizard.decisions.candidate_ids : [];
       const curSet = new Set(curArr.map(x => String(x || '').trim()).filter(Boolean));
 
+      // ✅ Prune any stored IDs that are not in the current preview universe
+      const prunedCurSet = new Set();
+      for (const x of curSet) {
+        if (allSet.has(x)) prunedCurSet.add(x);
+      }
+
       // If no filter is currently set => default is "ALL candidates"
-      const effectiveSet = (curSet.size > 0) ? new Set(curSet) : new Set(allSet);
+      const effectiveSet = (prunedCurSet.size > 0) ? new Set(prunedCurSet) : new Set(allSet);
 
       if (includeChecked) effectiveSet.add(cid);
       else effectiveSet.delete(cid);
@@ -15296,6 +15495,7 @@ function attachBankingModalDelegatedHandlers() {
     if (a === 'banking:pay:clearCandidateFilter') {
       st.pay.draftWizard.candidate_filter_id = '';
       st.pay.draftWizard.candidate_filter_label = '';
+      resetPayPreviewAndDecisions();
       await safeRerender(null);
       return;
     }
@@ -15323,6 +15523,7 @@ function attachBankingModalDelegatedHandlers() {
     if (a === 'banking:pay:clearClientFilter') {
       st.pay.draftWizard.client_filter_id = '';
       st.pay.draftWizard.client_filter_label = '';
+      resetPayPreviewAndDecisions();
       await safeRerender(null);
       return;
     }
@@ -16023,8 +16224,6 @@ function attachBankingModalDelegatedHandlers() {
 
   return { ok: true };
 }
-
-
 
 // NEW: advanced, section-aware search modal
 // === UPDATED: Advanced Search — add Roles (any) multi-select, use UK date pickers ===
