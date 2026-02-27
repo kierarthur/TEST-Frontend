@@ -4956,7 +4956,9 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
     reason: defaultReason,
     busy: false,
     err: '',
-    notice: ''
+    notice: '',
+    __pwTouched: false,
+    __pwClearedOnce: false
   };
 
   const render = () => {
@@ -4977,10 +4979,14 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
                   <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                     <input
                       id="bankingCancelPassword"
+                      name="banking_cancel_password"
                       class="input"
                       type="password"
                       placeholder="Enter your password"
                       value="${enc(state.password)}"
+                      autocomplete="new-password"
+                      autocapitalize="off"
+                      spellcheck="false"
                       style="min-width:260px;max-width:420px;"
                       ${state.busy ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);min-width:260px;max-width:420px;"' : ''}
                     />
@@ -4992,10 +4998,14 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
                   <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                     <input
                       id="bankingCancelReason"
+                      name="banking_cancel_reason"
                       class="input"
                       type="text"
                       placeholder="Why are you cancelling this payment?"
                       value="${enc(state.reason)}"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      spellcheck="false"
                       style="min-width:360px;max-width:720px;"
                       ${state.busy ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);min-width:360px;max-width:720px;"' : ''}
                     />
@@ -5093,19 +5103,47 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
       const btnOk = root.querySelector('#bankingCancelConfirm');
       const btnClose = root.querySelector('#bankingCancelClose');
 
+      // ✅ Force password to be blank on initial mount (prevents browser autofill showing a value)
+      //    and re-clear once shortly after mount (covers delayed autofill) unless user has typed.
+      if (pwEl && !state.__pwClearedOnce) {
+        state.__pwClearedOnce = true;
+        state.password = '';
+        try { pwEl.value = ''; } catch {}
+        try { pwEl.setAttribute('value', ''); } catch {}
+
+        try {
+          setTimeout(() => {
+            try {
+              if (!state.__pwTouched && pwEl && String(pwEl.value || '').trim()) {
+                pwEl.value = '';
+                state.password = '';
+              }
+            } catch {}
+          }, 250);
+        } catch {}
+      }
+
       if (pwEl && !pwEl.__wired) {
         pwEl.__wired = true;
-        pwEl.addEventListener('input', () => { state.password = String(pwEl.value || ''); });
+
+        const syncPw = () => {
+          state.__pwTouched = true;
+          state.password = String(pwEl.value || '');
+        };
+
+        pwEl.addEventListener('input', syncPw);
+        pwEl.addEventListener('change', syncPw);
       }
 
       if (rsEl && !rsEl.__wired) {
         rsEl.__wired = true;
         rsEl.addEventListener('input', () => { state.reason = String(rsEl.value || ''); });
+        rsEl.addEventListener('change', () => { state.reason = String(rsEl.value || ''); });
       }
 
       if (btnClose && !btnClose.__wired) {
         btnClose.__wired = true;
-        btnClose.onclick = () => { closeTop(); finish(null); };
+        btnClose.onclick = () => { finish(null); closeTop(); };
       }
 
       if (btnOk && !btnOk.__wired) {
@@ -5116,7 +5154,17 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
           state.err = '';
           state.notice = '';
 
-          const pw = String(state.password || '');
+          // ✅ Always read the live DOM value (covers autofill that didn't fire input/change)
+          const pwLive = (() => {
+            try {
+              const el = document.getElementById('bankingCancelPassword');
+              return el ? String(el.value || '') : String(state.password || '');
+            } catch {
+              return String(state.password || '');
+            }
+          })();
+
+          const pw = String(pwLive || '');
           const reason = String(state.reason || '').trim();
 
           if (!pw) {
@@ -5130,8 +5178,9 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
             return;
           }
 
-          closeTop();
+          // ✅ CRITICAL FIX: resolve FIRST, then close (otherwise onDismiss wins and you always get null)
           finish({ password: pw, reason });
+          closeTop();
         };
       }
     };
@@ -5139,7 +5188,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
     try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
   });
 }
-
 
 
 
