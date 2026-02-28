@@ -8693,7 +8693,6 @@ async function bankingOutboxList({ reference_prefix = '', reference_contains = '
   }
 }
 
-
 function renderBankingTab(key, row) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -8865,7 +8864,21 @@ function renderBankingTab(key, row) {
     </div>
   `;
 
-  const notReady = busy || !capsRaw || !st.settings || !st.settings.raw;
+  // ✅ FIX: settings defaults response shape may be { settings: {...} } not { raw: {...} }.
+  // Keep backward-compat by ensuring st.settings.raw is populated when possible.
+  const settingsObj = (st.settings && typeof st.settings === 'object') ? st.settings : null;
+  const settingsRaw =
+    (settingsObj && settingsObj.raw && typeof settingsObj.raw === 'object') ? settingsObj.raw
+    : (settingsObj && settingsObj.settings && typeof settingsObj.settings === 'object') ? settingsObj.settings
+    : null;
+
+  try {
+    if (settingsObj && settingsRaw && (!settingsObj.raw || typeof settingsObj.raw !== 'object')) {
+      settingsObj.raw = settingsRaw;
+    }
+  } catch {}
+
+  const notReady = busy || !capsRaw || !settingsObj || !settingsRaw;
 
   // ✅ Ensure ID state scaffolding exists for render-only usage (handlers will also seed this)
   try { st.id = (st.id && typeof st.id === 'object') ? st.id : {}; } catch {}
@@ -9462,7 +9475,6 @@ function renderBankingTab(key, row) {
     </div>
   `;
 }
-
 
 function renderBankingBanners() {
   const enc = (typeof escapeHtml === 'function')
