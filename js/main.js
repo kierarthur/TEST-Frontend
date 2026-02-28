@@ -10852,6 +10852,11 @@ function renderPayNewBatchWizard() {
     const blockers = toBlockers(c);
     const hasPayeeReadinessBlockers = (!asBool(c?.is_ready_for_draft)) || (blockers.length > 0);
 
+    const hasBankReadinessIssue =
+      blockers.includes('BLOCKED_BANK_DETAILS') ||
+      blockers.includes('BLOCKED_NAME_CHECK') ||
+      blockers.includes('BLOCKED_NO_PAYEE_MAP');
+
     const blockedCount = toInt(c?.blocked_count, 0);
     const dnpCount = toInt(c?.do_not_pay_count, 0);
 
@@ -10903,23 +10908,30 @@ function renderPayNewBatchWizard() {
 
     const whyBadges = (() => {
       const bits = [];
+
       if (hasMismatch) bits.push(`<span class="pill pill-warn" title="Candidate has mismatched pay channel deltas">Mismatch</span>`);
-      if (hasPayeeReadinessBlockers) {
+
+      // ✅ IMPORTANT: do NOT show “Payee blocked / BLOCKED_*” pills when the Bank pill already carries the advisory.
+      // (Bank: Near match / No match / Missing details / Not mapped / etc.)
+      if (hasPayeeReadinessBlockers && !hasBankReadinessIssue) {
         bits.push(`<span class="pill pill-bad" title="Candidate is blocked for drafting (payee readiness)">Payee blocked</span>`);
         if (blockers.length) {
           bits.push(blockers.map(b => `<span class="pill" title="${enc(b)}">${enc(b)}</span>`).join(''));
         }
       }
+
       if (hasBlockedItems) {
         const t = (blockedCount > 0) ? `Blocked items: ${blockedCount}` : 'Blocked items present';
         const lbl = (blockedCount > 0) ? `Blocked items: ${blockedCount}` : 'Blocked items';
         bits.push(`<span class="pill pill-bad" title="${enc(t)}">${enc(lbl)}</span>`);
       }
+
       if (hasDoNotPayItems) {
         const t = (dnpCount > 0) ? `Do-not-pay items: ${dnpCount}` : 'Do-not-pay items present';
         const lbl = (dnpCount > 0) ? `Do not pay: ${dnpCount}` : 'Do not pay';
         bits.push(`<span class="pill pill-warn" title="${enc(t)}">${enc(lbl)}</span>`);
       }
+
       if (!bits.length) return '';
       return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${bits.join('')}</div>`;
     })();
@@ -10975,9 +10987,9 @@ function renderPayNewBatchWizard() {
       </div>
     ` : ``;
 
-    return `
-      <tr>
-        <td style="white-space:nowrap;">
+    const includeCellHtml = hasBankReadinessIssue
+      ? `<div class="mini" style="opacity:.85;">—</div>`
+      : `
           <label class="inline mini" title="Include this candidate in the batch">
             <input
               type="checkbox"
@@ -10987,6 +10999,12 @@ function renderPayNewBatchWizard() {
             />
             Include
           </label>
+        `;
+
+    return `
+      <tr>
+        <td style="white-space:nowrap;">
+          ${includeCellHtml}
         </td>
         <td>
           <div style="display:flex;flex-direction:column;gap:6px;">
@@ -11171,6 +11189,8 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
+
+
 function renderPayBatchListPanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -15383,6 +15403,10 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
   const rootId = `bankingPayeEntry_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const openToken = `paye-entry:${id}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 
+  const toast = (msg) => {
+    try { if (typeof window.__toast === 'function') window.__toast(String(msg || '').trim()); } catch {}
+  };
+
   const fmtMoney = (v) => {
     const n = Number(v);
     if (!Number.isFinite(n)) return '';
@@ -15422,6 +15446,90 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     return await apiPostJson(path, payload || {});
   };
 
+  const getSurnameKey = (c) => {
+    try {
+      if (!c || typeof c !== 'object') return '';
+      const direct =
+        String(
+          c.candidate_last_name ||
+          c.last_name ||
+          c.surname ||
+          c.candidate_surname ||
+          ''
+        ).trim();
+      if (direct) return direct.toLowerCase();
+
+      const nm = String(c.candidate_display_name || c.display_name || '').trim();
+      if (!nm) return '';
+      const parts = nm.split(/\s+/).filter(Boolean);
+      if (!parts.length) return nm.toLowerCase();
+      return String(parts[parts.length - 1] || '').toLowerCase();
+    } catch {
+      return '';
+    }
+  };
+
+  const getForenameKey = (c) => {
+    try {
+      if (!c || typeof c !== 'object') return '';
+      const direct =
+        String(
+          c.candidate_first_name ||
+          c.first_name ||
+          c.forename ||
+          ''
+        ).trim();
+      if (direct) return direct.toLowerCase();
+
+      const nm = String(c.candidate_display_name || c.display_name || '').trim();
+      if (!nm) return '';
+      const parts = nm.split(/\s+/).filter(Boolean);
+      if (!parts.length) return nm.toLowerCase();
+      return String(parts[0] || '').toLowerCase();
+    } catch {
+      return '';
+    }
+  };
+
+  const sortCandidatesBySurname = (arr) => {
+    const a = Array.isArray(arr) ? arr.slice() : [];
+    a.sort((x, y) => {
+      const sx = getSurnameKey(x);
+      const sy = getSurnameKey(y);
+      if (sx < sy) return -1;
+      if (sx > sy) return 1;
+
+      const fx = getForenameKey(x);
+      const fy = getForenameKey(y);
+      if (fx < fy) return -1;
+      if (fx > fy) return 1;
+
+      const tx = String(x?.candidate_tms_ref || x?.tms_ref || '').trim().toLowerCase();
+      const ty = String(y?.candidate_tms_ref || y?.tms_ref || '').trim().toLowerCase();
+      if (tx < ty) return -1;
+      if (tx > ty) return 1;
+
+      const ix = String(x?.candidate_id || '').trim();
+      const iy = String(y?.candidate_id || '').trim();
+      if (ix < iy) return -1;
+      if (ix > iy) return 1;
+
+      return 0;
+    });
+    return a;
+  };
+
+  const isDraftStatus = (dataObj) => {
+    try {
+      const d = (dataObj && typeof dataObj === 'object') ? dataObj : null;
+      const b = (d && d.batch && typeof d.batch === 'object') ? d.batch : null;
+      const stx = String(b?.status || '').trim().toUpperCase();
+      return (stx === 'DRAFT' || stx === 'DRAFT_CREATED');
+    } catch {
+      return false;
+    }
+  };
+
   const stillTopIsThisModal = () => {
     try {
       const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
@@ -15430,8 +15538,7 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
       if (!ctx || String(ctx.entity || '') !== 'banking') return false;
       if (fr._ctxRef !== ctx) return false;
-      const fs = (ctx.formState && typeof ctx.formState === 'object') ? ctx.formState : null;
-      const pe = (fs && fs.payeEntry && typeof fs.payeEntry === 'object') ? fs.payeEntry : null;
+      const pe = (ctx.payeNetState && typeof ctx.payeNetState === 'object') ? ctx.payeNetState : null;
       if (!pe) return false;
       if (String(pe.openToken || '') !== String(openToken || '')) return false;
       return true;
@@ -15444,14 +15551,15 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
     if (!ctx || String(ctx.entity || '') !== 'banking') return null;
 
-    ctx.formState = (ctx.formState && typeof ctx.formState === 'object') ? ctx.formState : {};
-    ctx.formState.payeEntry = (ctx.formState.payeEntry && typeof ctx.formState.payeEntry === 'object') ? ctx.formState.payeEntry : {};
+    ctx.payeNetState = (ctx.payeNetState && typeof ctx.payeNetState === 'object' && !Array.isArray(ctx.payeNetState))
+      ? ctx.payeNetState
+      : {};
 
-    const pe = ctx.formState.payeEntry;
+    const pe = ctx.payeNetState;
 
-    if (!('openToken' in pe)) pe.openToken = openToken;
-    if (!('rootId' in pe)) pe.rootId = rootId;
-    if (!('payBatchId' in pe)) pe.payBatchId = id;
+    pe.openToken = openToken;
+    pe.rootId = rootId;
+    pe.payBatchId = id;
 
     if (!('loading' in pe)) pe.loading = false;
     if (!('error' in pe)) pe.error = '';
@@ -15462,6 +15570,9 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     if (!('netDraft' in pe) || typeof pe.netDraft !== 'object' || Array.isArray(pe.netDraft)) pe.netDraft = {};
     if (!('baselineNet' in pe) || typeof pe.baselineNet !== 'object' || Array.isArray(pe.baselineNet)) pe.baselineNet = {};
     if (!('baselineSource' in pe) || typeof pe.baselineSource !== 'object' || Array.isArray(pe.baselineSource)) pe.baselineSource = {};
+
+    if (!('__loadInFlight' in pe)) pe.__loadInFlight = false;
+    if (!('__saveInFlight' in pe)) pe.__saveInFlight = false;
 
     return { ctx, pe };
   };
@@ -15493,6 +15604,36 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     pe.baselineSource = baselineSource;
   };
 
+  const enableViewModeButtons = () => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (!fr) return;
+      if (String(fr.kind || '') !== KIND) return;
+      const mode = String(fr.mode || '').trim().toLowerCase();
+      if (mode !== 'view') return;
+
+      const root = document.getElementById(rootId);
+      if (!root) return;
+
+      const allowActs = new Set([
+        'banking:pay:payeEntry:refresh',
+        'banking:pay:payeEntry:printWorksheet'
+      ]);
+
+      const btns = root.querySelectorAll('button[data-action]');
+      for (const b of btns) {
+        const act = String(b.getAttribute('data-action') || '').trim();
+        if (!allowActs.has(act)) continue;
+        try { b.disabled = false; } catch {}
+        try { b.removeAttribute('disabled'); } catch {}
+        try { b.removeAttribute('readonly'); } catch {}
+        try { b.setAttribute('aria-disabled', 'false'); } catch {}
+        try { b.dataset.disabled = ''; } catch {}
+        try { b.classList && b.classList.remove('disabled'); } catch {}
+      }
+    } catch {}
+  };
+
   const rerender = async () => {
     try {
       const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
@@ -15505,12 +15646,11 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       fr._updateButtons && fr._updateButtons();
     } catch {}
 
-    // Best-effort date picker wiring for any [data-uk-date="1"] inputs inside modal
+    try { enableViewModeButtons(); } catch {}
+
     try {
       if (typeof attachUkDatePicker === 'function') {
-        const ctxState = ensureCtxState();
-        const pe = ctxState ? ctxState.pe : null;
-        const root = pe ? document.getElementById(String(pe.rootId || '')) : null;
+        const root = document.getElementById(rootId);
         const els = root ? root.querySelectorAll('[data-uk-date="1"]') : [];
         for (const el of els) {
           try { attachUkDatePicker(el, {}); } catch {}
@@ -15538,10 +15678,16 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     }
 
     try {
-      const obj = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
+      const obj0 = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
       if (!stillTopIsThisModal()) return;
 
-      ctxState.ctx.data = deep(obj);
+      const obj = deep(obj0);
+
+      if (obj && typeof obj === 'object' && Array.isArray(obj.candidates)) {
+        obj.candidates = sortCandidatesBySurname(obj.candidates);
+      }
+
+      ctxState.ctx.data = obj;
       computeBaselinesFromData(ctxState.ctx.data);
 
       pe.loading = false;
@@ -15562,8 +15708,14 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       if (!child) return;
       if (String(child.batchId || '').trim() !== id) return;
 
-      const obj = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
-      child.data = deep(obj);
+      const obj0 = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
+      const obj = deep(obj0);
+
+      if (obj && typeof obj === 'object' && Array.isArray(obj.candidates)) {
+        obj.candidates = sortCandidatesBySurname(obj.candidates);
+      }
+
+      child.data = obj;
       child.error = '';
       child.loading = false;
 
@@ -15577,7 +15729,6 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       const pe = ctxState ? ctxState.pe : null;
       if (pe) pe.activeTabKey = String(key || '').trim() || 'paye';
     } catch {}
-
     return renderBankingPayBatchPayeEntryModal();
   };
 
@@ -15635,7 +15786,6 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       const prev = String(baselineNet[candId] || '').trim();
       const nextStr = (next == null) ? '' : String(next);
 
-      // Only send changes
       if (prev === nextStr) continue;
 
       const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim() || null;
@@ -15670,6 +15820,16 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       const pe = ctxState.pe;
 
       if (pe.__saveInFlight) return false;
+
+      const dataNow = (ctx && typeof ctx === 'object' && ctx.data && typeof ctx.data === 'object') ? ctx.data : null;
+      const isDraftNow = isDraftStatus(dataNow);
+      if (!isDraftNow) {
+        pe.error = 'PAYE Entry can only be saved while the batch is in DRAFT.';
+        await rerender();
+        toast(pe.error);
+        return false;
+      }
+
       pe.__saveInFlight = true;
 
       pe.error = '';
@@ -15677,17 +15837,13 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
 
       const entries = buildPatchEntries(ctx, pe);
 
-      // PATCH semantics: empty entries is allowed and is a no-op
       await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/manual`, { entries });
 
-      // Reload batch to show saved values, rebuild baselines, and clear draft
       await loadBatchIntoModal({ silent: true });
 
-      // Clear draft after successful save (view mode should show saved state)
       pe.netDraft = {};
       computeBaselinesFromData(ctx.data);
 
-      // Refresh parent child modal snapshot so execute gating updates when user returns
       await refreshParentPayBatchChild();
 
       try { if (typeof window.__toast === 'function') window.__toast('PAYE net payments saved'); } catch {}
@@ -15708,6 +15864,26 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     }
   };
 
+  let forceEdit = false;
+  try {
+    const pre = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
+    forceEdit = isDraftStatus(pre);
+
+    try {
+      const ctxState = ensureCtxState();
+      if (ctxState) {
+        const obj = deep(pre);
+        if (obj && typeof obj === 'object' && Array.isArray(obj.candidates)) {
+          obj.candidates = sortCandidatesBySurname(obj.candidates);
+        }
+        ctxState.ctx.data = obj;
+        computeBaselinesFromData(ctxState.ctx.data);
+      }
+    } catch {}
+  } catch {
+    forceEdit = false;
+  }
+
   showModal(
     `PAYE Entry — ${id.slice(0, 8)}`,
     [
@@ -15722,7 +15898,7 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       noParentGate: true,
       showSave: true,
       showApply: false,
-      forceEdit: false,
+      forceEdit: forceEdit,
       stayOpenOnSave: true,
       onDismiss
     }
@@ -15782,6 +15958,13 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
         }
 
         if (act === 'banking:pay:payeEntry:importSage') {
+          const dataNow = (ctxState.ctx && typeof ctxState.ctx === 'object' && ctxState.ctx.data && typeof ctxState.ctx.data === 'object') ? ctxState.ctx.data : null;
+          const isDraftNow = isDraftStatus(dataNow);
+          if (!isDraftNow) {
+            toast('Sage import is only available while the batch is in DRAFT.');
+            return;
+          }
+
           const inp = document.getElementById(`${rootId}__sageFile`);
           if (inp && typeof inp.click === 'function') inp.click();
           return;
@@ -15791,10 +15974,12 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
           const data = (ctxState.ctx && ctxState.ctx.data && typeof ctxState.ctx.data === 'object') ? ctxState.ctx.data : null;
           const candidates = (data && Array.isArray(data.candidates)) ? data.candidates : [];
 
-          const payeCandidates = candidates.filter(c => {
+          const payeCandidates0 = candidates.filter(c => {
             const ps = (c && Object.prototype.hasOwnProperty.call(c, 'paye_state')) ? c.paye_state : null;
             return ps != null && String(ps).trim() !== '';
           });
+
+          const payeCandidates = sortCandidatesBySurname(payeCandidates0);
 
           const title = `PAYE Worksheet — ${id.slice(0, 8)}`;
           const rows = payeCandidates.map((c) => {
@@ -15857,7 +16042,6 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
           return;
         }
 
-        // default: no-op
         void pe;
       } catch (e) {
         try { if (typeof window.__toast === 'function') window.__toast(String(e?.message || e || 'Action failed')); } catch {}
@@ -15872,7 +16056,6 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
 
         const el = ev.target;
 
-        // File selected (Sage import)
         try {
           if (el && el.id === `${rootId}__sageFile`) {
             const f = (el.files && el.files[0]) ? el.files[0] : null;
@@ -15882,6 +16065,13 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
             const ctxState = ensureCtxState();
             if (!ctxState) return;
             const pe = ctxState.pe;
+
+            const dataNow = (ctxState.ctx && typeof ctxState.ctx === 'object' && ctxState.ctx.data && typeof ctxState.ctx.data === 'object') ? ctxState.ctx.data : null;
+            const isDraftNow = isDraftStatus(dataNow);
+            if (!isDraftNow) {
+              toast('Sage import is only available while the batch is in DRAFT.');
+              return;
+            }
 
             pe.importBusy = true;
             pe.importError = '';
@@ -15979,10 +16169,8 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
 
   try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
 
-  // Initial load
   await loadBatchIntoModal({ silent: false });
 }
-
 
 function renderBankingPayBatchPayeEntryModal() {
   const enc = (typeof escapeHtml === 'function')
@@ -61961,7 +62149,7 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
     return;
   }
 
-  // Buttons: in ro mode, keep specific IDs + any timesheet action buttons enabled
+   // Buttons: in ro mode, keep specific IDs + any timesheet action buttons enabled
   if (el.type === 'button' || el.tagName === 'BUTTON') {
     const allow = new Set([
       'btnCloseModal',
@@ -61977,6 +62165,21 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
       'btnTsAuthorise',
       'btnTsUnauthorise'
     ]);
+
+    // ✅ Banking PAYE Entry: keep safe view buttons clickable even when modal is read-only.
+    // (Edit mode enables inputs; view mode should still allow Refresh/Print.)
+    try {
+      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+      const isPayeEntry = !!(top && String(top.kind || '') === 'banking-pay-paye-entry');
+
+      if (isPayeEntry && ro) {
+        const act = String(el.getAttribute('data-action') || '').trim();
+        if (act === 'banking:pay:payeEntry:refresh' || act === 'banking:pay:payeEntry:printWorksheet') {
+          el.disabled = false;
+          return;
+        }
+      }
+    } catch {}
 
     // Keep Timesheet action buttons enabled in VIEW only if they are "safe view actions".
     // Do NOT keep weekly schedule edit buttons enabled (reset / add/remove shift lines).
@@ -66859,13 +67062,14 @@ if (!isChild && top.entity === 'contracts') {
 
 
    top._updateButtons();
-  btnEdit.onclick = ()=> {
+   btnEdit.onclick = ()=> {
     const isChildNow    = (stack().length > 1);
     const isRatePreset  = (top.kind === 'rate-preset');
+    const isPayeEntry   = (top.kind === 'banking-pay-paye-entry');
 
     // Block Edit for search & normal child-apply modals,
-    // but allow Edit for rate-preset even when opened as a child.
-    if (!isRatePreset && (isChildNow || top.kind === 'advanced-search')) return;
+    // but allow Edit for rate-preset (and PAYE Entry) even when opened as a child.
+    if (!isRatePreset && !isPayeEntry && (isChildNow || top.kind === 'advanced-search')) return;
 
   if (top.mode === 'view') {
   top._snapshot = {
