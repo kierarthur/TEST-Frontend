@@ -10255,7 +10255,6 @@ function renderBankingPayTab(scopePreset) {
   `;
 }
 
-
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -10577,18 +10576,57 @@ function renderPayNewBatchWizard() {
     const ncStatus = String(cc.name_check_status || '').trim().toUpperCase();
     const hasOverride = asBool(cc.name_check_has_override);
 
-    if (!ready) {
-      const title = blockers.length ? `Blocked: ${blockers.join(', ')}` : 'Not ready for drafting';
-      return `<span class="pill pill-bad" title="${enc(title)}">${enc('Blocked')}</span>`;
+    const hasBankMissing = blockers.includes('BLOCKED_BANK_DETAILS');
+    const hasNameBlocked = blockers.includes('BLOCKED_NAME_CHECK');
+    const hasMapBlocked = blockers.includes('BLOCKED_NO_PAYEE_MAP');
+
+    // ✅ Keep “Verified/Ready” compact for the ready table; show explicit mismatch detail only when blocked/review-required.
+    if (ready) {
+      if (mapPresent && (ncStatus === 'PASS' || hasOverride)) {
+        const title = hasOverride ? 'Verified (override applied)' : 'Verified';
+        return `<span class="pill pill-ok" title="${enc(title)}">${enc('Verified')}</span>`;
+      }
+      return `<span class="pill pill-ok" title="${enc('Ready for drafting')}">${enc('Ready')}</span>`;
     }
 
-    // Ready: distinguish "Verified" vs "Ready" (e.g., CSV rail may not require CoP/map)
-    if (mapPresent && (ncStatus === 'PASS' || hasOverride)) {
-      const title = hasOverride ? 'Verified (override applied)' : 'Verified';
-      return `<span class="pill pill-ok" title="${enc(title)}">${enc('Verified')}</span>`;
+    // Not ready: show explicit reason (esp. Near match / No match)
+    let label = 'Bank: Blocked';
+    let cls = 'pill-bad';
+
+    if (hasBankMissing) {
+      label = 'Bank: Missing details';
+      cls = 'pill-bad';
+    } else if (hasNameBlocked) {
+      if (hasOverride) {
+        label = 'Bank: Accepted (override)';
+        cls = 'pill-ok';
+      } else if (ncStatus === 'PASS') {
+        label = 'Bank: Match to name';
+        cls = 'pill-ok';
+      } else if (ncStatus === 'NEAR_MATCH') {
+        label = 'Bank: Near match to name';
+        cls = 'pill-warn';
+      } else if (ncStatus === 'FAIL') {
+        label = 'Bank: No match to name';
+        cls = 'pill-bad';
+      } else if (ncStatus === 'UNAVAILABLE') {
+        label = 'Bank: Cannot check name';
+        cls = 'pill-warn';
+      } else {
+        label = 'Bank: Unverified';
+        cls = 'pill-warn';
+      }
+    } else if (hasMapBlocked) {
+      label = 'Bank: Not mapped';
+      cls = 'pill-warn';
+    } else {
+      // Generic blocked fallback (still show blockers in title)
+      label = 'Bank: Blocked';
+      cls = 'pill-bad';
     }
 
-    return `<span class="pill pill-ok" title="${enc('Ready for drafting')}">${enc('Ready')}</span>`;
+    const title = blockers.length ? `Blocked: ${blockers.join(', ')}` : 'Not ready for drafting';
+    return `<span class="pill ${enc(cls)}" title="${enc(title)}">${enc(label)}</span>`;
   };
 
   const getCandidateIdFromItem = (it) => {
@@ -10733,7 +10771,7 @@ function renderPayNewBatchWizard() {
     <details style="border:1px solid var(--line); border-radius:10px; padding:10px;" open>
       <summary style="cursor:pointer; user-select:none;">
         <span class="mini" style="opacity:.9;">
-          Ready to pay (no mismatches): <span class="mono">${enc(String(readyCands.length))}</span> candidate(s)
+          Ready to pay: <span class="mono">${enc(String(readyCands.length))}</span> candidate(s)
           • <span class="mono">${enc(String(readyRows.length))}</span> item(s)
           • Total: <span class="mono">${enc(fmtMoney(readyTotal))}</span>
         </span>
@@ -10886,13 +10924,6 @@ function renderPayNewBatchWizard() {
       return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${bits.join('')}</div>`;
     })();
 
-    const linesHtml = hasMismatch
-      ? renderItemisationTable(c, 'MISMATCH_ONLY')
-      : renderItemisationTable(c, 'ALL');
-
-    const blockedInline = renderInlineItemsForCandidate(blockedItems, cid, 'Blocked items');
-    const dnpInline = renderInlineItemsForCandidate(doNotPayItems, cid, 'Do-not-pay items');
-
     const mismatchChoiceCell = hasMismatch ? `
       <select
         class="input"
@@ -10969,12 +11000,6 @@ function renderPayNewBatchWizard() {
             ${whyBadges ? `<div class="mini" style="opacity:.95;">${whyBadges}</div>` : ``}
 
             ${mismatchSourcesLine}
-
-            <div class="mini" style="opacity:.85;">Affected lines:</div>
-            ${linesHtml}
-
-            ${blockedInline}
-            ${dnpInline}
           </div>
         </td>
         <td style="min-width:220px;">
@@ -10988,16 +11013,6 @@ function renderPayNewBatchWizard() {
   }).join('') : `
     <tr><td colspan="4" class="mini" style="opacity:.85;">No review required.</td></tr>
   `;
-
-  const elig = (pv && typeof pv === 'object' && pv.eligibility && typeof pv.eligibility === 'object') ? pv.eligibility : null;
-  const eligFrom = elig ? String(elig.from_date || '').trim() : '';
-  const eligTo   = elig ? String(elig.to_date || '').trim() : '';
-
-  const pvCutoff = pv ? String(pv.week_ending_cutoff_date || '').trim() : '';
-
-  const summary = (pv && typeof pv === 'object' && pv.summary && typeof pv.summary === 'object') ? pv.summary : null;
-  const sumReadiness = (summary && summary.readiness && typeof summary.readiness === 'object') ? summary.readiness : null;
-  const sumCandidates = (summary && summary.candidates && typeof summary.candidates === 'object') ? summary.candidates : null;
 
   const readinessBannerHtml = (() => {
     if (!readiness || typeof readiness !== 'object') return '';
@@ -11025,47 +11040,6 @@ function renderPayNewBatchWizard() {
 
     return '';
   })();
-
-  const previewSummaryHtml = pv ? `
-    <div class="mini" style="opacity:.9;">
-      Preview runs automatically on open; use <b>Refresh preview</b> to re-run.
-      ${pvLoading ? ` <span class="mono">${enc('Checking beneficiary details…')}</span>` : ``}
-    </div>
-    <div class="mini" style="opacity:.9; margin-top:4px;">
-      Eligible Timesheet period: <span class="mono">${enc((eligFrom && eligTo) ? `${ymdToUk(eligFrom)} → ${ymdToUk(eligTo)}` : '—')}</span>
-      • W/E cutoff: <span class="mono">${enc(ymdToUk(pvCutoff || cutoffIso) || '—')}</span>
-      • PAYE candidates: <span class="mono">${enc(String(payeCands.length))}</span>
-      • Umbrella payees: <span class="mono">${enc(String(nonPaye.length))}</span>
-      • Mismatches: <span class="mono">${enc(String(mismatchList.length))}</span>
-      • Blocked: <span class="mono">${enc(String(blockedItems.length))}</span>
-      • Do-not-pay: <span class="mono">${enc(String(doNotPayItems.length))}</span>
-      • Snoozed: <span class="mono">${enc(String(snoozedItems.length))}</span>
-    </div>
-    ${
-      (sumReadiness || sumCandidates)
-        ? `
-          <div class="mini" style="opacity:.9; margin-top:4px;">
-            ${
-              sumCandidates
-                ? `Candidates — total: <span class="mono">${enc(String(toInt(sumCandidates.total_candidates, 0)))}</span>, ready: <span class="mono">${enc(String(toInt(sumCandidates.ready_count, 0)))}</span>, review required: <span class="mono">${enc(String(toInt(sumCandidates.review_required_count, 0)))}</span>`
-                : ''
-            }
-            ${
-              sumReadiness
-                ? `${sumCandidates ? ' • ' : ''}Payees — total: <span class="mono">${enc(String(toInt(sumReadiness.payees_total, 0)))}</span>, missing bank: <span class="mono">${enc(String(toInt(sumReadiness.payees_missing_bank_details, 0)))}</span>, need name check: <span class="mono">${enc(String(toInt(sumReadiness.payees_need_name_check, 0)))}</span>, need payee map: <span class="mono">${enc(String(toInt(sumReadiness.payees_need_payee_map, 0)))}</span>`
-                : ''
-            }
-          </div>
-        `
-        : ``
-    }
-  ` : `
-    <div class="mini" style="opacity:.85;">
-      Preview runs automatically on open; use <b>Refresh preview</b> to re-run.
-      ${pvLoading ? ` <span class="mono">${enc('Checking beneficiary details…')}</span>` : ``}
-    </div>
-    <div class="mini" style="opacity:.85; margin-top:4px;">Run Refresh preview to compute deltas, blockers, and mismatch decisions.</div>
-  `;
 
   const previewBtnDisabled = pvLoading || cdBusy;
   const createBtnDisabled = cdBusy || pvLoading || !payDateIso || !cutoffIso || !pv || readyCands.length === 0;
@@ -11175,8 +11149,6 @@ function renderPayNewBatchWizard() {
             </div>
           </div>
 
-          ${previewSummaryHtml}
-
           ${readyTableHtml}
 
           <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
@@ -11184,8 +11156,8 @@ function renderPayNewBatchWizard() {
               <thead>
                 <tr>
                   <th style="width:90px;">Include</th>
-                  <th>Review required (mismatches + blocked items)</th>
-                  <th style="width:220px;">Mismatch choice</th>
+                  <th>Review required</th>
+                  <th style="width:220px;">Mismatch choice / Actions</th>
                   <th style="width:260px;">Loan caps (optional)</th>
                 </tr>
               </thead>
@@ -11194,16 +11166,11 @@ function renderPayNewBatchWizard() {
               </tbody>
             </table>
           </div>
-
-          <div class="mini" style="opacity:.8;">
-            Notes: mismatch choices are required for candidates flagged with mismatches. Candidates can also appear here due to payee readiness blockers (CoP/name-check/payee map) and/or blocked/do-not-pay items; these items are excluded from payable deltas unless resolved.
-          </div>
         </div>
       </div>
     </div>
   `;
 }
-
 function renderPayBatchListPanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
