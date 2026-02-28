@@ -10255,6 +10255,955 @@ function renderBankingPayTab(scopePreset) {
   `;
 }
 
+
+function renderPayNewBatchWizard() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPayNewBatchWizard">
+        <div class="row">
+          <label>New pay batch</label>
+          <div class="controls">
+            <span class="mini">Banking state not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {
+    pay_date: '',
+    week_ending_cutoff_date: '',
+    candidate_filter_id: '',
+    candidate_filter_label: '',
+    client_filter_id: '',
+    client_filter_label: '',
+    preview: { data: null, loading: false, error: '' },
+    decisions: { candidate_ids: [], mismatch_choices: {}, loan_caps: {} },
+    createDraftBusy: false,
+    createDraftError: ''
+  };
+
+  const wiz = st.pay.draftWizard;
+
+  if (!('candidate_filter_label' in wiz)) wiz.candidate_filter_label = '';
+  if (!('client_filter_label' in wiz)) wiz.client_filter_label = '';
+  if (!('week_ending_cutoff_date' in wiz)) wiz.week_ending_cutoff_date = '';
+
+  // ✅ UK “today” (ISO) + default pay date = nearest Friday (today if Friday, else next Friday)
+  const getUkTodayIso = () => {
+    try {
+      const ymd = (typeof toLocalParts === 'function')
+        ? (toLocalParts(new Date().toISOString(), null)?.ymd || null)
+        : null;
+      if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return String(ymd);
+    } catch {}
+    try {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).formatToParts(new Date());
+      const g = (t) => (parts.find(p => p.type === t)?.value || '');
+      const y = g('year'), m = g('month'), d = g('day');
+      const iso = `${y}-${m}-${d}`;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+    } catch {}
+    return new Date().toISOString().slice(0, 10);
+  };
+
+  const addDaysIso = (iso, addDays) => {
+    const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (isNaN(dt.getTime())) return '';
+    dt.setUTCDate(dt.getUTCDate() + Number(addDays || 0));
+    const yy = dt.getUTCFullYear();
+    const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getUTCDate()).padStart(2, '0');
+    return `${yy}-${mm}-${dd}`;
+  };
+
+  const nextFridayIsoFrom = (todayIso) => {
+    const m = String(todayIso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (isNaN(dt.getTime())) return '';
+    const dow = dt.getUTCDay(); // 0=Sun ... 5=Fri
+    const target = 5; // Friday
+    const add = (target - dow + 7) % 7; // 0 if already Friday
+    return addDaysIso(todayIso, add);
+  };
+
+  const prevSundayCutoffIsoFrom = (todayIso) => {
+    const m = String(todayIso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (isNaN(dt.getTime())) return '';
+    const dow = dt.getUTCDay(); // 0=Sun ... 6=Sat
+    const daysBack = (dow === 0) ? 7 : dow; // Sun => previous Sunday (7 days back), Mon => 1 day back, ...
+    return addDaysIso(todayIso, -daysBack);
+  };
+
+  const ukTodayIso = getUkTodayIso();
+  const defaultPayIso = nextFridayIsoFrom(ukTodayIso) || ukTodayIso;
+
+  let payDateIso = String(wiz.pay_date || '').trim();
+  const isIsoPay = /^\d{4}-\d{2}-\d{2}$/.test(payDateIso);
+
+  // ✅ If missing/invalid OR in the past => force default Friday (never allow past date)
+  if (!isIsoPay || payDateIso < ukTodayIso) {
+    payDateIso = defaultPayIso;
+    try { wiz.pay_date = payDateIso; } catch {}
+  }
+
+  let cutoffIso = String(wiz.week_ending_cutoff_date || '').trim();
+  const isIsoCutoff = /^\d{4}-\d{2}-\d{2}$/.test(cutoffIso);
+
+  // ✅ Default cutoff = previous Sunday (strictly before today); user can change later
+  if (!isIsoCutoff) {
+    cutoffIso = prevSundayCutoffIsoFrom(ukTodayIso) || ukTodayIso;
+    try { wiz.week_ending_cutoff_date = cutoffIso; } catch {}
+  }
+
+  const ymdToUk = (ymd) => {
+    const s = String(ymd || '').trim();
+    if (!s) return '';
+    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+    return s;
+  };
+
+  const payDateDisplay = ymdToUk(payDateIso);
+  const cutoffDisplay = ymdToUk(cutoffIso);
+
+  const candFilterId = String(wiz.candidate_filter_id || '').trim();
+  const clientFilterId = String(wiz.client_filter_id || '').trim();
+  const candFilterLabel = String(wiz.candidate_filter_label || '').trim();
+  const clientFilterLabel = String(wiz.client_filter_label || '').trim();
+
+  const candDisplay = candFilterId ? (candFilterLabel || candFilterId) : 'ALL candidates';
+  const clientDisplay = clientFilterId ? (clientFilterLabel || clientFilterId) : 'ALL clients';
+
+  const preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : { data: null, loading: false, error: '' };
+
+  // preview.data may be:
+  //  - legacy: pay_preview JSON directly
+  //  - new: { ok:true, preview:{...}, readiness:{...} }
+  const pvContainer = (preview.data && typeof preview.data === 'object') ? preview.data : null;
+  const pv = (pvContainer && typeof pvContainer === 'object' && pvContainer.preview && typeof pvContainer.preview === 'object')
+    ? pvContainer.preview
+    : pvContainer;
+
+  const readiness = (pvContainer && typeof pvContainer === 'object' && pvContainer.readiness && typeof pvContainer.readiness === 'object')
+    ? pvContainer.readiness
+    : ((preview.readiness && typeof preview.readiness === 'object') ? preview.readiness : null);
+
+  const pvErr = String(preview.error || '').trim();
+  const pvLoading = !!preview.loading;
+
+  const cdErr = String(wiz.createDraftError || '').trim();
+  const cdBusy = !!wiz.createDraftBusy;
+
+  const decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : { candidate_ids: [], mismatch_choices: {}, loan_caps: {} };
+  const mismatchChoices = (decisions.mismatch_choices && typeof decisions.mismatch_choices === 'object') ? decisions.mismatch_choices : {};
+  const loanCaps = (decisions.loan_caps && typeof decisions.loan_caps === 'object') ? decisions.loan_caps : {};
+
+  const payeCands = Array.isArray(pv?.paye_candidates) ? pv.paye_candidates : [];
+  const nonPaye = Array.isArray(pv?.non_paye_payees) ? pv.non_paye_payees : [];
+  const allCands = [...payeCands, ...nonPaye];
+
+  const mismatchList = allCands.filter(c => {
+    try {
+      const m = c && typeof c === 'object' ? c.mismatch : null;
+      const hm = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true'));
+      return !!hm;
+    } catch {
+      return false;
+    }
+  });
+
+  const blockedItems = Array.isArray(pv?.blocked_items) ? pv.blocked_items : [];
+  const doNotPayItems = Array.isArray(pv?.do_not_pay_items) ? pv.do_not_pay_items : [];
+  const snoozedItems = Array.isArray(pv?.snoozed_items) ? pv.snoozed_items : [];
+
+  const candidateIdsArr = Array.isArray(decisions.candidate_ids) ? decisions.candidate_ids : [];
+  const candidateSet = new Set(candidateIdsArr.map(x => String(x || '').trim()).filter(Boolean));
+  const useCandidateFilter = candidateSet.size > 0;
+
+  const isIncludedCandidate = (cid) => {
+    const id = String(cid || '').trim();
+    if (!id) return false;
+    return useCandidateFilter ? candidateSet.has(id) : true;
+  };
+
+  const fmtMoney = (v) => {
+    if (v === null || v === undefined) return '0.00';
+    const n = Number(v);
+    if (!Number.isFinite(n)) {
+      const s = String(v).trim();
+      if (!s) return '0.00';
+      return s;
+    }
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const renderItemisationTable = (cand, mode) => {
+    const c = (cand && typeof cand === 'object') ? cand : {};
+    const items = Array.isArray(c.itemisation) ? c.itemisation : [];
+    const candMethod = String(c.current_pay_method || '').trim().toUpperCase();
+
+    const modeKey = String(mode || '').trim().toUpperCase();
+    const isMismatchOnly = (modeKey === 'MISMATCH_ONLY');
+    const isNonMismatchOnly = (modeKey === 'NON_MISMATCH_ONLY');
+    const isReviewAllNonZero = (modeKey === 'REVIEW_ALL_NONZERO' || modeKey === 'ALL' || modeKey === '');
+
+    let rows = items
+      .filter(it => it && typeof it === 'object')
+      .map(it => ({
+        week_ending_date: String(it.week_ending_date || '').trim(),
+        client_name: String(it.client_name || '').trim(),
+        payment_amount: (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0)),
+        source_pay_method: String(it.source_pay_method || '').trim().toUpperCase()
+      }))
+      .filter(r => {
+        const amt = Number(r.payment_amount);
+        const nonZero = Number.isFinite(amt) ? Math.round(amt * 100) / 100 !== 0 : String(r.payment_amount || '').trim() !== '' && String(r.payment_amount) !== '0';
+        if (!nonZero) return false;
+
+        if (isMismatchOnly) {
+          if (!candMethod) return true;
+          return r.source_pay_method && r.source_pay_method !== candMethod;
+        }
+
+        if (isNonMismatchOnly) {
+          if (!candMethod) return true;
+          return !r.source_pay_method || r.source_pay_method === candMethod;
+        }
+
+        if (isReviewAllNonZero) return true;
+        return true;
+      });
+
+    if (isMismatchOnly && rows.length === 0) {
+      // Fallback: if candidate is marked mismatch but we couldn't isolate rows, show all non-zero rows
+      rows = items
+        .filter(it => it && typeof it === 'object')
+        .map(it => ({
+          week_ending_date: String(it.week_ending_date || '').trim(),
+          client_name: String(it.client_name || '').trim(),
+          payment_amount: (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0)),
+          source_pay_method: String(it.source_pay_method || '').trim().toUpperCase()
+        }))
+        .filter(r => {
+          const amt = Number(r.payment_amount);
+          return Number.isFinite(amt) ? Math.round(amt * 100) / 100 !== 0 : String(r.payment_amount || '').trim() !== '' && String(r.payment_amount) !== '0';
+        });
+    }
+
+    if (!rows.length) {
+      return `<div class="mini" style="opacity:.8;">No payable line items.</div>`;
+    }
+
+    const rowsHtml = rows.map(r => `
+      <tr>
+        <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(r.week_ending_date) || '—')}</td>
+        <td class="mini">${enc(r.client_name || '—')}</td>
+        <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(r.payment_amount))}</td>
+      </tr>
+    `).join('');
+
+    return `
+      <div style="margin-top:6px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
+        <table class="grid" style="min-width:520px; table-layout:auto;">
+          <thead>
+            <tr>
+              <th style="width:140px;">Week ending</th>
+              <th>Client</th>
+              <th style="width:140px; text-align:right;">Payment amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
+    `;
+  };
+
+  const asBool = (v) => (v === true) || (v === 1) || (v === '1') || (String(v).trim().toLowerCase() === 'true');
+
+  const toInt = (v, def = 0) => {
+    if (v == null) return def;
+    if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : def;
+    const s = String(v).trim();
+    if (!s) return def;
+    const n = Number(s);
+    return Number.isFinite(n) ? Math.trunc(n) : def;
+  };
+
+  const toBlockers = (c) => {
+    const b = c && typeof c === 'object' ? c.blockers : null;
+    if (Array.isArray(b)) return b.map(x => String(x || '').trim().toUpperCase()).filter(Boolean);
+    if (typeof b === 'string') {
+      const s = b.trim();
+      if (!s) return [];
+      try {
+        const j = JSON.parse(s);
+        if (Array.isArray(j)) return j.map(x => String(x || '').trim().toUpperCase()).filter(Boolean);
+      } catch {}
+      return s.split(',').map(x => String(x || '').trim().toUpperCase()).filter(Boolean);
+    }
+    return [];
+  };
+
+  const bankPillForCandidate = (c) => {
+    const cc = (c && typeof c === 'object') ? c : {};
+    const ready = asBool(cc.is_ready_for_draft);
+    const blockers = toBlockers(cc);
+    const mapPresent = asBool(cc.payee_map_present);
+    const ncStatus = String(cc.name_check_status || '').trim().toUpperCase();
+    const hasOverride = asBool(cc.name_check_has_override);
+
+    if (!ready) {
+      const title = blockers.length ? `Blocked: ${blockers.join(', ')}` : 'Not ready for drafting';
+      return `<span class="pill pill-bad" title="${enc(title)}">${enc('Blocked')}</span>`;
+    }
+
+    // Ready: distinguish "Verified" vs "Ready" (e.g., CSV rail may not require CoP/map)
+    if (mapPresent && (ncStatus === 'PASS' || hasOverride)) {
+      const title = hasOverride ? 'Verified (override applied)' : 'Verified';
+      return `<span class="pill pill-ok" title="${enc(title)}">${enc('Verified')}</span>`;
+    }
+
+    return `<span class="pill pill-ok" title="${enc('Ready for drafting')}">${enc('Ready')}</span>`;
+  };
+
+  const getCandidateIdFromItem = (it) => {
+    if (!it || typeof it !== 'object') return '';
+    const cid =
+      (it.candidate_id != null ? it.candidate_id : (it.candidateId != null ? it.candidateId : (it.candidate != null ? it.candidate : '')));
+    return String(cid || '').trim();
+  };
+
+  const buildCandidateIdSetFromItems = (arr) => {
+    const out = new Set();
+    if (!Array.isArray(arr)) return out;
+    for (const it of arr) {
+      const cid = getCandidateIdFromItem(it);
+      if (cid) out.add(cid);
+    }
+    return out;
+  };
+
+  const blockedCandIdSet = buildCandidateIdSetFromItems(blockedItems);
+  const doNotPayCandIdSet = buildCandidateIdSetFromItems(doNotPayItems);
+  const snoozedCandIdSet = buildCandidateIdSetFromItems(snoozedItems);
+
+  const hasAnyPayableLines = (c) => {
+    const items = Array.isArray(c?.itemisation) ? c.itemisation : [];
+    if (!items.length) return false;
+    for (const it of items) {
+      if (!it || typeof it !== 'object') continue;
+      const v = (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0));
+      const n = Number(v);
+      if (Number.isFinite(n) && Math.round(n * 100) / 100 !== 0) return true;
+      if (!Number.isFinite(n) && String(v || '').trim() && String(v) !== '0') return true;
+    }
+    return false;
+  };
+
+  const renderInlineItemsForCandidate = (items, cid, titleText) => {
+    const id = String(cid || '').trim();
+    if (!id || !Array.isArray(items) || !items.length) return '';
+    const rows = items.filter(it => String(getCandidateIdFromItem(it) || '') === id);
+    if (!rows.length) return '';
+
+    const lines = rows.slice(0, 12).map((it) => {
+      const tId = String(it.timesheet_id || it.timesheetId || '').trim();
+      const sId = String(it.segment_id || it.segmentId || '').trim();
+      const ref = String(it.source_ref || it.sourceRef || it.ref || '').trim();
+      const reason = String(it.reason || it.reason_code || it.code || it.blocker || '').trim();
+      const amt = (it.amount != null) ? it.amount : (it.payment_amount != null ? it.payment_amount : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : null)));
+      const bits = [];
+      if (reason) bits.push(reason);
+      if (tId) bits.push(`ts ${tId}`);
+      if (sId) bits.push(`seg ${sId}`);
+      if (!tId && !sId && ref) bits.push(ref);
+      if (amt != null) bits.push(`£${fmtMoney(amt)}`);
+      return `<div class="mini" style="opacity:.9; margin-top:2px;">• ${enc(bits.join(' • ') || '—')}</div>`;
+    }).join('');
+
+    const more = rows.length > 12 ? `<div class="mini" style="opacity:.8; margin-top:2px;">… and ${enc(String(rows.length - 12))} more</div>` : '';
+
+    return `
+      <div style="margin-top:8px;">
+        <div class="mini" style="opacity:.85;">${enc(titleText || 'Items')}:</div>
+        ${lines}
+        ${more}
+      </div>
+    `;
+  };
+
+  // ✅ Ready-to-pay list: candidates with no mismatch, included, ready-for-draft, no blocked/do-not-pay flags, and with non-zero itemisation lines
+  const readyCands = allCands.filter(c => {
+    const cid = String(c?.candidate_id || '').trim();
+    if (!cid) return false;
+    if (!isIncludedCandidate(cid)) return false;
+
+    // Must be ready for drafting (bank/COP readiness etc.)
+    if (!asBool(c?.is_ready_for_draft)) return false;
+
+    const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
+    const hm = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true'));
+    if (hm) return false;
+
+    // Explicit: ready means no blocked/do-not-pay signals (candidate-level and preview-level)
+    const blockedCount = toInt(c?.blocked_count, 0);
+    const dnpCount = toInt(c?.do_not_pay_count, 0);
+    if (blockedCount > 0) return false;
+    if (dnpCount > 0) return false;
+    if (blockedCandIdSet.has(cid)) return false;
+    if (doNotPayCandIdSet.has(cid)) return false;
+
+    const items = Array.isArray(c?.itemisation) ? c.itemisation : [];
+    if (!items.length) return false;
+
+    // Any non-zero amount line?
+    for (const it of items) {
+      if (!it || typeof it !== 'object') continue;
+      const v = (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0));
+      const n = Number(v);
+      if (Number.isFinite(n) && Math.round(n * 100) / 100 !== 0) return true;
+      if (!Number.isFinite(n) && String(v || '').trim() && String(v) !== '0') return true;
+    }
+    return false;
+  });
+
+  const readyRows = [];
+  for (const c of readyCands) {
+    const cid = String(c?.candidate_id || '').trim();
+    const name = String(c?.display_name || '').trim() || '—';
+    const tms = String(c?.tms_ref || '').trim();
+    const items = Array.isArray(c?.itemisation) ? c.itemisation : [];
+    const candMethod = String(c?.current_pay_method || '').trim().toUpperCase();
+    const bankPillHtml = bankPillForCandidate(c);
+
+    for (const it of items) {
+      if (!it || typeof it !== 'object') continue;
+      const srcMethod = String(it.source_pay_method || '').trim().toUpperCase();
+      if (candMethod && srcMethod && srcMethod !== candMethod) continue; // non-mismatch only
+
+      const v = (it.payment_amount != null) ? it.payment_amount : (it.payment_amount_inc_vat != null ? it.payment_amount_inc_vat : (it.payment_amount_ex_vat != null ? it.payment_amount_ex_vat : 0));
+      const n = Number(v);
+      const nonZero = Number.isFinite(n) ? Math.round(n * 100) / 100 !== 0 : String(v || '').trim() && String(v) !== '0';
+      if (!nonZero) continue;
+
+      readyRows.push({
+        cid,
+        tms,
+        name,
+        bank_pill_html: bankPillHtml,
+        week_ending_date: String(it.week_ending_date || '').trim(),
+        client_name: String(it.client_name || '').trim(),
+        payment_amount: v
+      });
+    }
+  }
+
+  const readyTotal = readyRows.reduce((acc, r) => {
+    const n = Number(r.payment_amount);
+    if (!Number.isFinite(n)) return acc;
+    return acc + (Math.round(n * 100) / 100);
+  }, 0);
+
+  const readyTableHtml = pv ? `
+    <details style="border:1px solid var(--line); border-radius:10px; padding:10px;" open>
+      <summary style="cursor:pointer; user-select:none;">
+        <span class="mini" style="opacity:.9;">
+          Ready to pay (no mismatches): <span class="mono">${enc(String(readyCands.length))}</span> candidate(s)
+          • <span class="mono">${enc(String(readyRows.length))}</span> item(s)
+          • Total: <span class="mono">${enc(fmtMoney(readyTotal))}</span>
+        </span>
+      </summary>
+      <div style="margin-top:10px; overflow:auto;">
+        <table class="grid" style="min-width:1080px; table-layout:auto;">
+          <thead>
+            <tr>
+              <th>Candidate</th>
+              <th style="width:120px;">Bank</th>
+              <th style="width:140px;">Week ending</th>
+              <th>Client</th>
+              <th style="width:160px; text-align:right;">Payment amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              readyRows.length
+                ? readyRows.map(r => `
+                    <tr>
+                      <td>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                          <span class="mono">${enc(r.tms || '')}</span>
+                          <span>${enc(r.name)}</span>
+                        </div>
+                      </td>
+                      <td style="white-space:nowrap;">${r.bank_pill_html}</td>
+                      <td class="mini" style="white-space:nowrap;">${enc(ymdToUk(r.week_ending_date) || '—')}</td>
+                      <td class="mini">${enc(r.client_name || '—')}</td>
+                      <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(r.payment_amount))}</td>
+                    </tr>
+                  `).join('')
+                : `<tr><td colspan="5" class="mini" style="opacity:.85;">No ready-to-pay items.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+    </details>
+  ` : ``;
+
+  // ✅ Review required list: mismatches + blocked items + do-not-pay + payee readiness blockers (with actionability guard)
+  const reviewCands = allCands.filter((c) => {
+    const cid = String(c?.candidate_id || '').trim();
+    if (!cid) return false;
+    if (!isIncludedCandidate(cid)) return false;
+
+    const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
+    const hasMismatch = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true')) ? true : false;
+
+    const blockers = toBlockers(c);
+    const hasPayeeReadinessBlockers = (!asBool(c?.is_ready_for_draft)) || (blockers.length > 0);
+
+    const blockedCount = toInt(c?.blocked_count, 0);
+    const dnpCount = toInt(c?.do_not_pay_count, 0);
+
+    const hasBlockedItems = (blockedCount > 0) || blockedCandIdSet.has(cid);
+    const hasDoNotPayItems = (dnpCount > 0) || doNotPayCandIdSet.has(cid);
+
+    const anyLines = hasAnyPayableLines(c);
+
+    return (
+      hasMismatch ||
+      hasBlockedItems ||
+      hasDoNotPayItems ||
+      (hasPayeeReadinessBlockers && anyLines)
+    );
+  });
+
+  const reviewRowsHtml = reviewCands.length ? reviewCands.map((c) => {
+    const cid = String(c?.candidate_id || '').trim();
+    const name = String(c?.display_name || '').trim() || '—';
+    const tms = String(c?.tms_ref || '').trim();
+    const method = String(c?.current_pay_method || '').trim().toUpperCase() || '—';
+
+    const m = (c && typeof c === 'object' && c.mismatch && typeof c.mismatch === 'object') ? c.mismatch : {};
+    const hasMismatch = (m && (m.has_mismatch === true || String(m.has_mismatch).toLowerCase() === 'true')) ? true : false;
+
+    const blockers = toBlockers(c);
+    const hasPayeeReadinessBlockers = (!asBool(c?.is_ready_for_draft)) || (blockers.length > 0);
+
+    const blockedCount = toInt(c?.blocked_count, 0);
+    const dnpCount = toInt(c?.do_not_pay_count, 0);
+
+    const hasBlockedItems = (blockedCount > 0) || blockedCandIdSet.has(cid);
+    const hasDoNotPayItems = (dnpCount > 0) || doNotPayCandIdSet.has(cid);
+
+    const srcPaye = (m.source_paye_ex_vat != null) ? String(m.source_paye_ex_vat) : '';
+    const srcUmb  = (m.source_umbrella_ex_vat != null) ? String(m.source_umbrella_ex_vat) : '';
+
+    const choiceNow = String(mismatchChoices[cid] || '').trim().toUpperCase();
+    const includeChecked = useCandidateFilter ? candidateSet.has(cid) : true;
+
+    const capNow = (loanCaps[cid] && typeof loanCaps[cid] === 'object') ? loanCaps[cid] : {};
+    const minTakeHome = (capNow.min_take_home != null) ? String(capNow.min_take_home) : '';
+    const maxDed = (capNow.max_deduction != null) ? String(capNow.max_deduction) : '';
+
+    const bankPillHtml = bankPillForCandidate(c);
+
+    const payeeKind = String(c?.payee_entity_kind || '').trim().toUpperCase();
+    const payeeId = String(c?.payee_entity_id || '').trim();
+
+    const rail = (pv && typeof pv === 'object' && pv.settings && typeof pv.settings === 'object' && pv.settings.rail && typeof pv.settings.rail === 'object')
+      ? pv.settings.rail
+      : {};
+    const railProvider = String(rail.provider_default || '').trim().toUpperCase();
+    const railEnv = String(rail.env_default || '').trim().toUpperCase();
+
+    const canAcceptBankDetails = (
+      payeeKind &&
+      (payeeKind === 'CANDIDATE' || payeeKind === 'UMBRELLA') &&
+      payeeId &&
+      blockers.includes('BLOCKED_NAME_CHECK') &&
+      !asBool(c?.name_check_has_override)
+    );
+
+    const acceptBankBtnHtml = canAcceptBankDetails ? `
+      <button
+        type="button"
+        class="btn btn-sm btn-outline"
+        data-action="banking:pay:acceptBankDetails"
+        data-entity-kind="${enc(payeeKind)}"
+        data-entity-id="${enc(payeeId)}"
+        ${railProvider ? `data-provider="${enc(railProvider)}"` : ''}
+        ${railEnv ? `data-env="${enc(railEnv)}"` : ''}
+        data-candidate-id="${enc(cid)}"
+        title="Accept bank name-check mismatch for these bank details (requires a reason). This is auditable."
+      >Accept bank details</button>
+    ` : ``;
+
+    const whyBadges = (() => {
+      const bits = [];
+      if (hasMismatch) bits.push(`<span class="pill pill-warn" title="Candidate has mismatched pay channel deltas">Mismatch</span>`);
+      if (hasPayeeReadinessBlockers) {
+        bits.push(`<span class="pill pill-bad" title="Candidate is blocked for drafting (payee readiness)">Payee blocked</span>`);
+        if (blockers.length) {
+          bits.push(blockers.map(b => `<span class="pill" title="${enc(b)}">${enc(b)}</span>`).join(''));
+        }
+      }
+      if (hasBlockedItems) {
+        const t = (blockedCount > 0) ? `Blocked items: ${blockedCount}` : 'Blocked items present';
+        const lbl = (blockedCount > 0) ? `Blocked items: ${blockedCount}` : 'Blocked items';
+        bits.push(`<span class="pill pill-bad" title="${enc(t)}">${enc(lbl)}</span>`);
+      }
+      if (hasDoNotPayItems) {
+        const t = (dnpCount > 0) ? `Do-not-pay items: ${dnpCount}` : 'Do-not-pay items present';
+        const lbl = (dnpCount > 0) ? `Do not pay: ${dnpCount}` : 'Do not pay';
+        bits.push(`<span class="pill pill-warn" title="${enc(t)}">${enc(lbl)}</span>`);
+      }
+      if (!bits.length) return '';
+      return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${bits.join('')}</div>`;
+    })();
+
+    const linesHtml = hasMismatch
+      ? renderItemisationTable(c, 'MISMATCH_ONLY')
+      : renderItemisationTable(c, 'ALL');
+
+    const blockedInline = renderInlineItemsForCandidate(blockedItems, cid, 'Blocked items');
+    const dnpInline = renderInlineItemsForCandidate(doNotPayItems, cid, 'Do-not-pay items');
+
+    const mismatchChoiceCell = hasMismatch ? `
+      <select
+        class="input"
+        data-action="banking:pay:setMismatchChoice"
+        data-candidate-id="${enc(cid)}"
+        title="Choose how to settle mismatch amounts for this candidate"
+      >
+        <option value="" ${choiceNow ? '' : 'selected'}>Choose…</option>
+        <option value="PAYE" ${choiceNow === 'PAYE' ? 'selected' : ''}>Settle via PAYE</option>
+        <option value="UMBRELLA" ${choiceNow === 'UMBRELLA' ? 'selected' : ''}>Settle via Umbrella</option>
+      </select>
+      ${acceptBankBtnHtml ? `<div style="margin-top:8px;">${acceptBankBtnHtml}</div>` : ``}
+    ` : (acceptBankBtnHtml ? `${acceptBankBtnHtml}` : `<div class="mini" style="opacity:.85;">—</div>`);
+
+    const loanCapsCell = hasMismatch ? `
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input
+          class="input"
+          style="max-width:130px;"
+          type="number"
+          step="0.01"
+          min="0"
+          data-action="banking:pay:setLoanCap"
+          data-candidate-id="${enc(cid)}"
+          data-cap-field="min_take_home"
+          placeholder="Min take-home"
+          value="${enc(minTakeHome)}"
+          title="Optional: minimum take-home after loan repayment"
+        />
+        <input
+          class="input"
+          style="max-width:130px;"
+          type="number"
+          step="0.01"
+          min="0"
+          data-action="banking:pay:setLoanCap"
+          data-candidate-id="${enc(cid)}"
+          data-cap-field="max_deduction"
+          placeholder="Max deduction"
+          value="${enc(maxDed)}"
+          title="Optional: cap total deductions for loans"
+        />
+      </div>
+    ` : `<div class="mini" style="opacity:.85;">—</div>`;
+
+    const mismatchSourcesLine = hasMismatch ? `
+      <div class="mini" style="opacity:.85;">
+        Mismatch sources — PAYE: <span class="mono">${enc(srcPaye || '0')}</span> • Umbrella: <span class="mono">${enc(srcUmb || '0')}</span>
+      </div>
+    ` : ``;
+
+    return `
+      <tr>
+        <td style="white-space:nowrap;">
+          <label class="inline mini" title="Include this candidate in the batch">
+            <input
+              type="checkbox"
+              data-action="banking:pay:setCandidateInclude"
+              data-candidate-id="${enc(cid)}"
+              ${includeChecked ? 'checked' : ''}
+            />
+            Include
+          </label>
+        </td>
+        <td>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span class="mono">${enc(tms || '')}</span>
+              <span>${enc(name)}</span>
+              <span class="pill">${enc(method)}</span>
+              <span style="white-space:nowrap;">${bankPillHtml}</span>
+            </div>
+
+            ${whyBadges ? `<div class="mini" style="opacity:.95;">${whyBadges}</div>` : ``}
+
+            ${mismatchSourcesLine}
+
+            <div class="mini" style="opacity:.85;">Affected lines:</div>
+            ${linesHtml}
+
+            ${blockedInline}
+            ${dnpInline}
+          </div>
+        </td>
+        <td style="min-width:220px;">
+          ${mismatchChoiceCell}
+        </td>
+        <td style="min-width:260px;">
+          ${loanCapsCell}
+        </td>
+      </tr>
+    `;
+  }).join('') : `
+    <tr><td colspan="4" class="mini" style="opacity:.85;">No review required.</td></tr>
+  `;
+
+  const elig = (pv && typeof pv === 'object' && pv.eligibility && typeof pv.eligibility === 'object') ? pv.eligibility : null;
+  const eligFrom = elig ? String(elig.from_date || '').trim() : '';
+  const eligTo   = elig ? String(elig.to_date || '').trim() : '';
+
+  const pvCutoff = pv ? String(pv.week_ending_cutoff_date || '').trim() : '';
+
+  const summary = (pv && typeof pv === 'object' && pv.summary && typeof pv.summary === 'object') ? pv.summary : null;
+  const sumReadiness = (summary && summary.readiness && typeof summary.readiness === 'object') ? summary.readiness : null;
+  const sumCandidates = (summary && summary.candidates && typeof summary.candidates === 'object') ? summary.candidates : null;
+
+  const readinessBannerHtml = (() => {
+    if (!readiness || typeof readiness !== 'object') return '';
+
+    const performed = (readiness.performed === true);
+    const failedCount = Number.isFinite(Number(readiness.failed_count)) ? Math.trunc(Number(readiness.failed_count)) : 0;
+    const attemptedCount = Number.isFinite(Number(readiness.attempted_count)) ? Math.trunc(Number(readiness.attempted_count)) : 0;
+    const didWork = (readiness.did_work === true);
+
+    if (performed && failedCount > 0) {
+      return `
+        <div class="warn" style="white-space:pre-wrap;">
+          ${enc(`Some beneficiary checks failed (${failedCount}/${attemptedCount}). Those payees remain in Review required. You can refresh preview to retry.`)}
+        </div>
+      `;
+    }
+
+    if (performed && didWork) {
+      return `
+        <div class="mini" style="opacity:.9;">
+          ${enc('Beneficiary checks were performed during preview; refresh preview to re-check if bank details change.')}
+        </div>
+      `;
+    }
+
+    return '';
+  })();
+
+  const previewSummaryHtml = pv ? `
+    <div class="mini" style="opacity:.9;">
+      Preview runs automatically on open; use <b>Refresh preview</b> to re-run.
+      ${pvLoading ? ` <span class="mono">${enc('Checking beneficiary details…')}</span>` : ``}
+    </div>
+    <div class="mini" style="opacity:.9; margin-top:4px;">
+      Eligible Timesheet period: <span class="mono">${enc((eligFrom && eligTo) ? `${ymdToUk(eligFrom)} → ${ymdToUk(eligTo)}` : '—')}</span>
+      • W/E cutoff: <span class="mono">${enc(ymdToUk(pvCutoff || cutoffIso) || '—')}</span>
+      • PAYE candidates: <span class="mono">${enc(String(payeCands.length))}</span>
+      • Umbrella payees: <span class="mono">${enc(String(nonPaye.length))}</span>
+      • Mismatches: <span class="mono">${enc(String(mismatchList.length))}</span>
+      • Blocked: <span class="mono">${enc(String(blockedItems.length))}</span>
+      • Do-not-pay: <span class="mono">${enc(String(doNotPayItems.length))}</span>
+      • Snoozed: <span class="mono">${enc(String(snoozedItems.length))}</span>
+    </div>
+    ${
+      (sumReadiness || sumCandidates)
+        ? `
+          <div class="mini" style="opacity:.9; margin-top:4px;">
+            ${
+              sumCandidates
+                ? `Candidates — total: <span class="mono">${enc(String(toInt(sumCandidates.total_candidates, 0)))}</span>, ready: <span class="mono">${enc(String(toInt(sumCandidates.ready_count, 0)))}</span>, review required: <span class="mono">${enc(String(toInt(sumCandidates.review_required_count, 0)))}</span>`
+                : ''
+            }
+            ${
+              sumReadiness
+                ? `${sumCandidates ? ' • ' : ''}Payees — total: <span class="mono">${enc(String(toInt(sumReadiness.payees_total, 0)))}</span>, missing bank: <span class="mono">${enc(String(toInt(sumReadiness.payees_missing_bank_details, 0)))}</span>, need name check: <span class="mono">${enc(String(toInt(sumReadiness.payees_need_name_check, 0)))}</span>, need payee map: <span class="mono">${enc(String(toInt(sumReadiness.payees_need_payee_map, 0)))}</span>`
+                : ''
+            }
+          </div>
+        `
+        : ``
+    }
+  ` : `
+    <div class="mini" style="opacity:.85;">
+      Preview runs automatically on open; use <b>Refresh preview</b> to re-run.
+      ${pvLoading ? ` <span class="mono">${enc('Checking beneficiary details…')}</span>` : ``}
+    </div>
+    <div class="mini" style="opacity:.85; margin-top:4px;">Run Refresh preview to compute deltas, blockers, and mismatch decisions.</div>
+  `;
+
+  const previewBtnDisabled = pvLoading || cdBusy;
+  const createBtnDisabled = cdBusy || pvLoading || !payDateIso || !cutoffIso || !pv || readyCands.length === 0;
+
+  const createDraftTitle = (!pv)
+    ? 'Run Refresh preview first'
+    : (readyCands.length === 0)
+      ? 'No ready-to-pay candidates. Resolve Review required items and refresh preview.'
+      : 'Create draft batches (PAYE + Umbrella) using current preview decisions';
+
+  return `
+    <div class="card" id="bankingPayNewBatchWizard">
+      <div class="row" style="gap:10px;">
+        <label>Create / Preview</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+          ${pvErr ? `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>` : ''}
+          ${cdErr ? `<div class="error" style="white-space:pre-wrap;">${enc(cdErr)}</div>` : ''}
+
+          ${readinessBannerHtml}
+
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div style="min-width:220px;max-width:260px;">
+              <label class="inline mini" style="opacity:.85;">Pay date</label>
+              <input
+                id="bankingPayDateInput"
+                class="input"
+                type="text"
+                name="pay_date"
+                placeholder="DD/MM/YYYY"
+                value="${enc(payDateDisplay)}"
+                data-action="banking:pay:setPayDate"
+                data-uk-date="1"
+                title="Pay date (DD/MM/YYYY) — cannot be in the past"
+              />
+            </div>
+
+            <div style="min-width:260px;max-width:320px;">
+              <label class="inline mini" style="opacity:.85;">Only process timesheets where W/E is up to</label>
+              <input
+                id="bankingWeekEndingCutoffInput"
+                class="input"
+                type="text"
+                name="week_ending_cutoff_date"
+                placeholder="DD/MM/YYYY"
+                value="${enc(cutoffDisplay)}"
+                data-action="banking:pay:setWeekEndingCutoff"
+                data-uk-date="1"
+                title="Week ending cutoff (DD/MM/YYYY). Default is previous Sunday (strictly before today)."
+              />
+            </div>
+
+            <div style="min-width:320px;max-width:420px;">
+              <label class="inline mini" style="opacity:.85;">Candidate filter</label>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input
+                  class="input"
+                  type="text"
+                  value="${enc(candDisplay)}"
+                  readonly
+                  title="Candidate filter (defaults to ALL candidates)"
+                  style="min-width:220px;flex:1;"
+                />
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:pickCandidateFilter" title="Pick a candidate (optional)">Pick…</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearCandidateFilter" title="Clear candidate filter (ALL candidates)">Clear</button>
+              </div>
+            </div>
+
+            <div style="min-width:320px;max-width:420px;">
+              <label class="inline mini" style="opacity:.85;">Client filter</label>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input
+                  class="input"
+                  type="text"
+                  value="${enc(clientDisplay)}"
+                  readonly
+                  title="Client filter (defaults to ALL clients)"
+                  style="min-width:220px;flex:1;"
+                />
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:pickClientFilter" title="Pick a client (optional)">Pick…</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearClientFilter" title="Clear client filter (ALL clients)">Clear</button>
+              </div>
+            </div>
+
+            <div class="actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline ${previewBtnDisabled ? 'disabled' : ''}"
+                ${previewBtnDisabled ? 'aria-disabled="true"' : ''}
+                data-action="banking:pay:preview"
+                title="Re-run pay preview (deltas, blockers, mismatches)"
+              >${pvLoading ? 'Refreshing…' : 'Refresh preview'}</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-primary ${createBtnDisabled ? 'disabled' : ''}"
+                ${createBtnDisabled ? 'aria-disabled="true"' : ''}
+                data-action="banking:pay:createDraft"
+                title="${enc(createDraftTitle)}"
+              >${cdBusy ? 'Creating…' : 'Create drafts'}</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:clearPreview"
+                title="Clear preview results"
+              >Clear</button>
+            </div>
+          </div>
+
+          ${previewSummaryHtml}
+
+          ${readyTableHtml}
+
+          <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+            <table class="grid" style="min-width:980px; table-layout:auto;">
+              <thead>
+                <tr>
+                  <th style="width:90px;">Include</th>
+                  <th>Review required (mismatches + blocked items)</th>
+                  <th style="width:220px;">Mismatch choice</th>
+                  <th style="width:260px;">Loan caps (optional)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${reviewRowsHtml}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mini" style="opacity:.8;">
+            Notes: mismatch choices are required for candidates flagged with mismatches. Candidates can also appear here due to payee readiness blockers (CoP/name-check/payee map) and/or blocked/do-not-pay items; these items are excluded from payable deltas unless resolved.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderPayBatchListPanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
