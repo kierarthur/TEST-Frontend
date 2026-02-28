@@ -13517,10 +13517,9 @@ async function openBankingPayBatchChildModal(batchId) {
     openToken: `pay-batch-child:${id}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
     batchId: id,
     rootId,
-    loading: true,
+    loading: false,
     error: '',
     data: null,
-
     // UI state
     ui: {
       expanded: {},               // { [candidate_id]: true/false }
@@ -14231,10 +14230,6 @@ async function openBankingPayBatchChildModal(batchId) {
       onDismiss
     }
   );
-
-  // Start timer-based polling/refresh (throttled) for non-draft batches
-  try { startAutoPoll(); } catch {}
-
   // Wire child modal events (self-contained; does not depend on banking delegated handler)
   const wire = () => {
     const body = document.getElementById('modalBody');
