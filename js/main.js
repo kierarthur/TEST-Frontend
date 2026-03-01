@@ -17088,8 +17088,24 @@ function renderBankingPayBatchChildModalOverview() {
     for (const x of (Array.isArray(linesRawTop) ? linesRawTop : [])) {
       if (!x || typeof x !== 'object') continue;
 
-      // shape A: { candidate_id, timesheets:[...] }
-      if (Array.isArray(x.timesheets) && String(x?.candidate_id || '').trim() === cid) {
+      const xid = String(x?.candidate_id || '').trim();
+      if (xid !== cid) continue;
+
+      // ✅ shape NEW (current DB): { candidate_id, ts_lines:[...], non_ts_lines:[...] }
+      const hasTsLines = Array.isArray(x.ts_lines);
+      const hasNonTsLines = Array.isArray(x.non_ts_lines);
+      if (hasTsLines || hasNonTsLines) {
+        for (const t of (hasTsLines ? x.ts_lines : [])) {
+          if (t && typeof t === 'object') out.push({ ...t, candidate_id: cid });
+        }
+        for (const n of (hasNonTsLines ? x.non_ts_lines : [])) {
+          if (n && typeof n === 'object') out.push({ ...n, candidate_id: cid });
+        }
+        continue;
+      }
+
+      // shape A (legacy): { candidate_id, timesheets:[...] }
+      if (Array.isArray(x.timesheets)) {
         for (const t of x.timesheets) {
           if (t && typeof t === 'object') out.push({ ...t, candidate_id: cid });
         }
@@ -17097,7 +17113,7 @@ function renderBankingPayBatchChildModalOverview() {
       }
 
       // shape B: flat entry (legacy) OR timesheet-group entry with breakdown_lines
-      if (String(x?.candidate_id || '').trim() === cid) out.push(x);
+      out.push(x);
     }
     return out;
   };
@@ -17531,7 +17547,6 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
-
 async function openBankingPayBatchPayeEntryModal(payBatchId) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
