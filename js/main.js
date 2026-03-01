@@ -64729,6 +64729,18 @@ persistCurrentTabState() {
       if (hasSettingsForm) {
         const c = collectForm('#settingsForm', true) || {};
 
+        // ✅ Settings: stage new remittance defaults as booleans so FALSE is preserved
+        try {
+          const formEl = document.getElementById('settingsForm');
+          if (formEl) {
+            const cbDetail = formEl.querySelector('input[type="checkbox"][name="remittances_detailed_breakdown"]');
+            if (cbDetail) c.remittances_detailed_breakdown = !!cbDetail.checked;
+
+            const cbCopy = formEl.querySelector('input[type="checkbox"][name="remittance_receive_when_umbrella_paid"]');
+            if (cbCopy) c.remittance_receive_when_umbrella_paid = !!cbCopy.checked;
+          }
+        } catch {}
+
         // Stage into formState.main (safe; Settings is a singleton row)
         fs.main = { ...(fs.main || {}), ...c };
 
@@ -64859,29 +64871,7 @@ persistCurrentTabState() {
   }
 }
 
-if (hasSettingsForm) {
-  const c = collectForm('#settingsForm', true) || {};
 
-  // ✅ Settings: stage new remittance defaults as booleans so FALSE is preserved
-  try {
-    const formEl = document.getElementById('settingsForm');
-    if (formEl) {
-      const cbDetail = formEl.querySelector('input[type="checkbox"][name="remittances_detailed_breakdown"]');
-      if (cbDetail) c.remittances_detailed_breakdown = !!cbDetail.checked;
-
-      const cbCopy = formEl.querySelector('input[type="checkbox"][name="remittance_receive_when_umbrella_paid"]');
-      if (cbCopy) c.remittance_receive_when_umbrella_paid = !!cbCopy.checked;
-    }
-  } catch {}
-
-  // Stage into formState.main (safe; Settings is a singleton row)
-  fs.main = { ...(fs.main || {}), ...c };
-
-  // Also mirror into modalCtx.data so renderSettingsTab sees latest values immediately
-  try {
-    window.modalCtx.data = { ...(window.modalCtx.data || {}), ...c };
-  } catch {}
-}
 
 
   // NEW: capture Care Packages tab (candidates/rates) into main form state
