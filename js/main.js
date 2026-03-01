@@ -4622,6 +4622,7 @@ function renderTopNav(){
   } catch {}
 }
 
+
 async function openBankingReauthModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -4764,8 +4765,9 @@ async function openBankingReauthModal(opts = {}) {
   };
 
   // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
+  let ctxSeed = null;
   try {
-    const ctxSeed = { entity: 'reauth', openToken: `reauth:${Date.now()}:${Math.random().toString(36).slice(2)}` };
+    ctxSeed = { entity: 'reauth', openToken: `reauth:${Date.now()}:${Math.random().toString(36).slice(2)}` };
     window.modalCtx = ctxSeed;
     try { if (typeof modalCtx !== 'undefined') modalCtx = ctxSeed; } catch {}
   } catch {}
@@ -4776,6 +4778,20 @@ async function openBankingReauthModal(opts = {}) {
       if (done) return;
       done = true;
       resolve(tokenOrNull || null);
+    };
+
+    const stillTopIsThisModal = () => {
+      try {
+        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        if (!fr) return false;
+        if (String(fr.kind || '') !== String(kind || '')) return false;
+        const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+        if (!ctx || String(ctx.entity || '') !== 'reauth') return false;
+        if (ctxSeed && fr._ctxRef !== ctxSeed) return false;
+        return true;
+      } catch {
+        return false;
+      }
     };
 
     const isDisabledEl = (el) => {
@@ -4794,6 +4810,9 @@ async function openBankingReauthModal(opts = {}) {
 
     const rerender = () => {
       try {
+        if (done) return;
+        if (!stillTopIsThisModal()) return;
+
         const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
         if (fr && typeof fr.setTab === 'function') {
           fr.setTab('main');
@@ -4801,6 +4820,9 @@ async function openBankingReauthModal(opts = {}) {
         }
       } catch {}
       try {
+        if (done) return;
+        if (!stillTopIsThisModal()) return;
+
         const body = document.getElementById('modalBody');
         if (body) body.innerHTML = render();
       } catch {}
@@ -4926,8 +4948,8 @@ async function openBankingReauthModal(opts = {}) {
           if (id === 'bankingReauthCancel') {
             ev.preventDefault();
             ev.stopPropagation();
-            closeTop();
             finish(null);
+            closeTop();
             return;
           }
 
@@ -5012,8 +5034,9 @@ async function openBankingReauthModal(opts = {}) {
               const tok2 = String(j?.reauth_token || '').trim();
               if (!tok2) throw new Error('reauth_token missing');
 
-              closeTop();
+              // ✅ Fix: resolve first, then close (prevents onDismiss from winning the race with finish(null))
               finish(tok2);
+              closeTop();
             } catch (e) {
               state.err = String(e?.message || e || 'Verification failed');
               rerender();
@@ -5038,6 +5061,7 @@ async function openBankingReauthModal(opts = {}) {
     try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
   });
 }
+
 async function openPayBatchPasswordConfirmModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -15222,8 +15246,9 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
   };
 
   // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
+  let ctxSeed = null;
   try {
-    const ctxSeed = { entity: 'banking-pay-exec-confirm', openToken: `banking-pay-exec-confirm:${Date.now()}:${Math.random().toString(36).slice(2)}` };
+    ctxSeed = { entity: 'banking-pay-exec-confirm', openToken: `banking-pay-exec-confirm:${Date.now()}:${Math.random().toString(36).slice(2)}` };
     window.modalCtx = ctxSeed;
     try { if (typeof modalCtx !== 'undefined') modalCtx = ctxSeed; } catch {}
   } catch {}
@@ -15297,7 +15322,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
           if (String(fr.kind || '') !== String(kind || '')) return false;
           const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
           if (!ctx || String(ctx.entity || '') !== 'banking-pay-exec-confirm') return false;
-          if (fr._ctxRef !== ctx) return false;
+          if (ctxSeed && fr._ctxRef !== ctxSeed) return false;
           return true;
         } catch {
           return false;
@@ -15428,7 +15453,8 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
           const id = String(btn.id || '').trim();
 
           if (id === 'payExecCancelBtn') {
-            pendingResult = { cancelled: true };
+            // ✅ Fix: resolve deterministically first, then close (no reliance on onDismiss timing)
+            finish({ cancelled: true });
             closeTop();
             return;
           }
@@ -15491,7 +15517,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
             const authMode = goldenKeyAvailable ? String(state.auth_mode || 'NORMAL').trim().toUpperCase() : 'NORMAL';
             const actor_intent = (authMode === 'GOLDEN_KEY') ? 'USE_GOLDEN_KEY' : null;
 
-            pendingResult = {
+            const result = {
               confirmed: true,
               schedule_kind,
               scheduled_at_utc,
@@ -15500,6 +15526,8 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
               actor_intent
             };
 
+            // ✅ Fix: resolve deterministically first, then close (no reliance on onDismiss timing)
+            finish(result);
             closeTop();
           }
         } catch {}
@@ -16267,8 +16295,9 @@ async function openBankingPayBatchChildModal(batchId) {
           throw new Error(String(e?.message || e || 'Payment verification failed'));
         }
 
-        if (!reauthToken || !String(reauthToken).trim()) {
-          child.actionsBusy.executing = false;
+          if (!reauthToken || !String(reauthToken).trim()) {
+          child.error = 'Payment verification did not complete. Execution was not attempted — please try again.';
+          try { if (typeof window.__toast === 'function') window.__toast('Payment verification did not complete. Execution was not attempted.'); } catch {}
           await rerenderChild();
           return;
         }
@@ -16511,6 +16540,16 @@ async function openBankingPayBatchChildModal(batchId) {
     } catch {}
     try { child.__loadInFlight = false; } catch { child.__loadInFlight = false; }
     try { child.loading = false; } catch {}
+
+    // ✅ Clear stale child state so a fresh open never hits an old openToken/rootId
+    try {
+      if (pay && pay.child && typeof pay.child === 'object') {
+        const tok = String(pay.child.openToken || '');
+        if (tok && tok === String(child.openToken || '')) {
+          pay.child = null;
+        }
+      }
+    } catch {}
   };
 
   // Open modal (READ-ONLY operational child modal)
