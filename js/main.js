@@ -5173,6 +5173,16 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
     `;
   };
 
+  // Capture prior ctx so we can restore legacy `modalCtx` on dismiss (prevents stale ctx clobbering later modals)
+  let prevLegacyModalCtx = null;
+  let hadLegacyModalCtx = false;
+  try {
+    if (typeof modalCtx !== 'undefined') {
+      prevLegacyModalCtx = modalCtx;
+      hadLegacyModalCtx = true;
+    }
+  } catch {}
+
   // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
   try {
     const ctxSeed = { entity: 'cancel-pay', openToken: `cancel-pay:${Date.now()}:${Math.random().toString(36).slice(2)}` };
@@ -5182,13 +5192,29 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
 
   return await new Promise((resolve) => {
     let done = false;
+    let cleaned = false;
+
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+
+      // Restore legacy global `modalCtx` (showModal has a back-compat adopter that can otherwise re-clobber window.modalCtx later)
+      try {
+        if (typeof modalCtx !== 'undefined') {
+          if (hadLegacyModalCtx) modalCtx = prevLegacyModalCtx;
+          else modalCtx = undefined;
+        }
+      } catch {}
+    };
+
     const finish = (res) => {
       if (done) return;
       done = true;
+      cleanup();
       resolve(res || null);
     };
 
-    const onDismiss = () => finish(null);
+    const onDismiss = () => { cleanup(); finish(null); };
 
     const renderTab = (k) => {
       if (k !== 'main') return '';
@@ -5196,7 +5222,7 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
     };
 
     showModal(
-      'Cancel payment',
+      title,
       [{ key: 'main', label: 'Confirm' }],
       renderTab,
       null,
@@ -64261,8 +64287,19 @@ try {
     const wTok = w ? (w.openToken || null) : null;
     const mTok = m.openToken || null;
 
+    const hasActiveStack = (() => {
+      try { return (typeof stack === 'function') ? (stack().length > 0) : false; } catch { return false; }
+    })();
+
+    const wLooksValid = !!(w && String(w.entity || '').trim());
+
+    // ✅ IMPORTANT:
+    // If a modal stack is already active, do NOT let a stale legacy `modalCtx` clobber a valid `window.modalCtx`.
+    // Only adopt legacy ctx when there's no active stack (top-level open), or when window.modalCtx isn't a real ctx.
     if (mTok && (!wTok || String(wTok) !== String(mTok))) {
-      window.modalCtx = m;
+      if (!(hasActiveStack && wLooksValid)) {
+        window.modalCtx = m;
+      }
     }
   }
 } catch {}
@@ -67627,8 +67664,10 @@ try {
 } catch {}
 
   // restore the parent/owner context for whatever frame is now on top
-  if (top && top._ctxRef) window.modalCtx = top._ctxRef;
-
+  if (top && top._ctxRef) {
+    window.modalCtx = top._ctxRef;
+    try { if (typeof modalCtx !== 'undefined') modalCtx = window.modalCtx; } catch {}
+  }
 
   if (typeof top._detachGlobal === 'function') { try { top._detachGlobal(); } catch {} top._wired = false; }
 
