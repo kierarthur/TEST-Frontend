@@ -4658,6 +4658,7 @@ async function openBankingReauthModal(opts = {}) {
   };
 
   const rootId = `bankingReauth_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const openToken = `banking-reauth:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 
   const state = {
     step: 'password',            // 'password' | 'code'
@@ -4678,8 +4679,11 @@ async function openBankingReauthModal(opts = {}) {
     const disSend = state.busySend || state.busyVerify;
     const disVerify = state.busyVerify || !stepCode;
 
+    const pwdShade = (!stepPwd) ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : '';
+    const codeShade = (!stepCode) ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : '';
+
     return `
-      <div id="${enc(rootId)}">
+      <div id="${enc(rootId)}" data-open-token="${enc(openToken)}">
         <div class="card">
           <div class="row">
             <label>Confirm it’s you</label>
@@ -4702,7 +4706,7 @@ async function openBankingReauthModal(opts = {}) {
                       placeholder="Enter your password"
                       value="${enc(state.password)}"
                       style="min-width:260px;max-width:420px;"
-                      ${stepPwd ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);min-width:260px;max-width:420px;"'}
+                      ${pwdShade}
                     />
                     <button
                       id="bankingReauthSendCode"
@@ -4725,7 +4729,7 @@ async function openBankingReauthModal(opts = {}) {
                       placeholder="6-digit code"
                       value="${enc(state.code)}"
                       style="max-width:180px;"
-                      ${stepCode ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);max-width:180px;"'}
+                      ${codeShade}
                     />
                     <button
                       id="bankingReauthVerify"
@@ -4774,7 +4778,51 @@ async function openBankingReauthModal(opts = {}) {
       resolve(tokenOrNull || null);
     };
 
-    const onDismiss = () => finish(null);
+    const isDisabledEl = (el) => {
+      try {
+        if (!el) return false;
+        const d = String(el.getAttribute('data-disabled') || '').trim();
+        if (d === '1' || d.toLowerCase() === 'true') return true;
+        const aria = String(el.getAttribute('aria-disabled') || '').trim().toLowerCase();
+        if (aria === 'true') return true;
+        if (el.classList && el.classList.contains('disabled')) return true;
+        return false;
+      } catch {
+        return false;
+      }
+    };
+
+    const rerender = () => {
+      try {
+        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        if (fr && typeof fr.setTab === 'function') {
+          fr.setTab('main');
+          return;
+        }
+      } catch {}
+      try {
+        const body = document.getElementById('modalBody');
+        if (body) body.innerHTML = render();
+      } catch {}
+    };
+
+    const detachDelegated = () => {
+      try {
+        const body = document.getElementById('modalBody');
+        if (!body) return;
+        const h = body.__bankingReauthHandler;
+        if (!h || String(h.openToken || '') !== String(openToken || '')) return;
+
+        try { body.removeEventListener('click', h.onClick, true); } catch {}
+        try { body.removeEventListener('input', h.onInput, true); } catch {}
+        delete body.__bankingReauthHandler;
+      } catch {}
+    };
+
+    const onDismiss = () => {
+      detachDelegated();
+      finish(null);
+    };
 
     const renderTab = (k) => {
       if (k !== 'main') return '';
@@ -4798,137 +4846,198 @@ async function openBankingReauthModal(opts = {}) {
       }
     );
 
+    // Delegated wiring on #modalBody so rerenders cannot drop handlers
     const wire = () => {
       const body = document.getElementById('modalBody');
       if (!body) return;
 
-      const root = body.querySelector(`#${CSS.escape(rootId)}`);
-      if (!root) return;
+      // Prevent double-wire for this open
+      if (body.__bankingReauthHandler && String(body.__bankingReauthHandler.openToken || '') === String(openToken || '')) {
+        return;
+      }
 
-      if (root.__wired) return;
-      root.__wired = true;
-
-      const rerender = () => {
+      const findRoot = (t) => {
         try {
-          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-          if (fr && typeof fr.setTab === 'function') fr.setTab('main');
+          if (!t || typeof t.closest !== 'function') return null;
+          return t.closest(`#${CSS.escape(rootId)}`);
         } catch {
-          try { body.innerHTML = render(); } catch {}
+          try { return t.closest(`#${rootId}`); } catch { return null; }
         }
       };
 
-      const pwdEl = root.querySelector('#bankingReauthPassword');
-      const codeEl = root.querySelector('#bankingReauthCode');
-      const btnSend = root.querySelector('#bankingReauthSendCode');
-      const btnVerify = root.querySelector('#bankingReauthVerify');
-      const btnCancel = root.querySelector('#bankingReauthCancel');
+      const normCode = (raw) => String(raw || '').replace(/[^\d]/g, '').slice(0, 6);
 
-      if (pwdEl && !pwdEl.__wired) {
-        pwdEl.__wired = true;
-        pwdEl.addEventListener('input', () => {
-          state.password = String(pwdEl.value || '');
-        });
-      }
+      const onInput = (ev) => {
+        try {
+          const t = ev && ev.target ? ev.target : null;
+          if (!t) return;
 
-      if (codeEl && !codeEl.__wired) {
-        codeEl.__wired = true;
-        codeEl.addEventListener('input', () => {
-          state.code = String(codeEl.value || '').replace(/\s+/g, '');
-        });
-      }
+          const root = findRoot(t);
+          if (!root) return;
 
-      if (btnCancel && !btnCancel.__wired) {
-        btnCancel.__wired = true;
-        btnCancel.onclick = () => {
-          closeTop();
-          finish(null);
-        };
-      }
+          const tok = String(root.getAttribute('data-open-token') || '').trim();
+          if (tok && tok !== openToken) return;
 
-      if (btnSend && !btnSend.__wired) {
-        btnSend.__wired = true;
-        btnSend.onclick = async () => {
-          if (state.busySend || state.busyVerify) return;
+          const id = String(t.id || '').trim();
 
-          state.err = '';
-          state.notice = '';
-
-          const pw = String(state.password || '');
-          if (!pw) {
-            state.err = 'Password is required.';
-            rerender();
+          if (id === 'bankingReauthPassword') {
+            state.password = String(t.value || '');
             return;
           }
 
-          state.busySend = true;
-          rerender();
+          if (id === 'bankingReauthCode') {
+            const cleaned = normCode(t.value);
+            state.code = cleaned;
+            try { t.value = cleaned; } catch {}
+            return;
+          }
+        } catch {}
+      };
 
+      const onClick = async (ev) => {
+        try {
+          const t = ev && ev.target ? ev.target : null;
+          if (!t) return;
+
+          const root = findRoot(t);
+          if (!root) return;
+
+          const tok = String(root.getAttribute('data-open-token') || '').trim();
+          if (tok && tok !== openToken) return;
+
+          const btn = (typeof t.closest === 'function') ? t.closest('button') : null;
+          if (!btn) return;
+
+          const id = String(btn.id || '').trim();
+          if (!id) return;
+
+          if (isDisabledEl(btn)) return;
+
+          // Keep state in sync (handles "click verify without blur")
           try {
-            const j = await apiPost('/auth/reauth/start', { password: pw });
-            const cid = String(j?.challenge_id || '').trim();
-            const exp = Number(j?.expires_in || 0);
-
-            if (!cid) throw new Error('challenge_id missing');
-
-            state.challenge_id = cid;
-            state.expires_in = Number.isFinite(exp) ? Math.trunc(exp) : 0;
-            state.step = 'code';
-            state.notice = 'Code sent. Check your email.';
-          } catch (e) {
-            state.err = String(e?.message || e || 'Failed to send code');
-          } finally {
-            state.busySend = false;
-            rerender();
-          }
-        };
-      }
-
-      if (btnVerify && !btnVerify.__wired) {
-        btnVerify.__wired = true;
-        btnVerify.onclick = async () => {
-          if (state.busyVerify) return;
-
-          state.err = '';
-          state.notice = '';
-
-          const cid = String(state.challenge_id || '').trim();
-          if (!cid) {
-            state.err = 'Please send a code first.';
-            rerender();
-            return;
-          }
-
-          const code = String(state.code || '').trim();
-          if (!/^\d{6}$/.test(code)) {
-            state.err = 'Enter the 6-digit code.';
-            rerender();
-            return;
-          }
-
-          state.busyVerify = true;
-          rerender();
-
+            const pwdEl = root.querySelector('#bankingReauthPassword');
+            if (pwdEl) state.password = String(pwdEl.value || '');
+          } catch {}
           try {
-            const j = await apiPost('/auth/reauth/verify', { challenge_id: cid, code });
-            const tok = String(j?.reauth_token || '').trim();
-            if (!tok) throw new Error('reauth_token missing');
+            const codeEl = root.querySelector('#bankingReauthCode');
+            if (codeEl) state.code = normCode(codeEl.value);
+          } catch {}
 
+          if (id === 'bankingReauthCancel') {
+            ev.preventDefault();
+            ev.stopPropagation();
             closeTop();
-            finish(tok);
-          } catch (e) {
-            state.err = String(e?.message || e || 'Verification failed');
-          } finally {
-            state.busyVerify = false;
-            rerender();
+            finish(null);
+            return;
           }
-        };
-      }
+
+          if (id === 'bankingReauthSendCode') {
+            ev.preventDefault();
+            ev.stopPropagation();
+
+            if (state.busySend || state.busyVerify) return;
+
+            state.err = '';
+            state.notice = '';
+
+            const pw = String(state.password || '');
+            if (!pw) {
+              state.err = 'Password is required.';
+              rerender();
+              return;
+            }
+
+            state.busySend = true;
+            rerender();
+
+            try {
+              const j = await apiPost('/auth/reauth/start', { password: pw });
+              const cid = String(j?.challenge_id || '').trim();
+              const exp = Number(j?.expires_in || 0);
+
+              if (!cid) throw new Error('challenge_id missing');
+
+              state.challenge_id = cid;
+              state.expires_in = Number.isFinite(exp) ? Math.trunc(exp) : 0;
+              state.step = 'code';
+              state.notice = 'Code sent. Check your email.';
+
+              rerender();
+
+              // Best-effort focus
+              try {
+                const root2 = document.getElementById(rootId);
+                const codeEl2 = root2 ? root2.querySelector('#bankingReauthCode') : null;
+                if (codeEl2) codeEl2.focus();
+              } catch {}
+            } catch (e) {
+              state.err = String(e?.message || e || 'Failed to send code');
+              rerender();
+            } finally {
+              state.busySend = false;
+              rerender();
+            }
+
+            return;
+          }
+
+          if (id === 'bankingReauthVerify') {
+            ev.preventDefault();
+            ev.stopPropagation();
+
+            if (state.busyVerify) return;
+
+            state.err = '';
+            state.notice = '';
+
+            const cid = String(state.challenge_id || '').trim();
+            if (!cid) {
+              state.err = 'Please send a code first.';
+              rerender();
+              return;
+            }
+
+            const code = normCode(state.code);
+            if (!/^\d{6}$/.test(code)) {
+              state.err = 'Enter the 6-digit code.';
+              rerender();
+              return;
+            }
+
+            state.busyVerify = true;
+            rerender();
+
+            try {
+              const j = await apiPost('/auth/reauth/verify', { challenge_id: cid, code });
+              const tok2 = String(j?.reauth_token || '').trim();
+              if (!tok2) throw new Error('reauth_token missing');
+
+              closeTop();
+              finish(tok2);
+            } catch (e) {
+              state.err = String(e?.message || e || 'Verification failed');
+              rerender();
+            } finally {
+              state.busyVerify = false;
+              rerender();
+            }
+
+            return;
+          }
+        } catch {}
+      };
+
+      body.addEventListener('click', onClick, true);
+      body.addEventListener('input', onInput, true);
+      body.__bankingReauthHandler = { openToken, onClick, onInput };
+
+      // Initial paint/focus safety
+      try { rerender(); } catch {}
     };
 
     try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
   });
 }
-
 async function openPayBatchPasswordConfirmModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
