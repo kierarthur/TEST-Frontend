@@ -5189,8 +5189,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
   });
 }
 
-
-
 async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -5201,6 +5199,15 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
   const kind = String(opts.kind || 'import-summary-banking-auth-requests').trim() || 'import-summary-banking-auth-requests';
   const authId = String(authRequestId || '').trim();
   if (!authId) throw new Error('authRequestId required');
+
+  const payBatchIdHint = String(
+    opts.pay_batch_id ||
+    opts.payBatchId ||
+    opts.pay_batchId ||
+    opts.pay_batch_id_hint ||
+    opts.payBatchIdHint ||
+    ''
+  ).trim();
 
   const closeTop = () => {
     try {
@@ -5245,10 +5252,20 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
     busy: false,
     err: '',
     notice: '',
-    users: [],           // eligible authorisers
+    users: [],            // eligible authorisers
     invitedSet: new Set(),// already-invited (disable)
     selectedSet: new Set(),
-    selectAll: false
+    selectAll: false,
+    canInvite: true,
+    canInviteReason: '',
+    authMeta: {
+      auth_request_id: authId,
+      pay_batch_id: payBatchIdHint || null,
+      auth_state: '',
+      required_quantity: null,
+      approved_count: null
+    },
+    lastResult: null
   };
 
   // Pull invited list from current Banking state if available (best-effort)
@@ -5300,8 +5317,30 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
     const topErr = state.err ? `<div class="error" style="white-space:pre-wrap;">${enc(state.err)}</div>` : '';
     const topOk  = state.notice ? `<div class="mini" style="color:#bbf7d0;white-space:pre-wrap;">${enc(state.notice)}</div>` : '';
 
-    const disabledSend = state.busy || state.loading;
-    const disabledAll  = state.loading;
+    const disabledSend = state.busy || state.loading || state.canInvite !== true;
+    const disabledAll  = state.loading || state.canInvite !== true;
+
+    const disableAttrs = (isDis, title) => {
+      if (!isDis) return '';
+      const tt = String(title || '').trim();
+      return `data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"${tt ? ` title="${enc(tt)}"` : ''}`;
+    };
+
+    const cannotInviteHint = (!state.canInvite && state.canInviteReason)
+      ? state.canInviteReason
+      : (!state.canInvite ? 'Authorisation is no longer required for this request.' : '');
+
+    const authHint = (() => {
+      const rq = state.authMeta.required_quantity;
+      const ap = state.authMeta.approved_count;
+      const stx = String(state.authMeta.auth_state || '').trim();
+      const pb = String(state.authMeta.pay_batch_id || '').trim();
+      const parts = [];
+      if (pb) parts.push(`Batch: ${pb.slice(0, 8)}…`);
+      if (stx) parts.push(`State: ${stx}`);
+      if (rq != null && ap != null) parts.push(`Approvals: ${ap}/${rq}`);
+      return parts.length ? parts.join(' · ') : '';
+    })();
 
     return `
       <div id="${enc(rootId)}">
@@ -5313,6 +5352,10 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
                 Select who to email for authorisation. Already requested users are ticked and locked.
               </div>
 
+              ${authHint ? `<div class="mini" style="opacity:.85;">${enc(authHint)}</div>` : ''}
+
+              ${!state.canInvite && cannotInviteHint ? `<div class="mini" style="opacity:.9;">${enc(cannotInviteHint)}</div>` : ''}
+
               ${topErr}
               ${topOk}
 
@@ -5321,24 +5364,21 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
                   id="bankingAuthReqSelectAll"
                   type="button"
                   class="btn btn-sm btn-outline"
-                  ${disabledAll ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
-                  title="Select all eligible authorisers"
+                  ${disableAttrs(disabledAll, cannotInviteHint || 'Select all eligible authorisers')}
                 >Select all</button>
 
                 <button
                   id="bankingAuthReqClearAll"
                   type="button"
                   class="btn btn-sm btn-outline"
-                  ${disabledAll ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
-                  title="Clear selection"
+                  ${disableAttrs(disabledAll, cannotInviteHint || 'Clear selection')}
                 >Clear</button>
 
                 <button
                   id="bankingAuthReqRequestAll"
                   type="button"
                   class="btn btn-sm btn-outline"
-                  ${disabledAll ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
-                  title="Request all authorisers (emails everyone eligible)"
+                  ${disableAttrs(disabledAll, cannotInviteHint || 'Request all authorisers (emails everyone eligible)')}
                 >Request all authorisers</button>
 
                 <span class="mini" style="opacity:.8;margin-left:auto;">
@@ -5365,8 +5405,7 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
                   id="bankingAuthReqSend"
                   type="button"
                   class="btn btn-primary"
-                  ${disabledSend ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"' : ''}
-                  title="Send authorisation request emails"
+                  ${disableAttrs(disabledSend, cannotInviteHint || 'Send authorisation request emails')}
                 >${state.busy ? 'Sending…' : 'Send Payment Authorisation Request'}</button>
 
                 <button
@@ -5402,7 +5441,7 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
       resolve(res || null);
     };
 
-    const onDismiss = () => finish(null);
+    const onDismiss = () => finish(state.lastResult || null);
 
     const renderTab = (k) => {
       if (k !== 'main') return '';
@@ -5450,6 +5489,59 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
         if (el) el.textContent = String(state.selectedSet.size);
       };
 
+      const parseUuid = (s) => {
+        const v = String(s || '').trim();
+        if (!v) return '';
+        const re = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        return re.test(v) ? v : '';
+      };
+
+      const refreshAuthFromBatchHint = async () => {
+        const pbId = parseUuid(payBatchIdHint || state.authMeta.pay_batch_id || '');
+        if (!pbId) return;
+
+        try {
+          const j = await apiGet(`/api/banking/pay/batch/${encodeURIComponent(pbId)}`);
+          const auth = (j && typeof j === 'object' && j.auth && typeof j.auth === 'object') ? j.auth : null;
+
+          const reqId = String(auth?.auth_request_id || '').trim();
+          if (!reqId || reqId !== authId) return;
+
+          const invitedTo = Array.isArray(auth?.invited_to) ? auth.invited_to : [];
+          state.invitedSet.clear();
+          for (const it of invitedTo) {
+            const uid = String(it?.target_user_id || it?.user_id || '').trim();
+            if (uid) state.invitedSet.add(uid);
+          }
+
+          state.authMeta.pay_batch_id = pbId;
+          state.authMeta.auth_state = String(auth?.auth_state || '').trim();
+          state.authMeta.required_quantity = Number.isFinite(Number(auth?.required_quantity)) ? Math.trunc(Number(auth.required_quantity)) : null;
+          state.authMeta.approved_count = Number.isFinite(Number(auth?.approved_count)) ? Math.trunc(Number(auth.approved_count)) : null;
+
+          const rq = state.authMeta.required_quantity;
+          const ap = state.authMeta.approved_count;
+
+          const satisfied = (rq != null && ap != null) ? (ap >= rq) : false;
+          const stx = String(state.authMeta.auth_state || '').trim().toUpperCase();
+
+          state.canInvite = true;
+          state.canInviteReason = '';
+
+          if (satisfied) {
+            state.canInvite = false;
+            state.canInviteReason = 'Authorisation has already been satisfied for this payment.';
+          } else if (stx && stx !== 'AWAITING_AUTHORISATION' && stx !== 'AWAITING' && stx !== 'PENDING' && stx !== 'AUTHORISE_REQUIRED') {
+            // If the state is not one of the “still waiting/needs action” states, disable invites.
+            // This is intentionally conservative to avoid spamming after execution/settlement.
+            state.canInvite = false;
+            state.canInviteReason = 'Authorisation is no longer required for this payment.';
+          }
+        } catch {
+          // Non-fatal: keep best-effort invited set from existing state
+        }
+      };
+
       // Load eligible users once
       const load = async () => {
         state.loading = true;
@@ -5458,6 +5550,9 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
         rerender();
 
         try {
+          // Best-effort: hydrate invited list + auth meta from pay batch if caller supplied it
+          await refreshAuthFromBatchHint();
+
           const j = await apiGet('/api/banking/pay/authorisers');
           const list = Array.isArray(j?.users) ? j.users : [];
           state.users = list;
@@ -5501,7 +5596,7 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
         btnClose.__wired = true;
         btnClose.onclick = () => {
           closeTop();
-          finish(null);
+          finish(state.lastResult || null);
         };
       }
 
@@ -5510,6 +5605,7 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
         btnSelAll.__wired = true;
         btnSelAll.onclick = () => {
           if (state.loading) return;
+          if (state.canInvite !== true) return;
           for (const u of state.users) {
             const uid = String(u?.id || '').trim();
             if (!uid) continue;
@@ -5535,6 +5631,13 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
         btnReqAll.__wired = true;
         btnReqAll.onclick = async () => {
           if (state.loading || state.busy) return;
+          if (state.canInvite !== true) {
+            const msg = state.canInviteReason || 'Authorisation is not required.';
+            state.err = String(msg);
+            state.notice = '';
+            rerender();
+            return;
+          }
 
           state.busy = true;
           state.err = '';
@@ -5544,6 +5647,17 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
           try {
             const res = await apiPost(`/api/banking/pay/auth-requests/${encodeURIComponent(authId)}/invites`, { all: true });
             state.notice = `Requests sent. Queued emails: ${Number(res?.queued_emails || 0)}.`;
+
+            state.lastResult = {
+              ok: true,
+              kind: 'all',
+              auth_request_id: String(res?.auth_request_id || authId),
+              pay_batch_id: String(res?.pay_batch_id || state.authMeta.pay_batch_id || ''),
+              queued_emails: Number(res?.queued_emails || 0),
+              queue_errors: Number(res?.queue_errors || 0),
+              tokens: Array.isArray(res?.tokens) ? res.tokens : []
+            };
+
             // Update invited set so UI locks them
             try {
               const toks = Array.isArray(res?.tokens) ? res.tokens : [];
@@ -5552,6 +5666,7 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
                 if (uid) state.invitedSet.add(uid);
               }
             } catch {}
+
             state.selectedSet.clear();
             rerender();
           } catch (e) {
@@ -5569,6 +5684,13 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
         btnSend.__wired = true;
         btnSend.onclick = async () => {
           if (state.loading || state.busy) return;
+          if (state.canInvite !== true) {
+            const msg = state.canInviteReason || 'Authorisation is not required.';
+            state.err = String(msg);
+            state.notice = '';
+            rerender();
+            return;
+          }
 
           const ids = Array.from(state.selectedSet);
           if (!ids.length) {
@@ -5585,6 +5707,17 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
           try {
             const res = await apiPost(`/api/banking/pay/auth-requests/${encodeURIComponent(authId)}/invites`, { target_user_ids: ids });
             state.notice = `Requests sent. Queued emails: ${Number(res?.queued_emails || 0)}.`;
+
+            state.lastResult = {
+              ok: true,
+              kind: 'selected',
+              auth_request_id: String(res?.auth_request_id || authId),
+              pay_batch_id: String(res?.pay_batch_id || state.authMeta.pay_batch_id || ''),
+              target_user_ids: ids.slice(),
+              queued_emails: Number(res?.queued_emails || 0),
+              queue_errors: Number(res?.queue_errors || 0),
+              tokens: Array.isArray(res?.tokens) ? res.tokens : []
+            };
 
             // Mark these as invited in UI
             for (const uid of ids) state.invitedSet.add(uid);
@@ -5608,6 +5741,7 @@ async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
     try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
   });
 }
+
 
 async function openBanking() {
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
@@ -8693,7 +8827,6 @@ async function bankingOutboxList({ reference_prefix = '', reference_contains = '
   }
 }
 
-
 function renderBankingTab(key, row) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -9024,10 +9157,43 @@ function renderBankingTab(key, row) {
       const selectedIdRef = String(idSt.selectedRunIdRef || '').trim();
       const runSearchIdRef = String(idSt.runSearchIdRef || '').trim();
 
+      // ✅ Auto-load Preview + Runs the first time the tab is shown (no need to click Refresh)
+      try {
+        idSt._historyAutoLoad = (idSt._historyAutoLoad && typeof idSt._historyAutoLoad === 'object')
+          ? idSt._historyAutoLoad
+          : { inflight: false, done: false };
+
+        const needPreview = (!pvData && !pvLoading);
+        const needRuns = ((!runsItems || runsItems.length === 0) && !runsLoading);
+
+        if ((needPreview || needRuns) && !idSt._historyAutoLoad.inflight) {
+          idSt._historyAutoLoad.inflight = true;
+
+          setTimeout(async () => {
+            try {
+              if (needPreview && typeof bankingIdPreview === 'function') {
+                await bankingIdPreview();
+              }
+            } catch {}
+
+            try {
+              if (needRuns && typeof bankingIdRunsList === 'function') {
+                await bankingIdRunsList(null);
+              }
+            } catch {}
+
+            try {
+              idSt._historyAutoLoad.done = true;
+              idSt._historyAutoLoad.inflight = false;
+            } catch {}
+          }, 0);
+        }
+      } catch {}
+
       const previewHtml = (() => {
         if (pvLoading) return `<div class="mini" style="opacity:.85;">Loading preview…</div>`;
         if (pvErr) return `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>`;
-        if (!pvData) return `<div class="mini" style="opacity:.85;">No preview loaded yet. Click “Refresh preview”.</div>`;
+        if (!pvData) return `<div class="mini" style="opacity:.85;">No preview loaded yet.</div>`;
 
         const totals = (pvData.totals && typeof pvData.totals === 'object') ? pvData.totals : {};
         const lines = Array.isArray(pvData.lines) ? pvData.lines : [];
@@ -9091,7 +9257,7 @@ function renderBankingTab(key, row) {
       const runsListHtml = (() => {
         if (runsLoading) return `<div class="mini" style="opacity:.85;">Loading runs…</div>`;
         if (runsErr) return `<div class="error" style="white-space:pre-wrap;">${enc(runsErr)}</div>`;
-        if (!runsItems.length) return `<div class="mini" style="opacity:.85;">No runs loaded yet. Click “Refresh runs”.</div>`;
+        if (!runsItems.length) return `<div class="mini" style="opacity:.85;">No runs loaded yet.</div>`;
 
         const rows = runsItems.slice(0, 200).map((r) => {
           const idRef = String(r?.id_ref || '').trim();
@@ -9166,6 +9332,14 @@ function renderBankingTab(key, row) {
                   data-id-ref="${enc(String(selectedRun.id_ref || '').trim())}"
                   title="Print this run"
                 >Print</button>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:id:runExportCsv"
+                  data-id-ref="${enc(String(selectedRun.id_ref || '').trim())}"
+                  title="Export this run as CSV"
+                >Export CSV</button>
               </div>
             </div>
           </div>
@@ -9669,18 +9843,134 @@ function bankingIdRunPrint(selectedRun) {
 </html>
   `.trim();
 
-  const w = window.open('', '_blank', 'noopener,noreferrer');
+  const w = window.open('', '_blank', 'popup,width=1024,height=768');
   if (!w) throw new Error('bankingIdRunPrint: Unable to open print window (popup blocked?)');
+
+  try { w.opener = null; } catch {}
+
   w.document.open();
   w.document.write(html);
   w.document.close();
 
+  const attemptPrint = () => {
+    try { w.focus(); } catch {}
+    try { w.print(); } catch {}
+  };
+
+  // ✅ Print must be triggered as reliably as possible:
+  // - some browsers block print if invoked only after load (loses user-gesture context)
+  // - others need a tick for layout
+  try { attemptPrint(); } catch {}
+  try { setTimeout(attemptPrint, 0); } catch {}
+  try { setTimeout(attemptPrint, 150); } catch {}
+  try { setTimeout(attemptPrint, 500); } catch {}
+
   try {
-    w.onload = () => {
-      try { w.focus(); } catch {}
-      try { w.print(); } catch {}
-    };
+    w.addEventListener('load', () => {
+      try { attemptPrint(); } catch {}
+    }, { once: true });
   } catch {}
+}
+
+function bankingIdRunExportCsv(selectedRun) {
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  const idSt = (st && st.id && typeof st.id === 'object') ? st.id : {};
+  const run = (selectedRun && typeof selectedRun === 'object') ? selectedRun : ((idSt.selectedRun && typeof idSt.selectedRun === 'object') ? idSt.selectedRun : null);
+  const lines = Array.isArray(idSt.selectedRunLines) ? idSt.selectedRunLines : [];
+
+  if (!run) throw new Error('bankingIdRunExportCsv: No run selected');
+
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const fmtSignedMoney = (v) => {
+    const x = Math.round(toNum(v) * 100) / 100;
+    const s = x.toFixed(2);
+    return (x > 0) ? `+${s}` : s;
+  };
+
+  const csvEscape = (v) => {
+    const s = String(v ?? '');
+    if (s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r')) {
+      return `"${s.replaceAll('"', '""')}"`;
+    }
+    return s;
+  };
+
+  const runIdRef = String(run.id_ref || '').trim() || '—';
+
+  let sumEx = 0;
+  let sumInc = 0;
+
+  const header = ['Invoice Number', 'Client Name', 'Delta ex VAT', 'Delta inc VAT'];
+
+  const rows = (lines && lines.length)
+    ? lines.map((ln) => {
+        const invNo = String(ln?.invoice_number || '').trim();
+        const client = String(ln?.client_name || '').trim();
+        const dx = toNum(ln?.delta_ex_vat);
+        const di = toNum(ln?.delta_inc_vat);
+        sumEx += dx;
+        sumInc += di;
+
+        return [
+          invNo,
+          client,
+          fmtSignedMoney(dx),
+          fmtSignedMoney(di)
+        ];
+      })
+    : [];
+
+  // Totals row
+  rows.push(['Totals', '', fmtSignedMoney(sumEx), fmtSignedMoney(sumInc)]);
+
+  const csv = [
+    header.map(csvEscape).join(','),
+    ...rows.map(r => r.map(csvEscape).join(','))
+  ].join('\r\n');
+
+  const filename = `ID_Run_${runIdRef}.csv`;
+
+  const bom = '\ufeff';
+  const content = bom + csv;
+
+  // Download (Blob → object URL)
+  try {
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+
+    document.body.appendChild(a);
+    a.click();
+
+    setTimeout(() => {
+      try { document.body.removeChild(a); } catch {}
+      try { URL.revokeObjectURL(url); } catch {}
+    }, 0);
+
+    return;
+  } catch {}
+
+  // Fallback: data URL
+  try {
+    const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent(content);
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 0);
+  } catch (e) {
+    throw new Error('bankingIdRunExportCsv: Unable to export CSV');
+  }
 }
 
 
@@ -13032,6 +13322,8 @@ function renderBankingIdTab() {
     const sub = `Δ ex VAT £${fmtSignedMoney(pvTotals.ex)} · Δ VAT £${fmtSignedMoney(pvTotals.vat)}`;
     const lc = pvLineCount;
 
+    const bigColor = (pvTotals.inc < 0) ? 'color:#ef4444;' : '';
+
     const rows = (pvLines.length > 0)
       ? pvLines.map((r) => `
           <tr>
@@ -13046,7 +13338,7 @@ function renderBankingIdTab() {
     return `
       <div style="display:flex;flex-direction:column;gap:10px;">
         <div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;">
-          <div style="font-size:28px;font-weight:800;letter-spacing:-0.02em;" class="mono" title="Total delta inc VAT">${enc(big)}</div>
+          <div style="font-size:28px;font-weight:800;letter-spacing:-0.02em;${bigColor}" class="mono" title="Total delta inc VAT">${enc(big)}</div>
           <div class="mini" style="opacity:.85;">Line count: <span class="mono">${enc(String(lc))}</span></div>
         </div>
         <div class="mini" style="opacity:.75;">${enc(sub)}</div>
@@ -14380,6 +14672,712 @@ function renderBankingRemittancesStatusTab() {
   `;
 }
 
+async function openBankingPayExecuteConfirmModal(opts = {}) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const kind = String(opts.kind || 'import-summary-banking-pay-execute-confirm').trim() || 'import-summary-banking-pay-execute-confirm';
+
+  const payBatchId = String(opts.pay_batch_id || opts.payBatchId || '').trim();
+  const scope = String(opts.scope || opts.pay_channel_scope || opts.payChannelScope || '').trim().toUpperCase() || 'ALL';
+
+  const rootId = `bankingPayExecConfirm_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  const closeTop = () => {
+    try {
+      const btn = document.getElementById('btnCloseModal');
+      if (btn && typeof btn.click === 'function') { btn.click(); return; }
+    } catch {}
+    try { if (typeof closeModal === 'function') closeModal(); } catch {}
+  };
+
+  const parseUkDateToIsoLocal = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    try {
+      if (typeof parseUkDateToIso === 'function') {
+        const iso0 = parseUkDateToIso(s);
+        const iso = String(iso0 || '').trim();
+        return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : '';
+      }
+    } catch {}
+    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+  };
+
+  // ✅ STRICT 24h time input: EXACTLY 4 digits (HHMM), e.g. 0200, 0259, 2311
+  const parseTimeHm = (raw) => {
+    const s0 = String(raw || '').trim();
+    if (!s0) return null;
+
+    const s = s0.replace(/\s+/g, '');
+
+    // Must be exactly 4 digits
+    const m = s.match(/^(\d{2})(\d{2})$/);
+    if (!m) return null;
+
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    if (hh < 0 || hh > 23) return null;
+    if (mm < 0 || mm > 59) return null;
+
+    return { hh, mm };
+  };
+
+  const sanitizeTimeDigits = (raw) => {
+    const s = String(raw || '');
+    const digits = s.replace(/[^\d]/g, '').slice(0, 4);
+    return digits;
+  };
+
+  const detectGoldenKeyAvailable = () => {
+    try {
+      const direct =
+        opts.has_golden_key ??
+        opts.hasGoldenKey ??
+        opts.user_has_golden_key ??
+        opts.userHasGoldenKey ??
+        opts.is_golden_key ??
+        opts.isGoldenKey ??
+        opts.payment_golden_key ??
+        opts.paymentGoldenKey ??
+        null;
+
+      if (direct === true) return true;
+      if (direct === false) return false;
+
+      const u = (opts.user && typeof opts.user === 'object') ? opts.user : null;
+      if (u) {
+        const v =
+          u.payment_golden_key ??
+          u.paymentGoldenKey ??
+          u.is_golden_key ??
+          u.isGoldenKey ??
+          u.golden_key ??
+          u.goldenKey ??
+          null;
+
+        if (v === true) return true;
+        if (v === false) return false;
+      }
+    } catch {}
+
+    try {
+      const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+      const caps = (st && st.caps && typeof st.caps === 'object') ? st.caps : null;
+      const raw = (caps && caps.raw && typeof caps.raw === 'object') ? caps.raw : null;
+
+      const keys = [
+        'payment_golden_key',
+        'paymentGoldenKey',
+        'user_payment_golden_key',
+        'userPaymentGoldenKey',
+        'actor_payment_golden_key',
+        'actorPaymentGoldenKey',
+        'me_payment_golden_key',
+        'mePaymentGoldenKey',
+        'tms_user_payment_golden_key',
+        'tmsUserPaymentGoldenKey'
+      ];
+
+      for (const k of keys) {
+        const v = raw ? raw[k] : undefined;
+        if (v === true) return true;
+        if (v === false) return false;
+      }
+    } catch {}
+
+    return false;
+  };
+
+  const goldenKeyAvailable = detectGoldenKeyAvailable();
+
+  // Convert a UK (Europe/London) wall-time to a UTC ISO string using Intl formatting + iteration.
+  const ukLocalToUtcIso = (ymd, hm) => {
+    const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return '';
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    const hh = Number(hm?.hh);
+    const mm = Number(hm?.mm);
+    if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d) || !Number.isFinite(hh) || !Number.isFinite(mm)) return '';
+
+    const desiredNaiveUtcMs = Date.UTC(y, mo - 1, d, hh, mm, 0);
+
+    const fmt = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/London',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+
+    let guess = desiredNaiveUtcMs;
+
+    const partsToObj = (parts) => {
+      const g = (t) => String((parts.find(p => p.type === t)?.value) || '').trim();
+      const yy = Number(g('year'));
+      const mm2 = Number(g('month'));
+      const dd2 = Number(g('day'));
+      const hh2 = Number(g('hour'));
+      const mi2 = Number(g('minute'));
+      if (![yy, mm2, dd2, hh2, mi2].every(Number.isFinite)) return null;
+      return { yy, mm2, dd2, hh2, mi2 };
+    };
+
+    for (let i = 0; i < 5; i++) {
+      const gotParts = fmt.formatToParts(new Date(guess));
+      const got = partsToObj(gotParts);
+      if (!got) break;
+
+      const gotNaiveUtcMs = Date.UTC(got.yy, got.mm2 - 1, got.dd2, got.hh2, got.mi2, 0);
+      const diffMs = desiredNaiveUtcMs - gotNaiveUtcMs;
+
+      if (diffMs === 0) break;
+      guess += diffMs;
+    }
+
+    const out = new Date(guess);
+    if (Number.isNaN(out.getTime())) return '';
+    return out.toISOString();
+  };
+
+  const state = {
+    schedule_kind: 'IMMEDIATE', // IMMEDIATE | SCHEDULED
+    date_uk: '',
+    time_uk: '',
+    auth_mode: 'NORMAL', // NORMAL | GOLDEN_KEY
+    funding_account_ref: '',
+    warning_hours_json_raw: '',
+    busy: false,
+    err: ''
+  };
+
+  let pendingResult = null;
+
+  const render = () => {
+    const dis = state.busy
+      ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"'
+      : '';
+
+    const isScheduled = (String(state.schedule_kind || '').toUpperCase() === 'SCHEDULED');
+
+    const scheduleHint = (() => {
+      if (!isScheduled) return '<span class="mini" style="opacity:.85;">Payment will be executed immediately.</span>';
+
+      const iso = parseUkDateToIsoLocal(state.date_uk);
+      const hm = parseTimeHm(state.time_uk);
+      if (!iso || !hm) return '<span class="mini" style="opacity:.85;">Choose a UK date and time.</span>';
+
+      const utcIso = ukLocalToUtcIso(iso, hm);
+      if (!utcIso) return '<span class="mini" style="opacity:.85;">Unable to convert the selected date/time.</span>';
+
+      return `<span class="mini" style="opacity:.85;">Scheduled (UK) → UTC: <span class="mono">${enc(utcIso)}</span></span>`;
+    })();
+
+    const authHint = (() => {
+      if (!goldenKeyAvailable) {
+        return `<div class="mini" style="opacity:.85;">Normal authorisation rules apply (other authorisers may be required).</div>`;
+      }
+      const m = String(state.auth_mode || '').trim().toUpperCase();
+      if (m === 'GOLDEN_KEY') {
+        return `<div class="mini" style="opacity:.85;">🔑 Golden Key selected: this execution will be authorised immediately (no other authorisers required).</div>`;
+      }
+      return `<div class="mini" style="opacity:.85;">Normal authorisation selected: other authorisers may be required.</div>`;
+    })();
+
+    const goldenPill = goldenKeyAvailable
+      ? `<span class="pill pill-info" title="You have a Golden Key available">🔑 Golden Key available</span>`
+      : ``;
+
+    return `
+      <div id="${enc(rootId)}">
+        <div class="card">
+          <div class="row">
+            <label>Execute payment</label>
+            <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+
+              ${state.err ? `<div class="error" style="white-space:pre-wrap;">${enc(state.err)}</div>` : ''}
+
+              <div class="mini" style="opacity:.9;">
+                Confirm whether this payment should be executed immediately or scheduled for a specific date/time.
+              </div>
+
+              <div class="card" style="padding:10px;">
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                  <div class="mini" style="opacity:.85;">Batch</div>
+                  <div class="mono" style="font-weight:700;">${enc(payBatchId ? `${payBatchId.slice(0, 8)}…` : '—')}</div>
+                  <div class="mini" style="opacity:.85;">Scope</div>
+                  <div class="mono">${enc(scope)}</div>
+                  <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    ${goldenPill}
+                  </div>
+                </div>
+              </div>
+
+              <div class="card" style="padding:10px;">
+                <div class="mini" style="opacity:.85;margin-bottom:8px;">Schedule</div>
+
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                  <label class="inline mini" style="display:flex;gap:6px;align-items:center;">
+                    <input
+                      type="radio"
+                      name="pay_exec_schedule_kind"
+                      value="IMMEDIATE"
+                      ${String(state.schedule_kind).toUpperCase() === 'IMMEDIATE' ? 'checked' : ''}
+                      ${dis}
+                      data-action="pay-exec:setScheduleKind"
+                    />
+                    Immediate
+                  </label>
+
+                  <label class="inline mini" style="display:flex;gap:6px;align-items:center;">
+                    <input
+                      type="radio"
+                      name="pay_exec_schedule_kind"
+                      value="SCHEDULED"
+                      ${String(state.schedule_kind).toUpperCase() === 'SCHEDULED' ? 'checked' : ''}
+                      ${dis}
+                      data-action="pay-exec:setScheduleKind"
+                    />
+                    Scheduled (UK)
+                  </label>
+
+                  <div style="margin-left:auto;">
+                    ${scheduleHint}
+                  </div>
+                </div>
+
+                ${isScheduled ? `
+                  <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px;">
+                    <div style="min-width:220px;">
+                      <label class="inline mini" style="opacity:.85;">Date (UK)</label>
+                      <input
+                        id="payExecDateUk"
+                        class="input"
+                        type="text"
+                        value="${enc(state.date_uk)}"
+                        placeholder="DD/MM/YYYY"
+                        autocomplete="off"
+                        spellcheck="false"
+                        data-uk-date="1"
+                        data-action="pay-exec:setDateUk"
+                        ${dis}
+                      />
+                    </div>
+
+                    <div style="min-width:200px;">
+                      <label class="inline mini" style="opacity:.85;">Time (UK)</label>
+                      <div style="display:flex;gap:8px;align-items:center;">
+                        <input
+                          id="payExecTimeUk"
+                          class="input"
+                          type="text"
+                          value="${enc(state.time_uk)}"
+                          placeholder="HHMM"
+                          inputmode="numeric"
+                          autocomplete="off"
+                          spellcheck="false"
+                          data-action="pay-exec:setTimeUk"
+                          ${dis}
+                          style="width:120px;"
+                        />
+                        <span class="mini" style="opacity:.85;">hrs</span>
+                      </div>
+                      <div class="mini" style="opacity:.75;margin-top:4px;">Enter 4 digits (24h), e.g. 0200, 0259, 2311</div>
+                    </div>
+                  </div>
+                ` : ''}
+
+              </div>
+
+              <div class="card" style="padding:10px;">
+                <div class="mini" style="opacity:.85;margin-bottom:8px;">Authorisation</div>
+
+                ${goldenKeyAvailable ? `
+                  <div class="mini" style="opacity:.9; white-space:pre-wrap;">
+                    Do you want to use your Golden Key to authorise and execute immediately without any other authorisations required?
+                  </div>
+
+                  <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+                    <label class="inline mini" style="display:flex;gap:6px;align-items:flex-start;">
+                      <input
+                        type="radio"
+                        name="pay_exec_auth_mode"
+                        value="GOLDEN_KEY"
+                        ${String(state.auth_mode).toUpperCase() === 'GOLDEN_KEY' ? 'checked' : ''}
+                        ${dis}
+                        data-action="pay-exec:setAuthMode"
+                      />
+                      <span>
+                        <div style="font-weight:700;">Use Golden Key (instant authorise)</div>
+                        <div style="opacity:.85;">No other authorisers will be required.</div>
+                      </span>
+                    </label>
+
+                    <label class="inline mini" style="display:flex;gap:6px;align-items:flex-start;">
+                      <input
+                        type="radio"
+                        name="pay_exec_auth_mode"
+                        value="NORMAL"
+                        ${String(state.auth_mode).toUpperCase() === 'NORMAL' ? 'checked' : ''}
+                        ${dis}
+                        data-action="pay-exec:setAuthMode"
+                      />
+                      <span>
+                        <div style="font-weight:700;">Normal authorisation</div>
+                        <div style="opacity:.85;">Other authorisers may be required.</div>
+                      </span>
+                    </label>
+                  </div>
+
+                  <div style="margin-top:8px;">${authHint}</div>
+
+                  <div class="mini" style="opacity:.75;margin-top:8px;">
+                    Note: You will still be asked to verify by password + email code once for this execution.
+                  </div>
+                ` : `
+                  ${authHint}
+                  <div class="mini" style="opacity:.75;margin-top:8px;">
+                    Note: You will be asked to verify by password + email code once for this execution.
+                  </div>
+                `}
+              </div>
+
+              <details style="border:1px solid var(--line); border-radius:10px; padding:10px;">
+                <summary class="mini" style="cursor:pointer;opacity:.9;">Advanced ▸</summary>
+                <div style="margin-top:10px; display:flex; flex-direction:column; gap:10px;">
+                  <div class="mini" style="opacity:.85;">Optional execution fields (leave blank to use defaults).</div>
+
+                  <div>
+                    <label class="inline mini" style="opacity:.85;">Funding account ref</label>
+                    <input
+                      id="payExecFundingAccountRef"
+                      class="input"
+                      type="text"
+                      value="${enc(state.funding_account_ref)}"
+                      placeholder="(optional)"
+                      autocomplete="off"
+                      spellcheck="false"
+                      data-action="pay-exec:setFundingAccountRef"
+                      ${dis}
+                    />
+                  </div>
+
+                  <div>
+                    <label class="inline mini" style="opacity:.85;">Warning hours JSON</label>
+                    <textarea
+                      id="payExecWarningHoursJson"
+                      class="input"
+                      rows="4"
+                      placeholder='(optional) JSON array, e.g. [{"name":"...","hours":12}]'
+                      data-action="pay-exec:setWarningHoursJson"
+                      ${dis}
+                      style="width:100%;"
+                    >${enc(state.warning_hours_json_raw || '')}</textarea>
+                  </div>
+                </div>
+              </details>
+
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                <button
+                  id="payExecConfirmBtn"
+                  type="button"
+                  class="btn btn-primary"
+                  ${dis}
+                  title="Continue"
+                >${state.busy ? 'Working…' : 'Continue'}</button>
+
+                <button
+                  id="payExecCancelBtn"
+                  type="button"
+                  class="btn btn-outline"
+                  ${dis}
+                  title="Cancel"
+                >Cancel</button>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
+  try {
+    const ctxSeed = { entity: 'banking-pay-exec-confirm', openToken: `banking-pay-exec-confirm:${Date.now()}:${Math.random().toString(36).slice(2)}` };
+    window.modalCtx = ctxSeed;
+    try { if (typeof modalCtx !== 'undefined') modalCtx = ctxSeed; } catch {}
+  } catch {}
+
+  return await new Promise((resolve) => {
+    let done = false;
+    const finish = (res) => {
+      if (done) return;
+      done = true;
+      resolve(res || null);
+    };
+
+    const onDismiss = () => {
+      if (pendingResult) {
+        const r = pendingResult;
+        pendingResult = null;
+        finish(r);
+      } else {
+        finish({ cancelled: true });
+      }
+    };
+
+    const renderTab = (k) => {
+      if (k !== 'main') return '';
+      return render();
+    };
+
+    showModal(
+      'Execute payment',
+      [{ key: 'main', label: 'Confirm' }],
+      renderTab,
+      null,
+      true,
+      null,
+      {
+        kind,
+        noParentGate: true,
+        showSave: false,
+        showApply: false,
+        stayOpenOnSave: false,
+        onDismiss
+      }
+    );
+
+    const wire = () => {
+      const body = document.getElementById('modalBody');
+      if (!body) return;
+
+      const root = body.querySelector(`#${CSS.escape(rootId)}`);
+      if (!root) return;
+
+      if (root.__wired) return;
+      root.__wired = true;
+
+      const rerender = () => {
+        try {
+          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (fr && typeof fr.setTab === 'function') fr.setTab('main');
+        } catch {
+          try { body.innerHTML = render(); } catch {}
+        }
+      };
+
+      // Best-effort UK date picker
+      try {
+        const elDate = root.querySelector('#payExecDateUk');
+        if (elDate && typeof attachUkDatePicker === 'function' && !elDate.__ukdp) {
+          elDate.__ukdp = true;
+          try { attachUkDatePicker(elDate, {}); } catch {}
+        }
+      } catch {}
+
+      // Delegate inputs
+      if (!root.__wiredInputs) {
+        root.__wiredInputs = true;
+
+        root.addEventListener('change', (ev) => {
+          const t = ev && ev.target ? ev.target : null;
+          if (!t) return;
+
+          const act = String(t.getAttribute && t.getAttribute('data-action') || '').trim();
+
+          if (act === 'pay-exec:setScheduleKind') {
+            const v = String(t.value || '').trim().toUpperCase();
+            state.schedule_kind = (v === 'SCHEDULED') ? 'SCHEDULED' : 'IMMEDIATE';
+            state.err = '';
+            rerender();
+            return;
+          }
+
+          if (act === 'pay-exec:setAuthMode') {
+            const v = String(t.value || '').trim().toUpperCase();
+            if (goldenKeyAvailable) {
+              state.auth_mode = (v === 'GOLDEN_KEY') ? 'GOLDEN_KEY' : 'NORMAL';
+            } else {
+              state.auth_mode = 'NORMAL';
+            }
+            state.err = '';
+            rerender();
+            return;
+          }
+        }, true);
+
+        root.addEventListener('input', (ev) => {
+          const t = ev && ev.target ? ev.target : null;
+          if (!t) return;
+
+          const act = String(t.getAttribute && t.getAttribute('data-action') || '').trim();
+
+          if (act === 'pay-exec:setDateUk') {
+            state.date_uk = String(t.value || '');
+            state.err = '';
+            return;
+          }
+          if (act === 'pay-exec:setTimeUk') {
+            const cleaned = sanitizeTimeDigits(String(t.value || ''));
+            state.time_uk = cleaned;
+            try { t.value = cleaned; } catch {}
+            state.err = '';
+            return;
+          }
+          if (act === 'pay-exec:setFundingAccountRef') {
+            state.funding_account_ref = String(t.value || '');
+            state.err = '';
+            return;
+          }
+          if (act === 'pay-exec:setWarningHoursJson') {
+            state.warning_hours_json_raw = String(t.value || '');
+            state.err = '';
+            return;
+          }
+        }, true);
+      }
+
+      const btnCancel = root.querySelector('#payExecCancelBtn');
+      if (btnCancel && !btnCancel.__wired) {
+        btnCancel.__wired = true;
+        btnCancel.onclick = () => {
+          pendingResult = { cancelled: true };
+          closeTop();
+        };
+      }
+
+      const btnConfirm = root.querySelector('#payExecConfirmBtn');
+      if (btnConfirm && !btnConfirm.__wired) {
+        btnConfirm.__wired = true;
+        btnConfirm.onclick = () => {
+          if (state.busy) return;
+
+          state.err = '';
+
+          const scheduleKindRaw = String(state.schedule_kind || '').trim().toUpperCase();
+          const schedule_kind = (scheduleKindRaw === 'SCHEDULED') ? 'SCHEDULED' : 'IMMEDIATE';
+
+          let scheduled_at_utc = null;
+
+          if (schedule_kind === 'SCHEDULED') {
+            const iso = parseUkDateToIsoLocal(state.date_uk);
+            const hm = parseTimeHm(state.time_uk);
+
+            if (!iso) {
+              state.err = 'Scheduled date is required (DD/MM/YYYY).';
+              rerender();
+              return;
+            }
+            if (!hm) {
+              state.err = 'Scheduled time is required in 24-hour HHMM format (e.g. 0200, 2311).';
+              rerender();
+              return;
+            }
+
+            const utcIso = ukLocalToUtcIso(iso, hm);
+            if (!utcIso) {
+              state.err = 'Unable to convert the selected UK date/time.';
+              rerender();
+              return;
+            }
+
+            scheduled_at_utc = utcIso;
+          }
+
+          const funding_account_ref = String(state.funding_account_ref || '').trim() || null;
+
+          let warning_hours_json = null;
+          const rawWarn = String(state.warning_hours_json_raw || '').trim();
+          if (rawWarn) {
+            try {
+              const j = JSON.parse(rawWarn);
+              if (!Array.isArray(j)) {
+                state.err = 'Warning hours JSON must be a JSON array.';
+                rerender();
+                return;
+              }
+              warning_hours_json = j;
+            } catch {
+              state.err = 'Warning hours JSON is invalid JSON.';
+              rerender();
+              return;
+            }
+          }
+
+          const authMode = goldenKeyAvailable ? String(state.auth_mode || 'NORMAL').trim().toUpperCase() : 'NORMAL';
+          const actor_intent = (authMode === 'GOLDEN_KEY') ? 'USE_GOLDEN_KEY' : null;
+
+          pendingResult = {
+            confirmed: true,
+            schedule_kind,
+            scheduled_at_utc,
+            funding_account_ref,
+            warning_hours_json,
+            actor_intent
+          };
+
+          closeTop();
+        };
+      }
+
+      // Repaint once so schedule hint updates live (without waiting for tab switch)
+      try { rerender(); } catch {}
+    };
+
+    try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
+  });
+}
+
+async function bankingPayBatchExecutePayment(payBatchId, payload) {
+  const id = String(payBatchId || '').trim();
+  if (!id) throw new Error('bankingPayBatchExecutePayment: payBatchId is required');
+
+  const body = (payload && typeof payload === 'object') ? payload : {};
+
+  if (typeof apiPostJson === 'function') {
+    return await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute-payment`, body);
+  }
+
+  if (typeof authFetch !== 'function' || typeof API !== 'function') {
+    throw new Error('bankingPayBatchExecutePayment: apiPostJson or authFetch/API is required');
+  }
+
+  const res = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute-payment`), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body || {})
+  });
+
+  const txt = await res.text().catch(() => '');
+  let parsed = null;
+  try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = null; }
+
+  if (!res.ok) {
+    const msg =
+      (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+        ? String(parsed.error || parsed.message)
+        : (txt || `Request failed (${res.status})`);
+    const err = new Error(String(msg || 'Execute payment failed'));
+    err.status = res.status;
+    err.body = txt;
+    err.json = parsed;
+    throw err;
+  }
+
+  return (parsed && typeof parsed === 'object') ? parsed : {};
+}
 
 async function openBankingPayBatchChildModal(batchId) {
   const enc = (typeof escapeHtml === 'function')
@@ -14978,15 +15976,197 @@ async function openBankingPayBatchChildModal(batchId) {
       const provider = String(b0.rail_provider_snapshot || 'CSV').trim().toUpperCase();
 
       if (provider && provider !== 'CSV') {
-        // ✅ API rails: use the consolidated execute-payment path (execute-bank + verify-only readiness + authorisation start)
-        await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute-payment`, {
-          scope,
-          pay_channel_scope: scope,
-          schedule_kind: 'IMMEDIATE',
-          scheduled_at_utc: null,
-          funding_account_ref: null,
-          warning_hours_json: null
-        });
+        // ✅ API rails (Revolut etc): at execute-time we MUST:
+        // 1) confirm schedule_kind + (optional) scheduled time + golden key choice (if available)
+        // 2) require re-auth (password + emailed 2FA)
+        // 3) start/pay-batch authorisation request and offer to send invites if required
+
+        // Detect golden key availability (best-effort) so the confirm modal can show the option reliably
+        let hasGoldenKey = null;
+        try {
+          const gst = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+          const raw = (gst && gst.caps && typeof gst.caps === 'object' && gst.caps.raw && typeof gst.caps.raw === 'object') ? gst.caps.raw : null;
+          const keys = [
+            'payment_golden_key',
+            'paymentGoldenKey',
+            'user_payment_golden_key',
+            'userPaymentGoldenKey',
+            'actor_payment_golden_key',
+            'actorPaymentGoldenKey',
+            'me_payment_golden_key',
+            'mePaymentGoldenKey',
+            'tms_user_payment_golden_key',
+            'tmsUserPaymentGoldenKey'
+          ];
+          for (const k of keys) {
+            if (!raw) break;
+            const v = raw[k];
+            if (v === true) { hasGoldenKey = true; break; }
+            if (v === false) { hasGoldenKey = false; break; }
+          }
+        } catch {}
+
+        // 1) Confirm schedule (Immediate vs Scheduled + date/time + golden key choice)
+        let execCfg = null;
+        try {
+          if (typeof openBankingPayExecuteConfirmModal === 'function') {
+            const payload = { pay_batch_id: id, batch: deep(child.data), scope };
+            if (typeof hasGoldenKey === 'boolean') payload.has_golden_key = hasGoldenKey;
+            execCfg = await openBankingPayExecuteConfirmModal(payload);
+          } else {
+            const ok = window.confirm('Execute this payment immediately?\n\nPress Cancel if you want to schedule it at a specific time.');
+            if (!ok) {
+              child.actionsBusy.executing = false;
+              await rerenderChild();
+              return;
+            }
+            execCfg = { confirmed: true, schedule_kind: 'IMMEDIATE', scheduled_at_utc: null, funding_account_ref: null, warning_hours_json: null, actor_intent: null };
+          }
+        } catch (e) {
+          throw new Error(String(e?.message || e || 'Unable to open execute confirm'));
+        }
+
+        const cancelled = !!(execCfg && (execCfg.cancelled === true || execCfg.confirmed === false));
+        if (cancelled) {
+          child.actionsBusy.executing = false;
+          await rerenderChild();
+          return;
+        }
+
+        const scheduleKindRaw0 = String(execCfg?.schedule_kind || execCfg?.scheduleKind || execCfg?.kind || 'IMMEDIATE').trim().toUpperCase();
+        const scheduleKindRaw = (scheduleKindRaw0 === 'AT_TIME') ? 'SCHEDULED' : scheduleKindRaw0;
+        const scheduleKind = (scheduleKindRaw === 'IMMEDIATE' || scheduleKindRaw === 'SCHEDULED') ? scheduleKindRaw : 'IMMEDIATE';
+
+        const scheduledAtUtcRaw =
+          (execCfg?.scheduled_at_utc !== null && execCfg?.scheduled_at_utc !== undefined)
+            ? String(execCfg.scheduled_at_utc || '').trim()
+            : (execCfg?.scheduledAtUtc !== null && execCfg?.scheduledAtUtc !== undefined)
+              ? String(execCfg.scheduledAtUtc || '').trim()
+              : '';
+        const scheduledAtUtc = scheduledAtUtcRaw ? scheduledAtUtcRaw : null;
+
+        if (scheduleKind === 'SCHEDULED' && !scheduledAtUtc) {
+          throw new Error('Scheduled time is required.');
+        }
+
+        const fundingAccountRefRaw =
+          (execCfg?.funding_account_ref !== null && execCfg?.funding_account_ref !== undefined)
+            ? String(execCfg.funding_account_ref || '').trim()
+            : (execCfg?.fundingAccountRef !== null && execCfg?.fundingAccountRef !== undefined)
+              ? String(execCfg.fundingAccountRef || '').trim()
+              : '';
+        const fundingAccountRef = fundingAccountRefRaw ? fundingAccountRefRaw : null;
+
+        let warningHoursJson = null;
+        if (execCfg && Object.prototype.hasOwnProperty.call(execCfg, 'warning_hours_json')) {
+          warningHoursJson = Array.isArray(execCfg.warning_hours_json) ? execCfg.warning_hours_json : null;
+        } else if (execCfg && Object.prototype.hasOwnProperty.call(execCfg, 'warningHoursJson')) {
+          warningHoursJson = Array.isArray(execCfg.warningHoursJson) ? execCfg.warningHoursJson : null;
+        } else {
+          warningHoursJson = null;
+        }
+
+        const actorIntentRaw = String(execCfg?.actor_intent || execCfg?.actorIntent || '').trim().toUpperCase();
+        const actorIntent = (actorIntentRaw === 'USE_GOLDEN_KEY') ? 'USE_GOLDEN_KEY' : null;
+
+        // 2) Reauth (password + emailed code) MUST happen at execute-time
+        let reauthToken = null;
+        try {
+          if (typeof openBankingReauthModal === 'function') {
+            reauthToken = await openBankingReauthModal({ purpose: 'PAYMENT_SCHEDULE' });
+          } else {
+            throw new Error('Payment verification modal is not available.');
+          }
+        } catch (e) {
+          throw new Error(String(e?.message || e || 'Payment verification failed'));
+        }
+
+        if (!reauthToken || !String(reauthToken).trim()) {
+          child.actionsBusy.executing = false;
+          await rerenderChild();
+          return;
+        }
+
+        // 3) Execute-payment (server-side orchestration starts authorisation request)
+        let execRes = null;
+        if (typeof bankingPayBatchExecutePayment === 'function') {
+          execRes = await bankingPayBatchExecutePayment(id, {
+            scope,
+            pay_channel_scope: scope,
+            schedule_kind: scheduleKind,
+            scheduled_at_utc: (scheduleKind === 'SCHEDULED') ? scheduledAtUtc : null,
+            funding_account_ref: fundingAccountRef,
+            warning_hours_json: warningHoursJson,
+            actor_intent: actorIntent,
+            reauth_token: reauthToken
+          });
+        } else {
+          execRes = await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute-payment`, {
+            scope,
+            pay_channel_scope: scope,
+            schedule_kind: scheduleKind,
+            scheduled_at_utc: (scheduleKind === 'SCHEDULED') ? scheduledAtUtc : null,
+            funding_account_ref: fundingAccountRef,
+            warning_hours_json: warningHoursJson,
+            actor_intent: actorIntent,
+            reauth_token: reauthToken
+          });
+        }
+
+        // If an authorisation request was created and requires more than 1 approver, prompt to send invites now.
+        try {
+          const scheduledOut = (execRes && typeof execRes === 'object' && execRes.scheduled && typeof execRes.scheduled === 'object') ? execRes.scheduled : null;
+          const authId0 =
+            scheduledOut && scheduledOut.auth_request_id ? String(scheduledOut.auth_request_id).trim() :
+            null;
+
+          const reqQty0 = scheduledOut && Number.isFinite(Number(scheduledOut.required_quantity)) ? Math.trunc(Number(scheduledOut.required_quantity)) : null;
+          const appr0 = scheduledOut && Number.isFinite(Number(scheduledOut.approved_count)) ? Math.trunc(Number(scheduledOut.approved_count)) : null;
+
+          const batchGet0 = (execRes && typeof execRes === 'object' && execRes.batch_get && typeof execRes.batch_get === 'object') ? execRes.batch_get : null;
+          const auth0 = (batchGet0 && batchGet0.auth && typeof batchGet0.auth === 'object') ? batchGet0.auth : null;
+
+          const authId =
+            (authId0 && authId0.length) ? authId0 :
+            (auth0 && auth0.auth_request_id ? String(auth0.auth_request_id).trim() : '');
+
+          const reqQty =
+            (reqQty0 != null) ? reqQty0 :
+            (auth0 && Number.isFinite(Number(auth0.required_quantity)) ? Math.trunc(Number(auth0.required_quantity)) : 1);
+
+          const approvedCount =
+            (appr0 != null) ? appr0 :
+            (auth0 && Number.isFinite(Number(auth0.approved_count)) ? Math.trunc(Number(auth0.approved_count)) : 0);
+
+          const authState = auth0 ? String(auth0.auth_state || '').trim().toUpperCase() : '';
+
+          // If Golden Key was chosen, we should NOT prompt for other authorisers.
+          if (actorIntent === 'USE_GOLDEN_KEY') {
+            // no-op
+          } else {
+            const needsInvites =
+              !!authId &&
+              reqQty > 1 &&
+              approvedCount < reqQty &&
+              (
+                authState === '' ||
+                authState === 'AWAITING' ||
+                authState === 'AWAITING_AUTHORISATION' ||
+                authState === 'AUTHORISE_REQUIRED' ||
+                authState === 'PENDING' ||
+                authState === 'AUTHORISED'
+              );
+
+            if (needsInvites) {
+              if (typeof openPayAuthorisationRequestModal === 'function') {
+                await openPayAuthorisationRequestModal(authId, { kind: 'import-summary-banking-auth-requests', pay_batch_id: id });
+              } else {
+                try { if (typeof window.__toast === 'function') window.__toast('Authorisation request modal is not available.'); } catch {}
+              }
+            }
+          }
+        } catch {}
+
       } else {
         // ✅ Manual rail (CSV): create transfers + prepare so CSV export/confirm can proceed
         await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute`, { scope });
@@ -15475,6 +16655,50 @@ function renderBankingPayBatchChildModalOverview() {
     return (Math.round(n * 100) / 100).toFixed(2);
   };
 
+  const fmtQty = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    const r = Math.round(n * 100) / 100;
+    // Keep a compact representation (e.g. 37.5 not 37.50)
+    const s = String(r);
+    return s;
+  };
+
+  const isZeroQty = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return false;
+    return Math.round(n * 100) / 100 === 0;
+  };
+
+  const bucketLabel = (bucketCode, unitName) => {
+    const bc = String(bucketCode || '').trim().toUpperCase();
+    if (bc === 'DAY') return 'Day';
+    if (bc === 'NIGHT') return 'Night';
+    if (bc === 'SAT') return 'Sat';
+    if (bc === 'SUN') return 'Sun';
+    if (bc === 'BH') return 'BH';
+    const u = String(unitName || '').trim();
+    return u || '—';
+  };
+
+  const pickAmount = (batchKind, o) => {
+    // For PAYE show ex VAT; for UMBRELLA show inc VAT.
+    // For MIXED/unknown: prefer inc if present, else ex.
+    const bk = String(batchKind || '').trim().toUpperCase();
+    const ex = (o && o.amount_ex_vat != null) ? Number(o.amount_ex_vat) : NaN;
+    const inc = (o && o.amount_inc_vat != null) ? Number(o.amount_inc_vat) : NaN;
+
+    if (bk === 'PAYE') {
+      return Number.isFinite(ex) ? ex : (Number.isFinite(inc) ? inc : 0);
+    }
+    if (bk === 'UMBRELLA') {
+      return Number.isFinite(inc) ? inc : (Number.isFinite(ex) ? ex : 0);
+    }
+    if (Number.isFinite(inc)) return inc;
+    if (Number.isFinite(ex)) return ex;
+    return 0;
+  };
+
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
   const st = (mc && mc.banking && typeof mc.banking === 'object') ? mc.banking : null;
   const pay = (st && st.pay && typeof st.pay === 'object') ? st.pay : null;
@@ -15605,6 +16829,131 @@ function renderBankingPayBatchChildModalOverview() {
     return '';
   })();
 
+  const linesRawTop = (data && Array.isArray(data.candidate_lines)) ? data.candidate_lines : [];
+  const normalizeCandidateLineEntries = (candId) => {
+    const cid = String(candId || '').trim();
+
+    const out = [];
+    for (const x of (Array.isArray(linesRawTop) ? linesRawTop : [])) {
+      if (!x || typeof x !== 'object') continue;
+
+      // shape A: { candidate_id, timesheets:[...] }
+      if (Array.isArray(x.timesheets) && String(x?.candidate_id || '').trim() === cid) {
+        for (const t of x.timesheets) {
+          if (t && typeof t === 'object') out.push({ ...t, candidate_id: cid });
+        }
+        continue;
+      }
+
+      // shape B: flat entry (legacy) OR timesheet-group entry with breakdown_lines
+      if (String(x?.candidate_id || '').trim() === cid) out.push(x);
+    }
+    return out;
+  };
+
+  const buildBreakdownRowsForCandidate = (candId) => {
+    const entries = normalizeCandidateLineEntries(candId);
+    const rows = [];
+
+    for (const ln of entries) {
+      const we =
+        String(
+          ln?.week_ending_date ||
+          ln?.week_ending_bucket ||
+          ln?.timesheet?.week_ending_date ||
+          ''
+        ).trim();
+
+      const cl =
+        String(
+          ln?.client_name ||
+          ln?.timesheet?.client_name ||
+          ''
+        ).trim();
+
+      const kindTop =
+        String(
+          ln?.line_kind ||
+          ln?.kind ||
+          ln?.item_type ||
+          ''
+        ).trim();
+
+      // New shape: breakdown_lines array
+      if (Array.isArray(ln.breakdown_lines)) {
+        for (const bl of ln.breakdown_lines) {
+          if (!bl || typeof bl !== 'object') continue;
+
+          const uName = bucketLabel(bl.bucket_code, bl.unit_name);
+          const qty = (bl.units == null) ? null : Number(bl.units);
+          const hasQty = (bl.units != null) && Number.isFinite(qty);
+
+          // Hard rule: hide lines where quantity is zero (for quantity-bearing lines)
+          if (hasQty && isZeroQty(qty)) continue;
+
+          const isAmountOnly = (bl.units == null) || (!Number.isFinite(qty));
+          const rate = (bl.rate == null) ? null : Number(bl.rate);
+          const hasRate = Number.isFinite(rate);
+
+          const amt = pickAmount(batchKind, bl);
+
+          rows.push({
+            week_ending_date: we,
+            client_name: cl,
+            unit_name: uName,
+            units_text: isAmountOnly ? '' : fmtQty(qty),
+            rate_text: (isAmountOnly || !hasRate) ? '' : fmtMoney(rate),
+            total_text: fmtMoney(amt),
+            type_text: String(bl.line_kind || kindTop || '—').trim() || '—'
+          });
+        }
+        continue;
+      }
+
+      // Legacy / fallback: treat as single line entry without deriving rate
+      const unitName = String(ln?.unit_name || ln?.unit || '').trim() || '—';
+      const units = (ln?.units != null) ? Number(ln.units) : NaN;
+
+      // Hard rule: hide lines where quantity is zero
+      if (Number.isFinite(units) && isZeroQty(units)) continue;
+
+      const rateVal = (ln?.rate != null) ? Number(ln.rate) : NaN;
+      const paymentAmt =
+        (ln?.payment_amount != null) ? Number(ln.payment_amount)
+        : (ln?.subtotal != null) ? Number(ln.subtotal)
+        : NaN;
+
+      const total = Number.isFinite(paymentAmt)
+        ? paymentAmt
+        : pickAmount(batchKind, ln);
+
+      rows.push({
+        week_ending_date: we,
+        client_name: cl,
+        unit_name: unitName,
+        units_text: Number.isFinite(units) ? fmtQty(units) : '',
+        rate_text: Number.isFinite(rateVal) ? fmtMoney(rateVal) : '',
+        total_text: fmtMoney(total),
+        type_text: kindTop || '—'
+      });
+    }
+
+    // stable ordering: week ending desc, then client, then unit
+    rows.sort((a, b) => {
+      const wa = String(a.week_ending_date || '');
+      const wb = String(b.week_ending_date || '');
+      if (wa !== wb) return wb.localeCompare(wa);
+      const ca = String(a.client_name || '');
+      const cb = String(b.client_name || '');
+      if (ca !== cb) return ca.localeCompare(cb);
+      const ua = String(a.unit_name || '');
+      const ub = String(b.unit_name || '');
+      return ua.localeCompare(ub);
+    });
+
+    return rows;
+  };
+
   const candidateRowsHtml = candidates.length
     ? candidates.map((c) => {
         const cid = String(c?.candidate_id || '').trim();
@@ -15638,8 +16987,7 @@ function renderBankingPayBatchChildModalOverview() {
 
         const isExpanded = !!expanded[cid];
 
-        const linesRaw = (data && Array.isArray(data.candidate_lines)) ? data.candidate_lines : [];
-        const lines = Array.isArray(linesRaw) ? linesRaw.filter(x => String(x?.candidate_id || '').trim() === cid) : [];
+        const rows = isExpanded ? buildBreakdownRowsForCandidate(cid) : [];
 
         const linesHtml = isExpanded ? `
           <div style="margin-top:8px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
@@ -15649,40 +16997,37 @@ function renderBankingPayBatchChildModalOverview() {
                   <th style="width:140px;">Week ending</th>
                   <th>Client</th>
                   <th>Unit</th>
-                  <th style="width:90px; text-align:right;">Units</th>
+                  <th style="width:110px; text-align:right;">Quantity</th>
                   <th style="width:110px; text-align:right;">Rate</th>
-                  <th style="width:140px; text-align:right;">Subtotal</th>
+                  <th style="width:140px; text-align:right;">Total</th>
                   <th style="width:160px;">Type</th>
                 </tr>
               </thead>
               <tbody>
                 ${
-                  lines.length
-                    ? lines.map(ln => {
-                        const we = String(ln?.week_ending_date || ln?.week_ending_bucket || '').trim();
-                        const cl = String(ln?.client_name || '').trim();
-                        const un = String(ln?.unit_name || ln?.unit || ln?.ward_name || '').trim();
-                        const units = (ln?.units != null) ? String(ln.units) : '';
-                        const rate = (ln?.rate != null) ? String(ln.rate) : '';
-                        const sub =
-                          (ln?.subtotal != null) ? fmtMoney(ln.subtotal)
-                          : (ln?.payment_amount != null) ? fmtMoney(ln.payment_amount)
-                          : (ln?.amount != null) ? fmtMoney(ln.amount)
-                          : '';
-                        const kind = String(ln?.line_kind || ln?.kind || ln?.item_type || '').trim() || '—';
+                  rows.length
+                    ? rows.map(rw => {
+                        const we = String(rw.week_ending_date || '').trim();
+                        const cl = String(rw.client_name || '').trim();
+                        const un = String(rw.unit_name || '').trim();
+                        const qt = String(rw.units_text || '').trim();
+                        const rt = String(rw.rate_text || '').trim();
+                        const tt = String(rw.total_text || '').trim();
+                        const ty = String(rw.type_text || '').trim() || '—';
+
                         return `
                           <tr>
                             <td class="mini" style="white-space:nowrap;">${enc(we ? formatIsoToUkLocal(we) : '—')}</td>
                             <td class="mini">${enc(cl || '—')}</td>
                             <td class="mini">${enc(un || '—')}</td>
-                            <td class="mono" style="text-align:right;">${enc(units || '')}</td>
-                            <td class="mono" style="text-align:right;">${enc(rate || '')}</td>
-                            <td class="mono" style="text-align:right;">${enc(sub || '')}</td>
-                            <td class="mini">${enc(kind)}</td>
+                            <td class="mono" style="text-align:right;">${enc(qt || '')}</td>
+                            <td class="mono" style="text-align:right;">${enc(rt || '')}</td>
+                            <td class="mono" style="text-align:right;">£${enc(tt || '0.00')}</td>
+                            <td class="mini">${enc(ty)}</td>
                           </tr>
                         `;
                       }).join('')
-                    : `<tr><td colspan="7" class="mini" style="opacity:.85;">No line breakdown available in this response.</td></tr>`
+                    : `<tr><td colspan="7" class="mini" style="opacity:.85;">No canonical breakdown lines were returned for this candidate.</td></tr>`
                 }
               </tbody>
             </table>
@@ -15934,7 +17279,8 @@ function renderBankingPayBatchChildModalOverview() {
       </div>
     </div>
   `;
-} 
+}
+
 async function openBankingPayBatchPayeEntryModal(payBatchId) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -18262,6 +19608,28 @@ function attachBankingModalDelegatedHandlers() {
       const r = (st.id && st.id.selectedRun && typeof st.id.selectedRun === 'object') ? st.id.selectedRun : null;
       if (!r) { toast('Select a run first'); return; }
       try { bankingIdRunPrint(r); } catch (e) { toast(String(e?.message || e || 'Print failed')); }
+      return;
+    }
+
+    if (a === 'banking:id:runExportCsv') {
+      if (typeof bankingIdRunExportCsv !== 'function') { toast('Export is not available'); return; }
+
+      const idRef = String(ds('idRef') || dget('data-id-ref') || '').trim();
+      const curRef = String(st.id?.selectedRunIdRef || '').trim();
+
+      try {
+        if (idRef && /^[0-9]{6}$/.test(idRef) && idRef !== curRef) {
+          await idRunSelect(idRef);
+        }
+      } catch (e) {
+        toast(String(e?.message || e || 'Unable to load run for export'));
+        return;
+      }
+
+      const r = (st.id && st.id.selectedRun && typeof st.id.selectedRun === 'object') ? st.id.selectedRun : null;
+      if (!r) { toast('Select a run first'); return; }
+
+      try { bankingIdRunExportCsv(r); } catch (e) { toast(String(e?.message || e || 'Export failed')); }
       return;
     }
 
@@ -34767,6 +36135,8 @@ async function openCandidateAdvancesModal(candidateRow) {
     console.warn('[ADVANCES][MGR] initial wiring failed', e);
   }
 }
+
+
 function renderCandidateTab(key, row = {}) {
   if (key === 'main') {
     const enc = escapeHtml || ((s) => String(s || ''));
@@ -34845,9 +36215,6 @@ function renderCandidateTab(key, row = {}) {
                 All
               </label>
             </div>
-            <div class="hint">
-              “All” will tick/untick Email, SMS and WhatsApp together. (All is UI-only and is not saved to the database.)
-            </div>
           </div>
         </div>
 
@@ -34892,11 +36259,6 @@ function renderCandidateTab(key, row = {}) {
             </div>
             <div id="cand-alias-empty" class="mini">
               No aliases configured yet.
-            </div>
-            <div class="hint">
-              Aliases come from previous NHSP / HealthRoster imports where this staff name
-              was resolved to this candidate. Removing a mapping will prevent future rotas
-              using that name from auto-linking to this candidate.
             </div>
           </div>
         </div>
@@ -35069,68 +36431,115 @@ function renderCandidateTab(key, row = {}) {
     </div>
   `);
 
-  if (key === 'pay') return html(`
-    <div class="form" id="tab-pay" data-candidate-id="${row.id || ''}">
-      <div class="row">
-        <label class="hint">
-          PAYE bank fields are editable. If UMBRELLA is selected, bank details are taken from the umbrella and locked.
-        </label>
-      </div>
+  if (key === 'pay') {
+    const enc = escapeHtml || ((s) => String(s || ''));
 
-      ${input('account_holder','Account holder', row.account_holder)}
-      ${input('bank_name','Bank name', row.bank_name)}
-      ${input('sort_code','Sort code', row.sort_code)}
-      ${input('account_number','Account number', row.account_number)}
+    const remOverrides = !!row.remittance_overrides_enabled;
+    const remReceivePaye = !!row.remittance_receive_enabled;
+    const remDetailed = !!row.remittances_detailed_breakdown;
+    const remUmbCopy = !!row.remittance_receive_when_umbrella_paid;
 
-      <!-- Umbrella chooser: text input + datalist + hidden canonical id -->
-      <div class="row" id="umbRow">
-        <label>Umbrella company</label>
-        <input id="umbrella_name"
-               list="umbList"
-               placeholder="Type to search umbrellas…"
-               value=""
-               autocomplete="off"
-               onclick="if (this.value) { this.dataset.prev=this.value; this.value=''; this.dispatchEvent(new Event('input',{bubbles:true})); }"
-               onfocus="if (this.value) { this.dataset.prev=this.value; this.value=''; this.dispatchEvent(new Event('input',{bubbles:true})); }" />
-        <datalist id="umbList"></datalist>
-        <input type="hidden" name="umbrella_id" id="umbrella_id" value="${row.umbrella_id || ''}"/>
-      </div>
+    return html(`
+      <div class="form" id="tab-pay" data-candidate-id="${row.id || ''}">
+        <div class="row">
+          <label class="hint">
+            PAYE bank fields are editable. If UMBRELLA is selected, bank details are taken from the umbrella and locked.
+          </label>
+        </div>
 
-      <!-- Advances summary (read-only) -->
-      <div class="row">
-        <label>Advances summary</label>
-        <div class="controls" id="candidateAdvancesSummary">
-          <span class="mini">No advances loaded yet.</span>
+        ${input('account_holder','Account holder', row.account_holder)}
+        ${input('bank_name','Bank name', row.bank_name)}
+        ${input('sort_code','Sort code', row.sort_code)}
+        ${input('account_number','Account number', row.account_number)}
+
+        <!-- Umbrella chooser: text input + datalist + hidden canonical id -->
+        <div class="row" id="umbRow">
+          <label>Umbrella company</label>
+          <input id="umbrella_name"
+                 list="umbList"
+                 placeholder="Type to search umbrellas…"
+                 value=""
+                 autocomplete="off"
+                 onclick="if (this.value) { this.dataset.prev=this.value; this.value=''; this.dispatchEvent(new Event('input',{bubbles:true})); }"
+                 onfocus="if (this.value) { this.dataset.prev=this.value; this.value=''; this.dispatchEvent(new Event('input',{bubbles:true})); }" />
+          <datalist id="umbList"></datalist>
+          <input type="hidden" name="umbrella_id" id="umbrella_id" value="${row.umbrella_id || ''}"/>
+        </div>
+
+        <!-- ✅ NEW: Remittance overrides (candidate-level) -->
+        <div class="row" style="grid-column:1/-1;">
+          <label>Remittances</label>
+          <div class="controls">
+            <div class="card" style="padding:12px;">
+              <label class="mini" style="display:flex;gap:8px;align-items:center;cursor:pointer;">
+                <input type="checkbox" name="remittance_overrides_enabled" ${remOverrides ? 'checked' : ''}>
+                Use candidate remittance overrides
+              </label>
+
+              <div class="mini" style="opacity:.75;margin:6px 0 10px 26px;">
+                When enabled, the options below override Global Settings for this candidate.
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:10px;margin-left:18px;">
+                <label class="mini" style="display:flex;gap:8px;align-items:center;cursor:pointer;">
+                  <input type="checkbox" name="remittance_receive_enabled" ${remReceivePaye ? 'checked' : ''}>
+                  PAYE candidate receives remittances
+                </label>
+
+                <label class="mini" style="display:flex;gap:8px;align-items:center;cursor:pointer;">
+                  <input type="checkbox" name="remittances_detailed_breakdown" ${remDetailed ? 'checked' : ''}>
+                  Detailed remittances (include schedule rows for segment timesheets)
+                </label>
+
+                <label class="mini" style="display:flex;gap:8px;align-items:center;cursor:pointer;">
+                  <input type="checkbox" name="remittance_receive_when_umbrella_paid" ${remUmbCopy ? 'checked' : ''}>
+                  Candidate receives umbrella copy remittance (umbrella-paid items)
+                </label>
+              </div>
+
+              <div class="mini" style="opacity:.7;margin-top:10px;">
+                Note: Umbrella remittances are always sent to the umbrella remittance email when configured.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Advances summary (read-only) -->
+        <div class="row">
+          <label>Advances summary</label>
+          <div class="controls" id="candidateAdvancesSummary">
+            <span class="mini">No advances loaded yet.</span>
+          </div>
+        </div>
+
+        <!-- Missing-shift advances (read-only) -->
+        <div class="row">
+          <label>Missing-shift advances</label>
+          <div class="controls">
+            <div id="candidateMissingShiftAdvances">
+              <span class="mini">No missing-shift advances.</span>
+            </div>
+            <div class="hint mini">
+              To add or edit missing-shift advances, right-click this candidate in the summary list and choose “Advances / loans…”.
+            </div>
+          </div>
+        </div>
+
+        <!-- General advances / loans (read-only) -->
+        <div class="row">
+          <label>Advances / loans</label>
+          <div class="controls">
+            <div id="candidateGeneralAdvances">
+              <span class="mini">No advances or loans.</span>
+            </div>
+            <div class="hint mini">
+              To manage advances or loans, right-click this candidate in the summary list and choose “Advances / loans…”.
+            </div>
+          </div>
         </div>
       </div>
-
-      <!-- Missing-shift advances (read-only) -->
-      <div class="row">
-        <label>Missing-shift advances</label>
-        <div class="controls">
-          <div id="candidateMissingShiftAdvances">
-            <span class="mini">No missing-shift advances.</span>
-          </div>
-          <div class="hint mini">
-            To add or edit missing-shift advances, right-click this candidate in the summary list and choose “Advances / loans…”.
-          </div>
-        </div>
-      </div>
-
-      <!-- General advances / loans (read-only) -->
-      <div class="row">
-        <label>Advances / loans</label>
-        <div class="controls">
-          <div id="candidateGeneralAdvances">
-            <span class="mini">No advances or loans.</span>
-          </div>
-          <div class="hint mini">
-            To manage advances or loans, right-click this candidate in the summary list and choose “Advances / loans…”.
-          </div>
-        </div>
-      </div>
-    </div>
-  `);
+    `);
+  }
 
   // Candidate Calendar tab container
   if (key === 'bookings') return html(`
@@ -36382,7 +37791,6 @@ async function openCandidate(row) {
             payload.band = n;
           }
         }
-
         const coerceBool = (v) => {
           if (v === true) return true;
           if (v === false) return false;
@@ -36403,6 +37811,25 @@ async function openCandidate(row) {
         ensureOpt('opt_in_email');
         ensureOpt('opt_in_sms');
         ensureOpt('opt_in_whatsapp');
+
+        // ✅ NEW: remittance overrides (PAY tab) — always include booleans so OFF persists
+        const baseRow =
+          (window.modalCtx && window.modalCtx.data && typeof window.modalCtx.data === 'object')
+            ? window.modalCtx.data
+            : {};
+
+        const readRem = (key, dflt=false) => {
+          // precedence: live DOM (#tab-pay) → staged pay state → DB row
+          if (Object.prototype.hasOwnProperty.call(pay, key))      return coerceBool(pay[key]);
+          if (Object.prototype.hasOwnProperty.call(statePay, key)) return coerceBool(statePay[key]);
+          if (Object.prototype.hasOwnProperty.call(baseRow, key))  return coerceBool(baseRow[key]);
+          return !!dflt;
+        };
+
+        payload.remittance_overrides_enabled = readRem('remittance_overrides_enabled', false);
+        payload.remittance_receive_enabled = readRem('remittance_receive_enabled', false);
+        payload.remittances_detailed_breakdown = readRem('remittances_detailed_breakdown', false);
+        payload.remittance_receive_when_umbrella_paid = readRem('remittance_receive_when_umbrella_paid', false);
       } catch (e) {
         W('canonicalise (title/band/opt_ins) failed', e);
       }
@@ -40886,6 +42313,12 @@ async function mountCandidatePayTab() {
   const sortCode  = document.querySelector('#tab-pay input[name="sort_code"]');
   const accNum    = document.querySelector('#tab-pay input[name="account_number"]');
 
+  // ✅ Remittance override controls (candidate pay tab)
+  const remOverridesCk = document.querySelector('#tab-pay input[name="remittance_overrides_enabled"]');
+  const remReceiveCk   = document.querySelector('#tab-pay input[name="remittance_receive_enabled"]');
+  const remDetailedCk  = document.querySelector('#tab-pay input[name="remittances_detailed_breakdown"]');
+  const remUmbCopyCk   = document.querySelector('#tab-pay input[name="remittance_receive_when_umbrella_paid"]');
+
   // ----- Ensure modalCtx + formState/pay exist (no optional-chaining on assignment) -----
 
   window.modalCtx = window.modalCtx || {};
@@ -40945,6 +42378,17 @@ async function mountCandidatePayTab() {
     '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
   }[c]));
 
+  const boolish = (v, dflt=false) => {
+    if (typeof v === 'boolean') return v;
+    if (v === 1 || v === '1') return true;
+    if (v === 0 || v === '0') return false;
+    if (v == null) return !!dflt;
+    const s = String(v).trim().toLowerCase();
+    if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+    if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+    return !!dflt;
+  };
+
   function setBankDisabled(disabled) {
     [accHolder, bankName, sortCode, accNum].forEach(el => { if (el) el.disabled = !!disabled; });
     const umbInput = document.getElementById('umbrella_name');
@@ -40952,6 +42396,97 @@ async function mountCandidatePayTab() {
     if (umbInput) umbInput.disabled = !isEdit;
     try { window.__BANK_FIELDS_DISABLED__ = !!disabled; } catch {}
     if (LOG) console.log('[PAYTAB] setBankDisabled', { disabled, isEdit });
+  }
+
+  // ----- Remittance UI helpers --------------------------------------------
+
+  function readRemBool(key, dflt=false) {
+    try {
+      if (Object.prototype.hasOwnProperty.call(stagedPay, key)) {
+        return boolish(stagedPay[key], dflt);
+      }
+      const d = (window.modalCtx && window.modalCtx.data && typeof window.modalCtx.data === 'object') ? window.modalCtx.data : {};
+      if (Object.prototype.hasOwnProperty.call(d, key)) {
+        return boolish(d[key], dflt);
+      }
+      return !!dflt;
+    } catch {
+      return !!dflt;
+    }
+  }
+
+  function setCkFromStagedOrDb(el, key, dflt=false) {
+    if (!el) return;
+    const v = readRemBool(key, dflt);
+    el.checked = !!v;
+    // ensure staged state is boolean-stable
+    stagedPay[key] = !!v;
+  }
+
+  function setLabelDisabledVisual(el, disabled) {
+    if (!el) return;
+    const lab = (typeof el.closest === 'function') ? el.closest('label') : null;
+    if (!lab) return;
+    lab.style.opacity = disabled ? '0.55' : '';
+    lab.style.filter  = disabled ? 'grayscale(35%)' : '';
+  }
+
+  function applyRemittanceEnableState() {
+    const overridesOn = remOverridesCk ? !!remOverridesCk.checked : false;
+
+    // Master checkbox: normal edit gating
+    if (remOverridesCk) {
+      remOverridesCk.disabled = !isEdit;
+      setLabelDisabledVisual(remOverridesCk, !isEdit);
+    }
+
+    const depDisabled = (!isEdit) || (!overridesOn);
+
+    // Dependent options: disable when overrides off (but keep values intact)
+    [remReceiveCk, remDetailedCk, remUmbCopyCk].forEach(el => {
+      if (!el) return;
+      el.disabled = depDisabled;
+      setLabelDisabledVisual(el, depDisabled);
+    });
+
+    if (LOG) {
+      console.log('[PAYTAB] remittance enable state', {
+        isEdit,
+        overridesOn,
+        depDisabled
+      });
+    }
+  }
+
+  function stageRemittanceFromDom() {
+    if (remOverridesCk) stagedPay.remittance_overrides_enabled = !!remOverridesCk.checked;
+    if (remReceiveCk)   stagedPay.remittance_receive_enabled = !!remReceiveCk.checked;
+    if (remDetailedCk)  stagedPay.remittances_detailed_breakdown = !!remDetailedCk.checked;
+    if (remUmbCopyCk)   stagedPay.remittance_receive_when_umbrella_paid = !!remUmbCopyCk.checked;
+  }
+
+  function wireRemittanceControls() {
+    const wire = (el, key, onChange) => {
+      if (!el) return;
+      if (el.__payTabRemWired) return;
+      el.__payTabRemWired = true;
+      el.addEventListener('change', () => {
+        try {
+          if (key) stagedPay[key] = !!el.checked;
+        } catch {}
+        try { onChange && onChange(); } catch {}
+        try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+      }, true);
+    };
+
+    wire(remOverridesCk, 'remittance_overrides_enabled', () => {
+      // do not mutate dependent checkbox values; just enable/disable them
+      applyRemittanceEnableState();
+    });
+
+    wire(remReceiveCk, 'remittance_receive_enabled', null);
+    wire(remDetailedCk, 'remittances_detailed_breakdown', null);
+    wire(remUmbCopyCk, 'remittance_receive_when_umbrella_paid', null);
   }
 
   // ----- Staging helpers ---------------------------------------------------
@@ -40964,6 +42499,10 @@ async function mountCandidatePayTab() {
     stagedPay.umbrella_name  = nameInput ? nameInput.value : '';
     stagedPay.umbrella_id    = idHidden  ? idHidden.value  : '';
     stagedPay.__forMethod    = payMethod || null;   // tag staging with the *current* method
+
+    // ✅ also keep remittance checkboxes staged (independent of pay method)
+    stageRemittanceFromDom();
+
     if (LOG) console.log('[PAYTAB] stageFromDom', { ...stagedPay });
   }
 
@@ -40982,6 +42521,8 @@ async function mountCandidatePayTab() {
     stagedPay.umbrella_name  = '';
     stagedPay.umbrella_id    = '';
     stagedPay.__forMethod    = null;
+
+    // ✅ do NOT clear remittance staging here
 
     if (LOG) console.log('[PAYTAB] clearBankAndUmbrella (DOM + staged)');
   }
@@ -41047,6 +42588,9 @@ async function mountCandidatePayTab() {
     stagedPay.umbrella_name  = nameInput ? (nameInput.value || umb.name || '') : (umb.name || '');
     stagedPay.umbrella_id    = umb.id || '';
     stagedPay.__forMethod    = payMethod || 'UMBRELLA';
+
+    // keep remittance staging stable
+    stageRemittanceFromDom();
 
     if (LOG) console.log('[PAYTAB] prefillUmbrellaBankFields', {
       umb_id: umb.id,
@@ -41167,6 +42711,9 @@ async function mountCandidatePayTab() {
       stagedPay.sort_code      = '';
       stagedPay.account_number = '';
 
+      // keep remittance staging stable
+      stageRemittanceFromDom();
+
       if (LOG) console.log('[PAYTAB] selection cleared (umbrella_name empty)', { stagedPay: { ...stagedPay } });
       return;
     }
@@ -41211,6 +42758,8 @@ async function mountCandidatePayTab() {
       stagedPay.umbrella_id   = '';
       stagedPay.__forMethod   = payMethod || null;
     }
+
+    stageRemittanceFromDom();
   }
 
   // ----- Staged state helpers / flags --------------------------------------
@@ -41293,6 +42842,10 @@ async function mountCandidatePayTab() {
         fillFromCandidate();
       }
     }
+
+    // remittance toggles are independent of pay method
+    stageRemittanceFromDom();
+    applyRemittanceEnableState();
   };
 
   try {
@@ -41308,6 +42861,16 @@ async function mountCandidatePayTab() {
   // ─────────────────────────────────────────────────────────────
   // Initial render (when Pay tab is entered)
   // ─────────────────────────────────────────────────────────────
+
+  // ✅ Ensure remittance checkboxes reflect staged values first, then DB row
+  setCkFromStagedOrDb(remOverridesCk, 'remittance_overrides_enabled', false);
+  setCkFromStagedOrDb(remReceiveCk,   'remittance_receive_enabled', false);
+  setCkFromStagedOrDb(remDetailedCk,  'remittances_detailed_breakdown', false);
+  setCkFromStagedOrDb(remUmbCopyCk,   'remittance_receive_when_umbrella_paid', false);
+
+  // ✅ Apply enable/disable and wire handlers (does not change values)
+  applyRemittanceEnableState();
+  wireRemittanceControls();
 
   const hadStagedAtEntry = hasStagedForCurrentMethod();
 
@@ -41357,6 +42920,7 @@ async function mountCandidatePayTab() {
           stagedPay.umbrella_name = term;
           stagedPay.umbrella_id = '';
           stagedPay.__forMethod = payMethod || null;
+          stageRemittanceFromDom();
         }
 
         scheduleUmbrellaSearch(term, false);
@@ -41407,6 +42971,10 @@ async function mountCandidatePayTab() {
     }
   }
 
+  // Ensure remittance staging is consistent after initial bank/umbrella paint
+  stageRemittanceFromDom();
+  applyRemittanceEnableState();
+
   if (LOG) {
     console.log('[PAYTAB] EXIT', {
       finalDom: {
@@ -41415,7 +42983,11 @@ async function mountCandidatePayTab() {
         sort_code:      sortCode?.value  ?? null,
         account_number: accNum?.value    ?? null,
         umbrella_name:  nameInput?.value ?? null,
-        umbrella_id:    idHidden?.value  ?? null
+        umbrella_id:    idHidden?.value  ?? null,
+        remittance_overrides_enabled: remOverridesCk?.checked ?? null,
+        remittance_receive_enabled: remReceiveCk?.checked ?? null,
+        remittances_detailed_breakdown: remDetailedCk?.checked ?? null,
+        remittance_receive_when_umbrella_paid: remUmbCopyCk?.checked ?? null
       },
       finalStagedPay: { ...stagedPay }
     });
@@ -63287,26 +64859,29 @@ persistCurrentTabState() {
   }
 }
 
- if (this.currentTabKey === 'pay' && byId('tab-pay')) {
-  const c = collectForm('#tab-pay');
-  // For the Pay tab we must preserve blanks so cleared bank/umbrella fields
-  // don’t spring back from the DB when hopping between tabs.
-  // Do NOT strip empty values here.
-  if (LOG) {
-    console.log('[MODAL][persistCurrentTabState] PAY TAB collected', {
-      raw: { ...c },
-      prevPay: { ...(fs.pay || {}) }
-    });
-  }
-  fs.pay = { ...(fs.pay || {}), ...c };
-  if (LOG) {
-    console.log('[MODAL][persistCurrentTabState] PAY TAB updated fs.pay', {
-      payKeys: Object.keys(fs.pay || {}),
-      fsPay: { ...fs.pay }
-    });
-  }
-}
+if (hasSettingsForm) {
+  const c = collectForm('#settingsForm', true) || {};
 
+  // ✅ Settings: stage new remittance defaults as booleans so FALSE is preserved
+  try {
+    const formEl = document.getElementById('settingsForm');
+    if (formEl) {
+      const cbDetail = formEl.querySelector('input[type="checkbox"][name="remittances_detailed_breakdown"]');
+      if (cbDetail) c.remittances_detailed_breakdown = !!cbDetail.checked;
+
+      const cbCopy = formEl.querySelector('input[type="checkbox"][name="remittance_receive_when_umbrella_paid"]');
+      if (cbCopy) c.remittance_receive_when_umbrella_paid = !!cbCopy.checked;
+    }
+  } catch {}
+
+  // Stage into formState.main (safe; Settings is a singleton row)
+  fs.main = { ...(fs.main || {}), ...c };
+
+  // Also mirror into modalCtx.data so renderSettingsTab sees latest values immediately
+  try {
+    window.modalCtx.data = { ...(window.modalCtx.data || {}), ...c };
+  } catch {}
+}
 
 
   // NEW: capture Care Packages tab (candidates/rates) into main form state
@@ -63534,14 +65109,23 @@ mergedRowForTab(k) {
         }
       }
 
-      // ✅ Ensure staged opt-ins override base even when false
-      const OPT_KEYS = ['opt_in_email', 'opt_in_sms', 'opt_in_whatsapp'];
-      for (const k2 of OPT_KEYS) {
-        if (Object.prototype.hasOwnProperty.call(mainStaged, k2)) {
-          const v2 = mainStaged[k2];
-          if (typeof v2 === 'boolean') out[k2] = v2;
-        }
-      }
+    // ✅ Ensure staged opt-ins + remittance toggles override base even when false
+const OPT_KEYS = [
+  'opt_in_email', 'opt_in_sms', 'opt_in_whatsapp',
+  'remittance_overrides_enabled',
+  'remittance_receive_enabled',
+  'remittances_detailed_breakdown',
+  'remittance_receive_when_umbrella_paid'
+];
+for (const k2 of OPT_KEYS) {
+  if (Object.prototype.hasOwnProperty.call(mainStaged, k2)) {
+    const v2 = mainStaged[k2];
+    if (typeof v2 === 'boolean') out[k2] = v2;
+  } else if (Object.prototype.hasOwnProperty.call(payStaged, k2)) {
+    const v2 = payStaged[k2];
+    if (typeof v2 === 'boolean') out[k2] = v2;
+  }
+}
     }
 
     if (this.entity === 'clients') {
@@ -67009,7 +68593,7 @@ const canProcessNow =
         };
       }
 
-   // ── Process Timesheet ──
+// ── Process Timesheet ──
 if (btnTsProcess) {
   btnTsProcess.style.display = canProcessNow ? '' : 'none';
   btnTsProcess.disabled      = !!top._saving;
@@ -67053,21 +68637,66 @@ if (btnTsProcess) {
       return;
     }
 
-    // pull draft extras from contract_weeks.totals_json.additional_units_week
-    let auWeek = null;
+    // ✅ Flush pending edits in the Additional Rates grid (covers "type then click Process")
     try {
-      auWeek = (cw && cw.totals_json && typeof cw.totals_json === 'object')
-        ? cw.totals_json.additional_units_week
-        : null;
+      const exRoot = document.getElementById('tsWeeklyExtras');
+      if (exRoot) {
+        exRoot.querySelectorAll('input[name^="extra_units_"]').forEach(el => {
+          try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
+        });
+      }
+    } catch {}
 
-      if (typeof auWeek === 'string') {
-        try { auWeek = JSON.parse(auWeek); } catch { auWeek = null; }
+    // ✅ Frontend source of truth: build BOTH maps from timesheetState.additionalRates
+    const buildAdditionalUnits = () => {
+      const ar = (mc.timesheetState && typeof mc.timesheetState.additionalRates === 'object')
+        ? mc.timesheetState.additionalRates
+        : {};
+
+      const week = {};
+      const perDay = {};
+
+      const sumPerDay = (m) => {
+        let s = 0;
+        if (!m || typeof m !== 'object') return 0;
+        for (const v of Object.values(m)) {
+          const n = Number(v);
+          if (Number.isFinite(n) && n > 0) s += n;
+        }
+        return s;
+      };
+
+      for (const [codeRaw, item] of Object.entries(ar)) {
+        const code = String((item && item.code) || codeRaw || '').toUpperCase().trim();
+        if (!code) continue;
+
+        const pd = (item && item.units_per_day && typeof item.units_per_day === 'object')
+          ? item.units_per_day
+          : null;
+
+        if (pd) {
+          for (const [ymd, v] of Object.entries(pd)) {
+            const y = String(ymd || '').slice(0, 10);
+            const n = Number(v);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(y)) continue;
+            if (!Number.isFinite(n) || n <= 0) continue;
+            (perDay[code] ||= {})[y] = n;
+          }
+        }
+
+        const wk = pd ? sumPerDay(perDay[code]) : Number(item && item.units_week);
+        if (Number.isFinite(wk) && wk > 0) week[code] = wk;
       }
 
-      if (!auWeek || typeof auWeek !== 'object') auWeek = {};
-    } catch {
-      auWeek = {};
-    }
+      for (const c of Object.keys(perDay)) {
+        if (!perDay[c] || !Object.keys(perDay[c]).length) delete perDay[c];
+      }
+
+      return { week, perDay };
+    };
+
+    const { week: auWeek, perDay: auPerDay } = buildAdditionalUnits();
+
 const sanitizeSchedule = (arr) => {
   const out = Array.isArray(arr) ? JSON.parse(JSON.stringify(arr)) : [];
   for (const seg of out) {
@@ -67114,7 +68743,8 @@ const sanitizeSchedule = (arr) => {
 
 const payload = {
   actual_schedule_json: sanitizeSchedule(scheduleX),
-  additional_units_week: auWeek
+  additional_units_week: auWeek,
+  additional_units_per_day: auPerDay
 };
     
 
@@ -67142,7 +68772,6 @@ await refreshFooter();
     }
   };
 }
-
 
       // ── Delete Timesheet ──
       if (btnTsDelete) {
@@ -76457,6 +78086,25 @@ async function openUmbrella(row){
     (key, r)=> {
       L('[renderUmbrellaTab] tab=', key, 'rowKeys=', Object.keys(r||{}), 'sample=', { name: r?.name, id: r?.id });
       const u = r || {};
+
+      const boolish = (v, dflt=false) => {
+        if (typeof v === 'boolean') return v;
+        if (v === 1 || v === '1') return true;
+        if (v === 0 || v === '0') return false;
+        if (v == null) return !!dflt;
+        const s = String(v).trim().toLowerCase();
+        if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+        if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+        return !!dflt;
+      };
+
+      const ovOn = boolish(u.remittance_overrides_enabled, false);
+      const detOn = boolish(u.remittances_detailed_breakdown, false);
+
+      const detailDisAttrs = (!ovOn)
+        ? 'disabled style="opacity:.55;filter:saturate(0.75) brightness(0.95);"'
+        : '';
+
       return html(`
         <div class="form" id="tab-main">
           ${input('name','Name', u.name)}
@@ -76464,6 +78112,27 @@ async function openUmbrella(row){
           ${input('bank_name','Bank', u.bank_name)}
           ${input('sort_code','Sort code', u.sort_code)}
           ${input('account_number','Account number', u.account_number)}
+
+          <div class="row">
+            <label>Remittance overrides</label>
+            <div class="controls">
+              <div class="card" style="padding:12px;">
+                <label class="mini" style="display:flex;gap:8px;align-items:center;cursor:pointer;">
+                  <input type="checkbox" name="remittance_overrides_enabled" ${ovOn ? 'checked' : ''}>
+                  Use umbrella remittance overrides
+                </label>
+
+                <div class="mini" style="opacity:.75;margin:6px 0 10px 26px;">
+                  When enabled, the option below overrides Global Settings for this umbrella.
+                </div>
+
+                <label class="mini" style="display:flex;gap:8px;align-items:center;cursor:pointer;margin-left:18px;">
+                  <input type="checkbox" name="remittances_detailed_breakdown" ${detOn ? 'checked' : ''} ${detailDisAttrs}>
+                  Detailed remittances (include schedule rows for segment timesheets)
+                </label>
+              </div>
+            </div>
+          </div>
 
           <div class="row">
             <label>Company registration number</label>
@@ -76536,6 +78205,15 @@ async function openUmbrella(row){
 
       L('[onSave] collected', { sameRecord, stagedKeys: Object.keys(staged||{}), liveKeys: Object.keys(live||{}) });
 
+      const coerceBool = (v, dflt=false) => {
+        if (v === true) return true;
+        if (v === false) return false;
+        if (v == null) return !!dflt;
+        const s = String(v).trim().toLowerCase();
+        return (s === 'on' || s === 'true' || s === '1' || s === 'yes' || s === 'y');
+      };
+
+      // Existing normalisation
       if (typeof payload.vat_chargeable !== 'boolean') {
         payload.vat_chargeable = (payload.vat_chargeable === 'Yes' || payload.vat_chargeable === 'true');
       }
@@ -76543,9 +78221,29 @@ async function openUmbrella(row){
         payload.enabled = (payload.enabled === 'Yes' || payload.enabled === 'true');
       }
 
+      // ✅ NEW: umbrella remittance override booleans — always include explicitly
+      const baseRow = (window.modalCtx && window.modalCtx.data && typeof window.modalCtx.data === 'object') ? window.modalCtx.data : {};
+
+      const readField = (key, dflt=false) => {
+        if (Object.prototype.hasOwnProperty.call(live, key))   return coerceBool(live[key], dflt);
+        if (Object.prototype.hasOwnProperty.call(staged, key)) return coerceBool(staged[key], dflt);
+        if (Object.prototype.hasOwnProperty.call(baseRow, key)) return coerceBool(baseRow[key], dflt);
+        return !!dflt;
+      };
+
+      payload.remittance_overrides_enabled = readField('remittance_overrides_enabled', false);
+      payload.remittances_detailed_breakdown = readField('remittances_detailed_breakdown', false);
+
+      // If overrides are off, keep the detailed flag stored but UI-only disables editing.
+      // No mutation here; DB stores both fields as requested.
+
       for (const k of Object.keys(payload)) {
         if (payload[k] === '') delete payload[k];
       }
+
+      // Ensure booleans stay in payload even if they might have been deleted above (belt-and-braces)
+      payload.remittance_overrides_enabled = (payload.remittance_overrides_enabled === true);
+      payload.remittances_detailed_breakdown = (payload.remittances_detailed_breakdown === true);
 
       const idForUpdate = window.modalCtx?.data?.id || full?.id || null;
       L('[onSave] upsertUmbrella', { idForUpdate, payloadKeys: Object.keys(payload||{}) });
@@ -76561,13 +78259,17 @@ async function openUmbrella(row){
 
       L('[onSave] final window.modalCtx', {
         dataId: window.modalCtx.data?.id,
-        dataKeys: Object.keys(window.modalCtx.data||{})
+        dataKeys: Object.keys(window.modalCtx.data||{}),
+        remittance: {
+          remittance_overrides_enabled: window.modalCtx.data?.remittance_overrides_enabled ?? null,
+          remittances_detailed_breakdown: window.modalCtx.data?.remittances_detailed_breakdown ?? null
+        }
       });
 
       return { ok: true, saved: window.modalCtx.data };
     },
     full?.id,
-    // onReturn: (re)bind address + company number to model + postcode lookup
+    // onReturn: (re)bind address + company number to model + postcode lookup + remittance override toggling
     () => {
       try {
         const container = document.getElementById('tab-main');
@@ -76575,6 +78277,35 @@ async function openUmbrella(row){
         const model = buildUmbrellaDetailsModel(window.modalCtx?.data || {});
         window.modalCtx.umbrellaModel = model;
         bindUmbrellaAddressEvents(container, model);
+
+        // ✅ NEW: remittance overrides enable/disable wiring (detail checkbox)
+        const ov = container.querySelector('input[name="remittance_overrides_enabled"]');
+        const det = container.querySelector('input[name="remittances_detailed_breakdown"]');
+
+        const sync = () => {
+          const on = !!(ov && ov.checked);
+          if (det) {
+            det.disabled = !on;
+            det.style.opacity = on ? '' : '0.55';
+            det.style.filter  = on ? '' : 'saturate(0.75) brightness(0.95)';
+          }
+        };
+
+        if (ov && !ov.__wiredRemOv) {
+          ov.__wiredRemOv = true;
+          ov.addEventListener('change', () => {
+            sync();
+            try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+          }, true);
+        }
+        if (det && !det.__wiredRemDet) {
+          det.__wiredRemDet = true;
+          det.addEventListener('change', () => {
+            try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+          }, true);
+        }
+
+        sync();
       } catch (e) {
         W('bindUmbrellaAddressEvents failed', e);
       }
@@ -76584,6 +78315,7 @@ async function openUmbrella(row){
   // (Umbrella has no heavy post-paint preloads in your snippet; if you add any later,
   // keep them here, after showModal, and guard with token/id like in openClient.)
 }
+
 
 
 // ---- Audit (Outbox)
@@ -80728,6 +82460,7 @@ function renderSettingsTab(key, s = {}) {
   //  - Checkbox groups (UI-only; NOT collected by collectForm)
   //  - Header/Footer message (persisted; collected by collectForm)
   //  - No JSON shown
+  //  - NEW: default detailed + default candidate umbrella-copy controls (persisted)
   // ─────────────────────────────────────────────────────────────
   if (k === 'remittances') {
     const deep = (o)=> JSON.parse(JSON.stringify(o || {}));
@@ -80847,7 +82580,7 @@ function renderSettingsTab(key, s = {}) {
       { key: 'job_title',        label: 'Job title / role' },
       { key: 'band',             label: 'Band' },
       { key: 'reference_number', label: 'Reference number' },
-      { key: 'worked_times',     label: 'Worked times (start/end/break/minutes)' }
+      { key: 'worked_times',     label: 'Worked times (legacy; schedule display is controlled by Detailed remittances)' }
     ];
 
     const boolish = (v, dflt) => {
@@ -80860,6 +82593,9 @@ function renderSettingsTab(key, s = {}) {
       if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
       return !!dflt;
     };
+
+    const detailDefaultOn = boolish(s.remittances_detailed_breakdown, false);
+    const umbCopyDefaultOn = boolish(s.remittance_receive_when_umbrella_paid, false);
 
     const getCfg = (scope, group, kk, dflt) => {
       try {
@@ -81037,6 +82773,36 @@ function renderSettingsTab(key, s = {}) {
               </div>
             </div>
 
+            <div class="row" style="grid-column:1/-1;margin-top:2px;">
+              <label style="white-space:normal;">Detailed remittances by default</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
+                <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:start;margin:0;cursor:pointer;min-width:0;">
+                  <input type="checkbox" id="remittances_detailed_breakdown" name="remittances_detailed_breakdown" ${detailDefaultOn ? 'checked' : ''} style="margin-top:2px;justify-self:start;" />
+                  <div style="min-width:0;">
+                    <div style="line-height:1.2;white-space:normal;overflow-wrap:break-word;">Include detailed schedule rows for segment timesheets</div>
+                    <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+                      This is the global default. Umbrella and candidate overrides can change it per recipient.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1;margin-top:2px;">
+              <label style="white-space:normal;">Candidate receives umbrella copy by default</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
+                <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:start;margin:0;cursor:pointer;min-width:0;">
+                  <input type="checkbox" id="remittance_receive_when_umbrella_paid" name="remittance_receive_when_umbrella_paid" ${umbCopyDefaultOn ? 'checked' : ''} style="margin-top:2px;justify-self:start;" />
+                  <div style="min-width:0;">
+                    <div style="line-height:1.2;white-space:normal;overflow-wrap:break-word;">Send a copy remittance to the candidate for umbrella-paid items</div>
+                    <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+                      When enabled, the umbrella receives its normal remittance, and the candidate also receives a copy remittance (umbrella items only), subject to candidate overrides.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
             <div class="row" style="grid-column:1/-1">
               <label>Header message</label>
               <div class="controls">
@@ -81064,7 +82830,8 @@ function renderSettingsTab(key, s = {}) {
             <div style="margin-top:10px;font-size:12px;color:rgba(255,255,255,0.65)">
               Notes:
               <ul style="margin:6px 0 0 18px;padding:0">
-                <li>PAYE remittance enable/disable is controlled in <strong>Global Settings → Banking &amp; Payments</strong>.</li>
+                <li>PAYE remittance enable/disable is controlled in <strong>Global Settings → Banking &amp; Payments</strong>, with candidate overrides taking precedence when enabled.</li>
+                <li>Detailed schedule rows are controlled by <strong>Detailed remittances by default</strong> (and per-recipient overrides), not by the “Include details” tick boxes.</li>
                 <li>Job title / band will be included only when present and enabled.</li>
                 <li>Daily timesheets do not rely on contracts; values are sourced from the best available timesheet context.</li>
               </ul>
@@ -81077,8 +82844,6 @@ function renderSettingsTab(key, s = {}) {
 
   return '';
 }
-
-
 
 /**
  * ✅ Add this once (global) somewhere in your FE file:
@@ -81144,6 +82909,7 @@ async function patchFinanceWindow(id, patch){
 //   1) PATCH Current (end/value changes)   2) POST New   3) PATCH Future
 // - Clears __SETTINGS_CACHE__ and refreshes modalCtx with latest settings + windows
 // ─────────────────────────────────────────────────────────────
+
 async function handleSaveSettings() {
   const byId = (id) => document.getElementById(id);
 
@@ -81241,6 +83007,17 @@ async function handleSaveSettings() {
 
     const baseData = (mc && mc.data && typeof mc.data === 'object') ? mc.data : {};
 
+    const boolish = (v, dflt) => {
+      if (typeof v === 'boolean') return v;
+      if (v === 1 || v === '1') return true;
+      if (v === 0 || v === '0') return false;
+      if (v == null) return !!dflt;
+      const s = String(v).trim().toLowerCase();
+      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
+      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
+      return !!dflt;
+    };
+
     const hasExistingRemValues = (() => {
       try {
         const inc = baseData && baseData.remittance_includes_json;
@@ -81256,7 +83033,10 @@ async function handleSaveSettings() {
         const hdrOk = (hdr != null && String(hdr).trim().length > 0);
         const ftrOk = (ftr != null && String(ftr).trim().length > 0);
 
-        return incOk || hdrOk || ftrOk;
+        const detOk = Object.prototype.hasOwnProperty.call(baseData, 'remittances_detailed_breakdown');
+        const copyOk = Object.prototype.hasOwnProperty.call(baseData, 'remittance_receive_when_umbrella_paid');
+
+        return incOk || hdrOk || ftrOk || detOk || copyOk;
       } catch {
         return false;
       }
@@ -81317,6 +83097,35 @@ async function handleSaveSettings() {
       }
 
       payload.remittance_includes_json = inc;
+
+      // ✅ NEW: ensure these two settings are explicit booleans (never 'on'/'')
+      let detDefault = null;
+      let umbCopyDefault = null;
+
+      if (remRootMounted) {
+        const detEl = byId('remittances_detailed_breakdown');
+        const copyEl = byId('remittance_receive_when_umbrella_paid');
+        if (detEl) detDefault = !!detEl.checked;
+        if (copyEl) umbCopyDefault = !!copyEl.checked;
+      } else {
+        if (Object.prototype.hasOwnProperty.call(baseData, 'remittances_detailed_breakdown')) {
+          detDefault = boolish(baseData.remittances_detailed_breakdown, false);
+        }
+        if (Object.prototype.hasOwnProperty.call(baseData, 'remittance_receive_when_umbrella_paid')) {
+          umbCopyDefault = boolish(baseData.remittance_receive_when_umbrella_paid, false);
+        }
+      }
+
+      // Also accept legacy collectForm shape if present (checkbox 'on')
+      if (detDefault === null && Object.prototype.hasOwnProperty.call(payload, 'remittances_detailed_breakdown')) {
+        detDefault = boolish(payload.remittances_detailed_breakdown, false);
+      }
+      if (umbCopyDefault === null && Object.prototype.hasOwnProperty.call(payload, 'remittance_receive_when_umbrella_paid')) {
+        umbCopyDefault = boolish(payload.remittance_receive_when_umbrella_paid, false);
+      }
+
+      if (detDefault !== null) payload.remittances_detailed_breakdown = (detDefault === true);
+      if (umbCopyDefault !== null) payload.remittance_receive_when_umbrella_paid = (umbCopyDefault === true);
 
       try {
         if (rd) rd.dirty = true;
@@ -81737,6 +83546,7 @@ async function handleSaveSettings() {
     return { ok:true, saved };
   }
 }
+
 
 function buildRemittanceIncludesJsonFromUi() {
   const byId = (id) => document.getElementById(id);
@@ -88279,18 +90089,18 @@ const onSaveTimesheet = async () => {
     tasks.push(async () => {
       const schedulePayload = Array.isArray(st.schedule) ? st.schedule : [];
       if (!weekIdSave) throw new Error('contract_week_id missing; cannot save weekly schedule.');
-
       if (isPlannedWeeklyWithoutTs) {
         if (typeof contractWeekManualDraftUpsert !== 'function') {
           throw new Error('contractWeekManualDraftUpsert is not defined (required for weekly MANUAL draft save)');
         }
 
         const payload = {
-          planned_schedule_json: schedulePayload
-        };
+          planned_schedule_json: schedulePayload,
 
-        if (extrasChangedWeekly) payload.additional_units_week = { ...(stagedExtrasWeek || {}) };
-        if (extrasChangedWeekly) payload.additional_units_per_day = { ...(stagedExtrasPerDay || {}) };
+          // ✅ ALWAYS send both maps (frontend is source of truth; empty means "no units")
+          additional_units_week: { ...(stagedExtrasWeek || {}) },
+          additional_units_per_day: { ...(stagedExtrasPerDay || {}) }
+        };
 
         await contractWeekManualDraftUpsert(weekIdSave, payload);
 
@@ -88322,7 +90132,6 @@ const onSaveTimesheet = async () => {
       }
 
       const expected = window.modalCtx?.timesheetMeta?.expected_timesheet_id || tsIdSave || null;
-
       const payload = {
         expected_timesheet_id: expected,
         actual_schedule_json: schedulePayload,
@@ -88338,11 +90147,12 @@ const onSaveTimesheet = async () => {
         reissue_qr:       false,
         revoke_to_manual: (qrActionBackend === 'REVOKE_TO_MANUAL'),
         revoke_qr:        (qrActionBackend === 'REVOKE_TO_MANUAL'),
-        disable_qr:       false
-      };
+        disable_qr:       false,
 
-      if (extrasChangedWeekly) payload.additional_units_week = { ...(stagedExtrasWeek || {}) };
-      if (extrasChangedWeekly) payload.additional_units_per_day = { ...(stagedExtrasPerDay || {}) };
+        // ✅ ALWAYS send both maps (frontend is source of truth; empty means "no units")
+        additional_units_week: { ...(stagedExtrasWeek || {}) },
+        additional_units_per_day: { ...(stagedExtrasPerDay || {}) }
+      };
 
       L('weekly manual upsert payload', { weekIdSave, payload });
       const result = await manualUpsertContractWeek(weekIdSave, payload);
