@@ -8693,6 +8693,7 @@ async function bankingOutboxList({ reference_prefix = '', reference_contains = '
   }
 }
 
+
 function renderBankingTab(key, row) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -8888,6 +8889,7 @@ function renderBankingTab(key, row) {
   try { st.id.selectedRun = (st.id.selectedRun && typeof st.id.selectedRun === 'object') ? st.id.selectedRun : null; } catch {}
   try { st.id.selectedRunLines = Array.isArray(st.id.selectedRunLines) ? st.id.selectedRunLines : []; } catch { try { st.id.selectedRunLines = []; } catch {} }
   try { st.id.selectedRunIdRef = String(st.id.selectedRunIdRef || '').trim(); } catch { try { st.id.selectedRunIdRef = ''; } catch {} }
+  try { st.id.runSearchIdRef = String(st.id.runSearchIdRef || '').trim(); } catch { try { st.id.runSearchIdRef = ''; } catch {} }
 
   try {
     st.id.ledgerFilters = (st.id.ledgerFilters && typeof st.id.ledgerFilters === 'object') ? st.id.ledgerFilters : {
@@ -8932,6 +8934,14 @@ function renderBankingTab(key, row) {
       const n = Number(v);
       if (!Number.isFinite(n)) return '0.00';
       return (Math.round(n * 100) / 100).toFixed(2);
+    };
+
+    const fmtSignedMoney = (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '0.00';
+      const x = Math.round(n * 100) / 100;
+      const s = x.toFixed(2);
+      return (x > 0) ? `+${s}` : s;
     };
 
     const fmtUtcToUk = (iso) => {
@@ -9012,43 +9022,35 @@ function renderBankingTab(key, row) {
       const selectedRun = (idSt.selectedRun && typeof idSt.selectedRun === 'object') ? idSt.selectedRun : null;
       const selectedLines = Array.isArray(idSt.selectedRunLines) ? idSt.selectedRunLines : [];
       const selectedIdRef = String(idSt.selectedRunIdRef || '').trim();
+      const runSearchIdRef = String(idSt.runSearchIdRef || '').trim();
 
       const previewHtml = (() => {
         if (pvLoading) return `<div class="mini" style="opacity:.85;">Loading preview…</div>`;
         if (pvErr) return `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>`;
         if (!pvData) return `<div class="mini" style="opacity:.85;">No preview loaded yet. Click “Refresh preview”.</div>`;
 
-        const totalDeltaEx = fmtMoney(pvData.total_delta_ex_vat);
-        const totalDeltaVat = fmtMoney(pvData.total_delta_vat);
-        const totalDeltaInc = fmtMoney(pvData.total_delta_inc_vat);
-
-        const totalCurEx = fmtMoney(pvData.total_current_ex_vat);
-        const totalCurVat = fmtMoney(pvData.total_current_vat);
-        const totalCurInc = fmtMoney(pvData.total_current_inc_vat);
-
-        const totalRepEx = fmtMoney(pvData.total_reportable_current_ex_vat);
-        const totalRepVat = fmtMoney(pvData.total_reportable_current_vat);
-        const totalRepInc = fmtMoney(pvData.total_reportable_current_inc_vat);
-
+        const totals = (pvData.totals && typeof pvData.totals === 'object') ? pvData.totals : {};
         const lines = Array.isArray(pvData.lines) ? pvData.lines : [];
+        const lineCount = Number.isFinite(Number(pvData.line_count)) ? Math.trunc(Number(pvData.line_count)) : lines.length;
+
+        const totalDeltaEx = fmtSignedMoney(totals.total_delta_ex_vat);
+        const totalDeltaVat = fmtSignedMoney(totals.total_delta_vat);
+        const totalDeltaInc = fmtSignedMoney(totals.total_delta_inc_vat);
+
+        const big = `£${totalDeltaInc}`;
+        const sub = `Δ ex VAT £${totalDeltaEx} · Δ VAT £${totalDeltaVat}`;
+
         const rows = lines.slice(0, 200).map((ln) => {
           const invNo = String(ln?.invoice_number || '').trim() || '—';
-          const stx = String(ln?.invoice_status || '').trim() || '—';
-          const typ = String(ln?.invoice_type || '').trim() || '—';
-          const onHold = (ln?.is_on_hold === true);
-          const deltaEx = fmtMoney(ln?.delta_ex_vat);
-          const deltaVat = fmtMoney(ln?.delta_vat);
-          const deltaInc = fmtMoney(ln?.delta_inc_vat);
-          const reason = onHold ? 'ON_HOLD (non-reportable)' : '';
+          const client = String(ln?.client_name || '').trim() || '—';
+          const dx = fmtSignedMoney(ln?.delta_ex_vat);
+          const di = fmtSignedMoney(ln?.delta_inc_vat);
           return `
             <tr>
               <td class="mono">${enc(invNo)}</td>
-              <td class="mini">${enc(stx)}</td>
-              <td class="mini">${enc(typ)}</td>
-              <td class="mono" style="text-align:right;">${enc(deltaEx)}</td>
-              <td class="mono" style="text-align:right;">${enc(deltaVat)}</td>
-              <td class="mono" style="text-align:right;">${enc(deltaInc)}</td>
-              <td class="mini">${enc(reason)}</td>
+              <td class="mini">${enc(client)}</td>
+              <td class="mono" style="text-align:right; white-space:nowrap;">${enc(dx)}</td>
+              <td class="mono" style="text-align:right; white-space:nowrap;">${enc(di)}</td>
             </tr>
           `;
         }).join('');
@@ -9058,46 +9060,31 @@ function renderBankingTab(key, row) {
           : ``;
 
         return `
-          <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <div class="card" style="padding:10px;min-width:260px;">
-              <div class="mini" style="opacity:.8;">Delta totals</div>
-              <div class="mono">Ex VAT: ${enc(totalDeltaEx)}</div>
-              <div class="mono">VAT: ${enc(totalDeltaVat)}</div>
-              <div class="mono">Inc VAT: ${enc(totalDeltaInc)}</div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;">
+              <div class="mini" style="opacity:.85;">TOTAL DELTA INC VAT</div>
+              <div class="mono" style="font-size:28px;font-weight:800;letter-spacing:-0.02em;" title="Total delta inc VAT">${enc(big)}</div>
+              <div class="mini" style="opacity:.85;">Line count: <span class="mono">${enc(String(lineCount))}</span></div>
             </div>
-            <div class="card" style="padding:10px;min-width:260px;">
-              <div class="mini" style="opacity:.8;">Current totals</div>
-              <div class="mono">Ex VAT: ${enc(totalCurEx)}</div>
-              <div class="mono">VAT: ${enc(totalCurVat)}</div>
-              <div class="mono">Inc VAT: ${enc(totalCurInc)}</div>
-            </div>
-            <div class="card" style="padding:10px;min-width:260px;">
-              <div class="mini" style="opacity:.8;">Reportable current totals</div>
-              <div class="mono">Ex VAT: ${enc(totalRepEx)}</div>
-              <div class="mono">VAT: ${enc(totalRepVat)}</div>
-              <div class="mono">Inc VAT: ${enc(totalRepInc)}</div>
-            </div>
-          </div>
+            <div class="mini" style="opacity:.75;">${enc(sub)}</div>
 
-          <div style="margin-top:10px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
-            <table class="grid" style="min-width:980px; table-layout:auto;">
-              <thead>
-                <tr>
-                  <th>Invoice</th>
-                  <th>Status</th>
-                  <th>Type</th>
-                  <th style="text-align:right;">Delta ex VAT</th>
-                  <th style="text-align:right;">Delta VAT</th>
-                  <th style="text-align:right;">Delta inc VAT</th>
-                  <th>Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rows || `<tr><td colspan="7" class="mini" style="opacity:.85;">No lines.</td></tr>`}
-              </tbody>
-            </table>
+            <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+              <table class="grid" style="min-width:860px; table-layout:auto;">
+                <thead>
+                  <tr>
+                    <th>Invoice Number</th>
+                    <th>Client Name</th>
+                    <th style="text-align:right;">Delta ex VAT</th>
+                    <th style="text-align:right;">Delta inc VAT</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rows || `<tr><td colspan="4" class="mini" style="opacity:.85;">No lines.</td></tr>`}
+                </tbody>
+              </table>
+            </div>
+            ${truncated}
           </div>
-          ${truncated}
         `;
       })();
 
@@ -9146,37 +9133,66 @@ function renderBankingTab(key, row) {
       const runDetailHtml = (() => {
         if (!selectedRun) return `<div class="mini" style="opacity:.85;">Select a run to view its lines.</div>`;
 
+        const runIdRef = String(selectedRun.id_ref || '—');
+        const committedAt = selectedRun.bank_uploaded_at_utc ? fmtUtcToUk(selectedRun.bank_uploaded_at_utc) : '';
+        const bankCode = String(selectedRun.bank_upload_code || '').trim();
+
+        let sumEx = 0;
+        let sumInc = 0;
+        for (const ln of selectedLines) {
+          const dx = Number(ln?.delta_ex_vat);
+          const di = Number(ln?.delta_inc_vat);
+          if (Number.isFinite(dx)) sumEx += dx;
+          if (Number.isFinite(di)) sumInc += di;
+        }
+
         const header = `
           <div class="card" style="padding:10px;">
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-              <div class="mini" style="opacity:.85;">Selected run:</div>
-              <div class="mono" style="font-weight:700;">${enc(String(selectedRun.id_ref || '—'))}</div>
-              <div class="mini" style="opacity:.85;">Created:</div>
-              <div class="mono">${enc(fmtUtcToUk(selectedRun.created_at_utc || ''))}</div>
-              <div class="mini" style="opacity:.85;">Total delta (inc VAT):</div>
-              <div class="mono">${enc(fmtMoney(selectedRun.total_delta_inc_vat))}</div>
+              <div class="mini" style="opacity:.85;">Run ID:</div>
+              <div class="mono" style="font-weight:700;">${enc(runIdRef)}</div>
+
+              <div class="mini" style="opacity:.85;">Committed:</div>
+              <div class="mono">${enc(committedAt || '—')}</div>
+
+              <div class="mini" style="opacity:.85;">Bank upload code:</div>
+              <div class="mono">${enc(bankCode || '—')}</div>
+
+              <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:id:runPrint"
+                  data-id-ref="${enc(String(selectedRun.id_ref || '').trim())}"
+                  title="Print this run"
+                >Print</button>
+              </div>
             </div>
           </div>
         `;
 
         const rows = selectedLines.slice(0, 300).map((ln) => {
           const invNo = String(ln?.invoice_number || '').trim() || '—';
-          const stx = String(ln?.invoice_status || '').trim() || '—';
-          const typ = String(ln?.invoice_type || '').trim() || '—';
-          const dx = fmtMoney(ln?.delta_ex_vat);
-          const dv = fmtMoney(ln?.delta_vat);
-          const di = fmtMoney(ln?.delta_inc_vat);
+          const client = String(ln?.client_name || '').trim() || '—';
+          const dx = fmtSignedMoney(ln?.delta_ex_vat);
+          const di = fmtSignedMoney(ln?.delta_inc_vat);
           return `
             <tr>
               <td class="mono">${enc(invNo)}</td>
-              <td class="mini">${enc(stx)}</td>
-              <td class="mini">${enc(typ)}</td>
-              <td class="mono" style="text-align:right;">${enc(dx)}</td>
-              <td class="mono" style="text-align:right;">${enc(dv)}</td>
-              <td class="mono" style="text-align:right;">${enc(di)}</td>
+              <td class="mini">${enc(client)}</td>
+              <td class="mono" style="text-align:right; white-space:nowrap;">${enc(dx)}</td>
+              <td class="mono" style="text-align:right; white-space:nowrap;">${enc(di)}</td>
             </tr>
           `;
         }).join('');
+
+        const totalsRow = `
+          <tr>
+            <td colspan="2" class="mini" style="opacity:.85; font-weight:700;">Totals</td>
+            <td class="mono" style="text-align:right; white-space:nowrap; font-weight:800;">${enc(fmtSignedMoney(sumEx))}</td>
+            <td class="mono" style="text-align:right; white-space:nowrap; font-weight:800;">${enc(fmtSignedMoney(sumInc))}</td>
+          </tr>
+        `;
 
         const trunc = (selectedLines.length > 300)
           ? `<div class="mini" style="opacity:.8;margin-top:6px;">Showing first 300 lines (of ${enc(String(selectedLines.length))}).</div>`
@@ -9188,16 +9204,15 @@ function renderBankingTab(key, row) {
             <table class="grid" style="min-width:920px; table-layout:auto;">
               <thead>
                 <tr>
-                  <th>Invoice</th>
-                  <th>Status</th>
-                  <th>Type</th>
+                  <th>Invoice Number</th>
+                  <th>Client Name</th>
                   <th style="text-align:right;">Delta ex VAT</th>
-                  <th style="text-align:right;">Delta VAT</th>
                   <th style="text-align:right;">Delta inc VAT</th>
                 </tr>
               </thead>
               <tbody>
-                ${rows || `<tr><td colspan="6" class="mini" style="opacity:.85;">No lines.</td></tr>`}
+                ${rows || `<tr><td colspan="4" class="mini" style="opacity:.85;">No lines.</td></tr>`}
+                ${totalsRow}
               </tbody>
             </table>
           </div>
@@ -9331,6 +9346,27 @@ function renderBankingTab(key, row) {
                   <div style="font-weight:700;">Runs</div>
                   <button type="button" class="btn btn-sm btn-outline" data-action="banking:id:runsRefresh">Refresh runs</button>
                   <span class="mini" style="opacity:.8;">(history)</span>
+
+                  <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <input
+                      id="bankingIdRunSearchIdRef"
+                      class="input"
+                      type="text"
+                      value="${enc(runSearchIdRef)}"
+                      placeholder="Run ID (6 digits)"
+                      autocomplete="off"
+                      spellcheck="false"
+                      style="width:170px;"
+                      title="Run ID (6 digits)"
+                      data-action="banking:id:setRunSearchIdRef"
+                    />
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-outline"
+                      data-action="banking:id:runSearch"
+                      title="Search by Run ID"
+                    >Search</button>
+                  </div>
                 </div>
 
                 <div style="margin-top:10px;">
@@ -9475,6 +9511,178 @@ function renderBankingTab(key, row) {
     </div>
   `;
 }
+
+function bankingIdRunPrint(selectedRun) {
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  const idSt = (st && st.id && typeof st.id === 'object') ? st.id : {};
+  const run = (selectedRun && typeof selectedRun === 'object') ? selectedRun : ((idSt.selectedRun && typeof idSt.selectedRun === 'object') ? idSt.selectedRun : null);
+  const lines = Array.isArray(idSt.selectedRunLines) ? idSt.selectedRunLines : [];
+
+  if (!run) throw new Error('bankingIdRunPrint: No run selected');
+
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const fmtSignedMoney = (v) => {
+    const x = Math.round(toNum(v) * 100) / 100;
+    const s = x.toFixed(2);
+    return (x > 0) ? `+${s}` : s;
+  };
+
+  const fmtUtcToUk = (iso) => {
+    try {
+      if (!iso) return '';
+      const d = new Date(String(iso));
+      if (Number.isNaN(d.getTime())) return String(iso);
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      return fmt.format(d).replace(',', '');
+    } catch {
+      return String(iso || '');
+    }
+  };
+
+  const runIdRef = String(run.id_ref || '').trim() || '—';
+  const committedAt = run.bank_uploaded_at_utc ? fmtUtcToUk(run.bank_uploaded_at_utc) : '';
+  const bankCode = String(run.bank_upload_code || '').trim() || '';
+
+  let sumEx = 0;
+  let sumInc = 0;
+
+  const rowsHtml = (lines && lines.length)
+    ? lines.map((ln) => {
+        const invNo = String(ln?.invoice_number || '').trim() || '—';
+        const client = String(ln?.client_name || '').trim() || '—';
+        const dx = toNum(ln?.delta_ex_vat);
+        const di = toNum(ln?.delta_inc_vat);
+        sumEx += dx;
+        sumInc += di;
+
+        return `
+          <tr>
+            <td class="mono">${enc(invNo)}</td>
+            <td>${enc(client)}</td>
+            <td class="mono num">${enc(fmtSignedMoney(dx))}</td>
+            <td class="mono num">${enc(fmtSignedMoney(di))}</td>
+          </tr>
+        `;
+      }).join('')
+    : `
+        <tr>
+          <td colspan="4" class="muted">No lines.</td>
+        </tr>
+      `;
+
+  const totalsRowHtml = `
+    <tr class="totals">
+      <td colspan="2">Totals</td>
+      <td class="mono num">${enc(fmtSignedMoney(sumEx))}</td>
+      <td class="mono num">${enc(fmtSignedMoney(sumInc))}</td>
+    </tr>
+  `;
+
+  const html = `
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ID Run ${enc(runIdRef)}</title>
+  <style>
+    :root { color-scheme: light; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; color: #0f172a; }
+    h1 { font-size: 18px; margin: 0 0 8px 0; }
+    .meta { display:flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 16px 0; }
+    .chip { border: 1px solid #cbd5e1; border-radius: 10px; padding: 8px 10px; }
+    .label { font-size: 12px; color: #475569; margin-bottom: 2px; }
+    .value { font-size: 14px; font-weight: 700; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #e2e8f0; padding: 8px 10px; vertical-align: top; }
+    th { background: #f8fafc; text-align: left; font-size: 12px; color: #475569; }
+    td { font-size: 13px; }
+    .num { text-align: right; white-space: nowrap; }
+    .muted { color: #64748b; }
+    .totals td { font-weight: 800; background: #f8fafc; }
+    @media print {
+      body { margin: 0; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print" style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+    <button onclick="window.print()" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;cursor:pointer;">Print</button>
+  </div>
+
+  <h1>Invoice Discounting Run</h1>
+
+  <div class="meta">
+    <div class="chip">
+      <div class="label">Run ID</div>
+      <div class="value mono">${enc(runIdRef)}</div>
+    </div>
+    <div class="chip">
+      <div class="label">Committed</div>
+      <div class="value mono">${enc(committedAt || '—')}</div>
+    </div>
+    <div class="chip">
+      <div class="label">Bank upload code</div>
+      <div class="value mono">${enc(bankCode || '—')}</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Invoice Number</th>
+        <th>Client Name</th>
+        <th style="text-align:right;">Delta ex VAT</th>
+        <th style="text-align:right;">Delta inc VAT</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+      ${totalsRowHtml}
+    </tbody>
+  </table>
+
+  <script>
+    try { setTimeout(() => { window.focus(); }, 0); } catch {}
+  </script>
+</body>
+</html>
+  `.trim();
+
+  const w = window.open('', '_blank', 'noopener,noreferrer');
+  if (!w) throw new Error('bankingIdRunPrint: Unable to open print window (popup blocked?)');
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+
+  try {
+    w.onload = () => {
+      try { w.focus(); } catch {}
+      try { w.print(); } catch {}
+    };
+  } catch {}
+}
+
 
 function renderBankingBanners() {
   const enc = (typeof escapeHtml === 'function')
@@ -12754,16 +12962,10 @@ function renderBankingIdTab() {
 
   st.id = (st.id && typeof st.id === 'object') ? st.id : {};
   st.id.preview = (st.id.preview && typeof st.id.preview === 'object') ? st.id.preview : { data: null, loading: false, error: '' };
-  st.id.applyForm = (st.id.applyForm && typeof st.id.applyForm === 'object') ? st.id.applyForm : { bank_upload_code: '', note: '', busy: false, error: '' };
 
   const pvLoading = !!st.id.preview.loading;
   const pvErr = String(st.id.preview.error || '').trim();
   const pv = (st.id.preview.data && typeof st.id.preview.data === 'object') ? st.id.preview.data : null;
-
-  const applyBusy = !!st.id.applyForm.busy;
-  const applyErr = String(st.id.applyForm.error || '').trim();
-  const bankUploadCode = String(st.id.applyForm.bank_upload_code || '').trim();
-  const note = String(st.id.applyForm.note || '');
 
   const gatePreview = (typeof bankingIsActionBlocked === 'function') ? bankingIsActionBlocked('ID_PREVIEW') : { blocked:false, reasonCode:'', message:'' };
   const gateApply = (typeof bankingIsActionBlocked === 'function') ? bankingIsActionBlocked('ID_BALANCE_NOW') : { blocked:false, reasonCode:'', message:'' };
@@ -12773,134 +12975,90 @@ function renderBankingIdTab() {
     : (t ? ` title="${enc(String(t))}"` : '');
 
   const previewBtnTitle = gatePreview.blocked ? (gatePreview.message || gatePreview.reasonCode || 'Action blocked') : 'Refresh ID preview';
-  const applyBtnTitle = gateApply.blocked ? (gateApply.message || gateApply.reasonCode || 'Action blocked') : 'Apply ID balance-now (requires bank upload code)';
+  const applyBtnTitle = gateApply.blocked ? (gateApply.message || gateApply.reasonCode || 'Action blocked') : 'Apply Balance Now (creates a draft run)';
 
-  const pvSummaryRows = (() => {
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const fmtMoney = (v) => {
+    const n = toNum(v);
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const fmtSignedMoney = (v) => {
+    const n = toNum(v);
+    const x = Math.round(n * 100) / 100;
+    const s = x.toFixed(2);
+    return (x > 0) ? `+${s}` : s;
+  };
+
+  const pvLineCount = (() => {
+    if (!pv) return 0;
+    const lc = Number(pv.line_count);
+    if (Number.isFinite(lc)) return Math.trunc(lc);
+    const arr = Array.isArray(pv.lines) ? pv.lines : [];
+    return arr.length;
+  })();
+
+  const pvTotals = (() => {
+    if (!pv) return { ex: 0, vat: 0, inc: 0 };
+    const t = (pv.totals && typeof pv.totals === 'object') ? pv.totals : {};
+    return {
+      ex: toNum(t.total_delta_ex_vat),
+      vat: toNum(t.total_delta_vat),
+      inc: toNum(t.total_delta_inc_vat)
+    };
+  })();
+
+  const pvLines = (() => {
     if (!pv) return [];
-    const out = [];
-    try {
-      const keys = Object.keys(pv);
-      for (const k of keys) {
-        const v = pv[k];
-        const t = typeof v;
-        if (v == null || t === 'string' || t === 'number' || t === 'boolean') {
-          out.push([String(k), (v == null) ? '' : String(v)]);
-        } else if (Array.isArray(v)) {
-          out.push([String(k), `Array (${v.length})`]);
-        } else if (t === 'object') {
-          out.push([String(k), 'Object']);
-        } else {
-          out.push([String(k), String(v)]);
-        }
-      }
-    } catch {}
-    return out;
+    const arr = Array.isArray(pv.lines) ? pv.lines : [];
+    return arr.map((it) => ({
+      invoice_number: String(it?.invoice_number || '').trim(),
+      client_name: String(it?.client_name || '').trim(),
+      delta_ex_vat: toNum(it?.delta_ex_vat),
+      delta_inc_vat: toNum(it?.delta_inc_vat)
+    }));
   })();
 
-  const pvFirstArray = (() => {
-    if (!pv) return { key: '', items: [] };
-    const prefer = ['items', 'rows', 'invoices', 'ledger', 'lines'];
-    for (const k of prefer) {
-      try {
-        if (Array.isArray(pv[k])) return { key: k, items: pv[k] };
-      } catch {}
-    }
-    try {
-      for (const [k, v] of Object.entries(pv)) {
-        if (Array.isArray(v)) return { key: String(k), items: v };
-      }
-    } catch {}
-    return { key: '', items: [] };
-  })();
-
-  const pvTableHtml = (() => {
+  const previewPanelHtml = (() => {
     if (!pv) {
       return `<div class="mini" style="opacity:.85;">No preview loaded yet.</div>`;
     }
 
-    const sumRows = pvSummaryRows.length
-      ? pvSummaryRows.map(([k, v]) => `
+    const big = `£${fmtSignedMoney(pvTotals.inc)}`;
+    const sub = `Δ ex VAT £${fmtSignedMoney(pvTotals.ex)} · Δ VAT £${fmtSignedMoney(pvTotals.vat)}`;
+    const lc = pvLineCount;
+
+    const rows = (pvLines.length > 0)
+      ? pvLines.map((r) => `
           <tr>
-            <td class="mini" style="white-space:nowrap;">${enc(k)}</td>
-            <td class="mono" style="white-space:normal;overflow-wrap:anywhere;">${enc(v)}</td>
+            <td class="mono">${enc(r.invoice_number || '—')}</td>
+            <td class="mini">${enc(r.client_name || '—')}</td>
+            <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtSignedMoney(r.delta_ex_vat))}</td>
+            <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtSignedMoney(r.delta_inc_vat))}</td>
           </tr>
         `).join('')
-      : `<tr><td colspan="2" class="mini" style="opacity:.85;">No preview summary fields.</td></tr>`;
-
-    const { key: arrKey, items } = pvFirstArray;
-    const hasRows = Array.isArray(items) && items.length > 0;
-
-    const rows = hasRows ? items.map((it) => {
-      const invNum = String(it?.invoice_number || it?.invoice_no || '').trim();
-      const invId = String(it?.invoice_id || it?.id || '').trim();
-      const primary = invNum || invId || '—';
-
-      const invStatus = String(it?.invoice_status || it?.status || '').trim().toUpperCase() || '—';
-      const invType = String(it?.invoice_type || it?.type || '').trim().toUpperCase();
-      const client = String(it?.client_name || it?.client || '').trim() || String(it?.client_id || '').trim() || '—';
-
-      const delta = (it?.delta_inc_vat != null) ? it.delta_inc_vat
-        : (it?.delta_ex_vat != null) ? it.delta_ex_vat
-        : (it?.delta_vat != null) ? it.delta_vat
-        : null;
-
-      const curr = (it?.current_inc_vat != null) ? it.current_inc_vat
-        : (it?.current_ex_vat != null) ? it.current_ex_vat
-        : (it?.current_vat != null) ? it.current_vat
-        : null;
-
-      const ts = String(it?.updated_at_utc || it?.status_date || it?.issued_at_utc || it?.paid_at_utc || it?.created_at_utc || it?.created_at || '').trim();
-
-      const fmtMoney = (v) => {
-        const n = Number(v);
-        if (!Number.isFinite(n)) return '';
-        return (Math.round(n * 100) / 100).toFixed(2);
-      };
-
-      const fmtSigned = (v) => {
-        const n = Number(v);
-        if (!Number.isFinite(n)) return '';
-        const x = Math.round(n * 100) / 100;
-        const s = x.toFixed(2);
-        return (x > 0) ? `+${s}` : s;
-      };
-
-      return `
-        <tr>
-          <td class="mono" title="${enc(invId || invNum || '')}">${enc(primary)}</td>
-          <td><span class="pill" title="${enc(invType || '')}">${enc(invStatus)}</span></td>
-          <td class="mini">${enc(client)}</td>
-          <td class="mono" style="text-align:right; white-space:nowrap;">${enc(delta == null ? '' : fmtSigned(delta))}</td>
-          <td class="mono" style="text-align:right; white-space:nowrap;">${enc(curr == null ? '' : fmtMoney(curr))}</td>
-          <td class="mini">${enc(ts || '')}</td>
-        </tr>
-      `;
-    }).join('') : `<tr><td colspan="6" class="mini" style="opacity:.85;">No preview rows found${arrKey ? ` (array: ${enc(arrKey)})` : ''}.</td></tr>`;
+      : `<tr><td colspan="4" class="mini" style="opacity:.85;">No changed invoices (delta = 0).</td></tr>`;
 
     return `
       <div style="display:flex;flex-direction:column;gap:10px;">
-        <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-          <table class="grid" style="min-width:620px; table-layout:auto;">
-            <thead>
-              <tr>
-                <th style="width:220px;">Field</th>
-                <th>Value</th>
-              </tr>
-            </thead>
-            <tbody>${sumRows}</tbody>
-          </table>
+        <div style="display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;">
+          <div style="font-size:28px;font-weight:800;letter-spacing:-0.02em;" class="mono" title="Total delta inc VAT">${enc(big)}</div>
+          <div class="mini" style="opacity:.85;">Line count: <span class="mono">${enc(String(lc))}</span></div>
         </div>
+        <div class="mini" style="opacity:.75;">${enc(sub)}</div>
 
         <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-          <table class="grid" style="min-width:920px; table-layout:auto;">
+          <table class="grid" style="min-width:820px; table-layout:auto;">
             <thead>
               <tr>
-                <th>Invoice #</th>
-                <th>Status</th>
-                <th>Client</th>
-                <th style="text-align:right;">Delta</th>
-                <th style="text-align:right;">Current</th>
-                <th>Updated</th>
+                <th>Invoice Number</th>
+                <th>Client Name</th>
+                <th style="text-align:right;">Delta ex VAT</th>
+                <th style="text-align:right;">Delta inc VAT</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -12910,13 +13068,25 @@ function renderBankingIdTab() {
     `;
   })();
 
+  const applyDisabledByData = (() => {
+    if (!pv) return true;
+    return pvLineCount <= 0;
+  })();
+
+  const applyDisabled = gateApply.blocked || applyDisabledByData;
+  const applyTitle = gateApply.blocked
+    ? (gateApply.message || gateApply.reasonCode || 'Action blocked')
+    : (applyDisabledByData ? 'No changed invoices (delta = 0)' : applyBtnTitle);
+
   return `
     <div id="bankingIdTab">
       <div class="card" style="margin-bottom:10px;">
         <div class="row">
           <label>Invoice Discounting (ID)</label>
           <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <span class="mini" style="opacity:.85;">Preview the current ID position and apply a “balance now” run.</span>
+            <span class="mini" style="opacity:.85;">
+              Preview the next ID upload (delta since last reported baseline).
+            </span>
             <div style="margin-left:auto; display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <button
                 type="button"
@@ -12924,6 +13094,13 @@ function renderBankingIdTab() {
                 data-action="banking:id:preview"
                 ${gatePreview.blocked ? disAttrs(true, previewBtnTitle) : disAttrs(false, previewBtnTitle)}
               >${pvLoading ? 'Refreshing…' : 'Refresh preview'}</button>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-primary"
+                data-action="banking:id:draftStart"
+                ${applyDisabled ? disAttrs(true, applyTitle) : disAttrs(false, applyTitle)}
+              >Apply Balance Now</button>
             </div>
           </div>
         </div>
@@ -12935,63 +13112,451 @@ function renderBankingIdTab() {
         <div class="row">
           <label>Preview</label>
           <div class="controls">
-            ${pvTableHtml}
+            ${previewPanelHtml}
           </div>
         </div>
       </div>
 
-      <div class="card" style="padding:10px;">
-        <div class="row">
-          <label>Balance now</label>
-          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-            ${applyErr ? `<div class="error" style="white-space:pre-wrap;">${enc(applyErr)}</div>` : ''}
-
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-              <input
-                id="bankingIdBankUploadCode"
-                class="input"
-                type="text"
-                value="${enc(bankUploadCode)}"
-                placeholder="Bank upload code (required)"
-                data-action="banking:id:setBankUploadCode"
-                style="min-width:260px;max-width:360px;"
-                title="Bank upload code (required)"
-              />
-
-              <input
-                id="bankingIdNote"
-                class="input"
-                type="text"
-                value="${enc(note)}"
-                placeholder="Note (optional)"
-                data-action="banking:id:setNote"
-                style="min-width:360px;max-width:620px;"
-                title="Optional note"
-              />
-
-              <button
-                type="button"
-                class="btn btn-sm btn-primary"
-                data-action="banking:id:balanceNow"
-                ${gateApply.blocked ? disAttrs(true, applyBtnTitle) : disAttrs(false, applyBtnTitle)}
-              >${applyBusy ? 'Applying…' : 'Apply balance now'}</button>
-
-              <button
-                type="button"
-                class="btn btn-sm btn-outline"
-                data-action="banking:id:clearApplyForm"
-                title="Clear bank upload code and note"
-              >Clear</button>
-            </div>
-
-            <div class="mini" style="opacity:.8;">
-              After applying, refresh Preview, Ledger and Runs to confirm the result.
-            </div>
-          </div>
-        </div>
+      <div class="mini" style="opacity:.8; padding:0 2px;">
+        Apply Balance Now will create a <b>draft</b> run and prompt you to enter your bank upload reference to confirm and commit.
       </div>
     </div>
   `;
+}
+
+async function bankingIdRunDraftStart(payload = null) {
+  const in0 = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
+  const noteRaw = (in0.note === null || in0.note === undefined) ? '' : String(in0.note);
+  const note = String(noteRaw || '').trim() ? String(noteRaw || '').trim() : null;
+
+  // No modalCtx/entity gating here (so this can be called from a child modal safely)
+  const obj = await apiPostJson('/api/banking/id/run/draft-start', (note !== null) ? { note } : {});
+  const draft_run = (obj && typeof obj === 'object' && obj.draft_run && typeof obj.draft_run === 'object') ? obj.draft_run : null;
+  return { draft_run };
+}
+
+async function bankingIdRunDraftCommit(id_ref, bank_upload_code) {
+  const idRef = String(id_ref || '').trim();
+  if (!/^[0-9]{6}$/.test(idRef)) {
+    const err = new Error('id_ref must be 6 digits');
+    err.status = 400;
+    throw err;
+  }
+
+  const code = String(bank_upload_code || '').trim();
+  if (!code) {
+    const err = new Error('bank_upload_code is required');
+    err.status = 400;
+    throw err;
+  }
+
+  // No modalCtx/entity gating here (so this can be called from a child modal safely)
+  const obj = await apiPostJson(`/api/banking/id/run/${encodeURIComponent(idRef)}/commit`, { bank_upload_code: code });
+  const run = (obj && typeof obj === 'object' && obj.run && typeof obj.run === 'object') ? obj.run : null;
+  return { run };
+}
+
+async function bankingIdRunDraftCancel(id_ref) {
+  const idRef = String(id_ref || '').trim();
+  if (!/^[0-9]{6}$/.test(idRef)) {
+    const err = new Error('id_ref must be 6 digits');
+    err.status = 400;
+    throw err;
+  }
+
+  // No modalCtx/entity gating here (so this can be called from a child modal safely)
+  const obj = await apiPostJson(`/api/banking/id/run/${encodeURIComponent(idRef)}/cancel`, {});
+  return (obj && typeof obj === 'object') ? obj : { ok: true };
+}
+
+async function openBankingIdConfirmUploadModal({ id_ref, total_delta_inc_vat } = {}) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '')
+        .replaceAll('&','&amp;')
+        .replaceAll('<','&lt;')
+        .replaceAll('>','&gt;')
+        .replaceAll('"','&quot;')
+        .replaceAll("'","&#39;");
+
+  const idRef = String(id_ref || '').trim();
+  if (!/^[0-9]{6}$/.test(idRef)) {
+    throw new Error('openBankingIdConfirmUploadModal: id_ref must be 6 digits');
+  }
+
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const fmtSignedMoney = (v) => {
+    const n = toNum(v);
+    const x = Math.round(n * 100) / 100;
+    const s = x.toFixed(2);
+    return (x > 0) ? `+${s}` : s;
+  };
+
+  const deltaInc = toNum(total_delta_inc_vat);
+
+  const closeTop = () => {
+    try {
+      const btn = document.getElementById('btnCloseModal');
+      if (btn && typeof btn.click === 'function') { btn.click(); return; }
+    } catch {}
+    try { if (typeof closeModal === 'function') closeModal(); } catch {}
+  };
+
+  const kind = 'import-summary-banking-id-confirm-upload';
+  const title = 'Confirm bank upload';
+
+  const rootId = `bankingIdConfirm_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  const state = {
+    bank_upload_code: '',
+    busy: false,
+    err: '',
+    notice: '',
+    inflight: null // { kind:'commit'|'cancel', promise:Promise, bank_upload_code?:string }
+  };
+
+  const instructionText = 'Please enter the reference number supplied by your bank to confirm this has been uploaded';
+
+  // We stage the post-close behaviour so it runs AFTER the child modal is closed
+  // (so window.modalCtx is back to the Banking modal context).
+  let pendingPostClose = null; // { kind:'commit'|'cancel', id_ref, bank_upload_code? }
+
+  const requestClose = () => {
+    try {
+      const btn = document.getElementById('btnCloseModal');
+      if (btn) btn.click();
+      else if (typeof closeModal === 'function') closeModal();
+    } catch {
+      try { if (typeof closeModal === 'function') closeModal(); } catch {}
+    }
+  };
+
+  const render = () => {
+    const big = `£${fmtSignedMoney(deltaInc)}`;
+    const dis = state.busy
+      ? 'data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(0.6) brightness(0.9);"'
+      : '';
+
+    return `
+      <div id="${enc(rootId)}">
+        <div class="card">
+          <div class="row">
+            <label>Confirm upload</label>
+            <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+
+              ${state.err ? `<div class="error" style="white-space:pre-wrap;">${enc(state.err)}</div>` : ''}
+              ${state.notice ? `<div class="mini" style="color:#bbf7d0;white-space:pre-wrap;">${enc(state.notice)}</div>` : ''}
+
+              <div class="card" style="padding:10px;">
+                <div class="mini" style="opacity:.85;">TOTAL DELTA INC VAT</div>
+                <div class="mono" style="font-size:28px;font-weight:800;letter-spacing:-0.02em; margin-top:4px;">
+                  ${enc(big)}
+                </div>
+
+                <div style="margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <div class="mini" style="opacity:.85;">RUN ID</div>
+                  <div class="mono" style="font-weight:800;">${enc(idRef)}</div>
+                  <button
+                    id="bankingIdConfirmCopyRunId"
+                    type="button"
+                    class="btn btn-sm btn-outline"
+                    ${dis}
+                    title="Copy Run ID"
+                  >Copy</button>
+                </div>
+              </div>
+
+              <div class="mini" style="opacity:.9;">${enc(instructionText)}</div>
+
+              <div class="card" style="padding:10px;">
+                <div class="row">
+                  <label>Bank upload code</label>
+                  <div class="controls" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <input
+                      id="bankingIdConfirmBankUploadCode"
+                      class="input"
+                      type="text"
+                      value="${enc(state.bank_upload_code)}"
+                      placeholder="Enter bank upload reference"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      spellcheck="false"
+                      style="min-width:260px;max-width:520px;"
+                      ${dis}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                <button
+                  id="bankingIdConfirmSave"
+                  type="button"
+                  class="btn btn-primary"
+                  ${dis}
+                  title="Save and commit this run"
+                >${state.busy ? 'Working…' : 'Save'}</button>
+
+                <button
+                  id="bankingIdConfirmCancel"
+                  type="button"
+                  class="btn btn-outline"
+                  ${dis}
+                  title="Cancel (abandon the run)"
+                >Cancel</button>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
+  try {
+    const ctxSeed = { entity: 'banking-id-confirm-upload', openToken: `banking-id-confirm-upload:${Date.now()}:${Math.random().toString(36).slice(2)}` };
+    window.modalCtx = ctxSeed;
+    try { if (typeof modalCtx !== 'undefined') modalCtx = ctxSeed; } catch {}
+  } catch {}
+
+  const onDismiss = () => {
+    const todo0 = pendingPostClose;
+    pendingPostClose = null;
+
+    setTimeout(async () => {
+      let todo = todo0;
+
+      // ✅ Enforce cancel-on-dismiss:
+      // If the user closes the modal without Save/Cancel, best-effort cancel the draft.
+      // If an operation is in-flight, wait for it; if commit fails, then best-effort cancel.
+      try {
+        if (!todo) {
+          const inflight = (state.inflight && typeof state.inflight === 'object') ? state.inflight : null;
+          const p = inflight && inflight.promise && typeof inflight.promise.then === 'function' ? inflight.promise : null;
+
+          if (p) {
+            try {
+              await p;
+              // If user closed during a successful in-flight action, mirror the intended outcome.
+              if (inflight.kind === 'commit') {
+                todo = { kind: 'commit', id_ref: idRef, bank_upload_code: String(inflight.bank_upload_code || '').trim() };
+              } else if (inflight.kind === 'cancel') {
+                todo = { kind: 'cancel', id_ref: idRef };
+              } else {
+                // Unknown inflight: treat as cancel-safe
+                todo = { kind: 'cancel', id_ref: idRef };
+              }
+            } catch (e) {
+              // If commit failed while the user closed, cancel best-effort to avoid orphan drafts.
+              try {
+                await bankingIdRunDraftCancel(idRef);
+              } catch {}
+              todo = { kind: 'cancel', id_ref: idRef };
+              try { if (typeof window.__toast === 'function') window.__toast(String(e?.message || e || 'Action failed')); } catch {}
+            }
+          } else {
+            try {
+              await bankingIdRunDraftCancel(idRef);
+            } catch (e) {
+              try { if (typeof window.__toast === 'function') window.__toast(String(e?.message || e || 'Failed to cancel draft run')); } catch {}
+            }
+            todo = { kind: 'cancel', id_ref: idRef };
+          }
+        }
+      } catch {}
+
+      // After close, Banking modal should be the active top frame again
+      try { if (typeof bankingIdPreview === 'function') await bankingIdPreview(); } catch {}
+      try { if (typeof bankingIdRunsList === 'function') await bankingIdRunsList(null); } catch {}
+
+      // Optional ledger refresh (safe even if collapsed)
+      try { if (typeof bankingIdLedgerList === 'function') await bankingIdLedgerList(null); } catch {}
+
+      if (todo && todo.kind === 'commit') {
+        try {
+          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (fr && fr.kind === 'banking' && typeof fr.setTab === 'function') {
+            fr.setTab('id_history');
+          }
+        } catch {}
+
+        try { if (typeof bankingIdRunGet === 'function') await bankingIdRunGet(todo.id_ref); } catch {}
+      }
+
+      try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+    }, 0);
+  };
+
+  const renderTab = (k) => {
+    if (k !== 'main') return '';
+    return render();
+  };
+
+  showModal(
+    title,
+    [{ key: 'main', label: 'Confirm' }],
+    renderTab,
+    null,
+    true,
+    null,
+    {
+      kind,
+      noParentGate: true,
+      showSave: false,
+      showApply: false,
+      stayOpenOnSave: false,
+      onDismiss
+    }
+  );
+
+  const wire = () => {
+    const body = document.getElementById('modalBody');
+    if (!body) return;
+
+    const root = body.querySelector(`#${CSS.escape(rootId)}`);
+    if (!root) return;
+
+    if (root.__wired) return;
+    root.__wired = true;
+
+    const rerender = () => {
+      try {
+        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        if (fr && typeof fr.setTab === 'function') fr.setTab('main');
+      } catch {
+        try { body.innerHTML = render(); } catch {}
+      }
+    };
+
+    const copyText = async (txt) => {
+      const s = String(txt || '');
+      if (!s) return false;
+
+      try {
+        if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(s);
+          return true;
+        }
+      } catch {}
+
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = s;
+        ta.setAttribute('readonly', 'readonly');
+        ta.style.position = 'absolute';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return !!ok;
+      } catch {}
+
+      return false;
+    };
+
+    const inp = root.querySelector('#bankingIdConfirmBankUploadCode');
+    const btnSave = root.querySelector('#bankingIdConfirmSave');
+    const btnCancel = root.querySelector('#bankingIdConfirmCancel');
+    const btnCopy = root.querySelector('#bankingIdConfirmCopyRunId');
+
+    if (inp && !inp.__wired) {
+      inp.__wired = true;
+
+      const sync = () => { state.bank_upload_code = String(inp.value || ''); };
+      inp.addEventListener('input', sync);
+      inp.addEventListener('change', sync);
+
+      inp.addEventListener('keydown', async (ev) => {
+        if (ev && ev.key === 'Enter') {
+          ev.preventDefault();
+          try { btnSave && btnSave.click(); } catch {}
+        }
+      });
+
+      try { inp.focus(); } catch {}
+    }
+
+    if (btnCopy && !btnCopy.__wired) {
+      btnCopy.__wired = true;
+      btnCopy.addEventListener('click', async () => {
+        if (state.busy) return;
+        const ok = await copyText(idRef);
+        if (ok) {
+          try { if (typeof window.__toast === 'function') window.__toast('Copied'); } catch {}
+        }
+      });
+    }
+
+    if (btnCancel && !btnCancel.__wired) {
+      btnCancel.__wired = true;
+      btnCancel.addEventListener('click', async () => {
+        if (state.busy) return;
+
+        state.busy = true;
+        state.err = '';
+        state.notice = '';
+        rerender();
+
+        try {
+          const p = bankingIdRunDraftCancel(idRef);
+          state.inflight = { kind: 'cancel', promise: p };
+          await p;
+          state.inflight = null;
+
+          pendingPostClose = { kind: 'cancel', id_ref: idRef };
+          requestClose();
+        } catch (e) {
+          state.inflight = null;
+          state.err = String(e?.message || e || 'Failed to cancel draft run');
+          state.busy = false;
+          rerender();
+        }
+      });
+    }
+
+    if (btnSave && !btnSave.__wired) {
+      btnSave.__wired = true;
+      btnSave.addEventListener('click', async () => {
+        if (state.busy) return;
+
+        const code = String(state.bank_upload_code || '').trim();
+        if (!code) {
+          state.err = 'bank_upload_code is required';
+          state.notice = '';
+          rerender();
+          return;
+        }
+
+        state.busy = true;
+        state.err = '';
+        state.notice = '';
+        rerender();
+
+        try {
+          const p = bankingIdRunDraftCommit(idRef, code);
+          state.inflight = { kind: 'commit', promise: p, bank_upload_code: code };
+          await p;
+          state.inflight = null;
+
+          pendingPostClose = { kind: 'commit', id_ref: idRef, bank_upload_code: code };
+          requestClose();
+        } catch (e) {
+          state.inflight = null;
+          state.err = String(e?.message || e || 'Failed to commit draft run');
+          state.busy = false;
+          rerender();
+        }
+      });
+    }
+  };
+
+  try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
 }
 
 
@@ -16871,9 +17436,10 @@ function attachBankingModalDelegatedHandlers() {
     // ✅ NEW: ID History state scaffolding
     try { st.id.ledger = (st.id.ledger && typeof st.id.ledger === 'object') ? st.id.ledger : { items: [], loading: false, error: '' }; } catch {}
     try { st.id.runs = (st.id.runs && typeof st.id.runs === 'object') ? st.id.runs : { items: [], loading: false, error: '' }; } catch {}
-    try { st.id.selectedRun = (st.id.selectedRun && typeof st.id.selectedRun === 'object') ? st.id.selectedRun : null; } catch {}
+      try { st.id.selectedRun = (st.id.selectedRun && typeof st.id.selectedRun === 'object') ? st.id.selectedRun : null; } catch {}
     try { st.id.selectedRunLines = Array.isArray(st.id.selectedRunLines) ? st.id.selectedRunLines : []; } catch { try { st.id.selectedRunLines = []; } catch {} }
     try { st.id.selectedRunIdRef = String(st.id.selectedRunIdRef || '').trim(); } catch { try { st.id.selectedRunIdRef = ''; } catch {} }
+    try { st.id.runSearchIdRef = String(st.id.runSearchIdRef || '').trim(); } catch { try { st.id.runSearchIdRef = ''; } catch {} }
     // Ledger filters used by ID History UI
     try {
       st.id.ledgerFilters = (st.id.ledgerFilters && typeof st.id.ledgerFilters === 'object') ? st.id.ledgerFilters : {
@@ -17577,6 +18143,87 @@ function attachBankingModalDelegatedHandlers() {
       return;
     }
 
+    if (a === 'banking:id:draftStart') {
+      const g = safeGate('ID_BALANCE_NOW');
+      if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
+
+      // ✅ Prevent double-click / multiple drafts
+      try {
+        if (st.id && st.id.applyForm && st.id.applyForm.busy) return;
+        if (st.id && st.id.applyForm) {
+          st.id.applyForm.busy = true;
+          st.id.applyForm.error = '';
+        }
+      } catch {}
+      await safeRerender(null);
+
+      try {
+        const noteRaw = String(st.id?.applyForm?.note || '');
+        const note = String(noteRaw || '').trim() ? String(noteRaw || '').trim() : null;
+
+        let res = null;
+        if (typeof bankingIdRunDraftStart === 'function') {
+          res = await bankingIdRunDraftStart({ note });
+        } else if (typeof apiPostJson === 'function') {
+          const obj = await apiPostJson('/api/banking/id/run/draft-start', (note !== null) ? { note } : {});
+          res = { draft_run: (obj && typeof obj === 'object' && obj.draft_run && typeof obj.draft_run === 'object') ? obj.draft_run : null };
+        } else {
+          throw new Error('bankingIdRunDraftStart is not available');
+        }
+
+        const draftRun = (res && typeof res === 'object' && res.draft_run && typeof res.draft_run === 'object')
+          ? res.draft_run
+          : null;
+
+        const idRef = String(draftRun?.id_ref || draftRun?.idRef || '').trim();
+        if (!/^[0-9]{6}$/.test(idRef)) {
+          throw new Error('Draft start did not return a valid Run ID');
+        }
+
+        // Prefer totals from draft start; fall back to current preview totals if missing
+        let deltaIncRaw = null;
+        try {
+          const t0 = (draftRun && draftRun.totals && typeof draftRun.totals === 'object') ? draftRun.totals : null;
+          if (t0 && Object.prototype.hasOwnProperty.call(t0, 'delta_inc_vat')) deltaIncRaw = t0.delta_inc_vat;
+          else if (t0 && Object.prototype.hasOwnProperty.call(t0, 'total_delta_inc_vat')) deltaIncRaw = t0.total_delta_inc_vat;
+          else if (draftRun && Object.prototype.hasOwnProperty.call(draftRun, 'total_delta_inc_vat')) deltaIncRaw = draftRun.total_delta_inc_vat;
+          else if (draftRun && Object.prototype.hasOwnProperty.call(draftRun, 'delta_inc_vat')) deltaIncRaw = draftRun.delta_inc_vat;
+        } catch {}
+
+        if (deltaIncRaw == null) {
+          try {
+            const pv = (st.id && st.id.preview && st.id.preview.data && typeof st.id.preview.data === 'object') ? st.id.preview.data : null;
+            const t1 = (pv && pv.totals && typeof pv.totals === 'object') ? pv.totals : null;
+            if (t1 && Object.prototype.hasOwnProperty.call(t1, 'total_delta_inc_vat')) deltaIncRaw = t1.total_delta_inc_vat;
+            else if (t1 && Object.prototype.hasOwnProperty.call(t1, 'delta_inc_vat')) deltaIncRaw = t1.delta_inc_vat;
+          } catch {}
+        }
+
+        const deltaInc = (() => {
+          const n = Number(deltaIncRaw);
+          return Number.isFinite(n) ? n : 0;
+        })();
+
+        // ✅ Clear busy before opening the child modal (child modal swaps window.modalCtx)
+        try { if (st.id && st.id.applyForm) st.id.applyForm.busy = false; } catch {}
+        await safeRerender(null);
+
+        if (typeof openBankingIdConfirmUploadModal !== 'function') {
+          throw new Error('Confirm upload modal is not available');
+        }
+
+        await openBankingIdConfirmUploadModal({ id_ref: idRef, total_delta_inc_vat: deltaInc });
+        return;
+      } catch (e) {
+        const msg = String(e?.message || e || 'Draft start failed');
+        try { if (st.id && st.id.applyForm) st.id.applyForm.error = msg; } catch {}
+        try { if (st.id && st.id.applyForm) st.id.applyForm.busy = false; } catch {}
+        toast(msg);
+        await safeRerender(null);
+        return;
+      }
+    }
+
     if (a === 'banking:id:balanceNow') {
       const g = safeGate('ID_BALANCE_NOW');
       if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
@@ -17597,6 +18244,27 @@ function attachBankingModalDelegatedHandlers() {
       return;
     }
 
+     if (a === 'banking:id:setRunSearchIdRef') {
+      const v = (el && el.value != null) ? String(el.value) : '';
+      try { st.id.runSearchIdRef = String(v || '').trim(); } catch {}
+      return;
+    }
+
+    if (a === 'banking:id:runSearch') {
+      const ref = String(st.id?.runSearchIdRef || (el && el.value != null ? String(el.value) : '') || '').trim();
+      if (!/^[0-9]{6}$/.test(ref)) { toast('Run ID must be 6 digits'); return; }
+      await idRunSelect(ref);
+      return;
+    }
+
+    if (a === 'banking:id:runPrint') {
+      if (typeof bankingIdRunPrint !== 'function') { toast('Print is not available'); return; }
+      const r = (st.id && st.id.selectedRun && typeof st.id.selectedRun === 'object') ? st.id.selectedRun : null;
+      if (!r) { toast('Select a run first'); return; }
+      try { bankingIdRunPrint(r); } catch (e) { toast(String(e?.message || e || 'Print failed')); }
+      return;
+    }
+
     if (a === 'banking:id:runSelect') {
       const idRef = String(ds('idRef') || dget('data-id-ref') || '').trim();
       await idRunSelect(idRef);
@@ -17608,7 +18276,6 @@ function attachBankingModalDelegatedHandlers() {
       await idRefreshLedger();
       return;
     }
-
     if (a === 'banking:id:apply') {
       await idRefreshLedger();
       return;
@@ -18100,6 +18767,33 @@ function attachBankingModalDelegatedHandlers() {
     } catch {}
   };
 
+  const onKeyDown = async (ev) => {
+    try {
+      if (!isActiveBankingFrame()) return;
+
+      const t = ev && ev.target ? ev.target : null;
+      if (!t) return;
+
+      const id = String(t.id || '').trim();
+      if (id !== 'bankingIdRunSearchIdRef') return;
+
+      const key = String(ev.key || '').trim();
+      if (key !== 'Enter') return;
+
+      try { ev.preventDefault(); ev.stopPropagation(); } catch {}
+
+      const el = t;
+      try {
+        const st = getState();
+        if (st && st.id && typeof st.id === 'object') {
+          st.id.runSearchIdRef = String(el.value || '').trim();
+        }
+      } catch {}
+
+      await dispatch('banking:id:runSearch', el, ev, 'keydown');
+    } catch {}
+  };
+
   const onDblClick = async (ev) => {
     try {
       if (!isActiveBankingFrame()) return;
@@ -18141,6 +18835,7 @@ function attachBankingModalDelegatedHandlers() {
   targetEl.addEventListener('click', onClick, true);
   targetEl.addEventListener('change', onChange, true);
   targetEl.addEventListener('input', onInput, true);
+  targetEl.addEventListener('keydown', onKeyDown, true);
   targetEl.addEventListener('dblclick', onDblClick, true);
 
   // ✅ Ensure pay date + cutoff date pickers are always wired with min/max constraints
@@ -18221,10 +18916,11 @@ function attachBankingModalDelegatedHandlers() {
         onChange,
         onInput,
         onDblClick,
-        detach: () => {
+            detach: () => {
           try { targetEl.removeEventListener('click', onClick, true); } catch {}
           try { targetEl.removeEventListener('change', onChange, true); } catch {}
           try { targetEl.removeEventListener('input', onInput, true); } catch {}
+          try { targetEl.removeEventListener('keydown', onKeyDown, true); } catch {}
           try { targetEl.removeEventListener('dblclick', onDblClick, true); } catch {}
         }
       };
