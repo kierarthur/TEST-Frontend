@@ -15121,6 +15121,8 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
 
   return await new Promise((resolve) => {
     let done = false;
+    let detachHandlers = null;
+
     const finish = (res) => {
       if (done) return;
       done = true;
@@ -15128,6 +15130,8 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     };
 
     const onDismiss = () => {
+      try { if (typeof detachHandlers === 'function') detachHandlers(); } catch {}
+
       if (pendingResult) {
         const r = pendingResult;
         pendingResult = null;
@@ -15159,41 +15163,73 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
       }
     );
 
-    const wire = () => {
+     const wire = () => {
       const body = document.getElementById('modalBody');
       if (!body) return;
 
-      const root = body.querySelector(`#${CSS.escape(rootId)}`);
-      if (!root) return;
+      const getRoot = () => {
+        try { return body.querySelector(`#${CSS.escape(rootId)}`); } catch {}
+        try { return body.querySelector(`#${rootId}`); } catch {}
+        return null;
+      };
 
-      if (root.__wired) return;
-      root.__wired = true;
+      const root0 = getRoot();
+      if (!root0) return;
+
+      // ✅ Root is re-rendered via setTab(); do NOT bind to root nodes.
+      // Bind once to modalBody (which survives innerHTML replacement).
+      if (body.__payExecConfirmWiredToken === rootId) return;
+      body.__payExecConfirmWiredToken = rootId;
+
+      const stillTopIsThisModal = () => {
+        try {
+          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (!fr) return false;
+          if (String(fr.kind || '') !== String(kind || '')) return false;
+          const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+          if (!ctx || String(ctx.entity || '') !== 'banking-pay-exec-confirm') return false;
+          if (fr._ctxRef !== ctx) return false;
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      const ensureDatePicker = () => {
+        try {
+          const r = getRoot();
+          if (!r) return;
+          const elDate = r.querySelector('#payExecDateUk');
+          if (elDate && typeof attachUkDatePicker === 'function' && !elDate.__ukdp) {
+            elDate.__ukdp = true;
+            try { attachUkDatePicker(elDate, {}); } catch {}
+          }
+        } catch {}
+      };
 
       const rerender = () => {
         try {
           const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-          if (fr && typeof fr.setTab === 'function') fr.setTab('main');
-        } catch {
-          try { body.innerHTML = render(); } catch {}
-        }
+          if (fr && typeof fr.setTab === 'function') {
+            Promise.resolve(fr.setTab('main'))
+              .then(() => { try { ensureDatePicker(); } catch {} })
+              .catch(() => {});
+            return;
+          }
+        } catch {}
+        try { body.innerHTML = render(); } catch {}
+        try { ensureDatePicker(); } catch {}
       };
 
-      // Best-effort UK date picker
-      try {
-        const elDate = root.querySelector('#payExecDateUk');
-        if (elDate && typeof attachUkDatePicker === 'function' && !elDate.__ukdp) {
-          elDate.__ukdp = true;
-          try { attachUkDatePicker(elDate, {}); } catch {}
-        }
-      } catch {}
+      const onChange = (ev) => {
+        try {
+          if (!stillTopIsThisModal()) return;
 
-      // Delegate inputs
-      if (!root.__wiredInputs) {
-        root.__wiredInputs = true;
-
-        root.addEventListener('change', (ev) => {
           const t = ev && ev.target ? ev.target : null;
           if (!t) return;
+
+          const r = getRoot();
+          if (!r || !r.contains(t)) return;
 
           const act = String(t.getAttribute && t.getAttribute('data-action') || '').trim();
 
@@ -15216,11 +15252,26 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
             rerender();
             return;
           }
-        }, true);
 
-        root.addEventListener('input', (ev) => {
+          // ✅ Date picker fires CHANGE (not INPUT) → must capture here
+          if (act === 'pay-exec:setDateUk') {
+            state.date_uk = String(t.value || '');
+            state.err = '';
+            rerender(); // update schedule hint after a picked date
+            return;
+          }
+        } catch {}
+      };
+
+      const onInput = (ev) => {
+        try {
+          if (!stillTopIsThisModal()) return;
+
           const t = ev && ev.target ? ev.target : null;
           if (!t) return;
+
+          const r = getRoot();
+          if (!r || !r.contains(t)) return;
 
           const act = String(t.getAttribute && t.getAttribute('data-action') || '').trim();
 
@@ -15229,6 +15280,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
             state.err = '';
             return;
           }
+
           if (act === 'pay-exec:setTimeUk') {
             const cleaned = sanitizeTimeDigits(String(t.value || ''));
             state.time_uk = cleaned;
@@ -15236,104 +15288,129 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
             state.err = '';
             return;
           }
+
           if (act === 'pay-exec:setFundingAccountRef') {
             state.funding_account_ref = String(t.value || '');
             state.err = '';
             return;
           }
+
           if (act === 'pay-exec:setWarningHoursJson') {
             state.warning_hours_json_raw = String(t.value || '');
             state.err = '';
             return;
           }
-        }, true);
-      }
+        } catch {}
+      };
 
-      const btnCancel = root.querySelector('#payExecCancelBtn');
-      if (btnCancel && !btnCancel.__wired) {
-        btnCancel.__wired = true;
-        btnCancel.onclick = () => {
-          pendingResult = { cancelled: true };
-          closeTop();
-        };
-      }
+      const onClick = (ev) => {
+        try {
+          if (!stillTopIsThisModal()) return;
 
-      const btnConfirm = root.querySelector('#payExecConfirmBtn');
-      if (btnConfirm && !btnConfirm.__wired) {
-        btnConfirm.__wired = true;
-        btnConfirm.onclick = () => {
-          if (state.busy) return;
+          const t = ev && ev.target ? ev.target : null;
+          if (!t || typeof t.closest !== 'function') return;
 
-          state.err = '';
+          const r = getRoot();
+          if (!r || !r.contains(t)) return;
 
-          const scheduleKindRaw = String(state.schedule_kind || '').trim().toUpperCase();
-          const schedule_kind = (scheduleKindRaw === 'SCHEDULED') ? 'SCHEDULED' : 'IMMEDIATE';
+          const btn = t.closest('button');
+          if (!btn) return;
 
-          let scheduled_at_utc = null;
+          const id = String(btn.id || '').trim();
 
-          if (schedule_kind === 'SCHEDULED') {
-            const iso = parseUkDateToIsoLocal(state.date_uk);
-            const hm = parseTimeHm(state.time_uk);
-
-            if (!iso) {
-              state.err = 'Scheduled date is required (DD/MM/YYYY).';
-              rerender();
-              return;
-            }
-            if (!hm) {
-              state.err = 'Scheduled time is required in 24-hour HHMM format (e.g. 0200, 2311).';
-              rerender();
-              return;
-            }
-
-            const utcIso = ukLocalToUtcIso(iso, hm);
-            if (!utcIso) {
-              state.err = 'Unable to convert the selected UK date/time.';
-              rerender();
-              return;
-            }
-
-            scheduled_at_utc = utcIso;
+          if (id === 'payExecCancelBtn') {
+            pendingResult = { cancelled: true };
+            closeTop();
+            return;
           }
 
-          const funding_account_ref = String(state.funding_account_ref || '').trim() || null;
+          if (id === 'payExecConfirmBtn') {
+            if (state.busy) return;
 
-          let warning_hours_json = null;
-          const rawWarn = String(state.warning_hours_json_raw || '').trim();
-          if (rawWarn) {
-            try {
-              const j = JSON.parse(rawWarn);
-              if (!Array.isArray(j)) {
-                state.err = 'Warning hours JSON must be a JSON array.';
+            state.err = '';
+
+            const scheduleKindRaw = String(state.schedule_kind || '').trim().toUpperCase();
+            const schedule_kind = (scheduleKindRaw === 'SCHEDULED') ? 'SCHEDULED' : 'IMMEDIATE';
+
+            let scheduled_at_utc = null;
+
+            if (schedule_kind === 'SCHEDULED') {
+              const iso = parseUkDateToIsoLocal(state.date_uk);
+              const hm = parseTimeHm(state.time_uk);
+
+              if (!iso) {
+                state.err = 'Scheduled date is required (DD/MM/YYYY).';
                 rerender();
                 return;
               }
-              warning_hours_json = j;
-            } catch {
-              state.err = 'Warning hours JSON is invalid JSON.';
-              rerender();
-              return;
+              if (!hm) {
+                state.err = 'Scheduled time is required in 24-hour HHMM format (e.g. 0200, 2311).';
+                rerender();
+                return;
+              }
+
+              const utcIso = ukLocalToUtcIso(iso, hm);
+              if (!utcIso) {
+                state.err = 'Unable to convert the selected UK date/time.';
+                rerender();
+                return;
+              }
+
+              scheduled_at_utc = utcIso;
             }
+
+            const funding_account_ref = String(state.funding_account_ref || '').trim() || null;
+
+            let warning_hours_json = null;
+            const rawWarn = String(state.warning_hours_json_raw || '').trim();
+            if (rawWarn) {
+              try {
+                const j = JSON.parse(rawWarn);
+                if (!Array.isArray(j)) {
+                  state.err = 'Warning hours JSON must be a JSON array.';
+                  rerender();
+                  return;
+                }
+                warning_hours_json = j;
+              } catch {
+                state.err = 'Warning hours JSON is invalid JSON.';
+                rerender();
+                return;
+              }
+            }
+
+            const authMode = goldenKeyAvailable ? String(state.auth_mode || 'NORMAL').trim().toUpperCase() : 'NORMAL';
+            const actor_intent = (authMode === 'GOLDEN_KEY') ? 'USE_GOLDEN_KEY' : null;
+
+            pendingResult = {
+              confirmed: true,
+              schedule_kind,
+              scheduled_at_utc,
+              funding_account_ref,
+              warning_hours_json,
+              actor_intent
+            };
+
+            closeTop();
           }
+        } catch {}
+      };
 
-          const authMode = goldenKeyAvailable ? String(state.auth_mode || 'NORMAL').trim().toUpperCase() : 'NORMAL';
-          const actor_intent = (authMode === 'GOLDEN_KEY') ? 'USE_GOLDEN_KEY' : null;
+      body.addEventListener('change', onChange, true);
+      body.addEventListener('input', onInput, true);
+      body.addEventListener('click', onClick, true);
 
-          pendingResult = {
-            confirmed: true,
-            schedule_kind,
-            scheduled_at_utc,
-            funding_account_ref,
-            warning_hours_json,
-            actor_intent
-          };
+      detachHandlers = () => {
+        try { body.removeEventListener('change', onChange, true); } catch {}
+        try { body.removeEventListener('input', onInput, true); } catch {}
+        try { body.removeEventListener('click', onClick, true); } catch {}
+        try {
+          if (body.__payExecConfirmWiredToken === rootId) body.__payExecConfirmWiredToken = null;
+        } catch {}
+      };
 
-          closeTop();
-        };
-      }
-
-      // Repaint once so schedule hint updates live (without waiting for tab switch)
-      try { rerender(); } catch {}
+      // If Scheduled is already selected (or becomes selected), the picker is bound after rerender().
+      ensureDatePicker();
     };
 
     try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
