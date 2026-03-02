@@ -827,6 +827,12 @@ body{
 
     .form input,
     .form select,
+      .form textarea{
+      min-height:90px;
+    }
+
+    .form input,
+    .form select,
     .form textarea{
       background:#000;
       border:1px solid var(--line);
@@ -835,6 +841,20 @@ body{
       padding:8px 10px;
       width:100%;
       font-size:12px;
+    }
+
+    /* ✅ FIX: prevent checkboxes/radios in modals inheriting text-input styling */
+    #modal .form input[type="checkbox"],
+    #modal .form input[type="radio"]{
+      width:auto;
+      padding:0;
+      background:transparent;
+      border:none;
+      box-shadow:none;
+      appearance:auto;
+      -webkit-appearance:auto;
+      margin:0;
+      accent-color: var(--brand);
     }
 
     .form textarea{
