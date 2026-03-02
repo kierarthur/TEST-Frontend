@@ -31344,7 +31344,7 @@ function renderContractRatesTab(ctx) {
     </div>`;
 
   setTimeout(() => {
-    try {WRA
+    try {
       const root = document.getElementById('contractRatesTab');
       if (!root) return;
       const ev = new CustomEvent('contracts-rates-rendered', {
@@ -31359,7 +31359,6 @@ function renderContractRatesTab(ctx) {
 
   return html;
 }
-
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Week actions (drawer modals)
@@ -82440,9 +82439,7 @@ function renderSettingsTab(key, s = {}) {
     const trimStr = (v) => String(v == null ? '' : v).trim();
 
     const payrollTestingOn = boolish(s.payroll_testing, false);
-    const payeRemOn = boolish(s.paye_remittances_enabled, false);
 
-    const testEmail = trimStr(s.remittance_test_recipient_email || '');
     const authoriserQty = (s.payment_authoriser_quantity == null) ? '' : String(s.payment_authoriser_quantity);
     const defaultFundingRef = trimStr(s.rail_default_funding_account_ref || '');
 
@@ -82501,8 +82498,6 @@ function renderSettingsTab(key, s = {}) {
         if (!modalCtx.bankingPaymentsDraft || typeof modalCtx.bankingPaymentsDraft !== 'object') {
           modalCtx.bankingPaymentsDraft = {
             payroll_testing: payrollTestingOn,
-            paye_remittances_enabled: payeRemOn,
-            remittance_test_recipient_email: testEmail,
             payment_authoriser_quantity: authoriserQty,
             rail_default_funding_account_ref: defaultFundingRef,
             pay_eligibility_months_back: monthsBack,
@@ -82513,8 +82508,6 @@ function renderSettingsTab(key, s = {}) {
         } else {
           const d = modalCtx.bankingPaymentsDraft;
           if (!('payroll_testing' in d)) d.payroll_testing = payrollTestingOn;
-          if (!('paye_remittances_enabled' in d)) d.paye_remittances_enabled = payeRemOn;
-          if (!('remittance_test_recipient_email' in d)) d.remittance_test_recipient_email = testEmail;
           if (!('payment_authoriser_quantity' in d)) d.payment_authoriser_quantity = authoriserQty;
           if (!('rail_default_funding_account_ref' in d)) d.rail_default_funding_account_ref = defaultFundingRef;
           if (!('pay_eligibility_months_back' in d)) d.pay_eligibility_months_back = monthsBack;
@@ -82535,8 +82528,6 @@ function renderSettingsTab(key, s = {}) {
       ? modalCtx.bankingPaymentsDraft
       : {
           payroll_testing: payrollTestingOn,
-          paye_remittances_enabled: payeRemOn,
-          remittance_test_recipient_email: testEmail,
           payment_authoriser_quantity: authoriserQty,
           rail_default_funding_account_ref: defaultFundingRef,
           pay_eligibility_months_back: monthsBack,
@@ -82648,10 +82639,6 @@ function renderSettingsTab(key, s = {}) {
           const ckTest = document.getElementById('payrollTestingCk');
           const hidTest = document.getElementById('payroll_testing');
 
-          const ckPaye = document.getElementById('payeRemittancesEnabledCk');
-          const hidPaye = document.getElementById('paye_remittances_enabled');
-
-          const inTestEmail = document.getElementById('remittance_test_recipient_email');
           const inQty = document.getElementById('payment_authoriser_quantity');
           const inFunding = document.getElementById('rail_default_funding_account_ref');
           const inMonths = document.getElementById('pay_eligibility_months_back');
@@ -82722,12 +82709,9 @@ function renderSettingsTab(key, s = {}) {
 
           const sync = () => {
             const tOn = !!(ckTest && ckTest.checked);
-            const pOn = !!(ckPaye && ckPaye.checked);
 
             if (hidTest) hidTest.value = tOn ? 'true' : 'false';
-            if (hidPaye) hidPaye.value = pOn ? 'true' : 'false';
 
-            const te = (inTestEmail && inTestEmail.value != null) ? String(inTestEmail.value).trim() : '';
             const qty = (inQty && inQty.value != null) ? String(inQty.value).trim() : '';
             const fund = (inFunding && inFunding.value != null) ? String(inFunding.value).trim() : '';
             const mb = (inMonths && inMonths.value != null) ? String(inMonths.value).trim() : '';
@@ -82736,8 +82720,6 @@ function renderSettingsTab(key, s = {}) {
             try {
               if (modalCtx && modalCtx.bankingPaymentsDraft && typeof modalCtx.bankingPaymentsDraft === 'object') {
                 modalCtx.bankingPaymentsDraft.payroll_testing = tOn;
-                modalCtx.bankingPaymentsDraft.paye_remittances_enabled = pOn;
-                modalCtx.bankingPaymentsDraft.remittance_test_recipient_email = te;
                 modalCtx.bankingPaymentsDraft.payment_authoriser_quantity = qty;
                 modalCtx.bankingPaymentsDraft.rail_default_funding_account_ref = fund;
                 modalCtx.bankingPaymentsDraft.pay_eligibility_months_back = mb;
@@ -82755,8 +82737,6 @@ function renderSettingsTab(key, s = {}) {
             try {
               if (modalCtx && modalCtx.data && typeof modalCtx.data === 'object') {
                 modalCtx.data.payroll_testing = tOn;
-                modalCtx.data.paye_remittances_enabled = pOn;
-                modalCtx.data.remittance_test_recipient_email = te;
                 modalCtx.data.payment_authoriser_quantity = qty;
                 modalCtx.data.rail_default_funding_account_ref = fund;
                 modalCtx.data.pay_eligibility_months_back = mb;
@@ -82770,9 +82750,7 @@ function renderSettingsTab(key, s = {}) {
           };
 
           if (ckTest) ckTest.addEventListener('change', sync, true);
-          if (ckPaye) ckPaye.addEventListener('change', sync, true);
 
-          if (inTestEmail) inTestEmail.addEventListener('input', sync, true);
           if (inQty) inQty.addEventListener('input', sync, true);
           if (inFunding) inFunding.addEventListener('input', sync, true);
           if (inMonths) inMonths.addEventListener('input', sync, true);
@@ -82857,13 +82835,6 @@ function renderSettingsTab(key, s = {}) {
       }, 0);
     } catch {}
 
-    const asEmailHint = `
-      <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
-        When <strong>Payroll testing</strong> is enabled, remittances are only allowed if a test email is set here.
-        All remittances will be routed to this test recipient, and the intended recipient is recorded for audit.
-      </div>
-    `;
-
     const asFundingHint = `
       <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
         Default funding account reference used to preselect scheduling. Backend validates it against the current rail and requires GBP.
@@ -82884,7 +82855,7 @@ function renderSettingsTab(key, s = {}) {
               <div>
                 <div style="font-weight:700;font-size:14px">Banking & Payments</div>
                 <div style="font-size:12px;color:rgba(255,255,255,0.7)">
-                  Banking execution / remittance routing / pay eligibility window.
+                  Banking execution / pay eligibility window / CSV export format.
                 </div>
               </div>
             </div>
@@ -82897,37 +82868,11 @@ function renderSettingsTab(key, s = {}) {
                   <div style="min-width:0;">
                     <div style="line-height:1.2;white-space:normal;overflow-wrap:break-word;">Simulate payments (no real bank execution)</div>
                     <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
-                      In test mode, settlement artifacts are still created, but rail execution should be simulated. Remittances are routed to the test recipient below.
+                      In test mode, settlement artifacts are still created, but rail execution should be simulated.
                     </div>
                   </div>
                 </label>
                 <input type="hidden" id="payroll_testing" name="payroll_testing" value="${draft.payroll_testing ? 'true' : 'false'}" />
-              </div>
-            </div>
-
-            <div class="row" style="grid-column:1/-1;margin-top:2px;">
-              <label style="white-space:normal;">Enable PAYE remittances</label>
-              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
-                <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:center;margin:0;cursor:pointer;min-width:0;">
-                  <input type="checkbox" id="payeRemittancesEnabledCk" data-noCollect="true" ${draft.paye_remittances_enabled ? 'checked' : ''} style="margin:0;justify-self:start;" />
-                  <span style="display:block;min-width:0;line-height:1.25;">If disabled, PAYE remittance send is blocked.</span>
-                </label>
-                <input type="hidden" id="paye_remittances_enabled" name="paye_remittances_enabled" value="${draft.paye_remittances_enabled ? 'true' : 'false'}" />
-              </div>
-            </div>
-
-            <div class="row" style="grid-column:1/-1;">
-              <label>Test remittance recipient email</label>
-              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
-                <input
-                  id="remittance_test_recipient_email"
-                  name="remittance_test_recipient_email"
-                  class="input"
-                  type="text"
-                  value="${escapeHtml(toStr(draft.remittance_test_recipient_email || ''))}"
-                  placeholder="e.g. test@yourdomain.com"
-                />
-                ${asEmailHint}
               </div>
             </div>
 
@@ -83033,7 +82978,7 @@ function renderSettingsTab(key, s = {}) {
   //  - Checkbox groups (UI-only; NOT collected by collectForm)
   //  - Header/Footer message (persisted; collected by collectForm)
   //  - No JSON shown
-  //  - NEW: default detailed + default candidate umbrella-copy controls (persisted)
+  //  - NEW: PAYE remittances enable + test recipient + default detailed + default candidate umbrella-copy controls (persisted)
   // ─────────────────────────────────────────────────────────────
   if (k === 'remittances') {
     const deep = (o)=> JSON.parse(JSON.stringify(o || {}));
@@ -83104,6 +83049,24 @@ function renderSettingsTab(key, s = {}) {
       return out;
     })();
 
+    const boolish = (v, dflt) => {
+      if (typeof v === 'boolean') return v;
+      if (v === 1 || v === '1') return true;
+      if (v === 0 || v === '0') return false;
+      if (v == null) return !!dflt;
+      const s0 = String(v).trim().toLowerCase();
+      if (s0 === 'true' || s0 === 't' || s0 === 'yes' || s0 === 'y' || s0 === 'on') return true;
+      if (s0 === 'false' || s0 === 'f' || s0 === 'no' || s0 === 'n' || s0 === 'off') return false;
+      return !!dflt;
+    };
+
+    const toStr = (v) => (v == null ? '' : String(v));
+    const trimStr = (v) => String(v == null ? '' : v).trim();
+
+    const payrollTestingOn = boolish(s.payroll_testing, false);
+    const payeRemOn = boolish(s.paye_remittances_enabled, false);
+    const testEmail = trimStr(s.remittance_test_recipient_email || '');
+
     // Seed a stable draft store for the remittances tab so values survive tab switches/re-renders.
     try {
       if (modalCtx && typeof modalCtx === 'object') {
@@ -83113,6 +83076,8 @@ function renderSettingsTab(key, s = {}) {
             remittance_includes_json: deep(cfg),
             remittance_header_message: (s.remittance_header_message == null ? '' : String(s.remittance_header_message)),
             remittance_footer_message: (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message)),
+            paye_remittances_enabled: payeRemOn,
+            remittance_test_recipient_email: testEmail,
             dirty: false
           };
         } else {
@@ -83120,6 +83085,8 @@ function renderSettingsTab(key, s = {}) {
           if (!('remittance_header_message' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_header_message = (s.remittance_header_message == null ? '' : String(s.remittance_header_message));
           if (!('remittance_footer_message' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_footer_message = (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message));
           if (!('ui_scope' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.ui_scope = 'WEEKLY';
+          if (!('paye_remittances_enabled' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.paye_remittances_enabled = payeRemOn;
+          if (!('remittance_test_recipient_email' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.remittance_test_recipient_email = testEmail;
           if (!('dirty' in modalCtx.remittanceDraft)) modalCtx.remittanceDraft.dirty = false;
         }
       }
@@ -83130,6 +83097,8 @@ function renderSettingsTab(key, s = {}) {
       remittance_includes_json: deep(cfg),
       remittance_header_message: (s.remittance_header_message == null ? '' : String(s.remittance_header_message)),
       remittance_footer_message: (s.remittance_footer_message == null ? '' : String(s.remittance_footer_message)),
+      paye_remittances_enabled: payeRemOn,
+      remittance_test_recipient_email: testEmail,
       dirty: false
     };
 
@@ -83156,19 +83125,15 @@ function renderSettingsTab(key, s = {}) {
       { key: 'worked_times',     label: 'Worked times (legacy; schedule display is controlled by Detailed remittances)' }
     ];
 
-    const boolish = (v, dflt) => {
-      if (typeof v === 'boolean') return v;
-      if (v === 1 || v === '1') return true;
-      if (v === 0 || v === '0') return false;
-      if (v == null) return !!dflt;
-      const s = String(v).trim().toLowerCase();
-      if (s === 'true' || s === 't' || s === 'yes' || s === 'y' || s === 'on') return true;
-      if (s === 'false' || s === 'f' || s === 'no' || s === 'n' || s === 'off') return false;
-      return !!dflt;
-    };
-
     const detailDefaultOn = boolish(s.remittances_detailed_breakdown, false);
     const umbCopyDefaultOn = boolish(s.remittance_receive_when_umbrella_paid, false);
+
+    const asEmailHint = `
+      <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.25;white-space:normal;overflow-wrap:break-word;">
+        When <strong>Payroll testing</strong> is enabled, remittances are only allowed if a test email is set here.
+        All remittances will be routed to this test recipient, and the intended recipient is recorded for audit.
+      </div>
+    `;
 
     const getCfg = (scope, group, kk, dflt) => {
       try {
@@ -83232,6 +83197,10 @@ function renderSettingsTab(key, s = {}) {
           const wEl = document.getElementById('remScopeWeekly');
           const dEl = document.getElementById('remScopeDaily');
 
+          const ckPaye = document.getElementById('payeRemittancesEnabledCk');
+          const hidPaye = document.getElementById('paye_remittances_enabled');
+          const inTestEmail = document.getElementById('remittance_test_recipient_email');
+
           const applyScope = (sc) => {
             const up = String(sc || '').trim().toUpperCase();
             const next = (up === 'DAILY') ? 'DAILY' : 'WEEKLY';
@@ -83254,6 +83223,18 @@ function renderSettingsTab(key, s = {}) {
                 if (ftr) modalCtx.remittanceDraft.remittance_footer_message = String(ftr.value ?? '');
               }
 
+              const payeOn = !!(ckPaye && ckPaye.checked);
+              const te = (inTestEmail && inTestEmail.value != null) ? String(inTestEmail.value).trim() : '';
+
+              try {
+                if (hidPaye) hidPaye.value = payeOn ? 'true' : 'false';
+              } catch {}
+
+              if (modalCtx && modalCtx.remittanceDraft) {
+                modalCtx.remittanceDraft.paye_remittances_enabled = payeOn;
+                modalCtx.remittanceDraft.remittance_test_recipient_email = te;
+              }
+
               let inc = null;
               try {
                 if (typeof buildRemittanceIncludesJsonFromUi === 'function') {
@@ -83264,6 +83245,8 @@ function renderSettingsTab(key, s = {}) {
               if (modalCtx && modalCtx.data && typeof modalCtx.data === 'object') {
                 if (hdr) modalCtx.data.remittance_header_message = String(hdr.value ?? '');
                 if (ftr) modalCtx.data.remittance_footer_message = String(ftr.value ?? '');
+                modalCtx.data.paye_remittances_enabled = payeOn;
+                modalCtx.data.remittance_test_recipient_email = te;
               }
 
               if (inc && modalCtx && modalCtx.remittanceDraft) {
@@ -83303,6 +83286,9 @@ function renderSettingsTab(key, s = {}) {
             }
           } catch {}
 
+          if (ckPaye) ckPaye.addEventListener('change', syncDraftFromDom, true);
+          if (inTestEmail) inTestEmail.addEventListener('input', syncDraftFromDom, true);
+
           root.addEventListener('change', (e) => {
             const t = e && e.target;
             if (!t) return;
@@ -83318,6 +83304,8 @@ function renderSettingsTab(key, s = {}) {
               syncDraftFromDom();
             }
           }, true);
+
+          syncDraftFromDom();
         } catch {}
       }, 0);
     } catch {}
@@ -83343,6 +83331,32 @@ function renderSettingsTab(key, s = {}) {
                   <option value="WEEKLY" ${scopeSelWeekly}>Weekly</option>
                   <option value="DAILY" ${scopeSelDaily}>Daily</option>
                 </select>
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1;margin-top:2px;">
+              <label style="white-space:normal;">Enable PAYE remittances</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
+                <label style="display:grid;grid-template-columns:18px 1fr;column-gap:8px;align-items:center;margin:0;cursor:pointer;min-width:0;">
+                  <input type="checkbox" id="payeRemittancesEnabledCk" data-noCollect="true" ${draft.paye_remittances_enabled ? 'checked' : ''} style="margin:0;justify-self:start;" />
+                  <span style="display:block;min-width:0;line-height:1.25;">If disabled, PAYE remittance send is blocked.</span>
+                </label>
+                <input type="hidden" id="paye_remittances_enabled" name="paye_remittances_enabled" value="${draft.paye_remittances_enabled ? 'true' : 'false'}" />
+              </div>
+            </div>
+
+            <div class="row" style="grid-column:1/-1;">
+              <label>Test remittance recipient email</label>
+              <div class="controls" style="display:flex;flex-direction:column;gap:6px;">
+                <input
+                  id="remittance_test_recipient_email"
+                  name="remittance_test_recipient_email"
+                  class="input"
+                  type="text"
+                  value="${escapeHtml(toStr(draft.remittance_test_recipient_email || ''))}"
+                  placeholder="e.g. test@yourdomain.com"
+                />
+                ${payrollTestingOn ? asEmailHint : ``}
               </div>
             </div>
 
@@ -83403,7 +83417,7 @@ function renderSettingsTab(key, s = {}) {
             <div style="margin-top:10px;font-size:12px;color:rgba(255,255,255,0.65)">
               Notes:
               <ul style="margin:6px 0 0 18px;padding:0">
-                <li>PAYE remittance enable/disable is controlled in <strong>Global Settings → Banking &amp; Payments</strong>, with candidate overrides taking precedence when enabled.</li>
+                <li>PAYE remittance enable/disable and test recipient are controlled here. Candidate overrides can take precedence when enabled.</li>
                 <li>Detailed schedule rows are controlled by <strong>Detailed remittances by default</strong> (and per-recipient overrides), not by the “Include details” tick boxes.</li>
                 <li>Job title / band will be included only when present and enabled.</li>
                 <li>Daily timesheets do not rely on contracts; values are sourced from the best available timesheet context.</li>
