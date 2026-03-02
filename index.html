@@ -825,47 +825,40 @@ body{
       font-size:11px;
     }
 
-    .form input,
-    .form select,
-      .form textarea{
-      min-height:90px;
-    }
+ .form input,
+.form select,
+.form textarea{
+  background:#000;
+  border:1px solid var(--line);
+  color:var(--text);
+  border-radius:8px;
+  padding:8px 10px;
+  width:100%;
+  font-size:12px;
+}
 
-     .form input,
-    .form select,
-    .form textarea{
-      background:#000;
-      border:1px solid var(--line);
-      color:var(--text);
-      border-radius:8px;
-      padding:8px 10px;
-      width:100%;
-      font-size:12px;
-    }
+.form textarea{
+  min-height:90px;
+}
 
-    /* ✅ FIX (SCOPED): only remittance checkboxes (Candidate + Umbrella).
-       Avoid touching other modal checkboxes/radios. */
-    #modal input[type="checkbox"][name="remittance_overrides_enabled"],
-    #modal input[type="checkbox"][name="remittance_receive_enabled"],
-    #modal input[type="checkbox"][name="remittances_detailed_breakdown"],
-    #modal input[type="checkbox"][name="remittance_receive_when_umbrella_paid"]{
-      width:auto !important;
-      padding:0 !important;
-      background:transparent !important;
-      border:none !important;
-      box-shadow:none !important;
-      border-radius:0 !important;
-      min-height:auto !important;
-      height:auto !important;
-      margin:0 !important;
-      appearance:auto;
-      -webkit-appearance:auto;
-      accent-color: var(--brand);
-    }
-
-    .form textarea{
-      min-height:90px;
-    }
+/* ✅ FIX (SCOPED): only remittance checkboxes (Candidate + Umbrella).
+   Avoid touching other modal checkboxes/radios. */
+#modal input[type="checkbox"][name="remittance_overrides_enabled"],
+#modal input[type="checkbox"][name="remittance_receive_enabled"],
+#modal input[type="checkbox"][name="remittances_detailed_breakdown"],
+#modal input[type="checkbox"][name="remittance_receive_when_umbrella_paid"]{
+  width:auto !important;
+  padding:0 !important;
+  background:transparent !important;
+  border:none !important;
+  box-shadow:none !important;
+  border-radius:0 !important;
+  margin:0 !important;
+  vertical-align:middle;
+  appearance:auto;
+  -webkit-appearance:auto;
+  accent-color: var(--brand);
+}
     #modal .input{
       background:#000;
       border:1px solid var(--line);
