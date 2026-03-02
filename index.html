@@ -831,7 +831,7 @@ body{
       min-height:90px;
     }
 
-    .form input,
+     .form input,
     .form select,
     .form textarea{
       background:#000;
@@ -843,24 +843,29 @@ body{
       font-size:12px;
     }
 
-    /* ✅ FIX: prevent checkboxes/radios in modals inheriting text-input styling */
-    #modal .form input[type="checkbox"],
-    #modal .form input[type="radio"]{
-      width:auto;
-      padding:0;
-      background:transparent;
-      border:none;
-      box-shadow:none;
+    /* ✅ FIX (SCOPED): only remittance checkboxes (Candidate + Umbrella).
+       Avoid touching other modal checkboxes/radios. */
+    #modal input[type="checkbox"][name="remittance_overrides_enabled"],
+    #modal input[type="checkbox"][name="remittance_receive_enabled"],
+    #modal input[type="checkbox"][name="remittances_detailed_breakdown"],
+    #modal input[type="checkbox"][name="remittance_receive_when_umbrella_paid"]{
+      width:auto !important;
+      padding:0 !important;
+      background:transparent !important;
+      border:none !important;
+      box-shadow:none !important;
+      border-radius:0 !important;
+      min-height:auto !important;
+      height:auto !important;
+      margin:0 !important;
       appearance:auto;
       -webkit-appearance:auto;
-      margin:0;
       accent-color: var(--brand);
     }
 
     .form textarea{
       min-height:90px;
     }
-
     #modal .input{
       background:#000;
       border:1px solid var(--line);
