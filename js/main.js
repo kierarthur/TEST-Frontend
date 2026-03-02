@@ -7551,6 +7551,85 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
 
     try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
 
+    // ✅ NEW: if backend returned excluded_timesheets, show a modal warning (Option 2)
+    try {
+      const excludedRaw = (obj && Array.isArray(obj.excluded_timesheets)) ? obj.excluded_timesheets : [];
+      if (excludedRaw.length > 0) {
+        // Build best-effort candidate/timesheet labels from current preview (if available)
+        const pvContainer = (pay.draftWizard && pay.draftWizard.preview && pay.draftWizard.preview.data && typeof pay.draftWizard.preview.data === 'object')
+          ? pay.draftWizard.preview.data
+          : null;
+
+        const pv = (pvContainer && pvContainer.preview && typeof pvContainer.preview === 'object')
+          ? pvContainer.preview
+          : pvContainer;
+
+        const candNameById = new Map();
+        const tsMetaById = new Map();
+
+        try {
+          const payeCands = Array.isArray(pv?.paye_candidates) ? pv.paye_candidates : [];
+          const nonPaye = Array.isArray(pv?.non_paye_payees) ? pv.non_paye_payees : [];
+          const allCands = [...payeCands, ...nonPaye];
+
+          for (const c of allCands) {
+            if (!c || typeof c !== 'object') continue;
+            const cid = String(c.candidate_id || '').trim();
+            if (!cid) continue;
+            const dn = String(c.display_name || c.candidate_name || c.candidate_display || '').trim();
+            if (dn && !candNameById.has(cid)) candNameById.set(cid, dn);
+
+            const items = Array.isArray(c.itemisation) ? c.itemisation : [];
+            for (const it of items) {
+              if (!it || typeof it !== 'object') continue;
+              const tid = String(it.timesheet_id || it.timesheetId || '').trim();
+              if (!tid) continue;
+              if (tsMetaById.has(tid)) continue;
+
+              const we = String(it.week_ending_date || it.weekEndingDate || '').trim();
+              const clientNm = String(it.client_name || it.clientName || '').trim();
+              const ref =
+                String(it.ref_num || it.refNum || it.timesheet_ref || it.timesheetRef || it.source_ref || it.sourceRef || it.ref || '').trim();
+
+              tsMetaById.set(tid, { week_ending_date: we, client_name: clientNm, ref });
+            }
+          }
+        } catch {}
+
+        const exclusionsNorm = excludedRaw.map((x) => {
+          const tid = String(x?.timesheet_id || x?.timesheetId || '').trim();
+          const cid = String(x?.candidate_id || x?.candidateId || '').trim();
+          const reasonSummary = String(x?.reason_summary || x?.reasonSummary || '').trim();
+
+          const meta = tid ? (tsMetaById.get(tid) || null) : null;
+          const candName = cid ? (candNameById.get(cid) || '') : '';
+
+          return {
+            timesheet_id: tid,
+            candidate_id: cid,
+            candidate_display_name: candName,
+            week_ending_date: meta ? (meta.week_ending_date || '') : '',
+            client_name: meta ? (meta.client_name || '') : '',
+            timesheet_ref: meta ? (meta.ref || '') : '',
+            reason_summary: reasonSummary || 'Still processing',
+            tsfin_reasons: Array.isArray(x?.tsfin_reasons) ? x.tsfin_reasons : [],
+            next_attempt_at: (x && Object.prototype.hasOwnProperty.call(x, 'next_attempt_at')) ? x.next_attempt_at : null
+          };
+        }).filter(r => r && r.timesheet_id);
+
+        if (typeof openPayDraftSkippedTimesheetsModal === 'function') {
+          await openPayDraftSkippedTimesheetsModal(exclusionsNorm);
+        } else {
+          // Fallback (should not happen in CloudTMS): at least make it visible
+          try {
+            const msg = `Draft created, but ${excludedRaw.length} timesheet(s) were skipped because calculations are still processing.`;
+            if (typeof window.__toast === 'function') window.__toast(msg);
+            else alert(msg);
+          } catch {}
+        }
+      }
+    } catch {}
+
     return deep(obj);
 
   } catch (e) {
@@ -7567,6 +7646,231 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   }
 }
 
+async function openPayDraftSkippedTimesheetsModal(exclusions) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const closeTop = () => {
+    try {
+      const btn = document.getElementById('btnCloseModal');
+      if (btn && typeof btn.click === 'function') { btn.click(); return; }
+    } catch {}
+    try { if (typeof closeModal === 'function') closeModal(); } catch {}
+  };
+
+  const listIn = Array.isArray(exclusions) ? exclusions : [];
+  const rows = [];
+
+  for (const it of listIn) {
+    if (!it || typeof it !== 'object') continue;
+
+    const timesheetId = String(it.timesheet_id || it.timesheetId || '').trim();
+    const candidateId = String(it.candidate_id || it.candidateId || '').trim();
+
+    if (!timesheetId) continue;
+
+    const candidateName =
+      String(it.candidate_display_name || it.candidate_name || it.display_name || it.candidateDisplayName || it.candidateName || '').trim();
+
+    const weekEnding =
+      String(it.week_ending_date || it.weekEndingDate || it.week_ending || it.weekEnding || '').trim();
+
+    const refNum =
+      String(it.ref_num || it.refNum || it.timesheet_ref || it.timesheetRef || it.source_ref || it.sourceRef || it.ref || '').trim();
+
+    const clientName =
+      String(it.client_name || it.clientName || '').trim();
+
+    const reasonSummary =
+      String(it.reason_summary || it.reasonSummary || '').trim() || 'Still processing';
+
+    const tsfinReasons = Array.isArray(it.tsfin_reasons) ? it.tsfin_reasons : (Array.isArray(it.reasons) ? it.reasons : null);
+    const nextAttemptAt =
+      (it.next_attempt_at != null) ? it.next_attempt_at :
+      (it.nextAttemptAt != null) ? it.nextAttemptAt :
+      null;
+
+    rows.push({
+      timesheetId,
+      candidateId,
+      candidateName,
+      weekEnding,
+      refNum,
+      clientName,
+      reasonSummary,
+      tsfinReasons: Array.isArray(tsfinReasons) ? tsfinReasons.map(x => String(x || '').trim()).filter(Boolean) : [],
+      nextAttemptAt: (nextAttemptAt == null) ? null : String(nextAttemptAt)
+    });
+  }
+
+  const count = rows.length;
+
+  // If nothing to show, no-op (do not throw).
+  if (!count) return null;
+
+  const kind = 'import-summary-pay-draft-skipped-timesheets';
+  const rootId = `payDraftSkipped_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  const shortId = (s) => {
+    const x = String(s || '').trim();
+    if (!x) return '—';
+    return (x.length > 12) ? `${x.slice(0, 8)}…${x.slice(-4)}` : x;
+  };
+
+  const render = () => {
+    const head = `
+      <div class="card">
+        <div class="row">
+          <label>Draft created — some timesheets were skipped</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            <div class="mini" style="opacity:.9;">
+              Draft created, but <span class="mono">${enc(String(count))}</span> timesheet(s) were skipped because calculations are still processing.
+            </div>
+            <div class="mini" style="opacity:.85;">
+              They will be included automatically once ready.
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const tableRows = rows.map((r) => {
+      const cand = r.candidateName || (r.candidateId ? shortId(r.candidateId) : '—');
+      const tsLabel = r.refNum ? r.refNum : shortId(r.timesheetId);
+      const we = r.weekEnding ? r.weekEnding : '—';
+      const client = r.clientName || '—';
+      const reason = r.reasonSummary || 'Still processing';
+
+      const detailBits = [];
+      detailBits.push(`Timesheet ID: ${r.timesheetId}`);
+      if (r.candidateId) detailBits.push(`Candidate ID: ${r.candidateId}`);
+      if (r.weekEnding) detailBits.push(`Week ending: ${r.weekEnding}`);
+      if (r.clientName) detailBits.push(`Client: ${r.clientName}`);
+      if (r.refNum) detailBits.push(`Ref: ${r.refNum}`);
+      if (r.tsfinReasons.length) detailBits.push(`Reasons: ${r.tsfinReasons.join(', ')}`);
+      if (r.nextAttemptAt) detailBits.push(`Next attempt: ${r.nextAttemptAt}`);
+
+      return `
+        <tr>
+          <td>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span>${enc(cand)}</span>
+            </div>
+          </td>
+          <td class="mono" style="white-space:nowrap;">${enc(tsLabel)}</td>
+          <td class="mini" style="white-space:nowrap;">${enc(we)}</td>
+          <td class="mini">${enc(client)}</td>
+          <td class="mini">${enc(reason)}</td>
+          <td style="text-align:right;">
+            <details>
+              <summary class="mini" style="cursor:pointer; user-select:none;">Details</summary>
+              <div class="mini" style="opacity:.9; white-space:pre-wrap; margin-top:6px;">${enc(detailBits.join('\n'))}</div>
+            </details>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    const table = `
+      <div class="card" style="margin-top:10px;">
+        <div class="row">
+          <label>Skipped items</label>
+          <div class="controls">
+            <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+              <table class="grid" style="min-width:980px; table-layout:auto;">
+                <thead>
+                  <tr>
+                    <th>Candidate</th>
+                    <th style="width:160px;">Timesheet</th>
+                    <th style="width:140px;">Week ending</th>
+                    <th>Client</th>
+                    <th>Reason</th>
+                    <th style="width:120px; text-align:right;">Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${tableRows}
+                </tbody>
+              </table>
+            </div>
+
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;margin-top:10px;">
+              <button id="payDraftSkippedClose" type="button" class="btn btn-outline" title="Close">Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    return `<div id="${enc(rootId)}">${head}${table}</div>`;
+  };
+
+  // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
+  try {
+    const ctxSeed = { entity: 'pay-draft-skipped', openToken: `pay-draft-skipped:${Date.now()}:${Math.random().toString(36).slice(2)}` };
+    window.modalCtx = ctxSeed;
+    try { if (typeof modalCtx !== 'undefined') modalCtx = ctxSeed; } catch {}
+  } catch {}
+
+  return await new Promise((resolve) => {
+    let done = false;
+    const finish = (res) => {
+      if (done) return;
+      done = true;
+      resolve(res || null);
+    };
+
+    const onDismiss = () => finish(true);
+
+    const renderTab = (k) => {
+      if (k !== 'main') return '';
+      return render();
+    };
+
+    showModal(
+      'Draft warning',
+      [{ key: 'main', label: 'Skipped' }],
+      renderTab,
+      null,
+      true,
+      null,
+      {
+        kind,
+        noParentGate: true,
+        showSave: false,
+        showApply: false,
+        stayOpenOnSave: false,
+        onDismiss
+      }
+    );
+
+    const wire = () => {
+      const body = document.getElementById('modalBody');
+      if (!body) return;
+
+      const root = body.querySelector(`#${CSS.escape(rootId)}`);
+      if (!root) return;
+
+      if (root.__wired) return;
+      root.__wired = true;
+
+      const btnClose = root.querySelector('#payDraftSkippedClose');
+      if (btnClose) {
+        btnClose.addEventListener('click', () => {
+          closeTop();
+          finish(true);
+        }, { once: true });
+      }
+    };
+
+    // Wire once DOM is ready
+    try { setTimeout(wire, 0); } catch {}
+    try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch {}
+  });
+}
 
 async function bankingPayBatchExecute(payBatchId, scope = 'ALL') {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
