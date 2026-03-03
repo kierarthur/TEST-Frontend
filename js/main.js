@@ -33777,6 +33777,9 @@ async function openSearchModal(opts = {}) {
       row('Email',                `<input class="input" type="email" name="email" placeholder="name@domain" />`),
       row('Telephone',            inputText('phone')),
 
+      // ✅ NEW: Notes exact (case-insensitive) match
+      row('Notes (exact match)',  inputText('notes')),
+
       // Pay type (including blank)
       row('Pay type', `
         <select name="pay_method">
@@ -33849,6 +33852,10 @@ async function openSearchModal(opts = {}) {
       row(lblInvAddr,       inputText('invoice_address')),
       row(lblPost,          inputText('postcode')),
       row(lblApPhone,       inputText('ap_phone')),
+
+      // ✅ NEW: Notes exact (case-insensitive) match
+      row('Notes (exact match)', inputText('notes')),
+
       row('VAT chargeable (Yes/No)', boolSelect('vat_chargeable')),
       row('Payment terms (days)', `<input class="input" type="number" name="payment_terms_days" min="0" />`),
       row('Mileage charge rate',  `<input class="input" type="number" step="0.01" name="mileage_charge_rate" />`),
@@ -34202,7 +34209,6 @@ async function openSearchModal(opts = {}) {
   // Extra wiring (eg. load/save presets actions)
   setTimeout(wireAdvancedSearch, 0);
 }
-
 
 
 // === REPLACE: openSearchModal (icons only, legacy forced hidden, robust wiring) ===
@@ -42768,6 +42774,11 @@ function renderClientTab(key, row = {}){
       ${input('ap_phone','A/P phone', row.ap_phone)}
       ${select('vat_chargeable','VAT chargeable', vatChoice, ['Yes','No'])}
       ${input('payment_terms_days','Payment terms (days)', row.payment_terms_days || 30, 'number')}
+
+      <div class="row" style="grid-column:1/-1">
+        <label>Notes</label>
+        <textarea name="notes" placeholder="Free text…">${row.notes || ''}</textarea>
+      </div>
     </div>
   `);
 
@@ -42835,6 +42846,7 @@ function renderClientTab(key, row = {}){
 
   return '';
 }
+
 
 // ===========================
 // 5) mountCandidatePayTab(...)
@@ -70547,11 +70559,20 @@ if (shouldNoop) {
   if (isChildNow) {
     // If this child should remain open after save (successor contract),
     // flip it in-place to view mode and keep it on screen.
-    if (fr.stayOpenOnSave) {
+   if (fr.stayOpenOnSave) {
       try {
         if (saved && window.modalCtx) {
           window.modalCtx.data = { ...(window.modalCtx.data || {}), ...(saved.contract || saved) };
           fr.hasId = !!window.modalCtx.data?.id;
+
+          // ✅ FIX: after create→saved, rebind formState identity so staged state continues to apply
+          try {
+            const newId = window.modalCtx.data?.id || null;
+            if (newId) {
+              window.modalCtx.formState = window.modalCtx.formState || { __forId: newId, main: {}, pay: {} };
+              window.modalCtx.formState.__forId = newId;
+            }
+          } catch {}
         }
         setFrameMode(fr, 'view');
         fr._updateButtons && fr._updateButtons();
@@ -70619,9 +70640,18 @@ if (shouldNoop) {
       console.warn('[SAVE] list cache merge failed', e);
     }
 
-    if (saved && window.modalCtx) {
+if (saved && window.modalCtx) {
       window.modalCtx.data = { ...(window.modalCtx.data || {}), ...(saved.contract || saved) };
       fr.hasId = !!window.modalCtx.data?.id;
+
+      // ✅ FIX: after create→saved, rebind formState identity so staged state continues to apply
+      try {
+        const newId = window.modalCtx.data?.id || null;
+        if (newId) {
+          window.modalCtx.formState = window.modalCtx.formState || { __forId: newId, main: {}, pay: {} };
+          window.modalCtx.formState.__forId = newId;
+        }
+      } catch {}
     }
     fr.isDirty = false;
     fr._snapshot = null;
