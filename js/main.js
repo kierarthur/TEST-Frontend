@@ -95912,7 +95912,7 @@ async function bootstrapApp(){
             }
           } catch {}
 
-          // Repaint Tools if the current section is affected (to show the discreet dot)
+          // Repaint Toools if the current section is affected (to show the discreet dot)
           if (touchedCurrent) {
             try { renderTools(); } catch {}
           }
