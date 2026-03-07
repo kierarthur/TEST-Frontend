@@ -59860,8 +59860,6 @@ function renderTimesheetIssuesTab(ctx) {
   `;
 }
 
-
-
 function renderSummary(rows){
   currentRows = rows;
   currentSelection = null;
@@ -59970,6 +59968,64 @@ function renderSummary(rows){
   return wrap;
 };
 
+  const fmtSummaryMoney = (n) => {
+    const v = Number(n || 0);
+    const safe = Number.isFinite(v) ? v : 0;
+    return `£${Math.abs(safe).toFixed(2)}`;
+  };
+
+  const formatUkPayTimestamp = (rawUtc) => {
+    if (!rawUtc) return '';
+    try {
+      const d = new Date(rawUtc);
+      if (!Number.isFinite(d.getTime())) return String(rawUtc || '');
+      return new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      }).format(d).replace(',', '');
+    } catch {
+      return String(rawUtc || '');
+    }
+  };
+
+  const buildTimesheetPayIcon = (rowObj) => {
+    const iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
+    if (!iconCode || iconCode === 'NONE') return null;
+
+    const badge = document.createElement('span');
+    badge.className = 'coin-badge';
+    badge.setAttribute('aria-hidden', 'true');
+
+    if (iconCode === 'CLOCK') {
+      badge.textContent = '◷';
+      badge.title = 'Processing';
+    } else if (iconCode === 'COIN') {
+      const paidLabel = formatUkPayTimestamp(rowObj?.pay_paid_at_utc);
+      badge.textContent = '£';
+      badge.title = paidLabel ? `Paid on ${paidLabel}` : 'Paid';
+    } else if (iconCode === 'HALF_COIN') {
+      const delta = Number(rowObj?.net_delta_ex_vat || 0);
+      badge.textContent = '£';
+      badge.style.background = 'linear-gradient(90deg, #d4af37 0%, #d4af37 50%, #334155 50%, #334155 100%)';
+      badge.style.color = '#ffffff';
+      badge.title = `Underpaid by ${fmtSummaryMoney(delta)} (adjusted)`;
+    } else if (iconCode === 'RED_COIN') {
+      const delta = Number(rowObj?.net_delta_ex_vat || 0);
+      badge.textContent = '£';
+      badge.style.background = 'radial-gradient(circle at 30% 30%, #fecaca 0%, #f87171 35%, #dc2626 60%, #7f1d1d 100%)';
+      badge.style.color = '#ffffff';
+      badge.title = `Overpaid by ${fmtSummaryMoney(delta)} (adjusted)`;
+    } else {
+      return null;
+    }
+
+    return badge;
+  };
 
   // Tie selection to dataset via fingerprint (filters + section)
   const computeFp = ()=> getSummaryFingerprint(currentSection);
@@ -60512,7 +60568,6 @@ function renderSummary(rows){
   ['QR_AWAITING_SIGNATURE', 'QR awaiting signature']
 ];
 
-
     const issuesCur = String(stFilters.issues_filter || 'ALL').toUpperCase();
     issuesOpts.forEach(([v, label]) => {
       const o = document.createElement('option');
@@ -60815,7 +60870,7 @@ function renderSummary(rows){
         const invIssueStage = String(r?.invoice_issue_stage || '').trim().toUpperCase();
 
         const isFullyInvoiced      = (invSegStage === 'FULLY_INVOICED');
-        const isPaidToCandidate    = !!r?.paid_at_utc;
+        const isPaidToCandidate    = !!r?.pay_paid_at_utc;
         const isInvoiceIssued      = (invIssueStage === 'INVOICED_ISSUED');
         const isInvoiceNotIssued   = (invIssueStage === 'INVOICED_NOT_ISSUED');
 
@@ -60894,11 +60949,14 @@ function renderSummary(rows){
         }
 
       } else if (currentSection === 'timesheets' && c === 'candidate_name') {
-        // Candidate-paid coin in candidate cell
         const txt = String(formatDisplayValue(c, v) ?? '');
-        const isPaidToCandidate = !!r?.paid_at_utc;
+        td.textContent = txt;
 
-        if (isPaidToCandidate && txt) {
+      } else if (currentSection === 'timesheets' && c === 'tools_stage') {
+        const txt = String(formatDisplayValue(c, v) ?? '');
+        const payIconEl = buildTimesheetPayIcon(r);
+
+        if (payIconEl && txt) {
           const wrap = document.createElement('div');
           wrap.className = 'cell-right-icon';
 
@@ -60906,13 +60964,11 @@ function renderSummary(rows){
           main.className = 'cell-main';
           main.textContent = txt;
 
-          const coin = document.createElement('span');
-          coin.className = 'coin-badge';
-          coin.textContent = '£';
-
           wrap.appendChild(main);
-          wrap.appendChild(coin);
+          wrap.appendChild(payIconEl);
           td.appendChild(wrap);
+        } else if (payIconEl) {
+          td.appendChild(payIconEl);
         } else {
           td.textContent = txt;
         }
@@ -61357,7 +61413,6 @@ function renderSummary(rows){
 
   try { primeSummaryMembership(currentSection, fp); } catch (e) { /* non-blocking */ }
 }
-
 
 
 async function openInvoiceBatchIssueModal() {
