@@ -2914,11 +2914,20 @@ async function authFetch(input, init = {}) {
     (typeof window !== 'undefined' && !!window.__LOG_API) ||
     (typeof __LOG_API !== 'undefined' && !!__LOG_API);
 
-  const headers = new Headers(init.headers || {});
+  const {
+    auth401Mode,
+    ...fetchInit
+  } = (init || {});
+
+  const headers = new Headers(fetchInit.headers || {});
   if (SESSION?.accessToken) headers.set('Authorization', `Bearer ${SESSION.accessToken}`);
 
   const url = (typeof input === 'string') ? input : (input?.url || '');
-  const method = (init.method || 'GET');
+  const method = (fetchInit.method || 'GET');
+
+  const auth401ModeNorm = String(auth401Mode || '').trim().toLowerCase();
+  const isReauthPath = /\/auth\/reauth\/(?:start|verify)(?:\?|$)/i.test(String(url || ''));
+  const modalSafe401 = (auth401ModeNorm === 'return') || isReauthPath;
 
   if (APILOG) {
     const safeHeaders = {};
@@ -2926,14 +2935,14 @@ async function authFetch(input, init = {}) {
       safeHeaders[k] = (k.toLowerCase() === 'authorization') ? '***' : v;
     });
     const bodyPreview =
-      (typeof init.body === 'string')
-        ? (init.body.length > 500 ? init.body.slice(0, 500) + '…' : init.body)
-        : init.body;
+      (typeof fetchInit.body === 'string')
+        ? (fetchInit.body.length > 500 ? fetchInit.body.slice(0, 500) + '…' : fetchInit.body)
+        : fetchInit.body;
     console.log('[authFetch] →', { url, method, headers: safeHeaders, body: bodyPreview });
   }
 
   const doReq = async (hdrs) => {
-    return await fetch(input, { ...init, headers: hdrs, credentials: init.credentials || 'omit' });
+    return await fetch(input, { ...fetchInit, headers: hdrs, credentials: fetchInit.credentials || 'omit' });
   };
 
   let res = await doReq(headers);
@@ -2946,7 +2955,10 @@ async function authFetch(input, init = {}) {
   }
 
   if (res.status === 401) {
-    // ✅ If we are logged out or logging in, do NOT attempt refresh (prevents stale pollers breaking login UX)
+    if (modalSafe401) {
+      return res;
+    }
+
     try {
       const st = String((typeof window !== 'undefined' && window.__authState) ? window.__authState : '');
       if (st === 'LOGGED_OUT' || st === 'LOGIN_IN_PROGRESS' || !SESSION?.accessToken) {
@@ -2958,10 +2970,8 @@ async function authFetch(input, init = {}) {
 
     const ok = await refreshToken();
 
-    // ✅ If refresh failed, refreshToken() may have performed a hard local reset + login overlay (only when appropriate).
     if (!ok) throw new Error('Unauthorised');
 
-    // Retry once with new access token
     if (SESSION?.accessToken) headers.set('Authorization', `Bearer ${SESSION.accessToken}`);
 
     if (APILOG) console.log('[authFetch] retrying after 401');
@@ -2975,8 +2985,11 @@ async function authFetch(input, init = {}) {
       } catch {}
     }
 
-    // ✅ If we still get 401 after a successful refresh, treat as hard-auth-loss and force clean logout UI.
     if (res.status === 401) {
+      if (modalSafe401) {
+        return res;
+      }
+
       try { clearSession(); } catch {}
       try { if (typeof openLogin === 'function') openLogin('Your session has expired. Please sign in again.'); } catch {}
       try {
@@ -2992,6 +3005,8 @@ async function authFetch(input, init = {}) {
 
   return res;
 }
+
+
 // ===== Auth API calls =====
 
 // single, de-duplicated definition
@@ -4622,7 +4637,6 @@ function renderTopNav(){
   } catch {}
 }
 
-
 async function openBankingReauthModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -4641,28 +4655,33 @@ async function openBankingReauthModal(opts = {}) {
     try { if (typeof closeModal === 'function') closeModal(); } catch {}
   };
 
-  const safeJson = async (res) => { try { return await res.json(); } catch { return null; } };
+  const safeJson = async (res) => {
+    try { return await res.json(); } catch { return null; }
+  };
 
   const apiPost = async (path, payload) => {
     const res = await authFetch(API(path), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload || {})
+      body: JSON.stringify(payload || {}),
+      auth401Mode: 'return'
     });
     const j = await safeJson(res);
-    if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      const msg = (j && (j.error || j.message)) ? (j.error || j.message) : (t || `Request failed (${res.status})`);
-      throw new Error(String(msg || 'Request failed'));
+    let t = '';
+    if (!res.ok && !j) {
+      try { t = await res.clone().text(); } catch {}
     }
-    return j;
+    const msg = (j && (j.error || j.message))
+      ? String(j.error || j.message)
+      : (String(t || '').trim() || `Request failed (${res.status})`);
+    return { res, j, msg };
   };
 
   const rootId = `bankingReauth_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const openToken = `banking-reauth:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 
   const state = {
-    step: 'password',            // 'password' | 'code'
+    step: 'password',
     password: '',
     code: '',
     challenge_id: '',
@@ -4764,7 +4783,6 @@ async function openBankingReauthModal(opts = {}) {
     `;
   };
 
-  // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
   let ctxSeed = null;
   try {
     ctxSeed = { entity: 'reauth', openToken: `reauth:${Date.now()}:${Math.random().toString(36).slice(2)}` };
@@ -4774,6 +4792,7 @@ async function openBankingReauthModal(opts = {}) {
 
   return await new Promise((resolve) => {
     let done = false;
+
     const finish = (tokenOrNull) => {
       if (done) return;
       done = true;
@@ -4806,6 +4825,45 @@ async function openBankingReauthModal(opts = {}) {
       } catch {
         return false;
       }
+    };
+
+    const focusField = (fieldId) => {
+      try {
+        setTimeout(() => {
+          try {
+            if (!stillTopIsThisModal()) return;
+            const root = document.getElementById(rootId);
+            const el = root ? root.querySelector(`#${CSS.escape(fieldId)}`) : document.getElementById(fieldId);
+            if (el && typeof el.focus === 'function') {
+              el.focus();
+              if (typeof el.select === 'function' && fieldId === 'bankingReauthCode') {
+                try { el.select(); } catch {}
+              }
+            }
+          } catch {}
+        }, 0);
+      } catch {}
+    };
+
+    const showAuthFailedModal = async (message, focusId) => {
+      const msg = String(message || '').trim() || 'Authentication failed. Please try again.';
+      try {
+        await openUiConfirmModal({
+          title: 'Authentication failed',
+          message: msg,
+          confirm_label: 'Okay',
+          hide_cancel: true,
+          kind: 'import-summary-banking-auth-failed'
+        });
+      } catch {}
+      try {
+        if (!done) {
+          state.err = '';
+          state.notice = '';
+          rerender();
+          focusField(focusId);
+        }
+      } catch {}
     };
 
     const rerender = () => {
@@ -4868,12 +4926,10 @@ async function openBankingReauthModal(opts = {}) {
       }
     );
 
-    // Delegated wiring on #modalBody so rerenders cannot drop handlers
     const wire = () => {
       const body = document.getElementById('modalBody');
       if (!body) return;
 
-      // Prevent double-wire for this open
       if (body.__bankingReauthHandler && String(body.__bankingReauthHandler.openToken || '') === String(openToken || '')) {
         return;
       }
@@ -4935,7 +4991,6 @@ async function openBankingReauthModal(opts = {}) {
 
           if (isDisabledEl(btn)) return;
 
-          // Keep state in sync (handles "click verify without blur")
           try {
             const pwdEl = root.querySelector('#bankingReauthPassword');
             if (pwdEl) state.password = String(pwdEl.value || '');
@@ -4966,6 +5021,7 @@ async function openBankingReauthModal(opts = {}) {
             if (!pw) {
               state.err = 'Password is required.';
               rerender();
+              focusField('bankingReauthPassword');
               return;
             }
 
@@ -4973,7 +5029,20 @@ async function openBankingReauthModal(opts = {}) {
             rerender();
 
             try {
-              const j = await apiPost('/auth/reauth/start', { password: pw });
+              const { res, j, msg } = await apiPost('/auth/reauth/start', { password: pw, purpose });
+
+              if (res.status === 401) {
+                state.busySend = false;
+                state.password = '';
+                rerender();
+                await showAuthFailedModal(msg, 'bankingReauthPassword');
+                return;
+              }
+
+              if (!res.ok) {
+                throw new Error(String(msg || `Request failed (${res.status})`));
+              }
+
               const cid = String(j?.challenge_id || '').trim();
               const exp = Number(j?.expires_in || 0);
 
@@ -4983,18 +5052,14 @@ async function openBankingReauthModal(opts = {}) {
               state.expires_in = Number.isFinite(exp) ? Math.trunc(exp) : 0;
               state.step = 'code';
               state.notice = 'Code sent. Check your email.';
+              state.err = '';
 
               rerender();
-
-              // Best-effort focus
-              try {
-                const root2 = document.getElementById(rootId);
-                const codeEl2 = root2 ? root2.querySelector('#bankingReauthCode') : null;
-                if (codeEl2) codeEl2.focus();
-              } catch {}
+              focusField('bankingReauthCode');
             } catch (e) {
               state.err = String(e?.message || e || 'Failed to send code');
               rerender();
+              focusField('bankingReauthPassword');
             } finally {
               state.busySend = false;
               rerender();
@@ -5016,6 +5081,7 @@ async function openBankingReauthModal(opts = {}) {
             if (!cid) {
               state.err = 'Please send a code first.';
               rerender();
+              focusField('bankingReauthPassword');
               return;
             }
 
@@ -5023,6 +5089,7 @@ async function openBankingReauthModal(opts = {}) {
             if (!/^\d{6}$/.test(code)) {
               state.err = 'Enter the 6-digit code.';
               rerender();
+              focusField('bankingReauthCode');
               return;
             }
 
@@ -5030,16 +5097,29 @@ async function openBankingReauthModal(opts = {}) {
             rerender();
 
             try {
-              const j = await apiPost('/auth/reauth/verify', { challenge_id: cid, code });
+              const { res, j, msg } = await apiPost('/auth/reauth/verify', { challenge_id: cid, code, purpose });
+
+              if (res.status === 401) {
+                state.busyVerify = false;
+                state.code = '';
+                rerender();
+                await showAuthFailedModal(msg, 'bankingReauthCode');
+                return;
+              }
+
+              if (!res.ok) {
+                throw new Error(String(msg || `Request failed (${res.status})`));
+              }
+
               const tok2 = String(j?.reauth_token || '').trim();
               if (!tok2) throw new Error('reauth_token missing');
 
-              // ✅ Fix: resolve first, then close (prevents onDismiss from winning the race with finish(null))
               finish(tok2);
               closeTop();
             } catch (e) {
               state.err = String(e?.message || e || 'Verification failed');
               rerender();
+              focusField('bankingReauthCode');
             } finally {
               state.busyVerify = false;
               rerender();
@@ -5054,13 +5134,14 @@ async function openBankingReauthModal(opts = {}) {
       body.addEventListener('input', onInput, true);
       body.__bankingReauthHandler = { openToken, onClick, onInput };
 
-      // Initial paint/focus safety
       try { rerender(); } catch {}
+      focusField('bankingReauthPassword');
     };
 
     try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
   });
 }
+
 
 async function openPayBatchPasswordConfirmModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -5073,6 +5154,8 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
   const title = String(opts.title || 'Cancel payment').trim() || 'Cancel payment';
   const subtitle = String(opts.subtitle || 'Enter your password and a reason. No 2FA is required to cancel.').trim();
   const defaultReason = String(opts.defaultReason || '').trim();
+  const authFailedTitle = String(opts.auth_failed_title || 'Authentication failed').trim() || 'Authentication failed';
+  const authFailedMessage = String(opts.auth_failed_message || '').trim();
 
   const closeTop = () => {
     try {
@@ -5091,7 +5174,8 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
     err: '',
     notice: '',
     __pwTouched: false,
-    __pwClearedOnce: false
+    __pwClearedOnce: false,
+    __authFailedShown: false
   };
 
   const render = () => {
@@ -5173,7 +5257,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
     `;
   };
 
-  // Capture prior ctx so we can restore legacy `modalCtx` on dismiss (prevents stale ctx clobbering later modals)
   let prevLegacyModalCtx = null;
   let hadLegacyModalCtx = false;
   try {
@@ -5183,7 +5266,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
     }
   } catch {}
 
-  // Seed a distinct modalCtx entity so banking delegated handlers do not fire in this child modal
   try {
     const ctxSeed = { entity: 'cancel-pay', openToken: `cancel-pay:${Date.now()}:${Math.random().toString(36).slice(2)}` };
     window.modalCtx = ctxSeed;
@@ -5198,7 +5280,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
       if (cleaned) return;
       cleaned = true;
 
-      // Restore legacy global `modalCtx` (showModal has a back-compat adopter that can otherwise re-clobber window.modalCtx later)
       try {
         if (typeof modalCtx !== 'undefined') {
           if (hadLegacyModalCtx) modalCtx = prevLegacyModalCtx;
@@ -5248,6 +5329,39 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
       if (root.__wired) return;
       root.__wired = true;
 
+      const focusField = (fieldId) => {
+        try {
+          setTimeout(() => {
+            try {
+              const root2 = document.getElementById(rootId);
+              const el = root2 ? root2.querySelector(`#${CSS.escape(fieldId)}`) : document.getElementById(fieldId);
+              if (el && typeof el.focus === 'function') el.focus();
+            } catch {}
+          }, 0);
+        } catch {}
+      };
+
+      const showAuthFailedModal = async (message) => {
+        const msg = String(message || '').trim() || 'Authentication failed. Please try again.';
+        try {
+          await openUiConfirmModal({
+            title: authFailedTitle,
+            message: msg,
+            confirm_label: 'Okay',
+            hide_cancel: true,
+            kind: 'import-summary-banking-auth-failed'
+          });
+        } catch {}
+        try {
+          if (!done) {
+            state.err = '';
+            state.notice = '';
+            rerender();
+            focusField('bankingCancelPassword');
+          }
+        } catch {}
+      };
+
       const rerender = () => {
         try {
           const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
@@ -5262,8 +5376,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
       const btnOk = root.querySelector('#bankingCancelConfirm');
       const btnClose = root.querySelector('#bankingCancelClose');
 
-      // ✅ Force password to be blank on initial mount (prevents browser autofill showing a value)
-      //    and re-clear once shortly after mount (covers delayed autofill) unless user has typed.
       if (pwEl && !state.__pwClearedOnce) {
         state.__pwClearedOnce = true;
         state.password = '';
@@ -5313,7 +5425,6 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
           state.err = '';
           state.notice = '';
 
-          // ✅ Always read the live DOM value (covers autofill that didn't fire input/change)
           const pwLive = (() => {
             try {
               const el = document.getElementById('bankingCancelPassword');
@@ -5329,24 +5440,41 @@ async function openPayBatchPasswordConfirmModal(opts = {}) {
           if (!pw) {
             state.err = 'Password is required.';
             rerender();
+            focusField('bankingCancelPassword');
             return;
           }
           if (!reason) {
             state.err = 'Reason is required.';
             rerender();
+            focusField('bankingCancelReason');
             return;
           }
 
-          // ✅ CRITICAL FIX: resolve FIRST, then close (otherwise onDismiss wins and you always get null)
           finish({ password: pw, reason });
           closeTop();
         };
       }
+
+      if (!state.__authFailedShown && authFailedMessage) {
+        state.__authFailedShown = true;
+        try {
+          setTimeout(async () => {
+            try {
+              if (done) return;
+              await showAuthFailedModal(authFailedMessage);
+            } catch {}
+          }, 0);
+        } catch {}
+      }
+
+      focusField('bankingCancelPassword');
     };
 
     try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
   });
 }
+
+
 
 async function openPayAuthorisationRequestModal(authRequestId, opts = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -17009,62 +17137,97 @@ async function openBankingPayBatchChildModal(batchId) {
           return;
         }
 
-        if (act === 'banking:pay:child:deleteDraft') {
-          try {
-            const b = deriveBatchObj(child.data) || {};
-            const stx = String(b.status || '').trim().toUpperCase();
+    if (act === 'banking:pay:child:deleteDraft') {
+  try {
+    const b = deriveBatchObj(child.data) || {};
+    const stx = String(b.status || '').trim().toUpperCase();
 
-            if (stx && stx !== 'DRAFT' && stx !== 'DRAFT_CREATED') {
-              const ok = window.confirm('This batch is not a draft. Cancel it anyway?');
-              if (!ok) return;
-            }
+    if (stx && stx !== 'DRAFT' && stx !== 'DRAFT_CREATED') {
+      const ok = window.confirm('This batch is not a draft. Cancel it anyway?');
+      if (!ok) return;
+    }
 
-            let creds = null;
-            try {
-              if (typeof openPayBatchPasswordConfirmModal === 'function') {
-                creds = await openPayBatchPasswordConfirmModal({
-                  title: 'Delete draft batch',
-                  subtitle: 'Enter your password and a reason. This releases reserved items back into preview.',
-                  defaultReason: 'Delete draft batch'
-                });
-              }
-            } catch {}
+    let authFailedMessage = '';
 
-            const pw = String(creds?.password || '').trim();
-            const reason = String(creds?.reason || '').trim();
-            if (!pw || !reason) return;
-
-            await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel`, { password: pw, reason });
-
-            // Refresh parent list + preview so reservations reappear immediately
-            try {
-              if (st && st.pay && typeof st.pay === 'object') {
-                if (String(st.pay.selectedBatchId || '').trim() === id) st.pay.selectedBatchId = null;
-              }
-            } catch {}
-
-            try {
-              if (typeof bankingPayBatchesList === 'function') {
-                await bankingPayBatchesList({
-                  status: (st && st.pay && st.pay.list) ? st.pay.list.statusFilter : null,
-                  limit: (st && st.pay && st.pay.list) ? st.pay.list.limit : null,
-                  offset: (st && st.pay && st.pay.list) ? st.pay.list.offset : null
-                });
-              }
-            } catch {}
-
-            try {
-              const pd = String(st?.pay?.draftWizard?.pay_date || '').trim();
-              if (pd && typeof bankingPayPreview === 'function') await bankingPayPreview(pd);
-            } catch {}
-
-            closeTop();
-          } catch (e) {
-            child.error = String(e?.message || e || 'Delete draft failed');
-            await rerenderChild();
-          }
-          return;
+    while (true) {
+      let creds = null;
+      try {
+        if (typeof openPayBatchPasswordConfirmModal === 'function') {
+          creds = await openPayBatchPasswordConfirmModal({
+            title: 'Delete draft batch',
+            subtitle: 'Enter your password and a reason. This releases reserved items back into preview.',
+            defaultReason: 'Delete draft batch',
+            auth_failed_title: 'Authentication failed',
+            auth_failed_message: authFailedMessage
+          });
         }
+      } catch {}
+
+      const pw = String(creds?.password || '').trim();
+      const reason = String(creds?.reason || '').trim();
+      if (!pw || !reason) return;
+
+      if (typeof authFetch !== 'function' || typeof API !== 'function') {
+        throw new Error('authFetch/API missing');
+      }
+
+      const res = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: pw, reason }),
+        auth401Mode: 'return'
+      });
+
+      const txt = await res.clone().text().catch(() => '');
+      let parsed = null;
+      try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = null; }
+
+      if (res.status === 401 || res.status === 403) {
+        authFailedMessage =
+          (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+            ? String(parsed.error || parsed.message)
+            : (txt || 'Authentication failed. Please try again.');
+        continue;
+      }
+
+      if (!res.ok) {
+        const msg =
+          (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+            ? String(parsed.error || parsed.message)
+            : (txt || `Request failed (${res.status})`);
+        throw new Error(msg);
+      }
+
+      try {
+        if (st && st.pay && typeof st.pay === 'object') {
+          if (String(st.pay.selectedBatchId || '').trim() === id) st.pay.selectedBatchId = null;
+        }
+      } catch {}
+
+      try {
+        if (typeof bankingPayBatchesList === 'function') {
+          await bankingPayBatchesList({
+            status: (st && st.pay && st.pay.list) ? st.pay.list.statusFilter : null,
+            limit: (st && st.pay && st.pay.list) ? st.pay.list.limit : null,
+            offset: (st && st.pay && st.pay.list) ? st.pay.list.offset : null
+          });
+        }
+      } catch {}
+
+      try {
+        const pd = String(st?.pay?.draftWizard?.pay_date || '').trim();
+        if (pd && typeof bankingPayPreview === 'function') await bankingPayPreview(pd);
+      } catch {}
+
+      closeTop();
+      break;
+    }
+  } catch (e) {
+    child.error = String(e?.message || e || 'Delete draft failed');
+    await rerenderChild();
+  }
+  return;
+}
 
         if (act === 'banking:pay:child:expandAll') {
           const data = child.data;
@@ -20307,7 +20470,6 @@ function attachBankingModalDelegatedHandlers() {
       await openBatchChild(id);
       return;
     }
-
     if (a === 'banking:pay:cancel' || a === 'banking:pay:deleteDraft') {
       const id = String(ds('batchId') || dget('data-batch-id') || st.pay?.selectedBatchId || '').trim();
       if (!id) return;
@@ -20315,52 +20477,85 @@ function attachBankingModalDelegatedHandlers() {
       const g = safeGate('CANCEL');
       if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
 
-      let creds = null;
-      try {
-        if (typeof openPayBatchPasswordConfirmModal === 'function') {
-          creds = await openPayBatchPasswordConfirmModal({
-            title: 'Delete draft batch',
-            subtitle: 'Enter your password and a reason. This releases reserved items back into preview.',
-            defaultReason: 'Delete draft batch'
-          });
-        }
-      } catch {}
+      let authFailedMessage = '';
 
-      const pw = String(creds?.password || '').trim();
-      const reason = String(creds?.reason || '').trim();
-      if (!pw || !reason) return;
-
-      try {
-        await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel`, { password: pw, reason });
-
+      while (true) {
+        let creds = null;
         try {
-          if (String(st.pay?.selectedBatchId || '').trim() === id) {
-            st.pay.selectedBatchId = null;
-          }
-        } catch {}
-
-        try {
-          if (typeof bankingPayBatchesList === 'function') {
-            await bankingPayBatchesList({
-              status: st.pay.list ? st.pay.list.statusFilter : null,
-              limit: st.pay.list ? st.pay.list.limit : null,
-              offset: st.pay.list ? st.pay.list.offset : null
+          if (typeof openPayBatchPasswordConfirmModal === 'function') {
+            creds = await openPayBatchPasswordConfirmModal({
+              title: 'Delete draft batch',
+              subtitle: 'Enter your password and a reason. This releases reserved items back into preview.',
+              defaultReason: 'Delete draft batch',
+              auth_failed_title: 'Authentication failed',
+              auth_failed_message: authFailedMessage
             });
           }
         } catch {}
 
-        try {
-          const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
-          if (pd && typeof bankingPayPreview === 'function') await bankingPayPreview(pd);
-        } catch {}
+        const pw = String(creds?.password || '').trim();
+        const reason = String(creds?.reason || '').trim();
+        if (!pw || !reason) return;
 
-        await safeRerender(null);
-      } catch (e) {
         try {
-          if (typeof bankingHandleApiError === 'function') {
-            bankingHandleApiError(e, { action: 'CANCEL', scope: null, batchId: id, errorPath: ['pay', 'list', 'error'] });
+          const res = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel`), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ password: pw, reason }),
+            auth401Mode: 'return'
+          });
+
+          const txt = await res.clone().text().catch(() => '');
+          let j = null;
+          try { j = txt ? JSON.parse(txt) : null; } catch { j = null; }
+
+          if (res.status === 401 || res.status === 403) {
+            authFailedMessage =
+              (j && typeof j === 'object' && (j.error || j.message))
+                ? String(j.error || j.message)
+                : (txt || 'Authentication failed. Please try again.');
+            continue;
           }
-        } catch {}
+
+          if (!res.ok) {
+            const msg =
+              (j && typeof j === 'object' && (j.error || j.message))
+                ? String(j.error || j.message)
+                : (txt || `Request failed (${res.status})`);
+            throw new Error(msg);
+          }
+
+          try {
+            if (String(st.pay?.selectedBatchId || '').trim() === id) {
+              st.pay.selectedBatchId = null;
+            }
+          } catch {}
+
+          try {
+            if (typeof bankingPayBatchesList === 'function') {
+              await bankingPayBatchesList({
+                status: st.pay.list ? st.pay.list.statusFilter : null,
+                limit: st.pay.list ? st.pay.list.limit : null,
+                offset: st.pay.list ? st.pay.list.offset : null
+              });
+            }
+          } catch {}
+
+          try {
+            const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
+            if (pd && typeof bankingPayPreview === 'function') await bankingPayPreview(pd);
+          } catch {}
+
+          await safeRerender(null);
+          break;
+        } catch (e) {
+          try {
+            if (typeof bankingHandleApiError === 'function') {
+              bankingHandleApiError(e, { action: 'CANCEL', scope: null, batchId: id, errorPath: ['pay', 'list', 'error'] });
+            }
+          } catch {}
+          break;
+        }
       }
       return;
     }
