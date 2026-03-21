@@ -315,18 +315,23 @@ body{
       flex-direction:column;
     }
 
-    .summary-body{
-      flex:1;
-      min-height:0;
-      overflow-y:auto;
-      overflow-x:auto;
-      scrollbar-width:thin;
-      scrollbar-color:#1e293b #020617;
-    }
-    .summary-body::-webkit-scrollbar{
-      width:8px;
-      height:8px;
-    }
+.summary-body{
+  flex:1;
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:auto;
+  scrollbar-width:thin;
+  scrollbar-color:#1e293b #020617;
+}
+.summary-body:focus,
+.summary-body:focus-visible{
+  outline:none;
+  box-shadow:none;
+}
+.summary-body::-webkit-scrollbar{
+  width:8px;
+  height:8px;
+}
     .summary-body::-webkit-scrollbar-track{
       background:#020617;
     }
