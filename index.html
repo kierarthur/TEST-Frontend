@@ -675,24 +675,31 @@ body{
   overflow: hidden; /* ✅ IMPORTANT: avoid outer modal scrollbar */
 }
 
-/* ===== Banking Pay child batch modal: wider/taller + inner scrolling only ===== */
+/* ===== Banking Pay child batch modal: wider/taller + controlled inner scrolling ===== */
 #modal.banking-pay-batch-child-modal{
   width:min(1400px,98vw);
   max-height:96vh;
 }
 #modal.banking-pay-batch-child-modal .modal-b{
   padding:0;
-  overflow:hidden; /* keep shell stable; inner areas scroll instead */
-}
-#modal.banking-pay-batch-child-modal .tabc{
-  padding:10px;
   min-height:0;
   display:flex;
   flex-direction:column;
-  gap:10px;
-  overflow:hidden;
+  overflow:hidden; /* shell stays stable; body owns the tab scroll */
 }
-#modal.banking-pay-batch-child-modal .tabc > .card{
+#modal.banking-pay-batch-child-modal .modal-b > .tabs{
+  flex:0 0 auto;
+}
+#modal.banking-pay-batch-child-modal .modal-b > #modalBody.tabc{
+  flex:1 1 auto;
+  min-height:0;
+  padding:10px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  overflow:auto;
+}
+#modal.banking-pay-batch-child-modal .modal-b > #modalBody.tabc > .card{
   flex:0 0 auto;
   min-height:0;
 }
