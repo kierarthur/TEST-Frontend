@@ -675,7 +675,7 @@ body{
   overflow: hidden; /* ✅ IMPORTANT: avoid outer modal scrollbar */
 }
 
-/* ===== Banking Pay child batch modal: wider/taller + controlled inner scrolling ===== */
+ /* ===== Banking Pay child batch modal: wider/taller + controlled inner scrolling ===== */
 #modal.banking-pay-batch-child-modal{
   width:min(1400px,98vw);
   max-height:96vh;
@@ -685,7 +685,7 @@ body{
   min-height:0;
   display:flex;
   flex-direction:column;
-  overflow:hidden; /* shell stays stable; body owns the tab scroll */
+  overflow:hidden; /* shell stays stable; modalBody owns vertical scroll */
 }
 #modal.banking-pay-batch-child-modal .modal-b > .tabs{
   flex:0 0 auto;
