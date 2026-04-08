@@ -724,6 +724,80 @@ body{
   white-space:nowrap;
 }
 
+/* ===== Timesheet workbench modals: larger shells + inner-pane scrolling ===== */
+#modal.timesheet-imports-workbench,
+#modal.bulk-process-workbench,
+#modal.bulk-authorise-workbench{
+  width:min(1500px,99vw);
+  max-height:96vh;
+}
+
+#modal.timesheet-imports-workbench .modal-b,
+#modal.bulk-process-workbench .modal-b,
+#modal.bulk-authorise-workbench .modal-b{
+  padding:0;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+
+#modal.timesheet-imports-workbench .modal-b > .tabs,
+#modal.bulk-process-workbench .modal-b > .tabs,
+#modal.bulk-authorise-workbench .modal-b > .tabs{
+  flex:0 0 auto;
+}
+
+#modal.timesheet-imports-workbench .modal-b > #modalBody.tabc,
+#modal.bulk-process-workbench .modal-b > #modalBody.tabc,
+#modal.bulk-authorise-workbench .modal-b > #modalBody.tabc{
+  flex:1 1 auto;
+  min-height:0;
+  padding:10px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  overflow:hidden;
+}
+
+#modal.timesheet-imports-workbench .modal-b > #modalBody.tabc > .card,
+#modal.bulk-process-workbench .modal-b > #modalBody.tabc > .card,
+#modal.bulk-authorise-workbench .modal-b > #modalBody.tabc > .card{
+  flex:0 0 auto;
+  min-height:0;
+}
+
+#modal.timesheet-imports-workbench .grid,
+#modal.bulk-process-workbench .grid,
+#modal.bulk-authorise-workbench .grid{
+  table-layout:auto;
+}
+
+#modal.timesheet-imports-workbench .grid thead th,
+#modal.bulk-process-workbench .grid thead th,
+#modal.bulk-authorise-workbench .grid thead th{
+  position:sticky;
+  top:0;
+  z-index:6;
+  background:#020617;
+  box-shadow:0 1px 0 var(--line);
+}
+
+#modal.timesheet-imports-workbench .grid th,
+#modal.timesheet-imports-workbench .grid td,
+#modal.bulk-process-workbench .grid th,
+#modal.bulk-process-workbench .grid td,
+#modal.bulk-authorise-workbench .grid th,
+#modal.bulk-authorise-workbench .grid td{
+  padding:8px 10px;
+}
+
+#modal.timesheet-imports-workbench .pill,
+#modal.bulk-process-workbench .pill,
+#modal.bulk-authorise-workbench .pill{
+  white-space:nowrap;
+}
+
 /* Narrower modal just for Job Titles */
     .modal.jobtitles-modal{
       width:min(800px,95vw);
@@ -1805,7 +1879,7 @@ body{
   </script>
 
   <!-- 2) Load the application logic -->
-  <script src="./js/main.js"></script>
+  <script src="./FRONTEND%20FOR%20CLOUDTMS.js"></script>
 </body>
 </html>
 
