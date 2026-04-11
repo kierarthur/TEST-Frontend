@@ -570,12 +570,60 @@ body{
       color:#fde68a;
       border-color:rgba(251,191,36,.35);
     }
-    .pill-bad{
+      .pill-bad{
       background:rgba(239,68,68,.15);
       color:#fecaca;
       border-color:rgba(248,113,113,.4);
     }
 
+    /* ===== Banking Pay workbench presentation hooks ===== */
+    .banking-pay-candidate-pending{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:2px 8px;
+      border-radius:999px;
+      border:1px solid rgba(251,191,36,.35);
+      background:rgba(245,158,11,.15);
+      color:#fde68a;
+      font-size:12px;
+      white-space:nowrap;
+    }
+    .banking-pay-candidate-pending .spinner{
+      width:10px;
+      height:10px;
+      border-radius:50%;
+      border:2px solid rgba(253,230,138,.35);
+      border-top-color:#fde68a;
+      animation:bankingPayInlineSpin .8s linear infinite;
+      flex:0 0 auto;
+    }
+
+    .banking-pay-candidate-failed{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:2px 8px;
+      border-radius:999px;
+      border:1px solid rgba(248,113,113,.4);
+      background:rgba(239,68,68,.15);
+      color:#fecaca;
+      font-size:12px;
+      white-space:nowrap;
+    }
+
+    .banking-pay-action-disabled,
+    .banking-pay-action-disabled.btn,
+    .banking-pay-action-disabled button{
+      opacity:.45;
+      cursor:not-allowed !important;
+      filter:saturate(0.6) brightness(0.9);
+      pointer-events:none;
+    }
+
+    @keyframes bankingPayInlineSpin{
+      to{ transform:rotate(360deg); }
+    }
 
     .pill-weekly{
       background:rgba(79,70,229,.18);
