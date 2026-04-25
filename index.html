@@ -773,9 +773,13 @@ body{
 }
 
 /* ===== Timesheet workbench modals: larger shells + inner-pane scrolling ===== */
-#modal.timesheet-imports-workbench,
-#modal.bulk-authorise-workbench{
+#modal.timesheet-imports-workbench{
   width:min(1580px,99vw);
+  max-height:96vh;
+}
+
+#modal.bulk-authorise-workbench{
+  width:min(1820px,99vw);
   max-height:96vh;
 }
 
@@ -848,6 +852,41 @@ body{
 #modal.bulk-process-workbench .pill,
 #modal.bulk-authorise-workbench .pill{
   white-space:nowrap;
+}
+
+/* Bulk Authorise-only schedule fit tuning (keep Bulk Process geometry unchanged) */
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(1),
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(1){
+  width:8.5%;
+}
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(2),
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(2){
+  width:11%;
+}
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(4),
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(4),
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(5),
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(5){
+  width:10.5%;
+}
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(8),
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(8){
+  width:8.5%;
+}
+
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[data-weekly-field="start"],
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[data-weekly-field="end"],
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[name^="wl_start_"],
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[name^="wl_end_"]{
+  min-width:8.5ch !important;
+  width:8.5ch !important;
+  max-width:9.5ch !important;
+}
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[data-weekly-field="break_mins"],
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[name^="wl_break_mins_"]{
+  min-width:4ch !important;
+  width:4ch !important;
+  max-width:5ch !important;
 }
 
 /* Narrower modal just for Job Titles */
