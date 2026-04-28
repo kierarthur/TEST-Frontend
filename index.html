@@ -779,13 +779,30 @@ body{
 }
 
 #modal.bulk-authorise-workbench{
-  width:min(1900px,99vw);
+  width:1900px;
+  min-width:1900px;
+  max-width:none;
   max-height:96vh;
 }
 
 #modal.bulk-process-workbench{
-  width:min(1660px,99vw);
+  width:1660px;
+  min-width:1660px;
+  max-width:none;
   max-height:96vh;
+}
+
+
+#modalBack:has(#modal.bulk-authorise-workbench),
+#modalBack:has(#modal.bulk-process-workbench){
+  overflow-x:auto;
+  overflow-y:auto;
+  align-items:flex-start;
+}
+
+#modalBack:has(#modal.bulk-authorise-workbench) #modal,
+#modalBack:has(#modal.bulk-process-workbench) #modal{
+  flex:0 0 auto;
 }
 
 #modal.timesheet-imports-workbench .modal-b,
@@ -869,10 +886,6 @@ body{
 #modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(5){
   width:10.5%;
 }
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(8),
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(8){
-  width:8.5%;
-}
 
 #modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[data-weekly-field="start"],
 #modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[data-weekly-field="end"],
@@ -884,9 +897,9 @@ body{
 }
 #modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[data-weekly-field="break_mins"],
 #modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[name^="wl_break_mins_"]{
-  min-width:4ch !important;
-  width:4ch !important;
-  max-width:5ch !important;
+  min-width:7.8ch !important;
+  width:7.8ch !important;
+  max-width:9ch !important;
 }
 
 /* Narrower modal just for Job Titles */
