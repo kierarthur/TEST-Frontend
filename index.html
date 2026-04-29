@@ -779,9 +779,9 @@ body{
 }
 
 #modal.bulk-authorise-workbench{
-  width:1900px;
-  min-width:1900px;
-  max-width:none;
+  width:min(1900px, 96vw);
+  min-width:min(1200px, 96vw);
+  max-width:96vw;
   max-height:96vh;
 }
 
@@ -900,6 +900,18 @@ body{
   min-width:7.8ch !important;
   width:7.8ch !important;
   max-width:9ch !important;
+}
+
+#modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchRoot,
+#modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchGrid,
+#modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchContent,
+#modal.bulk-authorise-workbench #bulkAuthoriseLeftPane,
+#modal.bulk-authorise-workbench #bulkAuthoriseMiddlePane,
+#modal.bulk-authorise-workbench #bulkAuthoriseRightPane,
+#modal.bulk-authorise-workbench #bulkProcessPreviewPaneRoot,
+#modal.bulk-authorise-workbench #bulkProcessPreviewStage,
+#modal.bulk-authorise-workbench #bulkAuthoriseActionRowRoot{
+  min-width:0;
 }
 
 /* Narrower modal just for Job Titles */
