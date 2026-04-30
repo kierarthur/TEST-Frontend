@@ -984,6 +984,16 @@ body{
 #modal.bulk-authorise-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-line-btn.is-active-copy{ color:#ff8c00; box-shadow:0 0 8px rgba(255,140,0,0.9); }
 #modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-line-btn.is-active-paste,
 #modal.bulk-authorise-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-line-btn.is-active-paste{ color:#1d8f3a; box-shadow:0 0 8px rgba(46,204,113,0.9); }
+
+/* Bulk Process-only parity overrides: keep Bulk Authorise untouched. */
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule{
+table-layout:fixed !important;
+width:100% !important;
+min-width:0 !important;
+max-width:100% !important;
+}
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot .ts-weekly-schedule-wrap{
+overflow-x:hidden !important;
 }
 
 #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchRoot,
