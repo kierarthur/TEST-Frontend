@@ -871,35 +871,43 @@ body{
   white-space:nowrap;
 }
 
-/* Bulk Authorise-only schedule fit tuning (keep Bulk Process geometry unchanged) */
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(1),
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(1){
-  width:8.5%;
+/* Weekly schedule fit tuning for Bulk Process + Bulk Authorise right panes */
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot .ts-weekly-schedule-grid,
+#modal.bulk-authorise-workbench #bulkProcessManualEditorRoot .ts-weekly-schedule-grid{
+  table-layout:fixed !important;
+  width:100% !important;
+  min-width:0 !important;
+  max-width:100% !important;
 }
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(2),
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(2){
-  width:11%;
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot .ts-weekly-schedule-wrap,
+#modal.bulk-authorise-workbench #bulkProcessManualEditorRoot .ts-weekly-schedule-wrap{
+  overflow-x:hidden !important;
 }
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(4),
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(4),
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule th:nth-child(5),
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot #tsWeeklySchedule td:nth-child(5){
-  width:10.5%;
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule th,
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule td,
+#modal.bulk-authorise-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule th,
+#modal.bulk-authorise-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule td{
+  padding:6px 5px;
 }
-
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[data-weekly-field="start"],
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[data-weekly-field="end"],
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[name^="wl_start_"],
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[name^="wl_end_"]{
-  min-width:8.5ch !important;
-  width:8.5ch !important;
-  max-width:9.5ch !important;
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule td input,
+#modal.bulk-authorise-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule td input{
+  max-width:100%;
 }
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[data-weekly-field="break_mins"],
-#modal.bulk-authorise-workbench #bulkAuthoriseRightPane #bulkProcessManualEditorRoot input[name^="wl_break_mins_"]{
-  min-width:7.8ch !important;
-  width:7.8ch !important;
-  max-width:9ch !important;
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="start"],
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="end"],
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_start"],
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_end"],
+#modal.bulk-authorise-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="start"],
+#modal.bulk-authorise-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="end"],
+#modal.bulk-authorise-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_start"],
+#modal.bulk-authorise-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_end"]{
+  width:8.5ch;
+  min-width:8.5ch;
+}
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_mins"],
+#modal.bulk-authorise-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule input[data-weekly-field="break_mins"]{
+  width:7.8ch;
+  min-width:7.8ch;
 }
 
 #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchRoot,
