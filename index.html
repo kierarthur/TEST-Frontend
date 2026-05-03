@@ -625,6 +625,36 @@ body{
       to{ transform:rotate(360deg); }
     }
 
+    .banking-nav-alert{
+      position:relative;
+      border-color:rgba(255,59,59,.9) !important;
+      background:rgba(255,48,48,.14) !important;
+      box-shadow:0 0 0 1px rgba(255,74,74,.7), 0 0 14px rgba(255,54,54,.65);
+      animation:bankingNavAlertPulse 1.8s ease-in-out infinite;
+    }
+    .banking-nav-alert-badge{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-width:16px;
+      height:16px;
+      margin-left:6px;
+      padding:0 5px;
+      border-radius:999px;
+      background:#ff2f2f;
+      color:#fff;
+      border:1px solid rgba(255,205,205,.75);
+      font-size:11px;
+      font-weight:700;
+      line-height:1;
+      box-shadow:0 0 10px rgba(255,36,36,.75);
+      vertical-align:middle;
+    }
+    @keyframes bankingNavAlertPulse{
+      0%,100%{ box-shadow:0 0 0 1px rgba(255,74,74,.7), 0 0 12px rgba(255,54,54,.52); }
+      50%{ box-shadow:0 0 0 1px rgba(255,74,74,.9), 0 0 18px rgba(255,54,54,.92); }
+    }
+
     .pill-weekly{
       background:rgba(79,70,229,.18);
       color:#c7d2fe;
