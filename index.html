@@ -1947,11 +1947,38 @@ overflow-x:hidden !important;
       background:#0b152a;
       box-shadow:inset 0 1px 0 rgba(255,255,255,0.02);
     }
+    .payment-issues-tab{
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      min-width:0;
+      max-width:100%;
+    }
+    .payment-issues-tab .payment-issue-summary-card,
+    .payment-issues-tab .payment-issue-manual-action-card,
+    .payment-issues-tab .payment-issue-progress-compact{
+      min-width:0;
+      overflow-wrap:anywhere;
+      padding:10px;
+    }
+    .payment-issues-tab .payment-issue-manual-action-card{
+      border-color:rgba(148,163,184,0.32);
+      background:rgba(15,23,42,0.52);
+    }
+    .payment-issue-table-wrap{
+      overflow-x:auto;
+      overflow-y:visible;
+      max-width:100%;
+      border:1px solid var(--line);
+      border-radius:10px;
+      background:var(--panel);
+    }
     .payment-issue-table{
       width:100%;
       border-collapse:collapse;
       font-size:12px;
       line-height:1.35;
+      min-width:920px;
     }
     .payment-issue-table th,
     .payment-issue-table td{
@@ -1959,9 +1986,43 @@ overflow-x:hidden !important;
       border-bottom:1px solid rgba(148,163,184,0.18);
       vertical-align:middle;
     }
+    .payment-issue-table th:first-child,
+    .payment-issue-table td:first-child{
+      width:52px;
+      min-width:52px;
+      text-align:center;
+    }
+    .payment-issue-table th:nth-child(2),
+    .payment-issue-table td:nth-child(2){
+      min-width:180px;
+    }
+    .payment-issue-table th:nth-child(3),
+    .payment-issue-table td:nth-child(3){
+      min-width:180px;
+    }
+    .payment-issue-table th:nth-child(4),
+    .payment-issue-table td:nth-child(4){
+      min-width:130px;
+      text-align:right;
+      white-space:nowrap;
+    }
+    .payment-issue-table th:nth-child(5),
+    .payment-issue-table td:nth-child(5),
+    .payment-issue-table th:nth-child(7),
+    .payment-issue-table td:nth-child(7),
+    .payment-issue-table th:nth-child(8),
+    .payment-issue-table td:nth-child(8){
+      min-width:120px;
+      white-space:nowrap;
+    }
+    .payment-issue-table th:nth-child(6),
+    .payment-issue-table td:nth-child(6){
+      min-width:220px;
+      white-space:normal;
+    }
     .payment-issue-row-selected{
-      background:rgba(59,130,246,0.16);
-      box-shadow:inset 3px 0 0 #60a5fa;
+      background:rgba(56,189,248,0.12);
+      box-shadow:inset 3px 0 0 rgba(56,189,248,0.75);
     }
     .payment-issue-row-review{
       background:rgba(245,158,11,0.16);
@@ -1989,18 +2050,31 @@ overflow-x:hidden !important;
       color:var(--text);
       padding:4px 0;
     }
+    .payment-issue-progress-compact{
+      padding:8px 10px;
+      font-size:12px;
+    }
+    .payment-issue-progress-compact:empty,
+    .payment-issue-progress-compact ul:empty{
+      display:none;
+    }
     
     .payment-issue-toolbar{
       display:flex;
       flex-wrap:wrap;
       gap:8px;
       margin:8px 0;
+      align-items:center;
+      min-width:0;
     }
     .payment-issue-actions{
       display:flex;
       flex-wrap:wrap;
       gap:8px;
       margin-top:10px;
+      align-items:center;
+      justify-content:flex-start;
+      min-width:0;
     }
     .payment-issue-approval-chip{
       display:inline-flex;
@@ -2020,7 +2094,12 @@ overflow-x:hidden !important;
       color:inherit;
       font:inherit;
       cursor:pointer;
-      padding:0;
+      padding:2px 4px;
+      border-radius:6px;
+      line-height:1.25;
+    }
+    .payment-issue-sort-button:hover{
+      background:rgba(148,163,184,0.12);
     }
     .payment-issue-finance-review{
       border:1px solid rgba(148,163,184,0.25);
