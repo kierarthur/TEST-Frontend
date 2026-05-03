@@ -1908,7 +1908,7 @@ overflow-x:hidden !important;
 
     @keyframes gloadSpin{ to { transform: rotate(360deg); } }
 
-    /* Payment issue panel + banking alert (Handover 5B) */
+    /* Payment issue panel (Handover 5B) */
     .payment-issue-panel{
       margin-top:10px;
       padding:10px;
@@ -1984,38 +1984,6 @@ overflow-x:hidden !important;
       line-height:1.2;
       white-space:nowrap;
     }
-    .banking-nav-alert{
-      position:relative;
-      border-color:#ef4444 !important;
-      background:linear-gradient(180deg, rgba(239,68,68,0.28), rgba(185,28,28,0.28)) !important;
-      color:#ffe4e6 !important;
-      box-shadow:
-        0 0 0 1px rgba(239,68,68,0.5),
-        0 0 14px rgba(239,68,68,0.45);
-      animation:bankingAlertPulse 1.6s ease-in-out infinite;
-    }
-    .banking-nav-alert-badge{
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      min-width:16px;
-      height:16px;
-      margin-left:6px;
-      padding:0 5px;
-      border-radius:999px;
-      font-size:10px;
-      font-weight:800;
-      color:#fff;
-      background:#dc2626;
-      border:1px solid rgba(255,255,255,0.45);
-      box-shadow:0 0 8px rgba(220,38,38,0.6);
-      line-height:1;
-    }
-    @keyframes bankingAlertPulse{
-      0%,100%{ box-shadow:0 0 0 1px rgba(239,68,68,0.5), 0 0 12px rgba(239,68,68,0.4); }
-      50%{ box-shadow:0 0 0 1px rgba(248,113,113,0.75), 0 0 20px rgba(239,68,68,0.75); }
-    }
-
   </style>
 
 </head>
