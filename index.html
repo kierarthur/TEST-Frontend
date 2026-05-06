@@ -625,7 +625,7 @@ body{
       to{ transform:rotate(360deg); }
     }
 
-    .banking-nav-alert{
+      .banking-nav-alert{
       position:relative;
       border-color:rgba(255,59,59,.9) !important;
       background:rgba(255,48,48,.14) !important;
@@ -653,6 +653,235 @@ body{
     @keyframes bankingNavAlertPulse{
       0%,100%{ box-shadow:0 0 0 1px rgba(255,74,74,.7), 0 0 12px rgba(255,54,54,.52); }
       50%{ box-shadow:0 0 0 1px rgba(255,74,74,.9), 0 0 18px rgba(255,54,54,.92); }
+    }
+
+    .banking-nav-alert-trigger{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width:24px;
+      height:24px;
+      margin-left:4px;
+      border:1px solid rgba(255,205,205,.65);
+      border-radius:999px;
+      background:rgba(127,29,29,.72);
+      color:#fff;
+      cursor:pointer;
+      box-shadow:0 0 10px rgba(255,36,36,.42);
+      line-height:1;
+      font-size:12px;
+      flex:0 0 auto;
+    }
+    .banking-nav-alert-trigger:hover,
+    .banking-nav-alert-trigger[aria-expanded="true"]{
+      background:rgba(220,38,38,.92);
+      border-color:rgba(254,202,202,.95);
+      box-shadow:0 0 14px rgba(255,36,36,.75);
+    }
+    .banking-nav-alert-popover{
+      position:absolute;
+      z-index:80;
+      top:calc(100% + 8px);
+      right:0;
+      width:min(420px, calc(100vw - 24px));
+      max-height:min(520px, calc(100vh - 88px));
+      overflow:auto;
+      padding:10px;
+      border:1px solid rgba(248,113,113,.55);
+      border-radius:14px;
+      background:linear-gradient(180deg,#111827,#020617);
+      color:var(--text);
+      box-shadow:0 22px 55px rgba(0,0,0,.65), 0 0 0 1px rgba(127,29,29,.38);
+    }
+    .banking-nav-alert-popover[hidden],
+    .banking-nav-alert-popover.is-hidden{
+      display:none !important;
+    }
+    .banking-nav-alert-popover-header{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:10px;
+      padding:2px 2px 8px;
+      border-bottom:1px solid rgba(148,163,184,.22);
+      margin-bottom:8px;
+    }
+    .banking-nav-alert-popover-title{
+      font-weight:800;
+      letter-spacing:.01em;
+      color:#fee2e2;
+    }
+    .banking-nav-alert-popover-subtitle{
+      font-size:12px;
+      color:#cbd5e1;
+      opacity:.9;
+    }
+    .banking-nav-alert-popover-row{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      padding:10px;
+      margin:8px 0;
+      border:1px solid rgba(148,163,184,.26);
+      border-radius:12px;
+      background:rgba(15,23,42,.78);
+      color:var(--text);
+    }
+    .banking-nav-alert-popover-row.critical{
+      border-color:rgba(248,113,113,.72);
+      background:linear-gradient(180deg,rgba(127,29,29,.44),rgba(69,10,10,.24));
+      box-shadow:inset 3px 0 0 #ef4444;
+    }
+    .banking-nav-alert-popover-row-title{
+      display:flex;
+      align-items:center;
+      gap:6px;
+      flex-wrap:wrap;
+      font-weight:800;
+      color:#fee2e2;
+    }
+    .banking-nav-alert-popover-row-meta,
+    .banking-nav-alert-popover-row-description{
+      font-size:12px;
+      color:#e5e7eb;
+      opacity:.92;
+      overflow-wrap:anywhere;
+    }
+    .banking-nav-alert-actions{
+      display:flex;
+      align-items:center;
+      justify-content:flex-end;
+      gap:8px;
+      flex-wrap:wrap;
+      margin-top:4px;
+    }
+    .banking-nav-alert-actions .btn,
+    .banking-nav-alert-actions button{
+      border:1px solid rgba(148,163,184,.45);
+      background:#0b152a;
+      color:#fff;
+      padding:5px 9px;
+      border-radius:999px;
+      cursor:pointer;
+      font-size:12px;
+    }
+    .banking-nav-alert-actions .btn:hover,
+    .banking-nav-alert-actions button:hover{
+      background:rgba(79,70,229,.25);
+      border-color:#6366f1;
+    }
+    .banking-nav-alert-actions .danger,
+    .banking-nav-alert-actions [data-action*="clear"]{
+      border-color:rgba(248,113,113,.55);
+      background:rgba(127,29,29,.42);
+      color:#fee2e2;
+    }
+    .banking-nav-alert-popover-footer{
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+      padding-top:8px;
+      margin-top:8px;
+      border-top:1px solid rgba(148,163,184,.22);
+    }
+    .banking-nav-alert-popover-reminder{
+      font-size:11px;
+      line-height:1.35;
+      color:#cbd5e1;
+      opacity:.86;
+    }
+    .banking-pay-blocked-funds-badge{
+      display:inline-flex;
+      flex-direction:column;
+      align-items:flex-start;
+      gap:2px;
+      max-width:100%;
+      padding:5px 9px;
+      border:1px solid rgba(248,113,113,.72);
+      border-radius:10px;
+      background:linear-gradient(180deg,rgba(127,29,29,.52),rgba(69,10,10,.32));
+      color:#fee2e2;
+      box-shadow:inset 3px 0 0 #ef4444, 0 0 12px rgba(239,68,68,.22);
+      font-size:11px;
+      font-weight:800;
+      line-height:1.25;
+      letter-spacing:.01em;
+      text-transform:uppercase;
+      white-space:normal;
+      overflow-wrap:anywhere;
+    }
+    .banking-pay-blocked-funds-badge .secondary,
+    .banking-pay-blocked-funds-badge small{
+      color:#fecaca;
+      font-size:10px;
+      font-weight:700;
+      text-transform:none;
+      letter-spacing:0;
+    }
+    .banking-pay-blocked-funds-banner,
+    .banking-pay-blocked-funds-overview-banner{
+      border:1px solid rgba(248,113,113,.72) !important;
+      background:linear-gradient(180deg,rgba(127,29,29,.42),rgba(69,10,10,.26)) !important;
+      color:#fee2e2 !important;
+      box-shadow:inset 4px 0 0 #ef4444, 0 12px 28px rgba(127,29,29,.22);
+    }
+    .banking-pay-blocked-funds-banner strong,
+    .banking-pay-blocked-funds-overview-banner strong{
+      color:#fff;
+    }
+    .banking-pay-blocked-funds-banner .mono,
+    .banking-pay-blocked-funds-overview-banner .mono{
+      color:#fff;
+    }
+    .banking-payment-issue-blocked-funds-card{
+      border:1px solid rgba(248,113,113,.72);
+      border-radius:14px;
+      background:linear-gradient(180deg,rgba(127,29,29,.42),rgba(69,10,10,.24));
+      color:#fee2e2;
+      box-shadow:inset 4px 0 0 #ef4444, 0 12px 28px rgba(127,29,29,.2);
+      padding:12px;
+    }
+    .banking-payment-issue-blocked-funds-card .payment-issue-badge,
+    .banking-payment-issue-blocked-funds-card .pill-bad{
+      background:rgba(239,68,68,.24);
+      color:#fee2e2;
+      border-color:rgba(248,113,113,.72);
+    }
+    .banking-payment-issue-blocked-funds-card .mini,
+    .banking-payment-issue-blocked-funds-card .hint{
+      color:#fecaca;
+    }
+    .banking-payment-issue-blocked-funds-card .mono{
+      color:#fff;
+    }
+
+    @media (max-width: 720px){
+      .banking-nav-alert-trigger{
+        width:22px;
+        height:22px;
+        font-size:11px;
+      }
+      .banking-nav-alert-popover{
+        position:fixed;
+        top:56px;
+        left:8px;
+        right:8px;
+        width:auto;
+        max-height:calc(100vh - 72px);
+        border-radius:12px;
+      }
+      .banking-nav-alert-popover-header{
+        flex-direction:column;
+        align-items:stretch;
+      }
+      .banking-nav-alert-actions{
+        justify-content:flex-start;
+      }
+      .banking-pay-blocked-funds-banner,
+      .banking-pay-blocked-funds-overview-banner,
+      .banking-payment-issue-blocked-funds-card{
+        padding:10px !important;
+      }
     }
 
     .pill-weekly{
