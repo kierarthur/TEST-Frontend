@@ -131569,8 +131569,6 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
 }
 
 
-
-
 async function handleBulkAuthoriseSelected(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][AUTHORISE-SELECTED]');
   GC('handleBulkAuthoriseSelected');
@@ -131936,7 +131934,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     let processedRows = Array.isArray(visibleModel.visible_processed_eligible_rows) ? visibleModel.visible_processed_eligible_rows : [];
     let processedByKey = new Map(processedRows.map((row) => [rowIdentityKey(row), row]).filter(([key]) => !!key));
     const isActionRow = trimStr(opts.source || '') === 'action-row';
-    const hadCheckboxSelection = Array.isArray(st.selected_row_keys) && st.selected_row_keys.length > 0;
+    const hadCheckboxSelection = !isActionRow && Array.isArray(st.selected_row_keys) && st.selected_row_keys.length > 0;
     let selectionKeys = [];
 
     const rebuildSelectionKeys = () => {
@@ -132062,11 +132060,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
 
     const currentVisibleAfterPatch = getVisibleModel();
     const processedKeysAfterPatch = (currentVisibleAfterPatch.visible_processed_eligible_rows || []).map((row) => rowIdentityKey(row)).filter(Boolean);
-    const authorisedKeysAfterPatch = (currentVisibleAfterPatch.visible_authorised_eligible_rows || []).map((row) => rowIdentityKey(row)).filter(Boolean);
-    const visibleKeysAfterPatch = (currentVisibleAfterPatch.visible_rows || []).map((row) => rowIdentityKey(row)).filter(Boolean);
-    const allKnownKeysAfterPatch = Array.from(new Set([...visibleKeysAfterPatch, ...processedKeysAfterPatch, ...authorisedKeysAfterPatch].filter(Boolean)));
     const activeWasAffected = !!(activeRowKeyBefore && selectionKeys.includes(activeRowKeyBefore));
-    const isSingleActionRow = isActionRow && selectionKeys.length === 1;
     const activeRowBefore = selectedRows.find((row) => rowIdentityKey(row) === activeRowKeyBefore) || st.active_row || {};
     const activePatch = rowPatches.find((patch) => {
       if (!patch || typeof patch !== 'object') return false;
@@ -132074,28 +132068,21 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
       const patchKeys = [patch.previous_row_key, patch.row_key_before, patch.row_key_after, patch.row_key, patch.new_row_key].map(trimStr).filter(Boolean);
       return !!(activeRowKeyBefore && patchKeys.includes(activeRowKeyBefore));
     }) || null;
-    const patchPreferredKey = activePatch
-      ? [activePatch.new_row_key, activePatch.row_key_after, activePatch.row_key, activePatch.previous_row_key, activePatch.row_key_before]
-          .map(trimStr)
-          .find((key) => key && allKnownKeysAfterPatch.includes(key)) || ''
-      : '';
+    const activeMutationSucceeded = !!(activeWasAffected && (activePatch || (allSuccess && successCount > 0)));
 
     if (!isMultiRowAction) {
-      if (activeWasAffected) {
+      if (activeMutationSucceeded) {
         const originalProcessedKeys = processedRows.map((row) => rowIdentityKey(row)).filter(Boolean);
         const targetIndex = originalProcessedKeys.indexOf(activeRowKeyBefore);
-        const sameRowCandidate = patchPreferredKey || (
-          activeRowKeyBefore && (authorisedKeysAfterPatch.includes(activeRowKeyBefore) || processedKeysAfterPatch.includes(activeRowKeyBefore))
-            ? activeRowKeyBefore
-            : ''
-        );
-        const nextCandidate = sameRowCandidate ||
-          originalProcessedKeys.slice(targetIndex + 1).find((key) => key && !selectionKeys.includes(key) && processedKeysAfterPatch.includes(key)) ||
-          originalProcessedKeys.slice(0, targetIndex).reverse().find((key) => key && !selectionKeys.includes(key) && processedKeysAfterPatch.includes(key)) ||
+        const startingIndex = targetIndex >= 0
+          ? targetIndex
+          : Math.max(0, originalProcessedKeys.findIndex((key) => selectionKeys.includes(key)));
+        const nextCandidate = originalProcessedKeys.slice(startingIndex + 1).find((key) => key && !selectionKeys.includes(key) && processedKeysAfterPatch.includes(key)) ||
+          originalProcessedKeys.slice(0, startingIndex).reverse().find((key) => key && !selectionKeys.includes(key) && processedKeysAfterPatch.includes(key)) ||
           processedKeysAfterPatch.find((key) => key && !selectionKeys.includes(key)) ||
-          authorisedKeysAfterPatch.find((key) => key && !selectionKeys.includes(key)) ||
-          activeRowKeyBefore ||
           '';
+        st.selected_row_keys = [];
+        st.selected_section = null;
         if (typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function') {
           await setActiveBulkAuthoriseRowFromVisibleRows(st, nextCandidate || null, {
             source: 'status_patch',
@@ -132104,15 +132091,16 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
             minimalOnly: true,
             deferContextRefresh: true,
             refreshContext: false,
-            preserveSameRowAcrossSectionChange: !!(sameRowCandidate || patchPreferredKey || nextCandidate === activeRowKeyBefore),
-            preserveActiveContext: true,
-            preserveExistingContext: true,
+            preserveSameRowAcrossSectionChange: false,
+            preserveActiveContext: false,
+            preserveExistingContext: false,
             scheduleHydration: false,
-            allowedFallbackSections: ['authorised_eligible', 'processed_eligible'],
+            allowedFallbackSections: ['processed_eligible'],
+            skipDirtyGuard: true,
             rerender: false
           });
         }
-      } else if (typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function' && activeRowKeyBefore) {
+      } else if (!activeWasAffected && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function' && activeRowKeyBefore) {
         await setActiveBulkAuthoriseRowFromVisibleRows(st, activeRowKeyBefore, {
           source: 'status_patch',
           cache_invalidation_hints: result?.cache_invalidation_hints || {},
@@ -132123,7 +132111,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
           preserveActiveContext: true,
           preserveExistingContext: true,
           scheduleHydration: false,
-          allowedFallbackSections: ['authorised_eligible', 'processed_eligible'],
+          allowedFallbackSections: ['processed_eligible', 'authorised_eligible'],
           rerender: false
         });
       }
@@ -132132,9 +132120,8 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     // Status-only authorise/unauthorise patches intentionally preserve active context.
 
     const failedProcessedKeys = failedKeys.filter((key) => processedKeysAfterPatch.includes(key));
-    const failedAuthorisedKeys = failedKeys.filter((key) => !failedProcessedKeys.includes(key) && authorisedKeysAfterPatch.includes(key));
-    st.selected_row_keys = [...failedProcessedKeys, ...failedAuthorisedKeys];
-    st.selected_section = failedProcessedKeys.length ? 'processed_eligible' : (failedAuthorisedKeys.length ? 'authorised_eligible' : null);
+    st.selected_row_keys = failedProcessedKeys;
+    st.selected_section = failedProcessedKeys.length ? 'processed_eligible' : null;
 
     const summaryLines = [`${successCount} timesheets authorised`, `${failureCount} timesheets could not be authorised`];
     if (failedRows.length) {
@@ -132467,7 +132454,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     let authorisedRows = Array.isArray(visibleModel.visible_authorised_eligible_rows) ? visibleModel.visible_authorised_eligible_rows : [];
     let authorisedByKey = new Map(authorisedRows.map((row) => [rowIdentityKey(row), row]).filter(([key]) => !!key));
     const isActionRow = trimStr(opts.source || '') === 'action-row';
-    const hadCheckboxSelection = Array.isArray(st.selected_row_keys) && st.selected_row_keys.length > 0;
+    const hadCheckboxSelection = !isActionRow && Array.isArray(st.selected_row_keys) && st.selected_row_keys.length > 0;
     let selectionKeys = [];
 
     const rebuildSelectionKeys = () => {
@@ -132591,24 +132578,41 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     const processedKeysAfterPatch = (currentVisibleAfterPatch.visible_processed_eligible_rows || []).map((row) => rowIdentityKey(row)).filter(Boolean);
     const authorisedKeysAfterPatch = (currentVisibleAfterPatch.visible_authorised_eligible_rows || []).map((row) => rowIdentityKey(row)).filter(Boolean);
     const activeWasAffected = !!(activeRowKeyBefore && selectionKeys.includes(activeRowKeyBefore));
-    const preferredSameRow = rowPatches
-      .map((patch) => trimStr(patch?.new_row_key || patch?.row_key_after || patch?.row_key || ''))
-      .find((key) => key && (processedKeysAfterPatch.includes(key) || authorisedKeysAfterPatch.includes(key))) || activeRowKeyBefore || '';
+    const activeRowBefore = selectedRows.find((row) => rowIdentityKey(row) === activeRowKeyBefore) || st.active_row || {};
+    const activePatch = rowPatches.find((patch) => {
+      if (!patch || typeof patch !== 'object') return false;
+      if (patchAffectsRow(patch, activeRowBefore)) return true;
+      const patchKeys = [patch.previous_row_key, patch.row_key_before, patch.row_key_after, patch.row_key, patch.new_row_key].map(trimStr).filter(Boolean);
+      return !!(activeRowKeyBefore && patchKeys.includes(activeRowKeyBefore));
+    }) || null;
+    const activeMutationSucceeded = !!(activeWasAffected && (activePatch || (allSuccess && successCount > 0)));
 
     if (!isMultiRowAction) {
-      if (activeWasAffected && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function') {
-        await setActiveBulkAuthoriseRowFromVisibleRows(st, preferredSameRow || null, {
+      if (activeMutationSucceeded && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function') {
+        const originalAuthorisedKeys = authorisedRows.map((row) => rowIdentityKey(row)).filter(Boolean);
+        const targetIndex = originalAuthorisedKeys.indexOf(activeRowKeyBefore);
+        const startingIndex = targetIndex >= 0
+          ? targetIndex
+          : Math.max(0, originalAuthorisedKeys.findIndex((key) => selectionKeys.includes(key)));
+        const nextCandidate = originalAuthorisedKeys.slice(startingIndex + 1).find((key) => key && !selectionKeys.includes(key) && authorisedKeysAfterPatch.includes(key)) ||
+          originalAuthorisedKeys.slice(0, startingIndex).reverse().find((key) => key && !selectionKeys.includes(key) && authorisedKeysAfterPatch.includes(key)) ||
+          authorisedKeysAfterPatch.find((key) => key && !selectionKeys.includes(key)) ||
+          '';
+        st.selected_row_keys = [];
+        st.selected_section = null;
+        await setActiveBulkAuthoriseRowFromVisibleRows(st, nextCandidate || null, {
           source: 'status_patch',
           cache_invalidation_hints: result?.cache_invalidation_hints || {},
           datasetOnly: true,
           minimalOnly: true,
           deferContextRefresh: true,
           refreshContext: false,
-          preserveSameRowAcrossSectionChange: true,
-          preserveActiveContext: true,
-          preserveExistingContext: true,
+          preserveSameRowAcrossSectionChange: false,
+          preserveActiveContext: false,
+          preserveExistingContext: false,
           scheduleHydration: false,
-          allowedFallbackSections: ['processed_eligible', 'authorised_eligible'],
+          allowedFallbackSections: ['authorised_eligible'],
+          skipDirtyGuard: true,
           rerender: false
         });
       } else if (!activeWasAffected && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function' && activeRowKeyBefore) {
@@ -132622,6 +132626,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
           preserveActiveContext: true,
           preserveExistingContext: true,
           scheduleHydration: false,
+          allowedFallbackSections: ['authorised_eligible', 'processed_eligible'],
           rerender: false
         });
       }
@@ -132629,8 +132634,9 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
 
     // Status-only authorise/unauthorise patches intentionally preserve active context.
 
-    st.selected_row_keys = failedKeys.filter((key) => processedKeysAfterPatch.includes(key) || authorisedKeysAfterPatch.includes(key));
-    st.selected_section = st.selected_row_keys.length ? 'authorised_eligible' : null;
+    const failedAuthorisedKeys = failedKeys.filter((key) => authorisedKeysAfterPatch.includes(key));
+    st.selected_row_keys = failedAuthorisedKeys;
+    st.selected_section = failedAuthorisedKeys.length ? 'authorised_eligible' : null;
 
     const summaryLines = [`${successCount} timesheets unauthorised`, `${failureCount} timesheets could not be unauthorised`];
     if (failedRows.length) {
@@ -132715,6 +132721,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     }
   }
 }
+
 
 
 
