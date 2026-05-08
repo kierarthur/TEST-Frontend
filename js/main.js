@@ -103945,7 +103945,6 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
   }
   return true;
 }
-
 async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, options = {}) {
   const st = (state && typeof state === 'object')
     ? state
@@ -104019,8 +104018,11 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
     const nextIdentity = trimStr(details.nextIdentity || '');
     const nextRowKeyForPane = trimStr(details.nextRowKey || '');
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
-    const queueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows.map((item) => deep(item)) : [];
-    const keepQueueActive = trimStr(pane.active_tab || '').toLowerCase() === 'queue' && queueRows.length > 0;
+    const hasNextRowForPane = !!(nextIdentity || nextRowKeyForPane);
+    const existingQueueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows.map((item) => deep(item)) : [];
+    const queueRows = hasNextRowForPane ? existingQueueRows : [];
+    const preserveQueueActive = details.preserveQueueActive === true || details.preserveQueue === true;
+    const keepQueueActive = !!(hasNextRowForPane && preserveQueueActive && trimStr(pane.active_tab || '').toLowerCase() === 'queue' && queueRows.length > 0);
     st.evidence_pane_state = {
       ...pane,
       active_tab: keepQueueActive ? 'queue' : 'attached',
@@ -104028,6 +104030,7 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       active_attached_item: null,
       attached_rows: [],
       attached_all_rows: [],
+      queue_rows: queueRows,
       all_rows: queueRows,
       __attached_manual_override: false,
       __bulk_authorise_evidence_identity: nextIdentity || nextRowKeyForPane || '',
@@ -104074,6 +104077,41 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
         mime_type: '',
         rotation_deg: 0
       };
+    }
+  };
+
+  const clearBulkAuthoriseActivePaneBindings = (paneOptions = {}) => {
+    const cfg = (paneOptions && typeof paneOptions === 'object') ? paneOptions : {};
+    const nextRowKeyForPane = trimStr(cfg.nextRowKey || '');
+    const nextIdentityForPane = trimStr(cfg.nextIdentity || '');
+    const clearModalCtx = cfg.clearModalCtx === true;
+
+    st.__bulkAuthRightPaneCtx = null;
+    st.__bulkAuthRightPaneRowKey = nextRowKeyForPane;
+    st.__bulk_authorise_pending_row_dependent_bind = null;
+    st.__bulk_authorise_last_row_dependent_bind = null;
+    st.__bulk_authorise_last_post_render_binding = null;
+    st.__bulk_authorise_pending_row_switch_baseline_reset = null;
+    st.__bulkAuthorisePreviewActiveRowKey = nextRowKeyForPane;
+    st.__bulkAuthorisePreviewActiveRowSignature = '';
+    st.__bulkAuthorisePreviewActiveBackendRowSignature = '';
+    st.__bulkAuthorisePreviewActiveRenderSignature = '';
+    st.__bulk_authorise_open_preview_settle_key = '';
+    st.__bulk_authorise_open_preview_settle_pending = false;
+    st.__bulk_authorise_open_preview_settle_last_backend_signature = '';
+    st.__bulk_authorise_open_preview_settle_last_committed_key = '';
+    st.__bulk_authorise_open_preview_settle_last_record_identity = nextIdentityForPane;
+    st.__bulk_authorise_open_preview_settle_last_render_signature = '';
+    st.__bulk_authorise_open_preview_settle_last_row_signature = '';
+
+    if (window.modalCtx && typeof window.modalCtx === 'object' && (window.modalCtx.bulkAuthoriseState === st || trimStr(window.modalCtx.entity || '').toLowerCase() === 'bulk-authorise')) {
+      window.modalCtx.__bulkAuthoriseRecordIdentity = nextIdentityForPane || null;
+      if (clearModalCtx) {
+        window.modalCtx.timesheetDetails = {};
+        window.modalCtx.timesheetRelated = {};
+        window.modalCtx.timesheetMeta = {};
+        window.modalCtx.timesheetState = { evidence: [] };
+      }
     }
   };
 
@@ -104552,6 +104590,11 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       nextIdentity: '',
       source: 'set-active-row-cleared'
     });
+    clearBulkAuthoriseActivePaneBindings({
+      nextRowKey: '',
+      nextIdentity: '',
+      clearModalCtx: true
+    });
     st.__suppress_dirty_marking = previousSuppressDirty;
     if (opts.rerender !== false) {
       await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][SET-ACTIVE]');
@@ -104656,6 +104699,11 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       nextIdentity: activeRecordIdentity || nextIdentity,
       source: 'set-active-row-assigned'
     });
+    clearBulkAuthoriseActivePaneBindings({
+      nextRowKey,
+      nextIdentity: activeRecordIdentity || nextIdentity,
+      clearModalCtx: false
+    });
   }
   syncBulkAuthoriseModalCtxToActiveRow(st, { source: 'set-active-row-assigned' });
   if (window.modalCtx && typeof window.modalCtx === 'object') {
@@ -104663,6 +104711,10 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
     if (ctxEntity === 'bulk-authorise' || window.modalCtx.bulkAuthoriseState === st) {
       window.modalCtx.__bulkAuthoriseRecordIdentity = st.__bulkAuthoriseRecordIdentity || null;
     }
+  }
+  if (isGenuineRowChange && nextRowKey) {
+    st.__bulkAuthRightPaneRowKey = nextRowKey;
+    st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
   }
   st.__suppress_dirty_marking = previousSuppressDirty;
 
@@ -104688,6 +104740,8 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       st.__suppress_dirty_marking = previousHydrateSuppressDirty;
     }
     syncBulkAuthoriseModalCtxToActiveRow(st, { source: 'set-active-row-after-refresh-context' });
+    st.__bulkAuthRightPaneRowKey = nextRowKey;
+    st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
   } else if (scheduleHydration && nextRow) {
     scheduleDeferredContextRefresh(nextRow, {
       rowSignature: nextRenderSignature || nextBackendSignature,
@@ -104737,6 +104791,7 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
 
   return true;
 }
+
 
 async function refreshBulkAuthoriseDatasetPreservingState(state, options = {}) {
   const st = (state && typeof state === 'object')
@@ -131905,21 +131960,30 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     const rowForRefresh = (st.active_row && typeof st.active_row === 'object') ? st.active_row : null;
     if (!rowForRefresh) return false;
     try {
+      const activeRenderSignature = trimStr(st.__bulk_authorise_active_render_signature || '');
+      const activeBackendSignature = trimStr(st.__bulk_authorise_active_backend_row_signature || rowForRefresh.backend_row_signature || rowForRefresh.row_signature || '');
+      const activeRowSignature = activeRenderSignature || activeBackendSignature;
       const accepted = await refreshBulkAuthoriseActiveContext(st, {
         row: rowForRefresh,
-        rowSignature: trimStr(st.__bulk_authorise_active_render_signature || ''),
-        renderSignature: trimStr(st.__bulk_authorise_active_render_signature || ''),
-        backendRowSignature: trimStr(st.__bulk_authorise_active_backend_row_signature || rowForRefresh.row_signature || ''),
+        rowSignature: activeRowSignature,
+        renderSignature: activeRenderSignature,
+        backendRowSignature: activeBackendSignature,
         recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || ''),
         rowChangeSeq: Number(st.__bulk_authorise_row_change_seq || 0) || 0,
         force: true,
         bypassCache: true,
         invalidateCache: true,
         authoritative: true,
+        source: actionSource + '-authoritative-refresh',
+        profile: 'active_row_visible',
         rerender: false
       });
-      if (accepted !== false && typeof syncBulkAuthoriseModalCtxToActiveRow === 'function') {
-        try { syncBulkAuthoriseModalCtxToActiveRow(st, { source: actionSource + '-authoritative-refresh', force: true }); } catch {}
+      if (accepted !== false) {
+        if (typeof syncBulkAuthoriseModalCtxToActiveRow === 'function') {
+          try { syncBulkAuthoriseModalCtxToActiveRow(st, { source: actionSource + '-authoritative-refresh', force: true }); } catch {}
+        }
+        st.__bulkAuthRightPaneRowKey = trimStr(st.active_row_key || rowForRefresh.row_key || '');
+        st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
       }
       return accepted !== false;
     } catch {
@@ -132084,7 +132148,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
         st.selected_row_keys = [];
         st.selected_section = null;
         if (typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function') {
-          await setActiveBulkAuthoriseRowFromVisibleRows(st, nextCandidate || null, {
+          const activeSet = await setActiveBulkAuthoriseRowFromVisibleRows(st, nextCandidate || null, {
             source: 'status_patch',
             cache_invalidation_hints: result?.cache_invalidation_hints || {},
             datasetOnly: true,
@@ -132099,6 +132163,9 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
             skipDirtyGuard: true,
             rerender: false
           });
+          if (activeSet !== false && nextCandidate) {
+            await forceAuthoritativeActiveContext();
+          }
         }
       } else if (!activeWasAffected && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function' && activeRowKeyBefore) {
         await setActiveBulkAuthoriseRowFromVisibleRows(st, activeRowKeyBefore, {
@@ -132206,6 +132273,9 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     }
   }
 }
+
+
+
 
 async function handleBulkUnauthoriseSelected(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][UNAUTHORISE-SELECTED]');
@@ -132425,21 +132495,30 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     const rowForRefresh = (st.active_row && typeof st.active_row === 'object') ? st.active_row : null;
     if (!rowForRefresh) return false;
     try {
+      const activeRenderSignature = trimStr(st.__bulk_authorise_active_render_signature || '');
+      const activeBackendSignature = trimStr(st.__bulk_authorise_active_backend_row_signature || rowForRefresh.backend_row_signature || rowForRefresh.row_signature || '');
+      const activeRowSignature = activeRenderSignature || activeBackendSignature;
       const accepted = await refreshBulkAuthoriseActiveContext(st, {
         row: rowForRefresh,
-        rowSignature: trimStr(st.__bulk_authorise_active_render_signature || ''),
-        renderSignature: trimStr(st.__bulk_authorise_active_render_signature || ''),
-        backendRowSignature: trimStr(st.__bulk_authorise_active_backend_row_signature || rowForRefresh.row_signature || ''),
+        rowSignature: activeRowSignature,
+        renderSignature: activeRenderSignature,
+        backendRowSignature: activeBackendSignature,
         recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || ''),
         rowChangeSeq: Number(st.__bulk_authorise_row_change_seq || 0) || 0,
         force: true,
         bypassCache: true,
         invalidateCache: true,
         authoritative: true,
+        source: actionSource + '-authoritative-refresh',
+        profile: 'active_row_visible',
         rerender: false
       });
-      if (accepted !== false && typeof syncBulkAuthoriseModalCtxToActiveRow === 'function') {
-        try { syncBulkAuthoriseModalCtxToActiveRow(st, { source: actionSource + '-authoritative-refresh', force: true }); } catch {}
+      if (accepted !== false) {
+        if (typeof syncBulkAuthoriseModalCtxToActiveRow === 'function') {
+          try { syncBulkAuthoriseModalCtxToActiveRow(st, { source: actionSource + '-authoritative-refresh', force: true }); } catch {}
+        }
+        st.__bulkAuthRightPaneRowKey = trimStr(st.active_row_key || rowForRefresh.row_key || '');
+        st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
       }
       return accepted !== false;
     } catch {
@@ -132600,7 +132679,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
           '';
         st.selected_row_keys = [];
         st.selected_section = null;
-        await setActiveBulkAuthoriseRowFromVisibleRows(st, nextCandidate || null, {
+        const activeSet = await setActiveBulkAuthoriseRowFromVisibleRows(st, nextCandidate || null, {
           source: 'status_patch',
           cache_invalidation_hints: result?.cache_invalidation_hints || {},
           datasetOnly: true,
@@ -132615,6 +132694,9 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
           skipDirtyGuard: true,
           rerender: false
         });
+        if (activeSet !== false && nextCandidate) {
+          await forceAuthoritativeActiveContext();
+        }
       } else if (!activeWasAffected && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function' && activeRowKeyBefore) {
         await setActiveBulkAuthoriseRowFromVisibleRows(st, activeRowKeyBefore, {
           source: 'status_patch',
@@ -132721,7 +132803,6 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     }
   }
 }
-
 
 
 
