@@ -126641,7 +126641,6 @@ async function handleBulkProcessUnprocess(state) {
 }
 
 
-
 function applyBulkTimesheetRowPatches(state, patches, options = {}) {
   const st = (state && typeof state === 'object') ? state : {};
   const opts = (options && typeof options === 'object') ? options : {};
@@ -126894,7 +126893,7 @@ function applyBulkTimesheetRowPatches(state, patches, options = {}) {
 
   const rowFieldNames = [
     'row_key', 'stable_row_id', 'timesheet_id', 'current_timesheet_id', 'requested_timesheet_id', 'expected_timesheet_id',
-    'contract_week_id', 'contract_id', 'booking_id', 'timesheet_version', 'current_version', 'row_signature', 'updated_at',
+    'contract_week_id', 'contract_id', 'booking_id', 'timesheet_version', 'current_version', 'row_signature', 'backend_row_signature', 'row_backend_signature', 'render_signature', 'updated_at',
     'candidate_id', 'candidate_name', 'candidate_display_name', 'candidate_first_name', 'candidate_surname', 'occupant_key_norm',
     'client_id', 'client_name', 'client_display_name', 'hospital_name', 'hospital_norm', 'site_name', 'ward_name', 'ward_norm',
     'booking_ref', 'external_ref', 'week_ending_date', 'contract_week_ending_date', 'work_date', 'date', 'shift_date',
@@ -126928,6 +126927,51 @@ function applyBulkTimesheetRowPatches(state, patches, options = {}) {
       if (hasOwn(p, key)) direct[key] = deep(p[key]);
     }
     const merged = Object.assign({}, nestedRow, direct);
+
+    if (!merged.row_signature) {
+      merged.row_signature = stringFirst(
+        p.row_signature,
+        nestedRow.row_signature,
+        p.rowSignature,
+        nestedRow.rowSignature,
+        p.backend_row_signature,
+        nestedRow.backend_row_signature,
+        p.row_backend_signature,
+        nestedRow.row_backend_signature,
+        p.backendRowSignature,
+        nestedRow.backendRowSignature,
+        merged.backend_row_signature,
+        merged.row_backend_signature
+      );
+    }
+    if (!merged.backend_row_signature) {
+      merged.backend_row_signature = stringFirst(
+        p.backend_row_signature,
+        nestedRow.backend_row_signature,
+        p.backendRowSignature,
+        nestedRow.backendRowSignature,
+        p.row_backend_signature,
+        nestedRow.row_backend_signature,
+        p.row_signature,
+        nestedRow.row_signature,
+        p.rowSignature,
+        nestedRow.rowSignature,
+        merged.row_signature
+      );
+    }
+    if (!merged.row_backend_signature) {
+      merged.row_backend_signature = stringFirst(
+        p.row_backend_signature,
+        nestedRow.row_backend_signature,
+        p.backend_row_signature,
+        nestedRow.backend_row_signature,
+        p.backendRowSignature,
+        nestedRow.backendRowSignature,
+        merged.backend_row_signature,
+        merged.row_signature
+      );
+    }
+    if (!merged.render_signature) merged.render_signature = stringFirst(p.render_signature, nestedRow.render_signature, p.renderSignature, nestedRow.renderSignature);
 
     const currentTimesheetId = stringFirst(
       p.current_timesheet_id,
@@ -127177,6 +127221,60 @@ function applyBulkTimesheetRowPatches(state, patches, options = {}) {
     }
   };
 
+  const syncBulkAuthoriseActiveSignatureHolders = (nextActiveRow) => {
+    if (mode === 'bulk_process') return;
+    const activeRow = isPlainObject(nextActiveRow) ? nextActiveRow : {};
+    const rowKey = canonicalRowKey(activeRow);
+    const backendSignature = stringFirst(activeRow.backend_row_signature, activeRow.row_backend_signature, activeRow.backendRowSignature, activeRow.rowSignature, activeRow.row_signature);
+    const existingRenderSignature = stringFirst(
+      st.__bulk_authorise_active_render_signature,
+      st.active_context?.render_signature,
+      st.active_context?.renderSignature,
+      st.active_ctx?.render_signature,
+      st.active_ctx?.renderSignature,
+      st.active_row?.render_signature,
+      st.active_row?.renderSignature
+    );
+    const renderSignature = stringFirst(activeRow.render_signature, activeRow.renderSignature, existingRenderSignature);
+    const syncRowObject = (targetRow) => {
+      if (!targetRow || typeof targetRow !== 'object') return;
+      if (backendSignature) {
+        targetRow.row_signature = backendSignature;
+        targetRow.backend_row_signature = backendSignature;
+        targetRow.row_backend_signature = backendSignature;
+      }
+      if (renderSignature) targetRow.render_signature = renderSignature;
+    };
+
+    syncRowObject(st.active_row);
+
+    for (const contextObj of [st.active_context, st.active_ctx]) {
+      if (!contextObj || typeof contextObj !== 'object') continue;
+      const contextRowKey = trimStr(
+        contextObj.row?.row_key ||
+        contextObj.data_row?.row_key ||
+        contextObj.row_key ||
+        ''
+      );
+      if (rowKey && contextRowKey && contextRowKey !== rowKey) continue;
+      syncRowObject(contextObj.row);
+      syncRowObject(contextObj.data_row);
+      if (backendSignature) {
+        contextObj.row_signature = backendSignature;
+        contextObj.backend_row_signature = backendSignature;
+        contextObj.row_backend_signature = backendSignature;
+      }
+      if (renderSignature) contextObj.render_signature = renderSignature;
+    }
+
+    if (backendSignature) st.__bulk_authorise_active_backend_row_signature = backendSignature;
+    if (renderSignature) st.__bulk_authorise_active_render_signature = renderSignature;
+    if (rowKey) st.__bulkAuthoriseRecordIdentity = rowKey;
+    if (rowKey && st.__bulkAuthorisePreviewActiveRowKey === rowKey && backendSignature) {
+      st.__bulkAuthorisePreviewActiveRowSignature = backendSignature;
+    }
+  };
+
   const normaliseActiveIdentityForMode = (row) => {
     if (!isPlainObject(row)) return row;
     const next = row;
@@ -127197,7 +127295,24 @@ function applyBulkTimesheetRowPatches(state, patches, options = {}) {
   };
 
   const activeRowKeyBefore = canonicalRowKey(st.active_row || {});
-  const activeSignatureBefore = trimStr(st.active_row?.row_signature || st.active_context?.row_signature || st.active_ctx?.row_signature || '');
+  const activeSignatureBefore = trimStr(
+    st.active_row?.row_signature ||
+    st.active_row?.backend_row_signature ||
+    st.active_row?.row_backend_signature ||
+    st.active_context?.row_signature ||
+    st.active_context?.backend_row_signature ||
+    st.active_context?.row_backend_signature ||
+    st.active_context?.row?.row_signature ||
+    st.active_context?.row?.backend_row_signature ||
+    st.active_context?.row?.row_backend_signature ||
+    st.active_ctx?.row_signature ||
+    st.active_ctx?.backend_row_signature ||
+    st.active_ctx?.row_backend_signature ||
+    st.active_ctx?.row?.row_signature ||
+    st.active_ctx?.row?.backend_row_signature ||
+    st.active_ctx?.row?.row_backend_signature ||
+    ''
+  );
 
   for (const originalPatch of normalisedPatches) {
     const patchRow = extractPatchRow(originalPatch);
@@ -127286,8 +127401,8 @@ function applyBulkTimesheetRowPatches(state, patches, options = {}) {
     })();
 
     if (mergedForActive && st.active_row && rowMatchesPatch(st.active_row, originalPatch)) {
-      const previousSignature = trimStr(st.active_row.row_signature || '');
-      const nextSignature = trimStr(mergedForActive.row_signature || '');
+      const previousSignature = trimStr(st.active_row.row_signature || st.active_row.backend_row_signature || st.active_row.row_backend_signature || '');
+      const nextSignature = trimStr(mergedForActive.row_signature || mergedForActive.backend_row_signature || mergedForActive.row_backend_signature || '');
       const nextActiveRow = normaliseActiveIdentityForMode(deep(mergedForActive));
       const patchDomain = classifyPatchDomain(originalPatch, nextActiveRow, {
         previousRowKey: activeRowKeyBefore,
@@ -127339,6 +127454,7 @@ function applyBulkTimesheetRowPatches(state, patches, options = {}) {
           applyPatchDomainToContext(st.active_context, patchDomain);
         }
       }
+      syncBulkAuthoriseActiveSignatureHolders(nextActiveRow);
       if (mode === 'bulk_process' && st.active_details && typeof st.active_details === 'object') {
         if (st.active_row_key && st.active_row_key.startsWith('contract_week:')) {
           st.active_details.timesheet = null;
@@ -127379,7 +127495,24 @@ function applyBulkTimesheetRowPatches(state, patches, options = {}) {
   }
 
   const activeRowKeyAfter = canonicalRowKey(st.active_row || {});
-  const activeSignatureAfter = trimStr(st.active_row?.row_signature || st.active_context?.row_signature || st.active_ctx?.row_signature || '');
+  const activeSignatureAfter = trimStr(
+    st.active_row?.row_signature ||
+    st.active_row?.backend_row_signature ||
+    st.active_row?.row_backend_signature ||
+    st.active_context?.row_signature ||
+    st.active_context?.backend_row_signature ||
+    st.active_context?.row_backend_signature ||
+    st.active_context?.row?.row_signature ||
+    st.active_context?.row?.backend_row_signature ||
+    st.active_context?.row?.row_backend_signature ||
+    st.active_ctx?.row_signature ||
+    st.active_ctx?.backend_row_signature ||
+    st.active_ctx?.row_backend_signature ||
+    st.active_ctx?.row?.row_signature ||
+    st.active_ctx?.row?.backend_row_signature ||
+    st.active_ctx?.row?.row_backend_signature ||
+    ''
+  );
   if (activeRowKeyBefore && activeRowKeyAfter && activeRowKeyBefore !== activeRowKeyAfter) result.active_row_key_changed = true;
   if (activeSignatureBefore && activeSignatureAfter && activeSignatureBefore !== activeSignatureAfter) result.active_row_signature_changed = true;
 
@@ -130539,9 +130672,29 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       );
     }
     const saveCacheHints = (saveResult?.cache_invalidation_hints && typeof saveResult.cache_invalidation_hints === 'object') ? saveResult.cache_invalidation_hints : {};
-    const saveRowPatches = Array.isArray(saveResult?.row_patches)
-      ? saveResult.row_patches.filter((patch) => patch && typeof patch === 'object')
-      : (saveResult?.row_patch && typeof saveResult.row_patch === 'object' ? [saveResult.row_patch] : []);
+    const normaliseSaveRowPatch = (patchCandidate) => {
+      if (!patchCandidate || typeof patchCandidate !== 'object' || Array.isArray(patchCandidate)) return null;
+      if (patchCandidate.row_patch && typeof patchCandidate.row_patch === 'object' && !Array.isArray(patchCandidate.row_patch)) {
+        return { ...patchCandidate, ...patchCandidate.row_patch };
+      }
+      return patchCandidate;
+    };
+    const saveRowPatches = (() => {
+      const out = [];
+      const pushPatch = (patchCandidate) => {
+        const patch = normaliseSaveRowPatch(patchCandidate);
+        if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return;
+        out.push(patch);
+      };
+      if (Array.isArray(saveResult?.row_patches)) {
+        for (const patch of saveResult.row_patches) pushPatch(patch);
+      } else {
+        pushPatch(saveResult?.row_patch);
+        pushPatch(saveResult?.row);
+        pushPatch(saveResult?.data_row);
+      }
+      return out;
+    })();
 
     if (!saveRowPatches.length) {
       const syntheticPatch = {
@@ -130577,6 +130730,62 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       ''
     );
     const nextRenderSignature = trimStr(saveRowPatches[0]?.render_signature || activeRenderSignature || '');
+    const syncActiveSaveSignatureState = () => {
+      const backendSignature = trimStr(nextBackendRowSignature || '');
+      const rowKeyForSync = trimStr(preferredSaveRowKey || st.active_row_key || row?.row_key || '');
+      const existingRenderSignature = trimStr(
+        st.__bulk_authorise_active_render_signature ||
+        st.active_context?.render_signature ||
+        st.active_ctx?.render_signature ||
+        st.active_row?.render_signature ||
+        activeRenderSignature ||
+        ''
+      );
+      const renderSignature = trimStr(nextRenderSignature || existingRenderSignature || '');
+      const syncRowObject = (targetRow) => {
+        if (!targetRow || typeof targetRow !== 'object') return;
+        if (backendSignature) {
+          targetRow.row_signature = backendSignature;
+          targetRow.backend_row_signature = backendSignature;
+          targetRow.row_backend_signature = backendSignature;
+        }
+        if (renderSignature) targetRow.render_signature = renderSignature;
+      };
+
+      syncRowObject(st.active_row);
+      for (const contextObj of [st.active_context, st.active_ctx]) {
+        if (!contextObj || typeof contextObj !== 'object') continue;
+        const contextRowKey = trimStr(
+          contextObj.row?.row_key ||
+          contextObj.data_row?.row_key ||
+          contextObj.row_key ||
+          ''
+        );
+        if (rowKeyForSync && contextRowKey && contextRowKey !== rowKeyForSync) continue;
+        syncRowObject(contextObj.row);
+        syncRowObject(contextObj.data_row);
+        if (backendSignature) {
+          contextObj.row_signature = backendSignature;
+          contextObj.backend_row_signature = backendSignature;
+          contextObj.row_backend_signature = backendSignature;
+        }
+        if (renderSignature) contextObj.render_signature = renderSignature;
+      }
+
+      if (backendSignature) st.__bulk_authorise_active_backend_row_signature = backendSignature;
+      if (renderSignature) st.__bulk_authorise_active_render_signature = renderSignature;
+      if (activeRecordIdentity) st.__bulkAuthoriseRecordIdentity = activeRecordIdentity;
+      if (rowKeyForSync && st.__bulkAuthorisePreviewActiveRowKey === rowKeyForSync && backendSignature) {
+        st.__bulkAuthorisePreviewActiveRowSignature = backendSignature;
+      }
+      if (st.__bulk_authorise_row_context_ready === true) {
+        if (backendSignature) st.__bulk_authorise_row_context_ready_backend_signature = backendSignature;
+        if (renderSignature) {
+          st.__bulk_authorise_row_context_ready_signature = renderSignature;
+          st.__bulk_authorise_row_context_ready_render_signature = renderSignature;
+        }
+      }
+    };
 
     if (typeof applyBulkTimesheetRowPatches === 'function') {
       try {
@@ -130591,6 +130800,8 @@ async function handleBulkAuthoriseSave(state, options = {}) {
         if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][SAVE] shared patch helper failed; using active-row fallback', err);
       }
     }
+
+    syncActiveSaveSignatureState();
 
     if (preferredSaveRowKey && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function') {
       await setActiveBulkAuthoriseRowFromVisibleRows(st, preferredSaveRowKey, {
@@ -130610,6 +130821,8 @@ async function handleBulkAuthoriseSave(state, options = {}) {
         rerender: false
       });
     }
+
+    syncActiveSaveSignatureState();
 
     try {
       await refreshBulkAuthoriseSummaryRowAfterMutation(st, {
@@ -130639,6 +130852,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
         });
       } catch {}
     }
+
     const draftStateAfterSave = getDraftController();
     if (draftStateAfterSave && typeof draftStateAfterSave.clearAfterSuccessfulSave === 'function') {
       try {
@@ -130662,6 +130876,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     return { ok: false, error: st.error_text };
   }
 }
+
 
 
 async function refreshBulkAuthoriseSummaryRowAfterMutation(state, options = {}) {
