@@ -6023,10 +6023,14 @@ function renderTopNav(){
 
     // Normal button for all other sections
     const b = document.createElement('button');
+    b.setAttribute('data-nav', s.key);
+    b.setAttribute('data-tab', s.key);
+    b.setAttribute('data-section-key', s.key);
     b.innerHTML = `<span class="ico">${s.icon}</span> ${s.label}`;
     if (s.key === currentSection) b.classList.add('active');
 
     if (s.key === 'banking') {
+      b.setAttribute('aria-label', 'Banking');
       // BANKING: modal-only (like Imports/Settings) — do NOT switch summary section
       b.onclick = () => {
         if (!confirmDiscardChangesIfDirty()) return;
@@ -6333,7 +6337,20 @@ function renderTopNav(){
       q.__wired = true;
     }
   } catch {}
+
+  try {
+    const bankingState = (window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object')
+      ? window.__bankingNavAttentionState
+      : ((window.__bankingAlertSummary && typeof window.__bankingAlertSummary === 'object')
+        ? window.__bankingAlertSummary
+        : null);
+
+    if (bankingState && typeof updateBankingNavAttentionState === 'function') {
+      updateBankingNavAttentionState(bankingState);
+    }
+  } catch {}
 }
+
 
 async function openBankingReauthModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -34756,46 +34773,63 @@ function deriveBankingAttentionStateFromBatchList(input) {
 
 function updateBankingNavAttentionState(attentionState) {
   const navRoot = (typeof byId === 'function' ? byId('nav') : document.getElementById('nav')) || document;
-  if (!navRoot) return;
-
-  try {
-    if (typeof attachBankingNavAlertPopoverHandlers === 'function') {
-      attachBankingNavAlertPopoverHandlers();
-    }
-  } catch {}
-
   const state = (attentionState && typeof attentionState === 'object') ? attentionState : {};
+
   const normaliseCount = (value) => {
     const numeric = Number(value);
     return Number.isFinite(numeric) && numeric > 0 ? Math.trunc(numeric) : 0;
   };
+
   const deepClone = (value) => {
     try { return JSON.parse(JSON.stringify(value == null ? null : value)); } catch { return value; }
   };
+
+  const sourceSummary = (() => {
+    if (state.alertSummary && typeof state.alertSummary === 'object' && !Array.isArray(state.alertSummary)) return state.alertSummary;
+    if (state.banking_alert_summary && typeof state.banking_alert_summary === 'object' && !Array.isArray(state.banking_alert_summary)) return state.banking_alert_summary;
+    return {};
+  })();
+
   const activeAlertsRaw = Array.isArray(state.alerts)
     ? state.alerts
-    : (Array.isArray(state.banking_alerts) ? state.banking_alerts : []);
+    : (Array.isArray(state.banking_alerts)
+      ? state.banking_alerts
+      : (Array.isArray(sourceSummary.alerts)
+        ? sourceSummary.alerts
+        : (Array.isArray(sourceSummary.banking_alerts) ? sourceSummary.banking_alerts : [])));
+
   const count = normaliseCount(
     state.count
     ?? state.unacknowledgedCount
     ?? state.unacknowledged_count
     ?? state.banking_unacknowledged_alert_count
+    ?? sourceSummary.unacknowledged_count
+    ?? sourceSummary.banking_unacknowledged_alert_count
     ?? activeAlertsRaw.length
   );
+
   const activeAlerts = count > 0 ? activeAlertsRaw : [];
   const requiresAttention = count > 0;
   const badgeText = count > 0 ? String(count) : '!';
-  const highestLabelRaw = state.highestPriorityLabel ?? state.banking_highest_alert_label ?? state.highest_label ?? null;
-  const highestSeverityRaw = state.highestSeverity ?? state.banking_highest_alert_severity ?? state.highest_severity ?? null;
+  const highestLabelRaw = state.highestPriorityLabel
+    ?? state.banking_highest_alert_label
+    ?? state.highest_label
+    ?? sourceSummary.highest_label
+    ?? sourceSummary.banking_highest_alert_label
+    ?? null;
+  const highestSeverityRaw = state.highestSeverity
+    ?? state.banking_highest_alert_severity
+    ?? state.highest_severity
+    ?? sourceSummary.highest_severity
+    ?? sourceSummary.banking_highest_alert_severity
+    ?? null;
   const highestLabel = count > 0 && highestLabelRaw ? String(highestLabelRaw) : null;
   const highestSeverity = count > 0 && highestSeverityRaw ? String(highestSeverityRaw) : null;
   const titleText = String(state.title || (highestLabel ? `Banking issue: ${highestLabel}` : 'Banking action needed')).trim() || 'Banking action needed';
   const keepPopoverOpen = state.keepPopoverOpen === true || state.preservePopover === true || state.keepOpen === true;
-  const summaryCandidate = (state.alertSummary && typeof state.alertSummary === 'object' && !Array.isArray(state.alertSummary))
-    ? state.alertSummary
-    : ((state.banking_alert_summary && typeof state.banking_alert_summary === 'object' && !Array.isArray(state.banking_alert_summary)) ? state.banking_alert_summary : {});
+
   const normalisedSummary = {
-    ...(summaryCandidate && typeof summaryCandidate === 'object' ? deepClone(summaryCandidate) : {}),
+    ...(sourceSummary && typeof sourceSummary === 'object' ? deepClone(sourceSummary) : {}),
     alerts: deepClone(activeAlerts) || [],
     banking_alerts: deepClone(activeAlerts) || [],
     unacknowledged_count: count,
@@ -34805,15 +34839,6 @@ function updateBankingNavAttentionState(attentionState) {
     highest_severity: highestSeverity,
     banking_highest_alert_severity: highestSeverity
   };
-
-  let target = navRoot.querySelector('[data-nav="banking"], [data-tab="banking"]');
-  if (!target) {
-    const clickables = Array.from(navRoot.querySelectorAll('button, a, [role="tab"], [role="button"], .tab, .nav-item, .nav-link'));
-    target = clickables.find((el) => String(el.textContent || '').trim() === 'Banking')
-      || clickables.find((el) => /\bbanking\b/i.test(String(el.textContent || '').trim()))
-      || null;
-  }
-  if (!target) return;
 
   const nextState = {
     ...state,
@@ -34838,13 +34863,53 @@ function updateBankingNavAttentionState(attentionState) {
   window.__bankingAlertSummary = normalisedSummary;
   window.__bankingNavAlertStateVersion = Number(window.__bankingNavAlertStateVersion || 0) + 1;
 
+  if (!navRoot) return;
+
   const titleKey = 'data-banking-nav-prev-title';
-  const targetIsInteractive = /^(BUTTON|A)$/i.test(target.tagName || '') || ['button', 'tab', 'link'].includes(String(target.getAttribute('role') || '').toLowerCase());
   const triggerAttr = 'data-banking-nav-alert-trigger';
+
+  const bankingTextMatches = (element) => {
+    const text = String(element && element.textContent ? element.textContent : '').replace(/\s+/g, ' ').trim();
+    return text === 'Banking' || /^🏦\s*Banking\b/i.test(text) || /\bBanking\b/i.test(text);
+  };
+
+  const collectBankingTargets = () => {
+    const collected = new Set();
+    const add = (element) => {
+      if (!element || element.nodeType !== 1) return;
+      if (element.classList && element.classList.contains('banking-nav-alert-trigger')) return;
+      if (element.getAttribute && element.getAttribute(triggerAttr) === '1') return;
+      collected.add(element);
+    };
+
+    try {
+      navRoot.querySelectorAll('[data-nav="banking"], [data-tab="banking"], [data-section-key="banking"]').forEach(add);
+    } catch {}
+
+    try {
+      Array.from(navRoot.querySelectorAll('button, a, [role="tab"], [role="button"], .tab, .nav-item, .nav-link')).forEach((element) => {
+        if (bankingTextMatches(element)) add(element);
+      });
+    } catch {}
+
+    try {
+      navRoot.querySelectorAll('.banking-nav-alert').forEach((element) => {
+        const nestedBanking = element.querySelector && element.querySelector('[data-nav="banking"], [data-tab="banking"], [data-section-key="banking"]');
+        if (bankingTextMatches(element) || nestedBanking) add(element);
+      });
+    } catch {}
+
+    return Array.from(collected);
+  };
+
+  const targets = collectBankingTargets();
+  const target = targets[0] || null;
+
   const getTrigger = () => {
-    const parent = target.parentElement || navRoot;
+    const parent = target && target.parentElement ? target.parentElement : navRoot;
     return parent ? parent.querySelector(`[${triggerAttr}="1"]`) : null;
   };
+
   const restoreStoredTitle = (element) => {
     if (!element || !element.hasAttribute || !element.hasAttribute(titleKey)) return;
     const prevTitle = element.getAttribute(titleKey) || '';
@@ -34852,6 +34917,7 @@ function updateBankingNavAttentionState(attentionState) {
     else element.removeAttribute('title');
     element.removeAttribute(titleKey);
   };
+
   const removeAlertAttributes = (element) => {
     if (!element || !element.removeAttribute) return;
     [
@@ -34867,6 +34933,7 @@ function updateBankingNavAttentionState(attentionState) {
     ].forEach((attr) => element.removeAttribute(attr));
     restoreStoredTitle(element);
   };
+
   const removeAlertClasses = (element) => {
     if (!element || !element.classList) return;
     element.classList.remove(
@@ -34877,6 +34944,7 @@ function updateBankingNavAttentionState(attentionState) {
       'warning'
     );
   };
+
   const clearElementAlertState = (element) => {
     if (!element) return;
     removeAlertClasses(element);
@@ -34885,15 +34953,20 @@ function updateBankingNavAttentionState(attentionState) {
       element.setAttribute('aria-expanded', 'false');
     }
   };
+
   const collectBankingNavAlertElements = () => {
     const collected = new Set();
     const add = (element) => {
       if (element && element.nodeType === 1) collected.add(element);
     };
-    add(target);
-    add(target.parentElement);
-    add(target.closest ? target.closest('.banking-nav-alert') : null);
-    add(target.closest ? target.closest('[data-nav="banking"], [data-tab="banking"]') : null);
+
+    targets.forEach((element) => {
+      add(element);
+      add(element.parentElement);
+      add(element.closest ? element.closest('.banking-nav-alert') : null);
+      add(element.closest ? element.closest('[data-nav="banking"], [data-tab="banking"], [data-section-key="banking"]') : null);
+    });
+
     try {
       navRoot.querySelectorAll([
         '.banking-nav-alert',
@@ -34901,24 +34974,32 @@ function updateBankingNavAttentionState(attentionState) {
         '[data-banking-nav-alert-trigger="1"]',
         '[data-banking-alert-count]',
         '[data-banking-alert-label]',
-        '[data-banking-alert-severity]'
+        '[data-banking-alert-severity]',
+        '[data-alert-count]'
       ].join(',')).forEach(add);
     } catch {}
+
+    try {
+      document.querySelectorAll('.banking-nav-alert-popover .banking-nav-alert-popover-row').forEach(add);
+    } catch {}
+
     return Array.from(collected);
   };
+
   const removeAllBadges = () => {
     try {
-      navRoot.querySelectorAll('.banking-nav-alert-badge').forEach((badge) => {
+      document.querySelectorAll('.banking-nav-alert-badge').forEach((badge) => {
         if (badge && badge.parentNode) badge.parentNode.removeChild(badge);
       });
     } catch {}
   };
+
   const removeTrigger = () => {
     try {
       const triggers = new Set();
       const existing = getTrigger();
       if (existing) triggers.add(existing);
-      navRoot.querySelectorAll(`[${triggerAttr}="1"], .banking-nav-alert-trigger`).forEach((trigger) => triggers.add(trigger));
+      document.querySelectorAll(`[${triggerAttr}="1"], .banking-nav-alert-trigger`).forEach((trigger) => triggers.add(trigger));
       triggers.forEach((trigger) => {
         if (trigger && trigger.parentNode) trigger.parentNode.removeChild(trigger);
       });
@@ -34927,12 +35008,14 @@ function updateBankingNavAttentionState(attentionState) {
       if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
     }
   };
+
   const removePopover = () => {
     try {
       const popovers = Array.from(document.querySelectorAll('.banking-nav-alert-popover'));
       popovers.forEach((node) => { if (node && node.parentNode) node.parentNode.removeChild(node); });
     } catch {}
   };
+
   const refreshOpenPopoverFromState = () => {
     if (!keepPopoverOpen) return;
     try {
@@ -34955,24 +35038,38 @@ function updateBankingNavAttentionState(attentionState) {
     } catch {}
   };
 
-  let existingBadge = target.querySelector('.banking-nav-alert-badge');
+  if (!target) {
+    if (!requiresAttention) {
+      removeAllBadges();
+      removeTrigger();
+      if (!keepPopoverOpen) removePopover();
+    }
+    return;
+  }
 
   if (requiresAttention) {
-    target.classList.add('banking-nav-alert');
-    if (!target.hasAttribute(titleKey)) {
-      target.setAttribute(titleKey, target.getAttribute('title') || '');
-    }
-    target.setAttribute('title', titleText);
-    target.setAttribute('data-banking-alert-count', String(count));
-    target.setAttribute('data-banking-alert-label', String(highestLabel || ''));
-    target.setAttribute('data-banking-alert-severity', String(highestSeverity || ''));
+    targets.forEach((bankingTarget) => {
+      if (!bankingTarget || !bankingTarget.classList) return;
+      bankingTarget.classList.add('banking-nav-alert');
+      bankingTarget.setAttribute('data-nav', 'banking');
+      bankingTarget.setAttribute('data-tab', 'banking');
+      if (!bankingTarget.hasAttribute(titleKey)) {
+        bankingTarget.setAttribute(titleKey, bankingTarget.getAttribute('title') || '');
+      }
+      bankingTarget.setAttribute('title', titleText);
+      bankingTarget.setAttribute('data-banking-alert-count', String(count));
+      bankingTarget.setAttribute('data-banking-alert-label', String(highestLabel || ''));
+      bankingTarget.setAttribute('data-banking-alert-severity', String(highestSeverity || ''));
+    });
 
+    let existingBadge = target.querySelector('.banking-nav-alert-badge');
     const badge = existingBadge || document.createElement('span');
     badge.className = 'banking-nav-alert-badge';
     badge.textContent = badgeText;
     badge.setAttribute('aria-label', `${badgeText} Banking alert${badgeText === '1' ? '' : 's'}`);
     if (!existingBadge) target.appendChild(badge);
 
+    const targetIsInteractive = /^(BUTTON|A)$/i.test(target.tagName || '') || ['button', 'tab', 'link'].includes(String(target.getAttribute('role') || '').toLowerCase());
     let trigger = getTrigger();
     if (!trigger) {
       trigger = document.createElement('button');
@@ -34994,6 +35091,11 @@ function updateBankingNavAttentionState(attentionState) {
     trigger.setAttribute('data-alert-count', String(count));
     trigger.classList.toggle('is-active', count > 0);
     refreshOpenPopoverFromState();
+    try {
+      if (typeof attachBankingNavAlertPopoverHandlers === 'function') {
+        attachBankingNavAlertPopoverHandlers();
+      }
+    } catch {}
     return;
   }
 
@@ -35003,8 +35105,15 @@ function updateBankingNavAttentionState(attentionState) {
   refreshOpenPopoverFromState();
   if (!keepPopoverOpen) removePopover();
 
-  restoreStoredTitle(target);
+  targets.forEach(restoreStoredTitle);
+
+  try {
+    if (typeof attachBankingNavAlertPopoverHandlers === 'function') {
+      attachBankingNavAlertPopoverHandlers();
+    }
+  } catch {}
 }
+
 
 
 function bankingPayNormaliseBatchIssueBadge(row) {
@@ -130877,8 +130986,6 @@ async function handleBulkAuthoriseSave(state, options = {}) {
   }
 }
 
-
-
 async function refreshBulkAuthoriseSummaryRowAfterMutation(state, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const st = (state && typeof state === 'object')
@@ -130887,28 +130994,154 @@ async function refreshBulkAuthoriseSummaryRowAfterMutation(state, options = {}) 
   const opts = (options && typeof options === 'object') ? options : {};
   const safeClone = (value) => { try { return JSON.parse(JSON.stringify(value)); } catch { return value; } };
 
-  const rowPatchList = (() => {
-    const sources = [opts.row_patches, opts.rowPatches, opts.patches, opts.knownRowPatches];
-    for (const src of sources) {
-      if (Array.isArray(src)) return src.filter((row) => row && typeof row === 'object');
+  const summarySectionIsTimesheets = () => {
+    try { return trimStr(currentSection || '') === 'timesheets'; } catch { return false; }
+  };
+
+  const getSummaryCtx = () => {
+    const explicit = (opts.summaryCtx && typeof opts.summaryCtx === 'object') ? opts.summaryCtx : null;
+    if (explicit) return explicit;
+    const stateCtx = (st?.__summaryCtx && typeof st.__summaryCtx === 'object') ? st.__summaryCtx : null;
+    if (stateCtx) return stateCtx;
+    const modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    if (modalCtx?.__summaryCtx && typeof modalCtx.__summaryCtx === 'object') return modalCtx.__summaryCtx;
+    if (typeof captureSummaryContextForModalOpen === 'function') {
+      try { return captureSummaryContextForModalOpen(); } catch { return null; }
     }
-    return [];
-  })();
+    return null;
+  };
+
+  const summaryCtx = getSummaryCtx();
+  const summaryCtxStillActive = () => {
+    if (!summarySectionIsTimesheets()) return false;
+    if (summaryCtx && typeof isSummaryContextStillActive === 'function') {
+      try { return !!isSummaryContextStillActive(summaryCtx); } catch { return false; }
+    }
+    return true;
+  };
+
+  const normalisePatch = (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const src = safeClone(value);
+    const nestedRow = (src.row && typeof src.row === 'object' && !Array.isArray(src.row)) ? safeClone(src.row) : {};
+    const nestedDataRow = (src.data_row && typeof src.data_row === 'object' && !Array.isArray(src.data_row)) ? safeClone(src.data_row) : {};
+    const nestedPatch = (src.row_patch && typeof src.row_patch === 'object' && !Array.isArray(src.row_patch)) ? safeClone(src.row_patch) : {};
+    const merged = {
+      ...nestedRow,
+      ...nestedDataRow,
+      ...src,
+      ...nestedPatch
+    };
+    delete merged.row;
+    delete merged.data_row;
+    delete merged.row_patch;
+    return merged;
+  };
+
+  const collectPatchRows = () => {
+    const raw = [];
+    const push = (value) => {
+      if (!value) return;
+      if (Array.isArray(value)) {
+        raw.push(...value);
+        return;
+      }
+      if (value instanceof Map) {
+        raw.push(...Array.from(value.values()));
+        return;
+      }
+      if (typeof value === 'object') raw.push(value);
+    };
+
+    push(opts.row_patches);
+    push(opts.rowPatches);
+    push(opts.patches);
+    push(opts.knownRowPatches);
+    push(opts.rows);
+    push(opts.patchTruthRows);
+
+    const result = (opts.result && typeof opts.result === 'object') ? opts.result : null;
+    if (result) {
+      push(result.row_patches);
+      push(result.rowPatches);
+      push(result.patches);
+      push(result.rows);
+      push(result.row_patch);
+      push(result.rowPatch);
+      push(result.data_row);
+      push(result.row);
+      push(result.summary_row);
+      push(result.summary_row_hint);
+    }
+
+    if (st?.active_row && typeof st.active_row === 'object') push(st.active_row);
+    if (st?.active_context?.row && typeof st.active_context.row === 'object') push(st.active_context.row);
+    if (st?.active_ctx?.row && typeof st.active_ctx.row === 'object') push(st.active_ctx.row);
+
+    const out = [];
+    const seen = new Set();
+    for (const item of raw) {
+      const patch = normalisePatch(item);
+      if (!patch) continue;
+      const rowKey = trimStr(patch.row_key || patch.new_row_key || patch.row_key_after || '');
+      if (rowKey && !patch.row_key) patch.row_key = rowKey;
+      const timesheetId = trimStr(patch.timesheet_id || patch.current_timesheet_id || patch.new_timesheet_id || patch.requested_timesheet_id || patch.timesheet_id_after || '');
+      const contractWeekId = trimStr(patch.contract_week_id || patch.contract_week_id_after || '');
+      const previousRowKey = trimStr(patch.previous_row_key || patch.row_key_before || patch.old_row_key || '');
+      const identityKey = [rowKey, previousRowKey, timesheetId, contractWeekId].join('|');
+      if (!identityKey.replace(/\|/g, '')) continue;
+      if (seen.has(identityKey)) continue;
+      seen.add(identityKey);
+      out.push(patch);
+    }
+    return out;
+  };
+
+  const rowPatchList = collectPatchRows();
+
+  const getRowIdCandidates = (rowLike) => {
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const values = [
+      row.id,
+      row.timesheet_id,
+      row.current_timesheet_id,
+      row.new_timesheet_id,
+      row.requested_timesheet_id,
+      row.timesheet_id_after,
+      row.timesheet_id_before,
+      row.previous_timesheet_id,
+      row.contract_week_id,
+      row.contract_week_id_after,
+      row.contract_week_id_before
+    ].map(trimStr).filter(Boolean);
+
+    const rowKeys = [
+      row.row_key,
+      row.new_row_key,
+      row.row_key_after,
+      row.previous_row_key,
+      row.row_key_before,
+      row.old_row_key
+    ].map(trimStr).filter(Boolean);
+
+    for (const key of rowKeys) {
+      if (key.startsWith('timesheet:')) values.push(trimStr(key.slice('timesheet:'.length)));
+      if (key.startsWith('contract_week:')) values.push(trimStr(key.slice('contract_week:'.length)));
+    }
+
+    return Array.from(new Set(values.filter(Boolean)));
+  };
 
   const patchMatchesRow = (patch, row) => {
     const p = (patch && typeof patch === 'object') ? patch : {};
     const r = (row && typeof row === 'object') ? row : {};
-    const patchRowKeys = [p.row_key, p.new_row_key, p.row_key_after, p.previous_row_key, p.row_key_before].map(trimStr).filter(Boolean);
-    const rowKeys = [r.row_key, r.new_row_key, r.row_key_after, r.previous_row_key, r.row_key_before].map(trimStr).filter(Boolean);
+    const patchRowKeys = [p.row_key, p.new_row_key, p.row_key_after, p.previous_row_key, p.row_key_before, p.old_row_key].map(trimStr).filter(Boolean);
+    const rowKeys = [r.row_key, r.new_row_key, r.row_key_after, r.previous_row_key, r.row_key_before, r.old_row_key].map(trimStr).filter(Boolean);
     if (patchRowKeys.length && rowKeys.some((key) => patchRowKeys.includes(key))) return true;
 
-    const patchTsIds = [p.timesheet_id, p.current_timesheet_id, p.new_timesheet_id, p.requested_timesheet_id, p.timesheet_id_after, p.timesheet_id_before, p.previous_timesheet_id].map(trimStr).filter(Boolean);
-    const rowTsIds = [r.timesheet_id, r.current_timesheet_id, r.new_timesheet_id, r.requested_timesheet_id, r.timesheet_id_after, r.timesheet_id_before, r.previous_timesheet_id].map(trimStr).filter(Boolean);
-    if (patchTsIds.length && rowTsIds.some((id) => patchTsIds.includes(id))) return true;
-
-    const patchCwIds = [p.contract_week_id, p.contract_week_id_after, p.contract_week_id_before].map(trimStr).filter(Boolean);
-    const rowCwIds = [r.contract_week_id, r.contract_week_id_after, r.contract_week_id_before].map(trimStr).filter(Boolean);
-    return !!(patchCwIds.length && rowCwIds.some((id) => patchCwIds.includes(id)));
+    const patchIds = getRowIdCandidates(p);
+    const rowIds = getRowIdCandidates(r);
+    return !!(patchIds.length && rowIds.some((id) => patchIds.includes(id)));
   };
 
   const applyPatchToCollection = (collection, patches) => {
@@ -130920,6 +131153,8 @@ async function refreshBulkAuthoriseSummaryRowAfterMutation(state, options = {}) 
       const patch = patches.find((candidate) => patchMatchesRow(candidate, row));
       if (!patch) continue;
       collection[i] = { ...row, ...safeClone(patch) };
+      const stableId = trimStr(collection[i].id || collection[i].timesheet_id || collection[i].contract_week_id || '');
+      if (stableId) collection[i].id = stableId;
       patched += 1;
     }
     return patched;
@@ -130927,7 +131162,7 @@ async function refreshBulkAuthoriseSummaryRowAfterMutation(state, options = {}) 
 
   const applyRowPatchesToVisibleSummary = (patches) => {
     const patchList = Array.isArray(patches) ? patches.filter((patch) => patch && typeof patch === 'object') : [];
-    if (!patchList.length) return 0;
+    if (!patchList.length || !summaryCtxStillActive()) return 0;
     let patched = 0;
 
     try { if (Array.isArray(window.currentRows)) patched += applyPatchToCollection(window.currentRows, patchList); } catch {}
@@ -130941,9 +131176,39 @@ async function refreshBulkAuthoriseSummaryRowAfterMutation(state, options = {}) 
     return patched;
   };
 
-  const patchedInMemory = applyRowPatchesToVisibleSummary(rowPatchList);
+  const buildIdentity = (rowLike) => {
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const rowKey = trimStr(row.row_key || row.new_row_key || row.row_key_after || row.previous_row_key || row.row_key_before || row.old_row_key || '');
+    const timesheetIdFromKey = rowKey.startsWith('timesheet:') ? trimStr(rowKey.slice('timesheet:'.length)) : '';
+    const contractWeekIdFromKey = rowKey.startsWith('contract_week:') ? trimStr(rowKey.slice('contract_week:'.length)) : '';
+    const timesheetId = trimStr(row.timesheet_id || row.current_timesheet_id || row.new_timesheet_id || row.requested_timesheet_id || row.timesheet_id_after || row.timesheet_id_before || row.previous_timesheet_id || timesheetIdFromKey || '');
+    const contractWeekId = trimStr(row.contract_week_id || row.contract_week_id_after || row.contract_week_id_before || contractWeekIdFromKey || '');
+    const lookupId = timesheetId || contractWeekId;
+    return {
+      row_key: rowKey || (timesheetId ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : '')),
+      timesheet_id: timesheetId,
+      contract_week_id: contractWeekId,
+      lookup_id: lookupId,
+      is_timesheet: !!timesheetId
+    };
+  };
 
-  if (st && typeof st === 'object') {
+  const identityList = (() => {
+    const out = [];
+    const seen = new Set();
+    for (const patch of rowPatchList) {
+      const identity = buildIdentity(patch);
+      if (!identity.lookup_id) continue;
+      const key = [identity.row_key, identity.timesheet_id, identity.contract_week_id].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(identity);
+    }
+    return out;
+  })();
+
+  const markTracker = (source, rowLike = null) => {
+    if (!st || typeof st !== 'object') return;
     st.__bulk_authorise_mutation_tracker = (st.__bulk_authorise_mutation_tracker && typeof st.__bulk_authorise_mutation_tracker === 'object')
       ? st.__bulk_authorise_mutation_tracker
       : {};
@@ -130952,31 +131217,261 @@ async function refreshBulkAuthoriseSummaryRowAfterMutation(state, options = {}) 
       : {};
     st.__bulk_authorise_mutation_tracker.last_mutation_at = Date.now();
     st.__bulk_authorise_mutation_tracker.last_mutation_reason = trimStr(opts.actionName || opts.source || 'bulk-authorise-mutation');
-    for (const patch of rowPatchList) {
-      const rowKey = trimStr(patch.row_key || patch.new_row_key || patch.previous_row_key || '');
-      const timesheetId = trimStr(patch.current_timesheet_id || patch.timesheet_id || patch.requested_timesheet_id || '');
-      const contractWeekId = trimStr(patch.contract_week_id || '');
-      const key = rowKey || (timesheetId ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : ''));
-      if (key) st.__bulk_authorise_mutation_tracker.changed_rows[key] = { row: safeClone(patch), source: 'row_patch', ts: Date.now() };
+
+    const identity = buildIdentity(rowLike || {});
+    const key = identity.row_key || (identity.timesheet_id ? `timesheet:${identity.timesheet_id}` : (identity.contract_week_id ? `contract_week:${identity.contract_week_id}` : ''));
+    if (key) {
+      st.__bulk_authorise_mutation_tracker.changed_rows[key] = {
+        row: rowLike ? safeClone(rowLike) : null,
+        source,
+        ts: Date.now()
+      };
+    }
+  };
+
+  for (const patch of rowPatchList) markTracker('row_patch', patch);
+
+  const patchedInMemory = applyRowPatchesToVisibleSummary(rowPatchList);
+
+  const fetchCanonicalRowsByIds = async (ids) => {
+    const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map(trimStr).filter(Boolean)));
+    if (!uniqueIds.length || !summaryCtxStillActive()) return { ok: false, rows: [], reason: 'no-active-summary-or-ids' };
+
+    const ctxObj = (summaryCtx && typeof summaryCtx === 'object') ? summaryCtx : {};
+    const inRelatedMode = !!ctxObj.inRelatedMode;
+    if (inRelatedMode) return { ok: false, rows: [], reason: 'related-mode-no-network-refresh' };
+
+    if (typeof authFetch !== 'function' || typeof API !== 'function') {
+      return { ok: false, rows: [], reason: 'missing-auth-fetch' };
+    }
+
+    const listState = (window.__listState && window.__listState.timesheets && typeof window.__listState.timesheets === 'object') ? window.__listState.timesheets : {};
+    const filters = (listState.filters && typeof listState.filters === 'object') ? listState.filters : {};
+    const sort = (listState.sort && typeof listState.sort === 'object') ? listState.sort : { key: null, dir: 'asc' };
+    const qs = new URLSearchParams();
+    qs.set('page', '1');
+    qs.set('page_size', String(Math.min(200, Math.max(1, uniqueIds.length))));
+    qs.set('include_totals', 'false');
+    qs.set('ids', uniqueIds.join(','));
+
+    const appendFilter = (key, value) => {
+      if (value == null) return;
+      if (key === 'related' || key === 'page' || key === 'page_size' || key === 'limit' || key === 'offset' || key === 'id' || key === 'ids') return;
+      if (typeof value === 'string' && !value.trim()) return;
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const text = trimStr(item);
+          if (text) qs.append(key, text);
+        }
+        return;
+      }
+      qs.set(key, String(value));
+    };
+
+    for (const [key, value] of Object.entries(filters || {})) appendFilter(key, value);
+
+    try {
+      if (sort && sort.key) {
+        qs.set('order_by', String(sort.key));
+        qs.set('order_dir', String(sort.dir || '').toLowerCase() === 'desc' ? 'desc' : 'asc');
+      }
+    } catch {}
+
+    try {
+      if (window.__summaryCanonicalCache && typeof window.__summaryCanonicalCache === 'object') {
+        const fp = typeof getSummaryFingerprint === 'function'
+          ? trimStr(getSummaryFingerprint('timesheets') || '')
+          : (() => { try { return JSON.stringify({ section: 'timesheets', filters }); } catch { return 'timesheets'; } })();
+        for (const id of uniqueIds) delete window.__summaryCanonicalCache[`timesheets::${fp}::${id}`];
+      }
+    } catch {}
+
+    const fetchChunk = async (chunkIds) => {
+      const chunkQs = new URLSearchParams(qs.toString());
+      chunkQs.set('page_size', String(Math.min(200, Math.max(1, chunkIds.length))));
+      chunkQs.set('ids', chunkIds.join(','));
+      const response = await authFetch(API(`/api/timesheets/summary?${chunkQs.toString()}`));
+      if (!response || !response.ok) return { ok: false, rows: [], reason: `http-${response?.status || 'error'}` };
+      const json = await response.json().catch(() => null);
+      let rows = [];
+      if (Array.isArray(json)) rows = json;
+      else if (json && Array.isArray(json.items)) rows = json.items;
+      else if (json && Array.isArray(json.rows)) rows = json.rows;
+      else if (json && Array.isArray(json.data)) rows = json.data;
+      rows = rows.filter((row) => row && typeof row === 'object').map((row) => {
+        const out = safeClone(row);
+        if (!out.id) out.id = out.timesheet_id || out.contract_week_id || null;
+        return out;
+      });
+      return { ok: true, rows, reason: 'fetched' };
+    };
+
+    try {
+      const rows = [];
+      for (let i = 0; i < uniqueIds.length; i += 200) {
+        const chunkIds = uniqueIds.slice(i, i + 200);
+        const chunkResult = await fetchChunk(chunkIds);
+        if (!chunkResult.ok) return { ok: false, rows, reason: chunkResult.reason || 'chunk-fetch-failed' };
+        rows.push(...chunkResult.rows);
+      }
+      return { ok: true, rows, reason: 'fetched' };
+    } catch (err) {
+      return { ok: false, rows: [], reason: String(err?.message || err || 'fetch-failed') };
+    }
+  };
+
+  const applyCanonicalRow = async (canonicalRow) => {
+    const row = (canonicalRow && typeof canonicalRow === 'object') ? safeClone(canonicalRow) : null;
+    if (!row || !summaryCtxStillActive()) return { ok: false, reason: 'no-row-or-inactive-summary' };
+    const id = trimStr(row.id || row.timesheet_id || row.contract_week_id || '');
+    if (!id) return { ok: false, reason: 'no-id' };
+
+    if (typeof summaryApplySavedRecordToActiveSummary === 'function') {
+      try {
+        const result = await summaryApplySavedRecordToActiveSummary('timesheets', row, {
+          ...(summaryCtx || {}),
+          forceFresh: true,
+          bypassCache: true,
+          skipCache: true,
+          invalidateCache: true,
+          refreshCanonical: true
+        });
+        if (result && result.ok === true) return result;
+      } catch {}
+    }
+
+    let patched = false;
+    try {
+      if (typeof summaryPatchRowIfPresent === 'function') patched = !!summaryPatchRowIfPresent('timesheets', id, row);
+    } catch {}
+    try { if (patched && typeof summaryUpdateRowDom === 'function') summaryUpdateRowDom('timesheets', id, row); } catch {}
+    try { if (patched && typeof summaryMaybeResortDom === 'function') summaryMaybeResortDom('timesheets'); } catch {}
+
+    return { ok: patched, action: patched ? 'patched' : null, reason: patched ? 'direct-patched' : 'not-present', id };
+  };
+
+  const removeIfExcluded = async (id) => {
+    const rowId = trimStr(id || '');
+    if (!rowId || !summaryCtxStillActive()) return { ok: false, reason: 'no-id-or-inactive-summary', id: rowId || null };
+    if (typeof summaryRemoveRowIfNowExcluded === 'function') {
+      try {
+        const removed = await summaryRemoveRowIfNowExcluded('timesheets', rowId, {
+          ...(summaryCtx || {}),
+          forceFresh: true,
+          bypassCache: true,
+          skipCache: true,
+          invalidateCache: true,
+          refreshCanonical: true
+        });
+        return { ok: removed === true, action: removed === true ? 'removed' : null, reason: removed === true ? 'excluded' : 'still-present-or-not-visible', id: rowId };
+      } catch (err) {
+        return { ok: false, reason: String(err?.message || err || 'remove-check-failed'), id: rowId };
+      }
+    }
+    return { ok: false, reason: 'missing-summaryRemoveRowIfNowExcluded', id: rowId };
+  };
+
+  const lookupIds = identityList.map((identity) => identity.lookup_id).filter(Boolean);
+  let networkRefresh = false;
+  let canonicalApplied = 0;
+  let removedAsExcluded = 0;
+  const canonicalOutcomes = [];
+  const fetchResult = await fetchCanonicalRowsByIds(lookupIds);
+
+  if (fetchResult.ok) {
+    networkRefresh = true;
+    const canonicalRows = Array.isArray(fetchResult.rows) ? fetchResult.rows : [];
+    const canonicalById = new Map();
+    for (const row of canonicalRows) {
+      const ids = getRowIdCandidates(row);
+      for (const id of ids) canonicalById.set(id, row);
+    }
+
+    const appliedCanonicalIds = new Set();
+    for (const row of canonicalRows) {
+      const rowId = trimStr(row.id || row.timesheet_id || row.contract_week_id || '');
+      if (rowId && appliedCanonicalIds.has(rowId)) continue;
+      if (rowId) appliedCanonicalIds.add(rowId);
+      const outcome = await applyCanonicalRow(row);
+      canonicalOutcomes.push(outcome);
+      if (outcome?.ok === true) {
+        canonicalApplied += 1;
+        markTracker('canonical_summary_row', row);
+      }
+    }
+
+    for (const identity of identityList) {
+      const id = trimStr(identity.lookup_id || '');
+      if (!id) continue;
+      if (canonicalById.has(id)) continue;
+      const removalOutcome = await removeIfExcluded(id);
+      canonicalOutcomes.push(removalOutcome);
+      if (removalOutcome?.ok === true) removedAsExcluded += 1;
+    }
+  } else if (typeof summaryFetchCanonicalRow === 'function' && summaryCtxStillActive()) {
+    for (const identity of identityList) {
+      const id = trimStr(identity.lookup_id || '');
+      if (!id) continue;
+      let canonical = null;
+      try {
+        canonical = await summaryFetchCanonicalRow('timesheets', id, {
+          ...(summaryCtx || {}),
+          forceFresh: true,
+          bypassCache: true,
+          skipCache: true,
+          invalidateCache: true,
+          refreshCanonical: true
+        });
+      } catch {
+        canonical = null;
+      }
+      if (canonical && typeof canonical === 'object') {
+        networkRefresh = true;
+        const outcome = await applyCanonicalRow(canonical);
+        canonicalOutcomes.push(outcome);
+        if (outcome?.ok === true) {
+          canonicalApplied += 1;
+          markTracker('canonical_summary_row', canonical);
+        }
+      } else {
+        const removalOutcome = await removeIfExcluded(id);
+        canonicalOutcomes.push(removalOutcome);
+        if (removalOutcome?.ok === true) removedAsExcluded += 1;
+      }
     }
   }
 
   try {
-    console.log('[TS][BULK-AUTH][SUMMARY_REFRESH][PATCH_ONLY]', {
+    console.log('[TS][BULK-AUTH][SUMMARY_REFRESH][TARGETED]', {
       action_name: trimStr(opts.actionName || '') || null,
+      source: trimStr(opts.source || '') || null,
       patches_count: rowPatchList.length,
-      patched_in_memory: patchedInMemory
+      identities_count: identityList.length,
+      patched_in_memory: patchedInMemory,
+      network_refresh: networkRefresh,
+      fetch_reason: fetchResult.reason || null,
+      canonical_applied: canonicalApplied,
+      removed_as_excluded: removedAsExcluded,
+      outcomes: safeClone(canonicalOutcomes)
     });
   } catch {}
 
   return {
     ok: true,
-    patch_only: true,
-    network_refresh: false,
-    reason: rowPatchList.length ? 'patched-from-row-patches' : 'no-row-patches',
-    patched_in_memory: patchedInMemory
+    patch_only: false,
+    network_refresh: networkRefresh,
+    reason: networkRefresh ? 'targeted-canonical-refresh' : (rowPatchList.length ? 'patched-from-row-patches' : 'no-row-patches'),
+    patched_in_memory: patchedInMemory,
+    canonical_applied: canonicalApplied,
+    removed_as_excluded: removedAsExcluded,
+    identities_count: identityList.length,
+    fetch_reason: fetchResult.reason || null,
+    outcomes: canonicalOutcomes
   };
 }
+
+
+
 
 async function handleBulkAuthoriseUnprocess(state, row) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][UNPROCESS]');
