@@ -225633,8 +225633,6 @@ async function renderAll(){
 
   renderSummary(data);
 }
-
-
 async function bootstrapApp(){
   // Belt & braces: if loadSession() ran but globals are not mirrored, mirror now
   try {
@@ -225817,6 +225815,12 @@ async function bootstrapApp(){
           // Prefer POST with last-seen seqs (fast + small). If endpoint is missing, disable silently.
           try {
             const payload = { last_seen: hb.lastSeenSeqs || {} };
+            const bankingAlertSignature = String(
+              hb.bankingAlertSignature ||
+              window.__bankingAlertSummarySignature ||
+              ''
+            ).trim();
+            if (bankingAlertSignature) payload.banking_alert_signature = bankingAlertSignature;
             res = await doFetch(API('/api/changes/ping'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -225862,6 +225866,107 @@ async function bootstrapApp(){
           try { json = await res.json().catch(()=> null); } catch { json = null; }
           if (!json || typeof json !== 'object') return;
 
+          const buildBankingAlertSummarySignature = (summary) => {
+            try {
+              const src = (summary && typeof summary === 'object' && !Array.isArray(summary)) ? summary : {};
+              const alerts = Array.isArray(src.alerts) ? src.alerts : [];
+              const countValue = Number(src.unacknowledged_count ?? src.banking_unacknowledged_alert_count ?? alerts.length);
+              const compactAlerts = alerts.map((alert) => {
+                const row = (alert && typeof alert === 'object' && !Array.isArray(alert)) ? alert : {};
+                const payloadJson = (row.payload_json && typeof row.payload_json === 'object' && !Array.isArray(row.payload_json))
+                  ? row.payload_json
+                  : ((row.alert_payload_json && typeof row.alert_payload_json === 'object' && !Array.isArray(row.alert_payload_json)) ? row.alert_payload_json : {});
+                return {
+                  alert_fingerprint: String(row.alert_fingerprint || row.fingerprint || row.banking_alert_fingerprint || '').trim(),
+                  alert_kind: String(row.alert_kind || row.kind || row.issue_kind || row.banking_alert_kind || payloadJson.issue_kind || '').trim().toUpperCase(),
+                  entity_kind: String(row.entity_kind || row.entityKind || '').trim().toLowerCase(),
+                  entity_id: String(row.entity_id || row.entityId || row.pay_batch_id || payloadJson.pay_batch_id || '').trim(),
+                  severity: String(row.severity || row.banking_highest_alert_severity || row.highest_severity || '').trim().toLowerCase(),
+                  payload_fingerprint: String(payloadJson.alert_fingerprint || payloadJson.banking_alert_fingerprint || '').trim(),
+                  last_funds_check_at_utc: String(row.last_funds_check_at_utc || payloadJson.last_funds_check_at_utc || payloadJson.funds_check_checked_at_utc || payloadJson.checked_at_utc || '').trim(),
+                  required_gbp: String(row.required_gbp || row.blocked_funds_required_gbp || payloadJson.required_gbp || payloadJson.blocked_funds_required_gbp || '').trim(),
+                  available_gbp: String(row.available_gbp || row.blocked_funds_available_gbp || payloadJson.available_gbp || payloadJson.blocked_funds_available_gbp || '').trim()
+                };
+              }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+              return JSON.stringify({
+                unacknowledged_count: Number.isFinite(countValue) && countValue >= 0 ? Math.trunc(countValue) : alerts.length,
+                highest_label: String(src.highest_label || src.banking_highest_alert_label || '').trim(),
+                highest_severity: String(src.highest_severity || src.banking_highest_alert_severity || '').trim().toLowerCase(),
+                alerts: compactAlerts
+              });
+            } catch {
+              return '';
+            }
+          };
+
+          const applyBankingAlertSummaryFromPing = () => {
+            try {
+              const summary = (json.banking_alert_summary && typeof json.banking_alert_summary === 'object' && !Array.isArray(json.banking_alert_summary))
+                ? json.banking_alert_summary
+                : null;
+              if (!summary) {
+                if (json.banking_alert_summary_signature) {
+                  hb.bankingAlertSignature = String(json.banking_alert_summary_signature || '').trim();
+                  window.__bankingAlertSummarySignature = hb.bankingAlertSignature;
+                }
+                return false;
+              }
+
+              const nextSignature = String(
+                json.banking_alert_summary_signature ||
+                json.banking_alert_signature ||
+                buildBankingAlertSummarySignature(summary) ||
+                ''
+              ).trim();
+              const previousSignature = String(
+                hb.bankingAlertSignature ||
+                window.__bankingAlertSummarySignature ||
+                ''
+              ).trim();
+
+              if (nextSignature && previousSignature && nextSignature === previousSignature) return false;
+
+              hb.bankingAlertSignature = nextSignature;
+              window.__bankingAlertSummarySignature = nextSignature;
+
+              const alertPayload = {
+                ok: true,
+                banking_alert_summary: summary,
+                alert_summary: summary,
+                remaining_alert_summary: summary,
+                banking_alerts: Array.isArray(summary.alerts) ? summary.alerts : [],
+                banking_unacknowledged_alert_count: Number(summary.unacknowledged_count ?? summary.banking_unacknowledged_alert_count ?? 0),
+                banking_highest_alert_label: summary.highest_label ?? summary.banking_highest_alert_label ?? null,
+                banking_highest_alert_severity: summary.highest_severity ?? summary.banking_highest_alert_severity ?? null
+              };
+
+              if (typeof applyAlertSummaryToState === 'function') {
+                applyAlertSummaryToState(alertPayload);
+              } else if (typeof updateBankingNavAttentionState === 'function') {
+                const count = Number(alertPayload.banking_unacknowledged_alert_count || 0);
+                updateBankingNavAttentionState({
+                  requiresAttention: Number.isFinite(count) && count > 0,
+                  count: Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0,
+                  unacknowledgedCount: Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0,
+                  banking_unacknowledged_alert_count: Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0,
+                  alerts: alertPayload.banking_alerts,
+                  banking_alerts: alertPayload.banking_alerts,
+                  highestPriorityLabel: alertPayload.banking_highest_alert_label,
+                  banking_highest_alert_label: alertPayload.banking_highest_alert_label,
+                  highestSeverity: alertPayload.banking_highest_alert_severity,
+                  banking_highest_alert_severity: alertPayload.banking_highest_alert_severity,
+                  alertSummary: summary,
+                  banking_alert_summary: summary
+                });
+              }
+              return true;
+            } catch {
+              return false;
+            }
+          };
+
+          const bankingAlertStateChanged = applyBankingAlertSummaryFromPing();
+
           const seqs =
             (json.seqs && typeof json.seqs === 'object') ? json.seqs :
             (json.counters && typeof json.counters === 'object') ? json.counters :
@@ -225894,7 +225999,7 @@ async function bootstrapApp(){
             }
           }
 
-          if (!changed || !changed.length) return;
+          if ((!changed || !changed.length) && !bankingAlertStateChanged) return;
 
           // Mark discreet per-section “updates available” (no popups)
           let touchedCurrent = false;
