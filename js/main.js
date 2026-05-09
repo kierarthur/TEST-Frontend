@@ -102583,6 +102583,16 @@ async function openBulkAuthoriseWorkbench() {
       ''
     );
     const rowSignature = renderSignature;
+    const bindingReasonText = trimStr(opts.reason || opts.logPrefix || opts.source || '');
+    const forcedPostMutationRebind = !!(
+      opts.forceRebind === true ||
+      opts.force_rebind === true ||
+      opts.forceRowDependentRebind === true ||
+      opts.force_row_dependent_rebind === true ||
+      opts.forceActionRebind === true ||
+      opts.force_action_rebind === true ||
+      /\b(authorise|unauthorise|status_patch|status-patch|row-patch|row_patch|mutation)\b/i.test(bindingReasonText)
+    );
     const binderFreshnessKey = JSON.stringify({
       record_identity: recordIdentity,
       render_signature: renderSignature,
@@ -102600,7 +102610,7 @@ async function openBulkAuthoriseWorkbench() {
         state.__bulk_authorise_active_render_signature ||
         (state.active_row ? getBulkAuthoriseRenderSignatureFromRow(state.active_row) : '')
       ) === renderSignature;
-    const allowRowDependentBinders = !!(
+    const rowDependentContextReady = !!(
       opts.allowRowDependent === true &&
       state.__bulk_authorise_dataset_ready === true &&
       state.__bulk_authorise_row_context_ready === true &&
@@ -102608,6 +102618,16 @@ async function openBulkAuthoriseWorkbench() {
       Number(state.__bulk_authorise_row_context_ready_seq || 0) === Number(state.__bulk_authorise_row_change_seq || 0)
     );
     const activeRowKey = trimStr(state.active_row_key || state.active_row?.row_key || '');
+    const allowRowDependentBinders = !!(
+      rowDependentContextReady ||
+      (
+        forcedPostMutationRebind &&
+        opts.allowRowDependent === true &&
+        state.__bulk_authorise_dataset_ready === true &&
+        !!activeRowKey
+      )
+    );
+    const shouldForceScopeRebind = (scope) => !!(forcedPostMutationRebind && trimStr(scope || '') === 'action');
     const rowChangeSeq = Number(state.__bulk_authorise_row_change_seq || 0) || 0;
     const contextReadySignatureMatches = trimStr(state.__bulk_authorise_row_context_ready_render_signature || state.__bulk_authorise_row_context_ready_signature || '') === renderSignature;
     const contextReadyBackendSignatureMatches = !backendRowSignature || trimStr(state.__bulk_authorise_row_context_ready_backend_signature || '') === backendRowSignature;
@@ -102664,7 +102684,8 @@ async function openBulkAuthoriseWorkbench() {
       previousPostBind &&
       previousPostBind.workbenchRootEl === workbenchRootEl &&
       previousPostBind.rightPaneRootEl === rightPaneRootEl &&
-      trimStr(previousPostBind.signature || '') === postBindDuplicateSignature
+      trimStr(previousPostBind.signature || '') === postBindDuplicateSignature &&
+      !forcedPostMutationRebind
     ) {
       if (window.__LOG_MODAL === true) {
         console.log('[TS][BULK-AUTH][LIFECYCLE] post-render binder summary', {
@@ -102683,7 +102704,8 @@ async function openBulkAuthoriseWorkbench() {
           allowRowDependent: allowRowDependentBinders,
           skippedScopes: ['duplicate-post-render-pass'],
           boundScopes: [],
-          binderOnly
+          binderOnly,
+          forcedPostMutationRebind
         });
       }
       return;
@@ -102739,14 +102761,15 @@ async function openBulkAuthoriseWorkbench() {
     for (const binder of binders) {
       if (!isCurrentRender()) return;
       if (typeof binder.fn !== 'function') continue;
-      if (binder.scope && !allowRowDependentBinders) {
+      if (binder.scope && !allowRowDependentBinders && !shouldForceScopeRebind(binder.scope)) {
         skippedScopes.push(binder.scope);
         continue;
       }
       if (binder.scope && binderFreshnessKey) {
         if (
           trimStr(boundScopeIdentity[binder.scope] || '') === binderFreshnessKey &&
-          Number(boundScopeRenderSeq[binder.scope] || 0) === renderSeq
+          Number(boundScopeRenderSeq[binder.scope] || 0) === renderSeq &&
+          !shouldForceScopeRebind(binder.scope)
         ) {
           skippedScopes.push(`${binder.scope}:already-bound`);
           continue;
@@ -102819,7 +102842,8 @@ async function openBulkAuthoriseWorkbench() {
         allowRowDependent: allowRowDependentBinders,
         skippedScopes,
         boundScopes,
-        binderOnly
+        binderOnly,
+        forcedPostMutationRebind
       });
     }
   };
@@ -109038,9 +109062,6 @@ async function refreshBulkAuthoriseDatasetPreservingState(state, options = {}) {
   }
 }
 
-
-
-
 async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
   const prefix = String(logPrefix || '[TS][BULK-AUTH]');
   const st = (state && typeof state === 'object')
@@ -109049,7 +109070,7 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
 
   if (st && typeof st.__rerenderWorkbench === 'function' && st.__rerenderWorkbench !== rerenderBulkAuthoriseWorkbench) {
     try {
-      await st.__rerenderWorkbench();
+      await st.__rerenderWorkbench({ reason: prefix, logPrefix: prefix });
       return true;
     } catch (err) {
       console.warn(`${prefix} controller rerender failed`, err);
@@ -109090,6 +109111,7 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
   });
   const reasonText = trimStr(prefix || '');
   const rowDependentReason = /\b(context-ready|row-switch|preview-refresh|evidence-refresh|action-row|authorise|unauthorise)\b/i.test(reasonText);
+  const mutationPostRenderReason = /\b(authorise|unauthorise|status_patch|status-patch|row-patch|row_patch|mutation)\b/i.test(reasonText);
   const pendingRowDependentBind = (st && st.__bulk_authorise_pending_row_dependent_bind && typeof st.__bulk_authorise_pending_row_dependent_bind === 'object')
     ? st.__bulk_authorise_pending_row_dependent_bind
     : null;
@@ -109119,6 +109141,7 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
   const shouldSuppressSameRecordFullRender = !!(
     sameRecordAsLastCompletedRender &&
     !rowDependentBindRequired &&
+    !mutationPostRenderReason &&
     !/\b(row-switch|context-ready)\b/i.test(reasonText) &&
     (evidenceInitSameRecordReason || (hasGenuineManualDirtyForRender && manualDirtyRenderNoiseReason))
   );
@@ -109146,10 +109169,10 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
     const inflightReason = trimStr(st.__bulk_authorise_render_inflight_reason || '');
     const pendingIdentity = trimStr(st.__bulk_authorise_render_pending_identity || '');
     const pendingReason = trimStr(st.__bulk_authorise_render_pending_reason || '');
-    if (inflightIdentity === renderIdentity && inflightReason === prefix && !(rowDependentReason || rowDependentBindRequired)) {
+    if (inflightIdentity === renderIdentity && inflightReason === prefix && !(rowDependentReason || rowDependentBindRequired || mutationPostRenderReason)) {
       return true;
     }
-    if (pendingIdentity === renderIdentity && pendingReason === prefix && !(rowDependentReason || rowDependentBindRequired)) {
+    if (pendingIdentity === renderIdentity && pendingReason === prefix && !(rowDependentReason || rowDependentBindRequired || mutationPostRenderReason)) {
       return true;
     }
     st.__bulk_authorise_render_pending = true;
@@ -109162,6 +109185,7 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
         nextIdentity: renderIdentity,
         pendingIdentity,
         rowDependentReason,
+        mutationPostRenderReason,
         rowDependentBindRequired,
         contextReadyMatches,
         renderSeq: Number(st?.__bulk_authorise_render_seq || 0) || 0
@@ -109240,19 +109264,26 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
 
       if (st && typeof st.__runPostRenderBindings === 'function') {
         try {
+          const liveResolvedForBinding = resolveBulkAuthoriseModalIdentity({ state: st, frame: fr, ctx: fr && fr._ctxRef, source: 'rerenderBulkAuthoriseWorkbench' });
+          const liveRecordIdentityForBinding = trimStr(liveResolvedForBinding.recordIdentity || liveResolvedForBinding.record_identity || liveResolvedForBinding.identity || '');
+          const contextReadyForBinding = !!(
+            renderRecordIdentity === liveRecordIdentityForBinding &&
+            st.__bulk_authorise_dataset_ready === true &&
+            st.__bulk_authorise_row_context_ready === true &&
+            trimStr(st.__bulk_authorise_row_context_ready_render_signature || st.__bulk_authorise_row_context_ready_signature || '') === renderSignature &&
+            Number(st.__bulk_authorise_row_context_ready_seq || 0) === Number(st.__bulk_authorise_row_change_seq || 0)
+          );
           const result = st.__runPostRenderBindings({
             renderSeq,
             rowSignature: renderSignature,
             renderSignature,
             backendRowSignature: renderBackendRowSignature,
             recordIdentity: renderRecordIdentity,
-            allowRowDependent: !!(
-              renderRecordIdentity === trimStr(resolveBulkAuthoriseModalIdentity({ state: st, frame: fr, ctx: fr && fr._ctxRef, source: 'rerenderBulkAuthoriseWorkbench' }).recordIdentity || resolveBulkAuthoriseModalIdentity({ state: st, frame: fr, ctx: fr && fr._ctxRef, source: 'rerenderBulkAuthoriseWorkbench' }).identity || '') &&
-              st.__bulk_authorise_dataset_ready === true &&
-              st.__bulk_authorise_row_context_ready === true &&
-              trimStr(st.__bulk_authorise_row_context_ready_render_signature || st.__bulk_authorise_row_context_ready_signature || '') === renderSignature &&
-              Number(st.__bulk_authorise_row_context_ready_seq || 0) === Number(st.__bulk_authorise_row_change_seq || 0)
-            ),
+            allowRowDependent: contextReadyForBinding || mutationPostRenderReason,
+            bindStableControls: true,
+            binderOnly: false,
+            forceActionRebind: mutationPostRenderReason,
+            forceRowDependentRebind: mutationPostRenderReason,
             reason: prefix
           });
           if (result && typeof result.then === 'function') await result;
@@ -109442,7 +109473,10 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
             backendRowSignature: liveActiveBackendRowSignature,
             recordIdentity: trimStr(liveResolvedForPending.recordIdentity || liveResolvedForPending.record_identity || liveResolvedForPending.identity || ''),
             allowRowDependent: true,
+            bindStableControls: true,
             binderOnly: true,
+            forceActionRebind: pendingRowDependentReason || liveRowDependentBindRequired,
+            forceRowDependentRebind: pendingRowDependentReason || liveRowDependentBindRequired,
             reason: `${pendingReason}|binder-only`
           });
           if (window.__LOG_MODAL === true) {
@@ -109493,6 +109527,8 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
 
   return true;
 }
+
+
 
 
 
