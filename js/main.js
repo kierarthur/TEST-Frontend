@@ -22203,6 +22203,18 @@ function renderBankingNavAlertPopover(attentionState) {
   );
   const totalUnacknowledged = Number.isFinite(countCandidate) ? Math.max(0, Math.trunc(countCandidate)) : rawAlerts.filter(isActiveAlert).length;
   const alerts = totalUnacknowledged > 0 ? rawAlerts.filter(isActiveAlert) : [];
+  const detailsDeferred = totalUnacknowledged > 0 && alerts.length < 1 && (
+    state.detailsDeferred === true ||
+    state.details_deferred === true ||
+    state.detailsLoading === true ||
+    state.details_loading === true ||
+    state.banking_alert_summary_deferred === true ||
+    summary?.detailsDeferred === true ||
+    summary?.details_deferred === true ||
+    summary?.detailsLoading === true ||
+    summary?.details_loading === true ||
+    summary?.banking_alert_summary_deferred === true
+  );
   const clearing = state.clearing === true
     || state.isClearing === true
     || state.acknowledgementInFlight === true
@@ -22304,16 +22316,18 @@ function renderBankingNavAlertPopover(attentionState) {
     `;
   };
 
-  const hiddenCount = Math.max(0, totalUnacknowledged - alerts.length);
+  const hiddenCount = detailsDeferred ? 0 : Math.max(0, totalUnacknowledged - alerts.length);
   const rowsHtml = alerts.length
     ? alerts.map(renderAlertRow).join('')
-    : `<div class="mini" style="padding:10px 0;opacity:.85;">No current unacknowledged Banking alerts.</div>`;
+    : (detailsDeferred
+      ? `<div class="mini" data-banking-alert-details-deferred="1" style="padding:10px 0;opacity:.9;white-space:normal;">Banking alert details are refreshing. The Banking icon is red because there ${totalUnacknowledged === 1 ? 'is' : 'are'} ${enc(String(totalUnacknowledged))} unacknowledged Banking alert${totalUnacknowledged === 1 ? '' : 's'}.</div>`
+      : `<div class="mini" style="padding:10px 0;opacity:.85;">No current unacknowledged Banking alerts.</div>`);
   const clearAllDisabled = totalUnacknowledged <= 0 || clearing;
   const clearAllAttrs = clearAllDisabled ? 'data-disabled="1" aria-disabled="true" disabled' : '';
   const clearAllStyle = clearAllDisabled ? ' style="opacity:.45;filter:saturate(.6) brightness(.9);"' : '';
 
   return `
-    <div class="banking-nav-alert-popover card" role="dialog" aria-label="Banking alerts" data-banking-nav-alert-popover="1" data-clearing="${clearing ? '1' : '0'}" style="position:fixed;z-index:2147483000;width:min(420px,calc(100vw - 24px));max-height:min(70vh,620px);overflow:auto;padding:12px;box-shadow:0 14px 36px rgba(15,23,42,.18);">
+    <div class="banking-nav-alert-popover card" role="dialog" aria-label="Banking alerts" data-banking-nav-alert-popover="1" data-clearing="${clearing ? '1' : '0'}" data-banking-alert-details-deferred="${detailsDeferred ? '1' : '0'}" data-banking-alert-count="${enc(String(totalUnacknowledged))}" style="position:fixed;z-index:2147483000;width:min(420px,calc(100vw - 24px));max-height:min(70vh,620px);overflow:auto;padding:12px;box-shadow:0 14px 36px rgba(15,23,42,.18);">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;">
         <div>
           <div style="font-weight:800;font-size:14px;">Banking alerts</div>
@@ -22331,7 +22345,6 @@ function renderBankingNavAlertPopover(attentionState) {
     </div>
   `;
 }
-
 
 function attachBankingNavAlertPopoverHandlers() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
@@ -22383,6 +22396,70 @@ function attachBankingNavAlertPopoverHandlers() {
     }
     return globalState || {};
   };
+  const getAttentionCount = (state) => {
+    const src = (state && typeof state === 'object') ? state : {};
+    const summary = (src.alertSummary && typeof src.alertSummary === 'object' && !Array.isArray(src.alertSummary))
+      ? src.alertSummary
+      : ((src.banking_alert_summary && typeof src.banking_alert_summary === 'object' && !Array.isArray(src.banking_alert_summary)) ? src.banking_alert_summary : {});
+    const n = Number(src.count ?? src.unacknowledgedCount ?? src.unacknowledged_count ?? src.banking_unacknowledged_alert_count ?? summary.unacknowledged_count ?? summary.banking_unacknowledged_alert_count ?? 0);
+    return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+  };
+  const getAttentionAlerts = (state) => {
+    const src = (state && typeof state === 'object') ? state : {};
+    const summary = (src.alertSummary && typeof src.alertSummary === 'object' && !Array.isArray(src.alertSummary))
+      ? src.alertSummary
+      : ((src.banking_alert_summary && typeof src.banking_alert_summary === 'object' && !Array.isArray(src.banking_alert_summary)) ? src.banking_alert_summary : {});
+    if (Array.isArray(src.alerts)) return src.alerts;
+    if (Array.isArray(src.banking_alerts)) return src.banking_alerts;
+    if (Array.isArray(summary.alerts)) return summary.alerts;
+    if (Array.isArray(summary.banking_alerts)) return summary.banking_alerts;
+    return [];
+  };
+  const attentionNeedsDeferredDetail = (state) => {
+    const src = (state && typeof state === 'object') ? state : {};
+    const summary = (src.alertSummary && typeof src.alertSummary === 'object' && !Array.isArray(src.alertSummary))
+      ? src.alertSummary
+      : ((src.banking_alert_summary && typeof src.banking_alert_summary === 'object' && !Array.isArray(src.banking_alert_summary)) ? src.banking_alert_summary : {});
+    return getAttentionCount(src) > 0
+      && getAttentionAlerts(src).length < 1
+      && (
+        src.detailsDeferred === true
+        || src.details_deferred === true
+        || src.detailsLoading === true
+        || src.details_loading === true
+        || src.banking_alert_summary_deferred === true
+        || summary.detailsDeferred === true
+        || summary.details_deferred === true
+        || summary.detailsLoading === true
+        || summary.details_loading === true
+        || summary.banking_alert_summary_deferred === true
+      );
+  };
+  const requestDeferredAlertDetailRefresh = (state, reason = 'banking-alert-popover-detail') => {
+    try {
+      if (!attentionNeedsDeferredDetail(state)) return false;
+      const hb = (window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object')
+        ? window.__changesHeartbeat
+        : ((window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') ? window.__changeHeartbeat : null);
+      if (!hb) return false;
+      const now = Date.now();
+      const lastRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
+      hb._bankingAlertSummaryDeferred = true;
+      hb._bankingAlertSummaryDetailPending = true;
+      if (now - lastRequestedAt < 3000) return true;
+      if (hb._pingInFlight === true) {
+        hb._pendingPingReason = String(reason || 'banking-alert-popover-detail');
+        return true;
+      }
+      if (typeof hb.pingOnce === 'function') {
+        setTimeout(() => {
+          try { hb.pingOnce && hb.pingOnce(reason || 'banking-alert-popover-detail'); } catch {}
+        }, 0);
+        return true;
+      }
+    } catch {}
+    return false;
+  };
   const openPopover = (trigger) => {
     removePopover();
     const attentionState = getCanonicalAttentionState();
@@ -22395,6 +22472,7 @@ function attachBankingNavAlertPopoverHandlers() {
     document.body.appendChild(popover);
     positionPopover(popover, trigger);
     trigger?.setAttribute?.('aria-expanded', 'true');
+    requestDeferredAlertDetailRefresh(attentionState, 'banking-alert-popover-open');
   };
   const setPopoverClearingState = (busy) => {
     const popover = queryPopover();
@@ -22534,6 +22612,7 @@ function attachBankingNavAlertPopoverHandlers() {
       if (oldLeft) next.style.left = oldLeft;
       if (oldRight) next.style.right = oldRight;
     }
+    requestDeferredAlertDetailRefresh(attentionState, 'banking-alert-popover-refresh');
   };
   const openRelatedBatch = async (batchId, alertKind) => {
     const id = String(batchId || '').trim();
@@ -22729,6 +22808,7 @@ function attachBankingNavAlertPopoverHandlers() {
 }
 
 
+
 function applyAlertSummaryToState(responsePayload) {
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const deepClone = (value) => {
@@ -22820,31 +22900,165 @@ function applyAlertSummaryToState(responsePayload) {
   const usableAlertRows = filteredAlerts.filter((alert) => !!getFingerprint(alert));
   const positiveWithoutUsableAlertRows = rawCount > 0 && usableAlertRows.length < 1;
   if (positiveWithoutUsableAlertRows) {
-    try {
-      const currentState = (typeof window !== 'undefined' && window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object')
-        ? window.__bankingNavAttentionState
-        : null;
-      if (currentState) return currentState;
-    } catch {}
-    return {
-      requiresAttention: false,
-      count: 0,
-      unacknowledgedCount: 0,
-      unacknowledged_count: 0,
-      banking_unacknowledged_alert_count: 0,
+    const responseStartedBeforeAck = payload.banking_alert_response_started_before_ack === true
+      || payload.response_started_before_ack === true
+      || payload.positive_response_started_before_ack === true;
+    if (responseStartedBeforeAck) {
+      try {
+        const currentState = (typeof window !== 'undefined' && window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object')
+          ? window.__bankingNavAttentionState
+          : null;
+        if (currentState) return currentState;
+      } catch {}
+    }
+
+    const deferredCount = rawCount;
+    const highestLabelRaw = summary?.highest_label
+      ?? summary?.banking_highest_alert_label
+      ?? acknowledgement.highest_label
+      ?? acknowledgement.banking_highest_alert_label
+      ?? payload.highest_label
+      ?? payload.banking_highest_alert_label
+      ?? 'Banking issue';
+    const highestSeverityRaw = summary?.highest_severity
+      ?? summary?.banking_highest_alert_severity
+      ?? acknowledgement.highest_severity
+      ?? acknowledgement.banking_highest_alert_severity
+      ?? payload.highest_severity
+      ?? payload.banking_highest_alert_severity
+      ?? 'critical';
+    const highestLabel = deferredCount > 0 && highestLabelRaw ? String(highestLabelRaw) : null;
+    const highestSeverity = deferredCount > 0 && highestSeverityRaw ? String(highestSeverityRaw) : null;
+    const summaryToStore = {
+      ...(summary ? deepClone(summary) : {}),
+      ok: true,
       alerts: [],
       banking_alerts: [],
-      highestPriorityLabel: null,
-      highest_label: null,
-      banking_highest_alert_label: null,
-      highestSeverity: null,
-      highest_severity: null,
-      banking_highest_alert_severity: null,
-      alertSummary: null,
-      banking_alert_summary: null,
-      banking_alert_hash: '',
-      title: 'No current unacknowledged Banking alerts'
+      unacknowledged_count: deferredCount,
+      banking_unacknowledged_alert_count: deferredCount,
+      highest_label: highestLabel,
+      banking_highest_alert_label: highestLabel,
+      highest_severity: highestSeverity,
+      banking_highest_alert_severity: highestSeverity,
+      banking_alert_hash: alertHash,
+      banking_alert_summary_signature: alertHash,
+      banking_alert_summary_deferred: true,
+      detailsDeferred: true,
+      detailsLoading: true
     };
+
+    if (typeof window !== 'undefined') {
+      try {
+        if (alertHash) {
+          window.__bankingAlertHash = alertHash;
+          window.__bankingAlertSummarySignature = alertHash;
+        }
+        window.__bankingAlertSummary = deepClone(summaryToStore) || summaryToStore;
+        window.__bankingAlertCount = deferredCount;
+        const hb = (window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object')
+          ? window.__changesHeartbeat
+          : ((window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') ? window.__changeHeartbeat : null);
+        if (hb) {
+          if (alertHash) {
+            hb.bankingAlertHash = alertHash;
+            hb.bankingAlertSignature = alertHash;
+          }
+          hb._bankingAlertSummaryDeferred = true;
+          hb._bankingAlertSummaryDetailPending = true;
+          const lastRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
+          if (!hb._pingInFlight && typeof hb.pingOnce === 'function' && Date.now() - lastRequestedAt > 3000) {
+            setTimeout(() => {
+              try { hb.pingOnce && hb.pingOnce('banking-alert-detail-deferred'); } catch {}
+            }, 0);
+          }
+        }
+      } catch {}
+    }
+
+    const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    const list = mc?.banking?.pay?.list;
+    if (list && typeof list === 'object') {
+      list.banking_alerts = [];
+      list.banking_unacknowledged_alert_count = deferredCount;
+      list.banking_highest_alert_label = highestLabel;
+      list.banking_highest_alert_severity = highestSeverity;
+      list.banking_alert_summary = deepClone(summaryToStore) || {};
+      list.banking_alert_summary_deferred = true;
+      if (alertHash) list.banking_alert_hash = alertHash;
+    }
+
+    const hadOpenPopover = (() => {
+      try { return !!document.querySelector('.banking-nav-alert-popover[data-banking-nav-alert-popover="1"]'); } catch { return false; }
+    })();
+    const attentionState = {
+      requiresAttention: deferredCount > 0,
+      count: deferredCount,
+      unacknowledgedCount: deferredCount,
+      unacknowledged_count: deferredCount,
+      banking_unacknowledged_alert_count: deferredCount,
+      alerts: [],
+      banking_alerts: [],
+      highestPriorityLabel: highestLabel,
+      highest_label: highestLabel,
+      banking_highest_alert_label: highestLabel,
+      highestSeverity,
+      highest_severity: highestSeverity,
+      banking_highest_alert_severity: highestSeverity,
+      alertSummary: deepClone(summaryToStore) || {},
+      banking_alert_summary: deepClone(summaryToStore) || {},
+      banking_alert_hash: alertHash,
+      banking_alert_summary_signature: alertHash,
+      banking_alert_summary_deferred: true,
+      detailsDeferred: true,
+      detailsLoading: true,
+      title: deferredCount > 0
+        ? String(highestLabel || 'Banking action needed')
+        : 'No current unacknowledged Banking alerts',
+      keepPopoverOpen: hadOpenPopover,
+      forceReapply: hadOpenPopover
+    };
+
+    try {
+      if (typeof updateBankingNavAttentionState === 'function') {
+        updateBankingNavAttentionState(attentionState);
+      } else if (typeof window !== 'undefined') {
+        window.__bankingNavAttentionState = attentionState;
+      }
+    } catch {
+      try { if (typeof window !== 'undefined') window.__bankingNavAttentionState = attentionState; } catch {}
+    }
+
+    try {
+      const popover = document.querySelector('.banking-nav-alert-popover[data-banking-nav-alert-popover="1"]');
+      if (popover && typeof renderBankingNavAlertPopover === 'function') {
+        const trigger = document.querySelector('[data-banking-nav-alert-trigger="1"]');
+        const oldTop = popover.style.top;
+        const oldLeft = popover.style.left;
+        const oldRight = popover.style.right;
+        const replacement = document.createElement('div');
+        replacement.innerHTML = renderBankingNavAlertPopover(attentionState);
+        const next = replacement.firstElementChild;
+        if (next) {
+          popover.replaceWith(next);
+          if (trigger && typeof trigger.getBoundingClientRect === 'function') {
+            const rect = trigger.getBoundingClientRect();
+            const margin = 8;
+            const maxLeft = Math.max(margin, window.innerWidth - next.offsetWidth - margin);
+            next.style.top = `${Math.max(margin, rect.bottom + margin)}px`;
+            next.style.left = `${Math.min(Math.max(margin, rect.right - next.offsetWidth), maxLeft)}px`;
+            next.style.right = '';
+            trigger.setAttribute('aria-expanded', 'true');
+          } else {
+            if (oldTop) next.style.top = oldTop;
+            if (oldLeft) next.style.left = oldLeft;
+            if (oldRight) next.style.right = oldRight;
+          }
+          if (typeof attachBankingNavAlertPopoverHandlers === 'function') attachBankingNavAlertPopoverHandlers();
+        }
+      }
+    } catch {}
+
+    return attentionState;
   }
   const count = Math.max(0, rawCount - removedSuppressedCount);
   const alerts = count > 0 ? filteredAlerts : [];
@@ -22879,7 +23093,10 @@ function applyAlertSummaryToState(responsePayload) {
         highest_severity: highestSeverity,
         banking_highest_alert_severity: highestSeverity,
         banking_alert_hash: alertHash,
-        banking_alert_summary_signature: alertHash
+        banking_alert_summary_signature: alertHash,
+        banking_alert_summary_deferred: false,
+        detailsDeferred: false,
+        detailsLoading: false
       }
     : {
         ok: true,
@@ -22892,7 +23109,10 @@ function applyAlertSummaryToState(responsePayload) {
         highest_severity: highestSeverity,
         banking_highest_alert_severity: highestSeverity,
         banking_alert_hash: alertHash,
-        banking_alert_summary_signature: alertHash
+        banking_alert_summary_signature: alertHash,
+        banking_alert_summary_deferred: false,
+        detailsDeferred: false,
+        detailsLoading: false
       };
 
   if (typeof window !== 'undefined' && alertHash) {
@@ -22945,6 +23165,10 @@ function applyAlertSummaryToState(responsePayload) {
     alertSummary: deepClone(summaryToStore) || {},
     banking_alert_summary: deepClone(summaryToStore) || {},
     banking_alert_hash: alertHash,
+    banking_alert_summary_signature: alertHash,
+    banking_alert_summary_deferred: false,
+    detailsDeferred: false,
+    detailsLoading: false,
     title: count > 0
       ? String(highestLabel || 'Banking action needed')
       : 'No current unacknowledged Banking alerts',
@@ -35184,6 +35408,7 @@ function renderPayNewBatchWizard() {
   `;
 }
 
+
 function deriveBankingAttentionStateFromBatchList(input) {
   const emptyState = {
     requiresAttention: false,
@@ -35236,6 +35461,100 @@ function deriveBankingAttentionStateFromBatchList(input) {
     if (!key) return false;
     const map = getSuppressionMap();
     return !!map[key];
+  };
+
+  const makeDeferredState = (sourceState = {}, fallbackCount = 0, fallbackAlerts = []) => {
+    const src = isObj(sourceState) ? sourceState : {};
+    const summary = isObj(src.banking_alert_summary) ? src.banking_alert_summary : (isObj(src.alertSummary) ? src.alertSummary : {});
+    const rawCount = Math.max(0, Math.trunc(Number(
+      src.count ??
+      src.unacknowledgedCount ??
+      src.unacknowledged_count ??
+      src.banking_unacknowledged_alert_count ??
+      summary.unacknowledged_count ??
+      summary.banking_unacknowledged_alert_count ??
+      fallbackCount ??
+      0
+    ) || 0));
+    const count = rawCount > 0 ? rawCount : Math.max(0, Array.isArray(fallbackAlerts) ? fallbackAlerts.length : 0);
+    const highestPriorityLabel = firstNonBlank(
+      src.highestPriorityLabel,
+      src.highest_label,
+      src.banking_highest_alert_label,
+      summary.highest_label,
+      summary.banking_highest_alert_label,
+      count > 0 ? 'Banking issue' : ''
+    );
+    const highestSeverity = firstNonBlank(
+      src.level,
+      src.highestSeverity,
+      src.highest_severity,
+      src.banking_highest_alert_severity,
+      summary.highest_severity,
+      summary.banking_highest_alert_severity,
+      count > 0 ? 'critical' : ''
+    );
+    const hash = firstNonBlank(
+      src.banking_alert_hash,
+      src.banking_alert_summary_signature,
+      summary.banking_alert_hash,
+      summary.banking_alert_summary_signature
+    );
+    return {
+      requiresAttention: count > 0,
+      count,
+      unacknowledgedCount: count,
+      unacknowledged_count: count,
+      banking_unacknowledged_alert_count: count,
+      level: count > 0 ? highestSeverity : '',
+      highestPriorityLabel: count > 0 ? highestPriorityLabel : '',
+      highest_label: count > 0 ? highestPriorityLabel : null,
+      banking_highest_alert_label: count > 0 ? highestPriorityLabel : null,
+      highestSeverity: count > 0 ? highestSeverity : null,
+      highest_severity: count > 0 ? highestSeverity : null,
+      banking_highest_alert_severity: count > 0 ? highestSeverity : null,
+      title: count > 0 ? `Banking issue: ${highestPriorityLabel || 'Action needed'}` : 'No current unacknowledged Banking alerts',
+      alerts: [],
+      banking_alerts: [],
+      alertSummary: {
+        ok: true,
+        alerts: [],
+        banking_alerts: [],
+        unacknowledged_count: count,
+        banking_unacknowledged_alert_count: count,
+        highest_label: count > 0 ? highestPriorityLabel : null,
+        banking_highest_alert_label: count > 0 ? highestPriorityLabel : null,
+        highest_severity: count > 0 ? highestSeverity : null,
+        banking_highest_alert_severity: count > 0 ? highestSeverity : null,
+        banking_alert_hash: hash,
+        banking_alert_summary_signature: hash,
+        banking_alert_summary_deferred: count > 0,
+        detailsDeferred: count > 0,
+        detailsLoading: count > 0
+      },
+      banking_alert_summary: {
+        ok: true,
+        alerts: [],
+        banking_alerts: [],
+        unacknowledged_count: count,
+        banking_unacknowledged_alert_count: count,
+        highest_label: count > 0 ? highestPriorityLabel : null,
+        banking_highest_alert_label: count > 0 ? highestPriorityLabel : null,
+        highest_severity: count > 0 ? highestSeverity : null,
+        banking_highest_alert_severity: count > 0 ? highestSeverity : null,
+        banking_alert_hash: hash,
+        banking_alert_summary_signature: hash,
+        banking_alert_summary_deferred: count > 0,
+        detailsDeferred: count > 0,
+        detailsLoading: count > 0
+      },
+      banking_alert_hash: hash,
+      banking_alert_summary_signature: hash,
+      banking_alert_summary_deferred: count > 0,
+      detailsDeferred: count > 0,
+      detailsLoading: count > 0,
+      batchIds: Array.isArray(src.batchIds) ? src.batchIds : []
+    };
   };
 
   const source = Array.isArray(input)
@@ -35357,7 +35676,7 @@ function deriveBankingAttentionStateFromBatchList(input) {
     if (!isObj(state)) return null;
     const count = Math.max(0, Math.trunc(Number(state.count ?? state.unacknowledgedCount ?? state.unacknowledged_count ?? state.banking_unacknowledged_alert_count ?? 0) || 0));
     const alerts = Array.isArray(state.alerts) ? state.alerts : (Array.isArray(state.banking_alerts) ? state.banking_alerts : []);
-    if (count > 0 && alerts.length < 1) return { ...emptyState };
+    if (count > 0 && alerts.length < 1) return makeDeferredState(state, count, alerts);
     return {
       ...state,
       requiresAttention: count > 0,
@@ -35376,8 +35695,18 @@ function deriveBankingAttentionStateFromBatchList(input) {
     const globalHash = text(window.__bankingAlertHash || window.__bankingAlertSummarySignature || globalSummary?.banking_alert_hash || globalSummary?.banking_alert_summary_signature || globalState?.banking_alert_hash);
     const hasAuthoritativeGlobal = !!(globalHash || globalSummary || globalState?.alertSummary || globalState?.banking_alert_summary || Object.prototype.hasOwnProperty.call(globalState || {}, 'banking_unacknowledged_alert_count') || Object.prototype.hasOwnProperty.call(globalState || {}, 'count'));
     if (hasAuthoritativeGlobal) {
-      const stateFromGlobal = stateFromExistingAttention(globalState);
-      if (stateFromGlobal) return stateFromGlobal;
+      const globalStateHasContent = !!(globalState && (
+        Object.prototype.hasOwnProperty.call(globalState, 'count')
+        || Object.prototype.hasOwnProperty.call(globalState, 'unacknowledgedCount')
+        || Object.prototype.hasOwnProperty.call(globalState, 'unacknowledged_count')
+        || Object.prototype.hasOwnProperty.call(globalState, 'banking_unacknowledged_alert_count')
+        || Object.prototype.hasOwnProperty.call(globalState, 'alerts')
+        || Object.prototype.hasOwnProperty.call(globalState, 'banking_alerts')
+      ));
+      if (globalStateHasContent) {
+        const stateFromGlobal = stateFromExistingAttention(globalState);
+        if (stateFromGlobal) return stateFromGlobal;
+      }
       if (globalSummary) {
         return deriveBankingAttentionStateFromBatchList({
           banking_alert_summary: globalSummary,
@@ -35405,7 +35734,20 @@ function deriveBankingAttentionStateFromBatchList(input) {
       : backendAlerts.length;
     const removedByAcknowledgementOrSuppression = Math.max(0, directAlerts.length - backendAlerts.length);
     if (rawCount > 0 && backendAlerts.length < 1) {
-      return { ...emptyState, banking_alert_hash: firstNonBlank(source.banking_alert_hash, source.banking_alert_summary?.banking_alert_hash, source.banking_alert_summary?.banking_alert_summary_signature) };
+      const countAfterSuppression = Math.max(0, rawCount - removedByAcknowledgementOrSuppression);
+      const hash = firstNonBlank(source.banking_alert_hash, source.banking_alert_summary?.banking_alert_hash, source.banking_alert_summary?.banking_alert_summary_signature);
+      if (countAfterSuppression < 1 && removedByAcknowledgementOrSuppression > 0) {
+        return { ...emptyState, banking_alert_hash: hash, banking_alert_summary_signature: hash };
+      }
+      return makeDeferredState({
+        ...source,
+        banking_alert_hash: hash,
+        banking_alert_summary_signature: hash,
+        banking_unacknowledged_alert_count: countAfterSuppression || rawCount,
+        highestPriorityLabel: firstNonBlank(source.banking_highest_alert_label, source.highest_label, source.banking_alert_summary?.highest_label, 'Banking issue'),
+        banking_highest_alert_label: firstNonBlank(source.banking_highest_alert_label, source.highest_label, source.banking_alert_summary?.highest_label, 'Banking issue'),
+        banking_highest_alert_severity: firstNonBlank(source.banking_highest_alert_severity, source.highest_severity, source.banking_alert_summary?.highest_severity, 'critical')
+      }, countAfterSuppression || rawCount, []);
     }
     const count = Math.max(0, rawCount - removedByAcknowledgementOrSuppression);
     const sortedAlerts = count > 0 ? backendAlerts.slice().sort((a, b) => (a.priority || 999) - (b.priority || 999)) : [];
@@ -35647,6 +35989,7 @@ function deriveBankingAttentionStateFromBatchList(input) {
     batchIds: Array.from(batchIds)
   };
 }
+
 
 function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   const argumentCount = arguments.length;
@@ -36511,7 +36854,6 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   return result;
 }
 
-
 function updateBankingNavAttentionState(attentionState) {
   const navRoot = (typeof byId === 'function' ? byId('nav') : document.getElementById('nav')) || document;
   const state = (attentionState && typeof attentionState === 'object') ? attentionState : {};
@@ -36550,6 +36892,8 @@ function updateBankingNavAttentionState(attentionState) {
   );
 
   const activeAlerts = count > 0 ? activeAlertsRaw : [];
+  const hasAlertRows = count > 0 && activeAlerts.length > 0;
+  const inferredDetailsDeferred = count > 0 && !hasAlertRows;
   const requiresAttention = count > 0;
   const badgeText = count > 0 ? String(count) : '!';
   const highestLabelRaw = state.highestPriorityLabel
@@ -36568,6 +36912,31 @@ function updateBankingNavAttentionState(attentionState) {
   const highestSeverity = count > 0 && highestSeverityRaw ? String(highestSeverityRaw) : null;
   const titleText = String(state.title || (highestLabel ? `Banking issue: ${highestLabel}` : 'Banking action needed')).trim() || 'Banking action needed';
   const keepPopoverOpen = state.keepPopoverOpen === true || state.preservePopover === true || state.keepOpen === true;
+  const detailsDeferred = count > 0 && (
+    inferredDetailsDeferred === true
+    || state.detailsDeferred === true
+    || state.details_deferred === true
+    || state.banking_alert_summary_deferred === true
+    || sourceSummary.detailsDeferred === true
+    || sourceSummary.details_deferred === true
+    || sourceSummary.banking_alert_summary_deferred === true
+  );
+  const detailsLoading = count > 0 && (
+    state.detailsLoading === true
+    || state.details_loading === true
+    || sourceSummary.detailsLoading === true
+    || sourceSummary.details_loading === true
+    || detailsDeferred === true
+  );
+  const summaryIncluded = count > 0 && (
+    state.summaryIncluded === true
+    || state.summary_included === true
+    || state.banking_alert_summary_included === true
+    || sourceSummary.summaryIncluded === true
+    || sourceSummary.summary_included === true
+    || sourceSummary.banking_alert_summary_included === true
+    || (hasAlertRows && detailsDeferred !== true)
+  );
 
   const normalisedSummary = {
     ...(sourceSummary && typeof sourceSummary === 'object' ? deepClone(sourceSummary) : {}),
@@ -36578,7 +36947,12 @@ function updateBankingNavAttentionState(attentionState) {
     highest_label: highestLabel,
     banking_highest_alert_label: highestLabel,
     highest_severity: highestSeverity,
-    banking_highest_alert_severity: highestSeverity
+    banking_highest_alert_severity: highestSeverity,
+    banking_alert_summary_deferred: detailsDeferred,
+    detailsDeferred,
+    detailsLoading,
+    banking_alert_summary_included: summaryIncluded,
+    summaryIncluded
   };
 
   const nextState = {
@@ -36598,7 +36972,12 @@ function updateBankingNavAttentionState(attentionState) {
     banking_highest_alert_severity: highestSeverity,
     alertSummary: normalisedSummary,
     banking_alert_summary: normalisedSummary,
-    banking_alert_hash: String(state.banking_alert_hash || sourceSummary.banking_alert_hash || sourceSummary.banking_alert_summary_signature || '').trim()
+    banking_alert_hash: String(state.banking_alert_hash || sourceSummary.banking_alert_hash || sourceSummary.banking_alert_summary_signature || '').trim(),
+    banking_alert_summary_deferred: detailsDeferred,
+    detailsDeferred,
+    detailsLoading,
+    banking_alert_summary_included: summaryIncluded,
+    summaryIncluded
   };
 
   const forceReapply = state.force === true || state.forceReapply === true || state.reconcile === true || state.force_reapply === true;
@@ -36616,11 +36995,42 @@ function updateBankingNavAttentionState(attentionState) {
       if (!alert || typeof alert !== 'object') return '';
       return String(alert.alert_fingerprint || alert.fingerprint || alert.banking_alert_fingerprint || '').trim();
     }).filter(Boolean).sort();
+    const candidateCount = normaliseCount(candidate.count ?? candidate.unacknowledgedCount ?? candidate.unacknowledged_count ?? candidate.banking_unacknowledged_alert_count ?? candidateSummary.unacknowledged_count ?? candidateSummary.banking_unacknowledged_alert_count ?? candidateAlerts.length);
+    const candidateHasAlertRows = candidateCount > 0 && candidateAlerts.length > 0;
+    const candidateInferredDetailsDeferred = candidateCount > 0 && !candidateHasAlertRows;
+    const candidateDetailsDeferred = candidateCount > 0 && (
+      candidateInferredDetailsDeferred === true
+      || candidate.detailsDeferred === true
+      || candidate.details_deferred === true
+      || candidate.banking_alert_summary_deferred === true
+      || candidateSummary.detailsDeferred === true
+      || candidateSummary.details_deferred === true
+      || candidateSummary.banking_alert_summary_deferred === true
+    );
+    const candidateDetailsLoading = candidateCount > 0 && (
+      candidate.detailsLoading === true
+      || candidate.details_loading === true
+      || candidateSummary.detailsLoading === true
+      || candidateSummary.details_loading === true
+      || candidateDetailsDeferred === true
+    );
+    const candidateSummaryIncluded = candidateCount > 0 && (
+      candidate.summaryIncluded === true
+      || candidate.summary_included === true
+      || candidate.banking_alert_summary_included === true
+      || candidateSummary.summaryIncluded === true
+      || candidateSummary.summary_included === true
+      || candidateSummary.banking_alert_summary_included === true
+      || (candidateHasAlertRows && candidateDetailsDeferred !== true)
+    );
     return JSON.stringify({
-      count: normaliseCount(candidate.count ?? candidate.unacknowledgedCount ?? candidate.unacknowledged_count ?? candidate.banking_unacknowledged_alert_count ?? candidateSummary.unacknowledged_count ?? candidateSummary.banking_unacknowledged_alert_count ?? fingerprints.length),
+      count: candidateCount,
       highestLabel: String(candidate.highestPriorityLabel ?? candidate.banking_highest_alert_label ?? candidate.highest_label ?? candidateSummary.highest_label ?? candidateSummary.banking_highest_alert_label ?? '').trim(),
       highestSeverity: String(candidate.highestSeverity ?? candidate.banking_highest_alert_severity ?? candidate.highest_severity ?? candidateSummary.highest_severity ?? candidateSummary.banking_highest_alert_severity ?? '').trim().toLowerCase(),
       hash: String(candidate.banking_alert_hash || candidateSummary.banking_alert_hash || candidateSummary.banking_alert_summary_signature || '').trim(),
+      detailsDeferred: candidateDetailsDeferred === true,
+      detailsLoading: candidateDetailsLoading === true,
+      summaryIncluded: candidateSummaryIncluded === true,
       fingerprints
     });
   };
@@ -36886,8 +37296,6 @@ function updateBankingNavAttentionState(attentionState) {
 
   return nextState;
 }
-
-
 
 
 
@@ -41424,7 +41832,6 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
   });
 }
 
-
 async function bankingPayBatchExecutePayment(payBatchId, payload) {
   const id = String(payBatchId || '').trim();
   if (!id) throw new Error('bankingPayBatchExecutePayment: payBatchId is required');
@@ -41521,12 +41928,13 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
   const normalizeSuccessResult = (result, freshBatchPayload = null) => {
     const out = (result && typeof result === 'object') ? result : {};
     const batchGet = out.batch_get || freshBatchPayload || null;
+    const executionMode = String(out.execution_mode || '').trim().toUpperCase();
+    const effectivePaymentDate = String(out.effective_payment_date || '').trim() || null;
+    const postExecutionStatus = String(out.post_execution_status || out.status || '').trim().toUpperCase();
 
     if (isBlockedFundsResult(out, freshBatchPayload)) {
-      const friendly = normalizeErrorPayload({ ...out, blocked_funds: true, status: 'BLOCKED_FUNDS', post_execution_status: 'BLOCKED_FUNDS', error_code: 'BLOCKED_FUNDS' }, out, { fallbackCode: 'BLOCKED_FUNDS' });
+      const friendly = normalizeErrorPayload({ blocked_funds: true, status: 'BLOCKED_FUNDS', post_execution_status: 'BLOCKED_FUNDS', error_code: 'BLOCKED_FUNDS' }, out, { fallbackCode: 'BLOCKED_FUNDS' });
       return {
-        ...out,
-        ...friendly,
         ok: true,
         terminal: true,
         blocked_funds: true,
@@ -41538,25 +41946,63 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
         title: 'Bank rejected payment — blocked funds',
         message: 'Bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.',
         user_message: 'Bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.',
-        batch_get: batchGet
+        user_action: friendly.user_action || 'REVIEW_PAYMENT_ISSUES',
+        confirm_label: friendly.confirm_label || 'OK',
+        severity: friendly.severity || 'critical',
+        pay_batch_id: id,
+        execution_mode: executionMode || undefined,
+        effective_payment_date: effectivePaymentDate || undefined,
+        batch_get: batchGet,
+        payment_issue_summary: out.payment_issue_summary || undefined
       };
     }
 
     if (isScheduledResult(out)) {
       return {
-        ...out,
         ok: true,
         scheduled: true,
+        terminal: true,
         submitted_to_bank: false,
         blocked_funds: false,
         title: 'Payment scheduled',
         message: 'Payment scheduled. Funds will be checked when CloudTMS submits the payment to the bank on the scheduled date.',
         user_message: 'Payment scheduled. Funds will be checked when CloudTMS submits the payment to the bank on the scheduled date.',
-        batch_get: batchGet || out.batch_get
+        pay_batch_id: id,
+        execution_mode: executionMode || 'STANDARD_BANK',
+        effective_payment_date: effectivePaymentDate || undefined,
+        scheduled_at_utc: String(out.scheduled_at_utc || '').trim() || undefined,
+        post_execution_status: postExecutionStatus || undefined,
+        batch_get: batchGet || out.batch_get || null
       };
     }
 
-    return batchGet && !out.batch_get ? { ...out, batch_get: batchGet } : out;
+    const submittedToBank = out.submitted_to_bank === true
+      || postExecutionStatus === 'SUBMITTED'
+      || postExecutionStatus === 'COMMITTED';
+    const awaitingAuthorisation = out.awaiting_authorisation === true || postExecutionStatus === 'AWAITING_AUTHORISATION';
+
+    return {
+      ok: out.ok !== false,
+      terminal: submittedToBank || (!awaitingAuthorisation && ['CSV_SETTLEMENT', 'EXTERNAL_SETTLEMENT'].includes(executionMode)),
+      scheduled: false,
+      blocked_funds: false,
+      submitted_to_bank: submittedToBank,
+      awaiting_authorisation: awaitingAuthorisation,
+      title: awaitingAuthorisation
+        ? 'Payment authorisation requested'
+        : (submittedToBank ? 'Payment submitted' : 'Payment execution updated'),
+      message: awaitingAuthorisation
+        ? 'Payment has been sent for authorisation. No bank submission has been confirmed yet.'
+        : (submittedToBank ? 'Payment was submitted to the bank. Review the batch for the latest payment status.' : 'Payment processing was updated. Review the batch for the latest status.'),
+      user_message: awaitingAuthorisation
+        ? 'Payment has been sent for authorisation. No bank submission has been confirmed yet.'
+        : (submittedToBank ? 'Payment was submitted to the bank. Review the batch for the latest payment status.' : 'Payment processing was updated. Review the batch for the latest status.'),
+      pay_batch_id: id,
+      execution_mode: executionMode || undefined,
+      effective_payment_date: effectivePaymentDate || undefined,
+      post_execution_status: postExecutionStatus || undefined,
+      batch_get: batchGet || out.batch_get || null
+    };
   };
 
   const refreshBankingSurfacesAfterSuccess = async (resultObj) => {
@@ -97825,6 +98271,8 @@ function calcMargin(charge, pay, rate_type, erni_pct = 0) {
 }
 
 
+
+
 async function fetchBulkAuthoriseDataset(filters, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-AUTH][DATASET]');
   GC('fetchBulkAuthoriseDataset');
@@ -98291,15 +98739,100 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
   fetchBulkAuthoriseDataset.__latest_request_seq_by_signature = (fetchBulkAuthoriseDataset.__latest_request_seq_by_signature && typeof fetchBulkAuthoriseDataset.__latest_request_seq_by_signature === 'object')
     ? fetchBulkAuthoriseDataset.__latest_request_seq_by_signature
     : Object.create(null);
+  fetchBulkAuthoriseDataset.__mutation_epoch = Math.max(0, Math.floor(Number(fetchBulkAuthoriseDataset.__mutation_epoch || 0) || 0));
+  fetchBulkAuthoriseDataset.__cache_invalidated_at = Number(fetchBulkAuthoriseDataset.__cache_invalidated_at || 0) || 0;
+
+  const currentDatasetCacheEpoch = () => Math.max(0, Math.floor(Number(fetchBulkAuthoriseDataset.__mutation_epoch || 0) || 0));
+  const resetDatasetCacheStores = () => {
+    fetchBulkAuthoriseDataset.__cache = Object.create(null);
+    fetchBulkAuthoriseDataset.__inflight = Object.create(null);
+  };
+  const invalidateDatasetCache = (payload = {}) => {
+    const meta = (payload && typeof payload === 'object') ? payload : {};
+    fetchBulkAuthoriseDataset.__mutation_epoch = currentDatasetCacheEpoch() + 1;
+    fetchBulkAuthoriseDataset.__cache_invalidated_at = Date.now();
+    fetchBulkAuthoriseDataset.__last_invalidation_reason = trimStr(meta.reason || meta.source || meta.action || 'bulk-authorise-mutation');
+    fetchBulkAuthoriseDataset.__last_invalidation_meta = {
+      reason: fetchBulkAuthoriseDataset.__last_invalidation_reason,
+      source: trimStr(meta.source || ''),
+      action: trimStr(meta.action || ''),
+      mutationSeq: Math.max(0, Math.floor(Number(meta.mutationSeq ?? meta.mutation_seq ?? 0) || 0)),
+      row_keys: Array.isArray(meta.row_keys) ? meta.row_keys.map(trimStr).filter(Boolean) : [],
+      at: fetchBulkAuthoriseDataset.__cache_invalidated_at
+    };
+    resetDatasetCacheStores();
+    if (window.__LOG_MODAL === true) {
+      L('dataset cache invalidated', {
+        epoch: currentDatasetCacheEpoch(),
+        reason: fetchBulkAuthoriseDataset.__last_invalidation_reason,
+        row_keys: fetchBulkAuthoriseDataset.__last_invalidation_meta.row_keys
+      });
+    }
+    return currentDatasetCacheEpoch();
+  };
+  fetchBulkAuthoriseDataset.invalidateBulkAuthoriseDatasetCache = invalidateDatasetCache;
+  fetchBulkAuthoriseDataset.invalidateDatasetCache = invalidateDatasetCache;
+  fetchBulkAuthoriseDataset.invalidateCache = invalidateDatasetCache;
+  fetchBulkAuthoriseDataset.markBulkAuthoriseMutation = invalidateDatasetCache;
+
+  const explicitCacheInvalidationRequested = !!(
+    opts.invalidateCache === true ||
+    opts.invalidate_cache === true ||
+    opts.invalidateDatasetCache === true ||
+    opts.invalidate_dataset_cache === true ||
+    opts.invalidateBulkAuthoriseDatasetCache === true ||
+    opts.invalidate_bulk_authorise_dataset_cache === true ||
+    opts.markBulkAuthoriseMutation === true ||
+    opts.mark_bulk_authorise_mutation === true
+  );
+  if (explicitCacheInvalidationRequested) {
+    invalidateDatasetCache({
+      reason: trimStr(opts.cacheInvalidationReason || opts.cache_invalidation_reason || opts.actionSource || opts.source || 'explicit-fetch-invalidation'),
+      source: trimStr(opts.actionSource || opts.source || ''),
+      action: trimStr(opts.action || ''),
+      mutationSeq,
+      row_keys: Array.isArray(opts.affectedRowKeys) ? opts.affectedRowKeys : []
+    });
+  }
 
   const inflightStore = fetchBulkAuthoriseDataset.__inflight;
   const cacheStore = fetchBulkAuthoriseDataset.__cache;
   const latestRequestSeqBySignature = fetchBulkAuthoriseDataset.__latest_request_seq_by_signature;
-  const bypassCache = !!opts.force;
+  const bypassCache = !!(
+    opts.force === true ||
+    opts.bypassCache === true ||
+    opts.bypass_cache === true ||
+    opts.forceFreshDataset === true ||
+    opts.force_fresh_dataset === true ||
+    opts.skipCache === true ||
+    opts.skip_cache === true ||
+    opts.preventStaleDataset === true ||
+    opts.prevent_stale_dataset === true ||
+    opts.preventStaleCache === true ||
+    opts.prevent_stale_cache === true ||
+    opts.rejectStaleCache === true ||
+    opts.reject_stale_cache === true ||
+    opts.stalePrevention === true ||
+    opts.stale_prevention === true ||
+    opts.mutationSensitive === true ||
+    opts.mutation_sensitive === true ||
+    explicitCacheInvalidationRequested
+  );
   const requestSeq = fetchBulkAuthoriseDataset.__request_seq + 1;
   fetchBulkAuthoriseDataset.__request_seq = requestSeq;
   latestRequestSeqBySignature[requestSignature] = requestSeq;
   const isLatestRequestForSignature = () => Number(latestRequestSeqBySignature[requestSignature] || 0) === requestSeq;
+  const cacheEntryEpoch = (entry) => Math.max(0, Math.floor(Number(entry?.mutation_epoch ?? entry?.cache_epoch ?? 0) || 0));
+  const isCacheEntryCurrentForMutation = (entry) => !!(entry && typeof entry === 'object' && cacheEntryEpoch(entry) >= currentDatasetCacheEpoch());
+  const inflightEntryEpoch = (entry) => {
+    if (!entry || typeof entry !== 'object' || typeof entry.then === 'function') return 0;
+    return Math.max(0, Math.floor(Number(entry.mutation_epoch ?? entry.cache_epoch ?? 0) || 0));
+  };
+  const inflightEntryPromise = (entry) => {
+    if (!entry) return null;
+    if (typeof entry.then === 'function') return entry;
+    return (typeof entry.promise?.then === 'function') ? entry.promise : null;
+  };
 
   if (bypassCache) {
     try { delete cacheStore[requestSignature]; } catch {}
@@ -98307,6 +98840,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
   }
 
   const runFetch = async () => {
+    const fetchMutationEpoch = currentDatasetCacheEpoch();
     const url = API(`/api/timesheets/bulk-authorise-dataset?${qs.toString()}`);
     L('→ GET', { url, filters: f, profile, projection, noBackgroundRevalidate, mutationSeq });
 
@@ -98398,9 +98932,11 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
       client_option_rows: Array.isArray(json.client_option_rows) ? json.client_option_rows : null
     };
 
-    if (isLatestRequestForSignature() && !isStaleForMutation()) {
+    if (isLatestRequestForSignature() && !isStaleForMutation() && fetchMutationEpoch === currentDatasetCacheEpoch()) {
       cacheStore[requestSignature] = {
         at: Date.now(),
+        mutation_epoch: fetchMutationEpoch,
+        cache_epoch: fetchMutationEpoch,
         value: deep(out)
       };
     } else if (window.__LOG_MODAL === true) {
@@ -98409,7 +98945,9 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
         requestSeq,
         latestSeq: Number(latestRequestSeqBySignature[requestSignature] || 0),
         mutationSeq,
-        latestMutationSeq: getLiveMutationSeq()
+        latestMutationSeq: getLiveMutationSeq(),
+        fetchMutationEpoch,
+        latestDatasetMutationEpoch: currentDatasetCacheEpoch()
       });
     }
 
@@ -98426,44 +98964,72 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
 
   const cachedEntry = cacheStore[requestSignature];
   if (!bypassCache && cachedEntry && typeof cachedEntry === 'object' && cachedEntry.value) {
-    L('CACHE STALE-WHILE-REVALIDATE HIT', { requestSignature, age_ms: Date.now() - Number(cachedEntry.at || 0), noBackgroundRevalidate });
-    if (!noBackgroundRevalidate && !inflightStore[requestSignature]) {
-      const backgroundPromise = runFetch()
-        .catch((err) => {
-          L('background revalidate failed', { requestSignature, error: err });
-          throw err;
-        })
-        .finally(() => {
-          if (inflightStore[requestSignature] === backgroundPromise) {
-            try { delete inflightStore[requestSignature]; } catch {}
-          }
-        });
-      inflightStore[requestSignature] = backgroundPromise;
-      backgroundPromise.catch(() => {});
+    if (isCacheEntryCurrentForMutation(cachedEntry)) {
+      L('CACHE STALE-WHILE-REVALIDATE HIT', {
+        requestSignature,
+        age_ms: Date.now() - Number(cachedEntry.at || 0),
+        noBackgroundRevalidate,
+        cacheEpoch: cacheEntryEpoch(cachedEntry),
+        latestDatasetMutationEpoch: currentDatasetCacheEpoch()
+      });
+      const existingInflightEntry = inflightStore[requestSignature];
+      if (!noBackgroundRevalidate && (!existingInflightEntry || inflightEntryEpoch(existingInflightEntry) < currentDatasetCacheEpoch())) {
+        if (existingInflightEntry && inflightEntryEpoch(existingInflightEntry) < currentDatasetCacheEpoch()) {
+          try { delete inflightStore[requestSignature]; } catch {}
+        }
+        const backgroundEpoch = currentDatasetCacheEpoch();
+        const backgroundPromise = runFetch()
+          .catch((err) => {
+            L('background revalidate failed', { requestSignature, error: err });
+            throw err;
+          })
+          .finally(() => {
+            const currentInflightEntry = inflightStore[requestSignature];
+            if (currentInflightEntry && typeof currentInflightEntry === 'object' && currentInflightEntry.promise === backgroundPromise) {
+              try { delete inflightStore[requestSignature]; } catch {}
+            }
+          });
+        inflightStore[requestSignature] = { promise: backgroundPromise, mutation_epoch: backgroundEpoch, cache_epoch: backgroundEpoch };
+        backgroundPromise.catch(() => {});
+      }
+      GE();
+      return deep(cachedEntry.value);
     }
-    GE();
-    return deep(cachedEntry.value);
+    L('CACHE ENTRY REJECTED AFTER MUTATION', {
+      requestSignature,
+      cacheEpoch: cacheEntryEpoch(cachedEntry),
+      latestDatasetMutationEpoch: currentDatasetCacheEpoch()
+    });
+    try { delete cacheStore[requestSignature]; } catch {}
   }
 
   if (!bypassCache && inflightStore[requestSignature]) {
-    L('INFLIGHT REUSE', { requestSignature });
-    try {
-      const reused = await inflightStore[requestSignature];
-      GE();
-      return deep(reused);
-    } catch (err) {
-      GE();
-      throw err;
+    const existingInflightEntry = inflightStore[requestSignature];
+    const existingInflightPromise = inflightEntryPromise(existingInflightEntry);
+    if (existingInflightPromise && inflightEntryEpoch(existingInflightEntry) >= currentDatasetCacheEpoch()) {
+      L('INFLIGHT REUSE', { requestSignature, inflightEpoch: inflightEntryEpoch(existingInflightEntry), latestDatasetMutationEpoch: currentDatasetCacheEpoch() });
+      try {
+        const reused = await existingInflightPromise;
+        GE();
+        return deep(reused);
+      } catch (err) {
+        GE();
+        throw err;
+      }
     }
+    L('INFLIGHT REJECTED AFTER MUTATION', { requestSignature, inflightEpoch: inflightEntryEpoch(existingInflightEntry), latestDatasetMutationEpoch: currentDatasetCacheEpoch() });
+    try { delete inflightStore[requestSignature]; } catch {}
   }
 
+  const fetchEpoch = currentDatasetCacheEpoch();
   const fetchPromise = runFetch()
     .finally(() => {
-      if (inflightStore[requestSignature] === fetchPromise) {
+      const currentInflightEntry = inflightStore[requestSignature];
+      if (currentInflightEntry && typeof currentInflightEntry === 'object' && currentInflightEntry.promise === fetchPromise) {
         try { delete inflightStore[requestSignature]; } catch {}
       }
     });
-  inflightStore[requestSignature] = fetchPromise;
+  inflightStore[requestSignature] = { promise: fetchPromise, mutation_epoch: fetchEpoch, cache_epoch: fetchEpoch };
 
   try {
     const out = await fetchPromise;
@@ -98474,8 +99040,6 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     throw err;
   }
 }
-
-
 
 
 
@@ -106305,6 +106869,7 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
   }
   return true;
 }
+
 async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, options = {}) {
   const st = (state && typeof state === 'object')
     ? state
@@ -106846,6 +107411,139 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
     const rk = trimStr(rowLike.row_key || '');
     return rk ? `row:${rk}` : '';
   };
+  const syncBulkAuthoriseContextFromAuthoritativeRow = (rowObj, syncOptions = {}) => {
+    const row = (rowObj && typeof rowObj === 'object') ? deep(rowObj) : null;
+    if (!row) return false;
+    const rowKey = trimStr(row.row_key || '');
+    if (!rowKey) return false;
+    const backendRowSignature = getBackendSignatureFromRow(row);
+    const renderSignature = getRenderSignatureFromRow(row);
+    const rowSignature = backendRowSignature || renderSignature;
+    const timesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
+    const contractWeekId = trimStr(row.contract_week_id || '');
+    const recordIdentity = trimStr(syncOptions.recordIdentity || resolveIdentityFromRow(row) || st.__bulkAuthoriseRecordIdentity || '');
+    const markContextReady = syncOptions.markContextReady === true;
+    const rowChangeSeq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
+    const statusKeys = [
+      'bulk_authorise_section',
+      'bulk_authorise_classification',
+      'can_bulk_authorise',
+      'can_bulk_unauthorise',
+      'can_save',
+      'can_unprocess',
+      'can_add_additional_manual',
+      'can_manage_evidence',
+      'can_edit_timesheet_data',
+      'is_authorised',
+      'requires_authorisation',
+      'processing_status',
+      'summary_stage',
+      'tools_stage',
+      'review_only',
+      'locked',
+      'route_family',
+      'route_subfamily',
+      'underlying_channel_family',
+      'is_import_authoritative',
+      'ready_to_pay',
+      'row_signature',
+      'backend_row_signature',
+      'row_backend_signature',
+      'render_signature',
+      'updated_at',
+      'total_hours',
+      'total_pay_ex_vat',
+      'total_charge_ex_vat',
+      'margin_ex_vat',
+      'locked_by_invoice_id',
+      'paid_at_utc'
+    ];
+    const copyStatusKeys = (target) => {
+      if (!target || typeof target !== 'object') return;
+      for (const key of statusKeys) {
+        if (Object.prototype.hasOwnProperty.call(row, key)) target[key] = deep(row[key]);
+      }
+      target.row_key = rowKey;
+      target.activeRowKey = rowKey;
+      target.backend_row_signature = backendRowSignature || target.backend_row_signature || '';
+      target.row_backend_signature = backendRowSignature || target.row_backend_signature || '';
+      target.render_signature = renderSignature || target.render_signature || '';
+      target.row_signature = backendRowSignature || target.row_signature || '';
+      target.activeBackendRowSignature = backendRowSignature || target.activeBackendRowSignature || '';
+      target.activeRenderSignature = renderSignature || target.activeRenderSignature || '';
+      target.activeRowSignature = rowSignature || target.activeRowSignature || '';
+      target.activeRecordIdentity = recordIdentity || target.activeRecordIdentity || null;
+      target.activeTimesheetId = timesheetId || target.activeTimesheetId || null;
+      target.activeContractWeekId = contractWeekId || target.activeContractWeekId || null;
+      target.current_timesheet_id = timesheetId || target.current_timesheet_id || null;
+      target.requested_timesheet_id = trimStr(row.requested_timesheet_id || timesheetId || '') || target.requested_timesheet_id || null;
+      target.expected_timesheet_id = trimStr(row.expected_timesheet_id || timesheetId || '') || target.expected_timesheet_id || null;
+      target.contract_week_id = contractWeekId || target.contract_week_id || null;
+      target.row = deep(row);
+      target.data_row = deep(row);
+      target.row_patch = (row.row_patch && typeof row.row_patch === 'object') ? deep(row.row_patch) : (target.row_patch || {});
+      target.bulk_authorise = {
+        ...((target.bulk_authorise && typeof target.bulk_authorise === 'object') ? target.bulk_authorise : {}),
+        classification: row.bulk_authorise_classification || target.bulk_authorise?.classification || null,
+        section: row.bulk_authorise_section || target.bulk_authorise?.section || null,
+        can_authorise: !!row.can_bulk_authorise,
+        can_unauthorise: !!row.can_bulk_unauthorise,
+        requires_authorisation: !!row.requires_authorisation,
+        is_authorised: !!row.is_authorised
+      };
+      target.action_flags = {
+        ...((target.action_flags && typeof target.action_flags === 'object') ? target.action_flags : {}),
+        can_add_additional_manual: !!row.can_add_additional_manual,
+        can_manage_evidence: !!row.can_manage_evidence,
+        can_unprocess: !!row.can_unprocess,
+        can_edit_timesheet_data: !!row.can_edit_timesheet_data,
+        route_family: row.route_family || target.action_flags?.route_family || null,
+        underlying_channel_family: row.underlying_channel_family || target.action_flags?.underlying_channel_family || null,
+        is_import_authoritative: !!row.is_import_authoritative,
+        locked_by_invoice: !!row.locked_by_invoice_id,
+        paid: !!row.paid_at_utc
+      };
+      if (target.details && typeof target.details === 'object') {
+        target.details.current_timesheet_id = timesheetId || target.details.current_timesheet_id || null;
+        target.details.requested_timesheet_id = trimStr(row.requested_timesheet_id || timesheetId || '') || target.details.requested_timesheet_id || null;
+        target.details.expected_timesheet_id = trimStr(row.expected_timesheet_id || timesheetId || '') || target.details.expected_timesheet_id || null;
+        target.details.contract_week_id = contractWeekId || target.details.contract_week_id || null;
+        target.details.summary_stage = row.summary_stage || target.details.summary_stage || null;
+        target.details.tools_stage = row.tools_stage || target.details.tools_stage || null;
+        target.details.ready_to_pay = !!row.ready_to_pay;
+        target.details.route_type = row.route_type || target.details.route_type || null;
+        target.details.route_display = row.route_display || target.details.route_display || null;
+        target.details.tsfin = {
+          ...((target.details.tsfin && typeof target.details.tsfin === 'object') ? target.details.tsfin : {}),
+          processing_status: row.processing_status || target.details.tsfin?.processing_status || null,
+          total_hours: Object.prototype.hasOwnProperty.call(row, 'total_hours') ? row.total_hours : target.details.tsfin?.total_hours,
+          total_pay_ex_vat: Object.prototype.hasOwnProperty.call(row, 'total_pay_ex_vat') ? row.total_pay_ex_vat : target.details.tsfin?.total_pay_ex_vat,
+          total_charge_ex_vat: Object.prototype.hasOwnProperty.call(row, 'total_charge_ex_vat') ? row.total_charge_ex_vat : target.details.tsfin?.total_charge_ex_vat,
+          margin_ex_vat: Object.prototype.hasOwnProperty.call(row, 'margin_ex_vat') ? row.margin_ex_vat : target.details.tsfin?.margin_ex_vat,
+          locked_by_invoice_id: row.locked_by_invoice_id || target.details.tsfin?.locked_by_invoice_id || null,
+          paid_at_utc: row.paid_at_utc || target.details.tsfin?.paid_at_utc || null
+        };
+        target.details.bulk_authorise = deep(target.bulk_authorise);
+        target.details.action_flags = deep(target.action_flags);
+      }
+    };
+    if (st.active_context && typeof st.active_context === 'object') copyStatusKeys(st.active_context);
+    if (st.active_ctx && typeof st.active_ctx === 'object') copyStatusKeys(st.active_ctx);
+    if (st.active_context && typeof st.active_context === 'object' && st.active_context.details && typeof st.active_context.details === 'object') {
+      st.active_details = deep(st.active_context.details);
+    }
+    if (markContextReady) {
+      st.__bulk_authorise_row_context_ready = true;
+      st.__bulk_authorise_row_context_ready_backend_signature = backendRowSignature;
+      st.__bulk_authorise_row_context_ready_render_signature = renderSignature;
+      st.__bulk_authorise_row_context_ready_signature = renderSignature || backendRowSignature;
+      st.__bulk_authorise_row_context_ready_seq = rowChangeSeq;
+    }
+    st.__bulkAuthRightPaneRowKey = rowKey;
+    st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
+    return true;
+  };
+
   const currentRowKey = trimStr(st.active_row_key || '');
   const currentBackendSignature = trimStr(
     st.__bulk_authorise_active_backend_row_signature ||
@@ -107041,6 +107739,13 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       st.__bulk_authorise_row_context_ready_signature = nextRenderSignature || nextBackendSignature;
       st.__bulk_authorise_row_context_ready_seq = rowChangeSeq;
     }
+  }
+
+  if (nextRow) {
+    syncBulkAuthoriseContextFromAuthoritativeRow(nextRow, {
+      recordIdentity: activeRecordIdentity,
+      markContextReady: preserveExistingActiveContext
+    });
   }
 
   if (isGenuineRowChange) {
@@ -107322,6 +108027,154 @@ async function refreshBulkAuthoriseDatasetPreservingState(state, options = {}) {
     const rowCw = rowContractWeekIdentity(rowLike);
     const truthCw = rowContractWeekIdentity(truthLike);
     return !!(rowCw && truthCw && rowCw === truthCw);
+  };
+
+  const syncActiveContextFromDatasetRow = (rowObj, syncOptions = {}) => {
+    const row = (rowObj && typeof rowObj === 'object') ? deep(rowObj) : null;
+    if (!row) return false;
+    const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : null;
+    if (activeRow && !rowMatchesTruth(activeRow, row)) return false;
+    const rowKey = rowIdentityKey(row) || rowIdentityKey(activeRow || {});
+    if (!rowKey) return false;
+    const backendRowSignature = trimStr(row.backend_row_signature || row.row_backend_signature || row.row_signature || '');
+    const renderSignature = trimStr((typeof buildBulkAuthoriseRowSignature === 'function' ? buildBulkAuthoriseRowSignature(row, st) : '') || row.render_signature || '');
+    const rowSignature = backendRowSignature || renderSignature;
+    const timesheetId = rowTimesheetIdentity(row);
+    const contractWeekId = rowContractWeekIdentity(row);
+    const recordIdentity = trimStr(syncOptions.recordIdentity || st.__bulkAuthoriseRecordIdentity || rowKey || '');
+    const markContextReady = syncOptions.markContextReady === true || st.__bulk_authorise_row_context_ready === true;
+    const rowChangeSeq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
+    const statusKeys = [
+      'bulk_authorise_section',
+      'bulk_authorise_classification',
+      'can_bulk_authorise',
+      'can_bulk_unauthorise',
+      'can_save',
+      'can_unprocess',
+      'can_add_additional_manual',
+      'can_manage_evidence',
+      'can_edit_timesheet_data',
+      'is_authorised',
+      'requires_authorisation',
+      'processing_status',
+      'summary_stage',
+      'tools_stage',
+      'review_only',
+      'locked',
+      'route_family',
+      'route_subfamily',
+      'underlying_channel_family',
+      'is_import_authoritative',
+      'ready_to_pay',
+      'row_signature',
+      'backend_row_signature',
+      'row_backend_signature',
+      'render_signature',
+      'updated_at',
+      'total_hours',
+      'total_pay_ex_vat',
+      'total_charge_ex_vat',
+      'margin_ex_vat',
+      'locked_by_invoice_id',
+      'paid_at_utc'
+    ];
+    st.active_row = deep(row);
+    st.active_row_key = rowKey;
+    st.activeRowKey = rowKey;
+    st.__bulk_authorise_active_backend_row_signature = backendRowSignature;
+    st.__bulk_authorise_active_render_signature = renderSignature;
+    st.__bulk_authorise_active_row_signature = rowSignature;
+    st.activeRowSignature = rowSignature;
+    st.activeRecordIdentity = recordIdentity || null;
+    st.__bulkAuthoriseRecordIdentity = recordIdentity || null;
+    st.activeTimesheetId = timesheetId || null;
+    st.activeContractWeekId = contractWeekId || null;
+
+    const copyStatusKeys = (target) => {
+      if (!target || typeof target !== 'object') return;
+      for (const key of statusKeys) {
+        if (Object.prototype.hasOwnProperty.call(row, key)) target[key] = deep(row[key]);
+      }
+      target.row_key = rowKey;
+      target.activeRowKey = rowKey;
+      target.backend_row_signature = backendRowSignature || target.backend_row_signature || '';
+      target.row_backend_signature = backendRowSignature || target.row_backend_signature || '';
+      target.render_signature = renderSignature || target.render_signature || '';
+      target.row_signature = backendRowSignature || target.row_signature || '';
+      target.activeBackendRowSignature = backendRowSignature || target.activeBackendRowSignature || '';
+      target.activeRenderSignature = renderSignature || target.activeRenderSignature || '';
+      target.activeRowSignature = rowSignature || target.activeRowSignature || '';
+      target.activeRecordIdentity = recordIdentity || target.activeRecordIdentity || null;
+      target.activeTimesheetId = timesheetId || target.activeTimesheetId || null;
+      target.activeContractWeekId = contractWeekId || target.activeContractWeekId || null;
+      target.current_timesheet_id = timesheetId || target.current_timesheet_id || null;
+      target.requested_timesheet_id = trimStr(row.requested_timesheet_id || timesheetId || '') || target.requested_timesheet_id || null;
+      target.expected_timesheet_id = trimStr(row.expected_timesheet_id || timesheetId || '') || target.expected_timesheet_id || null;
+      target.contract_week_id = contractWeekId || target.contract_week_id || null;
+      target.row = deep(row);
+      target.data_row = deep(row);
+      target.row_patch = (row.row_patch && typeof row.row_patch === 'object') ? deep(row.row_patch) : (target.row_patch || {});
+      target.bulk_authorise = {
+        ...((target.bulk_authorise && typeof target.bulk_authorise === 'object') ? target.bulk_authorise : {}),
+        classification: row.bulk_authorise_classification || target.bulk_authorise?.classification || null,
+        section: row.bulk_authorise_section || target.bulk_authorise?.section || null,
+        can_authorise: !!row.can_bulk_authorise,
+        can_unauthorise: !!row.can_bulk_unauthorise,
+        requires_authorisation: !!row.requires_authorisation,
+        is_authorised: !!row.is_authorised
+      };
+      target.action_flags = {
+        ...((target.action_flags && typeof target.action_flags === 'object') ? target.action_flags : {}),
+        can_add_additional_manual: !!row.can_add_additional_manual,
+        can_manage_evidence: !!row.can_manage_evidence,
+        can_unprocess: !!row.can_unprocess,
+        can_edit_timesheet_data: !!row.can_edit_timesheet_data,
+        route_family: row.route_family || target.action_flags?.route_family || null,
+        underlying_channel_family: row.underlying_channel_family || target.action_flags?.underlying_channel_family || null,
+        is_import_authoritative: !!row.is_import_authoritative,
+        locked_by_invoice: !!row.locked_by_invoice_id,
+        paid: !!row.paid_at_utc
+      };
+      if (target.details && typeof target.details === 'object') {
+        target.details.current_timesheet_id = timesheetId || target.details.current_timesheet_id || null;
+        target.details.requested_timesheet_id = trimStr(row.requested_timesheet_id || timesheetId || '') || target.details.requested_timesheet_id || null;
+        target.details.expected_timesheet_id = trimStr(row.expected_timesheet_id || timesheetId || '') || target.details.expected_timesheet_id || null;
+        target.details.contract_week_id = contractWeekId || target.details.contract_week_id || null;
+        target.details.summary_stage = row.summary_stage || target.details.summary_stage || null;
+        target.details.tools_stage = row.tools_stage || target.details.tools_stage || null;
+        target.details.ready_to_pay = !!row.ready_to_pay;
+        target.details.route_type = row.route_type || target.details.route_type || null;
+        target.details.route_display = row.route_display || target.details.route_display || null;
+        target.details.tsfin = {
+          ...((target.details.tsfin && typeof target.details.tsfin === 'object') ? target.details.tsfin : {}),
+          processing_status: row.processing_status || target.details.tsfin?.processing_status || null,
+          total_hours: Object.prototype.hasOwnProperty.call(row, 'total_hours') ? row.total_hours : target.details.tsfin?.total_hours,
+          total_pay_ex_vat: Object.prototype.hasOwnProperty.call(row, 'total_pay_ex_vat') ? row.total_pay_ex_vat : target.details.tsfin?.total_pay_ex_vat,
+          total_charge_ex_vat: Object.prototype.hasOwnProperty.call(row, 'total_charge_ex_vat') ? row.total_charge_ex_vat : target.details.tsfin?.total_charge_ex_vat,
+          margin_ex_vat: Object.prototype.hasOwnProperty.call(row, 'margin_ex_vat') ? row.margin_ex_vat : target.details.tsfin?.margin_ex_vat,
+          locked_by_invoice_id: row.locked_by_invoice_id || target.details.tsfin?.locked_by_invoice_id || null,
+          paid_at_utc: row.paid_at_utc || target.details.tsfin?.paid_at_utc || null
+        };
+        target.details.bulk_authorise = deep(target.bulk_authorise);
+        target.details.action_flags = deep(target.action_flags);
+      }
+    };
+
+    if (st.active_context && typeof st.active_context === 'object') copyStatusKeys(st.active_context);
+    if (st.active_ctx && typeof st.active_ctx === 'object') copyStatusKeys(st.active_ctx);
+    if (st.active_context && typeof st.active_context === 'object' && st.active_context.details && typeof st.active_context.details === 'object') {
+      st.active_details = deep(st.active_context.details);
+    }
+    if (markContextReady) {
+      st.__bulk_authorise_row_context_ready = true;
+      st.__bulk_authorise_row_context_ready_backend_signature = backendRowSignature;
+      st.__bulk_authorise_row_context_ready_render_signature = renderSignature;
+      st.__bulk_authorise_row_context_ready_signature = renderSignature || backendRowSignature;
+      st.__bulk_authorise_row_context_ready_seq = rowChangeSeq;
+    }
+    st.__bulkAuthRightPaneRowKey = rowKey;
+    st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
+    return true;
   };
 
   const mergeLocalTruthIntoDataset = (datasetInput, truthRowsInput) => {
@@ -107676,6 +108529,11 @@ async function refreshBulkAuthoriseDatasetPreservingState(state, options = {}) {
       }
     }
 
+    syncActiveContextFromDatasetRow(st.active_row || mutationTruthRows.find((row) => rowMatchesTruth(row, snapshot.active_row || {})) || mutationTruthRows[0] || null, {
+      markContextReady: shouldPreservePatchContext,
+      recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || '')
+    });
+
     st.filters = deep(snapshot.filters || st.filters || {});
     st.selected_row_keys = Array.isArray(st.selected_row_keys) ? st.selected_row_keys.map(trimStr).filter(Boolean) : [];
     st.middle_pane_mode = snapshot.middle_pane_mode || st.middle_pane_mode || null;
@@ -107948,6 +108806,10 @@ async function refreshBulkAuthoriseDatasetPreservingState(state, options = {}) {
       st.__bulk_authorise_row_context_ready = true;
       st.__bulk_authorise_row_context_ready_signature = preferredRowSignature;
       st.__bulk_authorise_row_context_ready_seq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
+      syncActiveContextFromDatasetRow(preferredRow, {
+        markContextReady: true,
+        recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || '')
+      });
     } else if (preferredRow && snapshot.active_context && typeof snapshot.active_context === 'object') {
       st.__bulk_authorise_row_context_ready = false;
       st.__bulk_authorise_row_context_ready_signature = '';
@@ -107996,6 +108858,10 @@ async function refreshBulkAuthoriseDatasetPreservingState(state, options = {}) {
           st.__bulk_authorise_row_context_ready_render_signature = suppressedRenderSignature;
           st.__bulk_authorise_row_context_ready_signature = suppressedRenderSignature || suppressedBackendRowSignature;
           st.__bulk_authorise_row_context_ready_seq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
+          syncActiveContextFromDatasetRow(suppressedActiveRow, {
+            markContextReady: true,
+            recordIdentity: suppressedRecordIdentity || null
+          });
         } else {
           st.active_context = {
             ok: true,
@@ -108048,6 +108914,10 @@ async function refreshBulkAuthoriseDatasetPreservingState(state, options = {}) {
           };
           st.active_ctx = null;
           st.active_details = deep(st.active_context.details || {});
+          syncActiveContextFromDatasetRow(suppressedActiveRow, {
+            markContextReady: false,
+            recordIdentity: suppressedRecordIdentity || null
+          });
           st.__bulk_authorise_row_context_ready = false;
           st.__bulk_authorise_row_context_ready_backend_signature = '';
           st.__bulk_authorise_row_context_ready_render_signature = '';
@@ -108167,8 +109037,6 @@ async function refreshBulkAuthoriseDatasetPreservingState(state, options = {}) {
     return false;
   }
 }
-
-
 
 
 
@@ -134584,7 +135452,6 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
   }
 }
 
-
 async function handleBulkAuthoriseSelected(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][AUTHORISE-SELECTED]');
   GC('handleBulkAuthoriseSelected');
@@ -134696,6 +135563,184 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     }
     return true;
   };
+  const syncActiveContextFromStatusRows = (rowsOrPatches, syncOptions = {}) => {
+    const candidates = Array.isArray(rowsOrPatches) ? rowsOrPatches : [rowsOrPatches];
+    const activeBase = (st.active_row && typeof st.active_row === 'object') ? st.active_row : null;
+    const activeKey = rowIdentityKey(activeBase || {});
+    if (!activeKey || !candidates.length) return false;
+    const datasetRows = allDatasetRows();
+    let selectedPatch = null;
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== 'object') continue;
+      if (patchAffectsRow(candidate, activeBase || {})) {
+        selectedPatch = candidate;
+        break;
+      }
+      const candidateKey = rowIdentityKey(candidate);
+      if (candidateKey && candidateKey === activeKey) {
+        selectedPatch = candidate;
+        break;
+      }
+    }
+    if (!selectedPatch) return false;
+
+    const datasetRow = datasetRows.find((row) => row && typeof row === 'object' && (patchAffectsRow(selectedPatch, row) || rowIdentityKey(row) === activeKey)) || null;
+    const selectedRow = (selectedPatch.row && typeof selectedPatch.row === 'object')
+      ? selectedPatch.row
+      : ((selectedPatch.data_row && typeof selectedPatch.data_row === 'object') ? selectedPatch.data_row : selectedPatch);
+    const selectedPatchRow = (selectedPatch.row_patch && typeof selectedPatch.row_patch === 'object') ? selectedPatch.row_patch : {};
+    const mergedRow = {
+      ...(activeBase ? deep(activeBase) : {}),
+      ...(datasetRow ? deep(datasetRow) : {}),
+      ...deep(selectedRow || {}),
+      ...deep(selectedPatchRow || {})
+    };
+    const mergedRowKey = rowIdentityKey(mergedRow) || activeKey;
+    if (!mergedRowKey) return false;
+
+    const backendRowSignature = trimStr(mergedRow.backend_row_signature || mergedRow.row_backend_signature || mergedRow.row_signature || '');
+    const renderSignature = trimStr((typeof buildBulkAuthoriseRowSignature === 'function' ? buildBulkAuthoriseRowSignature(mergedRow, st) : '') || mergedRow.render_signature || '');
+    const rowSignature = backendRowSignature || renderSignature;
+    const timesheetId = trimStr(mergedRow.current_timesheet_id || mergedRow.timesheet_id || mergedRow.requested_timesheet_id || mergedRow.expected_timesheet_id || '');
+    const contractWeekId = trimStr(mergedRow.contract_week_id || '');
+    const markReady = syncOptions.markContextReady === true || st.__bulk_authorise_row_context_ready === true;
+    const rowChangeSeq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
+
+    st.active_row = deep(mergedRow);
+    st.active_row_key = mergedRowKey;
+    st.activeRowKey = mergedRowKey;
+    st.__bulk_authorise_active_backend_row_signature = backendRowSignature;
+    st.__bulk_authorise_active_render_signature = renderSignature;
+    st.__bulk_authorise_active_row_signature = rowSignature;
+    st.activeRowSignature = rowSignature;
+    st.activeTimesheetId = timesheetId || null;
+    st.activeContractWeekId = contractWeekId || null;
+
+    const statusKeys = [
+      'bulk_authorise_section',
+      'bulk_authorise_classification',
+      'can_bulk_authorise',
+      'can_bulk_unauthorise',
+      'can_save',
+      'can_unprocess',
+      'can_add_additional_manual',
+      'can_manage_evidence',
+      'can_edit_timesheet_data',
+      'is_authorised',
+      'requires_authorisation',
+      'processing_status',
+      'summary_stage',
+      'tools_stage',
+      'review_only',
+      'locked',
+      'route_family',
+      'route_subfamily',
+      'underlying_channel_family',
+      'is_import_authoritative',
+      'ready_to_pay',
+      'row_signature',
+      'backend_row_signature',
+      'row_backend_signature',
+      'render_signature',
+      'updated_at',
+      'total_hours',
+      'total_pay_ex_vat',
+      'total_charge_ex_vat',
+      'margin_ex_vat',
+      'locked_by_invoice_id',
+      'paid_at_utc'
+    ];
+    const copyStatusKeys = (target) => {
+      if (!target || typeof target !== 'object') return;
+      for (const key of statusKeys) {
+        if (Object.prototype.hasOwnProperty.call(mergedRow, key)) target[key] = deep(mergedRow[key]);
+      }
+      target.row_key = mergedRowKey;
+      target.activeRowKey = mergedRowKey;
+      target.backend_row_signature = backendRowSignature || target.backend_row_signature || '';
+      target.row_backend_signature = backendRowSignature || target.row_backend_signature || '';
+      target.render_signature = renderSignature || target.render_signature || '';
+      target.activeBackendRowSignature = backendRowSignature || target.activeBackendRowSignature || '';
+      target.activeRenderSignature = renderSignature || target.activeRenderSignature || '';
+      target.activeRowSignature = rowSignature || target.activeRowSignature || '';
+      target.activeTimesheetId = timesheetId || target.activeTimesheetId || null;
+      target.activeContractWeekId = contractWeekId || target.activeContractWeekId || null;
+      target.current_timesheet_id = timesheetId || target.current_timesheet_id || null;
+      target.requested_timesheet_id = trimStr(mergedRow.requested_timesheet_id || timesheetId || '') || target.requested_timesheet_id || null;
+      target.expected_timesheet_id = trimStr(mergedRow.expected_timesheet_id || timesheetId || '') || target.expected_timesheet_id || null;
+      target.contract_week_id = contractWeekId || target.contract_week_id || null;
+      target.row = deep(mergedRow);
+      target.data_row = deep(mergedRow);
+      target.row_patch = {
+        ...((target.row_patch && typeof target.row_patch === 'object') ? target.row_patch : {}),
+        ...deep(selectedPatchRow || {})
+      };
+      target.bulk_authorise = {
+        ...((target.bulk_authorise && typeof target.bulk_authorise === 'object') ? target.bulk_authorise : {}),
+        classification: mergedRow.bulk_authorise_classification || target.bulk_authorise?.classification || null,
+        section: mergedRow.bulk_authorise_section || target.bulk_authorise?.section || null,
+        can_authorise: !!mergedRow.can_bulk_authorise,
+        can_unauthorise: !!mergedRow.can_bulk_unauthorise,
+        requires_authorisation: !!mergedRow.requires_authorisation,
+        is_authorised: !!mergedRow.is_authorised
+      };
+      target.action_flags = {
+        ...((target.action_flags && typeof target.action_flags === 'object') ? target.action_flags : {}),
+        can_add_additional_manual: !!mergedRow.can_add_additional_manual,
+        can_manage_evidence: !!mergedRow.can_manage_evidence,
+        can_unprocess: !!mergedRow.can_unprocess,
+        can_edit_timesheet_data: !!mergedRow.can_edit_timesheet_data,
+        route_family: mergedRow.route_family || target.action_flags?.route_family || null,
+        underlying_channel_family: mergedRow.underlying_channel_family || target.action_flags?.underlying_channel_family || null,
+        is_import_authoritative: !!mergedRow.is_import_authoritative,
+        locked_by_invoice: !!mergedRow.locked_by_invoice_id,
+        paid: !!mergedRow.paid_at_utc
+      };
+      if (target.details && typeof target.details === 'object') {
+        target.details.current_timesheet_id = timesheetId || target.details.current_timesheet_id || null;
+        target.details.requested_timesheet_id = trimStr(mergedRow.requested_timesheet_id || timesheetId || '') || target.details.requested_timesheet_id || null;
+        target.details.expected_timesheet_id = trimStr(mergedRow.expected_timesheet_id || timesheetId || '') || target.details.expected_timesheet_id || null;
+        target.details.contract_week_id = contractWeekId || target.details.contract_week_id || null;
+        target.details.summary_stage = mergedRow.summary_stage || target.details.summary_stage || null;
+        target.details.tools_stage = mergedRow.tools_stage || target.details.tools_stage || null;
+        target.details.ready_to_pay = !!mergedRow.ready_to_pay;
+        target.details.route_type = mergedRow.route_type || target.details.route_type || null;
+        target.details.route_display = mergedRow.route_display || target.details.route_display || null;
+        target.details.tsfin = {
+          ...((target.details.tsfin && typeof target.details.tsfin === 'object') ? target.details.tsfin : {}),
+          processing_status: mergedRow.processing_status || target.details.tsfin?.processing_status || null,
+          total_hours: Object.prototype.hasOwnProperty.call(mergedRow, 'total_hours') ? mergedRow.total_hours : target.details.tsfin?.total_hours,
+          total_pay_ex_vat: Object.prototype.hasOwnProperty.call(mergedRow, 'total_pay_ex_vat') ? mergedRow.total_pay_ex_vat : target.details.tsfin?.total_pay_ex_vat,
+          total_charge_ex_vat: Object.prototype.hasOwnProperty.call(mergedRow, 'total_charge_ex_vat') ? mergedRow.total_charge_ex_vat : target.details.tsfin?.total_charge_ex_vat,
+          margin_ex_vat: Object.prototype.hasOwnProperty.call(mergedRow, 'margin_ex_vat') ? mergedRow.margin_ex_vat : target.details.tsfin?.margin_ex_vat,
+          locked_by_invoice_id: mergedRow.locked_by_invoice_id || target.details.tsfin?.locked_by_invoice_id || null,
+          paid_at_utc: mergedRow.paid_at_utc || target.details.tsfin?.paid_at_utc || null
+        };
+        target.details.bulk_authorise = deep(target.bulk_authorise);
+        target.details.action_flags = deep(target.action_flags);
+      }
+    };
+
+    if (st.active_context && typeof st.active_context === 'object') copyStatusKeys(st.active_context);
+    if (st.active_ctx && typeof st.active_ctx === 'object') copyStatusKeys(st.active_ctx);
+    if (st.active_context && typeof st.active_context === 'object' && st.active_context.details && typeof st.active_context.details === 'object') {
+      st.active_details = deep(st.active_context.details);
+    }
+    if (markReady) {
+      st.__bulk_authorise_row_context_ready = true;
+      st.__bulk_authorise_row_context_ready_backend_signature = backendRowSignature;
+      st.__bulk_authorise_row_context_ready_render_signature = renderSignature;
+      st.__bulk_authorise_row_context_ready_signature = renderSignature || backendRowSignature;
+      st.__bulk_authorise_row_context_ready_seq = rowChangeSeq;
+    }
+    st.__bulkAuthRightPaneRowKey = mergedRowKey;
+    st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
+    if (typeof syncBulkAuthoriseModalCtxToActiveRow === 'function') {
+      try { syncBulkAuthoriseModalCtxToActiveRow(st, { source: syncOptions.source || 'status-patch-context-sync', force: true }); } catch {}
+    }
+    return true;
+  };
+
   const applyPatches = (patches, countDeltas, result) => {
     const list = Array.isArray(patches) ? patches.filter((patch) => patch && typeof patch === 'object') : [];
     if (!list.length) return false;
@@ -134708,12 +135753,15 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
           result,
           preserveActiveContext: true
         });
+        syncActiveContextFromStatusRows(list, { source: 'authorise-row-patch-apply' });
         return true;
       } catch (err) {
         if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][AUTHORISE-SELECTED] shared patch helper failed; using fallback', err);
       }
     }
-    return mutateDatasetRowsFallback(list, countDeltas || {});
+    const fallbackApplied = mutateDatasetRowsFallback(list, countDeltas || {});
+    if (fallbackApplied) syncActiveContextFromStatusRows(list, { source: 'authorise-row-patch-fallback' });
+    return fallbackApplied;
   };
   const invalidateCaches = (patches, result) => {
     const list = Array.isArray(patches) ? patches : [];
@@ -134763,30 +135811,55 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
       }
     }
   };
-  const scheduleBackgroundReconcile = () => {
-    const run = async () => {
-      if (typeof refreshBulkAuthoriseDatasetPreservingState !== 'function') return;
-      try {
-        await refreshBulkAuthoriseDatasetPreservingState(st, {
-          actionSource,
-          datasetOnly: true,
-          minimalOnly: true,
-          deferContextRefresh: true,
-          preserveActiveContext: true,
-          preserveExistingContext: true,
-          preserveSignedUrlCache: true,
-          refreshContext: false,
-          rerender: false,
-          source: 'authorise-background-reconcile'
-        });
-      } catch (err) {
-        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][AUTHORISE-SELECTED] background reconcile failed', err);
-      }
+
+  const markBulkAuthoriseDatasetCacheMutation = (phase, rowsOrPatches, resultPayload) => {
+    if (typeof fetchBulkAuthoriseDataset !== 'function') return false;
+    const rowKeys = new Set();
+    const addKey = (value) => {
+      const key = trimStr(value || '');
+      if (key) rowKeys.add(key);
+    };
+    const addEntry = (entry) => {
+      if (!entry || typeof entry !== 'object') return;
+      addKey(entry.previous_row_key);
+      addKey(entry.row_key_before);
+      addKey(entry.row_key_after);
+      addKey(entry.new_row_key);
+      addKey(entry.row_key);
+      const tsId = trimStr(entry.current_timesheet_id || entry.timesheet_id || entry.requested_timesheet_id || entry.expected_timesheet_id || '');
+      if (tsId) addKey(`timesheet:${tsId}`);
+      const cwId = trimStr(entry.contract_week_id || '');
+      if (cwId) addKey(`contract_week:${cwId}`);
+    };
+    if (Array.isArray(rowsOrPatches)) rowsOrPatches.forEach(addEntry);
+    else addEntry(rowsOrPatches);
+    const hints = (resultPayload?.cache_invalidation_hints && typeof resultPayload.cache_invalidation_hints === 'object') ? resultPayload.cache_invalidation_hints : {};
+    if (Array.isArray(hints.row_keys)) hints.row_keys.forEach(addKey);
+    const payload = {
+      reason: trimStr(phase || 'authorise-mutation'),
+      source: actionSource,
+      action: 'authorise',
+      mutationSeq: Number(st.__bulk_authorise_mutation_seq || 0) || 0,
+      row_keys: [...rowKeys],
+      cache_invalidation_hints: hints
     };
     try {
-      window.requestAnimationFrame(() => { void run(); });
-    } catch {
-      setTimeout(() => { void run(); }, 0);
+      if (typeof fetchBulkAuthoriseDataset.invalidateBulkAuthoriseDatasetCache === 'function') {
+        fetchBulkAuthoriseDataset.invalidateBulkAuthoriseDatasetCache(payload);
+      } else if (typeof fetchBulkAuthoriseDataset.markBulkAuthoriseMutation === 'function') {
+        fetchBulkAuthoriseDataset.markBulkAuthoriseMutation(payload);
+      } else {
+        fetchBulkAuthoriseDataset.__mutation_epoch = (Number(fetchBulkAuthoriseDataset.__mutation_epoch || 0) || 0) + 1;
+        fetchBulkAuthoriseDataset.__cache_invalidated_at = Date.now();
+        fetchBulkAuthoriseDataset.__last_invalidation_reason = payload.reason;
+        fetchBulkAuthoriseDataset.__last_invalidation_meta = payload;
+        fetchBulkAuthoriseDataset.__cache = Object.create(null);
+        fetchBulkAuthoriseDataset.__inflight = Object.create(null);
+      }
+      return true;
+    } catch (err) {
+      if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][AUTHORISE-SELECTED] dataset cache invalidation failed', err);
+      return false;
     }
   };
 
@@ -135016,6 +136089,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     const isMultiRowAction = items.length > 1;
     st.__bulk_authorise_mutation_seq = (Number(st.__bulk_authorise_mutation_seq || 0) || 0) + 1;
     const mutationSeq = Number(st.__bulk_authorise_mutation_seq || 0) || 0;
+    markBulkAuthoriseDatasetCacheMutation('authorise-start', selectedRows);
     previousSuppressContextHydration = st.__bulk_authorise_suppress_context_hydration;
     if (isMultiRowAction) st.__bulk_authorise_suppress_context_hydration = true;
 
@@ -135035,6 +136109,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
           const chunkPatches = Array.isArray(row_patches) ? row_patches : [];
           if (!chunkPatches.length) return;
           applyPatches(chunkPatches, chunkResult?.count_deltas || {}, chunkResult);
+          markBulkAuthoriseDatasetCacheMutation('authorise-chunk-patches', chunkPatches, chunkResult);
           if (shouldInvalidateCachesForResult(chunkResult)) invalidateCaches(chunkPatches, chunkResult);
           chunkPatchApplied = true;
         }
@@ -135056,10 +136131,14 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
 
     if (!isMultiRowAction || !chunkPatchApplied) {
       applyPatches(rowPatches, result?.count_deltas || {}, result);
+      markBulkAuthoriseDatasetCacheMutation('authorise-row-patches', rowPatches.length ? rowPatches : selectedRows, result);
       if (shouldInvalidateCachesForResult(result)) invalidateCaches(rowPatches, result);
+    } else {
+      markBulkAuthoriseDatasetCacheMutation('authorise-result', rowPatches.length ? rowPatches : selectedRows, result);
     }
 
     await refreshMutationSummaryRows(selectedRows, result, rowPatches);
+    syncActiveContextFromStatusRows(rowPatches, { source: 'authorise-summary-refresh-sync' });
 
     if (isMultiRowAction && typeof refreshBulkAuthoriseDatasetPreservingState === 'function') {
       await refreshBulkAuthoriseDatasetPreservingState(st, {
@@ -135235,9 +136314,6 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
   }
 }
 
-
-
-
 async function handleBulkUnauthoriseSelected(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][UNAUTHORISE-SELECTED]');
   GC('handleBulkUnauthoriseSelected');
@@ -135319,6 +136395,184 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     }
     return true;
   };
+  const syncActiveContextFromStatusRows = (rowsOrPatches, syncOptions = {}) => {
+    const candidates = Array.isArray(rowsOrPatches) ? rowsOrPatches : [rowsOrPatches];
+    const activeBase = (st.active_row && typeof st.active_row === 'object') ? st.active_row : null;
+    const activeKey = rowIdentityKey(activeBase || {});
+    if (!activeKey || !candidates.length) return false;
+    const datasetRows = allDatasetRows();
+    let selectedPatch = null;
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== 'object') continue;
+      if (patchAffectsRow(candidate, activeBase || {})) {
+        selectedPatch = candidate;
+        break;
+      }
+      const candidateKey = rowIdentityKey(candidate);
+      if (candidateKey && candidateKey === activeKey) {
+        selectedPatch = candidate;
+        break;
+      }
+    }
+    if (!selectedPatch) return false;
+
+    const datasetRow = datasetRows.find((row) => row && typeof row === 'object' && (patchAffectsRow(selectedPatch, row) || rowIdentityKey(row) === activeKey)) || null;
+    const selectedRow = (selectedPatch.row && typeof selectedPatch.row === 'object')
+      ? selectedPatch.row
+      : ((selectedPatch.data_row && typeof selectedPatch.data_row === 'object') ? selectedPatch.data_row : selectedPatch);
+    const selectedPatchRow = (selectedPatch.row_patch && typeof selectedPatch.row_patch === 'object') ? selectedPatch.row_patch : {};
+    const mergedRow = {
+      ...(activeBase ? deep(activeBase) : {}),
+      ...(datasetRow ? deep(datasetRow) : {}),
+      ...deep(selectedRow || {}),
+      ...deep(selectedPatchRow || {})
+    };
+    const mergedRowKey = rowIdentityKey(mergedRow) || activeKey;
+    if (!mergedRowKey) return false;
+
+    const backendRowSignature = trimStr(mergedRow.backend_row_signature || mergedRow.row_backend_signature || mergedRow.row_signature || '');
+    const renderSignature = trimStr((typeof buildBulkAuthoriseRowSignature === 'function' ? buildBulkAuthoriseRowSignature(mergedRow, st) : '') || mergedRow.render_signature || '');
+    const rowSignature = backendRowSignature || renderSignature;
+    const timesheetId = trimStr(mergedRow.current_timesheet_id || mergedRow.timesheet_id || mergedRow.requested_timesheet_id || mergedRow.expected_timesheet_id || '');
+    const contractWeekId = trimStr(mergedRow.contract_week_id || '');
+    const markReady = syncOptions.markContextReady === true || st.__bulk_authorise_row_context_ready === true;
+    const rowChangeSeq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
+
+    st.active_row = deep(mergedRow);
+    st.active_row_key = mergedRowKey;
+    st.activeRowKey = mergedRowKey;
+    st.__bulk_authorise_active_backend_row_signature = backendRowSignature;
+    st.__bulk_authorise_active_render_signature = renderSignature;
+    st.__bulk_authorise_active_row_signature = rowSignature;
+    st.activeRowSignature = rowSignature;
+    st.activeTimesheetId = timesheetId || null;
+    st.activeContractWeekId = contractWeekId || null;
+
+    const statusKeys = [
+      'bulk_authorise_section',
+      'bulk_authorise_classification',
+      'can_bulk_authorise',
+      'can_bulk_unauthorise',
+      'can_save',
+      'can_unprocess',
+      'can_add_additional_manual',
+      'can_manage_evidence',
+      'can_edit_timesheet_data',
+      'is_authorised',
+      'requires_authorisation',
+      'processing_status',
+      'summary_stage',
+      'tools_stage',
+      'review_only',
+      'locked',
+      'route_family',
+      'route_subfamily',
+      'underlying_channel_family',
+      'is_import_authoritative',
+      'ready_to_pay',
+      'row_signature',
+      'backend_row_signature',
+      'row_backend_signature',
+      'render_signature',
+      'updated_at',
+      'total_hours',
+      'total_pay_ex_vat',
+      'total_charge_ex_vat',
+      'margin_ex_vat',
+      'locked_by_invoice_id',
+      'paid_at_utc'
+    ];
+    const copyStatusKeys = (target) => {
+      if (!target || typeof target !== 'object') return;
+      for (const key of statusKeys) {
+        if (Object.prototype.hasOwnProperty.call(mergedRow, key)) target[key] = deep(mergedRow[key]);
+      }
+      target.row_key = mergedRowKey;
+      target.activeRowKey = mergedRowKey;
+      target.backend_row_signature = backendRowSignature || target.backend_row_signature || '';
+      target.row_backend_signature = backendRowSignature || target.row_backend_signature || '';
+      target.render_signature = renderSignature || target.render_signature || '';
+      target.activeBackendRowSignature = backendRowSignature || target.activeBackendRowSignature || '';
+      target.activeRenderSignature = renderSignature || target.activeRenderSignature || '';
+      target.activeRowSignature = rowSignature || target.activeRowSignature || '';
+      target.activeTimesheetId = timesheetId || target.activeTimesheetId || null;
+      target.activeContractWeekId = contractWeekId || target.activeContractWeekId || null;
+      target.current_timesheet_id = timesheetId || target.current_timesheet_id || null;
+      target.requested_timesheet_id = trimStr(mergedRow.requested_timesheet_id || timesheetId || '') || target.requested_timesheet_id || null;
+      target.expected_timesheet_id = trimStr(mergedRow.expected_timesheet_id || timesheetId || '') || target.expected_timesheet_id || null;
+      target.contract_week_id = contractWeekId || target.contract_week_id || null;
+      target.row = deep(mergedRow);
+      target.data_row = deep(mergedRow);
+      target.row_patch = {
+        ...((target.row_patch && typeof target.row_patch === 'object') ? target.row_patch : {}),
+        ...deep(selectedPatchRow || {})
+      };
+      target.bulk_authorise = {
+        ...((target.bulk_authorise && typeof target.bulk_authorise === 'object') ? target.bulk_authorise : {}),
+        classification: mergedRow.bulk_authorise_classification || target.bulk_authorise?.classification || null,
+        section: mergedRow.bulk_authorise_section || target.bulk_authorise?.section || null,
+        can_authorise: !!mergedRow.can_bulk_authorise,
+        can_unauthorise: !!mergedRow.can_bulk_unauthorise,
+        requires_authorisation: !!mergedRow.requires_authorisation,
+        is_authorised: !!mergedRow.is_authorised
+      };
+      target.action_flags = {
+        ...((target.action_flags && typeof target.action_flags === 'object') ? target.action_flags : {}),
+        can_add_additional_manual: !!mergedRow.can_add_additional_manual,
+        can_manage_evidence: !!mergedRow.can_manage_evidence,
+        can_unprocess: !!mergedRow.can_unprocess,
+        can_edit_timesheet_data: !!mergedRow.can_edit_timesheet_data,
+        route_family: mergedRow.route_family || target.action_flags?.route_family || null,
+        underlying_channel_family: mergedRow.underlying_channel_family || target.action_flags?.underlying_channel_family || null,
+        is_import_authoritative: !!mergedRow.is_import_authoritative,
+        locked_by_invoice: !!mergedRow.locked_by_invoice_id,
+        paid: !!mergedRow.paid_at_utc
+      };
+      if (target.details && typeof target.details === 'object') {
+        target.details.current_timesheet_id = timesheetId || target.details.current_timesheet_id || null;
+        target.details.requested_timesheet_id = trimStr(mergedRow.requested_timesheet_id || timesheetId || '') || target.details.requested_timesheet_id || null;
+        target.details.expected_timesheet_id = trimStr(mergedRow.expected_timesheet_id || timesheetId || '') || target.details.expected_timesheet_id || null;
+        target.details.contract_week_id = contractWeekId || target.details.contract_week_id || null;
+        target.details.summary_stage = mergedRow.summary_stage || target.details.summary_stage || null;
+        target.details.tools_stage = mergedRow.tools_stage || target.details.tools_stage || null;
+        target.details.ready_to_pay = !!mergedRow.ready_to_pay;
+        target.details.route_type = mergedRow.route_type || target.details.route_type || null;
+        target.details.route_display = mergedRow.route_display || target.details.route_display || null;
+        target.details.tsfin = {
+          ...((target.details.tsfin && typeof target.details.tsfin === 'object') ? target.details.tsfin : {}),
+          processing_status: mergedRow.processing_status || target.details.tsfin?.processing_status || null,
+          total_hours: Object.prototype.hasOwnProperty.call(mergedRow, 'total_hours') ? mergedRow.total_hours : target.details.tsfin?.total_hours,
+          total_pay_ex_vat: Object.prototype.hasOwnProperty.call(mergedRow, 'total_pay_ex_vat') ? mergedRow.total_pay_ex_vat : target.details.tsfin?.total_pay_ex_vat,
+          total_charge_ex_vat: Object.prototype.hasOwnProperty.call(mergedRow, 'total_charge_ex_vat') ? mergedRow.total_charge_ex_vat : target.details.tsfin?.total_charge_ex_vat,
+          margin_ex_vat: Object.prototype.hasOwnProperty.call(mergedRow, 'margin_ex_vat') ? mergedRow.margin_ex_vat : target.details.tsfin?.margin_ex_vat,
+          locked_by_invoice_id: mergedRow.locked_by_invoice_id || target.details.tsfin?.locked_by_invoice_id || null,
+          paid_at_utc: mergedRow.paid_at_utc || target.details.tsfin?.paid_at_utc || null
+        };
+        target.details.bulk_authorise = deep(target.bulk_authorise);
+        target.details.action_flags = deep(target.action_flags);
+      }
+    };
+
+    if (st.active_context && typeof st.active_context === 'object') copyStatusKeys(st.active_context);
+    if (st.active_ctx && typeof st.active_ctx === 'object') copyStatusKeys(st.active_ctx);
+    if (st.active_context && typeof st.active_context === 'object' && st.active_context.details && typeof st.active_context.details === 'object') {
+      st.active_details = deep(st.active_context.details);
+    }
+    if (markReady) {
+      st.__bulk_authorise_row_context_ready = true;
+      st.__bulk_authorise_row_context_ready_backend_signature = backendRowSignature;
+      st.__bulk_authorise_row_context_ready_render_signature = renderSignature;
+      st.__bulk_authorise_row_context_ready_signature = renderSignature || backendRowSignature;
+      st.__bulk_authorise_row_context_ready_seq = rowChangeSeq;
+    }
+    st.__bulkAuthRightPaneRowKey = mergedRowKey;
+    st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
+    if (typeof syncBulkAuthoriseModalCtxToActiveRow === 'function') {
+      try { syncBulkAuthoriseModalCtxToActiveRow(st, { source: syncOptions.source || 'status-patch-context-sync', force: true }); } catch {}
+    }
+    return true;
+  };
+
   const applyPatches = (patches, countDeltas, result) => {
     const list = Array.isArray(patches) ? patches.filter((patch) => patch && typeof patch === 'object') : [];
     if (!list.length) return false;
@@ -135331,12 +136585,15 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
           result,
           preserveActiveContext: true
         });
+        syncActiveContextFromStatusRows(list, { source: 'unauthorise-row-patch-apply' });
         return true;
       } catch (err) {
         if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][UNAUTHORISE-SELECTED] shared patch helper failed; using fallback', err);
       }
     }
-    return mutateDatasetRowsFallback(list, countDeltas || {});
+    const fallbackApplied = mutateDatasetRowsFallback(list, countDeltas || {});
+    if (fallbackApplied) syncActiveContextFromStatusRows(list, { source: 'unauthorise-row-patch-fallback' });
+    return fallbackApplied;
   };
   const invalidateCaches = (patches, result) => {
     const list = Array.isArray(patches) ? patches : [];
@@ -135386,27 +136643,56 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
       }
     }
   };
-  const scheduleBackgroundReconcile = () => {
-    const run = async () => {
-      if (typeof refreshBulkAuthoriseDatasetPreservingState !== 'function') return;
-      try {
-        await refreshBulkAuthoriseDatasetPreservingState(st, {
-          actionSource,
-          datasetOnly: true,
-          minimalOnly: true,
-          deferContextRefresh: true,
-          preserveActiveContext: true,
-          preserveExistingContext: true,
-          preserveSignedUrlCache: true,
-          refreshContext: false,
-          rerender: false,
-          source: 'unauthorise-background-reconcile'
-        });
-      } catch (err) {
-        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][UNAUTHORISE-SELECTED] background reconcile failed', err);
-      }
+
+  const markBulkAuthoriseDatasetCacheMutation = (phase, rowsOrPatches, resultPayload) => {
+    if (typeof fetchBulkAuthoriseDataset !== 'function') return false;
+    const rowKeys = new Set();
+    const addKey = (value) => {
+      const key = trimStr(value || '');
+      if (key) rowKeys.add(key);
     };
-    try { window.requestAnimationFrame(() => { void run(); }); } catch { setTimeout(() => { void run(); }, 0); }
+    const addEntry = (entry) => {
+      if (!entry || typeof entry !== 'object') return;
+      addKey(entry.previous_row_key);
+      addKey(entry.row_key_before);
+      addKey(entry.row_key_after);
+      addKey(entry.new_row_key);
+      addKey(entry.row_key);
+      const tsId = trimStr(entry.current_timesheet_id || entry.timesheet_id || entry.requested_timesheet_id || entry.expected_timesheet_id || '');
+      if (tsId) addKey(`timesheet:${tsId}`);
+      const cwId = trimStr(entry.contract_week_id || '');
+      if (cwId) addKey(`contract_week:${cwId}`);
+    };
+    if (Array.isArray(rowsOrPatches)) rowsOrPatches.forEach(addEntry);
+    else addEntry(rowsOrPatches);
+    const hints = (resultPayload?.cache_invalidation_hints && typeof resultPayload.cache_invalidation_hints === 'object') ? resultPayload.cache_invalidation_hints : {};
+    if (Array.isArray(hints.row_keys)) hints.row_keys.forEach(addKey);
+    const payload = {
+      reason: trimStr(phase || 'unauthorise-mutation'),
+      source: actionSource,
+      action: 'unauthorise',
+      mutationSeq: Number(st.__bulk_authorise_mutation_seq || 0) || 0,
+      row_keys: [...rowKeys],
+      cache_invalidation_hints: hints
+    };
+    try {
+      if (typeof fetchBulkAuthoriseDataset.invalidateBulkAuthoriseDatasetCache === 'function') {
+        fetchBulkAuthoriseDataset.invalidateBulkAuthoriseDatasetCache(payload);
+      } else if (typeof fetchBulkAuthoriseDataset.markBulkAuthoriseMutation === 'function') {
+        fetchBulkAuthoriseDataset.markBulkAuthoriseMutation(payload);
+      } else {
+        fetchBulkAuthoriseDataset.__mutation_epoch = (Number(fetchBulkAuthoriseDataset.__mutation_epoch || 0) || 0) + 1;
+        fetchBulkAuthoriseDataset.__cache_invalidated_at = Date.now();
+        fetchBulkAuthoriseDataset.__last_invalidation_reason = payload.reason;
+        fetchBulkAuthoriseDataset.__last_invalidation_meta = payload;
+        fetchBulkAuthoriseDataset.__cache = Object.create(null);
+        fetchBulkAuthoriseDataset.__inflight = Object.create(null);
+      }
+      return true;
+    } catch (err) {
+      if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][UNAUTHORISE-SELECTED] dataset cache invalidation failed', err);
+      return false;
+    }
   };
 
 
@@ -135547,6 +136833,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     const isMultiRowAction = items.length > 1;
     st.__bulk_authorise_mutation_seq = (Number(st.__bulk_authorise_mutation_seq || 0) || 0) + 1;
     const mutationSeq = Number(st.__bulk_authorise_mutation_seq || 0) || 0;
+    markBulkAuthoriseDatasetCacheMutation('unauthorise-start', selectedRows);
     previousSuppressContextHydration = st.__bulk_authorise_suppress_context_hydration;
     if (isMultiRowAction) st.__bulk_authorise_suppress_context_hydration = true;
 
@@ -135566,6 +136853,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
           const chunkPatches = Array.isArray(row_patches) ? row_patches : [];
           if (!chunkPatches.length) return;
           applyPatches(chunkPatches, chunkResult?.count_deltas || {}, chunkResult);
+          markBulkAuthoriseDatasetCacheMutation('unauthorise-chunk-patches', chunkPatches, chunkResult);
           if (shouldInvalidateCachesForResult(chunkResult)) invalidateCaches(chunkPatches, chunkResult);
           chunkPatchApplied = true;
         }
@@ -135587,10 +136875,14 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
 
     if (!isMultiRowAction || !chunkPatchApplied) {
       applyPatches(rowPatches, result?.count_deltas || {}, result);
+      markBulkAuthoriseDatasetCacheMutation('unauthorise-row-patches', rowPatches.length ? rowPatches : selectedRows, result);
       if (shouldInvalidateCachesForResult(result)) invalidateCaches(rowPatches, result);
+    } else {
+      markBulkAuthoriseDatasetCacheMutation('unauthorise-result', rowPatches.length ? rowPatches : selectedRows, result);
     }
 
     await refreshMutationSummaryRows(selectedRows, result, rowPatches);
+    syncActiveContextFromStatusRows(rowPatches, { source: 'unauthorise-summary-refresh-sync' });
 
     if (isMultiRowAction && typeof refreshBulkAuthoriseDatasetPreservingState === 'function') {
       await refreshBulkAuthoriseDatasetPreservingState(st, {
@@ -135764,8 +137056,6 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     }
   }
 }
-
-
 
 
 async function openBulkQrReissueDecisionModal(row = {}, options = {}) {
@@ -228524,6 +229814,10 @@ async function bootstrapApp(){
       hb._pingInFlight = hb._pingInFlight === true ? true : false;
       hb._pendingPingReason = '';
       hb._lastBankingAckMutationAtMs = Number.isFinite(Number(hb._lastBankingAckMutationAtMs)) ? Math.max(0, Number(hb._lastBankingAckMutationAtMs)) : 0;
+      hb._bankingAlertSummaryDeferred = hb._bankingAlertSummaryDeferred === true ? true : false;
+      hb._bankingAlertSummaryDetailPending = hb._bankingAlertSummaryDetailPending === true ? true : false;
+      hb._bankingAlertSummaryDetailInFlight = hb._bankingAlertSummaryDetailInFlight === true ? true : false;
+      hb._bankingAlertSummaryDetailRequestedAtMs = Number.isFinite(Number(hb._bankingAlertSummaryDetailRequestedAtMs)) ? Math.max(0, Number(hb._bankingAlertSummaryDetailRequestedAtMs)) : 0;
 
       const stop = () => {
         try { if (hb._timer) clearInterval(hb._timer); } catch {}
@@ -228531,6 +229825,7 @@ async function bootstrapApp(){
         hb._started = false;
         hb._pingInFlight = false;
         hb._pendingPingReason = '';
+        hb._bankingAlertSummaryDetailInFlight = false;
       };
       hb.stop = stop;
 
@@ -228579,24 +229874,36 @@ async function bootstrapApp(){
           banking_alert_summary_signature: String(hash || '').trim()
         });
 
-        const applyBankingAlertSummaryPayload = (summary, hash = '') => {
+        const applyBankingAlertSummaryPayload = (summary, hash = '', options = {}) => {
           const safeSummary = (summary && typeof summary === 'object' && !Array.isArray(summary)) ? summary : buildEmptyBankingAlertSummary(hash);
           const alerts = Array.isArray(safeSummary.alerts) ? safeSummary.alerts : [];
           const count = toNonNegativeCount(safeSummary.unacknowledged_count ?? safeSummary.banking_unacknowledged_alert_count, alerts.length);
-          if (count > 0 && alerts.length < 1) return false;
+          const detailsDeferred = count > 0 && (
+            options.detailsDeferred === true ||
+            options.details_deferred === true ||
+            safeSummary.banking_alert_summary_deferred === true ||
+            safeSummary.detailsDeferred === true ||
+            safeSummary.details_deferred === true ||
+            safeSummary.detailsLoading === true ||
+            safeSummary.details_loading === true ||
+            alerts.length < 1
+          );
 
           const normalizedSummary = {
             ...safeSummary,
-            alerts: count > 0 ? alerts : [],
-            banking_alerts: count > 0 ? alerts : [],
+            alerts: count > 0 && !detailsDeferred ? alerts : [],
+            banking_alerts: count > 0 && !detailsDeferred ? alerts : [],
             unacknowledged_count: count,
             banking_unacknowledged_alert_count: count,
-            highest_label: count > 0 ? (safeSummary.highest_label ?? safeSummary.banking_highest_alert_label ?? null) : null,
-            banking_highest_alert_label: count > 0 ? (safeSummary.banking_highest_alert_label ?? safeSummary.highest_label ?? null) : null,
-            highest_severity: count > 0 ? (safeSummary.highest_severity ?? safeSummary.banking_highest_alert_severity ?? null) : null,
-            banking_highest_alert_severity: count > 0 ? (safeSummary.banking_highest_alert_severity ?? safeSummary.highest_severity ?? null) : null,
-            banking_alert_hash: String(hash || safeSummary.banking_alert_hash || '').trim(),
-            banking_alert_summary_signature: String(hash || safeSummary.banking_alert_summary_signature || safeSummary.banking_alert_hash || '').trim()
+            highest_label: count > 0 ? (safeSummary.highest_label ?? safeSummary.banking_highest_alert_label ?? options.highestLabel ?? options.banking_highest_alert_label ?? null) : null,
+            banking_highest_alert_label: count > 0 ? (safeSummary.banking_highest_alert_label ?? safeSummary.highest_label ?? options.banking_highest_alert_label ?? options.highestLabel ?? null) : null,
+            highest_severity: count > 0 ? (safeSummary.highest_severity ?? safeSummary.banking_highest_alert_severity ?? options.highestSeverity ?? options.banking_highest_alert_severity ?? null) : null,
+            banking_highest_alert_severity: count > 0 ? (safeSummary.banking_highest_alert_severity ?? safeSummary.highest_severity ?? options.banking_highest_alert_severity ?? options.highestSeverity ?? null) : null,
+            banking_alert_hash: String(hash || safeSummary.banking_alert_hash || safeSummary.banking_alert_summary_signature || '').trim(),
+            banking_alert_summary_signature: String(hash || safeSummary.banking_alert_summary_signature || safeSummary.banking_alert_hash || '').trim(),
+            banking_alert_summary_deferred: detailsDeferred,
+            detailsDeferred,
+            detailsLoading: detailsDeferred
           };
 
           const alertPayload = {
@@ -228609,7 +229916,10 @@ async function bootstrapApp(){
             banking_alerts: normalizedSummary.alerts,
             banking_unacknowledged_alert_count: normalizedSummary.banking_unacknowledged_alert_count,
             banking_highest_alert_label: normalizedSummary.banking_highest_alert_label,
-            banking_highest_alert_severity: normalizedSummary.banking_highest_alert_severity
+            banking_highest_alert_severity: normalizedSummary.banking_highest_alert_severity,
+            banking_alert_summary_deferred: detailsDeferred,
+            banking_alert_summary_included: !detailsDeferred,
+            banking_alert_response_started_before_ack: options.responseStartedBeforeAck === true
           };
 
           if (typeof applyAlertSummaryToState === 'function') {
@@ -228627,12 +229937,45 @@ async function bootstrapApp(){
               highestSeverity: normalizedSummary.banking_highest_alert_severity,
               banking_highest_alert_severity: normalizedSummary.banking_highest_alert_severity,
               alertSummary: normalizedSummary,
-              banking_alert_summary: normalizedSummary
+              banking_alert_summary: normalizedSummary,
+              banking_alert_hash: normalizedSummary.banking_alert_hash,
+              banking_alert_summary_signature: normalizedSummary.banking_alert_summary_signature,
+              banking_alert_summary_deferred: detailsDeferred,
+              detailsDeferred,
+              detailsLoading: detailsDeferred
             });
+          }
+
+          if (detailsDeferred) {
+            hb._bankingAlertSummaryDeferred = true;
+            hb._bankingAlertSummaryDetailPending = true;
+          } else {
+            hb._bankingAlertSummaryDeferred = false;
+            hb._bankingAlertSummaryDetailPending = false;
           }
 
           return true;
         };
+
+        const queueBankingAlertSummaryDetailRefresh = (reason = 'banking-alert-detail') => {
+          try {
+            hb._bankingAlertSummaryDeferred = true;
+            hb._bankingAlertSummaryDetailPending = true;
+            if (hb._pingInFlight === true) {
+              hb._pendingPingReason = String(reason || 'banking-alert-detail');
+              return true;
+            }
+            const now = Date.now();
+            const lastRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
+            if (now - lastRequestedAt < 3000) return true;
+            if (typeof hb.pingOnce === 'function') {
+              setTimeout(() => { try { hb.pingOnce && hb.pingOnce(reason || 'banking-alert-detail'); } catch {} }, 0);
+              return true;
+            }
+          } catch {}
+          return false;
+        };
+        hb.requestBankingAlertSummaryDetailRefresh = queueBankingAlertSummaryDetailRefresh;
 
         const pingOnce = async (reason = '') => {
           if (hb._disabled) return;
@@ -228650,8 +229993,17 @@ async function bootstrapApp(){
           }
 
           const now = Date.now();
-          // throttle: never more than once per 1s even if focus + interval collide
-          if (now - (hb._lastPingAtMs || 0) < 1000) return;
+          // throttle: never more than once per 1s even if focus + interval collide, except that
+          // deferred Banking alert detail requests are rescheduled so the popover can recover rows promptly.
+          const msSinceLastPing = now - (hb._lastPingAtMs || 0);
+          if (msSinceLastPing < 1000) {
+            if (/popover|detail|deferred/i.test(String(reason || ''))) {
+              hb._pendingPingReason = String(reason || 'banking-alert-detail');
+              const delayMs = Math.max(50, 1000 - msSinceLastPing);
+              setTimeout(() => { try { hb.pingOnce && hb.pingOnce(hb._pendingPingReason || 'banking-alert-detail'); } catch {} }, delayMs);
+            }
+            return;
+          }
 
           const requestSeq = Math.max(0, Math.trunc(Number(hb._pingSeq || 0))) + 1;
           hb._pingSeq = requestSeq;
@@ -228661,6 +230013,7 @@ async function bootstrapApp(){
 
           let res = null;
           let json = null;
+          let requestedBankingAlertDetailRefresh = false;
 
           try {
             const payload = {
@@ -228673,6 +230026,17 @@ async function bootstrapApp(){
                 ''
               ).trim()
             };
+            const detailRefreshPending = hb._bankingAlertSummaryDetailPending === true || hb._bankingAlertSummaryDeferred === true;
+            const lastDetailRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
+            const allowDetailRefresh = detailRefreshPending && !hb._bankingAlertSummaryDetailInFlight && (now - lastDetailRequestedAt >= 3000 || /popover|detail|deferred/i.test(String(reason || '')));
+            if (allowDetailRefresh) {
+              payload.banking_alert_summary_needed = true;
+              payload.banking_alert_detail_refresh = true;
+              requestedBankingAlertDetailRefresh = true;
+              hb._bankingAlertSummaryDetailPending = false;
+              hb._bankingAlertSummaryDetailInFlight = true;
+              hb._bankingAlertSummaryDetailRequestedAtMs = now;
+            }
             res = await doFetch(API('/api/changes/ping'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -228692,6 +230056,7 @@ async function bootstrapApp(){
             return;
           } finally {
             hb._pingInFlight = false;
+            if (requestedBankingAlertDetailRefresh) hb._bankingAlertSummaryDetailInFlight = false;
           }
 
           if (!res || !res.ok) {
@@ -228714,11 +230079,15 @@ async function bootstrapApp(){
                 hb._timer = null;
               }
             } catch {}
+            if (requestedBankingAlertDetailRefresh) hb._bankingAlertSummaryDetailPending = true;
             return;
           }
 
           try { json = await res.json().catch(()=> null); } catch { json = null; }
-          if (!json || typeof json !== 'object') return;
+          if (!json || typeof json !== 'object') {
+            if (requestedBankingAlertDetailRefresh) hb._bankingAlertSummaryDetailPending = true;
+            return;
+          }
 
           if (requestSeq < Math.max(0, Math.trunc(Number(hb._latestAppliedPingSeq || 0)))) return;
 
@@ -228763,40 +230132,81 @@ async function bootstrapApp(){
 
               if (count === 0) {
                 commitBankingAlertHash();
+                hb._bankingAlertSummaryDeferred = false;
+                hb._bankingAlertSummaryDetailPending = false;
                 const currentState = (window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object') ? window.__bankingNavAttentionState : {};
                 const currentCount = toNonNegativeCount(
                   currentState.count ?? currentState.unacknowledgedCount ?? currentState.banking_unacknowledged_alert_count,
                   0
                 );
-                if (summary || changed || currentCount > 0 || previousHash !== nextHash) {
+                if (summary || changed || currentCount > 0 || previousHash !== nextHash || json.banking_alert_summary_deferred === false) {
                   applyBankingAlertSummaryPayload(summary || buildEmptyBankingAlertSummary(nextHash), nextHash);
                   return true;
                 }
                 return false;
               }
 
-              if (positiveResponseStartedBeforeAck) return false;
-
-              if (!changed && nextHash && previousHash && nextHash === previousHash && !summary) return false;
+              if (positiveResponseStartedBeforeAck && !summary) return false;
 
               if (summary) {
                 const summaryAlerts = Array.isArray(summary.alerts) ? summary.alerts : [];
-                if (count > 0 && summaryAlerts.length < 1) {
-                  hb._bankingAlertSummaryDeferred = true;
-                  return false;
-                }
                 commitBankingAlertHash();
-                applyBankingAlertSummaryPayload(summary, nextHash);
+                if (count > 0 && summaryAlerts.length < 1) {
+                  applyBankingAlertSummaryPayload({
+                    ...summary,
+                    unacknowledged_count: count,
+                    banking_unacknowledged_alert_count: count,
+                    highest_label: summary.highest_label ?? summary.banking_highest_alert_label ?? json.banking_highest_alert_label ?? null,
+                    banking_highest_alert_label: summary.banking_highest_alert_label ?? summary.highest_label ?? json.banking_highest_alert_label ?? null,
+                    highest_severity: summary.highest_severity ?? summary.banking_highest_alert_severity ?? json.banking_highest_alert_severity ?? null,
+                    banking_highest_alert_severity: summary.banking_highest_alert_severity ?? summary.highest_severity ?? json.banking_highest_alert_severity ?? null,
+                    banking_alert_summary_deferred: true,
+                    detailsDeferred: true,
+                    detailsLoading: true
+                  }, nextHash, {
+                    detailsDeferred: true,
+                    responseStartedBeforeAck: positiveResponseStartedBeforeAck,
+                    highestLabel: json.banking_highest_alert_label,
+                    highestSeverity: json.banking_highest_alert_severity
+                  });
+                  queueBankingAlertSummaryDetailRefresh('banking-alert-summary-empty');
+                  return true;
+                }
+                applyBankingAlertSummaryPayload(summary, nextHash, {
+                  responseStartedBeforeAck: positiveResponseStartedBeforeAck
+                });
                 hb._bankingAlertSummaryDeferred = false;
+                hb._bankingAlertSummaryDetailPending = false;
                 return true;
               }
 
-              if (changed || json.banking_alert_summary_deferred === true) {
-                hb._bankingAlertSummaryDeferred = true;
-                return false;
+              commitBankingAlertHash();
+              const scalarSummary = {
+                ok: true,
+                alerts: [],
+                banking_alerts: [],
+                unacknowledged_count: count,
+                banking_unacknowledged_alert_count: count,
+                highest_label: json.banking_highest_alert_label ?? json.highest_label ?? null,
+                banking_highest_alert_label: json.banking_highest_alert_label ?? json.highest_label ?? null,
+                highest_severity: json.banking_highest_alert_severity ?? json.highest_severity ?? null,
+                banking_highest_alert_severity: json.banking_highest_alert_severity ?? json.highest_severity ?? null,
+                banking_alert_hash: nextHash,
+                banking_alert_summary_signature: nextHash,
+                banking_alert_summary_deferred: true,
+                detailsDeferred: true,
+                detailsLoading: true
+              };
+              applyBankingAlertSummaryPayload(scalarSummary, nextHash, {
+                detailsDeferred: true,
+                responseStartedBeforeAck: positiveResponseStartedBeforeAck,
+                highestLabel: json.banking_highest_alert_label,
+                highestSeverity: json.banking_highest_alert_severity
+              });
+              if (!requestedBankingAlertDetailRefresh || json.banking_alert_summary_deferred === true || changed || !nextHash || nextHash !== previousHash) {
+                queueBankingAlertSummaryDetailRefresh('banking-alert-summary-deferred');
               }
-
-              return false;
+              return true;
             } catch {
               return false;
             }
@@ -228910,6 +230320,9 @@ async function bootstrapApp(){
   renderTools();
   await renderAll();
 }
+
+
+
 // Initialize
 initAuthUI();
 
