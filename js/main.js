@@ -102146,6 +102146,7 @@ async function fetchBulkProcessDataset(filters, options = {}) {
   }
 }
 
+
 async function openBulkAuthoriseWorkbench() {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-AUTH][OPEN]');
   GC('openBulkAuthoriseWorkbench');
@@ -103196,12 +103197,107 @@ async function openBulkAuthoriseWorkbench() {
     __bulkAuthoriseRecordIdentity: getBulkAuthoriseRecordIdentityFromState(state)
   };
 
+  const scheduleRenderTabPostRenderBindings = (reason = 'render-tab', scheduleOptions = {}) => {
+    const scheduleCfg = (scheduleOptions && typeof scheduleOptions === 'object') ? scheduleOptions : {};
+    if (scheduleCfg.managedByWorkbench === true) return false;
+    if (typeof state.__runPostRenderBindings !== 'function') return false;
+    const token = (Number(state.__bulk_authorise_render_tab_bind_token || 0) || 0) + 1;
+    state.__bulk_authorise_render_tab_bind_token = token;
+
+    const run = async () => {
+      if ((Number(state.__bulk_authorise_render_tab_bind_token || 0) || 0) !== token) return false;
+      const frame = getWorkbenchFrame();
+      const modalCtxOwnsState = !!(window.modalCtx && window.modalCtx.bulkAuthoriseState === state);
+      const frameOwnsState = !!(frame && frame._ctxRef && frame._ctxRef.bulkAuthoriseState === state);
+      if (!modalCtxOwnsState && !frameOwnsState) return false;
+      if (frame && frame.__bulkAuthorisePostRenderBindingsManagedByWorkbench === true) return false;
+      const workbenchRootEl = document.getElementById('bulkAuthoriseWorkbenchRoot');
+      if (!workbenchRootEl) return false;
+
+      const renderSignature = trimStr(
+        state.__bulk_authorise_active_render_signature ||
+        (state.active_row ? getBulkAuthoriseRenderSignatureFromRow(state.active_row) : '')
+      );
+      const backendRowSignature = trimStr(
+        state.__bulk_authorise_active_backend_row_signature ||
+        (state.active_row ? getBulkAuthoriseBackendSignatureFromRow(state.active_row, state.active_context || state.active_ctx || null) : '')
+      );
+      const recordIdentity = trimStr(
+        state.__bulkAuthoriseRecordIdentity ||
+        ((typeof getBulkAuthoriseRecordIdentityFromState === 'function') ? getBulkAuthoriseRecordIdentityFromState(state) : '') ||
+        state.active_row_key ||
+        state.active_row?.row_key ||
+        state.active_row?.timesheet_id ||
+        state.active_row?.contract_week_id ||
+        ''
+      );
+      const activeRowKey = trimStr(state.active_row_key || state.active_row?.row_key || '');
+      const actionRootEl = document.getElementById('bulkAuthoriseActionRowRoot');
+      const actionButtonEl = document.getElementById('bulkAuthActionRowUnauthoriseBtn') || document.getElementById('bulkAuthActionRowAuthoriseBtn');
+      const hasActionDom = !!(actionRootEl || actionButtonEl);
+      const shouldForceActionRebind = !!(state.__bulk_authorise_dataset_ready === true && activeRowKey && hasActionDom);
+
+      try {
+        const result = state.__runPostRenderBindings({
+          reason: `[TS][BULK-AUTH][${trimStr(reason || 'render-tab')}][POST-DOM]`,
+          renderSeq: Number(state.__bulk_authorise_render_seq || 0) || 0,
+          rowSignature: renderSignature,
+          renderSignature,
+          backendRowSignature,
+          recordIdentity,
+          allowRowDependent: true,
+          bindStableControls: true,
+          binderOnly: false,
+          forceActionRebind: shouldForceActionRebind,
+          forceRowDependentRebind: shouldForceActionRebind
+        });
+        if (result && typeof result.then === 'function') await result;
+        if (window.__LOG_MODAL === true) {
+          console.log('[TS][BULK-AUTH][LIFECYCLE] renderTab post-DOM binder pass complete', {
+            reason,
+            renderSeq: Number(state.__bulk_authorise_render_seq || 0) || 0,
+            activeRowKey,
+            renderSignature,
+            backendRowSignature,
+            recordIdentity,
+            forceActionRebind: shouldForceActionRebind,
+            hasActionDom
+          });
+        }
+        return true;
+      } catch (err) {
+        console.warn('[TS][BULK-AUTH][OPEN] renderTab post-DOM binder failed', err);
+        return false;
+      }
+    };
+
+    const schedule = () => {
+      const invoke = () => { void run(); };
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(invoke));
+      } else {
+        setTimeout(invoke, 0);
+      }
+    };
+
+    try {
+      Promise.resolve().then(schedule);
+    } catch {
+      schedule();
+    }
+    return true;
+  };
+
   const renderTab = (key) => {
     if (String(key || '') !== 'main') return '';
+    const frame = getWorkbenchFrame();
+    const managedByWorkbench = !!(frame && frame.__bulkAuthorisePostRenderBindingsManagedByWorkbench === true);
     if (typeof renderBulkAuthoriseShell !== 'function') {
       return '<div class="tabc"><div class="card"><div class="mini">Bulk Authorise shell renderer is not available.</div></div></div>';
     }
-    return renderBulkAuthoriseShell(state);
+    const html = renderBulkAuthoriseShell(state);
+    scheduleRenderTabPostRenderBindings('render-tab', { managedByWorkbench });
+    return html;
   };
 
   showModal(
@@ -103291,7 +103387,6 @@ async function openBulkAuthoriseWorkbench() {
     return state;
   }
 }
-
 
 
 function buildBulkAuthoriseDatasetRequestFilters(state) {
