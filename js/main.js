@@ -22333,7 +22333,6 @@ function renderBankingNavAlertPopover(attentionState) {
 }
 
 
-
 function attachBankingNavAlertPopoverHandlers() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
   if (window.__bankingNavAlertPopoverHandlersAttached === true) return;
@@ -22427,6 +22426,87 @@ function attachBankingNavAlertPopoverHandlers() {
       }
     } catch {}
   };
+  const showPopoverFriendlyError = async (error, context = {}) => {
+    try {
+      if (error && (error.__bankingAlreadyReported === true || error.__bankingFriendlyReported === true)) return;
+    } catch {}
+
+    const action = String(context.action || 'banking_nav_alert_popover').trim() || 'banking_nav_alert_popover';
+    const fallbackTitle = String(context.title || 'Banking action failed').trim() || 'Banking action failed';
+    const fallbackMessage = String(context.message || 'CloudTMS could not complete this Banking action. Please refresh and try again.').trim() || 'CloudTMS could not complete this Banking action. Please refresh and try again.';
+    let friendly = null;
+
+    try {
+      if (typeof bankingNormalizeApiError === 'function') {
+        friendly = bankingNormalizeApiError(error, {
+          action,
+          userInitiated: true,
+          silent: true,
+          show_modal: true,
+          title_override: fallbackTitle,
+          message_override: fallbackMessage,
+          allow_custom_friendly_message: true
+        });
+      }
+    } catch {}
+
+    try {
+      if ((!friendly || typeof friendly !== 'object') && typeof bankingHandleApiError === 'function') {
+        friendly = bankingHandleApiError(error, {
+          action,
+          userInitiated: true,
+          silent: true,
+          show_modal: false,
+          title_override: fallbackTitle,
+          message_override: fallbackMessage,
+          allow_custom_friendly_message: true
+        });
+      }
+    } catch {}
+
+    const preferContextMessage = action === 'banking_nav_alert_open_batch'
+      || action === 'acknowledge_alert'
+      || action === 'acknowledge_many'
+      || action === 'acknowledge_all'
+      || context.prefer_context_message === true
+      || context.preferContextMessage === true;
+    const title = preferContextMessage
+      ? fallbackTitle
+      : (String(friendly?.title || friendly?.friendly_error?.title || fallbackTitle).trim() || fallbackTitle);
+    const message = preferContextMessage
+      ? fallbackMessage
+      : (String(friendly?.user_message || friendly?.message || friendly?.friendly_error?.message || fallbackMessage).trim() || fallbackMessage);
+    const confirmLabel = String(friendly?.confirm_label || friendly?.friendly_error?.confirm_label || 'OK').trim() || 'OK';
+
+    try {
+      if (typeof openUiConfirmModal === 'function') {
+        await openUiConfirmModal({
+          kind: 'banking-nav-alert-popover-error',
+          title,
+          message,
+          confirm_label: confirmLabel,
+          hide_cancel: true,
+          confirm_class: 'btn btn-primary'
+        });
+        try {
+          if (error && typeof error === 'object') {
+            error.__bankingAlreadyReported = true;
+            error.__bankingFriendlyReported = true;
+          }
+        } catch {}
+        return;
+      }
+    } catch {}
+
+    try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
+    try {
+      if (error && typeof error === 'object') {
+        error.__bankingAlreadyReported = true;
+        error.__bankingFriendlyReported = true;
+      }
+    } catch {}
+  };
+
 
   const refreshOpenPopover = (attentionStateOverride = null) => {
     const existing = queryPopover();
@@ -22527,11 +22607,19 @@ function attachBankingNavAlertPopoverHandlers() {
         return;
       }
     } catch (error) {
-      try { if (typeof window.__toast === 'function') window.__toast(String(error?.message || error || 'Unable to open batch.')); } catch {}
+      await showPopoverFriendlyError(error, {
+        action: 'banking_nav_alert_open_batch',
+        title: 'Unable to open payment batch',
+        message: 'Unable to open this payment batch. Please refresh Banking and try again.'
+      });
       return;
     }
 
-    try { if (typeof window.__toast === 'function') window.__toast('Open batch: child modal not available yet.'); } catch {}
+    await showPopoverFriendlyError(null, {
+      action: 'banking_nav_alert_open_batch',
+      title: 'Unable to open payment batch',
+      message: 'Unable to open this payment batch. Please refresh Banking and try again.'
+    });
   };
 
   const onClick = async (event) => {
@@ -22597,7 +22685,11 @@ function attachBankingNavAlertPopoverHandlers() {
         });
         refreshOpenPopover(result?.__banking_alert_attention_state || window.__bankingNavAttentionState || result?.alert_summary || result?.remaining_alert_summary || null);
       } catch (error) {
-        try { if (typeof window.__toast === 'function') window.__toast(String(error?.message || error || 'Unable to clear alert.')); } catch {}
+        await showPopoverFriendlyError(error, {
+          action: 'acknowledge_alert',
+          title: 'Alert could not be cleared',
+          message: 'CloudTMS could not clear this Banking alert. Refresh Banking and try again.'
+        });
         setPopoverClearingState(false);
       }
       return;
@@ -22611,7 +22703,11 @@ function attachBankingNavAlertPopoverHandlers() {
         const result = await bankingAcknowledgeAlerts({ clearAll: true });
         refreshOpenPopover(result?.__banking_alert_attention_state || window.__bankingNavAttentionState || result?.alert_summary || result?.remaining_alert_summary || null);
       } catch (error) {
-        try { if (typeof window.__toast === 'function') window.__toast(String(error?.message || error || 'Unable to clear alerts.')); } catch {}
+        await showPopoverFriendlyError(error, {
+          action: 'acknowledge_all',
+          title: 'Alerts could not be cleared',
+          message: 'CloudTMS could not clear these Banking alerts. Refresh Banking and try again.'
+        });
         setPopoverClearingState(false);
       }
     }
@@ -22704,6 +22800,15 @@ function applyAlertSummaryToState(responsePayload) {
     filteredAlerts.push(alert);
   }
 
+  const alertHash = toText(
+    payload.banking_alert_hash ||
+    payload.banking_alert_summary_signature ||
+    summary?.banking_alert_hash ||
+    summary?.banking_alert_summary_signature ||
+    acknowledgement.banking_alert_hash ||
+    acknowledgement.banking_alert_summary_signature ||
+    ''
+  );
   const countRaw = summary?.unacknowledged_count
     ?? summary?.banking_unacknowledged_alert_count
     ?? acknowledgement.unacknowledged_count
@@ -22712,6 +22817,35 @@ function applyAlertSummaryToState(responsePayload) {
     ?? payload.banking_unacknowledged_alert_count
     ?? filteredAlerts.length;
   const rawCount = toCount(countRaw, Array.isArray(responseAlerts) ? responseAlerts.length : filteredAlerts.length);
+  const usableAlertRows = filteredAlerts.filter((alert) => !!getFingerprint(alert));
+  const positiveWithoutUsableAlertRows = rawCount > 0 && usableAlertRows.length < 1;
+  if (positiveWithoutUsableAlertRows) {
+    try {
+      const currentState = (typeof window !== 'undefined' && window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object')
+        ? window.__bankingNavAttentionState
+        : null;
+      if (currentState) return currentState;
+    } catch {}
+    return {
+      requiresAttention: false,
+      count: 0,
+      unacknowledgedCount: 0,
+      unacknowledged_count: 0,
+      banking_unacknowledged_alert_count: 0,
+      alerts: [],
+      banking_alerts: [],
+      highestPriorityLabel: null,
+      highest_label: null,
+      banking_highest_alert_label: null,
+      highestSeverity: null,
+      highest_severity: null,
+      banking_highest_alert_severity: null,
+      alertSummary: null,
+      banking_alert_summary: null,
+      banking_alert_hash: '',
+      title: 'No current unacknowledged Banking alerts'
+    };
+  }
   const count = Math.max(0, rawCount - removedSuppressedCount);
   const alerts = count > 0 ? filteredAlerts : [];
   const highestLabelRaw = summary?.highest_label
@@ -22733,15 +22867,6 @@ function applyAlertSummaryToState(responsePayload) {
     ?? null;
   const highestLabel = count > 0 && highestLabelRaw ? String(highestLabelRaw) : null;
   const highestSeverity = count > 0 && highestSeverityRaw ? String(highestSeverityRaw) : null;
-  const alertHash = toText(
-    payload.banking_alert_hash ||
-    payload.banking_alert_summary_signature ||
-    summary?.banking_alert_hash ||
-    summary?.banking_alert_summary_signature ||
-    acknowledgement.banking_alert_hash ||
-    acknowledgement.banking_alert_summary_signature ||
-    ''
-  );
   const summaryToStore = summary
     ? {
         ...deepClone(summary),
@@ -22769,6 +22894,20 @@ function applyAlertSummaryToState(responsePayload) {
         banking_alert_hash: alertHash,
         banking_alert_summary_signature: alertHash
       };
+
+  if (typeof window !== 'undefined' && alertHash) {
+    try {
+      window.__bankingAlertHash = alertHash;
+      window.__bankingAlertSummarySignature = alertHash;
+      const hb = (window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object')
+        ? window.__changesHeartbeat
+        : ((window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') ? window.__changeHeartbeat : null);
+      if (hb) {
+        hb.bankingAlertHash = alertHash;
+        hb.bankingAlertSignature = alertHash;
+      }
+    } catch {}
+  }
 
   if (count === 0 && alertHash) {
     try { window.__bankingLocallyAcknowledgedFingerprints = Object.create(null); } catch {}
@@ -22855,6 +22994,7 @@ function applyAlertSummaryToState(responsePayload) {
 
   return attentionState;
 }
+
 
 async function bankingAcknowledgeAlerts(input = {}) {
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -25560,14 +25700,39 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
 
     return out;
   };
-  const countEligibleCandidatesForScope = (scopeCandidates, includeCandidateIds = []) => {
+  const countEligibleCandidatesForScope = (scopeCandidates, includeCandidateIds = [], selectedPreviewRowIds = []) => {
     const arr = Array.isArray(scopeCandidates) ? scopeCandidates : [];
     const includeSet = Array.isArray(includeCandidateIds) && includeCandidateIds.length
       ? new Set(includeCandidateIds.map((x) => String(x || '').trim()).filter(Boolean))
       : null;
+    const selectedRowIdSet = new Set(uniqTrimmed(selectedPreviewRowIds));
 
     const seen = new Set();
     let eligible = 0;
+
+    const rowIdOf = (rowLike) => trimStr(rowLike?.preview_row_id || rowLike?.row_id || rowLike?.line_id || rowLike?.id || '');
+    const candidateRows = (candidateLike) => {
+      const candidate = isPlainObject(candidateLike) ? candidateLike : null;
+      if (!candidate) return [];
+
+      const rows = [];
+      if (isDraftCreateEligiblePreviewRow(candidate)) rows.push(candidate);
+
+      for (const sourceRows of [
+        candidate.itemisation,
+        candidate.canonical_preview_lines,
+        candidate.preview_lines,
+        candidate.preview_rows,
+        candidate.ready_preview_lines,
+        candidate.lines
+      ]) {
+        for (const row of asArray(sourceRows)) {
+          if (isPlainObject(row)) rows.push(row);
+        }
+      }
+
+      return rows;
+    };
 
     for (const c of arr) {
       if (!c || typeof c !== 'object') continue;
@@ -25576,15 +25741,14 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
       if (seen.has(candId)) continue;
       if (includeSet && !includeSet.has(candId)) continue;
 
-      const isReadyForDraft = (c.is_ready_for_draft === true);
-      if (!isReadyForDraft) continue;
+      const hasSelectedReadyLine = candidateRows(c).some((row) => {
+        if (!isDraftCreateEligiblePreviewRow(row)) return false;
+        const rowId = rowIdOf(row);
+        if (!rowId) return false;
+        return selectedRowIdSet.size <= 0 || selectedRowIdSet.has(rowId);
+      });
 
-      const hasAnyDelta = (c.has_any_delta === true);
-      const safeCaseCount = Number(c.safe_case_count || 0);
-      const financeSafeDueTotal = Number(c.finance_safe_due_total_ex_vat || 0);
-      const itemisation = Array.isArray(c.itemisation) ? c.itemisation : [];
-
-      if (!hasAnyDelta && safeCaseCount <= 0 && financeSafeDueTotal === 0 && itemisation.length === 0) continue;
+      if (!hasSelectedReadyLine) continue;
 
       seen.add(candId);
       eligible += 1;
@@ -26298,7 +26462,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
 
   const countEligibleCandidatesForPreview = (scopeCandidates) => {
     const includeCandidateIds = Array.isArray(wiz.decisions.candidate_ids) ? wiz.decisions.candidate_ids : [];
-    return countEligibleCandidatesForScope(scopeCandidates, includeCandidateIds);
+    return countEligibleCandidatesForScope(scopeCandidates, includeCandidateIds, selectedPreviewRowIdsForServer);
   };
 
   const explicitPayChannelScopeRaw = trimStr(
@@ -26754,6 +26918,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
 
 
 
@@ -35130,6 +35295,22 @@ function deriveBankingAttentionStateFromBatchList(input) {
     return 100 + severityRank(alert?.severity || alert?.banking_alert_severity);
   };
 
+  const getRecentLocalAckAt = () => {
+    try {
+      return Math.max(
+        Number(window.__bankingLastAlertAckMutationAtMs || 0) || 0,
+        Number((window.__changesHeartbeat && window.__changesHeartbeat._lastBankingAckMutationAtMs) || 0) || 0,
+        Number((window.__changeHeartbeat && window.__changeHeartbeat._lastBankingAckMutationAtMs) || 0) || 0
+      );
+    } catch {
+      return 0;
+    }
+  };
+  const hasRecentLocalAck = () => {
+    const t = getRecentLocalAckAt();
+    return t > 0 && Date.now() - t < (2 * 60 * 1000);
+  };
+
   const normaliseAlert = (alert, fallbackRow = null, fallbackIndex = 0) => {
     if (!alert || typeof alert !== 'object') return null;
     const kind = upper(alert.alert_kind || alert.kind || alert.issue_kind || alert.banking_alert_kind || fallbackRow?.banking_alert_kind);
@@ -35142,6 +35323,7 @@ function deriveBankingAttentionStateFromBatchList(input) {
     const active = alert.is_active === false || alert.active === false ? false : true;
     if (!active || acknowledged) return null;
     if (fingerprint && isLocallySuppressed(fingerprint)) return null;
+    if (!fingerprint && hasRecentLocalAck()) return null;
 
     const required = firstNonBlank(alert.required_gbp, alert.blocked_funds_required_gbp, alert.payload_json?.required_gbp, fallbackRow?.blocked_funds_required_gbp);
     const available = firstNonBlank(alert.available_gbp, alert.blocked_funds_available_gbp, alert.payload_json?.available_gbp, fallbackRow?.blocked_funds_available_gbp);
@@ -35171,6 +35353,45 @@ function deriveBankingAttentionStateFromBatchList(input) {
     };
   };
 
+  const stateFromExistingAttention = (state) => {
+    if (!isObj(state)) return null;
+    const count = Math.max(0, Math.trunc(Number(state.count ?? state.unacknowledgedCount ?? state.unacknowledged_count ?? state.banking_unacknowledged_alert_count ?? 0) || 0));
+    const alerts = Array.isArray(state.alerts) ? state.alerts : (Array.isArray(state.banking_alerts) ? state.banking_alerts : []);
+    if (count > 0 && alerts.length < 1) return { ...emptyState };
+    return {
+      ...state,
+      requiresAttention: count > 0,
+      count,
+      level: count > 0 ? firstNonBlank(state.level, state.highestSeverity, state.highest_severity, state.banking_highest_alert_severity, 'critical') : '',
+      highestPriorityLabel: count > 0 ? firstNonBlank(state.highestPriorityLabel, state.highest_label, state.banking_highest_alert_label, alerts[0]?.label) : '',
+      title: count > 0 ? firstNonBlank(state.title, `Banking issue: ${firstNonBlank(state.highestPriorityLabel, state.highest_label, state.banking_highest_alert_label, alerts[0]?.label, 'Action needed')}`) : '',
+      alerts: count > 0 ? alerts : [],
+      batchIds: Array.isArray(state.batchIds) ? state.batchIds : []
+    };
+  };
+
+  if (!hasBackendSummary && typeof window !== 'undefined') {
+    const globalSummary = isObj(window.__bankingAlertSummary) ? window.__bankingAlertSummary : null;
+    const globalState = isObj(window.__bankingNavAttentionState) ? window.__bankingNavAttentionState : null;
+    const globalHash = text(window.__bankingAlertHash || window.__bankingAlertSummarySignature || globalSummary?.banking_alert_hash || globalSummary?.banking_alert_summary_signature || globalState?.banking_alert_hash);
+    const hasAuthoritativeGlobal = !!(globalHash || globalSummary || globalState?.alertSummary || globalState?.banking_alert_summary || Object.prototype.hasOwnProperty.call(globalState || {}, 'banking_unacknowledged_alert_count') || Object.prototype.hasOwnProperty.call(globalState || {}, 'count'));
+    if (hasAuthoritativeGlobal) {
+      const stateFromGlobal = stateFromExistingAttention(globalState);
+      if (stateFromGlobal) return stateFromGlobal;
+      if (globalSummary) {
+        return deriveBankingAttentionStateFromBatchList({
+          banking_alert_summary: globalSummary,
+          banking_alerts: Array.isArray(globalSummary.alerts) ? globalSummary.alerts : [],
+          banking_unacknowledged_alert_count: globalSummary.banking_unacknowledged_alert_count ?? globalSummary.unacknowledged_count ?? 0,
+          banking_highest_alert_label: globalSummary.banking_highest_alert_label ?? globalSummary.highest_label ?? '',
+          banking_highest_alert_severity: globalSummary.banking_highest_alert_severity ?? globalSummary.highest_severity ?? '',
+          banking_alert_hash: globalHash
+        });
+      }
+      return { ...emptyState, banking_alert_hash: globalHash };
+    }
+  }
+
   const backendAlerts = [];
   directAlerts.forEach((alert, index) => {
     const normalised = normaliseAlert(alert, null, index);
@@ -35183,6 +35404,9 @@ function deriveBankingAttentionStateFromBatchList(input) {
       ? Math.max(0, Math.trunc(Number(countCandidate)))
       : backendAlerts.length;
     const removedByAcknowledgementOrSuppression = Math.max(0, directAlerts.length - backendAlerts.length);
+    if (rawCount > 0 && backendAlerts.length < 1) {
+      return { ...emptyState, banking_alert_hash: firstNonBlank(source.banking_alert_hash, source.banking_alert_summary?.banking_alert_hash, source.banking_alert_summary?.banking_alert_summary_signature) };
+    }
     const count = Math.max(0, rawCount - removedByAcknowledgementOrSuppression);
     const sortedAlerts = count > 0 ? backendAlerts.slice().sort((a, b) => (a.priority || 999) - (b.priority || 999)) : [];
     const top = sortedAlerts[0] || null;
@@ -35621,6 +35845,21 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'BATCH_STALE',
     'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
     'BLOCKED_FUNDS',
+    'NO_ACTIVE_PAYMENTS_IN_BATCH',
+    'EXECUTE_NOT_ALLOWED',
+    'EXECUTION_ALREADY_SUBMITTED',
+    'STANDARD_BANK_NOT_AVAILABLE_FOR_CSV_PROVIDER',
+    'EXTERNAL_SUBMISSION_ALREADY_RECORDED',
+    'CSV_SETTLEMENT_SCOPE_MUST_BE_ALL',
+    'CSV_EXPORT_EVIDENCE_REQUIRED',
+    'CSV_UPLOADED_CONFIRMATION_REQUIRED',
+    'CSV_BANK_CONFIRM_REF_REQUIRED',
+    'EXTERNAL_SETTLEMENT_COMMENT_REQUIRED',
+    'PREVIEW_GATE_NOT_SATISFIED',
+    'REMITTANCE_QUEUE_DISPATCH_FAILED',
+    'SETTLEMENT_FINALISATION_FAILED',
+    'STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
     'PAYE_NOT_READY',
     'PAYE_NET_MISSING',
     'PAYE_NET_INVALID',
@@ -35658,6 +35897,10 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
     if (code === 'PAY_EXECUTE_BANK_FAILED') return 'BANKING_EXECUTE_PAYMENT_FAILED';
     if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'CSV_UPLOADED_CONFIRMED_MUST_BE_TRUE' || code === 'CSV_UPLOADED_CONFIRMATION_MISSING') return 'CSV_UPLOADED_CONFIRMATION_REQUIRED';
+    if (code === 'CSV_BANK_CONFIRM_REF_IS_REQUIRED' || code === 'CSV_BANK_CONFIRMATION_REFERENCE_REQUIRED') return 'CSV_BANK_CONFIRM_REF_REQUIRED';
+    if (code === 'EXTERNAL_SETTLEMENT_COMMENT_IS_REQUIRED') return 'EXTERNAL_SETTLEMENT_COMMENT_REQUIRED';
+    if (code === 'HAS_HARD_BLOCKERS') return 'PREVIEW_GATE_NOT_SATISFIED';
     if (code === 'BANKING_ALERT_ACKNOWLEDGEMENT_ALREADY_EXISTS') return 'ACKNOWLEDGEMENT_ALREADY_EXISTS';
     if (code === 'ACKNOWLEDGEMENT_ALREADY_ACKNOWLEDGED') return 'ACKNOWLEDGEMENT_ALREADY_EXISTS';
     if (code === 'ERROR' || code === 'REQUEST_FAILED' || code === 'RPC_ERROR' || code === 'HTTP_ERROR' || code === 'FETCH_ERROR') return 'BANKING_ACTION_FAILED';
@@ -35713,6 +35956,22 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       if (knownCode === 'BLOCKED_FUNDS') continue;
       if (containsCodeToken(rawUpper, knownCode)) return canonicaliseCode(knownCode);
     }
+
+    if (rawUpper.includes('NO_ACTIVE_PAYMENTS_IN_BATCH') || rawUpper.includes('NO ACTIVE PAYMENTS')) return 'NO_ACTIVE_PAYMENTS_IN_BATCH';
+    if (rawUpper.includes('EXECUTE_NOT_ALLOWED') || rawUpper.includes('BATCH IS NOT EXECUTABLE')) return 'EXECUTE_NOT_ALLOWED';
+    if (rawUpper.includes('EXECUTION_ALREADY_SUBMITTED') || rawUpper.includes('ALREADY CROSSED THE NATIVE EXECUTION SUBMISSION BOUNDARY')) return 'EXECUTION_ALREADY_SUBMITTED';
+    if (rawUpper.includes('STANDARD_BANK_NOT_AVAILABLE_FOR_CSV_PROVIDER') || rawUpper.includes('STANDARD BANK EXECUTION IS NOT AVAILABLE FOR CSV')) return 'STANDARD_BANK_NOT_AVAILABLE_FOR_CSV_PROVIDER';
+    if (rawUpper.includes('EXTERNAL_SUBMISSION_ALREADY_RECORDED')) return 'EXTERNAL_SUBMISSION_ALREADY_RECORDED';
+    if (rawUpper.includes('CSV_SETTLEMENT_SCOPE_MUST_BE_ALL')) return 'CSV_SETTLEMENT_SCOPE_MUST_BE_ALL';
+    if (rawUpper.includes('CSV_EXPORT_EVIDENCE_REQUIRED')) return 'CSV_EXPORT_EVIDENCE_REQUIRED';
+    if (rawUpper.includes('CSV_UPLOADED_CONFIRMED MUST BE TRUE') || rawUpper.includes('CSV_UPLOADED_CONFIRMATION_REQUIRED')) return 'CSV_UPLOADED_CONFIRMATION_REQUIRED';
+    if (rawUpper.includes('CSV_BANK_CONFIRM_REF IS REQUIRED') || rawUpper.includes('CSV_BANK_CONFIRM_REF_REQUIRED')) return 'CSV_BANK_CONFIRM_REF_REQUIRED';
+    if (rawUpper.includes('EXTERNAL_SETTLEMENT_COMMENT IS REQUIRED') || rawUpper.includes('EXTERNAL_SETTLEMENT_COMMENT_REQUIRED')) return 'EXTERNAL_SETTLEMENT_COMMENT_REQUIRED';
+    if (rawUpper.includes('PREVIEW_GATE_NOT_SATISFIED') || rawUpper.includes('HAS HARD BLOCKERS')) return 'PREVIEW_GATE_NOT_SATISFIED';
+    if (rawUpper.includes('REMITTANCE_QUEUE_DISPATCH_FAILED') || rawUpper.includes('REMITTANCE QUEUE DISPATCH FAILED')) return 'REMITTANCE_QUEUE_DISPATCH_FAILED';
+    if (rawUpper.includes('SETTLEMENT_FINALISATION_FAILED') || rawUpper.includes('SETTLEMENT FINALISATION FAILED')) return 'SETTLEMENT_FINALISATION_FAILED';
+    if (rawUpper.includes('STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED')) return 'STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED';
+    if (rawUpper.includes('STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') || rawUpper.includes('FUNDING ACCOUNT IS REQUIRED')) return 'FUNDING_ACCOUNT_MISSING';
 
     if (rawUpper.includes('23505') && rawUpper.includes('UQ_BANKING_ALERT_ACK_USER_FINGERPRINT_SCOPE')) return 'ACKNOWLEDGEMENT_ALREADY_EXISTS';
     if (rawUpper.includes('DUPLICATE KEY') && rawUpper.includes('UQ_BANKING_ALERT_ACK_USER_FINGERPRINT_SCOPE')) return 'ACKNOWLEDGEMENT_ALREADY_EXISTS';
@@ -35786,6 +36045,147 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       submitted_to_bank: false,
       status: 'BLOCKED_FUNDS',
       post_execution_status: 'BLOCKED_FUNDS'
+    },
+
+    NO_ACTIVE_PAYMENTS_IN_BATCH: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'No active payments in this batch',
+      message: 'This draft batch has no active payments. Delete the draft or create a new batch.',
+      user_action: 'REVIEW_BATCH',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    EXECUTE_NOT_ALLOWED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment cannot be executed',
+      message: 'This payment batch is not currently executable. Refresh the batch, review its current status, then try again if it is still eligible.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    EXECUTION_ALREADY_SUBMITTED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment already submitted',
+      message: 'This payment has already crossed the bank submission boundary. Refresh the batch and review the latest status before taking further action.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    STANDARD_BANK_NOT_AVAILABLE_FOR_CSV_PROVIDER: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Standard Bank execution is not available',
+      message: 'Standard Bank execution is not available for CSV rail batches. Use CSV settlement or Settle Batch Externally.',
+      user_action: 'USE_AVAILABLE_BANKING_ACTION',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    EXTERNAL_SUBMISSION_ALREADY_RECORDED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'External submission already recorded',
+      message: 'External submission evidence has already been recorded for this batch. Refresh the batch and review the current settlement status.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    CSV_SETTLEMENT_SCOPE_MUST_BE_ALL: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'CSV settlement scope is invalid',
+      message: 'CSV settlement must be completed for the whole batch, not an individual pay channel.',
+      user_action: 'USE_AVAILABLE_BANKING_ACTION',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    CSV_EXPORT_EVIDENCE_REQUIRED: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'CSV export required',
+      message: 'Generate the CloudTMS banking CSV for this batch before confirming CSV settlement.',
+      user_action: 'GENERATE_CSV_EXPORT',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    CSV_UPLOADED_CONFIRMATION_REQUIRED: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'CSV upload confirmation required',
+      message: 'Confirm that the CSV has been uploaded or processed at the bank before completing CSV settlement.',
+      user_action: 'CONFIRM_CSV_UPLOAD',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    CSV_BANK_CONFIRM_REF_REQUIRED: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Bank confirmation reference required',
+      message: 'Enter the bank confirmation reference before completing CSV settlement.',
+      user_action: 'ENTER_BANK_REFERENCE',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    EXTERNAL_SETTLEMENT_COMMENT_REQUIRED: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'External settlement comment required',
+      message: 'Enter a comment explaining the external settlement before completing this action.',
+      user_action: 'ENTER_SETTLEMENT_COMMENT',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    PREVIEW_GATE_NOT_SATISFIED: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Payment batch has blockers',
+      message: 'This batch has blockers that must be resolved before the payment can continue. Refresh the batch and review the Payment Issues or Blocked for Pay items.',
+      user_action: 'REVIEW_BLOCKERS',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    REMITTANCE_QUEUE_DISPATCH_FAILED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Remittance dispatch failed',
+      message: 'The payment action completed, but CloudTMS could not dispatch the remittance queue. Refresh the batch and review remittance status before retrying.',
+      user_action: 'REVIEW_REMITTANCES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    SETTLEMENT_FINALISATION_FAILED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Settlement could not be finalised',
+      message: 'CloudTMS could not finalise this settlement. Refresh the batch, review the latest details, then try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED: {
+      ok: false,
+      http_status: 409,
+      severity: 'critical',
+      title: 'Payment status needs review',
+      message: 'CloudTMS could not safely confirm the final payment state. No successful bank submission has been confirmed. Refresh the batch and review Payment Issues before trying again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
     },
     PAYE_NOT_READY: {
       ok: false,
@@ -36616,13 +37016,39 @@ function refreshBankingNavAttentionFromCachedRows() {
     const hasRecentLocalAck = recentAckAt > 0 && Date.now() - recentAckAt < (2 * 60 * 1000);
     const globalState = (window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object') ? window.__bankingNavAttentionState : null;
     const globalSummary = (window.__bankingAlertSummary && typeof window.__bankingAlertSummary === 'object') ? window.__bankingAlertSummary : null;
-    const globalHash = String(window.__bankingAlertHash || window.__bankingAlertSummarySignature || '').trim();
-    const hasAuthoritativeGlobal = !!(globalHash || globalSummary || (globalState && (globalState.alertSummary || globalState.banking_alert_summary || Object.prototype.hasOwnProperty.call(globalState, 'banking_unacknowledged_alert_count') || Object.prototype.hasOwnProperty.call(globalState, 'count'))));
+    const globalHash = String(window.__bankingAlertHash || window.__bankingAlertSummarySignature || globalSummary?.banking_alert_hash || globalSummary?.banking_alert_summary_signature || globalState?.banking_alert_hash || '').trim();
+    const hasAuthoritativeGlobal = !!(
+      globalHash ||
+      globalSummary ||
+      (globalState && (
+        globalState.alertSummary ||
+        globalState.banking_alert_summary ||
+        Object.prototype.hasOwnProperty.call(globalState, 'banking_unacknowledged_alert_count') ||
+        Object.prototype.hasOwnProperty.call(globalState, 'unacknowledged_count') ||
+        Object.prototype.hasOwnProperty.call(globalState, 'count')
+      ))
+    );
 
-    if (hasAuthoritativeGlobal && globalState && (hasRecentLocalAck || globalHash || globalSummary)) {
-      updateBankingNavAttentionState(globalState);
+    if (hasAuthoritativeGlobal) {
+      if (globalState) {
+        updateBankingNavAttentionState(globalState);
+        return;
+      }
+      if (globalSummary) {
+        updateBankingNavAttentionState(deriveBankingAttentionStateFromBatchList({
+          banking_alert_summary: globalSummary,
+          banking_alerts: Array.isArray(globalSummary.alerts) ? globalSummary.alerts : [],
+          banking_unacknowledged_alert_count: globalSummary.banking_unacknowledged_alert_count ?? globalSummary.unacknowledged_count ?? 0,
+          banking_highest_alert_label: globalSummary.banking_highest_alert_label ?? globalSummary.highest_label ?? '',
+          banking_highest_alert_severity: globalSummary.banking_highest_alert_severity ?? globalSummary.highest_severity ?? '',
+          banking_alert_hash: globalHash
+        }));
+        return;
+      }
       return;
     }
+
+    if (hasRecentLocalAck) return;
 
     const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
     const pay = (mc && mc.banking && mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : null;
@@ -36639,12 +37065,6 @@ function refreshBankingNavAttentionFromCachedRows() {
     );
 
     const rows = Array.isArray(list.items) ? list.items : [];
-
-    if (!hasBackendSummary && hasAuthoritativeGlobal && globalState) {
-      updateBankingNavAttentionState(globalState);
-      return;
-    }
-
     const attentionInput = hasBackendSummary
       ? {
           rows,
@@ -41245,6 +41665,7 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
 
 
 
+
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -41397,8 +41818,8 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       } else if (typeof existingChild.__rerenderChild === 'function') {
         await existingChild.__rerenderChild();
       }
-    } catch (e) {
-      try { if (typeof window.__toast === 'function') window.__toast(String(e?.message || e || 'Unable to refresh batch.')); } catch {}
+    } catch {
+      try { if (typeof window.__toast === 'function') window.__toast('Unable to refresh this payment batch. Please refresh Banking and try again.'); } catch {}
     }
 
     return;
@@ -42030,6 +42451,33 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     try { if (typeof window.__toast === 'function') window.__toast(String(msg || '').trim()); } catch {}
   };
 
+  const looksTechnicalChildMessage = (value) => {
+    const text = String(value == null ? '' : value).trim();
+    if (!text) return false;
+    const upper = text.toUpperCase();
+    if (text.includes('{') || text.includes('}')) return true;
+    if (upper.includes('SQLSTATE') || upper.includes('SQL STATE')) return true;
+    if (upper.includes('RPC ') || upper.includes(' RPC') || upper.includes('RPC_')) return true;
+    if (upper.includes('PLPGSQL') || upper.includes('POSTGRES') || upper.includes('SUPABASE') || upper.includes('POSTGREST')) return true;
+    if (upper.includes('DUPLICATE KEY') || upper.includes('UNIQUE CONSTRAINT') || upper.includes('FOREIGN KEY')) return true;
+    if (upper.includes('CONSTRAINT') || upper.includes('STACK TRACE') || upper.includes('TRACEBACK')) return true;
+    if (upper.includes('PUBLIC.') || upper.includes('PAY_BATCHES') || upper.includes('PAY_BANK_TRANSFERS') || upper.includes('BANKING_ALERT_ACKNOWLEDGEMENTS')) return true;
+    if (upper.includes('UQ_') || upper.includes('IDX_') || upper.includes('_PKEY') || upper.includes('PG_')) return true;
+    if (upper.includes('VIOLATES') || upper.includes('RELATION "') || upper.includes('COLUMN "') || upper.includes('FUNCTION "')) return true;
+    if (/\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|POLICY|INDEX)\s+[\"']?[A-Z0-9_.-]+/.test(upper)) return true;
+    if (/\b[A-Z0-9_]+\([^)]*\)/.test(upper)) return true;
+    if (/\b(P[0-9A-Z]{4}|[0-9]{5})\b/.test(upper) && (upper.includes('ERROR') || upper.includes('FAILED'))) return true;
+    return false;
+  };
+
+  const pickSafeChildMessage = (values, fallback) => {
+    const list = Array.isArray(values) ? values : [values];
+    for (const value of list) {
+      const text = String(value == null ? '' : value).trim();
+      if (text && !looksTechnicalChildMessage(text)) return text;
+    }
+    return String(fallback || 'CloudTMS could not complete this Banking action. Please refresh and try again.').trim();
+  };
 
   const extractBlockedFundsRetryErrorPayload = (error) => {
     if (error && typeof error === 'object') {
@@ -42064,8 +42512,8 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     const envLabel = String(p.blocked_funds_env || p.batch_get?.blocked_funds_env || p.batch_get?.batch?.blocked_funds_env || p.batch_get?.rail_env_snapshot || p.batch_get?.batch?.rail_env_snapshot || '').trim();
     const accountRef = String(p.blocked_funds_account_ref || p.batch_get?.blocked_funds_account_ref || p.batch_get?.batch?.blocked_funds_account_ref || p.batch_get?.funding_account_ref || p.batch_get?.batch?.funding_account_ref || '').trim();
 
-    let title = String(friendly.title || '').trim();
-    let message = String(friendly.message || p.user_message || p.message || p.error || fallbackMessage || error?.message || 'Blocked-funds retry failed.').trim();
+    let title = pickSafeChildMessage([friendly.title], '');
+    let message = pickSafeChildMessage([friendly.message, p.user_message, p.message, p.error], fallbackMessage || 'Blocked-funds retry failed.');
 
     if (!title) {
       if (code === 'BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE' || code === 'BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED' || code === 'BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS') {
@@ -42839,11 +43287,8 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
           offset: (st && st.pay && st.pay.list) ? st.pay.list.offset : null
         });
       }
-    } catch (e) {
-      const msg = String(e?.message || e || '').trim();
-      if (msg) {
-        try { toast(`Batch list refresh failed: ${msg}`); } catch {}
-      }
+    } catch {
+      try { toast('Batch list refresh failed. Refresh Banking and try again.'); } catch {}
     }
 
     if (!assertRefreshStillCurrent()) return;
@@ -42881,9 +43326,12 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
           }
         }
       } catch (e) {
-        const msg = String(e?.message || e || 'Preview refresh failed after payment removal.').trim();
-        child.error = msg;
-        try { toast(msg); } catch {}
+        await reportChildFriendlyError(e, 'BANKING_ACTION_FAILED', {
+          action: 'POST_ACTION_PREVIEW_REFRESH',
+          userInitiated: false,
+          silent: false,
+          scope: null
+        });
         await rerenderChild();
       }
     }
@@ -42897,11 +43345,12 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     try {
       if (typeof bankingRerender === 'function') await bankingRerender(null);
     } catch (e) {
-      const msg = String(e?.message || e || '').trim();
-      if (msg) {
-        child.error = msg;
-        try { toast(msg); } catch {}
-      }
+      await reportChildFriendlyError(e, 'BANKING_ACTION_FAILED', {
+        action: 'BANKING_RERENDER',
+        userInitiated: false,
+        silent: true,
+        scope: null
+      });
     }
 
     if (draftOnlyRemoval) {
@@ -43246,6 +43695,28 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
         && result.rail_execution_attempted === false
         && String(result.scheduled_at_utc || '').trim()
       );
+  };
+
+  const isUncertainImmediateExecutionResult = (value) => {
+    const result = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+    const code = String(result.error_code || result.code || '').trim().toUpperCase();
+    const status = String(result.status || result.post_execution_status || '').trim().toUpperCase();
+    const railAttempted = result.rail_execution_attempted === true || result.standardImmediateRailExecutionAttempted === true;
+    const submittedToBank = result.submitted_to_bank === true || ['SUBMITTED', 'COMMITTED'].includes(status);
+
+    if (result.uncertain_execution_state === true) return true;
+    if (result.review_needed === true && result.terminal === true) return true;
+    if (code === 'STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED') return true;
+    if (railAttempted && submittedToBank !== true && !['SUBMITTED', 'COMMITTED', 'BLOCKED_FUNDS'].includes(status)) return true;
+    return false;
+  };
+
+  const isFriendlyFailedExecutionResult = (value) => {
+    const result = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+    if (!result || !Object.keys(result).length) return false;
+    if (result.ok === false) return true;
+    const code = String(result.error_code || result.code || '').trim().toUpperCase();
+    return !!(code && code !== 'BLOCKED_FUNDS');
   };
 
   const loadBatch = async (opts = {}) => {
@@ -43710,6 +44181,50 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
         return;
       }
 
+      if (isUncertainImmediateExecutionResult(execRes)) {
+        child.actionsBusy.executing = false;
+        child.error = '';
+        child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
+        child.ui.activeTabKey = 'payment_issues';
+
+        try {
+          if (execRes && typeof execRes === 'object' && execRes.batch_get && typeof execRes.batch_get === 'object' && !Array.isArray(execRes.batch_get)) {
+            child.data = deep(execRes.batch_get);
+            hydratePaymentIssueState();
+            syncChildCommunicationsState(child.data);
+            normalizeCandidateExpansionStateForData(child.data);
+            syncChildCsvEvidenceFromData(child.data);
+          }
+        } catch {}
+
+        try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
+        await rerenderChild();
+
+        await showChildFriendlyNotice({
+          title: 'Payment status needs review',
+          message: 'CloudTMS could not confirm the final bank submission state. No successful payment submission has been confirmed. Refresh the batch and review Payment Issues before retrying.',
+          confirmLabel: 'OK',
+          kind: 'import-summary-banking-execute-review-needed',
+          confirmClass: 'btn btn-primary'
+        });
+        return;
+      }
+
+      if (isFriendlyFailedExecutionResult(execRes)) {
+        child.actionsBusy.executing = false;
+        child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
+        child.ui.activeTabKey = 'payment_issues';
+        try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
+        await rerenderChild();
+        await reportChildFriendlyError(execRes, String(execRes?.error_code || execRes?.code || 'BANKING_EXECUTE_PAYMENT_FAILED'), {
+          action: 'EXECUTE_PAYMENT',
+          userInitiated: true,
+          silent: false,
+          scope: deriveScopeForBatch(child.data)
+        });
+        return;
+      }
+
         try {
           const scheduledOut = (execRes && typeof execRes === 'object' && execRes.scheduled && typeof execRes.scheduled === 'object') ? execRes.scheduled : null;
           const authId0 =
@@ -43764,6 +44279,8 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
       await loadBatch({ forcePoll: false });
     } catch (e) {
+      child.actionsBusy.executing = false;
+      await rerenderChild();
       await reportChildFriendlyError(e, 'BANKING_EXECUTE_PAYMENT_FAILED', {
         action: 'EXECUTE_PAYMENT',
         userInitiated: true,
@@ -43829,10 +44346,11 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
         throw new Error('Payment verification modal is not available.');
       }
     } catch (e) {
-      child.error = String(e?.message || e || 'Payment verification failed');
+      const message = pickSafeChildMessage([e?.json?.user_message, e?.json?.message, e?.message], 'Payment verification failed. Please try again.');
+      child.error = message;
       await showBlockedFundsRetryModal({
         title: 'Payment verification failed',
-        message: child.error
+        message
       });
       child.actionsBusy.retryingBlockedFunds = false;
       await rerenderChild();
@@ -43980,15 +44498,12 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       await loadBatch({ forcePoll: false });
       try { if (typeof window.__toast === 'function') window.__toast(`CSV banking file downloaded${out && out.filename ? ` (${out.filename})` : ''}`); } catch {}
     } catch (e) {
-      try {
-        if (typeof bankingHandleApiError === 'function') {
-          bankingHandleApiError(e, { errorPath: ['pay', 'child', 'error'] });
-        } else {
-          child.error = String(e?.message || e || 'CSV export failed');
-        }
-      } catch {
-        child.error = String(e?.message || e || 'CSV export failed');
-      }
+      await reportChildFriendlyError(e, 'BANKING_ACTION_FAILED', {
+        action: 'EXPORT_CSV',
+        userInitiated: true,
+        silent: false,
+        scope: deriveScopeForBatch(child.data)
+      });
     } finally {
       child.actionsBusy.exportingCsv = false;
       await rerenderChild();
@@ -44018,15 +44533,12 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       }
       await rerenderChild();
     } catch (e) {
-      try {
-        if (typeof bankingHandleApiError === 'function') {
-          bankingHandleApiError(e, { action: 'EXPORT_DETAIL_CSV', scope: 'DETAIL', batchId: id, errorPath: ['pay', 'child', 'error'] });
-        } else {
-          child.error = String(e?.message || e || 'Detail CSV export failed');
-        }
-      } catch {
-        child.error = String(e?.message || e || 'Detail CSV export failed');
-      }
+      await reportChildFriendlyError(e, 'BANKING_ACTION_FAILED', {
+        action: 'EXPORT_DETAIL_CSV',
+        userInitiated: true,
+        silent: false,
+        scope: 'DETAIL'
+      });
       await rerenderChild();
     } finally {
       child.actionsBusy.exportingDetailCsv = false;
@@ -44057,15 +44569,12 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       }
       await rerenderChild();
     } catch (e) {
-      try {
-        if (typeof bankingHandleApiError === 'function') {
-          bankingHandleApiError(e, { action: 'EXPORT_DETAIL_PDF', scope: 'DETAIL', batchId: id, errorPath: ['pay', 'child', 'error'] });
-        } else {
-          child.error = String(e?.message || e || 'Detail PDF export failed');
-        }
-      } catch {
-        child.error = String(e?.message || e || 'Detail PDF export failed');
-      }
+      await reportChildFriendlyError(e, 'BANKING_ACTION_FAILED', {
+        action: 'EXPORT_DETAIL_PDF',
+        userInitiated: true,
+        silent: false,
+        scope: 'DETAIL'
+      });
       await rerenderChild();
     } finally {
       child.actionsBusy.exportingDetailPdf = false;
@@ -44675,7 +45184,9 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
               return;
             }
           } catch (e) {
-            child.error = String(e?.message || e || 'Payment issue action failed');
+            child.error = (typeof sanitizeBankingPaymentIssueError === 'function')
+              ? sanitizeBankingPaymentIssueError(e, 'process')
+              : 'Payment issue action failed.';
             await rerenderPaymentIssuesOnly();
             return;
           }
@@ -44746,8 +45257,8 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
             try {
               await openBankingPayBatchPayeEntryModal(id);
               return;
-            } catch (e) {
-              const msg = String(e?.message || e || 'PAYE entry modal failed to open.');
+            } catch {
+              const msg = 'PAYE entry modal failed to open.';
               child.error = msg;
               toast(msg);
               await rerenderChild();
@@ -44872,7 +45383,12 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
             }
             });
           } catch (e) {
-            child.error = String(e?.message || e || 'Cancel batch failed');
+            await reportChildFriendlyError(e, 'BANKING_ACTION_FAILED', {
+              action: 'CANCEL_BATCH',
+              userInitiated: true,
+              silent: false,
+              scope: null
+            });
             await rerenderChild();
           }
           return;
@@ -45038,7 +45554,12 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
         await openOutboxDetailModal({ channel, outbox_id: outboxId });
       } catch (e) {
-        child.error = String(e?.message || e || 'Unable to open remittance preview');
+        await reportChildFriendlyError(e, 'BANKING_ACTION_FAILED', {
+          action: 'OPEN_REMITTANCE_PREVIEW',
+          userInitiated: true,
+          silent: false,
+          scope: null
+        });
         await rerenderChild();
       }
     };
@@ -227859,6 +228380,7 @@ async function renderAll(){
   renderSummary(data);
 }
 
+
 async function bootstrapApp(){
   // Belt & braces: if loadSession() ran but globals are not mirrored, mirror now
   try {
@@ -228061,6 +228583,8 @@ async function bootstrapApp(){
           const safeSummary = (summary && typeof summary === 'object' && !Array.isArray(summary)) ? summary : buildEmptyBankingAlertSummary(hash);
           const alerts = Array.isArray(safeSummary.alerts) ? safeSummary.alerts : [];
           const count = toNonNegativeCount(safeSummary.unacknowledged_count ?? safeSummary.banking_unacknowledged_alert_count, alerts.length);
+          if (count > 0 && alerts.length < 1) return false;
+
           const normalizedSummary = {
             ...safeSummary,
             alerts: count > 0 ? alerts : [],
@@ -228198,203 +228722,85 @@ async function bootstrapApp(){
 
           if (requestSeq < Math.max(0, Math.trunc(Number(hb._latestAppliedPingSeq || 0)))) return;
 
-   const applyBankingAlertSummaryFromPing = () => {
-  try {
-    const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
-    const toText = (value) => String(value == null ? '' : value).trim();
-    const toCount = (value, fallback = 0) => {
-      const numeric = Number(value);
-      return Number.isFinite(numeric) && numeric >= 0 ? Math.trunc(numeric) : fallback;
-    };
-    const deepClone = (value) => {
-      try { return JSON.parse(JSON.stringify(value == null ? null : value)); } catch { return value; }
-    };
-    const getFingerprint = (alert) => {
-      if (!isPlainObject(alert)) return '';
-      return toText(alert.alert_fingerprint || alert.fingerprint || alert.banking_alert_fingerprint || alert.payload_json?.alert_fingerprint || alert.alert_payload_json?.alert_fingerprint);
-    };
-    const getSuppressionMap = () => {
-      if (typeof window === 'undefined') return {};
-      if (!window.__bankingLocallyAcknowledgedFingerprints || typeof window.__bankingLocallyAcknowledgedFingerprints !== 'object') {
-        window.__bankingLocallyAcknowledgedFingerprints = Object.create(null);
-      }
-      return window.__bankingLocallyAcknowledgedFingerprints;
-    };
-    const purgeExpiredSuppressions = () => {
-      const map = getSuppressionMap();
-      const now = Date.now();
-      const ttlMs = 2 * 60 * 1000;
-      try {
-        for (const [fingerprint, stampedAt] of Object.entries(map)) {
-          const t = Number(stampedAt || 0);
-          if (!fingerprint || !Number.isFinite(t) || now - t > ttlMs) delete map[fingerprint];
-        }
-      } catch {}
-      return map;
-    };
-    const requestStartedAt = (() => {
-      try {
-        if (typeof requestStartedAtMs !== 'undefined') {
-          const n = Number(requestStartedAtMs);
-          return Number.isFinite(n) ? n : 0;
-        }
-      } catch {}
-      return 0;
-    })();
-    const latestAckAtMs = Math.max(
-      Number((typeof window !== 'undefined' && window.__bankingLastAlertAckMutationAtMs) || 0) || 0,
-      Number((hb && hb._lastBankingAckMutationAtMs) || 0) || 0
-    );
-    const nextHash = toText(
-      json.banking_alert_hash ||
-      json.bankingAlertHash ||
-      json.banking_alert_summary_signature ||
-      json.banking_alert_signature ||
-      ''
-    );
-    const previousHash = toText(
-      hb.bankingAlertHash ||
-      hb.bankingAlertSignature ||
-      (typeof window !== 'undefined' ? (window.__bankingAlertHash || window.__bankingAlertSummarySignature) : '') ||
-      ''
-    );
-    const changed = json.banking_alert_summary_changed === true;
-    const summary = isPlainObject(json.banking_alert_summary) ? json.banking_alert_summary : null;
-    const responseCount = toCount(json.banking_unacknowledged_alert_count ?? json.unacknowledged_count, summary && Array.isArray(summary.alerts) ? summary.alerts.length : 0);
-    const positiveResponseStartedBeforeAck = responseCount > 0 && latestAckAtMs > 0 && requestStartedAt > 0 && requestStartedAt < latestAckAtMs;
+          const applyBankingAlertSummaryFromPing = () => {
+            try {
+              const nextHash = String(
+                json.banking_alert_hash ||
+                json.bankingAlertHash ||
+                json.banking_alert_summary_signature ||
+                json.banking_alert_signature ||
+                ''
+              ).trim();
+              const previousHash = String(
+                hb.bankingAlertHash ||
+                window.__bankingAlertHash ||
+                hb.bankingAlertSignature ||
+                window.__bankingAlertSummarySignature ||
+                ''
+              ).trim();
+              const count = toNonNegativeCount(
+                json.banking_unacknowledged_alert_count ??
+                json.unacknowledged_count,
+                0
+              );
+              const summary = (json.banking_alert_summary && typeof json.banking_alert_summary === 'object' && !Array.isArray(json.banking_alert_summary))
+                ? json.banking_alert_summary
+                : null;
+              const changed = json.banking_alert_summary_changed === true;
+              const latestAckAtMs = Math.max(
+                Number(window.__bankingLastAlertAckMutationAtMs || 0) || 0,
+                Number(hb._lastBankingAckMutationAtMs || 0) || 0
+              );
+              const positiveResponseStartedBeforeAck = count > 0 && latestAckAtMs > 0 && requestStartedAtMs < latestAckAtMs;
 
-    if (nextHash) {
-      hb.bankingAlertHash = nextHash;
-      hb.bankingAlertSignature = nextHash;
-      if (typeof window !== 'undefined') {
-        window.__bankingAlertHash = nextHash;
-        window.__bankingAlertSummarySignature = nextHash;
-      }
-    }
+              const commitBankingAlertHash = () => {
+                if (!nextHash) return;
+                hb.bankingAlertHash = nextHash;
+                hb.bankingAlertSignature = nextHash;
+                window.__bankingAlertHash = nextHash;
+                window.__bankingAlertSummarySignature = nextHash;
+              };
 
-    const applySummary = (sourceSummary, forcedCount = null) => {
-      const src = isPlainObject(sourceSummary) ? sourceSummary : { ok: true, alerts: [] };
-      const rawAlerts = Array.isArray(src.alerts) ? src.alerts : (Array.isArray(src.banking_alerts) ? src.banking_alerts : []);
-      const suppressionMap = purgeExpiredSuppressions();
-      let removedSuppressedCount = 0;
-      const filteredAlerts = [];
-      for (const alert of rawAlerts) {
-        const fingerprint = getFingerprint(alert);
-        const acknowledged = alert && typeof alert === 'object' && (
-          alert.acknowledged_for_current_user === true ||
-          alert.banking_alert_acknowledged_for_user === true ||
-          alert.alert_acknowledged_for_current_user === true
-        );
-        if (acknowledged) continue;
-        if (fingerprint && suppressionMap[fingerprint]) {
-          removedSuppressedCount += 1;
-          continue;
-        }
-        filteredAlerts.push(alert);
-      }
-      const rawCount = forcedCount !== null && forcedCount !== undefined
-        ? toCount(forcedCount, filteredAlerts.length)
-        : toCount(src.unacknowledged_count ?? src.banking_unacknowledged_alert_count, filteredAlerts.length);
-      const count = Math.max(0, rawCount - removedSuppressedCount);
-      const finalAlerts = count > 0 ? filteredAlerts : [];
-      const highestLabel = count > 0 ? (src.highest_label ?? src.banking_highest_alert_label ?? json.banking_highest_alert_label ?? null) : null;
-      const highestSeverity = count > 0 ? (src.highest_severity ?? src.banking_highest_alert_severity ?? json.banking_highest_alert_severity ?? null) : null;
-      const normalisedSummary = {
-        ...deepClone(src),
-        alerts: deepClone(finalAlerts) || [],
-        banking_alerts: deepClone(finalAlerts) || [],
-        unacknowledged_count: count,
-        banking_unacknowledged_alert_count: count,
-        highest_label: highestLabel,
-        banking_highest_alert_label: highestLabel,
-        highest_severity: highestSeverity,
-        banking_highest_alert_severity: highestSeverity,
-        banking_alert_hash: nextHash || src.banking_alert_hash || '',
-        banking_alert_summary_signature: nextHash || src.banking_alert_summary_signature || src.banking_alert_hash || ''
-      };
+              if (count === 0) {
+                commitBankingAlertHash();
+                const currentState = (window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object') ? window.__bankingNavAttentionState : {};
+                const currentCount = toNonNegativeCount(
+                  currentState.count ?? currentState.unacknowledgedCount ?? currentState.banking_unacknowledged_alert_count,
+                  0
+                );
+                if (summary || changed || currentCount > 0 || previousHash !== nextHash) {
+                  applyBankingAlertSummaryPayload(summary || buildEmptyBankingAlertSummary(nextHash), nextHash);
+                  return true;
+                }
+                return false;
+              }
 
-      if (count === 0 && nextHash) {
-        try { window.__bankingLocallyAcknowledgedFingerprints = Object.create(null); } catch {}
-      }
+              if (positiveResponseStartedBeforeAck) return false;
 
-      const alertPayload = {
-        ok: true,
-        banking_alert_hash: normalisedSummary.banking_alert_hash,
-        banking_alert_summary_signature: normalisedSummary.banking_alert_summary_signature,
-        banking_alert_summary: normalisedSummary,
-        alert_summary: normalisedSummary,
-        remaining_alert_summary: normalisedSummary,
-        banking_alerts: normalisedSummary.alerts,
-        banking_unacknowledged_alert_count: count,
-        banking_highest_alert_label: highestLabel,
-        banking_highest_alert_severity: highestSeverity
-      };
+              if (!changed && nextHash && previousHash && nextHash === previousHash && !summary) return false;
 
-      if (typeof applyAlertSummaryToState === 'function') {
-        applyAlertSummaryToState(alertPayload);
-      } else if (typeof updateBankingNavAttentionState === 'function') {
-        updateBankingNavAttentionState({
-          requiresAttention: count > 0,
-          count,
-          unacknowledgedCount: count,
-          unacknowledged_count: count,
-          banking_unacknowledged_alert_count: count,
-          alerts: normalisedSummary.alerts,
-          banking_alerts: normalisedSummary.alerts,
-          highestPriorityLabel: highestLabel,
-          highest_label: highestLabel,
-          banking_highest_alert_label: highestLabel,
-          highestSeverity,
-          highest_severity: highestSeverity,
-          banking_highest_alert_severity: highestSeverity,
-          alertSummary: normalisedSummary,
-          banking_alert_summary: normalisedSummary,
-          banking_alert_hash: normalisedSummary.banking_alert_hash
-        });
-      }
-      return true;
-    };
+              if (summary) {
+                const summaryAlerts = Array.isArray(summary.alerts) ? summary.alerts : [];
+                if (count > 0 && summaryAlerts.length < 1) {
+                  hb._bankingAlertSummaryDeferred = true;
+                  return false;
+                }
+                commitBankingAlertHash();
+                applyBankingAlertSummaryPayload(summary, nextHash);
+                hb._bankingAlertSummaryDeferred = false;
+                return true;
+              }
 
-    if (responseCount === 0) {
-      const existingState = (typeof window !== 'undefined' && window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object') ? window.__bankingNavAttentionState : {};
-      const existingCount = toCount(existingState.count ?? existingState.unacknowledgedCount ?? existingState.banking_unacknowledged_alert_count, 0);
-      if (summary || changed || existingCount > 0 || (nextHash && nextHash !== previousHash)) {
-        return applySummary(summary || { ok: true, alerts: [], unacknowledged_count: 0, banking_unacknowledged_alert_count: 0 }, 0);
-      }
-      return false;
-    }
+              if (changed || json.banking_alert_summary_deferred === true) {
+                hb._bankingAlertSummaryDeferred = true;
+                return false;
+              }
 
-    if (positiveResponseStartedBeforeAck) return false;
-
-    if (!changed && nextHash && previousHash && nextHash === previousHash && !summary) return false;
-
-    if (changed && summary) return applySummary(summary);
-
-    if (summary && (!nextHash || nextHash !== previousHash)) return applySummary(summary);
-
-    if (changed && !summary) {
-      const hasRecentLocalSuppression = latestAckAtMs > 0 && Date.now() - latestAckAtMs < (2 * 60 * 1000);
-      if (hasRecentLocalSuppression && responseCount > 0) return false;
-      return applySummary({
-        ok: true,
-        alerts: [],
-        banking_alerts: [],
-        unacknowledged_count: responseCount,
-        banking_unacknowledged_alert_count: responseCount,
-        highest_label: responseCount > 0 ? (json.banking_highest_alert_label || null) : null,
-        banking_highest_alert_label: responseCount > 0 ? (json.banking_highest_alert_label || null) : null,
-        highest_severity: responseCount > 0 ? (json.banking_highest_alert_severity || null) : null,
-        banking_highest_alert_severity: responseCount > 0 ? (json.banking_highest_alert_severity || null) : null,
-        banking_alert_hash: nextHash,
-        banking_alert_summary_signature: nextHash
-      }, responseCount);
-    }
-
-    return false;
-  } catch {
-    return false;
-  }
-};
+              return false;
+            } catch {
+              return false;
+            }
+          };
 
           const bankingAlertStateChanged = applyBankingAlertSummaryFromPing();
           hb._latestAppliedPingSeq = Math.max(Math.trunc(Number(hb._latestAppliedPingSeq || 0)), requestSeq);
@@ -228504,8 +228910,6 @@ async function bootstrapApp(){
   renderTools();
   await renderAll();
 }
-
-
 // Initialize
 initAuthUI();
 
