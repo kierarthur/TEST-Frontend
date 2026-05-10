@@ -113016,12 +113016,58 @@ function buildBulkProcessEditableDraftSnapshot(stateOrCtx) {
     subMode === 'MANUAL' &&
     hasTs;
 
-  const expensesEnabled = !!(
-    (hasTs && hasFin && (subMode === 'MANUAL' || hasQr)) ||
-    isPlannedWeeklyManual
-  );
+  const policy = (typeof classifyTimesheetEditDomains === 'function')
+    ? classifyTimesheetEditDomains({ row, details, timesheet: ts || {}, tsfin: tsfin || {}, contract_week: contractWeek || {}, state, ctx })
+    : {};
+  const canEditHoursSchedule = !!policy.canEditHoursSchedule;
+  const canEditExpenses = !!policy.canEditExpenses;
 
-  if (isWeeklyManualContext) {
+  const expenseDraftCandidates = [
+    state.expensesDraft,
+    ctx.expensesDraft,
+    src.active_ctx?.state?.expensesDraft,
+    src.active_ctx?.expensesDraft,
+    src.active_context?.state?.expensesDraft,
+    src.active_context?.expensesDraft,
+    src.active_row?.expensesDraft,
+    src.formState?.expensesDraft,
+    src.expensesDraft,
+    window?.modalCtx?.active_ctx?.state?.expensesDraft,
+    window?.modalCtx?.active_context?.state?.expensesDraft
+  ];
+  const expenseBaselineCandidates = [
+    state.expensesBaseline,
+    ctx.expensesBaseline,
+    src.active_ctx?.state?.expensesBaseline,
+    src.active_ctx?.expensesBaseline,
+    src.active_context?.state?.expensesBaseline,
+    src.active_context?.expensesBaseline,
+    src.active_row?.expensesBaseline,
+    src.formState?.expensesBaseline,
+    src.expensesBaseline,
+    window?.modalCtx?.active_ctx?.state?.expensesBaseline,
+    window?.modalCtx?.active_context?.state?.expensesBaseline
+  ];
+  const expenseDirtyCandidates = [
+    state.expensesDirty,
+    state.expenses_dirty,
+    state.expensesDraftDirty,
+    state.hasStagedExpensesDirty,
+    state.stagedExpensesDirty,
+    state.expenseDirtyMarker,
+    ctx.expensesDirty,
+    ctx.expenses_dirty,
+    ctx.expensesDraftDirty,
+    ctx.hasStagedExpensesDirty,
+    ctx.stagedExpensesDirty,
+    ctx.expenseDirtyMarker
+  ];
+  const hasKnownExpenseDirtyMarker = expenseDirtyCandidates.some((v) => v === true);
+  const existingDraft = expenseDraftCandidates.find((v) => v && typeof v === 'object');
+  const existingBaseline = expenseBaselineCandidates.find((v) => v && typeof v === 'object');
+  const hasExpenseState = !!(existingDraft || existingBaseline);
+
+  if (isWeeklyManualContext && canEditHoursSchedule) {
     return sortObjectDeep({
       route_kind: 'weekly-manual',
       extra_shift_count: Number.isFinite(Number(state.extraShiftCount))
@@ -113029,23 +113075,38 @@ function buildBulkProcessEditableDraftSnapshot(stateOrCtx) {
         : 0,
       weekly_lines_by_date: normaliseWeeklyLinesByDate(state.weeklyLinesByDate),
       additional_rates: normaliseAdditionalRates(state.additionalRates),
-      expenses_draft: normaliseExpensesDraft(state.expensesDraft)
+      expenses_draft: (typeof normaliseTimesheetExpensesDraft === 'function')
+        ? normaliseTimesheetExpensesDraft(state.expensesDraft || existingDraft || {})
+        : normaliseExpensesDraft(state.expensesDraft || existingDraft || {}),
+      expenses_baseline: (typeof normaliseTimesheetExpensesDraft === 'function')
+        ? normaliseTimesheetExpensesDraft(state.expensesBaseline || existingBaseline || {})
+        : normaliseExpensesDraft(state.expensesBaseline || existingBaseline || {})
     });
   }
 
-  if (isDailyManualContext) {
+  if (isDailyManualContext && canEditHoursSchedule) {
     return sortObjectDeep({
       route_kind: 'daily-manual',
       reference: trimStr(state.reference || ''),
       schedule: normaliseDailySchedule(state.schedule),
-      expenses_draft: normaliseExpensesDraft(state.expensesDraft)
+      expenses_draft: (typeof normaliseTimesheetExpensesDraft === 'function')
+        ? normaliseTimesheetExpensesDraft(state.expensesDraft || existingDraft || {})
+        : normaliseExpensesDraft(state.expensesDraft || existingDraft || {}),
+      expenses_baseline: (typeof normaliseTimesheetExpensesDraft === 'function')
+        ? normaliseTimesheetExpensesDraft(state.expensesBaseline || existingBaseline || {})
+        : normaliseExpensesDraft(state.expensesBaseline || existingBaseline || {})
     });
   }
 
-  if (expensesEnabled) {
+  if (canEditExpenses || hasExpenseState || hasKnownExpenseDirtyMarker) {
     return sortObjectDeep({
       route_kind: 'expenses-only',
-      expenses_draft: normaliseExpensesDraft(state.expensesDraft)
+      expenses_draft: (typeof normaliseTimesheetExpensesDraft === 'function')
+        ? normaliseTimesheetExpensesDraft(state.expensesDraft || existingDraft || {})
+        : normaliseExpensesDraft(state.expensesDraft || existingDraft || {}),
+      expenses_baseline: (typeof normaliseTimesheetExpensesDraft === 'function')
+        ? normaliseTimesheetExpensesDraft(state.expensesBaseline || existingBaseline || {})
+        : normaliseExpensesDraft(state.expensesBaseline || existingBaseline || {})
     });
   }
 
@@ -116007,8 +116068,37 @@ function classifyBulkProcessEditability(ctxInput) {
     else if (isManual && (weekId || sheetScope === 'DAILY')) summaryStage = 'UNPROCESSED';
   }
 
-  const canSave = manualNonQrEditable && backendCanSave !== false;
-  const canProcess = manualNonQrEditable && !tsId && summaryStage === 'UNPROCESSED' && backendCanProcess !== false;
+  const hasSharedDomainPolicy = (typeof classifyTimesheetEditDomains === 'function');
+  const domainPolicy = hasSharedDomainPolicy
+    ? classifyTimesheetEditDomains({
+        row,
+        details,
+        timesheet: ts,
+        tsfin,
+        financial: details.financial || details.financial_snapshot || row.financial || row.financial_snapshot || {},
+        contract_week: cw,
+        contract_week_id: details.contract_week_id || cw.id || row.contract_week_id || null,
+        state: ctx.state || {},
+        ctx,
+        active_ctx: ctx.active_ctx || null,
+        active_context: ctx.active_context || null,
+        action_flags: actionFlags
+      })
+    : {};
+
+  const canEditHoursSchedule = hasSharedDomainPolicy ? !!domainPolicy.canEditHoursSchedule : manualNonQrEditable;
+  const canEditTimesheetData = (typeof domainPolicy.canEditTimesheetData === 'boolean')
+    ? domainPolicy.canEditTimesheetData
+    : manualNonQrEditable;
+  const canOpenExpenses = hasSharedDomainPolicy ? !!domainPolicy.canOpenExpenses : manualNonQrEditable;
+  const canEditExpenses = hasSharedDomainPolicy ? !!domainPolicy.canEditExpenses : manualNonQrEditable;
+  const expensesReadOnly = hasSharedDomainPolicy ? !!domainPolicy.expensesReadOnly : false;
+  const expensesDisabledReason = hasSharedDomainPolicy ? String(domainPolicy.expensesDisabledReason || '').trim() : '';
+  const requiresAdditionalManualForExpenses = hasSharedDomainPolicy ? !!domainPolicy.requiresAdditionalManualForExpenses : false;
+  const canManageExpenseEvidence = hasSharedDomainPolicy ? !!domainPolicy.canManageExpenseEvidence : true;
+
+  const canSave = backendCanSave !== false && !!(domainPolicy.canSave || canEditTimesheetData || canEditExpenses || manualNonQrEditable);
+  const canProcess = !isAuthorisedBlocked && !hasAnyLockBlocker && summaryStage === 'UNPROCESSED' && backendCanProcess !== false && !!(domainPolicy.canProcess ?? manualNonQrEditable);
   const canUnprocess = manualNonQrEditable && !!tsId && backendCanUnprocess !== false;
 
   const routeActionBaseAllowed =
@@ -116096,6 +116186,14 @@ function classifyBulkProcessEditability(ctxInput) {
     backendCanEditTimesheetData,
     reviewOnly: reviewOnlyEffective,
     manualNonQrEditable,
+    canEditHoursSchedule,
+    canEditTimesheetData,
+    canOpenExpenses,
+    canEditExpenses,
+    expensesReadOnly,
+    expensesDisabledReason,
+    requiresAdditionalManualForExpenses,
+    canManageExpenseEvidence,
     canSave,
     canProcess,
     canUnprocess,
@@ -127742,46 +127840,83 @@ function syncBulkProcessExpensesDraftFromDom(state) {
   if (!st || !st.active_ctx || typeof st.active_ctx !== 'object') return;
 
   const ctx = st.active_ctx;
+  const details = (ctx.details && typeof ctx.details === 'object') ? ctx.details : {};
+  const row = (ctx.row && typeof ctx.row === 'object') ? ctx.row : {};
   ctx.state = (ctx.state && typeof ctx.state === 'object') ? ctx.state : {};
-  ctx.state.expensesDraft = (ctx.state.expensesDraft && typeof ctx.state.expensesDraft === 'object')
-    ? ctx.state.expensesDraft
-    : {
-        mileage_units: 0,
-        travel_pay: 0,
-        travel_charge: 0,
-        accommodation_pay: 0,
-        accommodation_charge: 0,
-        other_pay: 0,
-        other_charge: 0,
-        note: ''
-      };
+  const policy = (typeof classifyBulkProcessEditability === 'function')
+    ? classifyBulkProcessEditability({ ...ctx, row, details })
+    : { canEditExpenses: true };
+  if (!policy.canEditExpenses) return false;
 
   const root =
     document.getElementById('bulkProcessExpensesChildRoot') ||
     document.getElementById('bulkProcessManualEditorRoot');
   if (!root) return;
 
-  const readNum = (selector) => {
+  const readNum = (selector, fallback) => {
     const el = root.querySelector(selector);
-    const raw = String(el?.value || '').trim();
-    if (!raw) return 0;
+    if (!el) return fallback;
+    const raw = String(el.value || '').trim();
+    if (!raw) return fallback;
     const n = Number(raw);
-    return Number.isFinite(n) ? n : 0;
+    return Number.isFinite(n) ? n : fallback;
   };
 
-  const readStr = (selector) => {
+  const readStr = (selector, fallback) => {
     const el = root.querySelector(selector);
-    return String(el?.value || '').trim();
+    if (!el) return fallback;
+    return String(el.value || '').trim();
   };
 
-  ctx.state.expensesDraft.mileage_units = readNum('input[data-exp-field="mileage_units"]');
-  ctx.state.expensesDraft.travel_pay = readNum('input[data-exp-field="travel_pay"]');
-  ctx.state.expensesDraft.travel_charge = readNum('input[data-exp-field="travel_charge"]');
-  ctx.state.expensesDraft.accommodation_pay = readNum('input[data-exp-field="accommodation_pay"]');
-  ctx.state.expensesDraft.accommodation_charge = readNum('input[data-exp-field="accommodation_charge"]');
-  ctx.state.expensesDraft.other_pay = readNum('input[data-exp-field="other_pay"]');
-  ctx.state.expensesDraft.other_charge = readNum('input[data-exp-field="other_charge"]');
-  ctx.state.expensesDraft.note = readStr('textarea[data-exp-field="note"], input[data-exp-field="note"]');
+  const currentDraft = (ctx.state.expensesDraft && typeof ctx.state.expensesDraft === 'object') ? ctx.state.expensesDraft : {};
+  const baseline = (ctx.state.expensesBaseline && typeof ctx.state.expensesBaseline === 'object') ? ctx.state.expensesBaseline : {};
+  const tsfin = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
+  const mergedDraft = {
+    ...currentDraft,
+    mileage_units: readNum('input[data-exp-field="mileage_units"]', currentDraft.mileage_units),
+    travel_pay: readNum('input[data-exp-field="travel_pay"]', currentDraft.travel_pay),
+    travel_charge: readNum('input[data-exp-field="travel_charge"]', currentDraft.travel_charge),
+    accommodation_pay: readNum('input[data-exp-field="accommodation_pay"]', currentDraft.accommodation_pay),
+    accommodation_charge: readNum('input[data-exp-field="accommodation_charge"]', currentDraft.accommodation_charge),
+    other_pay: readNum('input[data-exp-field="other_pay"]', currentDraft.other_pay),
+    other_charge: readNum('input[data-exp-field="other_charge"]', currentDraft.other_charge),
+    note: readStr('textarea[data-exp-field="note"], input[data-exp-field="note"]', String(currentDraft.note || ''))
+  };
+  const normDraft = (typeof normaliseTimesheetExpensesDraft === 'function')
+    ? normaliseTimesheetExpensesDraft(mergedDraft, {
+        context: ctx,
+        details,
+        tsfin,
+        rates: {
+          mileage_pay_rate: currentDraft.mileage_pay_rate ?? baseline.mileage_pay_rate ?? tsfin.mileage_pay_rate,
+          mileage_charge_rate: currentDraft.mileage_charge_rate ?? baseline.mileage_charge_rate ?? tsfin.mileage_charge_rate
+        }
+      })
+    : mergedDraft;
+  ctx.state.expensesDraft = normDraft;
+  if (typeof recalculateTimesheetExpenseTotals === 'function') {
+    const totals = recalculateTimesheetExpenseTotals(normDraft, tsfin, {
+      context: ctx,
+      details,
+      rates: {
+        mileage_pay_rate: normDraft.mileage_pay_rate ?? currentDraft.mileage_pay_rate ?? baseline.mileage_pay_rate ?? tsfin.mileage_pay_rate,
+        mileage_charge_rate: normDraft.mileage_charge_rate ?? currentDraft.mileage_charge_rate ?? baseline.mileage_charge_rate ?? tsfin.mileage_charge_rate
+      }
+    }) || {};
+    const writeOut = (k, val) => {
+      const out = root.querySelector(`[data-exp-out="${k}"]`);
+      if (out) out.textContent = String(val ?? '0');
+    };
+    writeOut('mileage_pay', totals.mileage_pay);
+    writeOut('mileage_charge', totals.mileage_charge);
+    writeOut('total_pay', totals.total_pay);
+    writeOut('total_charge', totals.total_charge);
+  }
+  if (typeof isTimesheetExpensesDraftDirty === 'function') {
+    const dirtyRes = isTimesheetExpensesDraftDirty(normDraft, baseline, { context: ctx, details, tsfin });
+    ctx.state.expensesDirty = !!(dirtyRes && dirtyRes.dirty);
+  }
+  return true;
 }
 
 
@@ -157180,9 +157315,15 @@ function renderBulkProcessActionRow(state) {
   const canAddAdditionalManual = !!editability.canAddAdditionalManual;
   const isDirty = (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty;
   const busy = !!(st.loading || st.saving || st.processing || st.unprocessing);
-  const canSaveNow = !!(canSave && isDirty && !busy);
+  const canSaveNow = !!((canSave || editability.canEditExpenses) && isDirty && !busy);
   const canProcessNow = !!(canProcess && !busy);
   const canUnprocessNow = !!(canUnprocess && !busy);
+  const canOpenExpenses = !!editability.canOpenExpenses;
+  const canEditExpenses = !!editability.canEditExpenses;
+  const expensesReadOnly = !!editability.expensesReadOnly;
+  const expenseBtnEnabled = !!(canOpenExpenses && !busy);
+  const expenseBtnLabel = expensesReadOnly && !canEditExpenses ? 'Expenses (View)' : 'Expenses';
+  const expenseReason = String(editability.expensesDisabledReason || '').trim();
 
   const hasExpenses = (() => {
     const d = (activeCtx?.state?.expensesDraft && typeof activeCtx.state.expensesDraft === 'object')
@@ -157305,10 +157446,11 @@ function renderBulkProcessActionRow(state) {
 
           <button
             type="button"
-            class="${enc(btnClass('btn btn-outline', !!(activeRow && !busy)))}"
+            class="${enc(btnClass('btn btn-outline', expenseBtnEnabled))}"
             id="bulkProcessOpenExpensesBtn"
-            ${btnAttrs(!!(activeRow && !busy), false)}
-          >Expenses${hasExpenses ? ' <span style="color:#32d583;font-weight:700;">✓</span>' : ''}</button>
+            ${btnAttrs(expenseBtnEnabled, false)}
+            title="${enc(expenseBtnEnabled ? '' : expenseReason)}"
+          >${enc(expenseBtnLabel)}${hasExpenses ? ' <span style="color:#32d583;font-weight:700;">✓</span>' : ''}</button>
 
           ${canAddAdditionalManual
             ? `<button type="button" class="${enc(btnClass('btn btn-outline', !busy))}" id="bulkProcessAddAdditionalManualBtn" ${btnAttrs(!busy, busy)}>${enc(routeBusyLabel || 'Add Additional Manual Timesheet')}</button>`
