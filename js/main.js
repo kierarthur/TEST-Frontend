@@ -105059,6 +105059,52 @@ function isBulkAuthoriseEditableDirty(state) {
   const editability = (typeof classifyBulkAuthoriseEditability === 'function')
     ? classifyBulkAuthoriseEditability(editabilityInput)
     : {};
+  const canEditExpensesByPolicy = (editability && editability.canEditExpenses === true);
+
+  const readExpensesStateValue = (containers, keys) => {
+    for (const container of containers) {
+      if (!container || typeof container !== 'object') continue;
+      for (const key of keys) {
+        if (!key || !Object.prototype.hasOwnProperty.call(container, key)) continue;
+        const value = container[key];
+        if (value !== undefined) return value;
+      }
+    }
+    return undefined;
+  };
+  const expenseContainers = [
+    st,
+    st.formState,
+    activeContext?.state,
+    activeCtx?.state,
+    activeContext,
+    activeCtx,
+    activeRow,
+    window.modalCtx?.active_context?.state,
+    window.modalCtx?.active_ctx?.state,
+    window.modalCtx?.active_context,
+    window.modalCtx?.active_ctx
+  ].filter((candidate) => candidate && typeof candidate === 'object');
+  const activeExpensesDraft = readExpensesStateValue(expenseContainers, ['expensesDraft', 'activeExpensesDraft', 'stagedExpensesDraft']);
+  const activeExpensesBaseline = readExpensesStateValue(expenseContainers, ['expensesBaseline', 'activeExpensesBaseline', 'stagedExpensesBaseline']);
+  const activeExpensesDirtyMarker = readExpensesStateValue(expenseContainers, [
+    'expensesDirty',
+    'expenses_dirty',
+    'expensesDraftDirty',
+    'hasStagedExpensesDirty',
+    'stagedExpensesDirty',
+    'expenseDirtyMarker'
+  ]);
+  const hasEditableExpensesDraftStaged = !!(activeExpensesDraft && typeof activeExpensesDraft === 'object');
+  const expenseDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+    ? isTimesheetExpensesDraftDirty(activeExpensesDraft || {}, activeExpensesBaseline || {})
+    : { dirty: false };
+  const isExpensesDraftDirty = !!(expenseDirtyResult && expenseDirtyResult.dirty === true);
+  const shouldTreatExpensesDirtyAsEditable = !!(
+    canEditExpensesByPolicy ||
+    hasEditableExpensesDraftStaged ||
+    boolish(activeExpensesDirtyMarker)
+  );
 
   const routeFamily = upper(activeContext.route_family || activeCtx.route_family || row?.route_family || '');
   const manualEditableByRoute = !!(
@@ -105081,6 +105127,10 @@ function isBulkAuthoriseEditableDirty(state) {
   );
 
   if (!canEditTimesheetData) {
+    if (isExpensesDraftDirty && shouldTreatExpensesDirtyAsEditable) {
+      st.dirty = true;
+      return true;
+    }
     if (st.dirty) st.dirty = false;
     return false;
   }
@@ -105107,6 +105157,10 @@ function isBulkAuthoriseEditableDirty(state) {
           st.dirty = true;
           return true;
         }
+        if (isExpensesDraftDirty && shouldTreatExpensesDirtyAsEditable) {
+          st.dirty = true;
+          return true;
+        }
         if (st.dirty) {
           const anyOtherDirty = Object.values(draftState.entries || {}).some((candidate) => !!candidate?.dirty && candidate?.dirty_source_type === 'USER');
           if (!anyOtherDirty) st.dirty = false;
@@ -105116,6 +105170,10 @@ function isBulkAuthoriseEditableDirty(state) {
     } catch {}
   }
 
+  if (isExpensesDraftDirty && shouldTreatExpensesDirtyAsEditable) {
+    st.dirty = true;
+    return true;
+  }
   return false;
 }
 
@@ -107302,6 +107360,69 @@ function hasBulkAuthoriseGenuineDirtyEdits(state, options = {}) {
     : ((window.modalCtx?.bulkAuthoriseState && typeof window.modalCtx.bulkAuthoriseState === 'object') ? window.modalCtx.bulkAuthoriseState : null);
   if (!st) return false;
   const opts = (options && typeof options === 'object') ? options : {};
+  const boolish = (value) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (value == null) return false;
+    const s = String(value).trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  };
+  const readExpensesStateValue = (containers, keys) => {
+    for (const container of containers) {
+      if (!container || typeof container !== 'object') continue;
+      for (const key of keys) {
+        if (!key || !Object.prototype.hasOwnProperty.call(container, key)) continue;
+        const value = container[key];
+        if (value !== undefined) return value;
+      }
+    }
+    return undefined;
+  };
+  const resolveExpenseDirtyState = () => {
+    const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+    const activeCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
+    const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
+    const expenseContainers = [
+      st,
+      st.formState,
+      activeContext?.state,
+      activeCtx?.state,
+      activeContext,
+      activeCtx,
+      activeRow,
+      window.modalCtx?.active_context?.state,
+      window.modalCtx?.active_ctx?.state,
+      window.modalCtx?.active_context,
+      window.modalCtx?.active_ctx
+    ].filter((candidate) => candidate && typeof candidate === 'object');
+    const draft = readExpensesStateValue(expenseContainers, ['expensesDraft', 'activeExpensesDraft', 'stagedExpensesDraft']);
+    const baseline = readExpensesStateValue(expenseContainers, ['expensesBaseline', 'activeExpensesBaseline', 'stagedExpensesBaseline']);
+    const marker = readExpensesStateValue(expenseContainers, [
+      'expensesDirty',
+      'expenses_dirty',
+      'expensesDraftDirty',
+      'hasStagedExpensesDirty',
+      'stagedExpensesDirty',
+      'expenseDirtyMarker'
+    ]);
+    const editability = (typeof classifyBulkAuthoriseEditability === 'function')
+      ? classifyBulkAuthoriseEditability({
+          ...(activeContext && typeof activeContext === 'object' ? activeContext : {}),
+          active_ctx: activeCtx,
+          row: activeRow,
+          details: (st.active_details && typeof st.active_details === 'object') ? st.active_details : {},
+          state: st
+        })
+      : {};
+    const canEditExpensesByPolicy = !!(editability && editability.canEditExpenses === true);
+    const hasEditableExpensesDraftStaged = !!(draft && typeof draft === 'object');
+    const dirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(draft || {}, baseline || {})
+      : { dirty: false };
+    const isDirty = !!(dirtyResult && dirtyResult.dirty === true);
+    const allowed = !!(canEditExpensesByPolicy || hasEditableExpensesDraftStaged || boolish(marker));
+    return { isDirty, allowed };
+  };
 
   if (typeof ensureBulkAuthoriseManualDraftState === 'function') {
     try {
@@ -107369,15 +107490,32 @@ function hasBulkAuthoriseGenuineDirtyEdits(state, options = {}) {
           st.dirty = true;
           return true;
         }
+        const expenseDirtyState = resolveExpenseDirtyState();
+        if (expenseDirtyState.isDirty && expenseDirtyState.allowed) {
+          st.dirty = true;
+          return true;
+        }
         if (st.dirty && !anyUserDirty()) st.dirty = false;
         return false;
       }
       if (st.dirty) {
         const anyDirty = anyUserDirty();
-        if (!anyDirty) st.dirty = false;
-        return anyDirty;
+        if (anyDirty) return true;
+        const expenseDirtyState = resolveExpenseDirtyState();
+        if (expenseDirtyState.isDirty && expenseDirtyState.allowed) {
+          st.dirty = true;
+          return true;
+        }
+        st.dirty = false;
+        return false;
       }
     } catch {}
+  }
+
+  const expenseDirtyState = resolveExpenseDirtyState();
+  if (expenseDirtyState.isDirty && expenseDirtyState.allowed) {
+    st.dirty = true;
+    return true;
   }
 
 
@@ -110502,21 +110640,24 @@ function classifyBulkAuthoriseEditability(ctxInput) {
 
   const base = (typeof classifyBulkProcessEditability === 'function')
     ? classifyBulkProcessEditability({ ...ctx, row: mergedRow, details })
-    : {
-        canSave: false,
-        canProcess: false,
-        canUnprocess: false,
-        canSwitchToManual: false,
-        canSwitchPlannedWeekToElectronic: false,
-        canRevertToElectronic: false,
-        canAllowQrAgain: false,
-        canAllowElectronicAgain: false,
-        canConvertQrToManualOnly: false,
-        canAddAdditionalManual: false,
-        manualNonQrEditable: false,
-        reviewOnly: true,
-        routeFamily: upper(readFirst([ctx, 'route_family'], [activeCtx, 'route_family'], [row, 'route_family']) || '')
-      };
+    : {};
+  const domainPolicy = (typeof classifyTimesheetEditDomains === 'function')
+    ? classifyTimesheetEditDomains({
+        ...(ctx && typeof ctx === 'object' ? ctx : {}),
+        active_ctx: activeCtx,
+        active_context: (ctx.active_context && typeof ctx.active_context === 'object') ? ctx.active_context : {},
+        row: mergedRow,
+        details,
+        timesheet: ts,
+        tsfin: (tsfin && typeof tsfin === 'object' && Object.keys(tsfin).length) ? tsfin : (mergedRow.tsfin || {}),
+        financial_snapshot: (details.financial_snapshot && typeof details.financial_snapshot === 'object') ? details.financial_snapshot : (mergedRow.financial_snapshot || {}),
+        contract_week: cw,
+        contract_week_id: readFirst([details, 'contract_week_id'], [cw, 'id'], [mergedRow, 'contract_week_id'], [ctx, 'contract_week_id']),
+        state: activeState,
+        action_flags: (details.action_flags && typeof details.action_flags === 'object') ? details.action_flags : {}
+      })
+    : null;
+  const hasSharedDomainPolicy = !!(domainPolicy && typeof domainPolicy === 'object');
 
   const routeFamily = upper(readFirst([ctx, 'route_family'], [activeCtx, 'route_family'], [row, 'route_family']) || base.routeFamily || '');
   const routeSubfamily = upper(readFirst([ctx, 'route_subfamily'], [activeCtx, 'route_subfamily'], [row, 'route_subfamily']) || '');
@@ -110659,7 +110800,8 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     )
   );
 
-  const canEditExpenses = !!(
+  const legacyHoursFallback = manualNonQrEditable;
+  const legacyExpensesFallback = !!(
     hasRealTimesheet &&
     hasFinancialSnapshot &&
     !isSegmentOnlyContext &&
@@ -110667,8 +110809,30 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     (isQr || isManual || effectiveMode === 'MANUAL')
   );
   const hasProcessedExpenses = !!bulkAuthoriseHasProcessedExpensesValue({ ...ctx, details, row, state: activeState, active_ctx: activeCtx });
-  const canOpenExpenses = !!(canEditExpenses || hasProcessedExpenses);
-  const expensesReadOnly = !!(canOpenExpenses && !canEditExpenses);
+  const legacyOpenFallback = !!(legacyExpensesFallback || hasProcessedExpenses);
+  const legacyExpensesReadOnlyFallback = !!(legacyOpenFallback && !legacyExpensesFallback);
+  const legacyCanManageEvidenceFallback = canManageEvidence;
+  const canEditHoursSchedule = hasSharedDomainPolicy
+    ? domainPolicy.canEditHoursSchedule === true
+    : legacyHoursFallback;
+  const canEditExpenses = hasSharedDomainPolicy
+    ? domainPolicy.canEditExpenses === true
+    : legacyExpensesFallback;
+  const canOpenExpenses = hasSharedDomainPolicy
+    ? domainPolicy.canOpenExpenses === true
+    : legacyOpenFallback;
+  const expensesReadOnly = hasSharedDomainPolicy
+    ? domainPolicy.expensesReadOnly === true
+    : legacyExpensesReadOnlyFallback;
+  const expensesDisabledReason = hasSharedDomainPolicy
+    ? String(domainPolicy.expensesDisabledReason || '')
+    : '';
+  const requiresAdditionalManualForExpenses = hasSharedDomainPolicy
+    ? domainPolicy.requiresAdditionalManualForExpenses === true
+    : false;
+  const canManageExpenseEvidence = hasSharedDomainPolicy
+    ? domainPolicy.canManageExpenseEvidence === true
+    : legacyCanManageEvidenceFallback;
 
   const out = {
     ...base,
@@ -110694,12 +110858,16 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     canProcess: false,
     canAuthorise: !isAuthorised && !actionHardLocked && canAuthorise,
     canUnauthorise: isAuthorised && canUnauthoriseWhenUnlocked && canUnauthorise,
+    canEditHoursSchedule,
     canEditTimesheetData: nonAuthorisedCanEditTimesheetData,
     canSave: nonAuthorisedCanSave,
     hasProcessedExpenses,
     canOpenExpenses,
     canEditExpenses,
     expensesReadOnly,
+    expensesDisabledReason,
+    requiresAdditionalManualForExpenses,
+    canManageExpenseEvidence,
     canManageEvidence,
     canUnprocess: nonAuthorisedCanUnprocess,
     canAddAdditionalManual: nonAuthorisedCanAddAdditionalManual,
