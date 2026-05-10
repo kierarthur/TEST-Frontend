@@ -3477,7 +3477,8 @@ async function apiPostJson(path, body, options = {}) {
 
   if (!res.ok) {
     const isBankingPayPath = String(path || '').startsWith('/api/banking/pay/');
-    const contextAction = (options && typeof options === 'object') ? options.action : '';
+    const opts = (options && typeof options === 'object') ? options : {};
+    const contextAction = opts.action;
     const inferBankingAction = (apiPath) => {
       const p = String(apiPath || '').toLowerCase();
       if (p.includes('/blocked-funds') && p.includes('/retry')) return 'RETRY_BLOCKED_FUNDS';
@@ -3500,7 +3501,10 @@ async function apiPostJson(path, body, options = {}) {
     err.json = parsed;
     err.payload = parsed;
     if (isBankingPayPath && typeof bankingNormalizeApiError === 'function') {
-      const normalised = bankingNormalizeApiError(err, parsed, { action: contextAction || inferBankingAction(path) });
+      const normalised = bankingNormalizeApiError(err, parsed, {
+        ...opts,
+        action: contextAction || inferBankingAction(path)
+      });
       if (normalised && typeof normalised === 'object') {
         err.friendly_error = normalised.friendly_error || {
           code: normalised.error_code || normalised.code || 'BANKING_ACTION_FAILED',
@@ -3513,6 +3517,10 @@ async function apiPostJson(path, body, options = {}) {
         err.title = normalised.title || 'Banking action failed';
         err.user_message = normalised.user_message || normalised.message || err.title;
         err.message = normalised.user_message || normalised.message || err.message;
+        err.technical_message = txt || msg;
+        err.statusText = res.statusText || '';
+        err.path = String(path || '');
+        err.backendPayload = parsed;
       }
     }
     throw err;
@@ -26981,7 +26989,14 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
       synced_selected_preview_row_ids_sample: syncedSelectedRows.slice(0, 10)
     });
 
-    const obj = await apiPostJson('/api/banking/pay/batch/create-draft', reqBody);
+    const obj = await apiPostJson('/api/banking/pay/batch/create-draft', reqBody, {
+      action: 'CREATE_DRAFT',
+      userInitiated: true,
+      silent: false,
+      fallbackCode: 'BANKING_PAY_CREATE_DRAFT_FAILED',
+      fallbackTitle: 'Payment batch could not be created',
+      fallbackMessage: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.'
+    });
     const normalised = makeNormalizedCreateDraftResult(obj);
     const postCreateRefresh = (obj && typeof obj === 'object' && obj.post_create_refresh && typeof obj.post_create_refresh === 'object' && !Array.isArray(obj.post_create_refresh))
       ? obj.post_create_refresh
@@ -36365,8 +36380,12 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'PAY_BATCH_AUTH_START_FAILED',
     'PAY_BATCH_FINALISE_FAILED',
     'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
     'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
     'BANKING_PAY_CREATE_DRAFT_FAILED',
+    'BANKING_CREATE_DRAFT_INVALID_PAY_DATE',
+    'BANKING_CREATE_DRAFT_INVALID_INPUT',
     'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED',
     'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
@@ -36386,6 +36405,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'REAUTH_REQUIRED',
     'RAIL_NOT_CONFIGURED',
     'UNKNOWN_RAIL_PROVIDER',
+    'RAIL_RETRY_EXECUTION_NOT_SUPPORTED',
     'MANUAL_CONFIRM_NOT_SUPPORTED_FOR_THIS_RAIL',
     'ACKNOWLEDGEMENT_ALREADY_EXISTS',
     'ACKNOWLEDGEMENT_ALREADY_ACKNOWLEDGED',
@@ -36707,7 +36727,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 400,
       severity: 'warning',
       title: 'PAYE net amounts are missing',
-      message: 'Missing PAYE net amounts. Enter the net amounts, click Save, then try again.',
+      message: 'Enter the missing PAYE net amounts, click Save, then try again.',
       user_action: 'COMPLETE_PAYE_NET_AMOUNTS',
       confirm_label: 'OK',
       show_modal: true
@@ -36872,6 +36892,16 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       confirm_label: 'OK',
       show_modal: true
     },
+    RAIL_RETRY_EXECUTION_NOT_SUPPORTED: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Banking setup needs attention',
+      message: 'CloudTMS could not retry this payment because the configured banking rail does not support retrying this batch. Review Banking settings, then retry or cancel/release the batch.',
+      user_action: 'CHECK_BANKING_SETTINGS',
+      confirm_label: 'OK',
+      show_modal: true
+    },
     MANUAL_CONFIRM_NOT_SUPPORTED_FOR_THIS_RAIL: {
       ok: false,
       http_status: 400,
@@ -36936,7 +36966,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   if (errorCode === 'BATCH_STALE') {
     if (action === 'RETRY_BLOCKED_FUNDS') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch has changed', message: 'This blocked-funds batch is no longer up to date. No payment was submitted. Refresh Banking, review the latest payment differences, then create or authorise a new payment batch.', user_action: 'REFRESH_BATCH' };
     else if (action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'Payment details changed while the batch was being prepared. Refresh the preview, review the latest payment details, then try again.', user_action: 'REFRESH_PREVIEW' };
-    else if (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.', user_action: 'REFRESH_PREVIEW' };
+    else if (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'The payment preview is no longer up to date. Refresh the preview, review the latest payment details, then try again.', user_action: 'REFRESH_PREVIEW' };
     else if (action === 'PAYE_NET_IMPORT' || action === 'PAYE_NET_SAVE') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch has changed', message: 'This batch is no longer up to date. Refresh the batch, review the latest payment details, then try again.', user_action: 'REFRESH_BATCH' };
   } else if (errorCode === 'BLOCKED_FUNDS' && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, ok: false, http_status: 400, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.' };
   else if (errorCode === 'BLOCKED_FUNDS' && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN' || action === 'WORKBENCH_MODAL_ACTION')) {
@@ -36952,11 +36982,11 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   else if (['BLOCKED_BANK_DETAILS', 'SELECTED_PAYEE_ROUTE_NOT_READY'].includes(errorCode)) actionAwareTemplate = { ...actionAwareTemplate, title: 'Bank details need attention', message: 'Review or accept the highlighted bank details, then try again.' };
   else if (['MISSING_RAIL_PROVIDER', 'RAIL_ENV_MISMATCH', 'RAIL_NOT_CONFIGURED', 'UNKNOWN_RAIL_PROVIDER', 'FUNDING_ACCOUNT_MISSING'].includes(errorCode)) actionAwareTemplate = { ...actionAwareTemplate, title: 'Banking setup needs attention', message: 'CloudTMS could not submit this payment because the banking setup is incomplete or unavailable. Review Banking settings and try again.' };
   else if (errorCode === 'NO_TIMESHEETS_READY_FOR_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'There are no payment items ready for this batch. Refresh Banking, review the preview, then try again.' };
-  else if (['BANKING_PAY_CREATE_DRAFT_FAILED', 'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED', 'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED'].includes(errorCode) && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.' };
-  else if (['BANKING_PAY_PREVIEW_FAILED', 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED'].includes(errorCode) && action === 'PREVIEW') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be loaded', message: 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.' };
-  else if (['WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE', 'STALE_SESSION', 'OBSOLETE_SESSION'].includes(errorCode) && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN')) actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.' };
+  else if (['BANKING_PAY_CREATE_DRAFT_FAILED', 'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED', 'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED', 'BANKING_CREATE_DRAFT_INVALID_PAY_DATE', 'BANKING_CREATE_DRAFT_INVALID_INPUT'].includes(errorCode) && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.' };
+  else if (['BANKING_PAY_PREVIEW_FAILED', 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', 'BANKING_PREVIEW_INVALID_PAY_DATE', 'BANKING_PREVIEW_INVALID_INPUT'].includes(errorCode) && action === 'PREVIEW') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be loaded', message: 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.' };
+  else if (['WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE', 'STALE_SESSION', 'OBSOLETE_SESSION'].includes(errorCode) && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN')) actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'The payment preview is no longer up to date. Refresh the preview, review the latest payment details, then try again.' };
   else if (/^WORKBENCH_MODAL_ACTION_INVALID_/.test(errorCode) && action === 'WORKBENCH_MODAL_ACTION') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be updated', message: 'CloudTMS could not save this payment decision. Refresh the preview and try again.' };
-  else if (['WORKBENCH_SESSION_INVALID', 'WORKBENCH_SESSION_NOT_FOUND'].includes(errorCode) && action === 'PREVIEW') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'Refresh Banking Pay preview, review the latest details, then try again.' };
+  else if (['WORKBENCH_SESSION_INVALID', 'WORKBENCH_SESSION_NOT_FOUND'].includes(errorCode) && action === 'PREVIEW') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'The payment preview is no longer up to date. Refresh the preview, review the latest payment details, then try again.' };
   const template = actionAwareTemplate;
 
   const pickSafeIdentifier = (values) => {
@@ -37022,7 +37052,12 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       user_action: template.user_action || 'REFRESH_AND_RETRY',
       severity: template.severity || (template.ok === true ? 'info' : 'error'),
       show_modal: showModal
-    }
+    },
+    showModal,
+    raw_code: normaliseCode((error && error.code) || (isPlainObject(error) ? error.error_code || error.errorCode || error.code : '') || ''),
+    raw_message: safeTrim((error && error.message) || (isPlainObject(error) ? error.message || error.error || error.detail || error.details : '') || rawText || ''),
+    technical_message: safeTrim(rawText || (error && error.stack) || ''),
+    payload: payloads[0] || (isPlainObject(payloadInput) ? payloadInput : null)
   };
 
   if (batchId) result.batch_id = batchId;
@@ -58147,6 +58182,7 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
     accepted: false,
     busy: false,
     error: '',
+    friendlyError: null,
     resolveAllLinked: existingCaseResolution?.resolve_all_linked_timesheets === true ? true : !!caseIsLinkable
   };
 
@@ -58416,7 +58452,18 @@ async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
         closeChild();
       } catch (e) {
         state.busy = false;
-        state.error = trimStr(e?.message || e || 'Failed to apply suggested rates.');
+        const friendly = (typeof bankingNormalizeApiError === 'function')
+          ? bankingNormalizeApiError(e, e?.payload || e?.json || null, {
+            action: 'WORKBENCH_MODAL_ACTION',
+            userInitiated: true,
+            silent: false,
+            fallbackCode: 'BANKING_ACTION_FAILED',
+            fallbackTitle: 'Payment preview could not be updated',
+            fallbackMessage: 'CloudTMS could not save this payment decision. Refresh the preview and try again.'
+          })
+          : null;
+        state.friendlyError = friendly && typeof friendly === 'object' ? friendly : null;
+        state.error = trimStr(friendly?.user_message || friendly?.message || 'CloudTMS could not save this payment decision. Refresh the preview and try again.');
         await rerenderChild();
       }
     };
