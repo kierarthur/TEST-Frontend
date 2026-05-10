@@ -75264,37 +75264,38 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
       session_signature: trimStr(payloadObj?.session_signature || payloadObj?.sessionSignature || sessionObj.session_signature || sessionObj.sessionSignature || previewObj?.session_signature || previewObj?.sessionSignature || previewSessionObj.session_signature || previewSessionObj.sessionSignature || '')
     };
   };
-  const res = await authFetch(API('/api/banking/pay/workbench/session/open'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(isPlainObject(payload) ? payload : {})
-  });
-  const json = await parseJsonResponse(res);
-  if (!res.ok) {
-    const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.payload = json;
-    throw err;
-  }
-  const payloadObj = isPlainObject(json) ? json : {};
-  const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : payloadObj;
-  const expectedPayDate = parseIsoOrUkDateToIso(payload?.pay_date || payload?.payDate || '');
-  const expectedWeekEndingCutoffDate = normalizeCutoffDate(payload?.week_ending_cutoff_date || payload?.weekEndingCutoffDate || payload?.week_ending_cutoff || payload?.weekEndingCutoff || '');
-  const expectedSessionSignature = trimStr(payload?.session_signature || payload?.sessionSignature || '');
-  const returnedContext = getEnvelopeContext(payloadObj, previewObj);
-  if (expectedPayDate && returnedContext.pay_date && returnedContext.pay_date !== expectedPayDate) {
-    const err = new Error('Banking preview returned a different payroll date from the requested workbench session.');
-    err.status = 409;
-    err.payload = {
-      ok: false,
-      code: 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
-      expected_pay_date: expectedPayDate,
-      returned_pay_date: returnedContext.pay_date,
-      response: payloadObj
-    };
-    throw err;
-  }
+  try {
+    const res = await authFetch(API('/api/banking/pay/workbench/session/open'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(isPlainObject(payload) ? payload : {})
+    });
+    const json = await parseJsonResponse(res);
+    if (!res.ok) {
+      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
+      const err = new Error(msg);
+      err.status = res.status;
+      err.payload = json;
+      throw err;
+    }
+    const payloadObj = isPlainObject(json) ? json : {};
+    const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : payloadObj;
+    const expectedPayDate = parseIsoOrUkDateToIso(payload?.pay_date || payload?.payDate || '');
+    const expectedWeekEndingCutoffDate = normalizeCutoffDate(payload?.week_ending_cutoff_date || payload?.weekEndingCutoffDate || payload?.week_ending_cutoff || payload?.weekEndingCutoff || '');
+    const expectedSessionSignature = trimStr(payload?.session_signature || payload?.sessionSignature || '');
+    const returnedContext = getEnvelopeContext(payloadObj, previewObj);
+    if (expectedPayDate && returnedContext.pay_date && returnedContext.pay_date !== expectedPayDate) {
+      const err = new Error('Banking preview returned a different payroll date from the requested workbench session.');
+      err.status = 409;
+      err.payload = {
+        ok: false,
+        code: 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+        expected_pay_date: expectedPayDate,
+        returned_pay_date: returnedContext.pay_date,
+        response: payloadObj
+      };
+      throw err;
+    }
   if (expectedWeekEndingCutoffDate && returnedContext.week_ending_cutoff_date && returnedContext.week_ending_cutoff_date !== expectedWeekEndingCutoffDate) {
     const err = new Error('Banking preview returned a different week-ending cutoff from the requested workbench session.');
     err.status = 409;
@@ -75323,22 +75324,28 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
       throw err;
     }
   }
-  return {
-    ok: true,
-    ...(cloneJson(payloadObj) || {}),
-    preview: cloneJson(previewObj) || previewObj,
-    session_id: trimStr(payloadObj.session_id || previewObj.session_id || payloadObj.session?.session_id || ''),
-    snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || payloadObj.session?.snapshot_run_id || ''),
-    session_version: payloadObj.session_version ?? previewObj.session_version ?? payloadObj.session?.session_version ?? null,
-    pay_date: returnedContext.pay_date || trimStr(payloadObj.pay_date || previewObj.pay_date || payloadObj.session?.pay_date || ''),
-    week_ending_cutoff_date: returnedContext.week_ending_cutoff_date,
-    week_ending_cutoff: returnedContext.week_ending_cutoff_date,
-    session_signature: returnedContext.session_signature || trimStr(payloadObj.session_signature || previewObj.session_signature || payloadObj.session?.session_signature || ''),
-    pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) || [] : [],
-    failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) || [] : [],
-    server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) || [] : [],
-    server_selected_preview_row_ids_provided: payloadObj.server_selected_preview_row_ids_provided === true || previewObj.server_selected_preview_row_ids_provided === true || payloadObj.session?.server_selected_preview_row_ids_provided === true
-  };
+    return {
+      ok: true,
+      ...(cloneJson(payloadObj) || {}),
+      preview: cloneJson(previewObj) || previewObj,
+      session_id: trimStr(payloadObj.session_id || previewObj.session_id || payloadObj.session?.session_id || ''),
+      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || payloadObj.session?.snapshot_run_id || ''),
+      session_version: payloadObj.session_version ?? previewObj.session_version ?? payloadObj.session?.session_version ?? null,
+      pay_date: returnedContext.pay_date || trimStr(payloadObj.pay_date || previewObj.pay_date || payloadObj.session?.pay_date || ''),
+      week_ending_cutoff_date: returnedContext.week_ending_cutoff_date,
+      week_ending_cutoff: returnedContext.week_ending_cutoff_date,
+      session_signature: returnedContext.session_signature || trimStr(payloadObj.session_signature || previewObj.session_signature || payloadObj.session?.session_signature || ''),
+      pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) || [] : [],
+      failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) || [] : [],
+      server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) || [] : [],
+      server_selected_preview_row_ids_provided: payloadObj.server_selected_preview_row_ids_provided === true || previewObj.server_selected_preview_row_ids_provided === true || payloadObj.session?.server_selected_preview_row_ids_provided === true
+    };
+  } catch (error) {
+    if (typeof bankingNormalizeApiError === 'function') {
+      throw bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'WORKBENCH_SESSION_OPEN', userInitiated: true });
+    }
+    throw error;
+  }
 }
 
 
