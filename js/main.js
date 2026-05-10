@@ -185323,6 +185323,35 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
     el.removeAttribute('readonly');
   }
 });
+// Timesheet domain-level lock overrides (Handover 3)
+try {
+  const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+  const isTimesheet = !!(top && top.entity === 'timesheets');
+  if (isTimesheet) {
+    const mc = window.modalCtx || {};
+    const det = mc.timesheetDetails || {};
+    const ts = det.timesheet || {};
+    const tf = det.tsfin || {};
+    const policy = mc.timesheetEditDomains || (typeof classifyTimesheetEditDomains === 'function'
+      ? classifyTimesheetEditDomains({ row: mc.data || {}, details: det, timesheet: ts, tsfin: tf, state: mc.timesheetState || {} })
+      : null);
+    const lockHours = !!(policy && policy.canEditHoursSchedule === false);
+    const lockExpenses = !!(policy && (policy.canEditExpenses === false || policy.expensesReadOnly === true));
+    const lockEvidence = !!(policy && policy.canManageExpenseEvidence === false);
+    if (lockHours) {
+      root.querySelectorAll('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],input[name^=\"extra_units_\"],button[data-ts-action]').forEach((el) => {
+        el.disabled = true; try { el.setAttribute('readonly', 'true'); } catch {}
+      });
+    }
+    root.querySelectorAll('input[data-exp-field],textarea[data-exp-field]').forEach((el) => {
+      if (lockExpenses || ro) { el.disabled = true; try { el.setAttribute('readonly', 'true'); } catch {} }
+      else { el.disabled = false; try { el.removeAttribute('readonly'); } catch {} }
+    });
+    if (lockEvidence) {
+      root.querySelectorAll('[data-evidence-remove],[data-evidence-return],[data-evidence-manage],[data-evidence-add],[data-evidence-upload]').forEach((el) => { el.disabled = true; });
+    }
+  }
+} catch {}
   const _allAfter = root.querySelectorAll('input, select, textarea, button');
   const afterDisabled = Array.from(_allAfter).filter(el => el.disabled).length;
   try {
@@ -188323,7 +188352,11 @@ if (this.entity === 'timesheets' && k === 'expenses') {
 
     // ✅ If the tab is disabled, do not wire anything (keeps it inert even if called programmatically)
     const enabled = !!mc.expenses_tab_enabled;
-    if (!enabled) {
+    const policy = mc.timesheetEditDomains || (typeof classifyTimesheetEditDomains === 'function'
+      ? classifyTimesheetEditDomains({ row: mc.data || {}, details: mc.timesheetDetails || {}, state: mc.timesheetState || {} })
+      : null);
+    const canEditExpenses = !!(policy ? (policy.canEditExpenses === true && policy.expensesReadOnly !== true) : true);
+    if (!enabled || !canEditExpenses) {
       if (LOGM) LT('expenses tab disabled; skip wiring', { reason: mc.expenses_tab_reason || '' });
     } else if (root) {
       mc.timesheetState = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
@@ -188378,7 +188411,7 @@ if (this.entity === 'timesheets' && k === 'expenses') {
         setText('[data-exp-out="total_charge"]',  `£${totChg.toFixed(2)}`);
       };
 
-      const inputs = root.querySelectorAll('input[data-exp-field]');
+      const inputs = root.querySelectorAll('input[data-exp-field], textarea[data-exp-field]');
       inputs.forEach(inp => {
         if (inp.__tsExpWired) return;
         inp.__tsExpWired = true;
@@ -188387,16 +188420,31 @@ if (this.entity === 'timesheets' && k === 'expenses') {
           const field = String(inp.getAttribute('data-exp-field') || '').trim();
           if (!field) return;
 
+          const isNote = (field === 'note');
           const raw = String(inp.value || '').trim();
-          const val = (raw === '') ? 0 : Number(raw);
-          const n = Number.isFinite(val) ? val : 0;
+          const val = isNote ? raw : ((raw === '') ? 0 : Number(raw));
+          const n = isNote ? raw : (Number.isFinite(val) ? val : 0);
 
           mc.timesheetState.expensesDraft[field] = n;
 
           // Update computed display cells live (no re-render)
+          if (typeof recalculateTimesheetExpenseTotals === 'function') {
+            const rates = {
+              mileage_pay_rate: Number(mc?.timesheetDetails?.tsfin?.mileage_pay_rate ?? 0),
+              mileage_charge_rate: Number(mc?.timesheetDetails?.tsfin?.mileage_charge_rate ?? 0)
+            };
+            recalculateTimesheetExpenseTotals(mc.timesheetState.expensesDraft, rates);
+          }
           recomputeAndPaint();
-
-          try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+          const dres = (typeof isTimesheetExpensesDraftDirty === 'function')
+            ? isTimesheetExpensesDraftDirty(
+                normaliseTimesheetExpensesDraft(mc.timesheetState.expensesDraft || {}),
+                normaliseTimesheetExpensesDraft(mc.timesheetState.expensesBaseline || {})
+              )
+            : { dirty: true };
+          if (dres && dres.dirty) {
+            try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+          }
         });
       });
 
@@ -211032,6 +211080,9 @@ function renderTimesheetExpensesTab(ctx) {
   const tf   = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : null;
   const cw   = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : null;
 
+  const editPolicy = (typeof classifyTimesheetEditDomains === 'function')
+    ? classifyTimesheetEditDomains({ row, details, tsfin: tf, timesheet: ts, contract_week: cw, state, ctx: c })
+    : null;
   const hasTs  = !!(ts && ts.timesheet_id);
   const hasFin = !!tf;
   const hasContractWeek = !!(details.contract_week_id || row.contract_week_id || cw?.id);
@@ -211063,11 +211114,16 @@ function renderTimesheetExpensesTab(ctx) {
     c.expensesForceOpen ||
     state.expensesForceOpen
   );
-  const enabled = !!(enabledByRoute || forceOpenForProcessed);
+  const enabled = editPolicy
+    ? (editPolicy.canOpenExpenses === true)
+    : !!(enabledByRoute || forceOpenForProcessed);
 
   const locked  = !!(tf && (tf.locked_by_invoice_id || tf.paid_at_utc));
   const authorised = !!(ts?.authorised_at_server || row.authorised_at_server);
-  const readOnly = !!(forcedReadOnly || locked || authorised);
+  const readOnly = !!(
+    (editPolicy && (editPolicy.canEditExpenses === false || editPolicy.expensesReadOnly === true)) ||
+    forcedReadOnly || locked || authorised
+  );
 
   const draft = (state.expensesDraft && typeof state.expensesDraft === 'object')
     ? state.expensesDraft
@@ -211139,15 +211195,15 @@ function renderTimesheetExpensesTab(ctx) {
 
   // Evidence requirements (UX guidance only; hard enforcement happens on Save/Process)
   const needsMileageEvidence = mileageUnits > 0;
-  const needsTravelEvidence  = travelChg > 0;
-  const needsAccomEvidence   = accomChg > 0;
-  const needsOtherEvidence   = otherChg > 0;
+  const needsTravelEvidence  = (travelPay > 0 || travelChg > 0);
+  const needsAccomEvidence   = (accomPay > 0 || accomChg > 0);
+  const needsOtherEvidence   = (otherPay > 0 || otherChg > 0);
 
   const evidenceLines = [];
   if (needsMileageEvidence) evidenceLines.push('• Mileage requires evidence kind MILEAGE (when units > 0).');
-  if (needsTravelEvidence)  evidenceLines.push('• Travel requires evidence kind TRAVEL (when charge > £0.00).');
-  if (needsAccomEvidence)   evidenceLines.push('• Accommodation requires evidence kind ACCOMMODATION (when charge > £0.00).');
-  if (needsOtherEvidence)   evidenceLines.push('• Other requires evidence kind OTHER (when charge > £0.00).');
+  if (needsTravelEvidence)  evidenceLines.push('• Travel requires evidence kind TRAVEL (when pay or charge > £0.00).');
+  if (needsAccomEvidence)   evidenceLines.push('• Accommodation requires evidence kind ACCOMMODATION (when pay or charge > £0.00).');
+  if (needsOtherEvidence)   evidenceLines.push('• Other requires evidence kind OTHER (when pay or charge > £0.00).');
 
   const isBulkProcessModal = String(window?.modalCtx?.entity || '').trim().toLowerCase() === 'bulk-process';
   const evidenceHint =
@@ -211225,7 +211281,7 @@ function renderTimesheetExpensesTab(ctx) {
           <div style="overflow:auto;border:1px solid var(--line);border-radius:10px">
             <table class="grid" style="min-width:720px;table-layout:auto">
               <thead>
-                <tr>
+                <tr data-mileage-pay-rate="${Number.isFinite(mileagePayRate) ? String(mileagePayRate) : ''}" data-mileage-charge-rate="${Number.isFinite(mileageChargeRate) ? String(mileageChargeRate) : ''}">
                   <th style="width:220px">Expense Type</th>
                   <th style="width:140px">Units</th>
                   <th style="width:160px">Pay</th>
@@ -217716,21 +217772,37 @@ const hasTsForExpenses = !!canonicalTimesheetId;
 const qrStatusRaw = (details && (details.qr_status ?? (tsLocal && tsLocal.qr_status))) ?? null;
 const hasQr = !!(qrStatusRaw && String(qrStatusRaw).trim());
 
-const expensesTabEnabled =
-  !!hasTsForExpenses &&
-  !!hasFin &&
-  (sheetScope !== 'SEGMENT') &&
-  (subMode === 'MANUAL' || hasQr);
+const timesheetEditDomains = (typeof classifyTimesheetEditDomains === 'function')
+  ? classifyTimesheetEditDomains({
+      row: baseRow,
+      details,
+      timesheet: details?.timesheet || null,
+      tsfin: details?.tsfin || null,
+      contract_week: details?.contract_week || null,
+      state: window.modalCtx?.timesheetState || null
+    })
+  : null;
 
-const expensesTabReason = !hasTsForExpenses
-  ? 'Expenses are available once a timesheet exists.'
-  : (!hasFin
-      ? 'Expenses unavailable until TSFIN snapshot exists.'
-      : ((sheetScope === 'SEGMENT')
-          ? 'Expenses must be added via Manual Timesheet for Segment Timesheets'
-          : (!(subMode === 'MANUAL' || hasQr)
-              ? 'Expenses are available for Manual or QR timesheets.'
-              : '')));
+const expensesTabEnabled = (timesheetEditDomains && typeof timesheetEditDomains.canOpenExpenses === 'boolean')
+  ? (timesheetEditDomains.canOpenExpenses === true)
+  : (
+      !!hasTsForExpenses &&
+      !!hasFin &&
+      (sheetScope !== 'SEGMENT') &&
+      (subMode === 'MANUAL' || hasQr)
+    );
+
+const expensesTabReason = (timesheetEditDomains && timesheetEditDomains.canOpenExpenses === false)
+  ? String(timesheetEditDomains.expensesDisabledReason || 'Expenses are not available for this timesheet.')
+  : (!hasTsForExpenses
+      ? 'Expenses are available once a timesheet exists.'
+      : (!hasFin
+          ? 'Expenses unavailable until TSFIN snapshot exists.'
+          : ((sheetScope === 'SEGMENT')
+              ? 'Expenses must be added via Manual Timesheet for Segment Timesheets'
+              : (!(subMode === 'MANUAL' || hasQr)
+                  ? 'Expenses are available for Manual or QR timesheets.'
+                  : ''))));
 
 
 // ─────────────────────────────────────────────
@@ -218184,6 +218256,11 @@ try {
   // ✅ NEW: expenses tab state (always visible, disabled unless eligible)
   expenses_tab_enabled: !!expensesTabEnabled,
   expenses_tab_reason: String(expensesTabReason || ''),
+  timesheetEditDomains: timesheetEditDomains || null,
+  expenses_read_only: !!(timesheetEditDomains && timesheetEditDomains.expensesReadOnly === true),
+  can_edit_hours_schedule: !!(timesheetEditDomains && timesheetEditDomains.canEditHoursSchedule === true),
+  hours_schedule_disabled_reason: String(timesheetEditDomains?.hoursScheduleDisabledReason || ''),
+  can_manage_expense_evidence: !!(timesheetEditDomains && timesheetEditDomains.canManageExpenseEvidence === true),
 
   data: canonicalModalData,
 
@@ -218915,7 +218992,10 @@ const onSaveTimesheet = async () => {
 
   const stagedExpenses   = normExpenses(st.expensesDraft);
   const baselineExpenses = normExpenses(st.expensesBaseline);
-  const expensesChanged  = stableStringify(stagedExpenses) !== stableStringify(baselineExpenses);
+  const expenseDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+    ? isTimesheetExpensesDraftDirty(stagedExpenses, baselineExpenses)
+    : { dirty: stableStringify(stagedExpenses) !== stableStringify(baselineExpenses), expensesDirty: false, mileageDirty: false };
+  const expensesChanged  = !!(expenseDirtyResult && expenseDirtyResult.dirty);
 
   // Daily schedule change detection
   const buildDailyScheduleFromLines = () => {
@@ -218996,12 +219076,21 @@ const onSaveTimesheet = async () => {
     !deepEqualJson(stagedSchedule, currentSchedule);
 
   // ✅ NEW: Frontend enforcement — cannot change hours/schedule/extras/expenses while authorised
+  const policy = (window.modalCtx && window.modalCtx.timesheetEditDomains) ? window.modalCtx.timesheetEditDomains : (
+    (typeof classifyTimesheetEditDomains === 'function')
+      ? classifyTimesheetEditDomains({ row: rowNow, details: det, timesheet: tsLocal, tsfin: tsfinLocal, state: st })
+      : null
+  );
   const isAuthorisedNow = !!(tsLocal.authorised_at_server || rowNow.authorised_at_server);
   const isAuthorisedContentChangeAttempt =
     (scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily || expensesChanged);
 
   if (isAuthorisedNow && isAuthorisedContentChangeAttempt) {
-    alert('This timesheet is authorised. Unauthorise it before changing hours.');
+    if (expensesChanged && !(scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily)) {
+      alert('This timesheet is authorised. Unauthorise it before changing expenses.');
+    } else {
+      alert('This timesheet is authorised. Unauthorise it before changing hours.');
+    }
     GE();
     return { ok: false };
   }
@@ -219141,6 +219230,52 @@ const onSaveTimesheet = async () => {
   });
 
   const tasks = [];
+  const hoursScheduleDirty = !!(scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily);
+  if (hoursScheduleDirty && policy && policy.canEditHoursSchedule === false) {
+    alert(policy.hoursScheduleDisabledReason || 'This timesheet was submitted electronically/through QR. To amend hours, switch it to Manual first.');
+    GE();
+    return { ok: false };
+  }
+  const onlyExpensesDirty = !!(expensesChanged && !hoursScheduleDirty && !refChanged && !hasSegOverrides && !hasSegTargets && !shouldChangeHold);
+  if (onlyExpensesDirty && tsIdSave) {
+    if (isAuthorisedNow) {
+      alert('This timesheet is authorised. Unauthorise it before changing expenses.');
+      GE();
+      return { ok: false };
+    }
+    if (lockedNow) {
+      alert((policy && policy.expensesDisabledReason) || 'This timesheet is invoiced, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.');
+      GE();
+      return { ok: false };
+    }
+    const saveExpOnly = await commitTimesheetExpensesMileageDraft({
+      timesheetId: tsIdSave,
+      expectedTimesheetId: window.modalCtx?.timesheetMeta?.expected_timesheet_id || null,
+      draft: stagedExpenses,
+      baseline: baselineExpenses,
+      row: rowNow,
+      details: det,
+      state: st,
+      source: 'simple',
+      onAdoptMovedTimesheetId: (typeof tsModalAdoptTimesheetId === 'function') ? tsModalAdoptTimesheetId : undefined
+    });
+    if (!saveExpOnly || saveExpOnly.ok === false) {
+      alert(String(saveExpOnly?.message || 'Failed to save expenses.'));
+      if (saveExpOnly && saveExpOnly.evidenceRequired) {
+        try {
+          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (fr && fr.entity === 'timesheets' && typeof fr.setTab === 'function') {
+            await fr.setTab('evidence');
+          }
+        } catch {}
+      }
+      GE();
+      return { ok: false };
+    }
+    try { st.expensesBaseline = JSON.parse(JSON.stringify(saveExpOnly.committedDraft || stagedExpenses)); } catch {}
+    GE();
+    return { ok: true, saved: rowNow };
+  }
 
    // ✅ WEEKLY MANUAL: schedule-driven ONLY (planned: draft endpoint; processed: manualUpsertContractWeek)
   if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly || (isPlannedWeeklyWithoutTs && expensesChanged))) {
@@ -219496,180 +219631,33 @@ if (det.isSegmentsMode && (hasSegOverrides || hasSegTargets) && (tsIdSave || row
   // ─────────────────────────────────────────────────────────────
   if (expensesChanged && tsIdSave) {
     tasks.push(async () => {
-      const expected = window.modalCtx?.timesheetMeta?.expected_timesheet_id || tsIdSave;
-
-      const d = (window.modalCtx?.timesheetState?.expensesDraft && typeof window.modalCtx.timesheetState.expensesDraft === 'object')
-        ? window.modalCtx.timesheetState.expensesDraft
-        : {};
-
-      // Pull current TSFIN rates for mileage so backend gets consistent values (units * rate)
-      const detNow = window.modalCtx?.timesheetDetails || det || {};
-      const finNow = detNow?.tsfin || tsfinLocal || {};
-
-      const mileageUnits = Number(d.mileage_units ?? 0) || 0;
-      const mileagePayRate = Number(finNow?.mileage_pay_rate ?? 0) || 0;
-      const mileageChargeRate = Number(finNow?.mileage_charge_rate ?? 0) || 0;
-
-      const mileagePayEx = round2(mileageUnits * mileagePayRate);
-      const mileageChargeEx = round2(mileageUnits * mileageChargeRate);
-
-      // 1) Patch expense category amounts (TSFIN canonical columns)
-      const payloadExpenses = {
-        expected_timesheet_id: expected,
-        expenses: {
-          travel_pay_ex_vat: round2(d.travel_pay ?? 0),
-          travel_charge_ex_vat: round2(d.travel_charge ?? 0),
-
-          accommodation_pay_ex_vat: round2(d.accommodation_pay ?? 0),
-          accommodation_charge_ex_vat: round2(d.accommodation_charge ?? 0),
-
-          other_pay_ex_vat: round2(d.other_pay ?? 0),
-          other_charge_ex_vat: round2(d.other_charge ?? 0),
-
-          // notes/meta only
-          description: String(d.note ?? '').trim()
-        }
-      };
-
-      // 2) Patch mileage (units + derived amounts + rates)
-      const payloadMileage = {
-        expected_timesheet_id: expected,
-        mileage: {
-          mileage_units: mileageUnits,
-          pay_rate: mileagePayRate,
-          charge_rate: mileageChargeRate,
-          pay_ex_vat: mileagePayEx,
-          charge_ex_vat: mileageChargeEx
-        }
-      };
-
-      // Helper: handle evidence-required errors in a user-friendly way
-      const handleEvidenceRequired = (err) => {
-        const j = (err && err.json && typeof err.json === 'object') ? err.json : null;
-        if (!(err?.status === 400 && j && j.error === 'EVIDENCE_REQUIRED')) return false;
-
-        const missing = Array.isArray(j.missing) ? j.missing : [];
-        const lines = missing.map(m => {
-          const cat = String(m?.category || '').trim();
-          const kind = String(m?.required_kind || '').trim();
-          return `- ${cat || 'Expense'}: upload evidence kind ${kind || 'REQUIRED'}`;
-        });
-
-        alert(
-          'Evidence is required before you can save these expenses:\n\n' +
-          (lines.length ? lines.join('\n') : '- Upload the required evidence in the Evidence tab.') +
-          '\n\nGo to the Evidence tab and upload the correct kind(s), then try Save again.'
-        );
-
-        try {
+      const result = await commitTimesheetExpensesMileageDraft({
+        timesheetId: tsIdSave,
+        expectedTimesheetId: window.modalCtx?.timesheetMeta?.expected_timesheet_id || null,
+        draft: stagedExpenses,
+        baseline: baselineExpenses,
+        row: rowNow,
+        details: det,
+        state: st,
+        source: 'simple',
+        onAdoptMovedTimesheetId: (typeof tsModalAdoptTimesheetId === 'function') ? tsModalAdoptTimesheetId : undefined
+      });
+      if (!result || result.ok === false) {
+        const msg = String(result?.message || 'Expenses save blocked.');
+        if (result && result.evidenceRequired) {
+          alert(msg);
           const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
           if (fr && fr.entity === 'timesheets' && typeof fr.setTab === 'function') {
-            Promise.resolve().then(() => { try { fr.setTab('evidence'); } catch {} });
+            try { await fr.setTab('evidence'); } catch {}
           }
-        } catch {}
-
-        return true;
-      };
-
-      // ✅ Use the TSFIN patch endpoints (canonical)
-      //    - /api/tsfin/:timesheet_id/expenses
-      //    - /api/tsfin/:timesheet_id/mileage
-      try {
-        const res1 = await apiPatchJson(
-          `/api/tsfin/${encodeURIComponent(tsIdSave)}/expenses`,
-          payloadExpenses
-        );
-
-        const moved1 =
-          (res1 && (res1.current_timesheet_id || res1.timesheet_id))
-            ? String(res1.current_timesheet_id || res1.timesheet_id)
-            : null;
-
-           if (moved1 && String(moved1) !== String(tsIdSave)) {
-          tsIdSave = moved1;
-
-          if (typeof tsModalAdoptTimesheetId === 'function') {
-            await tsModalAdoptTimesheetId(moved1, { refreshDetails: false });
-          } else {
-            if (window.modalCtx?.data) {
-              window.modalCtx.data.timesheet_id = moved1;
-              window.modalCtx.data.id = moved1;
-            }
-
-            window.modalCtx.formState =
-              (window.modalCtx?.formState && typeof window.modalCtx.formState === 'object')
-                ? window.modalCtx.formState
-                : {};
-
-            window.modalCtx.formState.__forId = moved1;
-
-            if (window.modalCtx?.timesheetMeta) {
-              window.modalCtx.timesheetMeta.expected_timesheet_id = moved1;
-              window.modalCtx.timesheetMeta.hasTs = true;
-              window.modalCtx.timesheetMeta.isPlannedWeek = false;
-            }
-          }
+        } else {
+          alert(msg);
         }
-      } catch (err) {
-        if (handleEvidenceRequired(err)) { try { err.__handled = true; } catch {} }
-        throw err;
+        const e = new Error(msg);
+        e.__handled = true;
+        throw e;
       }
-
-      try {
-        const res2 = await apiPatchJson(
-          `/api/tsfin/${encodeURIComponent(tsIdSave)}/mileage`,
-          payloadMileage
-        );
-
-        const moved2 =
-          (res2 && (res2.current_timesheet_id || res2.timesheet_id))
-            ? String(res2.current_timesheet_id || res2.timesheet_id)
-            : null;
-
-        if (moved2 && String(moved2) !== String(tsIdSave)) {
-          tsIdSave = moved2;
-
-          if (typeof tsModalAdoptTimesheetId === 'function') {
-            await tsModalAdoptTimesheetId(moved2, { refreshDetails: false });
-          } else {
-            if (window.modalCtx?.data) {
-              window.modalCtx.data.timesheet_id = moved2;
-              window.modalCtx.data.id = moved2;
-            }
-
-            window.modalCtx.formState =
-              (window.modalCtx?.formState && typeof window.modalCtx.formState === 'object')
-                ? window.modalCtx.formState
-                : {};
-
-            window.modalCtx.formState.__forId = moved2;
-
-            if (window.modalCtx?.timesheetMeta) {
-              window.modalCtx.timesheetMeta.expected_timesheet_id = moved2;
-              window.modalCtx.timesheetMeta.hasTs = true;
-              window.modalCtx.timesheetMeta.isPlannedWeek = false;
-            }
-          }
-        }
-      } catch (err) {
-        if (handleEvidenceRequired(err)) { try { err.__handled = true; } catch {} }
-        throw err;
-      }
-
-      // Refresh details so totals + tsfin reflect saved expenses immediately
-      try {
-        const idNow = (window.modalCtx?.data?.timesheet_id || tsIdSave || null);
-        if (idNow) {
-          const fresh = await fetchTimesheetDetails(idNow);
-          window.modalCtx.timesheetDetails = fresh;
-        }
-      } catch {}
-
-      // Advance baseline so subsequent saves don’t re-send unchanged expenses
-      try {
-        window.modalCtx.timesheetState.expensesBaseline =
-          JSON.parse(JSON.stringify(normExpenses(window.modalCtx.timesheetState.expensesDraft)));
-      } catch {}
+      try { window.modalCtx.timesheetState.expensesBaseline = JSON.parse(JSON.stringify(result?.committedDraft || stagedExpenses)); } catch {}
     });
   }
 
@@ -219986,14 +219974,20 @@ function renderWeeklyManualScheduleEditor(opts) {
     // ✅ NEW: authorised guard — schedule/hours/extras must NOT be editable while authorised
     const isAuthorised = !!(ts.authorised_at_server || row.authorised_at_server);
 
-    const canEditSchedule = isBulkProcess
-      ? (sheetScope === 'WEEKLY' && subMode === 'MANUAL')
-      : (isEditMode && !locked && !isAuthorised && !forceReadOnly && subMode === 'MANUAL');
+    const policy = (opts && opts.policy) || (ctx && ctx.timesheetEditDomains) || (window.modalCtx && window.modalCtx.timesheetEditDomains) || null;
+    const policyCanEditHours = (policy && typeof policy.canEditHoursSchedule === 'boolean') ? policy.canEditHoursSchedule : null;
+    const canEditSchedule = (policyCanEditHours === null)
+      ? (isBulkProcess
+        ? (sheetScope === 'WEEKLY' && subMode === 'MANUAL')
+        : (isEditMode && !locked && !isAuthorised && !forceReadOnly && subMode === 'MANUAL'))
+      : (!!policyCanEditHours && isEditMode && !locked && !isAuthorised && !forceReadOnly);
     state.__weeklyScheduleReadOnly = !canEditSchedule;
 
-    const authorisedMsgHtml = (isAuthorised || forceReadOnly)
-      ? '<span class="mini">Unauthorise first before editing timesheet data.</span>'
-      : '';
+    const authorisedMsgHtml = (!canEditSchedule && policy && policy.hoursScheduleDisabledReason)
+      ? `<span class="mini">${escapeHtml(policy.hoursScheduleDisabledReason)}</span>`
+      : ((isAuthorised || forceReadOnly)
+        ? '<span class="mini">Unauthorise first before editing timesheet data.</span>'
+        : '');
 
     // Build full 7-day week list (always show all days)
     const dowShort = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -223527,11 +223521,17 @@ function renderDailyManualScheduleEditor(opts) {
 
   const isEditMode = (frameMode === 'edit' || frameMode === 'create');
   const isAuthorised = !!(ts?.authorised_at_server || row?.authorised_at_server);
-  const canEditSchedule = isEditMode && !locked && !isAuthorised && !forceReadOnly;
+  const policy = (opts && opts.policy) || (ctx && ctx.timesheetEditDomains) || (window.modalCtx && window.modalCtx.timesheetEditDomains) || null;
+  const policyCanEditHours = (policy && typeof policy.canEditHoursSchedule === 'boolean') ? policy.canEditHoursSchedule : null;
+  const canEditSchedule = (policyCanEditHours === null)
+    ? (isEditMode && !locked && !isAuthorised && !forceReadOnly)
+    : (!!policyCanEditHours && isEditMode && !locked && !isAuthorised && !forceReadOnly);
 
-  const authorisedMsgHtml = (isAuthorised || forceReadOnly)
-    ? '<span class="mini">Unauthorise first before editing timesheet data.</span>'
-    : '';
+  const authorisedMsgHtml = (!canEditSchedule && policy && policy.hoursScheduleDisabledReason)
+    ? `<span class="mini">${escapeHtml(policy.hoursScheduleDisabledReason)}</span>`
+    : ((isAuthorised || forceReadOnly)
+      ? '<span class="mini">Unauthorise first before editing timesheet data.</span>'
+      : '');
 
   const trimStr = (v) => String(v == null ? '' : v).trim();
 
@@ -225215,14 +225215,26 @@ function renderTimesheetEvidenceTab(ctx) {
     details?.evidence_meta?.route_evidence_editable === true ||
     state?.evidence_meta?.route_evidence_editable === true
   );
-  const canManageEvidence = !!(
-    !importAuthoritative &&
-    !boolish(row.is_view_only) &&
-    !boolish(details.is_view_only) &&
-    !boolish(details.evidence_document_locked) &&
-    !boolish(row.evidence_document_locked) &&
-    positiveEvidencePermission
-  );
+  const policy = (typeof classifyTimesheetEditDomains === 'function')
+    ? classifyTimesheetEditDomains({ row, details, timesheet: ts, tsfin: details?.tsfin, state, ctx })
+    : null;
+  const policyAllowsEvidence = policy ? (policy.canManageExpenseEvidence === true) : null;
+  const canManageEvidence = policy
+    ? !!(
+        policyAllowsEvidence &&
+        !boolish(row.is_view_only) &&
+        !boolish(details.is_view_only) &&
+        !boolish(details.evidence_document_locked) &&
+        !boolish(row.evidence_document_locked)
+      )
+    : !!(
+        !importAuthoritative &&
+        !boolish(row.is_view_only) &&
+        !boolish(details.is_view_only) &&
+        !boolish(details.evidence_document_locked) &&
+        !boolish(row.evidence_document_locked) &&
+        positiveEvidencePermission
+      );
   const authorised = !!boolish(row.is_authorised || ts.is_authorised || details?.tsfin?.authorised_at_utc || ts.authorised_at_utc);
   const lockReason = String(details.evidence_lock_reason || row.evidence_lock_reason || '').trim();
   const isProtectedEvidence = (ev) => {
