@@ -127748,8 +127748,40 @@ async function handleBulkProcessOpenExpensesModal(state) {
   const stableStringify = (v) => {
     try { return JSON.stringify(v); } catch { return ''; }
   };
-  const draftSeed = deep(ctx?.state?.expensesDraft || ctx?.state?.expensesBaseline || {});
-  const baselineSeed = deep(ctx?.state?.expensesBaseline || ctx?.state?.expensesDraft || {});
+  const editability = (typeof classifyBulkProcessEditability === 'function')
+    ? classifyBulkProcessEditability(ctx || {})
+    : { canEditExpenses: true, canOpenExpenses: true, expensesReadOnly: false };
+  const canOpenExpenses = !!(
+    editability?.canOpenExpenses === true ||
+    editability?.canEditExpenses === true ||
+    editability?.expensesReadOnly === true
+  );
+  if (!canOpenExpenses) {
+    st.error_text = String(editability?.expensesDisabledReason || 'Expenses cannot be opened for this row.');
+    await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][EXPENSES-BLOCKED]');
+    return;
+  }
+  const readExpenseValue = (keys = []) => {
+    const list = Array.isArray(keys) ? keys : [keys];
+    const containers = [
+      st?.active_ctx?.state,
+      st?.active_context?.state,
+      st?.active_ctx,
+      st?.active_context,
+      st?.active_row,
+      st?.formState,
+      window.modalCtx?.active_ctx?.state,
+      window.modalCtx?.active_context?.state
+    ].filter((c) => c && typeof c === 'object');
+    for (const container of containers) {
+      for (const key of list) {
+        if (key && Object.prototype.hasOwnProperty.call(container, key)) return container[key];
+      }
+    }
+    return undefined;
+  };
+  const draftSeed = deep(readExpenseValue(['expensesDraft']) || {});
+  const baselineSeed = deep(readExpenseValue(['expensesBaseline']) || draftSeed || {});
   const childCtx = {
     ...(ctx || {}),
     state: {
@@ -127776,23 +127808,51 @@ async function handleBulkProcessOpenExpensesModal(state) {
   };
 
   const applyFromChild = async () => {
-    syncBulkProcessExpensesDraftFromDom({ active_ctx: childCtx });
-    const nextDraft = deep(childCtx?.state?.expensesDraft || {});
-    const prevDraft = deep(ctx?.state?.expensesDraft || {});
-    ctx.state = (ctx.state && typeof ctx.state === 'object') ? ctx.state : {};
-    ctx.state.expensesDraft = nextDraft;
-    childCtx.state.expensesBaseline = deep(nextDraft);
-
-    if (stableStringify(nextDraft) !== stableStringify(prevDraft)) {
-      markBulkProcessDirty(st, 'expenses-apply', {
-        source: 'handleBulkProcessOpenExpensesModal.applyFromChild',
-        dirty_source: 'expenses apply'
+    if (editability?.expensesReadOnly === true || editability?.canEditExpenses === false) return true;
+    if (typeof syncBulkProcessExpensesDraftFromDom === 'function') syncBulkProcessExpensesDraftFromDom({ active_ctx: childCtx });
+    const root = document.getElementById(rootId);
+    const mergedDraft = { ...deep(childCtx?.state?.expensesDraft || {}) };
+    if (root) {
+      const fields = root.querySelectorAll('input[data-exp-field], textarea[data-exp-field]');
+      fields.forEach((el) => {
+        const key = String(el?.dataset?.expField || '').trim();
+        if (!key) return;
+        const raw = String(el.value ?? '').trim();
+        if (key === 'note') mergedDraft[key] = raw;
+        else if (raw !== '') {
+          const n = Number(raw);
+          if (Number.isFinite(n)) mergedDraft[key] = n;
+        }
       });
-      st.__expensesAppliedRowKeys = (st.__expensesAppliedRowKeys && typeof st.__expensesAppliedRowKeys === 'object')
-        ? st.__expensesAppliedRowKeys
-        : {};
-      const rowKey = String(st.active_row?.row_key || '').trim();
-      if (rowKey) st.__expensesAppliedRowKeys[rowKey] = true;
+    }
+    const details = (ctx?.details && typeof ctx.details === 'object') ? ctx.details : {};
+    const tsfin = (details?.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
+    const baselineRef = deep(ctx?.state?.expensesBaseline || baselineSeed || {});
+    const prevDraft = deep(ctx?.state?.expensesDraft || {});
+    const normDraft = (typeof normaliseTimesheetExpensesDraft === 'function')
+      ? normaliseTimesheetExpensesDraft(mergedDraft, {
+          context: ctx,
+          details,
+          tsfin,
+          rates: {
+            mileage_pay_rate: mergedDraft.mileage_pay_rate ?? prevDraft.mileage_pay_rate ?? baselineRef.mileage_pay_rate ?? tsfin.mileage_pay_rate,
+            mileage_charge_rate: mergedDraft.mileage_charge_rate ?? prevDraft.mileage_charge_rate ?? baselineRef.mileage_charge_rate ?? tsfin.mileage_charge_rate
+          }
+        })
+      : mergedDraft;
+    const targets = [st?.active_ctx?.state, st?.active_context?.state].filter((t) => t && typeof t === 'object');
+    for (const target of targets) {
+      target.expensesDraft = deep(normDraft);
+      if (!Object.prototype.hasOwnProperty.call(target, 'expensesBaseline')) target.expensesBaseline = deep(baselineRef);
+      target.expensesDirty = true;
+      target.expensesDraftDirty = true;
+      target.hasStagedExpensesDirty = true;
+      target.stagedExpensesDirty = true;
+      target.expenseDirtyMarker = true;
+    }
+    st.dirty = true;
+    if (stableStringify(normDraft) !== stableStringify(prevDraft) && typeof markBulkProcessDirty === 'function') {
+      markBulkProcessDirty(st, 'expenses-apply', { source: 'handleBulkProcessOpenExpensesModal.applyFromChild', dirty_source: 'expenses apply' });
     }
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][EXPENSES]');
     return true;
@@ -127812,9 +127872,9 @@ async function handleBulkProcessOpenExpensesModal(state) {
     {
       kind: 'bulk-process-expenses',
       noParentGate: true,
-      forceEdit: true,
+      forceEdit: editability?.canEditExpenses === true && editability?.expensesReadOnly !== true,
       showSave: false,
-      showApply: true,
+      showApply: editability?.canEditExpenses === true && editability?.expensesReadOnly !== true,
       primaryLabel: 'Apply',
       stayOpenOnSave: false
     }
@@ -129011,27 +129071,41 @@ async function handleBulkProcessSave(state) {
       return null;
     })();
 
-    const normExpenses = (x) => {
-      const d = (x && typeof x === 'object') ? x : {};
-      return {
-        mileage_units: Number(d.mileage_units ?? 0) || 0,
-        travel_pay: round2(d.travel_pay ?? 0),
-        travel_charge: round2(d.travel_charge ?? 0),
-        accommodation_pay: round2(d.accommodation_pay ?? 0),
-        accommodation_charge: round2(d.accommodation_charge ?? 0),
-        other_pay: round2(d.other_pay ?? 0),
-        other_charge: round2(d.other_charge ?? 0),
-        note: String(d.note ?? '').trim()
-      };
+    const readExpenseState = (keys = []) => {
+      const list = Array.isArray(keys) ? keys : [keys];
+      const containers = [
+        st?.active_ctx?.state, st?.active_context?.state, st?.active_ctx, st?.active_context, st?.active_row, st?.formState,
+        window.modalCtx?.active_ctx?.state, window.modalCtx?.active_context?.state
+      ].filter((c) => c && typeof c === 'object');
+      for (const container of containers) {
+        for (const key of list) {
+          if (key && Object.prototype.hasOwnProperty.call(container, key)) return container[key];
+        }
+      }
+      return undefined;
     };
-
-    const stagedExpenses = normExpenses(stateCtx.expensesDraft);
-    const baselineExpenses = normExpenses(stateCtx.expensesBaseline);
-    const expensesChanged = stableStringify(stagedExpenses) !== stableStringify(baselineExpenses);
+    const stagedExpenses = deep(readExpenseState(['expensesDraft']) || {});
+    const baselineExpenses = deep(readExpenseState(['expensesBaseline']) || {});
+    const expensesDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(stagedExpenses, baselineExpenses, { context: ctx, details, tsfin })
+      : { dirty: stableStringify(stagedExpenses) !== stableStringify(baselineExpenses) };
+    const stagedExpenseMarkerDirty = !!(
+      readExpenseState(['expensesDirty']) ||
+      readExpenseState(['expensesDraftDirty']) ||
+      readExpenseState(['hasStagedExpensesDirty']) ||
+      readExpenseState(['stagedExpensesDirty']) ||
+      readExpenseState(['expenseDirtyMarker'])
+    );
+    const expensesChanged = !!(expensesDirtyResult?.dirty || stagedExpenseMarkerDirty);
 
     const stagedSchedule = (stateCtx.schedule != null) ? stateCtx.schedule : null;
+    const hasExplicitWeeklyScheduleDraft = !!(
+      Object.prototype.hasOwnProperty.call(stateCtx || {}, 'schedule') &&
+      stateCtx.schedule != null
+    );
     const scheduleChangedWeekly =
       isWeeklyManualContext &&
+      hasExplicitWeeklyScheduleDraft &&
       stableStringify(stagedSchedule || []) !== stableStringify(currentWeeklyScheduleBaseline || []);
 
     const currentExtrasWeek = (() => {
@@ -129109,14 +129183,105 @@ async function handleBulkProcessSave(state) {
         stableStringify(currentExtrasWeek) !== stableStringify(stagedExtrasWeek) ||
         stableStringify(currentExtrasPerDay) !== stableStringify(stagedExtrasPerDay)
       );
+    const currentReference = trimStr(ts.reference_number || row.reference_number || details.reference_number || '');
+    const stagedReference = trimStr(
+      Object.prototype.hasOwnProperty.call(stateCtx || {}, 'reference')
+        ? stateCtx.reference
+        : currentReference
+    );
+    const referenceChanged = stagedReference !== currentReference;
+    const buildCurrentDailyScheduleBaseline = () => {
+      if (typeof resolveCurrentDailyScheduleBaseline === 'function') {
+        try { return resolveCurrentDailyScheduleBaseline(ts, row); } catch {}
+      }
+      return ts?.actual_schedule_json || row?.actual_schedule_json || null;
+    };
+    const normaliseDailyScheduleForCompare = (value) => {
+      if (typeof sanitiseDailyManualSchedulePayload === 'function') {
+        const out = sanitiseDailyManualSchedulePayload(value || null, 'object');
+        return out?.schedule || null;
+      }
+      return value || null;
+    };
+    const stagedDailyScheduleForCompare = normaliseDailyScheduleForCompare(
+      stateCtx.schedule != null ? stateCtx.schedule : buildCurrentDailyScheduleBaseline()
+    );
+    const currentDailyScheduleForCompare = normaliseDailyScheduleForCompare(
+      buildCurrentDailyScheduleBaseline()
+    );
+    const dailyScheduleChanged = !!(
+      isDailyManualContext &&
+      (
+        (
+          typeof deepEqualJson === 'function'
+            ? !deepEqualJson(stagedDailyScheduleForCompare, currentDailyScheduleForCompare)
+            : stableStringify(stagedDailyScheduleForCompare || null) !== stableStringify(currentDailyScheduleForCompare || null)
+        ) ||
+        referenceChanged
+      )
+    );
 
     if (isWeeklyManualContext && !weekId) {
       throw new Error('contract_week_id missing; cannot save weekly row.');
     }
 
+    const weeklyScheduleDirtyAttempt = !!(scheduleChangedWeekly || extrasChangedWeekly);
+    const hoursScheduleDirtyAttempt = !!(weeklyScheduleDirtyAttempt || dailyScheduleChanged);
+    const nonExpenseDirty = !!(hoursScheduleDirtyAttempt || referenceChanged);
+    const actualTimesheetId =
+      ctx.current_timesheet_id ||
+      details.current_timesheet_id ||
+      details.timesheet?.timesheet_id ||
+      row.current_timesheet_id ||
+      row.timesheet_id ||
+      null;
+    const expectedTimesheetId =
+      ctx.expected_timesheet_id ||
+      ctx.current_timesheet_id ||
+      details.expected_timesheet_id ||
+      details.current_timesheet_id ||
+      details.timesheet?.timesheet_id ||
+      row.current_timesheet_id ||
+      row.timesheet_id ||
+      null;
+
+    if (expensesChanged && editability?.canEditExpenses === false) {
+      st.saving = false;
+      st.error_text = trimStr(editability?.expensesDisabledReason || '') || 'Expenses cannot be edited for this row.';
+      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE][EXPENSES-BLOCKED]');
+      st.__suppress_dirty_marking = false;
+      GE();
+      return { ok: false, error: 'EXPENSES_EDIT_BLOCKED', message: st.error_text, evidenceRequired: false };
+    }
+    if (expensesChanged && !actualTimesheetId) {
+      st.saving = false;
+      st.error_text = 'A real current timesheet is required before saving staged expenses.';
+      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
+      st.__suppress_dirty_marking = false;
+      GE();
+      return { ok: false, error: 'TIMESHEET_ID_REQUIRED', message: st.error_text, evidenceRequired: false };
+    }
+    if (expensesChanged && typeof commitTimesheetExpensesMileageDraft !== 'function') {
+      st.saving = false;
+      st.error_text = 'Unable to save expenses right now.';
+      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
+      st.__suppress_dirty_marking = false;
+      GE();
+      return { ok: false, error: 'EXPENSE_SAVE_UNAVAILABLE', message: st.error_text, evidenceRequired: false };
+    }
+
+    if (hoursScheduleDirtyAttempt && editability?.canEditHoursSchedule === false) {
+      st.saving = false;
+      st.error_text = trimStr(editability?.hoursScheduleDisabledReason || '') || 'Hours/schedule cannot be edited for this row.';
+      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
+      st.__suppress_dirty_marking = false;
+      GE();
+      return { ok: false, error: 'HOURS_EDIT_BLOCKED', message: st.error_text, evidenceRequired: false };
+    }
+
     let saveResult = null;
 
-    if (isWeeklyManualContext) {
+    if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly)) {
       if (isPlannedWeeklyWithoutTs) {
         saveResult = await contractWeekManualDraftUpsert(String(weekId), {
           planned_schedule_json: Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [],
@@ -129151,7 +129316,7 @@ async function handleBulkProcessSave(state) {
           activeRow: row || null
         });
       }
-    } else if (isDailyManualContext) {
+    } else if (isDailyManualContext && dailyScheduleChanged) {
       const sanitisedDaily = sanitiseDailyManualSchedulePayload(stateCtx.schedule || null, 'object');
       stateCtx.schedule = sanitisedDaily.clean;
       stateCtx.__dailyScheduleShapeMode = 'object';
@@ -129185,7 +129350,7 @@ async function handleBulkProcessSave(state) {
         payload
       );
       tsId = saveResult?.current_timesheet_id || saveResult?.timesheet_id || tsId;
-    } else {
+    } else if (!expensesChanged) {
       throw new Error('Active row is not a saveable manual Bulk Process row.');
     }
 
@@ -129197,46 +129362,50 @@ async function handleBulkProcessSave(state) {
 
     if (effectiveTsId) tsId = effectiveTsId;
 
-    if (tsId && expensesChanged) {
-      const detailSnapshot = (saveResult?.tsfin && saveResult?.timesheet)
-        ? { tsfin: saveResult.tsfin, timesheet: saveResult.timesheet }
-        : (st.active_details || details || {});
-      const finNow = detailSnapshot?.tsfin || tsfin || {};
-      const mileageUnits = Number(stagedExpenses.mileage_units ?? 0) || 0;
-      const mileagePayRate = Number(finNow?.mileage_pay_rate ?? 0) || 0;
-      const mileageChargeRate = Number(finNow?.mileage_charge_rate ?? 0) || 0;
-      const mileagePayEx = round2(mileageUnits * mileagePayRate);
-      const mileageChargeEx = round2(mileageUnits * mileageChargeRate);
+    let expenseCommitResult = null;
+    if (expensesChanged) {
+      expenseCommitResult = await commitTimesheetExpensesMileageDraft({
+        source: 'bulk-process',
+        timesheetId: actualTimesheetId,
+        expectedTimesheetId: expectedTimesheetId || null,
+        draft: stagedExpenses,
+        baseline: baselineExpenses,
+        row,
+        details,
+        state: stateCtx,
+        context: ctx,
+        onAdoptMovedTimesheetId: (typeof st?.onAdoptMovedTimesheetId === 'function') ? st.onAdoptMovedTimesheetId : undefined
+      });
+      if (!expenseCommitResult?.ok) {
+        const msg = trimStr(expenseCommitResult?.message || expenseCommitResult?.error || 'Unable to save expenses.');
+        st.saving = false;
+        st.error_text = msg;
+        await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
+        st.__suppress_dirty_marking = false;
+        GE();
+        return { ok: false, message: msg, error: expenseCommitResult?.error || 'EXPENSE_SAVE_FAILED', evidenceRequired: expenseCommitResult?.evidenceRequired === true, expense_result: expenseCommitResult };
+      }
+      const committed = deep(expenseCommitResult?.committedDraft || stagedExpenses);
+      for (const target of [st?.active_ctx?.state, st?.active_context?.state].filter((t) => t && typeof t === 'object')) {
+        target.expensesDraft = deep(committed);
+        target.expensesBaseline = deep(committed);
+        target.expensesDirty = false;
+        target.expensesDraftDirty = false;
+        target.hasStagedExpensesDirty = false;
+        target.stagedExpensesDirty = false;
+        target.expenseDirtyMarker = false;
+      }
+    }
 
-      await apiPatchJson(
-        `/api/tsfin/${encodeURIComponent(String(tsId))}/expenses`,
-        {
-          expected_timesheet_id: effectiveTsId || details.current_timesheet_id || ts.timesheet_id || tsId,
-          expenses: {
-            travel_pay_ex_vat: round2(stagedExpenses.travel_pay ?? 0),
-            travel_charge_ex_vat: round2(stagedExpenses.travel_charge ?? 0),
-            accommodation_pay_ex_vat: round2(stagedExpenses.accommodation_pay ?? 0),
-            accommodation_charge_ex_vat: round2(stagedExpenses.accommodation_charge ?? 0),
-            other_pay_ex_vat: round2(stagedExpenses.other_pay ?? 0),
-            other_charge_ex_vat: round2(stagedExpenses.other_charge ?? 0),
-            description: String(stagedExpenses.note ?? '').trim()
-          }
-        }
-      );
-
-      await apiPatchJson(
-        `/api/tsfin/${encodeURIComponent(String(tsId))}/mileage`,
-        {
-          expected_timesheet_id: effectiveTsId || details.current_timesheet_id || ts.timesheet_id || tsId,
-          mileage: {
-            mileage_units: mileageUnits,
-            pay_rate: mileagePayRate,
-            charge_rate: mileageChargeRate,
-            pay_ex_vat: mileagePayEx,
-            charge_ex_vat: mileageChargeEx
-          }
-        }
-      );
+    const didRunManualSave = !!saveResult;
+    const expensesOnlySave = !!(expensesChanged && !nonExpenseDirty);
+    if (expensesOnlySave && !didRunManualSave) {
+      st.saving = false;
+      st.__suppress_dirty_marking = false;
+      st.dirty = false;
+      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE][EXPENSES]');
+      GE();
+      return { ok: true, expense_result: expenseCommitResult || null };
     }
 
     const ds = ensureDataset();
@@ -129259,7 +129428,7 @@ async function handleBulkProcessSave(state) {
                     )
               )
         );
-    if (!rowPatchList.length) {
+    if (didRunManualSave && !rowPatchList.length) {
       throw new Error('Bulk Process save did not return the required row_patch/row_patches response. Saving is disabled until the save endpoint returns the bulk patch contract.');
     }
 
@@ -129341,10 +129510,6 @@ async function handleBulkProcessSave(state) {
     }
     installBulkProcessModalCtxPatch(st, { forceIdentityRebase: true });
 
-
-    if (st.active_ctx && st.active_ctx.state) {
-      st.active_ctx.state.expensesBaseline = deep(normExpenses(st.active_ctx.state.expensesDraft));
-    }
 
     resetBulkProcessDirtyBaseline(st, 'save-success', {
       source: 'handleBulkProcessSave',
