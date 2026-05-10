@@ -137034,37 +137034,19 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
  const commitActiveDirtyBeforeAuthoriseIfNeeded = async (selectionKeys, isActionRowFlag = false) => {
     const activeKey = rowIdentityKey(st.active_row || {});
     const selected = Array.isArray(selectionKeys) ? selectionKeys : [];
-    const shouldCommitActiveDraft = !!(isActionRowFlag || (activeKey && selected.includes(activeKey)) || opts.commitDirtyBeforeAuthorise === true);
-    if (!shouldCommitActiveDraft) return { ok: true, saved: false, preservedDirty: true };
+    const shouldAttemptSave = !!(isActionRowFlag || (activeKey && selected.includes(activeKey)) || opts.commitDirtyBeforeAuthorise === true);
+    if (!shouldAttemptSave) return { ok: true, saved: false, preservedDirty: true };
 
     const frozenDraft = captureActiveManualDraftForCommit();
-    const frozenEntry = (frozenDraft?.entry && typeof frozenDraft.entry === 'object') ? frozenDraft.entry : null;
-    const hasGenuineUserDraft = !!(
-      frozenEntry &&
-      frozenEntry.dirty === true &&
-      frozenEntry.dirty_source_type === 'USER' &&
-      Number(frozenEntry.last_user_edit_seq || 0) > 0
-    );
-    const requiresCommit = !!activeManualDraftRequiresCommit(frozenDraft);
-    if (!requiresCommit || !hasGenuineUserDraft) {
-      if (frozenEntry && !hasGenuineUserDraft) {
-        frozenEntry.dirty = false;
-        frozenEntry.dirty_source_type = 'SYSTEM';
-        frozenEntry.last_dirty_reason = '';
-        frozenEntry.last_dirty_at = 0;
-      }
-      const draftState = st?.__bulk_authorise_manual_draft_state;
-      if (draftState && draftState.entries && typeof draftState.entries === 'object') {
-        const hasAnyUserDirty = Object.values(draftState.entries).some((entry) => !!(
-          entry &&
-          entry.dirty === true &&
-          entry.dirty_source_type === 'USER' &&
-          Number(entry.last_user_edit_seq || 0) > 0
-        ));
-        if (!hasAnyUserDirty) st.dirty = false;
-      } else if (!hasGenuineUserDraft) {
-        st.dirty = false;
-      }
+    const requiresManualCommit = !!activeManualDraftRequiresCommit(frozenDraft);
+    let hasDirtyEdits = !!st.dirty;
+    if (typeof hasBulkAuthoriseGenuineDirtyEdits === 'function') {
+      try { hasDirtyEdits = !!hasBulkAuthoriseGenuineDirtyEdits(st, { preferDom: true }); } catch {}
+    }
+    if (!hasDirtyEdits && typeof isBulkAuthoriseEditableDirty === 'function') {
+      try { hasDirtyEdits = !!isBulkAuthoriseEditableDirty(st); } catch {}
+    }
+    if (!hasDirtyEdits && !requiresManualCommit) {
       return { ok: true, saved: false };
     }
     if (typeof handleBulkAuthoriseSave !== 'function') return { ok: false, error: 'Bulk Authorise save is not available.' };
@@ -137078,7 +137060,19 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
       frozenDraftHash: trimStr(frozenDraft?.entry?.draft_hash || '')
     });
     if (!saveResult || saveResult.ok === false) {
-      return { ok: false, error: saveResult?.error || 'Authorise stopped because the edited schedule could not be saved.', saveResult };
+      const errorMessage = trimStr(
+        saveResult?.message ||
+        saveResult?.error ||
+        saveResult?.expense_result?.message ||
+        'Save failed. Review the highlighted issue, then try again.'
+      );
+      return {
+        ok: false,
+        error: errorMessage,
+        message: errorMessage,
+        evidenceRequired: saveResult?.evidenceRequired === true,
+        saveResult
+      };
     }
     return { ok: true, saved: true, saveResult, frozenDraft: frozenDraft || null };
   };
@@ -137172,9 +137166,24 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     }
 
     const preAuthoriseSave = await commitActiveDirtyBeforeAuthoriseIfNeeded(selectionKeys, isActionRow);
-    if (!preAuthoriseSave.ok) {
+    if (!preAuthoriseSave || preAuthoriseSave.ok === false) {
+      const failureMessage = trimStr(
+        preAuthoriseSave?.message ||
+        preAuthoriseSave?.error ||
+        preAuthoriseSave?.saveResult?.message ||
+        preAuthoriseSave?.saveResult?.error ||
+        preAuthoriseSave?.saveResult?.expense_result?.message ||
+        'Save failed. Review the highlighted issue, then try again.'
+      );
+      st.error_text = failureMessage;
       GE();
-      return { ok: false, error: preAuthoriseSave.error || 'Authorise stopped because the edited schedule could not be saved.', saveResult: preAuthoriseSave.saveResult || null };
+      return {
+        ok: false,
+        message: failureMessage,
+        error: failureMessage,
+        evidenceRequired: preAuthoriseSave?.evidenceRequired === true,
+        saveResult: preAuthoriseSave?.saveResult || null
+      };
     }
 
     visibleModel = getVisibleModel();
