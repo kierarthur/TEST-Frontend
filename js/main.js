@@ -117178,7 +117178,7 @@ function bindBulkProcessManualEditor(state) {
       bulkProcessActionRowAllowElectronicAgainBtn: !!(editability.canAllowElectronicAgain && !busyNow),
       bulkProcessActionRowQrConvertManualBtn: !!(editability.canConvertQrToManualOnly && !busyNow),
       bulkProcessAddAdditionalManualBtn: !!(editability.canAddAdditionalManual && !busyNow),
-      bulkProcessOpenExpensesBtn: !!(st.active_row && !busyNow)
+      bulkProcessOpenExpensesBtn: !!(editability.canOpenExpenses && !busyNow)
     };
 
     Object.entries(routeEnabled).forEach(([id, enabled]) => {
@@ -117212,6 +117212,14 @@ function bindBulkProcessManualEditor(state) {
         .map((key) => trimStr(key))
         .filter(Boolean);
       const beforeErrorText = String(st.error_text || '');
+
+      if (dirtyBefore) {
+        const saveResult = await handleBulkProcessSave(st);
+        if (!saveResult || saveResult.ok !== true) {
+          syncPrimaryActionButtonStates();
+          return;
+        }
+      }
 
       st.loading = true;
       st.error_text = '';
@@ -117257,39 +117265,6 @@ function bindBulkProcessManualEditor(state) {
           ? findBulkProcessRowInDataset(nextDataset, { row_key: beforeActiveRowKey })
           : null;
 
-        if (!dirtyBefore) {
-          if (!createdRow) {
-            st.loading = false;
-            st.__suppress_dirty_marking = false;
-            st.active_row = currentRowInDataset ? deep(currentRowInDataset) : deep(beforeActiveRow);
-            st.active_row_key = trimStr(currentRowInDataset?.row_key || beforeActiveRowKey || '') || null;
-            st.active_details = deep(beforeActiveDetails);
-            st.active_ctx = deep(beforeActiveCtx);
-            st.selected_row_keys = beforeSelectedRowKeys;
-            st.error_text = 'Additional manual timesheet was created, but the new row could not be located in Bulk Process.';
-            installBulkProcessModalCtxPatch(st);
-            await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL]');
-            syncPrimaryActionButtonStates();
-            return;
-          }
-
-          st.active_row = deep(createdRow);
-          st.active_row_key = createdRowKey || null;
-          st.selected_row_keys = createdRowKey ? [createdRowKey] : [];
-          st.active_details = null;
-          st.active_ctx = null;
-          await refreshActiveContextInPlace();
-          resetBulkProcessDirtyBaseline(st, 'bulk-process-add-additional-open-clean', {
-            source: 'bindBulkProcessManualEditor.addAdditionalManual',
-            dirty_source: 'opened newly created additional manual timesheet'
-          });
-          st.loading = false;
-          st.__suppress_dirty_marking = false;
-          await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL]');
-          syncPrimaryActionButtonStates();
-          return;
-        }
-
         if (!createdRow) {
           st.loading = false;
           st.__suppress_dirty_marking = false;
@@ -117305,45 +117280,15 @@ function bindBulkProcessManualEditor(state) {
           return;
         }
 
-        st.active_row = currentRowInDataset ? deep(currentRowInDataset) : deep(beforeActiveRow);
-        st.active_row_key = trimStr(currentRowInDataset?.row_key || beforeActiveRowKey || '') || null;
-        st.active_details = deep(beforeActiveDetails);
-        st.active_ctx = deep(beforeActiveCtx);
-        st.selected_row_keys = beforeSelectedRowKeys;
-        installBulkProcessModalCtxPatch(st);
-        st.loading = false;
-        st.__suppress_dirty_marking = false;
-        await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL]');
-
-        const discardAndMove = await openBulkProcessConfirm({
-          title: 'Additional Manual Timesheet Created',
-          message: 'The new additional manual timesheet has already been created.\n\nDiscard your unsaved changes and open it now?',
-          confirm_label: 'Discard and open new timesheet',
-          cancel_label: 'Stay on current timesheet',
-          confirm_class: 'btn btn-warn',
-          cancel_class: 'btn btn-outline'
-        });
-
-        if (!discardAndMove) {
-          syncPrimaryActionButtonStates();
-          return;
-        }
-
-        st.loading = true;
-        st.error_text = '';
-        st.__suppress_dirty_marking = true;
-        st.dirty = false;
-        st.__dirty_baseline_row_key = null;
-        st.__dirty_baseline_state = null;
         st.active_row = deep(createdRow);
         st.active_row_key = createdRowKey || null;
         st.selected_row_keys = createdRowKey ? [createdRowKey] : [];
         st.active_details = null;
         st.active_ctx = null;
         await refreshActiveContextInPlace();
-        resetBulkProcessDirtyBaseline(st, 'bulk-process-add-additional-open-discard', {
+        resetBulkProcessDirtyBaseline(st, 'bulk-process-add-additional-open', {
           source: 'bindBulkProcessManualEditor.addAdditionalManual',
-          dirty_source: 'discarded current edits and opened newly created additional manual timesheet'
+          dirty_source: 'opened newly created additional manual timesheet'
         });
         st.loading = false;
         st.__suppress_dirty_marking = false;
@@ -129893,10 +129838,30 @@ async function handleBulkProcessProcess(state) {
   };
 
   try {
-    const editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
+    let editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
     if (!editability.canProcess) {
       GE();
-      return { ok: false, error: 'This row cannot be processed.' };
+      const reason = trimStr(editability.processDisabledReason || editability.disabledReason || '') || 'This row cannot be processed.';
+      return { ok: false, error: reason };
+    }
+
+    const dirtyBeforeProcess = (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty;
+    if (dirtyBeforeProcess) {
+      const saveResult = await handleBulkProcessSave(st);
+      if (!saveResult || saveResult.ok !== true) {
+        const saveMsg = trimStr(saveResult?.error || saveResult?.message || st.error_text || 'Save failed before process.');
+        return {
+          ok: false,
+          error: saveMsg,
+          message: saveMsg,
+          evidenceRequired: saveResult?.evidenceRequired === true
+        };
+      }
+      editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
+      if (!editability.canProcess) {
+        const reason = trimStr(editability.processDisabledReason || editability.disabledReason || '') || 'This row cannot be processed.';
+        return { ok: false, error: reason };
+      }
     }
 
     let active = readActive();
@@ -129949,7 +129914,6 @@ async function handleBulkProcessProcess(state) {
       const activeRowSignature = trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '');
       processResult = await processDailyManualTimesheet(String(activeTimesheetId), {
         expected_timesheet_id: expectedTimesheetId || activeTimesheetId,
-        schedule_json: Object.prototype.hasOwnProperty.call(stateCtx, 'schedule') ? stateCtx.schedule : active.timesheet.actual_schedule_json,
         reference_number: Object.prototype.hasOwnProperty.call(stateCtx, 'reference') ? stateCtx.reference : (active.timesheet.reference_number || active.row.reference_number || ''),
         expected_row_signature: activeRowSignature || null,
         row_signature: activeRowSignature || null,
@@ -130179,17 +130143,15 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       id
     );
 
+    const hasExplicitSchedulePatch = (
+      Object.prototype.hasOwnProperty.call(src, 'schedule_json') ||
+      Object.prototype.hasOwnProperty.call(src, 'actual_schedule_json')
+    );
     let schedule = Object.prototype.hasOwnProperty.call(src, 'schedule_json')
       ? src.schedule_json
-      : (Object.prototype.hasOwnProperty.call(src, 'actual_schedule_json')
-          ? src.actual_schedule_json
-          : ((activeBulkState && Object.prototype.hasOwnProperty.call(activeBulkState, 'schedule')) ? activeBulkState.schedule : mc?.timesheetState?.schedule));
+      : (Object.prototype.hasOwnProperty.call(src, 'actual_schedule_json') ? src.actual_schedule_json : null);
 
-    if (schedule == null && activeBulkDetails?.timesheet && Object.prototype.hasOwnProperty.call(activeBulkDetails.timesheet, 'actual_schedule_json')) {
-      schedule = activeBulkDetails.timesheet.actual_schedule_json;
-    }
-
-    if (typeof sanitiseDailyManualSchedulePayload === 'function' && schedule != null) {
+    if (typeof sanitiseDailyManualSchedulePayload === 'function' && hasExplicitSchedulePatch && schedule != null) {
       const checkedSchedule = sanitiseDailyManualSchedulePayload(schedule, 'object');
       if (!checkedSchedule.ok) {
         const err = new Error('Fix the highlighted shift/break times first before processing.');
@@ -130200,6 +130162,15 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       }
       schedule = checkedSchedule.schedule;
     }
+    const hasValidExplicitSchedulePatch = !!(
+      hasExplicitSchedulePatch &&
+      schedule != null &&
+      (
+        Array.isArray(schedule)
+          ? schedule.length > 0
+          : (schedule && typeof schedule === 'object' && Object.keys(schedule).length > 0)
+      )
+    );
 
     const explicitTimesheetPatch = pickObject(src.timesheet_patch_json || src.timesheetPatchJson || src.timesheet_patch || src.timesheetPatch);
     const explicitTsfinPatch = pickObject(src.tsfin_patch_json || src.tsfinPatchJson || src.tsfin_patch || src.tsfinPatch);
@@ -130207,10 +130178,10 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
     const timesheetPatch = { ...explicitTimesheetPatch };
     const tsfinPatch = {};
 
-    if (schedule != null && !Object.prototype.hasOwnProperty.call(timesheetPatch, 'actual_schedule_json')) {
+    if (hasValidExplicitSchedulePatch && !Object.prototype.hasOwnProperty.call(timesheetPatch, 'actual_schedule_json')) {
       timesheetPatch.actual_schedule_json = clone(schedule);
     }
-    if (schedule != null && !Object.prototype.hasOwnProperty.call(tsfinPatch, 'actual_schedule_json')) {
+    if (hasValidExplicitSchedulePatch && !Object.prototype.hasOwnProperty.call(tsfinPatch, 'actual_schedule_json')) {
       tsfinPatch.actual_schedule_json = clone(schedule);
     }
 
@@ -130231,7 +130202,11 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
     }
 
 
-    if (Object.prototype.hasOwnProperty.call(proposedTsfinPatch, 'actual_schedule_json') && !Object.prototype.hasOwnProperty.call(tsfinPatch, 'actual_schedule_json')) {
+    if (
+      hasValidExplicitSchedulePatch &&
+      Object.prototype.hasOwnProperty.call(proposedTsfinPatch, 'actual_schedule_json') &&
+      !Object.prototype.hasOwnProperty.call(tsfinPatch, 'actual_schedule_json')
+    ) {
       tsfinPatch.actual_schedule_json = clone(proposedTsfinPatch.actual_schedule_json);
     }
 
