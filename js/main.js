@@ -24948,6 +24948,7 @@ async function bankingPayPreview(pay_date) {
   if (!isIsoDate(effectivePayDate)) {
     wiz.preview.loading = false;
     wiz.preview.error = 'pay_date is required (YYYY-MM-DD)';
+    wiz.preview.friendlyError = null;
     wiz.preview.failure = {
       preview_unavailable: true,
       can_retry: false,
@@ -24964,6 +24965,7 @@ async function bankingPayPreview(pay_date) {
   if (gate && gate.blocked) {
     wiz.preview.loading = false;
     wiz.preview.error = String(gate.message || gate.reasonCode || 'Action blocked');
+    wiz.preview.friendlyError = null;
     wiz.preview.failure = {
       preview_unavailable: true,
       can_retry: false,
@@ -24977,6 +24979,7 @@ async function bankingPayPreview(pay_date) {
 
   wiz.preview.loading = true;
   wiz.preview.error = '';
+  wiz.preview.friendlyError = null;
   wiz.preview.failure = null;
 
   const openFiltersJson = (() => {
@@ -25215,17 +25218,37 @@ async function bankingPayPreview(pay_date) {
   const shouldAbortDetachedSettler = (expectedSessionId) => !isLatestRequest() || !isSameWorkbenchSession(expectedSessionId);
 
   const applyFailure = (error) => {
-    const message = trimStr(error?.message || error || 'Banking preview could not be loaded.');
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, {
+          action: 'PREVIEW',
+          fallbackCode: 'BANKING_PAY_PREVIEW_FAILED',
+          userInitiated: true
+        })
+      : null;
+    const message = trimStr(
+      friendly?.user_message ||
+      friendly?.message ||
+      error?.message ||
+      error ||
+      'Banking preview could not be loaded.'
+    ) || 'Banking preview could not be loaded.';
     wiz.preview.data = null;
     wiz.preview.error = message;
+    wiz.preview.friendlyError = friendly && typeof friendly === 'object' ? friendly : null;
     wiz.preview.readiness = null;
     wiz.preview.candidateDebtInfo = {};
     wiz.preview.failure = {
       preview_unavailable: true,
       can_retry: true,
       error: {
-        code: trimStr(error?.payload?.error?.code || error?.payload?.code || 'BANKING_PAY_PREVIEW_FAILED') || 'BANKING_PAY_PREVIEW_FAILED',
-        message
+        code: trimStr(
+          friendly?.error_code ||
+          friendly?.code ||
+          error?.payload?.error?.code ||
+          error?.payload?.code ||
+          'BANKING_PAY_PREVIEW_FAILED'
+        ) || 'BANKING_PAY_PREVIEW_FAILED',
+        message: trimStr(friendly?.message || message) || message
       }
     };
   };
@@ -26914,6 +26937,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
 
   wiz.createDraftBusy = true;
   wiz.createDraftError = '';
+  wiz.createDraftFriendlyError = null;
   try { wiz.lastCreateDraftResult = null; } catch {}
 
   try {
@@ -27177,16 +27201,28 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
     try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
     return deep(obj);
   } catch (e) {
-    const errMessage = trimStr(e?.message || e || 'Unknown error') || 'Unknown error';
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(e, e?.payload || e?.json || null, {
+          action: 'CREATE_DRAFT',
+          fallbackCode: 'BANKING_PAY_CREATE_DRAFT_FAILED',
+          userInitiated: true
+        })
+      : null;
+    const errMessage = trimStr(
+      friendly?.user_message ||
+      friendly?.message ||
+      e?.message ||
+      e ||
+      'Payment batch could not be created.'
+    ) || 'Payment batch could not be created.';
     logTroubleshoot('error', 'API_POST_CREATE_DRAFT_FAILED', {
       ...requestSummary,
       message: errMessage
     });
 
     try {
-      if (typeof bankingHandleApiError === 'function') {
-        bankingHandleApiError(e, { action: 'CREATE_DRAFT', scope: null, batchId: null, errorPath: ['pay', 'draftWizard', 'createDraftError'] });
-      }
+      wiz.createDraftError = errMessage;
+      wiz.createDraftFriendlyError = friendly && typeof friendly === 'object' ? friendly : null;
     } catch {}
 
     return null;
@@ -33660,8 +33696,26 @@ function renderPayNewBatchWizard() {
     : blankComponentStateCache();
 
   const pvErr = trimStr(wiz.preview.error);
+  const pvFriendly = isPlainObject(wiz.preview.friendlyError) ? wiz.preview.friendlyError : null;
+  const pvFriendlyTitle = trimStr(pvFriendly?.title || pvFriendly?.friendly_error?.title || 'Payment preview could not be loaded');
+  const pvFriendlyMessage = trimStr(
+    pvFriendly?.user_message ||
+    pvFriendly?.message ||
+    pvFriendly?.friendly_error?.message ||
+    pvErr ||
+    'Payment preview could not be loaded.'
+  ) || 'Payment preview could not be loaded.';
   const pvLoading = !!wiz.preview.loading;
   const cdErr = trimStr(wiz.createDraftError);
+  const cdFriendly = isPlainObject(wiz.createDraftFriendlyError) ? wiz.createDraftFriendlyError : null;
+  const cdFriendlyTitle = trimStr(cdFriendly?.title || cdFriendly?.friendly_error?.title || 'Payment batch could not be created');
+  const cdFriendlyMessage = trimStr(
+    cdFriendly?.user_message ||
+    cdFriendly?.message ||
+    cdFriendly?.friendly_error?.message ||
+    cdErr ||
+    'Payment batch could not be created.'
+  ) || 'Payment batch could not be created.';
   const cdBusy = !!wiz.createDraftBusy;
 
   const decisions = {
@@ -35404,8 +35458,8 @@ function renderPayNewBatchWizard() {
       <div class="row" style="gap:10px;">
         <label>Create / Preview</label>
         <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-          ${pvErr ? `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>` : ''}
-          ${cdErr ? `<div class="error" style="white-space:pre-wrap;">${enc(cdErr)}</div>` : ''}
+          ${pvFriendly ? `<div class="error"><div style="font-weight:700;margin-bottom:4px;">${enc(pvFriendlyTitle)}</div><div style="white-space:pre-wrap;">${enc(pvFriendlyMessage)}</div></div>` : (pvErr ? `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>` : '')}
+          ${cdFriendly ? `<div class="error"><div style="font-weight:700;margin-bottom:4px;">${enc(cdFriendlyTitle)}</div><div style="white-space:pre-wrap;">${enc(cdFriendlyMessage)}</div></div>` : (cdErr ? `<div class="error" style="white-space:pre-wrap;">${enc(cdErr)}</div>` : '')}
           ${guardrailsBannerHtml}
           ${readinessBannerHtml}
           ${(hasPendingCandidates || hasFailedCandidates) ? `
@@ -53658,14 +53712,29 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         wiz.preview.loading = false;
         return decisions;
       } catch (e) {
+        const friendly = (typeof bankingNormalizeApiError === 'function')
+          ? bankingNormalizeApiError(e, e?.payload || e?.json || null, {
+              action: 'WORKBENCH_MODAL_ACTION',
+              fallbackCode: 'BANKING_ACTION_FAILED',
+              userInitiated: true
+            })
+          : null;
+        const message = trimStr(
+          friendly?.user_message ||
+          friendly?.message ||
+          e?.message ||
+          e ||
+          'Failed to clear Banking decisions'
+        ) || 'Failed to clear Banking decisions';
         wiz.preview.loading = false;
-        wiz.preview.error = String(e?.message || e || 'Failed to clear Banking decisions');
+        wiz.preview.error = message;
+        wiz.preview.friendlyError = friendly && typeof friendly === 'object' ? friendly : null;
         wiz.preview.failure = {
-          preview_unavailable: false,
+          preview_unavailable: true,
           can_retry: true,
           error: {
-            code: trimStr(e?.payload?.error?.code || e?.payload?.code || 'BANKING_PAY_WORKBENCH_CLEAR_ALL_DECISIONS_FAILED') || 'BANKING_PAY_WORKBENCH_CLEAR_ALL_DECISIONS_FAILED',
-            message: String(e?.message || e || 'Failed to clear Banking decisions')
+            code: trimStr(friendly?.error_code || friendly?.code || 'BANKING_ACTION_FAILED') || 'BANKING_ACTION_FAILED',
+            message: trimStr(friendly?.message || message) || message
           }
         };
         return decisions;
