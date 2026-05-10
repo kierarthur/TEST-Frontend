@@ -75410,11 +75410,41 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
       server_selected_preview_row_ids_provided: payloadObj.server_selected_preview_row_ids_provided === true || previewObj.server_selected_preview_row_ids_provided === true || payloadObj.session?.server_selected_preview_row_ids_provided === true
     };
   } catch (error) {
-    if (typeof bankingNormalizeApiError === 'function') {
-      throw bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'WORKBENCH_SESSION_OPEN', userInitiated: true });
-    }
-    throw error;
+    const isContextMismatch = trimStr(error?.payload?.code || error?.payload?.error_code || error?.code || error?.error_code) === 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH';
+    const fallbackCode = isContextMismatch
+      ? 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH'
+      : 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED';
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'WORKBENCH_SESSION_OPEN', fallbackCode, userInitiated: true })
+      : null;
+    throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking workbench session open failed');
   }
+}
+
+function bankingBuildEnrichedFriendlyError(originalError, friendly, fallbackMessage = 'Banking action failed') {
+  const src = (friendly && typeof friendly === 'object' && !Array.isArray(friendly)) ? friendly : {};
+  const original = (originalError && typeof originalError === 'object') ? originalError : {};
+  const message = String(
+    src.user_message ||
+    src.message ||
+    src.friendly_error?.message ||
+    original.user_message ||
+    original.message ||
+    fallbackMessage ||
+    'Banking action failed'
+  ).trim() || 'Banking action failed';
+
+  const err = new Error(message);
+  err.status = Number(original.status || src.status_code || src.http_status || 500) || 500;
+  err.payload = original.payload || original.json || src.technical_payload || src;
+  err.json = original.json || original.payload || src;
+  err.body = original.body || '';
+  err.friendly_error = src.friendly_error || src;
+  err.error_code = src.error_code || src.code || original.error_code || original.code || 'BANKING_ACTION_FAILED';
+  err.code = src.code || src.error_code || err.error_code;
+  err.title = src.title || src.friendly_error?.title || original.title || 'Banking action failed';
+  err.user_message = src.user_message || src.message || message;
+  return err;
 }
 
 
@@ -75434,28 +75464,35 @@ async function bankingPayWorkbenchSessionGet(sessionId) {
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
   const sessionIdText = trimStr(sessionId);
-  const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}`));
-  const json = await parseJsonResponse(res);
-  if (!res.ok) {
-    const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.payload = json;
-    throw err;
+  try {
+    const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}`));
+    const json = await parseJsonResponse(res);
+    if (!res.ok) {
+      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
+      const err = new Error(msg);
+      err.status = res.status;
+      err.payload = json;
+      throw err;
+    }
+    const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
+    const previewObj = (payloadObj.preview && typeof payloadObj.preview === 'object' && !Array.isArray(payloadObj.preview)) ? payloadObj.preview : payloadObj;
+    return {
+      ok: true,
+      ...(cloneJson(payloadObj) || {}),
+      preview: cloneJson(previewObj) || previewObj,
+      session_id: trimStr(payloadObj.session_id || previewObj.session_id || ''),
+      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || ''),
+      session_version: payloadObj.session_version ?? previewObj.session_version ?? null,
+      pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) || [] : [],
+      failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) || [] : [],
+      server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) || [] : []
+    };
+  } catch (error) {
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: true })
+      : null;
+    throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview could not be refreshed');
   }
-  const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-  const previewObj = (payloadObj.preview && typeof payloadObj.preview === 'object' && !Array.isArray(payloadObj.preview)) ? payloadObj.preview : payloadObj;
-  return {
-    ok: true,
-    ...(cloneJson(payloadObj) || {}),
-    preview: cloneJson(previewObj) || previewObj,
-    session_id: trimStr(payloadObj.session_id || previewObj.session_id || ''),
-    snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || ''),
-    session_version: payloadObj.session_version ?? previewObj.session_version ?? null,
-    pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) || [] : [],
-    failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) || [] : [],
-    server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) || [] : []
-  };
 }
 
 async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId) {
@@ -75474,25 +75511,32 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId) {
   };
   const sessionIdText = trimStr(sessionId);
   const candidateIdText = trimStr(candidateId);
-  const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/candidate/${encodeURIComponent(candidateIdText)}`));
-  const json = await parseJsonResponse(res);
-  if (!res.ok) {
-    const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.payload = json;
-    throw err;
+  try {
+    const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/candidate/${encodeURIComponent(candidateIdText)}`));
+    const json = await parseJsonResponse(res);
+    if (!res.ok) {
+      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
+      const err = new Error(msg);
+      err.status = res.status;
+      err.payload = json;
+      throw err;
+    }
+    const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
+    return {
+      ok: true,
+      ...(cloneJson(payloadObj) || {}),
+      session_id: trimStr(payloadObj.session_id || ''),
+      candidate_id: trimStr(payloadObj.candidate_id || payloadObj.paye_candidate?.candidate_id || payloadObj.non_paye_payee?.candidate_id || candidateIdText),
+      summary: (payloadObj.summary && typeof payloadObj.summary === 'object' && !Array.isArray(payloadObj.summary)) ? (cloneJson(payloadObj.summary) || payloadObj.summary) : null,
+      paye_candidate: (payloadObj.paye_candidate && typeof payloadObj.paye_candidate === 'object' && !Array.isArray(payloadObj.paye_candidate)) ? (cloneJson(payloadObj.paye_candidate) || payloadObj.paye_candidate) : null,
+      non_paye_payee: (payloadObj.non_paye_payee && typeof payloadObj.non_paye_payee === 'object' && !Array.isArray(payloadObj.non_paye_payee)) ? (cloneJson(payloadObj.non_paye_payee) || payloadObj.non_paye_payee) : null
+    };
+  } catch (error) {
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE', userInitiated: true })
+      : null;
+    throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking candidate preview could not be refreshed');
   }
-  const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-  return {
-    ok: true,
-    ...(cloneJson(payloadObj) || {}),
-    session_id: trimStr(payloadObj.session_id || ''),
-    candidate_id: trimStr(payloadObj.candidate_id || payloadObj.paye_candidate?.candidate_id || payloadObj.non_paye_payee?.candidate_id || candidateIdText),
-    summary: (payloadObj.summary && typeof payloadObj.summary === 'object' && !Array.isArray(payloadObj.summary)) ? (cloneJson(payloadObj.summary) || payloadObj.summary) : null,
-    paye_candidate: (payloadObj.paye_candidate && typeof payloadObj.paye_candidate === 'object' && !Array.isArray(payloadObj.paye_candidate)) ? (cloneJson(payloadObj.paye_candidate) || payloadObj.paye_candidate) : null,
-    non_paye_payee: (payloadObj.non_paye_payee && typeof payloadObj.non_paye_payee === 'object' && !Array.isArray(payloadObj.non_paye_payee)) ? (cloneJson(payloadObj.non_paye_payee) || payloadObj.non_paye_payee) : null
-  };
 }
 
 
@@ -75577,18 +75621,19 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     throw err;
   };
   const sessionIdText = trimStr(sessionId);
-  if (options.staleSessionGuard === true || options.enforceActiveSession === true) {
-    const expectedSessionIdText = trimStr(options.expectedSessionId || options.expected_session_id || sessionIdText);
-    if (sessionIsObsolete(sessionIdText) || sessionIsObsolete(expectedSessionIdText)) {
-      raiseStaleSession('OBSOLETE_SESSION', 'Workbench session was replaced before progress could be read.', getCurrentSessionId());
+  try {
+    if (options.staleSessionGuard === true || options.enforceActiveSession === true) {
+      const expectedSessionIdText = trimStr(options.expectedSessionId || options.expected_session_id || sessionIdText);
+      if (sessionIsObsolete(sessionIdText) || sessionIsObsolete(expectedSessionIdText)) {
+        raiseStaleSession('OBSOLETE_SESSION', 'Workbench session was replaced before progress could be read.', getCurrentSessionId());
+      }
+      const currentSessionId = getCurrentSessionId();
+      if (uuidRe.test(currentSessionId) && uuidRe.test(expectedSessionIdText) && currentSessionId !== expectedSessionIdText) {
+        raiseStaleSession('STALE_SESSION', 'Workbench session was replaced before progress could be read.', currentSessionId);
+      }
     }
-    const currentSessionId = getCurrentSessionId();
-    if (uuidRe.test(currentSessionId) && uuidRe.test(expectedSessionIdText) && currentSessionId !== expectedSessionIdText) {
-      raiseStaleSession('STALE_SESSION', 'Workbench session was replaced before progress could be read.', currentSessionId);
-    }
-  }
-  const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/progress`));
-  const json = await parseJsonResponse(res);
+    const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/progress`));
+    const json = await parseJsonResponse(res);
   if (options.staleSessionGuard === true || options.enforceActiveSession === true) {
     const expectedSessionIdText = trimStr(options.expectedSessionId || options.expected_session_id || sessionIdText);
     if (sessionIsObsolete(sessionIdText) || sessionIsObsolete(expectedSessionIdText)) {
@@ -75599,24 +75644,30 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       raiseStaleSession('STALE_SESSION', 'Workbench session was replaced before progress response could be applied.', currentSessionId);
     }
   }
-  if (!res.ok) {
-    const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.payload = json;
-    throw err;
+    if (!res.ok) {
+      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
+      const err = new Error(msg);
+      err.status = res.status;
+      err.payload = json;
+      throw err;
+    }
+    const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
+    return {
+      ok: true,
+      ...(cloneJson(payloadObj) || {}),
+      session_id: trimStr(payloadObj.session_id || sessionIdText),
+      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || ''),
+      session_version: payloadObj.session_version ?? null,
+      pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids) || [] : [],
+      failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids) || [] : [],
+      candidate_status_rows: Array.isArray(payloadObj.candidate_status_rows) ? cloneJson(payloadObj.candidate_status_rows) || [] : []
+    };
+  } catch (error) {
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true })
+      : null;
+    throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview progress could not be refreshed');
   }
-  const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-  return {
-    ok: true,
-    ...(cloneJson(payloadObj) || {}),
-    session_id: trimStr(payloadObj.session_id || sessionIdText),
-    snapshot_run_id: trimStr(payloadObj.snapshot_run_id || ''),
-    session_version: payloadObj.session_version ?? null,
-    pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids) || [] : [],
-    failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids) || [] : [],
-    candidate_status_rows: Array.isArray(payloadObj.candidate_status_rows) ? cloneJson(payloadObj.candidate_status_rows) || [] : []
-  };
 }
 
 
