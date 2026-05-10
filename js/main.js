@@ -140097,29 +140097,14 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
   };
   const expensesReadOnly = !!(editability.expensesReadOnly || !editability.canEditExpenses);
   const hasProcessedExpenses = !!editability.hasProcessedExpenses;
-  if (!editability.canEditExpenses && !hasProcessedExpenses) {
-    return { ok: false, error: 'Expenses are not available for this Bulk Authorise row.' };
-  }
 
-  const patchJson = async (path, payload) => {
-    if (typeof apiPatchJson === 'function') {
-      return apiPatchJson(path, payload);
-    }
-    if (typeof authFetch !== 'function' || typeof API !== 'function') {
-      throw new Error('API patch helper is not available.');
-    }
-    const res = await authFetch(API(path), {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload || {})
-    });
-    const text = await res.text().catch(() => '');
-    if (!res.ok) throw new Error(text || `Request failed (${res.status})`);
-    try { return text ? JSON.parse(text) : null; } catch { return null; }
-  };
-
-  const draftSeed = normaliseExpensesDraft(ctx?.state?.expensesDraft || ctx?.state?.expensesBaseline || {});
-  const baselineSeed = normaliseExpensesDraft(ctx?.state?.expensesBaseline || ctx?.state?.expensesDraft || {});
+  const normaliseExpenseCanonical = (value, options = {}) => (
+    (typeof normaliseTimesheetExpensesDraft === 'function')
+      ? normaliseTimesheetExpensesDraft(value, options)
+      : normaliseExpensesDraft(value)
+  );
+  const draftSeed = normaliseExpenseCanonical(ctx?.state?.expensesDraft || ctx?.state?.expensesBaseline || {}, { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} });
+  const baselineSeed = normaliseExpenseCanonical(ctx?.state?.expensesBaseline || ctx?.state?.expensesDraft || {}, { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} });
   const childCtx = {
     ...(ctx || {}),
     expenses_read_only: expensesReadOnly,
@@ -140159,118 +140144,58 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       else if (typeof alert === 'function') alert('Expenses are view-only for this row.');
       return true;
     }
-    if (typeof syncBulkProcessExpensesDraftFromDom === 'function') {
-      syncBulkProcessExpensesDraftFromDom({ active_ctx: childCtx });
+    if (typeof syncBulkProcessExpensesDraftFromDom === 'function') syncBulkProcessExpensesDraftFromDom({ active_ctx: childCtx });
+    const root = document.getElementById(rootId);
+    if (root) {
+      const nodes = root.querySelectorAll('input[data-exp-field], textarea[data-exp-field]');
+      nodes.forEach((el) => {
+        const key = String(el?.dataset?.expField || '').trim();
+        if (!key) return;
+        childCtx.state = (childCtx.state && typeof childCtx.state === 'object') ? childCtx.state : {};
+        childCtx.state.expensesDraft = (childCtx.state.expensesDraft && typeof childCtx.state.expensesDraft === 'object') ? childCtx.state.expensesDraft : {};
+        childCtx.state.expensesDraft[key] = (el.type === 'checkbox') ? !!el.checked : el.value;
+      });
     }
 
-    const nextDraft = normaliseExpensesDraft(childCtx?.state?.expensesDraft || {});
-    const previousBaseline = normaliseExpensesDraft(childCtx?.state?.expensesBaseline || {});
-    if (stableStringify(nextDraft) === stableStringify(previousBaseline)) {
+    const normaliseOptions = { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} };
+    const nextDraftCanonical = normaliseExpenseCanonical(childCtx?.state?.expensesDraft || {}, normaliseOptions);
+    const previousBaseline = normaliseExpenseCanonical(ctx?.state?.expensesBaseline || childCtx?.state?.expensesBaseline || {}, normaliseOptions);
+    const comparison = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(nextDraftCanonical, previousBaseline, normaliseOptions)
+      : { dirty: stableStringify(nextDraftCanonical) !== stableStringify(previousBaseline) };
+    if (!comparison.dirty) {
       return true;
     }
-
-    const currentContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : activeContext;
-    const currentDetails = (st.active_details && typeof st.active_details === 'object') ? st.active_details : activeDetails;
-    const ts = (currentDetails?.timesheet && typeof currentDetails.timesheet === 'object') ? currentDetails.timesheet : {};
-    const tsfin = (currentDetails?.tsfin && typeof currentDetails.tsfin === 'object') ? currentDetails.tsfin : {};
-    const timesheetId = trimStr(
-      currentContext.current_timesheet_id ||
-      currentContext.requested_timesheet_id ||
-      ts.timesheet_id ||
-      activeRow?.timesheet_id ||
-      activeRow?.current_timesheet_id ||
-      ''
-    );
-
-    if (!timesheetId) {
-      throw new Error('A real timesheet is required before expenses can be saved.');
-    }
-
-    const related = (currentDetails?.related && typeof currentDetails.related === 'object') ? currentDetails.related : {};
-    const contract = (related.contract && typeof related.contract === 'object') ? related.contract : {};
-    const candidate = (related.candidate && typeof related.candidate === 'object') ? related.candidate : {};
-    const client = (related.client && typeof related.client === 'object') ? related.client : {};
-    const toFiniteNumberOrNull = (value) => {
-      if (value === null || value === undefined || value === '') return null;
-      const num = Number(value);
-      return Number.isFinite(num) ? num : null;
-    };
-    const expenseSignature = (draft) => stableStringify({
-      travel_pay: round2(draft?.travel_pay ?? 0),
-      travel_charge: round2(draft?.travel_charge ?? 0),
-      accommodation_pay: round2(draft?.accommodation_pay ?? 0),
-      accommodation_charge: round2(draft?.accommodation_charge ?? 0),
-      other_pay: round2(draft?.other_pay ?? 0),
-      other_charge: round2(draft?.other_charge ?? 0),
-      note: trimStr(draft?.note || '')
-    });
-    const mileageSignature = (draft) => stableStringify({
-      mileage_units: Number(draft?.mileage_units ?? 0) || 0
-    });
-    const expenseChanged = expenseSignature(nextDraft) !== expenseSignature(previousBaseline);
-    const mileageChanged = mileageSignature(nextDraft) !== mileageSignature(previousBaseline);
-    const expectedTimesheetId = currentContext.current_timesheet_id || ts.timesheet_id || timesheetId;
-
-    if (expenseChanged) {
-      await patchJson(
-        `/api/tsfin/${encodeURIComponent(String(timesheetId))}/expenses`,
-        {
-          expected_timesheet_id: expectedTimesheetId,
-          expenses: {
-            travel_pay_ex_vat: round2(nextDraft.travel_pay ?? 0),
-            travel_charge_ex_vat: round2(nextDraft.travel_charge ?? 0),
-            accommodation_pay_ex_vat: round2(nextDraft.accommodation_pay ?? 0),
-            accommodation_charge_ex_vat: round2(nextDraft.accommodation_charge ?? 0),
-            other_pay_ex_vat: round2(nextDraft.other_pay ?? 0),
-            other_charge_ex_vat: round2(nextDraft.other_charge ?? 0),
-            description: trimStr(nextDraft.note || '')
-          }
-        }
-      );
-    }
-
-    if (mileageChanged) {
-      const mileageUnits = Number(nextDraft.mileage_units ?? 0) || 0;
-      const mileagePayRate =
-        toFiniteNumberOrNull(tsfin.mileage_pay_rate) ??
-        toFiniteNumberOrNull(contract.mileage_pay_rate) ??
-        toFiniteNumberOrNull(candidate.mileage_pay_rate) ??
-        0;
-      const mileageChargeRate =
-        toFiniteNumberOrNull(tsfin.mileage_charge_rate) ??
-        toFiniteNumberOrNull(contract.mileage_charge_rate) ??
-        toFiniteNumberOrNull(client.mileage_charge_rate) ??
-        0;
-
-      await patchJson(
-        `/api/tsfin/${encodeURIComponent(String(timesheetId))}/mileage`,
-        {
-          expected_timesheet_id: expectedTimesheetId,
-          mileage: {
-            mileage_units: mileageUnits,
-            pay_rate: mileagePayRate,
-            charge_rate: mileageChargeRate,
-            pay_ex_vat: round2(mileageUnits * mileagePayRate),
-            charge_ex_vat: round2(mileageUnits * mileageChargeRate)
-          }
-        }
-      );
-    }
-
     ctx.state = (ctx.state && typeof ctx.state === 'object') ? ctx.state : {};
-    ctx.state.expensesDraft = deep(nextDraft);
-    ctx.state.expensesBaseline = deep(nextDraft);
-    childCtx.state.expensesDraft = deep(nextDraft);
-    childCtx.state.expensesBaseline = deep(nextDraft);
-
-    if (typeof refreshBulkAuthoriseDatasetPreservingState === 'function') {
-      await refreshBulkAuthoriseDatasetPreservingState(st, { refreshContext: true });
-    } else if (typeof refreshBulkAuthoriseActiveContext === 'function') {
-      await refreshBulkAuthoriseActiveContext(st, { reason: 'expenses-saved' });
-      await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][EXPENSES]');
-    } else {
-      await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][EXPENSES]');
+    const preservedBaseline = deep(ctx.state.expensesBaseline || childCtx.state.expensesBaseline || previousBaseline);
+    const existingDraft = (childCtx.state.expensesDraft && typeof childCtx.state.expensesDraft === 'object') ? childCtx.state.expensesDraft : {};
+    const mergedDraft = {
+      ...nextDraftCanonical,
+      mileage_pay_rate: (Object.prototype.hasOwnProperty.call(existingDraft, 'mileage_pay_rate') ? existingDraft.mileage_pay_rate : nextDraftCanonical.mileage_pay_rate),
+      mileage_charge_rate: (Object.prototype.hasOwnProperty.call(existingDraft, 'mileage_charge_rate') ? existingDraft.mileage_charge_rate : nextDraftCanonical.mileage_charge_rate)
+    };
+    ctx.state.expensesDraft = deep(mergedDraft);
+    ctx.state.expensesBaseline = deep(preservedBaseline);
+    childCtx.state.expensesDraft = deep(mergedDraft);
+    childCtx.state.expensesBaseline = deep(preservedBaseline);
+    ctx.state.expensesDirty = true;
+    ctx.state.expensesDraftDirty = true;
+    ctx.state.hasStagedExpensesDirty = true;
+    ctx.state.dirty = true;
+    st.dirty = true;
+    if (typeof markBulkAuthoriseDirty === 'function') {
+      markBulkAuthoriseDirty(st, { source: 'bulk-authorise-expenses-apply', dirty: true, reason: 'expenses-staged' });
     }
+    if (typeof recalculateTimesheetExpenseTotals === 'function') {
+      const totals = recalculateTimesheetExpenseTotals(mergedDraft, {
+        mileage_pay_rate: mergedDraft.mileage_pay_rate,
+        mileage_charge_rate: mergedDraft.mileage_charge_rate
+      }, normaliseOptions);
+      ctx.state.expenseTotals = deep(totals);
+      st.active_ctx.state = (st.active_ctx.state && typeof st.active_ctx.state === 'object') ? st.active_ctx.state : {};
+      st.active_ctx.state.expenseTotals = deep(totals);
+    }
+    await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][EXPENSES-STAGED]');
 
     return true;
   };
