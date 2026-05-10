@@ -3453,7 +3453,7 @@ function normalizeClientSettingsForSave(raw) {
 
 // ===== Auth fetch with refresh retry =====
 
-async function apiPostJson(path, body) {
+async function apiPostJson(path, body, options = {}) {
   const url = API(path);
 
   const hasBody = (body !== undefined && body !== null);
@@ -3476,6 +3476,19 @@ async function apiPostJson(path, body) {
   try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = null; }
 
   if (!res.ok) {
+    const isBankingPayPath = String(path || '').startsWith('/api/banking/pay/');
+    const contextAction = (options && typeof options === 'object') ? options.action : '';
+    const inferBankingAction = (apiPath) => {
+      const p = String(apiPath || '').toLowerCase();
+      if (p.includes('/blocked-funds') && p.includes('/retry')) return 'RETRY_BLOCKED_FUNDS';
+      if (p.includes('/retry-blocked-funds')) return 'RETRY_BLOCKED_FUNDS';
+      if (p.includes('/workbench') && p.includes('/open')) return 'WORKBENCH_SESSION_OPEN';
+      if (p.includes('/paye') && p.includes('/import')) return 'PAYE_NET_IMPORT';
+      if (p.includes('/paye')) return 'PAYE_NET_SAVE';
+      if (p.includes('/draft') && (p.includes('/create') || p.endsWith('/draft'))) return 'CREATE_DRAFT';
+      if (p.includes('/preview') || (p.includes('/workbench') && (p.includes('/candidate') || p.includes('/progress') || p.includes('/session/get')))) return 'PREVIEW';
+      return 'BANKING_ACTION';
+    };
     const msg =
       (parsed && typeof parsed === 'object' && (parsed.message || parsed.error))
         ? String(parsed.message || parsed.error)
@@ -3485,6 +3498,23 @@ async function apiPostJson(path, body) {
     err.status = res.status;
     err.body = txt || '';
     err.json = parsed;
+    err.payload = parsed;
+    if (isBankingPayPath && typeof bankingNormalizeApiError === 'function') {
+      const normalised = bankingNormalizeApiError(err, parsed, { action: contextAction || inferBankingAction(path) });
+      if (normalised && typeof normalised === 'object') {
+        err.friendly_error = normalised.friendly_error || {
+          code: normalised.error_code || normalised.code || 'BANKING_ACTION_FAILED',
+          title: normalised.title || 'Banking action failed',
+          message: normalised.user_message || normalised.message || 'CloudTMS could not complete this Banking action. Please refresh and try again.',
+          user_action: normalised.user_action || 'REFRESH_AND_RETRY'
+        };
+        err.error_code = normalised.error_code || normalised.code || 'BANKING_ACTION_FAILED';
+        err.code = normalised.code || normalised.error_code || 'BANKING_ACTION_FAILED';
+        err.title = normalised.title || 'Banking action failed';
+        err.user_message = normalised.user_message || normalised.message || err.title;
+        err.message = normalised.user_message || normalised.message || err.message;
+      }
+    }
     throw err;
   }
 
@@ -19011,7 +19041,7 @@ function bankingHandleApiError(err, context = {}) {
     return false;
   };
 
-  const setInline = (value) => {
+  const setInline = (value, normalisedObject = null) => {
     if (!st) return false;
     const msg = safeText(value);
     try {
@@ -19048,6 +19078,13 @@ function bankingHandleApiError(err, context = {}) {
       if (!current || typeof current !== 'object') return false;
       if (!Object.prototype.hasOwnProperty.call(current, last)) return false;
       current[last] = msg;
+      if (normalisedObject && typeof normalisedObject === 'object') {
+        const friendlyKey = (typeof last === 'string' && /error$/i.test(last)) ? last.replace(/error$/i, 'friendlyError') : '';
+        if (friendlyKey && Object.prototype.hasOwnProperty.call(current, friendlyKey)) current[friendlyKey] = normalisedObject;
+        if (String(last) === 'error' && Object.prototype.hasOwnProperty.call(current, 'friendlyError')) current.friendlyError = normalisedObject;
+        if (String(last) === 'createDraftError' && Object.prototype.hasOwnProperty.call(current, 'createDraftFriendlyError')) current.createDraftFriendlyError = normalisedObject;
+        if (String(last) === 'importError' && Object.prototype.hasOwnProperty.call(current, 'importFriendlyError')) current.importFriendlyError = normalisedObject;
+      }
       return true;
     } catch {
       return false;
@@ -19099,7 +19136,7 @@ function bankingHandleApiError(err, context = {}) {
   };
 
   if (isBanking) {
-    const didInline = setInline(message);
+    const didInline = setInline(message, friendly);
     if (!didInline) setGlobal(message);
   }
 
@@ -36062,7 +36099,11 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     if (upper.includes('PLPGSQL') || upper.includes('POSTGRES') || upper.includes('SUPABASE') || upper.includes('POSTGREST')) return true;
     if (upper.includes('DUPLICATE KEY') || upper.includes('UNIQUE CONSTRAINT') || upper.includes('FOREIGN KEY')) return true;
     if (upper.includes('CONSTRAINT') || upper.includes('STACK TRACE') || upper.includes('TRACEBACK')) return true;
-    if (upper.includes('PUBLIC.') || upper.includes('PAY_BATCHES') || upper.includes('PAY_BANK_TRANSFERS') || upper.includes('BANKING_ALERT_ACKNOWLEDGEMENTS')) return true;
+    if (upper.includes('PUBLIC.') || upper.includes('PAY_BATCHES') || upper.includes('PAY_BANK_TRANSFERS') || upper.includes('BANKING_PAY_WORKBENCH_SESSIONS')) return true;
+    if (upper.includes('MANUAL_DEBT_RECOVERY') || upper.includes('KEY_TYPE') || upper.includes('KEY_VALUE') || upper.includes('TIMESHEET_ID')) return true;
+    if (/\bDIFF\b/.test(upper) || /["']DIFF["']/.test(upper)) return true;
+    if (/\bEXPECTED\b/.test(upper) || /\bACTUAL\b/.test(upper)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(text)) return true;
     if (upper.includes('UQ_') || upper.includes('IDX_') || upper.includes('_PKEY') || upper.includes('PG_')) return true;
     if (upper.includes('BANKING_ALERT_ACK_USER_FINGERPRINT_SCOPE')) return true;
     if (upper.includes('VIOLATES') || upper.includes('RELATION "') || upper.includes('COLUMN "') || upper.includes('FUNCTION "')) return true;
@@ -36088,6 +36129,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   }
 
   const payloads = [];
+  const seenObjects = new WeakSet();
   const textParts = [];
 
   const addText = (value) => {
@@ -36097,6 +36139,8 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 
   const addPayloadObject = (candidate) => {
     if (!isPlainObject(candidate)) return;
+    if (seenObjects.has(candidate)) return;
+    seenObjects.add(candidate);
     payloads.push(candidate);
     try { addText(JSON.stringify(candidate)); } catch {}
 
@@ -36109,13 +36153,23 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       candidate.errorPayload,
       candidate.friendly_error,
       candidate.friendlyError,
-      candidate.response
+      candidate.response,
+      candidate.error,
+      candidate.message,
+      candidate.details,
+      candidate.detail,
+      candidate.hint,
+      candidate.cause
     ];
     for (const nested of nestedObjects) {
-      if (isPlainObject(nested)) payloads.push(nested);
+      if (Array.isArray(nested)) {
+        nested.forEach((entry) => addSource(entry));
+      } else if (isPlainObject(nested)) {
+        addPayloadObject(nested);
+      }
       else {
         const parsed = extractEmbeddedJsonObject(nested);
-        if (parsed) payloads.push(parsed);
+        if (parsed) addPayloadObject(parsed);
       }
     }
 
@@ -36136,8 +36190,9 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 
     [candidate.error, candidate.message, candidate.detail, candidate.details, candidate.hint, candidate.body, candidate.payload, candidate.data].forEach((textValue) => {
       const parsed = extractEmbeddedJsonObject(textValue);
-      if (parsed) payloads.push(parsed);
+      if (parsed) addPayloadObject(parsed);
     });
+    if (Array.isArray(candidate.errors)) candidate.errors.forEach((entry) => addSource(entry));
   };
 
   const addSource = (source) => {
@@ -36153,6 +36208,8 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       addText(source.details);
       addText(source.detail);
       addText(source.error);
+      addSource(source.cause);
+      if (Array.isArray(source.errors)) source.errors.forEach((entry) => addSource(entry));
       const parsedFromMessage = extractEmbeddedJsonObject(source.message);
       if (parsedFromMessage) addPayloadObject(parsedFromMessage);
       const parsedFromBody = extractEmbeddedJsonObject(source.body);
@@ -36170,6 +36227,8 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 
   addSource(error);
   addSource(payloadInput);
+  addSource(contextInput.error);
+  addSource(contextInput.message);
   addPayloadObject(contextInput.payload);
   addPayloadObject(contextInput.body);
   addPayloadObject(contextInput.json);
@@ -36188,7 +36247,15 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'BATCH_STALE',
     'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
     'BLOCKED_FUNDS',
+    'BLOCKED_FUNDS_RETRY_FAILED',
+    'BLOCKED_FUNDS_RETRY_REQUIRED',
+    'BLOCKED_FUNDS_RETRY_STATUS_MISMATCH',
+    'BLOCKED_FUNDS_RETRY_NOT_ALLOWED',
+    'BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_MISMATCH',
+    'BLOCKED_FUNDS_RETRY_TRANSFER_EVENTS_EXIST',
+    'BLOCKED_FUNDS_RETRY_NO_ACTIVE_ITEMS',
     'NO_ACTIVE_PAYMENTS_IN_BATCH',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
     'EXECUTE_NOT_ALLOWED',
     'EXECUTION_ALREADY_SUBMITTED',
     'STANDARD_BANK_NOT_AVAILABLE_FOR_CSV_PROVIDER',
@@ -36206,9 +36273,18 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'PAYE_NOT_READY',
     'PAYE_NET_MISSING',
     'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'PAYE_NET_NOT_APPLICABLE_FOR_LOANS_BATCH',
+    'SAGE_IMPORT_INVALID',
+    'MANUAL_NET_INVALID',
     'RAIL_ENV_MISMATCH',
     'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
     'FUNDING_ACCOUNT_MISSING',
+    'MISSING_RAIL_PROVIDER',
     'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
     'PAYMENT_AUTHORISER_REQUIRED',
     'STANDARD_BANK_IMMEDIATE_RAIL_EXECUTION_ERRORS',
@@ -36219,6 +36295,23 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'PAY_BATCH_PREPARE_FAILED',
     'PAY_BATCH_AUTH_START_FAILED',
     'PAY_BATCH_FINALISE_FAILED',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PAY_CREATE_DRAFT_FAILED',
+    'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED',
+    'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'WORKBENCH_MODAL_ACTION_INVALID_JSON',
+    'WORKBENCH_MODAL_ACTION_INVALID_CASE_RESOLUTION',
+    'WORKBENCH_MODAL_ACTION_INVALID_CANDIDATE',
+    'WORKBENCH_MODAL_ACTION_INVALID_FINANCE_CASE',
+    'WORKBENCH_MODAL_ACTION_INVALID_TIMESHEET',
+    'WORKBENCH_MODAL_ACTION_INVALID_SELECTED_ROWS',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
     'SUPPRESS_REMITTANCES_CONFIRM_REQUIRED',
     'PAYMENT_REAUTH_REQUIRED',
     'REAUTH_REQUIRED',
@@ -36243,7 +36336,6 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     if (code === 'CSV_UPLOADED_CONFIRMED_MUST_BE_TRUE' || code === 'CSV_UPLOADED_CONFIRMATION_MISSING') return 'CSV_UPLOADED_CONFIRMATION_REQUIRED';
     if (code === 'CSV_BANK_CONFIRM_REF_IS_REQUIRED' || code === 'CSV_BANK_CONFIRMATION_REFERENCE_REQUIRED') return 'CSV_BANK_CONFIRM_REF_REQUIRED';
     if (code === 'EXTERNAL_SETTLEMENT_COMMENT_IS_REQUIRED') return 'EXTERNAL_SETTLEMENT_COMMENT_REQUIRED';
-    if (code === 'HAS_HARD_BLOCKERS') return 'PREVIEW_GATE_NOT_SATISFIED';
     if (code === 'BANKING_ALERT_ACKNOWLEDGEMENT_ALREADY_EXISTS') return 'ACKNOWLEDGEMENT_ALREADY_EXISTS';
     if (code === 'ACKNOWLEDGEMENT_ALREADY_ACKNOWLEDGED') return 'ACKNOWLEDGEMENT_ALREADY_EXISTS';
     if (code === 'ERROR' || code === 'REQUEST_FAILED' || code === 'RPC_ERROR' || code === 'HTTP_ERROR' || code === 'FETCH_ERROR') return 'BANKING_ACTION_FAILED';
@@ -36255,7 +36347,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     if (!code) return false;
     if (/^[0-9]{5}$/.test(code)) return true;
     if (/^P[0-9A-Z]{4}$/.test(code)) return true;
-    return ['POSTGREST', 'POSTGRES', 'SUPABASE', 'SQLSTATE', 'DATABASE_ERROR', 'DB_ERROR', 'HTTP_ERROR', 'FETCH_ERROR'].includes(code);
+    return ['POSTGREST', 'POSTGRES', 'SUPABASE', 'SQLSTATE', 'DATABASE_ERROR', 'DB_ERROR', 'HTTP_ERROR', 'FETCH_ERROR', 'RPC_ERROR', 'REQUEST_FAILED', 'P0001'].includes(code);
   };
 
   const containsCodeToken = (text, code) => {
@@ -36310,7 +36402,8 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     if (rawUpper.includes('CSV_UPLOADED_CONFIRMED MUST BE TRUE') || rawUpper.includes('CSV_UPLOADED_CONFIRMATION_REQUIRED')) return 'CSV_UPLOADED_CONFIRMATION_REQUIRED';
     if (rawUpper.includes('CSV_BANK_CONFIRM_REF IS REQUIRED') || rawUpper.includes('CSV_BANK_CONFIRM_REF_REQUIRED')) return 'CSV_BANK_CONFIRM_REF_REQUIRED';
     if (rawUpper.includes('EXTERNAL_SETTLEMENT_COMMENT IS REQUIRED') || rawUpper.includes('EXTERNAL_SETTLEMENT_COMMENT_REQUIRED')) return 'EXTERNAL_SETTLEMENT_COMMENT_REQUIRED';
-    if (rawUpper.includes('PREVIEW_GATE_NOT_SATISFIED') || rawUpper.includes('HAS HARD BLOCKERS')) return 'PREVIEW_GATE_NOT_SATISFIED';
+    if (rawUpper.includes('HAS_HARD_BLOCKERS') || rawUpper.includes('HAS HARD BLOCKERS')) return 'HAS_HARD_BLOCKERS';
+    if (rawUpper.includes('PREVIEW_GATE_NOT_SATISFIED')) return 'PREVIEW_GATE_NOT_SATISFIED';
     if (rawUpper.includes('REMITTANCE_QUEUE_DISPATCH_FAILED') || rawUpper.includes('REMITTANCE QUEUE DISPATCH FAILED')) return 'REMITTANCE_QUEUE_DISPATCH_FAILED';
     if (rawUpper.includes('SETTLEMENT_FINALISATION_FAILED') || rawUpper.includes('SETTLEMENT FINALISATION FAILED')) return 'SETTLEMENT_FINALISATION_FAILED';
     if (rawUpper.includes('STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED')) return 'STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED';
@@ -36370,7 +36463,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment batch has changed',
-      message: 'This batch is no longer up to date. No payment was submitted. Refresh the batch, review the changes, then try again.',
+      message: 'This batch is no longer up to date. Refresh the batch, review the latest payment details, then try again.',
       user_action: 'REFRESH_BATCH',
       confirm_label: 'Refresh batch',
       show_modal: true
@@ -36380,7 +36473,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 200,
       severity: 'critical',
       title: 'Bank rejected payment — blocked funds',
-      message: 'Bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.',
+      message: 'The bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true,
@@ -36768,8 +36861,34 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     }
   };
 
-  if (!templates[errorCode]) errorCode = 'BANKING_ACTION_FAILED';
-  const template = templates[errorCode];
+  const action = normaliseCode(contextInput.action || contextInput.context_action || '');
+  const baseTemplate = templates[errorCode] || templates.BANKING_ACTION_FAILED;
+  let actionAwareTemplate = { ...baseTemplate };
+  if (errorCode === 'BATCH_STALE') {
+    if (action === 'RETRY_BLOCKED_FUNDS') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch has changed', message: 'This blocked-funds batch is no longer up to date. No payment was submitted. Refresh Banking, review the latest payment differences, then create or authorise a new payment batch.', user_action: 'REFRESH_BATCH' };
+    else if (action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'Payment details changed while the batch was being prepared. Refresh the preview, review the latest payment details, then try again.', user_action: 'REFRESH_PREVIEW' };
+    else if (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.', user_action: 'REFRESH_PREVIEW' };
+    else if (action === 'PAYE_NET_IMPORT' || action === 'PAYE_NET_SAVE') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch has changed', message: 'This batch is no longer up to date. Refresh the batch, review the latest payment details, then try again.', user_action: 'REFRESH_BATCH' };
+  } else if (errorCode === 'BLOCKED_FUNDS' && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, ok: false, http_status: 400, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.' };
+  else if (errorCode === 'BLOCKED_FUNDS' && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN' || action === 'WORKBENCH_MODAL_ACTION')) {
+    const map = action === 'WORKBENCH_MODAL_ACTION'
+      ? { title: 'Payment preview could not be updated', message: 'CloudTMS could not save this payment decision. Refresh the preview and try again.' }
+      : { title: 'Payment preview could not be loaded', message: action === 'WORKBENCH_SESSION_OPEN' ? 'CloudTMS could not open the Banking Pay workbench session. Refresh Banking and try again. No payment batch has been created.' : 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.' };
+    actionAwareTemplate = { ...actionAwareTemplate, ok: false, http_status: 400, ...map };
+  } else if (['PAYE_NET_MISSING', 'PAYE_NET_REQUIRED', 'PAYE_NET_BANK_AMOUNT_MISSING'].includes(errorCode)) actionAwareTemplate = { ...actionAwareTemplate, title: 'PAYE net amounts are missing', message: 'Enter the missing PAYE net amounts, click Save, then try again.' };
+  else if (['PAYE_NET_INVALID', 'PAYE_NET_BANK_AMOUNT_INVALID'].includes(errorCode)) actionAwareTemplate = { ...actionAwareTemplate, title: 'PAYE net amounts are invalid', message: 'Correct the PAYE net amounts, click Save, then try again.' };
+  else if (errorCode === 'SAGE_IMPORT_INVALID' && action === 'PAYE_NET_IMPORT') actionAwareTemplate = { ...actionAwareTemplate, title: 'PAYE net amounts could not be imported', message: 'Review the Sage export, refresh the batch, then try again.' };
+  else if (errorCode === 'MANUAL_NET_INVALID' && action === 'PAYE_NET_SAVE') actionAwareTemplate = { ...actionAwareTemplate, title: 'PAYE net amounts could not be saved', message: 'Correct the PAYE net amounts, click Save, then try again.' };
+  else if (errorCode === 'MANUAL_NET_INVALID') actionAwareTemplate = { ...actionAwareTemplate, title: 'PAYE net amounts are invalid', message: 'Correct the PAYE net amounts, click Save, then try again.' };
+  else if (['BLOCKED_BANK_DETAILS', 'SELECTED_PAYEE_ROUTE_NOT_READY'].includes(errorCode)) actionAwareTemplate = { ...actionAwareTemplate, title: 'Bank details need attention', message: 'Review or accept the highlighted bank details, then try again.' };
+  else if (['MISSING_RAIL_PROVIDER', 'RAIL_ENV_MISMATCH', 'RAIL_NOT_CONFIGURED', 'UNKNOWN_RAIL_PROVIDER', 'FUNDING_ACCOUNT_MISSING'].includes(errorCode)) actionAwareTemplate = { ...actionAwareTemplate, title: 'Banking setup needs attention', message: 'CloudTMS could not submit this payment because the banking setup is incomplete or unavailable. Review Banking settings and try again.' };
+  else if (errorCode === 'NO_TIMESHEETS_READY_FOR_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'There are no payment items ready for this batch. Refresh Banking, review the preview, then try again.' };
+  else if (['BANKING_PAY_CREATE_DRAFT_FAILED', 'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED', 'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED'].includes(errorCode) && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.' };
+  else if (['BANKING_PAY_PREVIEW_FAILED', 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED'].includes(errorCode) && action === 'PREVIEW') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be loaded', message: 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.' };
+  else if (['WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE', 'STALE_SESSION', 'OBSOLETE_SESSION'].includes(errorCode) && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN')) actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.' };
+  else if (/^WORKBENCH_MODAL_ACTION_INVALID_/.test(errorCode) && action === 'WORKBENCH_MODAL_ACTION') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be updated', message: 'CloudTMS could not save this payment decision. Refresh the preview and try again.' };
+  else if (['WORKBENCH_SESSION_INVALID', 'WORKBENCH_SESSION_NOT_FOUND'].includes(errorCode) && action === 'PREVIEW') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'Refresh Banking Pay preview, review the latest details, then try again.' };
+  const template = actionAwareTemplate;
 
   const pickSafeIdentifier = (values) => {
     for (const value of Array.isArray(values) ? values : []) {
@@ -36826,6 +36945,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     http_status: boundedHttpStatus(template.http_status, template.ok === true ? 200 : 400),
     status_code: boundedHttpStatus(template.http_status, template.ok === true ? 200 : 400),
     friendly_error: {
+      code: errorCode,
       title: template.title,
       message: template.message,
       error_code: errorCode,
