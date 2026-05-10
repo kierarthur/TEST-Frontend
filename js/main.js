@@ -23758,14 +23758,29 @@ async function bankingPayBatchRetryBlockedFunds(payBatchId, payload = {}) {
     let parsed = null;
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
     if (!response.ok) {
-      const message = parsed && typeof parsed === 'object' && (parsed.error || parsed.message)
-        ? String(parsed.error || parsed.message)
-        : (text || `Request failed (${response.status})`);
-      const error = new Error(message || 'Blocked-funds retry failed.');
+      const normalized = (typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(parsed || text || null, parsed, {
+            action: 'RETRY_BLOCKED_FUNDS',
+            userInitiated: true
+          })
+        : null;
+      const friendlyMessage = String(
+        normalized?.message ||
+        normalized?.user_message ||
+        normalized?.friendly_error?.message ||
+        'Blocked-funds retry failed.'
+      ).trim();
+      const error = new Error(friendlyMessage || 'Blocked-funds retry failed.');
       error.status = response.status;
       error.body = text;
       error.json = parsed;
-      error.error_code = parsed && typeof parsed === 'object' ? (parsed.error_code || parsed.code || null) : null;
+      error.payload = parsed;
+      error.friendly_error = normalized?.friendly_error || normalized || null;
+      error.error_code = String(normalized?.error_code || normalized?.code || parsed?.error_code || parsed?.code || '').trim() || null;
+      error.code = error.error_code;
+      error.title = String(normalized?.title || normalized?.friendly_error?.title || '').trim() || null;
+      error.user_message = String(normalized?.user_message || normalized?.message || friendlyMessage || '').trim() || null;
+      error.message = error.user_message || friendlyMessage || 'Blocked-funds retry failed.';
       throw error;
     }
     return (parsed && typeof parsed === 'object') ? parsed : {};
@@ -42441,8 +42456,10 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       netDraft: {},
       importBusy: false,
       importError: '',
+      importFriendlyError: null,
       saveBusy: false,
-      saveError: ''
+      saveError: '',
+      saveFriendlyError: null
     }
   };
 
@@ -43046,14 +43063,49 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   };
 
   const extractBlockedFundsRetryErrorPayload = (error) => {
-    if (error && typeof error === 'object') {
-      if (error.json && typeof error.json === 'object' && !Array.isArray(error.json)) return error.json;
-      if (typeof error.body === 'string' && error.body.trim()) {
-        try {
-          const parsed = JSON.parse(error.body);
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-        } catch {}
+    const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+    const tryParse = (v) => {
+      if (isObj(v)) return v;
+      const text = String(v == null ? '' : v).trim();
+      if (!text) return null;
+      try {
+        const parsed = JSON.parse(text);
+        return isObj(parsed) ? parsed : null;
+      } catch { return null; }
+    };
+    const unwrap = (v, depth = 0) => {
+      if (!isObj(v) || depth > 6) return null;
+      const inner = tryParse(v.error) || tryParse(v.message) || tryParse(v.detail) || tryParse(v.details);
+      return inner ? (unwrap(inner, depth + 1) || inner) : v;
+    };
+    const mergeMeta = (base, source) => {
+      if (!isObj(source)) return base;
+      const out = isObj(base) ? { ...base } : {};
+      const safeKeys = [
+        'batch_get', 'retry_cleanup', 'blocked_funds_required_gbp', 'blocked_funds_available_gbp',
+        'blocked_funds_provider', 'blocked_funds_env', 'blocked_funds_account_ref',
+        'banking_alerts', 'banking_unacknowledged_alert_count', 'banking_highest_alert_label', 'banking_highest_alert_severity'
+      ];
+      for (const key of safeKeys) {
+        if (Object.prototype.hasOwnProperty.call(source, key) && !Object.prototype.hasOwnProperty.call(out, key)) out[key] = source[key];
       }
+      return out;
+    };
+
+    if (!isObj(error)) return null;
+    const candidates = [
+      error.friendly_error, error.payload, error.json, error.body, error.message,
+      tryParse(error.body), tryParse(error.message)
+    ];
+    for (const c of candidates) {
+      const parsed = unwrap(tryParse(c) || c);
+      if (!isObj(parsed)) continue;
+      const payload = mergeMeta(parsed, error.payload);
+      const innerCode = String(payload.error_code || payload.code || '').trim().toUpperCase();
+      if (innerCode && innerCode !== 'P0001') return payload;
+      const nested = unwrap(tryParse(payload.error) || tryParse(payload.message) || payload);
+      if (isObj(nested)) return mergeMeta(nested, payload);
+      return payload;
     }
     return null;
   };
@@ -43066,8 +43118,13 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
   const buildBlockedFundsRetryModalCopy = (payload, error = null, fallbackMessage = '') => {
     const p = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
-    const friendly = (p.friendly_error && typeof p.friendly_error === 'object' && !Array.isArray(p.friendly_error)) ? p.friendly_error : {};
-    const code = String(p.error_code || p.code || error?.error_code || '').trim().toUpperCase();
+    const normalized = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(error || p, p, { action: 'RETRY_BLOCKED_FUNDS', userInitiated: true })
+      : null;
+    const friendly = (normalized?.friendly_error && typeof normalized.friendly_error === 'object' && !Array.isArray(normalized.friendly_error))
+      ? normalized.friendly_error
+      : ((p.friendly_error && typeof p.friendly_error === 'object' && !Array.isArray(p.friendly_error)) ? p.friendly_error : {});
+    const code = String(normalized?.error_code || normalized?.code || p.error_code || p.code || error?.error_code || '').trim().toUpperCase();
     const cleanup = (p.retry_cleanup && typeof p.retry_cleanup === 'object' && !Array.isArray(p.retry_cleanup)) ? p.retry_cleanup : null;
     const cleanupOk = cleanup && cleanup.ok === true;
     const cleanupFailed = cleanup && cleanup.ok === false && cleanup.attempted === true;
@@ -43078,23 +43135,30 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     const envLabel = String(p.blocked_funds_env || p.batch_get?.blocked_funds_env || p.batch_get?.batch?.blocked_funds_env || p.batch_get?.rail_env_snapshot || p.batch_get?.batch?.rail_env_snapshot || '').trim();
     const accountRef = String(p.blocked_funds_account_ref || p.batch_get?.blocked_funds_account_ref || p.batch_get?.batch?.blocked_funds_account_ref || p.batch_get?.funding_account_ref || p.batch_get?.batch?.funding_account_ref || '').trim();
 
-    let title = pickSafeChildMessage([friendly.title], '');
-    let message = pickSafeChildMessage([friendly.message, p.user_message, p.message, p.error], fallbackMessage || 'Blocked-funds retry failed.');
+    let title = pickSafeChildMessage([normalized?.title, friendly.title], '');
+    let message = pickSafeChildMessage([normalized?.message, normalized?.user_message, friendly.message, p.user_message, p.message], fallbackMessage || 'Blocked-funds retry failed.');
 
     if (!title) {
       if (code === 'BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE' || code === 'BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED' || code === 'BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS') {
         title = 'Payment retry did not complete';
       } else if (code === 'BATCH_STALE') {
-        title = 'Payment retry blocked';
+        title = 'Payment batch has changed';
       } else {
         title = 'Payment retry failed';
       }
     }
 
-    if (!message) message = 'Blocked-funds retry failed.';
+    if (code === 'BATCH_STALE') {
+      message = 'This blocked-funds batch is no longer up to date. No payment was submitted. Refresh Banking, review the latest payment differences, then create or authorise a new payment batch.';
+    } else if (!message) {
+      message = 'Blocked-funds retry failed.';
+    }
+    if (code === 'BLOCKED_FUNDS' && !title) title = 'Bank rejected payment — blocked funds';
+    if (code === 'BLOCKED_FUNDS' && (!message || message === 'Blocked-funds retry failed.')) {
+      message = 'The bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.';
+    }
 
     const detailRows = [];
-    if (code) detailRows.push(['Code', code]);
     if (formatRetryMoney(required)) detailRows.push(['Required', formatRetryMoney(required)]);
     if (formatRetryMoney(available)) detailRows.push(['Available', formatRetryMoney(available)]);
     if (provider) detailRows.push(['Provider', provider]);
@@ -43478,6 +43542,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
     child.paye.saveBusy = true;
     child.paye.saveError = '';
+    child.paye.saveFriendlyError = null;
     await rerenderChild();
 
     try {
@@ -43491,7 +43556,14 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       toast('PAYE net payments saved');
       return true;
     } catch (e) {
-      child.paye.saveError = String(e?.message || e || 'Save failed');
+      const friendly = normaliseChildFriendlyError(e, 'MANUAL_NET_INVALID', {
+        action: 'PAYE_NET_SAVE',
+        userInitiated: true,
+        silent: true,
+        scope: deriveScopeForBatch(child.data)
+      });
+      child.paye.saveError = String(friendly?.message || 'PAYE net amounts could not be saved.').trim();
+      child.paye.saveFriendlyError = friendly;
       await rerenderChild();
       return false;
     } finally {
@@ -44116,7 +44188,10 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
         if (normalized && typeof normalized === 'object') {
           const normalizedCode = String(normalized.error_code || normalized.code || fallbackCode || '').trim().toUpperCase();
           if (normalizedCode === 'BATCH_STALE') {
-            const staleMessage = 'This payment batch has changed. Refresh the batch, review the latest details, then try again.';
+            const action = String(contextObj.action || '').trim().toUpperCase();
+            const staleMessage = action === 'RETRY_BLOCKED_FUNDS'
+              ? 'This blocked-funds batch is no longer up to date. No payment was submitted. Refresh Banking, review the latest payment differences, then create or authorise a new payment batch.'
+              : 'This payment batch has changed. Refresh the batch, review the latest details, then try again.';
             return {
               ...normalized,
               ok: false,
@@ -44126,6 +44201,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
               message: staleMessage,
               error: staleMessage,
               user_message: staleMessage,
+              user_action: normalized.user_action || 'REFRESH_BATCH',
               confirm_label: normalized.confirm_label || 'OK',
               severity: normalized.severity || 'warning',
               show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true,
@@ -44136,6 +44212,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
                 title: 'Payment batch has changed',
                 message: staleMessage,
                 error_code: 'BATCH_STALE',
+                user_action: normalized.friendly_error?.user_action || normalized.user_action || 'REFRESH_BATCH',
                 confirm_label: normalized.confirm_label || normalized.friendly_error?.confirm_label || 'OK',
                 severity: normalized.severity || normalized.friendly_error?.severity || 'warning',
                 show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true
@@ -44205,6 +44282,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     const friendly = normaliseChildFriendlyError(errorValue, fallbackCode, contextObj);
     const message = String(friendly.user_message || friendly.message || friendly.error || 'CloudTMS could not complete this Banking action. Please refresh and try again.').trim();
     child.error = message;
+    child.friendlyError = friendly;
 
     if (typeof bankingHandleApiError === 'function') {
       try {
@@ -45002,8 +45080,15 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       }
     } catch (e) {
       const payload = extractBlockedFundsRetryErrorPayload(e);
-      const copy = buildBlockedFundsRetryModalCopy(payload, e, 'Blocked-funds retry failed.');
-      child.error = copy.message;
+      const normalized = normaliseChildFriendlyError(e || payload, 'BANKING_ACTION_FAILED', {
+        action: 'RETRY_BLOCKED_FUNDS',
+        userInitiated: true,
+        silent: true,
+        scope: deriveScopeForBatch(child.data)
+      });
+      const copy = buildBlockedFundsRetryModalCopy(payload || normalized || {}, normalized || e, normalized?.message || 'Blocked-funds retry failed.');
+      child.error = String(normalized?.message || copy.message || 'Blocked-funds retry failed.').trim();
+      child.friendlyError = normalized || null;
 
       try {
         if (payload && typeof payload === 'object' && payload.batch_get && typeof payload.batch_get === 'object') {
@@ -45033,6 +45118,9 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
       child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
       child.ui.activeTabKey = 'payment_issues';
+      if (String(normalized?.error_code || normalized?.code || '').trim().toUpperCase() === 'BATCH_STALE') {
+        try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
+      }
       await showBlockedFundsRetryModal(copy);
     } finally {
       child.actionsBusy.retryingBlockedFunds = false;
@@ -46023,6 +46111,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
             child.paye.importBusy = true;
             child.paye.importError = '';
+            child.paye.importFriendlyError = null;
             await rerenderChild();
 
             try {
@@ -46040,7 +46129,14 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
               toast('Sage import applied');
             } catch (e2) {
-              child.paye.importError = String(e2?.message || e2 || 'Import failed');
+              const friendly = normaliseChildFriendlyError(e2, 'SAGE_IMPORT_INVALID', {
+                action: 'PAYE_NET_IMPORT',
+                userInitiated: true,
+                silent: true,
+                scope: deriveScopeForBatch(child.data)
+              });
+              child.paye.importError = String(friendly?.message || 'PAYE net amounts could not be imported.').trim();
+              child.paye.importFriendlyError = friendly;
               await rerenderChild();
             } finally {
               child.paye.importBusy = false;
@@ -49126,8 +49222,10 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
 
     if (!('loading' in pe)) pe.loading = false;
     if (!('error' in pe)) pe.error = '';
+    if (!('friendlyError' in pe)) pe.friendlyError = null;
     if (!('importBusy' in pe)) pe.importBusy = false;
     if (!('importError' in pe)) pe.importError = '';
+    if (!('importFriendlyError' in pe)) pe.importFriendlyError = null;
     if (!('lastImportFilename' in pe)) pe.lastImportFilename = '';
 
     if (!('netDraft' in pe) || typeof pe.netDraft !== 'object' || Array.isArray(pe.netDraft)) pe.netDraft = {};
@@ -49489,6 +49587,7 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       pe.__saveInFlight = true;
 
       pe.error = '';
+      pe.friendlyError = null;
       await rerender();
 
       const entries = buildPatchEntries(ctx, pe);
@@ -49513,7 +49612,13 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     } catch (e) {
       try {
         const ctxState = ensureCtxState();
-        if (ctxState) ctxState.pe.error = String(e?.message || e || 'Save failed');
+        if (ctxState) {
+          const friendly = (typeof bankingNormalizeApiError === 'function')
+            ? bankingNormalizeApiError(e, null, { action: 'PAYE_NET_SAVE', userInitiated: true, batchId: id, fallbackCode: 'MANUAL_NET_INVALID' })
+            : null;
+          ctxState.pe.error = String(friendly?.message || friendly?.user_message || 'PAYE net amounts could not be saved.').trim();
+          ctxState.pe.friendlyError = friendly;
+        }
       } catch {}
       await rerender();
       return false;
@@ -49771,6 +49876,7 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
 
             pe.importBusy = true;
             pe.importError = '';
+            pe.importFriendlyError = null;
             await rerender();
 
             try {
@@ -49794,7 +49900,11 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
 
               try { if (typeof window.__toast === 'function') window.__toast('Sage import applied'); } catch {}
             } catch (e2) {
-              pe.importError = String(e2?.message || e2 || 'Import failed');
+              const friendly = (typeof bankingNormalizeApiError === 'function')
+                ? bankingNormalizeApiError(e2, null, { action: 'PAYE_NET_IMPORT', userInitiated: true, batchId: id, fallbackCode: 'SAGE_IMPORT_INVALID' })
+                : null;
+              pe.importError = String(friendly?.message || friendly?.user_message || 'PAYE net amounts could not be imported.').trim();
+              pe.importFriendlyError = friendly;
             } finally {
               pe.importBusy = false;
               await rerender();
