@@ -134740,29 +134740,14 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       readBool([ctx, 'is_import_authoritative'], [row, 'is_import_authoritative']) === true ||
       String(ctx.route_family || row.route_family || '').trim().toUpperCase() === 'IMPORT_AUTHORITATIVE';
 
-    if (
-      !editability.canSave ||
-      !editability.canEditTimesheetData ||
-      backendCanEditTimesheetData !== true ||
-      isAuthorised ||
-      isLocked ||
-      isImportAuthoritative
-    ) {
-      GE();
-      return { ok: false, error: 'This Bulk Authorise row is not currently editable.' };
-    }
-
     const sheetScope = trimStr(details.sheet_scope || row.sheet_scope || ts.sheet_scope || '').toUpperCase();
     const submissionMode = trimStr(ts.submission_mode || row.submission_mode || '').toUpperCase();
-    const timesheetId = trimStr(ctx.current_timesheet_id || ctx.requested_timesheet_id || ts.timesheet_id || row.timesheet_id || '');
+    const actualTimesheetId = trimStr(ctx.current_timesheet_id || ts.timesheet_id || row.current_timesheet_id || row.timesheet_id || '');
+    const expectedTimesheetId = trimStr(ctx.expected_timesheet_id || ctx.current_timesheet_id || ts.timesheet_id || row.current_timesheet_id || row.timesheet_id || '');
+    const timesheetId = actualTimesheetId;
     const contractWeekId = trimStr(details.contract_week_id || details?.contract_week?.id || row.contract_week_id || '');
     const isWeeklyManualContext = (sheetScope === 'WEEKLY' && submissionMode === 'MANUAL' && !!timesheetId && !!contractWeekId);
     const isDailyManualContext = (sheetScope === 'DAILY' && submissionMode === 'MANUAL' && !!timesheetId);
-
-    if (!isWeeklyManualContext && !isDailyManualContext) {
-      GE();
-      return { ok: false, error: 'This Bulk Authorise row is not a saveable manual row.' };
-    }
 
     const validationResult = liveDraft?.validation || liveDraft?.entry?.validation_result || null;
     const validationBlocked = !!(
@@ -134772,11 +134757,6 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       validationResult?.has_errors === true ||
       validationResult?.ok === false
     );
-    if (validationBlocked) {
-      GE();
-      return { ok: false, error: 'Please fix the highlighted schedule errors before saving.' };
-    }
-
     const currentReference = trimStr(
       ts.reference_number ??
       row.reference_number ??
@@ -134854,21 +134834,98 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     const activeRecordIdentity = trimStr(resolvedIdentity.recordIdentity || resolvedIdentity.record_identity || resolvedIdentity.identity || st.__bulkAuthoriseRecordIdentity || '');
     const activeRowSignature = activeBackendRowSignature;
     const manualSnapshotChanged = manualDraftDiffersFromBaseline(liveDraft);
+    const expenseStateContainers = [stateCtx, originalStateCtx, ctx?.state, activeCtx?.state, st?.active_context?.state, st?.active_ctx?.state]
+      .filter((entry) => entry && typeof entry === 'object');
+    const readExpenseState = (keys = []) => {
+      const list = Array.isArray(keys) ? keys : [keys];
+      for (const container of expenseStateContainers) {
+        for (const key of list) {
+          if (!key || !Object.prototype.hasOwnProperty.call(container, key)) continue;
+          return container[key];
+        }
+      }
+      return undefined;
+    };
+    const stagedExpensesDraft = deep(readExpenseState(['expensesDraft', 'activeExpensesDraft', 'stagedExpensesDraft']) || {});
+    const stagedExpensesBaseline = deep(readExpenseState(['expensesBaseline', 'activeExpensesBaseline', 'stagedExpensesBaseline']) || {});
+    const expensesDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(stagedExpensesDraft, stagedExpensesBaseline)
+      : { dirty: stableStringify(stagedExpensesDraft || {}) !== stableStringify(stagedExpensesBaseline || {}) };
+    const stagedExpenseMarkerDirty = readBool(
+      [stateCtx, 'expensesDirty'],
+      [stateCtx, 'expensesDraftDirty'],
+      [stateCtx, 'hasStagedExpensesDirty'],
+      [stateCtx, 'stagedExpensesDirty'],
+      [stateCtx, 'expenseDirtyMarker'],
+      [ctx?.state || {}, 'expensesDirty'],
+      [ctx?.state || {}, 'expensesDraftDirty'],
+      [ctx?.state || {}, 'hasStagedExpensesDirty'],
+      [ctx?.state || {}, 'stagedExpensesDirty'],
+      [ctx?.state || {}, 'expenseDirtyMarker']
+    ) === true;
+    const expensesMileageDirty = !!(expensesDirtyResult?.dirty || stagedExpenseMarkerDirty);
     const shouldPersistWeeklyManual = !!(isWeeklyManualContext && (scheduleChanged || extrasChanged || manualSnapshotChanged));
     const shouldPersistDailyManual = !!(isDailyManualContext && (scheduleChanged || manualSnapshotChanged));
+    const hoursScheduleDirtyAttempt = !!(scheduleChanged || extrasChanged || manualSnapshotChanged);
+    const hoursScheduleDirty = !!(shouldPersistWeeklyManual || shouldPersistDailyManual);
+    const nonExpenseDirty = !!(referenceChanged || hoursScheduleDirtyAttempt);
 
-    if (!referenceChanged && !shouldPersistWeeklyManual && !shouldPersistDailyManual && !isDirtyWithoutExpenses(liveDraft)) {
+    if (hoursScheduleDirtyAttempt && editability?.canEditHoursSchedule === false) {
+      GE();
+      return { ok: false, error: 'HOURS_EDIT_BLOCKED', message: trimStr(editability?.hoursScheduleDisabledReason || '') || 'Hours/schedule cannot be edited for this row.', evidenceRequired: false };
+    }
+
+    if (!referenceChanged && !hoursScheduleDirtyAttempt && !expensesMileageDirty && !isDirtyWithoutExpenses(liveDraft)) {
       GE();
       return { ok: true, no_changes: true };
     }
 
-    if (!referenceChanged && !shouldPersistWeeklyManual && !shouldPersistDailyManual) {
+    if (!referenceChanged && !hoursScheduleDirtyAttempt && !expensesMileageDirty) {
       GE();
       return { ok: true, no_changes: true };
+    }
+
+    if (nonExpenseDirty) {
+      if (
+        !editability.canSave ||
+        !editability.canEditTimesheetData ||
+        backendCanEditTimesheetData !== true ||
+        isImportAuthoritative
+      ) {
+        GE();
+        return { ok: false, error: 'This Bulk Authorise row is not currently editable.' };
+      }
+      if (!isWeeklyManualContext && !isDailyManualContext) {
+        GE();
+        return { ok: false, error: 'This Bulk Authorise row is not a saveable manual row.' };
+      }
+      if (validationBlocked) {
+        GE();
+        return { ok: false, error: 'Please fix the highlighted schedule errors before saving.' };
+      }
+    }
+
+    if (isAuthorised && expensesMileageDirty) {
+      GE();
+      return { ok: false, error: 'AUTHORISED', message: 'This timesheet is authorised. Unauthorise it before changing expenses.', evidenceRequired: false };
+    }
+    if (isLocked && expensesMileageDirty) {
+      GE();
+      return { ok: false, error: 'EXPENSES_LOCKED', message: trimStr(editability?.expensesDisabledReason || '') || 'This timesheet is invoiced or paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.', evidenceRequired: false };
+    }
+    if (expensesMileageDirty && editability?.canEditExpenses === false) {
+      GE();
+      return { ok: false, error: 'EXPENSES_EDIT_BLOCKED', message: trimStr(editability?.expensesDisabledReason || '') || 'Expenses cannot be edited for this row.', evidenceRequired: false };
     }
 
     st.saving = true;
     st.error_text = '';
+
+    if (!actualTimesheetId) {
+      st.saving = false;
+      GE();
+      return { ok: false, error: 'TIMESHEET_ID_REQUIRED', message: 'A real current timesheet is required before saving staged expenses.', evidenceRequired: false };
+    }
 
     if (referenceChanged && typeof updateTimesheetReference === 'function') {
       await updateTimesheetReference(String(timesheetId), stagedReference, ctx.current_timesheet_id || ts.timesheet_id || timesheetId);
@@ -134914,6 +134971,45 @@ async function handleBulkAuthoriseSave(state, options = {}) {
           return_bulk_patch: true
         }
       );
+    }
+    let expenseCommitResult = null;
+    if (expensesMileageDirty && typeof commitTimesheetExpensesMileageDraft === 'function') {
+      expenseCommitResult = await commitTimesheetExpensesMileageDraft({
+        source: 'bulk-authorise',
+        timesheetId,
+        expectedTimesheetId: expectedTimesheetId || null,
+        draft: stagedExpensesDraft,
+        baseline: stagedExpensesBaseline,
+        row,
+        details,
+        state: stateCtx,
+        context: activeCtx || ctx,
+        onAdoptMovedTimesheetId: (typeof opts.onAdoptMovedTimesheetId === 'function') ? opts.onAdoptMovedTimesheetId : undefined
+      });
+      if (!expenseCommitResult?.ok) {
+        st.saving = false;
+        st.error_text = trimStr(expenseCommitResult?.message || expenseCommitResult?.error || 'Unable to save expenses.');
+        await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][SAVE][EXPENSES-ERROR]');
+        GE();
+        return {
+          ok: false,
+          error: trimStr(expenseCommitResult?.error || 'EXPENSE_SAVE_FAILED'),
+          message: st.error_text,
+          evidenceRequired: expenseCommitResult?.evidenceRequired === true,
+          expense_result: expenseCommitResult
+        };
+      }
+      const committedBaseline = deep(expenseCommitResult?.committedDraft || stagedExpensesDraft || {});
+      for (const target of [stateCtx, ctx?.state, activeCtx?.state, st?.active_context?.state, st?.active_ctx?.state]) {
+        if (!target || typeof target !== 'object') continue;
+        target.expensesDraft = deep(committedBaseline);
+        target.expensesBaseline = deep(committedBaseline);
+        target.expensesDirty = false;
+        target.expensesDraftDirty = false;
+        target.hasStagedExpensesDirty = false;
+        target.stagedExpensesDirty = false;
+        target.expenseDirtyMarker = false;
+      }
     }
     const saveCacheHints = (saveResult?.cache_invalidation_hints && typeof saveResult.cache_invalidation_hints === 'object') ? saveResult.cache_invalidation_hints : {};
     const normaliseSaveRowPatch = (patchCandidate) => {
@@ -135107,11 +135203,11 @@ async function handleBulkAuthoriseSave(state, options = {}) {
         });
       } catch {}
     }
-    st.dirty = false;
+    st.dirty = !!isDirtyWithoutExpenses(liveDraft);
     st.saving = false;
     await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][SAVE]');
     GE();
-    return { ok: true, result: saveResult || null, row_patches: saveRowPatches, row_patch: saveRowPatches[0] || null };
+    return { ok: true, result: saveResult || null, expense_result: expenseCommitResult || null, row_patches: saveRowPatches, row_patch: saveRowPatches[0] || null };
   } catch (err) {
     st.saving = false;
     st.error_text = String(err?.message || err || 'Failed to save Bulk Authorise changes.');
