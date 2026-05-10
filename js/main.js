@@ -75421,6 +75421,324 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
   }
 }
 
+function classifyTimesheetEditDomains(ctxInput) {
+  const toUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
+  const toBool = (v) => {
+    if (v === true || v === 1) return true;
+    if (typeof v === 'string') {
+      const s = v.trim().toLowerCase();
+      if (s === 'true' || s === '1' || s === 'yes' || s === 'y') return true;
+      if (s === 'false' || s === '0' || s === 'no' || s === 'n' || s === '') return false;
+    }
+    return false;
+  };
+  const get = (...keys) => {
+    const pool = [
+      ctxInput,
+      ctxInput?.row,
+      ctxInput?.details,
+      ctxInput?.details?.timesheet,
+      ctxInput?.details?.tsfin,
+      ctxInput?.details?.financials,
+      ctxInput?.row?.details,
+      ctxInput?.row?.details?.timesheet,
+      ctxInput?.row?.details?.tsfin,
+      ctxInput?.row?.financials,
+      ctxInput?.state,
+      ctxInput?.context,
+      ctxInput?.context?.row,
+      ctxInput?.context?.details,
+      ctxInput?.context?.details?.timesheet,
+      ctxInput?.context?.details?.tsfin,
+      ctxInput?.active_ctx,
+      ctxInput?.active_ctx?.row,
+      ctxInput?.active_ctx?.data_row,
+      ctxInput?.active_ctx?.details,
+      ctxInput?.active_ctx?.details?.timesheet,
+      ctxInput?.active_ctx?.details?.tsfin,
+      ctxInput?.active_ctx?.state,
+      ctxInput?.active_context,
+      ctxInput?.active_context?.row,
+      ctxInput?.active_context?.data_row,
+      ctxInput?.active_context?.details,
+      ctxInput?.active_context?.details?.timesheet,
+      ctxInput?.active_context?.details?.tsfin,
+      ctxInput?.active_context?.state,
+      ctxInput?.tsfin,
+      ctxInput?.financials
+    ];
+    for (const src of pool) {
+      if (!src || typeof src !== 'object') continue;
+      for (const k of keys) {
+        if (Object.prototype.hasOwnProperty.call(src, k) && src[k] != null) return src[k];
+      }
+    }
+    return undefined;
+  };
+  const allValues = (...keys) => {
+    const out = [];
+    const pool = [
+      ctxInput, ctxInput?.row, ctxInput?.details, ctxInput?.details?.timesheet, ctxInput?.details?.tsfin, ctxInput?.details?.financials,
+      ctxInput?.row?.details, ctxInput?.row?.details?.timesheet, ctxInput?.row?.details?.tsfin, ctxInput?.row?.financials,
+      ctxInput?.state, ctxInput?.context, ctxInput?.context?.row, ctxInput?.context?.details, ctxInput?.context?.details?.timesheet, ctxInput?.context?.details?.tsfin,
+      ctxInput?.active_ctx, ctxInput?.active_ctx?.row, ctxInput?.active_ctx?.data_row, ctxInput?.active_ctx?.details, ctxInput?.active_ctx?.details?.timesheet, ctxInput?.active_ctx?.details?.tsfin, ctxInput?.active_ctx?.state,
+      ctxInput?.active_context, ctxInput?.active_context?.row, ctxInput?.active_context?.data_row, ctxInput?.active_context?.details, ctxInput?.active_context?.details?.timesheet, ctxInput?.active_context?.details?.tsfin, ctxInput?.active_context?.state,
+      ctxInput?.tsfin, ctxInput?.financials
+    ];
+    for (const src of pool) {
+      if (!src || typeof src !== 'object') continue;
+      for (const k of keys) {
+        if (Object.prototype.hasOwnProperty.call(src, k)) out.push(src[k]);
+      }
+    }
+    return out;
+  };
+  const anyBool = (...keys) => allValues(...keys).some((v) => toBool(v));
+  const reasonCodes = [];
+  const routeFamily = toUpper(get('route_family', 'route_type', 'submission_mode', 'submission_mode_snapshot', 'cw_submission_mode_snapshot', 'underlying_channel_family', 'basis', 'tsfin_basis', 'financial_basis'));
+  const submissionChannel = toUpper(get('submission_channel', 'source_channel'));
+  const qrStatus = toUpper(get('qr_status'));
+  const qrHints = [anyBool('is_qr', 'has_qr_token'), !!get('qr_token'), !!(qrStatus && qrStatus !== 'NONE'), /^QR/.test(routeFamily), submissionChannel === 'QR'];
+  const elecHints = [anyBool('submitted_electronically'), /ELECTRONIC/.test(routeFamily), submissionChannel === 'ELECTRONIC'];
+  const isQrRoute = qrHints.some(Boolean);
+  const isElectronicRoute = !isQrRoute && elecHints.some(Boolean);
+  const isManualRoute = /MANUAL/.test(routeFamily) || (!isQrRoute && !isElectronicRoute && toUpper(get('submission_mode')) === 'MANUAL');
+  const isAuthorised = anyBool('is_authorised', 'authorised') || !!get('authorised_at_server', 'authorised_at_utc');
+  const isInvoiceLocked = anyBool('invoice_locked') || !!get('locked_by_invoice_id');
+  const isSegmentInvoiceLocked = anyBool('segment_invoice_locked');
+  const isPaid = anyBool('is_paid', 'paid') || !!get('paid_at_utc');
+  const sheetScope = toUpper(get('sheet_scope', 'period_type'));
+  const targetType = toUpper(get('target_type'));
+  const lineType = toUpper(get('line_type'));
+  const hasActiveSegmentTarget = targetType === 'TIMESHEET_SEGMENT' || sheetScope === 'SEGMENT' || lineType === 'SEGMENT' || lineType === 'SEGMENT_ONLY' || anyBool('segment_only', 'is_segment_context');
+  const isSegmentOnlyContext = !!hasActiveSegmentTarget;
+  const isParentTimesheetContext = !isSegmentOnlyContext;
+  const sourceHint = [get('basis'), get('tsfin_basis'), get('financial_basis'), get('route_type'), get('route_family'), get('route_subfamily'), get('underlying_channel_family'), get('weekly_timesheet_source')].map((x) => toUpper(x)).join('|');
+  const sourceSuggestsProtectedImport = /NHSP|HEALTHROSTER|HEALTHROSTER_SELF_BILL|IMPORT|IMPORT_AUTHORITATIVE/.test(sourceHint);
+  const sourceSuggestsNoTimesheetRequired = /NO_TIMESHEET_REQUIRED/.test(sourceHint);
+  const isImportAuthoritative = anyBool('is_import_authoritative', 'import_authoritative') || sourceSuggestsProtectedImport;
+  const noTsRequired = anyBool('client_no_timesheet_required', 'no_timesheet_required') || sourceSuggestsNoTimesheetRequired;
+  const hasAdditionalSignal = anyBool('is_adjustment', 'is_additional_manual', 'is_manual_adjustment') || Number(get('additional_seq', 'contract_week_additional_seq') || 0) > 0 || !!get('parent_timesheet_id') || /MANUAL|ADDITIONAL/.test(toUpper(get('adjustment_origin'))) || /ADJUST|ADDITIONAL/.test(lineType);
+  const isAdditionalManualRoute = !!(isManualRoute && hasAdditionalSignal);
+  const isOriginalImportAuthoritative = isImportAuthoritative && !isAdditionalManualRoute;
+  const isNoTimesheetRequiredOriginal = noTsRequired && !isAdditionalManualRoute;
+  const hasFinancialSnapshot = toBool(get('has_financial_snapshot', 'has_tsfin')) || !!get('tsfin_id', 'financial_id', 'timesheets_financials') || typeof get('invoice_breakdown_json') === 'object';
+  const hasRealTimesheet = !!get('timesheet_id', 'current_timesheet_id');
+  const hasSupportedManualDraft = !!(
+    isManualRoute && (
+      !!get('contract_week_id') ||
+      !!get('active_contract_week_id') ||
+      !!get('planned_contract_week_id') ||
+      anyBool('is_planned_timesheet_stub', 'supports_manual_draft_route', 'has_supported_manual_draft') ||
+      !!get('contract_week') ||
+      !!ctxInput?.details?.contract_week?.id ||
+      !!ctxInput?.row?.contract_week_id ||
+      !!ctxInput?.active_ctx?.contract_week_id ||
+      !!ctxInput?.active_context?.contract_week_id
+    )
+  );
+  const protectedOriginal = (isOriginalImportAuthoritative || isNoTimesheetRequiredOriginal) && !isAdditionalManualRoute;
+
+  const qrElecMsg = 'This timesheet was submitted electronically/through QR. To amend hours, switch it to Manual first.';
+  let hoursScheduleDisabledReason = null;
+  if (isQrRoute || isElectronicRoute) { hoursScheduleDisabledReason = qrElecMsg; reasonCodes.push('HOURS_QR_OR_ELECTRONIC'); }
+  else if (isAuthorised) { hoursScheduleDisabledReason = 'This timesheet is authorised. Unauthorise it before changing hours.'; reasonCodes.push('HOURS_AUTHORISED'); }
+  else if (isInvoiceLocked || isSegmentInvoiceLocked) { hoursScheduleDisabledReason = 'This timesheet is invoiced, so hours cannot be amended directly.'; reasonCodes.push('HOURS_INVOICED'); }
+  else if (isPaid) { hoursScheduleDisabledReason = 'This timesheet is paid, so hours cannot be amended directly.'; reasonCodes.push('HOURS_PAID'); }
+  else if (protectedOriginal) { hoursScheduleDisabledReason = 'This row is import/source authoritative and cannot have hours amended directly.'; reasonCodes.push('HOURS_IMPORT_PROTECTED'); }
+  else if (isSegmentOnlyContext) { hoursScheduleDisabledReason = 'This segment row does not support direct hour amendments here.'; reasonCodes.push('HOURS_SEGMENT_CONTEXT'); }
+  const canEditHoursSchedule = !hoursScheduleDisabledReason && isManualRoute;
+
+  const isExpenseBearingRoute = !!(isManualRoute || isQrRoute || isElectronicRoute || isAdditionalManualRoute || hasSupportedManualDraft);
+  let expensesDisabledReason = null;
+  if (isAuthorised) expensesDisabledReason = 'This timesheet is authorised. Unauthorise it before changing expenses.';
+  else if (isInvoiceLocked || isSegmentInvoiceLocked) expensesDisabledReason = 'This timesheet is invoiced, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.';
+  else if (isPaid) expensesDisabledReason = 'This timesheet is paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.';
+  else if (protectedOriginal) expensesDisabledReason = 'Expenses cannot be added to this original import/self-bill timesheet. Create an additional manual timesheet for expenses so it can be invoiced to the client.';
+  else if (isSegmentOnlyContext) expensesDisabledReason = 'Expenses cannot be added directly to this segment row. Create an additional manual timesheet for expenses so the charge can be evidenced, processed, authorised, and invoiced correctly.';
+  else if (!isExpenseBearingRoute) expensesDisabledReason = 'Expenses are not available for this timesheet route.';
+  else if (!(hasFinancialSnapshot || hasSupportedManualDraft)) expensesDisabledReason = 'A financial snapshot or supported manual draft route is required before expenses can be edited.';
+  const canEditExpenses = !expensesDisabledReason && isParentTimesheetContext && isExpenseBearingRoute;
+
+  return {
+    canEditHoursSchedule,
+    hoursScheduleReadOnly: !canEditHoursSchedule,
+    hoursScheduleDisabledReason,
+    canEditReferences: canEditHoursSchedule,
+    referencesReadOnly: !canEditHoursSchedule,
+    referencesDisabledReason: hoursScheduleDisabledReason,
+    canOpenExpenses: canEditExpenses || !!expensesDisabledReason,
+    canEditExpenses,
+    expensesReadOnly: !canEditExpenses,
+    expensesDisabledReason,
+    requiresAdditionalManualForExpenses: !!expensesDisabledReason && (isSegmentOnlyContext || isInvoiceLocked || isSegmentInvoiceLocked || isPaid || protectedOriginal),
+    canManageExpenseEvidence: canEditExpenses,
+    expenseEvidenceReadOnly: !canEditExpenses,
+    expenseEvidenceDisabledReason: expensesDisabledReason,
+    canAddAdditionalManual: !isSegmentOnlyContext,
+    addAdditionalManualReason: isSegmentOnlyContext ? 'Create additional manual at parent timesheet level.' : null,
+    isParentTimesheetContext,
+    isSegmentOnlyContext,
+    isManualRoute,
+    isQrRoute,
+    isElectronicRoute,
+    isAdditionalManualRoute,
+    isOriginalImportAuthoritative,
+    isNoTimesheetRequiredOriginal,
+    isAuthorised,
+    isInvoiceLocked,
+    isSegmentInvoiceLocked,
+    isPaid,
+    hasRealTimesheet,
+    hasFinancialSnapshot,
+    hasSupportedManualDraft,
+    reasonCodes
+  };
+}
+
+function normaliseTimesheetExpensesDraft(raw, options = {}) {
+  const src = (raw && typeof raw === 'object') ? raw : {};
+  const opts = (options && typeof options === 'object') ? options : {};
+  const optionContext = (opts.context && typeof opts.context === 'object') ? opts.context : {};
+  const optionDetails = (opts.details && typeof opts.details === 'object') ? opts.details : {};
+  const optionTsfin = (opts.tsfin && typeof opts.tsfin === 'object') ? opts.tsfin : {};
+  const optionRates = (opts.rates && typeof opts.rates === 'object') ? opts.rates : {};
+  const cleanNum = (v, dp = 2) => {
+    if (v == null || v === '') return 0;
+    const n = Number(String(v).replace(/[^0-9.-]/g, ''));
+    if (!Number.isFinite(n)) return 0;
+    const m = Math.pow(10, dp);
+    return Math.round(n * m) / m;
+  };
+  const pick = (...k) => { for (const key of k) if (Object.prototype.hasOwnProperty.call(src, key)) return src[key]; return undefined; };
+  const pickFrom = (obj, ...k) => {
+    if (!obj || typeof obj !== 'object') return undefined;
+    for (const key of k) if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+    return undefined;
+  };
+  const firstDefined = (...values) => values.find((v) => v !== undefined);
+  const resolvedMileagePayRate = firstDefined(
+    pick('mileage_pay_rate', 'mileagePayRate', 'mileage_rate'),
+    pickFrom(opts, 'mileage_pay_rate', 'mileagePayRate'),
+    pickFrom(optionRates, 'mileage_pay_rate', 'mileagePayRate'),
+    pickFrom(optionContext, 'mileage_pay_rate', 'mileagePayRate', 'mileage_rate'),
+    pickFrom(optionContext?.details, 'mileage_pay_rate', 'mileagePayRate', 'mileage_rate'),
+    pickFrom(optionDetails, 'mileage_pay_rate', 'mileagePayRate', 'mileage_rate'),
+    pickFrom(optionDetails?.tsfin, 'mileage_pay_rate', 'mileagePayRate', 'mileage_rate'),
+    pickFrom(optionTsfin, 'mileage_pay_rate', 'mileagePayRate', 'mileage_rate')
+  );
+  const resolvedMileageChargeRate = firstDefined(
+    pick('mileage_charge_rate', 'mileageChargeRate', 'mileage_rate_charge'),
+    pickFrom(opts, 'mileage_charge_rate', 'mileageChargeRate'),
+    pickFrom(optionRates, 'mileage_charge_rate', 'mileageChargeRate'),
+    pickFrom(optionContext, 'mileage_charge_rate', 'mileageChargeRate', 'mileage_rate_charge'),
+    pickFrom(optionContext?.details, 'mileage_charge_rate', 'mileageChargeRate', 'mileage_rate_charge'),
+    pickFrom(optionDetails, 'mileage_charge_rate', 'mileageChargeRate', 'mileage_rate_charge'),
+    pickFrom(optionDetails?.tsfin, 'mileage_charge_rate', 'mileageChargeRate', 'mileage_rate_charge'),
+    pickFrom(optionTsfin, 'mileage_charge_rate', 'mileageChargeRate', 'mileage_rate_charge')
+  );
+  return {
+    mileage_units: cleanNum(pick('mileage_units', 'mileageUnits'), 3),
+    travel_pay: cleanNum(pick('travel_pay', 'travelPay', 'travel_pay_ex_vat')),
+    travel_charge: cleanNum(pick('travel_charge', 'travelCharge', 'travel_charge_ex_vat')),
+    accommodation_pay: cleanNum(pick('accommodation_pay', 'accommodationPay', 'accommodation_pay_ex_vat')),
+    accommodation_charge: cleanNum(pick('accommodation_charge', 'accommodationCharge', 'accommodation_charge_ex_vat')),
+    other_pay: cleanNum(pick('other_pay', 'otherPay', 'other_pay_ex_vat')),
+    other_charge: cleanNum(pick('other_charge', 'otherCharge', 'other_charge_ex_vat')),
+    note: String(pick('note', 'expenses_description', 'description') || '').trim(),
+    mileage_pay_rate: cleanNum(resolvedMileagePayRate, 4),
+    mileage_charge_rate: cleanNum(resolvedMileageChargeRate, 4)
+  };
+}
+
+function isTimesheetExpensesDraftDirty(draft, baseline, options = {}) {
+  const a = normaliseTimesheetExpensesDraft(draft, options);
+  const b = normaliseTimesheetExpensesDraft(baseline, options);
+  const fields = ['travel_pay','travel_charge','accommodation_pay','accommodation_charge','other_pay','other_charge','note'];
+  const mileageFields = ['mileage_units'];
+  if (options.compareRates === true) mileageFields.push('mileage_pay_rate', 'mileage_charge_rate');
+  const changedFields = [...fields, ...mileageFields].filter((k) => a[k] !== b[k]);
+  const expensesDirty = fields.some((k) => a[k] !== b[k]);
+  const mileageDirty = mileageFields.some((k) => a[k] !== b[k]);
+  return { dirty: changedFields.length > 0, expensesDirty, mileageDirty, changedFields, normalisedDraft: a, normalisedBaseline: b };
+}
+
+function recalculateTimesheetExpenseTotals(draft, rates, options = {}) {
+  const d = normaliseTimesheetExpensesDraft(draft, options);
+  const fx = (v) => Math.round((Number(v) || 0) * 100) / 100;
+  const payRate = Number((rates && rates.mileage_pay_rate) ?? d.mileage_pay_rate ?? options.mileage_pay_rate ?? 0) || 0;
+  const chargeRate = Number((rates && rates.mileage_charge_rate) ?? d.mileage_charge_rate ?? options.mileage_charge_rate ?? 0) || 0;
+  const mileage_pay = fx(d.mileage_units * payRate);
+  const mileage_charge = fx(d.mileage_units * chargeRate);
+  return {
+    mileage_pay,
+    mileage_charge,
+    total_pay: fx(d.travel_pay + d.accommodation_pay + d.other_pay + mileage_pay),
+    total_charge: fx(d.travel_charge + d.accommodation_charge + d.other_charge + mileage_charge)
+  };
+}
+
+function formatTsfinEvidenceRequiredMessage(errorPayload) {
+  const p = errorPayload || {};
+  const missing = p.missing || p?.error?.missing || p?.body?.missing || p?.payload?.missing || p?.error?.payload?.missing;
+  if (!Array.isArray(missing) || !missing.length) return 'Required evidence is missing before these expenses can be saved. Please upload the required evidence, then try again.';
+  const map = { mileage: 'Mileage', travel: 'Travel', accommodation: 'Accommodation', other: 'Other' };
+  const parts = missing.map((m) => `${map[String(m?.category || '').toLowerCase()] || 'Expense'} evidence with kind ${String(m?.required_kind || 'UNKNOWN').toUpperCase()}`);
+  if (parts.length === 1) return `${parts[0]} is required before these expenses can be saved. Please upload evidence with kind ${String(missing[0]?.required_kind || 'UNKNOWN').toUpperCase()}, then try again.`;
+  return `${parts.join(' and ')} are required before these expenses can be saved. Please upload the required evidence, then try again.`;
+}
+
+async function commitTimesheetExpensesMileageDraft(args = {}) {
+  const timesheetId = args.timesheetId || args?.row?.timesheet_id || args?.details?.current_timesheet_id || args?.details?.timesheet_id || args?.context?.current_timesheet_id || args?.context?.timesheet_id;
+  const expectedTimesheetId = args.expectedTimesheetId || args?.details?.expected_timesheet_id || args?.row?.expected_timesheet_id || null;
+  const edit = classifyTimesheetEditDomains(args);
+  const normaliseOptions = {
+    ...(args.options && typeof args.options === 'object' ? args.options : {}),
+    context: args.context || args?.active_ctx || args?.active_context || null,
+    details: args.details || args?.context?.details || null,
+    tsfin: args?.details?.tsfin || args?.row?.tsfin || args?.context?.tsfin || null
+  };
+  const dirtyResult = isTimesheetExpensesDraftDirty(args.draft || {}, args.baseline || {}, normaliseOptions);
+  if (!dirtyResult.dirty) return { ok: true, noChanges: true, evidenceRequired: false, message: '', error: null, missing: [], committedDraft: dirtyResult.normalisedBaseline, updatedTsfin: null, response: null, dirtyResult };
+  if (!edit.canEditExpenses) return { ok: false, noChanges: false, evidenceRequired: false, message: edit.expensesDisabledReason || 'Expenses cannot be edited.', error: 'EXPENSES_EDIT_BLOCKED', missing: [], committedDraft: null, updatedTsfin: null, response: null, dirtyResult };
+  if (!timesheetId) return { ok: false, noChanges: false, evidenceRequired: false, message: 'A real timesheet is required before expenses can be saved.', error: 'TIMESHEET_ID_REQUIRED', missing: [], committedDraft: null, updatedTsfin: null, response: null, dirtyResult };
+  if (dirtyResult.mileageDirty) {
+    const payRate = Number(dirtyResult.normalisedDraft?.mileage_pay_rate);
+    const chargeRate = Number(dirtyResult.normalisedDraft?.mileage_charge_rate);
+    if (!Number.isFinite(payRate) || !Number.isFinite(chargeRate) || payRate <= 0 || chargeRate <= 0) {
+      return { ok: false, noChanges: false, evidenceRequired: false, message: 'Mileage rates are missing, so mileage cannot be saved. Check the contract/client mileage rates, then try again.', error: 'MILEAGE_RATE_MISSING', missing: [], committedDraft: null, updatedTsfin: null, response: null, dirtyResult };
+    }
+  }
+  try {
+    let last = null;
+    if (dirtyResult.expensesDirty) {
+      const payload = { expenses: { travel_pay_ex_vat: dirtyResult.normalisedDraft.travel_pay, travel_charge_ex_vat: dirtyResult.normalisedDraft.travel_charge, accommodation_pay_ex_vat: dirtyResult.normalisedDraft.accommodation_pay, accommodation_charge_ex_vat: dirtyResult.normalisedDraft.accommodation_charge, other_pay_ex_vat: dirtyResult.normalisedDraft.other_pay, other_charge_ex_vat: dirtyResult.normalisedDraft.other_charge, description: dirtyResult.normalisedDraft.note } };
+      if (expectedTimesheetId) payload.expected_timesheet_id = expectedTimesheetId;
+      const r = await authFetch(API(`/tsfin/${encodeURIComponent(String(timesheetId))}/expenses`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      last = await r.json().catch(() => ({}));
+      if (!r.ok) throw last;
+    }
+    if (dirtyResult.mileageDirty) {
+      const payload = { mileage: { mileage_units: dirtyResult.normalisedDraft.mileage_units, pay_rate: dirtyResult.normalisedDraft.mileage_pay_rate, charge_rate: dirtyResult.normalisedDraft.mileage_charge_rate } };
+      if (expectedTimesheetId) payload.expected_timesheet_id = expectedTimesheetId;
+      const r = await authFetch(API(`/tsfin/${encodeURIComponent(String(timesheetId))}/mileage`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      last = await r.json().catch(() => ({}));
+      if (!r.ok) throw last;
+    }
+    const movedId = last?.current_timesheet_id || last?.timesheet_id;
+    if (movedId && typeof args.onAdoptMovedTimesheetId === 'function' && String(movedId) !== String(timesheetId)) args.onAdoptMovedTimesheetId(movedId, last);
+    return { ok: true, noChanges: false, evidenceRequired: false, message: '', error: null, missing: [], committedDraft: dirtyResult.normalisedDraft, updatedTsfin: last?.tsfin || last?.data || null, response: last, dirtyResult };
+  } catch (e) {
+    const err = e || {};
+    const movedId = err?.current_timesheet_id || err?.timesheet_id;
+    if (movedId && typeof args.onAdoptMovedTimesheetId === 'function' && String(movedId) !== String(timesheetId)) args.onAdoptMovedTimesheetId(movedId, err);
+    const code = String(err.error || err.error_code || '').toUpperCase();
+    const missing = Array.isArray(err.missing) ? err.missing : [];
+    const evidenceRequired = code === 'EVIDENCE_REQUIRED';
+    return { ok: false, noChanges: false, evidenceRequired, message: evidenceRequired ? formatTsfinEvidenceRequiredMessage(err) : String(err.message || edit.expensesDisabledReason || 'Unable to save expenses.'), error: code || 'SAVE_FAILED', missing, committedDraft: null, updatedTsfin: null, response: err, dirtyResult };
+  }
+}
+
 function bankingBuildEnrichedFriendlyError(originalError, friendly, fallbackMessage = 'Banking action failed') {
   const src = (friendly && typeof friendly === 'object' && !Array.isArray(friendly)) ? friendly : {};
   const original = (originalError && typeof originalError === 'object') ? originalError : {};
