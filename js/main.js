@@ -77918,10 +77918,6 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
   }
 }
 
-
-
-
-
 function classifyTimesheetEditDomains(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const toUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -78121,7 +78117,7 @@ function classifyTimesheetEditDomains(ctxInput) {
   const qrStatusU = toUpper(get('qr_status'));
   const routeText = [routeTypeU, routeFamilyU, routeSubfamilyU, underlyingChannelU, weeklySourceU, basisU, sourceSystemU, submissionModeU, submissionChannelU].filter(Boolean).join('|');
 
-  const currentManualRoute = !!(
+  const manualRouteSignal = !!(
     submissionModeU === 'MANUAL' ||
     routeTypeU === 'MANUAL' ||
     routeFamilyU === 'MANUAL' ||
@@ -78132,8 +78128,9 @@ function classifyTimesheetEditDomains(ctxInput) {
     routeSubfamilyU.includes('MANUAL') ||
     anyBool('is_manual', 'manual_route', 'manually_created', 'created_manually')
   );
-  const terminalQrStatuses = new Set(['', 'NONE', 'NO', 'FALSE', '0', 'EXPIRED', 'CANCELLED', 'CANCELED', 'REVOKED', 'VOID', 'VOIDED', 'DELETED', 'ARCHIVED', 'CONVERTED', 'MANUAL']);
-  const activeQrStatus = !!(qrStatusU && !terminalQrStatuses.has(qrStatusU));
+  const terminalQrStatuses = new Set(['', 'NONE', 'NO', 'FALSE', '0', 'EXPIRED', 'CANCELLED', 'CANCELED', 'REVOKED', 'VOID', 'VOIDED', 'DELETED', 'ARCHIVED']);
+  const manualisedQrStatuses = new Set(['CONVERTED', 'MANUAL', 'MANUALISED', 'MANUALIZED']);
+  const activeQrStatus = !!(qrStatusU && !terminalQrStatuses.has(qrStatusU) && !manualisedQrStatuses.has(qrStatusU));
   const explicitQrSubmission = !!(
     submissionModeU === 'QR' ||
     submissionChannelU === 'QR'
@@ -78148,14 +78145,7 @@ function classifyTimesheetEditDomains(ctxInput) {
     routeSubfamilyU.includes('QR') ||
     underlyingChannelU.includes('QR')
   );
-  const currentQrRoute = !!(
-    explicitQrSubmission ||
-    (!currentManualRoute && routeTextShowsQr)
-  );
-  const activeQrArtifact = !!(!currentManualRoute && (anyBool('has_qr_token') || anyValue('qr_token')) && activeQrStatus);
-  const currentQrFlag = !!(!currentManualRoute && anyBool('is_qr') && activeQrStatus);
-  const isQrRoute = !!(currentQrRoute || activeQrArtifact || currentQrFlag);
-  const isElectronicRoute = !!(!isQrRoute && !currentManualRoute && (
+  const electronicRouteSignal = !!(
     submissionModeU === 'ELECTRONIC' ||
     submissionChannelU === 'ELECTRONIC' ||
     routeTypeU === 'ELECTRONIC' ||
@@ -78165,7 +78155,47 @@ function classifyTimesheetEditDomains(ctxInput) {
     routeFamilyU.includes('ELECTRONIC') ||
     underlyingChannelU.includes('ELECTRONIC') ||
     anyBool('submitted_electronically', 'is_electronic')
-  ));
+  );
+  const reliableManualRouteSignal = !!(
+    anyBool(
+      'manually_created',
+      'created_manually',
+      'is_manual_additional',
+      'manual_additional',
+      'manual_adjustment',
+      'is_additional_manual',
+      'is_manual_adjustment',
+      'converted_to_manual',
+      'qr_converted_to_manual',
+      'electronic_converted_to_manual',
+      'converted_from_qr',
+      'converted_from_electronic',
+      'manual_conversion',
+      'is_manual_conversion',
+      'manualised',
+      'manualized'
+    ) ||
+    anyValue(
+      'parent_timesheet_id',
+      'converted_to_manual_at',
+      'qr_converted_to_manual_at',
+      'electronic_converted_to_manual_at',
+      'converted_from_qr_at',
+      'converted_from_electronic_at',
+      'manual_conversion_at',
+      'manualised_at',
+      'manualized_at'
+    ) ||
+    anyPositiveNumber('additional_seq', 'contract_week_additional_seq') ||
+    (manualRouteSignal && manualisedQrStatuses.has(qrStatusU))
+  );
+  const currentQrRoute = !!(explicitQrSubmission || routeTextShowsQr);
+  const activeQrArtifact = !!((anyBool('has_qr_token') || anyValue('qr_token')) && activeQrStatus);
+  const currentQrFlag = !!(anyBool('is_qr') && activeQrStatus);
+  const protectedQrSignal = !!(currentQrRoute || activeQrArtifact || currentQrFlag);
+  const isQrRoute = !!(protectedQrSignal && !reliableManualRouteSignal);
+  const isElectronicRoute = !!(!isQrRoute && electronicRouteSignal && !reliableManualRouteSignal);
+  const currentManualRoute = !!(reliableManualRouteSignal || (manualRouteSignal && !isQrRoute && !isElectronicRoute));
   const isManualRoute = !!currentManualRoute;
 
   const revokedAt = get('revoked_at', 'revoked_at_server', 'authorisation_revoked_at');
@@ -78310,11 +78340,17 @@ function classifyTimesheetEditDomains(ctxInput) {
     expensesDisabledReason = 'A financial snapshot or supported manual draft route is required before expenses can be edited.';
   }
   const canEditExpenses = !!(!expensesDisabledReason && isParentTimesheetContext && isExpenseBearingRoute);
+  const expensesTabDisabled = !!(!canEditExpenses && protectedOriginal && isParentTimesheetContext);
+  const expensesTabDisabledReason = expensesTabDisabled ? expensesDisabledReason : null;
   const canOpenExpenses = !!(
-    canEditExpenses ||
-    expensesDisabledReason ||
-    (isParentTimesheetContext && (isExpenseBearingRoute || hasFinancialSnapshot || hasRealTimesheet || hasSupportedManualDraft || protectedOriginal))
+    !expensesTabDisabled &&
+    (
+      canEditExpenses ||
+      expensesDisabledReason ||
+      (isParentTimesheetContext && (isExpenseBearingRoute || hasFinancialSnapshot || hasRealTimesheet || hasSupportedManualDraft || protectedOriginal))
+    )
   );
+  if (expensesTabDisabled) reasonCodes.push('EXPENSES_IMPORT_PROTECTED_TAB_DISABLED');
 
   const backendAddAdditional = firstBoolIfPresent('can_add_additional_manual', 'canAddAdditionalManual', 'allow_additional_manual', 'can_create_additional_manual');
   const requiresAdditionalManualForExpenses = !!(expensesDisabledReason && (isSegmentOnlyContext || isInvoiceLocked || isSegmentInvoiceLocked || isPaid || protectedOriginal));
@@ -78356,6 +78392,10 @@ function classifyTimesheetEditDomains(ctxInput) {
     canEditExpenses,
     expensesReadOnly: !canEditExpenses,
     expensesDisabledReason,
+    expensesTabDisabled,
+    expensesTabDisabledReason,
+    expensesActionDisabled: expensesTabDisabled,
+    expensesActionDisabledReason: expensesTabDisabledReason,
     requiresAdditionalManualForExpenses,
     canManageExpenseEvidence: canEditExpenses,
     expenseEvidenceReadOnly: !canEditExpenses,
@@ -78380,6 +78420,8 @@ function classifyTimesheetEditDomains(ctxInput) {
     reasonCodes
   };
 }
+
+
 
 
 
@@ -88762,6 +88804,7 @@ function resetBulkProcessDirtyBaseline(state, reason, detail = {}) {
     traceDetail
   );
 }
+
 async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   const mc =
     (modalCtxArg && typeof modalCtxArg === 'object')
@@ -88785,6 +88828,48 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
 
   const tsLocal = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : {};
   const tsfinLocal = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
+
+  const timesheetEditDomains = (() => {
+    try {
+      if (mc.timesheetEditDomains && typeof mc.timesheetEditDomains === 'object') return mc.timesheetEditDomains;
+      if (typeof classifyTimesheetEditDomains !== 'function') return null;
+      return classifyTimesheetEditDomains({
+        row: baseRow,
+        details,
+        related,
+        timesheet: tsLocal,
+        tsfin: tsfinLocal,
+        financial_snapshot: tsfinLocal,
+        contract_week: details.contract_week || {},
+        state,
+        action_flags: details.action_flags || {}
+      });
+    } catch {
+      return null;
+    }
+  })();
+
+  if (timesheetEditDomains && typeof timesheetEditDomains === 'object') {
+    mc.timesheetEditDomains = timesheetEditDomains;
+  }
+
+  const canEditHoursSchedule = timesheetEditDomains
+    ? timesheetEditDomains.canEditHoursSchedule === true
+    : true;
+
+  const protectedHoursSchedule = !!(timesheetEditDomains && timesheetEditDomains.canEditHoursSchedule !== true);
+
+  const resetProtectedScheduleTouchFlags = () => {
+    if (!protectedHoursSchedule) return;
+    state.__weeklyScheduleTouched = false;
+    state.__dailyScheduleTouched = false;
+    state.__weeklyExtrasTouched = false;
+    state.__segmentControlsTouched = false;
+    state.__hoursScheduleDisplayOnly = true;
+    state.__scheduleHydratedDisplayOnly = true;
+  };
+
+  resetProtectedScheduleTouchFlags();
 
   const hasTs = !!(
     tsLocal.timesheet_id ||
@@ -89189,6 +89274,7 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
 
   state.schedule = schedule;
   state.additionalRates = additionalRates;
+  resetProtectedScheduleTouchFlags();
 
   const hasWeeklySchedule = Array.isArray(schedule) && schedule.length > 0;
 
@@ -89569,7 +89655,7 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
       state.weeklyLinesByDate[ymd] = arr;
     }
 
-    if (subMode === 'MANUAL' && typeof buildWeeklyScheduleFromLinesAndValidate === 'function') {
+    if (subMode === 'MANUAL' && canEditHoursSchedule && typeof buildWeeklyScheduleFromLinesAndValidate === 'function') {
       const out = buildWeeklyScheduleFromLinesAndValidate(
         state.weeklyLinesByDate,
         weekDays || undefined,
@@ -89582,11 +89668,14 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
     } else {
       state.scheduleErrorsByDate = {};
       state.scheduleHasErrors = false;
+      resetProtectedScheduleTouchFlags();
     }
   } else {
     state.scheduleErrorsByDate = {};
     state.scheduleHasErrors = false;
   }
+
+  resetProtectedScheduleTouchFlags();
 
   mc.timesheetState = state;
   mc.timesheetDetails = details;
@@ -89596,6 +89685,8 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
 
   return { row: baseRow, details, related, state };
 }
+
+
 
 async function openSendMailshotWizard() {
   const trimStr = (v) => String(v == null ? '' : v).trim();
@@ -115945,10 +116036,15 @@ function classifyBulkAuthoriseEditability(ctxInput) {
             : '';
 
   const canEditHoursSchedule = domainPolicy ? domainPolicy.canEditHoursSchedule === true : !!(!paymentScheduleLocked && isManual && !isQr && !isElectronic);
-  const canOpenExpenses = domainPolicy ? domainPolicy.canOpenExpenses === true : !!(hasRealTimesheet && !isSegmentOnlyContext);
-  const canEditExpenses = domainPolicy ? domainPolicy.canEditExpenses === true : !!(hasRealTimesheet && hasFinancialSnapshot && !paymentScheduleLocked && !isSegmentOnlyContext && (isQr || isManual || effectiveMode === 'MANUAL'));
-  const expensesReadOnly = domainPolicy ? domainPolicy.expensesReadOnly === true : !!(canOpenExpenses && !canEditExpenses);
-  const expensesDisabledReason = domainPolicy ? String(domainPolicy.expensesDisabledReason || '') : '';
+  const expensesActionDisabled = domainPolicy ? !!(domainPolicy.expensesActionDisabled === true || domainPolicy.expensesTabDisabled === true) : false;
+  const expensesActionDisabledReason = domainPolicy
+    ? String(domainPolicy.expensesActionDisabledReason || domainPolicy.expensesTabDisabledReason || domainPolicy.expensesDisabledReason || '')
+    : '';
+  const canOpenExpensesRaw = domainPolicy ? domainPolicy.canOpenExpenses === true : !!(hasRealTimesheet && !isSegmentOnlyContext);
+  const canOpenExpenses = !!(canOpenExpensesRaw && !expensesActionDisabled);
+  const canEditExpenses = domainPolicy ? (domainPolicy.canEditExpenses === true && !expensesActionDisabled) : !!(hasRealTimesheet && hasFinancialSnapshot && !paymentScheduleLocked && !isSegmentOnlyContext && (isQr || isManual || effectiveMode === 'MANUAL'));
+  const expensesReadOnly = domainPolicy ? (domainPolicy.expensesReadOnly === true || expensesActionDisabled || (canOpenExpensesRaw && !canEditExpenses)) : !!(canOpenExpenses && !canEditExpenses);
+  const expensesDisabledReason = domainPolicy ? String(domainPolicy.expensesDisabledReason || expensesActionDisabledReason || '') : '';
   const requiresAdditionalManualForExpenses = domainPolicy ? domainPolicy.requiresAdditionalManualForExpenses === true : false;
   const canManageExpenseEvidence = domainPolicy ? domainPolicy.canManageExpenseEvidence === true : !!(hasRealTimesheet && !isImportAuthoritative && !isInvoiceDocumentLocked && !hasSegmentInvoiceDocumentLock && backendCanManageEvidence === true);
   const hasProcessedExpenses = !!(typeof bulkAuthoriseHasProcessedExpensesValue === 'function' && bulkAuthoriseHasProcessedExpensesValue({ ...ctx, details, row: mergedRow, state: activeState, active_ctx: activeCtx }));
@@ -116002,10 +116098,13 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     canEditTimesheetData: canEditHoursSchedule,
     canSave: !!(scheduleSaveAllowed || expensesSaveAllowed),
     hasProcessedExpenses,
-    canOpenExpenses: !!(canOpenExpenses || hasProcessedExpenses),
+    canOpenExpenses: !!canOpenExpenses,
     canEditExpenses,
     expensesReadOnly: !!(expensesReadOnly || (hasProcessedExpenses && !canEditExpenses)),
     expensesDisabledReason,
+    expensesActionDisabled: !!expensesActionDisabled,
+    expensesActionDisabledReason,
+    canViewExpenses: !!(canOpenExpenses || hasProcessedExpenses),
     requiresAdditionalManualForExpenses,
     canManageExpenseEvidence,
     canManageEvidence,
@@ -121443,6 +121542,7 @@ function classifyBulkProcessEditability(ctxInput) {
 }
 
 
+
 function bindBulkProcessManualEditor(state) {
   const st = (state && typeof state === 'object') ? state : null;
   if (!st) return;
@@ -122659,8 +122759,8 @@ function bindBulkProcessManualEditor(state) {
     if (!btn || btn.dataset.boundBulkProcessAddAdditionalManual === '1') return;
     btn.dataset.boundBulkProcessAddAdditionalManual = '1';
     btn.addEventListener('click', async () => {
-      if (btn.disabled || isActionBusy() || st.__workbench_modal_spinner_active) return;
-      await withExistingModalLoadingSpinner(st, 'Working', async () => {
+      if (btn.disabled || isActionBusy() || st.__workbench_modal_spinner_active || btn.dataset.addAdditionalManualInFlight === '1') return;
+      btn.dataset.addAdditionalManualInFlight = '1';
 
       const ctx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
       const row = (ctx.row && typeof ctx.row === 'object') ? ctx.row : (st.active_row || {});
@@ -122668,60 +122768,142 @@ function bindBulkProcessManualEditor(state) {
         ? ctx.details
         : ((st.active_details && typeof st.active_details === 'object') ? st.active_details : {});
       const editability = classifyBulkProcessEditability(ctx);
-      if (!editability.canAddAdditionalManual) return;
-
-      const dirtyBefore = (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty;
-      const beforeActiveRow = deep(st.active_row || row || {});
-      const beforeActiveDetails = deep(st.active_details || details || {});
-      const beforeActiveCtx = deep(st.active_ctx || ctx || {});
-      const beforeActiveRowKey = trimStr(st.active_row_key || row.row_key || '');
-      const beforeSelectedRowKeys = (Array.isArray(st.selected_row_keys) ? st.selected_row_keys : [])
-        .map((key) => trimStr(key))
-        .filter(Boolean);
-      const beforeErrorText = String(st.error_text || '');
-
-      if (dirtyBefore) {
-        const saveResult = await handleBulkProcessSave(st);
-        if (!saveResult || saveResult.ok !== true) {
-          syncPrimaryActionButtonStates();
-          return;
-        }
+      if (!editability.canAddAdditionalManual) {
+        btn.dataset.addAdditionalManualInFlight = '';
+        return;
       }
 
-      st.loading = true;
-      st.error_text = '';
-      st.__suppress_dirty_marking = true;
-      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL]');
+      const captureAddAdditionalSnapshot = (ctxObj = {}, rowObj = {}, detailsObj = {}) => {
+        const liveCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : ctxObj;
+        const liveRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : rowObj;
+        const liveDetails = (st.active_details && typeof st.active_details === 'object') ? st.active_details : detailsObj;
+        return {
+          active_row: deep(liveRow || {}),
+          active_details: deep(liveDetails || {}),
+          active_ctx: deep(liveCtx || {}),
+          active_row_key: trimStr(st.active_row_key || liveRow?.row_key || rowObj?.row_key || ''),
+          selected_row_keys: (Array.isArray(st.selected_row_keys) ? st.selected_row_keys : [])
+            .map((key) => trimStr(key))
+            .filter(Boolean),
+          error_text: String(st.error_text || ''),
+          loading: !!st.loading,
+          saving: !!st.saving,
+          processing: !!st.processing,
+          unprocessing: !!st.unprocessing,
+          spinner: !!st.__workbench_modal_spinner_active,
+          suppress_dirty_marking: !!st.__suppress_dirty_marking
+        };
+      };
+
+      let addAdditionalSnapshot = captureAddAdditionalSnapshot(ctx, row, details);
+      const restoreAddAdditionalSnapshot = async (snapshotObj = addAdditionalSnapshot, reason = '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL]') => {
+        const snap = (snapshotObj && typeof snapshotObj === 'object') ? snapshotObj : addAdditionalSnapshot;
+        st.loading = !!snap.loading;
+        st.saving = !!snap.saving;
+        st.processing = !!snap.processing;
+        st.unprocessing = !!snap.unprocessing;
+        st.__workbench_modal_spinner_active = !!snap.spinner;
+        st.__suppress_dirty_marking = !!snap.suppress_dirty_marking;
+        st.error_text = String(snap.error_text || '');
+        st.active_row = deep(snap.active_row || {});
+        st.active_row_key = trimStr(snap.active_row_key || '') || null;
+        st.active_details = deep(snap.active_details || {});
+        st.active_ctx = deep(snap.active_ctx || {});
+        st.selected_row_keys = Array.isArray(snap.selected_row_keys) ? deep(snap.selected_row_keys) : [];
+        installBulkProcessModalCtxPatch(st);
+        await rerenderBulkProcessWorkbench(st, reason);
+      };
+
+      let postConfirmSpinnerActive = false;
+      const postConfirmBaseline = {
+        loading: !!st.loading,
+        saving: !!st.saving,
+        processing: !!st.processing,
+        unprocessing: !!st.unprocessing,
+        spinner: !!st.__workbench_modal_spinner_active,
+        suppress_dirty_marking: !!st.__suppress_dirty_marking
+      };
+      const setPostConfirmSpinner = async (active, reason = '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL][POST-CONFIRM-SPINNER]') => {
+        if (active) {
+          if (postConfirmSpinnerActive) return;
+          postConfirmSpinnerActive = true;
+          st.loading = true;
+          st.__workbench_modal_spinner_active = true;
+          st.__suppress_dirty_marking = true;
+          st.error_text = '';
+          await rerenderBulkProcessWorkbench(st, reason);
+          return;
+        }
+
+        if (!postConfirmSpinnerActive) return;
+        postConfirmSpinnerActive = false;
+        st.loading = postConfirmBaseline.loading;
+        st.saving = postConfirmBaseline.saving;
+        st.processing = postConfirmBaseline.processing;
+        st.unprocessing = postConfirmBaseline.unprocessing;
+        st.__workbench_modal_spinner_active = postConfirmBaseline.spinner;
+        st.__suppress_dirty_marking = postConfirmBaseline.suppress_dirty_marking;
+        await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL][CLEAR-SPINNER]');
+      };
 
       try {
+        const dirtyBefore = (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty;
+
+        if (dirtyBefore) {
+          const saveFirst = await openBulkProcessConfirm({
+            title: 'Save current edits first?',
+            message: 'You have unsaved manual edits on the current row. Save those edits before creating an additional manual timesheet?',
+            confirm_label: 'Save and continue',
+            cancel_label: 'Cancel',
+            confirm_class: 'btn btn-primary',
+            cancel_class: 'btn btn-outline'
+          });
+          if (!saveFirst) {
+            await restoreAddAdditionalSnapshot(addAdditionalSnapshot, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL][CANCEL-DIRTY-GUARD]');
+            syncPrimaryActionButtonStates();
+            return;
+          }
+
+          const saveResult = await handleBulkProcessSave(st);
+          if (!saveResult || saveResult.ok !== true) {
+            syncPrimaryActionButtonStates();
+            return;
+          }
+
+          const refreshedCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : ctx;
+          const refreshedRow = (refreshedCtx.row && typeof refreshedCtx.row === 'object') ? refreshedCtx.row : (st.active_row || row || {});
+          const refreshedDetails = (refreshedCtx.details && typeof refreshedCtx.details === 'object')
+            ? refreshedCtx.details
+            : ((st.active_details && typeof st.active_details === 'object') ? st.active_details : details);
+          addAdditionalSnapshot = captureAddAdditionalSnapshot(refreshedCtx, refreshedRow, refreshedDetails);
+        }
+
         const createResult = await createAdditionalManualAdjustmentAndOpen({
           source_context: 'bulk_process',
           bulk_process_context: {
-            row: deep(beforeActiveRow),
-            details: deep(beforeActiveDetails),
-            state: deep(beforeActiveCtx?.state || {}),
-            active_row_key: beforeActiveRowKey
-          }
+            row: deep(addAdditionalSnapshot.active_row || {}),
+            details: deep(addAdditionalSnapshot.active_details || {}),
+            state: deep(addAdditionalSnapshot.active_ctx?.state || {}),
+            active_row_key: addAdditionalSnapshot.active_row_key || null
+          },
+          deferSpinnerUntilConfirmed: true,
+          onConfirmedBeforeCreate: async () => setPostConfirmSpinner(true),
+          onBeforePostCreatePrompt: async () => setPostConfirmSpinner(false, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL][CLEAR-SPINNER-BEFORE-PROMPT]'),
+          onCreateFinally: async () => {}
         });
 
         if (!createResult || createResult.cancelled === true) {
-          st.loading = false;
-          st.__suppress_dirty_marking = false;
-          st.error_text = beforeErrorText;
-          st.active_row = deep(beforeActiveRow);
-          st.active_row_key = beforeActiveRowKey || null;
-          st.active_details = deep(beforeActiveDetails);
-          st.active_ctx = deep(beforeActiveCtx);
-          st.selected_row_keys = beforeSelectedRowKeys;
-          installBulkProcessModalCtxPatch(st);
-          await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL]');
+          await setPostConfirmSpinner(false);
+          await restoreAddAdditionalSnapshot(addAdditionalSnapshot, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL][CANCELLED]');
           syncPrimaryActionButtonStates();
           return;
         }
 
         if (createResult.ok !== true) {
-          throw new Error(String(createResult.message || 'Failed to create additional manual timesheet.'));
+          throw new Error(String(createResult.message || createResult.error || 'Failed to create additional manual timesheet.'));
         }
+
+        await setPostConfirmSpinner(true, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL][REFRESH-OPEN]');
 
         const createdIdentity = extractBulkProcessCreatedAdditionalIdentity(createResult || {});
         let nextDataset = null;
@@ -122740,7 +122922,7 @@ function bindBulkProcessManualEditor(state) {
 
         let rowToOpen = createdRowFromDataset ? deep(createdRowFromDataset) : null;
         if (!rowToOpen) {
-          rowToOpen = synthesizeBulkProcessAdditionalManualRow(createResult || {}, beforeActiveRow, beforeActiveDetails);
+          rowToOpen = synthesizeBulkProcessAdditionalManualRow(createResult || {}, addAdditionalSnapshot.active_row, addAdditionalSnapshot.active_details);
           rowToOpen = insertBulkProcessAdditionalManualRow(rowToOpen);
         }
 
@@ -122749,23 +122931,25 @@ function bindBulkProcessManualEditor(state) {
         }
 
         await openBulkProcessAdditionalManualRow(rowToOpen, 'bulk-process-add-additional-open');
-        st.loading = false;
-        st.__suppress_dirty_marking = false;
+        await setPostConfirmSpinner(false);
         await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL]');
       } catch (err) {
-        st.loading = false;
-        st.__suppress_dirty_marking = false;
+        await setPostConfirmSpinner(false).catch(() => {});
         st.error_text = String(err?.message || err || 'Failed to create additional manual timesheet.');
-        st.active_row = deep(beforeActiveRow);
-        st.active_row_key = beforeActiveRowKey || null;
-        st.active_details = deep(beforeActiveDetails);
-        st.active_ctx = deep(beforeActiveCtx);
-        st.selected_row_keys = beforeSelectedRowKeys;
-        installBulkProcessModalCtxPatch(st);
-        await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL]');
+        await restoreAddAdditionalSnapshot({
+          ...addAdditionalSnapshot,
+          error_text: st.error_text,
+          loading: false,
+          saving: false,
+          processing: false,
+          unprocessing: false,
+          spinner: false,
+          suppress_dirty_marking: false
+        }, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL][ERROR]');
+      } finally {
+        btn.dataset.addAdditionalManualInFlight = '';
+        syncPrimaryActionButtonStates();
       }
-      syncPrimaryActionButtonStates();
-      });
     });
   };
 
@@ -123392,7 +123576,6 @@ function bindBulkProcessManualEditor(state) {
     }
   }
 }
-
 
 
 function bindBulkProcessPreviewPane(state) {
@@ -144751,8 +144934,6 @@ async function enqueueQrTimesheetEmail(timesheetId, options = {}) {
   return out;
 }
 
-
-
 async function handleBulkAuthoriseAddAdditionalManual(state, row) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][ADD-ADDITIONAL]');
   GC('handleBulkAuthoriseAddAdditionalManual');
@@ -144850,6 +145031,58 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
       show_daily_manual: false
     };
 
+    if (typeof handleBulkAuthoriseUnsavedChangeGuard === 'function') {
+      const okToContinue = await handleBulkAuthoriseUnsavedChangeGuard(st, null, {
+        intent: 'add-additional-manual',
+        source: 'handleBulkAuthoriseAddAdditionalManual',
+        nextRowKey: trimStr(srcRow.row_key || ''),
+        suppressSpinner: true
+      });
+      if (!okToContinue) {
+        GE();
+        return { ok: false, cancelled: true };
+      }
+    } else if (typeof hasBulkAuthoriseGenuineDirtyEdits === 'function' && hasBulkAuthoriseGenuineDirtyEdits(st, { preferDom: false })) {
+      GE();
+      return { ok: false, error: 'Save or discard the current manual edits before creating an additional timesheet.' };
+    }
+
+    const priorBusyState = {
+      loading: !!st.loading,
+      saving: !!st.saving,
+      processing: !!st.processing,
+      spinner: !!st.__workbench_modal_spinner_active
+    };
+    let postConfirmSpinnerActive = false;
+    const setPostConfirmSpinner = async (active) => {
+      try {
+        if (active) {
+          if (postConfirmSpinnerActive) return;
+          postConfirmSpinnerActive = true;
+          st.loading = true;
+          st.__workbench_modal_spinner_active = true;
+        } else {
+          if (!postConfirmSpinnerActive) return;
+          postConfirmSpinnerActive = false;
+          st.loading = priorBusyState.loading;
+          st.saving = priorBusyState.saving;
+          st.processing = priorBusyState.processing;
+          st.__workbench_modal_spinner_active = priorBusyState.spinner;
+        }
+        if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
+          await rerenderBulkAuthoriseWorkbench(st, active ? '[TS][BULK-AUTH][ADD-ADDITIONAL][POST-CONFIRM-SPINNER]' : '[TS][BULK-AUTH][ADD-ADDITIONAL][CLEAR-SPINNER]');
+        }
+      } catch {
+        if (!active) {
+          st.loading = false;
+          st.saving = false;
+          st.processing = false;
+          st.__workbench_modal_spinner_active = false;
+          postConfirmSpinnerActive = false;
+        }
+      }
+    };
+
     const createResult = await createAdditionalManualAdjustmentAndOpen({
       source_context: 'bulk_authorise',
       active_row: { ...srcRow },
@@ -144858,7 +145091,11 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
       source_timesheet_id: timesheetId || null,
       contract_week_id: contractWeekId || null,
       period_type: sheetScope || null,
-      bulk_process_seed: seed
+      bulk_process_seed: seed,
+      deferSpinnerUntilConfirmed: true,
+      onConfirmedBeforeCreate: async () => setPostConfirmSpinner(true),
+      onBeforePostCreatePrompt: async () => setPostConfirmSpinner(false),
+      onCreateFinally: async () => setPostConfirmSpinner(false)
     });
 
     if (createResult?.cancelled === true) {
@@ -144873,21 +145110,113 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
       };
     }
 
+    if (createResult?.switched_to_bulk_process === true) {
+      await setPostConfirmSpinner(false);
+      GE();
+      return { ok: true, ...createResult };
+    }
+
+    const createdPatchRows = Array.isArray(createResult?.row_patches)
+      ? createResult.row_patches.filter((patchRow) => patchRow && typeof patchRow === 'object')
+      : (createResult?.row_patch && typeof createResult.row_patch === 'object')
+        ? [createResult.row_patch]
+        : [];
+    const createdPrimaryRow =
+      (createResult?.data_row && typeof createResult.data_row === 'object')
+        ? createResult.data_row
+        : (createResult?.row_patch && typeof createResult.row_patch === 'object')
+          ? createResult.row_patch
+          : (createResult?.row && typeof createResult.row === 'object')
+            ? createResult.row
+            : (createdPatchRows[0] || null);
+    const createdFocusRowKey = trimStr(
+      createResult?.row_key ||
+      createResult?.new_row_key ||
+      createdPrimaryRow?.row_key ||
+      createdPrimaryRow?.new_row_key ||
+      createdPrimaryRow?.current_row_key ||
+      createdPrimaryRow?.stable_row_id ||
+      (createResult?.current_timesheet_id ? `timesheet:${createResult.current_timesheet_id}` : '') ||
+      (createResult?.timesheet_id ? `timesheet:${createResult.timesheet_id}` : '') ||
+      (createResult?.contract_week_id ? `contract_week:${createResult.contract_week_id}` : '')
+    );
+    const createdFocusIdentity = trimStr(
+      createResult?.current_timesheet_id ||
+      createResult?.timesheet_id ||
+      createResult?.contract_week_id ||
+      createdFocusRowKey
+    );
+
+    if (createdFocusRowKey) {
+      st.__bulk_authorise_pending_focus_row_key = createdFocusRowKey;
+      st.__bulk_authorise_focus_row_key = createdFocusRowKey;
+      st.__bulk_authorise_preferred_active_row_key = createdFocusRowKey;
+      st.__bulkAuthorisePendingFocusRowKey = createdFocusRowKey;
+      st.__bulkAuthoriseRecordIdentity = createdFocusIdentity || createdFocusRowKey;
+      st.active_row_key = createdFocusRowKey;
+      st.selected_row_keys = [createdFocusRowKey];
+    }
+
+    if (createdPrimaryRow && createdFocusRowKey) {
+      st.active_row = { ...createdPrimaryRow, row_key: createdPrimaryRow.row_key || createdFocusRowKey };
+      st.active_context = {
+        ...(st.active_context && typeof st.active_context === 'object' ? st.active_context : {}),
+        row: st.active_row,
+        row_key: createdFocusRowKey
+      };
+      if (st.active_ctx && typeof st.active_ctx === 'object') {
+        st.active_ctx = {
+          ...st.active_ctx,
+          row: st.active_row,
+          row_key: createdFocusRowKey
+        };
+      }
+    }
+
+    await setPostConfirmSpinner(true);
+
     if (typeof refreshBulkAuthoriseDatasetPreservingState === 'function') {
-      await refreshBulkAuthoriseDatasetPreservingState(st, { refreshContext: true });
+      const refreshOptions = {
+        refreshContext: true,
+        focusRowKey: createdFocusRowKey || undefined,
+        activeRowKey: createdFocusRowKey || undefined,
+        selectedRowKeys: createdFocusRowKey ? [createdFocusRowKey] : undefined,
+        rowKey: createdFocusRowKey || undefined,
+        rowPatches: createdPatchRows.length ? createdPatchRows : undefined,
+        createdRowPatch: createdPrimaryRow || undefined,
+        source: 'add-additional-manual'
+      };
+      await refreshBulkAuthoriseDatasetPreservingState(st, refreshOptions);
+      if (createdFocusRowKey) {
+        st.__bulk_authorise_pending_focus_row_key = createdFocusRowKey;
+        st.__bulk_authorise_focus_row_key = createdFocusRowKey;
+        st.__bulk_authorise_preferred_active_row_key = createdFocusRowKey;
+        st.__bulkAuthorisePendingFocusRowKey = createdFocusRowKey;
+        st.__bulkAuthoriseRecordIdentity = createdFocusIdentity || createdFocusRowKey;
+        st.active_row_key = createdFocusRowKey;
+        st.selected_row_keys = [createdFocusRowKey];
+      }
       if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
         await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][ADD-ADDITIONAL-MANUAL]');
       }
     }
 
+    await setPostConfirmSpinner(false);
     GE();
     return { ok: true, ...createResult };
   } catch (err) {
+    try {
+      st.loading = false;
+      st.saving = false;
+      st.processing = false;
+      st.__workbench_modal_spinner_active = false;
+    } catch {}
     st.error_text = String(err?.message || err || 'Failed to create additional manual row.');
     GE();
     return { ok: false, error: st.error_text };
   }
 }
+
 
 
 async function handleBulkAuthoriseRouteConversion(state, row, action) {
@@ -145842,7 +146171,6 @@ async function handleBulkAuthoriseUnsavedChangeGuard(state, nextRowKey, options 
   }
 }
 
-
 function renderBulkAuthoriseActionRow(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -146033,6 +146361,22 @@ function renderBulkAuthoriseActionRow(state) {
   `;
 
   const actions = [];
+  const expensesActionDisabled = !!(editability.expensesActionDisabled === true || editability.expensesTabDisabled === true);
+  const expensesActionDisabledReason = trimStr(
+    editability.expensesActionDisabledReason ||
+    editability.expensesTabDisabledReason ||
+    editability.expensesDisabledReason ||
+    'Expenses are not available for this row.'
+  );
+  const pushExpensesAction = () => {
+    if (editability.canOpenExpenses && !expensesActionDisabled) {
+      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', !busy, '', 'btn btn-outline', 'expenses'));
+      return;
+    }
+    if (expensesActionDisabled) {
+      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', false, '', 'btn btn-outline', 'expenses', expensesActionDisabledReason));
+    }
+  };
 
   if (section === 'authorised_eligible' || editability.isAuthorised) {
     if (editability.canUnauthorise) {
@@ -146041,9 +146385,7 @@ function renderBulkAuthoriseActionRow(state) {
     if (editability.canAddAdditionalManual) {
       actions.push(buildBtn('bulkAuthActionRowAddAdditionalBtn', 'Add additional timesheets', !busy));
     }
-    if (editability.canOpenExpenses) {
-      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', !busy));
-    }
+    pushExpensesAction();
   } else {
     if (editability.canAuthorise) {
       actions.push(buildBtn('bulkAuthActionRowAuthoriseBtn', 'Authorise', !busy && contextReady, dirtyActionAttrs, 'btn btn-primary', 'authorise'));
@@ -146057,9 +146399,7 @@ function renderBulkAuthoriseActionRow(state) {
     if (editability.canAddAdditionalManual) {
       actions.push(buildBtn('bulkAuthActionRowAddAdditionalBtn', 'Add additional timesheets', !busy));
     }
-    if (editability.canOpenExpenses) {
-      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', !busy));
-    }
+    pushExpensesAction();
     if (!editability.isAuthorised && editability.canSwitchToManual) {
       actions.push(buildBtn('bulkAuthActionRowSwitchManualBtn', 'Convert to Manual', !busy, 'data-bulk-authorise-route-action="switch-manual"'));
     }
@@ -146134,7 +146474,6 @@ function renderBulkAuthoriseActionRow(state) {
     </div>
   `);
 }
-
 
 function bindBulkAuthoriseActionRow(state) {
   const st = (state && typeof state === 'object')
@@ -146307,7 +146646,7 @@ function bindBulkAuthoriseActionRow(state) {
     if (typeof handleBulkAuthoriseAddAdditionalManual === 'function') {
       await handleBulkAuthoriseAddAdditionalManual(st, activeRow);
     }
-  });
+  }, { withSpinner: false });
 
   bindBtn('bulkAuthActionRowExpensesBtn', 'boundBulkAuthActionExpenses', async () => {
     if (typeof handleBulkAuthoriseOpenExpensesModal === 'function') {
@@ -146329,6 +146668,7 @@ function bindBulkAuthoriseActionRow(state) {
     });
   });
 }
+
 
 async function handleBulkAuthoriseOpenExpensesModal(state) {
   const st = (state && typeof state === 'object')
@@ -191539,7 +191879,6 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
 
 // ✅ Canonical timesheet refresh helper (must exist BEFORE any footer clicks)
 
-
 function setFormReadOnly(root, ro) {
   if (!root || !document.contains(root)) { L('setFormReadOnly(skip: invalid root)', { ro }); return; }
   const _allBefore = root.querySelectorAll('input, select, textarea, button');
@@ -191596,19 +191935,37 @@ function setFormReadOnly(root, ro) {
       'segment-save',
       'segment-reset',
       'segment-add',
-      'segment-remove'
-    ]).has(a);
+      'segment-remove',
+      'copy-line',
+      'copy-shift',
+      'paste-line',
+      'paste-shift',
+      'duplicate-line',
+      'duplicate-shift',
+      'delete-line',
+      'delete-shift',
+      'clear-line',
+      'clear-shift',
+      'reset-line',
+      'reset-shift',
+      'add-break',
+      'remove-break',
+      'copy-schedule',
+      'paste-schedule'
+    ]).has(a) || /(^|[-_:])(schedule|hours?|shift|segment|break|line)([-_:]|$)/.test(a);
   };
   const isTimesheetHoursControl = (el) => {
     if (!el || typeof el.matches !== 'function') return false;
     const tsAction = el.getAttribute('data-ts-action') || el.getAttribute('data-hours-action') || '';
     if (isTimesheetHoursAction(tsAction)) return true;
-    if (el.matches('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-ts-daily-field],[data-weekly-line-action],[data-hours-action]')) return true;
+    if (el.matches('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-segment-action],[data-segment-control],[data-ts-daily-field],[data-weekly-line-action],[data-hours-action],[data-extra-code],[data-extra-field],[data-additional-rate-code],[data-additional-units-field],[data-protected-hours-control]')) return true;
     const id = String(el.id || '').toLowerCase();
     const name = String(el.getAttribute('name') || '').toLowerCase();
+    const dataAction = String(el.getAttribute('data-action') || '').toLowerCase();
     if (/tsdaily(date|start|end|break|paidhours)/.test(id)) return true;
-    if (/weekly|schedule|worked_start|worked_end|break_minutes|break_start|break_end|hours_day|hours_night|hours_sat|hours_sun|hours_bh/.test(name)) return true;
+    if (/weekly|schedule|worked_start|worked_end|break_minutes|break_mins|break_start|break_end|hours_day|hours_night|hours_sat|hours_sun|hours_bh|shift_start|shift_end|segment/.test(name)) return true;
     if (/^extra_units_/.test(name)) return true;
+    if (/schedule|hours?|shift|segment|break|weekly-line|daily/.test(dataAction) && !/expense|evidence|mileage/.test(dataAction)) return true;
     return false;
   };
   const isTimesheetExpenseControl = (el) => {
@@ -191668,9 +192025,13 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
 
  
   if (timesheetDomainLockContext) {
+    if (!timesheetDomainLockContext.lockHours && el.hasAttribute && el.hasAttribute('data-protected-hours-locked')) {
+      try { el.removeAttribute('data-protected-hours-locked'); } catch {}
+    }
     if (isTimesheetHoursControl(el) && timesheetDomainLockContext.lockHours) {
       el.setAttribute('disabled', 'true');
       el.setAttribute('readonly', 'true');
+      el.setAttribute('data-protected-hours-locked', 'true');
       return;
     }
     if (isTimesheetExpenseControl(el)) {
@@ -191765,12 +192126,35 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
         'add-line',
         'remove-line',
         'extra-break-add',
-        'extra-break-remove'
+        'extra-break-remove',
+        'copy-line',
+        'copy-shift',
+        'paste-line',
+        'paste-shift',
+        'duplicate-line',
+        'duplicate-shift',
+        'delete-line',
+        'delete-shift',
+        'clear-line',
+        'clear-shift',
+        'reset-line',
+        'reset-shift',
+        'add-break',
+        'remove-break',
+        'copy-schedule',
+        'paste-schedule',
+        'segment-edit',
+        'segment-save',
+        'segment-reset',
+        'segment-add',
+        'segment-remove'
       ]);
 
       // Hard block schedule edit actions when read-only
-      if (isTimesheetFrame && ro && tsAction && scheduleEditActions.has(tsAction)) {
+      if (isTimesheetFrame && tsAction && scheduleEditActions.has(tsAction) && (ro || (timesheetDomainLockContext && timesheetDomainLockContext.lockHours))) {
         el.disabled = true;
+        try { el.setAttribute('readonly', 'true'); } catch {}
+        try { el.setAttribute('data-protected-hours-locked', 'true'); } catch {}
         return;
       }
 
@@ -191866,8 +192250,10 @@ try {
     const lockExpenses = !!(policy && (policy.canEditExpenses === false || policy.expensesReadOnly === true));
     const lockEvidence = !!(policy && policy.canManageExpenseEvidence === false);
     if (lockHours) {
-      root.querySelectorAll('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-ts-daily-field],[data-weekly-line-action],[data-hours-action],input[name^=\"extra_units_\"]').forEach((el) => {
-        el.disabled = true; try { el.setAttribute('readonly', 'true'); } catch {}
+      root.querySelectorAll('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-segment-action],[data-segment-control],[data-ts-daily-field],[data-weekly-line-action],[data-hours-action],[data-extra-code],[data-extra-field],[data-additional-rate-code],[data-additional-units-field],[data-protected-hours-control],input[name^=\"extra_units_\"],input[name*=\"worked_start\"],input[name*=\"worked_end\"],input[name*=\"break_minutes\"],input[name*=\"break_mins\"],input[name*=\"break_start\"],input[name*=\"break_end\"],input[name*=\"hours_day\"],input[name*=\"hours_night\"],input[name*=\"hours_sat\"],input[name*=\"hours_sun\"],input[name*=\"hours_bh\"]').forEach((el) => {
+        el.disabled = true;
+        try { el.setAttribute('readonly', 'true'); } catch {}
+        try { el.setAttribute('data-protected-hours-locked', 'true'); } catch {}
       });
 
       const scheduleEditActions = new Set([
@@ -191894,17 +192280,39 @@ try {
         'daily-preview',
         'daily-apply',
         'apply-daily-schedule',
-        'preview-daily-schedule'
+        'preview-daily-schedule',
+        'copy-line',
+        'copy-shift',
+        'paste-line',
+        'paste-shift',
+        'duplicate-line',
+        'duplicate-shift',
+        'delete-line',
+        'delete-shift',
+        'clear-line',
+        'clear-shift',
+        'reset-line',
+        'reset-shift',
+        'add-break',
+        'remove-break',
+        'copy-schedule',
+        'paste-schedule',
+        'segment-edit',
+        'segment-save',
+        'segment-reset',
+        'segment-add',
+        'segment-remove'
       ]);
 
-      root.querySelectorAll('button[data-ts-action],button[data-weekly-line-action],button[data-hours-action]').forEach((btn) => {
-        const act = String(btn.getAttribute('data-ts-action') || btn.getAttribute('data-weekly-line-action') || btn.getAttribute('data-hours-action') || '').trim().toLowerCase();
-        if (!scheduleEditActions.has(act)) return;
+      root.querySelectorAll('button[data-ts-action],button[data-weekly-line-action],button[data-hours-action],button[data-segment-action],button[data-action]').forEach((btn) => {
+        const act = String(btn.getAttribute('data-ts-action') || btn.getAttribute('data-weekly-line-action') || btn.getAttribute('data-hours-action') || btn.getAttribute('data-segment-action') || btn.getAttribute('data-action') || '').trim().toLowerCase();
+        if (!scheduleEditActions.has(act) && !isTimesheetHoursAction(act)) return;
         btn.disabled = true;
         try { btn.setAttribute('readonly', 'true'); } catch {}
+        try { btn.setAttribute('data-protected-hours-locked', 'true'); } catch {}
       });
     }
-    root.querySelectorAll('input[data-exp-field],textarea[data-exp-field]').forEach((el) => {
+    root.querySelectorAll('input[data-exp-field],textarea[data-exp-field],select[data-exp-field]').forEach((el) => {
       if (lockExpenses || ro) { el.disabled = true; try { el.setAttribute('readonly', 'true'); } catch {} }
       else { el.disabled = false; try { el.removeAttribute('readonly'); } catch {} }
     });
@@ -191929,6 +192337,7 @@ try {
     });
   } catch {}
 }
+
 
 
 
@@ -194993,9 +195402,21 @@ if (this.entity === 'timesheets' && k === 'expenses') {
           state: mc.timesheetState || {}
         })
       : null);
-    const canEditExpenses = !!(policy ? (policy.canEditExpenses === true && policy.expensesReadOnly !== true) : true);
-    if (!enabled || !canEditExpenses) {
-      if (LOGM) LT('expenses tab disabled; skip wiring', { reason: mc.expenses_tab_reason || '' });
+     const expensesTabDisabled = !!(
+      (policy && (policy.expensesTabDisabled === true || policy.expensesActionDisabled === true)) ||
+      mc.expenses_tab_disabled === true
+    );
+    const canEditExpenses = !!(policy ? (policy.canEditExpenses === true && policy.expensesReadOnly !== true && !expensesTabDisabled) : true);
+    const expensesTabCanOpen = !!(policy ? (policy.canOpenExpenses === true && !expensesTabDisabled) : (enabled && !expensesTabDisabled));
+    if (!expensesTabCanOpen || !canEditExpenses) {
+      if (LOGM) LT('expenses tab disabled; skip wiring', {
+        reason:
+          mc.expenses_tab_reason ||
+          policy?.expensesTabDisabledReason ||
+          policy?.expensesActionDisabledReason ||
+          policy?.expensesDisabledReason ||
+          ''
+      });
     } else if (root) {
       mc.timesheetState = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
       const readRenderedMileageRate = (attrName) => {
@@ -196208,6 +196629,77 @@ function renderTop() {
 
   const tabsEl = byId('modalTabs'); tabsEl.innerHTML='';
 
+const resolveTabDisabledState = (tabLike) => {
+  const tab = (tabLike && typeof tabLike === 'object') ? tabLike : {};
+  const key = String(tab.key || '').trim();
+  let disabled = !!tab.disabled;
+  let reason = String(tab.disabled_reason || '').trim();
+
+  try {
+    if (top && top.entity === 'timesheets' && key === 'expenses') {
+      const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+      const det = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
+      const policy =
+        (mc.timesheetEditDomains && typeof mc.timesheetEditDomains === 'object')
+          ? mc.timesheetEditDomains
+          : (typeof classifyTimesheetEditDomains === 'function'
+              ? classifyTimesheetEditDomains({
+                  row: mc.data || {},
+                  details: det,
+                  timesheet: det.timesheet || null,
+                  tsfin: det.tsfin || null,
+                  financial_snapshot: det.financial_snapshot || null,
+                  contract_week: det.contract_week || null,
+                  related: mc.timesheetRelated || {},
+                  action_flags: det.action_flags || null,
+                  state: mc.timesheetState || {}
+                })
+              : null);
+
+      const hasCtxDisabled = Object.prototype.hasOwnProperty.call(mc, 'expenses_tab_disabled');
+      const hasCtxEnabled = Object.prototype.hasOwnProperty.call(mc, 'expenses_tab_enabled');
+      const policyTabDisabledKnown = !!(
+        policy &&
+        (
+          Object.prototype.hasOwnProperty.call(policy, 'expensesTabDisabled') ||
+          Object.prototype.hasOwnProperty.call(policy, 'expensesActionDisabled')
+        )
+      );
+
+      const disabledByPolicy = !!(policy && (policy.expensesTabDisabled === true || policy.expensesActionDisabled === true));
+      const disabledByCtx = !!(hasCtxDisabled && mc.expenses_tab_disabled === true);
+      const explicitlyEnabledByPolicy = !!(policy && policy.canOpenExpenses === true && !disabledByPolicy);
+      const explicitlyEnabledByCtx = !!(hasCtxEnabled && mc.expenses_tab_enabled === true && !disabledByCtx);
+      const explicitlyUnavailableByCtx = !!(hasCtxEnabled && mc.expenses_tab_enabled !== true);
+
+      if (disabledByPolicy || disabledByCtx) {
+        disabled = true;
+        reason = String(
+          mc.expenses_tab_reason ||
+          policy?.expensesTabDisabledReason ||
+          policy?.expensesActionDisabledReason ||
+          policy?.expensesDisabledReason ||
+          reason ||
+          'This tab is currently unavailable.'
+        ).trim();
+      } else if (explicitlyEnabledByCtx || explicitlyEnabledByPolicy) {
+        disabled = false;
+        reason = '';
+      } else if ((hasCtxDisabled || policyTabDisabledKnown || explicitlyUnavailableByCtx) && !explicitlyEnabledByCtx && !explicitlyEnabledByPolicy) {
+        disabled = true;
+        reason = String(
+          mc.expenses_tab_reason ||
+          policy?.expensesDisabledReason ||
+          reason ||
+          'Expenses are not available for this timesheet.'
+        ).trim();
+      }
+    }
+  } catch {}
+
+  if (disabled && !reason) reason = 'This tab is currently unavailable.';
+  return { disabled, reason };
+};
 
 // ✅ Choose a safe active tab (never start on a disabled tab)
 try {
@@ -196216,9 +196708,10 @@ try {
 
   let activeKey = top.currentTabKey || (list[0] ? list[0].key : null);
   const t0 = findTab(activeKey);
+  const t0Disabled = t0 ? resolveTabDisabledState(t0).disabled : false;
 
-  if (t0 && t0.disabled) {
-    const firstEnabled = list.find(x => !x?.disabled) || list[0] || null;
+  if (t0 && t0Disabled) {
+    const firstEnabled = list.find(x => !resolveTabDisabledState(x).disabled) || list[0] || null;
     activeKey = firstEnabled ? firstEnabled.key : activeKey;
   }
 
@@ -196245,11 +196738,12 @@ let _pushedRight = false;
   }
 
   // ✅ Disabled tab support WITHOUT native disabled (keeps hover/title reliable)
-  const isDisabled = !!(t && t.disabled);
+  const disabledState = resolveTabDisabledState(t);
+  const isDisabled = !!disabledState.disabled;
   if (isDisabled) {
     b.classList.add('disabled');
     b.dataset.disabled = '1';
-    const why = String(t.disabled_reason || window.modalCtx?.expenses_tab_reason || 'This tab is currently unavailable.');
+    const why = String(disabledState.reason || window.modalCtx?.expenses_tab_reason || 'This tab is currently unavailable.');
     b.setAttribute('title', why);
   } else {
     b.classList.remove('disabled');
@@ -200154,19 +200648,6 @@ async function applyTimesheetDeleteImpactToSummary(opts = {}) {
 }
 
 
-
-
-
-function tsExtractMoved409(err) {
-  const status = err?.status ?? err?.statusCode ?? null;
-  const j = err?.json || null;
-
-  if (status === 409 && j && j.error === 'TIMESHEET_MOVED' && j.current_timesheet_id) {
-    return { moved: true, current_timesheet_id: String(j.current_timesheet_id) };
-  }
-  return { moved: false, current_timesheet_id: null };
-}
-
 async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
   const o = (opts && typeof opts === 'object') ? opts : {};
   const sourceContext = String(o.source_context || 'single_modal').trim().toLowerCase();
@@ -200185,6 +200666,26 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
       return !!(res && res.confirmed === true);
     }
     return window.confirm(String(confirmOpts?.message || 'Are you sure?'));
+  };
+
+  let createPhaseStarted = false;
+  const callHook = async (hookName, payload = {}) => {
+    const fn = o && typeof o[hookName] === 'function' ? o[hookName] : null;
+    if (!fn) return;
+    await fn(payload);
+  };
+  const beginCreatePhase = async (payload = {}) => {
+    if (createPhaseStarted) return;
+    createPhaseStarted = true;
+    await callHook('onConfirmedBeforeCreate', payload);
+  };
+  const beforePostCreatePrompt = async (payload = {}) => {
+    await callHook('onBeforePostCreatePrompt', payload);
+  };
+  const finishCreatePhase = async (payload = {}) => {
+    if (!createPhaseStarted) return;
+    await callHook('onCreateFinally', payload);
+    createPhaseStarted = false;
   };
 
   const extractBulkCreatedPatchRow = (created) => {
@@ -200378,6 +200879,9 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
     }
 
     let created = null;
+    try {
+      await beginCreatePhase({ source_context: 'bulk_process', sheet_scope: sheetScope, existing_count: existingCount });
+
     if (isWeekly) {
       created = await apiPostJson(
         `/api/contract-weeks/${encodeURIComponent(String(weekId))}/additional-weekly-adjustment`,
@@ -200441,6 +200945,8 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
 
     try { if (typeof window.__toast === 'function') window.__toast('Additional manual timesheet created.'); } catch {}
 
+    await finishCreatePhase({ source_context: 'bulk_process', created });
+
     return {
       ok: true,
       source_context: 'bulk_process',
@@ -200485,6 +200991,10 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
           ? `Warning: ${existingCount} adjustment time(s) already existed for this ${isWeekly ? 'week' : 'shift'}.`
           : ''
     };
+    } catch (err) {
+      await finishCreatePhase({ source_context: 'bulk_process', error: err });
+      throw err;
+    }
   }
 
   if (sourceContext === 'bulk_authorise') {
@@ -200569,6 +201079,9 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
     }
 
     let created = null;
+    try {
+      await beginCreatePhase({ source_context: 'bulk_authorise', sheet_scope: sheetScope, existing_count: existingCount });
+
     if (isWeekly) {
       created = await apiPostJson(
         `/api/contract-weeks/${encodeURIComponent(String(weekId))}/additional-weekly-adjustment`,
@@ -200621,7 +201134,9 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
         (isWeekly && !createdTimesheetId && !!createdContractWeekId)
       )
     );
+    let switchedToBulkProcess = false;
     if (createdUnprocessed) {
+      await beforePostCreatePrompt({ source_context: 'bulk_authorise', created, created_unprocessed: true });
       const focusIdentity = createdRowKey || (isWeekly ? (createdTimesheetId || createdContractWeekId) : createdTimesheetId);
       const switchSeed = {
         ...(bulkProcessSeedBase || {}),
@@ -200646,12 +201161,16 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
         try { byId('btnCloseModal')?.click(); } catch {}
         await Promise.resolve();
         await openBulkProcessWorkbench(switchSeed);
+        switchedToBulkProcess = true;
       }
     }
+    await finishCreatePhase({ source_context: 'bulk_authorise', created });
+
     return {
       ok: true,
       source_context: 'bulk_authorise',
       created_unprocessed: createdUnprocessed,
+      switched_to_bulk_process: switchedToBulkProcess,
       current_timesheet_id: createdTimesheetId || null,
       timesheet_id: createdTimesheetId || null,
       expected_timesheet_id: createdTimesheetId || null,
@@ -200678,6 +201197,10 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
               invalidate_editor_context: true
             }
     };
+    } catch (err) {
+      await finishCreatePhase({ source_context: 'bulk_authorise', error: err });
+      throw err;
+    }
   }
 
   const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
@@ -201145,6 +201668,7 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
       await Promise.resolve();
 
       if (typeof openBulkProcessWorkbench === 'function') {
+        await finishCreatePhase({ source_context: 'bulk_authorise', created, switching_to_bulk_process: true });
         await openBulkProcessWorkbench(switchSeed);
         return;
       }
@@ -201224,6 +201748,19 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
   await Promise.resolve();
   await openTimesheet(openRow);
 }
+
+
+
+function tsExtractMoved409(err) {
+  const status = err?.status ?? err?.statusCode ?? null;
+  const j = err?.json || null;
+
+  if (status === 409 && j && j.error === 'TIMESHEET_MOVED' && j.current_timesheet_id) {
+    return { moved: true, current_timesheet_id: String(j.current_timesheet_id) };
+  }
+  return { moved: false, current_timesheet_id: null };
+}
+
 
 async function tsModalAdoptTimesheetId(newId, opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][ROTATE][ADOPT]');
@@ -217960,9 +218497,20 @@ function renderTimesheetExpensesTab(ctx) {
   const totalPay = round2(mileagePay + travelPay + accomPay + otherPay);
   const totalChg = round2(mileageChg + travelChg + accomChg + otherChg);
 
-  const enabled = editPolicy ? editPolicy.canOpenExpenses === true : true;
-  const readOnly = editPolicy ? (editPolicy.canEditExpenses === false || editPolicy.expensesReadOnly === true) : false;
-  const blockedReason = editPolicy?.expensesDisabledReason || 'Expenses are not available for this timesheet route.';
+  const frameMode =
+    (typeof window.__getModalFrame === 'function' ? window.__getModalFrame()?.mode : null) ||
+    'view';
+  const isEditMode = (frameMode === 'edit' || frameMode === 'create');
+  const isBulkProcessModal = String(window?.modalCtx?.entity || '').trim().toLowerCase() === 'bulk-process';
+  const expensesTabDisabled = !!(editPolicy && (editPolicy.expensesTabDisabled === true || editPolicy.expensesActionDisabled === true));
+  const expensesTabDisabledReason = String(
+    (editPolicy && (editPolicy.expensesTabDisabledReason || editPolicy.expensesActionDisabledReason || editPolicy.expensesDisabledReason)) ||
+    'Expenses are not available for this timesheet route.'
+  );
+  const enabled = editPolicy ? (editPolicy.canOpenExpenses === true && !expensesTabDisabled) : true;
+  const canEditExpenseControls = editPolicy ? (editPolicy.canEditExpenses === true && !expensesTabDisabled) : true;
+  const readOnly = !(canEditExpenseControls && (isEditMode || isBulkProcessModal));
+  const blockedReason = expensesTabDisabled ? expensesTabDisabledReason : (editPolicy?.expensesDisabledReason || 'Expenses are not available for this timesheet route.');
 
   const needsMileageEvidence = mileageUnits > 0 || mileagePay > 0 || mileageChg > 0;
   const needsTravelEvidence  = (travelPay > 0 || travelChg > 0);
@@ -217975,13 +218523,12 @@ function renderTimesheetExpensesTab(ctx) {
   if (needsAccomEvidence)   evidenceLines.push('• Accommodation requires evidence kind ACCOMMODATION (when pay or charge is greater than £0.00).');
   if (needsOtherEvidence)   evidenceLines.push('• Other requires evidence kind OTHER (when pay or charge is greater than £0.00).');
 
-  const isBulkProcessModal = String(window?.modalCtx?.entity || '').trim().toLowerCase() === 'bulk-process';
   const evidenceHint =
     evidenceLines.length
       ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">${evidenceLines.join('<br/>')}</div>`
       : (isBulkProcessModal ? '' : `<div class="mini" style="margin-top:8px;color:rgba(255,255,255,0.7)">Tip: upload supporting evidence in the Evidence tab. Evidence is required only when you claim mileage, travel, accommodation, or other expenses.</div>`);
 
-  if (!enabled) {
+  if (expensesTabDisabled || !enabled) {
     return `
       <div class="tabc">
         <div class="card">
@@ -224172,8 +224719,47 @@ if (hasTs) {
         ? payStateSegmentSnoozes
         : detailSegmentSnoozes;
 
-      return det;
+        return det;
     };
+
+const deriveExpensesTabUiState = (policy) => {
+  const p = (policy && typeof policy === 'object') ? policy : null;
+  const tabDisabled = !!(p && (p.expensesTabDisabled === true || p.expensesActionDisabled === true));
+  const disabledReason = String(
+    (p && (p.expensesTabDisabledReason || p.expensesActionDisabledReason || p.expensesDisabledReason)) ||
+    ''
+  ).trim();
+  const enabled = !!(p && !tabDisabled && p.canOpenExpenses === true);
+  const reason = enabled
+    ? ''
+    : (tabDisabled
+        ? (disabledReason || 'Expenses are not available for this timesheet.')
+        : String((p && p.expensesDisabledReason) || 'Expenses are not available for this timesheet.'));
+
+  return {
+    enabled,
+    disabled: tabDisabled,
+    reason
+  };
+};
+
+const applyTimesheetEditDomainPolicyToModalCtx = (modalCtx, policy) => {
+  if (!modalCtx || !policy || typeof policy !== 'object') return null;
+
+  const expensesUi = deriveExpensesTabUiState(policy);
+
+  modalCtx.timesheetEditDomains = policy;
+  modalCtx.expenses_tab_enabled = expensesUi.enabled;
+  modalCtx.expenses_tab_disabled = expensesUi.disabled;
+  modalCtx.expenses_tab_reason = expensesUi.reason;
+  modalCtx.expenses_read_only = policy.expensesReadOnly === true;
+  modalCtx.can_edit_hours_schedule = policy.canEditHoursSchedule === true;
+  modalCtx.hours_schedule_disabled_reason = String(policy.hoursScheduleDisabledReason || '');
+  modalCtx.can_manage_expense_evidence = policy.canManageExpenseEvidence === true;
+
+  return expensesUi;
+};
+
 const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
   const idArg = String(timesheetIdArg || '').trim();
   if (!idArg) return null;
@@ -224345,15 +224931,7 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
           state: modalCtx.timesheetState || {}
         });
 
-        modalCtx.timesheetEditDomains = refreshedPolicy;
-        modalCtx.expenses_tab_enabled = refreshedPolicy.canOpenExpenses === true;
-        modalCtx.expenses_tab_reason = refreshedPolicy.canOpenExpenses === false
-          ? String(refreshedPolicy.expensesDisabledReason || 'Expenses are not available for this timesheet.')
-          : '';
-        modalCtx.expenses_read_only = refreshedPolicy.expensesReadOnly === true;
-        modalCtx.can_edit_hours_schedule = refreshedPolicy.canEditHoursSchedule === true;
-        modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
-        modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
+            applyTimesheetEditDomainPolicyToModalCtx(modalCtx, refreshedPolicy);
       }
     } catch {}
   }
@@ -224530,26 +225108,34 @@ const timesheetEditDomains = (typeof classifyTimesheetEditDomains === 'function'
     })
   : null;
 
-const expensesTabEnabled = (timesheetEditDomains && typeof timesheetEditDomains.canOpenExpenses === 'boolean')
-  ? (timesheetEditDomains.canOpenExpenses === true)
-  : (
-      !!hasTsForExpenses &&
-      !!hasFin &&
-      (sheetScope !== 'SEGMENT') &&
-      (subMode === 'MANUAL' || hasQr)
-    );
+const fallbackExpensesTabEnabled = !!(
+  !!hasTsForExpenses &&
+  !!hasFin &&
+  (sheetScope !== 'SEGMENT') &&
+  (subMode === 'MANUAL' || hasQr)
+);
 
-const expensesTabReason = (timesheetEditDomains && timesheetEditDomains.canOpenExpenses === false)
-  ? String(timesheetEditDomains.expensesDisabledReason || 'Expenses are not available for this timesheet.')
-  : (!hasTsForExpenses
-      ? 'Expenses are available once a timesheet exists.'
-      : (!hasFin
-          ? 'Expenses unavailable until TSFIN snapshot exists.'
-          : ((sheetScope === 'SEGMENT')
-              ? 'Expenses must be added via Manual Timesheet for Segment Timesheets'
-              : (!(subMode === 'MANUAL' || hasQr)
-                  ? 'Expenses are available for Manual or QR timesheets.'
-                  : ''))));
+const fallbackExpensesTabReason = !hasTsForExpenses
+  ? 'Expenses are available once a timesheet exists.'
+  : (!hasFin
+      ? 'Expenses unavailable until TSFIN snapshot exists.'
+      : ((sheetScope === 'SEGMENT')
+          ? 'Expenses must be added via Manual Timesheet for Segment Timesheets'
+          : (!(subMode === 'MANUAL' || hasQr)
+              ? 'Expenses are available for Manual or QR timesheets.'
+              : '')));
+
+const initialExpensesTabUi = timesheetEditDomains
+  ? deriveExpensesTabUiState(timesheetEditDomains)
+  : {
+      enabled: fallbackExpensesTabEnabled,
+      disabled: !fallbackExpensesTabEnabled,
+      reason: fallbackExpensesTabEnabled ? '' : fallbackExpensesTabReason
+    };
+
+const expensesTabEnabled = initialExpensesTabUi.enabled;
+const expensesTabDisabled = initialExpensesTabUi.disabled;
+const expensesTabReason = initialExpensesTabUi.reason;
 
 
 // ─────────────────────────────────────────────
@@ -225030,7 +225616,9 @@ try {
       can_manage_expense_evidence:
         (timesheetEditDomains && typeof timesheetEditDomains.canManageExpenseEvidence === 'boolean')
           ? (timesheetEditDomains.canManageExpenseEvidence === true)
-          : null
+          : null,
+      expenses_tab_disabled: !!expensesTabDisabled,
+      expenses_tab_disabled_reason: expensesTabDisabled ? String(expensesTabReason || '') : ''
     };
 
     const canonicalTimesheetMeta = {
@@ -225077,7 +225665,8 @@ try {
   mode: 'view',
 
   // ✅ NEW: expenses tab state (always visible, disabled unless eligible)
-  expenses_tab_enabled: !!expensesTabEnabled,
+   expenses_tab_enabled: !!expensesTabEnabled,
+  expenses_tab_disabled: !!expensesTabDisabled,
   expenses_tab_reason: String(expensesTabReason || ''),
   timesheetEditDomains: timesheetEditDomains || null,
   expenses_read_only: !!(timesheetEditDomains && timesheetEditDomains.expensesReadOnly === true),
@@ -225619,7 +226208,15 @@ const onSaveTimesheet = async () => {
     let scheduleToSave = Array.isArray(baselineSorted) ? baselineSorted : [];
   let weeklyStagedScheduleForDirty = Array.isArray(baselineSorted) ? baselineSorted : [];
 
-  if (isWeeklyManualContext && weekDays.length && linesByDate) {
+  if (isWeeklyManualContext && !canEditHoursForSave) {
+    scheduleToSave = Array.isArray(baselineSorted) ? baselineSorted : [];
+    weeklyStagedScheduleForDirty = Array.isArray(baselineSorted) ? baselineSorted : [];
+    try {
+      st.__weeklyScheduleTouched = false;
+      st.__weeklyExtrasTouched = false;
+      st.__hoursScheduleDisplayOnly = true;
+    } catch {}
+  } else if (isWeeklyManualContext && weekDays.length && linesByDate) {
     const cleanLinesByDate = (() => {
       const src = (linesByDate && typeof linesByDate === 'object') ? linesByDate : {};
       const clone = JSON.parse(JSON.stringify(src || {}));
@@ -225723,10 +226320,7 @@ const onSaveTimesheet = async () => {
     canEditHoursForSave &&
     weeklyScheduleDiffers;
 
-  const blockedScheduleChangedWeekly =
-    isWeeklyManualContext &&
-    !canEditHoursForSave &&
-    weeklyScheduleDiffers;
+  const blockedScheduleChangedWeekly = false;
 
   // Extras diff (weekly + per-day)
   const normExtrasWeek = (extrasMapOrUnitsWeek) => {
@@ -225881,10 +226475,7 @@ const onSaveTimesheet = async () => {
     canEditHoursForSave &&
     extrasDiffersWeekly;
 
-  const blockedExtrasChangedWeekly =
-    isWeeklyManualContext &&
-    !canEditHoursForSave &&
-    extrasDiffersWeekly;
+  const blockedExtrasChangedWeekly = false;
 
   // ─────────────────────────────────────────────────────────────
   // ✅ Expenses diff (NEW): compare draft vs baseline (tsfin-seeded)
@@ -226001,16 +226592,19 @@ const onSaveTimesheet = async () => {
     }
   }
 
-  const currentSchedule = isDailyManualContext
+   const currentSchedule = isDailyManualContext
     ? sanitiseDailyManualSchedulePayload(resolveCurrentDailyScheduleBaseline(tsLocal, rowNow), 'object').schedule
     : sanitizeSchedulePayload(tsLocal.actual_schedule_json || null);
    const stagedSchedule = isDailyManualContext
-    ? ((st.schedule != null)
-        ? sanitiseDailyManualSchedulePayload(st.schedule, 'object').schedule
-        : sanitiseDailyManualSchedulePayload(resolveCurrentDailyScheduleBaseline(tsLocal, rowNow), 'object').schedule)
+    ? (canEditHoursForSave
+        ? ((st.schedule != null)
+            ? sanitiseDailyManualSchedulePayload(st.schedule, 'object').schedule
+            : sanitiseDailyManualSchedulePayload(resolveCurrentDailyScheduleBaseline(tsLocal, rowNow), 'object').schedule)
+        : currentSchedule)
     : currentSchedule;
   const dailyScheduleDiffers =
     isDailyManualContext &&
+    canEditHoursForSave &&
     !deepEqualJson(stagedSchedule, currentSchedule);
 
   const scheduleChangedDaily =
@@ -226018,19 +226612,13 @@ const onSaveTimesheet = async () => {
     canEditHoursForSave &&
     dailyScheduleDiffers;
 
-  const blockedScheduleChangedDaily =
-    isDailyManualContext &&
-    !canEditHoursForSave &&
-    dailyScheduleDiffers;
+  const blockedScheduleChangedDaily = false;
 
   // ✅ Frontend enforcement — cannot change hours/schedule/extras/expenses while authorised
   const hoursScheduleDirty = !!(
     scheduleChangedWeekly ||
     extrasChangedWeekly ||
-    scheduleChangedDaily ||
-    blockedScheduleChangedWeekly ||
-    blockedExtrasChangedWeekly ||
-    blockedScheduleChangedDaily
+    scheduleChangedDaily
   );
 
   const isAuthorisedContentChangeAttempt =
@@ -226305,15 +226893,7 @@ const onSaveTimesheet = async () => {
           action_flags: window.modalCtx.timesheetDetails?.action_flags || null,
           state: st
         });
-        window.modalCtx.timesheetEditDomains = refreshedPolicy;
-        window.modalCtx.expenses_tab_enabled = refreshedPolicy.canOpenExpenses === true;
-        window.modalCtx.expenses_tab_reason = refreshedPolicy.canOpenExpenses === false
-          ? String(refreshedPolicy.expensesDisabledReason || 'Expenses are not available for this timesheet.')
-          : '';
-        window.modalCtx.expenses_read_only = refreshedPolicy.expensesReadOnly === true;
-        window.modalCtx.can_edit_hours_schedule = refreshedPolicy.canEditHoursSchedule === true;
-        window.modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
-        window.modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
+         applyTimesheetEditDomainPolicyToModalCtx(window.modalCtx, refreshedPolicy);
       }
 
       try {
@@ -226743,15 +227323,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
             action_flags: window.modalCtx.timesheetDetails?.action_flags || null,
             state: window.modalCtx.timesheetState || st
           });
-          window.modalCtx.timesheetEditDomains = refreshedPolicy;
-          window.modalCtx.expenses_tab_enabled = refreshedPolicy.canOpenExpenses === true;
-          window.modalCtx.expenses_tab_reason = refreshedPolicy.canOpenExpenses === false
-            ? String(refreshedPolicy.expensesDisabledReason || 'Expenses are not available for this timesheet.')
-            : '';
-          window.modalCtx.expenses_read_only = refreshedPolicy.expensesReadOnly === true;
-          window.modalCtx.can_edit_hours_schedule = refreshedPolicy.canEditHoursSchedule === true;
-          window.modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
-          window.modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
+          applyTimesheetEditDomainPolicyToModalCtx(window.modalCtx, refreshedPolicy);
         }
       } catch {}
     });
@@ -226897,15 +227469,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
               state: window.modalCtx.timesheetState || st
             });
 
-            window.modalCtx.timesheetEditDomains = refreshedPolicy;
-            window.modalCtx.expenses_tab_enabled = refreshedPolicy.canOpenExpenses === true;
-            window.modalCtx.expenses_tab_reason = refreshedPolicy.canOpenExpenses === false
-              ? String(refreshedPolicy.expensesDisabledReason || 'Expenses are not available for this timesheet.')
-              : '';
-            window.modalCtx.expenses_read_only = refreshedPolicy.expensesReadOnly === true;
-            window.modalCtx.can_edit_hours_schedule = refreshedPolicy.canEditHoursSchedule === true;
-            window.modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
-            window.modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
+               applyTimesheetEditDomainPolicyToModalCtx(window.modalCtx, refreshedPolicy);
           }
         } catch {}
 
@@ -227041,7 +227605,6 @@ showModal(
 
 
 
-
 function renderWeeklyManualScheduleEditor(opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES][WEEKLY]');
   const {
@@ -227120,6 +227683,14 @@ function renderWeeklyManualScheduleEditor(opts) {
       (isEditMode || isBulkProcess || enableWeeklyLineActions)
     );
     state.__weeklyScheduleReadOnly = !canEditSchedule;
+    if (!canEditSchedule) {
+      state.__weeklyScheduleTouched = false;
+      state.__weeklyExtrasTouched = false;
+      state.__hoursScheduleDisplayOnly = true;
+    } else {
+      if (typeof state.__weeklyScheduleTouched !== 'boolean') state.__weeklyScheduleTouched = false;
+      if (typeof state.__weeklyExtrasTouched !== 'boolean') state.__weeklyExtrasTouched = false;
+    }
 
     const authorisedMsgHtml = (!canEditSchedule && policy && policy.hoursScheduleDisabledReason)
       ? `<span class="mini">${escapeHtml(policy.hoursScheduleDisabledReason)}</span>`
@@ -228008,9 +228579,9 @@ function renderWeeklyManualScheduleEditor(opts) {
 
     // Install helper in THIS TAB (not showModal)
       try {
-      if (!window.__tsWeeklyLinesHelper || window.__tsWeeklyLinesHelper.__v !== 8) {
+      if (!window.__tsWeeklyLinesHelper || window.__tsWeeklyLinesHelper.__v !== 9) {
         window.__tsWeeklyLinesHelper = {
-          __v: 8,
+          __v: 9,
 
           _hhmm(raw) {
             let s = String(raw || '').trim();
@@ -228301,6 +228872,16 @@ function renderWeeklyManualScheduleEditor(opts) {
           _isReadOnly(st) {
             return !!(st?.__weeklyScheduleReadOnly);
           },
+          _markWeeklyScheduleTouched(st) {
+            if (!st || typeof st !== 'object') return;
+            st.__weeklyScheduleTouched = true;
+            st.__hoursScheduleDisplayOnly = false;
+          },
+          _markWeeklyExtrasTouched(st) {
+            if (!st || typeof st !== 'object') return;
+            st.__weeklyExtrasTouched = true;
+            st.__hoursScheduleDisplayOnly = false;
+          },
           _getBulkAuthoriseManualDraftState(bulkState) {
             try {
               const ownerState = (bulkState && typeof bulkState === 'object')
@@ -228585,18 +229166,23 @@ function renderWeeklyManualScheduleEditor(opts) {
               if (field === 'break_mins') {
                 const breakLocked = !!(el.dataset.breaklock === '1' || el.dataset.autocalc === '1');
                 const hasCompleteWindow = !!(String(ln.break_start || '').trim() && String(ln.break_end || '').trim());
+                const beforeLineJson = JSON.stringify(ln || {});
 
                 if (breakLocked || hasCompleteWindow) {
                   ln.break_mins = '';
                   this._syncBreakMinsLock(date, idx, ln);
                   this._recalcPaidForDate(st, date);
-                  applyScheduleFromLines(st);
-                  this._markDirty('manual-editor-break-edit', {
-                    reason: 'manual-editor-break-edit',
-                    trace_source: 'renderWeeklyManualScheduleEditor.weeklyLineInput',
-                    dirty_source: 'weekly break length edit',
-                    field_name: 'break_mins'
-                  });
+                  const afterLineJson = JSON.stringify(ln || {});
+                  if (afterLineJson !== beforeLineJson) {
+                    this._markWeeklyScheduleTouched(st);
+                    applyScheduleFromLines(st);
+                    this._markDirty('manual-editor-break-edit', {
+                      reason: 'manual-editor-break-edit',
+                      trace_source: 'renderWeeklyManualScheduleEditor.weeklyLineInput',
+                      dirty_source: 'weekly break length edit',
+                      field_name: 'break_mins'
+                    });
+                  }
                   return;
                 }
 
@@ -228623,16 +229209,21 @@ function renderWeeklyManualScheduleEditor(opts) {
 
                 this._syncBreakMinsLock(date, idx, ln);
                 this._recalcPaidForDate(st, date);
-                applyScheduleFromLines(st);
-                this._markDirty('manual-editor-break-edit', {
-                  reason: 'manual-editor-break-edit',
-                  trace_source: 'renderWeeklyManualScheduleEditor.weeklyLineInput',
-                  dirty_source: 'weekly break length edit',
-                  field_name: 'break_mins'
-                });
+                const afterLineJson = JSON.stringify(ln || {});
+                if (afterLineJson !== beforeLineJson) {
+                  this._markWeeklyScheduleTouched(st);
+                  applyScheduleFromLines(st);
+                  this._markDirty('manual-editor-break-edit', {
+                    reason: 'manual-editor-break-edit',
+                    trace_source: 'renderWeeklyManualScheduleEditor.weeklyLineInput',
+                    dirty_source: 'weekly break length edit',
+                    field_name: 'break_mins'
+                  });
+                }
                 return;
               }
 
+              const beforeLineJson = JSON.stringify(ln || {});
               ln[field] = String(el.value || '');
 
               if (field === 'break_start' || field === 'break_end') {
@@ -228678,18 +229269,22 @@ function renderWeeklyManualScheduleEditor(opts) {
               // ✅ paid hours updates live, including after tab-away (onBlur calls onInput)
               this._recalcPaidForDate(st, date);
 
-              // ✅ rebuild + validate schedule on every edit (pre-save Finance preview fix)
-              applyScheduleFromLines(st);
+              const afterLineJson = JSON.stringify(ln || {});
+              if (afterLineJson !== beforeLineJson) {
+                // ✅ rebuild + validate schedule only after a real enabled user edit
+                this._markWeeklyScheduleTouched(st);
+                applyScheduleFromLines(st);
 
-              const canonicalInputReason = canonicalInputReasonForBaseline;
-              this._markDirty(canonicalInputReason, {
-                reason: canonicalInputReason,
-                trace_source: 'renderWeeklyManualScheduleEditor.weeklyLineInput',
-                dirty_source: (canonicalInputReason === 'manual-editor-break-edit')
-                  ? 'weekly break edit'
-                  : ((canonicalInputReason === 'manual-editor-schedule-edit') ? 'weekly schedule edit' : 'weekly line input'),
-                field_name: field
-              });
+                const canonicalInputReason = canonicalInputReasonForBaseline;
+                this._markDirty(canonicalInputReason, {
+                  reason: canonicalInputReason,
+                  trace_source: 'renderWeeklyManualScheduleEditor.weeklyLineInput',
+                  dirty_source: (canonicalInputReason === 'manual-editor-break-edit')
+                    ? 'weekly break edit'
+                    : ((canonicalInputReason === 'manual-editor-schedule-edit') ? 'weekly schedule edit' : 'weekly line input'),
+                  field_name: field
+                });
+              }
 
             } catch {}
           },
@@ -228706,6 +229301,7 @@ function renderWeeklyManualScheduleEditor(opts) {
                 ? this._ensureLine(st, date, idx)
                 : null;
 
+              const beforeValue = ln ? String(ln[field] == null ? '' : ln[field]) : String(el.value || '');
               if (field === 'start' || field === 'end' || field === 'break_start' || field === 'break_end') {
                 el.value = this._hhmm(el.value);
               }
@@ -228717,7 +229313,53 @@ function renderWeeklyManualScheduleEditor(opts) {
                 }
                 el.value = this._normBreakMins(el.value);
               }
-              this.onInput(el);
+              if (String(el.value || '') !== beforeValue) this.onInput(el);
+            } catch {}
+          },
+
+          onExtraInput(el) {
+            try {
+              const { st, fr, bulkState } = this._getState();
+              if (!st || !el) return;
+              if (this._isReadOnly(st) || el.disabled || el.readOnly) return;
+
+              const code = String(el.getAttribute('data-extra-code') || '').toUpperCase().trim();
+              if (!code) return;
+
+              const ymd = String(el.getAttribute('data-extra-ymd') || '').slice(0, 10);
+              const rawValue = String(el.value == null ? '' : el.value).trim();
+              const numericValue = rawValue === '' ? 0 : Number(rawValue);
+              if (!Number.isFinite(numericValue) || numericValue < 0) return;
+
+              st.additionalRates = (st.additionalRates && typeof st.additionalRates === 'object') ? st.additionalRates : {};
+              const current = (st.additionalRates[code] && typeof st.additionalRates[code] === 'object') ? st.additionalRates[code] : { code };
+              const beforeJson = JSON.stringify(current || {});
+              const next = {
+                ...current,
+                code
+              };
+
+              if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+                next.units_per_day = (next.units_per_day && typeof next.units_per_day === 'object') ? { ...next.units_per_day } : {};
+                if (numericValue > 0) next.units_per_day[ymd] = numericValue;
+                else delete next.units_per_day[ymd];
+
+                let weekTotal = 0;
+                for (const value of Object.values(next.units_per_day || {})) {
+                  const n = Number(value || 0);
+                  if (Number.isFinite(n) && n > 0) weekTotal += n;
+                }
+                next.units_week = weekTotal > 0 ? weekTotal : 0;
+              } else {
+                next.units_week = numericValue > 0 ? numericValue : 0;
+              }
+
+              st.additionalRates[code] = next;
+              const afterJson = JSON.stringify(next || {});
+              if (afterJson === beforeJson) return;
+
+              this._markWeeklyExtrasTouched(st);
+              this._markMutationDirty(fr, bulkState, 'manual-editor-weekly-extra-units');
             } catch {}
           },
 
@@ -228748,6 +229390,7 @@ function renderWeeklyManualScheduleEditor(opts) {
               this._recalcPaidForDate(st, d);
             }
 
+            this._markWeeklyScheduleTouched(st);
             applyScheduleFromLines(st);
             this._markMutationDirty(fr, bulkState, 'manual-editor-weekly-add-line');
 
@@ -228817,6 +229460,7 @@ function renderWeeklyManualScheduleEditor(opts) {
               this._setClipboard(st, fr, null);
             }
 
+            this._markWeeklyScheduleTouched(st);
             applyScheduleFromLines(st);
             this._markMutationDirty(fr, bulkState, 'manual-editor-weekly-remove-line');
 
@@ -228883,6 +229527,7 @@ function renderWeeklyManualScheduleEditor(opts) {
             ln.break_mins = String(payload.break_mins == null ? '' : payload.break_mins).trim();
             const domRefs = this._syncLineDom(d, i, ln);
             this._recalcPaidForDate(st, d);
+            this._markWeeklyScheduleTouched(st);
             applyScheduleFromLines(st);
             this._markMutationDirty(fr, bulkState, 'manual-editor-weekly-paste');
             try {
@@ -228922,6 +229567,7 @@ function renderWeeklyManualScheduleEditor(opts) {
               this._setClipboard(st, fr, null);
             }
             this._recalcPaidForDate(st, d);
+            this._markWeeklyScheduleTouched(st);
             applyScheduleFromLines(st);
             this._markMutationDirty(fr, bulkState, 'manual-editor-weekly-delete');
             try {
@@ -228959,6 +229605,7 @@ function renderWeeklyManualScheduleEditor(opts) {
               this._recalcPaidForDate(st, d);
             }
             this._setClipboard(st, fr, null);
+            this._markWeeklyScheduleTouched(st);
             applyScheduleFromLines(st);
             this._markMutationDirty(fr, bulkState, 'manual-editor-weekly-clear-all');
             try {
@@ -229205,6 +229852,7 @@ function renderWeeklyManualScheduleEditor(opts) {
     this._recalcPaidForDate(st, d);
   }
 
+  this._markWeeklyScheduleTouched(st);
   applyScheduleFromLines(st);
   st.__scheduleUpdatedAt = Date.now();
   this._markMutationDirty(fr, bulkState, 'manual-editor-weekly-reset');
@@ -229629,8 +230277,11 @@ function renderWeeklyManualScheduleEditor(opts) {
                   class="input"
                   name="${nameAttr}"
                   data-extra-code="${esc(r.code)}"
+                  data-hours-field="additional_units"
+                  data-protected-hours-control="true"
                   ${ymdAttr}
                   value="${esc(r.value || '')}"
+                  oninput="window.__tsWeeklyLinesHelper&&window.__tsWeeklyLinesHelper.onExtraInput(this)"
                   ${disabledAttrExtras}
                 />
               </td>
@@ -230020,7 +230671,15 @@ function bindDailyManualEditorLive({ root, stateObj, canEdit, onDirty, onAfterAp
   if (!(dateEl && startEl && endEl && breakStartEl && breakEndEl && breakMinsEl && paidHoursEl && dowCellEl && bannerEl)) return { ok: false };
 
   const st = (stateObj && typeof stateObj === 'object') ? stateObj : {};
+  if (canEdit !== true) {
+    try {
+      st.__dailyScheduleTouched = false;
+      st.__hoursScheduleDisplayOnly = true;
+    } catch {}
+    return { ok: true, readOnly: true };
+  }
   st.__dailyScheduleShapeMode = 'object';
+  if (typeof st.__dailyScheduleTouched !== 'boolean') st.__dailyScheduleTouched = false;
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const initialBindReason = trimStr(bindReason || 'initial_bind') || 'initial_bind';
   let isInitialBind = true;
@@ -230573,6 +231232,10 @@ function bindDailyManualEditorLive({ root, stateObj, canEdit, onDirty, onAfterAp
       reason === 'status_patch' ||
       reason === 'row_status_patch'
     );
+    if (markDirty === true && !initialOrProgrammatic) {
+      st.__dailyScheduleTouched = true;
+      st.__hoursScheduleDisplayOnly = false;
+    }
     const shouldPreview = !!(
       canEdit &&
       !suppressPreview &&
@@ -230641,6 +231304,7 @@ function bindDailyManualEditorLive({ root, stateObj, canEdit, onDirty, onAfterAp
   return { ok: true };
 }
 
+
 function renderDailyManualScheduleEditor(opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES][DAILY_MANUAL]');
   const {
@@ -230678,6 +231342,15 @@ function renderDailyManualScheduleEditor(opts) {
   const canEditSchedule = (policyCanEditHours === null)
     ? (isEditMode && !locked && !isAuthorised && !forceReadOnly)
     : (!!policyCanEditHours && isEditMode && !locked && !isAuthorised && !forceReadOnly);
+  const protectedDailyHoursAttr = 'data-protected-hours-control="true"';
+  if (state && typeof state === 'object') {
+    if (!canEditSchedule) {
+      state.__dailyScheduleTouched = false;
+      state.__hoursScheduleDisplayOnly = true;
+    } else if (typeof state.__dailyScheduleTouched !== 'boolean') {
+      state.__dailyScheduleTouched = false;
+    }
+  }
 
   const authorisedMsgHtml = (!canEditSchedule && policy && policy.hoursScheduleDisabledReason)
     ? `<span class="mini">${escapeHtml(policy.hoursScheduleDisabledReason)}</span>`
@@ -230878,7 +231551,7 @@ function renderDailyManualScheduleEditor(opts) {
     state.scheduleErrorsByDate = validated.errorsByDate || {};
   }
 
-  const disabledAttr = canEditSchedule ? '' : 'disabled';
+  const disabledAttr = canEditSchedule ? '' : 'disabled readonly aria-readonly="true"';
   const refValue = String((state.reference != null) ? state.reference : (ts?.reference_number || row?.reference_number || '')).trim();
   const dow = validated.clean.date ? dowShort(validated.clean.date) : '';
   const dateDisplay = validated.clean.date ? (fmtYmdDmy(validated.clean.date) || validated.clean.date) : '';
@@ -231114,7 +231787,7 @@ function renderDailyManualScheduleEditor(opts) {
                         placeholder="HH:MM"
                         class="${startCls}"
                         id="tsDailyStart"
-                        data-ts-daily-field="start" data-daily-field="start" data-schedule-field="start" data-hours-field="start"
+                        data-ts-daily-field="start" data-daily-field="start" data-schedule-field="start" data-hours-field="start" ${protectedDailyHoursAttr}
                         value="${esc(validated.clean.start || '')}"
                         ${disabledAttr}
                       />
@@ -231126,7 +231799,7 @@ function renderDailyManualScheduleEditor(opts) {
                         placeholder="HH:MM"
                         class="${endCls}"
                         id="tsDailyEnd"
-                        data-ts-daily-field="end" data-daily-field="end" data-schedule-field="end" data-hours-field="end"
+                        data-ts-daily-field="end" data-daily-field="end" data-schedule-field="end" data-hours-field="end" ${protectedDailyHoursAttr}
                         value="${esc(validated.clean.end || '')}"
                         ${disabledAttr}
                       />
@@ -231138,7 +231811,7 @@ function renderDailyManualScheduleEditor(opts) {
                         placeholder="HH:MM"
                         class="${breakStartCls}"
                         id="tsDailyBreakStart"
-                        data-ts-daily-field="break_start" data-daily-field="break_start" data-schedule-field="break_start" data-hours-field="break_start"
+                        data-ts-daily-field="break_start" data-daily-field="break_start" data-schedule-field="break_start" data-hours-field="break_start" ${protectedDailyHoursAttr}
                         value="${esc(breakStartValue)}"
                         ${disabledAttr}
                         ${breakWindowReadonlyAttr}
@@ -231152,7 +231825,7 @@ function renderDailyManualScheduleEditor(opts) {
                         placeholder="HH:MM"
                         class="${breakEndCls}"
                         id="tsDailyBreakEnd"
-                        data-ts-daily-field="break_end" data-daily-field="break_end" data-schedule-field="break_end" data-hours-field="break_end"
+                        data-ts-daily-field="break_end" data-daily-field="break_end" data-schedule-field="break_end" data-hours-field="break_end" ${protectedDailyHoursAttr}
                         value="${esc(breakEndValue)}"
                         ${disabledAttr}
                         ${breakWindowReadonlyAttr}
@@ -231165,7 +231838,7 @@ function renderDailyManualScheduleEditor(opts) {
                         inputmode="numeric"
                         class="${breakMinsCls}"
                         id="tsDailyBreakMinutes"
-                        data-ts-daily-field="break_minutes" data-daily-field="break_minutes" data-schedule-field="break_minutes" data-hours-field="break_minutes"
+                        data-ts-daily-field="break_minutes" data-daily-field="break_minutes" data-schedule-field="break_minutes" data-hours-field="break_minutes" ${protectedDailyHoursAttr}
                         value="${esc(breakMinsDisplayValue)}"
                         ${disabledAttr}
                         ${breakMinsLockAttr}
@@ -231181,7 +231854,7 @@ function renderDailyManualScheduleEditor(opts) {
               type="date"
               class="${dateCls}"
               id="tsDailyDate"
-              data-ts-daily-field="date" data-daily-field="date" data-schedule-field="date" data-hours-field="date"
+              data-ts-daily-field="date" data-daily-field="date" data-schedule-field="date" data-hours-field="date" ${protectedDailyHoursAttr}
               value="${esc(validated.clean.date || '')}"
               ${disabledAttr}
               style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;"
