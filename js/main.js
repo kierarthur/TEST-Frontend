@@ -27786,7 +27786,91 @@ async function bankingPayCreateDraft(input = {}) {
       }
     } catch (e) {
       reauthToken = '';
-      try { wiz.createDraftError = String(e?.message || e || 'Reauthentication failed.'); } catch {}
+      const rawReauthText = trimStr(
+        e?.user_message ||
+        e?.message ||
+        e?.error ||
+        e?.code ||
+        e?.error_code ||
+        e
+      );
+      const reauthWasCancelled = !!(
+        e?.cancelled === true ||
+        e?.canceled === true ||
+        e?.cancelled_by_user === true ||
+        e?.canceled_by_user === true ||
+        e?.user_cancelled === true ||
+        e?.userCanceled === true ||
+        e?.dismissed === true ||
+        /\b(cancelled|canceled|cancel|dismissed|closed)\b/i.test(rawReauthText)
+      );
+      const reauthCode = reauthWasCancelled ? 'PAYMENT_REAUTH_CANCELLED' : 'PAYMENT_REAUTH_REQUIRED';
+      const reauthTitle = 'Payment batch could not be created';
+      const reauthMessage = reauthWasCancelled
+        ? 'Same-week PAYE override was cancelled before verification completed.'
+        : 'Verification did not complete. Complete verification, then try again.';
+      const reauthSourcePayload = {
+        ok: false,
+        error_code: reauthCode,
+        code: reauthCode,
+        title: reauthTitle,
+        message: reauthMessage,
+        user_message: reauthMessage,
+        friendly_error: {
+          code: reauthCode,
+          title: reauthTitle,
+          message: reauthMessage
+        },
+        details: {
+          reason: reauthWasCancelled ? 'PAYE_SAME_WEEK_OVERRIDE_REAUTH_CANCELLED' : 'PAYE_SAME_WEEK_OVERRIDE_REAUTH_FAILED',
+          purpose: 'PAYE_SAME_WEEK_OVERRIDE',
+          technical_message: rawReauthText || null
+        },
+        reason: reauthWasCancelled ? 'PAYE_SAME_WEEK_OVERRIDE_REAUTH_CANCELLED' : 'PAYE_SAME_WEEK_OVERRIDE_REAUTH_FAILED',
+        technical_message: rawReauthText || reauthCode
+      };
+      const reauthBackendPayload = isPlainObject(e?.payload)
+        ? e.payload
+        : (isPlainObject(e?.json)
+            ? e.json
+            : (isPlainObject(e?.backendPayload)
+                ? e.backendPayload
+                : (isPlainObject(e) ? e : null)));
+      const reauthFriendlyBase = (typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(reauthSourcePayload, reauthBackendPayload || reauthSourcePayload, {
+            action: 'CREATE_DRAFT',
+            fallbackCode: reauthCode,
+            fallbackTitle: reauthTitle,
+            fallbackMessage: reauthMessage,
+            userInitiated: createDraftUserInitiated,
+            silent: createDraftSilent,
+            background: createDraftBackground,
+            showModal: false,
+            payload: reauthSourcePayload,
+            backendPayload: reauthBackendPayload || reauthSourcePayload
+          })
+        : null;
+      const reauthFriendly = {
+        ...((reauthFriendlyBase && typeof reauthFriendlyBase === 'object') ? reauthFriendlyBase : {}),
+        ok: false,
+        error_code: trimStr(reauthFriendlyBase?.error_code || reauthFriendlyBase?.code || reauthCode) || reauthCode,
+        code: trimStr(reauthFriendlyBase?.code || reauthFriendlyBase?.error_code || reauthCode) || reauthCode,
+        title: reauthTitle,
+        message: reauthMessage,
+        user_message: reauthMessage,
+        error: reauthMessage,
+        friendly_error: {
+          ...((reauthFriendlyBase?.friendly_error && typeof reauthFriendlyBase.friendly_error === 'object') ? reauthFriendlyBase.friendly_error : {}),
+          code: trimStr(reauthFriendlyBase?.friendly_error?.code || reauthFriendlyBase?.error_code || reauthFriendlyBase?.code || reauthCode) || reauthCode,
+          title: reauthTitle,
+          message: reauthMessage
+        },
+        technical_message: rawReauthText || trimStr(reauthFriendlyBase?.technical_message || '') || reauthCode
+      };
+      try {
+        wiz.createDraftError = reauthMessage;
+        wiz.createDraftFriendlyError = reauthFriendly;
+      } catch {}
     }
 
     if (!reauthToken) {
@@ -45505,10 +45589,10 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
           }
         }
       } catch (e) {
-        await reportChildFriendlyError(e, 'BANKING_ACTION_FAILED', {
-          action: 'POST_ACTION_PREVIEW_REFRESH',
+        await reportChildFriendlyError(e, 'BANKING_PAY_PREVIEW_FAILED', {
+          action: 'PREVIEW_REFRESH',
           userInitiated: false,
-          silent: false,
+          silent: true,
           scope: null
         });
         await rerenderChild();
@@ -45756,21 +45840,27 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
         });
         if (normalized && typeof normalized === 'object') {
           const normalizedCode = String(normalized.error_code || normalized.code || fallbackCode || '').trim().toUpperCase();
+          const normalizedAction = String(contextObj.action || '').trim().toUpperCase();
+          const fallbackCodeForContext = String(fallbackCode || '').trim().toUpperCase();
+          const isPreviewRefreshAction = normalizedAction === 'PREVIEW' || normalizedAction === 'PREVIEW_REFRESH' || normalizedAction === 'POST_ACTION_PREVIEW_REFRESH' || fallbackCodeForContext === 'BANKING_PAY_PREVIEW_FAILED';
+          const isPollAction = normalizedAction === 'POLL_BANK_STATUS' || normalizedAction === 'CHECK_BANK_STATUS' || normalizedAction === 'BANKING_PAY_POLL' || normalizedAction === 'POLL';
           if (normalizedCode === 'BATCH_STALE') {
-            const action = String(contextObj.action || '').trim().toUpperCase();
-            const staleMessage = action === 'RETRY_BLOCKED_FUNDS'
+            const staleTitle = isPreviewRefreshAction ? 'Payment preview needs refreshing' : 'Payment batch has changed';
+            const staleMessage = normalizedAction === 'RETRY_BLOCKED_FUNDS'
               ? 'This blocked-funds batch is no longer up to date. No payment was submitted. Refresh Banking, review the latest payment differences, then create or authorise a new payment batch.'
-              : 'This payment batch has changed. Refresh the batch, review the latest details, then try again.';
+              : (isPreviewRefreshAction
+                  ? 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.'
+                  : 'This payment batch has changed. Refresh the batch, review the latest details, then try again.');
             return {
               ...normalized,
               ok: false,
               error_code: 'BATCH_STALE',
               code: 'BATCH_STALE',
-              title: 'Payment batch has changed',
+              title: staleTitle,
               message: staleMessage,
               error: staleMessage,
               user_message: staleMessage,
-              user_action: normalized.user_action || 'REFRESH_BATCH',
+              user_action: normalized.user_action || (isPreviewRefreshAction ? 'REFRESH_PREVIEW' : 'REFRESH_BATCH'),
               confirm_label: normalized.confirm_label || 'OK',
               severity: normalized.severity || 'warning',
               show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true,
@@ -45778,10 +45868,72 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
               status_code: 409,
               friendly_error: {
                 ...(normalized.friendly_error && typeof normalized.friendly_error === 'object' && !Array.isArray(normalized.friendly_error) ? normalized.friendly_error : {}),
-                title: 'Payment batch has changed',
+                title: staleTitle,
                 message: staleMessage,
                 error_code: 'BATCH_STALE',
-                user_action: normalized.friendly_error?.user_action || normalized.user_action || 'REFRESH_BATCH',
+                user_action: normalized.friendly_error?.user_action || normalized.user_action || (isPreviewRefreshAction ? 'REFRESH_PREVIEW' : 'REFRESH_BATCH'),
+                confirm_label: normalized.confirm_label || normalized.friendly_error?.confirm_label || 'OK',
+                severity: normalized.severity || normalized.friendly_error?.severity || 'warning',
+                show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true
+              },
+              backendPayload: backendPayload || normalized.backendPayload || null
+            };
+          }
+          if (isPollAction || normalizedCode === 'BANKING_PAY_POLL_FAILED' || normalizedCode === 'POLL_NOT_SUPPORTED_FOR_THIS_RAIL') {
+            const setupCodes = new Set(['MISSING_RAIL_PROVIDER', 'RAIL_PROVIDER_REQUIRED', 'RAIL_NOT_CONFIGURED', 'UNKNOWN_RAIL_PROVIDER', 'POLL_NOT_SUPPORTED_FOR_THIS_RAIL', 'RAIL_ENV_MISMATCH']);
+            const pollIsSetup = setupCodes.has(normalizedCode);
+            const pollTitle = pollIsSetup ? 'Banking setup needs attention' : 'Payment status could not be refreshed';
+            const pollMessage = pollIsSetup
+              ? 'CloudTMS could not refresh this payment because the banking setup is incomplete or unavailable. Review Banking settings and try again.'
+              : 'CloudTMS could not refresh this payment status. Refresh the batch and try again.';
+            const pollCode = normalizedCode || 'BANKING_PAY_POLL_FAILED';
+            return {
+              ...normalized,
+              ok: false,
+              error_code: pollCode,
+              code: pollCode,
+              title: pollTitle,
+              message: pollMessage,
+              error: pollMessage,
+              user_message: pollMessage,
+              confirm_label: normalized.confirm_label || 'OK',
+              severity: normalized.severity || 'error',
+              show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true,
+              friendly_error: {
+                ...(normalized.friendly_error && typeof normalized.friendly_error === 'object' && !Array.isArray(normalized.friendly_error) ? normalized.friendly_error : {}),
+                title: pollTitle,
+                message: pollMessage,
+                error_code: pollCode,
+                confirm_label: normalized.confirm_label || normalized.friendly_error?.confirm_label || 'OK',
+                severity: normalized.severity || normalized.friendly_error?.severity || 'error',
+                show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true
+              },
+              backendPayload: backendPayload || normalized.backendPayload || null
+            };
+          }
+          if (isPreviewRefreshAction || normalizedCode === 'BANKING_PAY_PREVIEW_FAILED') {
+            const previewTitle = 'Payment preview needs refreshing';
+            const previewMessage = 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.';
+            const previewCode = normalizedCode || 'BANKING_PAY_PREVIEW_FAILED';
+            return {
+              ...normalized,
+              ok: false,
+              error_code: previewCode,
+              code: previewCode,
+              title: previewTitle,
+              message: previewMessage,
+              error: previewMessage,
+              user_message: previewMessage,
+              user_action: normalized.user_action || 'REFRESH_PREVIEW',
+              confirm_label: normalized.confirm_label || 'OK',
+              severity: normalized.severity || 'warning',
+              show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true,
+              friendly_error: {
+                ...(normalized.friendly_error && typeof normalized.friendly_error === 'object' && !Array.isArray(normalized.friendly_error) ? normalized.friendly_error : {}),
+                title: previewTitle,
+                message: previewMessage,
+                error_code: previewCode,
+                user_action: normalized.friendly_error?.user_action || normalized.user_action || 'REFRESH_PREVIEW',
                 confirm_label: normalized.confirm_label || normalized.friendly_error?.confirm_label || 'OK',
                 severity: normalized.severity || normalized.friendly_error?.severity || 'warning',
                 show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true
@@ -45798,20 +45950,61 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
     } catch {}
 
     const fallbackCodeUpper = String(fallbackCode || 'BANKING_ACTION_FAILED').trim().toUpperCase() || 'BANKING_ACTION_FAILED';
+    const fallbackAction = String(contextObj.action || '').trim().toUpperCase();
+    const fallbackIsPreviewRefreshAction = fallbackAction === 'PREVIEW' || fallbackAction === 'PREVIEW_REFRESH' || fallbackAction === 'POST_ACTION_PREVIEW_REFRESH' || fallbackCodeUpper === 'BANKING_PAY_PREVIEW_FAILED';
+    const fallbackIsPollAction = fallbackAction === 'POLL_BANK_STATUS' || fallbackAction === 'CHECK_BANK_STATUS' || fallbackAction === 'BANKING_PAY_POLL' || fallbackAction === 'POLL' || fallbackCodeUpper === 'BANKING_PAY_POLL_FAILED';
     if (fallbackCodeUpper === 'BATCH_STALE') {
+      const staleTitle = fallbackIsPreviewRefreshAction ? 'Payment preview needs refreshing' : 'Payment batch has changed';
+      const staleMessage = fallbackIsPreviewRefreshAction
+        ? 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.'
+        : 'This payment batch has changed. Refresh the batch, review the latest details, then try again.';
       return {
         ok: false,
         error_code: 'BATCH_STALE',
         code: 'BATCH_STALE',
-        title: 'Payment batch has changed',
-        message: 'This payment batch has changed. Refresh the batch, review the latest details, then try again.',
-        error: 'This payment batch has changed. Refresh the batch, review the latest details, then try again.',
-        user_message: 'This payment batch has changed. Refresh the batch, review the latest details, then try again.',
+        title: staleTitle,
+        message: staleMessage,
+        error: staleMessage,
+        user_message: staleMessage,
         confirm_label: 'OK',
         severity: 'warning',
         show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true,
         http_status: 409,
         status_code: 409
+      };
+    }
+
+    if (fallbackIsPollAction) {
+      return {
+        ok: false,
+        error_code: fallbackCodeUpper,
+        code: fallbackCodeUpper,
+        title: 'Payment status could not be refreshed',
+        message: 'CloudTMS could not refresh this payment status. Refresh the batch and try again.',
+        error: 'CloudTMS could not refresh this payment status. Refresh the batch and try again.',
+        user_message: 'CloudTMS could not refresh this payment status. Refresh the batch and try again.',
+        confirm_label: 'OK',
+        severity: 'error',
+        show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true,
+        http_status: 500,
+        status_code: 500
+      };
+    }
+
+    if (fallbackIsPreviewRefreshAction) {
+      return {
+        ok: false,
+        error_code: fallbackCodeUpper,
+        code: fallbackCodeUpper,
+        title: 'Payment preview needs refreshing',
+        message: 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.',
+        error: 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.',
+        user_message: 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.',
+        confirm_label: 'OK',
+        severity: 'warning',
+        show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true,
+        http_status: 500,
+        status_code: 500
       };
     }
 
@@ -46038,9 +46231,22 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
 
             child.actionsBusy.polling = false;
             await rerenderChild();
-          } catch {
+          } catch (pollError) {
             if (!shouldApplyChildMutation(expectedOpenToken, requestSeq)) return;
             child.actionsBusy.polling = false;
+            const pollUserInitiated = forcePoll === true && silent !== true;
+            const pollFriendly = await reportChildFriendlyError(pollError, 'BANKING_PAY_POLL_FAILED', {
+              action: 'POLL_BANK_STATUS',
+              userInitiated: pollUserInitiated,
+              silent: !pollUserInitiated,
+              scope: deriveScopeForBatch(child.data),
+              backendPayload: pollError?.backendPayload || pollError?.payload || pollError?.json || null,
+              technicalError: pollError
+            });
+            try {
+              const note = String(pollFriendly?.user_message || pollFriendly?.message || 'Payment status refresh failed.').trim();
+              child.ui.last_poll_note = note || 'Payment status refresh failed.';
+            } catch {}
             await rerenderChild();
           }
         }
@@ -50590,8 +50796,6 @@ function renderBankingPayBatchChildModalOverview() {
 }
 
 
-
-
 async function openBankingPayBatchPayeEntryModal(payBatchId) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -50635,6 +50839,231 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     return (Math.round(n * 100) / 100).toFixed(2);
   };
 
+
+  const normalizePayeEntryErrorCode = (value) => {
+    const raw = String(value || '').trim().toUpperCase();
+    if (!raw) return '';
+    const compact = raw.replace(/^ERROR[:\s]+/, '').replace(/^CODE[:\s]+/, '').replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!compact || /^[0-9]{5}$/.test(compact) || /^P[0-9A-Z]{4}$/.test(compact)) return '';
+    if (compact === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (compact === 'PAYE_NET_REQUIRED' || compact === 'PAYE_NET_BANK_AMOUNT_MISSING') return 'PAYE_NET_MISSING';
+    if (compact === 'PAYE_NET_BANK_AMOUNT_INVALID' || compact === 'MANUAL_NET_INVALID') return 'PAYE_NET_INVALID';
+    if (compact === 'PAY_BATCH_GET_FAILED') return 'BANKING_PAY_BATCH_LOAD_FAILED';
+    return compact;
+  };
+
+  const stringifyPayeEntryErrorValue = (value) => {
+    try {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+      if (value instanceof Error) return String(value.message || value.name || '');
+      return JSON.stringify(value);
+    } catch {
+      try { return String(value || ''); } catch { return ''; }
+    }
+  };
+
+  const parsePayeEntryEmbeddedObject = (value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    const text = String(value == null ? '' : value).trim();
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch {}
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        const parsed = JSON.parse(text.slice(start, end + 1));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+
+  const extractPayeEntryFailure = (errorValue, fallbackCode = 'BANKING_PAY_BATCH_LOAD_FAILED') => {
+    const knownCodes = [
+      'BATCH_STALE',
+      'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+      'PAYE_NET_MISSING',
+      'PAYE_NET_REQUIRED',
+      'PAYE_NET_BANK_AMOUNT_MISSING',
+      'PAYE_NET_INVALID',
+      'PAYE_NET_BANK_AMOUNT_INVALID',
+      'MANUAL_NET_INVALID',
+      'SAGE_IMPORT_INVALID',
+      'BANKING_PAY_BATCH_LOAD_FAILED',
+      'PAY_BATCH_GET_FAILED'
+    ];
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const findings = [];
+    const rawMessages = [];
+    const enqueue = (candidate) => {
+      if (candidate === null || candidate === undefined) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+    const addFinding = (payload, code, directKnown = false) => {
+      const normalizedCode = normalizePayeEntryErrorCode(code || fallbackCode);
+      if (!normalizedCode) return;
+      findings.push({
+        code: normalizedCode,
+        payload: (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : { message: stringifyPayeEntryErrorValue(payload) },
+        priority: normalizedCode === 'BATCH_STALE' ? 100 : (directKnown ? 80 : 40)
+      });
+    };
+
+    enqueue(errorValue);
+    while (queue.length) {
+      const item = queue.shift();
+      if (item instanceof Error) {
+        enqueue({
+          name: item.name,
+          message: item.message,
+          code: item.code,
+          error_code: item.error_code,
+          payload: item.payload,
+          json: item.json,
+          body: item.body,
+          backendPayload: item.backendPayload,
+          response_json: item.response_json,
+          raw_response_text: item.raw_response_text,
+          technical_message: item.technical_message,
+          details: item.details,
+          detail: item.detail,
+          reason: item.reason,
+          cause: item.cause
+        });
+        continue;
+      }
+      if (typeof item === 'string') {
+        const text = item.trim();
+        if (text) rawMessages.push(text);
+        const parsed = parsePayeEntryEmbeddedObject(text);
+        if (parsed) enqueue(parsed);
+        const upper = text.toUpperCase();
+        for (const knownCode of knownCodes) {
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) addFinding({ message: text }, knownCode, true);
+        }
+        continue;
+      }
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const directCode = normalizePayeEntryErrorCode(item.error_code || item.errorCode || item.code || item.error || '');
+      if (directCode) addFinding(item, directCode, knownCodes.map((code) => normalizePayeEntryErrorCode(code)).includes(directCode));
+      if (item.ok === false && !directCode) addFinding(item, fallbackCode, false);
+      for (const key of [
+        'error_code', 'errorCode', 'code', 'error', 'message', 'details', 'detail', 'reason', 'hint',
+        'body', 'json', 'payload', 'backendPayload', 'data', 'cause', 'response', 'result',
+        'technical_message', 'technicalMessage', 'rpc_error', 'rpcError', 'original_error', 'originalError',
+        'inner_error', 'innerError', 'friendly_error', 'friendlyError', 'raw_response_text'
+      ]) {
+        const nested = item[key];
+        enqueue(nested);
+        const parsed = parsePayeEntryEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(item.errors)) item.errors.forEach(enqueue);
+    }
+
+    findings.sort((a, b) => b.priority - a.priority);
+    const best = findings[0] || null;
+    return {
+      code: best ? best.code : (normalizePayeEntryErrorCode(fallbackCode) || 'BANKING_PAY_BATCH_LOAD_FAILED'),
+      payload: best ? best.payload : null,
+      raw_message: rawMessages.find(Boolean) || stringifyPayeEntryErrorValue(errorValue)
+    };
+  };
+
+  const normalisePayeEntryFriendlyError = (errorValue, fallbackCode = 'BANKING_PAY_BATCH_LOAD_FAILED', context = {}) => {
+    const contextObj = (context && typeof context === 'object' && !Array.isArray(context)) ? context : {};
+    const failure = extractPayeEntryFailure(errorValue, fallbackCode);
+    const code = normalizePayeEntryErrorCode(failure.code || fallbackCode) || normalizePayeEntryErrorCode(fallbackCode) || 'BANKING_PAY_BATCH_LOAD_FAILED';
+    const action = String(contextObj.action || '').trim().toUpperCase();
+    const isLoadAction = action === 'PAYE_ENTRY_LOAD' || action === 'OPEN_PAYE_ENTRY' || code === 'BANKING_PAY_BATCH_LOAD_FAILED';
+    const isImportAction = action === 'PAYE_NET_IMPORT';
+    const isSaveAction = action === 'PAYE_NET_SAVE';
+    const stale = code === 'BATCH_STALE';
+    const missingNet = code === 'PAYE_NET_MISSING';
+    const invalidNet = code === 'PAYE_NET_INVALID' || code === 'SAGE_IMPORT_INVALID';
+    const title = stale
+      ? 'Payment batch has changed'
+      : (missingNet
+          ? 'PAYE net amounts are missing'
+          : (invalidNet
+              ? 'PAYE net amounts are invalid'
+              : (isLoadAction ? 'Unable to load payment batch' : (isImportAction || isSaveAction ? 'PAYE net amounts are invalid' : 'PAYE Entry could not be updated'))));
+    const message = stale
+      ? 'This batch is no longer up to date. Refresh the batch, review the latest payment details, then try again.'
+      : (missingNet
+          ? 'Enter the missing PAYE net amounts, click Save, then try again.'
+          : (invalidNet
+              ? 'Correct the PAYE net amounts, click Save, then try again.'
+              : (isLoadAction
+                  ? 'CloudTMS could not load this payment batch. Refresh Banking and try again.'
+                  : 'CloudTMS could not update PAYE net amounts. Refresh the batch and try again.')));
+    const backendPayload = (contextObj.backendPayload && typeof contextObj.backendPayload === 'object' && !Array.isArray(contextObj.backendPayload))
+      ? contextObj.backendPayload
+      : ((errorValue?.payload && typeof errorValue.payload === 'object' && !Array.isArray(errorValue.payload))
+          ? errorValue.payload
+          : ((errorValue?.json && typeof errorValue.json === 'object' && !Array.isArray(errorValue.json))
+              ? errorValue.json
+              : ((failure.payload && typeof failure.payload === 'object' && !Array.isArray(failure.payload)) ? failure.payload : null)));
+    const normalized = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(errorValue, backendPayload || failure.payload || null, {
+          action: action || 'PAYE_ENTRY',
+          fallbackCode: code,
+          fallbackTitle: title,
+          fallbackMessage: message,
+          userInitiated: contextObj.userInitiated === true,
+          silent: contextObj.silent === true,
+          background: contextObj.background === true,
+          showModal: false,
+          batchId: id,
+          payload: backendPayload || failure.payload || undefined,
+          backendPayload: backendPayload || failure.payload || undefined,
+          technical_message: failure.raw_message || ''
+        })
+      : null;
+
+    return {
+      ...((normalized && typeof normalized === 'object') ? normalized : {}),
+      ok: false,
+      error_code: code,
+      code,
+      title,
+      message,
+      user_message: message,
+      error: message,
+      can_retry: true,
+      show_modal: false,
+      friendly_error: {
+        ...((normalized?.friendly_error && typeof normalized.friendly_error === 'object') ? normalized.friendly_error : {}),
+        code,
+        error_code: code,
+        title,
+        message,
+        show_modal: false
+      },
+      backendPayload: backendPayload || failure.payload || null,
+      technical_message: failure.raw_message || normalized?.technical_message || code
+    };
+  };
+
   const fetchJsonGet = async (path) => {
     if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
     const res = await authFetch(API(path), { method: 'GET' });
@@ -50642,13 +51071,22 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     let parsed = null;
     try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = null; }
     if (!res.ok) {
-      const msg = (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+      const rawMsg = (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
         ? String(parsed.error || parsed.message)
         : (txt || `Request failed (${res.status})`);
-      const err = new Error(String(msg || 'Request failed'));
+      const friendly = normalisePayeEntryFriendlyError(
+        parsed || rawMsg || `Request failed (${res.status})`,
+        'BANKING_PAY_BATCH_LOAD_FAILED',
+        { action: 'PAYE_ENTRY_LOAD', userInitiated: false, silent: true, backendPayload: parsed || null }
+      );
+      const err = new Error(String(friendly?.user_message || friendly?.message || rawMsg || 'Request failed'));
       err.status = res.status;
       err.body = txt;
       err.json = parsed;
+      err.payload = parsed;
+      err.backendPayload = parsed;
+      err.friendlyError = friendly;
+      err.error_code = String(friendly?.error_code || friendly?.code || 'BANKING_PAY_BATCH_LOAD_FAILED').trim() || 'BANKING_PAY_BATCH_LOAD_FAILED';
       throw err;
     }
     return (parsed && typeof parsed === 'object') ? parsed : {};
@@ -50814,6 +51252,27 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
     if (!('__saveInFlight' in pe)) pe.__saveInFlight = false;
 
     return { ctx, pe };
+  };
+
+  const applyPayeEntryFriendlyError = (errorValue, fallbackCode = 'BANKING_PAY_BATCH_LOAD_FAILED', context = {}) => {
+    const ctxState = ensureCtxState();
+    const pe = ctxState ? ctxState.pe : null;
+    const contextObj = (context && typeof context === 'object' && !Array.isArray(context)) ? context : {};
+    const friendly = normalisePayeEntryFriendlyError(errorValue, fallbackCode, contextObj);
+    const message = String(friendly?.user_message || friendly?.message || friendly?.error || 'CloudTMS could not load this payment batch. Refresh Banking and try again.').trim();
+    if (pe) {
+      if (contextObj.target === 'import') {
+        pe.importError = message;
+        pe.importFriendlyError = friendly;
+      } else {
+        pe.error = message;
+        pe.friendlyError = friendly;
+      }
+    }
+    if (contextObj.userInitiated === true && contextObj.silent !== true) {
+      try { toast(message); } catch {}
+    }
+    return friendly;
   };
 
   const computeBaselinesFromData = (dataObj) => {
@@ -51006,7 +51465,13 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       await rerender();
     } catch (e) {
       pe.loading = false;
-      pe.error = String(e?.message || e || 'Failed to load batch');
+      applyPayeEntryFriendlyError(e, 'BANKING_PAY_BATCH_LOAD_FAILED', {
+        action: 'PAYE_ENTRY_LOAD',
+        target: 'load',
+        userInitiated: opts.userInitiated === true,
+        silent: opts.silent === true,
+        backendPayload: e?.payload || e?.json || null
+      });
       await rerender();
     } finally {
       pe.__loadInFlight = false;
@@ -51189,14 +51654,13 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
       return true;
     } catch (e) {
       try {
-        const ctxState = ensureCtxState();
-        if (ctxState) {
-          const friendly = (typeof bankingNormalizeApiError === 'function')
-            ? bankingNormalizeApiError(e, null, { action: 'PAYE_NET_SAVE', userInitiated: true, batchId: id, fallbackCode: 'MANUAL_NET_INVALID' })
-            : null;
-          ctxState.pe.error = String(friendly?.message || friendly?.user_message || 'PAYE net amounts could not be saved.').trim();
-          ctxState.pe.friendlyError = friendly;
-        }
+        applyPayeEntryFriendlyError(e, 'MANUAL_NET_INVALID', {
+          action: 'PAYE_NET_SAVE',
+          target: 'load',
+          userInitiated: true,
+          silent: false,
+          backendPayload: e?.payload || e?.json || null
+        });
       } catch {}
       await rerender();
       return false;
@@ -51227,8 +51691,15 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
         computeBaselinesFromData(ctxState.ctx.data);
       }
     } catch {}
-  } catch {
+  } catch (prefetchError) {
     forceEdit = false;
+    applyPayeEntryFriendlyError(prefetchError, 'BANKING_PAY_BATCH_LOAD_FAILED', {
+      action: 'OPEN_PAYE_ENTRY',
+      target: 'load',
+      userInitiated: false,
+      silent: true,
+      backendPayload: prefetchError?.payload || prefetchError?.json || null
+    });
   }
 
   showModal(
@@ -51300,7 +51771,7 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
         const pe = ctxState.pe;
 
         if (act === 'banking:pay:payeEntry:refresh') {
-          await loadBatchIntoModal({ silent: false });
+          await loadBatchIntoModal({ silent: false, userInitiated: true });
           syncPayeEntryFrameState();
           return;
         }
@@ -51423,7 +51894,16 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
 
         void pe;
       } catch (e) {
-        try { if (typeof window.__toast === 'function') window.__toast(String(e?.message || e || 'Action failed')); } catch {}
+        try {
+          applyPayeEntryFriendlyError(e, 'BANKING_PAY_BATCH_LOAD_FAILED', {
+            action: 'PAYE_ENTRY_ACTION',
+            target: 'load',
+            userInitiated: true,
+            silent: false,
+            backendPayload: e?.payload || e?.json || null
+          });
+          await rerender();
+        } catch {}
       }
     };
 
@@ -51478,11 +51958,13 @@ async function openBankingPayBatchPayeEntryModal(payBatchId) {
 
               try { if (typeof window.__toast === 'function') window.__toast('Sage import applied'); } catch {}
             } catch (e2) {
-              const friendly = (typeof bankingNormalizeApiError === 'function')
-                ? bankingNormalizeApiError(e2, null, { action: 'PAYE_NET_IMPORT', userInitiated: true, batchId: id, fallbackCode: 'SAGE_IMPORT_INVALID' })
-                : null;
-              pe.importError = String(friendly?.message || friendly?.user_message || 'PAYE net amounts could not be imported.').trim();
-              pe.importFriendlyError = friendly;
+              applyPayeEntryFriendlyError(e2, 'SAGE_IMPORT_INVALID', {
+                action: 'PAYE_NET_IMPORT',
+                target: 'import',
+                userInitiated: true,
+                silent: false,
+                backendPayload: e2?.payload || e2?.json || null
+              });
             } finally {
               pe.importBusy = false;
               await rerender();
@@ -55169,6 +55651,235 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     );
   }
 
+
+  const normalizePreviewResetErrorCode = (value) => {
+    const raw = trimStr(value).toUpperCase();
+    if (!raw) return '';
+    const compact = raw.replace(/^ERROR[:\s]+/, '').replace(/^CODE[:\s]+/, '').replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!compact || /^[0-9]{5}$/.test(compact) || /^P[0-9A-Z]{4}$/.test(compact)) return '';
+    if (compact === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (compact === 'WORKBENCH_SESSION_MISSING') return 'WORKBENCH_SESSION_NOT_FOUND';
+    return compact;
+  };
+
+  const stringifyPreviewResetErrorValue = (value) => {
+    try {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+      if (value instanceof Error) return String(value.message || value.name || '');
+      return JSON.stringify(value);
+    } catch {
+      try { return String(value || ''); } catch { return ''; }
+    }
+  };
+
+  const parsePreviewResetEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        const parsed = JSON.parse(text.slice(start, end + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+
+  const extractPreviewResetFailure = (errorValue, fallbackCode = 'BANKING_PAY_PREVIEW_FAILED') => {
+    const knownCodes = [
+      'BATCH_STALE',
+      'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+      'WORKBENCH_SESSION_NOT_FOUND',
+      'WORKBENCH_SESSION_INVALID',
+      'STALE_SESSION',
+      'OBSOLETE_SESSION',
+      'BANKING_PAY_PREVIEW_FAILED',
+      'BANKING_PAY_WORKBENCH_DISCARD_FAILED',
+      'BANKING_PAY_WORKBENCH_CLEAR_REFRESH_PENDING',
+      'BANKING_PAY_WORKBENCH_CLEAR_FAILED'
+    ];
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const findings = [];
+    const rawMessages = [];
+    const enqueue = (candidate) => {
+      if (candidate === null || candidate === undefined) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+    const addFinding = (payload, code, directKnown = false) => {
+      const normalizedCode = normalizePreviewResetErrorCode(code || fallbackCode);
+      if (!normalizedCode) return;
+      findings.push({
+        code: normalizedCode,
+        payload: isPlainObject(payload) ? payload : { message: stringifyPreviewResetErrorValue(payload) },
+        priority: normalizedCode === 'BATCH_STALE' ? 100 : (directKnown ? 80 : 40)
+      });
+    };
+
+    enqueue(errorValue);
+    while (queue.length) {
+      const item = queue.shift();
+      if (item instanceof Error) {
+        enqueue({
+          name: item.name,
+          message: item.message,
+          code: item.code,
+          error_code: item.error_code,
+          payload: item.payload,
+          json: item.json,
+          body: item.body,
+          backendPayload: item.backendPayload,
+          response_json: item.response_json,
+          raw_response_text: item.raw_response_text,
+          technical_message: item.technical_message,
+          details: item.details,
+          detail: item.detail,
+          reason: item.reason,
+          cause: item.cause
+        });
+        continue;
+      }
+      if (typeof item === 'string') {
+        const text = item.trim();
+        if (text) rawMessages.push(text);
+        const parsed = parsePreviewResetEmbeddedObject(text);
+        if (parsed) enqueue(parsed);
+        const upper = text.toUpperCase();
+        for (const knownCode of knownCodes) {
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) addFinding({ message: text }, knownCode, true);
+        }
+        continue;
+      }
+      if (!isPlainObject(item)) continue;
+      const directCode = normalizePreviewResetErrorCode(item.error_code || item.errorCode || item.code || item.error || '');
+      if (directCode) addFinding(item, directCode, knownCodes.map((code) => normalizePreviewResetErrorCode(code)).includes(directCode));
+      if (item.ok === false && !directCode) addFinding(item, fallbackCode, false);
+      for (const key of [
+        'error_code', 'errorCode', 'code', 'error', 'message', 'details', 'detail', 'reason', 'hint',
+        'body', 'json', 'payload', 'backendPayload', 'data', 'cause', 'response', 'result',
+        'technical_message', 'technicalMessage', 'rpc_error', 'rpcError', 'original_error', 'originalError',
+        'inner_error', 'innerError', 'friendly_error', 'friendlyError', 'raw_response_text'
+      ]) {
+        const nested = item[key];
+        enqueue(nested);
+        const parsed = parsePreviewResetEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(item.errors)) item.errors.forEach(enqueue);
+    }
+
+    findings.sort((a, b) => b.priority - a.priority);
+    const best = findings[0] || null;
+    return {
+      code: best ? best.code : (normalizePreviewResetErrorCode(fallbackCode) || 'BANKING_PAY_PREVIEW_FAILED'),
+      payload: best ? best.payload : null,
+      raw_message: rawMessages.find(Boolean) || stringifyPreviewResetErrorValue(errorValue)
+    };
+  };
+
+  const normalisePreviewResetFriendlyError = (errorValue, fallbackCode = 'BANKING_PAY_PREVIEW_FAILED', context = {}) => {
+    const contextObj = isPlainObject(context) ? context : {};
+    const failure = extractPreviewResetFailure(errorValue, fallbackCode);
+    const code = normalizePreviewResetErrorCode(failure.code || fallbackCode) || normalizePreviewResetErrorCode(fallbackCode) || 'BANKING_PAY_PREVIEW_FAILED';
+    const action = trimStr(contextObj.action || 'PREVIEW').toUpperCase();
+    const isDiscard = action === 'DISCARD_SESSION' || code === 'BANKING_PAY_WORKBENCH_DISCARD_FAILED';
+    const isStaleOrSession = new Set(['BATCH_STALE', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID', 'STALE_SESSION', 'OBSOLETE_SESSION']).has(code);
+    const title = isDiscard
+      ? 'Payment preview could not be updated'
+      : (isStaleOrSession ? 'Payment preview needs refreshing' : 'Payment preview could not be loaded');
+    const message = isDiscard
+      ? 'CloudTMS could not discard this preview session. Refresh Banking and try again.'
+      : (isStaleOrSession
+          ? 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.'
+          : 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.');
+    const backendPayload = isPlainObject(contextObj.backendPayload)
+      ? contextObj.backendPayload
+      : (isPlainObject(errorValue?.payload)
+          ? errorValue.payload
+          : (isPlainObject(errorValue?.json)
+              ? errorValue.json
+              : (isPlainObject(failure.payload) ? failure.payload : null)));
+    const normalized = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(errorValue, backendPayload || failure.payload || null, {
+          action: isDiscard ? 'DISCARD_SESSION' : 'PREVIEW',
+          fallbackCode: code,
+          fallbackTitle: title,
+          fallbackMessage: message,
+          userInitiated: false,
+          silent: true,
+          background: true,
+          showModal: false,
+          payload: backendPayload || failure.payload || undefined,
+          backendPayload: backendPayload || failure.payload || undefined,
+          technical_message: failure.raw_message || ''
+        })
+      : null;
+
+    return {
+      ...((normalized && typeof normalized === 'object') ? normalized : {}),
+      ok: false,
+      error_code: code,
+      code,
+      title,
+      message,
+      user_message: message,
+      error: message,
+      can_retry: true,
+      show_modal: false,
+      friendly_error: {
+        ...((normalized?.friendly_error && typeof normalized.friendly_error === 'object') ? normalized.friendly_error : {}),
+        code,
+        error_code: code,
+        title,
+        message,
+        show_modal: false
+      },
+      backendPayload: backendPayload || failure.payload || null,
+      technical_message: failure.raw_message || normalized?.technical_message || code
+    };
+  };
+
+  const setPreviewResetFriendlyError = (errorValue, fallbackCode = 'BANKING_PAY_PREVIEW_FAILED', context = {}) => {
+    const friendly = normalisePreviewResetFriendlyError(errorValue, fallbackCode, context);
+    const message = trimStr(friendly.user_message || friendly.message || friendly.error || 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.');
+    const code = trimStr(friendly.error_code || friendly.code || fallbackCode) || fallbackCode;
+    try {
+      wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
+      wiz.preview.error = message;
+      wiz.preview.friendlyError = friendly;
+      wiz.preview.failure = {
+        preview_unavailable: context && context.previewUnavailable === true,
+        can_retry: true,
+        error: {
+          code,
+          message
+        }
+      };
+    } catch {}
+    return friendly;
+  };
+
   if (mode === 'CLEAR_ALL_DECISIONS') {
     wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {
       data: null,
@@ -55217,17 +55928,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
             });
             clearRefreshSucceeded = true;
           } catch (refreshErr) {
-            try {
-              wiz.preview.error = String(refreshErr?.message || refreshErr || 'Banking preview is still refreshing. Refresh Banking preview and try again.');
-              wiz.preview.failure = {
-                preview_unavailable: false,
-                can_retry: true,
-                error: {
-                  code: 'BANKING_PAY_WORKBENCH_CLEAR_REFRESH_PENDING',
-                  message: wiz.preview.error
-                }
-              };
-            } catch {}
+            setPreviewResetFriendlyError(refreshErr, 'BANKING_PAY_PREVIEW_FAILED', {
+              action: 'PREVIEW',
+              stage: 'clear_all_refresh',
+              previewUnavailable: false
+            });
           }
           markExplicitNoPreviewSelection({ refreshPending: !clearRefreshSucceeded });
         }
@@ -55239,31 +55944,12 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         wiz.preview.loading = false;
         return decisions;
       } catch (e) {
-        const friendly = (typeof bankingNormalizeApiError === 'function')
-          ? bankingNormalizeApiError(e, e?.payload || e?.json || null, {
-              action: 'WORKBENCH_MODAL_ACTION',
-              fallbackCode: 'BANKING_ACTION_FAILED',
-              userInitiated: true
-            })
-          : null;
-        const message = trimStr(
-          friendly?.user_message ||
-          friendly?.message ||
-          e?.message ||
-          e ||
-          'Failed to clear Banking decisions'
-        ) || 'Failed to clear Banking decisions';
+        setPreviewResetFriendlyError(e, 'BANKING_PAY_PREVIEW_FAILED', {
+          action: 'PREVIEW',
+          stage: 'clear_all_decisions',
+          previewUnavailable: true
+        });
         wiz.preview.loading = false;
-        wiz.preview.error = message;
-        wiz.preview.friendlyError = friendly && typeof friendly === 'object' ? friendly : null;
-        wiz.preview.failure = {
-          preview_unavailable: true,
-          can_retry: true,
-          error: {
-            code: trimStr(friendly?.error_code || friendly?.code || 'BANKING_ACTION_FAILED') || 'BANKING_ACTION_FAILED',
-            message: trimStr(friendly?.message || message) || message
-          }
-        };
         return decisions;
       }
     }
@@ -55285,17 +55971,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         fallbackRefreshSucceeded = true;
       }
     } catch (refreshErr) {
-      try {
-        wiz.preview.error = String(refreshErr?.message || refreshErr || 'Banking preview is still refreshing. Refresh Banking preview and try again.');
-        wiz.preview.failure = {
-          preview_unavailable: false,
-          can_retry: true,
-          error: {
-            code: 'BANKING_PAY_WORKBENCH_CLEAR_REFRESH_PENDING',
-            message: wiz.preview.error
-          }
-        };
-      } catch {}
+      setPreviewResetFriendlyError(refreshErr, 'BANKING_PAY_PREVIEW_FAILED', {
+        action: 'PREVIEW',
+        stage: 'fallback_clear_all_refresh',
+        previewUnavailable: false
+      });
     }
     markExplicitNoPreviewSelection({ refreshPending: !fallbackRefreshSucceeded });
     wiz.preview.loading = false;
@@ -55408,17 +56088,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       try {
         await bankingPayWorkbenchSessionDiscard(sessionIdBeforeReset, {});
       } catch (e) {
-        try {
-          wiz.preview.error = String(e?.message || e || 'Failed to discard workbench session');
-          wiz.preview.failure = {
-            preview_unavailable: false,
-            can_retry: true,
-            error: {
-              code: 'BANKING_PAY_WORKBENCH_DISCARD_FAILED',
-              message: String(e?.message || e || 'Failed to discard workbench session')
-            }
-          };
-        } catch {}
+        setPreviewResetFriendlyError(e, 'BANKING_PAY_WORKBENCH_DISCARD_FAILED', {
+          action: 'DISCARD_SESSION',
+          stage: 'discard_session',
+          previewUnavailable: false
+        });
       }
     }
     return decisions;
@@ -55463,7 +56137,13 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         preview_reopen_required: mode === 'POST_ACTION_REOPEN'
       });
     }
-  } catch {}
+  } catch (previewErr) {
+    setPreviewResetFriendlyError(previewErr, 'BANKING_PAY_PREVIEW_FAILED', {
+      action: 'PREVIEW',
+      stage: 'final_preview_reload',
+      previewUnavailable: false
+    });
+  }
 
   return decisions;
 };
@@ -77240,6 +77920,8 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
 
 
 
+
+
 function classifyTimesheetEditDomains(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const toUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -77549,7 +78231,6 @@ function classifyTimesheetEditDomains(ctxInput) {
     routeText.includes('NHSP') ||
     routeText.includes('HEALTHROSTER') ||
     routeText.includes('NO_TIMESHEET_REQUIRED') ||
-    routeText.includes('SELF_BILL') ||
     anyBool('is_import_authoritative', 'import_authoritative')
   );
   const clientNhspLineage = anyBool('client_is_nhsp', 'is_nhsp');
@@ -77560,7 +78241,7 @@ function classifyTimesheetEditDomains(ctxInput) {
   const isNoTimesheetRequiredOriginal = !!(noTimesheetRequired && !isAdditionalManualRoute);
   const protectedOriginal = !!(isOriginalImportAuthoritative || isNoTimesheetRequiredOriginal);
 
-  const hasRealTimesheet = anyValue('timesheet_id', 'current_timesheet_id', 'requested_timesheet_id');
+  const hasRealTimesheet = anyValue('timesheet_id', 'current_timesheet_id');
   const hasSupportedManualDraft = !!(
     isManualRoute &&
     (
@@ -77702,7 +78383,6 @@ function classifyTimesheetEditDomains(ctxInput) {
 
 
 
-
 function normaliseTimesheetExpensesDraft(raw, options = {}) {
   const src = (raw && typeof raw === 'object') ? raw : {};
   const opts = (options && typeof options === 'object') ? options : {};
@@ -77820,6 +78500,7 @@ function formatTsfinEvidenceRequiredMessage(errorPayload) {
   const list = normalised.map((item) => `${item.label} evidence (${item.kind})`).join(', ');
   return `${list} are required before these expenses can be saved. Please upload the required evidence, then try again.`;
 }
+
 
 async function commitTimesheetExpensesMileageDraft(args = {}) {
   const pick = (...values) => {
@@ -77964,6 +78645,121 @@ async function commitTimesheetExpensesMileageDraft(args = {}) {
   const mileageCharge = positiveMileageClaim && chargeRate != null ? round2(mileageUnits * chargeRate) : 0;
   draft.mileage_pay_rate = payRate;
   draft.mileage_charge_rate = chargeRate;
+
+  const requiredEvidence = [];
+  if (positiveMileageClaim || mileagePay > 0 || mileageCharge > 0) requiredEvidence.push({ category: 'mileage', required_kind: 'MILEAGE' });
+  if (Number(draft.travel_pay || 0) > 0 || Number(draft.travel_charge || 0) > 0) requiredEvidence.push({ category: 'travel', required_kind: 'TRAVEL' });
+  if (Number(draft.accommodation_pay || 0) > 0 || Number(draft.accommodation_charge || 0) > 0) requiredEvidence.push({ category: 'accommodation', required_kind: 'ACCOMMODATION' });
+  if (Number(draft.other_pay || 0) > 0 || Number(draft.other_charge || 0) > 0) requiredEvidence.push({ category: 'other', required_kind: 'OTHER' });
+
+  const evidenceKindAliases = {
+    MILEAGE: new Set(['MILEAGE', 'MILES', 'MILE']),
+    TRAVEL: new Set(['TRAVEL', 'EXPENSE', 'EXPENSES']),
+    ACCOMMODATION: new Set(['ACCOMMODATION', 'ACCOM']),
+    OTHER: new Set(['OTHER'])
+  };
+  const normaliseEvidenceRows = (value) => {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    if (typeof value !== 'object') return [];
+    const candidates = [
+      value.evidence,
+      value.evidence_rows,
+      value.rows,
+      value.items,
+      value.attached_evidence,
+      value.attached_rows,
+      value.user_evidence,
+      value.userEvidence,
+      value.documents,
+      value.files
+    ];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) return candidate;
+    }
+    return [];
+  };
+  const collectEvidenceRowsFromKnownState = () => {
+    const sources = [
+      args?.details?.evidence,
+      args?.details?.evidence_rows,
+      args?.details?.attached_evidence,
+      args?.details?.user_evidence,
+      args?.row?.evidence,
+      args?.row?.evidence_rows,
+      args?.row?.attached_evidence,
+      args?.context?.evidence,
+      args?.context?.details?.evidence,
+      args?.context?.details?.attached_evidence,
+      args?.state?.evidence,
+      args?.state?.evidence_rows,
+      args?.state?.attached_evidence,
+      args?.active_ctx?.details?.evidence,
+      args?.active_ctx?.details?.attached_evidence,
+      args?.active_context?.details?.evidence,
+      args?.active_context?.details?.attached_evidence
+    ];
+    const rows = [];
+    for (const source of sources) rows.push(...normaliseEvidenceRows(source));
+    return rows;
+  };
+  const evidenceRowsHaveKind = (rows, requiredKind) => {
+    const aliases = evidenceKindAliases[requiredKind] || new Set([requiredKind]);
+    return (rows || []).some((row) => {
+      const kindU = String(row?.kind || row?.evidence_kind || row?.required_kind || '').trim().toUpperCase();
+      if (!kindU) return false;
+      return aliases.has(kindU);
+    });
+  };
+  const fetchEvidenceRows = async () => {
+    if (!timesheetId || typeof authFetch !== 'function' || typeof API !== 'function') return [];
+    const response = await authFetch(API(`/api/timesheets/${encodeURIComponent(String(timesheetId))}/evidence?meta=1`), { method: 'GET' });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw payload || new Error('Evidence list could not be loaded.');
+    return normaliseEvidenceRows(payload);
+  };
+  const preflightEvidenceRows = async () => {
+    const knownRows = collectEvidenceRowsFromKnownState();
+    const knownCoversAll = requiredEvidence.every((item) => evidenceRowsHaveKind(knownRows, item.required_kind));
+    if (knownCoversAll) return knownRows;
+    const fetchedRows = await fetchEvidenceRows();
+    return [...knownRows, ...fetchedRows];
+  };
+
+  if (requiredEvidence.length) {
+    try {
+      const rowsForPreflight = await preflightEvidenceRows();
+      const missing = requiredEvidence.filter((item) => !evidenceRowsHaveKind(rowsForPreflight, item.required_kind));
+      if (missing.length) {
+        const evidencePayload = { error: 'EVIDENCE_REQUIRED', error_code: 'EVIDENCE_REQUIRED', missing };
+        return {
+          ok: false,
+          noChanges: false,
+          evidenceRequired: true,
+          message: formatTsfinEvidenceRequiredMessage(evidencePayload),
+          error: 'EVIDENCE_REQUIRED',
+          missing,
+          committedDraft: null,
+          updatedTsfin: null,
+          response: evidencePayload,
+          dirtyResult
+        };
+      }
+    } catch (evidenceErr) {
+      return {
+        ok: false,
+        noChanges: false,
+        evidenceRequired: false,
+        message: String(evidenceErr?.message || 'Unable to confirm required evidence before saving expenses. Please refresh the evidence list, then try again.'),
+        error: 'EVIDENCE_PREFLIGHT_FAILED',
+        missing: [],
+        committedDraft: null,
+        updatedTsfin: null,
+        response: evidenceErr || null,
+        dirtyResult
+      };
+    }
+  }
 
   const parseApiResponse = async (response) => {
     const text = await response.text().catch(() => '');
@@ -120646,6 +121442,7 @@ function classifyBulkProcessEditability(ctxInput) {
   };
 }
 
+
 function bindBulkProcessManualEditor(state) {
   const st = (state && typeof state === 'object') ? state : null;
   if (!st) return;
@@ -121579,6 +122376,220 @@ function bindBulkProcessManualEditor(state) {
     return null;
   };
 
+
+  const extractBulkProcessCreatedAdditionalIdentity = (createResultObj = {}) => {
+    const raw = (createResultObj && typeof createResultObj === 'object') ? createResultObj : {};
+    const source = (raw.json && typeof raw.json === 'object' && !Array.isArray(raw.json)) ? raw.json : raw;
+    const patchCandidates = [
+      source.row_patch,
+      source.data_row,
+      source.row,
+      source.summary_row_hint,
+      Array.isArray(source.row_patches) ? source.row_patches[0] : null,
+      Array.isArray(raw.row_patches) ? raw.row_patches[0] : null
+    ];
+    let patchRow = {};
+    for (const candidate of patchCandidates) {
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate) && Object.keys(candidate).length) {
+        patchRow = deep(candidate);
+        break;
+      }
+    }
+
+    const currentTimesheetId = firstNonEmpty(
+      source.current_timesheet_id,
+      source.timesheet_id,
+      source.new_timesheet_id,
+      source.requested_timesheet_id,
+      source.timesheet && source.timesheet.timesheet_id,
+      patchRow.current_timesheet_id,
+      patchRow.timesheet_id,
+      patchRow.new_timesheet_id,
+      patchRow.id
+    );
+    const contractWeekId = firstNonEmpty(
+      source.contract_week_id,
+      source.week_id,
+      source.contract_week && source.contract_week.id,
+      patchRow.contract_week_id,
+      patchRow.week_id
+    );
+    const rowKey = firstNonEmpty(
+      source.row_key,
+      source.new_row_key,
+      patchRow.row_key,
+      patchRow.new_row_key,
+      patchRow.current_row_key,
+      currentTimesheetId ? `timesheet:${currentTimesheetId}` : '',
+      contractWeekId ? `contract_week:${contractWeekId}` : '',
+      patchRow.stable_row_id
+    );
+
+    return {
+      ...source,
+      row_patch: patchRow,
+      current_timesheet_id: currentTimesheetId || null,
+      timesheet_id: currentTimesheetId || null,
+      expected_timesheet_id: firstNonEmpty(source.expected_timesheet_id, patchRow.expected_timesheet_id, currentTimesheetId) || null,
+      contract_week_id: contractWeekId || null,
+      row_key: rowKey || null,
+      new_row_key: firstNonEmpty(source.new_row_key, patchRow.new_row_key, rowKey) || null,
+      row_signature: firstNonEmpty(source.row_signature, patchRow.row_signature, patchRow.backend_row_signature) || null
+    };
+  };
+
+  const ensureBulkProcessDatasetShape = () => {
+    st.dataset = (st.dataset && typeof st.dataset === 'object') ? st.dataset : {};
+    if (!Array.isArray(st.dataset.unprocessed_rows)) st.dataset.unprocessed_rows = [];
+    if (!Array.isArray(st.dataset.processed_rows)) st.dataset.processed_rows = [];
+    if (!st.dataset.counts || typeof st.dataset.counts !== 'object') st.dataset.counts = {};
+    return st.dataset;
+  };
+
+  const synthesizeBulkProcessAdditionalManualRow = (createResultObj = {}, beforeRowObj = {}, beforeDetailsObj = {}) => {
+    const identity = extractBulkProcessCreatedAdditionalIdentity(createResultObj);
+    const beforeRow = isPlainObject(beforeRowObj) ? deep(beforeRowObj) : {};
+    const beforeDetails = isPlainObject(beforeDetailsObj) ? deep(beforeDetailsObj) : {};
+    const patchRow = isPlainObject(identity.row_patch) ? deep(identity.row_patch) : {};
+    const currentTimesheetId = firstNonEmpty(identity.current_timesheet_id, identity.timesheet_id, patchRow.current_timesheet_id, patchRow.timesheet_id);
+    const contractWeekId = firstNonEmpty(identity.contract_week_id, patchRow.contract_week_id, beforeRow.contract_week_id, beforeDetails.contract_week_id, beforeDetails.contract_week && beforeDetails.contract_week.id);
+    const rowKey = firstNonEmpty(
+      identity.row_key,
+      identity.new_row_key,
+      patchRow.row_key,
+      patchRow.new_row_key,
+      currentTimesheetId ? `timesheet:${currentTimesheetId}` : '',
+      contractWeekId ? `contract_week:${contractWeekId}` : ''
+    );
+    const processingStatus = firstNonEmpty(
+      patchRow.processing_status,
+      identity.processing_status,
+      patchRow.summary_stage,
+      patchRow.bulk_process_bucket,
+      'UNPROCESSED'
+    ).toUpperCase();
+    const bucket = firstNonEmpty(
+      patchRow.bulk_process_bucket,
+      identity.bulk_process_bucket,
+      patchRow.summary_stage,
+      processingStatus,
+      'UNPROCESSED'
+    ).toUpperCase() === 'PROCESSED' ? 'PROCESSED' : 'UNPROCESSED';
+
+    return {
+      ...beforeRow,
+      ...patchRow,
+      row_key: rowKey || null,
+      new_row_key: firstNonEmpty(identity.new_row_key, patchRow.new_row_key, rowKey) || null,
+      stable_row_id: firstNonEmpty(patchRow.stable_row_id, currentTimesheetId, contractWeekId, rowKey) || null,
+      timesheet_id: currentTimesheetId || patchRow.timesheet_id || null,
+      current_timesheet_id: currentTimesheetId || patchRow.current_timesheet_id || patchRow.timesheet_id || null,
+      requested_timesheet_id: currentTimesheetId || patchRow.requested_timesheet_id || patchRow.timesheet_id || null,
+      expected_timesheet_id: firstNonEmpty(identity.expected_timesheet_id, patchRow.expected_timesheet_id, currentTimesheetId) || null,
+      contract_week_id: contractWeekId || null,
+      parent_timesheet_id: firstNonEmpty(patchRow.parent_timesheet_id, beforeRow.current_timesheet_id, beforeRow.timesheet_id, beforeDetails.current_timesheet_id, beforeDetails.timesheet && beforeDetails.timesheet.timesheet_id) || null,
+      is_adjustment: true,
+      submission_mode: firstNonEmpty(patchRow.submission_mode, 'MANUAL'),
+      submission_mode_snapshot: firstNonEmpty(patchRow.submission_mode_snapshot, patchRow.submission_mode, 'MANUAL'),
+      line_type: firstNonEmpty(patchRow.line_type, 'ADDITIONAL'),
+      adjustment_origin: firstNonEmpty(patchRow.adjustment_origin, 'ADD_ADDITIONAL'),
+      route_type: firstNonEmpty(patchRow.route_type, beforeRow.route_type, 'MANUAL'),
+      route_display: firstNonEmpty(patchRow.route_display, 'Manual additional'),
+      processing_status: processingStatus,
+      bulk_process_bucket: bucket,
+      summary_stage: bucket,
+      tools_stage: bucket,
+      paid_at_utc: patchRow.paid_at_utc ?? null,
+      locked_by_invoice_id: patchRow.locked_by_invoice_id ?? null,
+      authorised_at_server: patchRow.authorised_at_server ?? null,
+      row_signature: firstNonEmpty(identity.row_signature, patchRow.row_signature, patchRow.backend_row_signature) || null,
+      client_id: firstNonEmpty(patchRow.client_id, beforeRow.client_id) || null,
+      client_name: firstNonEmpty(patchRow.client_name, beforeRow.client_name) || null,
+      candidate_id: firstNonEmpty(patchRow.candidate_id, beforeRow.candidate_id) || null,
+      candidate_name: firstNonEmpty(patchRow.candidate_name, beforeRow.candidate_name, beforeRow.occupant_key_norm) || null,
+      occupant_key_norm: firstNonEmpty(patchRow.occupant_key_norm, beforeRow.occupant_key_norm, beforeRow.candidate_name) || null
+    };
+  };
+
+  const insertBulkProcessAdditionalManualRow = (rowObj) => {
+    const row = isPlainObject(rowObj) ? deep(rowObj) : null;
+    if (!row) return null;
+    const key = rowKeyOf(row);
+    if (!key) return null;
+    const dataset = ensureBulkProcessDatasetShape();
+    dataset.unprocessed_rows = dataset.unprocessed_rows.filter((candidate) => rowKeyOf(candidate) !== key);
+    dataset.processed_rows = dataset.processed_rows.filter((candidate) => rowKeyOf(candidate) !== key);
+    const bucket = String(row.bulk_process_bucket || row.summary_stage || row.processing_status || 'UNPROCESSED').trim().toUpperCase();
+    const target = bucket === 'PROCESSED' ? dataset.processed_rows : dataset.unprocessed_rows;
+    target.unshift(row);
+    return row;
+  };
+
+  const openBulkProcessAdditionalManualRow = async (rowObj, reason = 'bulk-process-add-additional-open') => {
+    const row = isPlainObject(rowObj) ? deep(rowObj) : null;
+    if (!row) throw new Error('Additional manual timesheet was created, but no usable row identity was returned.');
+    const rowKey = rowKeyOf(row);
+    if (!rowKey) throw new Error('Additional manual timesheet was created, but no usable row key was returned.');
+
+    st.active_row = deep(row);
+    st.active_row_key = rowKey;
+    st.selected_row_keys = [rowKey];
+    st.active_details = null;
+    st.active_ctx = null;
+    st.__active_context_is_minimal = true;
+    installBulkProcessModalCtxPatch(st);
+
+    try {
+      await refreshActiveContextInPlace();
+    } catch (refreshErr) {
+      const fallbackRelated = buildFallbackRelated(row, {});
+      st.active_details = {
+        current_timesheet_id: firstNonEmpty(row.current_timesheet_id, row.timesheet_id) || null,
+        contract_week_id: firstNonEmpty(row.contract_week_id) || null,
+        sheet_scope: row.sheet_scope || row.period_type || null,
+        summary_stage: row.summary_stage || row.bulk_process_bucket || row.processing_status || 'UNPROCESSED',
+        tools_stage: row.tools_stage || row.summary_stage || row.bulk_process_bucket || row.processing_status || 'UNPROCESSED',
+        route_type: row.route_type || null,
+        route_display: row.route_display || null,
+        manual_pdf_r2_key: row.manual_pdf_r2_key || row.primary_artifact_storage_key || null,
+        timesheet: row.timesheet_id ? {
+          timesheet_id: firstNonEmpty(row.current_timesheet_id, row.timesheet_id),
+          submission_mode: row.submission_mode || 'MANUAL',
+          sheet_scope: row.sheet_scope || row.period_type || null,
+          week_ending_date: row.week_ending_date || row.contract_week_ending_date || null,
+          qr_status: row.qr_status || null
+        } : null,
+        contract_week: row.contract_week_id ? {
+          id: row.contract_week_id,
+          week_ending_date: row.contract_week_ending_date || row.week_ending_date || null,
+          submission_mode_snapshot: row.submission_mode_snapshot || row.submission_mode || 'MANUAL'
+        } : null,
+        tsfin: row.timesheet_id ? {
+          processing_status: row.processing_status || null,
+          total_hours: row.total_hours ?? null,
+          total_pay_ex_vat: row.total_pay_ex_vat ?? null,
+          total_charge_ex_vat: row.total_charge_ex_vat ?? null,
+          margin_ex_vat: row.margin_ex_vat ?? null,
+          locked_by_invoice_id: row.locked_by_invoice_id ?? null,
+          paid_at_utc: row.paid_at_utc ?? null
+        } : null,
+        evidence: [],
+        related: ensureBulkProcessRelatedContract(fallbackRelated, row, {})
+      };
+      st.active_ctx = normaliseBulkTimesheetWorkbenchCtx(deep(row), deep(st.active_details));
+      st.__active_context_is_minimal = true;
+      try { console.warn('[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL] using minimal context after refresh failed', refreshErr); } catch {}
+      installBulkProcessModalCtxPatch(st);
+    }
+
+    resetBulkProcessDirtyBaseline(st, reason, {
+      source: 'bindBulkProcessManualEditor.addAdditionalManual',
+      dirty_source: 'opened newly created additional manual timesheet'
+    });
+
+    return st.active_row;
+  };
+
   const syncPrimaryActionButtonStates = () => {
     const editability = classifyBulkProcessEditability(st.active_ctx || {});
     const dirtyNow = isBulkAuthoriseCtx()
@@ -121712,40 +122723,32 @@ function bindBulkProcessManualEditor(state) {
           throw new Error(String(createResult.message || 'Failed to create additional manual timesheet.'));
         }
 
-        const nextDataset = await fetchBulkProcessDataset(st.filters || {});
-        st.dataset = nextDataset;
+        const createdIdentity = extractBulkProcessCreatedAdditionalIdentity(createResult || {});
+        let nextDataset = null;
+        try {
+          nextDataset = await fetchBulkProcessDataset(st.filters || {});
+        } catch (datasetErr) {
+          try { console.warn('[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL] dataset refresh failed; inserting synthetic row', datasetErr); } catch {}
+          nextDataset = ensureBulkProcessDatasetShape();
+        }
+        st.dataset = (nextDataset && typeof nextDataset === 'object') ? nextDataset : ensureBulkProcessDatasetShape();
+        ensureBulkProcessDatasetShape();
 
-        const createdRow = findBulkProcessRowInDataset(nextDataset, createResult || {});
-        const createdRowKey = trimStr(createdRow?.row_key || createResult?.row_key || '');
-        const currentRowInDataset = beforeActiveRowKey
-          ? findBulkProcessRowInDataset(nextDataset, { row_key: beforeActiveRowKey })
-          : null;
+        const createdRowFromDataset =
+          findBulkProcessRowInDataset(st.dataset, createdIdentity) ||
+          findBulkProcessRowInDataset(st.dataset, createResult || {});
 
-        if (!createdRow) {
-          st.loading = false;
-          st.__suppress_dirty_marking = false;
-          st.active_row = currentRowInDataset ? deep(currentRowInDataset) : deep(beforeActiveRow);
-          st.active_row_key = trimStr(currentRowInDataset?.row_key || beforeActiveRowKey || '') || null;
-          st.active_details = deep(beforeActiveDetails);
-          st.active_ctx = deep(beforeActiveCtx);
-          st.selected_row_keys = beforeSelectedRowKeys;
-          st.error_text = 'Additional manual timesheet was created, but the new row could not be located in Bulk Process.';
-          installBulkProcessModalCtxPatch(st);
-          await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL]');
-          syncPrimaryActionButtonStates();
-          return;
+        let rowToOpen = createdRowFromDataset ? deep(createdRowFromDataset) : null;
+        if (!rowToOpen) {
+          rowToOpen = synthesizeBulkProcessAdditionalManualRow(createResult || {}, beforeActiveRow, beforeActiveDetails);
+          rowToOpen = insertBulkProcessAdditionalManualRow(rowToOpen);
         }
 
-        st.active_row = deep(createdRow);
-        st.active_row_key = createdRowKey || null;
-        st.selected_row_keys = createdRowKey ? [createdRowKey] : [];
-        st.active_details = null;
-        st.active_ctx = null;
-        await refreshActiveContextInPlace();
-        resetBulkProcessDirtyBaseline(st, 'bulk-process-add-additional-open', {
-          source: 'bindBulkProcessManualEditor.addAdditionalManual',
-          dirty_source: 'opened newly created additional manual timesheet'
-        });
+        if (!rowToOpen || !rowKeyOf(rowToOpen)) {
+          throw new Error('Additional manual timesheet was created, but no usable row identity was returned. Refresh Bulk Process and try again.');
+        }
+
+        await openBulkProcessAdditionalManualRow(rowToOpen, 'bulk-process-add-additional-open');
         st.loading = false;
         st.__suppress_dirty_marking = false;
         await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][ADD-ADDITIONAL-MANUAL]');
@@ -134376,6 +135379,38 @@ async function handleBulkProcessProcess(state) {
           evidenceRequired: saveResult?.evidenceRequired === true
         };
       }
+
+      const afterSaveRowKey = rowKeyOf(st.active_row || {});
+      if (!afterSaveRowKey) {
+        const msg = 'Bulk Process could not identify the saved row before processing. Refresh the row, then try again.';
+        return { ok: false, error: msg, message: msg };
+      }
+      if (typeof handleBulkProcessRowChange !== 'function') {
+        const msg = 'Bulk Process row context refresh is not available after save. Refresh the row, then try again.';
+        return { ok: false, error: msg, message: msg };
+      }
+
+      const preservedStateAfterSave = pickObject(st.active_ctx?.state || {});
+      await handleBulkProcessRowChange(st, afterSaveRowKey, {
+        source: 'bulk-process-process-after-save',
+        includeEvidence: true,
+        loadEvidence: true,
+        forceContextRefresh: true,
+        skipDatasetRefresh: true,
+        preserveEvidencePane: true,
+        preserveActiveContext: false,
+        rerender: false,
+        skipDirtyGuard: true,
+        force: true
+      });
+      if (preservedStateAfterSave && typeof preservedStateAfterSave === 'object' && Object.keys(preservedStateAfterSave).length) {
+        st.active_ctx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
+        st.active_ctx.state = {
+          ...((st.active_ctx.state && typeof st.active_ctx.state === 'object') ? st.active_ctx.state : {}),
+          ...deep(preservedStateAfterSave)
+        };
+      }
+
       editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
       if (!editability.canProcess) {
         const reason = trimStr(editability.processDisabledReason || editability.disabledReason || '') || 'This row cannot be processed.';
@@ -134439,12 +135474,27 @@ async function handleBulkProcessProcess(state) {
           return null;
         }
       };
-      const savedScheduleForProcess = (() => {
-        const fromTimesheet = parseSavedJson(active.timesheet?.actual_schedule_json || active.details?.timesheet?.actual_schedule_json || active.row?.actual_schedule_json || null);
-        if (Array.isArray(fromTimesheet)) return fromTimesheet;
-        const fromContractWeek = parseSavedJson(active.contractWeek?.planned_schedule_json || active.details?.contract_week?.planned_schedule_json || active.row?.planned_schedule_json || null);
-        return Array.isArray(fromContractWeek) ? fromContractWeek : [];
+      const savedScheduleForProcessInfo = (() => {
+        const candidates = [
+          { label: 'timesheet.actual_schedule_json', value: active.timesheet?.actual_schedule_json },
+          { label: 'details.timesheet.actual_schedule_json', value: active.details?.timesheet?.actual_schedule_json },
+          { label: 'row.actual_schedule_json', value: active.row?.actual_schedule_json },
+          { label: 'contract_week.planned_schedule_json', value: active.contractWeek?.planned_schedule_json },
+          { label: 'details.contract_week.planned_schedule_json', value: active.details?.contract_week?.planned_schedule_json },
+          { label: 'row.planned_schedule_json', value: active.row?.planned_schedule_json }
+        ];
+        for (const candidate of candidates) {
+          const parsed = parseSavedJson(candidate.value);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return { schedule: parsed, source: candidate.label };
+          }
+        }
+        return { schedule: null, source: null };
       })();
+      if (!Array.isArray(savedScheduleForProcessInfo.schedule) || savedScheduleForProcessInfo.schedule.length === 0) {
+        throw new Error('Weekly Bulk Process cannot continue because no saved authoritative schedule was available after save. Refresh the row, check the saved schedule, then try again.');
+      }
+      const savedScheduleForProcess = savedScheduleForProcessInfo.schedule;
       const readSavedUnitsObject = (value) => {
         const parsed = parseSavedJson(value);
         return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
@@ -190490,7 +191540,6 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
 // ✅ Canonical timesheet refresh helper (must exist BEFORE any footer clicks)
 
 
-
 function setFormReadOnly(root, ro) {
   if (!root || !document.contains(root)) { L('setFormReadOnly(skip: invalid root)', { ro }); return; }
   const _allBefore = root.querySelectorAll('input, select, textarea, button');
@@ -190525,12 +191574,22 @@ function setFormReadOnly(root, ro) {
     return new Set([
       'reset-schedule',
       'rebuild-schedule',
+      'clear-all-lines',
+      'clear-lines',
       'apply-schedule',
       'preview-schedule',
       'daily-preview',
       'daily-apply',
+      'apply-daily-schedule',
+      'preview-daily-schedule',
       'extra-shift-add',
       'extra-shift-remove',
+      'weekly-line-add',
+      'weekly-line-remove',
+      'add-weekly-line',
+      'remove-weekly-line',
+      'add-line',
+      'remove-line',
       'extra-break-add',
       'extra-break-remove',
       'segment-edit',
@@ -190544,7 +191603,7 @@ function setFormReadOnly(root, ro) {
     if (!el || typeof el.matches !== 'function') return false;
     const tsAction = el.getAttribute('data-ts-action') || el.getAttribute('data-hours-action') || '';
     if (isTimesheetHoursAction(tsAction)) return true;
-    if (el.matches('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-ts-daily-field]')) return true;
+    if (el.matches('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-ts-daily-field],[data-weekly-line-action],[data-hours-action]')) return true;
     const id = String(el.id || '').toLowerCase();
     const name = String(el.getAttribute('name') || '').toLowerCase();
     if (/tsdaily(date|start|end|break|paidhours)/.test(id)) return true;
@@ -190569,7 +191628,6 @@ function setFormReadOnly(root, ro) {
     );
   };
 
- // AFTER (updated setFormReadOnly loop)
 // ✅ NEW: keep Candidate "display_name" locked whenever it is blank (even in edit/create mode),
 // because create-mode should not allow manual editing; system generates on save.
 root.querySelectorAll('input, select, textarea, button').forEach((el) => {
@@ -190689,8 +191747,23 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
       // Actions that must NEVER be clickable in VIEW (schedule-driven weekly grid)
       const scheduleEditActions = new Set([
         'reset-schedule',
+        'rebuild-schedule',
+        'clear-all-lines',
+        'clear-lines',
+        'apply-schedule',
+        'preview-schedule',
+        'daily-preview',
+        'daily-apply',
+        'apply-daily-schedule',
+        'preview-daily-schedule',
         'extra-shift-add',
         'extra-shift-remove',
+        'weekly-line-add',
+        'weekly-line-remove',
+        'add-weekly-line',
+        'remove-weekly-line',
+        'add-line',
+        'remove-line',
         'extra-break-add',
         'extra-break-remove'
       ]);
@@ -190793,14 +191866,29 @@ try {
     const lockExpenses = !!(policy && (policy.canEditExpenses === false || policy.expensesReadOnly === true));
     const lockEvidence = !!(policy && policy.canManageExpenseEvidence === false);
     if (lockHours) {
-      root.querySelectorAll('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],input[name^=\"extra_units_\"]').forEach((el) => {
+      root.querySelectorAll('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-ts-daily-field],[data-weekly-line-action],[data-hours-action],input[name^=\"extra_units_\"]').forEach((el) => {
         el.disabled = true; try { el.setAttribute('readonly', 'true'); } catch {}
       });
 
       const scheduleEditActions = new Set([
         'reset-schedule',
+        'rebuild-schedule',
+        'clear-all-lines',
+        'clear-lines',
+        'apply-schedule',
+        'preview-schedule',
+        'daily-preview',
+        'daily-apply',
+        'apply-daily-schedule',
+        'preview-daily-schedule',
         'extra-shift-add',
         'extra-shift-remove',
+        'weekly-line-add',
+        'weekly-line-remove',
+        'add-weekly-line',
+        'remove-weekly-line',
+        'add-line',
+        'remove-line',
         'extra-break-add',
         'extra-break-remove',
         'daily-preview',
@@ -190809,8 +191897,8 @@ try {
         'preview-daily-schedule'
       ]);
 
-      root.querySelectorAll('button[data-ts-action]').forEach((btn) => {
-        const act = String(btn.getAttribute('data-ts-action') || '').trim().toLowerCase();
+      root.querySelectorAll('button[data-ts-action],button[data-weekly-line-action],button[data-hours-action]').forEach((btn) => {
+        const act = String(btn.getAttribute('data-ts-action') || btn.getAttribute('data-weekly-line-action') || btn.getAttribute('data-hours-action') || '').trim().toLowerCase();
         if (!scheduleEditActions.has(act)) return;
         btn.disabled = true;
         try { btn.setAttribute('readonly', 'true'); } catch {}
@@ -190841,6 +191929,7 @@ try {
     });
   } catch {}
 }
+
 
 
  const getModalAnchorStore = () => {
@@ -223924,9 +225013,23 @@ try {
         baseRow.authorised_at_server ||
         null,
       is_qr: (!!qrStatus || !!baseRow.is_qr),
-      client_no_timesheet_required:
+       client_no_timesheet_required:
         Object.prototype.hasOwnProperty.call(baseRow, 'client_no_timesheet_required')
           ? baseRow.client_no_timesheet_required
+          : null,
+      can_edit_hours_schedule:
+        (timesheetEditDomains && typeof timesheetEditDomains.canEditHoursSchedule === 'boolean')
+          ? (timesheetEditDomains.canEditHoursSchedule === true)
+          : null,
+      hours_schedule_disabled_reason:
+        timesheetEditDomains ? String(timesheetEditDomains.hoursScheduleDisabledReason || '') : '',
+      can_edit_expenses:
+        (timesheetEditDomains && typeof timesheetEditDomains.canEditExpenses === 'boolean')
+          ? (timesheetEditDomains.canEditExpenses === true)
+          : null,
+      can_manage_expense_evidence:
+        (timesheetEditDomains && typeof timesheetEditDomains.canManageExpenseEvidence === 'boolean')
+          ? (timesheetEditDomains.canManageExpenseEvidence === true)
           : null
     };
 
@@ -224048,11 +225151,24 @@ const tabDefs = [
 
 
 const renderTab = (key, mergedRow) => {
+  const activeEditDomains = (window.modalCtx && window.modalCtx.timesheetEditDomains)
+    ? window.modalCtx.timesheetEditDomains
+    : null;
+
   const ctxForTab = {
     row: mergedRow || window.modalCtx.data || baseRow,
     details: window.modalCtx.timesheetDetails || details,
     related: window.modalCtx.timesheetRelated || related,
-    state: window.modalCtx.timesheetState
+    state: window.modalCtx.timesheetState,
+    policy: activeEditDomains,
+    editDomains: activeEditDomains,
+    timesheetEditDomains: activeEditDomains,
+    canEditHoursSchedule: activeEditDomains
+      ? (activeEditDomains.canEditHoursSchedule === true)
+      : undefined,
+    hoursScheduleDisabledReason: activeEditDomains
+      ? String(activeEditDomains.hoursScheduleDisabledReason || '')
+      : ''
   };
 
   // NEW: audit fetch on tab open (best-effort, non-fatal)
@@ -224099,15 +225215,7 @@ const renderTab = (key, mergedRow) => {
     case 'expenses': {
       const enabled = !!(window.modalCtx && window.modalCtx.expenses_tab_enabled);
 
-      // ✅ non-responsive: bounce back to overview if disabled
       if (!enabled) {
-        try {
-          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-          if (fr && fr.entity === 'timesheets' && typeof fr.setTab === 'function') {
-            Promise.resolve().then(() => { try { fr.setTab('overview'); } catch {} });
-          }
-        } catch {}
-
         const why = (window.modalCtx && window.modalCtx.expenses_tab_reason) ? String(window.modalCtx.expenses_tab_reason) : '';
         return `<div class="tabc"><div class="card"><div class="row"><label>Expenses</label><div class="controls"><span class="mini">${why || 'Expenses are not available for this timesheet.'}</span></div></div></div></div>`;
       }
@@ -224434,7 +225542,11 @@ const onSaveTimesheet = async () => {
     (policy && (policy.isInvoiceLocked === true || policy.isSegmentInvoiceLocked === true || policy.isPaid === true))
   );
 
-  const canEditHoursForSave = !(policy && policy.canEditHoursSchedule === false);
+  const canEditHoursForSave = !!(policy && policy.canEditHoursSchedule === true);
+  const hoursScheduleDisabledReasonForSave = String(
+    (policy && policy.hoursScheduleDisabledReason) ||
+    'Hours/schedule cannot be amended for this timesheet.'
+  );
 
   const currentRef = tsLocal.reference_number || rowNow.reference_number || '';
   const stagedRef  = (st.reference != null) ? st.reference : currentRef;
@@ -224602,9 +225714,19 @@ const onSaveTimesheet = async () => {
     st.schedule = Array.isArray(scheduleToSave) ? scheduleToSave : [];
   }
 
-  const scheduleChangedWeekly =
+  const weeklyScheduleDiffers =
     isWeeklyManualContext &&
     !deepEqualJson(sortScheduleStable(weeklyStagedScheduleForDirty || []), baselineSorted);
+
+  const scheduleChangedWeekly =
+    isWeeklyManualContext &&
+    canEditHoursForSave &&
+    weeklyScheduleDiffers;
+
+  const blockedScheduleChangedWeekly =
+    isWeeklyManualContext &&
+    !canEditHoursForSave &&
+    weeklyScheduleDiffers;
 
   // Extras diff (weekly + per-day)
   const normExtrasWeek = (extrasMapOrUnitsWeek) => {
@@ -224747,12 +225869,22 @@ const onSaveTimesheet = async () => {
   const currentExtrasWeek  = getCurrentExtrasWeek();
   const currentExtrasPerDay= getCurrentExtrasPerDay();
 
-  const extrasChangedWeekly =
+  const extrasDiffersWeekly =
     isWeeklyManualContext &&
     (
       stableStringify(currentExtrasWeek)   !== stableStringify(stagedExtrasWeek) ||
       stableStringify(currentExtrasPerDay) !== stableStringify(stagedExtrasPerDay)
     );
+
+  const extrasChangedWeekly =
+    isWeeklyManualContext &&
+    canEditHoursForSave &&
+    extrasDiffersWeekly;
+
+  const blockedExtrasChangedWeekly =
+    isWeeklyManualContext &&
+    !canEditHoursForSave &&
+    extrasDiffersWeekly;
 
   // ─────────────────────────────────────────────────────────────
   // ✅ Expenses diff (NEW): compare draft vs baseline (tsfin-seeded)
@@ -224877,13 +226009,32 @@ const onSaveTimesheet = async () => {
         ? sanitiseDailyManualSchedulePayload(st.schedule, 'object').schedule
         : sanitiseDailyManualSchedulePayload(resolveCurrentDailyScheduleBaseline(tsLocal, rowNow), 'object').schedule)
     : currentSchedule;
-  const scheduleChangedDaily =
+  const dailyScheduleDiffers =
     isDailyManualContext &&
     !deepEqualJson(stagedSchedule, currentSchedule);
 
+  const scheduleChangedDaily =
+    isDailyManualContext &&
+    canEditHoursForSave &&
+    dailyScheduleDiffers;
+
+  const blockedScheduleChangedDaily =
+    isDailyManualContext &&
+    !canEditHoursForSave &&
+    dailyScheduleDiffers;
+
   // ✅ Frontend enforcement — cannot change hours/schedule/extras/expenses while authorised
+  const hoursScheduleDirty = !!(
+    scheduleChangedWeekly ||
+    extrasChangedWeekly ||
+    scheduleChangedDaily ||
+    blockedScheduleChangedWeekly ||
+    blockedExtrasChangedWeekly ||
+    blockedScheduleChangedDaily
+  );
+
   const isAuthorisedContentChangeAttempt =
-    (scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily || expensesChanged);
+    (hoursScheduleDirty || expensesChanged);
 
   if (isAuthorisedNow && isAuthorisedContentChangeAttempt) {
     if (expensesChanged && !(scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily)) {
@@ -224902,18 +226053,17 @@ const onSaveTimesheet = async () => {
   const hasSegTargets   = !!Object.keys(segTargets).length;
   const segmentControlsDirty = !!(det.isSegmentsMode && (hasSegOverrides || hasSegTargets));
 
-  if (segmentControlsDirty && policy && policy.canEditHoursSchedule === false) {
-    alert(policy.hoursScheduleDisabledReason || 'This timesheet was submitted electronically/through QR. Segment controls cannot be amended here.');
+  if (segmentControlsDirty && !canEditHoursForSave) {
+    alert(hoursScheduleDisabledReasonForSave || 'This timesheet was submitted electronically/through QR. Segment controls cannot be amended here.');
     GE();
     return { ok: false };
   }
 
   // QR-sensitive change (weekly schedule + weekly extras + daily schedule)
   const qrSensitiveChange = scheduleChangedWeekly || scheduleChangedDaily || extrasChangedWeekly;
-  const hoursScheduleDirty = !!(scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily);
 
-  if (hoursScheduleDirty && policy && policy.canEditHoursSchedule === false) {
-    alert(policy.hoursScheduleDisabledReason || 'This timesheet was submitted electronically/through QR. To amend hours, switch it to Manual first.');
+  if (hoursScheduleDirty && !canEditHoursForSave) {
+    alert(hoursScheduleDisabledReasonForSave || 'This timesheet was submitted electronically/through QR. To amend hours, switch it to Manual first.');
     GE();
     return { ok: false };
   }
@@ -224961,7 +226111,21 @@ const onSaveTimesheet = async () => {
   // and optionally send a new QR immediately after save.
   // ─────────────────────────────────────────────────────────────
 
-  const qrStatusRaw = String(det?.qr_status || tsLocal?.qr_status || '').toUpperCase();
+    const qrStatusRaw = String(det?.qr_status || tsLocal?.qr_status || '').toUpperCase();
+
+  const preQrCurrentOnHold    = !!tsfinLocal.pay_on_hold;
+  const preQrPayHoldDesired   = (st.payHoldDesired === true || st.payHoldDesired === false) ? st.payHoldDesired : null;
+  const preQrShouldChangeHold =
+    (preQrPayHoldDesired === true  && !preQrCurrentOnHold) ||
+    (preQrPayHoldDesired === false &&  preQrCurrentOnHold);
+
+  const preQrOnlyExpensesDirty = !!(
+    expensesChanged &&
+    !hoursScheduleDirty &&
+    !refChanged &&
+    !segmentControlsDirty &&
+    !preQrShouldChangeHold
+  );
 
   let qrAfterSaveAction = null;     // 'SEND_NEW_NOW' | 'SAVE_ONLY_INVALIDATE' | 'CONVERT_TO_MANUAL_ONLY' | null
   let qrActionBackend   = null;     // 'INVALIDATE' | 'REVOKE_TO_MANUAL' | null
@@ -224972,7 +226136,7 @@ const onSaveTimesheet = async () => {
   // - QR is active/known on this timesheet,
   // - not locked,
   // - and QR-sensitive content actually changed.
-  if (!!tsIdSave && qrStatusRaw && !lockedNow && qrSensitiveChange) {
+  if (!!tsIdSave && qrStatusRaw && !lockedNow && qrSensitiveChange && !preQrOnlyExpensesDirty) {
     const decision = await openQrAfterSaveModal({
       context: {
         timesheet_id: tsIdSave || null,
@@ -225097,15 +226261,38 @@ const onSaveTimesheet = async () => {
       GE();
       return { ok: false };
     }
-    try { st.expensesBaseline = JSON.parse(JSON.stringify(saveExpOnly.committedDraft || stagedExpenses)); } catch {}
+     try { st.expensesBaseline = JSON.parse(JSON.stringify(saveExpOnly.committedDraft || stagedExpenses)); } catch {}
 
     try {
-      if (saveExpOnly.updatedTsfin && window.modalCtx?.timesheetDetails) {
+      const committedTsfin = saveExpOnly.updatedTsfin || null;
+
+      if (committedTsfin && window.modalCtx?.timesheetDetails) {
         window.modalCtx.timesheetDetails.tsfin = {
           ...(window.modalCtx.timesheetDetails.tsfin || {}),
-          ...(saveExpOnly.updatedTsfin || {})
+          ...(committedTsfin || {})
         };
       }
+
+      if (committedTsfin && window.modalCtx?.data) {
+        window.modalCtx.data = {
+          ...(window.modalCtx.data || rowNow),
+          total_pay_ex_vat: committedTsfin.total_pay_ex_vat ?? window.modalCtx.data.total_pay_ex_vat,
+          total_charge_ex_vat: committedTsfin.total_charge_ex_vat ?? window.modalCtx.data.total_charge_ex_vat,
+          margin_ex_vat: committedTsfin.margin_ex_vat ?? window.modalCtx.data.margin_ex_vat,
+          paid_at_utc: committedTsfin.paid_at_utc ?? window.modalCtx.data.paid_at_utc,
+          locked_by_invoice_id: committedTsfin.locked_by_invoice_id ?? window.modalCtx.data.locked_by_invoice_id,
+          id: tsIdSave || window.modalCtx.data.id,
+          timesheet_id: tsIdSave || window.modalCtx.data.timesheet_id
+        };
+      }
+
+      if (tsIdSave && typeof refreshTimesheetsSummaryAfterRotation === 'function') {
+        await refreshTimesheetsSummaryAfterRotation(tsIdSave, {
+          allowRenderAll: false,
+          skipTabRefresh: true
+        });
+      }
+
       if (typeof classifyTimesheetEditDomains === 'function' && window.modalCtx) {
         const refreshedPolicy = classifyTimesheetEditDomains({
           row: window.modalCtx.data || rowNow,
@@ -225128,10 +226315,20 @@ const onSaveTimesheet = async () => {
         window.modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
         window.modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
       }
+
+      try {
+        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        if (fr && fr.entity === 'timesheets') {
+          fr._suppressDirty = true;
+          await fr.setTab(fr.currentTabKey || 'expenses');
+          fr._suppressDirty = false;
+          fr._updateButtons && fr._updateButtons();
+        }
+      } catch {}
     } catch {}
 
     GE();
-    return { ok: true, saved: rowNow };
+    return { ok: true, saved: window.modalCtx?.data || rowNow };
   }
 
    // ✅ WEEKLY MANUAL: schedule-driven ONLY (planned: draft endpoint; processed: manualUpsertContractWeek)
