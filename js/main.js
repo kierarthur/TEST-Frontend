@@ -3474,89 +3474,245 @@ async function apiPostJson(path, body, options = {}) {
 
   try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = null; }
 
-  if (!res.ok) {
-    const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
-    const safeString = (value) => {
-      try {
-        if (value == null) return '';
-        if (typeof value === 'string') return value;
-        if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
-        return '';
-      } catch {
-        return '';
-      }
-    };
-    const safeTrim = (value) => safeString(value).trim();
-    const isBankingPayPath = String(path || '').startsWith('/api/banking/pay/');
-    const opts = (options && typeof options === 'object') ? options : {};
-    const contextAction = opts.action;
-    const inferBankingAction = (apiPath) => {
-      const p = String(apiPath || '').toLowerCase();
-      if (p.includes('/blocked-funds') && p.includes('/retry')) return 'RETRY_BLOCKED_FUNDS';
-      if (p.includes('/retry-blocked-funds')) return 'RETRY_BLOCKED_FUNDS';
-      if (p.includes('/workbench') && p.includes('/open')) return 'WORKBENCH_SESSION_OPEN';
-      if (p.includes('/paye') && p.includes('/import')) return 'PAYE_NET_IMPORT';
-      if (p.includes('/paye')) return 'PAYE_NET_SAVE';
-      if (p.includes('/draft') && (p.includes('/create') || p.endsWith('/draft'))) return 'CREATE_DRAFT';
-      if (p.includes('/preview') || (p.includes('/workbench') && (p.includes('/candidate') || p.includes('/progress') || p.includes('/session/get')))) return 'PREVIEW';
-      return 'BANKING_ACTION';
-    };
-    const extractSafeResponseMessage = (payload) => {
-      if (!isPlainObject(payload)) return '';
-      const candidates = [
-        payload.title,
-        payload.user_message,
-        payload.userMessage,
-        payload.message,
-        payload.friendly_error?.message,
-        payload.friendlyError?.message,
-        payload.error?.message,
-        payload.error?.title,
-        payload.error?.user_message,
-        payload.error?.userMessage,
-        payload.error?.code,
-        payload.error?.error_code,
-        payload.error_code,
-        payload.errorCode,
-        payload.code
-      ];
-      for (const candidate of candidates) {
-        const text = safeTrim(candidate);
-        if (text) return text;
-      }
-      if (typeof payload.error === 'string') return safeTrim(payload.error);
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const safeString = (value) => {
+    try {
+      if (value == null) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+      if (value instanceof Error) return String(value.message || value.name || '');
       return '';
+    } catch {
+      return '';
+    }
+  };
+  const safeTrim = (value) => safeString(value).trim();
+  const isBankingPayPath = String(path || '').startsWith('/api/banking/pay/');
+  const opts = (options && typeof options === 'object') ? options : {};
+  const contextAction = opts.action;
+  const inferBankingAction = (apiPath) => {
+    const p = String(apiPath || '').toLowerCase();
+    if (p.includes('/blocked-funds') && p.includes('/retry')) return 'RETRY_BLOCKED_FUNDS';
+    if (p.includes('/retry-blocked-funds')) return 'RETRY_BLOCKED_FUNDS';
+    if (p.includes('/workbench') && p.includes('/open')) return 'WORKBENCH_SESSION_OPEN';
+    if (p.includes('/paye') && p.includes('/import')) return 'PAYE_NET_IMPORT';
+    if (p.includes('/paye')) return 'PAYE_NET_SAVE';
+    if (p.includes('/draft') && (p.includes('/create') || p.endsWith('/draft'))) return 'CREATE_DRAFT';
+    if (p.includes('/preview') || (p.includes('/workbench') && (p.includes('/candidate') || p.includes('/progress') || p.includes('/session/get')))) return 'PREVIEW';
+    return 'BANKING_ACTION';
+  };
+  const bankingAction = contextAction || inferBankingAction(path);
+  const extractEmbeddedJsonObject = (value) => {
+    const text = safeTrim(value);
+    if (!text) return null;
+    try {
+      const parsedObject = JSON.parse(text);
+      if (isPlainObject(parsedObject)) return parsedObject;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsedObject = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsedObject)) return parsedObject;
+      } catch {}
+    }
+    return null;
+  };
+  const collectBusinessPayloads = (value) => {
+    const out = [];
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
     };
-
-    const fallbackMessage = txt || `Request failed (${res.status})`;
-    const msg = extractSafeResponseMessage(parsed) || fallbackMessage;
-
+    enqueue(value);
+    while (queue.length) {
+      const node = queue.shift();
+      if (isPlainObject(node)) {
+        out.push(node);
+        for (const key of [
+          'error_code', 'errorCode', 'code', 'error', 'message', 'details', 'detail', 'reason', 'hint',
+          'body', 'json', 'payload', 'data', 'result', 'response', 'cause', 'friendly_error', 'friendlyError',
+          'technical_message', 'technicalMessage', 'rpc_error', 'rpcError', 'original_error', 'originalError',
+          'inner_error', 'innerError', 'source_error', 'sourceError', 'raw_error', 'rawError'
+        ]) {
+          const nested = node[key];
+          if (isPlainObject(nested)) enqueue(nested);
+          else {
+            const parsedNested = extractEmbeddedJsonObject(nested);
+            if (parsedNested) enqueue(parsedNested);
+          }
+          if (typeof nested === 'string') enqueue(nested);
+        }
+        if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+      } else if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          details: node.details,
+          detail: node.detail,
+          hint: node.hint,
+          cause: node.cause,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload
+        });
+      } else if (typeof node === 'string') {
+        const parsedNode = extractEmbeddedJsonObject(node);
+        if (parsedNode) enqueue(parsedNode);
+      }
+    }
+    return out;
+  };
+  const normaliseBusinessCode = (value) => {
+    const code = safeTrim(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'PAY_EXECUTE_BANK_FAILED') return 'BANKING_EXECUTE_PAYMENT_FAILED';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const failureCodes = new Set([
+    'BATCH_STALE', 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED', 'PAYE_NOT_READY', 'PAYE_NET_MISSING', 'PAYE_NET_INVALID', 'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING', 'PAYE_NET_BANK_AMOUNT_INVALID', 'HAS_HARD_BLOCKERS', 'BLOCKED_BANK_DETAILS', 'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'FUNDING_ACCOUNT_MISSING', 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED', 'RAIL_ENV_MISMATCH', 'RAIL_NOT_CONFIGURED', 'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER', 'PAYMENT_AUTHORISER_REQUIRED', 'NO_ACTIVE_PAYMENTS_IN_BATCH', 'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'WORKBENCH_SESSION_INVALID', 'WORKBENCH_SESSION_NOT_FOUND', 'STALE_SESSION', 'OBSOLETE_SESSION', 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'BANKING_PAY_PREVIEW_FAILED', 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', 'BANKING_PAY_CREATE_DRAFT_FAILED', 'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED',
+    'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED', 'BLOCKED_FUNDS_RETRY_FAILED', 'BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED',
+    'BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE', 'BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS', 'BLOCKED_FUNDS_RETRY_NO_PENDING_TRANSFERS',
+    'BLOCKED_FUNDS_RETRY_TRANSFER_MATERIALISATION_BLOCKED', 'BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_REQUIRED',
+    'PAY_BATCH_GET_FAILED_AFTER_RETRY_MATERIALISATION', 'BLOCKED_FUNDS_RETRY_CLEANUP_FAILED', 'BLOCKED_FUNDS_RETRY_CLEANUP_VERIFY_FAILED',
+    'BLOCKED_FUNDS_RETRY_BLOCKED_WITH_LOCAL_RETRY_ARTEFACTS', 'BLOCKED_FUNDS_RETRY_RECORDED_WITHOUT_BATCH_STATUS',
+    'BANKING_EXECUTE_PAYMENT_FAILED', 'PAY_BATCH_GET_FAILED', 'PAY_BATCH_PREPARE_FAILED', 'PAY_BATCH_AUTH_START_FAILED', 'PAY_BATCH_FINALISE_FAILED',
+    'RAIL_RETRY_EXECUTION_NOT_SUPPORTED', 'SUPPRESS_REMITTANCES_CONFIRM_REQUIRED', 'PAYMENT_REAUTH_REQUIRED'
+  ]);
+  const extractBusinessFailureEnvelope = (payload, rawText = '') => {
+    const payloads = collectBusinessPayloads(payload);
+    if (rawText) payloads.push(...collectBusinessPayloads(rawText));
+    let best = null;
+    const addFinding = (candidatePayload, candidateCode, score) => {
+      const code = normaliseBusinessCode(candidateCode);
+      if (!code) return;
+      const finding = { payload: isPlainObject(candidatePayload) ? candidatePayload : { error_code: code, message: safeTrim(candidatePayload) || code }, code, score };
+      if (!best || finding.score > best.score) best = finding;
+    };
+    for (const candidate of payloads) {
+      if (!isPlainObject(candidate)) continue;
+      const code = normaliseBusinessCode(candidate.error_code || candidate.errorCode || candidate.code || '');
+      const isKnownFailure = code && failureCodes.has(code);
+      const isOkFalse = candidate.ok === false;
+      const unavailable = candidate.preview_unavailable === true || candidate.create_draft_unavailable === true;
+      const hasErrorValue = Object.prototype.hasOwnProperty.call(candidate, 'error') && candidate.error != null && candidate.error !== false;
+      if (isKnownFailure || isOkFalse || unavailable || (hasErrorValue && candidate.ok !== true)) {
+        addFinding(candidate, isKnownFailure ? code : (code || 'BANKING_ACTION_FAILED'), code === 'BATCH_STALE' ? 100 : (isKnownFailure ? 80 : 40));
+      }
+    }
+    const rawUpper = safeTrim(rawText).toUpperCase();
+    if (rawUpper) {
+      for (const knownCode of failureCodes) {
+        const canonical = normaliseBusinessCode(knownCode);
+        if (!canonical) continue;
+        const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+        if (pattern.test(rawUpper)) addFinding({ error_code: canonical, message: rawText }, canonical, canonical === 'BATCH_STALE' ? 100 : 60);
+      }
+    }
+    if (!best) return null;
+    if (best.code === 'BLOCKED_FUNDS' && best.payload && best.payload.ok === true) return null;
+    return best;
+  };
+  const extractSafeResponseMessage = (payload) => {
+    if (!isPlainObject(payload)) return '';
+    const candidates = [
+      payload.title,
+      payload.user_message,
+      payload.userMessage,
+      payload.message,
+      payload.friendly_error?.message,
+      payload.friendlyError?.message,
+      payload.error?.message,
+      payload.error?.title,
+      payload.error?.user_message,
+      payload.error?.userMessage,
+      payload.error?.code,
+      payload.error?.error_code,
+      payload.error_code,
+      payload.errorCode,
+      payload.code
+    ];
+    for (const candidate of candidates) {
+      const text = safeTrim(candidate);
+      if (text) return text;
+    }
+    if (typeof payload.error === 'string') return safeTrim(payload.error);
+    return '';
+  };
+  const buildAndThrowBankingError = (status, responseText, responseJson, sourceError = null, forcedBusinessFailure = null) => {
+    const fallbackMessage = responseText || `Request failed (${status})`;
+    const msg = extractSafeResponseMessage(responseJson) || safeTrim(sourceError?.message) || fallbackMessage;
     const err = new Error(msg);
-    err.status = res.status;
-    err.body = txt || '';
-    err.json = parsed;
-    err.payload = parsed;
-    err.backendPayload = parsed;
-    err.raw_response_text = txt || '';
-    err.statusText = res.statusText || '';
+    err.status = status;
+    err.body = responseText || '';
+    err.json = responseJson;
+    err.payload = responseJson;
+    err.backendPayload = responseJson;
+    err.raw_response_text = responseText || '';
+    err.statusText = res?.statusText || '';
     err.path = String(path || '');
 
-    if (isPlainObject(parsed)) {
-      if (parsed.error_code || parsed.errorCode || parsed.code) err.error_code = parsed.error_code || parsed.errorCode || parsed.code;
-      if (parsed.code || parsed.error_code || parsed.errorCode) err.code = parsed.code || parsed.error_code || parsed.errorCode;
-      if (parsed.title) err.title = parsed.title;
-      if (parsed.user_message || parsed.userMessage) err.user_message = parsed.user_message || parsed.userMessage;
-      if (parsed.details) err.details = parsed.details;
-      if (parsed.error) err.error = parsed.error;
-      if (parsed.friendly_error || parsed.friendlyError) err.friendly_error = parsed.friendly_error || parsed.friendlyError;
+    if (isPlainObject(responseJson)) {
+      if (responseJson.error_code || responseJson.errorCode || responseJson.code) err.error_code = responseJson.error_code || responseJson.errorCode || responseJson.code;
+      if (responseJson.code || responseJson.error_code || responseJson.errorCode) err.code = responseJson.code || responseJson.error_code || responseJson.errorCode;
+      if (responseJson.title) err.title = responseJson.title;
+      if (responseJson.user_message || responseJson.userMessage) err.user_message = responseJson.user_message || responseJson.userMessage;
+      if (responseJson.details) err.details = responseJson.details;
+      if (responseJson.error) err.error = responseJson.error;
+      if (responseJson.friendly_error || responseJson.friendlyError) err.friendly_error = responseJson.friendly_error || responseJson.friendlyError;
     }
 
-    if (isBankingPayPath && typeof bankingNormalizeApiError === 'function') {
-      const normalised = bankingNormalizeApiError(err, parsed, {
+    if (sourceError && typeof sourceError === 'object') {
+      err.source_error = sourceError;
+      if (!err.backendPayload && sourceError.backendPayload) err.backendPayload = sourceError.backendPayload;
+    }
+
+    const normaliseInput = forcedBusinessFailure?.payload || err;
+    const normalisePayload = forcedBusinessFailure?.payload || responseJson;
+    if (typeof bankingNormalizeApiError === 'function') {
+      const normalised = bankingNormalizeApiError(normaliseInput, normalisePayload, {
         ...opts,
-        action: contextAction || inferBankingAction(path)
+        action: bankingAction,
+        fallbackCode: forcedBusinessFailure?.code || opts.fallbackCode || opts.fallback_code
       });
       if (normalised && typeof normalised === 'object') {
+        if (typeof bankingBuildEnrichedFriendlyError === 'function') {
+          const enriched = bankingBuildEnrichedFriendlyError(err, normalised, normalised.user_message || normalised.message || msg);
+          enriched.status = Number(status || enriched.status || normalised.status_code || normalised.http_status || 500) || 500;
+          enriched.body = err.body;
+          enriched.raw_response_text = err.raw_response_text;
+          enriched.statusText = err.statusText;
+          enriched.path = err.path;
+          if (!enriched.backendPayload) enriched.backendPayload = responseJson;
+          throw enriched;
+        }
         err.friendly_error = normalised.friendly_error || {
           code: normalised.error_code || normalised.code || 'BANKING_ACTION_FAILED',
           title: normalised.title || 'Banking action failed',
@@ -3568,13 +3724,44 @@ async function apiPostJson(path, body, options = {}) {
         err.title = normalised.title || 'Banking action failed';
         err.user_message = normalised.user_message || normalised.message || err.title;
         err.message = normalised.user_message || normalised.message || err.message;
-        err.technical_message = txt || msg;
-        err.statusText = res.statusText || '';
-        err.path = String(path || '');
-        err.backendPayload = parsed;
+        err.technical_message = responseText || msg;
+        err.backendPayload = responseJson;
       }
     }
     throw err;
+  };
+
+  if (!res.ok) {
+    if (isBankingPayPath) {
+      const businessFailure = extractBusinessFailureEnvelope(parsed, txt);
+      buildAndThrowBankingError(res.status, txt, parsed, null, businessFailure);
+    }
+
+    const fallbackMessage = txt || `Request failed (${res.status})`;
+    const msg = extractSafeResponseMessage(parsed) || fallbackMessage;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.body = txt || '';
+    err.json = parsed;
+    err.payload = parsed;
+    err.backendPayload = parsed;
+    err.raw_response_text = txt || '';
+    err.statusText = res.statusText || '';
+    err.path = String(path || '');
+    throw err;
+  }
+
+  if (isBankingPayPath) {
+    const businessFailure = extractBusinessFailureEnvelope(parsed, txt);
+    if (businessFailure) {
+      buildAndThrowBankingError(
+        businessFailure.code === 'BATCH_STALE' ? 409 : boundedHttpStatus(parsed?.http_status || parsed?.status_code, 400),
+        txt,
+        parsed,
+        null,
+        businessFailure
+      );
+    }
   }
 
   return (parsed != null) ? parsed : {};
@@ -23834,9 +24021,84 @@ async function bankingPayBatchRetryBlockedFunds(payBatchId, payload = {}) {
     const text = await response.text().catch(() => '');
     let parsed = null;
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
-    if (!response.ok) {
+
+    const isObj = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+    const parseEmbedded = (value) => {
+      if (isObj(value)) return value;
+      const raw = String(value == null ? '' : value).trim();
+      if (!raw) return null;
+      try {
+        const parsedObject = JSON.parse(raw);
+        if (isObj(parsedObject)) return parsedObject;
+      } catch {}
+      const start = raw.indexOf('{');
+      const end = raw.lastIndexOf('}');
+      if (start >= 0 && end > start) {
+        try {
+          const parsedObject = JSON.parse(raw.slice(start, end + 1));
+          if (isObj(parsedObject)) return parsedObject;
+        } catch {}
+      }
+      return null;
+    };
+    const normaliseCode = (value) => {
+      const code = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+      if (!code) return '';
+      if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+      if (code === 'PAY_EXECUTE_BANK_FAILED') return 'BANKING_EXECUTE_PAYMENT_FAILED';
+      if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+      if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+      return code;
+    };
+    const retryFailureCodes = new Set([
+      'BATCH_STALE', 'BLOCKED_FUNDS_RETRY_FAILED', 'BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED',
+      'BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE', 'BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS',
+      'BLOCKED_FUNDS_RETRY_NO_PENDING_TRANSFERS', 'BLOCKED_FUNDS_RETRY_TRANSFER_MATERIALISATION_BLOCKED',
+      'BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_REQUIRED', 'PAY_BATCH_GET_FAILED_AFTER_RETRY_MATERIALISATION',
+      'BLOCKED_FUNDS_RETRY_CLEANUP_FAILED', 'BLOCKED_FUNDS_RETRY_CLEANUP_VERIFY_FAILED',
+      'BLOCKED_FUNDS_RETRY_BLOCKED_WITH_LOCAL_RETRY_ARTEFACTS', 'BLOCKED_FUNDS_RETRY_RECORDED_WITHOUT_BATCH_STATUS',
+      'PAY_EXECUTE_BANK_FAILED', 'BANKING_EXECUTE_PAYMENT_FAILED', 'PAY_BATCH_GET_FAILED', 'FUNDING_ACCOUNT_MISSING',
+      'RAIL_ENV_MISMATCH', 'RAIL_NOT_CONFIGURED', 'UNKNOWN_RAIL_PROVIDER', 'MISSING_RAIL_PROVIDER', 'PAYMENT_AUTHORISER_REQUIRED'
+    ]);
+    const detectFailurePayload = (value) => {
+      const queue = [];
+      const seen = new Set();
+      const enqueue = (candidate) => {
+        if (candidate == null) return;
+        const marker = typeof candidate === 'object' ? candidate : String(candidate);
+        if (seen.has(marker)) return;
+        seen.add(marker);
+        queue.push(candidate);
+      };
+      enqueue(value);
+      enqueue(text);
+      while (queue.length) {
+        const item = queue.shift();
+        if (typeof item === 'string') {
+          const parsedObject = parseEmbedded(item);
+          if (parsedObject) enqueue(parsedObject);
+          const upper = item.toUpperCase();
+          for (const code of retryFailureCodes) {
+            if (upper.includes(code)) return { error_code: normaliseCode(code), message: item };
+          }
+          continue;
+        }
+        if (!isObj(item)) continue;
+        const directCode = normaliseCode(item.error_code || item.errorCode || item.code || '');
+        if (item.ok === false || (directCode && retryFailureCodes.has(directCode))) return { ...item, error_code: directCode || item.error_code || item.code || 'BLOCKED_FUNDS_RETRY_FAILED', code: directCode || item.code || item.error_code || 'BLOCKED_FUNDS_RETRY_FAILED' };
+        for (const key of ['error', 'message', 'details', 'detail', 'body', 'json', 'payload', 'data', 'result', 'response', 'friendly_error', 'friendlyError', 'technical_message', 'technicalMessage', 'rpc_error', 'rpcError', 'original_error', 'originalError', 'cause']) {
+          const nested = item[key];
+          if (isObj(nested)) enqueue(nested);
+          const parsedNested = parseEmbedded(nested);
+          if (parsedNested) enqueue(parsedNested);
+          if (typeof nested === 'string') enqueue(nested);
+        }
+      }
+      return null;
+    };
+    const throwFriendly = (status, sourcePayload) => {
       const normalized = (typeof bankingNormalizeApiError === 'function')
-        ? bankingNormalizeApiError(parsed || text || null, parsed, {
+        ? bankingNormalizeApiError(sourcePayload || parsed || text || null, sourcePayload || parsed, {
             action: 'RETRY_BLOCKED_FUNDS',
             userInitiated: true
           })
@@ -23847,19 +24109,42 @@ async function bankingPayBatchRetryBlockedFunds(payBatchId, payload = {}) {
         normalized?.friendly_error?.message ||
         'Blocked-funds retry failed.'
       ).trim();
-      const error = new Error(friendlyMessage || 'Blocked-funds retry failed.');
-      error.status = response.status;
-      error.body = text;
-      error.json = parsed;
-      error.payload = parsed;
-      error.friendly_error = normalized?.friendly_error || normalized || null;
-      error.error_code = String(normalized?.error_code || normalized?.code || parsed?.error_code || parsed?.code || '').trim() || null;
-      error.code = error.error_code;
-      error.title = String(normalized?.title || normalized?.friendly_error?.title || '').trim() || null;
-      error.user_message = String(normalized?.user_message || normalized?.message || friendlyMessage || '').trim() || null;
-      error.message = error.user_message || friendlyMessage || 'Blocked-funds retry failed.';
-      throw error;
+      const baseError = new Error(friendlyMessage || 'Blocked-funds retry failed.');
+      baseError.status = status;
+      baseError.body = text;
+      baseError.json = parsed;
+      baseError.payload = parsed;
+      baseError.backendPayload = parsed;
+      baseError.raw_response_text = text;
+      baseError.friendly_error = normalized?.friendly_error || normalized || null;
+      baseError.error_code = String(normalized?.error_code || normalized?.code || sourcePayload?.error_code || sourcePayload?.code || parsed?.error_code || parsed?.code || '').trim() || null;
+      baseError.code = baseError.error_code;
+      baseError.title = String(normalized?.title || normalized?.friendly_error?.title || '').trim() || null;
+      baseError.user_message = String(normalized?.user_message || normalized?.message || friendlyMessage || '').trim() || null;
+      baseError.message = baseError.user_message || friendlyMessage || 'Blocked-funds retry failed.';
+      if (typeof bankingBuildEnrichedFriendlyError === 'function' && normalized && typeof normalized === 'object') {
+        const enriched = bankingBuildEnrichedFriendlyError(baseError, normalized, baseError.message);
+        enriched.status = status;
+        enriched.body = text;
+        enriched.backendPayload = parsed;
+        enriched.raw_response_text = text;
+        throw enriched;
+      }
+      throw baseError;
+    };
+
+    if (!response.ok) {
+      throwFriendly(response.status, detectFailurePayload(parsed) || parsed);
     }
+
+    const failurePayload = detectFailurePayload(parsed);
+    if (failurePayload) {
+      const code = normaliseCode(failurePayload.error_code || failurePayload.code || '');
+      if (!(code === 'BLOCKED_FUNDS' && failurePayload.ok === true)) {
+        throwFriendly(code === 'BATCH_STALE' ? 409 : 400, failurePayload);
+      }
+    }
+
     return (parsed && typeof parsed === 'object') ? parsed : {};
   };
 
@@ -23950,6 +24235,7 @@ async function bankingPayBatchRetryBlockedFunds(payBatchId, payload = {}) {
 
   return obj;
 }
+
 
 
 
@@ -25392,6 +25678,209 @@ async function bankingPayPreview(pay_date) {
     };
     await presentPreviewFriendlyError(friendly, 'Payment preview could not be loaded', message);
   };
+  const previewFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED'
+  ]);
+  const normalizePreviewFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parsePreviewEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectPreviewFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parsePreviewEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of previewFailureCodes) {
+          const canonical = normalizePreviewFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizePreviewFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true;
+      const hasKnownDirectCode = !!(code && previewFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizePreviewFailureCode(node.error_code || node.code || '') || 'BANKING_PAY_PREVIEW_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parsePreviewEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+  const throwPreviewFailureEnvelope = (failurePayload, fallbackCode = 'BANKING_PAY_PREVIEW_FAILED') => {
+    const sourcePayload = isPlainObject(failurePayload)
+      ? failurePayload
+      : { ok: false, error_code: fallbackCode, code: fallbackCode, message: trimStr(failurePayload) || fallbackCode };
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(sourcePayload, sourcePayload, {
+          action: 'PREVIEW',
+          fallbackCode: sourcePayload.error_code || sourcePayload.code || fallbackCode,
+          userInitiated: previewUserInitiated,
+          silent: previewSilent,
+          background: previewBackground,
+          showModal: previewUserInitiated && !previewSilent && !previewBackground,
+          payload: sourcePayload,
+          backendPayload: sourcePayload
+        })
+      : null;
+    const message = trimStr(
+      friendly?.user_message ||
+      friendly?.message ||
+      friendly?.friendly_error?.message ||
+      sourcePayload.user_message ||
+      sourcePayload.message ||
+      sourcePayload.error ||
+      'Payment preview could not be loaded. CloudTMS could not calculate the payment preview. Refresh Banking and try again.'
+    ) || 'Payment preview could not be loaded. CloudTMS could not calculate the payment preview. Refresh Banking and try again.';
+    const err = new Error(message);
+    err.status = Number(friendly?.status_code || friendly?.http_status || sourcePayload.status_code || sourcePayload.http_status || 400) || 400;
+    err.payload = sourcePayload;
+    err.json = sourcePayload;
+    err.backendPayload = sourcePayload;
+    err.friendly_error = friendly?.friendly_error || friendly || sourcePayload.friendly_error || null;
+    err.error_code = trimStr(friendly?.error_code || friendly?.code || sourcePayload.error_code || sourcePayload.code || fallbackCode) || fallbackCode;
+    err.code = err.error_code;
+    err.title = trimStr(friendly?.title || friendly?.friendly_error?.title || sourcePayload.title || 'Payment preview could not be loaded') || 'Payment preview could not be loaded';
+    err.user_message = message;
+    err.technical_message = trimStr(sourcePayload.technical_message || sourcePayload.message || sourcePayload.error || '');
+    if (typeof bankingBuildEnrichedFriendlyError === 'function' && friendly && typeof friendly === 'object') {
+      throw bankingBuildEnrichedFriendlyError(err, friendly, message);
+    }
+    throw err;
+  };
 
   const syncProgressIntoState = (progress) => {
     const progressObj = isPlainObject(progress) ? progress : null;
@@ -25720,6 +26209,10 @@ async function bankingPayPreview(pay_date) {
     if (beforeFullRefreshGuard) return;
 
     const refreshedPreview = await bankingPayWorkbenchSessionGet(expectedSessionId);
+    const refreshedPreviewFailure = detectPreviewFailureEnvelope(refreshedPreview);
+    if (refreshedPreviewFailure) {
+      throwPreviewFailureEnvelope(refreshedPreviewFailure, 'BANKING_PAY_PREVIEW_FAILED');
+    }
     if (shouldAbortDetachedSettler(expectedSessionId)) return;
 
     applyFullWorkbenchPreviewPayload(refreshedPreview);
@@ -25734,10 +26227,18 @@ async function bankingPayPreview(pay_date) {
 
     if (candidateScopedRefresh && !willOpenNewWorkbenchSession && trimStr(wiz.workbench.session_id) && requestedCandidateId) {
       responsePayload = await bankingPayWorkbenchSessionGetCandidate(wiz.workbench.session_id, requestedCandidateId);
+      const responsePayloadFailure = detectPreviewFailureEnvelope(responsePayload);
+      if (responsePayloadFailure) {
+        throwPreviewFailureEnvelope(responsePayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+      }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       mergePayWorkbenchCandidatePreviewIntoState(responsePayload, stLocal);
     } else if (useReplacementSessionBootstrap && trimStr(replacementSessionId) && typeof bankingPayWorkbenchSessionGet === 'function') {
       responsePayload = await bankingPayWorkbenchSessionGet(replacementSessionId);
+      const replacementSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
+      if (replacementSessionPayloadFailure) {
+        throwPreviewFailureEnvelope(replacementSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+      }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       applyFullWorkbenchPreviewPayload(responsePayload);
       try {
@@ -25748,6 +26249,10 @@ async function bankingPayPreview(pay_date) {
       didFullPreviewLoad = true;
     } else if (willOpenNewWorkbenchSession) {
       responsePayload = await bankingPayWorkbenchSessionOpen(openPayload);
+      const openedSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
+      if (openedSessionPayloadFailure) {
+        throwPreviewFailureEnvelope(openedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+      }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       applyFullWorkbenchPreviewPayload(responsePayload);
       try {
@@ -25757,6 +26262,10 @@ async function bankingPayPreview(pay_date) {
       didFullPreviewLoad = true;
     } else if (softRefresh || trimStr(wiz.workbench.session_id)) {
       responsePayload = await bankingPayWorkbenchSessionGet(wiz.workbench.session_id);
+      const existingSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
+      if (existingSessionPayloadFailure) {
+        throwPreviewFailureEnvelope(existingSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+      }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       applyFullWorkbenchPreviewPayload(responsePayload);
       try {
@@ -25766,6 +26275,10 @@ async function bankingPayPreview(pay_date) {
       didFullPreviewLoad = true;
     } else {
       responsePayload = await bankingPayWorkbenchSessionOpen(openPayload);
+      const fallbackOpenedSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
+      if (fallbackOpenedSessionPayloadFailure) {
+        throwPreviewFailureEnvelope(fallbackOpenedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+      }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       applyFullWorkbenchPreviewPayload(responsePayload);
       try {
@@ -25997,6 +26510,8 @@ function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, opti
     st.selected_row_keys = [st.active_row_key, ...st.selected_row_keys].filter(Boolean);
   }
 }
+
+
 
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
@@ -26416,6 +26931,212 @@ async function bankingPayCreateDraft(input = {}) {
     } catch {}
     await presentCreateDraftFriendlyError(friendly, 'Payment batch could not be created', msg);
     return null;
+  };
+  const createDraftFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_CREATE_DRAFT_FAILED',
+    'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED',
+    'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED',
+    'BANKING_CREATE_DRAFT_INVALID_PAY_DATE',
+    'BANKING_CREATE_DRAFT_INVALID_INPUT',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH'
+  ]);
+  const normalizeCreateDraftFailureCode = (value) => {
+    const code = upperTrim(value).replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseCreateDraftEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectCreateDraftFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseCreateDraftEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of createDraftFailureCodes) {
+          const canonical = normalizeCreateDraftFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeCreateDraftFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.create_draft_unavailable === true || node.preview_unavailable === true;
+      const hasKnownDirectCode = !!(code && createDraftFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeCreateDraftFailureCode(node.error_code || node.code || '') || 'BANKING_PAY_CREATE_DRAFT_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseCreateDraftEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+  const throwCreateDraftFailureEnvelope = (failurePayload, fallbackCode = 'BANKING_PAY_CREATE_DRAFT_FAILED') => {
+    const sourcePayload = isPlainObject(failurePayload)
+      ? failurePayload
+      : { ok: false, error_code: fallbackCode, code: fallbackCode, message: trimStr(failurePayload) || fallbackCode };
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(sourcePayload, sourcePayload, {
+          action: 'CREATE_DRAFT',
+          fallbackCode: sourcePayload.error_code || sourcePayload.code || fallbackCode,
+          userInitiated: createDraftUserInitiated,
+          silent: createDraftSilent,
+          background: createDraftBackground,
+          showModal: createDraftUserInitiated && !createDraftSilent && !createDraftBackground,
+          payload: sourcePayload,
+          backendPayload: sourcePayload
+        })
+      : null;
+    const message = trimStr(
+      friendly?.user_message ||
+      friendly?.message ||
+      friendly?.friendly_error?.message ||
+      sourcePayload.user_message ||
+      sourcePayload.message ||
+      sourcePayload.error ||
+      'Payment batch could not be created. Refresh the preview, review the latest payment details, then try again.'
+    ) || 'Payment batch could not be created. Refresh the preview, review the latest payment details, then try again.';
+    const err = new Error(message);
+    err.status = Number(friendly?.status_code || friendly?.http_status || sourcePayload.status_code || sourcePayload.http_status || 400) || 400;
+    err.payload = sourcePayload;
+    err.json = sourcePayload;
+    err.backendPayload = sourcePayload;
+    err.friendly_error = friendly?.friendly_error || friendly || sourcePayload.friendly_error || null;
+    err.error_code = trimStr(friendly?.error_code || friendly?.code || sourcePayload.error_code || sourcePayload.code || fallbackCode) || fallbackCode;
+    err.code = err.error_code;
+    err.title = trimStr(friendly?.title || friendly?.friendly_error?.title || sourcePayload.title || 'Payment batch could not be created') || 'Payment batch could not be created';
+    err.user_message = message;
+    err.technical_message = trimStr(sourcePayload.technical_message || sourcePayload.message || sourcePayload.error || '');
+    if (typeof bankingBuildEnrichedFriendlyError === 'function' && friendly && typeof friendly === 'object') {
+      throw bankingBuildEnrichedFriendlyError(err, friendly, message);
+    }
+    throw err;
   };
   const normalizeCutoffDate = (value) => trimStr(value) || '9999-12-31';
   const canonicalizeJsonValue = (value) => {
@@ -27155,6 +27876,10 @@ async function bankingPayCreateDraft(input = {}) {
     const selectionSyncResult = await bankingPayWorkbenchSessionSetSelectedRows(sessionId, {
       selected_preview_row_ids: selectedPreviewRowIdsForServer
     });
+    const selectionSyncFailure = detectCreateDraftFailureEnvelope(selectionSyncResult);
+    if (selectionSyncFailure) {
+      throwCreateDraftFailureEnvelope(selectionSyncFailure, 'BANKING_PAY_CREATE_DRAFT_FAILED');
+    }
 
     const syncedSelectedRows = uniqTrimmed(
       Array.isArray(selectionSyncResult?.selected_preview_row_ids)
@@ -27200,6 +27925,10 @@ async function bankingPayCreateDraft(input = {}) {
       fallbackTitle: 'Payment batch could not be created',
       fallbackMessage: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.'
     });
+    const createDraftFailure = detectCreateDraftFailureEnvelope(obj);
+    if (createDraftFailure) {
+      throwCreateDraftFailureEnvelope(createDraftFailure, 'BANKING_PAY_CREATE_DRAFT_FAILED');
+    }
     const normalised = makeNormalizedCreateDraftResult(obj);
     const postCreateRefresh = (obj && typeof obj === 'object' && obj.post_create_refresh && typeof obj.post_create_refresh === 'object' && !Array.isArray(obj.post_create_refresh))
       ? obj.post_create_refresh
@@ -27472,8 +28201,6 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
-
-
 
 
 
@@ -36688,6 +37415,17 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_MISMATCH',
     'BLOCKED_FUNDS_RETRY_TRANSFER_EVENTS_EXIST',
     'BLOCKED_FUNDS_RETRY_NO_ACTIVE_ITEMS',
+    'BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED',
+    'BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE',
+    'BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS',
+    'BLOCKED_FUNDS_RETRY_NO_PENDING_TRANSFERS',
+    'BLOCKED_FUNDS_RETRY_TRANSFER_MATERIALISATION_BLOCKED',
+    'BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_REQUIRED',
+    'PAY_BATCH_GET_FAILED_AFTER_RETRY_MATERIALISATION',
+    'BLOCKED_FUNDS_RETRY_CLEANUP_FAILED',
+    'BLOCKED_FUNDS_RETRY_CLEANUP_VERIFY_FAILED',
+    'BLOCKED_FUNDS_RETRY_BLOCKED_WITH_LOCAL_RETRY_ARTEFACTS',
+    'BLOCKED_FUNDS_RETRY_RECORDED_WITHOUT_BATCH_STATUS',
     'NO_ACTIVE_PAYMENTS_IN_BATCH',
     'NO_TIMESHEETS_READY_FOR_DRAFT',
     'EXECUTE_NOT_ALLOWED',
@@ -36923,6 +37661,17 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED',
     'STANDARD_BANK_IMMEDIATE_RAIL_EXECUTION_ERRORS',
     'PAYMENT_AUTHORISER_REQUIRED',
+    'BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED',
+    'BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE',
+    'BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS',
+    'BLOCKED_FUNDS_RETRY_NO_PENDING_TRANSFERS',
+    'BLOCKED_FUNDS_RETRY_TRANSFER_MATERIALISATION_BLOCKED',
+    'BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_REQUIRED',
+    'PAY_BATCH_GET_FAILED_AFTER_RETRY_MATERIALISATION',
+    'BLOCKED_FUNDS_RETRY_CLEANUP_FAILED',
+    'BLOCKED_FUNDS_RETRY_CLEANUP_VERIFY_FAILED',
+    'BLOCKED_FUNDS_RETRY_BLOCKED_WITH_LOCAL_RETRY_ARTEFACTS',
+    'BLOCKED_FUNDS_RETRY_RECORDED_WITHOUT_BATCH_STATUS',
     'NO_ACTIVE_PAYMENTS_IN_BATCH'
   ];
   const priorityBusinessCode = priorityBusinessCodes.find((candidateCode) => {
@@ -36937,6 +37686,14 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   let errorCode = priorityBusinessCode || specificStructuredCode || detectedSpecificCode || safeNonTransportCode || wrapperStructuredCode || detectedWrapperCode || genericStructuredCode || detectedCode || 'BANKING_ACTION_FAILED';
 
   const blockedFundsFailureContext = rawUpper.includes('MARK_BLOCKED_FUNDS_FAILED')
+    || rawUpper.includes('BLOCKED_FUNDS_RETRY_FAILED')
+    || rawUpper.includes('BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED')
+    || rawUpper.includes('BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE')
+    || rawUpper.includes('BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS')
+    || rawUpper.includes('BLOCKED_FUNDS_RETRY_NO_PENDING_TRANSFERS')
+    || rawUpper.includes('BLOCKED_FUNDS_RETRY_TRANSFER_MATERIALISATION_BLOCKED')
+    || rawUpper.includes('BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_REQUIRED')
+    || rawUpper.includes('PAY_BATCH_GET_FAILED_AFTER_RETRY_MATERIALISATION')
     || rawUpper.includes('BLOCKED_FUNDS_RETRY_CLEANUP_FAILED')
     || rawUpper.includes('BLOCKED_FUNDS_RETRY_CLEANUP_VERIFY_FAILED')
     || rawUpper.includes('BLOCKED_FUNDS_RETRY_STATUS_MISMATCH')
@@ -36983,6 +37740,126 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       submitted_to_bank: false,
       status: 'BLOCKED_FUNDS',
       post_execution_status: 'BLOCKED_FUNDS'
+    },
+    BLOCKED_FUNDS_RETRY_FAILED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BLOCKED_FUNDS_RETRY_NO_PENDING_TRANSFERS: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BLOCKED_FUNDS_RETRY_TRANSFER_MATERIALISATION_BLOCKED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_REQUIRED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    PAY_BATCH_GET_FAILED_AFTER_RETRY_MATERIALISATION: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BLOCKED_FUNDS_RETRY_CLEANUP_FAILED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BLOCKED_FUNDS_RETRY_CLEANUP_VERIFY_FAILED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BLOCKED_FUNDS_RETRY_BLOCKED_WITH_LOCAL_RETRY_ARTEFACTS: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BLOCKED_FUNDS_RETRY_RECORDED_WITHOUT_BATCH_STATUS: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry did not complete',
+      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
     },
 
     NO_ACTIVE_PAYMENTS_IN_BATCH: {
@@ -37523,6 +38400,8 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 
   return result;
 }
+
+
 
 
 
@@ -43608,53 +44487,158 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     return String(fallback || 'CloudTMS could not complete this Banking action. Please refresh and try again.').trim();
   };
 
-  const extractBlockedFundsRetryErrorPayload = (error) => {
+ const extractBlockedFundsRetryErrorPayload = (error) => {
     const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+    const safeString = (v) => {
+      try {
+        if (v == null) return '';
+        if (typeof v === 'string') return v;
+        if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint') return String(v);
+        if (v instanceof Error) return String(v.message || v.name || '');
+        return JSON.stringify(v);
+      } catch {
+        try { return String(v || ''); } catch { return ''; }
+      }
+    };
+    const normaliseCode = (v) => {
+      const code = safeString(v).trim().toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+      if (!code) return '';
+      if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+      if (code === 'PAY_EXECUTE_BANK_FAILED') return 'BANKING_EXECUTE_PAYMENT_FAILED';
+      if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+      if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+      return code;
+    };
     const tryParse = (v) => {
       if (isObj(v)) return v;
-      const text = String(v == null ? '' : v).trim();
+      const text = safeString(v).trim();
       if (!text) return null;
       try {
         const parsed = JSON.parse(text);
         return isObj(parsed) ? parsed : null;
-      } catch { return null; }
-    };
-    const unwrap = (v, depth = 0) => {
-      if (!isObj(v) || depth > 6) return null;
-      const inner = tryParse(v.error) || tryParse(v.message) || tryParse(v.detail) || tryParse(v.details);
-      return inner ? (unwrap(inner, depth + 1) || inner) : v;
+      } catch {}
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (start >= 0 && end > start) {
+        try {
+          const parsed = JSON.parse(text.slice(start, end + 1));
+          return isObj(parsed) ? parsed : null;
+        } catch {}
+      }
+      return null;
     };
     const mergeMeta = (base, source) => {
-      if (!isObj(source)) return base;
       const out = isObj(base) ? { ...base } : {};
+      if (!isObj(source)) return out;
       const safeKeys = [
         'batch_get', 'retry_cleanup', 'blocked_funds_required_gbp', 'blocked_funds_available_gbp',
         'blocked_funds_provider', 'blocked_funds_env', 'blocked_funds_account_ref',
-        'banking_alerts', 'banking_unacknowledged_alert_count', 'banking_highest_alert_label', 'banking_highest_alert_severity'
+        'banking_alerts', 'banking_unacknowledged_alert_count', 'banking_highest_alert_label', 'banking_highest_alert_severity',
+        'blocked_funds', 'status', 'post_execution_status', 'submitted_to_bank'
       ];
       for (const key of safeKeys) {
         if (Object.prototype.hasOwnProperty.call(source, key) && !Object.prototype.hasOwnProperty.call(out, key)) out[key] = source[key];
       }
       return out;
     };
+    const knownCodes = new Set([
+      'BATCH_STALE', 'BLOCKED_FUNDS', 'BLOCKED_FUNDS_RETRY_FAILED', 'BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED',
+      'BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE', 'BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS',
+      'BLOCKED_FUNDS_RETRY_NO_PENDING_TRANSFERS', 'BLOCKED_FUNDS_RETRY_TRANSFER_MATERIALISATION_BLOCKED',
+      'BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_REQUIRED', 'PAY_BATCH_GET_FAILED_AFTER_RETRY_MATERIALISATION',
+      'BLOCKED_FUNDS_RETRY_CLEANUP_FAILED', 'BLOCKED_FUNDS_RETRY_CLEANUP_VERIFY_FAILED',
+      'BLOCKED_FUNDS_RETRY_BLOCKED_WITH_LOCAL_RETRY_ARTEFACTS', 'BLOCKED_FUNDS_RETRY_RECORDED_WITHOUT_BATCH_STATUS',
+      'PAY_EXECUTE_BANK_FAILED', 'BANKING_EXECUTE_PAYMENT_FAILED', 'PAY_BATCH_GET_FAILED', 'FUNDING_ACCOUNT_MISSING',
+      'RAIL_ENV_MISMATCH', 'RAIL_NOT_CONFIGURED', 'UNKNOWN_RAIL_PROVIDER', 'MISSING_RAIL_PROVIDER', 'PAYMENT_AUTHORISER_REQUIRED'
+    ]);
+    const queue = [];
+    const visitedObjects = new Set();
+    const visitedStrings = new Set();
+    const findings = [];
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || visitedStrings.has(text)) return;
+        visitedStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (visitedObjects.has(candidate)) return;
+        visitedObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+    const addFinding = (payload, code, score) => {
+      const normalisedCode = normaliseCode(code);
+      if (!normalisedCode) return;
+      findings.push({
+        payload: mergeMeta(isObj(payload) ? payload : { error_code: normalisedCode, message: safeString(payload) || normalisedCode }, error),
+        code: normalisedCode,
+        score: normalisedCode === 'BATCH_STALE' ? 100 : score
+      });
+    };
 
-    if (!isObj(error)) return null;
-    const candidates = [
-      error.friendly_error, error.payload, error.json, error.body, error.message,
-      tryParse(error.body), tryParse(error.message)
-    ];
-    for (const c of candidates) {
-      const parsed = unwrap(tryParse(c) || c);
-      if (!isObj(parsed)) continue;
-      const payload = mergeMeta(parsed, error.payload);
-      const innerCode = String(payload.error_code || payload.code || '').trim().toUpperCase();
-      if (innerCode && innerCode !== 'P0001') return payload;
-      const nested = unwrap(tryParse(payload.error) || tryParse(payload.message) || payload);
-      if (isObj(nested)) return mergeMeta(nested, payload);
-      return payload;
+    enqueue(error);
+    while (queue.length) {
+      const node = queue.shift();
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          details: node.details,
+          detail: node.detail,
+          hint: node.hint,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          response_json: node.response_json,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message,
+          cause: node.cause
+        });
+        continue;
+      }
+      if (typeof node === 'string') {
+        const parsed = tryParse(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of knownCodes) {
+          const canonical = normaliseCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) addFinding({ error_code: canonical, message: node }, canonical, canonical === 'BLOCKED_FUNDS' ? 70 : 60);
+        }
+        continue;
+      }
+      if (!isObj(node)) continue;
+      const directCode = normaliseCode(node.error_code || node.errorCode || node.code || '');
+      const directKnown = directCode && knownCodes.has(directCode);
+      const okFalse = node.ok === false;
+      if (directKnown || okFalse) addFinding(node, directKnown ? directCode : 'BLOCKED_FUNDS_RETRY_FAILED', directKnown ? 85 : 45);
+      for (const key of [
+        'friendly_error', 'friendlyError', 'payload', 'json', 'body', 'message', 'error', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'details', 'detail', 'reason', 'hint',
+        'cause', 'data', 'result', 'response', 'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError'
+      ]) {
+        const nested = node[key];
+        enqueue(nested);
+        const parsed = tryParse(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
     }
-    return null;
+
+    if (!findings.length) return null;
+    findings.sort((a, b) => b.score - a.score);
+    const best = findings[0];
+    return mergeMeta({ ...best.payload, error_code: best.code, code: best.code }, best.payload);
   };
+
 
   const formatRetryMoney = (value) => {
     const n = Number(value);
@@ -43662,7 +44646,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     return `£${(Math.round(n * 100) / 100).toFixed(2)}`;
   };
 
-  const buildBlockedFundsRetryModalCopy = (payload, error = null, fallbackMessage = '') => {
+ const buildBlockedFundsRetryModalCopy = (payload, error = null, fallbackMessage = '') => {
     const p = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
     const normalized = (typeof bankingNormalizeApiError === 'function')
       ? bankingNormalizeApiError(error || p, p, { action: 'RETRY_BLOCKED_FUNDS', userInitiated: true })
@@ -43681,28 +44665,38 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     const envLabel = String(p.blocked_funds_env || p.batch_get?.blocked_funds_env || p.batch_get?.batch?.blocked_funds_env || p.batch_get?.rail_env_snapshot || p.batch_get?.batch?.rail_env_snapshot || '').trim();
     const accountRef = String(p.blocked_funds_account_ref || p.batch_get?.blocked_funds_account_ref || p.batch_get?.batch?.blocked_funds_account_ref || p.batch_get?.funding_account_ref || p.batch_get?.batch?.funding_account_ref || '').trim();
 
+    const retryTerminalCodes = new Set([
+      'BLOCKED_FUNDS_RETRY_FAILED',
+      'BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED',
+      'BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE',
+      'BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS',
+      'BLOCKED_FUNDS_RETRY_NO_PENDING_TRANSFERS',
+      'BLOCKED_FUNDS_RETRY_TRANSFER_MATERIALISATION_BLOCKED',
+      'BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_REQUIRED',
+      'PAY_BATCH_GET_FAILED_AFTER_RETRY_MATERIALISATION',
+      'BLOCKED_FUNDS_RETRY_CLEANUP_FAILED',
+      'BLOCKED_FUNDS_RETRY_CLEANUP_VERIFY_FAILED',
+      'BLOCKED_FUNDS_RETRY_BLOCKED_WITH_LOCAL_RETRY_ARTEFACTS',
+      'BLOCKED_FUNDS_RETRY_RECORDED_WITHOUT_BATCH_STATUS'
+    ]);
+
     let title = pickSafeChildMessage([normalized?.title, friendly.title], '');
     let message = pickSafeChildMessage([normalized?.message, normalized?.user_message, friendly.message, p.user_message, p.message], fallbackMessage || 'Blocked-funds retry failed.');
 
-    if (!title) {
-      if (code === 'BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE' || code === 'BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED' || code === 'BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS') {
-        title = 'Payment retry did not complete';
-      } else if (code === 'BATCH_STALE') {
-        title = 'Payment batch has changed';
-      } else {
-        title = 'Payment retry failed';
-      }
+    if (code === 'BATCH_STALE') {
+      title = 'Payment batch has changed';
+      message = 'This blocked-funds batch is no longer up to date. No payment was submitted. Refresh Banking, review the latest payment differences, then create or authorise a new payment batch.';
+    } else if (code === 'BLOCKED_FUNDS') {
+      title = 'Bank rejected payment — blocked funds';
+      message = 'The bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.';
+    } else if (retryTerminalCodes.has(code)) {
+      title = 'Payment retry did not complete';
+      message = 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.';
+    } else if (!title) {
+      title = 'Payment retry failed';
     }
 
-    if (code === 'BATCH_STALE') {
-      message = 'This blocked-funds batch is no longer up to date. No payment was submitted. Refresh Banking, review the latest payment differences, then create or authorise a new payment batch.';
-    } else if (!message) {
-      message = 'Blocked-funds retry failed.';
-    }
-    if (code === 'BLOCKED_FUNDS' && !title) title = 'Bank rejected payment — blocked funds';
-    if (code === 'BLOCKED_FUNDS' && (!message || message === 'Blocked-funds retry failed.')) {
-      message = 'The bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.';
-    }
+    if (!message) message = 'Blocked-funds retry failed.';
 
     const detailRows = [];
     if (formatRetryMoney(required)) detailRows.push(['Required', formatRetryMoney(required)]);
@@ -43722,6 +44716,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       confirmClass
     };
   };
+
 
   const showBlockedFundsRetryModal = async ({ title, message, detailRows = [], confirmClass = 'btn btn-primary' } = {}) => {
     const titleOut = String(title || 'Payment retry').trim() || 'Payment retry';
@@ -44709,27 +45704,55 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     }
   };
 
-  const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_FAILED', context = {}) => {
+const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_FAILED', context = {}) => {
     const contextObj = (context && typeof context === 'object' && !Array.isArray(context)) ? context : {};
+    const isObj = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+    const parseObject = (value) => {
+      if (isObj(value)) return value;
+      const text = String(value == null ? '' : value).trim();
+      if (!text) return null;
+      try {
+        const parsed = JSON.parse(text);
+        if (isObj(parsed)) return parsed;
+      } catch {}
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (start >= 0 && end > start) {
+        try {
+          const parsed = JSON.parse(text.slice(start, end + 1));
+          if (isObj(parsed)) return parsed;
+        } catch {}
+      }
+      return null;
+    };
+    const deriveBackendPayload = () => {
+      if (isObj(contextObj.backendPayload)) return contextObj.backendPayload;
+      if (isObj(contextObj.payload)) return contextObj.payload;
+      if (isObj(contextObj.json)) return contextObj.json;
+      if (isObj(errorValue?.backendPayload)) return errorValue.backendPayload;
+      if (isObj(errorValue?.payload)) return errorValue.payload;
+      if (isObj(errorValue?.json)) return errorValue.json;
+      const parsedContextPayload = parseObject(contextObj.backendPayload) || parseObject(contextObj.payload) || parseObject(contextObj.body) || parseObject(contextObj.message) || parseObject(contextObj.error);
+      if (parsedContextPayload) return parsedContextPayload;
+      const parsedErrorPayload = parseObject(errorValue?.body) || parseObject(errorValue?.message) || parseObject(errorValue?.error) || parseObject(errorValue);
+      if (parsedErrorPayload) return parsedErrorPayload;
+      return null;
+    };
     try {
       if (typeof bankingNormalizeApiError === 'function') {
-        const backendPayload = (() => {
-          try {
-            if (errorValue && typeof errorValue === 'object' && errorValue.json && typeof errorValue.json === 'object' && !Array.isArray(errorValue.json)) return errorValue.json;
-            if (errorValue && typeof errorValue === 'object' && typeof errorValue.body === 'string' && errorValue.body.trim()) {
-              const parsed = JSON.parse(errorValue.body);
-              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-            }
-          } catch {}
-          return null;
-        })();
-        const normalized = bankingNormalizeApiError(errorValue, backendPayload, {
+        const backendPayload = deriveBackendPayload();
+        const normaliseSource = backendPayload || errorValue;
+        const normalized = bankingNormalizeApiError(normaliseSource, backendPayload || normaliseSource, {
           action: contextObj.action || 'banking_child_action',
           batchId: id,
           scope: contextObj.scope || null,
           userInitiated: contextObj.userInitiated === true,
           silent: contextObj.silent === true,
-          fallbackCode
+          fallbackCode,
+          payload: backendPayload || undefined,
+          backendPayload: backendPayload || undefined,
+          original_error: errorValue || contextObj.technicalError || null,
+          technical_message: errorValue?.message || contextObj.technical_message || contextObj.technicalMessage || ''
         });
         if (normalized && typeof normalized === 'object') {
           const normalizedCode = String(normalized.error_code || normalized.code || fallbackCode || '').trim().toUpperCase();
@@ -44762,10 +45785,14 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
                 confirm_label: normalized.confirm_label || normalized.friendly_error?.confirm_label || 'OK',
                 severity: normalized.severity || normalized.friendly_error?.severity || 'warning',
                 show_modal: contextObj.silent === true ? false : contextObj.userInitiated === true
-              }
+              },
+              backendPayload: backendPayload || normalized.backendPayload || null
             };
           }
-          return normalized;
+          return {
+            ...normalized,
+            backendPayload: backendPayload || normalized.backendPayload || null
+          };
         }
       }
     } catch {}
@@ -44803,6 +45830,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       status_code: 500
     };
   };
+
 
   const showChildFriendlyNotice = async ({ title, message, confirmLabel = 'OK', kind = 'import-summary-banking-child-friendly-notice', confirmClass = 'btn btn-primary' } = {}) => {
     const titleText = String(title || 'Banking').trim() || 'Banking';
@@ -45492,7 +46520,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   };
 
 
-  const retryBlockedFundsPipeline = async () => {
+ const retryBlockedFundsPipeline = async () => {
     if (child.actionsBusy.retryingBlockedFunds) return;
     if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
 
@@ -45626,14 +46654,17 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       }
     } catch (e) {
       const payload = extractBlockedFundsRetryErrorPayload(e);
-      const normalized = normaliseChildFriendlyError(e || payload, 'BANKING_ACTION_FAILED', {
+      const normalized = normaliseChildFriendlyError(payload || e, 'BANKING_ACTION_FAILED', {
         action: 'RETRY_BLOCKED_FUNDS',
         userInitiated: true,
         silent: true,
-        scope: deriveScopeForBatch(child.data)
+        scope: deriveScopeForBatch(child.data),
+        payload: payload || null,
+        backendPayload: payload || e?.backendPayload || e?.payload || e?.json || null,
+        technicalError: e
       });
       const copy = buildBlockedFundsRetryModalCopy(payload || normalized || {}, normalized || e, normalized?.message || 'Blocked-funds retry failed.');
-      child.error = String(normalized?.message || copy.message || 'Blocked-funds retry failed.').trim();
+      child.error = String(copy.message || normalized?.message || 'Blocked-funds retry failed.').trim();
       child.friendlyError = normalized || null;
 
       try {
@@ -45673,6 +46704,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       await rerenderChild();
     }
   };
+
 
   const generateCsv = async () => {
     if (child.actionsBusy.exportingCsv) return;
@@ -75801,8 +76833,6 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
   throw timeoutError;
 }
 
-
-
 async function bankingPayWorkbenchSessionOpen(payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -75915,6 +76945,173 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
     }
     return err;
   };
+  const workbenchFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const normalizeWorkbenchFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseWorkbenchEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectWorkbenchFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseWorkbenchEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of workbenchFailureCodes) {
+          const canonical = normalizeWorkbenchFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
+      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseWorkbenchEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+
 
   const parseIsoOrUkDateToIso = (raw) => {
     const s = trimStr(raw);
@@ -75959,7 +77156,13 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
+    if (successFailureEnvelope) {
+      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
+      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = isPlainObject(json) ? json : {};
     const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : payloadObj;
@@ -76236,24 +77439,52 @@ function classifyTimesheetEditDomains(ctxInput) {
   const qrStatusU = toUpper(get('qr_status'));
   const routeText = [routeTypeU, routeFamilyU, routeSubfamilyU, underlyingChannelU, weeklySourceU, basisU, sourceSystemU, submissionModeU, submissionChannelU].filter(Boolean).join('|');
 
-  const isQrRoute = !!(
-    anyBool('is_qr', 'has_qr_token') ||
-    anyValue('qr_token') ||
-    (qrStatusU && qrStatusU !== 'NONE' && qrStatusU !== 'NO' && qrStatusU !== 'FALSE') ||
-    routeText.includes('QR') ||
-    submissionChannelU === 'QR'
-  );
-  const isElectronicRoute = !!(!isQrRoute && (
-    submissionModeU === 'ELECTRONIC' ||
-    submissionChannelU === 'ELECTRONIC' ||
-    routeText.includes('ELECTRONIC') ||
-    anyBool('submitted_electronically', 'is_electronic')
-  ));
-  const isManualRoute = !!(
+  const currentManualRoute = !!(
     submissionModeU === 'MANUAL' ||
-    routeText.includes('MANUAL') ||
+    routeTypeU === 'MANUAL' ||
+    routeFamilyU === 'MANUAL' ||
+    routeSubfamilyU === 'MANUAL' ||
+    submissionChannelU === 'MANUAL' ||
+    routeTypeU.includes('MANUAL') ||
+    routeFamilyU.includes('MANUAL') ||
+    routeSubfamilyU.includes('MANUAL') ||
     anyBool('is_manual', 'manual_route', 'manually_created', 'created_manually')
   );
+  const terminalQrStatuses = new Set(['', 'NONE', 'NO', 'FALSE', '0', 'EXPIRED', 'CANCELLED', 'CANCELED', 'REVOKED', 'VOID', 'VOIDED', 'DELETED', 'ARCHIVED', 'CONVERTED', 'MANUAL']);
+  const activeQrStatus = !!(qrStatusU && !terminalQrStatuses.has(qrStatusU));
+  const explicitQrSubmission = !!(
+    submissionModeU === 'QR' ||
+    submissionChannelU === 'QR'
+  );
+  const routeTextShowsQr = !!(
+    routeTypeU === 'QR' ||
+    routeFamilyU === 'QR' ||
+    routeSubfamilyU === 'QR' ||
+    underlyingChannelU === 'QR' ||
+    routeTypeU.includes('QR') ||
+    routeFamilyU.includes('QR') ||
+    routeSubfamilyU.includes('QR') ||
+    underlyingChannelU.includes('QR')
+  );
+  const currentQrRoute = !!(
+    explicitQrSubmission ||
+    (!currentManualRoute && routeTextShowsQr)
+  );
+  const activeQrArtifact = !!(!currentManualRoute && (anyBool('has_qr_token') || anyValue('qr_token')) && activeQrStatus);
+  const currentQrFlag = !!(!currentManualRoute && anyBool('is_qr') && activeQrStatus);
+  const isQrRoute = !!(currentQrRoute || activeQrArtifact || currentQrFlag);
+  const isElectronicRoute = !!(!isQrRoute && !currentManualRoute && (
+    submissionModeU === 'ELECTRONIC' ||
+    submissionChannelU === 'ELECTRONIC' ||
+    routeTypeU === 'ELECTRONIC' ||
+    routeFamilyU === 'ELECTRONIC' ||
+    underlyingChannelU === 'ELECTRONIC' ||
+    routeTypeU.includes('ELECTRONIC') ||
+    routeFamilyU.includes('ELECTRONIC') ||
+    underlyingChannelU.includes('ELECTRONIC') ||
+    anyBool('submitted_electronically', 'is_electronic')
+  ));
+  const isManualRoute = !!currentManualRoute;
 
   const revokedAt = get('revoked_at', 'revoked_at_server', 'authorisation_revoked_at');
   const hasRevocation = hasValue(revokedAt);
@@ -76278,22 +77509,30 @@ function classifyTimesheetEditDomains(ctxInput) {
   );
   const isParentTimesheetContext = !isSegmentOnlyContext;
 
+  const adjustmentOriginU = toUpper(get('adjustment_origin'));
+  const correctionKindU = toUpper(get('correction_kind'));
   const hasExplicitManualAdditionalFlag = !!(
-    anyBool('manually_created', 'created_manually', 'is_manual_additional', 'manual_additional', 'manual_adjustment') ||
-    routeSubfamilyU.includes('MANUAL')
+    anyBool('manually_created', 'created_manually', 'is_manual_additional', 'manual_additional', 'manual_adjustment', 'is_additional_manual', 'is_manual_adjustment')
   );
   const hasAdditionalSignal = !!(
-    anyBool('is_adjustment', 'is_additional_manual', 'is_manual_adjustment') ||
     anyValue('parent_timesheet_id') ||
     anyPositiveNumber('additional_seq', 'contract_week_additional_seq') ||
-    lineTypeU.includes('ADJUST') ||
+    lineTypeU.includes('MANUAL_ADDITIONAL') ||
+    lineTypeU.includes('ADDITIONAL_MANUAL') ||
     lineTypeU.includes('ADDITIONAL') ||
-    toUpper(get('adjustment_origin')).includes('MANUAL') ||
-    toUpper(get('adjustment_origin')).includes('ADDITIONAL') ||
-    toUpper(get('adjustment_origin')).includes('ADD_ADDITIONAL') ||
-    toUpper(get('adjustment_origin')).includes('EXPENSE') ||
-    toUpper(get('correction_kind')).includes('ADJUST') ||
-    toUpper(get('correction_kind')).includes('ADDITIONAL')
+    (lineTypeU.includes('ADJUST') && isManualRoute) ||
+    adjustmentOriginU.includes('MANUAL') ||
+    adjustmentOriginU.includes('ADDITIONAL') ||
+    adjustmentOriginU.includes('ADD_ADDITIONAL') ||
+    adjustmentOriginU.includes('CORRECTION') ||
+    adjustmentOriginU.includes('EXPENSE') ||
+    correctionKindU.includes('MANUAL') ||
+    correctionKindU.includes('ADDITIONAL') ||
+    correctionKindU.includes('ADD_ADDITIONAL') ||
+    correctionKindU.includes('CORRECTION') ||
+    correctionKindU.includes('EXPENSE') ||
+    (correctionKindU.includes('ADJUST') && isManualRoute) ||
+    (isManualRoute && anyBool('is_adjustment', 'is_additional_manual', 'is_manual_adjustment'))
   );
   const isAdjustmentBasis = basisU === 'NHSP_ADJUSTMENT' || basisU === 'HEALTHROSTER_ADJUSTMENT';
   const isAdditionalManualRoute = !!(hasAdditionalSignal || hasExplicitManualAdditionalFlag || (isManualRoute && isAdjustmentBasis));
@@ -76302,15 +77541,20 @@ function classifyTimesheetEditDomains(ctxInput) {
     anyBool('client_no_timesheet_required', 'no_timesheet_required', 'contract_no_timesheet_required') ||
     routeText.includes('NO_TIMESHEET_REQUIRED')
   );
-  const sourceSuggestsProtectedImport = !!(
+  const actualSourceSuggestsProtectedImport = !!(
     basisU === 'NHSP' ||
     basisU === 'HEALTHROSTER_SELF_BILL' ||
     routeText.includes('IMPORT') ||
     routeText.includes('IMPORT_AUTHORITATIVE') ||
     routeText.includes('NHSP') ||
     routeText.includes('HEALTHROSTER') ||
-    anyBool('is_import_authoritative', 'import_authoritative', 'client_is_nhsp', 'is_nhsp')
+    routeText.includes('NO_TIMESHEET_REQUIRED') ||
+    routeText.includes('SELF_BILL') ||
+    anyBool('is_import_authoritative', 'import_authoritative')
   );
+  const clientNhspLineage = anyBool('client_is_nhsp', 'is_nhsp');
+  const clientLineageSupportedByRowSource = !!(clientNhspLineage && (actualSourceSuggestsProtectedImport || noTimesheetRequired));
+  const sourceSuggestsProtectedImport = !!(actualSourceSuggestsProtectedImport || clientLineageSupportedByRowSource);
   const sourceSuggestsAdjustmentImport = !!(isAdjustmentBasis && sourceSuggestsProtectedImport && !isAdditionalManualRoute);
   const isOriginalImportAuthoritative = !!(!isAdditionalManualRoute && (sourceSuggestsProtectedImport || sourceSuggestsAdjustmentImport));
   const isNoTimesheetRequiredOriginal = !!(noTimesheetRequired && !isAdditionalManualRoute);
@@ -76457,6 +77701,8 @@ function classifyTimesheetEditDomains(ctxInput) {
 }
 
 
+
+
 function normaliseTimesheetExpensesDraft(raw, options = {}) {
   const src = (raw && typeof raw === 'object') ? raw : {};
   const opts = (options && typeof options === 'object') ? options : {};
@@ -76468,6 +77714,13 @@ function normaliseTimesheetExpensesDraft(raw, options = {}) {
     if (v == null || v === '') return 0;
     const n = Number(String(v).replace(/[^0-9.-]/g, ''));
     if (!Number.isFinite(n)) return 0;
+    const m = Math.pow(10, dp);
+    return Math.round(n * m) / m;
+  };
+  const cleanRate = (v, dp = 4) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(String(v).replace(/[^0-9.-]/g, ''));
+    if (!Number.isFinite(n)) return null;
     const m = Math.pow(10, dp);
     return Math.round(n * m) / m;
   };
@@ -76507,10 +77760,12 @@ function normaliseTimesheetExpensesDraft(raw, options = {}) {
     other_pay: cleanNum(pick('other_pay', 'otherPay', 'other_pay_ex_vat')),
     other_charge: cleanNum(pick('other_charge', 'otherCharge', 'other_charge_ex_vat')),
     note: String(pick('note', 'expenses_description', 'description') || '').trim(),
-    mileage_pay_rate: cleanNum(resolvedMileagePayRate, 4),
-    mileage_charge_rate: cleanNum(resolvedMileageChargeRate, 4)
+    mileage_pay_rate: cleanRate(resolvedMileagePayRate, 4),
+    mileage_charge_rate: cleanRate(resolvedMileageChargeRate, 4)
   };
 }
+
+
 
 function isTimesheetExpensesDraftDirty(draft, baseline, options = {}) {
   const a = normaliseTimesheetExpensesDraft(draft, options);
@@ -76575,44 +77830,74 @@ async function commitTimesheetExpensesMileageDraft(args = {}) {
   };
   const toNumberOrNull = (value) => {
     if (value === null || value === undefined || value === '') return null;
-    const n = Number(value);
+    const n = Number(String(value).replace(/[^0-9.-]/g, ''));
     return Number.isFinite(n) ? n : null;
   };
   const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
-  const readNested = (source, path) => {
+  const hasOwn = (source, key) => !!(source && typeof source === 'object' && Object.prototype.hasOwnProperty.call(source, key));
+  const readRateFromSource = (source, aliases, options = {}) => {
     if (!source || typeof source !== 'object') return null;
-    let cur = source;
-    for (const key of path) {
-      if (!cur || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, key)) return null;
-      cur = cur[key];
+    const allowZero = options.allowZero !== false;
+    for (const fieldName of aliases) {
+      if (!hasOwn(source, fieldName)) continue;
+      const n = toNumberOrNull(source[fieldName]);
+      if (n == null) continue;
+      if (n === 0 && !allowZero) continue;
+      return n;
     }
-    return cur;
+    return null;
   };
-  const readRate = (fieldName) => {
+  const readSourcedRate = (aliases, primaryFieldName) => {
     const sources = [
-      args?.draft,
-      args?.baseline,
-      args?.details?.tsfin,
-      args?.details?.financial_snapshot,
-      args?.details?.financials,
-      args?.row?.tsfin,
-      args?.row?.financial_snapshot,
-      args?.row?.financials,
-      args?.context?.tsfin,
-      args?.context?.financial_snapshot,
-      args?.context?.financials,
-      args?.state?.expensesDraft,
-      args?.state?.expensesBaseline,
-      args?.active_ctx?.state?.expensesDraft,
-      args?.active_ctx?.state?.expensesBaseline,
-      args?.active_context?.state?.expensesDraft,
-      args?.active_context?.state?.expensesBaseline
+      { source: args?.draft, allowZero: false },
+      { source: args?.baseline, allowZero: false },
+      { source: args?.details?.tsfin, allowZero: true },
+      { source: args?.details?.financial_snapshot, allowZero: true },
+      { source: args?.details?.financials, allowZero: true },
+      { source: args?.details?.timesheets_financials, allowZero: true },
+      { source: args?.details?.timesheet, allowZero: true },
+      { source: args?.row?.tsfin, allowZero: true },
+      { source: args?.row?.financial_snapshot, allowZero: true },
+      { source: args?.row?.financials, allowZero: true },
+      { source: args?.row?.timesheets_financials, allowZero: true },
+      { source: args?.context?.tsfin, allowZero: true },
+      { source: args?.context?.financial_snapshot, allowZero: true },
+      { source: args?.context?.financials, allowZero: true },
+      { source: args?.context?.timesheets_financials, allowZero: true },
+      { source: args?.context?.details?.tsfin, allowZero: true },
+      { source: args?.context?.details?.financial_snapshot, allowZero: true },
+      { source: args?.context?.details?.financials, allowZero: true },
+      { source: args?.state?.expensesDraft, allowZero: false },
+      { source: args?.state?.expensesBaseline, allowZero: false },
+      { source: args?.active_ctx?.state?.expensesDraft, allowZero: false },
+      { source: args?.active_ctx?.state?.expensesBaseline, allowZero: false },
+      { source: args?.active_ctx?.details?.tsfin, allowZero: true },
+      { source: args?.active_ctx?.details?.financial_snapshot, allowZero: true },
+      { source: args?.active_context?.state?.expensesDraft, allowZero: false },
+      { source: args?.active_context?.state?.expensesBaseline, allowZero: false },
+      { source: args?.active_context?.details?.tsfin, allowZero: true },
+      { source: args?.active_context?.details?.financial_snapshot, allowZero: true },
+      { source: args?.options?.rates, allowZero: true },
+      { source: args?.options, allowZero: true }
     ];
-    for (const source of sources) {
-      if (!source || typeof source !== 'object') continue;
-      if (Object.prototype.hasOwnProperty.call(source, fieldName)) {
-        const n = toNumberOrNull(source[fieldName]);
-        if (n != null) return n;
+    for (const entry of sources) {
+      const value = readRateFromSource(entry.source, aliases, { allowZero: entry.allowZero });
+      if (value != null) return value;
+    }
+    if (primaryFieldName) {
+      const markerNames = [
+        `${primaryFieldName}_sourced`,
+        `${primaryFieldName}_source_known`,
+        `${primaryFieldName}_explicit`,
+        `${primaryFieldName}_is_explicit`
+      ];
+      const markerSources = [args?.draft, args?.baseline, args?.state?.expensesDraft, args?.state?.expensesBaseline];
+      for (const source of markerSources) {
+        if (!source || typeof source !== 'object') continue;
+        const markerTrue = markerNames.some((name) => hasOwn(source, name) && source[name] === true);
+        if (!markerTrue) continue;
+        const value = readRateFromSource(source, aliases, { allowZero: true });
+        if (value != null) return value;
       }
     }
     return null;
@@ -76666,8 +77951,8 @@ async function commitTimesheetExpensesMileageDraft(args = {}) {
 
   const draft = { ...(dirtyResult.normalisedDraft || {}) };
   const baseline = { ...(dirtyResult.normalisedBaseline || {}) };
-  const payRate = toNumberOrNull(draft.mileage_pay_rate) ?? toNumberOrNull(baseline.mileage_pay_rate) ?? readRate('mileage_pay_rate');
-  const chargeRate = toNumberOrNull(draft.mileage_charge_rate) ?? toNumberOrNull(baseline.mileage_charge_rate) ?? readRate('mileage_charge_rate');
+  const payRate = readSourcedRate(['mileage_pay_rate', 'mileagePayRate', 'mileage_rate'], 'mileage_pay_rate');
+  const chargeRate = readSourcedRate(['mileage_charge_rate', 'mileageChargeRate', 'mileage_rate_charge'], 'mileage_charge_rate');
   const mileageUnits = Number(draft.mileage_units || 0);
   const positiveMileageClaim = mileageUnits > 0;
 
@@ -76710,15 +77995,16 @@ async function commitTimesheetExpensesMileageDraft(args = {}) {
       if (!r.ok) throw last;
     }
     if (dirtyResult.mileageDirty) {
+      const mileagePayload = {
+        mileage_units: mileageUnits,
+        pay_ex_vat: mileagePay,
+        charge_ex_vat: mileageCharge
+      };
+      if (payRate != null) mileagePayload.pay_rate = payRate;
+      if (chargeRate != null) mileagePayload.charge_rate = chargeRate;
       const payload = {
         expected_timesheet_id: String(expectedTimesheetId),
-        mileage: {
-          mileage_units: mileageUnits,
-          pay_rate: payRate,
-          charge_rate: chargeRate,
-          pay_ex_vat: mileagePay,
-          charge_ex_vat: mileageCharge
-        }
+        mileage: mileagePayload
       };
       const r = await authFetch(API(`/api/tsfin/${encodeURIComponent(String(timesheetId))}/mileage`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       last = await parseApiResponse(r);
@@ -76753,16 +78039,24 @@ function bankingBuildEnrichedFriendlyError(originalError, friendly, fallbackMess
     'Banking action failed'
   ).trim() || 'Banking action failed';
 
+  const rawPayload = original.backendPayload || original.payload || original.json || src.backendPayload || src.raw_payload || src.technical_payload || null;
   const err = new Error(message);
-  err.status = Number(original.status || src.status_code || src.http_status || 500) || 500;
-  err.payload = original.payload || original.json || src.technical_payload || src;
-  err.json = original.json || original.payload || src;
+  err.status = Number(src.status_code || src.http_status || original.status || 500) || 500;
+  err.payload = src;
+  err.json = src;
   err.body = original.body || '';
+  err.backendPayload = rawPayload;
+  err.raw_payload = rawPayload;
+  err.technical_payload = rawPayload;
   err.friendly_error = src.friendly_error || src;
   err.error_code = src.error_code || src.code || original.error_code || original.code || 'BANKING_ACTION_FAILED';
   err.code = src.code || src.error_code || err.error_code;
   err.title = src.title || src.friendly_error?.title || original.title || 'Banking action failed';
   err.user_message = src.user_message || src.message || message;
+  err.technical_message = src.technical_message || original.technical_message || original.raw_response_text || original.body || '';
+  err.raw_response_text = original.raw_response_text || original.body || '';
+  err.statusText = original.statusText || '';
+  err.path = original.path || '';
   return err;
 }
 
@@ -76879,12 +78173,185 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
     }
     return err;
   };
+  const workbenchFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const normalizeWorkbenchFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseWorkbenchEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectWorkbenchFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseWorkbenchEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of workbenchFailureCodes) {
+          const canonical = normalizeWorkbenchFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
+      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseWorkbenchEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+
   const sessionIdText = trimStr(sessionId);
   try {
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}`));
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
+    if (successFailureEnvelope) {
+      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
+      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const previewObj = (payloadObj.preview && typeof payloadObj.preview === 'object' && !Array.isArray(payloadObj.preview)) ? payloadObj.preview : payloadObj;
@@ -76906,7 +78373,6 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview could not be refreshed');
   }
 }
-
 
 async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -77020,13 +78486,186 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, op
     }
     return err;
   };
+  const workbenchFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const normalizeWorkbenchFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseWorkbenchEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectWorkbenchFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseWorkbenchEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of workbenchFailureCodes) {
+          const canonical = normalizeWorkbenchFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
+      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseWorkbenchEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+
   const sessionIdText = trimStr(sessionId);
   const candidateIdText = trimStr(candidateId);
   try {
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/candidate/${encodeURIComponent(candidateIdText)}`));
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
+    if (successFailureEnvelope) {
+      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
+      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     return {
@@ -77159,6 +78798,173 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     }
     return err;
   };
+  const workbenchFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const normalizeWorkbenchFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseWorkbenchEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectWorkbenchFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseWorkbenchEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of workbenchFailureCodes) {
+          const canonical = normalizeWorkbenchFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
+      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseWorkbenchEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
   const getCurrentSessionId = () => {
     try {
@@ -77250,7 +79056,13 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     }
   }
     if (!res.ok) {
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
+    if (successFailureEnvelope) {
+      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
+      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     return {
@@ -77270,7 +79082,6 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview progress could not be refreshed');
   }
 }
-
 
 async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -77384,6 +79195,173 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     }
     return err;
   };
+  const workbenchFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const normalizeWorkbenchFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseWorkbenchEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectWorkbenchFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseWorkbenchEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of workbenchFailureCodes) {
+          const canonical = normalizeWorkbenchFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
+      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseWorkbenchEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution`), {
@@ -77393,7 +79371,13 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
+    if (successFailureEnvelope) {
+      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
+      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
@@ -77416,6 +79400,7 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
 
 
 
@@ -77531,6 +79516,173 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
     }
     return err;
   };
+  const workbenchFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const normalizeWorkbenchFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseWorkbenchEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectWorkbenchFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseWorkbenchEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of workbenchFailureCodes) {
+          const canonical = normalizeWorkbenchFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
+      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseWorkbenchEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution/clear`), {
@@ -77540,7 +79692,13 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
+    if (successFailureEnvelope) {
+      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
+      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
@@ -77676,6 +79834,173 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
     }
     return err;
   };
+  const workbenchFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const normalizeWorkbenchFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseWorkbenchEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectWorkbenchFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseWorkbenchEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of workbenchFailureCodes) {
+          const canonical = normalizeWorkbenchFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
+      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseWorkbenchEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/timesheet-exclusion`), {
@@ -77685,7 +80010,13 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
+    if (successFailureEnvelope) {
+      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
+      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
@@ -77708,6 +80039,7 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
 
 async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -77821,6 +80153,173 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     }
     return err;
   };
+  const workbenchFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const normalizeWorkbenchFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseWorkbenchEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectWorkbenchFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseWorkbenchEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of workbenchFailureCodes) {
+          const canonical = normalizeWorkbenchFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
+      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseWorkbenchEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/selected-rows`), {
@@ -77830,7 +80329,13 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
+    if (successFailureEnvelope) {
+      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
+      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const selectedRows = Array.isArray(payloadObj.selected_preview_row_ids)
@@ -77850,7 +80355,6 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
-
 
 async function bankingPayWorkbenchSessionDiscard(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -77964,6 +80468,173 @@ async function bankingPayWorkbenchSessionDiscard(sessionId, payload = {}) {
     }
     return err;
   };
+  const workbenchFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const normalizeWorkbenchFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseWorkbenchEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectWorkbenchFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseWorkbenchEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of workbenchFailureCodes) {
+          const canonical = normalizeWorkbenchFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
+      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseWorkbenchEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/discard`), {
@@ -77973,7 +80644,13 @@ async function bankingPayWorkbenchSessionDiscard(sessionId, payload = {}) {
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
+    if (successFailureEnvelope) {
+      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
+      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     return {
@@ -77990,7 +80667,6 @@ async function bankingPayWorkbenchSessionDiscard(sessionId, payload = {}) {
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be closed');
   }
 }
-
 
 
 function renderContractSettingsModal(ctx) {
@@ -117687,18 +120363,30 @@ function classifyBulkProcessEditability(ctxInput) {
   const weekId = trimStr(details.contract_week_id || cw.id || row.contract_week_id || '');
 
   const qrStatus = upper(details.qr_status || ts.qr_status || row.qr_status || '');
-  const isQr =
-    qrStatus === 'PENDING' ||
-    qrStatus === 'USED' ||
-    qrStatus === 'EXPIRED' ||
-    qrStatus === 'CANCELLED' ||
-    boolish(row?.is_qr) ||
-    boolish(details?.is_qr) ||
+  const isManual = !!(
+    effectiveMode === 'MANUAL' ||
+    routeFamily === 'MANUAL' ||
+    routeFamily === 'MANUAL_NON_QR' ||
+    routeSubfamily === 'MANUAL' ||
+    routeSubfamily.includes('MANUAL') ||
+    boolish(row?.is_manual) ||
+    boolish(details?.is_manual) ||
+    boolish(actionFlags?.is_manual)
+  );
+  const terminalQrStatuses = new Set(['', 'NONE', 'NO', 'FALSE', '0', 'EXPIRED', 'CANCELLED', 'CANCELED', 'REVOKED', 'VOID', 'VOIDED', 'DELETED', 'ARCHIVED', 'CONVERTED', 'MANUAL']);
+  const activeQrStatus = !!(qrStatus && !terminalQrStatuses.has(qrStatus));
+  const currentQrRoute = !!(
+    effectiveMode === 'QR' ||
     routeFamily === 'QR' ||
-    routeSubfamily === 'QR';
+    routeSubfamily === 'QR' ||
+    underlyingChannelFamily === 'QR'
+  );
+  const activeQrArtifact = !!(!isManual && activeQrStatus && (boolish(row?.has_qr_token) || boolish(details?.has_qr_token) || hasValue(row?.qr_token) || hasValue(details?.qr_token)));
+  const currentQrFlag = !!(!isManual && activeQrStatus && (boolish(row?.is_qr) || boolish(details?.is_qr)));
+  const isQr = !!(currentQrRoute || activeQrArtifact || currentQrFlag);
 
-  const isElectronic = effectiveMode === 'ELECTRONIC' || routeFamily === 'ELECTRONIC' || underlyingChannelFamily === 'ELECTRONIC';
-  const isManual = effectiveMode === 'MANUAL' || routeFamily === 'MANUAL_NON_QR';
+  const isElectronic = !!(!isQr && !isManual && (effectiveMode === 'ELECTRONIC' || routeFamily === 'ELECTRONIC' || underlyingChannelFamily === 'ELECTRONIC'));
+
 
   const isImportAuthoritativeCurrent = !!(
     readBool([ctx, 'is_import_authoritative'], [row, 'is_import_authoritative'], [details, 'is_import_authoritative'], [actionFlags, 'is_import_authoritative']) === true ||
@@ -117734,7 +120422,7 @@ function classifyBulkProcessEditability(ctxInput) {
   const reviewOnly = readBool([row, 'review_only'], [details, 'review_only'], [actionFlags, 'review_only'], [ctx, 'review_only']);
   const reviewOnlyEffective = reviewOnly === true || hasAnyLockBlocker || isAuthorisedBlocked;
 
-  const manualNonQrEditable =
+  let manualNonQrEditable =
     isManual &&
     !isQr &&
     !isElectronic &&
@@ -117765,6 +120453,24 @@ function classifyBulkProcessEditability(ctxInput) {
         action_flags: actionFlags
       })
     : {};
+
+  const effectiveIsManual = hasSharedDomainPolicy && typeof domainPolicy.isManualRoute === 'boolean'
+    ? !!domainPolicy.isManualRoute
+    : isManual;
+  const effectiveIsQr = hasSharedDomainPolicy && typeof domainPolicy.isQrRoute === 'boolean'
+    ? !!domainPolicy.isQrRoute
+    : isQr;
+  const effectiveIsElectronic = hasSharedDomainPolicy && typeof domainPolicy.isElectronicRoute === 'boolean'
+    ? !!domainPolicy.isElectronicRoute
+    : isElectronic;
+
+  manualNonQrEditable =
+    effectiveIsManual &&
+    !effectiveIsQr &&
+    !effectiveIsElectronic &&
+    !isImportAuthoritativeCurrent &&
+    !reviewOnlyEffective &&
+    backendCanEditTimesheetData !== false;
 
   const canEditHoursSchedule = hasSharedDomainPolicy ? !!domainPolicy.canEditHoursSchedule : manualNonQrEditable;
   const canEditTimesheetData = (typeof domainPolicy.canEditTimesheetData === 'boolean')
@@ -117806,8 +120512,8 @@ function classifyBulkProcessEditability(ctxInput) {
   );
 
   const unprocessedLike = summaryStage === 'UNPROCESSED' || summaryStage === 'UNPROCESSED_DAILY' || summaryStage === 'MANUAL_UNPROCESSED';
-  const dailyManualProcessTarget = !!(sheetScope === 'DAILY' && isManual && !!tsId);
-  const weeklyManualProcessTarget = !!(sheetScope === 'WEEKLY' && isManual && (!!tsId || !!weekId));
+  const dailyManualProcessTarget = !!(sheetScope === 'DAILY' && effectiveIsManual && !!tsId);
+  const weeklyManualProcessTarget = !!(sheetScope === 'WEEKLY' && effectiveIsManual && (!!tsId || !!weekId));
   const domainCanProcess = (typeof domainPolicy.canProcess === 'boolean') ? domainPolicy.canProcess : null;
   const canProcess = !!(
     !isAuthorisedBlocked &&
@@ -117859,7 +120565,7 @@ function classifyBulkProcessEditability(ctxInput) {
   const canConvertQrToManualOnly =
     routeActionBaseAllowed &&
     !!tsId &&
-    isQr;
+    effectiveIsQr;
 
   const statusValue = upper(row.status || details.status || cw.status || ts.status || '');
   const isCancelled =
@@ -117885,7 +120591,7 @@ function classifyBulkProcessEditability(ctxInput) {
       backendCanAddAdditionalManual === true ||
       domainPolicy.canAddAdditionalManual === true ||
       originalProtectedSourceNeedsAdditionalManual ||
-      (manualNonQrEditable && !isQr && !isElectronic)
+      (manualNonQrEditable && !effectiveIsQr && !effectiveIsElectronic)
     )
   );
 
@@ -117899,9 +120605,9 @@ function classifyBulkProcessEditability(ctxInput) {
     routeFamily,
     routeSubfamily,
     underlyingChannelFamily,
-    isQr,
-    isElectronic,
-    isManual,
+    isQr: effectiveIsQr,
+    isElectronic: effectiveIsElectronic,
+    isManual: effectiveIsManual,
     isImportAuthoritativeCurrent,
     isLockedByInvoice,
     isPaid,
@@ -129429,8 +132135,6 @@ async function refreshBulkProcessSummaryByIdentity(opts = {}) {
 }
 
 
-
-
 async function handleBulkProcessOpenExpensesModal(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -129497,15 +132201,27 @@ async function handleBulkProcessOpenExpensesModal(state) {
   const updateChildDirty = () => {
     const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
     if (!fr || String(fr.kind || '') !== 'bulk-process-expenses') return;
-    const dirty =
-      stableStringify(childCtx?.state?.expensesDraft || null) !==
-      stableStringify(childCtx?.state?.expensesBaseline || null);
-    fr.isDirty = !!dirty;
+    const dirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(childCtx?.state?.expensesDraft || {}, childCtx?.state?.expensesBaseline || {}, {
+          context: childCtx,
+          details: childCtx?.details || ctx?.details || {},
+          tsfin: childCtx?.details?.tsfin || ctx?.details?.tsfin || {}
+        })
+      : { dirty: stableStringify(childCtx?.state?.expensesDraft || null) !== stableStringify(childCtx?.state?.expensesBaseline || null) };
+    fr.isDirty = !!dirtyResult.dirty;
     try { fr._updateButtons && fr._updateButtons(); } catch {}
   };
 
+
   const applyFromChild = async () => {
-    if (editability?.expensesReadOnly === true || editability?.canEditExpenses === false) return true;
+    const latestEditability = (typeof classifyBulkProcessEditability === 'function')
+      ? classifyBulkProcessEditability(ctx || {})
+      : editability;
+    if (latestEditability?.expensesReadOnly === true || latestEditability?.canEditExpenses === false) {
+      st.error_text = String(latestEditability?.expensesDisabledReason || 'Expenses cannot be edited for this row.');
+      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][EXPENSES-BLOCKED-APPLY]');
+      return false;
+    }
     if (typeof syncBulkProcessExpensesDraftFromDom === 'function') syncBulkProcessExpensesDraftFromDom({ active_ctx: childCtx });
     const root = document.getElementById(rootId);
     const mergedDraft = { ...deep(childCtx?.state?.expensesDraft || {}) };
@@ -129537,6 +132253,14 @@ async function handleBulkProcessOpenExpensesModal(state) {
           }
         })
       : mergedDraft;
+    const dirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(normDraft, baselineRef, { context: ctx, details, tsfin })
+      : { dirty: stableStringify(normDraft) !== stableStringify(baselineRef) };
+    childCtx.state.expensesDraft = deep(normDraft);
+    if (!dirtyResult.dirty) {
+      updateChildDirty();
+      return true;
+    }
     const targets = [st?.active_ctx?.state, st?.active_context?.state].filter((t) => t && typeof t === 'object');
     for (const target of targets) {
       target.expensesDraft = deep(normDraft);
@@ -129548,7 +132272,7 @@ async function handleBulkProcessOpenExpensesModal(state) {
       target.expenseDirtyMarker = true;
     }
     st.dirty = true;
-    if (stableStringify(normDraft) !== stableStringify(prevDraft) && typeof markBulkProcessDirty === 'function') {
+    if (typeof markBulkProcessDirty === 'function') {
       markBulkProcessDirty(st, 'expenses-apply', { source: 'handleBulkProcessOpenExpensesModal.applyFromChild', dirty_source: 'expenses apply' });
     }
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][EXPENSES]');
@@ -129591,6 +132315,8 @@ async function handleBulkProcessOpenExpensesModal(state) {
   };
   setTimeout(wire, 0);
 }
+
+
 
 function syncBulkProcessExpensesDraftFromDom(state) {
   const st = (state && typeof state === 'object') ? state : null;
@@ -129660,9 +132386,13 @@ function syncBulkProcessExpensesDraftFromDom(state) {
         mileage_charge_rate: normDraft.mileage_charge_rate ?? currentDraft.mileage_charge_rate ?? baseline.mileage_charge_rate ?? tsfin.mileage_charge_rate
       }
     }) || {};
+    const formatOut = (value) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n.toFixed(2) : '0.00';
+    };
     const writeOut = (k, val) => {
       const out = root.querySelector(`[data-exp-out="${k}"]`);
-      if (out) out.textContent = String(val ?? '0');
+      if (out) out.textContent = formatOut(val);
     };
     writeOut('mileage_pay', totals.mileage_pay);
     writeOut('mileage_charge', totals.mileage_charge);
@@ -129671,10 +132401,16 @@ function syncBulkProcessExpensesDraftFromDom(state) {
   }
   if (typeof isTimesheetExpensesDraftDirty === 'function') {
     const dirtyRes = isTimesheetExpensesDraftDirty(normDraft, baseline, { context: ctx, details, tsfin });
-    ctx.state.expensesDirty = !!(dirtyRes && dirtyRes.dirty);
+    const isDirty = !!(dirtyRes && dirtyRes.dirty);
+    ctx.state.expensesDirty = isDirty;
+    ctx.state.expensesDraftDirty = isDirty;
+    ctx.state.hasStagedExpensesDirty = isDirty;
+    ctx.state.stagedExpensesDirty = isDirty;
+    ctx.state.expenseDirtyMarker = isDirty;
   }
   return true;
 }
+
 
 
 function captureBulkProcessUiSnapshot(state) {
@@ -131954,27 +134690,36 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       )
     );
 
-    const explicitTimesheetPatch = pickObject(src.timesheet_patch_json || src.timesheetPatchJson || src.timesheet_patch || src.timesheetPatch);
+    const explicitTimesheetPatchRaw = pickObject(src.timesheet_patch_json || src.timesheetPatchJson || src.timesheet_patch || src.timesheetPatch);
     const explicitTsfinPatch = pickObject(src.tsfin_patch_json || src.tsfinPatchJson || src.tsfin_patch || src.tsfinPatch);
     const proposedTsfinPatch = stripAuthoritativeTsfinValues(explicitTsfinPatch);
-    const timesheetPatch = { ...explicitTimesheetPatch };
+    const blockedSchedulePatchKeys = new Set([
+      'actual_schedule_json',
+      'schedule_json',
+      'schedule',
+      'worked_start_iso',
+      'worked_end_iso',
+      'break_start_iso',
+      'break_end_iso',
+      'break_minutes',
+      'worked_minutes',
+      'additional_units_week',
+      'additional_units_per_day'
+    ]);
+    const timesheetPatch = {};
+    for (const [key, value] of Object.entries(explicitTimesheetPatchRaw)) {
+      if (blockedSchedulePatchKeys.has(key)) continue;
+      timesheetPatch[key] = clone(value);
+    }
     const tsfinPatch = {};
 
-    if (hasValidExplicitSchedulePatch && !Object.prototype.hasOwnProperty.call(timesheetPatch, 'actual_schedule_json')) {
+    if (hasValidExplicitSchedulePatch) {
       timesheetPatch.actual_schedule_json = clone(schedule);
     }
     const hasExplicitReferenceNumber = Object.prototype.hasOwnProperty.call(src, 'reference_number');
     if (hasExplicitReferenceNumber && !Object.prototype.hasOwnProperty.call(timesheetPatch, 'reference_number')) {
       timesheetPatch.reference_number = src.reference_number == null ? '' : String(src.reference_number);
     }
-
-    const passthroughTimesheetKeys = ['worked_start_iso', 'worked_end_iso', 'break_start_iso', 'break_end_iso', 'break_minutes', 'worked_minutes', 'additional_units_week', 'additional_units_per_day'];
-    for (const key of passthroughTimesheetKeys) {
-      if (Object.prototype.hasOwnProperty.call(src, key) && !Object.prototype.hasOwnProperty.call(timesheetPatch, key)) {
-        timesheetPatch[key] = clone(src[key]);
-      }
-    }
-
 
     const expectedRowSignature = trimStr(
       src.expected_row_signature ||
@@ -132120,6 +134865,8 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
     throw err;
   }
 }
+
+
 
 
 async function unprocessDailyManualTimesheet(timesheetId, payload = {}) {
@@ -136508,7 +139255,6 @@ function renderBulkAuthoriseRightPane(state) {
 }
 
 
-
 async function bankingPayWorkbenchSessionClearAllDecisions(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -136524,6 +139270,271 @@ async function bankingPayWorkbenchSessionClearAllDecisions(sessionId, payload = 
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
+  const extractPayloadCode = (payloadObj) => {
+    const seen = new Set();
+    const codes = [];
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); } catch {}
+        }
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      for (const key of ['error_code', 'code', 'raw_code']) {
+        const s = trimStr(value[key]);
+        if (s) codes.push(s);
+      }
+      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    return trimStr(codes[0] || '');
+  };
+  const looksTechnicalPayloadMessage = (value) => {
+    const s = trimStr(value);
+    if (!s) return true;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
+    const fallback = trimStr(fallbackMessage) || 'Request failed.';
+    const seen = new Set();
+    const candidates = [];
+    const add = (value) => {
+      const s = trimStr(value);
+      if (s) candidates.push(s);
+    };
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
+        }
+        add(raw);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      add(value.user_message);
+      add(value.friendly_message);
+      add(value.message);
+      add(value.title);
+      add(value.error_description);
+      if (isPlainObject(value.friendly_error)) {
+        add(value.friendly_error.user_message);
+        add(value.friendly_error.message);
+        add(value.friendly_error.title);
+      }
+      if (isPlainObject(value.error)) {
+        visit(value.error, depth + 1);
+      } else if (typeof value.error === 'string') {
+        visit(value.error, depth + 1);
+      }
+      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
+    return trimStr(picked || fallback) || fallback;
+  };
+  const makeApiPayloadError = (json, status, fallbackMessage) => {
+    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
+    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const err = new Error(message);
+    err.status = status;
+    err.payload = json;
+    err.json = json;
+    err.response_json = cloneJson(json) || json;
+    const code = extractPayloadCode(payloadObj);
+    if (code) {
+      err.code = code;
+      err.error_code = code;
+    }
+    return err;
+  };
+
+  const workbenchFailureCodes = new Set([
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'WORKBENCH_SESSION_INVALID',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'STALE_SESSION',
+    'OBSOLETE_SESSION',
+    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'FUNDING_ACCOUNT_MISSING',
+    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_TIMESHEETS_READY_FOR_DRAFT',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PREVIEW_INVALID_PAY_DATE',
+    'BANKING_PREVIEW_INVALID_INPUT',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const normalizeWorkbenchFailureCode = (value) => {
+    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!code) return '';
+    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
+    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
+    return code;
+  };
+  const parseWorkbenchEmbeddedObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (isPlainObject(parsed)) return parsed;
+    } catch {}
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        if (isPlainObject(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+  const detectWorkbenchFailureEnvelope = (value) => {
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (candidate && typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+
+    enqueue(value);
+
+    while (queue.length) {
+      const node = queue.shift();
+
+      if (node instanceof Error) {
+        enqueue({
+          name: node.name,
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          body: node.body,
+          json: node.json,
+          payload: node.payload,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          detail: node.detail,
+          reason: node.reason,
+          cause: node.cause,
+          friendly_error: node.friendly_error,
+          friendlyError: node.friendlyError,
+          raw_response_text: node.raw_response_text,
+          technical_message: node.technical_message
+        });
+        continue;
+      }
+
+      if (typeof node === 'string') {
+        const parsed = parseWorkbenchEmbeddedObject(node);
+        if (parsed) enqueue(parsed);
+        const upper = node.toUpperCase();
+        for (const knownCode of workbenchFailureCodes) {
+          const canonical = normalizeWorkbenchFailureCode(knownCode);
+          if (!canonical) continue;
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) {
+            return {
+              ok: false,
+              error_code: canonical,
+              code: canonical,
+              message: node
+            };
+          }
+        }
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+
+      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
+      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
+      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
+      const hasErrorishContent = !!(
+        Object.prototype.hasOwnProperty.call(node, 'error') ||
+        Object.prototype.hasOwnProperty.call(node, 'message') ||
+        Object.prototype.hasOwnProperty.call(node, 'details') ||
+        Object.prototype.hasOwnProperty.call(node, 'detail') ||
+        Object.prototype.hasOwnProperty.call(node, 'reason') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
+        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
+      );
+
+      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
+        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
+        return {
+          ...node,
+          ok: false,
+          error_code: finalCode,
+          code: finalCode
+        };
+      }
+
+      for (const key of [
+        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
+        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
+        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
+      ]) {
+        const nested = node[key];
+        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
+        const parsed = parseWorkbenchEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
+    }
+
+    return null;
+  };
+
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/clear-all-decisions`), {
@@ -136533,11 +139544,13 @@ async function bankingPayWorkbenchSessionClearAllDecisions(sessionId, payload = 
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
+      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
+      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    }
+    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
+    if (successFailureEnvelope) {
+      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
+      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const previewObj = (payloadObj.preview && typeof payloadObj.preview === 'object' && !Array.isArray(payloadObj.preview)) ? payloadObj.preview : payloadObj;
@@ -136559,6 +139572,7 @@ async function bankingPayWorkbenchSessionClearAllDecisions(sessionId, payload = 
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
 
 async function handleBulkAuthoriseSave(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][SAVE]');
@@ -187779,8 +190793,27 @@ try {
     const lockExpenses = !!(policy && (policy.canEditExpenses === false || policy.expensesReadOnly === true));
     const lockEvidence = !!(policy && policy.canManageExpenseEvidence === false);
     if (lockHours) {
-      root.querySelectorAll('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-ts-daily-field],input[name^=\"extra_units_\"],[data-hours-action],button[data-ts-action=\"reset-schedule\"],button[data-ts-action=\"rebuild-schedule\"],button[data-ts-action=\"apply-schedule\"],button[data-ts-action=\"preview-schedule\"],button[data-ts-action=\"daily-preview\"],button[data-ts-action=\"daily-apply\"],button[data-ts-action=\"extra-shift-add\"],button[data-ts-action=\"extra-shift-remove\"],button[data-ts-action=\"extra-break-add\"],button[data-ts-action=\"extra-break-remove\"],button[data-ts-action=\"segment-edit\"],button[data-ts-action=\"segment-save\"],button[data-ts-action=\"segment-reset\"],button[data-ts-action=\"segment-add\"],button[data-ts-action=\"segment-remove\"]').forEach((el) => {
+      root.querySelectorAll('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],input[name^=\"extra_units_\"]').forEach((el) => {
         el.disabled = true; try { el.setAttribute('readonly', 'true'); } catch {}
+      });
+
+      const scheduleEditActions = new Set([
+        'reset-schedule',
+        'extra-shift-add',
+        'extra-shift-remove',
+        'extra-break-add',
+        'extra-break-remove',
+        'daily-preview',
+        'daily-apply',
+        'apply-daily-schedule',
+        'preview-daily-schedule'
+      ]);
+
+      root.querySelectorAll('button[data-ts-action]').forEach((btn) => {
+        const act = String(btn.getAttribute('data-ts-action') || '').trim().toLowerCase();
+        if (!scheduleEditActions.has(act)) return;
+        btn.disabled = true;
+        try { btn.setAttribute('readonly', 'true'); } catch {}
       });
     }
     root.querySelectorAll('input[data-exp-field],textarea[data-exp-field]').forEach((el) => {
@@ -192818,7 +195851,7 @@ top._updateButtons = ()=> {
       !!tsfin.locked_by_invoice_id ||
       !!tsfin.paid_at_utc;
 
-  if (top.entity === 'timesheets') {
+   if (top.entity === 'timesheets') {
   const hasTsMeta  = !!meta.hasTs;
   const isPlanned  = !!meta.isPlannedWeek;
 
@@ -192877,6 +195910,30 @@ top._updateButtons = ()=> {
       ? backendImportAuthoritative
       : isImportAuthoritativeFromSummary(dSum.route_type, dSum.client_no_timesheet_required);
 
+  const timesheetPolicy = mcTs.timesheetEditDomains || (typeof classifyTimesheetEditDomains === 'function'
+    ? classifyTimesheetEditDomains({
+        row: data || {},
+        details: det || {},
+        timesheet: det.timesheet || null,
+        tsfin: tsfin || null,
+        financial_snapshot: det.financial_snapshot || null,
+        contract_week: det.contract_week || null,
+        related: mcTs.timesheetRelated || {},
+        action_flags: det.action_flags || null,
+        state: mcTs.timesheetState || {}
+      })
+    : null);
+
+  const hasEditableTimesheetDomain = !!(
+    timesheetPolicy &&
+    (
+      timesheetPolicy.canEditHoursSchedule === true ||
+      timesheetPolicy.canEditExpenses === true ||
+      timesheetPolicy.canManageExpenseEvidence === true ||
+      timesheetPolicy.canEditReferences === true
+    )
+  );
+
   // ✅ Allow Edit for import-authoritative *real timesheets* (for deferrals)
   const isImportAuthEditable =
     hasTsMeta && !locked && importAuthoritative;
@@ -192888,7 +195945,14 @@ top._updateButtons = ()=> {
   canEdit =
     (top.mode === 'view') &&
     !isImportAuthPlannedStub &&
-    (isWeeklyManualTs || isPlannedManualWeek || isDailyManualTs || isImportAuthEditable);
+    !locked &&
+    (
+      hasEditableTimesheetDomain ||
+      isWeeklyManualTs ||
+      isPlannedManualWeek ||
+      isDailyManualTs ||
+      isImportAuthEditable
+    );
 
 } else {
   canEdit = (top.mode === 'view' && top.hasId);
@@ -221403,147 +224467,7 @@ const onSaveTimesheet = async () => {
     det?.contract_week?.week_ending_date ||
     null;
 
-    const weekDays = isWeeklyManualContext ? getWeekDays(weekEndingYmd) : [];
-
-  const earlyRound2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
-
-  const normaliseExpensesForEarlyOnly = (x) => {
-    const d = (x && typeof x === 'object') ? x : {};
-    const raw = {
-      mileage_units: Number(d.mileage_units ?? 0) || 0,
-      mileage_pay_rate:
-        (d.mileage_pay_rate != null && Number.isFinite(Number(d.mileage_pay_rate)))
-          ? Number(d.mileage_pay_rate)
-          : ((tsfinLocal.mileage_pay_rate != null && Number.isFinite(Number(tsfinLocal.mileage_pay_rate)))
-              ? Number(tsfinLocal.mileage_pay_rate)
-              : null),
-      mileage_charge_rate:
-        (d.mileage_charge_rate != null && Number.isFinite(Number(d.mileage_charge_rate)))
-          ? Number(d.mileage_charge_rate)
-          : ((tsfinLocal.mileage_charge_rate != null && Number.isFinite(Number(tsfinLocal.mileage_charge_rate)))
-              ? Number(tsfinLocal.mileage_charge_rate)
-              : null),
-
-      travel_pay: earlyRound2(d.travel_pay ?? 0),
-      travel_charge: earlyRound2(d.travel_charge ?? 0),
-
-      accommodation_pay: earlyRound2(d.accommodation_pay ?? 0),
-      accommodation_charge: earlyRound2(d.accommodation_charge ?? 0),
-
-      other_pay: earlyRound2(d.other_pay ?? 0),
-      other_charge: earlyRound2(d.other_charge ?? 0),
-
-      note: String(d.note ?? '').trim()
-    };
-
-    return (typeof normaliseTimesheetExpensesDraft === 'function')
-      ? normaliseTimesheetExpensesDraft(raw, { row: rowNow, details: det, tsfin: tsfinLocal, state: st })
-      : raw;
-  };
-
-  const earlyStagedExpenses = normaliseExpensesForEarlyOnly(st.expensesDraft);
-  const earlyBaselineExpenses = normaliseExpensesForEarlyOnly(st.expensesBaseline);
-  const earlyExpenseDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
-    ? isTimesheetExpensesDraftDirty(earlyStagedExpenses, earlyBaselineExpenses, { row: rowNow, details: det, tsfin: tsfinLocal, state: st })
-    : { dirty: stableStringify(earlyStagedExpenses) !== stableStringify(earlyBaselineExpenses), expensesDirty: false, mileageDirty: false };
-  const earlyExpensesChanged = !!(earlyExpenseDirtyResult && earlyExpenseDirtyResult.dirty);
-
-  const earlySegmentControlsDirty = !!(
-    det.isSegmentsMode &&
-    (
-      Object.keys(st.segmentOverrides || {}).length ||
-      Object.keys(st.segmentInvoiceTargets || {}).length
-    )
-  );
-  const earlyCurrentOnHold = !!tsfinLocal.pay_on_hold;
-  const earlyPayHoldDesired = (st.payHoldDesired === true || st.payHoldDesired === false) ? st.payHoldDesired : null;
-  const earlyShouldChangeHold =
-    (earlyPayHoldDesired === true && !earlyCurrentOnHold) ||
-    (earlyPayHoldDesired === false && earlyCurrentOnHold);
-  const earlyWantsMarkPaid = !!st.markPaid;
-
-  const earlyOnlyExpensesDirty = !!(
-    earlyExpensesChanged &&
-    !refChanged &&
-    !earlySegmentControlsDirty &&
-    !earlyShouldChangeHold &&
-    !earlyWantsMarkPaid
-  );
-
-  if (earlyOnlyExpensesDirty && tsIdSave) {
-    if (isAuthorisedNow) {
-      alert('This timesheet is authorised. Unauthorise it before changing expenses.');
-      GE();
-      return { ok: false };
-    }
-    if (lockedNow) {
-      alert((policy && policy.expensesDisabledReason) || 'This timesheet is invoiced or paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.');
-      GE();
-      return { ok: false };
-    }
-
-    const saveEarlyExpOnly = await commitTimesheetExpensesMileageDraft({
-      timesheetId: tsIdSave,
-      expectedTimesheetId: window.modalCtx?.timesheetMeta?.expected_timesheet_id || tsIdSave,
-      draft: earlyStagedExpenses,
-      baseline: earlyBaselineExpenses,
-      row: rowNow,
-      details: det,
-      state: st,
-      source: 'simple',
-      onAdoptMovedTimesheetId: (typeof tsModalAdoptTimesheetId === 'function') ? tsModalAdoptTimesheetId : undefined
-    });
-
-    if (!saveEarlyExpOnly || saveEarlyExpOnly.ok === false) {
-      alert(String(saveEarlyExpOnly?.message || 'Failed to save expenses.'));
-      if (saveEarlyExpOnly && saveEarlyExpOnly.evidenceRequired) {
-        try {
-          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-          if (fr && fr.entity === 'timesheets' && typeof fr.setTab === 'function') {
-            await fr.setTab('evidence');
-          }
-        } catch {}
-      }
-      GE();
-      return { ok: false };
-    }
-
-    try { st.expensesBaseline = JSON.parse(JSON.stringify(saveEarlyExpOnly.committedDraft || earlyStagedExpenses)); } catch {}
-
-    try {
-      if (saveEarlyExpOnly.updatedTsfin && window.modalCtx?.timesheetDetails) {
-        window.modalCtx.timesheetDetails.tsfin = {
-          ...(window.modalCtx.timesheetDetails.tsfin || {}),
-          ...(saveEarlyExpOnly.updatedTsfin || {})
-        };
-      }
-      if (typeof classifyTimesheetEditDomains === 'function' && window.modalCtx) {
-        const refreshedPolicy = classifyTimesheetEditDomains({
-          row: window.modalCtx.data || rowNow,
-          details: window.modalCtx.timesheetDetails || det,
-          timesheet: window.modalCtx.timesheetDetails?.timesheet || tsLocal,
-          tsfin: window.modalCtx.timesheetDetails?.tsfin || tsfinLocal,
-          financial_snapshot: window.modalCtx.timesheetDetails?.financial_snapshot || null,
-          contract_week: window.modalCtx.timesheetDetails?.contract_week || null,
-          related: window.modalCtx.timesheetRelated || {},
-          action_flags: window.modalCtx.timesheetDetails?.action_flags || null,
-          state: st
-        });
-        window.modalCtx.timesheetEditDomains = refreshedPolicy;
-        window.modalCtx.expenses_tab_enabled = refreshedPolicy.canOpenExpenses === true;
-        window.modalCtx.expenses_tab_reason = refreshedPolicy.canOpenExpenses === false
-          ? String(refreshedPolicy.expensesDisabledReason || 'Expenses are not available for this timesheet.')
-          : '';
-        window.modalCtx.expenses_read_only = refreshedPolicy.expensesReadOnly === true;
-        window.modalCtx.can_edit_hours_schedule = refreshedPolicy.canEditHoursSchedule === true;
-        window.modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
-        window.modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
-      }
-    } catch {}
-
-    GE();
-    return { ok: true, saved: rowNow };
-  }
+     const weekDays = isWeeklyManualContext ? getWeekDays(weekEndingYmd) : [];
 
   // Baseline for change detection:
   // - real TS: actual_schedule_json
@@ -221580,15 +224504,10 @@ const onSaveTimesheet = async () => {
   }
 
   // Build schedule from lines if we can; otherwise fall back to existing schedule/baseline (no-op safe).
-   let scheduleToSave = Array.isArray(baselineSorted) ? baselineSorted : [];
+    let scheduleToSave = Array.isArray(baselineSorted) ? baselineSorted : [];
+  let weeklyStagedScheduleForDirty = Array.isArray(baselineSorted) ? baselineSorted : [];
 
-  if (isWeeklyManualContext && canEditHoursForSave && weekDays.length && linesByDate) {
-    if (typeof buildWeeklyScheduleFromLinesAndValidate !== 'function') {
-      alert('Internal error: buildWeeklyScheduleFromLinesAndValidate is missing.');
-      GE();
-      return { ok: false };
-    }
-
+  if (isWeeklyManualContext && weekDays.length && linesByDate) {
     const cleanLinesByDate = (() => {
       const src = (linesByDate && typeof linesByDate === 'object') ? linesByDate : {};
       const clone = JSON.parse(JSON.stringify(src || {}));
@@ -221607,52 +224526,76 @@ const onSaveTimesheet = async () => {
       return clone;
     })();
 
-    const out = buildWeeklyScheduleFromLinesAndValidate(
-      cleanLinesByDate,
-      weekDays,
-      { allowOvernight: true, allowBreakMins: true }
-    );
+    if (typeof buildWeeklyScheduleFromLinesAndValidate !== 'function') {
+      if (canEditHoursForSave) {
+        alert('Internal error: buildWeeklyScheduleFromLinesAndValidate is missing.');
+        GE();
+        return { ok: false };
+      }
 
-    if (out && out.hasErrors) {
-      st.scheduleHasErrors = true;
-      st.scheduleErrorsByDate = (out.errorsByDate && typeof out.errorsByDate === 'object') ? out.errorsByDate : {};
-
-      try {
-        const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-        if (fr && fr.entity === 'timesheets') {
-          fr._suppressDirty = true;
-          await fr.setTab('lines');
-          fr._suppressDirty = false;
-          fr._updateButtons && fr._updateButtons();
-        }
-      } catch {}
-
-      // Build a friendly error list (cap at 12)
-      const flat = [];
-      try {
-        for (const [d, msgs] of Object.entries(st.scheduleErrorsByDate || {})) {
-          (Array.isArray(msgs) ? msgs : []).forEach(m => flat.push(`${d}: ${m}`));
-        }
-      } catch {}
-
-      alert(
-        'Fix these schedule issues first:\n\n' +
-        flat.slice(0, 12).map(x => `- ${x}`).join('\n') +
-        (flat.length > 12 ? `\n\n(and ${flat.length - 12} more)` : '')
+      const fallback = normaliseScheduleJson(st.schedule) || baselineSorted;
+      weeklyStagedScheduleForDirty = sortScheduleStable(Array.isArray(fallback) ? fallback : []);
+    } else {
+      const out = buildWeeklyScheduleFromLinesAndValidate(
+        cleanLinesByDate,
+        weekDays,
+        { allowOvernight: true, allowBreakMins: true }
       );
 
-      GE();
-      return { ok: false };
+      if (out && out.hasErrors) {
+        weeklyStagedScheduleForDirty = [{ __invalid_schedule_attempt: true }];
+
+        if (canEditHoursForSave) {
+          st.scheduleHasErrors = true;
+          st.scheduleErrorsByDate = (out.errorsByDate && typeof out.errorsByDate === 'object') ? out.errorsByDate : {};
+
+          try {
+            const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+            if (fr && fr.entity === 'timesheets') {
+              fr._suppressDirty = true;
+              await fr.setTab('lines');
+              fr._suppressDirty = false;
+              fr._updateButtons && fr._updateButtons();
+            }
+          } catch {}
+
+          // Build a friendly error list (cap at 12)
+          const flat = [];
+          try {
+            for (const [d, msgs] of Object.entries(st.scheduleErrorsByDate || {})) {
+              (Array.isArray(msgs) ? msgs : []).forEach(m => flat.push(`${d}: ${m}`));
+            }
+          } catch {}
+
+          alert(
+            'Fix these schedule issues first:\n\n' +
+            flat.slice(0, 12).map(x => `- ${x}`).join('\n') +
+            (flat.length > 12 ? `\n\n(and ${flat.length - 12} more)` : '')
+          );
+
+          GE();
+          return { ok: false };
+        }
+      } else {
+        const candidateSchedule = sortScheduleStable(Array.isArray(out?.schedule) ? out.schedule : []);
+        weeklyStagedScheduleForDirty = candidateSchedule;
+
+        if (canEditHoursForSave) {
+          st.scheduleHasErrors = false;
+          st.scheduleErrorsByDate = {};
+          scheduleToSave = candidateSchedule;
+        }
+      }
     }
-
-    st.scheduleHasErrors = false;
-    st.scheduleErrorsByDate = {};
-
-    scheduleToSave = Array.isArray(out?.schedule) ? out.schedule : [];
   }
-  else if (isWeeklyManualContext && canEditHoursForSave) {
+  else if (isWeeklyManualContext) {
     const fallback = normaliseScheduleJson(st.schedule) || baselineSorted;
-    scheduleToSave = sortScheduleStable(Array.isArray(fallback) ? fallback : []);
+    const candidateSchedule = sortScheduleStable(Array.isArray(fallback) ? fallback : []);
+    weeklyStagedScheduleForDirty = candidateSchedule;
+
+    if (canEditHoursForSave) {
+      scheduleToSave = candidateSchedule;
+    }
   }
 
   if (isWeeklyManualContext && canEditHoursForSave) {
@@ -221661,8 +224604,7 @@ const onSaveTimesheet = async () => {
 
   const scheduleChangedWeekly =
     isWeeklyManualContext &&
-    canEditHoursForSave &&
-    !deepEqualJson(sortScheduleStable(st.schedule || []), baselineSorted);
+    !deepEqualJson(sortScheduleStable(weeklyStagedScheduleForDirty || []), baselineSorted);
 
   // Extras diff (weekly + per-day)
   const normExtrasWeek = (extrasMapOrUnitsWeek) => {
@@ -221807,7 +224749,6 @@ const onSaveTimesheet = async () => {
 
   const extrasChangedWeekly =
     isWeeklyManualContext &&
-    canEditHoursForSave &&
     (
       stableStringify(currentExtrasWeek)   !== stableStringify(stagedExtrasWeek) ||
       stableStringify(currentExtrasPerDay) !== stableStringify(stagedExtrasPerDay)
@@ -221931,14 +224872,13 @@ const onSaveTimesheet = async () => {
   const currentSchedule = isDailyManualContext
     ? sanitiseDailyManualSchedulePayload(resolveCurrentDailyScheduleBaseline(tsLocal, rowNow), 'object').schedule
     : sanitizeSchedulePayload(tsLocal.actual_schedule_json || null);
-  const stagedSchedule = (isDailyManualContext && canEditHoursForSave)
+   const stagedSchedule = isDailyManualContext
     ? ((st.schedule != null)
         ? sanitiseDailyManualSchedulePayload(st.schedule, 'object').schedule
         : sanitiseDailyManualSchedulePayload(resolveCurrentDailyScheduleBaseline(tsLocal, rowNow), 'object').schedule)
     : currentSchedule;
   const scheduleChangedDaily =
     isDailyManualContext &&
-    canEditHoursForSave &&
     !deepEqualJson(stagedSchedule, currentSchedule);
 
   // ✅ Frontend enforcement — cannot change hours/schedule/extras/expenses while authorised
@@ -221970,6 +224910,19 @@ const onSaveTimesheet = async () => {
 
   // QR-sensitive change (weekly schedule + weekly extras + daily schedule)
   const qrSensitiveChange = scheduleChangedWeekly || scheduleChangedDaily || extrasChangedWeekly;
+  const hoursScheduleDirty = !!(scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily);
+
+  if (hoursScheduleDirty && policy && policy.canEditHoursSchedule === false) {
+    alert(policy.hoursScheduleDisabledReason || 'This timesheet was submitted electronically/through QR. To amend hours, switch it to Manual first.');
+    GE();
+    return { ok: false };
+  }
+
+  if (staleScheduleErrorAtSaveStart && hoursScheduleDirty) {
+    alert('Fix the highlighted shift/break times first (overlaps, partial times, or breaks outside the shift).');
+    GE();
+    return { ok: false };
+  }
 
   const isContentChangeAttempt =
     qrSensitiveChange ||
@@ -222108,17 +225061,6 @@ const onSaveTimesheet = async () => {
   });
 
    const tasks = [];
-  const hoursScheduleDirty = !!(scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily);
-  if (staleScheduleErrorAtSaveStart && hoursScheduleDirty) {
-    alert('Fix the highlighted shift/break times first (overlaps, partial times, or breaks outside the shift).');
-    GE();
-    return { ok: false };
-  }
-  if (hoursScheduleDirty && policy && policy.canEditHoursSchedule === false) {
-    alert(policy.hoursScheduleDisabledReason || 'This timesheet was submitted electronically/through QR. To amend hours, switch it to Manual first.');
-    GE();
-    return { ok: false };
-  }
   const onlyExpensesDirty = !!(expensesChanged && !hoursScheduleDirty && !refChanged && !segmentControlsDirty && !shouldChangeHold);
   if (onlyExpensesDirty && tsIdSave) {
     if (isAuthorisedNow) {
@@ -228637,8 +231579,6 @@ function renderTimesheetEvidenceTab(ctx) {
   `;
 }
 
-
-
 async function openTimesheetEvidenceUploadDialog(file) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE][UPLOAD_DIALOG]');
   GC('openTimesheetEvidenceUploadDialog');
@@ -228665,6 +231605,15 @@ async function openTimesheetEvidenceUploadDialog(file) {
     : { isBulkAuthoriseTimesheets: false };
   const isBulkAuthoriseTimesheetsUpload = !!bulkAuthoriseTimesheetContext?.isBulkAuthoriseTimesheets;
 
+  const bulkProcessState = (mc.bulkProcessState && typeof mc.bulkProcessState === 'object')
+    ? mc.bulkProcessState
+    : ((window.modalCtx?.bulkProcessState && typeof window.modalCtx.bulkProcessState === 'object') ? window.modalCtx.bulkProcessState : null);
+  const bulkProcessActiveRow = (bulkProcessState?.active_row && typeof bulkProcessState.active_row === 'object') ? bulkProcessState.active_row : {};
+  const bulkProcessActiveContext = (bulkProcessState?.active_context && typeof bulkProcessState.active_context === 'object') ? bulkProcessState.active_context : {};
+  const bulkProcessActiveCtx = (bulkProcessState?.active_ctx && typeof bulkProcessState.active_ctx === 'object') ? bulkProcessState.active_ctx : {};
+  const bulkProcessActiveDetails = (bulkProcessState?.active_details && typeof bulkProcessState.active_details === 'object') ? bulkProcessState.active_details : {};
+  const isBulkProcessUpload = !!bulkProcessState;
+
   const realTsId =
     data?.timesheet_id ||
     data?.current_timesheet_id ||
@@ -228679,6 +231628,15 @@ async function openTimesheetEvidenceUploadDialog(file) {
     bulkAuthoriseActiveCtx.state?.current_timesheet_id ||
     bulkAuthoriseActiveDetails.current_timesheet_id ||
     bulkAuthoriseActiveDetails.timesheet?.timesheet_id ||
+    bulkProcessActiveRow.current_timesheet_id ||
+    bulkProcessActiveRow.timesheet_id ||
+    bulkProcessActiveRow.requested_timesheet_id ||
+    bulkProcessActiveContext.current_timesheet_id ||
+    bulkProcessActiveContext.requested_timesheet_id ||
+    bulkProcessActiveCtx.current_timesheet_id ||
+    bulkProcessActiveCtx.state?.current_timesheet_id ||
+    bulkProcessActiveDetails.current_timesheet_id ||
+    bulkProcessActiveDetails.timesheet?.timesheet_id ||
     null;
 
   const contractWeekId =
@@ -228691,6 +231649,12 @@ async function openTimesheetEvidenceUploadDialog(file) {
     bulkAuthoriseActiveCtx.state?.contract_week_id ||
     bulkAuthoriseActiveDetails.contract_week_id ||
     bulkAuthoriseActiveDetails.contract_week?.id ||
+    bulkProcessActiveRow.contract_week_id ||
+    bulkProcessActiveContext.contract_week_id ||
+    bulkProcessActiveCtx.contract_week_id ||
+    bulkProcessActiveCtx.state?.contract_week_id ||
+    bulkProcessActiveDetails.contract_week_id ||
+    bulkProcessActiveDetails.contract_week?.id ||
     null;
 
   const isPlannedWeekContext =
@@ -228714,48 +231678,75 @@ async function openTimesheetEvidenceUploadDialog(file) {
     const s = String(v).trim().toLowerCase();
     return (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on');
   };
-  const routeType = String(
-    data.route_type ||
-    details.route_type ||
-    details?.timesheet?.route_type ||
-    ''
-  ).toUpperCase();
-  const routeFamily = String(
-    data.route_family ||
-    details.route_family ||
-    details?.timesheet?.route_family ||
-    ''
-  ).toUpperCase();
-  const basis = String(
-    details?.tsfin?.basis ||
-    data.basis ||
-    details.basis ||
-    details?.timesheet?.basis ||
-    ''
-  ).toUpperCase();
-  const noTimesheetRequired = boolish(
-    details?.effective?.client_no_timesheet_required ??
-    data.client_no_timesheet_required ??
-    details.client_no_timesheet_required ??
-    details?.timesheet?.client_no_timesheet_required
-  );
 
-  const isImportAuthoritative =
-    boolish(data.is_import_authoritative) ||
-    boolish(details.is_import_authoritative) ||
-    boolish(meta.is_import_authoritative) ||
-    routeFamily === 'IMPORT_AUTHORITATIVE' ||
-    routeType === 'WEEKLY_NHSP' ||
-    routeType === 'WEEKLY_NHSP_ADJUSTMENT' ||
-    basis === 'NHSP' ||
-    basis === 'NHSP_ADJUSTMENT' ||
-    basis === 'HEALTHROSTER_SELF_BILL' ||
-    basis === 'HEALTHROSTER_ADJUSTMENT' ||
-    (routeType === 'WEEKLY_HEALTHROSTER' && noTimesheetRequired === true);
+  const evidencePolicyRow = isBulkAuthoriseTimesheetsUpload
+    ? (Object.keys(bulkAuthoriseActiveRow || {}).length ? bulkAuthoriseActiveRow : data)
+    : (isBulkProcessUpload
+        ? (Object.keys(bulkProcessActiveRow || {}).length ? bulkProcessActiveRow : data)
+        : data);
+  const evidencePolicyDetails = isBulkAuthoriseTimesheetsUpload
+    ? (Object.keys(bulkAuthoriseActiveDetails || {}).length ? bulkAuthoriseActiveDetails : details)
+    : (isBulkProcessUpload
+        ? (Object.keys(bulkProcessActiveDetails || {}).length ? bulkProcessActiveDetails : details)
+        : details);
+  const evidencePolicyActiveCtx = isBulkAuthoriseTimesheetsUpload
+    ? (bulkAuthoriseActiveCtx || null)
+    : (isBulkProcessUpload ? (bulkProcessActiveCtx || null) : null);
+  const evidencePolicyActiveContext = isBulkAuthoriseTimesheetsUpload
+    ? (bulkAuthoriseActiveContext || null)
+    : (isBulkProcessUpload ? (bulkProcessActiveContext || null) : null);
+  const evidencePolicyState =
+    (evidencePolicyActiveCtx?.state && typeof evidencePolicyActiveCtx.state === 'object')
+      ? evidencePolicyActiveCtx.state
+      : ((evidencePolicyActiveContext?.state && typeof evidencePolicyActiveContext.state === 'object')
+          ? evidencePolicyActiveContext.state
+          : (mc.timesheetState || {}));
+  const evidencePolicyRelated =
+    evidencePolicyDetails?.related ||
+    evidencePolicyActiveCtx?.details?.related ||
+    evidencePolicyActiveContext?.details?.related ||
+    mc.timesheetRelated ||
+    details?.related ||
+    {};
 
-  if (isImportAuthoritative) {
+  const evidencePolicy = (typeof classifyTimesheetEditDomains === 'function')
+    ? classifyTimesheetEditDomains({
+        row: evidencePolicyRow,
+        details: evidencePolicyDetails,
+        timesheet: evidencePolicyDetails?.timesheet || evidencePolicyRow?.timesheet || evidencePolicyActiveCtx?.timesheet || evidencePolicyActiveCtx?.details?.timesheet || evidencePolicyActiveContext?.timesheet || evidencePolicyActiveContext?.details?.timesheet || null,
+        tsfin: evidencePolicyDetails?.tsfin || evidencePolicyRow?.tsfin || evidencePolicyActiveCtx?.tsfin || evidencePolicyActiveCtx?.details?.tsfin || evidencePolicyActiveContext?.tsfin || evidencePolicyActiveContext?.details?.tsfin || null,
+        financial_snapshot: evidencePolicyDetails?.financial_snapshot || evidencePolicyRow?.financial_snapshot || evidencePolicyActiveCtx?.financial_snapshot || evidencePolicyActiveCtx?.details?.financial_snapshot || evidencePolicyActiveContext?.financial_snapshot || evidencePolicyActiveContext?.details?.financial_snapshot || null,
+        contract_week: evidencePolicyDetails?.contract_week || evidencePolicyRow?.contract_week || evidencePolicyActiveCtx?.contract_week || evidencePolicyActiveCtx?.details?.contract_week || evidencePolicyActiveContext?.contract_week || evidencePolicyActiveContext?.details?.contract_week || null,
+        related: evidencePolicyRelated,
+        action_flags: evidencePolicyDetails?.action_flags || evidencePolicyActiveCtx?.action_flags || evidencePolicyActiveCtx?.details?.action_flags || evidencePolicyActiveContext?.action_flags || evidencePolicyActiveContext?.details?.action_flags || null,
+        state: evidencePolicyState,
+        active_ctx: evidencePolicyActiveCtx,
+        active_context: evidencePolicyActiveContext,
+        context: {
+          row: evidencePolicyRow,
+          data,
+          details: evidencePolicyDetails,
+          simple_modal_row: data,
+          simple_modal_details: details,
+          active_row: isBulkAuthoriseTimesheetsUpload ? bulkAuthoriseActiveRow : bulkProcessActiveRow,
+          active_context: evidencePolicyActiveContext,
+          active_ctx: evidencePolicyActiveCtx,
+          bulk_authorise_active_row: bulkAuthoriseActiveRow,
+          bulk_authorise_active_context: bulkAuthoriseActiveContext,
+          bulk_authorise_active_ctx: bulkAuthoriseActiveCtx,
+          bulk_process_active_row: bulkProcessActiveRow,
+          bulk_process_active_context: bulkProcessActiveContext,
+          bulk_process_active_ctx: bulkProcessActiveCtx
+        }
+      })
+    : null;
+
+  if (evidencePolicy && evidencePolicy.canManageExpenseEvidence !== true) {
+    const blockedMessage = evidencePolicy.isAuthorised === true
+      ? 'This timesheet is authorised. Unauthorise it before changing expenses or expense evidence.'
+      : String(evidencePolicy.expenseEvidenceDisabledReason || evidencePolicy.expensesDisabledReason || 'Evidence cannot be uploaded for this timesheet route.');
     GE();
-    throw new Error('Evidence is view-only for this route and cannot be uploaded here');
+    throw new Error(blockedMessage);
   }
 
   if (!realTsId && !contractWeekId) {
@@ -228796,6 +231787,9 @@ async function openTimesheetEvidenceUploadDialog(file) {
       : bulkAuthoriseState;
     const latestTimesheetState = (window.modalCtx?.timesheetState && typeof window.modalCtx.timesheetState === 'object') ? window.modalCtx.timesheetState : {};
     const latestDetails = (window.modalCtx?.timesheetDetails && typeof window.modalCtx.timesheetDetails === 'object') ? window.modalCtx.timesheetDetails : details;
+    const latestBulkProcessState = (window.modalCtx?.bulkProcessState && typeof window.modalCtx.bulkProcessState === 'object')
+      ? window.modalCtx.bulkProcessState
+      : bulkProcessState;
     const sources = isBulkAuthoriseTimesheetsUpload
       ? [
           latestTimesheetState.evidence,
@@ -228807,13 +231801,28 @@ async function openTimesheetEvidenceUploadDialog(file) {
           latestBulkAuthoriseState?.active_context?.details?.evidence,
           latestBulkAuthoriseState?.active_details?.evidence
         ]
-      : [
-          latestTimesheetState.evidence,
-          latestDetails.evidence,
-          latestDetails.details?.evidence,
-          latestDetails.timesheetEvidence,
-          latestDetails.timesheet_evidence
-        ];
+      : (isBulkProcessUpload
+          ? [
+              latestTimesheetState.evidence,
+              latestBulkProcessState?.evidence_pane_state?.attached_rows,
+              latestBulkProcessState?.evidence_pane_state?.attached_all_rows,
+              latestBulkProcessState?.active_ctx?.state?.evidence,
+              latestBulkProcessState?.active_ctx?.evidence,
+              latestBulkProcessState?.active_context?.evidence,
+              latestBulkProcessState?.active_context?.details?.evidence,
+              latestBulkProcessState?.active_details?.evidence,
+              latestDetails.evidence,
+              latestDetails.details?.evidence,
+              latestDetails.timesheetEvidence,
+              latestDetails.timesheet_evidence
+            ]
+          : [
+              latestTimesheetState.evidence,
+              latestDetails.evidence,
+              latestDetails.details?.evidence,
+              latestDetails.timesheetEvidence,
+              latestDetails.timesheet_evidence
+            ]);
     const rows = [];
     const seen = new Set();
     const add = (item) => {
@@ -229300,6 +232309,7 @@ async function openTimesheetEvidenceUploadDialog(file) {
 
   GE();
 }
+
 
 
 async function openTimesheetEvidenceReplaceDialog(file) {
