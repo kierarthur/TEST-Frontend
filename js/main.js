@@ -3469,13 +3469,24 @@ async function apiPostJson(path, body, options = {}) {
     res = await authFetch(url, init);
     txt = await res.text().catch(() => '');
   } catch (e) {
-    // network / CORS / authFetch failure (no HTTP status)
     throw e;
   }
 
   try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = null; }
 
   if (!res.ok) {
+    const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+    const safeString = (value) => {
+      try {
+        if (value == null) return '';
+        if (typeof value === 'string') return value;
+        if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+        return '';
+      } catch {
+        return '';
+      }
+    };
+    const safeTrim = (value) => safeString(value).trim();
     const isBankingPayPath = String(path || '').startsWith('/api/banking/pay/');
     const opts = (options && typeof options === 'object') ? options : {};
     const contextAction = opts.action;
@@ -3490,16 +3501,56 @@ async function apiPostJson(path, body, options = {}) {
       if (p.includes('/preview') || (p.includes('/workbench') && (p.includes('/candidate') || p.includes('/progress') || p.includes('/session/get')))) return 'PREVIEW';
       return 'BANKING_ACTION';
     };
-    const msg =
-      (parsed && typeof parsed === 'object' && (parsed.message || parsed.error))
-        ? String(parsed.message || parsed.error)
-        : (txt || `Request failed (${res.status})`);
+    const extractSafeResponseMessage = (payload) => {
+      if (!isPlainObject(payload)) return '';
+      const candidates = [
+        payload.title,
+        payload.user_message,
+        payload.userMessage,
+        payload.message,
+        payload.friendly_error?.message,
+        payload.friendlyError?.message,
+        payload.error?.message,
+        payload.error?.title,
+        payload.error?.user_message,
+        payload.error?.userMessage,
+        payload.error?.code,
+        payload.error?.error_code,
+        payload.error_code,
+        payload.errorCode,
+        payload.code
+      ];
+      for (const candidate of candidates) {
+        const text = safeTrim(candidate);
+        if (text) return text;
+      }
+      if (typeof payload.error === 'string') return safeTrim(payload.error);
+      return '';
+    };
+
+    const fallbackMessage = txt || `Request failed (${res.status})`;
+    const msg = extractSafeResponseMessage(parsed) || fallbackMessage;
 
     const err = new Error(msg);
     err.status = res.status;
     err.body = txt || '';
     err.json = parsed;
     err.payload = parsed;
+    err.backendPayload = parsed;
+    err.raw_response_text = txt || '';
+    err.statusText = res.statusText || '';
+    err.path = String(path || '');
+
+    if (isPlainObject(parsed)) {
+      if (parsed.error_code || parsed.errorCode || parsed.code) err.error_code = parsed.error_code || parsed.errorCode || parsed.code;
+      if (parsed.code || parsed.error_code || parsed.errorCode) err.code = parsed.code || parsed.error_code || parsed.errorCode;
+      if (parsed.title) err.title = parsed.title;
+      if (parsed.user_message || parsed.userMessage) err.user_message = parsed.user_message || parsed.userMessage;
+      if (parsed.details) err.details = parsed.details;
+      if (parsed.error) err.error = parsed.error;
+      if (parsed.friendly_error || parsed.friendlyError) err.friendly_error = parsed.friendly_error || parsed.friendlyError;
+    }
+
     if (isBankingPayPath && typeof bankingNormalizeApiError === 'function') {
       const normalised = bankingNormalizeApiError(err, parsed, {
         ...opts,
@@ -3528,6 +3579,8 @@ async function apiPostJson(path, body, options = {}) {
 
   return (parsed != null) ? parsed : {};
 }
+
+
 
 async function apiPatchJson(path, body) {
   const url = API(path);
@@ -17821,7 +17874,7 @@ function sanitizeBankingPaymentIssueError(errorOrJson, context = '') {
   const safeText = (value) => String(value == null ? '' : value).trim();
   const allText = [];
   const collect = (value, depth = 0) => {
-    if (depth > 3 || value == null) return;
+    if (depth > 5 || value == null) return;
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
       allText.push(String(value));
       return;
@@ -17831,7 +17884,11 @@ function sanitizeBankingPaymentIssueError(errorOrJson, context = '') {
       return;
     }
     if (typeof value === 'object') {
-      ['code', 'error_code', 'errorCode', 'error', 'message', 'detail', 'details', 'title'].forEach((key) => collect(value[key], depth + 1));
+      [
+        'code', 'error_code', 'errorCode', 'error', 'message', 'detail', 'details', 'title',
+        'reason', 'technical_message', 'technicalMessage', 'rpc_error', 'rpcError',
+        'original_error', 'originalError', 'inner_error', 'innerError', 'raw_error', 'rawError'
+      ].forEach((key) => collect(value[key], depth + 1));
       collect(value.blocker, depth + 1);
       collect(value.blockers, depth + 1);
       collect(value.hard_blockers, depth + 1);
@@ -17839,11 +17896,24 @@ function sanitizeBankingPaymentIssueError(errorOrJson, context = '') {
       collect(value.body, depth + 1);
       collect(value.payload, depth + 1);
       collect(value.data, depth + 1);
+      collect(value.response, depth + 1);
     }
   };
   collect(errorOrJson);
 
   const raw = allText.map((item) => safeText(item)).filter(Boolean).join(' | ').trim();
+  const rawLooksTechnical = (value) => {
+    const text = safeText(value);
+    if (!text) return false;
+    const upper = text.toUpperCase();
+    if (text.includes('{') || text.includes('}')) return true;
+    if (/\b(P[0-9A-Z]{4}|[0-9]{5})\b/.test(upper)) return true;
+    if (/SQLSTATE|SQL STATE|RPC\s|RPC_|POSTGRES|SUPABASE|POSTGREST|PLPGSQL|CONSTRAINT|DUPLICATE KEY|UNIQUE CONSTRAINT|FOREIGN KEY|PUBLIC\.|STACK TRACE|TRACEBACK/i.test(text)) return true;
+    if (/MANUAL_DEBT_RECOVERY|KEY_TYPE|KEY_VALUE|TIMESHEET_ID|\bDIFF\b|DIFF_JSON|\bEXPECTED\b|\bACTUAL\b/i.test(text)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(text)) return true;
+    return false;
+  };
+
   const codeCandidates = [];
   const pushCode = (value) => {
     const text = safeText(value).toUpperCase();
@@ -17884,15 +17954,14 @@ function sanitizeBankingPaymentIssueError(errorOrJson, context = '') {
       });
       const normalisedCode = safeText(normalised?.error_code || normalised?.code).toUpperCase();
       const normalisedMessage = safeText(normalised?.message || normalised?.user_message || normalised?.error);
-      if (normalisedCode && normalisedCode !== 'BANKING_ACTION_FAILED' && normalisedMessage) return normalisedMessage;
-      if (/SQLSTATE|RPC\s|RPC_|POSTGRES|SUPABASE|POSTGREST|CONSTRAINT|DUPLICATE KEY|UNIQUE CONSTRAINT|PUBLIC\.|STACK TRACE|TRACEBACK/i.test(raw)) {
-        return normalisedMessage || 'This payment needs review.';
-      }
+      if (normalisedCode && normalisedCode !== 'BANKING_ACTION_FAILED' && normalisedMessage && !rawLooksTechnical(normalisedMessage)) return normalisedMessage;
+      if (rawLooksTechnical(raw)) return normalisedMessage && !rawLooksTechnical(normalisedMessage) ? normalisedMessage : 'This payment needs review.';
     }
   } catch {}
 
   const banned = /(no-money|settled reversal|movement classification|correction kind|correction request|work item|frozen artifact|economic artifact|pre-bank|post-draft|before money moved|after money moved|return to banking pay|available in banking pay|reverse|reversal|unwind|correction)/i;
   if (banned.test(raw)) return 'This payment needs review.';
+  if (rawLooksTechnical(raw)) return 'This payment needs review.';
   if (/reauth|verify identity|password|code/i.test(raw)) return 'Please verify your identity before continuing.';
   if (/reason is required|missing reason/i.test(raw)) return 'Reason is required.';
   if (context === 'plan') return 'Unable to review payment issue.';
@@ -24839,6 +24908,21 @@ async function bankingPayPreview(pay_date) {
   const candidateScopedRefresh = options.candidate_scoped_refresh === true || options.candidateScopedRefresh === true || !!requestedCandidateId;
   const useReplacementSessionBootstrap = !!replacementSessionId;
   const ORDINARY_BANKING_CUTOFF_SENTINEL = '9999-12-31';
+  const previewMode = trimStr(options.mode || options.previewMode || options.preview_mode || '').toUpperCase();
+  const previewSilent = options.silent === true || options.silent === 'true';
+  const previewBackground = options.background === true || options.background === 'true' || previewMode === 'BACKGROUND' || previewMode === 'SILENT' || previewMode === 'POST_ACTION_REOPEN';
+  const previewUserInitiated = (
+    options.userInitiated === true ||
+    options.user_initiated === true ||
+    options.showModal === true ||
+    options.show_modal === true ||
+    (
+      options.userInitiated !== false &&
+      options.user_initiated !== false &&
+      !previewSilent &&
+      !previewBackground
+    )
+  );
 
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
   if (!mc || String(mc.entity || '') !== 'banking') return null;
@@ -24881,6 +24965,25 @@ async function bankingPayPreview(pay_date) {
     preview_epoch: 0
   };
   wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
+
+  const presentPreviewFriendlyError = async (friendly, fallbackTitle = 'Payment preview could not be loaded', fallbackMessage = 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.') => {
+    if (!previewUserInitiated || previewSilent || previewBackground) return;
+    const title = trimStr(friendly?.title || friendly?.friendly_error?.title || fallbackTitle) || fallbackTitle;
+    const message = trimStr(friendly?.user_message || friendly?.message || friendly?.friendly_error?.message || fallbackMessage) || fallbackMessage;
+    try {
+      if (typeof openUiConfirmModal === 'function') {
+        await openUiConfirmModal({
+          title,
+          message,
+          confirm_label: trimStr(friendly?.confirm_label || friendly?.friendly_error?.confirm_label || 'OK') || 'OK',
+          hide_cancel: true,
+          confirm_class: 'btn btn-primary'
+        });
+        return;
+      }
+    } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
+  };
 
   const isIsoDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(trimStr(value));
   const getLondonTodayIsoLocal = () => {
@@ -24954,15 +25057,27 @@ async function bankingPayPreview(pay_date) {
   const weekEndingCutoffDate = ORDINARY_BANKING_CUTOFF_SENTINEL;
 
   if (!isIsoDate(effectivePayDate)) {
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError({ code: 'BANKING_PREVIEW_INVALID_PAY_DATE', message: 'pay_date is required (YYYY-MM-DD)' }, null, {
+          action: 'PREVIEW',
+          fallbackCode: 'BANKING_PREVIEW_INVALID_PAY_DATE',
+          userInitiated: previewUserInitiated,
+          silent: previewSilent,
+          background: previewBackground,
+          showModal: previewUserInitiated && !previewSilent && !previewBackground
+        })
+      : null;
+    const message = trimStr(friendly?.user_message || friendly?.message || 'Payment preview could not be loaded. Select a valid pay date, then try again.') || 'Payment preview could not be loaded. Select a valid pay date, then try again.';
     wiz.preview.loading = false;
-    wiz.preview.error = 'pay_date is required (YYYY-MM-DD)';
-    wiz.preview.friendlyError = null;
+    wiz.preview.error = message;
+    wiz.preview.friendlyError = friendly && typeof friendly === 'object' ? friendly : null;
     wiz.preview.failure = {
       preview_unavailable: true,
       can_retry: false,
-      error: { code: 'BANKING_PREVIEW_INVALID_PAY_DATE', message: 'pay_date is required (YYYY-MM-DD)' }
+      error: { code: trimStr(friendly?.error_code || friendly?.code || 'BANKING_PREVIEW_INVALID_PAY_DATE') || 'BANKING_PREVIEW_INVALID_PAY_DATE', message }
     };
     wiz.preview.data = null;
+    await presentPreviewFriendlyError(friendly, 'Payment preview could not be loaded', message);
     return null;
   }
 
@@ -24971,17 +25086,32 @@ async function bankingPayPreview(pay_date) {
     : { blocked: false, reasonCode: '', message: '' };
 
   if (gate && gate.blocked) {
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError({
+          code: String(gate.reasonCode || 'BANKING_PREVIEW_BLOCKED'),
+          message: String(gate.message || gate.reasonCode || 'Action blocked')
+        }, gate, {
+          action: 'PREVIEW',
+          fallbackCode: 'BANKING_PAY_PREVIEW_FAILED',
+          userInitiated: previewUserInitiated,
+          silent: previewSilent,
+          background: previewBackground,
+          showModal: previewUserInitiated && !previewSilent && !previewBackground
+        })
+      : null;
+    const message = trimStr(friendly?.user_message || friendly?.message || gate.message || gate.reasonCode || 'Payment preview could not be loaded. Refresh Banking and try again.') || 'Payment preview could not be loaded. Refresh Banking and try again.';
     wiz.preview.loading = false;
-    wiz.preview.error = String(gate.message || gate.reasonCode || 'Action blocked');
-    wiz.preview.friendlyError = null;
+    wiz.preview.error = message;
+    wiz.preview.friendlyError = friendly && typeof friendly === 'object' ? friendly : null;
     wiz.preview.failure = {
       preview_unavailable: true,
       can_retry: false,
       error: {
-        code: String(gate.reasonCode || 'BANKING_PREVIEW_BLOCKED'),
-        message: String(gate.message || gate.reasonCode || 'Action blocked')
+        code: trimStr(friendly?.error_code || friendly?.code || gate.reasonCode || 'BANKING_PREVIEW_BLOCKED') || 'BANKING_PREVIEW_BLOCKED',
+        message
       }
     };
+    await presentPreviewFriendlyError(friendly, 'Payment preview could not be loaded', message);
     return null;
   }
 
@@ -25225,21 +25355,22 @@ async function bankingPayPreview(pay_date) {
   };
   const shouldAbortDetachedSettler = (expectedSessionId) => !isLatestRequest() || !isSameWorkbenchSession(expectedSessionId);
 
-  const applyFailure = (error) => {
+  const applyFailure = async (error) => {
     const friendly = (typeof bankingNormalizeApiError === 'function')
       ? bankingNormalizeApiError(error, error?.payload || error?.json || null, {
           action: 'PREVIEW',
           fallbackCode: 'BANKING_PAY_PREVIEW_FAILED',
-          userInitiated: true
+          userInitiated: previewUserInitiated,
+          silent: previewSilent,
+          background: previewBackground,
+          showModal: previewUserInitiated && !previewSilent && !previewBackground
         })
       : null;
     const message = trimStr(
       friendly?.user_message ||
       friendly?.message ||
-      error?.message ||
-      error ||
-      'Banking preview could not be loaded.'
-    ) || 'Banking preview could not be loaded.';
+      'Payment preview could not be loaded. CloudTMS could not calculate the payment preview. Refresh Banking and try again.'
+    ) || 'Payment preview could not be loaded. CloudTMS could not calculate the payment preview. Refresh Banking and try again.';
     wiz.preview.data = null;
     wiz.preview.error = message;
     wiz.preview.friendlyError = friendly && typeof friendly === 'object' ? friendly : null;
@@ -25259,6 +25390,7 @@ async function bankingPayPreview(pay_date) {
         message: trimStr(friendly?.message || message) || message
       }
     };
+    await presentPreviewFriendlyError(friendly, 'Payment preview could not be loaded', message);
   };
 
   const syncProgressIntoState = (progress) => {
@@ -25703,7 +25835,7 @@ async function bankingPayPreview(pay_date) {
       return null;
     }
 
-    applyFailure(e);
+    await applyFailure(e);
     wiz.preview.loading = false;
 
     try {
@@ -25722,7 +25854,6 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
-
 
 
 
@@ -25867,7 +25998,9 @@ function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, opti
   }
 }
 
-async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) {
+async function bankingPayCreateDraft(input = {}) {
+  const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
+  const { pay_date, preview_decisions_json } = inputOptions;
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const upperTrim = (value) => trimStr(value).toUpperCase();
@@ -26220,11 +26353,68 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
     } catch {}
   };
 
-  const failCreateDraftContext = (message, details = {}) => {
-    const msg = trimStr(message || 'Banking preview has changed. Refresh the Banking preview and try again.') || 'Banking preview has changed. Refresh the Banking preview and try again.';
+  const createDraftMode = upperTrim(inputOptions.mode || inputOptions.createDraftMode || inputOptions.create_draft_mode || '');
+  const createDraftSilent = inputOptions.silent === true || inputOptions.silent === 'true';
+  const createDraftBackground = inputOptions.background === true || inputOptions.background === 'true' || createDraftMode === 'BACKGROUND' || createDraftMode === 'SILENT';
+  const createDraftUserInitiated = (
+    inputOptions.userInitiated === true ||
+    inputOptions.user_initiated === true ||
+    inputOptions.showModal === true ||
+    inputOptions.show_modal === true ||
+    (
+      inputOptions.userInitiated !== false &&
+      inputOptions.user_initiated !== false &&
+      !createDraftSilent &&
+      !createDraftBackground
+    )
+  );
+
+  const presentCreateDraftFriendlyError = async (friendly, fallbackTitle = 'Payment batch could not be created', fallbackMessage = 'Refresh the preview, review the latest payment details, then try again.') => {
+    if (!createDraftUserInitiated || createDraftSilent || createDraftBackground) return;
+    const title = trimStr(friendly?.title || friendly?.friendly_error?.title || fallbackTitle) || fallbackTitle;
+    const message = trimStr(friendly?.user_message || friendly?.message || friendly?.friendly_error?.message || fallbackMessage) || fallbackMessage;
+    try {
+      if (typeof openUiConfirmModal === 'function') {
+        await openUiConfirmModal({
+          title,
+          message,
+          confirm_label: trimStr(friendly?.confirm_label || friendly?.friendly_error?.confirm_label || 'OK') || 'OK',
+          hide_cancel: true,
+          confirm_class: 'btn btn-primary'
+        });
+        return;
+      }
+    } catch {}
+    try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
+  };
+
+  const failCreateDraftContext = async (message, details = {}) => {
+    const rawMessage = trimStr(message || 'Banking preview has changed. Refresh the Banking preview and try again.') || 'Banking preview has changed. Refresh the Banking preview and try again.';
+    const detailObject = isPlainObject(details) ? details : {};
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError({
+          code: detailObject.code || detailObject.error_code || 'BANKING_PAY_CREATE_DRAFT_FAILED',
+          message: rawMessage,
+          details: detailObject,
+          reason: detailObject.reason || rawMessage,
+          technical_message: detailObject.reason || rawMessage,
+          payload: detailObject
+        }, detailObject, {
+          action: 'CREATE_DRAFT',
+          fallbackCode: detailObject.code || detailObject.error_code || 'BANKING_PAY_CREATE_DRAFT_FAILED',
+          userInitiated: createDraftUserInitiated,
+          silent: createDraftSilent,
+          background: createDraftBackground,
+          showModal: createDraftUserInitiated && !createDraftSilent && !createDraftBackground
+        })
+      : null;
+    const msg = trimStr(friendly?.user_message || friendly?.message || rawMessage) || 'Payment batch could not be created. Refresh the preview, review the latest payment details, then try again.';
     logTroubleshoot('warn', 'STALE_WORKBENCH_CONTEXT_ABORTED', details);
-    try { wiz.createDraftError = msg; } catch {}
-    try { if (typeof window.__toast === 'function') window.__toast(msg); } catch {}
+    try {
+      wiz.createDraftError = msg;
+      wiz.createDraftFriendlyError = friendly && typeof friendly === 'object' ? friendly : null;
+    } catch {}
+    await presentCreateDraftFriendlyError(friendly, 'Payment batch could not be created', msg);
     return null;
   };
   const normalizeCutoffDate = (value) => trimStr(value) || '9999-12-31';
@@ -26300,7 +26490,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   const payDateDistinctValues = contextDistinctValues(payDateContextEntries);
 
   if (payDateDistinctValues.length > 1) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'PAY_DATE_CONTEXT_CONFLICT',
       pay_date_values: payDateContextEntries
     });
@@ -26308,8 +26498,10 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
 
   const pd = payDateDistinctValues[0] || '';
   if (!pd) {
-    try { wiz.createDraftError = 'pay_date is required (YYYY-MM-DD)'; } catch {}
-    return null;
+    return await failCreateDraftContext('Payment batch could not be created. Select a valid pay date, then try again.', {
+      code: 'BANKING_CREATE_DRAFT_INVALID_PAY_DATE',
+      reason: 'PAY_DATE_REQUIRED'
+    });
   }
 
   const requestedCutoffRaw = trimStr(
@@ -26339,7 +26531,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   const cutoffDistinctValues = contextDistinctValues(cutoffContextEntries);
 
   if (cutoffDistinctValues.length > 1) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'WEEK_ENDING_CUTOFF_CONTEXT_CONFLICT',
       active_pay_date: pd,
       week_ending_cutoff_values: cutoffContextEntries
@@ -26426,7 +26618,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
 
   const activeRefreshState = collectPendingRefreshState();
   if (activeRefreshState.errorText) {
-    return failCreateDraftContext(`Banking Pay preview refresh failed. ${activeRefreshState.errorText}`, {
+    return await failCreateDraftContext(`Banking Pay preview refresh failed. ${activeRefreshState.errorText}`, {
       reason: 'CREATE_DRAFT_REFRESH_ERROR',
       active_pay_date: pd,
       week_ending_cutoff_date: cutoffIso,
@@ -26435,7 +26627,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
     });
   }
   if (activeRefreshState.hasPending) {
-    return failCreateDraftContext('Banking Pay preview is still refreshing. Draft creation will be available when the candidate refresh completes.', {
+    return await failCreateDraftContext('Banking Pay preview is still refreshing. Draft creation will be available when the candidate refresh completes.', {
       reason: 'CREATE_DRAFT_REFRESH_PENDING',
       active_pay_date: pd,
       week_ending_cutoff_date: cutoffIso,
@@ -26454,9 +26646,11 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
       reason_code: trimStr(gate.reasonCode) || null,
       message: msg || null
     });
-    try { wiz.createDraftError = msg; } catch {}
-    try { if (typeof window.__toast === 'function') window.__toast(msg); } catch {}
-    return null;
+    return await failCreateDraftContext(msg, {
+      code: gate.reasonCode || 'BANKING_PAY_CREATE_DRAFT_FAILED',
+      reason: 'CREATE_DRAFT_ACTION_BLOCKED',
+      gate
+    });
   }
 
   const sessionContextEntries = normalizeContextEntries([
@@ -26469,7 +26663,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   const sessionDistinctValues = contextDistinctValues(sessionContextEntries);
 
   if (sessionDistinctValues.length > 1) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'SESSION_ID_CONTEXT_CONFLICT',
       active_pay_date: pd,
       week_ending_cutoff_date: cutoffIso,
@@ -26481,9 +26675,12 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   if (!sessionId) {
     const msg = 'No workbench session is available. Refresh the Banking Pay workbench and try again.';
     logTroubleshoot('warn', 'SESSION_ID_MISSING', { pay_date: pd, week_ending_cutoff_date: cutoffIso });
-    try { wiz.createDraftError = msg; } catch {}
-    try { if (typeof window.__toast === 'function') window.__toast(msg); } catch {}
-    return null;
+    return await failCreateDraftContext(msg, {
+      code: 'BANKING_PAY_CREATE_DRAFT_SESSION_REQUIRED',
+      reason: 'SESSION_ID_MISSING',
+      pay_date: pd,
+      week_ending_cutoff_date: cutoffIso
+    });
   }
 
   const previewEnvelope = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : {};
@@ -26536,7 +26733,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   );
 
   if (computedLivePayDate && computedLivePayDate !== pd) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'COMPUTED_LIVE_PAY_DATE_DOES_NOT_MATCH_ACTIVE_PAY_DATE',
       computed_live_pay_date: computedLivePayDate,
       active_pay_date: pd,
@@ -26545,7 +26742,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   }
 
   if (computedLiveCutoffDate && computedLiveCutoffDate !== cutoffIso) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'COMPUTED_LIVE_WEEK_ENDING_CUTOFF_DOES_NOT_MATCH_ACTIVE_CUTOFF',
       computed_live_week_ending_cutoff_date: computedLiveCutoffDate,
       active_week_ending_cutoff_date: cutoffIso,
@@ -26555,7 +26752,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   }
 
   if (computedLiveSessionSignature && activeSessionSignature && !jsonSignatureTextsMatch(computedLiveSessionSignature, activeSessionSignature)) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'COMPUTED_LIVE_SESSION_SIGNATURE_DOES_NOT_MATCH_ACTIVE_SIGNATURE',
       computed_live_session_signature: computedLiveSessionSignature,
       active_session_signature: activeSessionSignature,
@@ -26568,7 +26765,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   }
 
   if (previewSessionId && previewSessionId !== sessionId) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'PREVIEW_SESSION_ID_DOES_NOT_MATCH_ACTIVE_SESSION_ID',
       active_session_id: sessionId,
       preview_session_id: previewSessionId,
@@ -26577,7 +26774,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   }
 
   if (workbenchPayDate && workbenchPayDate !== pd) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'WORKBENCH_PAY_DATE_DOES_NOT_MATCH_ACTIVE_PAY_DATE',
       active_pay_date: pd,
       workbench_pay_date: workbenchPayDate,
@@ -26586,7 +26783,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   }
 
   if (previewPayDate && previewPayDate !== pd) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'PREVIEW_PAY_DATE_DOES_NOT_MATCH_ACTIVE_PAY_DATE',
       active_pay_date: pd,
       preview_pay_date: previewPayDate,
@@ -26595,7 +26792,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   }
 
   if (workbenchCutoffRaw && normalizeCutoffDate(workbenchCutoffRaw) !== cutoffIso) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'WORKBENCH_WEEK_ENDING_CUTOFF_DOES_NOT_MATCH_ACTIVE_CUTOFF',
       active_week_ending_cutoff_date: cutoffIso,
       workbench_week_ending_cutoff_date: normalizeCutoffDate(workbenchCutoffRaw),
@@ -26605,7 +26802,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   }
 
   if (previewCutoffRaw && normalizeCutoffDate(previewCutoffRaw) !== cutoffIso) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'PREVIEW_WEEK_ENDING_CUTOFF_DOES_NOT_MATCH_ACTIVE_CUTOFF',
       active_week_ending_cutoff_date: cutoffIso,
       preview_week_ending_cutoff_date: normalizeCutoffDate(previewCutoffRaw),
@@ -26615,7 +26812,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
   }
 
   if (previewSessionSignature && activeSessionSignature && !jsonSignatureTextsMatch(previewSessionSignature, activeSessionSignature)) {
-    return failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
+    return await failCreateDraftContext('Banking preview has changed. Refresh the Banking preview and try again.', {
       reason: 'PREVIEW_SESSION_SIGNATURE_DOES_NOT_MATCH_ACTIVE_SIGNATURE',
       active_session_signature: activeSessionSignature,
       preview_session_signature: previewSessionSignature,
@@ -26724,9 +26921,13 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
       preview_row_universe_count: previewRowUniverse.length,
       selected_preview_row_ids_count: selectedPreviewRowIdsForServer.length
     });
-    try { wiz.createDraftError = msg; } catch {}
-    try { if (typeof window.__toast === 'function') window.__toast(msg); } catch {}
-    return null;
+    return await failCreateDraftContext(msg, {
+      code: 'BANKING_CREATE_DRAFT_INVALID_INPUT',
+      reason: 'NO_SELECTED_PREVIEW_ROWS',
+      selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
+      preview_row_universe_count: previewRowUniverse.length,
+      selected_preview_row_ids_count: selectedPreviewRowIdsForServer.length
+    });
   }
 
   const inferSelectedPayChannelScope = (previewLike, selectedRowIds = []) => {
@@ -26991,8 +27192,10 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
 
     const obj = await apiPostJson('/api/banking/pay/batch/create-draft', reqBody, {
       action: 'CREATE_DRAFT',
-      userInitiated: true,
-      silent: false,
+      userInitiated: createDraftUserInitiated,
+      silent: createDraftSilent,
+      background: createDraftBackground,
+      showModal: createDraftUserInitiated && !createDraftSilent && !createDraftBackground,
       fallbackCode: 'BANKING_PAY_CREATE_DRAFT_FAILED',
       fallbackTitle: 'Payment batch could not be created',
       fallbackMessage: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.'
@@ -27102,18 +27305,29 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
         postActionResetTriggered = true;
       }
     } catch (resetErr) {
-      const resetMsg = trimStr(resetErr?.message || resetErr || 'Banking Pay preview refresh failed after draft creation. Refresh Banking preview and try again.');
+      const resetFriendly = (typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(resetErr, resetErr?.payload || resetErr?.json || null, {
+            action: 'PREVIEW',
+            fallbackCode: 'CREATE_DRAFT_POST_ACTION_REOPEN_FAILED',
+            userInitiated: false,
+            silent: true,
+            background: true
+          })
+        : null;
+      const resetMsg = trimStr(resetFriendly?.user_message || resetFriendly?.message || 'Banking Pay preview refresh failed after draft creation. Refresh Banking preview and try again.');
       try {
         wiz.createDraftError = resetMsg;
+        wiz.createDraftFriendlyError = resetFriendly && typeof resetFriendly === 'object' ? resetFriendly : wiz.createDraftFriendlyError || null;
         wiz.workbench.create_draft_refresh_pending = true;
         wiz.decisions.create_draft_refresh_pending = true;
         wiz.preview.loading = false;
         wiz.preview.error = resetMsg;
+        wiz.preview.friendlyError = resetFriendly && typeof resetFriendly === 'object' ? resetFriendly : null;
         wiz.preview.failure = {
           preview_unavailable: false,
           can_retry: true,
           error: {
-            code: 'CREATE_DRAFT_POST_ACTION_REOPEN_FAILED',
+            code: trimStr(resetFriendly?.error_code || resetFriendly?.code || 'CREATE_DRAFT_POST_ACTION_REOPEN_FAILED') || 'CREATE_DRAFT_POST_ACTION_REOPEN_FAILED',
             message: resetMsg
           }
         };
@@ -27153,18 +27367,29 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
           wiz.preview.loading = stillPendingAfterFallback;
         }
       } catch (fallbackPreviewErr) {
-        const fallbackMsg = trimStr(fallbackPreviewErr?.message || fallbackPreviewErr || 'Banking Pay preview refresh failed after draft creation. Refresh Banking preview and try again.');
+        const fallbackFriendly = (typeof bankingNormalizeApiError === 'function')
+          ? bankingNormalizeApiError(fallbackPreviewErr, fallbackPreviewErr?.payload || fallbackPreviewErr?.json || null, {
+              action: 'PREVIEW',
+              fallbackCode: 'CREATE_DRAFT_FALLBACK_PREVIEW_REFRESH_FAILED',
+              userInitiated: false,
+              silent: true,
+              background: true
+            })
+          : null;
+        const fallbackMsg = trimStr(fallbackFriendly?.user_message || fallbackFriendly?.message || 'Banking Pay preview refresh failed after draft creation. Refresh Banking preview and try again.');
         try {
           wiz.createDraftError = fallbackMsg;
+          wiz.createDraftFriendlyError = fallbackFriendly && typeof fallbackFriendly === 'object' ? fallbackFriendly : wiz.createDraftFriendlyError || null;
           wiz.workbench.create_draft_refresh_pending = true;
           wiz.decisions.create_draft_refresh_pending = true;
           wiz.preview.loading = false;
           wiz.preview.error = fallbackMsg;
+          wiz.preview.friendlyError = fallbackFriendly && typeof fallbackFriendly === 'object' ? fallbackFriendly : null;
           wiz.preview.failure = {
             preview_unavailable: false,
             can_retry: true,
             error: {
-              code: 'CREATE_DRAFT_FALLBACK_PREVIEW_REFRESH_FAILED',
+              code: trimStr(fallbackFriendly?.error_code || fallbackFriendly?.code || 'CREATE_DRAFT_FALLBACK_PREVIEW_REFRESH_FAILED') || 'CREATE_DRAFT_FALLBACK_PREVIEW_REFRESH_FAILED',
               message: fallbackMsg
             }
           };
@@ -27220,16 +27445,17 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
       ? bankingNormalizeApiError(e, e?.payload || e?.json || null, {
           action: 'CREATE_DRAFT',
           fallbackCode: 'BANKING_PAY_CREATE_DRAFT_FAILED',
-          userInitiated: true
+          userInitiated: createDraftUserInitiated,
+          silent: createDraftSilent,
+          background: createDraftBackground,
+          showModal: createDraftUserInitiated && !createDraftSilent && !createDraftBackground
         })
       : null;
     const errMessage = trimStr(
       friendly?.user_message ||
       friendly?.message ||
-      e?.message ||
-      e ||
-      'Payment batch could not be created.'
-    ) || 'Payment batch could not be created.';
+      'Payment batch could not be created. Refresh the preview, review the latest payment details, then try again.'
+    ) || 'Payment batch could not be created. Refresh the preview, review the latest payment details, then try again.';
     logTroubleshoot('error', 'API_POST_CREATE_DRAFT_FAILED', {
       ...requestSummary,
       message: errMessage
@@ -27240,6 +27466,7 @@ async function bankingPayCreateDraft({ pay_date, preview_decisions_json } = {}) 
       wiz.createDraftFriendlyError = friendly && typeof friendly === 'object' ? friendly : null;
     } catch {}
 
+    await presentCreateDraftFriendlyError(friendly, 'Payment batch could not be created', errMessage);
     return null;
   } finally {
     try { wiz.createDraftBusy = false; } catch {}
@@ -33437,7 +33664,6 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
 
 
 
-
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -33711,26 +33937,92 @@ function renderPayNewBatchWizard() {
     : blankComponentStateCache();
 
   const pvErr = trimStr(wiz.preview.error);
-  const pvFriendly = isPlainObject(wiz.preview.friendlyError) ? wiz.preview.friendlyError : null;
+  const looksTechnicalRenderError = (value) => {
+    const s = trimStr(value);
+    if (!s) return false;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const normaliseRenderFriendlyError = ({ existingFriendly, rawError, action, fallbackCode, fallbackTitle, fallbackMessage }) => {
+    const fallbackFriendly = {
+      title: fallbackTitle,
+      message: fallbackMessage,
+      user_message: fallbackMessage,
+      error_code: fallbackCode,
+      code: fallbackCode
+    };
+    let friendly = isPlainObject(existingFriendly) ? existingFriendly : null;
+    if (!friendly && trimStr(rawError) && typeof bankingNormalizeApiError === 'function') {
+      try {
+        friendly = bankingNormalizeApiError(rawError, null, {
+          action,
+          fallbackCode,
+          userInitiated: false,
+          silent: true,
+          background: true
+        });
+      } catch {}
+    }
+    if (!friendly && trimStr(rawError)) friendly = fallbackFriendly;
+    if (!friendly) return null;
+
+    const title = trimStr(friendly?.title || friendly?.friendly_error?.title || fallbackTitle) || fallbackTitle;
+    let message = trimStr(
+      friendly?.user_message ||
+      friendly?.message ||
+      friendly?.friendly_error?.message ||
+      fallbackMessage
+    ) || fallbackMessage;
+    if (looksTechnicalRenderError(message)) message = fallbackMessage;
+
+    return {
+      ...(isPlainObject(friendly) ? friendly : {}),
+      title,
+      message,
+      user_message: trimStr(friendly?.user_message || '') || message,
+      friendly_error: {
+        ...(isPlainObject(friendly?.friendly_error) ? friendly.friendly_error : {}),
+        title,
+        message
+      }
+    };
+  };
+  const pvFriendly = normaliseRenderFriendlyError({
+    existingFriendly: wiz.preview.friendlyError,
+    rawError: pvErr,
+    action: 'PREVIEW',
+    fallbackCode: 'BANKING_PAY_PREVIEW_FAILED',
+    fallbackTitle: 'Payment preview could not be loaded',
+    fallbackMessage: 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.'
+  });
   const pvFriendlyTitle = trimStr(pvFriendly?.title || pvFriendly?.friendly_error?.title || 'Payment preview could not be loaded');
   const pvFriendlyMessage = trimStr(
     pvFriendly?.user_message ||
     pvFriendly?.message ||
     pvFriendly?.friendly_error?.message ||
-    pvErr ||
-    'Payment preview could not be loaded.'
-  ) || 'Payment preview could not be loaded.';
+    'CloudTMS could not calculate the payment preview. Refresh Banking and try again.'
+  ) || 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.';
   const pvLoading = !!wiz.preview.loading;
   const cdErr = trimStr(wiz.createDraftError);
-  const cdFriendly = isPlainObject(wiz.createDraftFriendlyError) ? wiz.createDraftFriendlyError : null;
+  const cdFriendly = normaliseRenderFriendlyError({
+    existingFriendly: wiz.createDraftFriendlyError,
+    rawError: cdErr,
+    action: 'CREATE_DRAFT',
+    fallbackCode: 'BANKING_PAY_CREATE_DRAFT_FAILED',
+    fallbackTitle: 'Payment batch could not be created',
+    fallbackMessage: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.'
+  });
   const cdFriendlyTitle = trimStr(cdFriendly?.title || cdFriendly?.friendly_error?.title || 'Payment batch could not be created');
   const cdFriendlyMessage = trimStr(
     cdFriendly?.user_message ||
     cdFriendly?.message ||
     cdFriendly?.friendly_error?.message ||
-    cdErr ||
-    'Payment batch could not be created.'
-  ) || 'Payment batch could not be created.';
+    'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.'
+  ) || 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.';
   const cdBusy = !!wiz.createDraftBusy;
 
   const decisions = {
@@ -36111,7 +36403,6 @@ function deriveBankingAttentionStateFromBatchList(input) {
   };
 }
 
-
 function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   const argumentCount = arguments.length;
   const isPlainObject = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -36217,7 +36508,12 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   const textParts = [];
 
   const addText = (value) => {
-    const text = safeTrim(value);
+    let text = '';
+    if (value && typeof value === 'object') {
+      try { text = JSON.stringify(value); } catch { text = safeTrim(value); }
+    } else {
+      text = safeTrim(value);
+    }
     if (text) textParts.push(text);
   };
 
@@ -36238,10 +36534,24 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       candidate.friendly_error,
       candidate.friendlyError,
       candidate.response,
+      candidate.result,
       candidate.error,
       candidate.message,
       candidate.details,
       candidate.detail,
+      candidate.reason,
+      candidate.technical_message,
+      candidate.technicalMessage,
+      candidate.rpc_error,
+      candidate.rpcError,
+      candidate.original_error,
+      candidate.originalError,
+      candidate.inner_error,
+      candidate.innerError,
+      candidate.source_error,
+      candidate.sourceError,
+      candidate.raw_error,
+      candidate.rawError,
       candidate.hint,
       candidate.cause
     ];
@@ -36268,11 +36578,26 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     addText(candidate.status);
     addText(candidate.post_execution_status);
     addText(candidate.postExecutionStatus);
+    addText(candidate.reason);
+    addText(candidate.technical_message);
+    addText(candidate.technicalMessage);
+    addText(candidate.rpc_error);
+    addText(candidate.rpcError);
+    addText(candidate.original_error);
+    addText(candidate.originalError);
+    addText(candidate.inner_error);
+    addText(candidate.innerError);
+    addText(candidate.source_error);
+    addText(candidate.sourceError);
+    addText(candidate.raw_error);
+    addText(candidate.rawError);
+    addText(candidate.response);
+    addText(candidate.result);
     addText(candidate.body);
     addText(candidate.payload);
     addText(candidate.data);
 
-    [candidate.error, candidate.message, candidate.detail, candidate.details, candidate.hint, candidate.body, candidate.payload, candidate.data].forEach((textValue) => {
+    [candidate.error, candidate.message, candidate.detail, candidate.details, candidate.reason, candidate.technical_message, candidate.technicalMessage, candidate.rpc_error, candidate.rpcError, candidate.original_error, candidate.originalError, candidate.inner_error, candidate.innerError, candidate.source_error, candidate.sourceError, candidate.raw_error, candidate.rawError, candidate.response, candidate.result, candidate.hint, candidate.body, candidate.payload, candidate.data].forEach((textValue) => {
       const parsed = extractEmbeddedJsonObject(textValue);
       if (parsed) addPayloadObject(parsed);
     });
@@ -36286,11 +36611,24 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       addPayloadObject(source.body);
       addPayloadObject(source.payload);
       addPayloadObject(source.data);
+      addPayloadObject(source.response);
+      addPayloadObject(source.result);
       addText(source.name);
       addText(source.message);
       addText(source.stack);
       addText(source.details);
       addText(source.detail);
+      addText(source.reason);
+      addText(source.technical_message);
+      addText(source.technicalMessage);
+      addText(source.rpc_error);
+      addText(source.rpcError);
+      addText(source.original_error);
+      addText(source.originalError);
+      addText(source.inner_error);
+      addText(source.innerError);
+      addText(source.response);
+      addText(source.result);
       addText(source.error);
       addSource(source.cause);
       if (Array.isArray(source.errors)) source.errors.forEach((entry) => addSource(entry));
@@ -36298,6 +36636,10 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       if (parsedFromMessage) addPayloadObject(parsedFromMessage);
       const parsedFromBody = extractEmbeddedJsonObject(source.body);
       if (parsedFromBody) addPayloadObject(parsedFromBody);
+      const parsedFromReason = extractEmbeddedJsonObject(source.reason);
+      if (parsedFromReason) addPayloadObject(parsedFromReason);
+      const parsedFromTechnical = extractEmbeddedJsonObject(source.technical_message || source.technicalMessage);
+      if (parsedFromTechnical) addPayloadObject(parsedFromTechnical);
       return;
     }
     if (isPlainObject(source)) {
@@ -36318,6 +36660,14 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   addPayloadObject(contextInput.json);
   addPayloadObject(contextInput.friendly_error);
   addPayloadObject(contextInput.friendlyError);
+  addPayloadObject(contextInput.response);
+  addPayloadObject(contextInput.rpc_error);
+  addPayloadObject(contextInput.rpcError);
+  addPayloadObject(contextInput.original_error);
+  addPayloadObject(contextInput.originalError);
+  addSource(contextInput.reason);
+  addSource(contextInput.technical_message);
+  addSource(contextInput.technicalMessage);
   addText(contextInput.error_code);
   addText(contextInput.errorCode);
   addText(contextInput.code);
@@ -36510,18 +36860,81 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   };
 
   const canonicalStructuredCodes = structuredCodeCandidates.map(canonicaliseCode).filter(Boolean);
-  const specificStructuredCode = canonicalStructuredCodes.find((candidateCode) => knownErrorCodes.includes(candidateCode) && candidateCode !== 'BANKING_ACTION_FAILED');
+  const wrapperErrorCodes = new Set([
+    'BLOCKED_FUNDS_RETRY_FAILED',
+    'BANKING_PAY_PREVIEW_FAILED',
+    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
+    'BANKING_PAY_CREATE_DRAFT_FAILED',
+    'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED',
+    'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED',
+    'BANKING_PAY_WORKBENCH_SESSION_OPEN_FAILED',
+    'BANKING_PAY_WORKBENCH_SESSION_GET_FAILED',
+    'BANKING_PAY_WORKBENCH_SESSION_GET_CANDIDATE_FAILED',
+    'BANKING_PAY_WORKBENCH_SESSION_PROGRESS_FAILED',
+    'BANKING_ALERT_ACKNOWLEDGE_FAILED',
+    'BANKING_ACTION_FAILED'
+  ]);
+  const isWrapperErrorCode = (value) => {
+    const code = canonicaliseCode(value);
+    if (!code) return false;
+    if (wrapperErrorCodes.has(code)) return true;
+    if (code.startsWith('BANKING_PAY_') && code.endsWith('_FAILED')) return true;
+    if (code.startsWith('BANKING_') && code.endsWith('_FAILED')) return true;
+    return false;
+  };
+  const specificStructuredCode = canonicalStructuredCodes.find((candidateCode) => (
+    knownErrorCodes.includes(candidateCode) &&
+    candidateCode !== 'BANKING_ACTION_FAILED' &&
+    !isWrapperErrorCode(candidateCode) &&
+    !isDatabaseOrTransportCode(candidateCode)
+  ));
+  const wrapperStructuredCode = canonicalStructuredCodes.find((candidateCode) => (
+    knownErrorCodes.includes(candidateCode) &&
+    candidateCode !== 'BANKING_ACTION_FAILED' &&
+    isWrapperErrorCode(candidateCode)
+  ));
   const genericStructuredCode = canonicalStructuredCodes.find((candidateCode) => candidateCode === 'BANKING_ACTION_FAILED');
   const detectedCode = detectCodeFromText();
-  const detectedSpecificCode = detectedCode && detectedCode !== 'BANKING_ACTION_FAILED' ? detectedCode : '';
+  const detectedSpecificCode = detectedCode && detectedCode !== 'BANKING_ACTION_FAILED' && !isWrapperErrorCode(detectedCode) ? detectedCode : '';
+  const detectedWrapperCode = detectedCode && detectedCode !== 'BANKING_ACTION_FAILED' && isWrapperErrorCode(detectedCode) ? detectedCode : '';
   const safeNonTransportCode = canonicalStructuredCodes.find((candidateCode) => {
     if (!candidateCode) return false;
-    if (knownErrorCodes.includes(candidateCode)) return candidateCode !== 'BANKING_ACTION_FAILED';
+    if (knownErrorCodes.includes(candidateCode)) return candidateCode !== 'BANKING_ACTION_FAILED' && !isWrapperErrorCode(candidateCode);
     if (isDatabaseOrTransportCode(candidateCode)) return false;
     return false;
   });
 
-  let errorCode = specificStructuredCode || detectedSpecificCode || safeNonTransportCode || genericStructuredCode || detectedCode || 'BANKING_ACTION_FAILED';
+  const priorityBusinessCodes = [
+    'BATCH_STALE',
+    'PAYE_NOT_READY',
+    'PAYE_NET_MISSING',
+    'PAYE_NET_INVALID',
+    'PAYE_NET_REQUIRED',
+    'PAYE_NET_BANK_AMOUNT_MISSING',
+    'PAYE_NET_BANK_AMOUNT_INVALID',
+    'HAS_HARD_BLOCKERS',
+    'BLOCKED_BANK_DETAILS',
+    'SELECTED_PAYEE_ROUTE_NOT_READY',
+    'FUNDING_ACCOUNT_MISSING',
+    'RAIL_ENV_MISMATCH',
+    'RAIL_NOT_CONFIGURED',
+    'UNKNOWN_RAIL_PROVIDER',
+    'MISSING_RAIL_PROVIDER',
+    'STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED',
+    'STANDARD_BANK_IMMEDIATE_RAIL_EXECUTION_ERRORS',
+    'PAYMENT_AUTHORISER_REQUIRED',
+    'NO_ACTIVE_PAYMENTS_IN_BATCH'
+  ];
+  const priorityBusinessCode = priorityBusinessCodes.find((candidateCode) => {
+    if (canonicalStructuredCodes.includes(candidateCode)) return true;
+    if (detectedSpecificCode === candidateCode) return true;
+    if (containsCodeToken(rawUpper, candidateCode)) return true;
+    if (candidateCode === 'BATCH_STALE' && containsCodeToken(rawUpper, 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED')) return true;
+    if (candidateCode === 'FUNDING_ACCOUNT_MISSING' && containsCodeToken(rawUpper, 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED')) return true;
+    return false;
+  });
+
+  let errorCode = priorityBusinessCode || specificStructuredCode || detectedSpecificCode || safeNonTransportCode || wrapperStructuredCode || detectedWrapperCode || genericStructuredCode || detectedCode || 'BANKING_ACTION_FAILED';
 
   const blockedFundsFailureContext = rawUpper.includes('MARK_BLOCKED_FUNDS_FAILED')
     || rawUpper.includes('BLOCKED_FUNDS_RETRY_CLEANUP_FAILED')
@@ -36540,7 +36953,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       || safeTrim(payload.postExecutionStatus).toUpperCase() === 'BLOCKED_FUNDS';
   });
   const hasSpecificNonBlockedFundsCode = Boolean(errorCode && errorCode !== 'BANKING_ACTION_FAILED' && errorCode !== 'BLOCKED_FUNDS');
-  if (hasExplicitBlockedFundsCode) {
+  if (hasExplicitBlockedFundsCode && !priorityBusinessCode && !hasSpecificNonBlockedFundsCode) {
     errorCode = 'BLOCKED_FUNDS';
   } else if ((hasBlockedFundsFlag || hasBlockedFundsStatus) && !hasSpecificNonBlockedFundsCode && !blockedFundsFailureContext) {
     errorCode = 'BLOCKED_FUNDS';
@@ -36742,6 +37155,26 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       confirm_label: 'OK',
       show_modal: true
     },
+    BLOCKED_BANK_DETAILS: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Bank details need attention',
+      message: 'Review or accept the highlighted bank details, then try again.',
+      user_action: 'REVIEW_BANK_DETAILS',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    SELECTED_PAYEE_ROUTE_NOT_READY: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Bank details need attention',
+      message: 'Review or accept the highlighted bank details, then try again.',
+      user_action: 'REVIEW_BANK_DETAILS',
+      confirm_label: 'OK',
+      show_modal: true
+    },
     RAIL_ENV_MISMATCH: {
       ok: false,
       http_status: 400,
@@ -36872,6 +37305,16 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       confirm_label: 'OK',
       show_modal: true
     },
+    MISSING_RAIL_PROVIDER: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Banking setup needs attention',
+      message: 'CloudTMS could not submit this payment because the banking setup is incomplete or unavailable. Review Banking settings and try again.',
+      user_action: 'CHECK_BANKING_SETTINGS',
+      confirm_label: 'OK',
+      show_modal: true
+    },
     RAIL_NOT_CONFIGURED: {
       ok: false,
       http_status: 400,
@@ -36968,7 +37411,10 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     else if (action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'Payment details changed while the batch was being prepared. Refresh the preview, review the latest payment details, then try again.', user_action: 'REFRESH_PREVIEW' };
     else if (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'The payment preview is no longer up to date. Refresh the preview, review the latest payment details, then try again.', user_action: 'REFRESH_PREVIEW' };
     else if (action === 'PAYE_NET_IMPORT' || action === 'PAYE_NET_SAVE') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch has changed', message: 'This batch is no longer up to date. Refresh the batch, review the latest payment details, then try again.', user_action: 'REFRESH_BATCH' };
-  } else if (errorCode === 'BLOCKED_FUNDS' && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, ok: false, http_status: 400, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.' };
+  } else if (errorCode === 'BANKING_ACTION_FAILED' && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.', user_action: 'REFRESH_PREVIEW' };
+  else if (errorCode === 'BANKING_ACTION_FAILED' && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN')) actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be loaded', message: 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.', user_action: 'REFRESH_PREVIEW' };
+  else if (errorCode === 'BANKING_ACTION_FAILED' && action === 'WORKBENCH_MODAL_ACTION') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be updated', message: 'CloudTMS could not save this payment decision. Refresh the preview and try again.', user_action: 'REFRESH_PREVIEW' };
+  else if (errorCode === 'BLOCKED_FUNDS' && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, ok: false, http_status: 400, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.' };
   else if (errorCode === 'BLOCKED_FUNDS' && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN' || action === 'WORKBENCH_MODAL_ACTION')) {
     const map = action === 'WORKBENCH_MODAL_ACTION'
       ? { title: 'Payment preview could not be updated', message: 'CloudTMS could not save this payment decision. Refresh the preview and try again.' }
@@ -37077,6 +37523,8 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 
   return result;
 }
+
+
 
 function updateBankingNavAttentionState(attentionState) {
   const navRoot = (typeof byId === 'function' ? byId('nav') : document.getElementById('nav')) || document;
@@ -43123,7 +43571,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     try { if (typeof window.__toast === 'function') window.__toast(String(msg || '').trim()); } catch {}
   };
 
-  const looksTechnicalChildMessage = (value) => {
+ const looksTechnicalChildMessage = (value) => {
     const text = String(value == null ? '' : value).trim();
     if (!text) return false;
     const upper = text.toUpperCase();
@@ -43134,13 +43582,22 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     if (upper.includes('DUPLICATE KEY') || upper.includes('UNIQUE CONSTRAINT') || upper.includes('FOREIGN KEY')) return true;
     if (upper.includes('CONSTRAINT') || upper.includes('STACK TRACE') || upper.includes('TRACEBACK')) return true;
     if (upper.includes('PUBLIC.') || upper.includes('PAY_BATCHES') || upper.includes('PAY_BANK_TRANSFERS') || upper.includes('BANKING_ALERT_ACKNOWLEDGEMENTS')) return true;
+    if (upper.includes('MANUAL_DEBT_RECOVERY')) return true;
+    if (upper.includes('KEY_TYPE')) return true;
+    if (upper.includes('KEY_VALUE')) return true;
+    if (upper.includes('TIMESHEET_ID')) return true;
+    if (/\bDIFF\b/.test(upper) || /\bDIFFS\b/.test(upper) || /\bDIFF_JSON\b/.test(upper)) return true;
+    if (/\bEXPECTED\b/.test(upper)) return true;
+    if (/\bACTUAL\b/.test(upper)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(text)) return true;
     if (upper.includes('UQ_') || upper.includes('IDX_') || upper.includes('_PKEY') || upper.includes('PG_')) return true;
     if (upper.includes('VIOLATES') || upper.includes('RELATION "') || upper.includes('COLUMN "') || upper.includes('FUNCTION "')) return true;
     if (/\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|POLICY|INDEX)\s+[\"']?[A-Z0-9_.-]+/.test(upper)) return true;
     if (/\b[A-Z0-9_]+\([^)]*\)/.test(upper)) return true;
-    if (/\b(P[0-9A-Z]{4}|[0-9]{5})\b/.test(upper) && (upper.includes('ERROR') || upper.includes('FAILED'))) return true;
+    if (/\b(P[0-9A-Z]{4}|[0-9]{5})\b/.test(upper)) return true;
     return false;
   };
+
 
   const pickSafeChildMessage = (values, fallback) => {
     const list = Array.isArray(values) ? values : [values];
@@ -52264,7 +52721,10 @@ function attachBankingModalDelegatedHandlers() {
             pay_date: pd,
             mode: hardMode ? 'HARD_SESSION_RELOAD' : 'SOFT_REFRESH',
             hard_session_reload: hardMode,
-            soft_refresh: !hardMode
+            soft_refresh: !hardMode,
+            userInitiated: false,
+            silent: true,
+            background: true
           });
           return;
         }
@@ -55874,7 +56334,12 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       const g = safeGate('PREVIEW');
       if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
       const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
-      await bankingPayPreview?.(pd);
+      await bankingPayPreview?.({
+        pay_date: pd,
+        userInitiated: true,
+        silent: false,
+        background: false
+      });
       return;
     }
 
@@ -55883,7 +56348,13 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       if (g.blocked) { toast(g.message || g.reasonCode || 'Action blocked'); return; }
       const pd = String(st.pay?.draftWizard?.pay_date || '').trim();
       const dec = ensurePayWizardDecisionState();
-      await bankingPayCreateDraft?.({ pay_date: pd, preview_decisions_json: dec });
+      await bankingPayCreateDraft?.({
+        pay_date: pd,
+        preview_decisions_json: dec,
+        userInitiated: true,
+        silent: false,
+        background: false
+      });
       return;
     }
 
@@ -75332,8 +75803,6 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
 
 
 
-
-
 async function bankingPayWorkbenchSessionOpen(payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -75348,6 +75817,103 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
     const text = await res.text().catch(() => '');
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
+  };
+  const extractPayloadCode = (payloadObj) => {
+    const seen = new Set();
+    const codes = [];
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); } catch {}
+        }
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      for (const key of ['error_code', 'code', 'raw_code']) {
+        const s = trimStr(value[key]);
+        if (s) codes.push(s);
+      }
+      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    return trimStr(codes[0] || '');
+  };
+  const looksTechnicalPayloadMessage = (value) => {
+    const s = trimStr(value);
+    if (!s) return true;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
+    const fallback = trimStr(fallbackMessage) || 'Request failed.';
+    const seen = new Set();
+    const candidates = [];
+    const add = (value) => {
+      const s = trimStr(value);
+      if (s) candidates.push(s);
+    };
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
+        }
+        add(raw);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      add(value.user_message);
+      add(value.friendly_message);
+      add(value.message);
+      add(value.title);
+      add(value.error_description);
+      if (isPlainObject(value.friendly_error)) {
+        add(value.friendly_error.user_message);
+        add(value.friendly_error.message);
+        add(value.friendly_error.title);
+      }
+      if (isPlainObject(value.error)) {
+        visit(value.error, depth + 1);
+      } else if (typeof value.error === 'string') {
+        visit(value.error, depth + 1);
+      }
+      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
+    return trimStr(picked || fallback) || fallback;
+  };
+  const makeApiPayloadError = (json, status, fallbackMessage) => {
+    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
+    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const err = new Error(message);
+    err.status = status;
+    err.payload = json;
+    err.json = json;
+    err.response_json = cloneJson(json) || json;
+    const code = extractPayloadCode(payloadObj);
+    if (code) {
+      err.code = code;
+      err.error_code = code;
+    }
+    return err;
   };
 
   const parseIsoOrUkDateToIso = (raw) => {
@@ -75380,6 +75946,11 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
       session_signature: trimStr(payloadObj?.session_signature || payloadObj?.sessionSignature || sessionObj.session_signature || sessionObj.sessionSignature || previewObj?.session_signature || previewObj?.sessionSignature || previewSessionObj.session_signature || previewSessionObj.sessionSignature || '')
     };
   };
+  const uiOptions = isPlainObject(payload?.ui_options) ? payload.ui_options : (isPlainObject(payload) ? payload : {});
+  const userInitiated = uiOptions.userInitiated === true || uiOptions.user_initiated === true || uiOptions.showModal === true || uiOptions.show_modal === true;
+  const silent = uiOptions.silent === true || uiOptions.silent === 'true';
+  const background = uiOptions.background === true || uiOptions.background === 'true';
+
   try {
     const res = await authFetch(API('/api/banking/pay/workbench/session/open'), {
       method: 'POST',
@@ -75388,11 +75959,7 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
     }
     const payloadObj = isPlainObject(json) ? json : {};
     const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : payloadObj;
@@ -75462,168 +76029,414 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
       ? 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH'
       : 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED';
     const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'WORKBENCH_SESSION_OPEN', fallbackCode, userInitiated: true })
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'WORKBENCH_SESSION_OPEN', fallbackCode, userInitiated, silent, background, showModal: userInitiated && !silent && !background })
       : null;
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking workbench session open failed');
   }
 }
 
+
+
 function classifyTimesheetEditDomains(ctxInput) {
+  const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const toUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
+  const trimStr = (v) => String(v == null ? '' : v).trim();
   const toBool = (v) => {
     if (v === true || v === 1) return true;
+    if (v === false || v === 0 || v == null) return false;
     if (typeof v === 'string') {
       const s = v.trim().toLowerCase();
-      if (s === 'true' || s === '1' || s === 'yes' || s === 'y') return true;
-      if (s === 'false' || s === '0' || s === 'no' || s === 'n' || s === '') return false;
+      if (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on') return true;
+      if (s === 'false' || s === '0' || s === 'no' || s === 'n' || s === 'off' || s === '') return false;
     }
     return false;
   };
+  const hasValue = (v) => trimStr(v) !== '';
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const parseJsonMaybe = (value) => {
+    if (!value) return null;
+    if (typeof value === 'object') return value;
+    if (typeof value !== 'string') return null;
+    const raw = value.trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return (parsed && typeof parsed === 'object') ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const related = (ctx.related && typeof ctx.related === 'object') ? ctx.related : {};
+  const details = (ctx.details && typeof ctx.details === 'object') ? ctx.details : {};
+  const activeCtx = (ctx.active_ctx && typeof ctx.active_ctx === 'object') ? ctx.active_ctx : {};
+  const activeContext = (ctx.active_context && typeof ctx.active_context === 'object') ? ctx.active_context : {};
+  const context = (ctx.context && typeof ctx.context === 'object') ? ctx.context : {};
+  const row = (ctx.row && typeof ctx.row === 'object') ? ctx.row : {};
+  const rowDetails = (row.details && typeof row.details === 'object') ? row.details : {};
+  const detailsRelated = (details.related && typeof details.related === 'object') ? details.related : {};
+  const activeDetails = (activeCtx.details && typeof activeCtx.details === 'object') ? activeCtx.details : {};
+  const activeContextDetails = (activeContext.details && typeof activeContext.details === 'object') ? activeContext.details : {};
+  const contextDetails = (context.details && typeof context.details === 'object') ? context.details : {};
+  const actionFlags = (ctx.action_flags && typeof ctx.action_flags === 'object') ? ctx.action_flags : {};
+  const detailsActionFlags = (details.action_flags && typeof details.action_flags === 'object') ? details.action_flags : {};
+  const activeActionFlags = (activeCtx.action_flags && typeof activeCtx.action_flags === 'object') ? activeCtx.action_flags : {};
+  const rowActionFlags = (row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
+
+  const pool = [
+    ctx,
+    actionFlags,
+    detailsActionFlags,
+    activeActionFlags,
+    rowActionFlags,
+    row,
+    ctx.timesheet,
+    ctx.tsfin,
+    ctx.financial,
+    ctx.financials,
+    ctx.financial_snapshot,
+    ctx.contract_week,
+    related,
+    related.contract,
+    related.client,
+    related.candidate,
+    details,
+    details.timesheet,
+    details.tsfin,
+    details.financial,
+    details.financials,
+    details.financial_snapshot,
+    details.timesheets_financials,
+    details.contract_week,
+    detailsRelated,
+    detailsRelated.contract,
+    detailsRelated.client,
+    detailsRelated.candidate,
+    rowDetails,
+    rowDetails.timesheet,
+    rowDetails.tsfin,
+    rowDetails.financial,
+    rowDetails.financials,
+    rowDetails.financial_snapshot,
+    row.financial_snapshot,
+    row.tsfin,
+    row.financials,
+    row.timesheets_financials,
+    row.contract_week,
+    ctx.state,
+    context,
+    context.row,
+    context.data_row,
+    context.timesheet,
+    context.tsfin,
+    context.financial,
+    context.financials,
+    context.financial_snapshot,
+    context.contract_week,
+    contextDetails,
+    contextDetails.timesheet,
+    contextDetails.tsfin,
+    contextDetails.financial_snapshot,
+    contextDetails.contract_week,
+    contextDetails.related,
+    contextDetails.related && contextDetails.related.contract,
+    activeCtx,
+    activeCtx.row,
+    activeCtx.data_row,
+    activeCtx.timesheet,
+    activeCtx.tsfin,
+    activeCtx.financial,
+    activeCtx.financials,
+    activeCtx.financial_snapshot,
+    activeCtx.contract_week,
+    activeDetails,
+    activeDetails.timesheet,
+    activeDetails.tsfin,
+    activeDetails.financial_snapshot,
+    activeDetails.contract_week,
+    activeDetails.related,
+    activeDetails.related && activeDetails.related.contract,
+    activeCtx.state,
+    activeContext,
+    activeContext.row,
+    activeContext.data_row,
+    activeContext.timesheet,
+    activeContext.tsfin,
+    activeContext.financial,
+    activeContext.financials,
+    activeContext.financial_snapshot,
+    activeContext.contract_week,
+    activeContextDetails,
+    activeContextDetails.timesheet,
+    activeContextDetails.tsfin,
+    activeContextDetails.financial_snapshot,
+    activeContextDetails.contract_week,
+    activeContextDetails.related,
+    activeContextDetails.related && activeContextDetails.related.contract,
+    activeContext.state
+  ].filter((src) => src && typeof src === 'object');
+
   const get = (...keys) => {
-    const pool = [
-      ctxInput,
-      ctxInput?.row,
-      ctxInput?.details,
-      ctxInput?.details?.timesheet,
-      ctxInput?.details?.tsfin,
-      ctxInput?.details?.financials,
-      ctxInput?.row?.details,
-      ctxInput?.row?.details?.timesheet,
-      ctxInput?.row?.details?.tsfin,
-      ctxInput?.row?.financials,
-      ctxInput?.state,
-      ctxInput?.context,
-      ctxInput?.context?.row,
-      ctxInput?.context?.details,
-      ctxInput?.context?.details?.timesheet,
-      ctxInput?.context?.details?.tsfin,
-      ctxInput?.active_ctx,
-      ctxInput?.active_ctx?.row,
-      ctxInput?.active_ctx?.data_row,
-      ctxInput?.active_ctx?.details,
-      ctxInput?.active_ctx?.details?.timesheet,
-      ctxInput?.active_ctx?.details?.tsfin,
-      ctxInput?.active_ctx?.state,
-      ctxInput?.active_context,
-      ctxInput?.active_context?.row,
-      ctxInput?.active_context?.data_row,
-      ctxInput?.active_context?.details,
-      ctxInput?.active_context?.details?.timesheet,
-      ctxInput?.active_context?.details?.tsfin,
-      ctxInput?.active_context?.state,
-      ctxInput?.tsfin,
-      ctxInput?.financials
-    ];
     for (const src of pool) {
-      if (!src || typeof src !== 'object') continue;
-      for (const k of keys) {
-        if (Object.prototype.hasOwnProperty.call(src, k) && src[k] != null) return src[k];
+      for (const key of keys) {
+        if (!key) continue;
+        if (Object.prototype.hasOwnProperty.call(src, key) && src[key] != null) return src[key];
       }
     }
     return undefined;
   };
   const allValues = (...keys) => {
     const out = [];
-    const pool = [
-      ctxInput, ctxInput?.row, ctxInput?.details, ctxInput?.details?.timesheet, ctxInput?.details?.tsfin, ctxInput?.details?.financials,
-      ctxInput?.row?.details, ctxInput?.row?.details?.timesheet, ctxInput?.row?.details?.tsfin, ctxInput?.row?.financials,
-      ctxInput?.state, ctxInput?.context, ctxInput?.context?.row, ctxInput?.context?.details, ctxInput?.context?.details?.timesheet, ctxInput?.context?.details?.tsfin,
-      ctxInput?.active_ctx, ctxInput?.active_ctx?.row, ctxInput?.active_ctx?.data_row, ctxInput?.active_ctx?.details, ctxInput?.active_ctx?.details?.timesheet, ctxInput?.active_ctx?.details?.tsfin, ctxInput?.active_ctx?.state,
-      ctxInput?.active_context, ctxInput?.active_context?.row, ctxInput?.active_context?.data_row, ctxInput?.active_context?.details, ctxInput?.active_context?.details?.timesheet, ctxInput?.active_context?.details?.tsfin, ctxInput?.active_context?.state,
-      ctxInput?.tsfin, ctxInput?.financials
-    ];
     for (const src of pool) {
-      if (!src || typeof src !== 'object') continue;
-      for (const k of keys) {
-        if (Object.prototype.hasOwnProperty.call(src, k)) out.push(src[k]);
+      for (const key of keys) {
+        if (!key) continue;
+        if (Object.prototype.hasOwnProperty.call(src, key)) out.push(src[key]);
       }
     }
     return out;
   };
   const anyBool = (...keys) => allValues(...keys).some((v) => toBool(v));
-  const reasonCodes = [];
-  const routeFamily = toUpper(get('route_family', 'route_type', 'submission_mode', 'submission_mode_snapshot', 'cw_submission_mode_snapshot', 'underlying_channel_family', 'basis', 'tsfin_basis', 'financial_basis'));
-  const submissionChannel = toUpper(get('submission_channel', 'source_channel'));
-  const qrStatus = toUpper(get('qr_status'));
-  const qrHints = [anyBool('is_qr', 'has_qr_token'), !!get('qr_token'), !!(qrStatus && qrStatus !== 'NONE'), /^QR/.test(routeFamily), submissionChannel === 'QR'];
-  const elecHints = [anyBool('submitted_electronically'), /ELECTRONIC/.test(routeFamily), submissionChannel === 'ELECTRONIC'];
-  const isQrRoute = qrHints.some(Boolean);
-  const isElectronicRoute = !isQrRoute && elecHints.some(Boolean);
-  const isManualRoute = /MANUAL/.test(routeFamily) || (!isQrRoute && !isElectronicRoute && toUpper(get('submission_mode')) === 'MANUAL');
-  const isAuthorised = anyBool('is_authorised', 'authorised') || !!get('authorised_at_server', 'authorised_at_utc');
-  const isInvoiceLocked = anyBool('invoice_locked') || !!get('locked_by_invoice_id');
-  const isSegmentInvoiceLocked = anyBool('segment_invoice_locked');
-  const isPaid = anyBool('is_paid', 'paid') || !!get('paid_at_utc');
-  const sheetScope = toUpper(get('sheet_scope', 'period_type'));
-  const targetType = toUpper(get('target_type'));
-  const lineType = toUpper(get('line_type'));
-  const hasActiveSegmentTarget = targetType === 'TIMESHEET_SEGMENT' || sheetScope === 'SEGMENT' || lineType === 'SEGMENT' || lineType === 'SEGMENT_ONLY' || anyBool('segment_only', 'is_segment_context');
-  const isSegmentOnlyContext = !!hasActiveSegmentTarget;
+  const firstBoolIfPresent = (...keys) => {
+    for (const value of allValues(...keys)) {
+      if (value === undefined || value === null || value === '') continue;
+      return toBool(value);
+    }
+    return null;
+  };
+  const anyValue = (...keys) => allValues(...keys).some((v) => hasValue(v));
+  const anyPositiveNumber = (...keys) => allValues(...keys).some((v) => num(v) > 0);
+
+  const invoiceBreakdown = (() => {
+    for (const value of allValues('invoice_breakdown_json', 'invoiceBreakdown', 'invoice_breakdown')) {
+      const parsed = parseJsonMaybe(value);
+      if (parsed) return parsed;
+    }
+    return null;
+  })();
+  const hasSegmentInvoiceLockFromBreakdown = (() => {
+    const segments = Array.isArray(invoiceBreakdown?.segments) ? invoiceBreakdown.segments : [];
+    return segments.some((segment) => hasValue(segment?.invoice_locked_invoice_id));
+  })();
+
+  const submissionModeU = toUpper(get('submission_mode', 'submission_mode_snapshot', 'cw_submission_mode_snapshot'));
+  const sheetScopeU = toUpper(get('sheet_scope', 'period_type'));
+  const targetTypeU = toUpper(get('target_type'));
+  const lineTypeU = toUpper(get('line_type'));
+  const basisU = toUpper(get('basis', 'tsfin_basis', 'financial_basis'));
+  const routeTypeU = toUpper(get('route_type'));
+  const routeFamilyU = toUpper(get('route_family'));
+  const routeSubfamilyU = toUpper(get('route_subfamily'));
+  const underlyingChannelU = toUpper(get('underlying_channel_family'));
+  const weeklySourceU = toUpper(get('weekly_timesheet_source'));
+  const sourceSystemU = toUpper(get('source', 'source_system', 'basis_source'));
+  const submissionChannelU = toUpper(get('submission_channel', 'source_channel'));
+  const qrStatusU = toUpper(get('qr_status'));
+  const routeText = [routeTypeU, routeFamilyU, routeSubfamilyU, underlyingChannelU, weeklySourceU, basisU, sourceSystemU, submissionModeU, submissionChannelU].filter(Boolean).join('|');
+
+  const isQrRoute = !!(
+    anyBool('is_qr', 'has_qr_token') ||
+    anyValue('qr_token') ||
+    (qrStatusU && qrStatusU !== 'NONE' && qrStatusU !== 'NO' && qrStatusU !== 'FALSE') ||
+    routeText.includes('QR') ||
+    submissionChannelU === 'QR'
+  );
+  const isElectronicRoute = !!(!isQrRoute && (
+    submissionModeU === 'ELECTRONIC' ||
+    submissionChannelU === 'ELECTRONIC' ||
+    routeText.includes('ELECTRONIC') ||
+    anyBool('submitted_electronically', 'is_electronic')
+  ));
+  const isManualRoute = !!(
+    submissionModeU === 'MANUAL' ||
+    routeText.includes('MANUAL') ||
+    anyBool('is_manual', 'manual_route', 'manually_created', 'created_manually')
+  );
+
+  const revokedAt = get('revoked_at', 'revoked_at_server', 'authorisation_revoked_at');
+  const hasRevocation = hasValue(revokedAt);
+  const hasAuthorisedTimestamp = anyValue('authorised_at_server') || (!hasRevocation && anyValue('authorised_at_utc'));
+  const isAuthorised = !!(!hasRevocation && (anyBool('is_authorised', 'authorised') || hasAuthorisedTimestamp));
+  const isPaid = !!(anyBool('is_paid', 'paid') || anyValue('paid_at_utc'));
+  const isInvoiceLocked = !!(anyBool('invoice_locked', 'locked_by_invoice') || anyValue('locked_by_invoice_id'));
+  const isSegmentInvoiceLocked = !!(
+    anyBool('segment_invoice_locked', 'has_segment_invoice_lock', 'invoice_segment_locked') ||
+    anyPositiveNumber('invoice_segments_locked', 'segment_invoice_locked_count') ||
+    hasSegmentInvoiceLockFromBreakdown
+  );
+  const isReviewOnly = anyBool('review_only', 'read_only', 'is_view_only', 'system_read_only');
+
+  const isSegmentOnlyContext = !!(
+    targetTypeU === 'TIMESHEET_SEGMENT' ||
+    sheetScopeU === 'SEGMENT' ||
+    lineTypeU === 'SEGMENT' ||
+    lineTypeU === 'SEGMENT_ONLY' ||
+    anyBool('segment_only', 'is_segment_context') ||
+    anyValue('segment_id', 'segment_stable_key')
+  );
   const isParentTimesheetContext = !isSegmentOnlyContext;
-  const sourceHint = [get('basis'), get('tsfin_basis'), get('financial_basis'), get('route_type'), get('route_family'), get('route_subfamily'), get('underlying_channel_family'), get('weekly_timesheet_source')].map((x) => toUpper(x)).join('|');
-  const sourceSuggestsProtectedImport = /NHSP|HEALTHROSTER|HEALTHROSTER_SELF_BILL|IMPORT|IMPORT_AUTHORITATIVE/.test(sourceHint);
-  const sourceSuggestsNoTimesheetRequired = /NO_TIMESHEET_REQUIRED/.test(sourceHint);
-  const isImportAuthoritative = anyBool('is_import_authoritative', 'import_authoritative') || sourceSuggestsProtectedImport;
-  const noTsRequired = anyBool('client_no_timesheet_required', 'no_timesheet_required') || sourceSuggestsNoTimesheetRequired;
-  const hasAdditionalSignal = anyBool('is_adjustment', 'is_additional_manual', 'is_manual_adjustment') || Number(get('additional_seq', 'contract_week_additional_seq') || 0) > 0 || !!get('parent_timesheet_id') || /MANUAL|ADDITIONAL/.test(toUpper(get('adjustment_origin'))) || /ADJUST|ADDITIONAL/.test(lineType);
-  const isAdditionalManualRoute = !!(isManualRoute && hasAdditionalSignal);
-  const isOriginalImportAuthoritative = isImportAuthoritative && !isAdditionalManualRoute;
-  const isNoTimesheetRequiredOriginal = noTsRequired && !isAdditionalManualRoute;
-  const hasFinancialSnapshot = toBool(get('has_financial_snapshot', 'has_tsfin')) || !!get('tsfin_id', 'financial_id', 'timesheets_financials') || typeof get('invoice_breakdown_json') === 'object';
-  const hasRealTimesheet = !!get('timesheet_id', 'current_timesheet_id');
+
+  const hasExplicitManualAdditionalFlag = !!(
+    anyBool('manually_created', 'created_manually', 'is_manual_additional', 'manual_additional', 'manual_adjustment') ||
+    routeSubfamilyU.includes('MANUAL')
+  );
+  const hasAdditionalSignal = !!(
+    anyBool('is_adjustment', 'is_additional_manual', 'is_manual_adjustment') ||
+    anyValue('parent_timesheet_id') ||
+    anyPositiveNumber('additional_seq', 'contract_week_additional_seq') ||
+    lineTypeU.includes('ADJUST') ||
+    lineTypeU.includes('ADDITIONAL') ||
+    toUpper(get('adjustment_origin')).includes('MANUAL') ||
+    toUpper(get('adjustment_origin')).includes('ADDITIONAL') ||
+    toUpper(get('adjustment_origin')).includes('ADD_ADDITIONAL') ||
+    toUpper(get('adjustment_origin')).includes('EXPENSE') ||
+    toUpper(get('correction_kind')).includes('ADJUST') ||
+    toUpper(get('correction_kind')).includes('ADDITIONAL')
+  );
+  const isAdjustmentBasis = basisU === 'NHSP_ADJUSTMENT' || basisU === 'HEALTHROSTER_ADJUSTMENT';
+  const isAdditionalManualRoute = !!(hasAdditionalSignal || hasExplicitManualAdditionalFlag || (isManualRoute && isAdjustmentBasis));
+
+  const noTimesheetRequired = !!(
+    anyBool('client_no_timesheet_required', 'no_timesheet_required', 'contract_no_timesheet_required') ||
+    routeText.includes('NO_TIMESHEET_REQUIRED')
+  );
+  const sourceSuggestsProtectedImport = !!(
+    basisU === 'NHSP' ||
+    basisU === 'HEALTHROSTER_SELF_BILL' ||
+    routeText.includes('IMPORT') ||
+    routeText.includes('IMPORT_AUTHORITATIVE') ||
+    routeText.includes('NHSP') ||
+    routeText.includes('HEALTHROSTER') ||
+    anyBool('is_import_authoritative', 'import_authoritative', 'client_is_nhsp', 'is_nhsp')
+  );
+  const sourceSuggestsAdjustmentImport = !!(isAdjustmentBasis && sourceSuggestsProtectedImport && !isAdditionalManualRoute);
+  const isOriginalImportAuthoritative = !!(!isAdditionalManualRoute && (sourceSuggestsProtectedImport || sourceSuggestsAdjustmentImport));
+  const isNoTimesheetRequiredOriginal = !!(noTimesheetRequired && !isAdditionalManualRoute);
+  const protectedOriginal = !!(isOriginalImportAuthoritative || isNoTimesheetRequiredOriginal);
+
+  const hasRealTimesheet = anyValue('timesheet_id', 'current_timesheet_id', 'requested_timesheet_id');
   const hasSupportedManualDraft = !!(
-    isManualRoute && (
-      !!get('contract_week_id') ||
-      !!get('active_contract_week_id') ||
-      !!get('planned_contract_week_id') ||
+    isManualRoute &&
+    (
+      anyValue('contract_week_id', 'active_contract_week_id', 'planned_contract_week_id') ||
       anyBool('is_planned_timesheet_stub', 'supports_manual_draft_route', 'has_supported_manual_draft') ||
       !!get('contract_week') ||
-      !!ctxInput?.details?.contract_week?.id ||
-      !!ctxInput?.row?.contract_week_id ||
-      !!ctxInput?.active_ctx?.contract_week_id ||
-      !!ctxInput?.active_context?.contract_week_id
+      !!ctx.contract_week ||
+      !!details.contract_week ||
+      !!activeCtx.contract_week ||
+      !!activeContext.contract_week
     )
   );
-  const protectedOriginal = (isOriginalImportAuthoritative || isNoTimesheetRequiredOriginal) && !isAdditionalManualRoute;
+  const hasFinancialSnapshot = !!(
+    toBool(get('has_financial_snapshot', 'has_tsfin')) ||
+    anyValue('tsfin_id', 'financial_id') ||
+    !!get('timesheets_financials') ||
+    !!get('tsfin') ||
+    !!get('financial_snapshot') ||
+    anyValue('basis', 'processing_status', 'total_pay_ex_vat', 'total_charge_ex_vat', 'margin_ex_vat', 'expenses_pay_ex_vat', 'expenses_charge_ex_vat', 'mileage_units', 'mileage_pay_rate', 'mileage_charge_rate', 'travel_pay_ex_vat', 'travel_charge_ex_vat', 'accommodation_pay_ex_vat', 'accommodation_charge_ex_vat', 'other_pay_ex_vat', 'other_charge_ex_vat') ||
+    !!invoiceBreakdown ||
+    allValues('invoice_breakdown_json').some((v) => typeof v === 'string' && v.trim() !== '')
+  );
 
+  const reasonCodes = [];
   const qrElecMsg = 'This timesheet was submitted electronically/through QR. To amend hours, switch it to Manual first.';
   let hoursScheduleDisabledReason = null;
-  if (isQrRoute || isElectronicRoute) { hoursScheduleDisabledReason = qrElecMsg; reasonCodes.push('HOURS_QR_OR_ELECTRONIC'); }
-  else if (isAuthorised) { hoursScheduleDisabledReason = 'This timesheet is authorised. Unauthorise it before changing hours.'; reasonCodes.push('HOURS_AUTHORISED'); }
-  else if (isInvoiceLocked || isSegmentInvoiceLocked) { hoursScheduleDisabledReason = 'This timesheet is invoiced, so hours cannot be amended directly.'; reasonCodes.push('HOURS_INVOICED'); }
-  else if (isPaid) { hoursScheduleDisabledReason = 'This timesheet is paid, so hours cannot be amended directly.'; reasonCodes.push('HOURS_PAID'); }
-  else if (protectedOriginal) { hoursScheduleDisabledReason = 'This row is import/source authoritative and cannot have hours amended directly.'; reasonCodes.push('HOURS_IMPORT_PROTECTED'); }
-  else if (isSegmentOnlyContext) { hoursScheduleDisabledReason = 'This segment row does not support direct hour amendments here.'; reasonCodes.push('HOURS_SEGMENT_CONTEXT'); }
-  const canEditHoursSchedule = !hoursScheduleDisabledReason && isManualRoute;
+  if (isQrRoute || isElectronicRoute) {
+    hoursScheduleDisabledReason = qrElecMsg;
+    reasonCodes.push('HOURS_QR_OR_ELECTRONIC');
+  } else if (isAuthorised) {
+    hoursScheduleDisabledReason = 'This timesheet is authorised. Unauthorise it before changing hours.';
+    reasonCodes.push('HOURS_AUTHORISED');
+  } else if (isInvoiceLocked || isSegmentInvoiceLocked) {
+    hoursScheduleDisabledReason = 'This timesheet is invoiced, so hours cannot be amended directly.';
+    reasonCodes.push(isSegmentInvoiceLocked ? 'HOURS_SEGMENT_INVOICED' : 'HOURS_INVOICED');
+  } else if (isPaid) {
+    hoursScheduleDisabledReason = 'This timesheet is paid, so hours cannot be amended directly.';
+    reasonCodes.push('HOURS_PAID');
+  } else if (protectedOriginal) {
+    hoursScheduleDisabledReason = 'This row is import/source authoritative and cannot have hours amended directly.';
+    reasonCodes.push('HOURS_IMPORT_PROTECTED');
+  } else if (isSegmentOnlyContext) {
+    hoursScheduleDisabledReason = 'This segment row does not support direct hour amendments here.';
+    reasonCodes.push('HOURS_SEGMENT_CONTEXT');
+  } else if (isReviewOnly) {
+    hoursScheduleDisabledReason = 'This row is review-only.';
+    reasonCodes.push('HOURS_REVIEW_ONLY');
+  }
+  const canEditHoursSchedule = !!(!hoursScheduleDisabledReason && isManualRoute);
 
   const isExpenseBearingRoute = !!(isManualRoute || isQrRoute || isElectronicRoute || isAdditionalManualRoute || hasSupportedManualDraft);
   let expensesDisabledReason = null;
-  if (isAuthorised) expensesDisabledReason = 'This timesheet is authorised. Unauthorise it before changing expenses.';
-  else if (isInvoiceLocked || isSegmentInvoiceLocked) expensesDisabledReason = 'This timesheet is invoiced, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.';
-  else if (isPaid) expensesDisabledReason = 'This timesheet is paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.';
-  else if (protectedOriginal) expensesDisabledReason = 'Expenses cannot be added to this original import/self-bill timesheet. Create an additional manual timesheet for expenses so it can be invoiced to the client.';
-  else if (isSegmentOnlyContext) expensesDisabledReason = 'Expenses cannot be added directly to this segment row. Create an additional manual timesheet for expenses so the charge can be evidenced, processed, authorised, and invoiced correctly.';
-  else if (!isExpenseBearingRoute) expensesDisabledReason = 'Expenses are not available for this timesheet route.';
-  else if (!(hasFinancialSnapshot || hasSupportedManualDraft)) expensesDisabledReason = 'A financial snapshot or supported manual draft route is required before expenses can be edited.';
-  const canEditExpenses = !expensesDisabledReason && isParentTimesheetContext && isExpenseBearingRoute;
+  if (isAuthorised) {
+    expensesDisabledReason = 'This timesheet is authorised. Unauthorise it before changing expenses.';
+  } else if (isInvoiceLocked || isSegmentInvoiceLocked) {
+    expensesDisabledReason = 'This timesheet is invoiced, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.';
+  } else if (isPaid) {
+    expensesDisabledReason = 'This timesheet is paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.';
+  } else if (protectedOriginal) {
+    expensesDisabledReason = 'Expenses cannot be added to this original import/self-bill timesheet. Create an additional manual timesheet for expenses so it can be invoiced to the client.';
+  } else if (isSegmentOnlyContext) {
+    expensesDisabledReason = 'Expenses cannot be added directly to this segment row. Create an additional manual timesheet for expenses so the charge can be evidenced, processed, authorised, and invoiced correctly.';
+  } else if (!isExpenseBearingRoute) {
+    expensesDisabledReason = 'Expenses are not available for this timesheet route.';
+  } else if (!(hasFinancialSnapshot || hasSupportedManualDraft)) {
+    expensesDisabledReason = 'A financial snapshot or supported manual draft route is required before expenses can be edited.';
+  }
+  const canEditExpenses = !!(!expensesDisabledReason && isParentTimesheetContext && isExpenseBearingRoute);
+  const canOpenExpenses = !!(
+    canEditExpenses ||
+    expensesDisabledReason ||
+    (isParentTimesheetContext && (isExpenseBearingRoute || hasFinancialSnapshot || hasRealTimesheet || hasSupportedManualDraft || protectedOriginal))
+  );
+
+  const backendAddAdditional = firstBoolIfPresent('can_add_additional_manual', 'canAddAdditionalManual', 'allow_additional_manual', 'can_create_additional_manual');
+  const requiresAdditionalManualForExpenses = !!(expensesDisabledReason && (isSegmentOnlyContext || isInvoiceLocked || isSegmentInvoiceLocked || isPaid || protectedOriginal));
+  const hasAdditionalManualAnchor = !!(
+    hasRealTimesheet ||
+    anyValue('contract_week_id', 'active_contract_week_id', 'planned_contract_week_id') ||
+    !!get('contract_week') ||
+    !!ctx.contract_week ||
+    !!details.contract_week ||
+    !!activeCtx.contract_week ||
+    !!activeContext.contract_week
+  );
+  const inferredAddAdditionalEligible = !!(
+    !isSegmentOnlyContext &&
+    hasAdditionalManualAnchor &&
+    (
+      requiresAdditionalManualForExpenses ||
+      protectedOriginal ||
+      isOriginalImportAuthoritative ||
+      isNoTimesheetRequiredOriginal ||
+      isInvoiceLocked ||
+      isSegmentInvoiceLocked ||
+      isPaid
+    )
+  );
+  const canAddAdditionalManual = backendAddAdditional !== null
+    ? backendAddAdditional === true
+    : inferredAddAdditionalEligible;
 
   return {
     canEditHoursSchedule,
+    canEditTimesheetData: canEditHoursSchedule,
     hoursScheduleReadOnly: !canEditHoursSchedule,
     hoursScheduleDisabledReason,
     canEditReferences: canEditHoursSchedule,
     referencesReadOnly: !canEditHoursSchedule,
     referencesDisabledReason: hoursScheduleDisabledReason,
-    canOpenExpenses: canEditExpenses || !!expensesDisabledReason,
+    canOpenExpenses,
     canEditExpenses,
     expensesReadOnly: !canEditExpenses,
     expensesDisabledReason,
-    requiresAdditionalManualForExpenses: !!expensesDisabledReason && (isSegmentOnlyContext || isInvoiceLocked || isSegmentInvoiceLocked || isPaid || protectedOriginal),
+    requiresAdditionalManualForExpenses,
     canManageExpenseEvidence: canEditExpenses,
     expenseEvidenceReadOnly: !canEditExpenses,
     expenseEvidenceDisabledReason: expensesDisabledReason,
-    canAddAdditionalManual: !isSegmentOnlyContext,
-    addAdditionalManualReason: isSegmentOnlyContext ? 'Create additional manual at parent timesheet level.' : null,
+    canAddAdditionalManual,
+    addAdditionalManualReason: canAddAdditionalManual ? null : (isSegmentOnlyContext ? 'Create additional manual at parent timesheet level.' : 'Additional manual timesheet is not available for this row.'),
     isParentTimesheetContext,
     isSegmentOnlyContext,
     isManualRoute,
@@ -75642,6 +76455,7 @@ function classifyTimesheetEditDomains(ctxInput) {
     reasonCodes
   };
 }
+
 
 function normaliseTimesheetExpensesDraft(raw, options = {}) {
   const src = (raw && typeof raw === 'object') ? raw : {};
@@ -75729,15 +76543,114 @@ function formatTsfinEvidenceRequiredMessage(errorPayload) {
   const p = errorPayload || {};
   const missing = p.missing || p?.error?.missing || p?.body?.missing || p?.payload?.missing || p?.error?.payload?.missing;
   if (!Array.isArray(missing) || !missing.length) return 'Required evidence is missing before these expenses can be saved. Please upload the required evidence, then try again.';
-  const map = { mileage: 'Mileage', travel: 'Travel', accommodation: 'Accommodation', other: 'Other' };
-  const parts = missing.map((m) => `${map[String(m?.category || '').toLowerCase()] || 'Expense'} evidence with kind ${String(m?.required_kind || 'UNKNOWN').toUpperCase()}`);
-  if (parts.length === 1) return `${parts[0]} is required before these expenses can be saved. Please upload evidence with kind ${String(missing[0]?.required_kind || 'UNKNOWN').toUpperCase()}, then try again.`;
-  return `${parts.join(' and ')} are required before these expenses can be saved. Please upload the required evidence, then try again.`;
+
+  const labelMap = {
+    mileage: 'Mileage',
+    travel: 'Travel',
+    accommodation: 'Accommodation',
+    other: 'Other'
+  };
+  const normalised = missing.map((m) => {
+    const category = String(m?.category || '').trim().toLowerCase();
+    const label = labelMap[category] || 'Expense';
+    const kind = String(m?.required_kind || m?.kind || '').trim().toUpperCase() || 'UNKNOWN';
+    return { label, kind };
+  });
+
+  if (normalised.length === 1) {
+    const item = normalised[0];
+    return `${item.label} evidence is required before these expenses can be saved. Please upload evidence with kind ${item.kind}, then try again.`;
+  }
+
+  const list = normalised.map((item) => `${item.label} evidence (${item.kind})`).join(', ');
+  return `${list} are required before these expenses can be saved. Please upload the required evidence, then try again.`;
 }
 
 async function commitTimesheetExpensesMileageDraft(args = {}) {
-  const timesheetId = args.timesheetId || args?.row?.timesheet_id || args?.details?.current_timesheet_id || args?.details?.timesheet_id || args?.context?.current_timesheet_id || args?.context?.timesheet_id;
-  const expectedTimesheetId = args.expectedTimesheetId || args?.details?.expected_timesheet_id || args?.row?.expected_timesheet_id || null;
+  const pick = (...values) => {
+    for (const value of values) {
+      if (value != null && String(value).trim() !== '') return value;
+    }
+    return null;
+  };
+  const toNumberOrNull = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+  const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
+  const readNested = (source, path) => {
+    if (!source || typeof source !== 'object') return null;
+    let cur = source;
+    for (const key of path) {
+      if (!cur || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, key)) return null;
+      cur = cur[key];
+    }
+    return cur;
+  };
+  const readRate = (fieldName) => {
+    const sources = [
+      args?.draft,
+      args?.baseline,
+      args?.details?.tsfin,
+      args?.details?.financial_snapshot,
+      args?.details?.financials,
+      args?.row?.tsfin,
+      args?.row?.financial_snapshot,
+      args?.row?.financials,
+      args?.context?.tsfin,
+      args?.context?.financial_snapshot,
+      args?.context?.financials,
+      args?.state?.expensesDraft,
+      args?.state?.expensesBaseline,
+      args?.active_ctx?.state?.expensesDraft,
+      args?.active_ctx?.state?.expensesBaseline,
+      args?.active_context?.state?.expensesDraft,
+      args?.active_context?.state?.expensesBaseline
+    ];
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      if (Object.prototype.hasOwnProperty.call(source, fieldName)) {
+        const n = toNumberOrNull(source[fieldName]);
+        if (n != null) return n;
+      }
+    }
+    return null;
+  };
+
+  const timesheetId = pick(
+    args.timesheetId,
+    args?.details?.current_timesheet_id,
+    args?.details?.timesheet_id,
+    args?.details?.timesheet?.timesheet_id,
+    args?.row?.current_timesheet_id,
+    args?.row?.timesheet_id,
+    args?.context?.current_timesheet_id,
+    args?.context?.timesheet_id,
+    args?.active_ctx?.current_timesheet_id,
+    args?.active_ctx?.row?.timesheet_id,
+    args?.active_context?.current_timesheet_id,
+    args?.active_context?.row?.timesheet_id
+  );
+  const expectedTimesheetId = pick(
+    args.expectedTimesheetId,
+    args?.details?.expected_timesheet_id,
+    args?.details?.current_timesheet_id,
+    args?.details?.timesheet_id,
+    args?.details?.timesheet?.timesheet_id,
+    args?.row?.expected_timesheet_id,
+    args?.row?.current_timesheet_id,
+    args?.row?.timesheet_id,
+    args?.context?.expected_timesheet_id,
+    args?.context?.current_timesheet_id,
+    args?.context?.timesheet_id,
+    args?.active_ctx?.current_timesheet_id,
+    args?.active_ctx?.row?.timesheet_id,
+    args?.active_context?.current_timesheet_id,
+    args?.active_context?.row?.timesheet_id,
+    timesheetId
+  );
+
   const edit = classifyTimesheetEditDomains(args);
   const normaliseOptions = {
     ...(args.options && typeof args.options === 'object' ? args.options : {}),
@@ -75749,32 +76662,71 @@ async function commitTimesheetExpensesMileageDraft(args = {}) {
   if (!dirtyResult.dirty) return { ok: true, noChanges: true, evidenceRequired: false, message: '', error: null, missing: [], committedDraft: dirtyResult.normalisedBaseline, updatedTsfin: null, response: null, dirtyResult };
   if (!edit.canEditExpenses) return { ok: false, noChanges: false, evidenceRequired: false, message: edit.expensesDisabledReason || 'Expenses cannot be edited.', error: 'EXPENSES_EDIT_BLOCKED', missing: [], committedDraft: null, updatedTsfin: null, response: null, dirtyResult };
   if (!timesheetId) return { ok: false, noChanges: false, evidenceRequired: false, message: 'A real timesheet is required before expenses can be saved.', error: 'TIMESHEET_ID_REQUIRED', missing: [], committedDraft: null, updatedTsfin: null, response: null, dirtyResult };
-  if (dirtyResult.mileageDirty) {
-    const payRate = Number(dirtyResult.normalisedDraft?.mileage_pay_rate);
-    const chargeRate = Number(dirtyResult.normalisedDraft?.mileage_charge_rate);
-    if (!Number.isFinite(payRate) || !Number.isFinite(chargeRate) || payRate <= 0 || chargeRate <= 0) {
-      return { ok: false, noChanges: false, evidenceRequired: false, message: 'Mileage rates are missing, so mileage cannot be saved. Check the contract/client mileage rates, then try again.', error: 'MILEAGE_RATE_MISSING', missing: [], committedDraft: null, updatedTsfin: null, response: null, dirtyResult };
-    }
+  if (!expectedTimesheetId) return { ok: false, noChanges: false, evidenceRequired: false, message: 'A current timesheet id is required before expenses can be saved.', error: 'EXPECTED_TIMESHEET_ID_REQUIRED', missing: [], committedDraft: null, updatedTsfin: null, response: null, dirtyResult };
+
+  const draft = { ...(dirtyResult.normalisedDraft || {}) };
+  const baseline = { ...(dirtyResult.normalisedBaseline || {}) };
+  const payRate = toNumberOrNull(draft.mileage_pay_rate) ?? toNumberOrNull(baseline.mileage_pay_rate) ?? readRate('mileage_pay_rate');
+  const chargeRate = toNumberOrNull(draft.mileage_charge_rate) ?? toNumberOrNull(baseline.mileage_charge_rate) ?? readRate('mileage_charge_rate');
+  const mileageUnits = Number(draft.mileage_units || 0);
+  const positiveMileageClaim = mileageUnits > 0;
+
+  if (dirtyResult.mileageDirty && positiveMileageClaim && (payRate == null || chargeRate == null)) {
+    return { ok: false, noChanges: false, evidenceRequired: false, message: 'Mileage rates are missing, so mileage cannot be saved. Check the contract/client mileage rates, then try again.', error: 'MILEAGE_RATE_MISSING', missing: [], committedDraft: null, updatedTsfin: null, response: null, dirtyResult };
   }
+
+  const mileagePay = positiveMileageClaim && payRate != null ? round2(mileageUnits * payRate) : 0;
+  const mileageCharge = positiveMileageClaim && chargeRate != null ? round2(mileageUnits * chargeRate) : 0;
+  draft.mileage_pay_rate = payRate;
+  draft.mileage_charge_rate = chargeRate;
+
+  const parseApiResponse = async (response) => {
+    const text = await response.text().catch(() => '');
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { message: text };
+    }
+  };
+
   try {
     let last = null;
     if (dirtyResult.expensesDirty) {
-      const payload = { expenses: { travel_pay_ex_vat: dirtyResult.normalisedDraft.travel_pay, travel_charge_ex_vat: dirtyResult.normalisedDraft.travel_charge, accommodation_pay_ex_vat: dirtyResult.normalisedDraft.accommodation_pay, accommodation_charge_ex_vat: dirtyResult.normalisedDraft.accommodation_charge, other_pay_ex_vat: dirtyResult.normalisedDraft.other_pay, other_charge_ex_vat: dirtyResult.normalisedDraft.other_charge, description: dirtyResult.normalisedDraft.note } };
-      if (expectedTimesheetId) payload.expected_timesheet_id = expectedTimesheetId;
-      const r = await authFetch(API(`/tsfin/${encodeURIComponent(String(timesheetId))}/expenses`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
-      last = await r.json().catch(() => ({}));
+      const payload = {
+        expected_timesheet_id: String(expectedTimesheetId),
+        expenses: {
+          travel_pay_ex_vat: draft.travel_pay,
+          travel_charge_ex_vat: draft.travel_charge,
+          accommodation_pay_ex_vat: draft.accommodation_pay,
+          accommodation_charge_ex_vat: draft.accommodation_charge,
+          other_pay_ex_vat: draft.other_pay,
+          other_charge_ex_vat: draft.other_charge,
+          description: draft.note
+        }
+      };
+      const r = await authFetch(API(`/api/tsfin/${encodeURIComponent(String(timesheetId))}/expenses`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      last = await parseApiResponse(r);
       if (!r.ok) throw last;
     }
     if (dirtyResult.mileageDirty) {
-      const payload = { mileage: { mileage_units: dirtyResult.normalisedDraft.mileage_units, pay_rate: dirtyResult.normalisedDraft.mileage_pay_rate, charge_rate: dirtyResult.normalisedDraft.mileage_charge_rate } };
-      if (expectedTimesheetId) payload.expected_timesheet_id = expectedTimesheetId;
-      const r = await authFetch(API(`/tsfin/${encodeURIComponent(String(timesheetId))}/mileage`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
-      last = await r.json().catch(() => ({}));
+      const payload = {
+        expected_timesheet_id: String(expectedTimesheetId),
+        mileage: {
+          mileage_units: mileageUnits,
+          pay_rate: payRate,
+          charge_rate: chargeRate,
+          pay_ex_vat: mileagePay,
+          charge_ex_vat: mileageCharge
+        }
+      };
+      const r = await authFetch(API(`/api/tsfin/${encodeURIComponent(String(timesheetId))}/mileage`), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      last = await parseApiResponse(r);
       if (!r.ok) throw last;
     }
     const movedId = last?.current_timesheet_id || last?.timesheet_id;
     if (movedId && typeof args.onAdoptMovedTimesheetId === 'function' && String(movedId) !== String(timesheetId)) args.onAdoptMovedTimesheetId(movedId, last);
-    return { ok: true, noChanges: false, evidenceRequired: false, message: '', error: null, missing: [], committedDraft: dirtyResult.normalisedDraft, updatedTsfin: last?.tsfin || last?.data || null, response: last, dirtyResult };
+    return { ok: true, noChanges: false, evidenceRequired: false, message: '', error: null, missing: [], committedDraft: draft, updatedTsfin: last?.tsfin || last?.data || null, response: last, dirtyResult };
   } catch (e) {
     const err = e || {};
     const movedId = err?.current_timesheet_id || err?.timesheet_id;
@@ -75785,6 +76737,8 @@ async function commitTimesheetExpensesMileageDraft(args = {}) {
     return { ok: false, noChanges: false, evidenceRequired, message: evidenceRequired ? formatTsfinEvidenceRequiredMessage(err) : String(err.message || edit.expensesDisabledReason || 'Unable to save expenses.'), error: code || 'SAVE_FAILED', missing, committedDraft: null, updatedTsfin: null, response: err, dirtyResult };
   }
 }
+
+
 
 function bankingBuildEnrichedFriendlyError(originalError, friendly, fallbackMessage = 'Banking action failed') {
   const src = (friendly && typeof friendly === 'object' && !Array.isArray(friendly)) ? friendly : {};
@@ -75813,9 +76767,9 @@ function bankingBuildEnrichedFriendlyError(originalError, friendly, fallbackMess
 }
 
 
-
-async function bankingPayWorkbenchSessionGet(sessionId) {
+async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const cloneJson = (value) => {
     try {
       return JSON.parse(JSON.stringify(value));
@@ -75828,16 +76782,109 @@ async function bankingPayWorkbenchSessionGet(sessionId) {
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
+  const extractPayloadCode = (payloadObj) => {
+    const seen = new Set();
+    const codes = [];
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); } catch {}
+        }
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      for (const key of ['error_code', 'code', 'raw_code']) {
+        const s = trimStr(value[key]);
+        if (s) codes.push(s);
+      }
+      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    return trimStr(codes[0] || '');
+  };
+  const looksTechnicalPayloadMessage = (value) => {
+    const s = trimStr(value);
+    if (!s) return true;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
+    const fallback = trimStr(fallbackMessage) || 'Request failed.';
+    const seen = new Set();
+    const candidates = [];
+    const add = (value) => {
+      const s = trimStr(value);
+      if (s) candidates.push(s);
+    };
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
+        }
+        add(raw);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      add(value.user_message);
+      add(value.friendly_message);
+      add(value.message);
+      add(value.title);
+      add(value.error_description);
+      if (isPlainObject(value.friendly_error)) {
+        add(value.friendly_error.user_message);
+        add(value.friendly_error.message);
+        add(value.friendly_error.title);
+      }
+      if (isPlainObject(value.error)) {
+        visit(value.error, depth + 1);
+      } else if (typeof value.error === 'string') {
+        visit(value.error, depth + 1);
+      }
+      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
+    return trimStr(picked || fallback) || fallback;
+  };
+  const makeApiPayloadError = (json, status, fallbackMessage) => {
+    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
+    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const err = new Error(message);
+    err.status = status;
+    err.payload = json;
+    err.json = json;
+    err.response_json = cloneJson(json) || json;
+    const code = extractPayloadCode(payloadObj);
+    if (code) {
+      err.code = code;
+      err.error_code = code;
+    }
+    return err;
+  };
   const sessionIdText = trimStr(sessionId);
   try {
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}`));
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const previewObj = (payloadObj.preview && typeof payloadObj.preview === 'object' && !Array.isArray(payloadObj.preview)) ? payloadObj.preview : payloadObj;
@@ -75854,14 +76901,16 @@ async function bankingPayWorkbenchSessionGet(sessionId) {
     };
   } catch (error) {
     const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: true })
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
       : null;
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview could not be refreshed');
   }
 }
 
-async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId) {
+
+async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const cloneJson = (value) => {
     try {
       return JSON.parse(JSON.stringify(value));
@@ -75874,17 +76923,110 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId) {
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
+  const extractPayloadCode = (payloadObj) => {
+    const seen = new Set();
+    const codes = [];
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); } catch {}
+        }
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      for (const key of ['error_code', 'code', 'raw_code']) {
+        const s = trimStr(value[key]);
+        if (s) codes.push(s);
+      }
+      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    return trimStr(codes[0] || '');
+  };
+  const looksTechnicalPayloadMessage = (value) => {
+    const s = trimStr(value);
+    if (!s) return true;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
+    const fallback = trimStr(fallbackMessage) || 'Request failed.';
+    const seen = new Set();
+    const candidates = [];
+    const add = (value) => {
+      const s = trimStr(value);
+      if (s) candidates.push(s);
+    };
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
+        }
+        add(raw);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      add(value.user_message);
+      add(value.friendly_message);
+      add(value.message);
+      add(value.title);
+      add(value.error_description);
+      if (isPlainObject(value.friendly_error)) {
+        add(value.friendly_error.user_message);
+        add(value.friendly_error.message);
+        add(value.friendly_error.title);
+      }
+      if (isPlainObject(value.error)) {
+        visit(value.error, depth + 1);
+      } else if (typeof value.error === 'string') {
+        visit(value.error, depth + 1);
+      }
+      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
+    return trimStr(picked || fallback) || fallback;
+  };
+  const makeApiPayloadError = (json, status, fallbackMessage) => {
+    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
+    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const err = new Error(message);
+    err.status = status;
+    err.payload = json;
+    err.json = json;
+    err.response_json = cloneJson(json) || json;
+    const code = extractPayloadCode(payloadObj);
+    if (code) {
+      err.code = code;
+      err.error_code = code;
+    }
+    return err;
+  };
   const sessionIdText = trimStr(sessionId);
   const candidateIdText = trimStr(candidateId);
   try {
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/candidate/${encodeURIComponent(candidateIdText)}`));
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     return {
@@ -75898,7 +77040,7 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId) {
     };
   } catch (error) {
     const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE', userInitiated: true })
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
       : null;
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking candidate preview could not be refreshed');
   }
@@ -75907,6 +77049,7 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId) {
 
 async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const cloneJson = (value) => {
     try {
       return JSON.parse(JSON.stringify(value));
@@ -75918,6 +77061,103 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     const text = await res.text().catch(() => '');
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
+  };
+  const extractPayloadCode = (payloadObj) => {
+    const seen = new Set();
+    const codes = [];
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); } catch {}
+        }
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      for (const key of ['error_code', 'code', 'raw_code']) {
+        const s = trimStr(value[key]);
+        if (s) codes.push(s);
+      }
+      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    return trimStr(codes[0] || '');
+  };
+  const looksTechnicalPayloadMessage = (value) => {
+    const s = trimStr(value);
+    if (!s) return true;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
+    const fallback = trimStr(fallbackMessage) || 'Request failed.';
+    const seen = new Set();
+    const candidates = [];
+    const add = (value) => {
+      const s = trimStr(value);
+      if (s) candidates.push(s);
+    };
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
+        }
+        add(raw);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      add(value.user_message);
+      add(value.friendly_message);
+      add(value.message);
+      add(value.title);
+      add(value.error_description);
+      if (isPlainObject(value.friendly_error)) {
+        add(value.friendly_error.user_message);
+        add(value.friendly_error.message);
+        add(value.friendly_error.title);
+      }
+      if (isPlainObject(value.error)) {
+        visit(value.error, depth + 1);
+      } else if (typeof value.error === 'string') {
+        visit(value.error, depth + 1);
+      }
+      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
+    return trimStr(picked || fallback) || fallback;
+  };
+  const makeApiPayloadError = (json, status, fallbackMessage) => {
+    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
+    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const err = new Error(message);
+    err.status = status;
+    err.payload = json;
+    err.json = json;
+    err.response_json = cloneJson(json) || json;
+    const code = extractPayloadCode(payloadObj);
+    if (code) {
+      err.code = code;
+      err.error_code = code;
+    }
+    return err;
   };
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
   const getCurrentSessionId = () => {
@@ -76010,11 +77250,7 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     }
   }
     if (!res.ok) {
-      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     return {
@@ -76029,7 +77265,7 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     };
   } catch (error) {
     const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true })
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
       : null;
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview progress could not be refreshed');
   }
@@ -76051,6 +77287,103 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
+  const extractPayloadCode = (payloadObj) => {
+    const seen = new Set();
+    const codes = [];
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); } catch {}
+        }
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      for (const key of ['error_code', 'code', 'raw_code']) {
+        const s = trimStr(value[key]);
+        if (s) codes.push(s);
+      }
+      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    return trimStr(codes[0] || '');
+  };
+  const looksTechnicalPayloadMessage = (value) => {
+    const s = trimStr(value);
+    if (!s) return true;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
+    const fallback = trimStr(fallbackMessage) || 'Request failed.';
+    const seen = new Set();
+    const candidates = [];
+    const add = (value) => {
+      const s = trimStr(value);
+      if (s) candidates.push(s);
+    };
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
+        }
+        add(raw);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      add(value.user_message);
+      add(value.friendly_message);
+      add(value.message);
+      add(value.title);
+      add(value.error_description);
+      if (isPlainObject(value.friendly_error)) {
+        add(value.friendly_error.user_message);
+        add(value.friendly_error.message);
+        add(value.friendly_error.title);
+      }
+      if (isPlainObject(value.error)) {
+        visit(value.error, depth + 1);
+      } else if (typeof value.error === 'string') {
+        visit(value.error, depth + 1);
+      }
+      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
+    return trimStr(picked || fallback) || fallback;
+  };
+  const makeApiPayloadError = (json, status, fallbackMessage) => {
+    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
+    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const err = new Error(message);
+    err.status = status;
+    err.payload = json;
+    err.json = json;
+    err.response_json = cloneJson(json) || json;
+    const code = extractPayloadCode(payloadObj);
+    if (code) {
+      err.code = code;
+      err.error_code = code;
+    }
+    return err;
+  };
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution`), {
@@ -76060,11 +77393,7 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
@@ -76088,6 +77417,8 @@ async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload 
   }
 }
 
+
+
 async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -76103,6 +77434,103 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
+  const extractPayloadCode = (payloadObj) => {
+    const seen = new Set();
+    const codes = [];
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); } catch {}
+        }
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      for (const key of ['error_code', 'code', 'raw_code']) {
+        const s = trimStr(value[key]);
+        if (s) codes.push(s);
+      }
+      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    return trimStr(codes[0] || '');
+  };
+  const looksTechnicalPayloadMessage = (value) => {
+    const s = trimStr(value);
+    if (!s) return true;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
+    const fallback = trimStr(fallbackMessage) || 'Request failed.';
+    const seen = new Set();
+    const candidates = [];
+    const add = (value) => {
+      const s = trimStr(value);
+      if (s) candidates.push(s);
+    };
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
+        }
+        add(raw);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      add(value.user_message);
+      add(value.friendly_message);
+      add(value.message);
+      add(value.title);
+      add(value.error_description);
+      if (isPlainObject(value.friendly_error)) {
+        add(value.friendly_error.user_message);
+        add(value.friendly_error.message);
+        add(value.friendly_error.title);
+      }
+      if (isPlainObject(value.error)) {
+        visit(value.error, depth + 1);
+      } else if (typeof value.error === 'string') {
+        visit(value.error, depth + 1);
+      }
+      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
+    return trimStr(picked || fallback) || fallback;
+  };
+  const makeApiPayloadError = (json, status, fallbackMessage) => {
+    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
+    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const err = new Error(message);
+    err.status = status;
+    err.payload = json;
+    err.json = json;
+    err.response_json = cloneJson(json) || json;
+    const code = extractPayloadCode(payloadObj);
+    if (code) {
+      err.code = code;
+      err.error_code = code;
+    }
+    return err;
+  };
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/case-resolution/clear`), {
@@ -76112,11 +77540,7 @@ async function bankingPayWorkbenchSessionClearCaseResolution(sessionId, payload 
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
@@ -76155,6 +77579,103 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
+  const extractPayloadCode = (payloadObj) => {
+    const seen = new Set();
+    const codes = [];
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); } catch {}
+        }
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      for (const key of ['error_code', 'code', 'raw_code']) {
+        const s = trimStr(value[key]);
+        if (s) codes.push(s);
+      }
+      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    return trimStr(codes[0] || '');
+  };
+  const looksTechnicalPayloadMessage = (value) => {
+    const s = trimStr(value);
+    if (!s) return true;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
+    const fallback = trimStr(fallbackMessage) || 'Request failed.';
+    const seen = new Set();
+    const candidates = [];
+    const add = (value) => {
+      const s = trimStr(value);
+      if (s) candidates.push(s);
+    };
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
+        }
+        add(raw);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      add(value.user_message);
+      add(value.friendly_message);
+      add(value.message);
+      add(value.title);
+      add(value.error_description);
+      if (isPlainObject(value.friendly_error)) {
+        add(value.friendly_error.user_message);
+        add(value.friendly_error.message);
+        add(value.friendly_error.title);
+      }
+      if (isPlainObject(value.error)) {
+        visit(value.error, depth + 1);
+      } else if (typeof value.error === 'string') {
+        visit(value.error, depth + 1);
+      }
+      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
+    return trimStr(picked || fallback) || fallback;
+  };
+  const makeApiPayloadError = (json, status, fallbackMessage) => {
+    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
+    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const err = new Error(message);
+    err.status = status;
+    err.payload = json;
+    err.json = json;
+    err.response_json = cloneJson(json) || json;
+    const code = extractPayloadCode(payloadObj);
+    if (code) {
+      err.code = code;
+      err.error_code = code;
+    }
+    return err;
+  };
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/timesheet-exclusion`), {
@@ -76164,11 +77685,7 @@ async function bankingPayWorkbenchSessionSetTimesheetExclusion(sessionId, payloa
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const jobId = trimStr(payloadObj.job_id || payloadObj.pending_job_id || '');
@@ -76207,6 +77724,103 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
+  const extractPayloadCode = (payloadObj) => {
+    const seen = new Set();
+    const codes = [];
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); } catch {}
+        }
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      for (const key of ['error_code', 'code', 'raw_code']) {
+        const s = trimStr(value[key]);
+        if (s) codes.push(s);
+      }
+      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    return trimStr(codes[0] || '');
+  };
+  const looksTechnicalPayloadMessage = (value) => {
+    const s = trimStr(value);
+    if (!s) return true;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
+    const fallback = trimStr(fallbackMessage) || 'Request failed.';
+    const seen = new Set();
+    const candidates = [];
+    const add = (value) => {
+      const s = trimStr(value);
+      if (s) candidates.push(s);
+    };
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
+        }
+        add(raw);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      add(value.user_message);
+      add(value.friendly_message);
+      add(value.message);
+      add(value.title);
+      add(value.error_description);
+      if (isPlainObject(value.friendly_error)) {
+        add(value.friendly_error.user_message);
+        add(value.friendly_error.message);
+        add(value.friendly_error.title);
+      }
+      if (isPlainObject(value.error)) {
+        visit(value.error, depth + 1);
+      } else if (typeof value.error === 'string') {
+        visit(value.error, depth + 1);
+      }
+      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
+    return trimStr(picked || fallback) || fallback;
+  };
+  const makeApiPayloadError = (json, status, fallbackMessage) => {
+    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
+    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const err = new Error(message);
+    err.status = status;
+    err.payload = json;
+    err.json = json;
+    err.response_json = cloneJson(json) || json;
+    const code = extractPayloadCode(payloadObj);
+    if (code) {
+      err.code = code;
+      err.error_code = code;
+    }
+    return err;
+  };
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/selected-rows`), {
@@ -76216,11 +77830,7 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     const selectedRows = Array.isArray(payloadObj.selected_preview_row_ids)
@@ -76241,6 +77851,7 @@ async function bankingPayWorkbenchSessionSetSelectedRows(sessionId, payload = {}
   }
 }
 
+
 async function bankingPayWorkbenchSessionDiscard(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -76256,6 +77867,103 @@ async function bankingPayWorkbenchSessionDiscard(sessionId, payload = {}) {
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
+  const extractPayloadCode = (payloadObj) => {
+    const seen = new Set();
+    const codes = [];
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); } catch {}
+        }
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      for (const key of ['error_code', 'code', 'raw_code']) {
+        const s = trimStr(value[key]);
+        if (s) codes.push(s);
+      }
+      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    return trimStr(codes[0] || '');
+  };
+  const looksTechnicalPayloadMessage = (value) => {
+    const s = trimStr(value);
+    if (!s) return true;
+    if (s === '[object Object]') return true;
+    if (/^[\[{]/.test(s)) return true;
+    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
+    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
+    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
+    return false;
+  };
+  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
+    const fallback = trimStr(fallbackMessage) || 'Request failed.';
+    const seen = new Set();
+    const candidates = [];
+    const add = (value) => {
+      const s = trimStr(value);
+      if (s) candidates.push(s);
+    };
+    const visit = (value, depth = 0) => {
+      if (value == null || depth > 5) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
+        }
+        add(raw);
+        return;
+      }
+      if (!isPlainObject(value)) return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      add(value.user_message);
+      add(value.friendly_message);
+      add(value.message);
+      add(value.title);
+      add(value.error_description);
+      if (isPlainObject(value.friendly_error)) {
+        add(value.friendly_error.user_message);
+        add(value.friendly_error.message);
+        add(value.friendly_error.title);
+      }
+      if (isPlainObject(value.error)) {
+        visit(value.error, depth + 1);
+      } else if (typeof value.error === 'string') {
+        visit(value.error, depth + 1);
+      }
+      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
+        visit(value[key], depth + 1);
+      }
+    };
+    visit(payloadObj);
+    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
+    return trimStr(picked || fallback) || fallback;
+  };
+  const makeApiPayloadError = (json, status, fallbackMessage) => {
+    const payloadObj = isPlainObject(json) ? json : { raw_response: json };
+    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const err = new Error(message);
+    err.status = status;
+    err.payload = json;
+    err.json = json;
+    err.response_json = cloneJson(json) || json;
+    const code = extractPayloadCode(payloadObj);
+    if (code) {
+      err.code = code;
+      err.error_code = code;
+    }
+    return err;
+  };
   try {
     const sessionIdText = trimStr(sessionId);
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/discard`), {
@@ -76265,11 +77973,7 @@ async function bankingPayWorkbenchSessionDiscard(sessionId, payload = {}) {
     });
     const json = await parseJsonResponse(res);
     if (!res.ok) {
-      const msg = trimStr(json?.error || json?.message || `Request failed (${res.status})`) || `Request failed (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
     }
     const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
     return {
@@ -105037,13 +106741,23 @@ function isBulkAuthoriseEditableDirty(state) {
   const tsfin = (activeDetails.tsfin && typeof activeDetails.tsfin === 'object') ? activeDetails.tsfin : {};
   const activeRowKey = trimStr(st.active_row_key || row?.row_key || '');
 
+  const isRevoked = !!(
+    hasValue(ts.revoked_at) ||
+    hasValue(activeDetails.revoked_at) ||
+    hasValue(row?.revoked_at) ||
+    hasValue(activeContext.revoked_at) ||
+    hasValue(activeCtx.revoked_at)
+  );
   const isAuthorised = !!(
-    readBool([activeContext, 'is_authorised'], [activeCtx, 'is_authorised'], [row, 'is_authorised']) === true ||
-    hasValue(ts.authorised_at_server) ||
-    hasValue(ts.authorised_at_utc) ||
-    hasValue(tsfin.authorised_at_utc) ||
-    hasValue(row?.authorised_at_server) ||
-    hasValue(row?.authorised_at_utc)
+    !isRevoked &&
+    (
+      readBool([activeContext, 'is_authorised'], [activeCtx, 'is_authorised'], [row, 'is_authorised']) === true ||
+      hasValue(ts.authorised_at_server) ||
+      hasValue(ts.authorised_at_utc) ||
+      hasValue(tsfin.authorised_at_utc) ||
+      hasValue(row?.authorised_at_server) ||
+      hasValue(row?.authorised_at_utc)
+    )
   );
 
   const locked = !!(
@@ -105148,9 +106862,8 @@ function isBulkAuthoriseEditableDirty(state) {
     : { dirty: false };
   const isExpensesDraftDirty = !!(expenseDirtyResult && expenseDirtyResult.dirty === true);
   const shouldTreatExpensesDirtyAsEditable = !!(
-    canEditExpensesByPolicy ||
-    hasEditableExpensesDraftStaged ||
-    boolish(activeExpensesDirtyMarker)
+    canEditExpensesByPolicy &&
+    (hasEditableExpensesDraftStaged || boolish(activeExpensesDirtyMarker) || isExpensesDraftDirty)
   );
 
   const routeFamily = upper(activeContext.route_family || activeCtx.route_family || row?.route_family || '');
@@ -105223,8 +106936,6 @@ function isBulkAuthoriseEditableDirty(state) {
   }
   return false;
 }
-
-
 
 function bindBulkAuthoriseOrderingToolbar(state) {
   const st = (state && typeof state === 'object')
@@ -107425,10 +109136,21 @@ function hasBulkAuthoriseGenuineDirtyEdits(state, options = {}) {
     }
     return undefined;
   };
+  const syncExpenseDirtyMarkers = (containers, dirty) => {
+    for (const container of containers) {
+      if (!container || typeof container !== 'object') continue;
+      if (Object.prototype.hasOwnProperty.call(container, 'expensesDirty')) container.expensesDirty = !!dirty;
+      if (Object.prototype.hasOwnProperty.call(container, 'expensesDraftDirty')) container.expensesDraftDirty = !!dirty;
+      if (Object.prototype.hasOwnProperty.call(container, 'hasStagedExpensesDirty')) container.hasStagedExpensesDirty = !!dirty;
+      if (Object.prototype.hasOwnProperty.call(container, 'stagedExpensesDirty')) container.stagedExpensesDirty = !!dirty;
+      if (Object.prototype.hasOwnProperty.call(container, 'expenseDirtyMarker')) container.expenseDirtyMarker = !!dirty;
+    }
+  };
   const resolveExpenseDirtyState = () => {
     const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
     const activeCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
     const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
+    const activeDetails = (st.active_details && typeof st.active_details === 'object') ? st.active_details : {};
     const expenseContainers = [
       st,
       st.formState,
@@ -107457,17 +109179,17 @@ function hasBulkAuthoriseGenuineDirtyEdits(state, options = {}) {
           ...(activeContext && typeof activeContext === 'object' ? activeContext : {}),
           active_ctx: activeCtx,
           row: activeRow,
-          details: (st.active_details && typeof st.active_details === 'object') ? st.active_details : {},
+          details: activeDetails,
           state: st
         })
       : {};
     const canEditExpensesByPolicy = !!(editability && editability.canEditExpenses === true);
-    const hasEditableExpensesDraftStaged = !!(draft && typeof draft === 'object');
     const dirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
       ? isTimesheetExpensesDraftDirty(draft || {}, baseline || {})
-      : { dirty: false };
+      : { dirty: boolish(marker) };
     const isDirty = !!(dirtyResult && dirtyResult.dirty === true);
-    const allowed = !!(canEditExpensesByPolicy || hasEditableExpensesDraftStaged || boolish(marker));
+    const allowed = !!canEditExpensesByPolicy;
+    syncExpenseDirtyMarkers(expenseContainers, isDirty && allowed);
     return { isDirty, allowed };
   };
 
@@ -107564,7 +109286,6 @@ function hasBulkAuthoriseGenuineDirtyEdits(state, options = {}) {
     st.dirty = true;
     return true;
   }
-
 
   if (opts.allowLegacyFallback === true && typeof isBulkProcessEditableDirty === 'function') {
     return !!isBulkProcessEditableDirty(st);
@@ -110606,26 +112327,34 @@ function bulkAuthoriseHasProcessedExpensesValue(ctxInput) {
 function classifyBulkAuthoriseEditability(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const activeCtx = (ctx.active_ctx && typeof ctx.active_ctx === 'object') ? ctx.active_ctx : {};
+  const activeContext = (ctx.active_context && typeof ctx.active_context === 'object') ? ctx.active_context : {};
   const activeState = (ctx.state && typeof ctx.state === 'object')
     ? ctx.state
-    : ((activeCtx.state && typeof activeCtx.state === 'object') ? activeCtx.state : {});
-  const row = (ctx.row && typeof ctx.row === 'object') ? ctx.row : ((ctxInput && typeof ctxInput === 'object') ? ctxInput : {});
+    : ((activeCtx.state && typeof activeCtx.state === 'object')
+      ? activeCtx.state
+      : ((activeContext.state && typeof activeContext.state === 'object') ? activeContext.state : {}));
+  const row = (ctx.row && typeof ctx.row === 'object')
+    ? ctx.row
+    : ((activeCtx.row && typeof activeCtx.row === 'object')
+      ? activeCtx.row
+      : ((activeContext.row && typeof activeContext.row === 'object') ? activeContext.row : ctx));
   const details = (ctx.details && typeof ctx.details === 'object')
     ? ctx.details
     : ((activeCtx.details && typeof activeCtx.details === 'object')
-        ? activeCtx.details
-        : ((row.details && typeof row.details === 'object') ? row.details : {}));
+      ? activeCtx.details
+      : ((activeContext.details && typeof activeContext.details === 'object')
+        ? activeContext.details
+        : ((row.details && typeof row.details === 'object') ? row.details : {})));
   const ts = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : {};
   const tsfin = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
   const cw = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : {};
 
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const upper = (value) => trimStr(value).toUpperCase();
-  const hasValue = (value) => trimStr(value || '') !== '';
+  const hasValue = (value) => trimStr(value) !== '';
   const boolish = (value) => {
     if (value === true) return true;
-    if (value === false) return false;
-    if (value == null) return false;
+    if (value === false || value == null) return false;
     const s = String(value).trim().toLowerCase();
     return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
   };
@@ -110662,37 +112391,27 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     const segments = Array.isArray(invoiceBreakdown.segments) ? invoiceBreakdown.segments : [];
     return segments.some((segment) => hasValue(segment?.invoice_locked_invoice_id));
   };
-
-  const contextFirstKeys = [
-    'route_family',
-    'route_subfamily',
-    'underlying_channel_family',
-    'is_authorised',
-    'locked',
-    'is_import_authoritative',
-    'can_manage_evidence',
-    'can_edit_timesheet_data',
-    'can_unprocess',
-    'can_add_additional_manual',
-    'can_bulk_authorise',
-    'can_bulk_unauthorise',
-    'review_only'
-  ];
+  const hasRevoked = hasValue(readFirst([ts, 'revoked_at'], [row, 'revoked_at'], [details, 'revoked_at'], [ctx, 'revoked_at'], [activeCtx, 'revoked_at']));
 
   const mergedRow = { ...(row && typeof row === 'object' ? row : {}) };
-  contextFirstKeys.forEach((key) => {
-    const value = readFirst([ctx, key], [activeCtx, key]);
+  [
+    'route_family', 'route_subfamily', 'underlying_channel_family', 'is_authorised', 'locked',
+    'is_import_authoritative', 'can_manage_evidence', 'can_edit_timesheet_data', 'can_unprocess',
+    'can_add_additional_manual', 'can_bulk_authorise', 'can_bulk_unauthorise', 'review_only',
+    'segment_id', 'segment_stable_key', 'target_type', 'segment_only'
+  ].forEach((key) => {
+    const value = readFirst([ctx, key], [activeCtx, key], [activeContext, key]);
     if (value !== undefined) mergedRow[key] = value;
   });
 
   const base = (typeof classifyBulkProcessEditability === 'function')
-    ? classifyBulkProcessEditability({ ...ctx, row: mergedRow, details })
+    ? classifyBulkProcessEditability({ ...ctx, row: mergedRow, details, active_ctx: activeCtx, active_context: activeContext, state: activeState })
     : {};
   const domainPolicy = (typeof classifyTimesheetEditDomains === 'function')
     ? classifyTimesheetEditDomains({
         ...(ctx && typeof ctx === 'object' ? ctx : {}),
         active_ctx: activeCtx,
-        active_context: (ctx.active_context && typeof ctx.active_context === 'object') ? ctx.active_context : {},
+        active_context: activeContext,
         row: mergedRow,
         details,
         timesheet: ts,
@@ -110704,101 +112423,43 @@ function classifyBulkAuthoriseEditability(ctxInput) {
         action_flags: (details.action_flags && typeof details.action_flags === 'object') ? details.action_flags : {}
       })
     : null;
-  const hasSharedDomainPolicy = !!(domainPolicy && typeof domainPolicy === 'object');
 
-  const routeFamily = upper(readFirst([ctx, 'route_family'], [activeCtx, 'route_family'], [row, 'route_family']) || base.routeFamily || '');
-  const routeSubfamily = upper(readFirst([ctx, 'route_subfamily'], [activeCtx, 'route_subfamily'], [row, 'route_subfamily']) || '');
-  const underlyingChannelFamily = upper(readFirst([ctx, 'underlying_channel_family'], [activeCtx, 'underlying_channel_family'], [row, 'underlying_channel_family']) || '');
-
-  const sheetScope = upper(
-    readFirst([details, 'sheet_scope'], [ctx, 'period_type'], [activeCtx, 'period_type'], [row, 'period_type'], [row, 'sheet_scope'], [ts, 'sheet_scope']) ||
-    base.sheetScope ||
-    ''
-  );
-
-  const weeklyMode = upper(
-    readFirst([cw, 'submission_mode_snapshot'], [details, 'cw_submission_mode_snapshot'], [row, 'submission_mode_snapshot'], [ctx, 'submission_mode_snapshot'], [activeCtx, 'submission_mode_snapshot'], [row, 'submission_mode']) ||
-    base.weeklyMode ||
-    ''
-  );
-
-  const dailyMode = upper(
-    readFirst([ts, 'submission_mode'], [details, 'submission_mode'], [row, 'submission_mode'], [ctx, 'submission_mode'], [activeCtx, 'submission_mode'], [ts, 'submission_mode_snapshot'], [row, 'submission_mode_snapshot']) ||
-    base.dailyMode ||
-    ''
-  );
-
+  const sheetScope = upper(readFirst([details, 'sheet_scope'], [ctx, 'period_type'], [activeCtx, 'period_type'], [mergedRow, 'period_type'], [mergedRow, 'sheet_scope'], [ts, 'sheet_scope']) || base.sheetScope || '');
+  const weeklyMode = upper(readFirst([cw, 'submission_mode_snapshot'], [details, 'cw_submission_mode_snapshot'], [mergedRow, 'submission_mode_snapshot'], [ctx, 'submission_mode_snapshot'], [activeCtx, 'submission_mode_snapshot'], [mergedRow, 'submission_mode']) || base.weeklyMode || '');
+  const dailyMode = upper(readFirst([ts, 'submission_mode'], [details, 'submission_mode'], [mergedRow, 'submission_mode'], [ctx, 'submission_mode'], [activeCtx, 'submission_mode'], [ts, 'submission_mode_snapshot'], [mergedRow, 'submission_mode_snapshot']) || base.dailyMode || '');
   const effectiveMode = sheetScope === 'WEEKLY' ? weeklyMode : dailyMode;
-  const tsId = trimStr(readFirst([ts, 'timesheet_id'], [details, 'current_timesheet_id'], [details, 'requested_timesheet_id'], [ctx, 'current_timesheet_id'], [ctx, 'requested_timesheet_id'], [row, 'timesheet_id'], [row, 'current_timesheet_id']) || base.tsId || '');
-  const weekId = trimStr(readFirst([details, 'contract_week_id'], [cw, 'id'], [row, 'contract_week_id'], [ctx, 'contract_week_id']) || base.weekId || '');
+  const routeFamily = upper(readFirst([ctx, 'route_family'], [activeCtx, 'route_family'], [mergedRow, 'route_family']) || base.routeFamily || readFirst([mergedRow, 'route_type'], [details, 'route_type'], [ts, 'route_type']) || '');
+  const routeSubfamily = upper(readFirst([ctx, 'route_subfamily'], [activeCtx, 'route_subfamily'], [mergedRow, 'route_subfamily']) || '');
+  const underlyingChannelFamily = upper(readFirst([ctx, 'underlying_channel_family'], [activeCtx, 'underlying_channel_family'], [mergedRow, 'underlying_channel_family']) || '');
+
+  const tsId = trimStr(readFirst([ts, 'timesheet_id'], [details, 'current_timesheet_id'], [details, 'requested_timesheet_id'], [ctx, 'current_timesheet_id'], [ctx, 'requested_timesheet_id'], [mergedRow, 'timesheet_id'], [mergedRow, 'current_timesheet_id']) || base.tsId || '');
+  const weekId = trimStr(readFirst([details, 'contract_week_id'], [cw, 'id'], [mergedRow, 'contract_week_id'], [ctx, 'contract_week_id']) || base.weekId || '');
   const hasRealTimesheet = !!tsId;
-  const hasFinancialSnapshot = !!(
-    tsfin &&
-    (tsfin.timesheet_id || tsfin.total_hours != null || tsfin.total_pay_ex_vat != null || tsfin.processing_status)
-  );
+  const hasFinancialSnapshot = !!(domainPolicy?.hasFinancialSnapshot || (tsfin && (tsfin.timesheet_id || tsfin.total_hours != null || tsfin.total_pay_ex_vat != null || tsfin.processing_status)));
 
-  const qrStatus = upper(readFirst([details, 'qr_status'], [ts, 'qr_status'], [row, 'qr_status'], [ctx, 'qr_status']) || '');
-  const isQr = !!(
-    routeFamily === 'QR' ||
-    routeSubfamily === 'QR' ||
-    underlyingChannelFamily === 'QR' ||
-    readBool([ctx, 'is_qr'], [activeCtx, 'is_qr'], [row, 'is_qr'], [details, 'is_qr']) === true ||
-    ['PENDING', 'USED', 'EXPIRED', 'CANCELLED'].includes(qrStatus)
-  );
-  const isElectronic = !!(
-    routeFamily === 'ELECTRONIC' ||
-    underlyingChannelFamily === 'ELECTRONIC' ||
-    effectiveMode === 'ELECTRONIC'
-  );
-  const isManual = !!(
-    routeFamily === 'MANUAL_NON_QR' ||
-    (effectiveMode === 'MANUAL' && !isElectronic)
-  );
+  const qrStatus = upper(readFirst([details, 'qr_status'], [ts, 'qr_status'], [mergedRow, 'qr_status'], [ctx, 'qr_status']) || '');
+  const isQr = domainPolicy ? !!domainPolicy.isQrRoute : !!(routeFamily === 'QR' || routeSubfamily === 'QR' || underlyingChannelFamily === 'QR' || readBool([ctx, 'is_qr'], [activeCtx, 'is_qr'], [mergedRow, 'is_qr'], [details, 'is_qr']) === true || ['PENDING', 'USED', 'EXPIRED', 'CANCELLED'].includes(qrStatus));
+  const isElectronic = domainPolicy ? !!domainPolicy.isElectronicRoute : !!(routeFamily === 'ELECTRONIC' || underlyingChannelFamily === 'ELECTRONIC' || effectiveMode === 'ELECTRONIC');
+  const isManual = domainPolicy ? !!domainPolicy.isManualRoute : !!(routeFamily === 'MANUAL_NON_QR' || (effectiveMode === 'MANUAL' && !isElectronic));
 
-  const isAuthorised = !!(
-    readBool([ctx, 'is_authorised'], [activeCtx, 'is_authorised'], [row, 'is_authorised']) === true ||
-    hasValue(readFirst([ts, 'authorised_at_server'], [ts, 'authorised_at_utc'], [tsfin, 'authorised_at_utc'], [row, 'authorised_at_server'], [row, 'authorised_at_utc']))
-  );
+  const isAuthorised = domainPolicy
+    ? !!domainPolicy.isAuthorised
+    : !!(!hasRevoked && (readBool([ctx, 'is_authorised'], [activeCtx, 'is_authorised'], [mergedRow, 'is_authorised']) === true || hasValue(readFirst([ts, 'authorised_at_server'], [ts, 'authorised_at_utc'], [tsfin, 'authorised_at_utc'], [mergedRow, 'authorised_at_server'], [mergedRow, 'authorised_at_utc']))));
+  const rowLocked = readBool([ctx, 'locked'], [activeCtx, 'locked'], [mergedRow, 'locked']) === true;
+  const isInvoiceDocumentLocked = domainPolicy ? !!domainPolicy.isInvoiceLocked : hasValue(readFirst([tsfin, 'locked_by_invoice_id'], [mergedRow, 'locked_by_invoice_id']));
+  const isPaid = domainPolicy ? !!domainPolicy.isPaid : hasValue(readFirst([tsfin, 'paid_at_utc'], [mergedRow, 'paid_at_utc']));
+  const hasSegmentInvoiceDocumentLock = domainPolicy ? !!domainPolicy.isSegmentInvoiceLocked : !!(hasSegmentInvoiceLock(readFirst([tsfin, 'invoice_breakdown_json'], [details, 'invoice_breakdown_json'], [details, 'invoiceBreakdown'], [mergedRow, 'invoice_breakdown_json'])) || Number(readFirst([mergedRow, 'invoice_segments_locked'], [details, 'invoice_segments_locked'], [ctx, 'invoice_segments_locked']) || 0) > 0);
+  const isImportAuthoritative = domainPolicy ? !!domainPolicy.isOriginalImportAuthoritative : !!(readBool([ctx, 'is_import_authoritative'], [activeCtx, 'is_import_authoritative'], [mergedRow, 'is_import_authoritative']) === true || routeFamily === 'IMPORT_AUTHORITATIVE' || underlyingChannelFamily === 'IMPORT_AUTHORITATIVE');
+  const isSegmentOnlyContext = domainPolicy ? !!domainPolicy.isSegmentOnlyContext : !!(readBool([ctx, 'segment_only'], [activeCtx, 'segment_only'], [mergedRow, 'segment_only'], [details, 'segment_only']) === true || upper(readFirst([ctx, 'target_type'], [activeCtx, 'target_type'], [mergedRow, 'target_type']) || '') === 'TIMESHEET_SEGMENT' || hasValue(readFirst([ctx, 'segment_id'], [activeCtx, 'segment_id'], [mergedRow, 'segment_id'], [details, 'segment_id'], [ctx, 'segment_stable_key'], [activeCtx, 'segment_stable_key'], [mergedRow, 'segment_stable_key'])));
 
-  const rowLocked = readBool([ctx, 'locked'], [activeCtx, 'locked'], [row, 'locked']) === true;
-  const isInvoiceDocumentLocked = hasValue(readFirst([tsfin, 'locked_by_invoice_id'], [row, 'locked_by_invoice_id']));
-  const isPaid = hasValue(readFirst([tsfin, 'paid_at_utc'], [row, 'paid_at_utc']));
-  const hasSegmentInvoiceDocumentLock = hasSegmentInvoiceLock(readFirst([tsfin, 'invoice_breakdown_json'], [details, 'invoice_breakdown_json'], [details, 'invoiceBreakdown'], [row, 'invoice_breakdown_json']));
+  const backendCanManageEvidence = readBool([ctx, 'can_manage_evidence'], [activeCtx, 'can_manage_evidence'], [mergedRow, 'can_manage_evidence']);
+  const backendCanAddAdditionalManual = readBool([ctx, 'can_add_additional_manual'], [activeCtx, 'can_add_additional_manual'], [mergedRow, 'can_add_additional_manual']);
+  const backendCanUnprocess = readBool([ctx, 'can_unprocess'], [activeCtx, 'can_unprocess'], [mergedRow, 'can_unprocess']);
+  const canAuthoriseFlag = readBool([ctx, 'can_bulk_authorise'], [activeCtx, 'can_bulk_authorise'], [mergedRow, 'can_bulk_authorise']) === true;
+  const canUnauthoriseFlag = readBool([ctx, 'can_bulk_unauthorise'], [activeCtx, 'can_bulk_unauthorise'], [mergedRow, 'can_bulk_unauthorise']) === true;
 
-  const isImportAuthoritative = !!(
-    readBool([ctx, 'is_import_authoritative'], [activeCtx, 'is_import_authoritative'], [row, 'is_import_authoritative']) === true ||
-    routeFamily === 'IMPORT_AUTHORITATIVE' ||
-    underlyingChannelFamily === 'IMPORT_AUTHORITATIVE'
-  );
-
-  const isSegmentOnlyContext = !!(
-    readBool([ctx, 'segment_only'], [activeCtx, 'segment_only'], [row, 'segment_only'], [details, 'segment_only']) === true ||
-    upper(readFirst([ctx, 'target_type'], [activeCtx, 'target_type'], [row, 'target_type']) || '') === 'TIMESHEET_SEGMENT' ||
-    hasValue(readFirst([ctx, 'segment_id'], [activeCtx, 'segment_id'], [row, 'segment_id'], [details, 'segment_id']))
-  );
-
-  const backendCanEditTimesheetData = readBool([ctx, 'can_edit_timesheet_data'], [activeCtx, 'can_edit_timesheet_data'], [row, 'can_edit_timesheet_data']);
-  const backendCanManageEvidence = readBool([ctx, 'can_manage_evidence'], [activeCtx, 'can_manage_evidence'], [row, 'can_manage_evidence']);
-  const backendCanAddAdditionalManual = readBool([ctx, 'can_add_additional_manual'], [activeCtx, 'can_add_additional_manual'], [row, 'can_add_additional_manual']);
-  const backendCanUnprocess = readBool([ctx, 'can_unprocess'], [activeCtx, 'can_unprocess'], [row, 'can_unprocess']);
-  const canAuthorise = readBool([ctx, 'can_bulk_authorise'], [activeCtx, 'can_bulk_authorise'], [row, 'can_bulk_authorise']) === true;
-  const canUnauthorise = readBool([ctx, 'can_bulk_unauthorise'], [activeCtx, 'can_bulk_unauthorise'], [row, 'can_bulk_unauthorise']) === true;
-  const actionHardLocked = !!(
-    rowLocked ||
-    isPaid ||
-    isInvoiceDocumentLocked ||
-    hasSegmentInvoiceDocumentLock
-  );
-  const canUnauthoriseWhenUnlocked = !actionHardLocked;
-
-  const paymentScheduleLocked = !!(
-    isAuthorised ||
-    rowLocked ||
-    isPaid ||
-    isInvoiceDocumentLocked ||
-    hasSegmentInvoiceDocumentLock ||
-    isImportAuthoritative
-  );
+  const actionHardLocked = !!(rowLocked || isPaid || isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock);
+  const paymentScheduleLocked = !!(isAuthorised || actionHardLocked || isImportAuthoritative);
   const paymentScheduleLockReason = isImportAuthoritative
     ? 'import-authoritative'
     : (isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock)
@@ -110811,77 +112472,29 @@ function classifyBulkAuthoriseEditability(ctxInput) {
             ? 'authorised'
             : '';
 
-  const evidenceDocumentLocked = !!(isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock);
-  const evidenceLockReason = !hasRealTimesheet
-    ? 'missing-timesheet-id'
-    : isImportAuthoritative
-      ? 'import-authoritative'
-      : evidenceDocumentLocked
-        ? 'invoice/document-locked'
-        : (backendCanManageEvidence !== true)
-          ? 'backend-denied'
-          : '';
-  const canManageEvidence = !!(
-    hasRealTimesheet &&
-    !isImportAuthoritative &&
-    !evidenceDocumentLocked &&
-    backendCanManageEvidence === true
-  );
+  const canEditHoursSchedule = domainPolicy ? domainPolicy.canEditHoursSchedule === true : !!(!paymentScheduleLocked && isManual && !isQr && !isElectronic);
+  const canOpenExpenses = domainPolicy ? domainPolicy.canOpenExpenses === true : !!(hasRealTimesheet && !isSegmentOnlyContext);
+  const canEditExpenses = domainPolicy ? domainPolicy.canEditExpenses === true : !!(hasRealTimesheet && hasFinancialSnapshot && !paymentScheduleLocked && !isSegmentOnlyContext && (isQr || isManual || effectiveMode === 'MANUAL'));
+  const expensesReadOnly = domainPolicy ? domainPolicy.expensesReadOnly === true : !!(canOpenExpenses && !canEditExpenses);
+  const expensesDisabledReason = domainPolicy ? String(domainPolicy.expensesDisabledReason || '') : '';
+  const requiresAdditionalManualForExpenses = domainPolicy ? domainPolicy.requiresAdditionalManualForExpenses === true : false;
+  const canManageExpenseEvidence = domainPolicy ? domainPolicy.canManageExpenseEvidence === true : !!(hasRealTimesheet && !isImportAuthoritative && !isInvoiceDocumentLocked && !hasSegmentInvoiceDocumentLock && backendCanManageEvidence === true);
+  const hasProcessedExpenses = !!(typeof bulkAuthoriseHasProcessedExpensesValue === 'function' && bulkAuthoriseHasProcessedExpensesValue({ ...ctx, details, row: mergedRow, state: activeState, active_ctx: activeCtx }));
 
-  const manualNonQrEditable = !!(
-    !paymentScheduleLocked &&
-    !isImportAuthoritative &&
-    !isQr &&
-    !isElectronic &&
-    routeFamily === 'MANUAL_NON_QR' &&
-    (backendCanEditTimesheetData === true || (backendCanEditTimesheetData === null && base.manualNonQrEditable === true))
-  );
+  const expenseDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+    ? isTimesheetExpensesDraftDirty(activeState?.expensesDraft || activeCtx?.state?.expensesDraft || activeContext?.state?.expensesDraft || {}, activeState?.expensesBaseline || activeCtx?.state?.expensesBaseline || activeContext?.state?.expensesBaseline || {})
+    : { dirty: false };
+  const expensesDirty = !!(expenseDirtyResult && expenseDirtyResult.dirty === true);
+  const scheduleSaveAllowed = !!(!paymentScheduleLocked && canEditHoursSchedule && base.canSave === true);
+  const expensesSaveAllowed = !!(!isAuthorised && !actionHardLocked && expensesDirty && canEditExpenses);
 
-  const nonAuthorisedCanEditTimesheetData = manualNonQrEditable;
-  const nonAuthorisedCanSave = !!(!paymentScheduleLocked && base.canSave === true && nonAuthorisedCanEditTimesheetData);
-  const nonAuthorisedCanUnprocess = !!(!paymentScheduleLocked && backendCanUnprocess === true && base.canUnprocess === true && routeFamily === 'MANUAL_NON_QR');
-  const nonAuthorisedCanAddAdditionalManual = !!(
-    (
-      backendCanAddAdditionalManual === true ||
-      (backendCanAddAdditionalManual === null && base.canAddAdditionalManual === true)
-    )
-  );
+  const canAddAdditionalManual = domainPolicy
+    ? !!domainPolicy.canAddAdditionalManual
+    : (backendCanAddAdditionalManual === null ? !!base.canAddAdditionalManual : backendCanAddAdditionalManual === true);
+  const canManageEvidence = canManageExpenseEvidence;
+  const canUnprocess = !!(!paymentScheduleLocked && backendCanUnprocess === true && base.canUnprocess === true && isManual && !isQr && !isElectronic);
 
-  const legacyHoursFallback = manualNonQrEditable;
-  const legacyExpensesFallback = !!(
-    hasRealTimesheet &&
-    hasFinancialSnapshot &&
-    !isSegmentOnlyContext &&
-    !paymentScheduleLocked &&
-    (isQr || isManual || effectiveMode === 'MANUAL')
-  );
-  const hasProcessedExpenses = !!bulkAuthoriseHasProcessedExpensesValue({ ...ctx, details, row, state: activeState, active_ctx: activeCtx });
-  const legacyOpenFallback = !!(legacyExpensesFallback || hasProcessedExpenses);
-  const legacyExpensesReadOnlyFallback = !!(legacyOpenFallback && !legacyExpensesFallback);
-  const legacyCanManageEvidenceFallback = canManageEvidence;
-  const canEditHoursSchedule = hasSharedDomainPolicy
-    ? domainPolicy.canEditHoursSchedule === true
-    : legacyHoursFallback;
-  const canEditExpenses = hasSharedDomainPolicy
-    ? domainPolicy.canEditExpenses === true
-    : legacyExpensesFallback;
-  const canOpenExpenses = hasSharedDomainPolicy
-    ? domainPolicy.canOpenExpenses === true
-    : legacyOpenFallback;
-  const expensesReadOnly = hasSharedDomainPolicy
-    ? domainPolicy.expensesReadOnly === true
-    : legacyExpensesReadOnlyFallback;
-  const expensesDisabledReason = hasSharedDomainPolicy
-    ? String(domainPolicy.expensesDisabledReason || '')
-    : '';
-  const requiresAdditionalManualForExpenses = hasSharedDomainPolicy
-    ? domainPolicy.requiresAdditionalManualForExpenses === true
-    : false;
-  const canManageExpenseEvidence = hasSharedDomainPolicy
-    ? domainPolicy.canManageExpenseEvidence === true
-    : legacyCanManageEvidenceFallback;
-
-  const out = {
+  return {
     ...base,
     sheetScope: sheetScope || base.sheetScope,
     effectiveMode: effectiveMode || base.effectiveMode,
@@ -110898,72 +112511,38 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     hasAnyLockBlocker: paymentScheduleLocked,
     paymentScheduleLocked,
     paymentScheduleLockReason,
-    evidenceDocumentLocked,
-    evidenceLockReason,
+    evidenceDocumentLocked: !!(isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock),
+    evidenceLockReason: !hasRealTimesheet
+      ? 'missing-timesheet-id'
+      : isImportAuthoritative
+        ? 'import-authoritative'
+        : (isInvoiceDocumentLocked || hasSegmentInvoiceDocumentLock)
+          ? 'invoice/document-locked'
+          : (backendCanManageEvidence !== true && !canManageExpenseEvidence)
+            ? 'backend-denied'
+            : '',
     tsId,
     weekId,
     canProcess: false,
-    canAuthorise: !isAuthorised && !actionHardLocked && canAuthorise,
-    canUnauthorise: isAuthorised && canUnauthoriseWhenUnlocked && canUnauthorise,
+    canAuthorise: !isAuthorised && !actionHardLocked && canAuthoriseFlag,
+    canUnauthorise: isAuthorised && !actionHardLocked && canUnauthoriseFlag,
     canEditHoursSchedule,
-    canEditTimesheetData: nonAuthorisedCanEditTimesheetData,
-    canSave: nonAuthorisedCanSave,
+    canEditTimesheetData: canEditHoursSchedule,
+    canSave: !!(scheduleSaveAllowed || expensesSaveAllowed),
     hasProcessedExpenses,
-    canOpenExpenses,
+    canOpenExpenses: !!(canOpenExpenses || hasProcessedExpenses),
     canEditExpenses,
-    expensesReadOnly,
+    expensesReadOnly: !!(expensesReadOnly || (hasProcessedExpenses && !canEditExpenses)),
     expensesDisabledReason,
     requiresAdditionalManualForExpenses,
     canManageExpenseEvidence,
     canManageEvidence,
-    canUnprocess: nonAuthorisedCanUnprocess,
-    canAddAdditionalManual: nonAuthorisedCanAddAdditionalManual,
-    reviewOnly: !!(base.reviewOnly || paymentScheduleLocked || !nonAuthorisedCanEditTimesheetData),
-    isAuthorised
+    canUnprocess,
+    canAddAdditionalManual,
+    reviewOnly: !!(base.reviewOnly || paymentScheduleLocked || (!canEditHoursSchedule && !canEditExpenses)),
+    isAuthorised,
+    isSegmentOnlyContext
   };
-
-  if (isAuthorised) {
-    out.canAuthorise = false;
-    out.canSave = false;
-    out.canOpenExpenses = !!hasProcessedExpenses;
-    out.canEditExpenses = false;
-    out.expensesReadOnly = !!hasProcessedExpenses;
-    out.canManageEvidence = canManageEvidence;
-    out.canUnprocess = false;
-    out.canSwitchToManual = false;
-    out.canSwitchPlannedWeekToElectronic = false;
-    out.canRevertToElectronic = false;
-    out.canAllowQrAgain = false;
-    out.canAllowElectronicAgain = false;
-    out.canConvertQrToManualOnly = false;
-    out.canAddAdditionalManual = (
-      backendCanAddAdditionalManual === null
-        ? !!base.canAddAdditionalManual
-        : (backendCanAddAdditionalManual === true)
-    );
-    out.canUnauthorise = canUnauthorise === true && isAuthorised && canUnauthoriseWhenUnlocked;
-    out.canEditTimesheetData = false;
-    out.reviewOnly = true;
-  }
-
-  if (paymentScheduleLocked || isImportAuthoritative) {
-    out.canSave = false;
-    out.canOpenExpenses = !!hasProcessedExpenses;
-    out.canEditExpenses = false;
-    out.expensesReadOnly = !!hasProcessedExpenses;
-    out.canManageEvidence = canManageEvidence;
-    out.canUnprocess = false;
-    out.canSwitchToManual = false;
-    out.canSwitchPlannedWeekToElectronic = false;
-    out.canRevertToElectronic = false;
-    out.canAllowQrAgain = false;
-    out.canAllowElectronicAgain = false;
-    out.canConvertQrToManualOnly = false;
-    out.canEditTimesheetData = false;
-    out.reviewOnly = true;
-  }
-
-  return out;
 }
 
 function bindBulkAuthoriseShellControls(state) {
@@ -116015,7 +117594,6 @@ function renderBulkProcessPreviewPane(state) {
   `);
 }
 
-
 function classifyBulkProcessEditability(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const row = (ctx.row && typeof ctx.row === 'object') ? ctx.row : {};
@@ -116024,25 +117602,68 @@ function classifyBulkProcessEditability(ctxInput) {
   const tsfin = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
   const cw = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : {};
   const actionFlags = (details.action_flags && typeof details.action_flags === 'object') ? details.action_flags : {};
+  const stateCtx = (ctx.state && typeof ctx.state === 'object') ? ctx.state : {};
 
   const upper = (v) => String(v == null ? '' : v).trim().toUpperCase();
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const hasValue = (v) => trimStr(v) !== '';
+  const boolish = (v) => {
+    if (v === true) return true;
+    if (v === false) return false;
+    if (v == null) return false;
+    const s = String(v).trim().toLowerCase();
+    if (!s) return false;
+    if (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on') return true;
+    if (s === 'false' || s === '0' || s === 'no' || s === 'n' || s === 'off') return false;
+    return !!v;
+  };
   const readBool = (...entries) => {
     for (const entry of entries) {
       const obj = Array.isArray(entry) ? entry[0] : null;
       const key = Array.isArray(entry) ? entry[1] : '';
       if (!obj || typeof obj !== 'object' || !key) continue;
       if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
-      if (typeof obj[key] === 'boolean') return obj[key];
-      return !!obj[key];
+      return boolish(obj[key]);
     }
     return null;
+  };
+  const readFirst = (...entries) => {
+    for (const entry of entries) {
+      const obj = Array.isArray(entry) ? entry[0] : null;
+      const key = Array.isArray(entry) ? entry[1] : '';
+      if (!obj || typeof obj !== 'object' || !key) continue;
+      if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+      return obj[key];
+    }
+    return undefined;
+  };
+  const parseMaybeJson = (value) => {
+    if (value == null) return null;
+    if (Array.isArray(value) || (value && typeof value === 'object')) {
+      try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+    }
+    if (typeof value !== 'string') return null;
+    const raw = value.trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return (parsed && typeof parsed === 'object') ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const hasSegmentInvoiceLock = (value) => {
+    const invoiceBreakdown = parseMaybeJson(value);
+    if (!invoiceBreakdown || typeof invoiceBreakdown !== 'object') return false;
+    const segments = Array.isArray(invoiceBreakdown.segments) ? invoiceBreakdown.segments : [];
+    return segments.some((segment) => hasValue(segment?.invoice_locked_invoice_id));
   };
 
   const sheetScope = upper(details.sheet_scope || row.sheet_scope || ts.sheet_scope || '');
   const rawSummaryStage = upper(row.summary_stage || row.processing_status || tsfin.processing_status || '');
-  const routeFamily = upper(ctx.route_family || row.route_family || '');
-  const routeSubfamily = upper(ctx.route_subfamily || row.route_subfamily || '');
-  const underlyingChannelFamily = upper(ctx.underlying_channel_family || row.underlying_channel_family || '');
+  const routeFamily = upper(ctx.route_family || row.route_family || actionFlags.route_family || '');
+  const routeSubfamily = upper(ctx.route_subfamily || row.route_subfamily || actionFlags.route_subfamily || '');
+  const underlyingChannelFamily = upper(ctx.underlying_channel_family || row.underlying_channel_family || actionFlags.underlying_channel_family || '');
 
   const weeklyMode = upper(
     cw.submission_mode_snapshot ||
@@ -116062,8 +117683,8 @@ function classifyBulkProcessEditability(ctxInput) {
   );
 
   const effectiveMode = (sheetScope === 'WEEKLY') ? weeklyMode : dailyMode;
-  const tsId = String(ts.timesheet_id || row.timesheet_id || details.current_timesheet_id || '').trim();
-  const weekId = String(details.contract_week_id || cw.id || row.contract_week_id || '').trim();
+  const tsId = trimStr(ts.timesheet_id || row.timesheet_id || row.current_timesheet_id || details.current_timesheet_id || '');
+  const weekId = trimStr(details.contract_week_id || cw.id || row.contract_week_id || '');
 
   const qrStatus = upper(details.qr_status || ts.qr_status || row.qr_status || '');
   const isQr =
@@ -116071,34 +117692,46 @@ function classifyBulkProcessEditability(ctxInput) {
     qrStatus === 'USED' ||
     qrStatus === 'EXPIRED' ||
     qrStatus === 'CANCELLED' ||
-    !!row?.is_qr ||
-    !!details?.is_qr ||
+    boolish(row?.is_qr) ||
+    boolish(details?.is_qr) ||
     routeFamily === 'QR' ||
     routeSubfamily === 'QR';
 
   const isElectronic = effectiveMode === 'ELECTRONIC' || routeFamily === 'ELECTRONIC' || underlyingChannelFamily === 'ELECTRONIC';
   const isManual = effectiveMode === 'MANUAL' || routeFamily === 'MANUAL_NON_QR';
 
-  const isImportAuthoritativeCurrent =
-    !isManual &&
+  const isImportAuthoritativeCurrent = !!(
+    readBool([ctx, 'is_import_authoritative'], [row, 'is_import_authoritative'], [details, 'is_import_authoritative'], [actionFlags, 'is_import_authoritative']) === true ||
+    routeFamily === 'IMPORT_AUTHORITATIVE' ||
+    underlyingChannelFamily === 'IMPORT_AUTHORITATIVE'
+  );
+
+  const isSegmentInvoiceLocked = !!(
+    Number(row.invoice_segments_locked || details.invoice_segments_locked || tsfin.invoice_segments_locked || 0) > 0 ||
+    hasSegmentInvoiceLock(tsfin.invoice_breakdown_json || details.invoice_breakdown_json || details.invoiceBreakdown || row.invoice_breakdown_json || null)
+  );
+  const isLockedByInvoice = !!(tsfin.locked_by_invoice_id || row.locked_by_invoice_id || details.locked_by_invoice_id || isSegmentInvoiceLocked);
+  const isPaid = !!(tsfin.paid_at_utc || row.paid_at_utc || details.paid_at_utc);
+  const isRevoked = !!(hasValue(ts.revoked_at) || hasValue(row.revoked_at) || hasValue(details.revoked_at));
+  const isAuthorisedBlocked = !!(
+    !isRevoked &&
     (
-      !!ctx.is_import_authoritative ||
-      !!row.is_import_authoritative ||
-      routeFamily === 'IMPORT_AUTHORITATIVE' ||
-      underlyingChannelFamily === 'IMPORT_AUTHORITATIVE'
-    );
-
-  const isLockedByInvoice = !!(tsfin.locked_by_invoice_id || row.locked_by_invoice_id);
-  const isPaid = !!(tsfin.paid_at_utc || row.paid_at_utc);
-  const isAuthorisedBlocked = !!(ts.authorised_at_server || row.authorised_at_server);
+      readBool([row, 'is_authorised'], [details, 'is_authorised'], [actionFlags, 'is_authorised']) === true ||
+      hasValue(ts.authorised_at_server) ||
+      hasValue(row.authorised_at_server) ||
+      hasValue(ts.authorised_at_utc) ||
+      hasValue(row.authorised_at_utc)
+    )
+  );
   const hasAnyLockBlocker = isLockedByInvoice || isPaid;
-  const isAdjustment = !!(ts.is_adjustment || cw.is_adjustment || row.is_adjustment);
+  const isAdjustment = !!(ts.is_adjustment || cw.is_adjustment || row.is_adjustment || actionFlags.is_adjustment);
 
-  const backendCanSave = readBool([row, 'can_save'], [details, 'can_save'], [actionFlags, 'can_save']);
-  const backendCanProcess = readBool([row, 'can_process'], [details, 'can_process'], [actionFlags, 'can_process']);
-  const backendCanUnprocess = readBool([row, 'can_unprocess'], [details, 'can_unprocess'], [actionFlags, 'can_unprocess']);
-  const backendCanEditTimesheetData = readBool([row, 'can_edit_timesheet_data'], [details, 'can_edit_timesheet_data'], [actionFlags, 'can_edit_timesheet_data']);
-  const reviewOnly = readBool([row, 'review_only'], [details, 'review_only'], [actionFlags, 'review_only']);
+  const backendCanSave = readBool([row, 'can_save'], [details, 'can_save'], [actionFlags, 'can_save'], [ctx, 'can_save']);
+  const backendCanProcess = readBool([row, 'can_process'], [details, 'can_process'], [actionFlags, 'can_process'], [ctx, 'can_process']);
+  const backendCanUnprocess = readBool([row, 'can_unprocess'], [details, 'can_unprocess'], [actionFlags, 'can_unprocess'], [ctx, 'can_unprocess']);
+  const backendCanEditTimesheetData = readBool([row, 'can_edit_timesheet_data'], [details, 'can_edit_timesheet_data'], [actionFlags, 'can_edit_timesheet_data'], [ctx, 'can_edit_timesheet_data']);
+  const backendCanAddAdditionalManual = readBool([row, 'can_add_additional_manual'], [details, 'can_add_additional_manual'], [actionFlags, 'can_add_additional_manual'], [ctx, 'can_add_additional_manual']);
+  const reviewOnly = readBool([row, 'review_only'], [details, 'review_only'], [actionFlags, 'review_only'], [ctx, 'review_only']);
   const reviewOnlyEffective = reviewOnly === true || hasAnyLockBlocker || isAuthorisedBlocked;
 
   const manualNonQrEditable =
@@ -116125,7 +117758,7 @@ function classifyBulkProcessEditability(ctxInput) {
         financial: details.financial || details.financial_snapshot || row.financial || row.financial_snapshot || {},
         contract_week: cw,
         contract_week_id: details.contract_week_id || cw.id || row.contract_week_id || null,
-        state: ctx.state || {},
+        state: stateCtx,
         ctx,
         active_ctx: ctx.active_ctx || null,
         active_context: ctx.active_context || null,
@@ -116144,9 +117777,48 @@ function classifyBulkProcessEditability(ctxInput) {
   const requiresAdditionalManualForExpenses = hasSharedDomainPolicy ? !!domainPolicy.requiresAdditionalManualForExpenses : false;
   const canManageExpenseEvidence = hasSharedDomainPolicy ? !!domainPolicy.canManageExpenseEvidence : true;
 
-  const canSave = backendCanSave !== false && !!(domainPolicy.canSave || canEditTimesheetData || canEditExpenses || manualNonQrEditable);
-  const canProcess = !isAuthorisedBlocked && !hasAnyLockBlocker && summaryStage === 'UNPROCESSED' && backendCanProcess !== false && !!(domainPolicy.canProcess ?? manualNonQrEditable);
-  const canUnprocess = manualNonQrEditable && !!tsId && backendCanUnprocess !== false;
+  const expenseContainers = [stateCtx, ctx, row, details].filter((value) => value && typeof value === 'object');
+  const readExpenseState = (keys) => {
+    const list = Array.isArray(keys) ? keys : [keys];
+    for (const container of expenseContainers) {
+      for (const key of list) {
+        if (!Object.prototype.hasOwnProperty.call(container, key)) continue;
+        return container[key];
+      }
+    }
+    return undefined;
+  };
+  const expensesDraft = readExpenseState(['expensesDraft', 'activeExpensesDraft', 'stagedExpensesDraft']) || {};
+  const expensesBaseline = readExpenseState(['expensesBaseline', 'activeExpensesBaseline', 'stagedExpensesBaseline']) || {};
+  const expenseMarkerDirty = !!(
+    readBool([stateCtx, 'expensesDirty'], [stateCtx, 'expensesDraftDirty'], [stateCtx, 'hasStagedExpensesDirty'], [stateCtx, 'stagedExpensesDirty'], [stateCtx, 'expenseDirtyMarker'], [ctx, 'expensesDirty'], [ctx, 'expensesDraftDirty'], [ctx, 'hasStagedExpensesDirty'], [ctx, 'stagedExpensesDirty'], [ctx, 'expenseDirtyMarker']) === true
+  );
+  const expenseDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+    ? isTimesheetExpensesDraftDirty(expensesDraft, expensesBaseline)
+    : { dirty: false };
+  const expensesMileageDirty = !!(expenseMarkerDirty || expenseDirtyResult?.dirty === true);
+
+  const canSave = backendCanSave !== false && !!(
+    (expensesMileageDirty && canEditExpenses) ||
+    domainPolicy.canSave === true ||
+    canEditTimesheetData ||
+    manualNonQrEditable
+  );
+
+  const unprocessedLike = summaryStage === 'UNPROCESSED' || summaryStage === 'UNPROCESSED_DAILY' || summaryStage === 'MANUAL_UNPROCESSED';
+  const dailyManualProcessTarget = !!(sheetScope === 'DAILY' && isManual && !!tsId);
+  const weeklyManualProcessTarget = !!(sheetScope === 'WEEKLY' && isManual && (!!tsId || !!weekId));
+  const domainCanProcess = (typeof domainPolicy.canProcess === 'boolean') ? domainPolicy.canProcess : null;
+  const canProcess = !!(
+    !isAuthorisedBlocked &&
+    !hasAnyLockBlocker &&
+    !reviewOnlyEffective &&
+    backendCanProcess !== false &&
+    unprocessedLike &&
+    (dailyManualProcessTarget || weeklyManualProcessTarget) &&
+    (domainCanProcess !== false)
+  );
+  const canUnprocess = !!((domainPolicy.canUnprocess === true || manualNonQrEditable) && !!tsId && backendCanUnprocess !== false);
 
   const routeActionBaseAllowed =
     !isAdjustment &&
@@ -116194,18 +117866,28 @@ function classifyBulkProcessEditability(ctxInput) {
     statusValue === 'CANCELLED' ||
     !!(row.cancelled_at_utc || details.cancelled_at_utc || cw.cancelled_at_utc || ts.cancelled_at_utc);
 
-  const canAddAdditionalManual =
+  const originalProtectedSourceNeedsAdditionalManual = !!(
+    requiresAdditionalManualForExpenses ||
+    domainPolicy.isOriginalImportAuthoritative === true ||
+    domainPolicy.isNoTimesheetRequiredOriginal === true ||
+    ((isImportAuthoritativeCurrent || boolish(row.client_no_timesheet_required) || boolish(details.client_no_timesheet_required) || boolish(row.no_timesheet_required) || boolish(details.no_timesheet_required)) && !isAdjustment)
+  );
+
+  const canAddAdditionalManual = !!(
     sheetScope === 'WEEKLY' &&
     !!weekId &&
-    manualNonQrEditable &&
     !isCancelled &&
-    !isImportAuthoritativeCurrent &&
     !hasAnyLockBlocker &&
     !isAuthorisedBlocked &&
     !reviewOnlyEffective &&
     !isAdjustment &&
-    !isQr &&
-    !isElectronic;
+    (
+      backendCanAddAdditionalManual === true ||
+      domainPolicy.canAddAdditionalManual === true ||
+      originalProtectedSourceNeedsAdditionalManual ||
+      (manualNonQrEditable && !isQr && !isElectronic)
+    )
+  );
 
   return {
     sheetScope,
@@ -116215,12 +117897,15 @@ function classifyBulkProcessEditability(ctxInput) {
     weeklyMode,
     dailyMode,
     routeFamily,
+    routeSubfamily,
+    underlyingChannelFamily,
     isQr,
     isElectronic,
     isManual,
     isImportAuthoritativeCurrent,
     isLockedByInvoice,
     isPaid,
+    isSegmentInvoiceLocked,
     isAuthorisedBlocked,
     hasAnyLockBlocker,
     tsId,
@@ -116231,6 +117916,7 @@ function classifyBulkProcessEditability(ctxInput) {
     backendCanProcess,
     backendCanUnprocess,
     backendCanEditTimesheetData,
+    backendCanAddAdditionalManual,
     reviewOnly: reviewOnlyEffective,
     manualNonQrEditable,
     canEditHoursSchedule,
@@ -116292,6 +117978,13 @@ function bindBulkProcessManualEditor(state) {
   };
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const isActionBusy = () => !!(st.loading || st.saving || st.processing || st.unprocessing);
+  const getCurrentBulkProcessEditability = () => {
+    try {
+      return classifyBulkProcessEditability(st.active_ctx || st.active_context || {});
+    } catch {
+      return {};
+    }
+  };
   const isBulkAuthoriseReadOnlySchedule = () => {
     const activeCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
     const stateCtx = (activeCtx.state && typeof activeCtx.state === 'object') ? activeCtx.state : {};
@@ -116299,8 +117992,13 @@ function bindBulkProcessManualEditor(state) {
     if (!inBulkAuthorise) return false;
     return !!(stateCtx.bulkAuthoriseForceReadOnly || stateCtx.reviewOnly || activeCtx.review_only || activeCtx.is_authorised);
   };
+  const isScheduleMutationReadOnly = () => {
+    if (isBulkAuthoriseReadOnlySchedule()) return true;
+    const editability = getCurrentBulkProcessEditability();
+    return editability.canEditHoursSchedule !== true;
+  };
   const applyBulkAuthoriseScheduleReadOnly = () => {
-    if (!isBulkAuthoriseReadOnlySchedule()) return;
+    if (!isScheduleMutationReadOnly()) return;
     const controls = root.querySelectorAll([
       '[data-weekly-field]',
       '[data-daily-field]',
@@ -116620,10 +118318,15 @@ function bindBulkProcessManualEditor(state) {
       dirtyNow &&
       !busyNow &&
       !validationBlocked &&
-      !isBulkAuthoriseReadOnlySchedule() &&
-      (editability.canSave !== false) &&
-      (editability.canEditTimesheetData !== false) &&
-      (editability.manualNonQrEditable !== false)
+      (
+        (editability.canEditExpenses === true && editability.canSave !== false) ||
+        (
+          !isBulkAuthoriseReadOnlySchedule() &&
+          (editability.canSave !== false) &&
+          (editability.canEditTimesheetData !== false) &&
+          (editability.canEditHoursSchedule !== false)
+        )
+      )
     );
     const applyButtonEnabledState = (id, enabled) => {
       const btn = document.getElementById(id);
@@ -116782,7 +118485,7 @@ function bindBulkProcessManualEditor(state) {
       const scheduleControl = !!(target && target.matches && target.matches(
         '[data-weekly-field],[data-daily-field],[data-ts-daily-field],input[name^="wl_"],input[name^="ts_day_"],input[name*="break"],input[name*="start"],input[name*="end"],input[name*="hours"],input[name*="date"],input[name*="ref"],input[data-extra-code]'
       ));
-      if (scheduleControl && isBulkAuthoriseReadOnlySchedule()) return;
+      if (scheduleControl && isScheduleMutationReadOnly()) return;
       const isSchedule = !!(target && target.matches && target.matches(
         '[data-weekly-field="start"],[data-weekly-field="end"],[data-daily-field="start"],[data-daily-field="end"],[data-ts-daily-field="start"],[data-ts-daily-field="end"],input[name^="wl_start_"],input[name^="wl_end_"]'
       ));
@@ -116813,7 +118516,7 @@ function bindBulkProcessManualEditor(state) {
       if (!btn) return;
       const act = String(btn.getAttribute('data-ts-action') || '').trim().toLowerCase();
       if (!act) return;
-      if (isBulkAuthoriseReadOnlySchedule() && (
+      if (isScheduleMutationReadOnly() && (
         act === 'extra-shift-add' ||
         act === 'extra-shift-remove' ||
         act === 'extra-break-add' ||
@@ -117176,7 +118879,7 @@ function bindBulkProcessManualEditor(state) {
       ? getBulkAuthoriseManualDirty()
       : ((typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty);
     const busyNow = isActionBusy();
-    const canSaveNow = !!(editability.canSave && dirtyNow && !busyNow);
+    const canSaveNow = !!((editability.canSave || editability.canEditExpenses) && dirtyNow && !busyNow);
     const canProcessNow = !!(editability.canProcess && !busyNow);
     const canUnprocessNow = !!(editability.canUnprocess && !busyNow);
 
@@ -117608,7 +119311,7 @@ function bindBulkProcessManualEditor(state) {
   const editability = classifyBulkProcessEditability(st.active_ctx || {});
   const scope = String(editability?.sheetScope || '').toUpperCase();
   const mode = String(editability?.effectiveMode || '').toUpperCase();
-  const canEditDaily = (scope === 'DAILY' && mode === 'MANUAL' && !!editability?.manualNonQrEditable && !isBulkAuthoriseReadOnlySchedule());
+  const canEditDaily = (scope === 'DAILY' && mode === 'MANUAL' && editability?.canEditHoursSchedule === true && !isScheduleMutationReadOnly());
   const manualEditorBindReason = (() => {
     if (isActionBusy()) return 'status_patch';
     const hints = (st.__last_bulk_patch_hints && typeof st.__last_bulk_patch_hints === 'object') ? st.__last_bulk_patch_hints : {};
@@ -117617,26 +119320,28 @@ function bindBulkProcessManualEditor(state) {
     return 'row_click';
   })();
 
-  bindDailyManualEditorLive({
-    root,
-    stateObj: st.active_ctx?.state || {},
-    canEdit: canEditDaily,
-    suppressInitialPreview: true,
-    suppressProgrammaticPreview: true,
-    bindReason: manualEditorBindReason,
-    onDirty: () => {
-      markManualEditorDirty('manual-editor-daily-input', {
-        trace_source: 'bindBulkProcessManualEditor.daily',
-        dirty_source: 'daily schedule field change'
-      });
-      syncPrimaryActionButtonStates();
-    },
-    onAfterApply: () => {
-      syncPrimaryActionButtonStates();
-    }
-  });
+  if (canEditDaily) {
+    bindDailyManualEditorLive({
+      root,
+      stateObj: st.active_ctx?.state || {},
+      canEdit: true,
+      suppressInitialPreview: true,
+      suppressProgrammaticPreview: true,
+      bindReason: manualEditorBindReason,
+      onDirty: () => {
+        markManualEditorDirty('manual-editor-daily-input', {
+          trace_source: 'bindBulkProcessManualEditor.daily',
+          dirty_source: 'daily schedule field change'
+        });
+        syncPrimaryActionButtonStates();
+      },
+      onAfterApply: () => {
+        syncPrimaryActionButtonStates();
+      }
+    });
+  }
 
-  const isWeeklyLiveEditable = (scope === 'WEEKLY' && mode === 'MANUAL' && !!editability?.manualNonQrEditable);
+  const isWeeklyLiveEditable = (scope === 'WEEKLY' && mode === 'MANUAL' && editability?.canEditHoursSchedule === true && !isScheduleMutationReadOnly());
   if (isWeeklyLiveEditable) {
     const fmt = (v) => Number.isFinite(Number(v)) ? `£${(Math.round(Number(v) * 100) / 100).toFixed(2)}` : '—';
     const getCtxRefs = () => {
@@ -128596,7 +130301,6 @@ async function rerenderBulkProcessWorkbench(state, logPrefix) {
   }
 }
 
-
 async function handleBulkProcessSave(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][SAVE]');
   GC('handleBulkProcessSave');
@@ -128622,11 +130326,6 @@ async function handleBulkProcessSave(state) {
 
   const editability = classifyBulkProcessEditability(st.active_ctx || {});
   const dirtyNow = (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty;
-
-  if (!editability.canSave || !dirtyNow) {
-    GE();
-    return { ok: false };
-  }
 
   const deep = (v) => {
     try { return JSON.parse(JSON.stringify(v)); } catch { return v; }
@@ -129044,14 +130743,9 @@ async function handleBulkProcessSave(state) {
     const isDailyManualContext = (sheetScope === 'DAILY' && subMode === 'MANUAL' && !!tsId);
 
     const currentWeeklyScheduleBaseline = (() => {
-      const src =
-        tsId
-          ? ts.actual_schedule_json
-          : (
-              details.contract_week
-                ? (details.contract_week.planned_schedule_json != null ? details.contract_week.planned_schedule_json : details.contract_week.std_schedule_json)
-                : null
-            );
+      const src = tsId
+        ? ts.actual_schedule_json
+        : (details.contract_week ? details.contract_week.planned_schedule_json : null);
       if (src == null) return null;
       if (Array.isArray(src) || typeof src === 'object') return src;
       if (typeof src === 'string') {
@@ -129137,7 +130831,15 @@ async function handleBulkProcessSave(state) {
       return out;
     })();
 
+    const hasExplicitAdditionalRatesDraft = !!(
+      Object.prototype.hasOwnProperty.call(stateCtx || {}, 'additionalRates') &&
+      stateCtx.additionalRates &&
+      typeof stateCtx.additionalRates === 'object' &&
+      !Array.isArray(stateCtx.additionalRates)
+    );
+
     const stagedExtrasWeek = (() => {
+      if (!hasExplicitAdditionalRatesDraft) return currentExtrasWeek;
       const src = (stateCtx.additionalRates && typeof stateCtx.additionalRates === 'object') ? stateCtx.additionalRates : {};
       const out = {};
       for (const [k, v] of Object.entries(src)) {
@@ -129150,6 +130852,7 @@ async function handleBulkProcessSave(state) {
     })();
 
     const stagedExtrasPerDay = (() => {
+      if (!hasExplicitAdditionalRatesDraft) return currentExtrasPerDay;
       const src = (stateCtx.additionalRates && typeof stateCtx.additionalRates === 'object') ? stateCtx.additionalRates : {};
       const out = {};
       for (const [k, v] of Object.entries(src)) {
@@ -129171,6 +130874,7 @@ async function handleBulkProcessSave(state) {
 
     const extrasChangedWeekly =
       isWeeklyManualContext &&
+      hasExplicitAdditionalRatesDraft &&
       (
         stableStringify(currentExtrasWeek) !== stableStringify(stagedExtrasWeek) ||
         stableStringify(currentExtrasPerDay) !== stableStringify(stagedExtrasPerDay)
@@ -129201,21 +130905,19 @@ async function handleBulkProcessSave(state) {
     const currentDailyScheduleForCompare = normaliseDailyScheduleForCompare(
       buildCurrentDailyScheduleBaseline()
     );
+    const hasExplicitDailyScheduleDraft = !!(
+      Object.prototype.hasOwnProperty.call(stateCtx || {}, 'schedule') &&
+      stateCtx.schedule != null
+    );
     const dailyScheduleChanged = !!(
       isDailyManualContext &&
+      hasExplicitDailyScheduleDraft &&
       (
-        (
-          typeof deepEqualJson === 'function'
-            ? !deepEqualJson(stagedDailyScheduleForCompare, currentDailyScheduleForCompare)
-            : stableStringify(stagedDailyScheduleForCompare || null) !== stableStringify(currentDailyScheduleForCompare || null)
-        ) ||
-        referenceChanged
+        typeof deepEqualJson === 'function'
+          ? !deepEqualJson(stagedDailyScheduleForCompare, currentDailyScheduleForCompare)
+          : stableStringify(stagedDailyScheduleForCompare || null) !== stableStringify(currentDailyScheduleForCompare || null)
       )
     );
-
-    if (isWeeklyManualContext && !weekId) {
-      throw new Error('contract_week_id missing; cannot save weekly row.');
-    }
 
     const weeklyScheduleDirtyAttempt = !!(scheduleChangedWeekly || extrasChangedWeekly);
     const hoursScheduleDirtyAttempt = !!(weeklyScheduleDirtyAttempt || dailyScheduleChanged);
@@ -129245,7 +130947,9 @@ async function handleBulkProcessSave(state) {
       GE();
       return { ok: false, error: 'EXPENSES_EDIT_BLOCKED', message: st.error_text, evidenceRequired: false };
     }
-    if (expensesChanged && !actualTimesheetId) {
+    const plannedManualDraftExpenseSave = !!(expensesChanged && isPlannedWeeklyWithoutTs && !actualTimesheetId && !!weekId);
+
+    if (expensesChanged && !actualTimesheetId && !plannedManualDraftExpenseSave) {
       st.saving = false;
       st.error_text = 'A real current timesheet is required before saving staged expenses.';
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
@@ -129253,7 +130957,7 @@ async function handleBulkProcessSave(state) {
       GE();
       return { ok: false, error: 'TIMESHEET_ID_REQUIRED', message: st.error_text, evidenceRequired: false };
     }
-    if (expensesChanged && typeof commitTimesheetExpensesMileageDraft !== 'function') {
+    if (expensesChanged && !plannedManualDraftExpenseSave && typeof commitTimesheetExpensesMileageDraft !== 'function') {
       st.saving = false;
       st.error_text = 'Unable to save expenses right now.';
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
@@ -129271,27 +130975,52 @@ async function handleBulkProcessSave(state) {
       return { ok: false, error: 'HOURS_EDIT_BLOCKED', message: st.error_text, evidenceRequired: false };
     }
 
+    if (!expensesChanged && !nonExpenseDirty) {
+      st.saving = false;
+      st.__suppress_dirty_marking = false;
+      GE();
+      return { ok: false, no_changes: true };
+    }
+
+    if (!editability.canSave && !(expensesChanged && editability.canEditExpenses === true) && !plannedManualDraftExpenseSave) {
+      st.saving = false;
+      st.error_text = 'This row cannot currently be saved.';
+      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
+      st.__suppress_dirty_marking = false;
+      GE();
+      return { ok: false, error: 'SAVE_BLOCKED', message: st.error_text, evidenceRequired: false };
+    }
+
+    if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly || plannedManualDraftExpenseSave) && !weekId) {
+      throw new Error('contract_week_id missing; cannot save weekly row.');
+    }
+
     let saveResult = null;
 
-    if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly)) {
+    if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly || plannedManualDraftExpenseSave)) {
       if (isPlannedWeeklyWithoutTs) {
-        saveResult = await contractWeekManualDraftUpsert(String(weekId), {
-          planned_schedule_json: Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [],
-          additional_units_week: { ...(stagedExtrasWeek || {}) },
-          additional_units_per_day: { ...(stagedExtrasPerDay || {}) },
-          expenses_draft: deep(stagedExpenses),
+        const plannedDraftPayload = {
+          planned_schedule_json: scheduleChangedWeekly
+            ? (Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [])
+            : (Array.isArray(currentWeeklyScheduleBaseline) ? currentWeeklyScheduleBaseline : []),
+          additional_units_week: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasWeek || {}) } : { ...(currentExtrasWeek || {}) },
+          additional_units_per_day: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasPerDay || {}) } : { ...(currentExtrasPerDay || {}) },
           bulk_process: true,
           return_bulk_patch: true,
           context: 'bulk_process',
           expected_row_signature: activeRowSignature || null,
           row_signature: activeRowSignature || null
-        });
+        };
+        if (expensesChanged) plannedDraftPayload.expenses_draft = deep(stagedExpenses);
+        saveResult = await contractWeekManualDraftUpsert(String(weekId), plannedDraftPayload);
       } else {
         const payload = {
           expected_timesheet_id: details.current_timesheet_id || ts.timesheet_id || tsId || null,
-          actual_schedule_json: Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [],
-          additional_units_week: { ...(stagedExtrasWeek || {}) },
-          additional_units_per_day: { ...(stagedExtrasPerDay || {}) },
+          actual_schedule_json: scheduleChangedWeekly
+            ? (Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [])
+            : (Array.isArray(currentWeeklyScheduleBaseline) ? currentWeeklyScheduleBaseline : []),
+          additional_units_week: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasWeek || {}) } : { ...(currentExtrasWeek || {}) },
+          additional_units_per_day: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasPerDay || {}) } : { ...(currentExtrasPerDay || {}) },
           bulk_process: true,
           return_bulk_patch: true,
           context: 'bulk_process',
@@ -129308,34 +131037,35 @@ async function handleBulkProcessSave(state) {
           activeRow: row || null
         });
       }
-    } else if (isDailyManualContext && dailyScheduleChanged) {
-      const sanitisedDaily = sanitiseDailyManualSchedulePayload(stateCtx.schedule || null, 'object');
-      stateCtx.schedule = sanitisedDaily.clean;
-      stateCtx.__dailyScheduleShapeMode = 'object';
-      stateCtx.scheduleHasErrors = !sanitisedDaily.ok;
-      stateCtx.scheduleErrorsByDate = sanitisedDaily.errorsByDate || {};
+    } else if (isDailyManualContext && (dailyScheduleChanged || referenceChanged)) {
+      let sanitisedDaily = null;
+      if (dailyScheduleChanged) {
+        sanitisedDaily = sanitiseDailyManualSchedulePayload(stateCtx.schedule || null, 'object');
+        stateCtx.schedule = sanitisedDaily.clean;
+        stateCtx.__dailyScheduleShapeMode = 'object';
+        stateCtx.scheduleHasErrors = !sanitisedDaily.ok;
+        stateCtx.scheduleErrorsByDate = sanitisedDaily.errorsByDate || {};
 
-      if (!sanitisedDaily.ok) {
-        st.error_text = 'Fix the highlighted daily shift/break fields before saving.';
-        st.saving = false;
-        await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
-        st.__suppress_dirty_marking = false;
-        GE();
-        return { ok: false, validation: true };
+        if (!sanitisedDaily.ok) {
+          st.error_text = 'Fix the highlighted daily shift/break fields before saving.';
+          st.saving = false;
+          await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
+          st.__suppress_dirty_marking = false;
+          GE();
+          return { ok: false, validation: true };
+        }
       }
 
       const payload = {
         expected_timesheet_id: details.current_timesheet_id || ts.timesheet_id || tsId,
-        schedule_json: sanitisedDaily.schedule,
-        reference_number: trimStr(
-          (Object.prototype.hasOwnProperty.call(stateCtx || {}, 'reference') ? stateCtx.reference : (ts.reference_number || row.reference_number || ''))
-        ),
         bulk_process: true,
         return_bulk_patch: true,
         context: 'bulk_process',
         expected_row_signature: activeRowSignature || null,
         row_signature: activeRowSignature || null
       };
+      if (dailyScheduleChanged) payload.schedule_json = sanitisedDaily.schedule;
+      if (referenceChanged) payload.reference_number = stagedReference;
 
       saveResult = await apiPostJson(
         `/api/timesheets/${encodeURIComponent(String(tsId))}/daily-manual-upsert`,
@@ -129355,7 +131085,7 @@ async function handleBulkProcessSave(state) {
     if (effectiveTsId) tsId = effectiveTsId;
 
     let expenseCommitResult = null;
-    if (expensesChanged) {
+    if (expensesChanged && !plannedManualDraftExpenseSave) {
       expenseCommitResult = await commitTimesheetExpensesMileageDraft({
         source: 'bulk-process',
         timesheetId: actualTimesheetId,
@@ -129390,8 +131120,14 @@ async function handleBulkProcessSave(state) {
     }
 
     const didRunManualSave = !!saveResult;
-    const expensesOnlySave = !!(expensesChanged && !nonExpenseDirty);
+    const expensesOnlySave = !!(expensesChanged && !nonExpenseDirty && !plannedManualDraftExpenseSave);
     if (expensesOnlySave && !didRunManualSave) {
+      if (expenseCommitResult?.updatedTsfin && st.active_details && typeof st.active_details === 'object') {
+        st.active_details.tsfin = {
+          ...((st.active_details.tsfin && typeof st.active_details.tsfin === 'object') ? st.active_details.tsfin : {}),
+          ...(expenseCommitResult.updatedTsfin || {})
+        };
+      }
       st.saving = false;
       st.__suppress_dirty_marking = false;
       st.dirty = false;
@@ -129943,63 +131679,51 @@ async function handleBulkProcessProcess(state) {
 
     let processResult = null;
     if (active.isDaily && active.submissionMode === 'MANUAL' && activeTimesheetId) {
-      const stateCtx = active.stateCtx || {};
-      const timesheetPatch = pickObject(stateCtx.timesheet_patch_json || stateCtx.timesheetPatchJson);
-      const rawTsfinPatch = pickObject(stateCtx.tsfin_patch_json || stateCtx.tsfinPatchJson);
-      const blockedTsfinKeys = new Set([
-        'candidate_id', 'client_id', 'pay_method', 'candidate_assignment', 'basis', 'policy_snapshot_json', 'rate_source_refs_json',
-        'hours_day', 'hours_night', 'hours_sat', 'hours_sun', 'hours_bh',
-        'pay_day', 'pay_night', 'pay_sat', 'pay_sun', 'pay_bh',
-        'charge_day', 'charge_night', 'charge_sat', 'charge_sun', 'charge_bh',
-        'total_hours', 'total_pay_ex_vat', 'total_charge_ex_vat', 'margin_ex_vat',
-        'expenses_pay_ex_vat', 'expenses_charge_ex_vat', 'mileage_units', 'mileage_pay_rate', 'mileage_charge_rate',
-        'mileage_pay_ex_vat', 'mileage_charge_ex_vat', 'travel_pay_ex_vat', 'travel_charge_ex_vat',
-        'accommodation_pay_ex_vat', 'accommodation_charge_ex_vat', 'other_pay_ex_vat', 'other_charge_ex_vat',
-        'additional_pay_ex_vat', 'additional_charge_ex_vat', 'additional_margin_ex_vat', 'has_rate_issue', 'has_pay_channel_issue'
-      ]);
-      const tsfinPatch = Object.fromEntries(Object.entries(rawTsfinPatch).filter(([key]) => !blockedTsfinKeys.has(key) && !/(_pay_|_charge_|_margin_|^pay_|^charge_|^margin_|total_|hours_|_rate$|_ex_vat$)/i.test(key)));
       const activeRowSignature = trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '');
       processResult = await processDailyManualTimesheet(String(activeTimesheetId), {
         expected_timesheet_id: expectedTimesheetId || activeTimesheetId,
-        reference_number: Object.prototype.hasOwnProperty.call(stateCtx, 'reference') ? stateCtx.reference : (active.timesheet.reference_number || active.row.reference_number || ''),
         expected_row_signature: activeRowSignature || null,
         row_signature: activeRowSignature || null,
         bulk_process: true,
         return_bulk_patch: true,
-        context: 'bulk_process',
-        timesheet_patch_json: timesheetPatch,
-        tsfin_patch_json: tsfinPatch
+        context: 'bulk_process'
       });
     } else if (active.isWeekly && activeContractWeekId) {
       const stateCtx = active.stateCtx || {};
-      const additionalRates = (stateCtx.additionalRates && typeof stateCtx.additionalRates === 'object') ? stateCtx.additionalRates : {};
-      const additional_units_week = {};
-      const additional_units_per_day = {};
-      for (const [codeRaw, cfgRaw] of Object.entries(additionalRates)) {
-        const code = upper(codeRaw);
-        if (!code) continue;
-        const cfg = (cfgRaw && typeof cfgRaw === 'object') ? cfgRaw : { units_week: cfgRaw };
-        const weekUnits = Number(cfg.units_week || 0);
-        if (Number.isFinite(weekUnits) && weekUnits > 0) additional_units_week[code] = weekUnits;
-        if (cfg.units_per_day && typeof cfg.units_per_day === 'object') {
-          const per = {};
-          for (const [ymdRaw, valueRaw] of Object.entries(cfg.units_per_day)) {
-            const ymd = String(ymdRaw || '').slice(0, 10);
-            const n = Number(valueRaw || 0);
-            if (/^\d{4}-\d{2}-\d{2}$/.test(ymd) && Number.isFinite(n) && n > 0) per[ymd] = n;
-          }
-          if (Object.keys(per).length) additional_units_per_day[code] = per;
+      const parseSavedJson = (value) => {
+        if (value == null) return null;
+        if (Array.isArray(value) || (value && typeof value === 'object')) return deep(value);
+        if (typeof value !== 'string') return null;
+        const raw = value.trim();
+        if (!raw) return null;
+        try {
+          const parsed = JSON.parse(raw);
+          return (Array.isArray(parsed) || (parsed && typeof parsed === 'object')) ? parsed : null;
+        } catch {
+          return null;
         }
-      }
+      };
+      const savedScheduleForProcess = (() => {
+        const fromTimesheet = parseSavedJson(active.timesheet?.actual_schedule_json || active.details?.timesheet?.actual_schedule_json || active.row?.actual_schedule_json || null);
+        if (Array.isArray(fromTimesheet)) return fromTimesheet;
+        const fromContractWeek = parseSavedJson(active.contractWeek?.planned_schedule_json || active.details?.contract_week?.planned_schedule_json || active.row?.planned_schedule_json || null);
+        return Array.isArray(fromContractWeek) ? fromContractWeek : [];
+      })();
+      const readSavedUnitsObject = (value) => {
+        const parsed = parseSavedJson(value);
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+      };
+      const additionalRates = {};
+      const additional_units_week = readSavedUnitsObject(active.timesheet?.additional_units_week || active.row?.additional_units_week || active.contractWeek?.totals_json?.additional_units_week || active.details?.contract_week?.totals_json?.additional_units_week || null);
+      const additional_units_per_day = readSavedUnitsObject(active.timesheet?.additional_units_per_day || active.row?.additional_units_per_day || active.contractWeek?.totals_json?.additional_units_per_day || active.details?.contract_week?.totals_json?.additional_units_per_day || null);
       const activeRowSignature = trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '');
       processResult = await manualUpsertContractWeek(String(activeContractWeekId), {
         expected_timesheet_id: expectedTimesheetId || activeTimesheetId || null,
         expected_row_signature: activeRowSignature || null,
         row_signature: activeRowSignature || null,
-        actual_schedule_json: Array.isArray(stateCtx.schedule) ? stateCtx.schedule : (Array.isArray(active.contractWeek.planned_schedule_json) ? active.contractWeek.planned_schedule_json : []),
+        actual_schedule_json: savedScheduleForProcess,
         additional_units_week,
         additional_units_per_day,
-        expenses_draft: pickObject(stateCtx.expensesDraft),
         bulk_process: true,
         return_bulk_patch: true,
         context: 'bulk_process'
@@ -130082,6 +131806,17 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       'basis',
       'policy_snapshot_json',
       'rate_source_refs_json',
+      'actual_schedule_json',
+      'schedule_json',
+      'schedule',
+      'worked_start_iso',
+      'worked_end_iso',
+      'break_start_iso',
+      'break_end_iso',
+      'break_minutes',
+      'worked_minutes',
+      'additional_units_week',
+      'additional_units_per_day',
       'hours_day',
       'hours_night',
       'hours_sat',
@@ -130228,17 +131963,9 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
     if (hasValidExplicitSchedulePatch && !Object.prototype.hasOwnProperty.call(timesheetPatch, 'actual_schedule_json')) {
       timesheetPatch.actual_schedule_json = clone(schedule);
     }
-    if (hasValidExplicitSchedulePatch && !Object.prototype.hasOwnProperty.call(tsfinPatch, 'actual_schedule_json')) {
-      tsfinPatch.actual_schedule_json = clone(schedule);
-    }
-
-    const referenceNumber = Object.prototype.hasOwnProperty.call(src, 'reference_number')
-      ? src.reference_number
-      : ((activeBulkState && Object.prototype.hasOwnProperty.call(activeBulkState, 'reference'))
-          ? activeBulkState.reference
-          : (activeBulkDetails?.timesheet?.reference_number ?? activeBulkRow?.reference_number ?? mc?.data?.reference_number ?? ''));
-    if (!Object.prototype.hasOwnProperty.call(timesheetPatch, 'reference_number')) {
-      timesheetPatch.reference_number = referenceNumber == null ? '' : String(referenceNumber);
+    const hasExplicitReferenceNumber = Object.prototype.hasOwnProperty.call(src, 'reference_number');
+    if (hasExplicitReferenceNumber && !Object.prototype.hasOwnProperty.call(timesheetPatch, 'reference_number')) {
+      timesheetPatch.reference_number = src.reference_number == null ? '' : String(src.reference_number);
     }
 
     const passthroughTimesheetKeys = ['worked_start_iso', 'worked_end_iso', 'break_start_iso', 'break_end_iso', 'break_minutes', 'worked_minutes', 'additional_units_week', 'additional_units_per_day'];
@@ -130248,14 +131975,6 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       }
     }
 
-
-    if (
-      hasValidExplicitSchedulePatch &&
-      Object.prototype.hasOwnProperty.call(proposedTsfinPatch, 'actual_schedule_json') &&
-      !Object.prototype.hasOwnProperty.call(tsfinPatch, 'actual_schedule_json')
-    ) {
-      tsfinPatch.actual_schedule_json = clone(proposedTsfinPatch.actual_schedule_json);
-    }
 
     const expectedRowSignature = trimStr(
       src.expected_row_signature ||
@@ -130293,6 +132012,17 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       'basis',
       'policy_snapshot_json',
       'rate_source_refs_json',
+      'actual_schedule_json',
+      'schedule_json',
+      'schedule',
+      'worked_start_iso',
+      'worked_end_iso',
+      'break_start_iso',
+      'break_end_iso',
+      'break_minutes',
+      'worked_minutes',
+      'additional_units_week',
+      'additional_units_per_day',
       'hours_day',
       'hours_night',
       'hours_sat',
@@ -130390,7 +132120,6 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
     throw err;
   }
 }
-
 
 
 async function unprocessDailyManualTimesheet(timesheetId, payload = {}) {
@@ -135045,12 +136774,21 @@ async function handleBulkAuthoriseSave(state, options = {}) {
         };
 
     const backendCanEditTimesheetData = readBool([ctx, 'can_edit_timesheet_data'], [row, 'can_edit_timesheet_data']) === true;
+    const isRevoked = !!(
+      hasValue(ts.revoked_at) ||
+      hasValue(details.revoked_at) ||
+      hasValue(row.revoked_at) ||
+      hasValue(ctx.revoked_at)
+    );
     const isAuthorised = !!(
-      readBool([ctx, 'is_authorised'], [row, 'is_authorised'], [ts, 'authorised_at_server']) === true ||
-      hasValue(ts.authorised_at_server) ||
-      hasValue(tsfin.authorised_at_utc) ||
-      hasValue(row.authorised_at_server) ||
-      hasValue(row.authorised_at_utc)
+      !isRevoked &&
+      (
+        readBool([ctx, 'is_authorised'], [row, 'is_authorised'], [ts, 'authorised_at_server']) === true ||
+        hasValue(ts.authorised_at_server) ||
+        hasValue(tsfin.authorised_at_utc) ||
+        hasValue(row.authorised_at_server) ||
+        hasValue(row.authorised_at_utc)
+      )
     );
     const isLocked = !!(
       readBool([ctx, 'locked'], [row, 'locked']) === true ||
@@ -135099,7 +136837,15 @@ async function handleBulkAuthoriseSave(state, options = {}) {
 
     const currentExtrasPerDay = (() => toPositiveUnitsPerDayObject(parseMaybeJson(ts?.additional_units_per_day)))();
 
+    const hasExplicitAdditionalRatesDraft = !!(
+      Object.prototype.hasOwnProperty.call(stateCtx, 'additionalRates') &&
+      stateCtx.additionalRates &&
+      typeof stateCtx.additionalRates === 'object' &&
+      !Array.isArray(stateCtx.additionalRates)
+    );
+
     const stagedExtrasWeek = (() => {
+      if (!hasExplicitAdditionalRatesDraft) return currentExtrasWeek;
       const src = (stateCtx.additionalRates && typeof stateCtx.additionalRates === 'object') ? stateCtx.additionalRates : {};
       const out = {};
       for (const [key, value] of Object.entries(src)) {
@@ -135112,6 +136858,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     })();
 
     const stagedExtrasPerDay = (() => {
+      if (!hasExplicitAdditionalRatesDraft) return currentExtrasPerDay;
       const src = (stateCtx.additionalRates && typeof stateCtx.additionalRates === 'object') ? stateCtx.additionalRates : {};
       const out = {};
       for (const [key, value] of Object.entries(src)) {
@@ -135131,10 +136878,20 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       return out;
     })();
 
-    const schedulePayload = (stateCtx.schedule != null) ? stateCtx.schedule : null;
+    const hasExplicitScheduleDraft = !!(
+      Object.prototype.hasOwnProperty.call(stateCtx, 'schedule') &&
+      stateCtx.schedule != null
+    );
+    const schedulePayload = hasExplicitScheduleDraft ? stateCtx.schedule : currentWeeklyScheduleBaseline;
     const baselineSchedule = currentWeeklyScheduleBaseline;
-    const scheduleChanged = stableStringify(schedulePayload || null) !== stableStringify(baselineSchedule || null);
-    const extrasChanged = stableStringify(currentExtrasWeek) !== stableStringify(stagedExtrasWeek) || stableStringify(currentExtrasPerDay) !== stableStringify(stagedExtrasPerDay);
+    const scheduleChanged = !!(
+      hasExplicitScheduleDraft &&
+      stableStringify(schedulePayload || null) !== stableStringify(baselineSchedule || null)
+    );
+    const extrasChanged = !!(
+      hasExplicitAdditionalRatesDraft &&
+      (stableStringify(currentExtrasWeek) !== stableStringify(stagedExtrasWeek) || stableStringify(currentExtrasPerDay) !== stableStringify(stagedExtrasPerDay))
+    );
     const resolvedIdentity = (typeof resolveBulkAuthoriseModalIdentity === 'function')
       ? (resolveBulkAuthoriseModalIdentity({ state: st, source: 'handleBulkAuthoriseSave' }) || {})
       : {};
@@ -135155,7 +136912,9 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     );
     const activeRecordIdentity = trimStr(resolvedIdentity.recordIdentity || resolvedIdentity.record_identity || resolvedIdentity.identity || st.__bulkAuthoriseRecordIdentity || '');
     const activeRowSignature = activeBackendRowSignature;
-    const manualSnapshotChanged = manualDraftDiffersFromBaseline(liveDraft);
+    const canEditHoursScheduleByPolicy = editability?.canEditHoursSchedule === true;
+    const manualSnapshotChangedRaw = manualDraftDiffersFromBaseline(liveDraft);
+    const manualSnapshotChanged = !!(canEditHoursScheduleByPolicy && manualSnapshotChangedRaw);
     const expenseStateContainers = [stateCtx, originalStateCtx, ctx?.state, activeCtx?.state, st?.active_context?.state, st?.active_ctx?.state]
       .filter((entry) => entry && typeof entry === 'object');
     const readExpenseState = (keys = []) => {
@@ -135186,8 +136945,8 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       [ctx?.state || {}, 'expenseDirtyMarker']
     ) === true;
     const expensesMileageDirty = !!(expensesDirtyResult?.dirty || stagedExpenseMarkerDirty);
-    const shouldPersistWeeklyManual = !!(isWeeklyManualContext && (scheduleChanged || extrasChanged || manualSnapshotChanged));
-    const shouldPersistDailyManual = !!(isDailyManualContext && (scheduleChanged || manualSnapshotChanged));
+    const shouldPersistWeeklyManual = !!(canEditHoursScheduleByPolicy && isWeeklyManualContext && (scheduleChanged || extrasChanged || manualSnapshotChanged));
+    const shouldPersistDailyManual = !!(canEditHoursScheduleByPolicy && isDailyManualContext && (scheduleChanged || manualSnapshotChanged));
     const hoursScheduleDirtyAttempt = !!(scheduleChanged || extrasChanged || manualSnapshotChanged);
     const hoursScheduleDirty = !!(shouldPersistWeeklyManual || shouldPersistDailyManual);
     const nonExpenseDirty = !!(referenceChanged || hoursScheduleDirtyAttempt);
@@ -135258,7 +137017,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     if (shouldPersistWeeklyManual) {
       saveResult = await manualUpsertContractWeek(String(contractWeekId), {
         expected_timesheet_id: ctx.current_timesheet_id || ts.timesheet_id || timesheetId || null,
-        actual_schedule_json: Array.isArray(schedulePayload) ? schedulePayload : [],
+        actual_schedule_json: Array.isArray(schedulePayload) ? schedulePayload : (Array.isArray(baselineSchedule) ? baselineSchedule : []),
         additional_units_week: { ...(stagedExtrasWeek || {}) },
         additional_units_per_day: { ...(stagedExtrasPerDay || {}) },
         expected_row_signature: activeBackendRowSignature || null,
@@ -135282,7 +137041,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
         `/api/timesheets/${encodeURIComponent(String(timesheetId))}/daily-manual-upsert`,
         {
           expected_timesheet_id: ctx.current_timesheet_id || ts.timesheet_id || timesheetId,
-          schedule_json: schedulePayload || null,
+          schedule_json: hasExplicitScheduleDraft ? (schedulePayload || null) : null,
           expected_row_signature: activeBackendRowSignature || null,
           row_signature: activeBackendRowSignature || null,
           backend_row_signature: activeBackendRowSignature || null,
@@ -135331,6 +137090,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
         target.hasStagedExpensesDirty = false;
         target.stagedExpensesDirty = false;
         target.expenseDirtyMarker = false;
+        target.dirty = false;
       }
     }
     const saveCacheHints = (saveResult?.cache_invalidation_hints && typeof saveResult.cache_invalidation_hints === 'object') ? saveResult.cache_invalidation_hints : {};
@@ -137353,6 +139113,39 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     }
   };
 
+  const activeExpensesDraftRequiresCommit = () => {
+    const containers = [
+      st?.active_ctx?.state,
+      st?.active_context?.state,
+      st?.active_ctx,
+      st?.active_context,
+      st,
+      window.modalCtx?.active_ctx?.state,
+      window.modalCtx?.active_context?.state
+    ].filter((entry) => entry && typeof entry === 'object');
+
+    const readFromContainers = (keys) => {
+      const list = Array.isArray(keys) ? keys : [keys];
+      for (const container of containers) {
+        for (const key of list) {
+          if (!key || !Object.prototype.hasOwnProperty.call(container, key)) continue;
+          return container[key];
+        }
+      }
+      return undefined;
+    };
+
+    const draft = readFromContainers(['expensesDraft', 'activeExpensesDraft', 'stagedExpensesDraft']) || {};
+    const baseline = readFromContainers(['expensesBaseline', 'activeExpensesBaseline', 'stagedExpensesBaseline']) || {};
+    const marker = readFromContainers(['expensesDirty', 'expensesDraftDirty', 'hasStagedExpensesDirty', 'stagedExpensesDirty', 'expenseDirtyMarker']);
+    const markerDirty = marker === true || String(marker == null ? '' : marker).trim().toLowerCase() === 'true' || String(marker == null ? '' : marker).trim() === '1';
+    const dirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(draft, baseline)
+      : { dirty: stableStringify(draft || {}) !== stableStringify(baseline || {}) };
+
+    return !!(markerDirty || (dirtyResult && dirtyResult.dirty === true));
+  };
+
  const commitActiveDirtyBeforeAuthoriseIfNeeded = async (selectionKeys, isActionRowFlag = false) => {
     const activeKey = rowIdentityKey(st.active_row || {});
     const selected = Array.isArray(selectionKeys) ? selectionKeys : [];
@@ -137361,14 +139154,15 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
 
     const frozenDraft = captureActiveManualDraftForCommit();
     const requiresManualCommit = !!activeManualDraftRequiresCommit(frozenDraft);
-    let hasDirtyEdits = !!st.dirty;
+    const requiresExpensesCommit = !!activeExpensesDraftRequiresCommit();
+    let hasDirtyEdits = !!(st.dirty || requiresExpensesCommit);
     if (typeof hasBulkAuthoriseGenuineDirtyEdits === 'function') {
       try { hasDirtyEdits = !!hasBulkAuthoriseGenuineDirtyEdits(st, { preferDom: true }); } catch {}
     }
     if (!hasDirtyEdits && typeof isBulkAuthoriseEditableDirty === 'function') {
       try { hasDirtyEdits = !!isBulkAuthoriseEditableDirty(st); } catch {}
     }
-    if (!hasDirtyEdits && !requiresManualCommit) {
+    if (!hasDirtyEdits && !requiresManualCommit && !requiresExpensesCommit) {
       return { ok: true, saved: false };
     }
     if (typeof handleBulkAuthoriseSave !== 'function') return { ok: false, error: 'Bulk Authorise save is not available.' };
@@ -140472,7 +142266,6 @@ function bindBulkAuthoriseActionRow(state) {
   });
 }
 
-
 async function handleBulkAuthoriseOpenExpensesModal(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -140497,7 +142290,10 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       };
 
   if (!activeRow || !editability.canOpenExpenses) {
-    return { ok: false, error: 'Expenses are not available for this Bulk Authorise row.' };
+    const reason = String(editability?.expensesDisabledReason || 'Expenses are not available for this Bulk Authorise row.');
+    if (typeof toast === 'function') toast(reason);
+    else if (typeof alert === 'function') alert(reason);
+    return { ok: false, error: reason, message: reason };
   }
 
   const ctx = st.active_ctx;
@@ -140530,6 +142326,20 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       ? normaliseTimesheetExpensesDraft(value, options)
       : normaliseExpensesDraft(value)
   );
+  const syncChildExpensesDraftFromDom = () => {
+    const root = document.getElementById(rootId);
+    if (!root) return;
+    childCtx.state = (childCtx.state && typeof childCtx.state === 'object') ? childCtx.state : {};
+    childCtx.state.expensesDraft = (childCtx.state.expensesDraft && typeof childCtx.state.expensesDraft === 'object') ? childCtx.state.expensesDraft : {};
+    const nodes = root.querySelectorAll('input[data-exp-field], textarea[data-exp-field]');
+    nodes.forEach((el) => {
+      const key = String(el?.dataset?.expField || '').trim();
+      if (!key) return;
+      const isNote = key === 'note';
+      const raw = String(el.value == null ? '' : el.value).trim();
+      childCtx.state.expensesDraft[key] = isNote ? raw : (raw === '' ? 0 : (Number.isFinite(Number(raw)) ? Number(raw) : 0));
+    });
+  };
   const draftSeed = normaliseExpenseCanonical(ctx?.state?.expensesDraft || ctx?.state?.expensesBaseline || {}, { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} });
   const baselineSeed = normaliseExpenseCanonical(ctx?.state?.expensesBaseline || ctx?.state?.expensesDraft || {}, { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} });
   const childCtx = {
@@ -140558,10 +142368,15 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       try { fr._updateButtons && fr._updateButtons(); } catch {}
       return;
     }
-    const dirty =
-      stableStringify(normaliseExpensesDraft(childCtx?.state?.expensesDraft || {})) !==
-      stableStringify(normaliseExpensesDraft(childCtx?.state?.expensesBaseline || {}));
-    fr.isDirty = !!dirty;
+    const normaliseOptions = { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} };
+    const dirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(
+          normaliseExpenseCanonical(childCtx?.state?.expensesDraft || {}, normaliseOptions),
+          normaliseExpenseCanonical(childCtx?.state?.expensesBaseline || {}, normaliseOptions),
+          normaliseOptions
+        )
+      : { dirty: stableStringify(normaliseExpensesDraft(childCtx?.state?.expensesDraft || {})) !== stableStringify(normaliseExpensesDraft(childCtx?.state?.expensesBaseline || {})) };
+    fr.isDirty = !!(dirtyResult && dirtyResult.dirty);
     try { fr._updateButtons && fr._updateButtons(); } catch {}
   };
 
@@ -140571,18 +142386,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       else if (typeof alert === 'function') alert('Expenses are view-only for this row.');
       return true;
     }
-    if (typeof syncBulkProcessExpensesDraftFromDom === 'function') syncBulkProcessExpensesDraftFromDom({ active_ctx: childCtx });
-    const root = document.getElementById(rootId);
-    if (root) {
-      const nodes = root.querySelectorAll('input[data-exp-field], textarea[data-exp-field]');
-      nodes.forEach((el) => {
-        const key = String(el?.dataset?.expField || '').trim();
-        if (!key) return;
-        childCtx.state = (childCtx.state && typeof childCtx.state === 'object') ? childCtx.state : {};
-        childCtx.state.expensesDraft = (childCtx.state.expensesDraft && typeof childCtx.state.expensesDraft === 'object') ? childCtx.state.expensesDraft : {};
-        childCtx.state.expensesDraft[key] = (el.type === 'checkbox') ? !!el.checked : el.value;
-      });
-    }
+    syncChildExpensesDraftFromDom();
 
     const normaliseOptions = { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} };
     const nextDraftCanonical = normaliseExpenseCanonical(childCtx?.state?.expensesDraft || {}, normaliseOptions);
@@ -140608,7 +142412,14 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     ctx.state.expensesDirty = true;
     ctx.state.expensesDraftDirty = true;
     ctx.state.hasStagedExpensesDirty = true;
+    ctx.state.stagedExpensesDirty = true;
+    ctx.state.expenseDirtyMarker = true;
     ctx.state.dirty = true;
+    st.expensesDirty = true;
+    st.expensesDraftDirty = true;
+    st.hasStagedExpensesDirty = true;
+    st.stagedExpensesDirty = true;
+    st.expenseDirtyMarker = true;
     st.dirty = true;
     if (typeof markBulkAuthoriseDirty === 'function') {
       markBulkAuthoriseDirty(st, { source: 'bulk-authorise-expenses-apply', dirty: true, reason: 'expenses-staged' });
@@ -140658,9 +142469,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       return;
     }
     const markDirty = () => {
-      if (typeof syncBulkProcessExpensesDraftFromDom === 'function') {
-        syncBulkProcessExpensesDraftFromDom({ active_ctx: childCtx });
-      }
+      syncChildExpensesDraftFromDom();
       updateChildDirty();
     };
     root.addEventListener('input', markDirty, true);
@@ -185666,10 +187475,85 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
 
 // ✅ Canonical timesheet refresh helper (must exist BEFORE any footer clicks)
 
+
+
 function setFormReadOnly(root, ro) {
   if (!root || !document.contains(root)) { L('setFormReadOnly(skip: invalid root)', { ro }); return; }
   const _allBefore = root.querySelectorAll('input, select, textarea, button');
   const beforeDisabled = Array.from(_allBefore).filter(el => el.disabled).length;
+
+  const timesheetDomainLockContext = (() => {
+    try {
+      const top = (typeof currentFrame === 'function') ? currentFrame() : null;
+      const isTimesheetFrame = !!(top && top.entity === 'timesheets');
+      if (!isTimesheetFrame) return null;
+      const mc = window.modalCtx || {};
+      const det = mc.timesheetDetails || {};
+      const ts = det.timesheet || {};
+      const tf = det.tsfin || det.financial_snapshot || det.financials || {};
+      const cw = det.contract_week || {};
+      const policy = mc.timesheetEditDomains || (typeof classifyTimesheetEditDomains === 'function'
+        ? classifyTimesheetEditDomains({ row: mc.data || {}, details: det, timesheet: ts, tsfin: tf, contract_week: cw, state: mc.timesheetState || {}, action_flags: det.action_flags || {} })
+        : null);
+      if (!policy) return null;
+      return {
+        policy,
+        lockHours: policy.canEditHoursSchedule === false,
+        lockExpenses: policy.canEditExpenses === false || policy.expensesReadOnly === true,
+        lockEvidence: policy.canManageExpenseEvidence === false
+      };
+    } catch {
+      return null;
+    }
+  })();
+  const isTimesheetHoursAction = (action) => {
+    const a = String(action || '').trim().toLowerCase();
+    return new Set([
+      'reset-schedule',
+      'rebuild-schedule',
+      'apply-schedule',
+      'preview-schedule',
+      'daily-preview',
+      'daily-apply',
+      'extra-shift-add',
+      'extra-shift-remove',
+      'extra-break-add',
+      'extra-break-remove',
+      'segment-edit',
+      'segment-save',
+      'segment-reset',
+      'segment-add',
+      'segment-remove'
+    ]).has(a);
+  };
+  const isTimesheetHoursControl = (el) => {
+    if (!el || typeof el.matches !== 'function') return false;
+    const tsAction = el.getAttribute('data-ts-action') || el.getAttribute('data-hours-action') || '';
+    if (isTimesheetHoursAction(tsAction)) return true;
+    if (el.matches('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-ts-daily-field]')) return true;
+    const id = String(el.id || '').toLowerCase();
+    const name = String(el.getAttribute('name') || '').toLowerCase();
+    if (/tsdaily(date|start|end|break|paidhours)/.test(id)) return true;
+    if (/weekly|schedule|worked_start|worked_end|break_minutes|break_start|break_end|hours_day|hours_night|hours_sat|hours_sun|hours_bh/.test(name)) return true;
+    if (/^extra_units_/.test(name)) return true;
+    return false;
+  };
+  const isTimesheetExpenseControl = (el) => {
+    if (!el || typeof el.matches !== 'function') return false;
+    if (el.matches('input[data-exp-field],textarea[data-exp-field],select[data-exp-field]')) return true;
+    const name = String(el.getAttribute('name') || '').toLowerCase();
+    return /^exp_/.test(name) || name.includes('mileage_units') || name.includes('travel_pay') || name.includes('travel_charge') || name.includes('accom') || name.includes('other_pay') || name.includes('other_charge');
+  };
+  const isTimesheetEvidenceMutationControl = (el) => {
+    if (!el || typeof el.getAttribute !== 'function') return false;
+    return !!(
+      el.getAttribute('data-evidence-remove') ||
+      el.getAttribute('data-evidence-return') ||
+      el.getAttribute('data-evidence-manage') ||
+      el.getAttribute('data-evidence-add') ||
+      el.getAttribute('data-evidence-upload')
+    );
+  };
 
  // AFTER (updated setFormReadOnly loop)
 // ✅ NEW: keep Candidate "display_name" locked whenever it is blank (even in edit/create mode),
@@ -185710,7 +187594,36 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
     return;
   }
 
-   // Buttons: in ro mode, keep specific IDs + any timesheet action buttons enabled
+ 
+  if (timesheetDomainLockContext) {
+    if (isTimesheetHoursControl(el) && timesheetDomainLockContext.lockHours) {
+      el.setAttribute('disabled', 'true');
+      el.setAttribute('readonly', 'true');
+      return;
+    }
+    if (isTimesheetExpenseControl(el)) {
+      if (ro || timesheetDomainLockContext.lockExpenses) {
+        el.setAttribute('disabled', 'true');
+        el.setAttribute('readonly', 'true');
+      } else {
+        el.removeAttribute('disabled');
+        el.removeAttribute('readonly');
+        el.disabled = false;
+      }
+      return;
+    }
+    if (isTimesheetEvidenceMutationControl(el)) {
+      if (timesheetDomainLockContext.lockEvidence) {
+        el.setAttribute('disabled', 'true');
+        return;
+      }
+      el.removeAttribute('disabled');
+      el.disabled = false;
+      return;
+    }
+  }
+
+  // Buttons: in ro mode, keep specific IDs + any timesheet action buttons enabled
   if (el.type === 'button' || el.tagName === 'BUTTON') {
     const allow = new Set([
       'btnCloseModal',
@@ -185866,7 +187779,7 @@ try {
     const lockExpenses = !!(policy && (policy.canEditExpenses === false || policy.expensesReadOnly === true));
     const lockEvidence = !!(policy && policy.canManageExpenseEvidence === false);
     if (lockHours) {
-      root.querySelectorAll('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],input[name^=\"extra_units_\"],button[data-ts-action]').forEach((el) => {
+      root.querySelectorAll('[data-weekly-field],[data-daily-field],[data-hours-field],[data-schedule-field],[data-segment-field],[data-ts-daily-field],input[name^=\"extra_units_\"],[data-hours-action],button[data-ts-action=\"reset-schedule\"],button[data-ts-action=\"rebuild-schedule\"],button[data-ts-action=\"apply-schedule\"],button[data-ts-action=\"preview-schedule\"],button[data-ts-action=\"daily-preview\"],button[data-ts-action=\"daily-apply\"],button[data-ts-action=\"extra-shift-add\"],button[data-ts-action=\"extra-shift-remove\"],button[data-ts-action=\"extra-break-add\"],button[data-ts-action=\"extra-break-remove\"],button[data-ts-action=\"segment-edit\"],button[data-ts-action=\"segment-save\"],button[data-ts-action=\"segment-reset\"],button[data-ts-action=\"segment-add\"],button[data-ts-action=\"segment-remove\"]').forEach((el) => {
         el.disabled = true; try { el.setAttribute('readonly', 'true'); } catch {}
       });
     }
@@ -185895,7 +187808,6 @@ try {
     });
   } catch {}
 }
-
 
 
  const getModalAnchorStore = () => {
@@ -188395,36 +190307,63 @@ if (this.entity === 'timesheets' && k === 'lines') {
         : {};
       mc.timesheetState.scheduleHasErrors    = !!mc.timesheetState.scheduleHasErrors;
 
-      // ✅ SEGMENTS: exclude_from_pay wiring (still needed)
+      const detForLinesPolicy = mc.timesheetDetails || {};
+      const tsForLinesPolicy = detForLinesPolicy.timesheet || {};
+      const tsfinForLinesPolicy = detForLinesPolicy.tsfin || {};
+      const linePolicy = mc.timesheetEditDomains || (typeof classifyTimesheetEditDomains === 'function'
+        ? classifyTimesheetEditDomains({
+            row: mc.data || {},
+            details: detForLinesPolicy,
+            timesheet: tsForLinesPolicy,
+            tsfin: tsfinForLinesPolicy,
+            financial_snapshot: detForLinesPolicy.financial_snapshot || null,
+            contract_week: detForLinesPolicy.contract_week || null,
+            related: mc.timesheetRelated || {},
+            action_flags: detForLinesPolicy.action_flags || null,
+            state: mc.timesheetState || {}
+          })
+        : null);
+      const canEditHoursScheduleForLines = (linePolicy && typeof linePolicy.canEditHoursSchedule === 'boolean')
+        ? (linePolicy.canEditHoursSchedule === true)
+        : (this.mode === 'edit' || this.mode === 'create');
+
+        // ✅ SEGMENTS: exclude_from_pay wiring (still needed)
       const checkboxes = root.querySelectorAll('input[name="seg_exclude_from_pay"][data-segment-id]');
-      checkboxes.forEach(cb => {
-        if (cb.__tsWired) return;
-        cb.__tsWired = true;
-        cb.addEventListener('change', () => {
-          const segId = cb.getAttribute('data-segment-id') || '';
-          if (!segId) return;
+      if (canEditHoursScheduleForLines) {
+        checkboxes.forEach(cb => {
+          if (cb.__tsWired) return;
+          cb.__tsWired = true;
+          cb.addEventListener('change', () => {
+            const segId = cb.getAttribute('data-segment-id') || '';
+            if (!segId) return;
 
-          const originalSeg =
-            (mc.timesheetDetails && Array.isArray(mc.timesheetDetails.segments))
-              ? mc.timesheetDetails.segments.find(s => String(s.segment_id) === segId)
-              : null;
+            const originalSeg =
+              (mc.timesheetDetails && Array.isArray(mc.timesheetDetails.segments))
+                ? mc.timesheetDetails.segments.find(s => String(s.segment_id) === segId)
+                : null;
 
-          const origVal = originalSeg ? !!originalSeg.exclude_from_pay : false;
-          const newVal  = !!cb.checked;
+            const origVal = originalSeg ? !!originalSeg.exclude_from_pay : false;
+            const newVal  = !!cb.checked;
 
-          mc.timesheetState.segmentOverrides = (mc.timesheetState.segmentOverrides && typeof mc.timesheetState.segmentOverrides === 'object')
-            ? mc.timesheetState.segmentOverrides
-            : {};
+            mc.timesheetState.segmentOverrides = (mc.timesheetState.segmentOverrides && typeof mc.timesheetState.segmentOverrides === 'object')
+              ? mc.timesheetState.segmentOverrides
+              : {};
 
-          if (newVal === origVal) {
-            if (mc.timesheetState.segmentOverrides[segId]) delete mc.timesheetState.segmentOverrides[segId];
-          } else {
-            mc.timesheetState.segmentOverrides[segId] = { exclude_from_pay: newVal };
-          }
+            if (newVal === origVal) {
+              if (mc.timesheetState.segmentOverrides[segId]) delete mc.timesheetState.segmentOverrides[segId];
+            } else {
+              mc.timesheetState.segmentOverrides[segId] = { exclude_from_pay: newVal };
+            }
 
-          try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+            try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+          });
         });
-      });
+      } else {
+        checkboxes.forEach(cb => {
+          cb.disabled = true;
+          try { cb.setAttribute('readonly', 'true'); } catch {}
+        });
+      }
 
            // ✅ SEGMENTS: invoice week input + pause checkbox wiring (still needed)
       // New UI:
@@ -188635,38 +190574,51 @@ const stageTargetFromControls = (segId) => {
 };
 
 
-      // Wire date inputs (attach UK date picker + change handler)
-      weekInputs.forEach(inEl => {
-        if (!inEl || inEl.__tsWeekWired) return;
-        inEl.__tsWeekWired = true;
+        // Wire date inputs (attach UK date picker + change handler)
+      if (canEditHoursScheduleForLines) {
+        weekInputs.forEach(inEl => {
+          if (!inEl || inEl.__tsWeekWired) return;
+          inEl.__tsWeekWired = true;
 
-        const segId = inEl.getAttribute('data-segment-id') || '';
-        if (!segId) return;
+          const segId = inEl.getAttribute('data-segment-id') || '';
+          if (!segId) return;
 
-        // Attach UK date picker with min bound (dynamic safe)
-        try {
-          if (typeof attachUkDatePicker === 'function') {
-            attachUkDatePicker(inEl, { minDate: currentWeekStart });
-          }
-        } catch {}
+          // Attach UK date picker with min bound (dynamic safe)
+          try {
+            if (typeof attachUkDatePicker === 'function') {
+              attachUkDatePicker(inEl, { minDate: currentWeekStart });
+            }
+          } catch {}
 
-        inEl.addEventListener('change', () => {
-          stageTargetFromControls(segId);
+          inEl.addEventListener('change', () => {
+            stageTargetFromControls(segId);
+          });
         });
-      });
 
-      // Wire pause checkboxes
-      pauseChecks.forEach(pEl => {
-        if (!pEl || pEl.__tsPauseWired) return;
-        pEl.__tsPauseWired = true;
+        // Wire pause checkboxes
+        pauseChecks.forEach(pEl => {
+          if (!pEl || pEl.__tsPauseWired) return;
+          pEl.__tsPauseWired = true;
 
-        const segId = pEl.getAttribute('data-segment-id') || '';
-        if (!segId) return;
+          const segId = pEl.getAttribute('data-segment-id') || '';
+          if (!segId) return;
 
-        pEl.addEventListener('change', () => {
-          stageTargetFromControls(segId);
+          pEl.addEventListener('change', () => {
+            stageTargetFromControls(segId);
+          });
         });
-      });
+      } else {
+        weekInputs.forEach(inEl => {
+          if (!inEl) return;
+          inEl.disabled = true;
+          try { inEl.setAttribute('readonly', 'true'); } catch {}
+        });
+        pauseChecks.forEach(pEl => {
+          if (!pEl) return;
+          pEl.disabled = true;
+          try { pEl.setAttribute('readonly', 'true'); } catch {}
+        });
+      }
 
 
          // ✅ KEEP: Additional Rates weekly extras inputs
@@ -188708,6 +190660,12 @@ const stageTargetFromControls = (segId) => {
       };
 
       extraInputs.forEach(input => {
+        if (!canEditHoursScheduleForLines) {
+          input.disabled = true;
+          try { input.setAttribute('readonly', 'true'); } catch {}
+          return;
+        }
+
         if (input.__tsExtraWired) return;
         input.__tsExtraWired = true;
 
@@ -188817,14 +190775,34 @@ const stageTargetFromControls = (segId) => {
             rowNow?.locked_by_invoice_id ||
             rowNow?.paid_at_utc
           );
-      const canEditDaily = hasDailyEditorDom && isEditModeNow && !isAuthorisedNow && !isLockedLikeNow;
+        const canEditDaily = hasDailyEditorDom && canEditHoursScheduleForLines === true;
 
-      if (hasDailyEditorDom) {
+      if (hasDailyEditorDom && !canEditDaily) {
+        [
+          dateEl,
+          startEl,
+          endEl,
+          breakStartEl,
+          breakEndEl,
+          breakMinsEl,
+          paidHoursEl
+        ].forEach((el) => {
+          if (!el) return;
+          el.disabled = true;
+          try { el.setAttribute('readonly', 'true'); } catch {}
+        });
+
+        if (bannerEl) {
+          try { bannerEl.style.display = 'none'; } catch {}
+        }
+      }
+
+      if (canEditDaily) {
         const st = mc.timesheetState = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
         bindDailyManualEditorLive({
           root,
           stateObj: st,
-          canEdit: canEditDaily,
+          canEdit: true,
           onDirty: () => {
             try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
           },
@@ -188879,22 +190857,88 @@ if (this.entity === 'timesheets' && k === 'expenses') {
 
     // ✅ If the tab is disabled, do not wire anything (keeps it inert even if called programmatically)
     const enabled = !!mc.expenses_tab_enabled;
+    const detailsForExpensesPolicy = mc.timesheetDetails || {};
     const policy = mc.timesheetEditDomains || (typeof classifyTimesheetEditDomains === 'function'
-      ? classifyTimesheetEditDomains({ row: mc.data || {}, details: mc.timesheetDetails || {}, state: mc.timesheetState || {} })
+      ? classifyTimesheetEditDomains({
+          row: mc.data || {},
+          details: detailsForExpensesPolicy,
+          timesheet: detailsForExpensesPolicy.timesheet || null,
+          tsfin: detailsForExpensesPolicy.tsfin || null,
+          financial_snapshot: detailsForExpensesPolicy.financial_snapshot || null,
+          contract_week: detailsForExpensesPolicy.contract_week || null,
+          related: mc.timesheetRelated || {},
+          action_flags: detailsForExpensesPolicy.action_flags || null,
+          state: mc.timesheetState || {}
+        })
       : null);
     const canEditExpenses = !!(policy ? (policy.canEditExpenses === true && policy.expensesReadOnly !== true) : true);
     if (!enabled || !canEditExpenses) {
       if (LOGM) LT('expenses tab disabled; skip wiring', { reason: mc.expenses_tab_reason || '' });
     } else if (root) {
       mc.timesheetState = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
-      mc.timesheetState.expensesDraft = (mc.timesheetState.expensesDraft && typeof mc.timesheetState.expensesDraft === 'object')
+      const readRenderedMileageRate = (attrName) => {
+        try {
+          const candidates = [
+            root,
+            root.querySelector(`[${attrName}]`),
+            root.querySelector('input[data-exp-field="mileage_units"]')
+          ].filter(Boolean);
+
+          for (const el of candidates) {
+            if (!el || typeof el.getAttribute !== 'function') continue;
+            const raw = el.getAttribute(attrName);
+            if (raw == null || String(raw).trim() === '') continue;
+            const n = Number(raw);
+            if (Number.isFinite(n)) return n;
+          }
+        } catch {}
+        return null;
+      };
+
+      const currentTsfinForExpenses = mc?.timesheetDetails?.tsfin || {};
+      const existingExpensesDraft = (mc.timesheetState.expensesDraft && typeof mc.timesheetState.expensesDraft === 'object')
         ? mc.timesheetState.expensesDraft
-        : {
-            mileage_units: 0,
-            travel_pay: 0, travel_charge: 0,
-            accommodation_pay: 0, accommodation_charge: 0,
-            other_pay: 0, other_charge: 0
-          };
+        : {};
+
+      const seedMileagePayRate =
+        (existingExpensesDraft.mileage_pay_rate != null && Number.isFinite(Number(existingExpensesDraft.mileage_pay_rate)))
+          ? Number(existingExpensesDraft.mileage_pay_rate)
+          : ((readRenderedMileageRate('data-mileage-pay-rate') != null)
+              ? readRenderedMileageRate('data-mileage-pay-rate')
+              : ((currentTsfinForExpenses.mileage_pay_rate != null && Number.isFinite(Number(currentTsfinForExpenses.mileage_pay_rate)))
+                  ? Number(currentTsfinForExpenses.mileage_pay_rate)
+                  : null));
+
+      const seedMileageChargeRate =
+        (existingExpensesDraft.mileage_charge_rate != null && Number.isFinite(Number(existingExpensesDraft.mileage_charge_rate)))
+          ? Number(existingExpensesDraft.mileage_charge_rate)
+          : ((readRenderedMileageRate('data-mileage-charge-rate') != null)
+              ? readRenderedMileageRate('data-mileage-charge-rate')
+              : ((currentTsfinForExpenses.mileage_charge_rate != null && Number.isFinite(Number(currentTsfinForExpenses.mileage_charge_rate)))
+                  ? Number(currentTsfinForExpenses.mileage_charge_rate)
+                  : null));
+
+      const seedExpensesDraft = {
+        mileage_units: Number(existingExpensesDraft.mileage_units ?? currentTsfinForExpenses.mileage_units ?? 0) || 0,
+        mileage_pay_rate: seedMileagePayRate,
+        mileage_charge_rate: seedMileageChargeRate,
+        travel_pay: Number(existingExpensesDraft.travel_pay ?? currentTsfinForExpenses.travel_pay_ex_vat ?? 0) || 0,
+        travel_charge: Number(existingExpensesDraft.travel_charge ?? currentTsfinForExpenses.travel_charge_ex_vat ?? 0) || 0,
+        accommodation_pay: Number(existingExpensesDraft.accommodation_pay ?? currentTsfinForExpenses.accommodation_pay_ex_vat ?? 0) || 0,
+        accommodation_charge: Number(existingExpensesDraft.accommodation_charge ?? currentTsfinForExpenses.accommodation_charge_ex_vat ?? 0) || 0,
+        other_pay: Number(existingExpensesDraft.other_pay ?? currentTsfinForExpenses.other_pay_ex_vat ?? 0) || 0,
+        other_charge: Number(existingExpensesDraft.other_charge ?? currentTsfinForExpenses.other_charge_ex_vat ?? 0) || 0,
+        note: String(existingExpensesDraft.note ?? '').trim()
+      };
+
+      mc.timesheetState.expensesDraft = (typeof normaliseTimesheetExpensesDraft === 'function')
+        ? normaliseTimesheetExpensesDraft(seedExpensesDraft, {
+            row: mc.data || {},
+            details: mc.timesheetDetails || {},
+            tsfin: currentTsfinForExpenses,
+            state: mc.timesheetState || {}
+          })
+        : seedExpensesDraft;
 
       const num0 = (v) => {
         const n = Number(v);
@@ -188902,11 +190946,49 @@ if (this.entity === 'timesheets' && k === 'expenses') {
       };
       const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
-      const recomputeAndPaint = () => {
+         const resolveMileageRatesForExpenses = () => {
         const det = mc.timesheetDetails || {};
         const tf  = det.tsfin || {};
-
         const d = mc.timesheetState.expensesDraft || {};
+        const b = mc.timesheetState.expensesBaseline || {};
+
+        const payRate =
+          (d.mileage_pay_rate != null && Number.isFinite(Number(d.mileage_pay_rate)))
+            ? Number(d.mileage_pay_rate)
+            : ((b.mileage_pay_rate != null && Number.isFinite(Number(b.mileage_pay_rate)))
+                ? Number(b.mileage_pay_rate)
+                : ((readRenderedMileageRate('data-mileage-pay-rate') != null)
+                    ? readRenderedMileageRate('data-mileage-pay-rate')
+                    : ((tf.mileage_pay_rate != null && Number.isFinite(Number(tf.mileage_pay_rate)))
+                        ? Number(tf.mileage_pay_rate)
+                        : null)));
+
+        const chargeRate =
+          (d.mileage_charge_rate != null && Number.isFinite(Number(d.mileage_charge_rate)))
+            ? Number(d.mileage_charge_rate)
+            : ((b.mileage_charge_rate != null && Number.isFinite(Number(b.mileage_charge_rate)))
+                ? Number(b.mileage_charge_rate)
+                : ((readRenderedMileageRate('data-mileage-charge-rate') != null)
+                    ? readRenderedMileageRate('data-mileage-charge-rate')
+                    : ((tf.mileage_charge_rate != null && Number.isFinite(Number(tf.mileage_charge_rate)))
+                        ? Number(tf.mileage_charge_rate)
+                        : null)));
+
+        return { mileage_pay_rate: payRate, mileage_charge_rate: chargeRate };
+      };
+
+      const recomputeAndPaint = () => {
+        const d = mc.timesheetState.expensesDraft || {};
+        const resolvedRates = resolveMileageRatesForExpenses();
+
+        if (d && typeof d === 'object') {
+          if (resolvedRates.mileage_pay_rate != null && d.mileage_pay_rate == null) {
+            d.mileage_pay_rate = resolvedRates.mileage_pay_rate;
+          }
+          if (resolvedRates.mileage_charge_rate != null && d.mileage_charge_rate == null) {
+            d.mileage_charge_rate = resolvedRates.mileage_charge_rate;
+          }
+        }
 
         const travelPay = round2(num0(d.travel_pay));
         const travelChg = round2(num0(d.travel_charge));
@@ -188915,8 +190997,8 @@ if (this.entity === 'timesheets' && k === 'expenses') {
         const otherPay  = round2(num0(d.other_pay));
         const otherChg  = round2(num0(d.other_charge));
 
-        const pr = (tf.mileage_pay_rate    != null) ? Number(tf.mileage_pay_rate) : NaN;
-        const cr = (tf.mileage_charge_rate != null) ? Number(tf.mileage_charge_rate) : NaN;
+        const pr = Number(resolvedRates.mileage_pay_rate);
+        const cr = Number(resolvedRates.mileage_charge_rate);
 
         const ratesOk = Number.isFinite(pr) && Number.isFinite(cr) && pr > 0 && cr > 0;
         const mu = num0(d.mileage_units);
@@ -188924,8 +191006,12 @@ if (this.entity === 'timesheets' && k === 'expenses') {
         const mileagePay = ratesOk ? round2(mu * pr) : 0;
         const mileageChg = ratesOk ? round2(mu * cr) : 0;
 
-        const totPay = round2(mileagePay + travelPay + accomPay + otherPay);
-        const totChg = round2(mileageChg + travelChg + accomChg + otherChg);
+        const totals = (typeof recalculateTimesheetExpenseTotals === 'function')
+          ? recalculateTimesheetExpenseTotals(d, resolvedRates)
+          : null;
+
+        const totPay = round2((totals && Number.isFinite(Number(totals.total_pay))) ? Number(totals.total_pay) : (mileagePay + travelPay + accomPay + otherPay));
+        const totChg = round2((totals && Number.isFinite(Number(totals.total_charge))) ? Number(totals.total_charge) : (mileageChg + travelChg + accomChg + otherChg));
 
         const setText = (sel, txt) => {
           const el = root.querySelector(sel);
@@ -188954,19 +191040,52 @@ if (this.entity === 'timesheets' && k === 'expenses') {
 
           mc.timesheetState.expensesDraft[field] = n;
 
+          const rates = resolveMileageRatesForExpenses();
+          if (rates.mileage_pay_rate != null) {
+            mc.timesheetState.expensesDraft.mileage_pay_rate = rates.mileage_pay_rate;
+          }
+          if (rates.mileage_charge_rate != null) {
+            mc.timesheetState.expensesDraft.mileage_charge_rate = rates.mileage_charge_rate;
+          }
+
+          if (typeof normaliseTimesheetExpensesDraft === 'function') {
+            mc.timesheetState.expensesDraft = normaliseTimesheetExpensesDraft(mc.timesheetState.expensesDraft || {}, {
+              row: mc.data || {},
+              details: mc.timesheetDetails || {},
+              tsfin: mc?.timesheetDetails?.tsfin || {},
+              state: mc.timesheetState || {}
+            });
+          }
+
           // Update computed display cells live (no re-render)
           if (typeof recalculateTimesheetExpenseTotals === 'function') {
-            const rates = {
-              mileage_pay_rate: Number(mc?.timesheetDetails?.tsfin?.mileage_pay_rate ?? 0),
-              mileage_charge_rate: Number(mc?.timesheetDetails?.tsfin?.mileage_charge_rate ?? 0)
-            };
             recalculateTimesheetExpenseTotals(mc.timesheetState.expensesDraft, rates);
           }
           recomputeAndPaint();
           const dres = (typeof isTimesheetExpensesDraftDirty === 'function')
             ? isTimesheetExpensesDraftDirty(
-                normaliseTimesheetExpensesDraft(mc.timesheetState.expensesDraft || {}),
-                normaliseTimesheetExpensesDraft(mc.timesheetState.expensesBaseline || {})
+                (typeof normaliseTimesheetExpensesDraft === 'function'
+                  ? normaliseTimesheetExpensesDraft(mc.timesheetState.expensesDraft || {}, {
+                      row: mc.data || {},
+                      details: mc.timesheetDetails || {},
+                      tsfin: mc?.timesheetDetails?.tsfin || {},
+                      state: mc.timesheetState || {}
+                    })
+                  : (mc.timesheetState.expensesDraft || {})),
+                (typeof normaliseTimesheetExpensesDraft === 'function'
+                  ? normaliseTimesheetExpensesDraft(mc.timesheetState.expensesBaseline || {}, {
+                      row: mc.data || {},
+                      details: mc.timesheetDetails || {},
+                      tsfin: mc?.timesheetDetails?.tsfin || {},
+                      state: mc.timesheetState || {}
+                    })
+                  : (mc.timesheetState.expensesBaseline || {})),
+                {
+                  row: mc.data || {},
+                  details: mc.timesheetDetails || {},
+                  tsfin: mc?.timesheetDetails?.tsfin || {},
+                  state: mc.timesheetState || {}
+                }
               )
             : { dirty: true };
           if (dres && dres.dirty) {
@@ -211608,59 +213727,8 @@ function renderTimesheetExpensesTab(ctx) {
   const cw   = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : null;
 
   const editPolicy = (typeof classifyTimesheetEditDomains === 'function')
-    ? classifyTimesheetEditDomains({ row, details, tsfin: tf, timesheet: ts, contract_week: cw, state, ctx: c })
+    ? classifyTimesheetEditDomains({ row, details, tsfin: tf, timesheet: ts, contract_week: cw, state, ctx: c, related })
     : null;
-  const hasTs  = !!(ts && ts.timesheet_id);
-  const hasFin = !!tf;
-  const hasContractWeek = !!(details.contract_week_id || row.contract_week_id || cw?.id);
-
-  const sheetScope = String(details.sheet_scope || row.sheet_scope || ts?.sheet_scope || '').toUpperCase();
-  const subMode = String(ts?.submission_mode || row.submission_mode || '').toUpperCase();
-  const cwModeSnapshot = String(cw?.submission_mode_snapshot || row.submission_mode_snapshot || row.submission_mode || '').toUpperCase();
-
-  const qrStatusRaw = (ts && Object.prototype.hasOwnProperty.call(ts, 'qr_status')) ? ts.qr_status : (row.qr_status ?? null);
-  const hasQr = !!(qrStatusRaw && String(qrStatusRaw).trim());
-
-  const isPlannedWeeklyManual =
-    !hasTs &&
-    hasContractWeek &&
-    sheetScope === 'WEEKLY' &&
-    cwModeSnapshot === 'MANUAL';
-
-  const enabledByRoute = !!(
-    (hasTs && hasFin && (subMode === 'MANUAL' || hasQr)) ||
-    isPlannedWeeklyManual
-  );
-  const forcedReadOnly = !!(
-    c.expenses_read_only ||
-    c.expensesReadOnly ||
-    state.expensesReadOnly
-  );
-  const forceOpenForProcessed = !!(
-    c.expenses_force_open ||
-    c.expensesForceOpen ||
-    state.expensesForceOpen
-  );
-  const enabled = editPolicy
-    ? (editPolicy.canOpenExpenses === true)
-    : !!(enabledByRoute || forceOpenForProcessed);
-
-  const locked  = !!(tf && (tf.locked_by_invoice_id || tf.paid_at_utc));
-  const authorised = !!(ts?.authorised_at_server || row.authorised_at_server);
-  const readOnly = !!(
-    (editPolicy && (editPolicy.canEditExpenses === false || editPolicy.expensesReadOnly === true)) ||
-    forcedReadOnly || locked || authorised
-  );
-
-  const draft = (state.expensesDraft && typeof state.expensesDraft === 'object')
-    ? state.expensesDraft
-    : {
-        mileage_units: 0,
-        travel_pay: 0, travel_charge: 0,
-        accommodation_pay: 0, accommodation_charge: 0,
-        other_pay: 0, other_charge: 0,
-        note: ''
-      };
 
   const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
   const fmt2 = (n) => {
@@ -211668,9 +213736,9 @@ function renderTimesheetExpensesTab(ctx) {
     return Number.isFinite(x) ? x.toFixed(2) : '0.00';
   };
 
-  const contract = (related.contract && typeof related.contract === 'object') ? related.contract : {};
-  const candidate = (related.candidate && typeof related.candidate === 'object') ? related.candidate : {};
-  const client = (related.client && typeof related.client === 'object') ? related.client : {};
+  const contract = (related.contract && typeof related.contract === 'object') ? related.contract : (details?.related?.contract || {});
+  const candidate = (related.candidate && typeof related.candidate === 'object') ? related.candidate : (details?.related?.candidate || {});
+  const client = (related.client && typeof related.client === 'object') ? related.client : (details?.related?.client || {});
 
   const mileagePayRate =
     (tf && tf.mileage_pay_rate != null)
@@ -211698,15 +213766,34 @@ function renderTimesheetExpensesTab(ctx) {
               )
         );
 
+  const sourceDraft = (state.expensesDraft && typeof state.expensesDraft === 'object')
+    ? state.expensesDraft
+    : {
+        mileage_units: tf?.mileage_units ?? 0,
+        travel_pay: tf?.travel_pay_ex_vat ?? 0,
+        travel_charge: tf?.travel_charge_ex_vat ?? 0,
+        accommodation_pay: tf?.accommodation_pay_ex_vat ?? 0,
+        accommodation_charge: tf?.accommodation_charge_ex_vat ?? 0,
+        other_pay: tf?.other_pay_ex_vat ?? 0,
+        other_charge: tf?.other_charge_ex_vat ?? 0,
+        note: tf?.expenses_description ?? ''
+      };
+
+  const draft = {
+    ...sourceDraft,
+    mileage_pay_rate: Number.isFinite(mileagePayRate) ? mileagePayRate : sourceDraft.mileage_pay_rate,
+    mileage_charge_rate: Number.isFinite(mileageChargeRate) ? mileageChargeRate : sourceDraft.mileage_charge_rate
+  };
+
   const mileageRatesOk =
-    Number.isFinite(mileagePayRate) &&
-    Number.isFinite(mileageChargeRate) &&
-    mileagePayRate > 0 &&
-    mileageChargeRate > 0;
+    Number.isFinite(Number(draft.mileage_pay_rate)) &&
+    Number.isFinite(Number(draft.mileage_charge_rate)) &&
+    Number(draft.mileage_pay_rate) > 0 &&
+    Number(draft.mileage_charge_rate) > 0;
 
   const mileageUnits = Number(draft.mileage_units || 0);
-  const mileagePay   = mileageRatesOk ? round2(mileageUnits * mileagePayRate) : 0;
-  const mileageChg   = mileageRatesOk ? round2(mileageUnits * mileageChargeRate) : 0;
+  const mileagePay   = mileageRatesOk ? round2(mileageUnits * Number(draft.mileage_pay_rate)) : round2(Number(tf?.mileage_pay_ex_vat || 0));
+  const mileageChg   = mileageRatesOk ? round2(mileageUnits * Number(draft.mileage_charge_rate)) : round2(Number(tf?.mileage_charge_ex_vat || 0));
 
   const travelPay = round2(draft.travel_pay || 0);
   const travelChg = round2(draft.travel_charge || 0);
@@ -211720,45 +213807,37 @@ function renderTimesheetExpensesTab(ctx) {
   const totalPay = round2(mileagePay + travelPay + accomPay + otherPay);
   const totalChg = round2(mileageChg + travelChg + accomChg + otherChg);
 
-  // Evidence requirements (UX guidance only; hard enforcement happens on Save/Process)
-  const needsMileageEvidence = mileageUnits > 0;
+  const enabled = editPolicy ? editPolicy.canOpenExpenses === true : true;
+  const readOnly = editPolicy ? (editPolicy.canEditExpenses === false || editPolicy.expensesReadOnly === true) : false;
+  const blockedReason = editPolicy?.expensesDisabledReason || 'Expenses are not available for this timesheet route.';
+
+  const needsMileageEvidence = mileageUnits > 0 || mileagePay > 0 || mileageChg > 0;
   const needsTravelEvidence  = (travelPay > 0 || travelChg > 0);
   const needsAccomEvidence   = (accomPay > 0 || accomChg > 0);
   const needsOtherEvidence   = (otherPay > 0 || otherChg > 0);
 
   const evidenceLines = [];
-  if (needsMileageEvidence) evidenceLines.push('• Mileage requires evidence kind MILEAGE (when units > 0).');
-  if (needsTravelEvidence)  evidenceLines.push('• Travel requires evidence kind TRAVEL (when pay or charge > £0.00).');
-  if (needsAccomEvidence)   evidenceLines.push('• Accommodation requires evidence kind ACCOMMODATION (when pay or charge > £0.00).');
-  if (needsOtherEvidence)   evidenceLines.push('• Other requires evidence kind OTHER (when pay or charge > £0.00).');
+  if (needsMileageEvidence) evidenceLines.push('• Mileage requires evidence kind MILEAGE (when units, pay, or charge is greater than zero).');
+  if (needsTravelEvidence)  evidenceLines.push('• Travel requires evidence kind TRAVEL (when pay or charge is greater than £0.00).');
+  if (needsAccomEvidence)   evidenceLines.push('• Accommodation requires evidence kind ACCOMMODATION (when pay or charge is greater than £0.00).');
+  if (needsOtherEvidence)   evidenceLines.push('• Other requires evidence kind OTHER (when pay or charge is greater than £0.00).');
 
   const isBulkProcessModal = String(window?.modalCtx?.entity || '').trim().toLowerCase() === 'bulk-process';
   const evidenceHint =
     evidenceLines.length
       ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">${evidenceLines.join('<br/>')}</div>`
-      : (isBulkProcessModal ? '' : `<div class="mini" style="margin-top:8px;color:rgba(255,255,255,0.7)">Tip: upload supporting evidence in the Evidence tab. Evidence is required only when you claim mileage/charges.</div>`);
+      : (isBulkProcessModal ? '' : `<div class="mini" style="margin-top:8px;color:rgba(255,255,255,0.7)">Tip: upload supporting evidence in the Evidence tab. Evidence is required only when you claim mileage, travel, accommodation, or other expenses.</div>`);
 
   if (!enabled) {
-    const reason =
-      isPlannedWeeklyManual
-        ? 'Expenses are available for planned weekly MANUAL rows.'
-        : (
-            !hasTs
-              ? 'Expenses are available once a timesheet exists.'
-              : (!hasFin
-                  ? 'Expenses are unavailable until a TSFIN snapshot exists.'
-                  : 'Expenses are available for Manual or QR timesheets.')
-          );
-
     return `
       <div class="tabc">
         <div class="card">
           <div class="row" style="grid-column:1/-1">
             <label>Expenses</label>
             <div class="controls">
-              <span class="mini">${reason}</span>
+              <span class="mini">${escapeHtml(blockedReason)}</span>
               <div class="mini" style="margin-top:6px;opacity:.85">
-                Tip: use <strong>Add additional manual timesheet</strong> to process expenses when the original sheet is locked or non-manual.
+                Tip: use <strong>Add additional manual timesheet</strong> where the original sheet cannot carry expenses directly.
               </div>
             </div>
           </div>
@@ -211769,37 +213848,30 @@ function renderTimesheetExpensesTab(ctx) {
 
   const ro = readOnly ? 'disabled' : '';
   const roStyle = readOnly ? 'style="opacity:0.7"' : '';
-
-  const mileageUnitsDisabled = (!mileageRatesOk || readOnly) ? 'disabled' : '';
+  const mileageUnitsDisabled = readOnly ? 'disabled' : '';
   const mileageHint =
     !mileageRatesOk
-      ? `<div class="mini" style="margin-top:6px;color:rgba(255,200,120,0.95)">Mileage rates not set (contract/global fallback missing). Mileage is disabled.</div>`
-      : `<div class="mini" style="margin-top:6px;color:rgba(255,255,255,0.7)">Mileage pay £${fmt2(mileagePayRate)} · Charge £${fmt2(mileageChargeRate)}</div>`;
+      ? `<div class="mini" style="margin-top:6px;color:rgba(255,200,120,0.95)">Mileage rates are not set. You may clear mileage to zero, but a positive mileage claim requires rates before it can be saved.</div>`
+      : `<div class="mini" style="margin-top:6px;color:rgba(255,255,255,0.7)">Mileage pay £${fmt2(draft.mileage_pay_rate)} · Charge £${fmt2(draft.mileage_charge_rate)}</div>`;
 
-  const readOnlyHint = locked
-    ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">This timesheet is locked (paid or invoiced). Expenses are read-only.</div>`
-    : (authorised
-        ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">This timesheet is authorised. Unauthorise it before changing expenses.</div>`
-        : (forcedReadOnly
-            ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">Expenses are view-only for this row.</div>`
-            : ``));
+  const readOnlyHint = readOnly
+    ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">${escapeHtml(blockedReason || 'Expenses are read-only for this row.')}</div>`
+    : '';
 
   const noteVal = String(draft.note ?? '').trim();
-
   const enforcementHint = (isBulkProcessModal ? '' : (
-    isPlannedWeeklyManual
+    editPolicy?.hasSupportedManualDraft && !editPolicy?.hasRealTimesheet
       ? `Note: Evidence enforcement happens on Process for planned weekly/manual rows. If required evidence is missing, Process will fail and you should upload receipts in the Evidence tab first.`
       : `Note: Evidence enforcement happens on Save. If required evidence is missing, Save will fail with an “Evidence required” message and you should upload receipts in the Evidence tab.`
   ));
 
   return `
-    <div class="tabc">
+    <div class="tabc" data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
       <div class="card">
         <div class="row" style="grid-column:1/-1">
           <label>Expenses</label>
           <div class="controls">
             <span class="mini">Edit expenses and mileage. Charges with £0.00 will not appear on invoices.</span>
-            ${readOnly ? '<div class="mini" style="margin-top:8px;color:rgba(255,255,255,0.78)">Viewing processed expenses in read-only mode.</div>' : ''}
             ${readOnlyHint}
           </div>
         </div>
@@ -211808,7 +213880,7 @@ function renderTimesheetExpensesTab(ctx) {
           <div style="overflow:auto;border:1px solid var(--line);border-radius:10px">
             <table class="grid" style="min-width:720px;table-layout:auto">
               <thead>
-                <tr data-mileage-pay-rate="${Number.isFinite(mileagePayRate) ? String(mileagePayRate) : ''}" data-mileage-charge-rate="${Number.isFinite(mileageChargeRate) ? String(mileageChargeRate) : ''}">
+                <tr data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
                   <th style="width:220px">Expense Type</th>
                   <th style="width:140px">Units</th>
                   <th style="width:160px">Pay</th>
@@ -211816,8 +213888,6 @@ function renderTimesheetExpensesTab(ctx) {
                 </tr>
               </thead>
               <tbody>
-
-                <!-- Mileage -->
                 <tr>
                   <td><strong>Mileage</strong></td>
                   <td>
@@ -211831,6 +213901,8 @@ function renderTimesheetExpensesTab(ctx) {
                       ${mileageUnitsDisabled}
                       ${roStyle}
                       data-exp-field="mileage_units"
+                      data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}"
+                      data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}"
                       placeholder="0"
                     />
                   </td>
@@ -211843,89 +213915,55 @@ function renderTimesheetExpensesTab(ctx) {
                   </td>
                 </tr>
 
-                <!-- Travel -->
                 <tr>
                   <td><strong>Travel</strong></td>
                   <td><span class="mini" style="opacity:.7">—</span></td>
-                  <td>
-                    <input class="input" type="number" step="0.01" name="exp_travel_pay"
-                      value="${fmt2(travelPay)}" ${ro} ${roStyle} data-exp-field="travel_pay" />
-                  </td>
-                  <td>
-                    <input class="input" type="number" step="0.01" name="exp_travel_charge"
-                      value="${fmt2(travelChg)}" ${ro} ${roStyle} data-exp-field="travel_charge" />
-                  </td>
+                  <td><input class="input" type="number" step="0.01" name="exp_travel_pay" value="${fmt2(travelPay)}" ${ro} ${roStyle} data-exp-field="travel_pay" /></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_travel_charge" value="${fmt2(travelChg)}" ${ro} ${roStyle} data-exp-field="travel_charge" /></td>
                 </tr>
 
-                <!-- Accommodation -->
                 <tr>
                   <td><strong>Accommodation</strong></td>
                   <td><span class="mini" style="opacity:.7">—</span></td>
-                  <td>
-                    <input class="input" type="number" step="0.01" name="exp_accom_pay"
-                      value="${fmt2(accomPay)}" ${ro} ${roStyle} data-exp-field="accommodation_pay" />
-                  </td>
-                  <td>
-                    <input class="input" type="number" step="0.01" name="exp_accom_charge"
-                      value="${fmt2(accomChg)}" ${ro} ${roStyle} data-exp-field="accommodation_charge" />
-                  </td>
+                  <td><input class="input" type="number" step="0.01" name="exp_accom_pay" value="${fmt2(accomPay)}" ${ro} ${roStyle} data-exp-field="accommodation_pay" /></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_accom_charge" value="${fmt2(accomChg)}" ${ro} ${roStyle} data-exp-field="accommodation_charge" /></td>
                 </tr>
 
-                <!-- Other -->
                 <tr>
                   <td><strong>Other</strong></td>
                   <td><span class="mini" style="opacity:.7">—</span></td>
-                  <td>
-                    <input class="input" type="number" step="0.01" name="exp_other_pay"
-                      value="${fmt2(otherPay)}" ${ro} ${roStyle} data-exp-field="other_pay" />
-                  </td>
-                  <td>
-                    <input class="input" type="number" step="0.01" name="exp_other_charge"
-                      value="${fmt2(otherChg)}" ${ro} ${roStyle} data-exp-field="other_charge" />
-                  </td>
+                  <td><input class="input" type="number" step="0.01" name="exp_other_pay" value="${fmt2(otherPay)}" ${ro} ${roStyle} data-exp-field="other_pay" /></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_other_charge" value="${fmt2(otherChg)}" ${ro} ${roStyle} data-exp-field="other_charge" /></td>
                 </tr>
 
-                <!-- Total -->
                 <tr>
                   <td><strong>Total</strong></td>
                   <td></td>
                   <td><strong class="mini" data-exp-out="total_pay">£${fmt2(totalPay)}</strong></td>
                   <td><strong class="mini" data-exp-out="total_charge">£${fmt2(totalChg)}</strong></td>
                 </tr>
-
               </tbody>
             </table>
           </div>
         </div>
 
         <div class="row" style="grid-column:1/-1;margin-top:10px">
-          <div class="mini" style="color:rgba(255,255,255,0.7)">
-            Notes (optional). Notes do not affect totals or invoice maths.
-          </div>
+          <div class="mini" style="color:rgba(255,255,255,0.7)">Notes (optional). Notes do not affect totals or invoice maths.</div>
         </div>
 
         <div class="row" style="grid-column:1/-1;margin-top:6px">
-          <textarea
-            class="input"
-            style="width:100%;min-height:90px;resize:vertical"
-            name="exp_note"
-            placeholder="Add any notes about these expenses (optional)…"
-            data-exp-field="note"
-            ${ro}
-            ${roStyle}
-          >${noteVal}</textarea>
+          <textarea class="input" style="width:100%;min-height:90px;resize:vertical" name="exp_note" placeholder="Add any notes about these expenses (optional)" data-exp-field="note" ${ro} ${roStyle}>${escapeHtml(noteVal)}</textarea>
         </div>
 
         <div class="row" style="grid-column:1/-1;margin-top:10px">
-          <div class="mini" style="color:rgba(255,255,255,0.7)">
-            ${enforcementHint}
-          </div>
+          <div class="mini" style="color:rgba(255,255,255,0.7)">${enforcementHint}</div>
           ${evidenceHint}
         </div>
       </div>
     </div>
   `;
 }
+
 
 
 // Utility: map route_type / status to pill CSS classes
@@ -218139,6 +220177,32 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
     if (modalCtx.timesheetMeta) {
       modalCtx.timesheetMeta.expected_timesheet_id = idArg;
     }
+
+    try {
+      if (typeof classifyTimesheetEditDomains === 'function') {
+        const refreshedPolicy = classifyTimesheetEditDomains({
+          row: modalCtx.data || {},
+          details: detailsForState || {},
+          timesheet: detailsForState?.timesheet || null,
+          tsfin: detailsForState?.tsfin || null,
+          financial_snapshot: detailsForState?.financial_snapshot || null,
+          contract_week: detailsForState?.contract_week || null,
+          related: (shouldFetchRelated ? freshRelated : existingRelated) || modalCtx.timesheetRelated || {},
+          action_flags: detailsForState?.action_flags || null,
+          state: modalCtx.timesheetState || {}
+        });
+
+        modalCtx.timesheetEditDomains = refreshedPolicy;
+        modalCtx.expenses_tab_enabled = refreshedPolicy.canOpenExpenses === true;
+        modalCtx.expenses_tab_reason = refreshedPolicy.canOpenExpenses === false
+          ? String(refreshedPolicy.expensesDisabledReason || 'Expenses are not available for this timesheet.')
+          : '';
+        modalCtx.expenses_read_only = refreshedPolicy.expensesReadOnly === true;
+        modalCtx.can_edit_hours_schedule = refreshedPolicy.canEditHoursSchedule === true;
+        modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
+        modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
+      }
+    } catch {}
   }
 
   traceOpen('finance-refresh-after-state-write', {
@@ -218305,7 +220369,10 @@ const timesheetEditDomains = (typeof classifyTimesheetEditDomains === 'function'
       details,
       timesheet: details?.timesheet || null,
       tsfin: details?.tsfin || null,
+      financial_snapshot: details?.financial_snapshot || null,
       contract_week: details?.contract_week || null,
+      related,
+      action_flags: details?.action_flags || null,
       state: window.modalCtx?.timesheetState || null
     })
   : null;
@@ -218365,10 +220432,30 @@ const _extractExpenseNote = (desc) => {
   return '';
 };
 
-const expensesDraft = {
-  mileage_units: Number(tsfinLocal?.mileage_units ?? 0) || 0,
+const mileagePayRateSeed =
+  Number.isFinite(Number(tsfinLocal?.mileage_pay_rate))
+    ? Number(tsfinLocal.mileage_pay_rate)
+    : (Number.isFinite(Number(related?.contract?.mileage_pay_rate))
+        ? Number(related.contract.mileage_pay_rate)
+        : (Number.isFinite(Number(related?.candidate?.mileage_pay_rate))
+            ? Number(related.candidate.mileage_pay_rate)
+            : null));
 
-  // ✅ NEW canonical TSFIN numeric columns (amount carriers)
+const mileageChargeRateSeed =
+  Number.isFinite(Number(tsfinLocal?.mileage_charge_rate))
+    ? Number(tsfinLocal.mileage_charge_rate)
+    : (Number.isFinite(Number(related?.contract?.mileage_charge_rate))
+        ? Number(related.contract.mileage_charge_rate)
+        : (Number.isFinite(Number(related?.client?.mileage_charge_rate))
+            ? Number(related.client.mileage_charge_rate)
+            : null));
+
+const rawExpensesDraft = {
+  mileage_units: Number(tsfinLocal?.mileage_units ?? 0) || 0,
+  mileage_pay_rate: mileagePayRateSeed,
+  mileage_charge_rate: mileageChargeRateSeed,
+
+  // ✅ canonical TSFIN numeric columns (amount carriers)
   travel_pay: Number(tsfinLocal?.travel_pay_ex_vat ?? 0) || 0,
   travel_charge: Number(tsfinLocal?.travel_charge_ex_vat ?? 0) || 0,
 
@@ -218381,6 +220468,15 @@ const expensesDraft = {
   // notes/meta only
   note: _extractExpenseNote(tsfinLocal?.expenses_description)
 };
+
+const expensesDraft = (typeof normaliseTimesheetExpensesDraft === 'function')
+  ? normaliseTimesheetExpensesDraft(rawExpensesDraft, {
+      row: baseRow,
+      details,
+      tsfin: tsfinLocal,
+      related
+    })
+  : rawExpensesDraft;
 
 const expensesBaseline = JSON.parse(JSON.stringify(expensesDraft));
 
@@ -218665,8 +220761,41 @@ try {
   }
 } catch { /* non-fatal */ }
 
+    const initialInvoiceBreakdownForLock = (() => {
+      try {
+        const raw =
+          tsfinLocal.invoice_breakdown_json ||
+          details.invoice_breakdown_json ||
+          details.invoiceBreakdown ||
+          baseRow.invoice_breakdown_json ||
+          null;
+
+        if (!raw) return null;
+        if (typeof raw === 'object') return raw;
+        if (typeof raw === 'string') {
+          const parsed = JSON.parse(raw);
+          return (parsed && typeof parsed === 'object') ? parsed : null;
+        }
+      } catch {}
+      return null;
+    })();
+
+    const initialSegmentInvoiceLocked = (() => {
+      try {
+        const segments = Array.isArray(initialInvoiceBreakdownForLock?.segments)
+          ? initialInvoiceBreakdownForLock.segments
+          : [];
+        return segments.some((segment) => {
+          const lockedId = segment?.invoice_locked_invoice_id;
+          return lockedId != null && String(lockedId).trim() !== '';
+        });
+      } catch {
+        return false;
+      }
+    })();
+
     const isPaid     = !!tsfinLocal.paid_at_utc;
-    const isInvoiced = !!tsfinLocal.locked_by_invoice_id;
+    const isInvoiced = !!(tsfinLocal.locked_by_invoice_id || initialSegmentInvoiceLocked);
     const canDeletePerm = !!(canonicalHasTs && !isPaid && !isInvoiced);
 
      const cwId =
@@ -218946,12 +221075,7 @@ const onSaveTimesheet = async () => {
   const det    = mc.timesheetDetails || {};
   const st     = mc.timesheetState || {};
 
-  // HARD BLOCK if we already know schedule is invalid
-  if (st && st.scheduleHasErrors) {
-    alert('Fix the highlighted shift/break times first (overlaps, partial times, or breaks outside the shift).');
-    GE();
-    return { ok: false };
-  }
+  const staleScheduleErrorAtSaveStart = !!(st && st.scheduleHasErrors);
 
   const stableStringify = (obj) => { try { return JSON.stringify(obj); } catch { return ''; } };
   const deepEqualJson   = (a, b) => stableStringify(a) === stableStringify(b);
@@ -219194,6 +221318,60 @@ const onSaveTimesheet = async () => {
   const tsLocal    = det.timesheet || {};
   const tsfinLocal = det.tsfin     || {};
 
+  const currentInvoiceBreakdownForSave = normaliseScheduleJson(
+    tsfinLocal.invoice_breakdown_json ||
+    det.invoice_breakdown_json ||
+    det.invoiceBreakdown ||
+    rowNow.invoice_breakdown_json ||
+    null
+  );
+
+  const hasSegmentInvoiceLockForSave = (() => {
+    try {
+      const segments = Array.isArray(currentInvoiceBreakdownForSave?.segments)
+        ? currentInvoiceBreakdownForSave.segments
+        : [];
+      return segments.some((segment) => {
+        const lockedId = segment?.invoice_locked_invoice_id;
+        return lockedId != null && String(lockedId).trim() !== '';
+      });
+    } catch {
+      return false;
+    }
+  })();
+
+  const policy = (window.modalCtx && window.modalCtx.timesheetEditDomains) ? window.modalCtx.timesheetEditDomains : (
+    (typeof classifyTimesheetEditDomains === 'function')
+      ? classifyTimesheetEditDomains({
+          row: rowNow,
+          details: det,
+          timesheet: tsLocal,
+          tsfin: tsfinLocal,
+          financial_snapshot: det.financial_snapshot || null,
+          contract_week: det.contract_week || null,
+          related: mc.timesheetRelated || {},
+          action_flags: det.action_flags || null,
+          state: st
+        })
+      : null
+  );
+
+  const isAuthorisedNow = policy
+    ? policy.isAuthorised === true
+    : !!(
+        (tsLocal.authorised_at_server || rowNow.authorised_at_server || tsLocal.authorised_at_utc || rowNow.authorised_at_utc) &&
+        !(tsLocal.revoked_at || rowNow.revoked_at || det.revoked_at)
+      );
+
+  const lockedNow = !!(
+    tsfinLocal.locked_by_invoice_id ||
+    tsfinLocal.paid_at_utc ||
+    hasSegmentInvoiceLockForSave ||
+    (policy && (policy.isInvoiceLocked === true || policy.isSegmentInvoiceLocked === true || policy.isPaid === true))
+  );
+
+  const canEditHoursForSave = !(policy && policy.canEditHoursSchedule === false);
+
   const currentRef = tsLocal.reference_number || rowNow.reference_number || '';
   const stagedRef  = (st.reference != null) ? st.reference : currentRef;
   const refChanged = stagedRef !== currentRef;
@@ -219225,7 +221403,147 @@ const onSaveTimesheet = async () => {
     det?.contract_week?.week_ending_date ||
     null;
 
-  const weekDays = isWeeklyManualContext ? getWeekDays(weekEndingYmd) : [];
+    const weekDays = isWeeklyManualContext ? getWeekDays(weekEndingYmd) : [];
+
+  const earlyRound2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+  const normaliseExpensesForEarlyOnly = (x) => {
+    const d = (x && typeof x === 'object') ? x : {};
+    const raw = {
+      mileage_units: Number(d.mileage_units ?? 0) || 0,
+      mileage_pay_rate:
+        (d.mileage_pay_rate != null && Number.isFinite(Number(d.mileage_pay_rate)))
+          ? Number(d.mileage_pay_rate)
+          : ((tsfinLocal.mileage_pay_rate != null && Number.isFinite(Number(tsfinLocal.mileage_pay_rate)))
+              ? Number(tsfinLocal.mileage_pay_rate)
+              : null),
+      mileage_charge_rate:
+        (d.mileage_charge_rate != null && Number.isFinite(Number(d.mileage_charge_rate)))
+          ? Number(d.mileage_charge_rate)
+          : ((tsfinLocal.mileage_charge_rate != null && Number.isFinite(Number(tsfinLocal.mileage_charge_rate)))
+              ? Number(tsfinLocal.mileage_charge_rate)
+              : null),
+
+      travel_pay: earlyRound2(d.travel_pay ?? 0),
+      travel_charge: earlyRound2(d.travel_charge ?? 0),
+
+      accommodation_pay: earlyRound2(d.accommodation_pay ?? 0),
+      accommodation_charge: earlyRound2(d.accommodation_charge ?? 0),
+
+      other_pay: earlyRound2(d.other_pay ?? 0),
+      other_charge: earlyRound2(d.other_charge ?? 0),
+
+      note: String(d.note ?? '').trim()
+    };
+
+    return (typeof normaliseTimesheetExpensesDraft === 'function')
+      ? normaliseTimesheetExpensesDraft(raw, { row: rowNow, details: det, tsfin: tsfinLocal, state: st })
+      : raw;
+  };
+
+  const earlyStagedExpenses = normaliseExpensesForEarlyOnly(st.expensesDraft);
+  const earlyBaselineExpenses = normaliseExpensesForEarlyOnly(st.expensesBaseline);
+  const earlyExpenseDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+    ? isTimesheetExpensesDraftDirty(earlyStagedExpenses, earlyBaselineExpenses, { row: rowNow, details: det, tsfin: tsfinLocal, state: st })
+    : { dirty: stableStringify(earlyStagedExpenses) !== stableStringify(earlyBaselineExpenses), expensesDirty: false, mileageDirty: false };
+  const earlyExpensesChanged = !!(earlyExpenseDirtyResult && earlyExpenseDirtyResult.dirty);
+
+  const earlySegmentControlsDirty = !!(
+    det.isSegmentsMode &&
+    (
+      Object.keys(st.segmentOverrides || {}).length ||
+      Object.keys(st.segmentInvoiceTargets || {}).length
+    )
+  );
+  const earlyCurrentOnHold = !!tsfinLocal.pay_on_hold;
+  const earlyPayHoldDesired = (st.payHoldDesired === true || st.payHoldDesired === false) ? st.payHoldDesired : null;
+  const earlyShouldChangeHold =
+    (earlyPayHoldDesired === true && !earlyCurrentOnHold) ||
+    (earlyPayHoldDesired === false && earlyCurrentOnHold);
+  const earlyWantsMarkPaid = !!st.markPaid;
+
+  const earlyOnlyExpensesDirty = !!(
+    earlyExpensesChanged &&
+    !refChanged &&
+    !earlySegmentControlsDirty &&
+    !earlyShouldChangeHold &&
+    !earlyWantsMarkPaid
+  );
+
+  if (earlyOnlyExpensesDirty && tsIdSave) {
+    if (isAuthorisedNow) {
+      alert('This timesheet is authorised. Unauthorise it before changing expenses.');
+      GE();
+      return { ok: false };
+    }
+    if (lockedNow) {
+      alert((policy && policy.expensesDisabledReason) || 'This timesheet is invoiced or paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.');
+      GE();
+      return { ok: false };
+    }
+
+    const saveEarlyExpOnly = await commitTimesheetExpensesMileageDraft({
+      timesheetId: tsIdSave,
+      expectedTimesheetId: window.modalCtx?.timesheetMeta?.expected_timesheet_id || tsIdSave,
+      draft: earlyStagedExpenses,
+      baseline: earlyBaselineExpenses,
+      row: rowNow,
+      details: det,
+      state: st,
+      source: 'simple',
+      onAdoptMovedTimesheetId: (typeof tsModalAdoptTimesheetId === 'function') ? tsModalAdoptTimesheetId : undefined
+    });
+
+    if (!saveEarlyExpOnly || saveEarlyExpOnly.ok === false) {
+      alert(String(saveEarlyExpOnly?.message || 'Failed to save expenses.'));
+      if (saveEarlyExpOnly && saveEarlyExpOnly.evidenceRequired) {
+        try {
+          const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+          if (fr && fr.entity === 'timesheets' && typeof fr.setTab === 'function') {
+            await fr.setTab('evidence');
+          }
+        } catch {}
+      }
+      GE();
+      return { ok: false };
+    }
+
+    try { st.expensesBaseline = JSON.parse(JSON.stringify(saveEarlyExpOnly.committedDraft || earlyStagedExpenses)); } catch {}
+
+    try {
+      if (saveEarlyExpOnly.updatedTsfin && window.modalCtx?.timesheetDetails) {
+        window.modalCtx.timesheetDetails.tsfin = {
+          ...(window.modalCtx.timesheetDetails.tsfin || {}),
+          ...(saveEarlyExpOnly.updatedTsfin || {})
+        };
+      }
+      if (typeof classifyTimesheetEditDomains === 'function' && window.modalCtx) {
+        const refreshedPolicy = classifyTimesheetEditDomains({
+          row: window.modalCtx.data || rowNow,
+          details: window.modalCtx.timesheetDetails || det,
+          timesheet: window.modalCtx.timesheetDetails?.timesheet || tsLocal,
+          tsfin: window.modalCtx.timesheetDetails?.tsfin || tsfinLocal,
+          financial_snapshot: window.modalCtx.timesheetDetails?.financial_snapshot || null,
+          contract_week: window.modalCtx.timesheetDetails?.contract_week || null,
+          related: window.modalCtx.timesheetRelated || {},
+          action_flags: window.modalCtx.timesheetDetails?.action_flags || null,
+          state: st
+        });
+        window.modalCtx.timesheetEditDomains = refreshedPolicy;
+        window.modalCtx.expenses_tab_enabled = refreshedPolicy.canOpenExpenses === true;
+        window.modalCtx.expenses_tab_reason = refreshedPolicy.canOpenExpenses === false
+          ? String(refreshedPolicy.expensesDisabledReason || 'Expenses are not available for this timesheet.')
+          : '';
+        window.modalCtx.expenses_read_only = refreshedPolicy.expensesReadOnly === true;
+        window.modalCtx.can_edit_hours_schedule = refreshedPolicy.canEditHoursSchedule === true;
+        window.modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
+        window.modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
+      }
+    } catch {}
+
+    GE();
+    return { ok: true, saved: rowNow };
+  }
 
   // Baseline for change detection:
   // - real TS: actual_schedule_json
@@ -219262,9 +221580,9 @@ const onSaveTimesheet = async () => {
   }
 
   // Build schedule from lines if we can; otherwise fall back to existing schedule/baseline (no-op safe).
-  let scheduleToSave = null;
+   let scheduleToSave = Array.isArray(baselineSorted) ? baselineSorted : [];
 
-  if (isWeeklyManualContext && weekDays.length && linesByDate) {
+  if (isWeeklyManualContext && canEditHoursForSave && weekDays.length && linesByDate) {
     if (typeof buildWeeklyScheduleFromLinesAndValidate !== 'function') {
       alert('Internal error: buildWeeklyScheduleFromLinesAndValidate is missing.');
       GE();
@@ -219332,17 +221650,18 @@ const onSaveTimesheet = async () => {
 
     scheduleToSave = Array.isArray(out?.schedule) ? out.schedule : [];
   }
-  else if (isWeeklyManualContext) {
+  else if (isWeeklyManualContext && canEditHoursForSave) {
     const fallback = normaliseScheduleJson(st.schedule) || baselineSorted;
     scheduleToSave = sortScheduleStable(Array.isArray(fallback) ? fallback : []);
   }
 
-  if (isWeeklyManualContext) {
+  if (isWeeklyManualContext && canEditHoursForSave) {
     st.schedule = Array.isArray(scheduleToSave) ? scheduleToSave : [];
   }
 
   const scheduleChangedWeekly =
     isWeeklyManualContext &&
+    canEditHoursForSave &&
     !deepEqualJson(sortScheduleStable(st.schedule || []), baselineSorted);
 
   // Extras diff (weekly + per-day)
@@ -219488,6 +221807,7 @@ const onSaveTimesheet = async () => {
 
   const extrasChangedWeekly =
     isWeeklyManualContext &&
+    canEditHoursForSave &&
     (
       stableStringify(currentExtrasWeek)   !== stableStringify(stagedExtrasWeek) ||
       stableStringify(currentExtrasPerDay) !== stableStringify(stagedExtrasPerDay)
@@ -219496,12 +221816,24 @@ const onSaveTimesheet = async () => {
   // ─────────────────────────────────────────────────────────────
   // ✅ Expenses diff (NEW): compare draft vs baseline (tsfin-seeded)
   // ─────────────────────────────────────────────────────────────
-  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+   const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
   const normExpenses = (x) => {
     const d = (x && typeof x === 'object') ? x : {};
-    return {
+    const raw = {
       mileage_units: Number(d.mileage_units ?? 0) || 0,
+      mileage_pay_rate:
+        (d.mileage_pay_rate != null && Number.isFinite(Number(d.mileage_pay_rate)))
+          ? Number(d.mileage_pay_rate)
+          : ((tsfinLocal.mileage_pay_rate != null && Number.isFinite(Number(tsfinLocal.mileage_pay_rate)))
+              ? Number(tsfinLocal.mileage_pay_rate)
+              : null),
+      mileage_charge_rate:
+        (d.mileage_charge_rate != null && Number.isFinite(Number(d.mileage_charge_rate)))
+          ? Number(d.mileage_charge_rate)
+          : ((tsfinLocal.mileage_charge_rate != null && Number.isFinite(Number(tsfinLocal.mileage_charge_rate)))
+              ? Number(tsfinLocal.mileage_charge_rate)
+              : null),
 
       travel_pay: round2(d.travel_pay ?? 0),
       travel_charge: round2(d.travel_charge ?? 0),
@@ -219515,12 +221847,16 @@ const onSaveTimesheet = async () => {
       // ✅ include notes/meta in diff so “note-only” edits are saved
       note: String(d.note ?? '').trim()
     };
+
+    return (typeof normaliseTimesheetExpensesDraft === 'function')
+      ? normaliseTimesheetExpensesDraft(raw, { row: rowNow, details: det, tsfin: tsfinLocal, state: st })
+      : raw;
   };
 
   const stagedExpenses   = normExpenses(st.expensesDraft);
   const baselineExpenses = normExpenses(st.expensesBaseline);
   const expenseDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
-    ? isTimesheetExpensesDraftDirty(stagedExpenses, baselineExpenses)
+    ? isTimesheetExpensesDraftDirty(stagedExpenses, baselineExpenses, { row: rowNow, details: det, tsfin: tsfinLocal, state: st })
     : { dirty: stableStringify(stagedExpenses) !== stableStringify(baselineExpenses), expensesDirty: false, mileageDirty: false };
   const expensesChanged  = !!(expenseDirtyResult && expenseDirtyResult.dirty);
 
@@ -219566,7 +221902,7 @@ const onSaveTimesheet = async () => {
     return out;
   };
 
-  if (isDailyManualContext) {
+  if (isDailyManualContext && canEditHoursForSave) {
     const dailySanitised = sanitiseDailyManualSchedulePayload(
       (st.schedule != null) ? st.schedule : resolveCurrentDailyScheduleBaseline(tsLocal, rowNow),
       'object'
@@ -219592,23 +221928,20 @@ const onSaveTimesheet = async () => {
     }
   }
 
-  const stagedSchedule = (st.schedule != null)
-    ? sanitiseDailyManualSchedulePayload(st.schedule, 'object').schedule
-    : sanitiseDailyManualSchedulePayload(resolveCurrentDailyScheduleBaseline(tsLocal, rowNow), 'object').schedule;
   const currentSchedule = isDailyManualContext
     ? sanitiseDailyManualSchedulePayload(resolveCurrentDailyScheduleBaseline(tsLocal, rowNow), 'object').schedule
     : sanitizeSchedulePayload(tsLocal.actual_schedule_json || null);
+  const stagedSchedule = (isDailyManualContext && canEditHoursForSave)
+    ? ((st.schedule != null)
+        ? sanitiseDailyManualSchedulePayload(st.schedule, 'object').schedule
+        : sanitiseDailyManualSchedulePayload(resolveCurrentDailyScheduleBaseline(tsLocal, rowNow), 'object').schedule)
+    : currentSchedule;
   const scheduleChangedDaily =
     isDailyManualContext &&
+    canEditHoursForSave &&
     !deepEqualJson(stagedSchedule, currentSchedule);
 
-  // ✅ NEW: Frontend enforcement — cannot change hours/schedule/extras/expenses while authorised
-  const policy = (window.modalCtx && window.modalCtx.timesheetEditDomains) ? window.modalCtx.timesheetEditDomains : (
-    (typeof classifyTimesheetEditDomains === 'function')
-      ? classifyTimesheetEditDomains({ row: rowNow, details: det, timesheet: tsLocal, tsfin: tsfinLocal, state: st })
-      : null
-  );
-  const isAuthorisedNow = !!(tsLocal.authorised_at_server || rowNow.authorised_at_server);
+  // ✅ Frontend enforcement — cannot change hours/schedule/extras/expenses while authorised
   const isAuthorisedContentChangeAttempt =
     (scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily || expensesChanged);
 
@@ -219622,24 +221955,42 @@ const onSaveTimesheet = async () => {
     return { ok: false };
   }
 
-  const lockedNow = !!(tsfinLocal.locked_by_invoice_id || tsfinLocal.paid_at_utc);
-
   // Segments staging
   const segOverrides    = st.segmentOverrides || {};
   const segTargets      = st.segmentInvoiceTargets || {};
   const hasSegOverrides = !!Object.keys(segOverrides).length;
   const hasSegTargets   = !!Object.keys(segTargets).length;
+  const segmentControlsDirty = !!(det.isSegmentsMode && (hasSegOverrides || hasSegTargets));
+
+  if (segmentControlsDirty && policy && policy.canEditHoursSchedule === false) {
+    alert(policy.hoursScheduleDisabledReason || 'This timesheet was submitted electronically/through QR. Segment controls cannot be amended here.');
+    GE();
+    return { ok: false };
+  }
+
   // QR-sensitive change (weekly schedule + weekly extras + daily schedule)
   const qrSensitiveChange = scheduleChangedWeekly || scheduleChangedDaily || extrasChangedWeekly;
 
   const isContentChangeAttempt =
     qrSensitiveChange ||
     expensesChanged ||
-    (det.isSegmentsMode && (hasSegOverrides || hasSegTargets)) ||
+    segmentControlsDirty ||
     refChanged;
 
   if (lockedNow && isContentChangeAttempt) {
-    alert('This timesheet is locked (invoiced or paid). You cannot change schedule, references, segments, or expenses.');
+    const lockedAttemptIsExpensesOnly = !!(
+      expensesChanged &&
+      !qrSensitiveChange &&
+      !(det.isSegmentsMode && (hasSegOverrides || hasSegTargets)) &&
+      !refChanged
+    );
+
+    if (lockedAttemptIsExpensesOnly) {
+      alert((policy && policy.expensesDisabledReason) || 'This timesheet is invoiced or paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.');
+    } else {
+      alert('This timesheet is locked (invoiced or paid). You cannot change schedule, references, segments, or expenses.');
+    }
+
     GE();
     return { ok: false };
   }
@@ -219756,14 +222107,19 @@ const onSaveTimesheet = async () => {
     shouldChangeHold
   });
 
-  const tasks = [];
+   const tasks = [];
   const hoursScheduleDirty = !!(scheduleChangedWeekly || extrasChangedWeekly || scheduleChangedDaily);
+  if (staleScheduleErrorAtSaveStart && hoursScheduleDirty) {
+    alert('Fix the highlighted shift/break times first (overlaps, partial times, or breaks outside the shift).');
+    GE();
+    return { ok: false };
+  }
   if (hoursScheduleDirty && policy && policy.canEditHoursSchedule === false) {
     alert(policy.hoursScheduleDisabledReason || 'This timesheet was submitted electronically/through QR. To amend hours, switch it to Manual first.');
     GE();
     return { ok: false };
   }
-  const onlyExpensesDirty = !!(expensesChanged && !hoursScheduleDirty && !refChanged && !hasSegOverrides && !hasSegTargets && !shouldChangeHold);
+  const onlyExpensesDirty = !!(expensesChanged && !hoursScheduleDirty && !refChanged && !segmentControlsDirty && !shouldChangeHold);
   if (onlyExpensesDirty && tsIdSave) {
     if (isAuthorisedNow) {
       alert('This timesheet is authorised. Unauthorise it before changing expenses.');
@@ -219777,7 +222133,7 @@ const onSaveTimesheet = async () => {
     }
     const saveExpOnly = await commitTimesheetExpensesMileageDraft({
       timesheetId: tsIdSave,
-      expectedTimesheetId: window.modalCtx?.timesheetMeta?.expected_timesheet_id || null,
+      expectedTimesheetId: window.modalCtx?.timesheetMeta?.expected_timesheet_id || tsIdSave,
       draft: stagedExpenses,
       baseline: baselineExpenses,
       row: rowNow,
@@ -219800,14 +222156,57 @@ const onSaveTimesheet = async () => {
       return { ok: false };
     }
     try { st.expensesBaseline = JSON.parse(JSON.stringify(saveExpOnly.committedDraft || stagedExpenses)); } catch {}
+
+    try {
+      if (saveExpOnly.updatedTsfin && window.modalCtx?.timesheetDetails) {
+        window.modalCtx.timesheetDetails.tsfin = {
+          ...(window.modalCtx.timesheetDetails.tsfin || {}),
+          ...(saveExpOnly.updatedTsfin || {})
+        };
+      }
+      if (typeof classifyTimesheetEditDomains === 'function' && window.modalCtx) {
+        const refreshedPolicy = classifyTimesheetEditDomains({
+          row: window.modalCtx.data || rowNow,
+          details: window.modalCtx.timesheetDetails || det,
+          timesheet: window.modalCtx.timesheetDetails?.timesheet || tsLocal,
+          tsfin: window.modalCtx.timesheetDetails?.tsfin || tsfinLocal,
+          financial_snapshot: window.modalCtx.timesheetDetails?.financial_snapshot || null,
+          contract_week: window.modalCtx.timesheetDetails?.contract_week || null,
+          related: window.modalCtx.timesheetRelated || {},
+          action_flags: window.modalCtx.timesheetDetails?.action_flags || null,
+          state: st
+        });
+        window.modalCtx.timesheetEditDomains = refreshedPolicy;
+        window.modalCtx.expenses_tab_enabled = refreshedPolicy.canOpenExpenses === true;
+        window.modalCtx.expenses_tab_reason = refreshedPolicy.canOpenExpenses === false
+          ? String(refreshedPolicy.expensesDisabledReason || 'Expenses are not available for this timesheet.')
+          : '';
+        window.modalCtx.expenses_read_only = refreshedPolicy.expensesReadOnly === true;
+        window.modalCtx.can_edit_hours_schedule = refreshedPolicy.canEditHoursSchedule === true;
+        window.modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
+        window.modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
+      }
+    } catch {}
+
     GE();
     return { ok: true, saved: rowNow };
   }
 
    // ✅ WEEKLY MANUAL: schedule-driven ONLY (planned: draft endpoint; processed: manualUpsertContractWeek)
-  if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly || (isPlannedWeeklyWithoutTs && expensesChanged))) {
+  const supportedPlannedManualExpenseDraft = !!(
+    isPlannedWeeklyWithoutTs &&
+    expensesChanged &&
+    policy &&
+    policy.hasSupportedManualDraft === true &&
+    policy.hasRealTimesheet !== true
+  );
+
+  if (isWeeklyManualContext && canEditHoursForSave && (scheduleChangedWeekly || extrasChangedWeekly || supportedPlannedManualExpenseDraft)) {
     tasks.push(async () => {
-      const schedulePayload = Array.isArray(st.schedule) ? st.schedule : [];
+      const plannedDraftExpensesOnly = !!(supportedPlannedManualExpenseDraft && !scheduleChangedWeekly && !extrasChangedWeekly);
+      const schedulePayload = plannedDraftExpensesOnly
+        ? (Array.isArray(baselineSorted) ? baselineSorted : [])
+        : (Array.isArray(st.schedule) ? st.schedule : []);
       if (!weekIdSave) throw new Error('contract_week_id missing; cannot save weekly schedule.');
       if (isPlannedWeeklyWithoutTs) {
         if (typeof contractWeekManualDraftUpsert !== 'function') {
@@ -220037,7 +222436,7 @@ const onSaveTimesheet = async () => {
   }
 
   // Segments staging apply (FIXED: supports explicit clear + updates in-memory segments)
-if (det.isSegmentsMode && (hasSegOverrides || hasSegTargets) && (tsIdSave || rowNow.timesheet_id)) {
+if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
   tasks.push(async () => {
     const currentDetails = window.modalCtx.timesheetDetails || det;
     const segments = Array.isArray(currentDetails.segments) ? currentDetails.segments : [];
@@ -220160,7 +222559,7 @@ if (det.isSegmentsMode && (hasSegOverrides || hasSegTargets) && (tsIdSave || row
     tasks.push(async () => {
       const result = await commitTimesheetExpensesMileageDraft({
         timesheetId: tsIdSave,
-        expectedTimesheetId: window.modalCtx?.timesheetMeta?.expected_timesheet_id || null,
+        expectedTimesheetId: window.modalCtx?.timesheetMeta?.expected_timesheet_id || tsIdSave,
         draft: stagedExpenses,
         baseline: baselineExpenses,
         row: rowNow,
@@ -220185,6 +222584,37 @@ if (det.isSegmentsMode && (hasSegOverrides || hasSegTargets) && (tsIdSave || row
         throw e;
       }
       try { window.modalCtx.timesheetState.expensesBaseline = JSON.parse(JSON.stringify(result?.committedDraft || stagedExpenses)); } catch {}
+
+      try {
+        if (result.updatedTsfin && window.modalCtx?.timesheetDetails) {
+          window.modalCtx.timesheetDetails.tsfin = {
+            ...(window.modalCtx.timesheetDetails.tsfin || {}),
+            ...(result.updatedTsfin || {})
+          };
+        }
+        if (typeof classifyTimesheetEditDomains === 'function' && window.modalCtx) {
+          const refreshedPolicy = classifyTimesheetEditDomains({
+            row: window.modalCtx.data || rowNow,
+            details: window.modalCtx.timesheetDetails || det,
+            timesheet: window.modalCtx.timesheetDetails?.timesheet || tsLocal,
+            tsfin: window.modalCtx.timesheetDetails?.tsfin || tsfinLocal,
+            financial_snapshot: window.modalCtx.timesheetDetails?.financial_snapshot || null,
+            contract_week: window.modalCtx.timesheetDetails?.contract_week || null,
+            related: window.modalCtx.timesheetRelated || {},
+            action_flags: window.modalCtx.timesheetDetails?.action_flags || null,
+            state: window.modalCtx.timesheetState || st
+          });
+          window.modalCtx.timesheetEditDomains = refreshedPolicy;
+          window.modalCtx.expenses_tab_enabled = refreshedPolicy.canOpenExpenses === true;
+          window.modalCtx.expenses_tab_reason = refreshedPolicy.canOpenExpenses === false
+            ? String(refreshedPolicy.expensesDisabledReason || 'Expenses are not available for this timesheet.')
+            : '';
+          window.modalCtx.expenses_read_only = refreshedPolicy.expensesReadOnly === true;
+          window.modalCtx.can_edit_hours_schedule = refreshedPolicy.canEditHoursSchedule === true;
+          window.modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
+          window.modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
+        }
+      } catch {}
     });
   }
 
@@ -220289,10 +222719,17 @@ if (det.isSegmentsMode && (hasSegOverrides || hasSegTargets) && (tsIdSave || row
           const subU    = String(tsNew.submission_mode || '').toUpperCase();
           const basisU  = String(finNew.basis || '').toUpperCase();
           const qrU     = String(freshDetails?.qr_status || tsNew.qr_status || '').toUpperCase();
-          const paid    = !!finNew.paid_at_utc;
-          const invo    = !!finNew.locked_by_invoice_id;
+            const paid    = !!finNew.paid_at_utc;
+          const invoiceBreakdownNew = normaliseScheduleJson(finNew.invoice_breakdown_json || null);
+          const segmentInvoiced = Array.isArray(invoiceBreakdownNew?.segments)
+            ? invoiceBreakdownNew.segments.some((segment) => {
+                const lockedId = segment?.invoice_locked_invoice_id;
+                return lockedId != null && String(lockedId).trim() !== '';
+              })
+            : false;
+          const invo    = !!(finNew.locked_by_invoice_id || segmentInvoiced);
 
-          window.modalCtx.timesheetMeta = {
+           window.modalCtx.timesheetMeta = {
             ...(window.modalCtx.timesheetMeta || {}),
             hasTs: true,
             isPlannedWeek: false,
@@ -220307,6 +222744,30 @@ if (det.isSegmentsMode && (hasSegOverrides || hasSegTargets) && (tsIdSave || row
             expected_timesheet_id: newId,
             hasElectronicOriginal: !!(freshDetails?.action_flags && freshDetails.action_flags.can_revert_to_electronic)
           };
+
+          if (typeof classifyTimesheetEditDomains === 'function' && window.modalCtx) {
+            const refreshedPolicy = classifyTimesheetEditDomains({
+              row: window.modalCtx.data || rowNow,
+              details: freshDetails || window.modalCtx.timesheetDetails || det,
+              timesheet: freshDetails?.timesheet || window.modalCtx.timesheetDetails?.timesheet || tsNew,
+              tsfin: freshDetails?.tsfin || window.modalCtx.timesheetDetails?.tsfin || finNew,
+              financial_snapshot: freshDetails?.financial_snapshot || window.modalCtx.timesheetDetails?.financial_snapshot || null,
+              contract_week: freshDetails?.contract_week || window.modalCtx.timesheetDetails?.contract_week || null,
+              related: window.modalCtx.timesheetRelated || {},
+              action_flags: freshDetails?.action_flags || window.modalCtx.timesheetDetails?.action_flags || null,
+              state: window.modalCtx.timesheetState || st
+            });
+
+            window.modalCtx.timesheetEditDomains = refreshedPolicy;
+            window.modalCtx.expenses_tab_enabled = refreshedPolicy.canOpenExpenses === true;
+            window.modalCtx.expenses_tab_reason = refreshedPolicy.canOpenExpenses === false
+              ? String(refreshedPolicy.expensesDisabledReason || 'Expenses are not available for this timesheet.')
+              : '';
+            window.modalCtx.expenses_read_only = refreshedPolicy.expensesReadOnly === true;
+            window.modalCtx.can_edit_hours_schedule = refreshedPolicy.canEditHoursSchedule === true;
+            window.modalCtx.hours_schedule_disabled_reason = String(refreshedPolicy.hoursScheduleDisabledReason || '');
+            window.modalCtx.can_manage_expense_evidence = refreshedPolicy.canManageExpenseEvidence === true;
+          }
         } catch {}
 
         try { await refreshTimesheetsSummaryAfterRotation(newId); } catch {}
@@ -220440,6 +222901,8 @@ showModal(
 }
 
 
+
+
 function renderWeeklyManualScheduleEditor(opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES][WEEKLY]');
   const {
@@ -220498,22 +222961,31 @@ function renderWeeklyManualScheduleEditor(opts) {
 
     const isEditMode = (frameMode === 'edit' || frameMode === 'create');
 
-    // ✅ NEW: authorised guard — schedule/hours/extras must NOT be editable while authorised
-    const isAuthorised = !!(ts.authorised_at_server || row.authorised_at_server);
-
-    const policy = (opts && opts.policy) || (ctx && ctx.timesheetEditDomains) || (window.modalCtx && window.modalCtx.timesheetEditDomains) || null;
-    const policyCanEditHours = (policy && typeof policy.canEditHoursSchedule === 'boolean') ? policy.canEditHoursSchedule : null;
-    const canEditSchedule = (policyCanEditHours === null)
-      ? (isBulkProcess
-        ? (sheetScope === 'WEEKLY' && subMode === 'MANUAL')
-        : (isEditMode && !locked && !isAuthorised && !forceReadOnly && subMode === 'MANUAL'))
-      : (!!policyCanEditHours && isEditMode && !locked && !isAuthorised && !forceReadOnly);
+    const policy = (opts && opts.policy) || (ctx && ctx.timesheetEditDomains) || (window.modalCtx && window.modalCtx.timesheetEditDomains) || (typeof classifyTimesheetEditDomains === 'function'
+      ? classifyTimesheetEditDomains({
+          row: row || {},
+          details: details || {},
+          timesheet: ts || {},
+          tsfin: tsfin || {},
+          financial_snapshot: details?.financial_snapshot || null,
+          contract_week: details?.contract_week || null,
+          related: related || {},
+          action_flags: details?.action_flags || null,
+          state: state || {}
+        })
+      : null);
+    const policyCanEditHours = (policy && typeof policy.canEditHoursSchedule === 'boolean') ? policy.canEditHoursSchedule : false;
+    const canEditSchedule = !!(
+      policyCanEditHours === true &&
+      !forceReadOnly &&
+      (isEditMode || isBulkProcess || enableWeeklyLineActions)
+    );
     state.__weeklyScheduleReadOnly = !canEditSchedule;
 
     const authorisedMsgHtml = (!canEditSchedule && policy && policy.hoursScheduleDisabledReason)
       ? `<span class="mini">${escapeHtml(policy.hoursScheduleDisabledReason)}</span>`
-      : ((isAuthorised || forceReadOnly)
-        ? '<span class="mini">Unauthorise first before editing timesheet data.</span>'
+      : (forceReadOnly
+        ? '<span class="mini">This schedule is read-only.</span>'
         : '');
 
     // Build full 7-day week list (always show all days)
@@ -220568,7 +223040,13 @@ function renderWeeklyManualScheduleEditor(opts) {
       return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
     };
 
-    const contractWeekObj = (details && details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : null;    const contractObj = (related && related.contract && typeof related.contract === 'object') ? related.contract : null;
+    const contractWeekObj = (details && details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : null;
+    const contractObj =
+      (related && related.contract && typeof related.contract === 'object')
+        ? related.contract
+        : ((details && details.related && details.related.contract && typeof details.related.contract === 'object')
+            ? details.related.contract
+            : ((details && details.contract && typeof details.contract === 'object') ? details.contract : null));
 
     const contractSchedule = (() => {
       if (!contractObj) return null;
@@ -220577,9 +223055,9 @@ function renderWeeklyManualScheduleEditor(opts) {
       return parsed && (Array.isArray(parsed) || typeof parsed === 'object') ? parsed : null;
     })();
 
-    const contractWeekFallbackSchedule = (() => {
+    const contractWeekPlannedSchedule = (() => {
       if (!contractWeekObj) return null;
-      const src = (contractWeekObj.std_schedule_json != null) ? contractWeekObj.std_schedule_json : null;
+      const src = (contractWeekObj.planned_schedule_json != null) ? contractWeekObj.planned_schedule_json : null;
       const parsed = tryParse(src);
       return parsed && (Array.isArray(parsed) || typeof parsed === 'object') ? parsed : null;
     })();
@@ -220589,11 +223067,11 @@ function renderWeeklyManualScheduleEditor(opts) {
       seedSchedule = tryParse(state.schedule);
     } else {
       seedSchedule = tryParse(ts.actual_schedule_json);
+      if ((!seedSchedule || (Array.isArray(seedSchedule) && !seedSchedule.length)) && contractWeekPlannedSchedule) {
+        seedSchedule = tryParse(contractWeekPlannedSchedule);
+      }
       if ((!seedSchedule || (Array.isArray(seedSchedule) && !seedSchedule.length)) && contractSchedule) {
         seedSchedule = tryParse(contractSchedule);
-      }
-      if ((!seedSchedule || (Array.isArray(seedSchedule) && !seedSchedule.length)) && contractWeekFallbackSchedule) {
-        seedSchedule = tryParse(contractWeekFallbackSchedule);
       }
     }
     if (!(Array.isArray(seedSchedule) || (seedSchedule && typeof seedSchedule === 'object'))) seedSchedule = [];
@@ -221097,6 +223575,7 @@ function renderWeeklyManualScheduleEditor(opts) {
       state.weekly_line_clipboard = null;
     }
     const showWeeklyLineActions = !!(
+      canEditSchedule &&
       sheetScope === 'WEEKLY' &&
       subMode === 'MANUAL' &&
       (isBulkProcess || enableWeeklyLineActions)
@@ -222530,13 +225009,13 @@ function renderWeeklyManualScheduleEditor(opts) {
       ? currentContractObj.std_schedule_json
       : contractSchedule;
 
-  const currentContractWeekFallbackRaw =
-    (currentContractWeekObj && currentContractWeekObj.std_schedule_json != null)
-      ? currentContractWeekObj.std_schedule_json
-      : contractWeekFallbackSchedule;
+  const currentContractWeekPlannedRaw =
+    (currentContractWeekObj && currentContractWeekObj.planned_schedule_json != null)
+      ? currentContractWeekObj.planned_schedule_json
+      : contractWeekPlannedSchedule;
 
   const contractScheduleNormalised = normaliseResetScheduleSource(currentContractScheduleRaw);
-  const contractWeekFallbackNormalised = normaliseResetScheduleSource(currentContractWeekFallbackRaw);
+  const contractWeekFallbackNormalised = normaliseResetScheduleSource(currentContractWeekPlannedRaw);
 
   const hasContractSchedule = Array.isArray(contractScheduleNormalised) && contractScheduleNormalised.length > 0;
   const hasFallbackSchedule = Array.isArray(contractWeekFallbackNormalised) && contractWeekFallbackNormalised.length > 0;
@@ -222548,7 +225027,7 @@ function renderWeeklyManualScheduleEditor(opts) {
       message: hasContractSchedule
         ? 'Reset the weekly schedule back to the contract defaults for this week?'
         : (hasFallbackSchedule
-            ? 'No live contract default schedule is available. Reset the weekly schedule to the stored contract week defaults instead?'
+            ? 'No live contract default schedule is available. Reset the weekly schedule to the stored planned week schedule instead?'
             : 'No contract default schedule is available. Reset the weekly schedule to blank lines?')
     });
     ok = !!(
@@ -222560,7 +225039,7 @@ function renderWeeklyManualScheduleEditor(opts) {
       hasContractSchedule
         ? 'Reset the weekly schedule back to the contract defaults for this week?'
         : (hasFallbackSchedule
-            ? 'No live contract default schedule is available. Reset the weekly schedule to the stored contract week defaults instead?'
+            ? 'No live contract default schedule is available. Reset the weekly schedule to the stored planned week schedule instead?'
             : 'No contract default schedule is available. Reset the weekly schedule to blank lines?')
     );
   }
@@ -222606,8 +225085,11 @@ function renderWeeklyManualScheduleEditor(opts) {
       }
     } catch {}
 
-    // Ensure schedule/errors are computed at least once for this render
-    try { applyScheduleFromLines(state); } catch {}
+    // Ensure schedule/errors are computed at least once only when the schedule domain is editable.
+    // Read-only/protected renders must not rebuild or mutate schedule truth.
+    if (canEditSchedule) {
+      try { applyScheduleFromLines(state); } catch {}
+    }
 
     const totalPayState = getTotalPayState();
     const totalPayStateHtml = totalPayState ? renderPayStatePill(totalPayState) : '<span class="mini">—</span>';
@@ -224020,8 +226502,6 @@ function bindDailyManualEditorLive({ root, stateObj, canEdit, onDirty, onAfterAp
   return { ok: true };
 }
 
-
-
 function renderDailyManualScheduleEditor(opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES][DAILY_MANUAL]');
   const {
@@ -224047,7 +226527,13 @@ function renderDailyManualScheduleEditor(opts) {
     'view';
 
   const isEditMode = (frameMode === 'edit' || frameMode === 'create');
-  const isAuthorised = !!(ts?.authorised_at_server || row?.authorised_at_server);
+  const hasAuthorisedTimestamp = !!(ts?.authorised_at_server || ts?.authorised_at_utc || row?.authorised_at_server || row?.authorised_at_utc);
+  const hasRevokedAt = !!(
+    (ts?.revoked_at != null && String(ts.revoked_at).trim() !== '') ||
+    (row?.revoked_at != null && String(row.revoked_at).trim() !== '') ||
+    (details?.revoked_at != null && String(details.revoked_at).trim() !== '')
+  );
+  const isAuthorised = !!(hasAuthorisedTimestamp && !hasRevokedAt);
   const policy = (opts && opts.policy) || (ctx && ctx.timesheetEditDomains) || (window.modalCtx && window.modalCtx.timesheetEditDomains) || null;
   const policyCanEditHours = (policy && typeof policy.canEditHoursSchedule === 'boolean') ? policy.canEditHoursSchedule : null;
   const canEditSchedule = (policyCanEditHours === null)
@@ -224162,7 +226648,7 @@ function renderDailyManualScheduleEditor(opts) {
   };
 
   const stateScheduleSource =
-    (state && Object.prototype.hasOwnProperty.call(state, 'schedule') && state.schedule != null)
+    (canEditSchedule && state && Object.prototype.hasOwnProperty.call(state, 'schedule') && state.schedule != null)
       ? state.schedule
       : null;
   const tsScheduleSource = (ts?.actual_schedule_json != null ? ts.actual_schedule_json : null);
@@ -224179,7 +226665,6 @@ function renderDailyManualScheduleEditor(opts) {
   }
 
   const scheduleShapeMode = 'object';
-  state.__dailyScheduleShapeMode = 'object';
 
   const normaliseHHMM = (raw) => {
     let s = trimStr(raw);
@@ -224247,16 +226732,19 @@ function renderDailyManualScheduleEditor(opts) {
   const breakMinsLockAttr = (canEditSchedule && validated.autoBreakLock)
     ? 'readonly data-breaklock="1" data-autocalc="1" aria-readonly="true"'
     : '';
-  state.schedule = validated.clean;
-  state.__dailyScheduleShapeMode = 'object';
-  state.scheduleHasErrors = !validated.ok;
-  state.scheduleErrorsByDate = validated.errorsByDate || {};
+  if (canEditSchedule) {
+    state.schedule = validated.clean;
+    state.__dailyScheduleShapeMode = 'object';
+    state.scheduleHasErrors = !validated.ok;
+    state.scheduleErrorsByDate = validated.errorsByDate || {};
+  }
 
   const disabledAttr = canEditSchedule ? '' : 'disabled';
   const refValue = String((state.reference != null) ? state.reference : (ts?.reference_number || row?.reference_number || '')).trim();
   const dow = validated.clean.date ? dowShort(validated.clean.date) : '';
   const dateDisplay = validated.clean.date ? (fmtYmdDmy(validated.clean.date) || validated.clean.date) : '';
-  const errorListHtml = validated.errors.length
+  const displayValidationErrors = !!(canEditSchedule && validated.errors.length);
+  const errorListHtml = displayValidationErrors
     ? '<ul style="margin:6px 0 0 18px;padding:0;">' + validated.errors.map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('') + '</ul>'
     : '';
   const refInputHtml = `
@@ -224264,7 +226752,7 @@ function renderDailyManualScheduleEditor(opts) {
       type="text"
       class="input"
       id="tsDailyReference"
-      data-ts-daily-field="reference"
+      data-ts-daily-field="reference" data-reference-field="1"
       value="${esc(refValue)}"
       ${disabledAttr}
     />
@@ -224410,7 +226898,7 @@ function renderDailyManualScheduleEditor(opts) {
   const previewStatus = trimStr(previewState?.status || '');
   const previewMessage = trimStr(previewState?.message || '');
   const previewNote = (() => {
-    if (previewStatus === 'loading') return 'Refreshing backend daily finance preview…';
+    if (previewStatus === 'loading') return 'Refreshing backend daily finance preview';
     if (previewStatus === 'invalid') return previewMessage || 'Fix the highlighted daily shift/break fields to refresh preview.';
     if (previewStatus === 'error') return previewMessage || 'Backend daily preview unavailable.';
     if (previewStatus === 'ready') return previewMessage || 'Showing current unsaved backend preview.';
@@ -224434,7 +226922,7 @@ function renderDailyManualScheduleEditor(opts) {
         <div class="row">
           <label>Daily schedule</label>
           <div class="controls">
-            <div id="tsDailyErrorsBanner" class="hint mini" style="${validated.errors.length ? '' : 'display:none;'}margin-bottom:6px;">
+            <div id="tsDailyErrorsBanner" class="hint mini" style="${displayValidationErrors ? '' : 'display:none;'}margin-bottom:6px;">
               Fix the highlighted daily shift/break fields before saving.${errorListHtml}
             </div>
             <div class="card" style="padding:8px;margin-bottom:8px;border:1px solid var(--line);background:var(--panel,#0f1115);">
@@ -224487,7 +226975,7 @@ function renderDailyManualScheduleEditor(opts) {
                         placeholder="HH:MM"
                         class="${startCls}"
                         id="tsDailyStart"
-                        data-ts-daily-field="start"
+                        data-ts-daily-field="start" data-daily-field="start" data-schedule-field="start" data-hours-field="start"
                         value="${esc(validated.clean.start || '')}"
                         ${disabledAttr}
                       />
@@ -224499,7 +226987,7 @@ function renderDailyManualScheduleEditor(opts) {
                         placeholder="HH:MM"
                         class="${endCls}"
                         id="tsDailyEnd"
-                        data-ts-daily-field="end"
+                        data-ts-daily-field="end" data-daily-field="end" data-schedule-field="end" data-hours-field="end"
                         value="${esc(validated.clean.end || '')}"
                         ${disabledAttr}
                       />
@@ -224511,7 +226999,7 @@ function renderDailyManualScheduleEditor(opts) {
                         placeholder="HH:MM"
                         class="${breakStartCls}"
                         id="tsDailyBreakStart"
-                        data-ts-daily-field="break_start"
+                        data-ts-daily-field="break_start" data-daily-field="break_start" data-schedule-field="break_start" data-hours-field="break_start"
                         value="${esc(breakStartValue)}"
                         ${disabledAttr}
                         ${breakWindowReadonlyAttr}
@@ -224525,7 +227013,7 @@ function renderDailyManualScheduleEditor(opts) {
                         placeholder="HH:MM"
                         class="${breakEndCls}"
                         id="tsDailyBreakEnd"
-                        data-ts-daily-field="break_end"
+                        data-ts-daily-field="break_end" data-daily-field="break_end" data-schedule-field="break_end" data-hours-field="break_end"
                         value="${esc(breakEndValue)}"
                         ${disabledAttr}
                         ${breakWindowReadonlyAttr}
@@ -224538,7 +227026,7 @@ function renderDailyManualScheduleEditor(opts) {
                         inputmode="numeric"
                         class="${breakMinsCls}"
                         id="tsDailyBreakMinutes"
-                        data-ts-daily-field="break_minutes"
+                        data-ts-daily-field="break_minutes" data-daily-field="break_minutes" data-schedule-field="break_minutes" data-hours-field="break_minutes"
                         value="${esc(breakMinsDisplayValue)}"
                         ${disabledAttr}
                         ${breakMinsLockAttr}
@@ -224554,7 +227042,7 @@ function renderDailyManualScheduleEditor(opts) {
               type="date"
               class="${dateCls}"
               id="tsDailyDate"
-              data-ts-daily-field="date"
+              data-ts-daily-field="date" data-daily-field="date" data-schedule-field="date" data-hours-field="date"
               value="${esc(validated.clean.date || '')}"
               ${disabledAttr}
               style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;"
@@ -224599,6 +227087,7 @@ function renderDailyManualScheduleEditor(opts) {
     </div>
   `;
 }
+
 
 
 async function refreshTimesheetsSummaryAfterRotation(newId, opts = {}) {
@@ -225727,9 +228216,7 @@ function renderTimesheetEvidenceTab(ctx) {
     routeType === 'WEEKLY_NHSP' ||
     routeType === 'WEEKLY_NHSP_ADJUSTMENT' ||
     basis === 'NHSP' ||
-    basis === 'NHSP_ADJUSTMENT' ||
     basis === 'HEALTHROSTER_SELF_BILL' ||
-    basis === 'HEALTHROSTER_ADJUSTMENT' ||
     (routeType === 'WEEKLY_HEALTHROSTER' && noTimesheetRequired)
   );
   const positiveEvidencePermission = !!(
@@ -225762,18 +228249,39 @@ function renderTimesheetEvidenceTab(ctx) {
         !boolish(row.evidence_document_locked) &&
         positiveEvidencePermission
       );
-  const authorised = !!boolish(row.is_authorised || ts.is_authorised || details?.tsfin?.authorised_at_utc || ts.authorised_at_utc);
+  const authorised = policy ? !!policy.isAuthorised : !!boolish(row.is_authorised || ts.is_authorised || details?.tsfin?.authorised_at_utc || ts.authorised_at_utc);
   const lockReason = String(details.evidence_lock_reason || row.evidence_lock_reason || '').trim();
   const isProtectedEvidence = (ev) => {
     const kindU = upper(ev?.kind || ev?.staged_kind || '');
+    const meta = (ev?.meta_json && typeof ev.meta_json === 'object') ? ev.meta_json : {};
+    const sourceText = [
+      ev?.source_system,
+      ev?.source_badge,
+      ev?.provenance,
+      ev?.origin,
+      meta.source_system,
+      meta.source_badge,
+      meta.provenance,
+      meta.origin
+    ].map(upper).filter(Boolean).join('|');
     return !!(
       boolish(ev?.system) ||
+      boolish(ev?.is_system) ||
       boolish(ev?.is_view_only) ||
       boolish(ev?.protected) ||
+      boolish(ev?.is_protected) ||
+      boolish(ev?.from_import) ||
+      boolish(meta.from_import) ||
+      !!ev?.import_id ||
+      !!meta.import_id ||
       kindU === 'AUTHORISATION' ||
+      kindU === 'SYSTEM' ||
       kindU === 'NHSP' ||
       kindU === 'HEALTHROSTER' ||
-      kindU === 'IMPORT'
+      kindU === 'IMPORT' ||
+      sourceText.includes('NHSP') ||
+      sourceText.includes('HEALTHROSTER') ||
+      sourceText.includes('IMPORT')
     );
   };
 
@@ -225992,7 +228500,7 @@ function renderTimesheetEvidenceTab(ctx) {
             </button>
           `;
 
-        const manageBtn = (!isAuthorisationRow)
+        const manageBtn = (!isAuthorisationRow && canManageEvidence && !protectedEvidence && canManage)
           ? `
             <button type="button"
                     class="btn mini subtle"
@@ -226086,11 +228594,14 @@ function renderTimesheetEvidenceTab(ctx) {
     </div>
   `;
 
-  const lockBanner = importAuthoritative
-    ? 'Import source evidence is review-only. Use an additional manual timesheet for expenses or extra supporting items.'
-    : (authorised
-        ? 'Payment values are locked because this timesheet is authorised. Evidence files can still be managed if the row is not invoice/document locked.'
-        : (lockReason ? `Evidence changes are locked: ${escapeHtml(lockReason)}` : ''));
+  const policyEvidenceReason = policy ? String(policy.expenseEvidenceDisabledReason || policy.expensesDisabledReason || '') : '';
+  const lockBanner = policy
+    ? (policy.canManageExpenseEvidence ? '' : (policyEvidenceReason || 'Evidence is read-only for this route/context.'))
+    : (importAuthoritative
+        ? 'Import source evidence is review-only. Use an additional manual timesheet for expenses or extra supporting items.'
+        : (authorised
+            ? 'Payment values are locked because this timesheet is authorised. Evidence files can still be managed if the row is not invoice/document locked.'
+            : (lockReason ? `Evidence changes are locked: ${escapeHtml(lockReason)}` : '')));
   const hasTimesheetEvidence = evList.some((ev) => String(ev?.kind || ev?.staged_kind || '').trim().toUpperCase() === 'TIMESHEET');
 
   return `
@@ -226125,6 +228636,8 @@ function renderTimesheetEvidenceTab(ctx) {
     </div>
   `;
 }
+
+
 
 async function openTimesheetEvidenceUploadDialog(file) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE][UPLOAD_DIALOG]');
