@@ -219862,6 +219862,7 @@ function normaliseTimesheetCtx(ctx) {
   return { row, details, related, state };
 }
 
+
 function renderTimesheetEvidenceTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE]');
   const { row, details, state } = normaliseTimesheetCtx(ctx);
@@ -219870,7 +219871,47 @@ function renderTimesheetEvidenceTab(ctx) {
   const ts = details.timesheet || {};
   const tsId = row.timesheet_id || ts.timesheet_id || '';
 
-  const evList = Array.isArray(state.evidence) ? state.evidence : [];
+  const firstEvidenceArray = (...values) => {
+    const arrays = [];
+    for (const value of values) {
+      if (Array.isArray(value)) {
+        arrays.push(value);
+      }
+    }
+    const nonEmpty = arrays.find((list) => list.length > 0);
+    return nonEmpty || arrays[0] || [];
+  };
+
+  const modalCtxEvidence = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object')
+    ? window.modalCtx
+    : {};
+
+  const evList = firstEvidenceArray(
+    state.evidence,
+    details.evidence,
+    row.evidence,
+    state.contractWeekStagedEvidence,
+    state.contract_week_staged_evidence,
+    state.stagedEvidence,
+    state.staged_evidence,
+    details.contractWeekStagedEvidence,
+    details.contract_week_staged_evidence,
+    details.stagedEvidence,
+    details.staged_evidence,
+    row.contractWeekStagedEvidence,
+    row.contract_week_staged_evidence,
+    row.stagedEvidence,
+    row.staged_evidence,
+    modalCtxEvidence?.timesheetState?.evidence,
+    modalCtxEvidence?.timesheetState?.contractWeekStagedEvidence,
+    modalCtxEvidence?.timesheetState?.contract_week_staged_evidence,
+    modalCtxEvidence?.timesheetDetails?.evidence,
+    modalCtxEvidence?.timesheetDetails?.contractWeekStagedEvidence,
+    modalCtxEvidence?.timesheetDetails?.contract_week_staged_evidence,
+    modalCtxEvidence?.contractWeekStagedEvidence,
+    modalCtxEvidence?.contract_week_staged_evidence,
+    modalCtxEvidence?.stagedEvidence
+  );
   const boolish = (v) => {
     if (v === true) return true;
     if (v === false) return false;
@@ -219910,7 +219951,16 @@ function renderTimesheetEvidenceTab(ctx) {
     state?.evidence_meta?.route_evidence_editable === true
   );
   const policy = (typeof classifyTimesheetEditDomains === 'function')
-    ? classifyTimesheetEditDomains({ row, details, timesheet: ts, tsfin: details?.tsfin, state, ctx })
+    ? classifyTimesheetEditDomains({
+        row,
+        details,
+        timesheet: ts,
+        tsfin: details?.tsfin,
+        contract_week: details?.contract_week,
+        contract_week_id: row.contract_week_id || details.contract_week_id || details?.contract_week?.id || null,
+        state,
+        ctx
+      })
     : null;
   const expenseStorageTarget = policy ? String(policy.expenseStorageTarget || '').trim().toUpperCase() : '';
   const expenseEvidenceStorageTarget = policy ? String(policy.expenseEvidenceStorageTarget || '').trim().toUpperCase() : '';
@@ -220324,7 +220374,6 @@ function renderTimesheetEvidenceTab(ctx) {
     </div>
   `;
 }
-
 // Utility: map route_type / status to pill CSS classes
 function classifyTimesheetPill(kind, value) {
   const v = String(value || '').toUpperCase();
@@ -236232,14 +236281,12 @@ async function openTimesheetEvidenceReplaceDialog(file) {
     throw err;
   }
 }
+
 async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE][REFRESH]');
   GC('refreshTimesheetEvidenceIntoModalState');
 
-  if (!timesheetId) {
-    GE();
-    throw new Error('refreshTimesheetEvidenceIntoModalState: timesheetId is required');
-  }
+  const idArg = String(timesheetId || '').trim();
 
   const mc = window.modalCtx || {};
   const data = (mc.data && typeof mc.data === 'object') ? mc.data : {};
@@ -236248,13 +236295,21 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
 
   const realTimesheetId =
     data.timesheet_id ||
+    data.current_timesheet_id ||
+    details.current_timesheet_id ||
+    details.timesheet_id ||
     details?.timesheet?.timesheet_id ||
     null;
 
   const contractWeekId =
     data.contract_week_id ||
+    data.contractWeekId ||
     details?.contract_week_id ||
+    details?.contractWeekId ||
     details?.contract_week?.id ||
+    meta.contract_week_id ||
+    meta.contractWeekId ||
+    (!realTimesheetId ? (data.id || null) : null) ||
     null;
 
   const policy = (typeof classifyTimesheetEditDomains === 'function')
@@ -236302,7 +236357,6 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
       (!realTimesheetId && contractWeekId)
     );
 
-  const idArg = String(timesheetId || '').trim();
   const effectiveTimesheetId = realTimesheetId ? String(realTimesheetId).trim() : '';
   const effectiveContractWeekId = contractWeekId ? String(contractWeekId).trim() : '';
 
@@ -236395,17 +236449,81 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
       if (!out.display_name && out.filename) out.display_name = out.filename;
       if (!out.filename && out.display_name) out.filename = out.display_name;
 
+      if (usePlannedWeekEndpoint) {
+        out.is_staged_context = true;
+        out.contract_week_id = out.contract_week_id || targetWeekId || null;
+        out.queue_id = out.queue_id || out.id || null;
+        out.kind = String(out.kind || out.staged_kind || '').trim().toUpperCase() || out.kind;
+        out.staged_kind = out.staged_kind || out.kind || null;
+        if (!out.source_badge) out.source_badge = 'Staged';
+        if (typeof out.can_return_to_queue !== 'boolean') out.can_return_to_queue = !out.system;
+      }
+
       return out;
     });
 
-    window.modalCtx = window.modalCtx || {};
-    window.modalCtx.timesheetState = window.modalCtx.timesheetState || {};
-    window.modalCtx.timesheetState.evidence = normalised;
+    const persistEvidenceState = () => {
+      window.modalCtx = window.modalCtx || {};
+      window.modalCtx.timesheetState = (window.modalCtx.timesheetState && typeof window.modalCtx.timesheetState === 'object')
+        ? window.modalCtx.timesheetState
+        : {};
+      window.modalCtx.timesheetDetails = (window.modalCtx.timesheetDetails && typeof window.modalCtx.timesheetDetails === 'object')
+        ? window.modalCtx.timesheetDetails
+        : {};
+      window.modalCtx.data = (window.modalCtx.data && typeof window.modalCtx.data === 'object')
+        ? window.modalCtx.data
+        : {};
+
+      const targetDetails = window.modalCtx.timesheetDetails;
+      const targetState = window.modalCtx.timesheetState;
+      const targetData = window.modalCtx.data;
+      const cloned = normalised.map((item) => ({ ...(item || {}) }));
+
+      targetState.evidence = cloned;
+      targetDetails.evidence = cloned;
+      targetData.evidence = cloned;
+
+      if (usePlannedWeekEndpoint) {
+        targetState.stagedEvidence = cloned;
+        targetState.contractWeekStagedEvidence = cloned;
+        targetState.contract_week_staged_evidence = cloned;
+        targetDetails.staged_evidence = cloned;
+        targetDetails.contractWeekStagedEvidence = cloned;
+        targetDetails.contract_week_staged_evidence = cloned;
+        targetData.staged_evidence = cloned;
+        targetData.contractWeekStagedEvidence = cloned;
+        targetData.contract_week_staged_evidence = cloned;
+        window.modalCtx.stagedEvidence = cloned;
+        window.modalCtx.contractWeekStagedEvidence = cloned;
+        window.modalCtx.contract_week_staged_evidence = cloned;
+
+        if (targetWeekId) {
+          targetDetails.contract_week_id = targetDetails.contract_week_id || targetWeekId;
+          targetData.contract_week_id = targetData.contract_week_id || targetWeekId;
+          targetDetails.contract_week = (targetDetails.contract_week && typeof targetDetails.contract_week === 'object')
+            ? targetDetails.contract_week
+            : {};
+          targetDetails.contract_week.id = targetDetails.contract_week.id || targetWeekId;
+        }
+      } else {
+        window.modalCtx.timesheetEvidence = cloned;
+        targetDetails.timesheetEvidence = cloned;
+        targetState.timesheetEvidence = cloned;
+      }
+    };
+
+    persistEvidenceState();
 
     try {
       window.__tsEvidenceDownload = async (evidenceId) => {
         const mc2 = window.modalCtx || {};
-        const evs = mc2?.timesheetState?.evidence || [];
+        const evs =
+          mc2?.timesheetState?.evidence ||
+          mc2?.timesheetState?.contractWeekStagedEvidence ||
+          mc2?.timesheetDetails?.evidence ||
+          mc2?.timesheetDetails?.contract_week_staged_evidence ||
+          mc2?.contractWeekStagedEvidence ||
+          [];
         const ev = (Array.isArray(evs) ? evs : []).find(x => String(x?.id || '') === String(evidenceId || ''));
         if (!ev) {
           window.__toast && window.__toast('Evidence item not found');
@@ -236492,6 +236610,7 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
     throw err;
   }
 }
+
 
 
 async function getTimesheetPdfUrl(timesheetId) {
