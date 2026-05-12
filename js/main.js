@@ -68825,6 +68825,7 @@ function summaryMaybeResortDom(section) {
 
   return true;
 }
+
 async function refreshContractWeekSummaryAfterPlannedChange(contractWeekId, ctx) {
   const targetContractWeekId = String(contractWeekId || '').trim();
   if (!targetContractWeekId) {
@@ -69025,14 +69026,15 @@ async function refreshContractWeekSummaryAfterPlannedChange(contractWeekId, ctx)
   const canonicalId = String(canonical?.id || '').trim();
   const canonicalTimesheetId = String(canonical?.timesheet_id || '').trim();
   const canonicalContractWeekId = String(canonical?.contract_week_id || '').trim();
+  const canonicalStableContractWeekId = canonicalContractWeekId || ((!canonicalTimesheetId && canonicalId === targetContractWeekId) ? canonicalId : '');
 
   const contractWeekMatches =
-    !!canonicalContractWeekId &&
-    canonicalContractWeekId === targetContractWeekId;
+    !!canonicalStableContractWeekId &&
+    canonicalStableContractWeekId === targetContractWeekId;
 
   const stableIdentityMatches =
     (!!canonicalId && canonicalId === targetContractWeekId) ||
-    (!!canonicalContractWeekId && canonicalContractWeekId === targetContractWeekId);
+    (!!canonicalStableContractWeekId && canonicalStableContractWeekId === targetContractWeekId);
 
   const isStillPlannedWeekRow = !canonicalTimesheetId;
 
@@ -69094,6 +69096,47 @@ async function refreshContractWeekSummaryAfterPlannedChange(contractWeekId, ctx)
   } catch {}
 
   if (!patched) {
+    if (
+      isActiveTimesheetsSection &&
+      summaryCtx &&
+      summaryCtx.inRelatedMode !== true &&
+      typeof summaryApplySavedRecordToActiveSummary === 'function'
+    ) {
+      try {
+        const insertCandidate = {
+          ...canonical,
+          id: canonicalId || targetContractWeekId,
+          contract_week_id: canonicalStableContractWeekId || targetContractWeekId,
+          row_key: canonical.row_key || `contract_week:${canonicalStableContractWeekId || targetContractWeekId}`
+        };
+        const insertResult = await summaryApplySavedRecordToActiveSummary('timesheets', insertCandidate, summaryCtx);
+        const inserted = !!(insertResult && insertResult.ok === true && String(insertResult.action || '').toLowerCase() === 'inserted');
+        const patchedViaApply = !!(insertResult && insertResult.ok === true && String(insertResult.action || '').toLowerCase() === 'patched');
+        if (inserted || patchedViaApply) {
+          try {
+            console.log('[TS][BULK-PROCESS][PLANNED-SUMMARY][INSERT_RESULT]', {
+              target_contract_week_id: targetContractWeekId,
+              insert_result: safeClone(insertResult),
+              action: inserted ? 'inserted' : 'patched'
+            });
+          } catch {}
+          return {
+            ok: true,
+            action: inserted ? 'inserted' : 'patched',
+            contract_week_id: targetContractWeekId,
+            row_id: canonicalId || targetContractWeekId
+          };
+        }
+      } catch (err) {
+        try {
+          console.log('[TS][BULK-PROCESS][PLANNED-SUMMARY][INSERT_EXCEPTION]', {
+            target_contract_week_id: targetContractWeekId,
+            error: String(err?.message || err || 'summaryApplySavedRecordToActiveSummary failed')
+          });
+        } catch {}
+      }
+    }
+
     return await fallbackRenderAll('planned-row-not-visible');
   }
 
@@ -69144,6 +69187,7 @@ async function refreshContractWeekSummaryAfterPlannedChange(contractWeekId, ctx)
     row_id: canonicalId || targetContractWeekId
   };
 }
+
 
 
 async function summaryFetchCanonicalRow(section, id, ctx) {
@@ -107573,6 +107617,8 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     opts.no_background_revalidate === true ||
     opts.mutationRefresh === true ||
     opts.mutation_refresh === true ||
+    f.mutationRefresh === true ||
+    f.mutation_refresh === true ||
     opts.patchOnly === true ||
     opts.patch_only === true ||
     opts.adoptionFlow === true ||
@@ -107657,9 +107703,88 @@ async function fetchBulkProcessDataset(filters, options = {}) {
   const showWeeklyManualBool = showWeeklyManual != null ? boolValue(showWeeklyManual, true) : null;
   const showDailyManualBool = showDailyManual != null ? boolValue(showDailyManual, true) : null;
 
+  const normaliseIdentityValues = (...values) => {
+    const out = [];
+    const addOne = (value) => {
+      if (value == null) return;
+      if (Array.isArray(value)) {
+        value.forEach(addOne);
+        return;
+      }
+      if (value instanceof Set) {
+        Array.from(value.values()).forEach(addOne);
+        return;
+      }
+      if (typeof value === 'string') {
+        value.split(',').forEach((part) => {
+          const s = cleanText(part);
+          if (s && !out.includes(s)) out.push(s);
+        });
+        return;
+      }
+      const s = cleanText(value);
+      if (s && !out.includes(s)) out.push(s);
+    };
+    values.forEach(addOne);
+    return out;
+  };
+
+  const rowKeyValues = normaliseIdentityValues(
+    f.row_key,
+    f.rowKey,
+    f.focus_row_key,
+    f.focusRowKey,
+    f.active_row_key,
+    f.activeRowKey
+  );
+  const rowKeys = normaliseIdentityValues(
+    rowKeyValues,
+    f.row_keys,
+    f.rowKeys,
+    f.selected_row_keys,
+    f.selectedRowKeys
+  );
+  const previousRowKeyValues = normaliseIdentityValues(
+    f.previous_row_key,
+    f.previousRowKey,
+    f.source_row_key,
+    f.sourceRowKey,
+    f.original_row_key,
+    f.originalRowKey
+  );
+  const timesheetIdValues = normaliseIdentityValues(f.timesheet_id, f.timesheetId);
+  const timesheetIds = normaliseIdentityValues(timesheetIdValues, f.timesheet_ids, f.timesheetIds);
+  const contractWeekIdValues = normaliseIdentityValues(f.contract_week_id, f.contractWeekId);
+  const contractWeekIds = normaliseIdentityValues(contractWeekIdValues, f.contract_week_ids, f.contractWeekIds);
+
+  const rowKey = rowKeyValues[0] || rowKeys[0] || null;
+  const previousRowKey = previousRowKeyValues[0] || null;
+  const timesheetId = timesheetIdValues[0] || timesheetIds[0] || null;
+  const contractWeekId = contractWeekIdValues[0] || contractWeekIds[0] || null;
+  const hasIdentityFilters = !!(
+    rowKey ||
+    rowKeys.length ||
+    previousRowKey ||
+    timesheetId ||
+    timesheetIds.length ||
+    contractWeekId ||
+    contractWeekIds.length
+  );
+  const appendParamValues = (key, values) => {
+    const list = normaliseIdentityValues(values);
+    for (const value of list) qs.append(key, value);
+  };
+
   if (qText != null && String(qText).trim()) qs.set('q', String(qText).trim());
   if (candidateId != null && String(candidateId).trim()) qs.set('candidate_id', String(candidateId).trim());
   if (clientId != null && String(clientId).trim()) qs.set('client_id', String(clientId).trim());
+  if (rowKey) qs.set('row_key', rowKey);
+  appendParamValues('row_keys', rowKeys);
+  if (previousRowKey) qs.set('previous_row_key', previousRowKey);
+  if (timesheetId) qs.set('timesheet_id', timesheetId);
+  appendParamValues('timesheet_ids', timesheetIds);
+  if (contractWeekId) qs.set('contract_week_id', contractWeekId);
+  appendParamValues('contract_week_ids', contractWeekIds);
   if (dateFrom != null && cleanText(dateFrom)) qs.set('date_from', cleanText(dateFrom));
   if (dateTo != null && cleanText(dateTo)) qs.set('date_to', cleanText(dateTo));
   if (weekEndingFrom != null && cleanText(weekEndingFrom)) qs.set('week_ending_from', cleanText(weekEndingFrom));
@@ -107677,6 +107802,13 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     q: (qText != null && String(qText).trim()) ? String(qText).trim() : '',
     candidate_id: (candidateId != null && String(candidateId).trim()) ? String(candidateId).trim() : '',
     client_id: (clientId != null && String(clientId).trim()) ? String(clientId).trim() : '',
+    row_key: rowKey || '',
+    row_keys: rowKeys.slice(),
+    previous_row_key: previousRowKey || '',
+    timesheet_id: timesheetId || '',
+    timesheet_ids: timesheetIds.slice(),
+    contract_week_id: contractWeekId || '',
+    contract_week_ids: contractWeekIds.slice(),
     date_from: (dateFrom != null && cleanText(dateFrom)) ? cleanText(dateFrom) : '',
     date_to: (dateTo != null && cleanText(dateTo)) ? cleanText(dateTo) : '',
     week_ending_from: (weekEndingFrom != null && cleanText(weekEndingFrom)) ? cleanText(weekEndingFrom) : '',
@@ -108076,7 +108208,17 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     return out;
   };
 
-  const bypassCache = !!opts.force;
+  const bypassCache = !!(
+    opts.force === true ||
+    opts.forceFreshDataset === true ||
+    opts.force_fresh_dataset === true ||
+    opts.mutationRefresh === true ||
+    opts.mutation_refresh === true ||
+    f.forceFreshDataset === true ||
+    f.force_fresh_dataset === true ||
+    f.mutationRefresh === true ||
+    f.mutation_refresh === true
+  );
   const baseSignature = requestSignature;
 
   fetchBulkProcessDataset.__request_seq = Number(fetchBulkProcessDataset.__request_seq || 0) || 0;
@@ -108152,6 +108294,13 @@ async function fetchBulkProcessDataset(filters, options = {}) {
         q: (qText != null && String(qText).trim()) ? String(qText).trim() : null,
         candidate_id: (candidateId != null && String(candidateId).trim()) ? String(candidateId).trim() : null,
         client_id: (clientId != null && String(clientId).trim()) ? String(clientId).trim() : null,
+        row_key: rowKey || null,
+        row_keys: rowKeys.slice(),
+        previous_row_key: previousRowKey || null,
+        timesheet_id: timesheetId || null,
+        timesheet_ids: timesheetIds.slice(),
+        contract_week_id: contractWeekId || null,
+        contract_week_ids: contractWeekIds.slice(),
         date_from: (dateFrom != null && cleanText(dateFrom)) ? cleanText(dateFrom) : null,
         date_to: (dateTo != null && cleanText(dateTo)) ? cleanText(dateTo) : null,
         week_ending_from: (weekEndingFrom != null && cleanText(weekEndingFrom)) ? cleanText(weekEndingFrom) : null,
@@ -118564,6 +118713,8 @@ function ensureBulkProcessRelatedContract(relatedObj, rowObj, detailsObj) {
   };
 }
 
+
+
 async function openBulkProcessWorkbench(seed = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][OPEN]');
   GC('openBulkProcessWorkbench');
@@ -118574,24 +118725,191 @@ async function openBulkProcessWorkbench(seed = {}) {
 
   const trimStr = (v) => String(v == null ? '' : v).trim();
 
+  const normaliseSeedIdentityKey = (candidate, ids = {}) => {
+    const raw = trimStr(candidate);
+    const identity = (ids && typeof ids === 'object') ? ids : {};
+    const tsId = trimStr(identity.timesheet_id || identity.timesheetId || identity.current_timesheet_id || identity.currentTimesheetId || '');
+    const cwId = trimStr(identity.contract_week_id || identity.contractWeekId || '');
+    const bareUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    if (tsId) {
+      if (!raw) return `timesheet:${tsId}`;
+      if (/^timesheet:/i.test(raw)) {
+        const suffix = trimStr(raw.replace(/^timesheet:/i, ''));
+        return `timesheet:${suffix || tsId}`;
+      }
+      if (!/^contract_week:/i.test(raw) && (raw === tsId || bareUuid.test(raw))) return `timesheet:${tsId}`;
+      return raw;
+    }
+
+    if (cwId) {
+      if (!raw) return `contract_week:${cwId}`;
+      if (/^contract_week:/i.test(raw)) {
+        const suffix = trimStr(raw.replace(/^contract_week:/i, ''));
+        return `contract_week:${suffix || cwId}`;
+      }
+      return `contract_week:${cwId}`;
+    }
+
+    return raw;
+  };
+
+  const collectSeedArray = (value) => {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    if (value instanceof Set) return Array.from(value.values());
+    if (typeof value === 'string') {
+      return value.split(',').map((item) => trimStr(item)).filter(Boolean);
+    }
+    return [value];
+  };
+
+  const normaliseSeedBucket = (rowLike) => {
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const raw = String(row.bulk_process_bucket || row.tools_stage || row.summary_stage || row.processing_status || '').trim().toUpperCase();
+    if (raw === 'UNPROCESSED') return 'UNPROCESSED';
+    if (raw === 'PROCESSED') return 'PROCESSED';
+    const rowKey = trimStr(row.row_key || row.new_row_key || row.rowKey || '');
+    const tsId = trimStr(row.timesheet_id || row.current_timesheet_id || row.requested_timesheet_id || row.timesheetId || '');
+    const cwId = trimStr(row.contract_week_id || row.contractWeekId || '');
+    if ((/^contract_week:/i.test(rowKey) || cwId) && !tsId) return 'UNPROCESSED';
+    return 'PROCESSED';
+  };
+
   const buildRowKeyFromSeed = (seedObj) => {
     const src = (seedObj && typeof seedObj === 'object') ? seedObj : {};
-    const directKey = trimStr(src.row_key || src.rowKey || '');
+    const patch = (src.row_patch && typeof src.row_patch === 'object')
+      ? src.row_patch
+      : ((src.rowPatch && typeof src.rowPatch === 'object')
+          ? src.rowPatch
+          : (Array.isArray(src.row_patches) && src.row_patches[0] && typeof src.row_patches[0] === 'object')
+            ? src.row_patches[0]
+            : (Array.isArray(src.rowPatches) && src.rowPatches[0] && typeof src.rowPatches[0] === 'object')
+              ? src.rowPatches[0]
+              : null);
+
+    const tsId = trimStr(src.timesheet_id || src.timesheetId || patch?.timesheet_id || patch?.timesheetId || patch?.current_timesheet_id || patch?.currentTimesheetId || '');
+    const weekId = trimStr(src.contract_week_id || src.contractWeekId || patch?.contract_week_id || patch?.contractWeekId || '');
+    const directKey = normaliseSeedIdentityKey(
+      src.focus_row_key ||
+      src.focusRowKey ||
+      src.active_row_key ||
+      src.activeRowKey ||
+      src.row_key ||
+      src.rowKey ||
+      patch?.row_key ||
+      patch?.rowKey ||
+      patch?.new_row_key ||
+      patch?.newRowKey ||
+      '',
+      { timesheet_id: tsId, contract_week_id: weekId }
+    );
     if (directKey) return directKey;
 
-    const tsId = trimStr(src.timesheet_id || src.timesheetId || '');
     if (tsId) return `timesheet:${tsId}`;
 
-    const weekId = trimStr(src.contract_week_id || src.contractWeekId || '');
     if (weekId) return `contract_week:${weekId}`;
 
     return '';
   };
 
+  const normaliseSeedPatchRow = (patchLike) => {
+    const patch = (patchLike && typeof patchLike === 'object' && !Array.isArray(patchLike)) ? deep(patchLike) : null;
+    if (!patch) return null;
+
+    const rawRowKey = trimStr(
+      patch.row_key ||
+      patch.rowKey ||
+      patch.new_row_key ||
+      patch.newRowKey ||
+      ''
+    );
+    const tsId = trimStr(patch.timesheet_id || patch.timesheetId || patch.current_timesheet_id || patch.currentTimesheetId || patch.requested_timesheet_id || patch.requestedTimesheetId || '');
+    const cwId = trimStr(patch.contract_week_id || patch.contractWeekId || '');
+    const rowKey = normaliseSeedIdentityKey(rawRowKey, { timesheet_id: tsId, contract_week_id: cwId });
+    const canonicalRowKey = rowKey || (tsId ? `timesheet:${tsId}` : (cwId ? `contract_week:${cwId}` : ''));
+
+    if (!canonicalRowKey && !tsId && !cwId) return null;
+
+    patch.row_key = canonicalRowKey || null;
+    patch.new_row_key = patch.new_row_key || canonicalRowKey || null;
+    if (tsId) {
+      patch.timesheet_id = patch.timesheet_id || tsId;
+      patch.current_timesheet_id = patch.current_timesheet_id || tsId;
+    }
+    if (cwId) patch.contract_week_id = patch.contract_week_id || cwId;
+
+    const bucket = normaliseSeedBucket(patch);
+    patch.bulk_process_bucket = bucket;
+    patch.summary_stage = patch.summary_stage || bucket;
+    patch.tools_stage = patch.tools_stage || bucket;
+    return patch;
+  };
+
+  const seedRowPatches = (() => {
+    const rows = [];
+    const seen = new Set();
+    const add = (candidate) => {
+      const row = normaliseSeedPatchRow(candidate);
+      if (!row) return;
+      const key = `${trimStr(row.row_key || '')}|${trimStr(row.timesheet_id || row.current_timesheet_id || '')}|${trimStr(row.contract_week_id || '')}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      rows.push(row);
+    };
+
+    add(seed?.row_patch);
+    add(seed?.rowPatch);
+    add(seed?.createdRowPatch);
+    add(seed?.created_row_patch);
+    collectSeedArray(seed?.row_patches).forEach(add);
+    collectSeedArray(seed?.rowPatches).forEach(add);
+    collectSeedArray(seed?.knownRowPatches).forEach(add);
+    collectSeedArray(seed?.known_row_patches).forEach(add);
+
+    return rows;
+  })();
+
+  const seedPrimaryRowPatch = seedRowPatches[0] || null;
+  const rawSeedFocusRowKey = trimStr(seed?.focus_row_key || seed?.focusRowKey || '');
+  const seedFocusRowKey = trimStr(
+    buildRowKeyFromSeed({
+      ...((seed && typeof seed === 'object') ? seed : {}),
+      ...(seedPrimaryRowPatch ? { row_patch: seedPrimaryRowPatch } : {}),
+      focus_row_key: rawSeedFocusRowKey
+    }) ||
+    buildRowKeyFromSeed(seedPrimaryRowPatch || {}) ||
+    buildRowKeyFromSeed(seed || {})
+  );
+  const seedSelectedRowKeys = (() => {
+    const keys = [];
+    const addKey = (value) => {
+      const key = buildRowKeyFromSeed({ ...((seed && typeof seed === 'object') ? seed : {}), focus_row_key: value, row_patch: seedPrimaryRowPatch || seed?.row_patch || seed?.rowPatch || null });
+      if (!key || keys.includes(key)) return;
+      keys.push(key);
+    };
+    collectSeedArray(seed?.selected_row_keys).forEach(addKey);
+    collectSeedArray(seed?.selectedRowKeys).forEach(addKey);
+    addKey(seedFocusRowKey);
+    return keys;
+  })();
+  const seedTimesheetId = trimStr(seed?.timesheet_id || seed?.timesheetId || seedPrimaryRowPatch?.timesheet_id || seedPrimaryRowPatch?.current_timesheet_id || '');
+  const seedContractWeekId = trimStr(seed?.contract_week_id || seed?.contractWeekId || seedPrimaryRowPatch?.contract_week_id || '');
+  const seedForceFreshDataset = !!(seed?.forceFreshDataset === true || seed?.force_fresh_dataset === true || seed?.force === true);
+  const seedMutationRefresh = !!(seed?.mutationRefresh === true || seed?.mutation_refresh === true || seedForceFreshDataset || seedRowPatches.length || seedFocusRowKey);
+  const seedMutationSeq = seedMutationRefresh ? Date.now() : 0;
+
   const initialFilters = {
     q: trimStr(seed.q || seed.candidate_text || seed.candidateText || ''),
-    candidate_id: trimStr(seed.candidate_id || seed.candidateId || ''),
-    client_id: trimStr(seed.client_id || seed.clientId || ''),
+    candidate_id: trimStr(seed.candidate_id || seed.candidateId || seedPrimaryRowPatch?.candidate_id || ''),
+    client_id: trimStr(seed.client_id || seed.clientId || seedPrimaryRowPatch?.client_id || ''),
+    row_key: seedFocusRowKey || '',
+    row_keys: seedSelectedRowKeys.length ? seedSelectedRowKeys.slice() : [],
+    timesheet_id: seedTimesheetId || '',
+    timesheet_ids: seedTimesheetId ? [seedTimesheetId] : [],
+    contract_week_id: seedContractWeekId || '',
+    contract_week_ids: seedContractWeekId ? [seedContractWeekId] : [],
+    previous_row_key: trimStr(seed.previous_row_key || seed.previousRowKey || seed.source_row_key || seed.sourceRowKey || seed.original_row_key || seed.originalRowKey || ''),
     show_weekly_manual:
       (Object.prototype.hasOwnProperty.call(seed || {}, 'show_weekly_manual'))
         ? !!seed.show_weekly_manual
@@ -118610,19 +118928,27 @@ async function openBulkProcessWorkbench(seed = {}) {
           )
   };
 
+  const seedUnprocessedRows = seedRowPatches.filter((row) => normaliseSeedBucket(row) === 'UNPROCESSED');
+  const seedProcessedRows = seedRowPatches.filter((row) => normaliseSeedBucket(row) !== 'UNPROCESSED');
+  const seedDatasetCounts = {
+    unprocessed: seedUnprocessedRows.length,
+    processed: seedProcessedRows.length,
+    total: seedUnprocessedRows.length + seedProcessedRows.length
+  };
+
   const state = {
     filters: deep(initialFilters),
     dataset: {
       filters: deep(initialFilters),
-      counts: { unprocessed: 0, processed: 0, total: 0 },
-      unprocessed_rows: [],
-      processed_rows: []
+      counts: seedDatasetCounts,
+      unprocessed_rows: deep(seedUnprocessedRows),
+      processed_rows: deep(seedProcessedRows)
     },
-    selected_row_keys: [],
+    selected_row_keys: seedSelectedRowKeys.slice(),
     view_mode: trimStr(seed.view_mode || seed.viewMode || 'preview') || 'preview',
     preview_mode: trimStr(seed.preview_mode || seed.previewMode || 'split') || 'split',
-    active_row_key: null,
-    active_row: null,
+    active_row_key: seedFocusRowKey || (seedPrimaryRowPatch ? trimStr(seedPrimaryRowPatch.row_key || '') : null) || null,
+    active_row: seedPrimaryRowPatch ? deep(seedPrimaryRowPatch) : null,
     active_context: null,
     active_context_profile: '',
     active_details: null,
@@ -118669,7 +118995,10 @@ async function openBulkProcessWorkbench(seed = {}) {
     error_text: '',
     shell_open: false,
     seed: deep(seed || {}),
-    __active_context_is_minimal: false,
+    __bulk_process_mutation_seq: seedMutationSeq,
+    __bulk_process_seed_row_patches: deep(seedRowPatches),
+    __bulk_process_seed_focus_row_key: seedFocusRowKey || '',
+    __active_context_is_minimal: seedPrimaryRowPatch ? true : false,
     __hydrating_active_context: null,
     __hydrating_active_context_identity: '',
     __bulk_process_row_context_cache: {},
@@ -119034,6 +119363,40 @@ async function openBulkProcessWorkbench(seed = {}) {
       ctx: minimalCtx
     };
   };
+
+  if (state.active_row && !state.active_ctx) {
+    try {
+      const minimalSeedContext = buildMinimalActiveContext(state.active_row);
+      state.active_details = minimalSeedContext.details || null;
+      state.active_ctx = minimalSeedContext.ctx || null;
+      state.active_context = {
+        ok: true,
+        context_type: 'bulk_process',
+        context_kind: 'bulk_process_row_context',
+        profile: 'status_header',
+        context_profile: 'status_header',
+        row: deep(state.active_row),
+        data_row: deep(state.active_row),
+        details: deep(minimalSeedContext.details || {}),
+        row_key: trimStr(state.active_row.row_key || state.active_row_key || ''),
+        row_signature: trimStr(state.active_row.row_signature || ''),
+        is_hydrated: false,
+        hydration_required: true,
+        context_stale: false,
+        slim_context: true,
+        seeded_from_mutation_patch: true,
+        __context_options: {
+          profile: 'status_header',
+          context_profile: 'status_header',
+          include_evidence: false
+        }
+      };
+      state.active_context_profile = 'status_header';
+      state.__active_context_is_minimal = true;
+      state.__bulk_process_empty_state = false;
+      state.__bulk_process_empty_state_identity = '';
+    } catch {}
+  }
 
 
   const fetchBulkProcessRowContextPayload = async (rowObj, options = {}) => {
@@ -120708,6 +121071,26 @@ async function openBulkProcessWorkbench(seed = {}) {
     }
   };
 
+  const openAsRoot = !!(seed?.open_as_root === true || seed?.openAsRoot === true || seed?.replace_current_workbench === true || seed?.replaceCurrentWorkbench === true);
+  if (openAsRoot) {
+    try {
+      const modalStack = Array.isArray(window.__modalStack) ? window.__modalStack : null;
+      if (modalStack && modalStack.length) {
+        for (let i = modalStack.length - 1; i >= 0; i -= 1) {
+          const fr = modalStack[i];
+          try { if (typeof fr?._onDismiss === 'function') fr._onDismiss(); } catch {}
+          try { if (typeof fr?._detachDirty === 'function') fr._detachDirty(); } catch {}
+          try { if (typeof fr?._detachGlobal === 'function') fr._detachGlobal(); } catch {}
+          try { if (fr) fr._wired = false; } catch {}
+          modalStack.splice(i, 1);
+        }
+      }
+      try { document.onmousemove = null; } catch {}
+      try { document.onmouseup = null; } catch {}
+      try { document.getElementById('modal')?.classList.remove('dragging'); } catch {}
+    } catch {}
+  }
+
   window.modalCtx = {
     entity: 'bulk-process',
     data: {},
@@ -120739,7 +121122,9 @@ async function openBulkProcessWorkbench(seed = {}) {
       noParentGate: true,
       showSave: false,
       showApply: false,
-      stayOpenOnSave: false
+      stayOpenOnSave: false,
+      open_as_root: openAsRoot,
+      replace_current_workbench: openAsRoot
     }
   );
 
@@ -120747,7 +121132,20 @@ async function openBulkProcessWorkbench(seed = {}) {
 
   try {
     await withExistingModalLoadingSpinner(state, 'Opening Bulk Process', async () => {
-      await refreshDatasetAndActiveRow({ datasetOnly: true, minimalActiveContext: true, deferActiveHydration: true, skipQueueRefresh: true });
+      await refreshDatasetAndActiveRow({
+        datasetOnly: true,
+        minimalActiveContext: true,
+        deferActiveHydration: true,
+        skipQueueRefresh: true,
+        expectedRowKey: seedFocusRowKey || undefined,
+        knownRowPatches: seedRowPatches.length ? seedRowPatches : undefined,
+        rowPatches: seedRowPatches.length ? seedRowPatches : undefined,
+        mutationRefresh: seedMutationRefresh,
+        mutationSeq: seedMutationSeq,
+        forceFreshDataset: seedForceFreshDataset || seedMutationRefresh,
+        forceDatasetFetch: seedForceFreshDataset || seedMutationRefresh,
+        noBackgroundRevalidate: seedMutationRefresh
+      });
     });
   } catch (e) {
     L('ERROR', e);
@@ -120755,7 +121153,6 @@ async function openBulkProcessWorkbench(seed = {}) {
 
   GE();
 }
-
 
 
 
@@ -134324,6 +134721,7 @@ async function rerenderBulkProcessWorkbench(state, logPrefix) {
   }
 }
 
+
 async function handleBulkProcessSave(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][SAVE]');
   GC('handleBulkProcessSave');
@@ -134359,6 +134757,8 @@ async function handleBulkProcessSave(state) {
   const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const upper = (v) => String(v == null ? '' : v).trim().toUpperCase();
+  const expenseStorageTarget = upper(editability?.expenseStorageTarget || '');
+  const supportsUnprocessedExpenseDraft = editability?.supportsUnprocessedExpenseDraft === true;
 
   const buildFallbackRelated = (rowObj, detailsObj) => {
     const row = (rowObj && typeof rowObj === 'object') ? rowObj : {};
@@ -134970,17 +135370,35 @@ async function handleBulkProcessSave(state) {
       GE();
       return { ok: false, error: 'EXPENSES_EDIT_BLOCKED', message: st.error_text, evidenceRequired: false };
     }
-    const plannedManualDraftExpenseSave = !!(expensesChanged && isPlannedWeeklyWithoutTs && !actualTimesheetId && !!weekId);
+    const plannedContractWeekExpenseDraftSave = !!(
+      expensesChanged &&
+      expenseStorageTarget === 'CONTRACT_WEEK_DRAFT' &&
+      supportsUnprocessedExpenseDraft &&
+      isPlannedWeeklyWithoutTs &&
+      !actualTimesheetId &&
+      !!weekId
+    );
+    const tsfinExpenseSave = !!(expensesChanged && expenseStorageTarget === 'TSFIN');
 
-    if (expensesChanged && !actualTimesheetId && !plannedManualDraftExpenseSave) {
+    if (expensesChanged && !actualTimesheetId && !plannedContractWeekExpenseDraftSave) {
       st.saving = false;
-      st.error_text = 'A real current timesheet is required before saving staged expenses.';
+      st.error_text = expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
+        ? 'contract_week_id missing; cannot save planned-week expenses.'
+        : 'A real current timesheet is required before saving staged expenses.';
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
       st.__suppress_dirty_marking = false;
       GE();
       return { ok: false, error: 'TIMESHEET_ID_REQUIRED', message: st.error_text, evidenceRequired: false };
     }
-    if (expensesChanged && !plannedManualDraftExpenseSave && typeof commitTimesheetExpensesMileageDraft !== 'function') {
+    if (expensesChanged && !plannedContractWeekExpenseDraftSave && expenseStorageTarget !== 'TSFIN') {
+      st.saving = false;
+      st.error_text = trimStr(editability?.expensesDisabledReason || '') || 'Expenses cannot be edited for this row.';
+      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
+      st.__suppress_dirty_marking = false;
+      GE();
+      return { ok: false, error: 'EXPENSE_STORAGE_TARGET_UNAVAILABLE', message: st.error_text, evidenceRequired: false };
+    }
+    if (tsfinExpenseSave && typeof commitTimesheetExpensesMileageDraft !== 'function') {
       st.saving = false;
       st.error_text = 'Unable to save expenses right now.';
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
@@ -135005,7 +135423,7 @@ async function handleBulkProcessSave(state) {
       return { ok: false, no_changes: true };
     }
 
-    if (!editability.canSave && !(expensesChanged && editability.canEditExpenses === true) && !plannedManualDraftExpenseSave) {
+    if (!editability.canSave && !(expensesChanged && editability.canEditExpenses === true) && !plannedContractWeekExpenseDraftSave) {
       st.saving = false;
       st.error_text = 'This row cannot currently be saved.';
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
@@ -135014,27 +135432,37 @@ async function handleBulkProcessSave(state) {
       return { ok: false, error: 'SAVE_BLOCKED', message: st.error_text, evidenceRequired: false };
     }
 
-    if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly || plannedManualDraftExpenseSave) && !weekId) {
+    if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly || plannedContractWeekExpenseDraftSave) && !weekId) {
       throw new Error('contract_week_id missing; cannot save weekly row.');
     }
 
     let saveResult = null;
 
-    if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly || plannedManualDraftExpenseSave)) {
+    if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly || plannedContractWeekExpenseDraftSave)) {
       if (isPlannedWeeklyWithoutTs) {
-        const plannedDraftPayload = {
-          planned_schedule_json: scheduleChangedWeekly
-            ? (Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [])
-            : (Array.isArray(currentWeeklyScheduleBaseline) ? currentWeeklyScheduleBaseline : []),
-          additional_units_week: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasWeek || {}) } : { ...(currentExtrasWeek || {}) },
-          additional_units_per_day: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasPerDay || {}) } : { ...(currentExtrasPerDay || {}) },
-          bulk_process: true,
-          return_bulk_patch: true,
-          context: 'bulk_process',
-          expected_row_signature: activeRowSignature || null,
-          row_signature: activeRowSignature || null
-        };
-        if (expensesChanged) plannedDraftPayload.expenses_draft = deep(stagedExpenses);
+        const plannedDraftExpensesOnly = !!(plannedContractWeekExpenseDraftSave && !scheduleChangedWeekly && !extrasChangedWeekly);
+        const plannedDraftPayload = plannedDraftExpensesOnly
+          ? {
+              expenses_draft: deep(stagedExpenses),
+              bulk_process: true,
+              return_bulk_patch: true,
+              context: 'bulk_process',
+              expected_row_signature: activeRowSignature || null,
+              row_signature: activeRowSignature || null
+            }
+          : {
+              planned_schedule_json: scheduleChangedWeekly
+                ? (Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [])
+                : (Array.isArray(currentWeeklyScheduleBaseline) ? currentWeeklyScheduleBaseline : []),
+              additional_units_week: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasWeek || {}) } : { ...(currentExtrasWeek || {}) },
+              additional_units_per_day: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasPerDay || {}) } : { ...(currentExtrasPerDay || {}) },
+              bulk_process: true,
+              return_bulk_patch: true,
+              context: 'bulk_process',
+              expected_row_signature: activeRowSignature || null,
+              row_signature: activeRowSignature || null,
+              ...(expensesChanged ? { expenses_draft: deep(stagedExpenses) } : {})
+            };
         saveResult = await contractWeekManualDraftUpsert(String(weekId), plannedDraftPayload);
       } else {
         const payload = {
@@ -135108,7 +135536,7 @@ async function handleBulkProcessSave(state) {
     if (effectiveTsId) tsId = effectiveTsId;
 
     let expenseCommitResult = null;
-    if (expensesChanged && !plannedManualDraftExpenseSave) {
+    if (expensesChanged && tsfinExpenseSave && !plannedContractWeekExpenseDraftSave) {
       expenseCommitResult = await commitTimesheetExpensesMileageDraft({
         source: 'bulk-process',
         timesheetId: actualTimesheetId,
@@ -135142,8 +135570,58 @@ async function handleBulkProcessSave(state) {
       }
     }
 
+    if (plannedContractWeekExpenseDraftSave && saveResult) {
+      const contractWeekPayload = (saveResult.contract_week && typeof saveResult.contract_week === 'object')
+        ? saveResult.contract_week
+        : ((saveResult.id && saveResult.contract_id) ? saveResult : null);
+      if (contractWeekPayload && !saveResult.row_patch && !saveResult.row_patches && !saveResult.data_row && !saveResult.row) {
+        const contractWeekId = trimStr(contractWeekPayload.id || weekId || '');
+        const rowKey = currentRowKey || (contractWeekId ? `contract_week:${contractWeekId}` : '');
+        saveResult = {
+          ...saveResult,
+          contract_week: deep(contractWeekPayload),
+          contract_week_id: contractWeekId || weekId || null,
+          row_patch: {
+            ...deep(row || {}),
+            contract_week_id: contractWeekId || weekId || null,
+            timesheet_id: null,
+            current_timesheet_id: null,
+            id: contractWeekId || weekId || row.id || null,
+            row_key: rowKey || null,
+            totals_json: contractWeekPayload.totals_json ?? row.totals_json ?? null,
+            planned_schedule_json: contractWeekPayload.planned_schedule_json ?? row.planned_schedule_json ?? null,
+            submission_mode_snapshot: contractWeekPayload.submission_mode_snapshot ?? row.submission_mode_snapshot ?? null,
+            bulk_process_bucket: row.bulk_process_bucket || 'UNPROCESSED',
+            summary_stage: row.summary_stage || 'UNPROCESSED'
+          }
+        };
+      }
+
+      const committed = deep(stagedExpenses);
+      for (const target of [st?.active_ctx?.state, st?.active_context?.state].filter((t) => t && typeof t === 'object')) {
+        target.expensesDraft = deep(committed);
+        target.expensesBaseline = deep(committed);
+        target.expensesDirty = false;
+        target.expensesDraftDirty = false;
+        target.hasStagedExpensesDirty = false;
+        target.stagedExpensesDirty = false;
+        target.expenseDirtyMarker = false;
+      }
+      if (st.active_details && typeof st.active_details === 'object') {
+        st.active_details.contract_week = (st.active_details.contract_week && typeof st.active_details.contract_week === 'object') ? st.active_details.contract_week : {};
+        let totals = st.active_details.contract_week.totals_json;
+        if (typeof totals === 'string') { try { totals = JSON.parse(totals); } catch { totals = {}; } }
+        totals = (totals && typeof totals === 'object') ? totals : {};
+        st.active_details.contract_week.totals_json = {
+          ...totals,
+          expenses_draft: deep(committed)
+        };
+        st.active_details.contract_week_id = st.active_details.contract_week_id || weekId || null;
+      }
+    }
+
     const didRunManualSave = !!saveResult;
-    const expensesOnlySave = !!(expensesChanged && !nonExpenseDirty && !plannedManualDraftExpenseSave);
+    const expensesOnlySave = !!(expensesChanged && !nonExpenseDirty && !plannedContractWeekExpenseDraftSave);
     if (expensesOnlySave && !didRunManualSave) {
       if (expenseCommitResult?.updatedTsfin && st.active_details && typeof st.active_details === 'object') {
         st.active_details.tsfin = {
@@ -135285,6 +135763,8 @@ async function handleBulkProcessSave(state) {
     return { ok: false, error: st.error_text };
   }
 }
+
+
 
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
@@ -140908,6 +141388,7 @@ async function bankingPayWorkbenchSessionClearAllDecisions(sessionId, payload = 
 }
 
 
+
 async function handleBulkAuthoriseSave(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][SAVE]');
   GC('handleBulkAuthoriseSave');
@@ -141260,6 +141741,27 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     );
     const activeRecordIdentity = trimStr(resolvedIdentity.recordIdentity || resolvedIdentity.record_identity || resolvedIdentity.identity || st.__bulkAuthoriseRecordIdentity || '');
     const activeRowSignature = activeBackendRowSignature;
+    const expenseStorageTarget = upper(
+      editability?.expenseStorageTarget ||
+      editability?.expense_storage_target ||
+      ctx.expenseStorageTarget ||
+      ctx.expense_storage_target ||
+      row.expenseStorageTarget ||
+      row.expense_storage_target ||
+      activeCtx?.expenseStorageTarget ||
+      activeCtx?.expense_storage_target ||
+      ''
+    );
+    const supportsUnprocessedExpenseDraft = !!(
+      editability?.supportsUnprocessedExpenseDraft === true ||
+      editability?.supports_unprocessed_expense_draft === true ||
+      ctx.supportsUnprocessedExpenseDraft === true ||
+      ctx.supports_unprocessed_expense_draft === true ||
+      row.supportsUnprocessedExpenseDraft === true ||
+      row.supports_unprocessed_expense_draft === true ||
+      activeCtx?.supportsUnprocessedExpenseDraft === true ||
+      activeCtx?.supports_unprocessed_expense_draft === true
+    );
     const canEditHoursScheduleByPolicy = editability?.canEditHoursSchedule === true;
     const manualSnapshotChangedRaw = manualDraftDiffersFromBaseline(liveDraft);
     const manualSnapshotChanged = !!(canEditHoursScheduleByPolicy && manualSnapshotChangedRaw);
@@ -141293,6 +141795,14 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       [ctx?.state || {}, 'expenseDirtyMarker']
     ) === true;
     const expensesMileageDirty = !!(expensesDirtyResult?.dirty || stagedExpenseMarkerDirty);
+    const plannedContractWeekExpenseDraftSave = !!(
+      expensesMileageDirty &&
+      expenseStorageTarget === 'CONTRACT_WEEK_DRAFT' &&
+      supportsUnprocessedExpenseDraft &&
+      !actualTimesheetId &&
+      !!contractWeekId
+    );
+    const tsfinExpenseSave = !!(expensesMileageDirty && expenseStorageTarget === 'TSFIN');
     const shouldPersistWeeklyManual = !!(canEditHoursScheduleByPolicy && isWeeklyManualContext && (scheduleChanged || extrasChanged || manualSnapshotChanged));
     const shouldPersistDailyManual = !!(canEditHoursScheduleByPolicy && isDailyManualContext && (scheduleChanged || manualSnapshotChanged));
     const hoursScheduleDirtyAttempt = !!(scheduleChanged || extrasChanged || manualSnapshotChanged);
@@ -141347,14 +141857,34 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       return { ok: false, error: 'EXPENSES_EDIT_BLOCKED', message: trimStr(editability?.expensesDisabledReason || '') || 'Expenses cannot be edited for this row.', evidenceRequired: false };
     }
 
-    st.saving = true;
-    st.error_text = '';
+    if (expensesMileageDirty && !plannedContractWeekExpenseDraftSave && !tsfinExpenseSave) {
+      GE();
+      const msg = trimStr(editability?.expensesDisabledReason || editability?.expensesActionDisabledReason || '') || 'Expenses cannot be edited directly for this row.';
+      return { ok: false, error: 'EXPENSE_STORAGE_TARGET_UNAVAILABLE', message: msg, evidenceRequired: false };
+    }
 
-    if (!actualTimesheetId) {
-      st.saving = false;
+    if (tsfinExpenseSave && !actualTimesheetId) {
       GE();
       return { ok: false, error: 'TIMESHEET_ID_REQUIRED', message: 'A real current timesheet is required before saving staged expenses.', evidenceRequired: false };
     }
+
+    if (plannedContractWeekExpenseDraftSave && typeof contractWeekManualDraftUpsert !== 'function') {
+      GE();
+      return { ok: false, error: 'CONTRACT_WEEK_DRAFT_SAVE_UNAVAILABLE', message: 'Unable to save planned-week expenses right now.', evidenceRequired: false };
+    }
+
+    if (tsfinExpenseSave && typeof commitTimesheetExpensesMileageDraft !== 'function') {
+      GE();
+      return { ok: false, error: 'EXPENSE_SAVE_UNAVAILABLE', message: 'Unable to save expenses right now.', evidenceRequired: false };
+    }
+
+    if ((referenceChanged || shouldPersistWeeklyManual || shouldPersistDailyManual || tsfinExpenseSave) && !actualTimesheetId) {
+      GE();
+      return { ok: false, error: 'TIMESHEET_ID_REQUIRED', message: 'A real current timesheet is required before saving this change.', evidenceRequired: false };
+    }
+
+    st.saving = true;
+    st.error_text = '';
 
     if (referenceChanged && typeof updateTimesheetReference === 'function') {
       await updateTimesheetReference(String(timesheetId), stagedReference, ctx.current_timesheet_id || ts.timesheet_id || timesheetId);
@@ -141401,8 +141931,85 @@ async function handleBulkAuthoriseSave(state, options = {}) {
         }
       );
     }
+    const clearExpenseDirtyAcrossAuthoriseState = (committedDraft) => {
+      const committedBaseline = deep(committedDraft || {});
+      const targets = [stateCtx, ctx?.state, activeCtx?.state, st?.active_context?.state, st?.active_ctx?.state]
+        .filter((target) => target && typeof target === 'object');
+      for (const target of targets) {
+        target.expensesDraft = deep(committedBaseline);
+        target.expensesBaseline = deep(committedBaseline);
+        target.expensesDirty = false;
+        target.expensesDraftDirty = false;
+        target.hasStagedExpensesDirty = false;
+        target.stagedExpensesDirty = false;
+        target.expenseDirtyMarker = false;
+        target.dirty = false;
+      }
+      st.expensesDirty = false;
+      st.expensesDraftDirty = false;
+      st.hasStagedExpensesDirty = false;
+      st.stagedExpensesDirty = false;
+      st.expenseDirtyMarker = false;
+    };
+
     let expenseCommitResult = null;
-    if (expensesMileageDirty && typeof commitTimesheetExpensesMileageDraft === 'function') {
+    if (plannedContractWeekExpenseDraftSave) {
+      saveResult = await contractWeekManualDraftUpsert(String(contractWeekId), {
+        expenses_draft: deep(stagedExpensesDraft),
+        bulk_authorise: true,
+        return_bulk_patch: true,
+        context: 'bulk_authorise',
+        expected_row_signature: activeBackendRowSignature || null,
+        row_signature: activeBackendRowSignature || null,
+        backend_row_signature: activeBackendRowSignature || null,
+        render_signature: activeRenderSignature || null,
+        record_identity: activeRecordIdentity || null
+      });
+
+      const committed = deep(stagedExpensesDraft || {});
+      clearExpenseDirtyAcrossAuthoriseState(committed);
+
+      const contractWeekPayload = (saveResult?.contract_week && typeof saveResult.contract_week === 'object')
+        ? saveResult.contract_week
+        : ((saveResult && typeof saveResult === 'object' && saveResult.id && saveResult.contract_id) ? saveResult : null);
+
+      if (st.active_details && typeof st.active_details === 'object') {
+        st.active_details.contract_week = (st.active_details.contract_week && typeof st.active_details.contract_week === 'object') ? st.active_details.contract_week : {};
+        let totals = contractWeekPayload?.totals_json ?? st.active_details.contract_week.totals_json;
+        if (typeof totals === 'string') { try { totals = JSON.parse(totals); } catch { totals = {}; } }
+        totals = (totals && typeof totals === 'object') ? totals : {};
+        st.active_details.contract_week = {
+          ...st.active_details.contract_week,
+          ...(contractWeekPayload && typeof contractWeekPayload === 'object' ? deep(contractWeekPayload) : {}),
+          totals_json: {
+            ...totals,
+            expenses_draft: deep(committed)
+          }
+        };
+        st.active_details.contract_week_id = st.active_details.contract_week_id || contractWeekId || null;
+      }
+
+      if (saveResult && typeof saveResult === 'object' && !saveResult.row_patch && !saveResult.row_patches && !saveResult.data_row && !saveResult.row) {
+        const rowKey = trimStr(row.row_key || activeContext.row_key || (contractWeekId ? `contract_week:${contractWeekId}` : ''));
+        saveResult.row_patch = {
+          ...(row && typeof row === 'object' ? deep(row) : {}),
+          row_key: rowKey || null,
+          new_row_key: rowKey || null,
+          contract_week_id: contractWeekId || null,
+          timesheet_id: null,
+          current_timesheet_id: null,
+          expected_timesheet_id: null,
+          totals_json: st.active_details?.contract_week?.totals_json || contractWeekPayload?.totals_json || null,
+          summary_stage: row.summary_stage || 'UNPROCESSED',
+          bulk_authorise_section: row.bulk_authorise_section || activeContext.bulk_authorise_section || null,
+          backend_row_signature: trimStr(saveResult.row_signature || activeBackendRowSignature || row.row_signature || ''),
+          row_signature: trimStr(saveResult.row_signature || activeBackendRowSignature || row.row_signature || ''),
+          render_signature: activeRenderSignature || row.render_signature || null
+        };
+      }
+    }
+
+    if (expensesMileageDirty && tsfinExpenseSave) {
       expenseCommitResult = await commitTimesheetExpensesMileageDraft({
         source: 'bulk-authorise',
         timesheetId,
@@ -141428,18 +142035,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
           expense_result: expenseCommitResult
         };
       }
-      const committedBaseline = deep(expenseCommitResult?.committedDraft || stagedExpensesDraft || {});
-      for (const target of [stateCtx, ctx?.state, activeCtx?.state, st?.active_context?.state, st?.active_ctx?.state]) {
-        if (!target || typeof target !== 'object') continue;
-        target.expensesDraft = deep(committedBaseline);
-        target.expensesBaseline = deep(committedBaseline);
-        target.expensesDirty = false;
-        target.expensesDraftDirty = false;
-        target.hasStagedExpensesDirty = false;
-        target.stagedExpensesDirty = false;
-        target.expenseDirtyMarker = false;
-        target.dirty = false;
-      }
+      clearExpenseDirtyAcrossAuthoriseState(deep(expenseCommitResult?.committedDraft || stagedExpensesDraft || {}));
     }
     const saveCacheHints = (saveResult?.cache_invalidation_hints && typeof saveResult.cache_invalidation_hints === 'object') ? saveResult.cache_invalidation_hints : {};
     const normaliseSaveRowPatch = (patchCandidate) => {
@@ -141485,7 +142081,8 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       saveCacheHints.manual_changed === true ||
       saveCacheHints.invalidate_editor_context === true ||
       shouldPersistWeeklyManual ||
-      shouldPersistDailyManual
+      shouldPersistDailyManual ||
+      plannedContractWeekExpenseDraftSave
     );
     const identityChangedAfterSave = saveCacheHints.identity_changed === true;
     const preferredSaveRowKey = trimStr(saveRowPatches[0]?.new_row_key || saveRowPatches[0]?.row_key_after || saveRowPatches[0]?.row_key || st.active_row_key || row?.row_key || '') || null;
@@ -145035,6 +145632,8 @@ async function enqueueQrTimesheetEmail(timesheetId, options = {}) {
   return out;
 }
 
+
+
 async function handleBulkAuthoriseAddAdditionalManual(state, row) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][ADD-ADDITIONAL]');
   GC('handleBulkAuthoriseAddAdditionalManual');
@@ -145122,14 +145721,22 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
       return { ok: false, error: 'This row cannot add an additional timesheet.' };
     }
 
+    const sourceRowKey = trimStr(srcRow.row_key || srcRow.current_row_key || srcRow.source_row_key || '');
     const seed = {
-      row_key: trimStr(srcRow.row_key || '') || null,
-      focus_row_key: trimStr(srcRow.row_key || '') || null,
-      selected_row_keys: trimStr(srcRow.row_key || '') ? [trimStr(srcRow.row_key || '')] : [],
+      source_row_key: sourceRowKey || null,
+      previous_row_key: sourceRowKey || null,
+      original_row_key: sourceRowKey || null,
+      source_timesheet_id: timesheetId || null,
+      source_contract_week_id: contractWeekId || null,
       candidate_id: srcRow.candidate_id || null,
       client_id: srcRow.client_id || null,
-      show_weekly_manual: true,
-      show_daily_manual: false
+      show_weekly_manual: !!isWeekly,
+      show_daily_manual: !!isDaily,
+      forceFreshDataset: true,
+      mutationRefresh: true,
+      replace_current_workbench: true,
+      open_as_root: true,
+      source_context: 'bulk_authorise'
     };
 
     if (typeof handleBulkAuthoriseUnsavedChangeGuard === 'function') {
@@ -145186,6 +145793,8 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
 
     const createResult = await createAdditionalManualAdjustmentAndOpen({
       source_context: 'bulk_authorise',
+      replace_current_workbench: true,
+      open_as_root: true,
       active_row: { ...srcRow },
       active_context: { ...activeContext },
       active_details: { ...activeDetails },
@@ -145213,6 +145822,12 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
 
     if (createResult?.switched_to_bulk_process === true) {
       await setPostConfirmSpinner(false);
+      try {
+        st.loading = false;
+        st.saving = false;
+        st.processing = false;
+        st.__workbench_modal_spinner_active = false;
+      } catch {}
       GE();
       return { ok: true, ...createResult };
     }
@@ -146462,21 +147077,32 @@ function renderBulkAuthoriseActionRow(state) {
   `;
 
   const actions = [];
-  const expensesActionDisabled = !!(editability.expensesActionDisabled === true || editability.expensesTabDisabled === true);
+  const expenseStorageTarget = trimStr(editability.expenseStorageTarget || editability.expense_storage_target || '').toUpperCase();
+  const expensesHaveStorageTarget = expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
+  const expensesActionDisabled = !!(
+    editability.expensesActionDisabled === true ||
+    editability.expensesTabDisabled === true ||
+    !expensesHaveStorageTarget ||
+    editability.canOpenExpenses === false
+  );
   const expensesActionDisabledReason = trimStr(
-    editability.expensesActionDisabledReason ||
-    editability.expensesTabDisabledReason ||
-    editability.expensesDisabledReason ||
-    'Expenses are not available for this row.'
+    editability.requiresAdditionalManualForExpenses === true
+      ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
+      : (
+          editability.expensesActionDisabledReason ||
+          editability.expensesTabDisabledReason ||
+          editability.expensesDisabledReason ||
+          (expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
+            ? 'Expenses will be saved as a draft until this week is processed.'
+            : 'Expenses cannot be edited directly for this row.')
+        )
   );
   const pushExpensesAction = () => {
-    if (editability.canOpenExpenses && !expensesActionDisabled) {
-      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', !busy, '', 'btn btn-outline', 'expenses'));
+    if (expensesHaveStorageTarget && editability.canOpenExpenses && !expensesActionDisabled) {
+      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', !busy, '', 'btn btn-outline', 'expenses', expenseStorageTarget === 'CONTRACT_WEEK_DRAFT' ? 'Expenses will be saved as a draft until this week is processed.' : ''));
       return;
     }
-    if (expensesActionDisabled) {
-      actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', false, '', 'btn btn-outline', 'expenses', expensesActionDisabledReason));
-    }
+    actions.push(buildBtn('bulkAuthActionRowExpensesBtn', 'Expenses', false, '', 'btn btn-outline', 'expenses', expensesActionDisabledReason));
   };
 
   if (section === 'authorised_eligible' || editability.isAuthorised) {
@@ -146575,6 +147201,8 @@ function renderBulkAuthoriseActionRow(state) {
     </div>
   `);
 }
+
+
 
 function bindBulkAuthoriseActionRow(state) {
   const st = (state && typeof state === 'object')
@@ -146794,8 +147422,16 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
         isAuthorised: !!activeRow?.is_authorised
       };
 
-  if (!activeRow || !editability.canOpenExpenses) {
-    const reason = String(editability?.expensesDisabledReason || 'Expenses are not available for this Bulk Authorise row.');
+  const expenseStorageTarget = String(editability?.expenseStorageTarget || editability?.expense_storage_target || '').trim().toUpperCase();
+  const canOpenExpenseStorageTarget = expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
+  const preciseBlockedReason = editability?.requiresAdditionalManualForExpenses === true
+    ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
+    : (expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
+        ? 'Expenses will be saved as a draft until this week is processed.'
+        : String(editability?.expensesActionDisabledReason || editability?.expensesTabDisabledReason || editability?.expensesDisabledReason || 'Expenses cannot be edited directly for this row.'));
+
+  if (!activeRow || !canOpenExpenseStorageTarget || editability.expensesActionDisabled === true || editability.expensesTabDisabled === true || editability.canOpenExpenses === false) {
+    const reason = String(preciseBlockedReason || 'Expenses cannot be edited directly for this row.');
     if (typeof toast === 'function') toast(reason);
     else if (typeof alert === 'function') alert(reason);
     return { ok: false, error: reason, message: reason };
@@ -146826,6 +147462,19 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
   const expensesReadOnly = !!(editability.expensesReadOnly || !editability.canEditExpenses);
   const hasProcessedExpenses = !!editability.hasProcessedExpenses;
 
+  const parseMaybeJson = (value) => {
+    if (value == null) return null;
+    if (Array.isArray(value) || typeof value === 'object') return deep(value);
+    if (typeof value !== 'string') return null;
+    const raw = value.trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return (Array.isArray(parsed) || (parsed && typeof parsed === 'object')) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
   const normaliseExpenseCanonical = (value, options = {}) => (
     (typeof normaliseTimesheetExpensesDraft === 'function')
       ? normaliseTimesheetExpensesDraft(value, options)
@@ -146845,14 +147494,35 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       childCtx.state.expensesDraft[key] = isNote ? raw : (raw === '' ? 0 : (Number.isFinite(Number(raw)) ? Number(raw) : 0));
     });
   };
-  const draftSeed = normaliseExpenseCanonical(ctx?.state?.expensesDraft || ctx?.state?.expensesBaseline || {}, { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} });
-  const baselineSeed = normaliseExpenseCanonical(ctx?.state?.expensesBaseline || ctx?.state?.expensesDraft || {}, { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} });
+  const contractWeekTotals = parseMaybeJson(activeDetails?.contract_week?.totals_json) || {};
+  const contractWeekExpensesDraft = (contractWeekTotals.expenses_draft && typeof contractWeekTotals.expenses_draft === 'object')
+    ? contractWeekTotals.expenses_draft
+    : {};
+  const normaliseOptions = { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {}, row: activeRow || {} };
+  const draftSource = expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
+    ? (ctx?.state?.expensesDraft || ctx?.state?.expensesBaseline || contractWeekExpensesDraft || {})
+    : (ctx?.state?.expensesDraft || ctx?.state?.expensesBaseline || {});
+  const baselineSource = expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
+    ? (ctx?.state?.expensesBaseline || contractWeekExpensesDraft || ctx?.state?.expensesDraft || {})
+    : (ctx?.state?.expensesBaseline || ctx?.state?.expensesDraft || {});
+  const draftSeed = normaliseExpenseCanonical(draftSource, normaliseOptions);
+  const baselineSeed = normaliseExpenseCanonical(baselineSource, normaliseOptions);
   const childCtx = {
     ...(ctx || {}),
+    expenseStorageTarget,
+    expense_storage_target: expenseStorageTarget,
+    hasContractWeekExpenseDraftTarget: editability?.hasContractWeekExpenseDraftTarget === true,
+    has_contract_week_expense_draft_target: editability?.hasContractWeekExpenseDraftTarget === true,
+    supportsUnprocessedExpenseDraft: editability?.supportsUnprocessedExpenseDraft === true,
+    supports_unprocessed_expense_draft: editability?.supportsUnprocessedExpenseDraft === true,
+    contract_week_id: activeDetails?.contract_week_id || activeDetails?.contract_week?.id || activeRow?.contract_week_id || null,
     expenses_read_only: expensesReadOnly,
     expenses_force_open: !!hasProcessedExpenses,
     state: {
       ...(ctx?.state || {}),
+      expenseStorageTarget,
+      expense_storage_target: expenseStorageTarget,
+      contract_week_id: activeDetails?.contract_week_id || activeDetails?.contract_week?.id || activeRow?.contract_week_id || null,
       expensesReadOnly: expensesReadOnly,
       expensesDraft: deep(draftSeed),
       expensesBaseline: deep(baselineSeed)
@@ -146873,7 +147543,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       try { fr._updateButtons && fr._updateButtons(); } catch {}
       return;
     }
-    const normaliseOptions = { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} };
+    const normaliseOptions = { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {}, row: activeRow || {} };
     const dirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
       ? isTimesheetExpensesDraftDirty(
           normaliseExpenseCanonical(childCtx?.state?.expensesDraft || {}, normaliseOptions),
@@ -146893,7 +147563,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     }
     syncChildExpensesDraftFromDom();
 
-    const normaliseOptions = { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {} };
+    const normaliseOptions = { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {}, row: activeRow || {} };
     const nextDraftCanonical = normaliseExpenseCanonical(childCtx?.state?.expensesDraft || {}, normaliseOptions);
     const previousBaseline = normaliseExpenseCanonical(ctx?.state?.expensesBaseline || childCtx?.state?.expensesBaseline || {}, normaliseOptions);
     const comparison = (typeof isTimesheetExpensesDraftDirty === 'function')
@@ -146910,16 +147580,23 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       mileage_pay_rate: (Object.prototype.hasOwnProperty.call(existingDraft, 'mileage_pay_rate') ? existingDraft.mileage_pay_rate : nextDraftCanonical.mileage_pay_rate),
       mileage_charge_rate: (Object.prototype.hasOwnProperty.call(existingDraft, 'mileage_charge_rate') ? existingDraft.mileage_charge_rate : nextDraftCanonical.mileage_charge_rate)
     };
-    ctx.state.expensesDraft = deep(mergedDraft);
-    ctx.state.expensesBaseline = deep(preservedBaseline);
+    const expenseStateTargets = [ctx.state, st.active_ctx?.state, st.active_context?.state, activeContext?.state]
+      .filter((target) => target && typeof target === 'object');
+    for (const target of expenseStateTargets) {
+      target.expensesDraft = deep(mergedDraft);
+      target.expensesBaseline = deep(preservedBaseline);
+      target.expenseStorageTarget = expenseStorageTarget;
+      target.expense_storage_target = expenseStorageTarget;
+      target.contract_week_id = childCtx.contract_week_id || target.contract_week_id || null;
+      target.expensesDirty = true;
+      target.expensesDraftDirty = true;
+      target.hasStagedExpensesDirty = true;
+      target.stagedExpensesDirty = true;
+      target.expenseDirtyMarker = true;
+      target.dirty = true;
+    }
     childCtx.state.expensesDraft = deep(mergedDraft);
     childCtx.state.expensesBaseline = deep(preservedBaseline);
-    ctx.state.expensesDirty = true;
-    ctx.state.expensesDraftDirty = true;
-    ctx.state.hasStagedExpensesDirty = true;
-    ctx.state.stagedExpensesDirty = true;
-    ctx.state.expenseDirtyMarker = true;
-    ctx.state.dirty = true;
     st.expensesDirty = true;
     st.expensesDraftDirty = true;
     st.hasStagedExpensesDirty = true;
@@ -146985,6 +147662,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
 
   return { ok: true };
 }
+
 
 async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][ROW-CHANGE]');
@@ -195487,7 +196165,7 @@ if (this.entity === 'timesheets' && k === 'expenses') {
   try {
     const mc = window.modalCtx || {};
 
-    // ✅ If the tab is disabled, do not wire anything (keeps it inert even if called programmatically)
+     // ✅ If the tab is disabled, do not wire anything (keeps it inert even if called programmatically)
     const enabled = !!mc.expenses_tab_enabled;
     const detailsForExpensesPolicy = mc.timesheetDetails || {};
     const policy = mc.timesheetEditDomains || (typeof classifyTimesheetEditDomains === 'function'
@@ -195503,12 +196181,34 @@ if (this.entity === 'timesheets' && k === 'expenses') {
           state: mc.timesheetState || {}
         })
       : null);
-     const expensesTabDisabled = !!(
+    const expenseStorageTarget = String(
+      policy?.expenseStorageTarget ||
+      policy?.expense_storage_target ||
+      mc.expenseStorageTarget ||
+      mc.expense_storage_target ||
+      mc.data?.expenseStorageTarget ||
+      mc.data?.expense_storage_target ||
+      ''
+    ).trim().toUpperCase();
+    const hasExpenseStorageTarget = (expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT');
+    const expensesTabDisabled = !!(
       (policy && (policy.expensesTabDisabled === true || policy.expensesActionDisabled === true)) ||
-      mc.expenses_tab_disabled === true
+      mc.expenses_tab_disabled === true ||
+      !hasExpenseStorageTarget
     );
-    const canEditExpenses = !!(policy ? (policy.canEditExpenses === true && policy.expensesReadOnly !== true && !expensesTabDisabled) : true);
-    const expensesTabCanOpen = !!(policy ? (policy.canOpenExpenses === true && !expensesTabDisabled) : (enabled && !expensesTabDisabled));
+    const canEditExpenses = !!(
+      policy
+        ? (policy.canEditExpenses === true && policy.expensesReadOnly !== true && !expensesTabDisabled)
+        : (enabled && hasExpenseStorageTarget && !expensesTabDisabled)
+    );
+    const expensesTabCanOpen = !!(
+      hasExpenseStorageTarget &&
+      (
+        policy
+          ? (policy.canOpenExpenses !== false && !expensesTabDisabled)
+          : (enabled && !expensesTabDisabled)
+      )
+    );
     if (!expensesTabCanOpen || !canEditExpenses) {
       if (LOGM) LT('expenses tab disabled; skip wiring', {
         reason:
@@ -195516,7 +196216,15 @@ if (this.entity === 'timesheets' && k === 'expenses') {
           policy?.expensesTabDisabledReason ||
           policy?.expensesActionDisabledReason ||
           policy?.expensesDisabledReason ||
-          ''
+          (
+            policy?.requiresAdditionalManualForExpenses === true
+              ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
+              : (
+                  expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
+                    ? 'Expenses will be saved as a draft until this week is processed.'
+                    : 'Expenses cannot be edited directly for this row.'
+                )
+          )
       });
     } else if (root) {
       mc.timesheetState = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
@@ -196757,7 +197465,7 @@ const resolveTabDisabledState = (tabLike) => {
                 })
               : null);
 
-      const hasCtxDisabled = Object.prototype.hasOwnProperty.call(mc, 'expenses_tab_disabled');
+         const hasCtxDisabled = Object.prototype.hasOwnProperty.call(mc, 'expenses_tab_disabled');
       const hasCtxEnabled = Object.prototype.hasOwnProperty.call(mc, 'expenses_tab_enabled');
       const policyTabDisabledKnown = !!(
         policy &&
@@ -196767,33 +197475,46 @@ const resolveTabDisabledState = (tabLike) => {
         )
       );
 
+      const expenseStorageTarget = String(
+        policy?.expenseStorageTarget ||
+        policy?.expense_storage_target ||
+        mc.expenseStorageTarget ||
+        mc.expense_storage_target ||
+        mc.data?.expenseStorageTarget ||
+        mc.data?.expense_storage_target ||
+        ''
+      ).trim().toUpperCase();
+      const hasExpenseStorageTarget = (expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT');
       const disabledByPolicy = !!(policy && (policy.expensesTabDisabled === true || policy.expensesActionDisabled === true));
       const disabledByCtx = !!(hasCtxDisabled && mc.expenses_tab_disabled === true);
-      const explicitlyEnabledByPolicy = !!(policy && policy.canOpenExpenses === true && !disabledByPolicy);
-      const explicitlyEnabledByCtx = !!(hasCtxEnabled && mc.expenses_tab_enabled === true && !disabledByCtx);
+      const explicitlyEnabledByPolicy = !!(policy && hasExpenseStorageTarget && policy.canOpenExpenses !== false && !disabledByPolicy);
+      const explicitlyEnabledByCtx = !!(hasExpenseStorageTarget && hasCtxEnabled && mc.expenses_tab_enabled === true && !disabledByCtx);
       const explicitlyUnavailableByCtx = !!(hasCtxEnabled && mc.expenses_tab_enabled !== true);
+      const preciseExpenseReason = String(
+        mc.expenses_tab_reason ||
+        policy?.expensesTabDisabledReason ||
+        policy?.expensesActionDisabledReason ||
+        policy?.expensesDisabledReason ||
+        (
+          policy?.requiresAdditionalManualForExpenses === true
+            ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
+            : (
+                expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
+                  ? 'Expenses will be saved as a draft until this week is processed.'
+                  : 'Expenses cannot be edited directly for this row.'
+              )
+        )
+      ).trim();
 
       if (disabledByPolicy || disabledByCtx) {
         disabled = true;
-        reason = String(
-          mc.expenses_tab_reason ||
-          policy?.expensesTabDisabledReason ||
-          policy?.expensesActionDisabledReason ||
-          policy?.expensesDisabledReason ||
-          reason ||
-          'This tab is currently unavailable.'
-        ).trim();
+        reason = preciseExpenseReason || 'This tab is currently unavailable.';
       } else if (explicitlyEnabledByCtx || explicitlyEnabledByPolicy) {
         disabled = false;
         reason = '';
-      } else if ((hasCtxDisabled || policyTabDisabledKnown || explicitlyUnavailableByCtx) && !explicitlyEnabledByCtx && !explicitlyEnabledByPolicy) {
+      } else if (!hasExpenseStorageTarget || hasCtxDisabled || policyTabDisabledKnown || explicitlyUnavailableByCtx) {
         disabled = true;
-        reason = String(
-          mc.expenses_tab_reason ||
-          policy?.expensesDisabledReason ||
-          reason ||
-          'Expenses are not available for this timesheet.'
-        ).trim();
+        reason = preciseExpenseReason || 'Expenses cannot be edited directly for this row.';
       }
     }
   } catch {}
@@ -200749,6 +201470,7 @@ async function applyTimesheetDeleteImpactToSummary(opts = {}) {
 }
 
 
+
 async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
   const o = (opts && typeof opts === 'object') ? opts : {};
   const sourceContext = String(o.source_context || 'single_modal').trim().toLowerCase();
@@ -200795,14 +201517,11 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
       created.row_patch,
       created.data_row,
       created.row,
+      created.summary_row_hint,
       Array.isArray(created.row_patches) ? created.row_patches[0] : null
-    ];
-    for (const candidate of candidates) {
-      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate) && Object.keys(candidate).length) {
-        return { ...candidate };
-      }
-    }
-    return null;
+    ].filter((candidate) => candidate && typeof candidate === 'object' && !Array.isArray(candidate) && Object.keys(candidate).length);
+    if (!candidates.length) return null;
+    return candidates.reduce((acc, candidate) => ({ ...(acc || {}), ...(candidate || {}) }), {});
   };
 
   const firstBulkString = function firstBulkString() {
@@ -200825,18 +201544,233 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
 
   const requireBulkCreatedPatch = (created, label) => {
     const patchRow = extractBulkCreatedPatchRow(created);
+    const timesheetId = firstBulkString(
+      patchRow?.current_timesheet_id,
+      patchRow?.timesheet_id,
+      created?.current_timesheet_id,
+      created?.timesheet_id,
+      created?.new_timesheet_id
+    );
+    const contractWeekId = firstBulkString(
+      patchRow?.contract_week_id,
+      created?.contract_week_id,
+      created?.week_id,
+      created?.contract_week?.id
+    );
     const rowKey = firstBulkString(
+      patchRow?.row_key,
       created?.row_key,
       created?.new_row_key,
-      patchRow?.row_key,
       patchRow?.new_row_key,
-      patchRow?.current_row_key,
-      patchRow?.stable_row_id
+      timesheetId ? `timesheet:${timesheetId}` : '',
+      contractWeekId ? `contract_week:${contractWeekId}` : ''
     );
     if (!patchRow || !rowKey) {
       throw new Error(`${label || 'Additional manual timesheet'} was created, but no bulk row patch was returned. Refresh Bulk Process and try again.`);
     }
+    patchRow.row_key = rowKey;
+    if (timesheetId) {
+      patchRow.timesheet_id = patchRow.timesheet_id || timesheetId;
+      patchRow.current_timesheet_id = patchRow.current_timesheet_id || timesheetId;
+    }
+    if (contractWeekId) patchRow.contract_week_id = patchRow.contract_week_id || contractWeekId;
     return { patchRow, rowKey };
+  };
+
+  const closeCurrentBulkAuthoriseBeforeBulkProcess = async () => {
+    if (typeof closeCurrentModalFrameSafely === 'function') {
+      try {
+        if (closeCurrentModalFrameSafely({ expectedKind: 'bulk-authorise-workbench' })) return true;
+      } catch {}
+      try {
+        if (closeCurrentModalFrameSafely({ kind: 'bulk-authorise-workbench' })) return true;
+      } catch {}
+    }
+
+    try {
+      if (Array.isArray(window.__modalStack)) {
+        const stack = window.__modalStack;
+        let idx = -1;
+        for (let i = stack.length - 1; i >= 0; i -= 1) {
+          const frame = stack[i];
+          if (String(frame?.kind || '') === 'bulk-authorise-workbench' || String(frame?.entity || '') === 'bulk-authorise') {
+            idx = i;
+            break;
+          }
+        }
+        if (idx >= 0) {
+          const removed = stack.splice(idx);
+          for (const frame of removed.reverse()) {
+            try { if (typeof frame?._onDismiss === 'function') frame._onDismiss(); } catch {}
+            try { if (typeof frame?._detachDirty === 'function') frame._detachDirty(); } catch {}
+            try { if (typeof frame?._detachGlobal === 'function') frame._detachGlobal(); } catch {}
+          }
+          if (!stack.length) {
+            try { if (typeof discardAllModalsAndState === 'function') discardAllModalsAndState(); } catch {}
+          } else {
+            const parent = stack[stack.length - 1];
+            if (parent?._ctxRef && typeof parent._ctxRef === 'object') {
+              window.modalCtx = parent._ctxRef;
+              try { if (typeof modalCtx !== 'undefined') modalCtx = window.modalCtx; } catch {}
+            }
+          }
+          return true;
+        }
+      }
+    } catch {}
+
+    return false;
+  };
+
+
+  const closeCurrentTimesheetModalBeforeReopen = async () => {
+    if (typeof closeCurrentModalFrameSafely === 'function') {
+      try {
+        if (closeCurrentModalFrameSafely({ expectedKind: 'timesheets' })) return true;
+      } catch {}
+      try {
+        if (closeCurrentModalFrameSafely({})) return true;
+      } catch {}
+    }
+
+    try {
+      if (Array.isArray(window.__modalStack) && window.__modalStack.length) {
+        const stack = window.__modalStack;
+        const top = stack.pop();
+        try { if (typeof top?._onDismiss === 'function') top._onDismiss(); } catch {}
+        try { if (typeof top?._detachDirty === 'function') top._detachDirty(); } catch {}
+        try { if (typeof top?._detachGlobal === 'function') top._detachGlobal(); } catch {}
+        const parent = stack.length ? stack[stack.length - 1] : null;
+        if (parent?._ctxRef && typeof parent._ctxRef === 'object') {
+          window.modalCtx = parent._ctxRef;
+          try { if (typeof modalCtx !== 'undefined') modalCtx = window.modalCtx; } catch {}
+        } else if (!parent) {
+          try { if (typeof discardAllModalsAndState === 'function') discardAllModalsAndState(); } catch {}
+        }
+        return true;
+      }
+    } catch {}
+
+    try { if (typeof discardAllModalsAndState === 'function') discardAllModalsAndState(); } catch {}
+    return false;
+  };
+
+
+  const invalidateCreatedManualAdjustmentCaches = (payload = {}) => {
+    const p = (payload && typeof payload === 'object') ? payload : {};
+    const patchSource = (p.row_patch && typeof p.row_patch === 'object')
+      ? p.row_patch
+      : ((p.row && typeof p.row === 'object')
+          ? p.row
+          : ((p.data_row && typeof p.data_row === 'object') ? p.data_row : {}));
+
+    const timesheetId = firstBulkString(
+      p.timesheet_id,
+      p.current_timesheet_id,
+      patchSource.current_timesheet_id,
+      patchSource.timesheet_id
+    );
+    const contractWeekId = firstBulkString(
+      p.contract_week_id,
+      p.week_id,
+      patchSource.contract_week_id,
+      patchSource.week_id
+    );
+    const rowKey = firstBulkString(
+      p.row_key,
+      p.new_row_key,
+      patchSource.row_key,
+      patchSource.new_row_key,
+      timesheetId ? `timesheet:${timesheetId}` : '',
+      contractWeekId ? `contract_week:${contractWeekId}` : ''
+    );
+    const previousRowKey = firstBulkString(
+      p.previous_row_key,
+      patchSource.previous_row_key,
+      patchSource.old_row_key,
+      o.previous_row_key,
+      o.source_row_key,
+      bulkProcessSeedBase?.previous_row_key,
+      bulkProcessSeedBase?.source_row_key
+    );
+
+    const cacheHints = {
+      identity_changed: true,
+      manual_changed: true,
+      route_changed: true,
+      invalidate_context: true,
+      invalidate_row_context: true,
+      invalidate_preview: false,
+      invalidate_evidence: false,
+      invalidate_editor_context: true,
+      ...(p.cache_invalidation_hints && typeof p.cache_invalidation_hints === 'object' ? p.cache_invalidation_hints : {}),
+      ...(p.cache_invalidation && typeof p.cache_invalidation === 'object' ? p.cache_invalidation : {})
+    };
+
+    const invalidationPatch = {
+      ...(patchSource && typeof patchSource === 'object' ? patchSource : {}),
+      row_key: rowKey || patchSource.row_key || null,
+      new_row_key: rowKey || patchSource.new_row_key || patchSource.row_key || null,
+      previous_row_key: previousRowKey || patchSource.previous_row_key || null,
+      timesheet_id: timesheetId || null,
+      current_timesheet_id: timesheetId || null,
+      contract_week_id: contractWeekId || null,
+      cache_invalidation_hints: cacheHints
+    };
+
+    const stateCandidates = [
+      window.modalCtx?.bulkProcessState,
+      window.modalCtx?.bulkAuthoriseState,
+      window.modalCtx?.bulk_process_state,
+      window.modalCtx?.bulk_authorise_state,
+      bulkProcessContext?.state,
+      bulkProcessContext,
+      o.bulk_process_state,
+      o.bulk_authorise_state,
+      o.state
+    ].filter((candidate) => candidate && typeof candidate === 'object');
+
+    for (const candidate of stateCandidates) {
+      try {
+        candidate.__bulk_process_mutation_seq = Math.max(0, Number(candidate.__bulk_process_mutation_seq || 0) || 0) + 1;
+      } catch {}
+      try {
+        candidate.__bulk_authorise_mutation_seq = Math.max(0, Number(candidate.__bulk_authorise_mutation_seq || 0) || 0) + 1;
+      } catch {}
+    }
+
+    if (typeof invalidateBulkTimesheetCachesForPatch === 'function') {
+      try {
+        invalidateBulkTimesheetCachesForPatch(stateCandidates[0] || {}, invalidationPatch, {
+          mode: 'additional_manual_create',
+          action: 'add-additional-manual-created',
+          force: true,
+          invalidate_context: true,
+          invalidate_row_context: true,
+          invalidate_editor_context: true,
+          cache_invalidation_hints: cacheHints
+        });
+      } catch {}
+    }
+
+    if (typeof fetchBulkProcessDataset === 'function') {
+      for (const prop of ['__cache', '__inflight', '__latest_request_seq_by_signature']) {
+        const store = fetchBulkProcessDataset[prop];
+        if (store && typeof store === 'object') {
+          for (const key of Object.keys(store)) {
+            try { delete store[key]; } catch {}
+          }
+        }
+      }
+    }
+
+    return {
+      row_key: rowKey || null,
+      previous_row_key: previousRowKey || null,
+      timesheet_id: timesheetId || null,
+      contract_week_id: contractWeekId || null,
+      cache_invalidation_hints: cacheHints
+    };
   };
 
 
@@ -201044,6 +201978,16 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
       canonicalContractWeekId ? `contract_week:${canonicalContractWeekId}` : ''
     ) || null;
 
+    const bulkProcessInvalidation = invalidateCreatedManualAdjustmentCaches({
+      ...created,
+      row_patch: canonicalRow,
+      row_key: canonicalRowKey,
+      new_row_key: firstBulkString(created?.new_row_key, canonicalRow.new_row_key, canonicalRowKey) || canonicalRowKey || null,
+      previous_row_key: firstBulkString(created?.previous_row_key, canonicalRow.previous_row_key, row.row_key, bpCtx.row_key) || null,
+      timesheet_id: canonicalTimesheetId || createdTimesheetId || null,
+      contract_week_id: canonicalContractWeekId || createdContractWeekId || null
+    });
+
     try { if (typeof window.__toast === 'function') window.__toast('Additional manual timesheet created.'); } catch {}
 
     await finishCreatePhase({ source_context: 'bulk_process', created });
@@ -201068,17 +202012,20 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
       row: (created?.row && typeof created.row === 'object') ? { ...created.row } : canonicalRow,
       count_deltas: (created?.count_deltas && typeof created.count_deltas === 'object') ? { ...created.count_deltas } : {},
       cache_invalidation_hints:
-        (created?.cache_invalidation_hints && typeof created.cache_invalidation_hints === 'object')
-          ? { ...created.cache_invalidation_hints }
-          : {
-              identity_changed: true,
-              manual_changed: true,
-              route_changed: true,
-              invalidate_context: false,
-              invalidate_preview: false,
-              invalidate_evidence: false,
-              invalidate_editor_context: true
-            },
+        (bulkProcessInvalidation.cache_invalidation_hints && typeof bulkProcessInvalidation.cache_invalidation_hints === 'object')
+          ? { ...bulkProcessInvalidation.cache_invalidation_hints }
+          : ((created?.cache_invalidation_hints && typeof created.cache_invalidation_hints === 'object')
+              ? { ...created.cache_invalidation_hints }
+              : {
+                  identity_changed: true,
+                  manual_changed: true,
+                  route_changed: true,
+                  invalidate_context: true,
+                  invalidate_row_context: true,
+                  invalidate_preview: false,
+                  invalidate_evidence: false,
+                  invalidate_editor_context: true
+                }),
       summary_row_hint:
         (created && created.summary_row_hint && typeof created.summary_row_hint === 'object')
           ? { ...created.summary_row_hint }
@@ -201213,14 +202160,28 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
       created?.contract_week?.id ||
       ''
     );
-    const createdRowKey = trimStr(
-      createdPatch.rowKey ||
-      created?.row_key ||
-      created?.new_row_key ||
-      createdPatchRow.row_key ||
-      createdPatchRow.new_row_key ||
-      (createdTimesheetId ? `timesheet:${createdTimesheetId}` : (createdContractWeekId ? `contract_week:${createdContractWeekId}` : ''))
-    );
+    const createdRowKey = createdTimesheetId
+      ? `timesheet:${createdTimesheetId}`
+      : (createdContractWeekId
+          ? `contract_week:${createdContractWeekId}`
+          : trimStr(createdPatch.rowKey || created?.row_key || created?.new_row_key || createdPatchRow.row_key || createdPatchRow.new_row_key || ''));
+    createdPatchRow.row_key = createdRowKey || createdPatchRow.row_key || null;
+    if (createdTimesheetId) {
+      createdPatchRow.timesheet_id = createdPatchRow.timesheet_id || createdTimesheetId;
+      createdPatchRow.current_timesheet_id = createdPatchRow.current_timesheet_id || createdTimesheetId;
+    }
+    if (createdContractWeekId) createdPatchRow.contract_week_id = createdPatchRow.contract_week_id || createdContractWeekId;
+
+    const bulkAuthoriseCreateInvalidation = invalidateCreatedManualAdjustmentCaches({
+      ...created,
+      row_patch: createdPatchRow,
+      row_key: createdRowKey || null,
+      new_row_key: firstBulkString(created?.new_row_key, createdPatchRow.new_row_key, createdRowKey) || createdRowKey || null,
+      previous_row_key: firstBulkString(created?.previous_row_key, createdPatchRow.previous_row_key, baRow.row_key, baCtx.row_key, o.previous_row_key) || null,
+      timesheet_id: createdTimesheetId || null,
+      contract_week_id: createdContractWeekId || null
+    });
+
     const createdUnprocessed = !!(
       created &&
       (
@@ -201235,18 +202196,38 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
         (isWeekly && !createdTimesheetId && !!createdContractWeekId)
       )
     );
+    if (isWeekly && createdContractWeekId && typeof refreshContractWeekSummaryAfterPlannedChange === 'function') {
+      try {
+        await refreshContractWeekSummaryAfterPlannedChange(createdContractWeekId, o.summary_ctx || o.summaryCtx || null);
+      } catch {}
+    } else if ((createdPatchRow || created?.summary_row_hint) && typeof summaryApplySavedRecordToActiveSummary === 'function') {
+      try {
+        await summaryApplySavedRecordToActiveSummary('timesheets', createdPatchRow || created.summary_row_hint, o.summary_ctx || o.summaryCtx || null);
+      } catch {}
+    }
+
     let switchedToBulkProcess = false;
     if (createdUnprocessed) {
       await beforePostCreatePrompt({ source_context: 'bulk_authorise', created, created_unprocessed: true });
-      const focusIdentity = createdRowKey || (isWeekly ? (createdTimesheetId || createdContractWeekId) : createdTimesheetId);
+      const focusIdentity = createdRowKey || (createdTimesheetId ? `timesheet:${createdTimesheetId}` : (createdContractWeekId ? `contract_week:${createdContractWeekId}` : ''));
       const switchSeed = {
         ...(bulkProcessSeedBase || {}),
         focus_row_key: focusIdentity || null,
         selected_row_keys: focusIdentity ? [focusIdentity] : [],
+        row_patch: { ...(createdPatchRow || {}) },
+        row_patches: Array.isArray(created?.row_patches) && created.row_patches.length ? created.row_patches : [{ ...(createdPatchRow || {}) }],
+        contract_week_id: createdContractWeekId || null,
+        timesheet_id: createdTimesheetId || null,
         candidate_id: candidateId || createdPatchRow.candidate_id || null,
         client_id: clientId || createdPatchRow.client_id || null,
+        bulk_process_bucket: createdPatchRow.bulk_process_bucket || createdPatchRow.summary_stage || created?.bulk_process_bucket || 'UNPROCESSED',
         show_weekly_manual: !!isWeekly,
-        show_daily_manual: !!isDaily
+        show_daily_manual: !!isDaily,
+        forceFreshDataset: true,
+        mutationRefresh: true,
+        replace_current_workbench: true,
+        open_as_root: true,
+        source_context: 'bulk_authorise'
       };
       const switchToBulk = await openConfirm({
         title: 'Open in Bulk Process?',
@@ -201259,7 +202240,7 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
         cancel_class: 'btn btn-outline'
       });
       if (switchToBulk && typeof openBulkProcessWorkbench === 'function') {
-        try { byId('btnCloseModal')?.click(); } catch {}
+        await closeCurrentBulkAuthoriseBeforeBulkProcess();
         await Promise.resolve();
         await openBulkProcessWorkbench(switchSeed);
         switchedToBulkProcess = true;
@@ -201280,23 +202261,29 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
       new_row_key: firstBulkString(created?.new_row_key, createdPatchRow.new_row_key, createdRowKey) || null,
       previous_row_key: firstBulkString(created?.previous_row_key, createdPatchRow.previous_row_key) || null,
       row_signature: firstBulkString(created?.row_signature, createdPatchRow.row_signature, createdPatchRow.backend_row_signature) || null,
+      candidate_id: candidateId || createdPatchRow.candidate_id || null,
+      client_id: clientId || createdPatchRow.client_id || null,
+      bulk_process_bucket: createdPatchRow.bulk_process_bucket || createdPatchRow.summary_stage || created?.bulk_process_bucket || null,
       row_patch: createdPatchRow,
       row_patches: Array.isArray(created?.row_patches) && created.row_patches.length ? created.row_patches : [createdPatchRow],
       data_row: (created?.data_row && typeof created.data_row === 'object') ? { ...created.data_row } : createdPatchRow,
       row: (created?.row && typeof created.row === 'object') ? { ...created.row } : createdPatchRow,
       count_deltas: (created?.count_deltas && typeof created.count_deltas === 'object') ? { ...created.count_deltas } : {},
       cache_invalidation_hints:
-        (created?.cache_invalidation_hints && typeof created.cache_invalidation_hints === 'object')
-          ? { ...created.cache_invalidation_hints }
-          : {
-              identity_changed: true,
-              manual_changed: true,
-              route_changed: true,
-              invalidate_context: false,
-              invalidate_preview: false,
-              invalidate_evidence: false,
-              invalidate_editor_context: true
-            }
+        (bulkAuthoriseCreateInvalidation.cache_invalidation_hints && typeof bulkAuthoriseCreateInvalidation.cache_invalidation_hints === 'object')
+          ? { ...bulkAuthoriseCreateInvalidation.cache_invalidation_hints }
+          : ((created?.cache_invalidation_hints && typeof created.cache_invalidation_hints === 'object')
+              ? { ...created.cache_invalidation_hints }
+              : {
+                  identity_changed: true,
+                  manual_changed: true,
+                  route_changed: true,
+                  invalidate_context: true,
+                  invalidate_row_context: true,
+                  invalidate_preview: false,
+                  invalidate_evidence: false,
+                  invalidate_editor_context: true
+                })
     };
     } catch (err) {
       await finishCreatePhase({ source_context: 'bulk_authorise', error: err });
@@ -201472,12 +202459,12 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
     if (isWeekly) {
       created = await apiPostJson(
         `/api/contract-weeks/${encodeURIComponent(String(weekId))}/additional-weekly-adjustment`,
-        {}
+        buildBulkCreatePayload('single_modal')
       );
     } else {
       created = await apiPostJson(
         `/api/timesheets/${encodeURIComponent(String(tsId))}/additional-daily-manual`,
-        {}
+        buildBulkCreatePayload('single_modal')
       );
     }
   } catch (err) {
@@ -201673,6 +202660,60 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
           'DAILY'
       };
 
+  const createdPatchRowForReturn = extractBulkCreatedPatchRow(created) || canonicalRow || openRow || null;
+  const createdRowKeyForReturn = canonicalTimesheetId
+    ? `timesheet:${canonicalTimesheetId}`
+    : (canonicalContractWeekId ? `contract_week:${canonicalContractWeekId}` : firstBulkString(created?.row_key, created?.new_row_key, createdPatchRowForReturn?.row_key));
+  if (createdPatchRowForReturn && typeof createdPatchRowForReturn === 'object' && createdRowKeyForReturn) {
+    createdPatchRowForReturn.row_key = createdRowKeyForReturn;
+  }
+  const singleModalReturnPayload = {
+    ok: true,
+    source_context: sourceContext,
+    created_unprocessed: createdUnprocessed,
+    switched_to_bulk_process: false,
+    current_timesheet_id: canonicalTimesheetId || createdTimesheetId || null,
+    timesheet_id: canonicalTimesheetId || createdTimesheetId || null,
+    expected_timesheet_id: canonicalTimesheetId || createdTimesheetId || null,
+    contract_week_id: canonicalContractWeekId || createdContractWeekId || null,
+    row_key: createdRowKeyForReturn || null,
+    new_row_key: firstBulkString(created?.new_row_key, createdPatchRowForReturn?.new_row_key, createdRowKeyForReturn) || null,
+    previous_row_key: firstBulkString(created?.previous_row_key, createdPatchRowForReturn?.previous_row_key) || null,
+    row_signature: firstBulkString(created?.row_signature, createdPatchRowForReturn?.row_signature, createdPatchRowForReturn?.backend_row_signature) || null,
+    candidate_id: candidateId || createdPatchRowForReturn?.candidate_id || null,
+    client_id: clientId || createdPatchRowForReturn?.client_id || null,
+    bulk_process_bucket: createdPatchRowForReturn?.bulk_process_bucket || createdPatchRowForReturn?.summary_stage || created?.bulk_process_bucket || null,
+    row_patch: createdPatchRowForReturn,
+    row_patches: Array.isArray(created?.row_patches) && created.row_patches.length ? created.row_patches : (createdPatchRowForReturn ? [createdPatchRowForReturn] : []),
+    data_row: (created?.data_row && typeof created.data_row === 'object') ? { ...created.data_row } : createdPatchRowForReturn,
+    row: (created?.row && typeof created.row === 'object') ? { ...created.row } : createdPatchRowForReturn,
+    count_deltas: (created?.count_deltas && typeof created.count_deltas === 'object') ? { ...created.count_deltas } : {},
+    cache_invalidation_hints:
+      (created?.cache_invalidation_hints && typeof created.cache_invalidation_hints === 'object')
+        ? { ...created.cache_invalidation_hints }
+        : {
+            identity_changed: true,
+            manual_changed: true,
+            route_changed: true,
+            invalidate_context: false,
+            invalidate_preview: false,
+            invalidate_evidence: false,
+            invalidate_editor_context: true
+          }
+  };
+
+  const singleModalCreateInvalidation = invalidateCreatedManualAdjustmentCaches({
+    ...singleModalReturnPayload,
+    row_patch: createdPatchRowForReturn || null,
+    row_key: createdRowKeyForReturn || null,
+    new_row_key: firstBulkString(created?.new_row_key, createdPatchRowForReturn?.new_row_key, createdRowKeyForReturn) || createdRowKeyForReturn || null,
+    previous_row_key: firstBulkString(created?.previous_row_key, createdPatchRowForReturn?.previous_row_key) || null,
+    timesheet_id: canonicalTimesheetId || createdTimesheetId || null,
+    contract_week_id: canonicalContractWeekId || createdContractWeekId || null,
+    cache_invalidation_hints: singleModalReturnPayload.cache_invalidation_hints || null
+  });
+  singleModalReturnPayload.cache_invalidation_hints = singleModalCreateInvalidation.cache_invalidation_hints || singleModalReturnPayload.cache_invalidation_hints;
+
   // ─────────────────────────────────────────────────────────────
   // Defensive modal state alignment
   // ─────────────────────────────────────────────────────────────
@@ -201704,53 +202745,45 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
   // ─────────────────────────────────────────────────────────────
   if (sourceContext === 'bulk_authorise' && createdUnprocessed) {
     const focusIdentity = isWeekly
-      ? (canonicalTimesheetId || canonicalContractWeekId)
-      : (canonicalTimesheetId || createdTimesheetId);
+      ? (canonicalTimesheetId ? `timesheet:${canonicalTimesheetId}` : (canonicalContractWeekId ? `contract_week:${canonicalContractWeekId}` : ''))
+      : (canonicalTimesheetId ? `timesheet:${canonicalTimesheetId}` : (createdTimesheetId ? `timesheet:${createdTimesheetId}` : ''));
+    const seedRowPatch = (canonicalRow && typeof canonicalRow === 'object')
+      ? { ...canonicalRow, row_key: focusIdentity || canonicalRow.row_key || null }
+      : (openRow && typeof openRow === 'object')
+        ? { ...openRow, row_key: focusIdentity || openRow.row_key || null }
+        : null;
 
-    const switchSeed =
-      isWeekly
-        ? {
-            ...(bulkProcessSeedBase || {}),
-            focus_row_key: focusIdentity,
-            selected_row_keys: focusIdentity ? [focusIdentity] : [],
-            candidate_id:
-              (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'candidate_id'))
-                ? bulkProcessSeedBase.candidate_id
-                : (candidateId || null),
-            client_id:
-              (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'client_id'))
-                ? bulkProcessSeedBase.client_id
-                : (clientId || null),
-            show_weekly_manual:
-              (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'show_weekly_manual'))
-                ? bulkProcessSeedBase.show_weekly_manual
-                : true,
-            show_daily_manual:
-              (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'show_daily_manual'))
-                ? bulkProcessSeedBase.show_daily_manual
-                : false
-          }
-        : {
-            ...(bulkProcessSeedBase || {}),
-            focus_row_key: focusIdentity,
-            selected_row_keys: focusIdentity ? [focusIdentity] : [],
-            candidate_id:
-              (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'candidate_id'))
-                ? bulkProcessSeedBase.candidate_id
-                : (candidateId || null),
-            client_id:
-              (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'client_id'))
-                ? bulkProcessSeedBase.client_id
-                : (clientId || null),
-            show_weekly_manual:
-              (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'show_weekly_manual'))
-                ? bulkProcessSeedBase.show_weekly_manual
-                : false,
-            show_daily_manual:
-              (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'show_daily_manual'))
-                ? bulkProcessSeedBase.show_daily_manual
-                : true
-          };
+    const switchSeed = {
+      ...(bulkProcessSeedBase || {}),
+      focus_row_key: focusIdentity || null,
+      selected_row_keys: focusIdentity ? [focusIdentity] : [],
+      row_patch: seedRowPatch,
+      row_patches: seedRowPatch ? [seedRowPatch] : [],
+      contract_week_id: canonicalContractWeekId || openRow?.contract_week_id || null,
+      timesheet_id: canonicalTimesheetId || createdTimesheetId || null,
+      bulk_process_bucket: (seedRowPatch && (seedRowPatch.bulk_process_bucket || seedRowPatch.summary_stage)) || 'UNPROCESSED',
+      forceFreshDataset: true,
+      mutationRefresh: true,
+      replace_current_workbench: true,
+      open_as_root: true,
+      source_context: 'bulk_authorise',
+      candidate_id:
+        (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'candidate_id'))
+          ? bulkProcessSeedBase.candidate_id
+          : (candidateId || null),
+      client_id:
+        (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'client_id'))
+          ? bulkProcessSeedBase.client_id
+          : (clientId || null),
+      show_weekly_manual:
+        (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'show_weekly_manual'))
+          ? bulkProcessSeedBase.show_weekly_manual
+          : !!isWeekly,
+      show_daily_manual:
+        (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'show_daily_manual'))
+          ? bulkProcessSeedBase.show_daily_manual
+          : !!isDaily
+    };
 
     const switchToBulk = await openConfirm({
       title: 'Open in Bulk Process?',
@@ -201765,7 +202798,7 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
     });
 
     if (switchToBulk) {
-      try { byId('btnCloseModal')?.click(); } catch {}
+      await closeCurrentBulkAuthoriseBeforeBulkProcess();
       await Promise.resolve();
 
       if (typeof openBulkProcessWorkbench === 'function') {
@@ -201804,13 +202837,13 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
         refreshDetails: true,
         tabKey: 'overview'
       });
-      return;
+      return singleModalReturnPayload;
     }
 
-    try { byId('btnCloseModal')?.click(); } catch {}
+    await closeCurrentTimesheetModalBeforeReopen();
     await Promise.resolve();
     await openTimesheet(openRow);
-    return;
+    return singleModalReturnPayload;
   }
 
   if (isWeekly) {
@@ -201836,19 +202869,21 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
       } catch {}
     }
 
-    try { byId('btnCloseModal')?.click(); } catch {}
+    await closeCurrentTimesheetModalBeforeReopen();
     await Promise.resolve();
     await openTimesheet(openRow);
-    return;
+    return singleModalReturnPayload;
   }
 
   // ─────────────────────────────────────────────────────────────
   // Fallback
   // ─────────────────────────────────────────────────────────────
-  try { byId('btnCloseModal')?.click(); } catch {}
+  await closeCurrentTimesheetModalBeforeReopen();
   await Promise.resolve();
   await openTimesheet(openRow);
+  return singleModalReturnPayload;
 }
+
 
 
 
@@ -234094,6 +235129,7 @@ function renderTimesheetEvidenceTab(ctx) {
   `;
 }
 
+
 async function openTimesheetEvidenceUploadDialog(file) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE][UPLOAD_DIALOG]');
   GC('openTimesheetEvidenceUploadDialog');
@@ -234256,10 +235292,40 @@ async function openTimesheetEvidenceUploadDialog(file) {
       })
     : null;
 
-  if (evidencePolicy && evidencePolicy.canManageExpenseEvidence !== true) {
+  const expenseStorageTarget = String(
+    evidencePolicy?.expenseStorageTarget ||
+    mc.expenseStorageTarget ||
+    mc.expense_storage_target ||
+    data.expenseStorageTarget ||
+    data.expense_storage_target ||
+    meta.expenseStorageTarget ||
+    meta.expense_storage_target ||
+    ''
+  ).trim().toUpperCase();
+  const expenseEvidenceStorageTarget = String(
+    evidencePolicy?.expenseEvidenceStorageTarget ||
+    mc.expenseEvidenceStorageTarget ||
+    mc.expense_evidence_storage_target ||
+    data.expenseEvidenceStorageTarget ||
+    data.expense_evidence_storage_target ||
+    meta.expenseEvidenceStorageTarget ||
+    meta.expense_evidence_storage_target ||
+    ''
+  ).trim().toUpperCase();
+  const evidenceStorageAllowed = expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
+  const policyAllowsEvidence = evidencePolicy
+    ? !!(evidencePolicy.canManageExpenseEvidence === true && evidenceStorageAllowed)
+    : true;
+  const blockedEvidenceMessage = evidencePolicy?.requiresAdditionalManualForExpenses === true || evidencePolicy?.isOriginalImportAuthoritative === true || evidencePolicy?.isNoTimesheetRequiredOriginal === true
+    ? 'Evidence cannot be uploaded directly for this source row. Use Add Additional Manual if expenses need to be claimed.'
+    : (!evidenceStorageAllowed
+        ? 'Evidence cannot be uploaded for this row because it does not have a supported expenses draft target.'
+        : String(evidencePolicy?.expenseEvidenceDisabledReason || evidencePolicy?.expensesDisabledReason || 'Evidence cannot be uploaded for this row because it does not have a supported expenses draft target.'));
+
+  if (evidencePolicy && !policyAllowsEvidence) {
     const blockedMessage = evidencePolicy.isAuthorised === true
       ? 'This timesheet is authorised. Unauthorise it before changing expenses or expense evidence.'
-      : String(evidencePolicy.expenseEvidenceDisabledReason || evidencePolicy.expensesDisabledReason || 'Evidence cannot be uploaded for this timesheet route.');
+      : blockedEvidenceMessage;
     GE();
     throw new Error(blockedMessage);
   }
@@ -234268,6 +235334,12 @@ async function openTimesheetEvidenceUploadDialog(file) {
     GE();
     throw new Error('Timesheet context missing; cannot upload evidence.');
   }
+
+  const isContractWeekDraftEvidenceContext = !!(
+    expenseStorageTarget === 'CONTRACT_WEEK_DRAFT' ||
+    expenseEvidenceStorageTarget === 'CONTRACT_WEEK_STAGED_EVIDENCE' ||
+    (!realTsId && contractWeekId && !evidencePolicy)
+  );
 
   if (!file) {
     GE();
@@ -234562,7 +235634,7 @@ async function openTimesheetEvidenceUploadDialog(file) {
 
   const blobUrl = URL.createObjectURL(file);
 
-  const title = (isPlannedWeekContext
+  const title = (isContractWeekDraftEvidenceContext
     ? `Upload staged evidence ${prettyContextId}…`
     : `Upload evidence ${prettyContextId}…`);
 
@@ -234600,8 +235672,8 @@ async function openTimesheetEvidenceUploadDialog(file) {
           <label></label>
           <div class="controls">
               <span class="mini" style="opacity:.85;">
-              ${(isPlannedWeekContext
-                ? 'Upload adds a staged evidence item to this planned weekly/manual row. You can view, return to queue, delete, or reclassify items from the Evidence tab.'
+              ${(isContractWeekDraftEvidenceContext
+                ? 'Upload adds a staged evidence item to this planned/unprocessed week because expenses are being saved as a draft. You can view, return to queue, delete, or reclassify items from the Evidence tab.'
                 : 'Upload adds a new evidence item to the timesheet. You can view, return to queue, delete, or reclassify items from the Evidence tab.')}
             </span>
           </div>
@@ -234644,7 +235716,7 @@ async function openTimesheetEvidenceUploadDialog(file) {
         return { ok: false };
       }
 
-      if (isPlannedWeekContext) {
+      if (isContractWeekDraftEvidenceContext) {
         const weekIdNow =
           (window.modalCtx?.data?.contract_week_id) ||
           (window.modalCtx?.timesheetDetails?.contract_week_id) ||
@@ -234824,7 +235896,6 @@ async function openTimesheetEvidenceUploadDialog(file) {
 
   GE();
 }
-
 
 
 async function openTimesheetEvidenceReplaceDialog(file) {
