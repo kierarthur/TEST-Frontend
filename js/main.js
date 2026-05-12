@@ -108394,7 +108394,328 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     throw err;
   }
 }
+function renderTimesheetExpensesTab(ctx) {
+  const c = normaliseTimesheetCtx(ctx);
+  const row     = c.row || {};
+  const details = c.details || {};
+  const related = c.related || {};
+  const state   = c.state || {};
 
+  const ts   = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : null;
+  const tf   = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : null;
+  const cw   = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : null;
+
+  const editPolicy = (typeof classifyTimesheetEditDomains === 'function')
+    ? classifyTimesheetEditDomains({ row, details, tsfin: tf, timesheet: ts, contract_week: cw, state, ctx: c, related })
+    : null;
+  const expenseStorageTarget = String(
+    c.expenseStorageTarget ||
+    c.expense_storage_target ||
+    c?.policy?.expenseStorageTarget ||
+    editPolicy?.expenseStorageTarget ||
+    ''
+  ).trim().toUpperCase() || null;
+  const isContractWeekDraftTarget = expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
+  const isTsfinTarget = expenseStorageTarget === 'TSFIN';
+  const parseMaybeJson = (value) => {
+    if (!value) return null;
+    if (typeof value === 'object') return value;
+    if (typeof value !== 'string') return null;
+    const raw = value.trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return (parsed && typeof parsed === 'object') ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const contractWeekTotals = parseMaybeJson(cw?.totals_json) || {};
+  const contractWeekExpensesDraft = (contractWeekTotals.expenses_draft && typeof contractWeekTotals.expenses_draft === 'object')
+    ? contractWeekTotals.expenses_draft
+    : {};
+
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const fmt2 = (n) => {
+    const x = Number(n);
+    return Number.isFinite(x) ? x.toFixed(2) : '0.00';
+  };
+
+  const contract = (related.contract && typeof related.contract === 'object') ? related.contract : (details?.related?.contract || {});
+  const candidate = (related.candidate && typeof related.candidate === 'object') ? related.candidate : (details?.related?.candidate || {});
+  const client = (related.client && typeof related.client === 'object') ? related.client : (details?.related?.client || {});
+
+  const mileagePayRate =
+    (tf && tf.mileage_pay_rate != null)
+      ? Number(tf.mileage_pay_rate)
+      : (
+          contract.mileage_pay_rate != null
+            ? Number(contract.mileage_pay_rate)
+            : (
+                candidate.mileage_pay_rate != null
+                  ? Number(candidate.mileage_pay_rate)
+                  : null
+              )
+        );
+
+  const mileageChargeRate =
+    (tf && tf.mileage_charge_rate != null)
+      ? Number(tf.mileage_charge_rate)
+      : (
+          contract.mileage_charge_rate != null
+            ? Number(contract.mileage_charge_rate)
+            : (
+                client.mileage_charge_rate != null
+                  ? Number(client.mileage_charge_rate)
+                  : null
+              )
+        );
+
+  const hasExpenseDraftPayload = (value) => {
+    if (!value || typeof value !== 'object') return false;
+    return [
+      'mileage_units',
+      'mileage_pay_rate',
+      'mileage_charge_rate',
+      'travel_pay',
+      'travel_charge',
+      'accommodation_pay',
+      'accommodation_charge',
+      'other_pay',
+      'other_charge',
+      'note',
+      'notes'
+    ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
+  };
+  const stateExpensesDraft = (state.expensesDraft && typeof state.expensesDraft === 'object') ? state.expensesDraft : null;
+  const useStateExpensesDraft = !!(stateExpensesDraft && (!isContractWeekDraftTarget || hasExpenseDraftPayload(stateExpensesDraft)));
+  const sourceDraft = useStateExpensesDraft
+    ? stateExpensesDraft
+    : (isContractWeekDraftTarget && hasExpenseDraftPayload(contractWeekExpensesDraft))
+      ? {
+          mileage_units: contractWeekExpensesDraft.mileage_units ?? 0,
+          mileage_pay_rate: contractWeekExpensesDraft.mileage_pay_rate,
+          mileage_charge_rate: contractWeekExpensesDraft.mileage_charge_rate,
+          travel_pay: contractWeekExpensesDraft.travel_pay ?? 0,
+          travel_charge: contractWeekExpensesDraft.travel_charge ?? 0,
+          accommodation_pay: contractWeekExpensesDraft.accommodation_pay ?? 0,
+          accommodation_charge: contractWeekExpensesDraft.accommodation_charge ?? 0,
+          other_pay: contractWeekExpensesDraft.other_pay ?? 0,
+          other_charge: contractWeekExpensesDraft.other_charge ?? 0,
+          note: contractWeekExpensesDraft.note ?? contractWeekExpensesDraft.notes ?? ''
+        }
+      : {
+          mileage_units: tf?.mileage_units ?? 0,
+          travel_pay: tf?.travel_pay_ex_vat ?? 0,
+          travel_charge: tf?.travel_charge_ex_vat ?? 0,
+          accommodation_pay: tf?.accommodation_pay_ex_vat ?? 0,
+          accommodation_charge: tf?.accommodation_charge_ex_vat ?? 0,
+          other_pay: tf?.other_pay_ex_vat ?? 0,
+          other_charge: tf?.other_charge_ex_vat ?? 0,
+          note: tf?.expenses_description ?? ''
+        };
+
+  const draft = {
+    ...sourceDraft,
+    mileage_pay_rate: Number.isFinite(mileagePayRate) ? mileagePayRate : sourceDraft.mileage_pay_rate,
+    mileage_charge_rate: Number.isFinite(mileageChargeRate) ? mileageChargeRate : sourceDraft.mileage_charge_rate
+  };
+
+  const mileageRatesOk =
+    Number.isFinite(Number(draft.mileage_pay_rate)) &&
+    Number.isFinite(Number(draft.mileage_charge_rate)) &&
+    Number(draft.mileage_pay_rate) > 0 &&
+    Number(draft.mileage_charge_rate) > 0;
+
+  const mileageUnits = Number(draft.mileage_units || 0);
+  const mileagePay   = mileageRatesOk ? round2(mileageUnits * Number(draft.mileage_pay_rate)) : round2(Number(tf?.mileage_pay_ex_vat || 0));
+  const mileageChg   = mileageRatesOk ? round2(mileageUnits * Number(draft.mileage_charge_rate)) : round2(Number(tf?.mileage_charge_ex_vat || 0));
+
+  const travelPay = round2(draft.travel_pay || 0);
+  const travelChg = round2(draft.travel_charge || 0);
+
+  const accomPay = round2(draft.accommodation_pay || 0);
+  const accomChg = round2(draft.accommodation_charge || 0);
+
+  const otherPay = round2(draft.other_pay || 0);
+  const otherChg = round2(draft.other_charge || 0);
+
+  const totalPay = round2(mileagePay + travelPay + accomPay + otherPay);
+  const totalChg = round2(mileageChg + travelChg + accomChg + otherChg);
+
+  const frameMode =
+    (typeof window.__getModalFrame === 'function' ? window.__getModalFrame()?.mode : null) ||
+    'view';
+  const isEditMode = (frameMode === 'edit' || frameMode === 'create');
+  const isBulkProcessModal = String(window?.modalCtx?.entity || '').trim().toLowerCase() === 'bulk-process';
+  const defaultBlockedReason = editPolicy?.requiresAdditionalManualForExpenses
+    ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
+    : (!expenseStorageTarget
+        ? 'Expenses cannot be saved because this row does not yet have a supported expenses draft target.'
+        : 'Expenses cannot be edited directly for this row.');
+  const expensesTabDisabled = !!(editPolicy && (editPolicy.expensesTabDisabled === true || editPolicy.expensesActionDisabled === true || !expenseStorageTarget));
+  const expensesTabDisabledReason = String(
+    (editPolicy && (editPolicy.expensesTabDisabledReason || editPolicy.expensesActionDisabledReason || editPolicy.expensesDisabledReason)) ||
+    defaultBlockedReason
+  );
+  const enabled = editPolicy ? ((isTsfinTarget || isContractWeekDraftTarget) && editPolicy.canOpenExpenses === true && !expensesTabDisabled) : true;
+  const canEditExpenseControls = editPolicy ? (editPolicy.canEditExpenses === true && (isTsfinTarget || isContractWeekDraftTarget) && !expensesTabDisabled) : true;
+  const readOnly = !(canEditExpenseControls && (isEditMode || isBulkProcessModal));
+  const blockedReason = expensesTabDisabled ? expensesTabDisabledReason : (editPolicy?.expensesDisabledReason || defaultBlockedReason);
+
+  const needsMileageEvidence = mileageUnits > 0 || mileagePay > 0 || mileageChg > 0;
+  const needsTravelEvidence  = (travelPay > 0 || travelChg > 0);
+  const needsAccomEvidence   = (accomPay > 0 || accomChg > 0);
+  const needsOtherEvidence   = (otherPay > 0 || otherChg > 0);
+
+  const evidenceLines = [];
+  if (needsMileageEvidence) evidenceLines.push('• Mileage requires evidence kind MILEAGE (when units, pay, or charge is greater than zero).');
+  if (needsTravelEvidence)  evidenceLines.push('• Travel requires evidence kind TRAVEL (when pay or charge is greater than £0.00).');
+  if (needsAccomEvidence)   evidenceLines.push('• Accommodation requires evidence kind ACCOMMODATION (when pay or charge is greater than £0.00).');
+  if (needsOtherEvidence)   evidenceLines.push('• Other requires evidence kind OTHER (when pay or charge is greater than £0.00).');
+
+  const evidenceHint =
+    evidenceLines.length
+      ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">${evidenceLines.join('<br/>')}</div>`
+      : (isBulkProcessModal ? '' : `<div class="mini" style="margin-top:8px;color:rgba(255,255,255,0.7)">Tip: upload supporting evidence in the Evidence tab. Evidence is required only when you claim mileage, travel, accommodation, or other expenses.</div>`);
+
+  if (expensesTabDisabled || !enabled) {
+    return `
+      <div class="tabc">
+        <div class="card">
+          <div class="row" style="grid-column:1/-1">
+            <label>Expenses</label>
+            <div class="controls">
+              <span class="mini">${escapeHtml(blockedReason)}</span>
+              ${editPolicy?.requiresAdditionalManualForExpenses ? `
+                <div class="mini" style="margin-top:6px;opacity:.85">
+                  Tip: use <strong>Add additional manual timesheet</strong> where the original sheet cannot carry expenses directly.
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const ro = readOnly ? 'disabled' : '';
+  const roStyle = readOnly ? 'style="opacity:0.7"' : '';
+  const mileageUnitsDisabled = readOnly ? 'disabled' : '';
+  const mileageHint =
+    !mileageRatesOk
+      ? `<div class="mini" style="margin-top:6px;color:rgba(255,200,120,0.95)">Mileage rates are not set. You may clear mileage to zero, but a positive mileage claim requires rates before it can be saved.</div>`
+      : `<div class="mini" style="margin-top:6px;color:rgba(255,255,255,0.7)">Mileage pay £${fmt2(draft.mileage_pay_rate)} · Charge £${fmt2(draft.mileage_charge_rate)}</div>`;
+
+  const readOnlyHint = readOnly
+    ? `<div class="mini" style="margin-top:8px;color:rgba(255,200,120,0.95)">${escapeHtml(blockedReason || 'Expenses are read-only for this row.')}</div>`
+    : '';
+
+  const noteVal = String(draft.note ?? '').trim();
+  const enforcementHint = (isBulkProcessModal ? '' : (
+    isContractWeekDraftTarget
+      ? `Expenses will be saved as a draft until this week is processed. Evidence enforcement uses staged evidence for this unprocessed week.`
+      : `Note: Evidence enforcement happens on Save. If required evidence is missing, Save will fail with an “Evidence required” message and you should upload receipts in the Evidence tab.`
+  ));
+
+  return `
+    <div class="tabc" data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
+      <div class="card">
+        <div class="row" style="grid-column:1/-1">
+          <label>Expenses</label>
+          <div class="controls">
+            <span class="mini">${isContractWeekDraftTarget ? 'Expenses will be saved as a draft until this week is processed.' : 'Edit expenses and mileage. Charges with £0.00 will not appear on invoices.'}</span>
+            ${readOnlyHint}
+          </div>
+        </div>
+
+        <div class="row" style="grid-column:1/-1;margin-top:10px">
+          <div style="overflow:auto;border:1px solid var(--line);border-radius:10px">
+            <table class="grid" style="min-width:720px;table-layout:auto">
+              <thead>
+                <tr data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}" data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}">
+                  <th style="width:220px">Expense Type</th>
+                  <th style="width:140px">Units</th>
+                  <th style="width:160px">Pay</th>
+                  <th style="width:160px">Charge</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Mileage</strong></td>
+                  <td>
+                    <input
+                      class="input"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="exp_mileage_units"
+                      value="${String(mileageUnits)}"
+                      ${mileageUnitsDisabled}
+                      ${roStyle}
+                      data-exp-field="mileage_units"
+                      data-mileage-pay-rate="${Number.isFinite(Number(draft.mileage_pay_rate)) ? String(draft.mileage_pay_rate) : ''}"
+                      data-mileage-charge-rate="${Number.isFinite(Number(draft.mileage_charge_rate)) ? String(draft.mileage_charge_rate) : ''}"
+                      placeholder="0"
+                    />
+                  </td>
+                  <td><span class="mini" data-exp-out="mileage_pay">£${fmt2(mileagePay)}</span></td>
+                  <td><span class="mini" data-exp-out="mileage_charge">£${fmt2(mileageChg)}</span></td>
+                </tr>
+                <tr>
+                  <td colspan="4" style="padding-top:6px;padding-bottom:10px">
+                    ${mileageHint}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td><strong>Travel</strong></td>
+                  <td><span class="mini" style="opacity:.7">—</span></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_travel_pay" value="${fmt2(travelPay)}" ${ro} ${roStyle} data-exp-field="travel_pay" /></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_travel_charge" value="${fmt2(travelChg)}" ${ro} ${roStyle} data-exp-field="travel_charge" /></td>
+                </tr>
+
+                <tr>
+                  <td><strong>Accommodation</strong></td>
+                  <td><span class="mini" style="opacity:.7">—</span></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_accom_pay" value="${fmt2(accomPay)}" ${ro} ${roStyle} data-exp-field="accommodation_pay" /></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_accom_charge" value="${fmt2(accomChg)}" ${ro} ${roStyle} data-exp-field="accommodation_charge" /></td>
+                </tr>
+
+                <tr>
+                  <td><strong>Other</strong></td>
+                  <td><span class="mini" style="opacity:.7">—</span></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_other_pay" value="${fmt2(otherPay)}" ${ro} ${roStyle} data-exp-field="other_pay" /></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_other_charge" value="${fmt2(otherChg)}" ${ro} ${roStyle} data-exp-field="other_charge" /></td>
+                </tr>
+
+                <tr>
+                  <td><strong>Total</strong></td>
+                  <td></td>
+                  <td><strong class="mini" data-exp-out="total_pay">£${fmt2(totalPay)}</strong></td>
+                  <td><strong class="mini" data-exp-out="total_charge">£${fmt2(totalChg)}</strong></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="row" style="grid-column:1/-1;margin-top:10px">
+          <div class="mini" style="color:rgba(255,255,255,0.7)">Notes (optional). Notes do not affect totals or invoice maths.</div>
+        </div>
+
+        <div class="row" style="grid-column:1/-1;margin-top:6px">
+          <textarea class="input" style="width:100%;min-height:90px;resize:vertical" name="exp_note" placeholder="Add any notes about these expenses (optional)" data-exp-field="note" ${ro} ${roStyle}>${escapeHtml(noteVal)}</textarea>
+        </div>
+
+        <div class="row" style="grid-column:1/-1;margin-top:10px">
+          <div class="mini" style="color:rgba(255,255,255,0.7)">${enforcementHint}</div>
+          ${evidenceHint}
+        </div>
+      </div>
+    </div>
+  `;
+}
 
 async function openBulkAuthoriseWorkbench() {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-AUTH][OPEN]');
