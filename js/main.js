@@ -118209,6 +118209,60 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     return null;
   };
 
+  const routeTypeUpperForManualAdjustment = upper(details.route_type || row.route_type || '');
+  const routeFamilyUpperForManualAdjustment = upper(row.route_family || details.route_family || '');
+  const basisUpperForManualAdjustment = upper(tsfin.basis || row.basis || cw.basis || '');
+  const cwTotalsForManualAdjustment = (() => {
+    const parsed = safeJsonParse(cw?.totals_json);
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+  })();
+  const cwHoursForManualAdjustment = (cwTotalsForManualAdjustment.hours && typeof cwTotalsForManualAdjustment.hours === 'object')
+    ? cwTotalsForManualAdjustment.hours
+    : {};
+  const explicitPlannedScheduleForManualAdjustment = parseScheduleLike(cw?.planned_schedule_json);
+  const plannedScheduleExplicitlyEmptyForManualAdjustment = Array.isArray(explicitPlannedScheduleForManualAdjustment) && explicitPlannedScheduleForManualAdjustment.length === 0;
+  const isWeeklyContextForManualAdjustment = !!(
+    sheetScope === 'WEEKLY' ||
+    routeTypeUpperForManualAdjustment.startsWith('WEEKLY') ||
+    !!contractWeekId
+  );
+  const isManualModeForManualAdjustment = !!(
+    subModeEffective === 'MANUAL' ||
+    cwModeSnapshot === 'MANUAL' ||
+    upper(row.submission_mode || '') === 'MANUAL' ||
+    routeTypeUpperForManualAdjustment.includes('MANUAL') ||
+    routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR'
+  );
+  const hasAdditionalManualAdjustmentMarker = !!(
+    row.is_adjustment === true ||
+    row.is_adjusted === true ||
+    cw.is_adjustment === true ||
+    cw.is_adjusted === true ||
+    Number(row.additional_seq || cw.additional_seq || 0) > 0 ||
+    basisUpperForManualAdjustment === 'NHSP_ADJUSTMENT' ||
+    basisUpperForManualAdjustment === 'MANUAL_ADJUSTMENT' ||
+    routeTypeUpperForManualAdjustment === 'WEEKLY_NHSP_ADJUSTMENT' ||
+    routeTypeUpperForManualAdjustment === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+    routeTypeUpperForManualAdjustment === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+    routeTypeUpperForManualAdjustment.includes('_ADJUSTMENT')
+  );
+  const zeroHourAdditionalManualAdjustment = !!(
+    Number(row.total_hours || 0) === 0 &&
+    Number(cwHoursForManualAdjustment.day || 0) === 0 &&
+    Number(cwHoursForManualAdjustment.night || 0) === 0 &&
+    Number(cwHoursForManualAdjustment.sat || 0) === 0 &&
+    Number(cwHoursForManualAdjustment.sun || 0) === 0 &&
+    Number(cwHoursForManualAdjustment.bh || 0) === 0
+  );
+  const keepAdditionalManualAdjustmentScheduleEmpty = !!(
+    !hasTs &&
+    !!contractWeekId &&
+    isWeeklyContextForManualAdjustment &&
+    isManualModeForManualAdjustment &&
+    hasAdditionalManualAdjustmentMarker &&
+    (plannedScheduleExplicitlyEmptyForManualAdjustment || zeroHourAdditionalManualAdjustment)
+  );
+
   const formatIsoToLondonYmd = (iso) => {
     try {
       const d = new Date(String(iso || ''));
@@ -118421,6 +118475,7 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
         return buildDailyScheduleFromCanonicalFields();
       }
       if (hasTs) return parseScheduleLike(ts?.actual_schedule_json);
+      if (keepAdditionalManualAdjustmentScheduleEmpty) return [];
       return parseScheduleLike(cw?.planned_schedule_json) || parseScheduleLike(cw?.std_schedule_json) || parseScheduleLike(related?.contract?.std_schedule_json);
     })(),
     __dailyScheduleShapeMode: (hasTs && sheetScope === 'DAILY')
@@ -118475,6 +118530,14 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   }
   if (!Object.prototype.hasOwnProperty.call(normalisedState, 'schedule')) {
     normalisedState.schedule = deep(stateSeed.schedule);
+  }
+  if (keepAdditionalManualAdjustmentScheduleEmpty) {
+    normalisedState.schedule = [];
+    normalisedState.baselineSchedule = [];
+    normalisedState.weeklyLinesByDate = null;
+    normalisedState.extraShiftCount = 0;
+    normalisedState.scheduleHasErrors = false;
+    normalisedState.scheduleErrorsByDate = {};
   }
   if (!normalisedState.dayReferences || typeof normalisedState.dayReferences !== 'object') {
     normalisedState.dayReferences = deep(stateSeed.dayReferences || {});
@@ -118546,7 +118609,6 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     slim_context: details.slim_context === true
   };
 }
-
 
 
 function traceBulkProcessDirty(state, reason, detail = {}) {
