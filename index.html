@@ -1246,13 +1246,58 @@ body{
 
 /* Bulk Process-only parity overrides: keep Bulk Authorise untouched. */
 #modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule{
-table-layout:fixed !important;
-width:100% !important;
-min-width:0 !important;
-max-width:100% !important;
+  table-layout:fixed !important;
+  width:100% !important;
+  min-width:0 !important;
+  max-width:100% !important;
 }
 #modal.bulk-process-workbench #bulkProcessManualEditorRoot .ts-weekly-schedule-wrap{
-overflow-x:hidden !important;
+  max-width:100% !important;
+  min-width:0 !important;
+  overflow-x:hidden !important;
+}
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-paid-hrs,
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-paid-hours-head,
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-paid-hours-cell{
+  width:58px !important;
+  min-width:58px !important;
+  max-width:58px !important;
+  white-space:nowrap !important;
+}
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-wk-col-actions,
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-line-actions-head,
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-line-actions-cell{
+  width:86px !important;
+  min-width:86px !important;
+  max-width:86px !important;
+  padding-left:3px !important;
+  padding-right:2px !important;
+  text-align:right !important;
+  white-space:nowrap !important;
+  overflow:visible !important;
+}
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-line-actions,
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-schedule-actions{
+  display:inline-flex !important;
+  flex-wrap:nowrap !important;
+  align-items:center !important;
+  justify-content:flex-end !important;
+  gap:2px !important;
+  width:100% !important;
+  max-width:100% !important;
+  min-width:0 !important;
+  overflow:visible !important;
+}
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-schedule-actions button,
+#modal.bulk-process-workbench #bulkProcessManualEditorRoot #tsWeeklySchedule .ts-weekly-line-btn{
+  flex:0 0 12px !important;
+  min-width:12px !important;
+  width:12px !important;
+  height:12px !important;
+  line-height:12px !important;
+  padding:0 !important;
+  font-size:7px !important;
+  text-align:center !important;
 }
 
 #modal.bulk-authorise-workbench #bulkAuthoriseWorkbenchRoot,
