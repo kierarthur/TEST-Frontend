@@ -127710,8 +127710,6 @@ function getBulkProcessVisibleRows(state) {
 }
 
 
-
-
 function bindBulkProcessFilters(state) {
   const st = (state && typeof state === 'object') ? state : null;
   const root = document.getElementById('bulkProcessFiltersRoot');
@@ -127732,11 +127730,19 @@ function bindBulkProcessFilters(state) {
     const weeklyEl = document.getElementById('bulkProcessShowWeeklyManual');
     const dailyEl = document.getElementById('bulkProcessShowDailyManual');
 
+    const previousFilters = (st.filters && typeof st.filters === 'object') ? st.filters : {};
     st.filters = {
-      ...(st.filters || {}),
+      ...previousFilters,
       q: trimStr(candidateTextEl?.value || ''),
       candidate_id: '',
       client_id: trimStr(clientSelectEl?.value || ''),
+      row_key: '',
+      row_keys: [],
+      previous_row_key: '',
+      timesheet_id: '',
+      timesheet_ids: [],
+      contract_week_id: '',
+      contract_week_ids: [],
       show_weekly_manual: !!weeklyEl?.checked,
       show_daily_manual: !!dailyEl?.checked
     };
@@ -127844,6 +127850,7 @@ function bindBulkProcessFilters(state) {
     });
   }
 }
+
 
 function renderBulkProcessFilters(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
