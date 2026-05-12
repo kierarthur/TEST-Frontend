@@ -77962,7 +77962,6 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
   }
 }
 
-
 function classifyTimesheetEditDomains(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const toUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -78013,34 +78012,8 @@ function classifyTimesheetEditDomains(ctxInput) {
   const rowActionFlags = (row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
 
   const pool = [
-    ctx,
-    actionFlags,
-    detailsActionFlags,
-    activeActionFlags,
-    rowActionFlags,
     row,
-    ctx.timesheet,
-    ctx.tsfin,
-    ctx.financial,
-    ctx.financials,
-    ctx.financial_snapshot,
-    ctx.contract_week,
-    related,
-    related.contract,
-    related.client,
-    related.candidate,
-    details,
-    details.timesheet,
-    details.tsfin,
-    details.financial,
-    details.financials,
-    details.financial_snapshot,
-    details.timesheets_financials,
-    details.contract_week,
-    detailsRelated,
-    detailsRelated.contract,
-    detailsRelated.client,
-    detailsRelated.candidate,
+    rowActionFlags,
     rowDetails,
     rowDetails.timesheet,
     rowDetails.tsfin,
@@ -78052,8 +78025,30 @@ function classifyTimesheetEditDomains(ctxInput) {
     row.financials,
     row.timesheets_financials,
     row.contract_week,
-    ctx.state,
-    context,
+    details,
+    detailsActionFlags,
+    details.timesheet,
+    details.tsfin,
+    details.financial,
+    details.financials,
+    details.financial_snapshot,
+    details.timesheets_financials,
+    details.contract_week,
+    ctx.timesheet,
+    ctx.tsfin,
+    ctx.financial,
+    ctx.financials,
+    ctx.financial_snapshot,
+    ctx.contract_week,
+    actionFlags,
+    related,
+    related.contract,
+    related.client,
+    related.candidate,
+    detailsRelated,
+    detailsRelated.contract,
+    detailsRelated.client,
+    detailsRelated.candidate,
     context.row,
     context.data_row,
     context.timesheet,
@@ -78069,7 +78064,6 @@ function classifyTimesheetEditDomains(ctxInput) {
     contextDetails.contract_week,
     contextDetails.related,
     contextDetails.related && contextDetails.related.contract,
-    activeCtx,
     activeCtx.row,
     activeCtx.data_row,
     activeCtx.timesheet,
@@ -78085,8 +78079,6 @@ function classifyTimesheetEditDomains(ctxInput) {
     activeDetails.contract_week,
     activeDetails.related,
     activeDetails.related && activeDetails.related.contract,
-    activeCtx.state,
-    activeContext,
     activeContext.row,
     activeContext.data_row,
     activeContext.timesheet,
@@ -78102,6 +78094,14 @@ function classifyTimesheetEditDomains(ctxInput) {
     activeContextDetails.contract_week,
     activeContextDetails.related,
     activeContextDetails.related && activeContextDetails.related.contract,
+    ctx,
+    ctx.state,
+    context,
+    contextDetails.related,
+    activeActionFlags,
+    activeCtx,
+    activeCtx.state,
+    activeContext,
     activeContext.state
   ].filter((src) => src && typeof src === 'object');
 
@@ -78161,6 +78161,23 @@ function classifyTimesheetEditDomains(ctxInput) {
   const submissionChannelU = toUpper(get('submission_channel', 'source_channel'));
   const qrStatusU = toUpper(get('qr_status'));
   const routeText = [routeTypeU, routeFamilyU, routeSubfamilyU, underlyingChannelU, weeklySourceU, basisU, sourceSystemU, submissionModeU, submissionChannelU].filter(Boolean).join('|');
+  const routeTokens = routeText.split('|').map((value) => toUpper(value)).filter(Boolean);
+  const isNonQrToken = (value) => {
+    const token = toUpper(value);
+    return token === 'NON_QR' || token === 'MANUAL_NON_QR' || token.endsWith('_NON_QR');
+  };
+  const routeHasToken = (...wanted) => {
+    const targets = new Set(wanted.map((value) => toUpper(value)).filter(Boolean));
+    return routeTokens.some((token) => targets.has(token));
+  };
+  const routeTokenIncludes = (...wantedParts) => {
+    const parts = wantedParts.map((value) => toUpper(value)).filter(Boolean);
+    return routeTokens.some((token) => {
+      if (!token || isNonQrToken(token)) return false;
+      return parts.some((part) => token.includes(part));
+    });
+  };
+  const hasExplicitNonQrMarker = routeTokens.some(isNonQrToken);
 
   const manualRouteSignal = !!(
     submissionModeU === 'MANUAL' ||
@@ -78181,14 +78198,10 @@ function classifyTimesheetEditDomains(ctxInput) {
     submissionChannelU === 'QR'
   );
   const routeTextShowsQr = !!(
-    routeTypeU === 'QR' ||
-    routeFamilyU === 'QR' ||
-    routeSubfamilyU === 'QR' ||
-    underlyingChannelU === 'QR' ||
-    routeTypeU.includes('QR') ||
-    routeFamilyU.includes('QR') ||
-    routeSubfamilyU.includes('QR') ||
-    underlyingChannelU.includes('QR')
+    explicitQrSubmission ||
+    routeHasToken('QR', 'QR_TIMESHEET', 'WEEKLY_QR', 'DAILY_QR') ||
+    routeTokenIncludes('QR_') ||
+    routeTokens.some((token) => token.endsWith('_QR') && !isNonQrToken(token))
   );
   const electronicRouteSignal = !!(
     submissionModeU === 'ELECTRONIC' ||
@@ -78237,10 +78250,17 @@ function classifyTimesheetEditDomains(ctxInput) {
   const currentQrRoute = !!(explicitQrSubmission || routeTextShowsQr);
   const activeQrArtifact = !!((anyBool('has_qr_token') || anyValue('qr_token')) && activeQrStatus);
   const currentQrFlag = !!(anyBool('is_qr') && activeQrStatus);
-  const protectedQrSignal = !!(currentQrRoute || activeQrArtifact || currentQrFlag);
+  const manualNonQrCurrentRow = !!(
+    hasExplicitNonQrMarker &&
+    manualRouteSignal &&
+    submissionModeU === 'MANUAL' &&
+    firstBoolIfPresent('is_qr') !== true &&
+    !explicitQrSubmission
+  );
+  const protectedQrSignal = !!(!manualNonQrCurrentRow && (currentQrRoute || activeQrArtifact || currentQrFlag));
   const isQrRoute = !!(protectedQrSignal && !reliableManualRouteSignal);
-  const isElectronicRoute = !!(!isQrRoute && electronicRouteSignal && !reliableManualRouteSignal);
-  const currentManualRoute = !!(reliableManualRouteSignal || (manualRouteSignal && !isQrRoute && !isElectronicRoute));
+  const isElectronicRoute = !!(!manualNonQrCurrentRow && !isQrRoute && electronicRouteSignal && !reliableManualRouteSignal);
+  const currentManualRoute = !!(manualNonQrCurrentRow || reliableManualRouteSignal || (manualRouteSignal && !isQrRoute && !isElectronicRoute));
   const isManualRoute = !!currentManualRoute;
 
   const revokedAt = get('revoked_at', 'revoked_at_server', 'authorisation_revoked_at');
@@ -78278,7 +78298,19 @@ function classifyTimesheetEditDomains(ctxInput) {
   const hasExplicitManualAdditionalFlag = !!(
     anyBool('manually_created', 'created_manually', 'is_manual_additional', 'manual_additional', 'manual_adjustment', 'is_additional_manual', 'is_manual_adjustment')
   );
+  const routeTypeManualAdjustmentSignal = !!(
+    isManualRoute &&
+    (
+      routeTypeU === 'WEEKLY_NHSP_ADJUSTMENT' ||
+      routeTypeU === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+      routeTypeU === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+      routeTypeU.includes('_ADJUSTMENT') ||
+      routeTypeU.includes('MANUAL_ADDITIONAL') ||
+      routeTypeU.includes('ADDITIONAL_MANUAL')
+    )
+  );
   const hasAdditionalSignal = !!(
+    routeTypeManualAdjustmentSignal ||
     anyValue('parent_timesheet_id') ||
     anyPositiveNumber('additional_seq', 'contract_week_additional_seq') ||
     lineTypeU.includes('MANUAL_ADDITIONAL') ||
@@ -78539,6 +78571,7 @@ function classifyTimesheetEditDomains(ctxInput) {
     reasonCodes
   };
 }
+
 
 
 
@@ -88925,6 +88958,7 @@ function resetBulkProcessDirtyBaseline(state, reason, detail = {}) {
   );
 }
 
+
 async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   const mc =
     (modalCtxArg && typeof modalCtxArg === 'object')
@@ -89352,6 +89386,82 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
     };
   };
 
+  const parseObjectLikeForManualAdjustment = (src) => {
+    if (!src) return {};
+    if (typeof src === 'object' && !Array.isArray(src)) return src;
+    if (typeof src === 'string') {
+      const raw = src.trim();
+      if (!raw) return {};
+      try {
+        const parsed = JSON.parse(raw);
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+      } catch {}
+    }
+    return {};
+  };
+
+  const num0ForManualAdjustment = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const cwForManualAdjustment = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : {};
+  const routeTypeUpperForManualAdjustment = String(details.route_type || baseRow.route_type || '').trim().toUpperCase();
+  const routeFamilyUpperForManualAdjustment = String(baseRow.route_family || details.route_family || '').trim().toUpperCase();
+  const routeSubfamilyUpperForManualAdjustment = String(baseRow.route_subfamily || details.route_subfamily || '').trim().toUpperCase();
+  const underlyingFamilyUpperForManualAdjustment = String(baseRow.underlying_channel_family || details.underlying_channel_family || '').trim().toUpperCase();
+  const cwModeSnapshotForManualAdjustment = String(
+    cwForManualAdjustment.submission_mode_snapshot ||
+    details.cw_submission_mode_snapshot ||
+    baseRow.submission_mode_snapshot ||
+    ''
+  ).trim().toUpperCase();
+  const explicitPlannedScheduleForManualAdjustment = parseScheduleLike(cwForManualAdjustment.planned_schedule_json);
+  const plannedScheduleExplicitlyEmptyForManualAdjustment = Array.isArray(explicitPlannedScheduleForManualAdjustment) && explicitPlannedScheduleForManualAdjustment.length === 0;
+  const cwTotalsForManualAdjustment = parseObjectLikeForManualAdjustment(cwForManualAdjustment.totals_json);
+  const cwHoursForManualAdjustment = (cwTotalsForManualAdjustment.hours && typeof cwTotalsForManualAdjustment.hours === 'object')
+    ? cwTotalsForManualAdjustment.hours
+    : {};
+  const isWeeklyContextForManualAdjustment = !!(
+    sheetScope === 'WEEKLY' ||
+    routeTypeUpperForManualAdjustment.startsWith('WEEKLY') ||
+    !!weekId
+  );
+  const isManualModeForManualAdjustment = !!(
+    subMode === 'MANUAL' ||
+    cwModeSnapshotForManualAdjustment === 'MANUAL' ||
+    routeTypeUpperForManualAdjustment.includes('MANUAL') ||
+    routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    routeSubfamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    underlyingFamilyUpperForManualAdjustment === 'MANUAL_NON_QR'
+  );
+  const hasAdditionalManualAdjustmentMarker = !!(
+    routeTypeUpperForManualAdjustment === 'WEEKLY_NHSP_ADJUSTMENT' ||
+    routeTypeUpperForManualAdjustment === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+    routeTypeUpperForManualAdjustment === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+    routeTypeUpperForManualAdjustment.includes('_ADJUSTMENT')
+  );
+  const routeFamilyConfirmsAdditionalManualAdjustment = routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR';
+  const zeroHourAdditionalManualAdjustment = !!(
+    num0ForManualAdjustment(baseRow.total_hours) === 0 &&
+    num0ForManualAdjustment(cwHoursForManualAdjustment.day) === 0 &&
+    num0ForManualAdjustment(cwHoursForManualAdjustment.night) === 0 &&
+    num0ForManualAdjustment(cwHoursForManualAdjustment.sat) === 0 &&
+    num0ForManualAdjustment(cwHoursForManualAdjustment.sun) === 0 &&
+    num0ForManualAdjustment(cwHoursForManualAdjustment.bh) === 0
+  );
+  const keepAdditionalManualAdjustmentScheduleEmpty = !!(
+    !hasTs &&
+    !!weekId &&
+    isWeeklyContextForManualAdjustment &&
+    isManualModeForManualAdjustment &&
+    hasAdditionalManualAdjustmentMarker &&
+    routeFamilyConfirmsAdditionalManualAdjustment &&
+    plannedScheduleExplicitlyEmptyForManualAdjustment &&
+    zeroHourAdditionalManualAdjustment
+  );
+  const suppressStandardScheduleFallbackForAdditionalManualAdjustment = keepAdditionalManualAdjustmentScheduleEmpty;
+
   let schedule = null;
   try {
     if (hasTs && sheetScope === 'DAILY') {
@@ -89375,24 +89485,39 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
     }
 
     if (!hasTs && !schedule) {
-      const cw2 = (details && details.contract_week) ? details.contract_week : null;
+      if (keepAdditionalManualAdjustmentScheduleEmpty) {
+        schedule = [];
+      } else {
+        const cw2 = (details && details.contract_week) ? details.contract_week : null;
 
-      const src = (cw2 && cw2.planned_schedule_json != null) ? cw2.planned_schedule_json
-               : (cw2 && cw2.std_schedule_json != null) ? cw2.std_schedule_json
-               : (contractTemplateSchedule != null) ? contractTemplateSchedule
-               : (baseRow.std_schedule_json != null) ? baseRow.std_schedule_json
-               : null;
+        const src = (cw2 && cw2.planned_schedule_json != null) ? cw2.planned_schedule_json
+                 : (cw2 && cw2.std_schedule_json != null) ? cw2.std_schedule_json
+                 : (contractTemplateSchedule != null) ? contractTemplateSchedule
+                 : (baseRow.std_schedule_json != null) ? baseRow.std_schedule_json
+                 : null;
 
-      if (src) {
-        const parsedSchedule = parseScheduleLike(src);
-        if (parsedSchedule != null) schedule = parsedSchedule;
+        if (src) {
+          const parsedSchedule = parseScheduleLike(src);
+          if (parsedSchedule != null) schedule = parsedSchedule;
+        }
       }
     }
   } catch {
     schedule = null;
   }
 
-  state.schedule = schedule;
+  state.schedule = keepAdditionalManualAdjustmentScheduleEmpty ? [] : schedule;
+  state.__suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
+  state.__keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
+  state.suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
+  state.keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
+  if (keepAdditionalManualAdjustmentScheduleEmpty) {
+    state.baselineSchedule = [];
+    state.weeklyLinesByDate = null;
+    state.extraShiftCount = 0;
+    state.scheduleHasErrors = false;
+    state.scheduleErrorsByDate = {};
+  }
   state.additionalRates = additionalRates;
   resetProtectedScheduleTouchFlags();
 
@@ -89496,7 +89621,9 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   };
 
   let seedSchedule = null;
-  if (Array.isArray(state.schedule) && state.schedule.length) {
+  if (keepAdditionalManualAdjustmentScheduleEmpty) {
+    seedSchedule = [];
+  } else if (Array.isArray(state.schedule) && state.schedule.length) {
     seedSchedule = tryParse(state.schedule);
   } else {
     seedSchedule = tryParse(tsLocal.actual_schedule_json);
@@ -89805,7 +89932,6 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
 
   return { row: baseRow, details, related, state };
 }
-
 
 
 async function openSendMailshotWizard() {
@@ -113274,7 +113400,16 @@ function hasBulkAuthoriseGenuineDirtyEdits(state, options = {}) {
       window.modalCtx?.active_ctx
     ].filter((candidate) => candidate && typeof candidate === 'object');
     const draft = readExpensesStateValue(expenseContainers, ['expensesDraft', 'activeExpensesDraft', 'stagedExpensesDraft']);
-    const baseline = readExpensesStateValue(expenseContainers, ['expensesBaseline', 'activeExpensesBaseline', 'stagedExpensesBaseline']);
+    const modalBaseline = readExpensesStateValue(expenseContainers, ['expensesBaseline', 'activeExpensesBaseline', 'stagedExpensesBaseline']);
+    const persistedBaseline = readExpensesStateValue(expenseContainers, [
+      'expensesPersistedBaseline',
+      'expensesServerBaseline',
+      'persistedExpensesBaseline',
+      'serverExpensesBaseline',
+      'expensesCommittedBaseline',
+      'committedExpensesBaseline'
+    ]);
+    const baseline = (persistedBaseline !== undefined && persistedBaseline !== null) ? persistedBaseline : modalBaseline;
     const marker = readExpensesStateValue(expenseContainers, [
       'expensesDirty',
       'expenses_dirty',
@@ -113295,8 +113430,8 @@ function hasBulkAuthoriseGenuineDirtyEdits(state, options = {}) {
     const canEditExpensesByPolicy = !!(editability && editability.canEditExpenses === true);
     const dirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
       ? isTimesheetExpensesDraftDirty(draft || {}, baseline || {})
-      : { dirty: boolish(marker) };
-    const isDirty = !!(dirtyResult && dirtyResult.dirty === true);
+      : { dirty: JSON.stringify(draft || {}) !== JSON.stringify(baseline || {}) };
+    const isDirty = !!((dirtyResult && dirtyResult.dirty === true) || boolish(marker));
     const allowed = !!canEditExpensesByPolicy;
     syncExpenseDirtyMarkers(expenseContainers, isDirty && allowed);
     return { isDirty, allowed };
@@ -113402,6 +113537,7 @@ function hasBulkAuthoriseGenuineDirtyEdits(state, options = {}) {
 
   return false;
 }
+
 
 
 function syncBulkAuthoriseModalCtxToActiveRow(state, options = {}) {
@@ -116433,6 +116569,7 @@ function bulkAuthoriseHasProcessedExpensesValue(ctxInput) {
   return !!(hasTimesheetAnchor && (numericDetected || descriptionDetected || stagedDetected));
 }
 
+
 function classifyBulkAuthoriseEditability(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const activeCtx = (ctx.active_ctx && typeof ctx.active_ctx === 'object') ? ctx.active_ctx : {};
@@ -116509,6 +116646,7 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     'can_add_additional_manual', 'can_bulk_authorise', 'can_bulk_unauthorise', 'review_only',
     'segment_id', 'segment_stable_key', 'target_type', 'segment_only'
   ].forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(mergedRow, key) && mergedRow[key] !== undefined && mergedRow[key] !== null && trimStr(mergedRow[key]) !== '') return;
     const value = readFirst([ctx, key], [activeCtx, key], [activeContext, key]);
     if (value !== undefined) mergedRow[key] = value;
   });
@@ -116537,9 +116675,9 @@ function classifyBulkAuthoriseEditability(ctxInput) {
   const weeklyMode = upper(readFirst([cw, 'submission_mode_snapshot'], [details, 'cw_submission_mode_snapshot'], [mergedRow, 'submission_mode_snapshot'], [ctx, 'submission_mode_snapshot'], [activeCtx, 'submission_mode_snapshot'], [mergedRow, 'submission_mode']) || base.weeklyMode || '');
   const dailyMode = upper(readFirst([ts, 'submission_mode'], [details, 'submission_mode'], [mergedRow, 'submission_mode'], [ctx, 'submission_mode'], [activeCtx, 'submission_mode'], [ts, 'submission_mode_snapshot'], [mergedRow, 'submission_mode_snapshot']) || base.dailyMode || '');
   const effectiveMode = sheetScope === 'WEEKLY' ? weeklyMode : dailyMode;
-  const routeFamily = upper(readFirst([ctx, 'route_family'], [activeCtx, 'route_family'], [mergedRow, 'route_family']) || base.routeFamily || readFirst([mergedRow, 'route_type'], [details, 'route_type'], [ts, 'route_type']) || '');
-  const routeSubfamily = upper(readFirst([ctx, 'route_subfamily'], [activeCtx, 'route_subfamily'], [mergedRow, 'route_subfamily']) || '');
-  const underlyingChannelFamily = upper(readFirst([ctx, 'underlying_channel_family'], [activeCtx, 'underlying_channel_family'], [mergedRow, 'underlying_channel_family']) || '');
+  const routeFamily = upper(readFirst([mergedRow, 'route_family'], [details, 'route_family'], [ctx, 'route_family'], [activeCtx, 'route_family']) || base.routeFamily || readFirst([mergedRow, 'route_type'], [details, 'route_type'], [ts, 'route_type']) || '');
+  const routeSubfamily = upper(readFirst([mergedRow, 'route_subfamily'], [details, 'route_subfamily'], [ctx, 'route_subfamily'], [activeCtx, 'route_subfamily']) || '');
+  const underlyingChannelFamily = upper(readFirst([mergedRow, 'underlying_channel_family'], [details, 'underlying_channel_family'], [ctx, 'underlying_channel_family'], [activeCtx, 'underlying_channel_family']) || '');
 
   const tsId = trimStr(readFirst([ts, 'timesheet_id'], [details, 'current_timesheet_id'], [details, 'requested_timesheet_id'], [ctx, 'current_timesheet_id'], [ctx, 'requested_timesheet_id'], [mergedRow, 'timesheet_id'], [mergedRow, 'current_timesheet_id']) || base.tsId || '');
   const weekId = trimStr(readFirst([details, 'contract_week_id'], [cw, 'id'], [mergedRow, 'contract_week_id'], [ctx, 'contract_week_id']) || base.weekId || '');
@@ -116600,10 +116738,42 @@ function classifyBulkAuthoriseEditability(ctxInput) {
   const canManageExpenseEvidence = domainPolicy ? (domainPolicy.canManageExpenseEvidence === true && !!expenseEvidenceStorageTarget) : !!(hasRealTimesheet && !isImportAuthoritative && !isInvoiceDocumentLocked && !hasSegmentInvoiceDocumentLock && backendCanManageEvidence === true);
   const hasProcessedExpenses = !!(typeof bulkAuthoriseHasProcessedExpensesValue === 'function' && bulkAuthoriseHasProcessedExpensesValue({ ...ctx, details, row: mergedRow, state: activeState, active_ctx: activeCtx }));
 
+  const expenseStateContainers = [activeState, activeCtx?.state, activeContext?.state, ctx?.state, ctx, activeCtx, activeContext]
+    .filter((container) => container && typeof container === 'object');
+  const readExpenseState = (keys) => {
+    const list = Array.isArray(keys) ? keys : [keys];
+    for (const container of expenseStateContainers) {
+      for (const key of list) {
+        if (!key || !Object.prototype.hasOwnProperty.call(container, key)) continue;
+        return container[key];
+      }
+    }
+    return undefined;
+  };
+  const expenseDraftForSave = readExpenseState(['expensesDraft', 'activeExpensesDraft', 'stagedExpensesDraft']) || {};
+  const expensePersistedBaselineForSave = readExpenseState([
+    'expensesPersistedBaseline',
+    'expensesServerBaseline',
+    'persistedExpensesBaseline',
+    'serverExpensesBaseline',
+    'expensesCommittedBaseline',
+    'committedExpensesBaseline'
+  ]);
+  const expenseModalBaselineForSave = readExpenseState(['expensesBaseline', 'activeExpensesBaseline', 'stagedExpensesBaseline']) || {};
+  const expenseBaselineForSave = (expensePersistedBaselineForSave !== undefined && expensePersistedBaselineForSave !== null)
+    ? expensePersistedBaselineForSave
+    : expenseModalBaselineForSave;
   const expenseDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
-    ? isTimesheetExpensesDraftDirty(activeState?.expensesDraft || activeCtx?.state?.expensesDraft || activeContext?.state?.expensesDraft || {}, activeState?.expensesBaseline || activeCtx?.state?.expensesBaseline || activeContext?.state?.expensesBaseline || {})
-    : { dirty: false };
-  const expensesDirty = !!(expenseDirtyResult && expenseDirtyResult.dirty === true);
+    ? isTimesheetExpensesDraftDirty(expenseDraftForSave || {}, expenseBaselineForSave || {})
+    : { dirty: JSON.stringify(expenseDraftForSave || {}) !== JSON.stringify(expenseBaselineForSave || {}) };
+  const explicitExpensePendingMarker = !!(
+    boolish(readExpenseState(['expensesDirty'])) ||
+    boolish(readExpenseState(['expensesDraftDirty'])) ||
+    boolish(readExpenseState(['hasStagedExpensesDirty'])) ||
+    boolish(readExpenseState(['stagedExpensesDirty'])) ||
+    boolish(readExpenseState(['expenseDirtyMarker']))
+  );
+  const expensesDirty = !!((expenseDirtyResult && expenseDirtyResult.dirty === true) || explicitExpensePendingMarker);
   const scheduleSaveAllowed = !!(!paymentScheduleLocked && canEditHoursSchedule && base.canSave === true);
   const expensesSaveAllowed = !!(!isAuthorised && !actionHardLocked && expensesDirty && canEditExpenses);
 
@@ -116645,6 +116815,12 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     tsId,
     weekId,
     canProcess: false,
+    canSwitchToManual: !!(base.canSwitchToManual && (isQr || isElectronic) && !isManual),
+    canSwitchPlannedWeekToElectronic: !!(base.canSwitchPlannedWeekToElectronic && isManual && !isQr),
+    canRevertToElectronic: !!(base.canRevertToElectronic && isManual && !isQr),
+    canAllowQrAgain: !!(base.canAllowQrAgain && isQr),
+    canAllowElectronicAgain: !!(base.canAllowElectronicAgain && isElectronic),
+    canConvertQrToManualOnly: !!(base.canConvertQrToManualOnly && isQr && !isManual),
     canAuthorise: !isAuthorised && !actionHardLocked && canAuthoriseFlag,
     canUnauthorise: isAuthorised && !actionHardLocked && canUnauthoriseFlag,
     canEditHoursSchedule,
@@ -116673,6 +116849,8 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     isSegmentOnlyContext
   };
 }
+
+
 
 function bindBulkAuthoriseShellControls(state) {
   const st = (state && typeof state === 'object')
@@ -117830,7 +118008,6 @@ async function unauthoriseSelectedTimesheets(payload) {
   return out;
 }
 
-
 function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   const deep = (v) => {
     try { return JSON.parse(JSON.stringify(v)); } catch { return v; }
@@ -118211,7 +118388,8 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
 
   const routeTypeUpperForManualAdjustment = upper(details.route_type || row.route_type || '');
   const routeFamilyUpperForManualAdjustment = upper(row.route_family || details.route_family || '');
-  const basisUpperForManualAdjustment = upper(tsfin.basis || row.basis || cw.basis || '');
+  const routeSubfamilyUpperForManualAdjustment = upper(row.route_subfamily || details.route_subfamily || '');
+  const underlyingFamilyUpperForManualAdjustment = upper(row.underlying_channel_family || details.underlying_channel_family || '');
   const cwTotalsForManualAdjustment = (() => {
     const parsed = safeJsonParse(cw?.totals_json);
     return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
@@ -118231,28 +118409,24 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     cwModeSnapshot === 'MANUAL' ||
     upper(row.submission_mode || '') === 'MANUAL' ||
     routeTypeUpperForManualAdjustment.includes('MANUAL') ||
-    routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR'
+    routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    routeSubfamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    underlyingFamilyUpperForManualAdjustment === 'MANUAL_NON_QR'
   );
   const hasAdditionalManualAdjustmentMarker = !!(
-    row.is_adjustment === true ||
-    row.is_adjusted === true ||
-    cw.is_adjustment === true ||
-    cw.is_adjusted === true ||
-    Number(row.additional_seq || cw.additional_seq || 0) > 0 ||
-    basisUpperForManualAdjustment === 'NHSP_ADJUSTMENT' ||
-    basisUpperForManualAdjustment === 'MANUAL_ADJUSTMENT' ||
     routeTypeUpperForManualAdjustment === 'WEEKLY_NHSP_ADJUSTMENT' ||
     routeTypeUpperForManualAdjustment === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
     routeTypeUpperForManualAdjustment === 'WEEKLY_MANUAL_ADJUSTMENT' ||
     routeTypeUpperForManualAdjustment.includes('_ADJUSTMENT')
   );
+  const routeFamilyConfirmsAdditionalManualAdjustment = routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR';
   const zeroHourAdditionalManualAdjustment = !!(
-    Number(row.total_hours || 0) === 0 &&
-    Number(cwHoursForManualAdjustment.day || 0) === 0 &&
-    Number(cwHoursForManualAdjustment.night || 0) === 0 &&
-    Number(cwHoursForManualAdjustment.sat || 0) === 0 &&
-    Number(cwHoursForManualAdjustment.sun || 0) === 0 &&
-    Number(cwHoursForManualAdjustment.bh || 0) === 0
+    num0(row.total_hours) === 0 &&
+    num0(cwHoursForManualAdjustment.day) === 0 &&
+    num0(cwHoursForManualAdjustment.night) === 0 &&
+    num0(cwHoursForManualAdjustment.sat) === 0 &&
+    num0(cwHoursForManualAdjustment.sun) === 0 &&
+    num0(cwHoursForManualAdjustment.bh) === 0
   );
   const keepAdditionalManualAdjustmentScheduleEmpty = !!(
     !hasTs &&
@@ -118260,8 +118434,11 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     isWeeklyContextForManualAdjustment &&
     isManualModeForManualAdjustment &&
     hasAdditionalManualAdjustmentMarker &&
-    (plannedScheduleExplicitlyEmptyForManualAdjustment || zeroHourAdditionalManualAdjustment)
+    routeFamilyConfirmsAdditionalManualAdjustment &&
+    plannedScheduleExplicitlyEmptyForManualAdjustment &&
+    zeroHourAdditionalManualAdjustment
   );
+  const suppressStandardScheduleFallbackForAdditionalManualAdjustment = keepAdditionalManualAdjustmentScheduleEmpty;
 
   const formatIsoToLondonYmd = (iso) => {
     try {
@@ -118458,6 +118635,10 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     weekly_line_clipboard: null,
     scheduleHasErrors: false,
     scheduleErrorsByDate: {},
+    __suppressStandardScheduleFallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
+    __keepAdditionalManualAdjustmentScheduleEmpty: keepAdditionalManualAdjustmentScheduleEmpty,
+    suppressStandardScheduleFallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
+    keepAdditionalManualAdjustmentScheduleEmpty: keepAdditionalManualAdjustmentScheduleEmpty,
     expensesDraft: null,
     expensesBaseline: null,
     evidence: incomingEvidence,
@@ -118531,6 +118712,10 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   if (!Object.prototype.hasOwnProperty.call(normalisedState, 'schedule')) {
     normalisedState.schedule = deep(stateSeed.schedule);
   }
+  normalisedState.__suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
+  normalisedState.__keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
+  normalisedState.suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
+  normalisedState.keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
   if (keepAdditionalManualAdjustmentScheduleEmpty) {
     normalisedState.schedule = [];
     normalisedState.baselineSchedule = [];
@@ -118538,6 +118723,18 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     normalisedState.extraShiftCount = 0;
     normalisedState.scheduleHasErrors = false;
     normalisedState.scheduleErrorsByDate = {};
+    normalisedRow.__suppressStandardScheduleFallback = true;
+    normalisedRow.__keepAdditionalManualAdjustmentScheduleEmpty = true;
+    normalisedRow.suppress_standard_schedule_fallback = true;
+    normalisedRow.keep_additional_manual_adjustment_schedule_empty = true;
+    normalisedDetails.__suppressStandardScheduleFallback = true;
+    normalisedDetails.__keepAdditionalManualAdjustmentScheduleEmpty = true;
+    normalisedDetails.suppress_standard_schedule_fallback = true;
+    normalisedDetails.keep_additional_manual_adjustment_schedule_empty = true;
+    metaPatch.__suppressStandardScheduleFallback = true;
+    metaPatch.__keepAdditionalManualAdjustmentScheduleEmpty = true;
+    metaPatch.suppress_standard_schedule_fallback = true;
+    metaPatch.keep_additional_manual_adjustment_schedule_empty = true;
   }
   if (!normalisedState.dayReferences || typeof normalisedState.dayReferences !== 'object') {
     normalisedState.dayReferences = deep(stateSeed.dayReferences || {});
@@ -118604,11 +118801,14 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     artifact_hints: preservedArtifactHints,
     left_pane: preservedLeftPane,
     compare_payload: preservedComparePayload,
+    suppress_standard_schedule_fallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
+    keep_additional_manual_adjustment_schedule_empty: keepAdditionalManualAdjustmentScheduleEmpty,
     is_hydrated: isHydrated,
     hydration_required: hydrationRequired,
     slim_context: details.slim_context === true
   };
 }
+
 
 
 function traceBulkProcessDirty(state, reason, detail = {}) {
@@ -119403,6 +119603,7 @@ async function openBulkProcessWorkbench(seed = {}) {
     },
     __bulk_process_render_seq: 0,
     __bulk_process_render_inflight: null,
+    __bulk_process_render_inflight_token: null,
     __bulk_process_render_inflight_identity: '',
     __bulk_process_render_inflight_reason: '',
     __bulk_process_render_pending: false,
@@ -120957,7 +121158,7 @@ async function openBulkProcessWorkbench(seed = {}) {
     };
 
     const queuePendingRender = () => {
-      if (isSameIdentityAsInflight() || isSameIdentityAsSettling()) {
+      if (isSameIdentityAsSettling()) {
         return false;
       }
 
@@ -120973,7 +121174,7 @@ async function openBulkProcessWorkbench(seed = {}) {
         state.__bulk_process_render_pending = true;
         state.__bulk_process_render_pending_identity = activeIdentity;
         state.__bulk_process_render_pending_reason = reason;
-      } else if (!state.__bulk_process_render_pending_reason && reason) {
+      } else if (reason) {
         state.__bulk_process_render_pending_reason = reason;
       }
 
@@ -120991,9 +121192,7 @@ async function openBulkProcessWorkbench(seed = {}) {
     }
 
     if (state.__bulk_process_render_inflight) {
-      if (!isSameIdentityAsInflight()) {
-        queuePendingRender();
-      }
+      queuePendingRender();
 
       try {
         await state.__bulk_process_render_inflight;
@@ -121001,7 +121200,17 @@ async function openBulkProcessWorkbench(seed = {}) {
       return true;
     }
 
-    const run = (async () => {
+    const renderToken = {
+      identity: activeIdentity,
+      reason,
+      createdAt: Date.now()
+    };
+
+    state.__bulk_process_render_inflight_token = renderToken;
+    state.__bulk_process_render_inflight_identity = activeIdentity;
+    state.__bulk_process_render_inflight_reason = reason;
+
+    const run = Promise.resolve().then(async () => {
       try {
         state.__bulk_process_render_seq = (Number(state.__bulk_process_render_seq || 0) || 0) + 1;
 
@@ -121067,17 +121276,16 @@ async function openBulkProcessWorkbench(seed = {}) {
       } catch (e) {
         console.warn('[TS][BULK-PROCESS][OPEN] rerenderWorkbench failed', e);
       } finally {
-        if (state.__bulk_process_render_inflight === run) {
+        if (state.__bulk_process_render_inflight_token === renderToken) {
           state.__bulk_process_render_inflight = null;
+          state.__bulk_process_render_inflight_token = null;
           state.__bulk_process_render_inflight_identity = '';
           state.__bulk_process_render_inflight_reason = '';
         }
       }
-    })();
+    });
 
     state.__bulk_process_render_inflight = run;
-    state.__bulk_process_render_inflight_identity = activeIdentity;
-    state.__bulk_process_render_inflight_reason = reason;
 
     try {
       await run;
@@ -121090,7 +121298,8 @@ async function openBulkProcessWorkbench(seed = {}) {
         state.__bulk_process_render_pending_identity = '';
         state.__bulk_process_render_pending_reason = '';
         state.__bulk_process_render_pending_force = false;
-        if (pendingIdentity && activeIdentity && pendingIdentity !== activeIdentity && !pendingForce) {
+        const livePendingIdentity = getActiveHydrationIdentity();
+        if (pendingIdentity && livePendingIdentity && pendingIdentity !== livePendingIdentity && !pendingForce) {
           return true;
         }
         await rerenderWorkbench({ reason: pendingReason, force: pendingForce });
@@ -121536,7 +121745,6 @@ async function openBulkProcessWorkbench(seed = {}) {
 
   GE();
 }
-
 
 
 
@@ -131866,6 +132074,7 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
   `;
 }
 
+
 function renderBulkProcessManualEditor(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -132197,7 +132406,8 @@ function renderBulkProcessManualEditor(state) {
         #bulkProcessManualEditorRoot .grid th,
         #bulkProcessManualEditorRoot .grid td { padding: 2px 4px; }
         #bulkProcessManualEditorRoot .grid th { font-size: 9px; }
-        #bulkProcessManualEditorRoot #tsWeeklySchedule { width: max-content !important; min-width: 1180px !important; max-width: none !important; table-layout: fixed !important; }
+        #bulkProcessManualEditorRoot .ts-weekly-schedule-wrap { max-width: 100% !important; min-width: 0 !important; overflow-x: hidden !important; }
+        #bulkProcessManualEditorRoot #tsWeeklySchedule { width: 100% !important; min-width: 0 !important; max-width: 100% !important; table-layout: fixed !important; }
         #bulkProcessManualEditorRoot #tsWeeklySchedule th,
         #bulkProcessManualEditorRoot #tsWeeklySchedule td {
           white-space: normal !important;
@@ -132246,8 +132456,10 @@ function renderBulkProcessManualEditor(state) {
         #bulkProcessManualEditorRoot .ts-weekly-paid-hours-head,
         #bulkProcessManualEditorRoot .ts-weekly-paid-hours-cell { min-width: 72px !important; white-space: nowrap !important; }
         #bulkProcessManualEditorRoot .ts-weekly-line-actions-head,
-        #bulkProcessManualEditorRoot .ts-weekly-line-actions-cell { min-width: 92px !important; width: 92px !important; padding-left: 10px !important; padding-right: 2px !important; text-align: right !important; }
-        #bulkProcessManualEditorRoot .ts-weekly-line-btn { min-width: 14px !important; width: 14px !important; height: 14px !important; font-size: 7.5px !important; padding: 0 !important; }
+        #bulkProcessManualEditorRoot .ts-weekly-line-actions-cell { min-width: 82px !important; width: 82px !important; max-width: 82px !important; padding-left: 4px !important; padding-right: 1px !important; text-align: right !important; white-space: nowrap !important; }
+        #bulkProcessManualEditorRoot .ts-weekly-line-actions,
+        #bulkProcessManualEditorRoot .ts-weekly-schedule-actions { display: inline-flex !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: flex-end !important; gap: 2px !important; max-width: 100% !important; }
+        #bulkProcessManualEditorRoot .ts-weekly-line-btn { min-width: 14px !important; width: 14px !important; height: 14px !important; font-size: 7.5px !important; padding: 0 !important; flex: 0 0 14px !important; }
         #bulkProcessManualEditorRoot #tsDailyReference { min-width: 22ch !important; width: 100% !important; max-width: none !important; }
       </style>
       <div id="bulkProcessManualEditorBody" style="margin-top:4px;display:flex;flex-direction:column;gap:5px;max-height:56vh;overflow:auto;overflow-x:auto;padding-right:2px;min-width:0;">
@@ -132262,6 +132474,7 @@ function renderBulkProcessManualEditor(state) {
     </div>
   `);
 }
+
 
 
 function getBulkProcessRouteKindFromRow(rowLike, detailsLike) {
@@ -136155,7 +136368,6 @@ async function handleBulkProcessSave(state) {
 }
 
 
-
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -136513,9 +136725,134 @@ async function handleBulkProcessProcess(state) {
     return window.confirm('This row has no attached or staged evidence yet. Continue anyway?');
   };
 
+  const parseSavedJsonForZeroHourAdjustment = (value) => {
+    if (value == null) return null;
+    if (Array.isArray(value) || (value && typeof value === 'object')) return deep(value);
+    if (typeof value !== 'string') return null;
+    const raw = value.trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return (Array.isArray(parsed) || (parsed && typeof parsed === 'object')) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const objectForZeroHourAdjustment = (value) => {
+    const parsed = parseSavedJsonForZeroHourAdjustment(value);
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+  };
+  const hasPositiveUnitValueForZeroHourAdjustment = (value) => {
+    if (value == null) return false;
+    if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
+      const n = Number(value);
+      return Number.isFinite(n) && n > 0;
+    }
+    if (Array.isArray(value)) return value.some((item) => hasPositiveUnitValueForZeroHourAdjustment(item));
+    if (typeof value === 'object') {
+      return Object.values(value).some((item) => hasPositiveUnitValueForZeroHourAdjustment(item));
+    }
+    return false;
+  };
+  const hasPositiveExpenseDraftForZeroHourAdjustment = (value) => {
+    const draft = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+    return !!(
+      Number(draft.mileage_units || 0) > 0 ||
+      Number(draft.travel_pay || draft.travel_pay_ex_vat || 0) > 0 ||
+      Number(draft.travel_charge || draft.travel_charge_ex_vat || 0) > 0 ||
+      Number(draft.accommodation_pay || draft.accommodation_pay_ex_vat || 0) > 0 ||
+      Number(draft.accommodation_charge || draft.accommodation_charge_ex_vat || 0) > 0 ||
+      Number(draft.other_pay || draft.other_pay_ex_vat || 0) > 0 ||
+      Number(draft.other_charge || draft.other_charge_ex_vat || 0) > 0
+    );
+  };
+  const isZeroHourExpenseOnlyAdditionalManualAdjustment = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const row = (active.row && typeof active.row === 'object') ? active.row : {};
+    const details = (active.details && typeof active.details === 'object') ? active.details : {};
+    const contractWeek = (active.contractWeek && typeof active.contractWeek === 'object') ? active.contractWeek : {};
+    const stateCtx = (active.stateCtx && typeof active.stateCtx === 'object') ? active.stateCtx : {};
+    const activeTimesheetId = trimStr(active.timesheetId || details.current_timesheet_id || row.current_timesheet_id || row.timesheet_id || '');
+    const activeContractWeekId = trimStr(active.contractWeekId || details.contract_week_id || contractWeek.id || row.contract_week_id || '');
+    if (activeTimesheetId || !activeContractWeekId) return false;
+
+    const routeType = upper(details.route_type || row.route_type || '');
+    const routeFamily = upper(row.route_family || details.route_family || '');
+    const routeSubfamily = upper(row.route_subfamily || details.route_subfamily || '');
+    const underlyingFamily = upper(row.underlying_channel_family || details.underlying_channel_family || '');
+    const sheetScope = upper(active.sheetScope || details.sheet_scope || row.sheet_scope || '');
+    const submissionMode = upper(active.submissionMode || row.submission_mode || contractWeek.submission_mode_snapshot || details.contract_week?.submission_mode_snapshot || row.submission_mode_snapshot || '');
+    const isWeeklyAdjustment = !!(sheetScope === 'WEEKLY' || routeType.startsWith('WEEKLY') || active.isWeekly === true);
+    const isManualAdjustment = !!(
+      submissionMode === 'MANUAL' ||
+      routeType.includes('MANUAL') ||
+      routeFamily === 'MANUAL_NON_QR' ||
+      routeSubfamily === 'MANUAL_NON_QR' ||
+      underlyingFamily === 'MANUAL_NON_QR'
+    );
+    const hasAdjustmentMarker = !!(
+      routeType === 'WEEKLY_NHSP_ADJUSTMENT' ||
+      routeType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+      routeType === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+      routeType.includes('_ADJUSTMENT')
+    );
+    if (!isWeeklyAdjustment || !isManualAdjustment || !hasAdjustmentMarker || routeFamily !== 'MANUAL_NON_QR') return false;
+
+    const plannedScheduleExplicitlyEmpty = [
+      contractWeek.planned_schedule_json,
+      details.contract_week?.planned_schedule_json,
+      row.planned_schedule_json
+    ].some((value) => {
+      const parsed = parseSavedJsonForZeroHourAdjustment(value);
+      return Array.isArray(parsed) && parsed.length === 0;
+    });
+    if (!plannedScheduleExplicitlyEmpty) return false;
+
+    const totals = objectForZeroHourAdjustment(contractWeek.totals_json || details.contract_week?.totals_json || row.totals_json || null);
+    const hours = (totals.hours && typeof totals.hours === 'object') ? totals.hours : {};
+    const hoursAreZero = !!(
+      Number(row.total_hours || 0) === 0 &&
+      Number(hours.day || 0) === 0 &&
+      Number(hours.night || 0) === 0 &&
+      Number(hours.sat || 0) === 0 &&
+      Number(hours.sun || 0) === 0 &&
+      Number(hours.bh || 0) === 0
+    );
+    if (!hoursAreZero) return false;
+
+    const hasHardLock = !!(
+      row.locked === true ||
+      row.is_authorised === true ||
+      hasValue(row.authorised_at_server) ||
+      hasValue(row.authorised_at_utc) ||
+      hasValue(details.timesheet?.authorised_at_server) ||
+      hasValue(details.timesheet?.authorised_at_utc) ||
+      hasValue(row.paid_at_utc) ||
+      hasValue(row.locked_by_invoice_id) ||
+      hasValue(details.tsfin?.paid_at_utc) ||
+      hasValue(details.tsfin?.locked_by_invoice_id) ||
+      row.is_import_authoritative === true ||
+      details.is_import_authoritative === true
+    );
+    if (hasHardLock) return false;
+
+    const expensesDraft = (stateCtx.expensesDraft && typeof stateCtx.expensesDraft === 'object')
+      ? stateCtx.expensesDraft
+      : ((totals.expenses_draft && typeof totals.expenses_draft === 'object') ? totals.expenses_draft : {});
+    const additionalUnitsWeek = objectForZeroHourAdjustment(active.timesheet?.additional_units_week || row.additional_units_week || totals.additional_units_week || null);
+    const additionalUnitsPerDay = objectForZeroHourAdjustment(active.timesheet?.additional_units_per_day || row.additional_units_per_day || totals.additional_units_per_day || null);
+
+    return !!(
+      hasPositiveExpenseDraftForZeroHourAdjustment(expensesDraft) ||
+      hasPositiveUnitValueForZeroHourAdjustment(additionalUnitsWeek) ||
+      hasPositiveUnitValueForZeroHourAdjustment(additionalUnitsPerDay)
+    );
+  };
+
   try {
     let editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
-    if (!editability.canProcess) {
+    let activeForInitialProcessGate = readActive();
+    if (!editability.canProcess && !isZeroHourExpenseOnlyAdditionalManualAdjustment(activeForInitialProcessGate)) {
       GE();
       const reason = trimStr(editability.processDisabledReason || editability.disabledReason || '') || 'This row cannot be processed.';
       return { ok: false, error: reason };
@@ -136566,7 +136903,8 @@ async function handleBulkProcessProcess(state) {
       }
 
       editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
-      if (!editability.canProcess) {
+      const activeForPostSaveProcessGate = readActive();
+      if (!editability.canProcess && !isZeroHourExpenseOnlyAdditionalManualAdjustment(activeForPostSaveProcessGate)) {
         const reason = trimStr(editability.processDisabledReason || editability.disabledReason || '') || 'This row cannot be processed.';
         return { ok: false, error: reason };
       }
@@ -136645,17 +136983,88 @@ async function handleBulkProcessProcess(state) {
         }
         return { schedule: null, source: null };
       })();
-      if (!Array.isArray(savedScheduleForProcessInfo.schedule) || savedScheduleForProcessInfo.schedule.length === 0) {
+      const parseObjectJson = (value) => {
+        const parsed = parseSavedJson(value);
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+      };
+      const plannedScheduleCandidatesForEmptyAdjustment = [
+        active.contractWeek?.planned_schedule_json,
+        active.details?.contract_week?.planned_schedule_json,
+        active.row?.planned_schedule_json
+      ];
+      const plannedScheduleExplicitlyEmptyForAdjustment = plannedScheduleCandidatesForEmptyAdjustment.some((value) => {
+        const parsed = parseSavedJson(value);
+        return Array.isArray(parsed) && parsed.length === 0;
+      });
+      const contractWeekTotalsForAdjustment = (() => {
+        const totals = parseObjectJson(active.contractWeek?.totals_json || active.details?.contract_week?.totals_json || active.row?.totals_json || null);
+        return totals && typeof totals === 'object' ? totals : {};
+      })();
+      const hoursForAdjustment = (contractWeekTotalsForAdjustment.hours && typeof contractWeekTotalsForAdjustment.hours === 'object') ? contractWeekTotalsForAdjustment.hours : {};
+      const routeTypeForAdjustment = upper(active.details?.route_type || active.row?.route_type || '');
+      const routeFamilyForAdjustment = upper(active.row?.route_family || active.details?.route_family || '');
+      const routeSubfamilyForAdjustment = upper(active.row?.route_subfamily || active.details?.route_subfamily || '');
+      const underlyingFamilyForAdjustment = upper(active.row?.underlying_channel_family || active.details?.underlying_channel_family || '');
+      const submissionModeForAdjustment = upper(active.submissionMode || active.row?.submission_mode || active.contractWeek?.submission_mode_snapshot || active.details?.contract_week?.submission_mode_snapshot || '');
+      const sheetScopeForAdjustment = upper(active.sheetScope || active.row?.sheet_scope || active.details?.sheet_scope || '');
+      const hasAdditionalManualAdjustmentMarker = !!(
+        routeTypeForAdjustment === 'WEEKLY_NHSP_ADJUSTMENT' ||
+        routeTypeForAdjustment === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+        routeTypeForAdjustment === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+        routeTypeForAdjustment.includes('_ADJUSTMENT')
+      );
+      const hoursAreZeroForAdjustment = !!(
+        Number(active.row?.total_hours || 0) === 0 &&
+        Number(hoursForAdjustment.day || 0) === 0 &&
+        Number(hoursForAdjustment.night || 0) === 0 &&
+        Number(hoursForAdjustment.sat || 0) === 0 &&
+        Number(hoursForAdjustment.sun || 0) === 0 &&
+        Number(hoursForAdjustment.bh || 0) === 0
+      );
+      const expensesDraftForAdjustment = (() => {
+        const fromState = (stateCtx.expensesDraft && typeof stateCtx.expensesDraft === 'object') ? stateCtx.expensesDraft : null;
+        const fromTotals = (contractWeekTotalsForAdjustment.expenses_draft && typeof contractWeekTotalsForAdjustment.expenses_draft === 'object') ? contractWeekTotalsForAdjustment.expenses_draft : null;
+        return fromState || fromTotals || {};
+      })();
+      const hasExpenseDraftForAdjustment = !!(
+        Number(expensesDraftForAdjustment.mileage_units || 0) > 0 ||
+        Number(expensesDraftForAdjustment.travel_pay || expensesDraftForAdjustment.travel_pay_ex_vat || 0) > 0 ||
+        Number(expensesDraftForAdjustment.travel_charge || expensesDraftForAdjustment.travel_charge_ex_vat || 0) > 0 ||
+        Number(expensesDraftForAdjustment.accommodation_pay || expensesDraftForAdjustment.accommodation_pay_ex_vat || 0) > 0 ||
+        Number(expensesDraftForAdjustment.accommodation_charge || expensesDraftForAdjustment.accommodation_charge_ex_vat || 0) > 0 ||
+        Number(expensesDraftForAdjustment.other_pay || expensesDraftForAdjustment.other_pay_ex_vat || 0) > 0 ||
+        Number(expensesDraftForAdjustment.other_charge || expensesDraftForAdjustment.other_charge_ex_vat || 0) > 0
+      );
+      const additionalUnitsWeekForAdjustment = parseObjectJson(active.timesheet?.additional_units_week || active.row?.additional_units_week || contractWeekTotalsForAdjustment.additional_units_week || null);
+      const additionalUnitsPerDayForAdjustment = parseObjectJson(active.timesheet?.additional_units_per_day || active.row?.additional_units_per_day || contractWeekTotalsForAdjustment.additional_units_per_day || null);
+      const hasAdditionalUnitsForAdjustment = !!(
+        Object.values(additionalUnitsWeekForAdjustment || {}).some((value) => Number(value?.unit_count ?? value ?? 0) > 0) ||
+        Object.values(additionalUnitsPerDayForAdjustment || {}).some((dayMap) => dayMap && typeof dayMap === 'object' && Object.values(dayMap).some((value) => Number(value || 0) > 0))
+      );
+      const allowEmptyScheduleForAdditionalManualAdjustment = !!(
+        !activeTimesheetId &&
+        !!activeContractWeekId &&
+        (sheetScopeForAdjustment === 'WEEKLY' || routeTypeForAdjustment.startsWith('WEEKLY')) &&
+        (submissionModeForAdjustment === 'MANUAL' || routeTypeForAdjustment.includes('MANUAL') || routeFamilyForAdjustment === 'MANUAL_NON_QR' || routeSubfamilyForAdjustment === 'MANUAL_NON_QR' || underlyingFamilyForAdjustment === 'MANUAL_NON_QR') &&
+        hasAdditionalManualAdjustmentMarker &&
+        routeFamilyForAdjustment === 'MANUAL_NON_QR' &&
+        plannedScheduleExplicitlyEmptyForAdjustment &&
+        hoursAreZeroForAdjustment &&
+        (hasExpenseDraftForAdjustment || hasAdditionalUnitsForAdjustment)
+      );
+      if ((!Array.isArray(savedScheduleForProcessInfo.schedule) || savedScheduleForProcessInfo.schedule.length === 0) && !allowEmptyScheduleForAdditionalManualAdjustment) {
         throw new Error('Weekly Bulk Process cannot continue because no saved authoritative schedule was available after save. Refresh the row, check the saved schedule, then try again.');
       }
-      const savedScheduleForProcess = savedScheduleForProcessInfo.schedule;
+      const savedScheduleForProcess = allowEmptyScheduleForAdditionalManualAdjustment
+        ? []
+        : savedScheduleForProcessInfo.schedule;
       const readSavedUnitsObject = (value) => {
         const parsed = parseSavedJson(value);
         return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
       };
       const additionalRates = {};
-      const additional_units_week = readSavedUnitsObject(active.timesheet?.additional_units_week || active.row?.additional_units_week || active.contractWeek?.totals_json?.additional_units_week || active.details?.contract_week?.totals_json?.additional_units_week || null);
-      const additional_units_per_day = readSavedUnitsObject(active.timesheet?.additional_units_per_day || active.row?.additional_units_per_day || active.contractWeek?.totals_json?.additional_units_per_day || active.details?.contract_week?.totals_json?.additional_units_per_day || null);
+      const additional_units_week = readSavedUnitsObject(active.timesheet?.additional_units_week || active.row?.additional_units_week || contractWeekTotalsForAdjustment.additional_units_week || active.contractWeek?.totals_json?.additional_units_week || active.details?.contract_week?.totals_json?.additional_units_week || null);
+      const additional_units_per_day = readSavedUnitsObject(active.timesheet?.additional_units_per_day || active.row?.additional_units_per_day || contractWeekTotalsForAdjustment.additional_units_per_day || active.contractWeek?.totals_json?.additional_units_per_day || active.details?.contract_week?.totals_json?.additional_units_per_day || null);
       const activeRowSignature = trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '');
       processResult = await manualUpsertContractWeek(String(activeContractWeekId), {
         expected_timesheet_id: expectedTimesheetId || activeTimesheetId || null,
@@ -141777,8 +142186,6 @@ async function bankingPayWorkbenchSessionClearAllDecisions(sessionId, payload = 
   }
 }
 
-
-
 async function handleBulkAuthoriseSave(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][SAVE]');
   GC('handleBulkAuthoriseSave');
@@ -142168,7 +142575,18 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       return undefined;
     };
     const stagedExpensesDraft = deep(readExpenseState(['expensesDraft', 'activeExpensesDraft', 'stagedExpensesDraft']) || {});
-    const stagedExpensesBaseline = deep(readExpenseState(['expensesBaseline', 'activeExpensesBaseline', 'stagedExpensesBaseline']) || {});
+    const stagedExpensesModalBaseline = deep(readExpenseState(['expensesBaseline', 'activeExpensesBaseline', 'stagedExpensesBaseline']) || {});
+    const stagedExpensesPersistedBaseline = deep(
+      readExpenseState([
+        'expensesPersistedBaseline',
+        'expensesServerBaseline',
+        'persistedExpensesBaseline',
+        'serverExpensesBaseline',
+        'expensesCommittedBaseline',
+        'committedExpensesBaseline'
+      ]) || stagedExpensesModalBaseline || {}
+    );
+    const stagedExpensesBaseline = stagedExpensesPersistedBaseline;
     const expensesDirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
       ? isTimesheetExpensesDraftDirty(stagedExpensesDraft, stagedExpensesBaseline)
       : { dirty: stableStringify(stagedExpensesDraft || {}) !== stableStringify(stagedExpensesBaseline || {}) };
@@ -142327,7 +142745,17 @@ async function handleBulkAuthoriseSave(state, options = {}) {
         .filter((target) => target && typeof target === 'object');
       for (const target of targets) {
         target.expensesDraft = deep(committedBaseline);
+        target.activeExpensesDraft = deep(committedBaseline);
+        target.stagedExpensesDraft = deep(committedBaseline);
         target.expensesBaseline = deep(committedBaseline);
+        target.activeExpensesBaseline = deep(committedBaseline);
+        target.stagedExpensesBaseline = deep(committedBaseline);
+        target.expensesPersistedBaseline = deep(committedBaseline);
+        target.expensesServerBaseline = deep(committedBaseline);
+        target.persistedExpensesBaseline = deep(committedBaseline);
+        target.serverExpensesBaseline = deep(committedBaseline);
+        target.expensesCommittedBaseline = deep(committedBaseline);
+        target.committedExpensesBaseline = deep(committedBaseline);
         target.expensesDirty = false;
         target.expensesDraftDirty = false;
         target.hasStagedExpensesDirty = false;
@@ -142633,6 +143061,9 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     return { ok: false, error: st.error_text };
   }
 }
+
+
+
 
 async function refreshBulkAuthoriseSummaryRowAfterMutation(state, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -147320,7 +147751,7 @@ function renderBulkAuthoriseActionRow(state) {
     }
     return undefined;
   };
-  const contextFirstKeys = [
+  const contextFillKeys = [
     'bulk_authorise_section',
     'can_bulk_authorise',
     'can_bulk_unauthorise',
@@ -147331,20 +147762,30 @@ function renderBulkAuthoriseActionRow(state) {
     'is_authorised',
     'locked',
     'is_import_authoritative',
+    'route_type',
     'route_family',
     'route_subfamily',
     'underlying_channel_family',
+    'submission_mode',
+    'is_qr',
+    'qr_status',
+    'qr_generated_at',
+    'qr_scanned_at',
+    'qr_last_sent_hash',
+    'paid_at_utc',
+    'locked_by_invoice_id',
     'review_only'
   ];
   const activeRow = { ...(activeRowBase && typeof activeRowBase === 'object' ? activeRowBase : {}) };
-  contextFirstKeys.forEach((key) => {
-    const value = readFirst([activeContext, key], [activeCtx, key]);
+  contextFillKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(activeRow, key) && activeRow[key] !== undefined && activeRow[key] !== null && trimStr(activeRow[key]) !== '') return;
+    const value = readFirst([activeDetails, key], [activeDetails?.timesheet, key], [activeDetails?.tsfin, key], [activeContext, key], [activeCtx, key]);
     if (value !== undefined) activeRow[key] = value;
   });
 
   const section = trimStr(activeContext.bulk_authorise_section || activeCtx?.bulk_authorise_section || activeRow.bulk_authorise_section || '');
   const editability = (typeof classifyBulkAuthoriseEditability === 'function')
-    ? classifyBulkAuthoriseEditability({ ...activeContext, row: activeRow, details: activeDetails, state: activeCtx?.state, active_ctx: activeCtx })
+    ? classifyBulkAuthoriseEditability({ row: activeRow, details: activeDetails, state: activeCtx?.state, active_ctx: activeCtx, active_context: activeContext })
     : {
         canAuthorise: !!activeRow.can_bulk_authorise,
         canUnauthorise: !!activeRow.can_bulk_unauthorise,
@@ -147889,14 +148330,29 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
     ? contractWeekTotals.expenses_draft
     : {};
   const normaliseOptions = { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {}, row: activeRow || {} };
-  const draftSource = expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
-    ? (ctx?.state?.expensesDraft || ctx?.state?.expensesBaseline || contractWeekExpensesDraft || {})
-    : (ctx?.state?.expensesDraft || ctx?.state?.expensesBaseline || {});
-  const baselineSource = expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
-    ? (ctx?.state?.expensesBaseline || contractWeekExpensesDraft || ctx?.state?.expensesDraft || {})
-    : (ctx?.state?.expensesBaseline || ctx?.state?.expensesDraft || {});
+  const parentExpenseState = (ctx?.state && typeof ctx.state === 'object') ? ctx.state : {};
+  const persistedBaselineSource = expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
+    ? (
+        parentExpenseState.expensesPersistedBaseline ||
+        parentExpenseState.expensesServerBaseline ||
+        parentExpenseState.persistedExpensesBaseline ||
+        parentExpenseState.serverExpensesBaseline ||
+        contractWeekExpensesDraft ||
+        parentExpenseState.expensesBaseline ||
+        {}
+      )
+    : (
+        parentExpenseState.expensesPersistedBaseline ||
+        parentExpenseState.expensesServerBaseline ||
+        parentExpenseState.persistedExpensesBaseline ||
+        parentExpenseState.serverExpensesBaseline ||
+        parentExpenseState.expensesBaseline ||
+        {}
+      );
+  const draftSource = parentExpenseState.expensesDraft || parentExpenseState.activeExpensesDraft || parentExpenseState.stagedExpensesDraft || persistedBaselineSource || {};
   const draftSeed = normaliseExpenseCanonical(draftSource, normaliseOptions);
-  const baselineSeed = normaliseExpenseCanonical(baselineSource, normaliseOptions);
+  const persistedBaselineSeed = normaliseExpenseCanonical(persistedBaselineSource, normaliseOptions);
+  const baselineSeed = normaliseExpenseCanonical(draftSeed, normaliseOptions);
   const childCtx = {
     ...(ctx || {}),
     expenseStorageTarget,
@@ -147915,7 +148371,11 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       contract_week_id: activeDetails?.contract_week_id || activeDetails?.contract_week?.id || activeRow?.contract_week_id || null,
       expensesReadOnly: expensesReadOnly,
       expensesDraft: deep(draftSeed),
-      expensesBaseline: deep(baselineSeed)
+      expensesBaseline: deep(baselineSeed),
+      expensesPersistedBaseline: deep(persistedBaselineSeed),
+      expensesServerBaseline: deep(persistedBaselineSeed),
+      persistedExpensesBaseline: deep(persistedBaselineSeed),
+      serverExpensesBaseline: deep(persistedBaselineSeed)
     }
   };
   const rootId = 'bulkProcessExpensesChildRoot';
@@ -147955,15 +148415,30 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
 
     const normaliseOptions = { context: activeContext, details: activeDetails, tsfin: activeDetails?.tsfin || {}, row: activeRow || {} };
     const nextDraftCanonical = normaliseExpenseCanonical(childCtx?.state?.expensesDraft || {}, normaliseOptions);
-    const previousBaseline = normaliseExpenseCanonical(ctx?.state?.expensesBaseline || childCtx?.state?.expensesBaseline || {}, normaliseOptions);
-    const comparison = (typeof isTimesheetExpensesDraftDirty === 'function')
-      ? isTimesheetExpensesDraftDirty(nextDraftCanonical, previousBaseline, normaliseOptions)
-      : { dirty: stableStringify(nextDraftCanonical) !== stableStringify(previousBaseline) };
-    if (!comparison.dirty) {
+    const childBaseline = normaliseExpenseCanonical(childCtx?.state?.expensesBaseline || {}, normaliseOptions);
+    const childComparison = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(nextDraftCanonical, childBaseline, normaliseOptions)
+      : { dirty: stableStringify(nextDraftCanonical) !== stableStringify(childBaseline) };
+    if (!childComparison.dirty) {
+      updateChildDirty();
       return true;
     }
     ctx.state = (ctx.state && typeof ctx.state === 'object') ? ctx.state : {};
-    const preservedBaseline = deep(ctx.state.expensesBaseline || childCtx.state.expensesBaseline || previousBaseline);
+    const persistedBaseline = normaliseExpenseCanonical(
+      ctx.state.expensesPersistedBaseline ||
+      ctx.state.expensesServerBaseline ||
+      ctx.state.persistedExpensesBaseline ||
+      ctx.state.serverExpensesBaseline ||
+      childCtx.state.expensesPersistedBaseline ||
+      childCtx.state.expensesServerBaseline ||
+      childBaseline ||
+      {},
+      normaliseOptions
+    );
+    const parentComparison = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(nextDraftCanonical, persistedBaseline, normaliseOptions)
+      : { dirty: stableStringify(nextDraftCanonical) !== stableStringify(persistedBaseline) };
+    const parentExpensesDirty = !!(parentComparison && parentComparison.dirty);
     const existingDraft = (childCtx.state.expensesDraft && typeof childCtx.state.expensesDraft === 'object') ? childCtx.state.expensesDraft : {};
     const mergedDraft = {
       ...nextDraftCanonical,
@@ -147974,26 +148449,52 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
       .filter((target) => target && typeof target === 'object');
     for (const target of expenseStateTargets) {
       target.expensesDraft = deep(mergedDraft);
-      target.expensesBaseline = deep(preservedBaseline);
+      target.activeExpensesDraft = deep(mergedDraft);
+      target.stagedExpensesDraft = deep(mergedDraft);
+      target.expensesBaseline = deep(mergedDraft);
+      target.activeExpensesBaseline = deep(mergedDraft);
+      target.stagedExpensesBaseline = deep(mergedDraft);
+      target.expensesPersistedBaseline = deep(persistedBaseline);
+      target.expensesServerBaseline = deep(persistedBaseline);
+      target.persistedExpensesBaseline = deep(persistedBaseline);
+      target.serverExpensesBaseline = deep(persistedBaseline);
       target.expenseStorageTarget = expenseStorageTarget;
       target.expense_storage_target = expenseStorageTarget;
       target.contract_week_id = childCtx.contract_week_id || target.contract_week_id || null;
-      target.expensesDirty = true;
-      target.expensesDraftDirty = true;
-      target.hasStagedExpensesDirty = true;
-      target.stagedExpensesDirty = true;
-      target.expenseDirtyMarker = true;
-      target.dirty = true;
+      target.expensesDirty = parentExpensesDirty;
+      target.expensesDraftDirty = parentExpensesDirty;
+      target.hasStagedExpensesDirty = parentExpensesDirty;
+      target.stagedExpensesDirty = parentExpensesDirty;
+      target.expenseDirtyMarker = parentExpensesDirty;
+      if (parentExpensesDirty) target.dirty = true;
     }
     childCtx.state.expensesDraft = deep(mergedDraft);
-    childCtx.state.expensesBaseline = deep(preservedBaseline);
-    st.expensesDirty = true;
-    st.expensesDraftDirty = true;
-    st.hasStagedExpensesDirty = true;
-    st.stagedExpensesDirty = true;
-    st.expenseDirtyMarker = true;
-    st.dirty = true;
-    if (typeof markBulkAuthoriseDirty === 'function') {
+    childCtx.state.activeExpensesDraft = deep(mergedDraft);
+    childCtx.state.stagedExpensesDraft = deep(mergedDraft);
+    childCtx.state.expensesBaseline = deep(mergedDraft);
+    childCtx.state.activeExpensesBaseline = deep(mergedDraft);
+    childCtx.state.stagedExpensesBaseline = deep(mergedDraft);
+    childCtx.state.expensesPersistedBaseline = deep(persistedBaseline);
+    childCtx.state.expensesServerBaseline = deep(persistedBaseline);
+    childCtx.state.persistedExpensesBaseline = deep(persistedBaseline);
+    childCtx.state.serverExpensesBaseline = deep(persistedBaseline);
+    childCtx.state.expensesDirty = false;
+    childCtx.state.expensesDraftDirty = false;
+    childCtx.state.hasStagedExpensesDirty = false;
+    childCtx.state.stagedExpensesDirty = false;
+    childCtx.state.expenseDirtyMarker = false;
+    st.expensesDirty = parentExpensesDirty;
+    st.expensesDraftDirty = parentExpensesDirty;
+    st.hasStagedExpensesDirty = parentExpensesDirty;
+    st.stagedExpensesDirty = parentExpensesDirty;
+    st.expenseDirtyMarker = parentExpensesDirty;
+    if (parentExpensesDirty) st.dirty = true;
+    const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+    if (fr && String(fr.kind || '') === 'bulk-authorise-expenses') {
+      fr.isDirty = false;
+      try { fr._updateButtons && fr._updateButtons(); } catch {}
+    }
+    if (parentExpensesDirty && typeof markBulkAuthoriseDirty === 'function') {
       markBulkAuthoriseDirty(st, { source: 'bulk-authorise-expenses-apply', dirty: true, reason: 'expenses-staged' });
     }
     if (typeof recalculateTimesheetExpenseTotals === 'function') {
@@ -229722,8 +230223,6 @@ showModal(
   }
 }
 
-
-
 function renderWeeklyManualScheduleEditor(opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES][WEEKLY]');
   const {
@@ -229891,15 +230390,200 @@ function renderWeeklyManualScheduleEditor(opts) {
       return parsed && (Array.isArray(parsed) || typeof parsed === 'object') ? parsed : null;
     })();
 
+    const parseObjectLikeForAdditionalManualAdjustment = (src) => {
+      if (!src) return {};
+      if (typeof src === 'object' && !Array.isArray(src)) return src;
+      if (typeof src === 'string') {
+        const raw = src.trim();
+        if (!raw) return {};
+        try {
+          const parsed = JSON.parse(raw);
+          return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+        } catch {}
+      }
+      return {};
+    };
+
+    const boolMarkerForAdditionalManualAdjustment = (...values) => values.some((value) => {
+      if (value === true) return true;
+      const raw = String(value == null ? '' : value).trim().toLowerCase();
+      return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
+    });
+
+    const num0ForAdditionalManualAdjustment = (value) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const upperForAdditionalManualAdjustment = (value) => String(value == null ? '' : value).trim().toUpperCase();
+
+    const contractWeekIdForAdditionalManualAdjustment = trimStr(
+      details?.contract_week_id ||
+      contractWeekObj?.id ||
+      row?.contract_week_id ||
+      ctx?.contract_week_id ||
+      ''
+    );
+    const timesheetIdForAdditionalManualAdjustment = trimStr(
+      tsId ||
+      ts?.timesheet_id ||
+      details?.current_timesheet_id ||
+      details?.timesheet_id ||
+      row?.current_timesheet_id ||
+      row?.timesheet_id ||
+      ctx?.current_timesheet_id ||
+      ctx?.timesheet_id ||
+      ''
+    );
+    const routeTypeUpperForAdditionalManualAdjustment = upperForAdditionalManualAdjustment(
+      details?.route_type ||
+      row?.route_type ||
+      ctx?.route_type ||
+      ''
+    );
+    const routeFamilyUpperForAdditionalManualAdjustment = upperForAdditionalManualAdjustment(
+      row?.route_family ||
+      details?.route_family ||
+      ctx?.route_family ||
+      ''
+    );
+    const routeSubfamilyUpperForAdditionalManualAdjustment = upperForAdditionalManualAdjustment(
+      row?.route_subfamily ||
+      details?.route_subfamily ||
+      ctx?.route_subfamily ||
+      ''
+    );
+    const underlyingFamilyUpperForAdditionalManualAdjustment = upperForAdditionalManualAdjustment(
+      row?.underlying_channel_family ||
+      details?.underlying_channel_family ||
+      ctx?.underlying_channel_family ||
+      ''
+    );
+    const sheetScopeUpperForAdditionalManualAdjustment = upperForAdditionalManualAdjustment(
+      sheetScope ||
+      details?.sheet_scope ||
+      row?.sheet_scope ||
+      ts?.sheet_scope ||
+      ctx?.sheet_scope ||
+      ''
+    );
+    const subModeUpperForAdditionalManualAdjustment = upperForAdditionalManualAdjustment(
+      subMode ||
+      ts?.submission_mode ||
+      row?.submission_mode ||
+      details?.submission_mode ||
+      ctx?.submission_mode ||
+      ''
+    );
+    const cwModeSnapshotUpperForAdditionalManualAdjustment = upperForAdditionalManualAdjustment(
+      contractWeekObj?.submission_mode_snapshot ||
+      details?.cw_submission_mode_snapshot ||
+      row?.submission_mode_snapshot ||
+      ctx?.cw_submission_mode_snapshot ||
+      ''
+    );
+    const explicitPlannedScheduleForAdditionalManualAdjustment = tryParse(contractWeekObj?.planned_schedule_json);
+    const plannedScheduleExplicitlyEmptyForAdditionalManualAdjustment = Array.isArray(explicitPlannedScheduleForAdditionalManualAdjustment) && explicitPlannedScheduleForAdditionalManualAdjustment.length === 0;
+    const cwTotalsForAdditionalManualAdjustment = parseObjectLikeForAdditionalManualAdjustment(contractWeekObj?.totals_json);
+    const cwHoursForAdditionalManualAdjustment = (cwTotalsForAdditionalManualAdjustment.hours && typeof cwTotalsForAdditionalManualAdjustment.hours === 'object')
+      ? cwTotalsForAdditionalManualAdjustment.hours
+      : {};
+    const hasExplicitSuppressStandardScheduleFallbackMarker = boolMarkerForAdditionalManualAdjustment(
+      state?.__suppressStandardScheduleFallback,
+      state?.suppressStandardScheduleFallback,
+      state?.suppress_standard_schedule_fallback,
+      state?.__keepAdditionalManualAdjustmentScheduleEmpty,
+      state?.keepAdditionalManualAdjustmentScheduleEmpty,
+      state?.keep_additional_manual_adjustment_schedule_empty,
+      ctx?.state?.__suppressStandardScheduleFallback,
+      ctx?.state?.suppressStandardScheduleFallback,
+      ctx?.state?.suppress_standard_schedule_fallback,
+      ctx?.state?.__keepAdditionalManualAdjustmentScheduleEmpty,
+      ctx?.state?.keepAdditionalManualAdjustmentScheduleEmpty,
+      ctx?.state?.keep_additional_manual_adjustment_schedule_empty,
+      row?.__suppressStandardScheduleFallback,
+      row?.suppress_standard_schedule_fallback,
+      row?.__keepAdditionalManualAdjustmentScheduleEmpty,
+      row?.keep_additional_manual_adjustment_schedule_empty,
+      details?.__suppressStandardScheduleFallback,
+      details?.suppress_standard_schedule_fallback,
+      details?.__keepAdditionalManualAdjustmentScheduleEmpty,
+      details?.keep_additional_manual_adjustment_schedule_empty,
+      ctx?.__suppressStandardScheduleFallback,
+      ctx?.suppress_standard_schedule_fallback,
+      ctx?.__keepAdditionalManualAdjustmentScheduleEmpty,
+      ctx?.keep_additional_manual_adjustment_schedule_empty
+    );
+    const recomputedSuppressStandardScheduleFallbackForAdditionalManualAdjustment = !!(
+      !timesheetIdForAdditionalManualAdjustment &&
+      !!contractWeekIdForAdditionalManualAdjustment &&
+      (
+        sheetScopeUpperForAdditionalManualAdjustment === 'WEEKLY' ||
+        routeTypeUpperForAdditionalManualAdjustment.startsWith('WEEKLY')
+      ) &&
+      (
+        subModeUpperForAdditionalManualAdjustment === 'MANUAL' ||
+        cwModeSnapshotUpperForAdditionalManualAdjustment === 'MANUAL' ||
+        routeTypeUpperForAdditionalManualAdjustment.includes('MANUAL') ||
+        routeFamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR' ||
+        routeSubfamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR' ||
+        underlyingFamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR'
+      ) &&
+      (
+        routeTypeUpperForAdditionalManualAdjustment === 'WEEKLY_NHSP_ADJUSTMENT' ||
+        routeTypeUpperForAdditionalManualAdjustment === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+        routeTypeUpperForAdditionalManualAdjustment === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+        routeTypeUpperForAdditionalManualAdjustment.includes('_ADJUSTMENT')
+      ) &&
+      routeFamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR' &&
+      plannedScheduleExplicitlyEmptyForAdditionalManualAdjustment &&
+      num0ForAdditionalManualAdjustment(row?.total_hours) === 0 &&
+      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.day) === 0 &&
+      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.night) === 0 &&
+      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.sat) === 0 &&
+      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.sun) === 0 &&
+      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.bh) === 0
+    );
+    const suppressStandardScheduleFallbackForAdditionalManualAdjustment = !!(
+      hasExplicitSuppressStandardScheduleFallbackMarker ||
+      recomputedSuppressStandardScheduleFallbackForAdditionalManualAdjustment
+    );
+    const preserveTouchedScheduleForAdditionalManualAdjustment = !!(
+      suppressStandardScheduleFallbackForAdditionalManualAdjustment &&
+      (
+        state?.__weeklyScheduleTouched === true ||
+        ctx?.state?.__weeklyScheduleTouched === true
+      )
+    );
+
+    if (suppressStandardScheduleFallbackForAdditionalManualAdjustment) {
+      state.__suppressStandardScheduleFallback = true;
+      state.suppressStandardScheduleFallback = true;
+      state.suppress_standard_schedule_fallback = true;
+      state.__keepAdditionalManualAdjustmentScheduleEmpty = true;
+      state.keepAdditionalManualAdjustmentScheduleEmpty = true;
+      state.keep_additional_manual_adjustment_schedule_empty = true;
+      state.baselineSchedule = [];
+      if (!preserveTouchedScheduleForAdditionalManualAdjustment) {
+        state.schedule = [];
+        state.weeklyLinesByDate = null;
+        state.extraShiftCount = 0;
+        state.scheduleHasErrors = false;
+        state.scheduleErrorsByDate = {};
+      }
+    }
+
      let seedSchedule = null;
-    if (Array.isArray(state.schedule) && state.schedule.length) {
+    if (suppressStandardScheduleFallbackForAdditionalManualAdjustment && !preserveTouchedScheduleForAdditionalManualAdjustment) {
+      seedSchedule = [];
+    } else if (Array.isArray(state.schedule) && state.schedule.length) {
       seedSchedule = tryParse(state.schedule);
     } else {
       seedSchedule = tryParse(ts.actual_schedule_json);
-      if ((!seedSchedule || (Array.isArray(seedSchedule) && !seedSchedule.length)) && contractWeekPlannedSchedule) {
+      if (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && (!seedSchedule || (Array.isArray(seedSchedule) && !seedSchedule.length)) && contractWeekPlannedSchedule) {
         seedSchedule = tryParse(contractWeekPlannedSchedule);
       }
-      if ((!seedSchedule || (Array.isArray(seedSchedule) && !seedSchedule.length)) && contractSchedule) {
+      if (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && (!seedSchedule || (Array.isArray(seedSchedule) && !seedSchedule.length)) && contractSchedule) {
         seedSchedule = tryParse(contractSchedule);
       }
     }
@@ -230698,9 +231382,9 @@ function renderWeeklyManualScheduleEditor(opts) {
 
     // Install helper in THIS TAB (not showModal)
       try {
-      if (!window.__tsWeeklyLinesHelper || window.__tsWeeklyLinesHelper.__v !== 9) {
+      if (!window.__tsWeeklyLinesHelper || window.__tsWeeklyLinesHelper.__v !== 10) {
         window.__tsWeeklyLinesHelper = {
-          __v: 9,
+          __v: 10,
 
           _hhmm(raw) {
             let s = String(raw || '').trim();
@@ -231909,21 +232593,40 @@ function renderWeeklyManualScheduleEditor(opts) {
       ? currentDetails.contract_week
       : contractWeekObj;
 
+  const suppressResetStandardScheduleFallback = !!(
+    st.__suppressStandardScheduleFallback === true ||
+    st.suppressStandardScheduleFallback === true ||
+    st.suppress_standard_schedule_fallback === true ||
+    st.__keepAdditionalManualAdjustmentScheduleEmpty === true ||
+    st.keepAdditionalManualAdjustmentScheduleEmpty === true ||
+    st.keep_additional_manual_adjustment_schedule_empty === true ||
+    currentBulkCtx?.state?.__suppressStandardScheduleFallback === true ||
+    currentBulkCtx?.state?.suppressStandardScheduleFallback === true ||
+    currentBulkCtx?.state?.suppress_standard_schedule_fallback === true ||
+    currentBulkCtx?.state?.__keepAdditionalManualAdjustmentScheduleEmpty === true ||
+    currentBulkCtx?.state?.keepAdditionalManualAdjustmentScheduleEmpty === true ||
+    currentBulkCtx?.state?.keep_additional_manual_adjustment_schedule_empty === true ||
+    currentBulkCtx?.row?.__suppressStandardScheduleFallback === true ||
+    currentBulkCtx?.row?.suppress_standard_schedule_fallback === true ||
+    currentDetails?.__suppressStandardScheduleFallback === true ||
+    currentDetails?.suppress_standard_schedule_fallback === true
+  );
+
   const currentContractScheduleRaw =
-    (currentContractObj && currentContractObj.std_schedule_json != null)
+    (!suppressResetStandardScheduleFallback && currentContractObj && currentContractObj.std_schedule_json != null)
       ? currentContractObj.std_schedule_json
-      : contractSchedule;
+      : (!suppressResetStandardScheduleFallback ? contractSchedule : null);
 
   const currentContractWeekPlannedRaw =
-    (currentContractWeekObj && currentContractWeekObj.planned_schedule_json != null)
+    (!suppressResetStandardScheduleFallback && currentContractWeekObj && currentContractWeekObj.planned_schedule_json != null)
       ? currentContractWeekObj.planned_schedule_json
-      : contractWeekPlannedSchedule;
+      : (!suppressResetStandardScheduleFallback ? contractWeekPlannedSchedule : null);
 
-  const contractScheduleNormalised = normaliseResetScheduleSource(currentContractScheduleRaw);
-  const contractWeekFallbackNormalised = normaliseResetScheduleSource(currentContractWeekPlannedRaw);
+  const contractScheduleNormalised = suppressResetStandardScheduleFallback ? [] : normaliseResetScheduleSource(currentContractScheduleRaw);
+  const contractWeekFallbackNormalised = suppressResetStandardScheduleFallback ? [] : normaliseResetScheduleSource(currentContractWeekPlannedRaw);
 
-  const hasContractSchedule = Array.isArray(contractScheduleNormalised) && contractScheduleNormalised.length > 0;
-  const hasFallbackSchedule = Array.isArray(contractWeekFallbackNormalised) && contractWeekFallbackNormalised.length > 0;
+  const hasContractSchedule = !suppressResetStandardScheduleFallback && Array.isArray(contractScheduleNormalised) && contractScheduleNormalised.length > 0;
+  const hasFallbackSchedule = !suppressResetStandardScheduleFallback && Array.isArray(contractWeekFallbackNormalised) && contractWeekFallbackNormalised.length > 0;
 
   let ok = false;
   if (typeof openUiConfirmModal === 'function') {
@@ -231956,9 +232659,22 @@ function renderWeeklyManualScheduleEditor(opts) {
     trace_source: 'renderWeeklyManualScheduleEditor.resetAll.preMutation'
   });
 
-  const resetSource = hasContractSchedule
-    ? contractScheduleNormalised
-    : contractWeekFallbackNormalised;
+  const resetSource = suppressResetStandardScheduleFallback
+    ? []
+    : (hasContractSchedule
+        ? contractScheduleNormalised
+        : contractWeekFallbackNormalised);
+
+  if (suppressResetStandardScheduleFallback) {
+    st.schedule = [];
+    st.baselineSchedule = [];
+    st.__suppressStandardScheduleFallback = true;
+    st.suppressStandardScheduleFallback = true;
+    st.suppress_standard_schedule_fallback = true;
+    st.__keepAdditionalManualAdjustmentScheduleEmpty = true;
+    st.keepAdditionalManualAdjustmentScheduleEmpty = true;
+    st.keep_additional_manual_adjustment_schedule_empty = true;
+  }
 
   st.weeklyLinesByDate = buildLinesFromSchedule(resetSource);
 
