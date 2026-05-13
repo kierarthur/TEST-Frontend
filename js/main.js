@@ -20095,7 +20095,6 @@ async function bankingPayBatchesList({ status = null, limit = null, offset = nul
   }
 }
 
-
 async function bankingPayBatchGet(payBatchId, options = {}) {
   const deep = (o) => JSON.parse(JSON.stringify(o || null));
   const id = (payBatchId == null) ? '' : String(payBatchId).trim();
@@ -20266,7 +20265,15 @@ async function bankingPayBatchGet(payBatchId, options = {}) {
   };
 
   try {
-    const res = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}`));
+    const detailMode = String(opts.detail_mode || opts.detailMode || 'AUTO').trim().toUpperCase() || 'AUTO';
+    const recommendedPageSizeRaw = Number(opts.recommended_page_size ?? opts.recommendedPageSize ?? opts.pageSize ?? opts.page_size ?? 100);
+    const recommendedPageSize = Number.isFinite(recommendedPageSizeRaw)
+      ? Math.max(1, Math.min(250, Math.trunc(recommendedPageSizeRaw)))
+      : 100;
+    const batchGetQuery = new URLSearchParams();
+    batchGetQuery.set('detail_mode', detailMode);
+    batchGetQuery.set('recommended_page_size', String(recommendedPageSize));
+    const res = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}?${batchGetQuery.toString()}`));
     const txt = await res.text().catch(() => '');
     const parsed = safeParse(txt);
 
@@ -20285,7 +20292,6 @@ async function bankingPayBatchGet(payBatchId, options = {}) {
 
     const obj = (parsed && typeof parsed === 'object') ? parsed : {};
     const batchObj = (obj.batch && typeof obj.batch === 'object') ? obj.batch : {};
-    const candidates = Array.isArray(obj.candidates) ? obj.candidates : [];
 
     const batchKindInfo = (typeof bankingNormalizeBatchKind === 'function')
       ? bankingNormalizeBatchKind(obj)
@@ -20301,6 +20307,155 @@ async function bankingPayBatchGet(payBatchId, options = {}) {
           isUmbrellaish: ['UMBRELLA', 'MIXED'].includes(String(obj?.batch_kind || batchObj?.batch_kind || batchObj?.batch_kind_fixed || '').trim().toUpperCase()),
           label: String(obj?.batch_kind || batchObj?.batch_kind || batchObj?.batch_kind_fixed || '').trim().toUpperCase() || 'UNKNOWN'
         };
+
+    const bootstrapOnly = obj.bootstrap_only === true || batchObj.bootstrap_only === true;
+    const availableSections = Array.isArray(obj.available_sections)
+      ? obj.available_sections.map((section) => String(section || '').trim()).filter(Boolean)
+      : Array.isArray(batchObj.available_sections)
+        ? batchObj.available_sections.map((section) => String(section || '').trim()).filter(Boolean)
+        : ['candidates', 'items', 'item_breakdowns', 'transfers', 'finance_case_groups', 'remittances', 'communications', 'auth_history', 'events'];
+    const bootstrapRecommendedPageSizeRaw = Number(obj.recommended_page_size ?? obj.recommendedPageSize ?? batchObj.recommended_page_size ?? batchObj.recommendedPageSize ?? opts.recommended_page_size ?? opts.recommendedPageSize ?? 100);
+    const bootstrapRecommendedPageSize = Number.isFinite(bootstrapRecommendedPageSizeRaw)
+      ? Math.max(1, Math.min(250, Math.trunc(bootstrapRecommendedPageSizeRaw)))
+      : 100;
+    const buildLazySectionsState = (previousSections = {}) => {
+      const previous = (previousSections && typeof previousSections === 'object' && !Array.isArray(previousSections)) ? previousSections : {};
+      const out = { ...previous };
+      for (const sectionName of availableSections) {
+        const key = String(sectionName || '').trim();
+        if (!key) continue;
+        const existing = (out[key] && typeof out[key] === 'object' && !Array.isArray(out[key])) ? out[key] : {};
+        out[key] = {
+          section: key,
+          rows: Array.isArray(existing.rows) ? existing.rows : (Array.isArray(existing.items) ? existing.items : []),
+          items: Array.isArray(existing.items) ? existing.items : (Array.isArray(existing.rows) ? existing.rows : []),
+          loading: existing.loading === true,
+          loaded: existing.loaded === true,
+          next_cursor: existing.next_cursor ?? existing.nextCursor ?? null,
+          known_total_count: Number.isFinite(Number(existing.known_total_count ?? existing.knownTotalCount))
+            ? Math.max(0, Math.trunc(Number(existing.known_total_count ?? existing.knownTotalCount)))
+            : null,
+          error: String(existing.error || '')
+        };
+      }
+      return out;
+    };
+
+    if (bootstrapOnly) {
+      const normalised = {
+        ...obj,
+        bootstrap_only: true,
+        batch_kind: batchKindInfo.normalizedKind || obj.batch_kind || batchObj.batch_kind || batchObj.batch_kind_fixed || '',
+        batch_kind_info: batchKindInfo,
+        batch: {
+          ...batchObj,
+          bootstrap_only: true,
+          batch_kind: batchKindInfo.normalizedKind || batchObj.batch_kind || batchObj.batch_kind_fixed || '',
+          batch_kind_fixed: String(batchObj?.batch_kind_fixed || '').trim() || null
+        },
+        available_sections: availableSections,
+        recommended_page_size: bootstrapRecommendedPageSize,
+        lazy_sections: buildLazySectionsState(obj.lazy_sections || obj.sections)
+      };
+
+      if (!Array.isArray(obj.candidates)) delete normalised.candidates;
+      if (!Array.isArray(obj.items)) delete normalised.items;
+      if (!Array.isArray(obj.transfers)) delete normalised.transfers;
+      if (!Array.isArray(obj.item_breakdowns)) delete normalised.item_breakdowns;
+      if (!Array.isArray(obj.candidate_lines)) delete normalised.candidate_lines;
+      if (!Array.isArray(obj.finance_case_groups)) delete normalised.finance_case_groups;
+
+      normalised.payment_correction =
+        obj.payment_correction && typeof obj.payment_correction === 'object' && !Array.isArray(obj.payment_correction)
+          ? obj.payment_correction
+          : null;
+      normalised.bank_evidence = Array.isArray(obj.bank_evidence) ? obj.bank_evidence : undefined;
+      normalised.movement_classification =
+        obj.movement_classification && typeof obj.movement_classification === 'object' && !Array.isArray(obj.movement_classification)
+          ? obj.movement_classification
+          : (typeof obj.movement_classification === 'string' ? obj.movement_classification : null);
+      normalised.manual_actions =
+        obj.manual_actions && typeof obj.manual_actions === 'object' && !Array.isArray(obj.manual_actions)
+          ? obj.manual_actions
+          : {};
+      normalised.communication_status =
+        obj.communication_status && typeof obj.communication_status === 'object' && !Array.isArray(obj.communication_status)
+          ? obj.communication_status
+          : null;
+      normalised.finance_case_correction_summary =
+        obj.finance_case_correction_summary && typeof obj.finance_case_correction_summary === 'object'
+          ? obj.finance_case_correction_summary
+          : null;
+      normalised.correction_progress =
+        obj.correction_progress && typeof obj.correction_progress === 'object' && !Array.isArray(obj.correction_progress)
+          ? obj.correction_progress
+          : null;
+
+      const sourceFundsJson = firstObject(obj.last_funds_check_json, batchObj.last_funds_check_json);
+      const sourceBlockedFundsIssue = firstObject(obj.blocked_funds_payment_issue, batchObj.blocked_funds_payment_issue);
+      const sourceBankingAlerts = Array.isArray(obj.banking_alerts)
+        ? obj.banking_alerts
+        : (Array.isArray(batchObj.banking_alerts) ? batchObj.banking_alerts : []);
+      const sourceBankingAlertKind = firstPresent(obj.banking_alert_kind, batchObj.banking_alert_kind);
+      const sourceBankingAlertFingerprint = firstPresent(obj.banking_alert_fingerprint, batchObj.banking_alert_fingerprint);
+      const sourceBankingAlertAcknowledged = obj.banking_alert_acknowledged_for_user === true || batchObj.banking_alert_acknowledged_for_user === true;
+      const sourceBankingAlertRequiresAttention = obj.banking_alert_requires_attention === true || batchObj.banking_alert_requires_attention === true;
+      const sourceRequiredGbp = firstPresent(obj.blocked_funds_required_gbp, batchObj.blocked_funds_required_gbp, sourceBlockedFundsIssue?.required_gbp, sourceFundsJson?.required_gbp);
+      const sourceAvailableGbp = firstPresent(obj.blocked_funds_available_gbp, batchObj.blocked_funds_available_gbp, sourceBlockedFundsIssue?.available_gbp, sourceFundsJson?.available_gbp);
+      const sourceProvider = firstPresent(obj.blocked_funds_provider, batchObj.blocked_funds_provider, sourceBlockedFundsIssue?.provider, sourceFundsJson?.rail_provider, obj.rail_provider_snapshot, batchObj.rail_provider_snapshot, obj.rail_provider, batchObj.rail_provider);
+      const sourceEnv = firstPresent(obj.blocked_funds_env, batchObj.blocked_funds_env, sourceBlockedFundsIssue?.env, sourceFundsJson?.rail_env, obj.rail_env_snapshot, batchObj.rail_env_snapshot, obj.rail_env, batchObj.rail_env);
+      const sourceFundingAccountRef = firstPresent(obj.blocked_funds_account_ref, batchObj.blocked_funds_account_ref, sourceBlockedFundsIssue?.funding_account_ref, sourceFundsJson?.funding_account_ref, obj.funding_account_ref, batchObj.funding_account_ref);
+      const sourceLastFundsCheckAtUtc = firstPresent(obj.last_funds_check_at_utc, batchObj.last_funds_check_at_utc, sourceBlockedFundsIssue?.last_funds_check_at_utc, sourceFundsJson?.checked_at_utc, sourceFundsJson?.funds_check_checked_at_utc);
+      const sourceCanRetryBlockedFunds = obj.can_retry_blocked_funds === true || batchObj.can_retry_blocked_funds === true || sourceBlockedFundsIssue?.can_retry_blocked_funds === true;
+
+      normalised.banking_alerts = sourceBankingAlerts;
+      normalised.banking_alert_kind = sourceBankingAlertKind;
+      normalised.banking_alert_fingerprint = sourceBankingAlertFingerprint;
+      normalised.banking_alert_acknowledged_for_user = sourceBankingAlertAcknowledged;
+      normalised.banking_alert_requires_attention = sourceBankingAlertRequiresAttention;
+      normalised.blocked_funds_required_gbp = sourceRequiredGbp;
+      normalised.blocked_funds_available_gbp = sourceAvailableGbp;
+      normalised.blocked_funds_provider = sourceProvider;
+      normalised.blocked_funds_env = sourceEnv;
+      normalised.blocked_funds_account_ref = sourceFundingAccountRef;
+      normalised.last_funds_check_at_utc = sourceLastFundsCheckAtUtc;
+      normalised.last_funds_check_json = sourceFundsJson || null;
+      normalised.can_retry_blocked_funds = sourceCanRetryBlockedFunds;
+      normalised.blocked_funds_payment_issue = sourceBlockedFundsIssue || null;
+      normalised.batch = {
+        ...normalised.batch,
+        banking_alerts: Array.isArray(normalised.batch?.banking_alerts) ? normalised.batch.banking_alerts : sourceBankingAlerts,
+        banking_alert_kind: firstPresent(normalised.batch?.banking_alert_kind, sourceBankingAlertKind),
+        banking_alert_fingerprint: firstPresent(normalised.batch?.banking_alert_fingerprint, sourceBankingAlertFingerprint),
+        banking_alert_acknowledged_for_user: normalised.batch?.banking_alert_acknowledged_for_user === true || sourceBankingAlertAcknowledged,
+        banking_alert_requires_attention: normalised.batch?.banking_alert_requires_attention === true || sourceBankingAlertRequiresAttention,
+        blocked_funds_required_gbp: firstPresent(normalised.batch?.blocked_funds_required_gbp, sourceRequiredGbp),
+        blocked_funds_available_gbp: firstPresent(normalised.batch?.blocked_funds_available_gbp, sourceAvailableGbp),
+        blocked_funds_provider: firstPresent(normalised.batch?.blocked_funds_provider, sourceProvider),
+        blocked_funds_env: firstPresent(normalised.batch?.blocked_funds_env, sourceEnv),
+        blocked_funds_account_ref: firstPresent(normalised.batch?.blocked_funds_account_ref, sourceFundingAccountRef),
+        last_funds_check_at_utc: firstPresent(normalised.batch?.last_funds_check_at_utc, sourceLastFundsCheckAtUtc),
+        last_funds_check_json: firstObject(normalised.batch?.last_funds_check_json, sourceFundsJson) || null,
+        can_retry_blocked_funds: normalised.batch?.can_retry_blocked_funds === true || sourceCanRetryBlockedFunds,
+        blocked_funds_payment_issue: firstObject(normalised.batch?.blocked_funds_payment_issue, sourceBlockedFundsIssue) || null
+      };
+
+      pay.child = (pay.child && typeof pay.child === 'object') ? pay.child : {};
+      pay.child.sections = buildLazySectionsState(pay.child.sections || normalised.lazy_sections);
+      pay.child.lazy_sections = pay.child.sections;
+      pay.child.available_sections = availableSections;
+      pay.child.recommended_page_size = bootstrapRecommendedPageSize;
+
+      pay.selected.data = deep(normalised);
+      pay.selected.loading = false;
+      pay.selected.error = '';
+      pay.selectedBatchId = id;
+
+      try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+      return deep(normalised);
+    }
+
+    const candidates = Array.isArray(obj.candidates) ? obj.candidates : [];
 
     const normalisedCandidates = candidates.map((candidate) => {
       const rawCandidate = (candidate && typeof candidate === 'object') ? candidate : {};
@@ -20567,6 +20722,9 @@ async function bankingPayBatchGet(payBatchId, options = {}) {
     try { pay.selected.loading = false; } catch {}
   }
 }
+
+
+
 
 async function bankingPayPaymentCorrectionPlan(payBatchId, selection) {
   const id = (payBatchId == null) ? '' : String(payBatchId).trim();
@@ -24005,7 +24163,6 @@ async function bankingAcknowledgeAlerts(input = {}) {
 }
 
 
-
 async function bankingPayBatchRetryBlockedFunds(payBatchId, payload = {}) {
   const id = String(payBatchId || '').trim();
   if (!id) throw new Error('pay_batch_id is required');
@@ -24017,173 +24174,108 @@ async function bankingPayBatchRetryBlockedFunds(payBatchId, payload = {}) {
   if (body.pay_channel_scope == null && body.scope != null) body.pay_channel_scope = body.scope;
   if (body.funding_account_ref == null && body.fundingAccountRef != null) body.funding_account_ref = body.fundingAccountRef;
 
-  const parseResponse = async (response) => {
+  const postRetryStart = async () => {
+    if (typeof apiPostJson === 'function') {
+      return await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/retry-blocked-funds`, body);
+    }
+
+    if (typeof authFetch !== 'function' || typeof API !== 'function') {
+      throw new Error('bankingPayBatchRetryBlockedFunds: apiPostJson or authFetch/API is required');
+    }
+
+    const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/retry-blocked-funds`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
     const text = await response.text().catch(() => '');
     let parsed = null;
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
-
-    const isObj = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
-    const parseEmbedded = (value) => {
-      if (isObj(value)) return value;
-      const raw = String(value == null ? '' : value).trim();
-      if (!raw) return null;
-      try {
-        const parsedObject = JSON.parse(raw);
-        if (isObj(parsedObject)) return parsedObject;
-      } catch {}
-      const start = raw.indexOf('{');
-      const end = raw.lastIndexOf('}');
-      if (start >= 0 && end > start) {
-        try {
-          const parsedObject = JSON.parse(raw.slice(start, end + 1));
-          if (isObj(parsedObject)) return parsedObject;
-        } catch {}
-      }
-      return null;
-    };
-    const normaliseCode = (value) => {
-      const code = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-      if (!code) return '';
-      if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
-      if (code === 'PAY_EXECUTE_BANK_FAILED') return 'BANKING_EXECUTE_PAYMENT_FAILED';
-      if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
-      if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
-      return code;
-    };
-    const retryFailureCodes = new Set([
-      'BATCH_STALE', 'BLOCKED_FUNDS_RETRY_FAILED', 'BLOCKED_FUNDS_RETRY_SUBMISSION_FAILED',
-      'BLOCKED_FUNDS_RETRY_SUBMISSION_INCOMPLETE', 'BLOCKED_FUNDS_RETRY_NO_SUBMISSION_PROGRESS',
-      'BLOCKED_FUNDS_RETRY_NO_PENDING_TRANSFERS', 'BLOCKED_FUNDS_RETRY_TRANSFER_MATERIALISATION_BLOCKED',
-      'BLOCKED_FUNDS_RETRY_FUNDING_ACCOUNT_REQUIRED', 'PAY_BATCH_GET_FAILED_AFTER_RETRY_MATERIALISATION',
-      'BLOCKED_FUNDS_RETRY_CLEANUP_FAILED', 'BLOCKED_FUNDS_RETRY_CLEANUP_VERIFY_FAILED',
-      'BLOCKED_FUNDS_RETRY_BLOCKED_WITH_LOCAL_RETRY_ARTEFACTS', 'BLOCKED_FUNDS_RETRY_RECORDED_WITHOUT_BATCH_STATUS',
-      'PAY_EXECUTE_BANK_FAILED', 'BANKING_EXECUTE_PAYMENT_FAILED', 'PAY_BATCH_GET_FAILED', 'FUNDING_ACCOUNT_MISSING',
-      'RAIL_ENV_MISMATCH', 'RAIL_NOT_CONFIGURED', 'UNKNOWN_RAIL_PROVIDER', 'MISSING_RAIL_PROVIDER', 'PAYMENT_AUTHORISER_REQUIRED'
-    ]);
-    const detectFailurePayload = (value) => {
-      const queue = [];
-      const seen = new Set();
-      const enqueue = (candidate) => {
-        if (candidate == null) return;
-        const marker = typeof candidate === 'object' ? candidate : String(candidate);
-        if (seen.has(marker)) return;
-        seen.add(marker);
-        queue.push(candidate);
-      };
-      enqueue(value);
-      enqueue(text);
-      while (queue.length) {
-        const item = queue.shift();
-        if (typeof item === 'string') {
-          const parsedObject = parseEmbedded(item);
-          if (parsedObject) enqueue(parsedObject);
-          const upper = item.toUpperCase();
-          for (const code of retryFailureCodes) {
-            if (upper.includes(code)) return { error_code: normaliseCode(code), message: item };
-          }
-          continue;
-        }
-        if (!isObj(item)) continue;
-        const directCode = normaliseCode(item.error_code || item.errorCode || item.code || '');
-        if (item.ok === false || (directCode && retryFailureCodes.has(directCode))) return { ...item, error_code: directCode || item.error_code || item.code || 'BLOCKED_FUNDS_RETRY_FAILED', code: directCode || item.code || item.error_code || 'BLOCKED_FUNDS_RETRY_FAILED' };
-        for (const key of ['error', 'message', 'details', 'detail', 'body', 'json', 'payload', 'data', 'result', 'response', 'friendly_error', 'friendlyError', 'technical_message', 'technicalMessage', 'rpc_error', 'rpcError', 'original_error', 'originalError', 'cause']) {
-          const nested = item[key];
-          if (isObj(nested)) enqueue(nested);
-          const parsedNested = parseEmbedded(nested);
-          if (parsedNested) enqueue(parsedNested);
-          if (typeof nested === 'string') enqueue(nested);
-        }
-      }
-      return null;
-    };
-    const throwFriendly = (status, sourcePayload) => {
-      const normalized = (typeof bankingNormalizeApiError === 'function')
-        ? bankingNormalizeApiError(sourcePayload || parsed || text || null, sourcePayload || parsed, {
-            action: 'RETRY_BLOCKED_FUNDS',
-            userInitiated: true
-          })
-        : null;
-      const friendlyMessage = String(
-        normalized?.message ||
-        normalized?.user_message ||
-        normalized?.friendly_error?.message ||
-        'Blocked-funds retry failed.'
-      ).trim();
-      const baseError = new Error(friendlyMessage || 'Blocked-funds retry failed.');
-      baseError.status = status;
+    if (!response.ok) {
+      const baseError = new Error(String((parsed && typeof parsed === 'object' && (parsed.error || parsed.message)) ? (parsed.error || parsed.message) : (text || `Request failed (${response.status})`)));
+      baseError.status = response.status;
       baseError.body = text;
       baseError.json = parsed;
-      baseError.payload = parsed;
-      baseError.backendPayload = parsed;
-      baseError.raw_response_text = text;
-      baseError.friendly_error = normalized?.friendly_error || normalized || null;
-      baseError.error_code = String(normalized?.error_code || normalized?.code || sourcePayload?.error_code || sourcePayload?.code || parsed?.error_code || parsed?.code || '').trim() || null;
-      baseError.code = baseError.error_code;
-      baseError.title = String(normalized?.title || normalized?.friendly_error?.title || '').trim() || null;
-      baseError.user_message = String(normalized?.user_message || normalized?.message || friendlyMessage || '').trim() || null;
-      baseError.message = baseError.user_message || friendlyMessage || 'Blocked-funds retry failed.';
-      if (typeof bankingBuildEnrichedFriendlyError === 'function' && normalized && typeof normalized === 'object') {
-        const enriched = bankingBuildEnrichedFriendlyError(baseError, normalized, baseError.message);
-        enriched.status = status;
-        enriched.body = text;
-        enriched.backendPayload = parsed;
-        enriched.raw_response_text = text;
-        throw enriched;
-      }
       throw baseError;
-    };
-
-    if (!response.ok) {
-      throwFriendly(response.status, detectFailurePayload(parsed) || parsed);
     }
-
-    const failurePayload = detectFailurePayload(parsed);
-    if (failurePayload) {
-      const code = normaliseCode(failurePayload.error_code || failurePayload.code || '');
-      if (!(code === 'BLOCKED_FUNDS' && failurePayload.ok === true)) {
-        throwFriendly(code === 'BATCH_STALE' ? 409 : 400, failurePayload);
-      }
-    }
-
     return (parsed && typeof parsed === 'object') ? parsed : {};
   };
 
-  const applyAlertSummary = (responsePayload) => {
-    const obj = (responsePayload && typeof responsePayload === 'object') ? responsePayload : {};
-    const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-    const list = mc?.banking?.pay?.list;
-    if (list && typeof list === 'object') {
-      if (Array.isArray(obj.banking_alerts)) list.banking_alerts = JSON.parse(JSON.stringify(obj.banking_alerts));
-      if (Number.isFinite(Number(obj.banking_unacknowledged_alert_count))) list.banking_unacknowledged_alert_count = Math.max(0, Math.trunc(Number(obj.banking_unacknowledged_alert_count)));
-      if (Object.prototype.hasOwnProperty.call(obj, 'banking_highest_alert_label')) list.banking_highest_alert_label = obj.banking_highest_alert_label || null;
-      if (Object.prototype.hasOwnProperty.call(obj, 'banking_highest_alert_severity')) list.banking_highest_alert_severity = obj.banking_highest_alert_severity || null;
-      list.banking_alert_summary = {
-        alerts: Array.isArray(list.banking_alerts) ? list.banking_alerts : [],
-        unacknowledged_count: list.banking_unacknowledged_alert_count || 0,
-        highest_label: list.banking_highest_alert_label || null,
-        highest_severity: list.banking_highest_alert_severity || null
-      };
-    }
+  const makeFriendlyError = (errorValue, backendPayload = null) => {
+    let normalized = null;
     try {
-      if (typeof deriveBankingAttentionStateFromBatchList === 'function' && typeof updateBankingNavAttentionState === 'function') {
-        updateBankingNavAttentionState(deriveBankingAttentionStateFromBatchList({
-          rows: Array.isArray(list?.items) ? list.items : [],
-          banking_alerts: Array.isArray(obj.banking_alerts) ? obj.banking_alerts : (Array.isArray(list?.banking_alerts) ? list.banking_alerts : []),
-          banking_unacknowledged_alert_count: obj.banking_unacknowledged_alert_count ?? list?.banking_unacknowledged_alert_count,
-          banking_highest_alert_label: obj.banking_highest_alert_label ?? list?.banking_highest_alert_label,
-          banking_highest_alert_severity: obj.banking_highest_alert_severity ?? list?.banking_highest_alert_severity,
-          banking_alert_summary: list?.banking_alert_summary || null
-        }));
+      if (typeof bankingNormalizeApiError === 'function') {
+        normalized = bankingNormalizeApiError(errorValue, backendPayload, { action: 'RETRY_BLOCKED_FUNDS', userInitiated: true });
       }
     } catch {}
+    const message = String(
+      normalized?.message ||
+      normalized?.user_message ||
+      normalized?.friendly_error?.message ||
+      errorValue?.message ||
+      'Blocked-funds retry failed.'
+    ).trim();
+    const baseError = new Error(message || 'Blocked-funds retry failed.');
+    baseError.status = Number(errorValue?.status || normalized?.http_status || normalized?.status_code || 400);
+    baseError.body = errorValue?.body || (() => { try { return JSON.stringify(backendPayload || normalized || {}); } catch { return message; } })();
+    baseError.json = backendPayload || normalized || errorValue?.json || null;
+    baseError.payload = backendPayload || null;
+    baseError.backendPayload = backendPayload || null;
+    baseError.friendly_error = normalized?.friendly_error || normalized || null;
+    baseError.error_code = String(normalized?.error_code || normalized?.code || backendPayload?.error_code || backendPayload?.code || errorValue?.error_code || '').trim() || null;
+    baseError.code = baseError.error_code;
+    baseError.title = String(normalized?.title || normalized?.friendly_error?.title || '').trim() || null;
+    baseError.user_message = String(normalized?.user_message || normalized?.message || message || '').trim() || null;
+    if (typeof bankingBuildEnrichedFriendlyError === 'function' && normalized && typeof normalized === 'object') {
+      const enriched = bankingBuildEnrichedFriendlyError(baseError, normalized, baseError.message);
+      enriched.status = baseError.status;
+      enriched.body = baseError.body;
+      enriched.backendPayload = baseError.backendPayload;
+      throw enriched;
+    }
+    throw baseError;
   };
 
-  const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/retry-blocked-funds`), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body)
+  let operationPayload = null;
+  try {
+    operationPayload = await postRetryStart();
+  } catch (e) {
+    makeFriendlyError(e, e?.json || e?.payload || e?.backendPayload || null);
+  }
+
+  const looksLikeOperation = !!(
+    operationPayload &&
+    typeof operationPayload === 'object' &&
+    (
+      operationPayload.operation_id ||
+      operationPayload.id ||
+      operationPayload.operation_type ||
+      operationPayload.operationType ||
+      operationPayload.phase ||
+      operationPayload.status ||
+      operationPayload.terminal === true
+    )
+  );
+
+  if (!looksLikeOperation) {
+    makeFriendlyError({ message: 'Blocked-funds retry did not start a payment operation.', status: 500 }, operationPayload);
+  }
+
+  if (typeof runBankingPayOperationWithProgress !== 'function') {
+    makeFriendlyError(
+      { message: 'Blocked-funds retry operation progress runner is not available.', status: 500 },
+      { error_code: 'PAYMENT_OPERATION_RUNNER_MISSING', message: 'Blocked-funds retry operation progress runner is not available.' }
+    );
+  }
+
+  const terminalResult = await runBankingPayOperationWithProgress(operationPayload, {
+    title: 'Retrying blocked-funds payment',
+    operationKind: 'PAYMENT_RETRY_BLOCKED_FUNDS',
+    finalResultExtractor: (operation) => operation?.result || operation?.final_result || operation
   });
-  const obj = await parseResponse(response);
+
+  const result = terminalResult?.result || terminalResult?.final_result || terminalResult;
 
   try {
     const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
@@ -24191,26 +24283,22 @@ async function bankingPayBatchRetryBlockedFunds(payBatchId, payload = {}) {
       mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
       mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
       mc.banking.pay.selectedBatchId = id;
-      mc.banking.pay.selected = (mc.banking.pay.selected && typeof mc.banking.pay.selected === 'object') ? mc.banking.pay.selected : {};
-      if (obj.batch_get && typeof obj.batch_get === 'object') mc.banking.pay.selected.data = obj.batch_get;
-      if (mc.banking.pay.child && typeof mc.banking.pay.child === 'object' && String(mc.banking.pay.child.batchId || mc.banking.pay.child.payBatchId || '') === id) {
-        if (obj.batch_get && typeof obj.batch_get === 'object') mc.banking.pay.child.data = obj.batch_get;
-        mc.banking.pay.child.ui = (mc.banking.pay.child.ui && typeof mc.banking.pay.child.ui === 'object') ? mc.banking.pay.child.ui : {};
-        mc.banking.pay.child.ui.activeTabKey = 'payment_issues';
+      if (result?.batch_get && typeof result.batch_get === 'object') {
+        mc.banking.pay.selected = (mc.banking.pay.selected && typeof mc.banking.pay.selected === 'object') ? mc.banking.pay.selected : {};
+        mc.banking.pay.selected.data = result.batch_get;
+        if (mc.banking.pay.child && typeof mc.banking.pay.child === 'object' && String(mc.banking.pay.child.batchId || mc.banking.pay.child.payBatchId || '') === id) {
+          mc.banking.pay.child.data = result.batch_get;
+          mc.banking.pay.child.ui = (mc.banking.pay.child.ui && typeof mc.banking.pay.child.ui === 'object') ? mc.banking.pay.child.ui : {};
+          mc.banking.pay.child.ui.activeTabKey = 'payment_issues';
+        }
       }
     }
   } catch {}
 
-  applyAlertSummary(obj);
-
   try {
-    if (typeof bankingPayBatchGet === 'function') await bankingPayBatchGet(id);
-  } catch {}
-
-  try {
-    const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-    const list = mc?.banking?.pay?.list || {};
     if (typeof bankingPayBatchesList === 'function') {
+      const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      const list = mc?.banking?.pay?.list || {};
       await bankingPayBatchesList({
         status: list.statusFilter || null,
         limit: list.limit || null,
@@ -24233,7 +24321,7 @@ async function bankingPayBatchRetryBlockedFunds(payBatchId, payload = {}) {
     }
   } catch {}
 
-  return obj;
+  return result;
 }
 
 
@@ -26512,7 +26600,6 @@ function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, opti
 }
 
 
-
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -27985,9 +28072,21 @@ async function bankingPayCreateDraft(input = {}) {
     const reqBody = {
       pay_date: pd,
       week_ending_cutoff_date: cutoffIso,
-      session_id: sessionId
+      session_id: sessionId,
+      selected_preview_row_ids: [...syncedSelectedRows],
+      selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
+      preview_decisions_json: {
+        ...(callerDecisionSource && typeof callerDecisionSource === 'object' && !Array.isArray(callerDecisionSource) ? deep(callerDecisionSource) : {}),
+        selected_preview_row_ids: [...syncedSelectedRows],
+        __selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
+        selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
+        pay_channel_scope: payChannelScope || 'ALL'
+      }
     };
 
+    if (activeSessionSignature) reqBody.session_signature = activeSessionSignature;
+    if (previewSessionSignature && !reqBody.session_signature) reqBody.session_signature = previewSessionSignature;
+    if (computedLiveSessionSignature && !reqBody.session_signature) reqBody.session_signature = computedLiveSessionSignature;
     if (payChannelScope) reqBody.pay_channel_scope = payChannelScope;
     if (overrideReason) reqBody.same_week_paye_override_reason = overrideReason;
     if (overrideContinue === true) reqBody.same_week_paye_override_continue = true;
@@ -27999,7 +28098,25 @@ async function bankingPayCreateDraft(input = {}) {
       synced_selected_preview_row_ids_sample: syncedSelectedRows.slice(0, 10)
     });
 
-    const obj = await apiPostJson('/api/banking/pay/batch/create-draft', reqBody, {
+    if (typeof runBankingPayOperationWithProgress !== 'function') {
+      throwCreateDraftFailureEnvelope({
+        ok: false,
+        error_code: 'PAYMENT_OPERATION_RUNNER_MISSING',
+        code: 'PAYMENT_OPERATION_RUNNER_MISSING',
+        message: 'Draft creation operation progress runner is not available. Refresh Banking and try again.'
+      }, 'PAYMENT_OPERATION_RUNNER_MISSING');
+    }
+
+    if (typeof bankingPayApplyCreateDraftResult !== 'function') {
+      throwCreateDraftFailureEnvelope({
+        ok: false,
+        error_code: 'PAYMENT_OPERATION_RESULT_HANDLER_MISSING',
+        code: 'PAYMENT_OPERATION_RESULT_HANDLER_MISSING',
+        message: 'Draft creation result handler is not available. Refresh Banking and try again.'
+      }, 'PAYMENT_OPERATION_RESULT_HANDLER_MISSING');
+    }
+
+    const operationPayload = await apiPostJson('/api/banking/pay/batch/create-draft', reqBody, {
       action: 'CREATE_DRAFT',
       userInitiated: createDraftUserInitiated,
       silent: createDraftSilent,
@@ -28009,250 +28126,92 @@ async function bankingPayCreateDraft(input = {}) {
       fallbackTitle: 'Payment batch could not be created',
       fallbackMessage: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.'
     });
-    const createDraftFailure = detectCreateDraftFailureEnvelope(obj);
+
+    const createDraftFailure = detectCreateDraftFailureEnvelope(operationPayload);
     if (createDraftFailure) {
       throwCreateDraftFailureEnvelope(createDraftFailure, 'BANKING_PAY_CREATE_DRAFT_FAILED');
     }
-    const normalised = makeNormalizedCreateDraftResult(obj);
-    const postCreateRefresh = (obj && typeof obj === 'object' && obj.post_create_refresh && typeof obj.post_create_refresh === 'object' && !Array.isArray(obj.post_create_refresh))
-      ? obj.post_create_refresh
-      : {};
 
-    try { wiz.lastCreateDraftResult = deep(normalised); } catch {}
+    const looksLikeOperation = !!(
+      operationPayload &&
+      typeof operationPayload === 'object' &&
+      !Array.isArray(operationPayload) &&
+      (
+        operationPayload.operation_id ||
+        operationPayload.id ||
+        operationPayload.operation_type ||
+        operationPayload.operationType ||
+        operationPayload.phase ||
+        operationPayload.status ||
+        operationPayload.terminal === true
+      )
+    );
 
-    if (!normalised.hasAnyRelevantScope) {
-      const msg = trimStr(normalised.summaryMessage || '') || 'Nothing relevant to create.';
-      logTroubleshoot('warn', 'API_POST_CREATE_DRAFT_NOTHING_RELEVANT', {
-        ...requestSummary,
-        umbrella_status: trimStr(normalised?.umbrella?.status || '') || null,
-        paye_status: trimStr(normalised?.paye?.status || '') || null,
-        message: msg
-      });
-      try { wiz.createDraftError = msg; } catch {}
-      try { if (typeof window.__toast === 'function') window.__toast(msg); } catch {}
-      try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
-      return deep(obj);
+    if (!looksLikeOperation) {
+      throwCreateDraftFailureEnvelope({
+        ok: false,
+        error_code: 'BANKING_PAY_CREATE_DRAFT_OPERATION_REQUIRED',
+        code: 'BANKING_PAY_CREATE_DRAFT_OPERATION_REQUIRED',
+        message: 'Draft creation did not start a payment operation. Refresh Banking and try again.',
+        payload: operationPayload
+      }, 'BANKING_PAY_CREATE_DRAFT_OPERATION_REQUIRED');
     }
 
-    if (normalised.primaryBatchId) {
-      pay.selectedBatchId = normalised.primaryBatchId;
-    }
-
-    const replacementSessionId = trimStr(postCreateRefresh.replacement_session_id || '');
-    const replacementSessionSignature = trimStr(postCreateRefresh.replacement_session_signature || '');
-    const replacementSnapshotRunId = trimStr(postCreateRefresh.replacement_snapshot_run_id || '');
-    const replacementSessionVersion = (postCreateRefresh.replacement_session_version != null)
-      ? postCreateRefresh.replacement_session_version
-      : null;
-    const dirtyCandidateIds = uniqTrimmed(postCreateRefresh.dirty_candidate_ids);
-    const refreshJobIds = uniqTrimmed(postCreateRefresh.dirty_refresh_job_ids || postCreateRefresh.refresh_job_ids);
-
-    logTroubleshoot('info', 'API_POST_CREATE_DRAFT_SUCCESS', {
+    logTroubleshoot('info', 'DRAFT_CREATE_OPERATION_STARTED', {
       ...requestSummary,
-      umbrella_status: trimStr(normalised?.umbrella?.status || '') || null,
-      umbrella_pay_batch_id: trimStr(normalised?.umbrella?.payBatchId || '') || null,
-      paye_status: trimStr(normalised?.paye?.status || '') || null,
-      paye_pay_batch_id: trimStr(normalised?.paye?.payBatchId || '') || null,
-      created_batch_ids: Array.isArray(normalised?.createdBatchIds) ? normalised.createdBatchIds : [],
-      primary_batch_id: trimStr(normalised?.primaryBatchId || '') || null,
-      replacement_session_id: replacementSessionId || null,
-      replacement_snapshot_run_id: replacementSnapshotRunId || null,
-      replacement_session_version: replacementSessionVersion,
-      dirty_candidate_count: dirtyCandidateIds.length,
-      refresh_job_count: refreshJobIds.length
+      operation_id: trimStr(operationPayload.operation_id || operationPayload.id || ''),
+      operation_type: trimStr(operationPayload.operation_type || operationPayload.operationType || ''),
+      operation_status: trimStr(operationPayload.status || ''),
+      operation_phase: trimStr(operationPayload.phase || '')
     });
 
-    const postSuccessPayDate = trimStr(wiz.pay_date || pd);
-    let postActionResetTriggered = false;
+    const terminalOperation = await runBankingPayOperationWithProgress(operationPayload, {
+      title: 'Creating payment draft',
+      operationKind: 'DRAFT_CREATE',
+      finalResultExtractor: (operation) => operation?.result || operation?.final_result || operation
+    });
 
-    try { wiz.createDraftBusy = false; } catch {}
-
-    try {
-      if (replacementSessionId) {
-        wiz.workbench.session_id = replacementSessionId;
-        wiz.decisions.session_id = replacementSessionId;
-      }
-      if (replacementSessionSignature) {
-        wiz.workbench.session_signature = replacementSessionSignature;
-        wiz.decisions.session_signature = replacementSessionSignature;
-      }
-      if (replacementSnapshotRunId) {
-        wiz.workbench.snapshot_run_id = replacementSnapshotRunId;
-        wiz.decisions.snapshot_run_id = replacementSnapshotRunId;
-      }
-      if (replacementSessionVersion !== null && replacementSessionVersion !== undefined) {
-        wiz.workbench.session_version = replacementSessionVersion;
-        wiz.decisions.session_version = replacementSessionVersion;
-      }
-      wiz.workbench.pending_candidate_ids = [...dirtyCandidateIds];
-      wiz.workbench.dirty_candidate_ids = [...dirtyCandidateIds];
-      wiz.workbench.pending_candidate_jobs = [...refreshJobIds].map((jobId, index) => ({
-        pending_job_id: jobId,
-        job_id: jobId,
-        candidate_id: dirtyCandidateIds[index] || null,
-        latest_job_type: 'SESSION_CANDIDATE_RECOMPUTE',
-        status: 'QUEUED'
-      }));
-      wiz.decisions.pending_candidate_ids = [...dirtyCandidateIds];
-      wiz.decisions.dirty_candidate_ids = [...dirtyCandidateIds];
-      wiz.decisions.pending_candidate_jobs = cloneForLog(wiz.workbench.pending_candidate_jobs) || [];
-    } catch {}
-
-    await clearPostCreatePreviewState();
-
-    try {
-      if (typeof resetPayPreviewAndDecisions === 'function') {
-        await resetPayPreviewAndDecisions({
-          mode: 'POST_ACTION_REOPEN',
-          reason: 'CREATE_DRAFT_SUCCESS',
-          source_session_id: trimStr(postCreateRefresh.source_session_id || sessionId) || null,
-          replacement_session_id: replacementSessionId || null,
-          replacement_session_signature: replacementSessionSignature || null,
-          replacement_snapshot_run_id: replacementSnapshotRunId || null,
-          replacement_session_version: replacementSessionVersion,
-          dirty_candidate_ids: [...dirtyCandidateIds],
-          pending_candidate_ids: [...dirtyCandidateIds],
-          refresh_job_ids: [...refreshJobIds],
-          preview_reopen_required: postCreateRefresh.preview_reopen_required === true
-        });
-        postActionResetTriggered = true;
-      }
-    } catch (resetErr) {
-      const resetFriendly = (typeof bankingNormalizeApiError === 'function')
-        ? bankingNormalizeApiError(resetErr, resetErr?.payload || resetErr?.json || null, {
-            action: 'PREVIEW',
-            fallbackCode: 'CREATE_DRAFT_POST_ACTION_REOPEN_FAILED',
-            userInitiated: false,
-            silent: true,
-            background: true
-          })
-        : null;
-      const resetMsg = trimStr(resetFriendly?.user_message || resetFriendly?.message || 'Banking Pay preview refresh failed after draft creation. Refresh Banking preview and try again.');
-      try {
-        wiz.createDraftError = resetMsg;
-        wiz.createDraftFriendlyError = resetFriendly && typeof resetFriendly === 'object' ? resetFriendly : wiz.createDraftFriendlyError || null;
-        wiz.workbench.create_draft_refresh_pending = true;
-        wiz.decisions.create_draft_refresh_pending = true;
-        wiz.preview.loading = false;
-        wiz.preview.error = resetMsg;
-        wiz.preview.friendlyError = resetFriendly && typeof resetFriendly === 'object' ? resetFriendly : null;
-        wiz.preview.failure = {
-          preview_unavailable: false,
-          can_retry: true,
-          error: {
-            code: trimStr(resetFriendly?.error_code || resetFriendly?.code || 'CREATE_DRAFT_POST_ACTION_REOPEN_FAILED') || 'CREATE_DRAFT_POST_ACTION_REOPEN_FAILED',
-            message: resetMsg
-          }
-        };
-      } catch {}
-      logTroubleshoot('warn', 'POST_CREATE_RESET_FAILED', { ...requestSummary, message: resetMsg });
+    const terminalFailure = detectCreateDraftFailureEnvelope(terminalOperation);
+    if (terminalFailure) {
+      throwCreateDraftFailureEnvelope(terminalFailure, 'BANKING_PAY_CREATE_DRAFT_FAILED');
     }
 
-    try {
-      if (typeof bankingPayBatchesList === 'function') {
-        await bankingPayBatchesList({
-          status: pay.list ? pay.list.statusFilter : null,
-          limit: pay.list ? pay.list.limit : null,
-          offset: pay.list ? pay.list.offset : null
-        });
-      }
-    } catch {}
+    const appliedResult = await bankingPayApplyCreateDraftResult(terminalOperation, {
+      pay_date: pd,
+      week_ending_cutoff_date: cutoffIso,
+      session_id: sessionId,
+      session_signature: trimStr(wiz.workbench.session_signature || wiz.decisions.session_signature || ''),
+      selected_preview_row_ids: [...selectedPreviewRowIdsForServer],
+      selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
+      pay_channel_scope: payChannelScope || 'ALL',
+      same_week_paye_override_reason_present: !!overrideReason,
+      same_week_paye_override_continue: overrideContinue === true,
+      source: 'bankingPayCreateDraft'
+    });
 
-    if (!postActionResetTriggered) {
-      try {
-        if (typeof bankingPayPreview === 'function') {
-          await bankingPayPreview({
-            pay_date: postSuccessPayDate,
-            mode: 'POST_ACTION_REOPEN',
-            hard_session_reload: true,
-            replacement_session_id: replacementSessionId || null,
-            replacement_session_signature: replacementSessionSignature || null,
-            replacement_snapshot_run_id: replacementSnapshotRunId || null,
-            replacement_session_version: replacementSessionVersion,
-            dirty_candidate_ids: [...dirtyCandidateIds],
-            pending_candidate_ids: [...dirtyCandidateIds],
-            refresh_job_ids: [...refreshJobIds],
-            preview_reopen_required: true
-          });
-          const stillPendingAfterFallback = dirtyCandidateIds.length > 0 || refreshJobIds.length > 0;
-          wiz.workbench.create_draft_refresh_pending = stillPendingAfterFallback;
-          wiz.decisions.create_draft_refresh_pending = stillPendingAfterFallback;
-          wiz.preview.loading = stillPendingAfterFallback;
-        }
-      } catch (fallbackPreviewErr) {
-        const fallbackFriendly = (typeof bankingNormalizeApiError === 'function')
-          ? bankingNormalizeApiError(fallbackPreviewErr, fallbackPreviewErr?.payload || fallbackPreviewErr?.json || null, {
-              action: 'PREVIEW',
-              fallbackCode: 'CREATE_DRAFT_FALLBACK_PREVIEW_REFRESH_FAILED',
-              userInitiated: false,
-              silent: true,
-              background: true
-            })
-          : null;
-        const fallbackMsg = trimStr(fallbackFriendly?.user_message || fallbackFriendly?.message || 'Banking Pay preview refresh failed after draft creation. Refresh Banking preview and try again.');
-        try {
-          wiz.createDraftError = fallbackMsg;
-          wiz.createDraftFriendlyError = fallbackFriendly && typeof fallbackFriendly === 'object' ? fallbackFriendly : wiz.createDraftFriendlyError || null;
-          wiz.workbench.create_draft_refresh_pending = true;
-          wiz.decisions.create_draft_refresh_pending = true;
-          wiz.preview.loading = false;
-          wiz.preview.error = fallbackMsg;
-          wiz.preview.friendlyError = fallbackFriendly && typeof fallbackFriendly === 'object' ? fallbackFriendly : null;
-          wiz.preview.failure = {
-            preview_unavailable: false,
-            can_retry: true,
-            error: {
-              code: trimStr(fallbackFriendly?.error_code || fallbackFriendly?.code || 'CREATE_DRAFT_FALLBACK_PREVIEW_REFRESH_FAILED') || 'CREATE_DRAFT_FALLBACK_PREVIEW_REFRESH_FAILED',
-              message: fallbackMsg
-            }
-          };
-        } catch {}
-        logTroubleshoot('warn', 'POST_CREATE_FALLBACK_PREVIEW_FAILED', { ...requestSummary, message: fallbackMsg });
-      }
-    }
+    const finalResult = (appliedResult && typeof appliedResult === 'object')
+      ? appliedResult
+      : (terminalOperation?.result || terminalOperation?.final_result || terminalOperation || {});
 
     try {
-      if (!wiz.workbench?.create_draft_refresh_pending && !wiz.decisions?.create_draft_refresh_pending && !trimStr(wiz.preview?.error || '')) {
-        wiz.createDraftError = '';
+      const rawFinal = finalResult?.result || finalResult?.raw || finalResult;
+      const normalised = makeNormalizedCreateDraftResult(rawFinal);
+      wiz.lastCreateDraftResult = deep(normalised);
+      if (normalised.primaryBatchId) {
+        pay.selectedBatchId = normalised.primaryBatchId;
       }
+      wiz.createDraftError = '';
+      wiz.createDraftFriendlyError = null;
     } catch {}
 
-    try {
-      const msg = trimStr(normalised.summaryMessage || '');
-      if (msg && typeof window.__toast === 'function') {
-        window.__toast(msg);
-      }
-    } catch {}
+    logTroubleshoot('info', 'DRAFT_CREATE_OPERATION_COMPLETE', {
+      ...requestSummary,
+      operation_id: trimStr(operationPayload.operation_id || operationPayload.id || ''),
+      terminal_status: trimStr(terminalOperation?.status || finalResult?.status || ''),
+      primary_batch_id: trimStr(finalResult?.primaryBatchId || finalResult?.primary_batch_id || finalResult?.pay_batch_id || '') || null
+    });
 
-    try {
-      const excludedRaw = (obj && Array.isArray(obj.excluded_timesheets)) ? obj.excluded_timesheets : [];
-      if (excludedRaw.length > 0) {
-        const exclusionsNorm = excludedRaw
-          .map((x) => ({
-            timesheet_id: trimStr(x?.timesheet_id || x?.timesheetId || ''),
-            candidate_id: trimStr(x?.candidate_id || x?.candidateId || '') || null,
-            candidate_display_name: trimStr(x?.candidate_display_name || x?.candidateDisplayName || ''),
-            week_ending_date: trimStr(x?.week_ending_date || x?.weekEndingDate || ''),
-            client_name: trimStr(x?.client_name || x?.clientName || ''),
-            timesheet_ref: trimStr(x?.timesheet_ref || x?.timesheetRef || ''),
-            reason_summary: trimStr(x?.reason_summary || x?.reasonSummary || '') || 'Still processing',
-            tsfin_reasons: Array.isArray(x?.tsfin_reasons) ? x.tsfin_reasons : [],
-            next_attempt_at: Object.prototype.hasOwnProperty.call(x || {}, 'next_attempt_at') ? x.next_attempt_at : null
-          }))
-          .filter((r) => r && r.timesheet_id);
-
-        if (typeof openPayDraftSkippedTimesheetsModal === 'function') {
-          await openPayDraftSkippedTimesheetsModal(exclusionsNorm);
-        } else {
-          const msg = `Draft created, but ${excludedRaw.length} timesheet(s) were skipped because calculations are still processing.`;
-          if (typeof window.__toast === 'function') window.__toast(msg);
-          else alert(msg);
-        }
-      }
-    } catch {}
-
-    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
-    return deep(obj);
+    return deep(finalResult);
   } catch (e) {
     const friendly = (typeof bankingNormalizeApiError === 'function')
       ? bankingNormalizeApiError(e, e?.payload || e?.json || null, {
@@ -28285,6 +28244,9 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
+
+
 
 
 
@@ -29369,6 +29331,11 @@ async function bankingPayBatchExportCsv(payBatchId, scope = 'ALL') {
     return fallbackName;
   };
 
+  const isOperationPayload = (payload) => {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+    return !!(payload.operation_id || payload.operationId || payload.operation_required === true || payload.bank_csv_export_prepare_required === true);
+  };
+
   const selectedData = (pay.selected && pay.selected.data && typeof pay.selected.data === 'object') ? pay.selected.data : null;
   const selectedBatch = (selectedData && selectedData.batch && typeof selectedData.batch === 'object') ? selectedData.batch : null;
   const currentBatchId = String(selectedBatch?.id || pay.selectedBatchId || '').trim();
@@ -29392,50 +29359,127 @@ async function bankingPayBatchExportCsv(payBatchId, scope = 'ALL') {
   pay.actionsBusy.exporting = true;
 
   try {
-    const url = API(`/api/banking/pay/batch/${encodeURIComponent(id)}/export-csv?scope=${encodeURIComponent(scopeNorm)}`);
-    const res = await authFetch(url, { method: 'GET' });
+    const downloadOnce = async () => {
+      const url = API(`/api/banking/pay/batch/${encodeURIComponent(id)}/export-csv?scope=${encodeURIComponent(scopeNorm)}`);
+      const res = await authFetch(url, { method: 'GET' });
+      const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+      const contentDisposition = String(res.headers.get('content-disposition') || '');
+      const looksLikeCsv = contentType.includes('text/csv') || /filename\*=|filename=/i.test(contentDisposition);
 
-    if (!res.ok) {
-      const txt = await res.text().catch(() => '');
-      const parsed = safeParse(txt);
-
-      if (res.status === 409) {
-        const staleReasons = Array.isArray(parsed?.stale_reasons) ? parsed.stale_reasons.map(x => String(x || '').trim()).filter(Boolean) : [];
-        const msg409 = staleReasons.length
-          ? `Bank/payment CSV export is blocked because the batch is stale: ${staleReasons.join(', ')}. Refresh/regenerate the draft first.`
-          : 'Bank/payment CSV export is blocked because the batch is stale. Refresh/regenerate the draft first.';
-        const err409 = new Error(msg409);
-        err409.status = res.status;
-        err409.body = txt || '';
-        err409.json = parsed;
-        throw err409;
+      if (res.ok && !looksLikeCsv && contentType.includes('application/json')) {
+        const txt = await res.text().catch(() => '');
+        const parsed = safeParse(txt);
+        if (isOperationPayload(parsed)) return { kind: 'operation', operation: parsed };
+        const err = new Error(String(parsed?.message || parsed?.error || 'CSV export did not return a file.'));
+        err.status = res.status;
+        err.body = txt || '';
+        err.json = parsed;
+        throw err;
       }
 
-      const msg =
-        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
-          ? String(parsed.error || parsed.message)
-          : (txt || `Request failed (${res.status})`);
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        const parsed = safeParse(txt);
+        if ((res.status === 202 || isOperationPayload(parsed)) && isOperationPayload(parsed)) return { kind: 'operation', operation: parsed };
 
-      const err = new Error(String(msg || 'Export failed'));
-      err.status = res.status;
-      err.body = txt || '';
-      err.json = parsed;
-      throw err;
+        if (res.status === 409) {
+          const staleReasons = Array.isArray(parsed?.stale_reasons) ? parsed.stale_reasons.map(x => String(x || '').trim()).filter(Boolean) : [];
+          const msg409 = staleReasons.length
+            ? `Bank/payment CSV export is blocked because the batch is stale: ${staleReasons.join(', ')}. Refresh/regenerate the draft first.`
+            : 'Bank/payment CSV export is blocked because the batch is stale. Refresh/regenerate the draft first.';
+          const err409 = new Error(msg409);
+          err409.status = res.status;
+          err409.body = txt || '';
+          err409.json = parsed;
+          throw err409;
+        }
+
+        const msg =
+          (parsed && typeof parsed === 'object' && (parsed.error || parsed.message || parsed.user_message))
+            ? String(parsed.error || parsed.message || parsed.user_message)
+            : (txt || `Request failed (${res.status})`);
+
+        const err = new Error(String(msg || 'Export failed'));
+        err.status = res.status;
+        err.body = txt || '';
+        err.json = parsed;
+        throw err;
+      }
+
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') || '';
+      const fallback = `pay_batch_${id}_${scopeNorm}.csv`;
+      const filename = parseFilename(cd, fallback);
+
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(objUrl); } catch {} }, 2_000);
+
+      return { kind: 'csv', filename };
+    };
+
+    let outcome = await downloadOnce();
+    if (outcome.kind === 'operation') {
+      if (typeof runBankingPayOperationWithProgress !== 'function') {
+        const err = new Error('Bank CSV export requires preparation, but the operation runner is not available.');
+        err.json = outcome.operation;
+        throw err;
+      }
+      const operationPayload = (typeof normaliseBankingPayOperationProgress === 'function')
+        ? normaliseBankingPayOperationProgress(outcome.operation)
+        : outcome.operation;
+      const terminalResult = await runBankingPayOperationWithProgress(operationPayload, {
+        title: 'Preparing bank CSV export',
+        action: 'EXPORT_BANK_CSV',
+        finalResultExtractor: (result, operationState) => {
+          const state = operationState && typeof operationState === 'object' ? operationState : {};
+          if (state.review_required === true || state.failed === true || state.cancelled === true) {
+            const errPayload = state.error && typeof state.error === 'object' ? state.error : {};
+            return {
+              ok: false,
+              review_required: state.review_required === true,
+              failed: state.failed === true,
+              cancelled: state.cancelled === true,
+              error_code: errPayload.error_code || errPayload.code || state.status || 'BANK_CSV_EXPORT_PREPARE_FAILED',
+              code: errPayload.error_code || errPayload.code || state.status || 'BANK_CSV_EXPORT_PREPARE_FAILED',
+              message: errPayload.message || state.status_text || 'Bank CSV export preparation did not complete.',
+              error: errPayload,
+              result: result || state.result || null,
+              operation: state.raw_payload || state
+            };
+          }
+          return result || state.result || state.raw_payload || state;
+        }
+      });
+      const terminalStatus = String(terminalResult?.status || terminalResult?.operation_status || terminalResult?.state || '').trim().toUpperCase();
+      const bankCsvExportReady = terminalResult && typeof terminalResult === 'object'
+        ? terminalResult.bank_csv_export_ready === true || terminalResult.result?.bank_csv_export_ready === true || terminalResult.operation?.result?.bank_csv_export_ready === true
+        : false;
+      const terminalOk = terminalResult && typeof terminalResult === 'object'
+        ? terminalResult.ok !== false
+          && terminalResult.review_required !== true
+          && terminalResult.failed !== true
+          && terminalResult.cancelled !== true
+          && !['FAILED', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED'].includes(terminalStatus)
+          && bankCsvExportReady === true
+        : false;
+      if (!terminalOk) {
+        const err = new Error(String(terminalResult.message || terminalResult.error?.message || terminalResult.error || 'Bank CSV export preparation did not complete.'));
+        err.json = terminalResult;
+        throw err;
+      }
+      outcome = await downloadOnce();
+      if (outcome.kind === 'operation') {
+        const err = new Error('Bank CSV export still requires preparation. Try again after the operation completes.');
+        err.json = outcome.operation;
+        throw err;
+      }
     }
-
-    const blob = await res.blob();
-    const cd = res.headers.get('content-disposition') || '';
-    const fallback = `pay_batch_${id}_${scopeNorm}.csv`;
-    const filename = parseFilename(cd, fallback);
-
-    const objUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => { try { URL.revokeObjectURL(objUrl); } catch {} }, 2_000);
 
     try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
     return true;
@@ -29461,6 +29505,7 @@ async function bankingPayBatchExportCsv(payBatchId, scope = 'ALL') {
     try { pay.actionsBusy.exporting = false; } catch {}
   }
 }
+
 
 async function bankingPayBatchExportDetailCsv(payBatchId) {
   const id = (payBatchId == null) ? '' : String(payBatchId).trim();
@@ -40925,6 +40970,68 @@ async function contractWeekManualDraftUpsert(weekId, payload) {
     return x;
   };
 
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const boolish = (value) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value == null) return false;
+    const s = String(value).trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  };
+  const hasMeaningfulScheduleRows = (value) => {
+    const parsed = normaliseScheduleField(value);
+    if (!Array.isArray(parsed)) return false;
+    return parsed.some((entry) => {
+      if (Array.isArray(entry)) return hasMeaningfulScheduleRows(entry);
+      if (!entry || typeof entry !== 'object') return false;
+      return !!(
+        trimStr(entry.start || entry.worked_start || '') ||
+        trimStr(entry.end || entry.worked_end || '') ||
+        trimStr(entry.break_start || '') ||
+        trimStr(entry.break_end || '') ||
+        trimStr(entry.ref || entry.reference || '') ||
+        trimStr(entry.break_mins ?? entry.break_minutes ?? '')
+      );
+    });
+  };
+  const zeroHourBuckets = () => ({ day: 0, night: 0, sat: 0, sun: 0, bh: 0 });
+  const zeroTotalsHoursIfPresent = (value) => {
+    let totals = value;
+    if (typeof totals === 'string') {
+      try { totals = JSON.parse(totals); } catch { totals = {}; }
+    }
+    totals = (totals && typeof totals === 'object' && !Array.isArray(totals)) ? { ...totals } : {};
+    totals.hours = zeroHourBuckets();
+    return totals;
+  };
+  const resolveActiveStateContainers = () => ([
+    payload,
+    window?.modalCtx?.bulkProcessState?.active_ctx?.state,
+    window?.modalCtx?.bulkProcessState?.active_context?.state,
+    window?.modalCtx?.bulkProcessState?.active_row,
+    window?.modalCtx?.active_ctx?.state,
+    window?.modalCtx?.active_context?.state,
+    window?.modalCtx?.timesheetState,
+    window?.modalCtx?.data
+  ].filter((item) => item && typeof item === 'object'));
+  const hasKeepEmptyMarker = resolveActiveStateContainers().some((container) => !!(
+    boolish(container.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(container.keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(container.keep_additional_manual_adjustment_schedule_empty) ||
+    boolish(container.__suppressStandardScheduleFallback) ||
+    boolish(container.suppressStandardScheduleFallback) ||
+    boolish(container.suppress_standard_schedule_fallback)
+  ));
+  const scheduleTouched = resolveActiveStateContainers().some((container) => !!(
+    boolish(container.__scheduleUserTouched) ||
+    boolish(container.scheduleUserTouched) ||
+    boolish(container.__weeklyScheduleUserTouched) ||
+    boolish(container.weeklyScheduleUserTouched) ||
+    boolish(container.__manualScheduleUserTouched) ||
+    boolish(container.manualScheduleUserTouched) ||
+    boolish(container.scheduleTouched) ||
+    boolish(container.hoursScheduleTouched)
+  ));
+
   const safePayload = { ...(payload || {}) };
 
   if (Object.prototype.hasOwnProperty.call(safePayload, 'planned_schedule_json')) {
@@ -40943,6 +41050,26 @@ async function contractWeekManualDraftUpsert(weekId, payload) {
     safePayload.expenses_draft = normaliseExpensesDraftField(safePayload.expenses_draft);
   }
 
+  if (hasKeepEmptyMarker) {
+    const scheduleCandidates = [safePayload.planned_schedule_json, safePayload.actual_schedule_json, safePayload.schedule_json]
+      .filter((value) => value != null);
+    const pollutedSchedule = scheduleCandidates.some((value) => hasMeaningfulScheduleRows(value));
+    if (pollutedSchedule && !scheduleTouched) {
+      GE();
+      throw new Error('This additional manual adjustment is explicitly zero-hours. Standard schedule fallback rows cannot be saved unless the user deliberately enters hours.');
+    }
+    if (!scheduleTouched) {
+      safePayload.planned_schedule_json = [];
+      if (Object.prototype.hasOwnProperty.call(safePayload, 'actual_schedule_json')) safePayload.actual_schedule_json = [];
+      if (Object.prototype.hasOwnProperty.call(safePayload, 'schedule_json')) safePayload.schedule_json = [];
+      if (Object.prototype.hasOwnProperty.call(safePayload, 'hours')) safePayload.hours = zeroHourBuckets();
+      if (Object.prototype.hasOwnProperty.call(safePayload, 'totals_json')) safePayload.totals_json = zeroTotalsHoursIfPresent(safePayload.totals_json);
+      if (Object.prototype.hasOwnProperty.call(safePayload, 'contract_week_totals_json')) safePayload.contract_week_totals_json = zeroTotalsHoursIfPresent(safePayload.contract_week_totals_json);
+      safePayload.keep_additional_manual_adjustment_schedule_empty = true;
+      safePayload.suppress_standard_schedule_fallback = true;
+    }
+  }
+
   // ✅ Schedule-driven payload is authoritative; do not rely on hours-only.
   // If any schedule field is present, drop legacy hours if the caller accidentally included them.
   if (
@@ -40951,7 +41078,8 @@ async function contractWeekManualDraftUpsert(weekId, payload) {
     safePayload.schedule_json != null
   ) {
     if (Object.prototype.hasOwnProperty.call(safePayload, 'hours')) {
-      delete safePayload.hours;
+      if (hasKeepEmptyMarker && !scheduleTouched) safePayload.hours = zeroHourBuckets();
+      else delete safePayload.hours;
     }
   }
 
@@ -43467,11 +43595,13 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
   });
 }
 
+
+
 async function bankingPayBatchExecutePayment(payBatchId, payload) {
   const id = String(payBatchId || '').trim();
   if (!id) throw new Error('bankingPayBatchExecutePayment: payBatchId is required');
 
-  const body = (payload && typeof payload === 'object') ? payload : {};
+  const body = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? { ...payload } : {};
 
   const classifyAuthFailure = (status, parsed, text) => {
     const st = Number(status || 0);
@@ -43498,10 +43628,11 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
     );
   };
 
-  const normalizeErrorPayload = (errorValue, backendPayload = null, context = {}) => {
+  const makeFriendlyError = (errorValue, backendPayload = null, context = {}) => {
+    let friendly = null;
     try {
       if (typeof bankingNormalizeApiError === 'function') {
-        return bankingNormalizeApiError(errorValue, backendPayload, {
+        friendly = bankingNormalizeApiError(errorValue, backendPayload, {
           action: 'execute_payment',
           batchId: id,
           userInitiated: true,
@@ -43510,237 +43641,128 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
         });
       }
     } catch {}
-    const message = 'CloudTMS could not execute this payment. No successful bank submission has been confirmed. Refresh the batch and review Payment Issues before trying again.';
-    return {
-      ok: false,
-      error_code: 'BANKING_EXECUTE_PAYMENT_FAILED',
-      code: 'BANKING_EXECUTE_PAYMENT_FAILED',
-      title: 'Payment execution failed',
-      message,
-      error: message,
-      user_message: message,
-      confirm_label: 'OK',
-      severity: 'critical',
-      show_modal: true,
-      http_status: 500,
-      status_code: 500
-    };
-  };
 
-  const makeFriendlyError = (errorValue, backendPayload = null, context = {}) => {
-    const friendly = normalizeErrorPayload(errorValue, backendPayload, context);
+    if (!friendly || typeof friendly !== 'object') {
+      const message = 'CloudTMS could not execute this payment. No successful bank submission has been confirmed. Refresh the batch and review Payment Issues before trying again.';
+      friendly = {
+        ok: false,
+        error_code: context.fallbackCode || 'BANKING_EXECUTE_PAYMENT_FAILED',
+        code: context.fallbackCode || 'BANKING_EXECUTE_PAYMENT_FAILED',
+        title: 'Payment execution failed',
+        message,
+        error: message,
+        user_message: message,
+        confirm_label: 'OK',
+        severity: 'critical',
+        show_modal: true,
+        http_status: 500,
+        status_code: 500
+      };
+    }
+
     const message = String(friendly.user_message || friendly.message || friendly.error || 'CloudTMS could not execute this payment. Refresh the batch and try again.').trim();
     const err = new Error(message);
     err.status = Number.isFinite(Number(friendly.http_status || friendly.status_code)) ? Math.trunc(Number(friendly.http_status || friendly.status_code)) : 400;
     err.json = friendly;
     err.body = (() => { try { return JSON.stringify(friendly); } catch { return message; } })();
-    err.error_code = friendly.error_code || friendly.code || 'BANKING_EXECUTE_PAYMENT_FAILED';
+    err.error_code = friendly.error_code || friendly.code || context.fallbackCode || 'BANKING_EXECUTE_PAYMENT_FAILED';
     err.friendly = true;
     return err;
   };
 
-  const isBlockedFundsResult = (result, freshBatchPayload = null) => {
-    const out = (result && typeof result === 'object') ? result : {};
-    const fresh = (freshBatchPayload && typeof freshBatchPayload === 'object') ? freshBatchPayload : {};
-    const freshBatch = (fresh.batch && typeof fresh.batch === 'object') ? fresh.batch : {};
-    return out.blocked_funds === true
-      || String(out.post_execution_status || '').trim().toUpperCase() === 'BLOCKED_FUNDS'
-      || String(out.status || '').trim().toUpperCase() === 'BLOCKED_FUNDS'
-      || String(out.batch_get?.batch?.status || out.batch_get?.status || '').trim().toUpperCase() === 'BLOCKED_FUNDS'
-      || String(freshBatch.status || fresh.status || '').trim().toUpperCase() === 'BLOCKED_FUNDS';
-  };
-
-  const isScheduledResult = (result) => {
-    const out = (result && typeof result === 'object') ? result : {};
-    return out.scheduled === true
-      || String(out.title || '').trim().toLowerCase() === 'payment scheduled'
-      || (String(out.execution_mode || '').trim().toUpperCase() === 'STANDARD_BANK'
-        && out.submitted_to_bank === false
-        && out.rail_execution_attempted === false
-        && String(out.scheduled_at_utc || '').trim());
-  };
-
-  const normalizeSuccessResult = (result, freshBatchPayload = null) => {
-    const out = (result && typeof result === 'object') ? result : {};
-    const batchGet = out.batch_get || freshBatchPayload || null;
-    const executionMode = String(out.execution_mode || '').trim().toUpperCase();
-    const effectivePaymentDate = String(out.effective_payment_date || '').trim() || null;
-    const postExecutionStatus = String(out.post_execution_status || out.status || '').trim().toUpperCase();
-
-    if (isBlockedFundsResult(out, freshBatchPayload)) {
-      const friendly = normalizeErrorPayload({ blocked_funds: true, status: 'BLOCKED_FUNDS', post_execution_status: 'BLOCKED_FUNDS', error_code: 'BLOCKED_FUNDS' }, out, { fallbackCode: 'BLOCKED_FUNDS' });
-      return {
-        ok: true,
-        terminal: true,
-        blocked_funds: true,
-        submitted_to_bank: false,
-        status: 'BLOCKED_FUNDS',
-        post_execution_status: 'BLOCKED_FUNDS',
-        error_code: 'BLOCKED_FUNDS',
-        code: 'BLOCKED_FUNDS',
-        title: 'Bank rejected payment — blocked funds',
-        message: 'Bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.',
-        user_message: 'Bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.',
-        user_action: friendly.user_action || 'REVIEW_PAYMENT_ISSUES',
-        confirm_label: friendly.confirm_label || 'OK',
-        severity: friendly.severity || 'critical',
-        pay_batch_id: id,
-        execution_mode: executionMode || undefined,
-        effective_payment_date: effectivePaymentDate || undefined,
-        batch_get: batchGet,
-        payment_issue_summary: out.payment_issue_summary || undefined
-      };
+  const postOperationStart = async () => {
+    if (typeof apiPostJson === 'function') {
+      return await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute-payment`, body);
     }
 
-    if (isScheduledResult(out)) {
-      return {
-        ok: true,
-        scheduled: true,
-        terminal: true,
-        submitted_to_bank: false,
-        blocked_funds: false,
-        title: 'Payment scheduled',
-        message: 'Payment scheduled. Funds will be checked when CloudTMS submits the payment to the bank on the scheduled date.',
-        user_message: 'Payment scheduled. Funds will be checked when CloudTMS submits the payment to the bank on the scheduled date.',
-        pay_batch_id: id,
-        execution_mode: executionMode || 'STANDARD_BANK',
-        effective_payment_date: effectivePaymentDate || undefined,
-        scheduled_at_utc: String(out.scheduled_at_utc || '').trim() || undefined,
-        post_execution_status: postExecutionStatus || undefined,
-        batch_get: batchGet || out.batch_get || null
-      };
+    if (typeof authFetch !== 'function' || typeof API !== 'function') {
+      throw new Error('bankingPayBatchExecutePayment: apiPostJson or authFetch/API is required');
     }
 
-    const submittedToBank = out.submitted_to_bank === true
-      || postExecutionStatus === 'SUBMITTED'
-      || postExecutionStatus === 'COMMITTED';
-    const awaitingAuthorisation = out.awaiting_authorisation === true || postExecutionStatus === 'AWAITING_AUTHORISATION';
+    const res = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute-payment`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
 
-    return {
-      ok: out.ok !== false,
-      terminal: submittedToBank || (!awaitingAuthorisation && ['CSV_SETTLEMENT', 'EXTERNAL_SETTLEMENT'].includes(executionMode)),
-      scheduled: false,
-      blocked_funds: false,
-      submitted_to_bank: submittedToBank,
-      awaiting_authorisation: awaitingAuthorisation,
-      title: awaitingAuthorisation
-        ? 'Payment authorisation requested'
-        : (submittedToBank ? 'Payment submitted' : 'Payment execution updated'),
-      message: awaitingAuthorisation
-        ? 'Payment has been sent for authorisation. No bank submission has been confirmed yet.'
-        : (submittedToBank ? 'Payment was submitted to the bank. Review the batch for the latest payment status.' : 'Payment processing was updated. Review the batch for the latest status.'),
-      user_message: awaitingAuthorisation
-        ? 'Payment has been sent for authorisation. No bank submission has been confirmed yet.'
-        : (submittedToBank ? 'Payment was submitted to the bank. Review the batch for the latest payment status.' : 'Payment processing was updated. Review the batch for the latest status.'),
-      pay_batch_id: id,
-      execution_mode: executionMode || undefined,
-      effective_payment_date: effectivePaymentDate || undefined,
-      post_execution_status: postExecutionStatus || undefined,
-      batch_get: batchGet || out.batch_get || null
-    };
-  };
+    const txt = await res.text().catch(() => '');
+    let parsed = null;
+    try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = null; }
 
-  const refreshBankingSurfacesAfterSuccess = async (resultObj) => {
-    let freshBatch = null;
-    try {
-      const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-      if (!mc || String(mc.entity || '') !== 'banking') return null;
-
-      mc.banking = (mc.banking && typeof mc.banking === 'object') ? mc.banking : {};
-      mc.banking.pay = (mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : {};
-      const pay = mc.banking.pay;
-
-      try {
-        if (typeof bankingPayBatchGet === 'function') {
-          freshBatch = await bankingPayBatchGet(id);
-
-          pay.selected = (pay.selected && typeof pay.selected === 'object') ? pay.selected : { data: null, loading: false, error: '' };
-          pay.selected.data = freshBatch;
-          pay.selected.loading = false;
-          pay.selected.error = '';
-          pay.selectedBatchId = id;
-
-          if (pay.child && typeof pay.child === 'object' && String(pay.child.batchId || '').trim() === id) {
-            pay.child.data = freshBatch;
-            pay.child.loading = false;
-            pay.child.error = '';
-          }
-        }
-      } catch {}
-
-      try {
-        if (typeof bankingPayBatchesList === 'function') {
-          await bankingPayBatchesList({
-            status: (pay && pay.list) ? pay.list.statusFilter : null,
-            limit: (pay && pay.list) ? pay.list.limit : null,
-            offset: (pay && pay.list) ? pay.list.offset : null
-          });
-        }
-      } catch {}
-
-      try {
-        if (typeof bankingRerender === 'function') {
-          await bankingRerender(null);
-        }
-      } catch {}
-
-      void resultObj;
-    } catch {}
-    return freshBatch;
-  };
-
-  if (typeof apiPostJson === 'function') {
-    try {
-      const out = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute-payment`, body);
-      const fresh = await refreshBankingSurfacesAfterSuccess(out);
-      return normalizeSuccessResult(out, fresh);
-    } catch (e) {
-      const st = Number(e?.status || 0);
-      const parsed = (e && e.json && typeof e.json === 'object') ? e.json : null;
-      const txt = String(e?.body || e?.message || '').trim();
-      const authFailure = classifyAuthFailure(st, parsed, txt);
-      const friendlyError = makeFriendlyError(e, parsed, { fallbackCode: authFailure ? 'PAYMENT_REAUTH_REQUIRED' : 'BANKING_EXECUTE_PAYMENT_FAILED' });
-
+    if (!res.ok) {
+      const authFailure = classifyAuthFailure(res.status, parsed, txt);
+      const baseError = new Error(String((parsed && typeof parsed === 'object' && (parsed.error || parsed.message)) ? (parsed.error || parsed.message) : (txt || `Request failed (${res.status})`)));
+      baseError.status = res.status;
+      baseError.body = txt;
+      baseError.json = parsed;
+      const friendlyError = makeFriendlyError(baseError, parsed, { fallbackCode: authFailure ? 'PAYMENT_REAUTH_REQUIRED' : 'BANKING_EXECUTE_PAYMENT_FAILED' });
       if (authFailure) {
         try { friendlyError.is_auth_failure = true; } catch {}
       }
-
       throw friendlyError;
     }
-  }
 
-  if (typeof authFetch !== 'function' || typeof API !== 'function') {
-    throw new Error('bankingPayBatchExecutePayment: apiPostJson or authFetch/API is required');
-  }
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  };
 
-  const res = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute-payment`), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body || {})
-  });
-
-  const txt = await res.text().catch(() => '');
-  let parsed = null;
-  try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = null; }
-
-  if (!res.ok) {
-    const authFailure = classifyAuthFailure(res.status, parsed, txt);
-    const baseError = new Error(String((parsed && typeof parsed === 'object' && (parsed.error || parsed.message)) ? (parsed.error || parsed.message) : (txt || `Request failed (${res.status})`)));
-    baseError.status = res.status;
-    baseError.body = txt;
-    baseError.json = parsed;
-    const friendlyError = makeFriendlyError(baseError, parsed, { fallbackCode: authFailure ? 'PAYMENT_REAUTH_REQUIRED' : 'BANKING_EXECUTE_PAYMENT_FAILED' });
-
+  let operationPayload = null;
+  try {
+    operationPayload = await postOperationStart();
+  } catch (e) {
+    const st = Number(e?.status || 0);
+    const parsed = (e && e.json && typeof e.json === 'object') ? e.json : null;
+    const txt = String(e?.body || e?.message || '').trim();
+    const authFailure = classifyAuthFailure(st, parsed, txt);
+    const friendlyError = makeFriendlyError(e, parsed, { fallbackCode: authFailure ? 'PAYMENT_REAUTH_REQUIRED' : 'BANKING_EXECUTE_PAYMENT_FAILED' });
     if (authFailure) {
       try { friendlyError.is_auth_failure = true; } catch {}
     }
-
     throw friendlyError;
   }
 
-  const out = (parsed && typeof parsed === 'object') ? parsed : {};
-  const fresh = await refreshBankingSurfacesAfterSuccess(out);
-  return normalizeSuccessResult(out, fresh);
+  const looksLikeOperation = !!(
+    operationPayload &&
+    typeof operationPayload === 'object' &&
+    (
+      operationPayload.operation_id ||
+      operationPayload.id ||
+      operationPayload.operation_type ||
+      operationPayload.operationType ||
+      operationPayload.phase ||
+      operationPayload.status ||
+      operationPayload.terminal === true
+    )
+  );
+
+  if (!looksLikeOperation) {
+    throw makeFriendlyError(operationPayload, operationPayload, { fallbackCode: 'BANKING_EXECUTE_PAYMENT_FAILED' });
+  }
+
+  if (typeof runBankingPayOperationWithProgress !== 'function') {
+    throw makeFriendlyError(
+      { message: 'Payment operation progress runner is not available.', status: 500 },
+      { error_code: 'PAYMENT_OPERATION_RUNNER_MISSING', message: 'Payment operation progress runner is not available.' },
+      { fallbackCode: 'PAYMENT_OPERATION_RUNNER_MISSING' }
+    );
+  }
+
+  if (typeof bankingPayApplyExecutePaymentResult !== 'function') {
+    throw makeFriendlyError(
+      { message: 'Payment execution result handler is not available.', status: 500 },
+      { error_code: 'PAYMENT_OPERATION_RESULT_HANDLER_MISSING', message: 'Payment execution result handler is not available.' },
+      { fallbackCode: 'PAYMENT_OPERATION_RESULT_HANDLER_MISSING' }
+    );
+  }
+
+  const terminalResult = await runBankingPayOperationWithProgress(operationPayload, {
+    title: 'Executing payment',
+    operationKind: 'PAYMENT_EXECUTE',
+    finalResultExtractor: (operation) => operation?.result || operation?.final_result || operation
+  });
+
+  const finalResult = await bankingPayApplyExecutePaymentResult(terminalResult, { pay_batch_id: id, source: 'bankingPayBatchExecutePayment' });
+
+  return finalResult;
 }
 
 
@@ -43908,6 +43930,51 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
   const rootId = `bankingPayBatchChild_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
+  const CHILD_LAZY_SECTION_KEYS = [
+    'candidates',
+    'items',
+    'item_breakdowns',
+    'transfers',
+    'finance_case_groups',
+    'remittances',
+    'communications',
+    'auth_history',
+    'events'
+  ];
+
+  const normaliseChildSectionKey = (value) => {
+    const key = String(value == null ? '' : value).trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (!key) return '';
+    if (key === 'candidate') return 'candidates';
+    if (key === 'item') return 'items';
+    if (key === 'breakdowns' || key === 'item_breakdown') return 'item_breakdowns';
+    if (key === 'transfer') return 'transfers';
+    if (key === 'finance_cases' || key === 'finance_case_group') return 'finance_case_groups';
+    if (key === 'remittance') return 'remittances';
+    if (key === 'communication') return 'communications';
+    if (key === 'auth' || key === 'history' || key === 'authorisation_history' || key === 'authorization_history') return 'auth_history';
+    if (CHILD_LAZY_SECTION_KEYS.includes(key)) return key;
+    return '';
+  };
+
+  const createChildSectionState = (section, existing = {}) => {
+    const sectionKey = normaliseChildSectionKey(section);
+    const prev = (existing && typeof existing === 'object' && !Array.isArray(existing)) ? existing : {};
+    const rows = Array.isArray(prev.rows) ? prev.rows : (Array.isArray(prev.items) ? prev.items : []);
+    const items = Array.isArray(prev.items) ? prev.items : rows;
+    const knownTotalRaw = Number(prev.known_total_count ?? prev.knownTotalCount ?? prev.total_count ?? prev.totalCount);
+    return {
+      section: sectionKey,
+      rows: rows.slice(),
+      items: items.slice(),
+      loading: prev.loading === true,
+      loaded: prev.loaded === true,
+      next_cursor: prev.next_cursor ?? prev.nextCursor ?? null,
+      known_total_count: Number.isFinite(knownTotalRaw) ? Math.max(0, Math.trunc(knownTotalRaw)) : null,
+      error: String(prev.error || '')
+    };
+  };
+
   // Child state (stored on banking state so it survives tab switches)
   pay.child = {
     openToken: `pay-batch-child:${id}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
@@ -43918,6 +43985,10 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     loading: false,
     error: '',
     data: null,
+    available_sections: CHILD_LAZY_SECTION_KEYS.slice(),
+    recommended_page_size: 100,
+    sections: Object.fromEntries(CHILD_LAZY_SECTION_KEYS.map((sectionKey) => [sectionKey, createChildSectionState(sectionKey)])),
+    lazy_sections: Object.fromEntries(CHILD_LAZY_SECTION_KEYS.map((sectionKey) => [sectionKey, createChildSectionState(sectionKey)])),
     communications: {
       summary: null,
       result: null,
@@ -43962,8 +44033,50 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       saveFriendlyError: null
     }
   };
-
   const child = pay.child;
+
+  const ensureChildLazySections = (data = null) => {
+    const source = (data && typeof data === 'object' && !Array.isArray(data)) ? data : child.data;
+    const batch = source && source.batch && typeof source.batch === 'object' && !Array.isArray(source.batch) ? source.batch : {};
+    const available = Array.isArray(source?.available_sections)
+      ? source.available_sections
+      : Array.isArray(batch.available_sections)
+        ? batch.available_sections
+        : CHILD_LAZY_SECTION_KEYS;
+    const sectionKeys = Array.from(new Set(
+      available
+        .map((section) => normaliseChildSectionKey(section))
+        .filter(Boolean)
+    ));
+    const finalSectionKeys = sectionKeys.length ? sectionKeys : CHILD_LAZY_SECTION_KEYS;
+
+    child.sections = (child.sections && typeof child.sections === 'object' && !Array.isArray(child.sections)) ? child.sections : {};
+    for (const sectionKey of finalSectionKeys) {
+      child.sections[sectionKey] = createChildSectionState(sectionKey, child.sections[sectionKey]);
+    }
+
+    child.lazy_sections = child.sections;
+    child.available_sections = finalSectionKeys;
+
+    const pageSizeRaw = Number(source?.recommended_page_size ?? batch.recommended_page_size ?? child.recommended_page_size ?? 100);
+    child.recommended_page_size = Number.isFinite(pageSizeRaw) ? Math.max(1, Math.min(250, Math.trunc(pageSizeRaw))) : 100;
+
+    return child.sections;
+  };
+
+  const isBootstrapBatchPayload = (data) => {
+    const d = (data && typeof data === 'object' && !Array.isArray(data)) ? data : null;
+    const b = d && d.batch && typeof d.batch === 'object' && !Array.isArray(d.batch) ? d.batch : null;
+    return !!(d && (d.bootstrap_only === true || b?.bootstrap_only === true));
+  };
+
+  const getChildSectionsForTab = (tabKey) => {
+    const key = normalizeChildTabKey(tabKey) || 'overview';
+    if (key === 'payment_issues') return ['finance_case_groups', 'items', 'transfers'];
+    if (key === 'paye_worksheet') return ['candidates', 'items'];
+    if (key === 'remittance') return ['remittances', 'communications'];
+    return [];
+  };
 
   const fmtUtcToUk = (iso) => {
     try {
@@ -44128,13 +44241,51 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   };
 
   const syncChildCsvEvidenceFromData = (data) => {
+    const d = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+    const b = (d.batch && typeof d.batch === 'object' && !Array.isArray(d.batch)) ? d.batch : {};
+    const csvSummary = (d.bank_csv_export_json && typeof d.bank_csv_export_json === 'object' && !Array.isArray(d.bank_csv_export_json))
+      ? d.bank_csv_export_json
+      : ((b.bank_csv_export_json && typeof b.bank_csv_export_json === 'object' && !Array.isArray(b.bank_csv_export_json)) ? b.bank_csv_export_json : null);
     const ev = (typeof deriveBankingPayBankCsvEvidence === 'function')
       ? deriveBankingPayBankCsvEvidence(data)
       : { generated_at_utc: null };
     child.csv = (child.csv && typeof child.csv === 'object') ? child.csv : {};
-    child.csv.generated_at_utc = ev.generated_at_utc || null;
+    child.csv.generated_at_utc =
+      ev.generated_at_utc ||
+      csvSummary?.generated_at_utc ||
+      d.csv_file_generated_at_utc ||
+      b.csv_file_generated_at_utc ||
+      null;
+    child.csv.filename =
+      ev.filename ||
+      csvSummary?.filename ||
+      d.csv_filename ||
+      b.csv_filename ||
+      child.csv.filename ||
+      '';
+    child.csv.row_count =
+      ev.row_count ??
+      csvSummary?.row_count ??
+      d.csv_row_count ??
+      b.csv_row_count ??
+      child.csv.row_count ??
+      null;
+    child.csv.total_amount =
+      ev.total_amount ??
+      csvSummary?.total_amount ??
+      d.csv_total_amount ??
+      b.csv_total_amount ??
+      child.csv.total_amount ??
+      null;
+    child.csv.evidence_summary = {
+      ...(child.csv.evidence_summary && typeof child.csv.evidence_summary === 'object' ? child.csv.evidence_summary : {}),
+      ...(csvSummary || {}),
+      generated_at_utc: child.csv.generated_at_utc,
+      filename: child.csv.filename,
+      row_count: child.csv.row_count,
+      total_amount: child.csv.total_amount
+    };
   };
-
   const deriveTransfers = (data) => {
     const d = (data && typeof data === 'object') ? data : null;
     return Array.isArray(d?.transfers) ? d.transfers : [];
@@ -44323,21 +44474,32 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       child.ui.expanded = next;
     } catch {}
   };
-
   const deriveChildCommunicationsState = (data) => {
     const d = (data && typeof data === 'object') ? data : null;
+    const b = (d && d.batch && typeof d.batch === 'object' && !Array.isArray(d.batch)) ? d.batch : null;
 
-    const summary = (d && d.communications && typeof d.communications === 'object')
-      ? deep(d.communications)
-      : null;
+    const summary =
+      (d && d.communications && typeof d.communications === 'object')
+        ? deep(d.communications)
+        : ((d && d.communication_status && typeof d.communication_status === 'object')
+            ? deep(d.communication_status)
+            : ((b && b.communications && typeof b.communications === 'object')
+                ? deep(b.communications)
+                : null));
 
-    const remittanceSummary = (summary && summary.remittance && typeof summary.remittance === 'object')
-      ? summary.remittance
-      : null;
+    const remittanceSummary =
+      (summary && summary.remittance && typeof summary.remittance === 'object')
+        ? summary.remittance
+        : ((d && d.remittance_summary && typeof d.remittance_summary === 'object')
+            ? d.remittance_summary
+            : ((b && b.remittance_summary && typeof b.remittance_summary === 'object') ? b.remittance_summary : null));
 
-    const payoutNoticeSummary = (summary && summary.payout_notice && typeof summary.payout_notice === 'object')
-      ? summary.payout_notice
-      : null;
+    const payoutNoticeSummary =
+      (summary && summary.payout_notice && typeof summary.payout_notice === 'object')
+        ? summary.payout_notice
+        : ((d && d.payout_notice_summary && typeof d.payout_notice_summary === 'object')
+            ? d.payout_notice_summary
+            : ((b && b.payout_notice_summary && typeof b.payout_notice_summary === 'object') ? b.payout_notice_summary : null));
 
     const remittanceResult = (d && d.remittance_result && typeof d.remittance_result === 'object')
       ? deep(d.remittance_result)
@@ -44347,9 +44509,13 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       ? deep(d.payout_notice_result)
       : null;
 
+    const remittanceSection = child.sections && child.sections.remittances ? child.sections.remittances : null;
+    const communicationsSection = child.sections && child.sections.communications ? child.sections.communications : null;
+
     const mode = String(
       d?.communication_mode ||
       summary?.mode ||
+      summary?.communication_mode ||
       ''
     ).trim().toUpperCase();
 
@@ -44359,6 +44525,8 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       (Number(remittanceSummary?.target_count || 0) > 0) ||
       (Number(remittanceSummary?.queued_count || 0) > 0) ||
       (Number(remittanceSummary?.sent_count || 0) > 0) ||
+      (Number(d?.remittance_count || b?.remittance_count || 0) > 0) ||
+      (remittanceSection && (Number(remittanceSection.known_total_count || 0) > 0 || (Array.isArray(remittanceSection.rows) && remittanceSection.rows.length > 0))) ||
       (remittanceResult && (
         Number(remittanceResult.queued_count || 0) > 0 ||
         Number(remittanceResult.sent_count || 0) > 0 ||
@@ -44372,6 +44540,8 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       (Number(payoutNoticeSummary?.target_count || 0) > 0) ||
       (Number(payoutNoticeSummary?.queued_count || 0) > 0) ||
       (Number(payoutNoticeSummary?.sent_count || 0) > 0) ||
+      (Number(d?.payout_notice_count || b?.payout_notice_count || 0) > 0) ||
+      (communicationsSection && (Number(communicationsSection.known_total_count || 0) > 0 || (Array.isArray(communicationsSection.rows) && communicationsSection.rows.length > 0))) ||
       (payoutNoticeResult && (
         Number(payoutNoticeResult.queued_count || 0) > 0 ||
         Number(payoutNoticeResult.sent_count || 0) > 0 ||
@@ -44380,7 +44550,10 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       false;
 
     return {
-      summary,
+      summary: summary || {
+        remittance: remittanceSummary || null,
+        payout_notice: payoutNoticeSummary || null
+      },
       result: {
         mode,
         remittance: remittanceResult,
@@ -45332,6 +45505,158 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     return (parsed && typeof parsed === 'object') ? parsed : {};
   };
 
+  const mergeSectionPageIntoChild = (sectionKey, pagePayload) => {
+    const key = normaliseChildSectionKey(sectionKey);
+    if (!key) return null;
+    ensureChildLazySections(child.data);
+
+    const current = createChildSectionState(key, child.sections[key]);
+    const payload = (pagePayload && typeof pagePayload === 'object' && !Array.isArray(pagePayload)) ? pagePayload : {};
+    const rows = Array.isArray(payload.items)
+      ? payload.items
+      : Array.isArray(payload.rows)
+        ? payload.rows
+        : Array.isArray(payload.data)
+          ? payload.data
+          : [];
+    const append = payload.append !== false;
+    const nextRows = append ? current.rows.concat(rows) : rows.slice();
+    const knownTotalRaw = Number(payload.known_total_count ?? payload.knownTotalCount ?? payload.total_count ?? payload.totalCount ?? current.known_total_count);
+
+    child.sections[key] = {
+      section: key,
+      rows: nextRows,
+      items: nextRows,
+      loading: false,
+      loaded: true,
+      next_cursor: payload.next_cursor ?? payload.nextCursor ?? null,
+      known_total_count: Number.isFinite(knownTotalRaw) ? Math.max(0, Math.trunc(knownTotalRaw)) : current.known_total_count,
+      error: ''
+    };
+    child.lazy_sections = child.sections;
+    return child.sections[key];
+  };
+
+  const loadChildSectionPage = async (sectionKey, { reset = false, silent = false } = {}) => {
+    const key = normaliseChildSectionKey(sectionKey);
+    if (!key) return null;
+    if (!isBootstrapBatchPayload(child.data)) return null;
+    if (typeof bankingPayBatchGetSectionPage !== 'function') {
+      child.error = 'Payment batch paging helper is not available.';
+      await rerenderChild();
+      return null;
+    }
+
+    ensureChildLazySections(child.data);
+    const current = createChildSectionState(key, child.sections[key]);
+    if (current.loading) return current;
+    if (!reset && current.loaded && !current.next_cursor) return current;
+
+    child.sections[key] = {
+      ...current,
+      loading: true,
+      error: ''
+    };
+    child.lazy_sections = child.sections;
+    if (!silent) await rerenderChild();
+
+    try {
+      const page = await bankingPayBatchGetSectionPage(id, key, {
+        cursor: reset ? null : current.next_cursor,
+        limit: child.recommended_page_size || 100,
+        userInitiated: !silent,
+        silent
+      });
+      const merged = mergeSectionPageIntoChild(key, { ...page, append: !reset });
+      syncChildCommunicationsState(child.data);
+      if (key === 'finance_case_groups' || key === 'items' || key === 'transfers') hydratePaymentIssueState();
+      return merged;
+    } catch (e) {
+      const latest = createChildSectionState(key, child.sections[key]);
+      child.sections[key] = {
+        ...latest,
+        loading: false,
+        error: String(e?.json?.user_message || e?.json?.message || e?.message || e || 'Section page could not be loaded.')
+      };
+      child.lazy_sections = child.sections;
+      await reportChildFriendlyError(e, 'PAY_BATCH_GET_FAILED', {
+        action: 'GET_BATCH_SECTION_PAGE',
+        userInitiated: !silent,
+        silent,
+        scope: key
+      });
+      return child.sections[key];
+    } finally {
+      try {
+        const latest = createChildSectionState(key, child.sections[key]);
+        child.sections[key] = {
+          ...latest,
+          loading: false
+        };
+        child.lazy_sections = child.sections;
+      } catch {}
+      if (!silent) await rerenderChild();
+    }
+  };
+
+  const ensureFirstPageForActiveTab = (tabKey) => {
+    try {
+      if (!isBootstrapBatchPayload(child.data)) return;
+      const sectionKeys = getChildSectionsForTab(tabKey);
+      if (!sectionKeys.length) return;
+      ensureChildLazySections(child.data);
+      for (const sectionKey of sectionKeys) {
+        const key = normaliseChildSectionKey(sectionKey);
+        const state = createChildSectionState(key, child.sections[key]);
+        if (!state.loaded && !state.loading) {
+          setTimeout(() => {
+            try { loadChildSectionPage(key, { reset: false, silent: false }); } catch {}
+          }, 0);
+          break;
+        }
+      }
+    } catch {}
+  };
+
+  const renderSectionLoadMoreHtml = (tabKey) => {
+    if (!isBootstrapBatchPayload(child.data)) return '';
+    const sectionKeys = getChildSectionsForTab(tabKey);
+    if (!sectionKeys.length) return '';
+    ensureChildLazySections(child.data);
+
+    const rows = sectionKeys.map((sectionKey) => {
+      const key = normaliseChildSectionKey(sectionKey);
+      const state = createChildSectionState(key, child.sections[key]);
+      const label = key.replace(/_/g, ' ');
+      const rowCount = Array.isArray(state.rows) ? state.rows.length : 0;
+      const totalText = state.known_total_count === null ? '' : ` of ${state.known_total_count}`;
+      const canLoadMore = !!state.next_cursor && state.loading !== true;
+      return `
+        <div class="card" style="padding:8px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+          <div>
+            <div class="mini" style="font-weight:700;opacity:.9;">${enc(label)}</div>
+            <div class="mini" style="opacity:.82;">Loaded <span class="mono">${enc(String(rowCount))}</span>${enc(totalText)}${state.loading ? ' · loading…' : ''}${state.error ? ` · ${enc(state.error)}` : ''}</div>
+          </div>
+          <button
+            type="button"
+            class="btn btn-sm btn-outline"
+            data-action="banking:pay:child:loadSectionMore"
+            data-section="${enc(key)}"
+            ${canLoadMore ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'}
+            title="${enc(canLoadMore ? 'Load the next page' : 'No more rows to load')}"
+          >${enc(state.loading ? 'Loading…' : 'Load more')}</button>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="card" style="padding:10px;margin-top:10px;">
+        <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Paged detail loading</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>
+      </div>
+    `;
+  };
+
   const postJson = async (path, payload) => {
     if (typeof apiPostJson !== 'function') throw new Error('apiPostJson missing');
     return await apiPostJson(path, payload || {});
@@ -45690,7 +46015,56 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       }
     }
 
-    const previousManualPaidActionMode = previous.manualPaidActionMode === true || previous.issueState?.manualPaidActionMode === true;
+     const previousManualPaidActionMode = previous.manualPaidActionMode === true || previous.issueState?.manualPaidActionMode === true;
+
+    if (isBootstrapBatchPayload(child.data)) {
+      const dataObj = (child.data && typeof child.data === 'object' && !Array.isArray(child.data)) ? child.data : {};
+      const compactIssueState = (dataObj.payment_issue_summary && typeof dataObj.payment_issue_summary === 'object' && !Array.isArray(dataObj.payment_issue_summary))
+        ? dataObj.payment_issue_summary
+        : ((dataObj.payment_correction && typeof dataObj.payment_correction === 'object' && !Array.isArray(dataObj.payment_correction)) ? dataObj.payment_correction : {});
+      const financeSection = child.sections && child.sections.finance_case_groups ? child.sections.finance_case_groups : createChildSectionState('finance_case_groups');
+      const existingRows = Array.isArray(previous.rows) ? previous.rows : [];
+      child.correction = {
+        ...previous,
+        issueState: {
+          ...(previous.issueState && typeof previous.issueState === 'object' ? previous.issueState : {}),
+          ...(compactIssueState || {}),
+          manualPaidActionMode: previousManualPaidActionMode,
+          bootstrap_only: true,
+          requiresUserAction: compactIssueState.requires_user_action === true || compactIssueState.requiresUserAction === true || compactIssueState.has_issue === true || compactIssueState.hasIssue === true || Number(financeSection.known_total_count || 0) > 0,
+          hasActionableIssueRows: compactIssueState.has_actionable_issue_rows === true || compactIssueState.hasActionableIssueRows === true,
+          hasSelectableRows: existingRows.some((row) => row && (row.selectableForApply === true || row.selectableForReview === true)),
+          headline: String(compactIssueState.headline || compactIssueState.status_text || compactIssueState.statusText || (Number(financeSection.known_total_count || 0) > 0 ? 'Needs review' : 'Payment status')).trim()
+        },
+        rows: existingRows,
+        manualPaidActionMode: previousManualPaidActionMode,
+        manualPaidActionAvailable: previous.manualPaidActionAvailable === true,
+        selectedRowKeys: asSet(previous.selectedRowKeys),
+        selectedPayBatchCandidateIds: asSet(previous.selectedPayBatchCandidateIds),
+        selectedTransferIds: asSet(previous.selectedTransferIds),
+        selectedPayBatchItemIds: asSet(previous.selectedPayBatchItemIds),
+        selectedUmbrellaGroup: previous.selectedUmbrellaGroup ?? null,
+        selectedTransferGroupKey: toText(previous.selectedTransferGroupKey),
+        selectionScopeMode: toText(previous.selectionScopeMode),
+        lastSelectionMode: toText(previous.lastSelectionMode),
+        sortKey: toText(previous.sortKey) || 'candidate_name',
+        sortDir: String(previous.sortDir || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
+        filterKey: toText(previous.filterKey) || 'action_needed',
+        selection: previous.selection || null,
+        plan: previous.plan || null,
+        planSelectionSignature: toText(previous.planSelectionSignature),
+        planError: toText(previous.planError),
+        request: previous.request || null,
+        progress: previous.progress || null,
+        acceptedResolutionJson: previous.acceptedResolutionJson || null,
+        acceptedResolutionSummary: previous.acceptedResolutionSummary || null,
+        reauthToken: toText(previous.reauthToken),
+        reauthVerifiedAtUtc: toText(previous.reauthVerifiedAtUtc),
+        lastStatusLoadedAtUtc: toText(previous.lastStatusLoadedAtUtc)
+      };
+      return;
+    }
+
     const nextIssueStateRaw = normaliseBankingPaymentIssueState(child.data, { manualPaidActionMode: previousManualPaidActionMode, correctionState: previous });
     const nextIssueState = (nextIssueStateRaw && typeof nextIssueStateRaw === 'object') ? { ...nextIssueStateRaw } : {};
     nextIssueState.manualPaidActionMode = previousManualPaidActionMode;
@@ -46159,11 +46533,15 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
       child.data = deep(nextData);
       if (!shouldApplyChildMutation(expectedOpenToken, requestSeq)) return false;
 
+      if (isBootstrapBatchPayload(child.data)) {
+        ensureChildLazySections(child.data);
+      }
+
       hydratePaymentIssueState();
       if (!shouldApplyChildMutation(expectedOpenToken, requestSeq)) return false;
 
       syncChildCommunicationsState(child.data);
-      normalizeCandidateExpansionStateForData(child.data);
+      if (!isBootstrapBatchPayload(child.data)) normalizeCandidateExpansionStateForData(child.data);
       syncChildCsvEvidenceFromData(child.data);
       child.error = '';
 
@@ -46192,14 +46570,19 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
               scope: null,
               errorPath: ['pay', 'child', 'error']
             }
-          })
-        : await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
+             })
+        : await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}?detail_mode=AUTO&recommended_page_size=${encodeURIComponent(String(child.recommended_page_size || 100))}`);
 
       if (!await applyLoadedData(obj)) return;
 
       try { child.ui.last_poll_note = ''; } catch {}
 
       await rerenderChild();
+
+      if (isBootstrapBatchPayload(child.data)) {
+        stopAutoPoll();
+        return;
+      }
 
       const wantPoll = (forcePoll || shouldAutoPoll(child.data));
       if (wantPoll && shouldApplyChildMutation(expectedOpenToken, requestSeq)) {
@@ -46278,7 +46661,7 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
   child.__rerenderChild = rerenderChild;
 
 
-  const downloadCsvFromExportEndpoint = async (scopeNorm) => {
+ const downloadCsvFromExportEndpoint = async (scopeNorm) => {
     const sc = String(scopeNorm || 'ALL').trim().toUpperCase();
     const scope = (sc === 'PAYE' || sc === 'UMBRELLA' || sc === 'ALL') ? sc : 'ALL';
 
@@ -46303,613 +46686,567 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
       return fallbackName;
     };
 
-    const url = API(`/api/banking/pay/batch/${encodeURIComponent(id)}/export-csv?scope=${encodeURIComponent(scope)}`);
-    const res = await authFetch(url, { method: 'GET' });
+    const isOperationPayload = (payload) => {
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+      return !!(payload.operation_id || payload.operationId || payload.operation_required === true || payload.bank_csv_export_prepare_required === true);
+    };
 
-    if (!res.ok) {
-      const txt = await res.text().catch(() => '');
-      const parsed = safeParse(txt);
-      const msg =
-        (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
-          ? String(parsed.error || parsed.message)
-          : (txt || `Request failed (${res.status})`);
+    const runDownloadOnce = async () => {
+      const url = API(`/api/banking/pay/batch/${encodeURIComponent(id)}/export-csv?scope=${encodeURIComponent(scope)}`);
+      const res = await authFetch(url, { method: 'GET' });
+      const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+      const contentDisposition = String(res.headers.get('content-disposition') || '');
+      const looksLikeCsv = contentType.includes('text/csv') || /filename\*=|filename=/i.test(contentDisposition);
 
-      const err = new Error(String(msg || 'Export failed'));
-      err.status = res.status;
-      err.body = txt || '';
-      err.json = parsed;
-      throw err;
+      if (res.ok && !looksLikeCsv && contentType.includes('application/json')) {
+        const txt = await res.text().catch(() => '');
+        const parsed = safeParse(txt);
+        if (isOperationPayload(parsed)) return { kind: 'operation', operation: parsed };
+        const err = new Error(String(parsed?.message || parsed?.error || 'CSV export did not return a file.'));
+        err.status = res.status;
+        err.body = txt || '';
+        err.json = parsed;
+        throw err;
+      }
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        const parsed = safeParse(txt);
+        if ((res.status === 202 || isOperationPayload(parsed)) && isOperationPayload(parsed)) return { kind: 'operation', operation: parsed };
+        const msg =
+          (parsed && typeof parsed === 'object' && (parsed.error || parsed.message || parsed.user_message))
+            ? String(parsed.error || parsed.message || parsed.user_message)
+            : (txt || `Request failed (${res.status})`);
+
+        const err = new Error(String(msg || 'Export failed'));
+        err.status = res.status;
+        err.body = txt || '';
+        err.json = parsed;
+        throw err;
+      }
+
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') || '';
+      const fallback = `pay_batch_${id}_${scope}.csv`;
+      const filename = parseFilename(cd, fallback);
+
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(objUrl); } catch {} }, 2_000);
+
+      return { kind: 'csv', filename };
+    };
+
+    let result = await runDownloadOnce();
+    if (result.kind === 'operation') {
+      if (typeof runBankingPayOperationWithProgress !== 'function') {
+        const err = new Error('Bank CSV export requires preparation, but the operation runner is not available.');
+        err.json = result.operation;
+        throw err;
+      }
+      const operationPayload = (typeof normaliseBankingPayOperationProgress === 'function')
+        ? normaliseBankingPayOperationProgress(result.operation)
+        : result.operation;
+      const terminalResult = await runBankingPayOperationWithProgress(operationPayload, {
+        title: 'Preparing bank CSV export',
+        action: 'EXPORT_BANK_CSV',
+        finalResultExtractor: (operationResult, operationState) => {
+          const state = operationState && typeof operationState === 'object' ? operationState : {};
+          if (state.review_required === true || state.failed === true || state.cancelled === true) {
+            const errPayload = state.error && typeof state.error === 'object' ? state.error : {};
+            return {
+              ok: false,
+              review_required: state.review_required === true,
+              failed: state.failed === true,
+              cancelled: state.cancelled === true,
+              error_code: errPayload.error_code || errPayload.code || state.status || 'BANK_CSV_EXPORT_PREPARE_FAILED',
+              code: errPayload.error_code || errPayload.code || state.status || 'BANK_CSV_EXPORT_PREPARE_FAILED',
+              message: errPayload.message || state.status_text || 'Bank CSV export preparation did not complete.',
+              error: errPayload,
+              result: operationResult || state.result || null,
+              operation: state.raw_payload || state
+            };
+          }
+          return operationResult || state.result || state.raw_payload || state;
+        }
+      });
+      const terminalOk = terminalResult && typeof terminalResult === 'object'
+        ? terminalResult.ok !== false
+        : true;
+      if (!terminalOk) {
+        const err = new Error(String(terminalResult.message || terminalResult.error?.message || terminalResult.error || 'Bank CSV export preparation did not complete.'));
+        err.json = terminalResult;
+        throw err;
+      }
+      result = await runDownloadOnce();
+      if (result.kind === 'operation') {
+        const err = new Error('Bank CSV export still requires preparation. Try again after the operation completes.');
+        err.json = result.operation;
+        throw err;
+      }
     }
 
-    const blob = await res.blob();
-    const cd = res.headers.get('content-disposition') || '';
-    const fallback = `pay_batch_${id}_${scope}.csv`;
-    const filename = parseFilename(cd, fallback);
-
-    const objUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => { try { URL.revokeObjectURL(objUrl); } catch {} }, 2_000);
-
-    return { ok: true, filename };
+    return { ok: true, filename: result.filename };
   };
 
- const executePaymentPipeline = async () => {
-    if (child.actionsBusy.executing) return;
-    if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
 
-    if (!hasActivePaymentsForBatch(child.data)) {
-      await blockNoActivePaymentsAction();
-      return;
-    }
+const executePaymentPipeline = async () => {
+  if (child.actionsBusy.executing) return;
+  if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
 
-    if (!isExecuteAllowedByStatus(child.data)) {
-      const message = 'This payment cannot be executed in its current state. Refresh the batch and review Payment Issues before trying again.';
-      child.error = message;
-      try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
-      await rerenderChild();
-      return;
-    }
+  if (!hasActivePaymentsForBatch(child.data)) {
+    await blockNoActivePaymentsAction();
+    return;
+  }
 
-    if (!isPayeNetCompleteForBatch(child.data)) {
-      try { if (typeof window.__toast === 'function') window.__toast('PAYE net payments are incomplete. Click “Enter PAYE payments”, save, then execute.'); } catch {}
-      return;
-    }
-
-    child.actionsBusy.executing = true;
-    child.error = '';
+  if (!isExecuteAllowedByStatus(child.data)) {
+    const message = 'This payment cannot be executed in its current state. Refresh the batch and review Payment Issues before trying again.';
+    child.error = message;
+    try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
     await rerenderChild();
+    return;
+  }
 
+  if (!isPayeNetCompleteForBatch(child.data)) {
+    try { if (typeof window.__toast === 'function') window.__toast('PAYE net payments are incomplete. Click “Enter PAYE payments”, save, then execute.'); } catch {}
+    return;
+  }
+
+  child.actionsBusy.executing = true;
+  child.error = '';
+  await rerenderChild();
+
+  try {
+    const scope = deriveScopeForBatch(child.data);
+
+    let hasGoldenKey = null;
     try {
-      const scope = deriveScopeForBatch(child.data);
-
-      let hasGoldenKey = null;
-      try {
-        const gst = (typeof bankingGetState === 'function') ? bankingGetState() : null;
-        const raw = (gst && gst.caps && typeof gst.caps === 'object' && gst.caps.raw && typeof gst.caps.raw === 'object') ? gst.caps.raw : null;
-        const keys = [
-          'payment_golden_key',
-          'paymentGoldenKey',
-          'user_payment_golden_key',
-          'userPaymentGoldenKey',
-          'actor_payment_golden_key',
-          'actorPaymentGoldenKey',
-          'me_payment_golden_key',
-          'mePaymentGoldenKey',
-          'tms_user_payment_golden_key',
-          'tmsUserPaymentGoldenKey'
-        ];
-        for (const k of keys) {
-          if (!raw) break;
-          const v = raw[k];
-          if (v === true) { hasGoldenKey = true; break; }
-          if (v === false) { hasGoldenKey = false; break; }
-        }
-      } catch {}
-
-      let execCfg = null;
-      try {
-        if (typeof openBankingPayExecuteConfirmModal === 'function') {
-          const payload = { pay_batch_id: id, batch: deep(child.data), scope };
-          if (typeof hasGoldenKey === 'boolean') payload.has_golden_key = hasGoldenKey;
-          execCfg = await openBankingPayExecuteConfirmModal(payload);
-        } else {
-          const ok = window.confirm('Execute this payment immediately?\n\nPress Cancel if you want to schedule it at a specific time.');
-          if (!ok) {
-            child.actionsBusy.executing = false;
-            await rerenderChild();
-            return;
-          }
-          execCfg = { confirmed: true, execution_mode: 'STANDARD_BANK', schedule_kind: 'IMMEDIATE', scheduled_at_utc: null, funding_account_ref: null, warning_hours_json: null, actor_intent: null };
-        }
-      } catch (e) {
-        throw new Error(String(e?.message || e || 'Unable to open execute confirm'));
+      const gst = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+      const raw = (gst && gst.caps && typeof gst.caps === 'object' && gst.caps.raw && typeof gst.caps.raw === 'object') ? gst.caps.raw : null;
+      const keys = [
+        'payment_golden_key',
+        'paymentGoldenKey',
+        'user_payment_golden_key',
+        'userPaymentGoldenKey',
+        'actor_payment_golden_key',
+        'actorPaymentGoldenKey',
+        'me_payment_golden_key',
+        'mePaymentGoldenKey',
+        'tms_user_payment_golden_key',
+        'tmsUserPaymentGoldenKey'
+      ];
+      for (const k of keys) {
+        if (!raw) break;
+        const v = raw[k];
+        if (v === true) { hasGoldenKey = true; break; }
+        if (v === false) { hasGoldenKey = false; break; }
       }
+    } catch {}
 
-      const cancelled = !!(execCfg && (execCfg.cancelled === true || execCfg.confirmed === false));
-      if (cancelled) {
-        child.actionsBusy.executing = false;
-        await rerenderChild();
-        return;
-      }
-
-      const executionModeRaw = String(execCfg?.execution_mode || execCfg?.executionMode || 'STANDARD_BANK').trim().toUpperCase();
-      const execution_mode = (
-        executionModeRaw === 'CSV_SETTLEMENT' ||
-        executionModeRaw === 'EXTERNAL_SETTLEMENT' ||
-        executionModeRaw === 'STANDARD_BANK'
-      ) ? executionModeRaw : 'STANDARD_BANK';
-
-      const scheduleKindRaw0 = String(execCfg?.schedule_kind || execCfg?.scheduleKind || execCfg?.kind || 'IMMEDIATE').trim().toUpperCase();
-      const scheduleKindRaw = (scheduleKindRaw0 === 'AT_TIME') ? 'SCHEDULED' : scheduleKindRaw0;
-      const scheduleKind = (scheduleKindRaw === 'IMMEDIATE' || scheduleKindRaw === 'SCHEDULED') ? scheduleKindRaw : 'IMMEDIATE';
-
-      const scheduledAtUtcRaw =
-        (execCfg?.scheduled_at_utc !== null && execCfg?.scheduled_at_utc !== undefined)
-          ? String(execCfg.scheduled_at_utc || '').trim()
-          : (execCfg?.scheduledAtUtc !== null && execCfg?.scheduledAtUtc !== undefined)
-            ? String(execCfg.scheduledAtUtc || '').trim()
-            : '';
-      const scheduledAtUtc = scheduledAtUtcRaw ? scheduledAtUtcRaw : null;
-
-      const londonYmdFromDateValue = (value) => {
-        const d = value instanceof Date ? value : new Date(value);
-        if (!d || !Number.isFinite(d.getTime())) return '';
-        try {
-          const fmt = new Intl.DateTimeFormat('en-CA', {
-            timeZone: 'Europe/London',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit'
-          });
-          const ymd = String(fmt.format(d) || '').trim();
-          return /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? ymd : '';
-        } catch {
-          return '';
-        }
-      };
-
-      let payment_date = '';
-      if (execution_mode === 'STANDARD_BANK') {
-        if (scheduleKind === 'SCHEDULED') {
-          if (!scheduledAtUtc) {
-            throw new Error('Scheduled time is required.');
-          }
-          payment_date = londonYmdFromDateValue(scheduledAtUtc);
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(payment_date)) {
-            throw new Error('Scheduled payment date could not be resolved.');
-          }
-        } else {
-          payment_date = londonYmdFromDateValue(new Date());
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(payment_date)) {
-            throw new Error('Immediate payment date could not be resolved.');
-          }
-        }
+    let execCfg = null;
+    try {
+      if (typeof openBankingPayExecuteConfirmModal === 'function') {
+        const payload = { pay_batch_id: id, batch: deep(child.data), scope };
+        if (typeof hasGoldenKey === 'boolean') payload.has_golden_key = hasGoldenKey;
+        execCfg = await openBankingPayExecuteConfirmModal(payload);
       } else {
-        payment_date = String(execCfg?.payment_date || execCfg?.paymentDate || '').trim();
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(payment_date)) {
-          throw new Error('Payment date is required.');
+        const ok = window.confirm('Execute this payment immediately?\n\nPress Cancel if you want to schedule it at a specific time.');
+        if (!ok) {
+          child.actionsBusy.executing = false;
+          await rerenderChild();
+          return;
         }
+        execCfg = { confirmed: true, execution_mode: 'STANDARD_BANK', schedule_kind: 'IMMEDIATE', scheduled_at_utc: null, funding_account_ref: null, warning_hours_json: null, actor_intent: null };
       }
-
-      const fundingAccountRefRaw =
-        (execCfg?.funding_account_ref !== null && execCfg?.funding_account_ref !== undefined)
-          ? String(execCfg.funding_account_ref || '').trim()
-          : (execCfg?.fundingAccountRef !== null && execCfg?.fundingAccountRef !== undefined)
-            ? String(execCfg.fundingAccountRef || '').trim()
-            : '';
-      const fundingAccountRef = fundingAccountRefRaw ? fundingAccountRefRaw : null;
-
-      let warningHoursJson = null;
-      if (execCfg && Object.prototype.hasOwnProperty.call(execCfg, 'warning_hours_json')) {
-        warningHoursJson = Array.isArray(execCfg.warning_hours_json) ? execCfg.warning_hours_json : null;
-      } else if (execCfg && Object.prototype.hasOwnProperty.call(execCfg, 'warningHoursJson')) {
-        warningHoursJson = Array.isArray(execCfg.warningHoursJson) ? execCfg.warningHoursJson : null;
-      }
-
-      const actorIntentRaw = String(execCfg?.actor_intent || execCfg?.actorIntent || '').trim().toUpperCase();
-      const actorIntent = (actorIntentRaw === 'USE_GOLDEN_KEY') ? 'USE_GOLDEN_KEY' : null;
-
-      const suppress_remittances = !!(execCfg?.suppress_remittances === true || execCfg?.suppressRemittances === true);
-      const suppress_remittances_confirmed = !!(execCfg?.suppress_remittances_confirmed === true || execCfg?.suppressRemittancesConfirmed === true);
-      const csv_uploaded_confirmed = !!(execCfg?.csv_uploaded_confirmed === true || execCfg?.csvUploadedConfirmed === true);
-      const csv_bank_confirm_ref = String(execCfg?.csv_bank_confirm_ref || execCfg?.csvBankConfirmRef || '').trim() || null;
-      const external_settlement_comment = String(execCfg?.external_settlement_comment || execCfg?.externalSettlementComment || '').trim() || null;
-
-      let reauthToken = null;
-      try {
-        if (typeof openBankingReauthModal === 'function') {
-          reauthToken = await openBankingReauthModal({ purpose: 'PAYMENT_SCHEDULE' });
-        } else {
-          throw new Error('Payment verification modal is not available.');
-        }
-      } catch (e) {
-        throw new Error(String(e?.message || e || 'Payment verification failed'));
-      }
-
-      if (!reauthToken || !String(reauthToken).trim()) {
-        child.error = 'Payment verification did not complete. Execution was not attempted — please try again.';
-        try { if (typeof window.__toast === 'function') window.__toast('Payment verification did not complete. Execution was not attempted.'); } catch {}
-        await rerenderChild();
-        return;
-      }
-
-      let execRes = null;
-      if (typeof bankingPayBatchExecutePayment === 'function') {
-        execRes = await bankingPayBatchExecutePayment(id, {
-          execution_mode,
-          payment_date,
-          scope,
-          pay_channel_scope: scope,
-          schedule_kind: execution_mode === 'STANDARD_BANK' ? scheduleKind : 'IMMEDIATE',
-          scheduled_at_utc: (execution_mode === 'STANDARD_BANK' && scheduleKind === 'SCHEDULED') ? scheduledAtUtc : null,
-          funding_account_ref: execution_mode === 'STANDARD_BANK' ? fundingAccountRef : null,
-          warning_hours_json: warningHoursJson,
-          actor_intent: actorIntent,
-          suppress_remittances,
-          suppress_remittances_confirmed,
-          csv_uploaded_confirmed,
-          csv_bank_confirm_ref,
-          external_settlement_comment,
-          reauth_token: reauthToken
-        });
-      } else {
-        execRes = await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/execute-payment`, {
-          execution_mode,
-          payment_date,
-          scope,
-          pay_channel_scope: scope,
-          schedule_kind: execution_mode === 'STANDARD_BANK' ? scheduleKind : 'IMMEDIATE',
-          scheduled_at_utc: (execution_mode === 'STANDARD_BANK' && scheduleKind === 'SCHEDULED') ? scheduledAtUtc : null,
-          funding_account_ref: execution_mode === 'STANDARD_BANK' ? fundingAccountRef : null,
-          warning_hours_json: warningHoursJson,
-          actor_intent: actorIntent,
-          suppress_remittances,
-          suppress_remittances_confirmed,
-          csv_uploaded_confirmed,
-          csv_bank_confirm_ref,
-          external_settlement_comment,
-          reauth_token: reauthToken
-        });
-      }
-
-      if (isBlockedFundsExecutionResult(execRes)) {
-        child.actionsBusy.executing = false;
-        child.error = '';
-        child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
-        child.ui.activeTabKey = 'payment_issues';
-
-        try {
-          if (execRes && typeof execRes === 'object' && execRes.batch_get && typeof execRes.batch_get === 'object' && !Array.isArray(execRes.batch_get)) {
-            child.data = deep(execRes.batch_get);
-            hydratePaymentIssueState();
-            syncChildCommunicationsState(child.data);
-            normalizeCandidateExpansionStateForData(child.data);
-            syncChildCsvEvidenceFromData(child.data);
-          }
-        } catch {}
-
-        try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
-        await rerenderChild();
-
-        await showChildFriendlyNotice({
-          title: 'Bank rejected payment — blocked funds',
-          message: 'Bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.',
-          confirmLabel: 'OK',
-          kind: 'import-summary-banking-execute-blocked-funds',
-          confirmClass: 'btn btn-primary'
-        });
-        return;
-      }
-
-      if (isScheduledExecutionResult(execRes)) {
-        child.actionsBusy.executing = false;
-        child.error = '';
-        child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
-        if (child.ui.activeTabKey === 'payment_issues' && !isRealPaymentIssueState()) child.ui.activeTabKey = 'overview';
-
-        try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
-        await rerenderChild();
-
-        await showChildFriendlyNotice({
-          title: 'Payment scheduled',
-          message: 'Payment scheduled. Funds will be checked when CloudTMS submits the payment to the bank on the scheduled date.',
-          confirmLabel: 'OK',
-          kind: 'import-summary-banking-execute-scheduled',
-          confirmClass: 'btn btn-primary'
-        });
-        return;
-      }
-
-      if (isUncertainImmediateExecutionResult(execRes)) {
-        child.actionsBusy.executing = false;
-        child.error = '';
-        child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
-        child.ui.activeTabKey = 'payment_issues';
-
-        try {
-          if (execRes && typeof execRes === 'object' && execRes.batch_get && typeof execRes.batch_get === 'object' && !Array.isArray(execRes.batch_get)) {
-            child.data = deep(execRes.batch_get);
-            hydratePaymentIssueState();
-            syncChildCommunicationsState(child.data);
-            normalizeCandidateExpansionStateForData(child.data);
-            syncChildCsvEvidenceFromData(child.data);
-          }
-        } catch {}
-
-        try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
-        await rerenderChild();
-
-        await showChildFriendlyNotice({
-          title: 'Payment status needs review',
-          message: 'CloudTMS could not confirm the final bank submission state. No successful payment submission has been confirmed. Refresh the batch and review Payment Issues before retrying.',
-          confirmLabel: 'OK',
-          kind: 'import-summary-banking-execute-review-needed',
-          confirmClass: 'btn btn-primary'
-        });
-        return;
-      }
-
-      if (isFriendlyFailedExecutionResult(execRes)) {
-        child.actionsBusy.executing = false;
-        child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
-        child.ui.activeTabKey = 'payment_issues';
-        try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
-        await rerenderChild();
-        await reportChildFriendlyError(execRes, String(execRes?.error_code || execRes?.code || 'BANKING_EXECUTE_PAYMENT_FAILED'), {
-          action: 'EXECUTE_PAYMENT',
-          userInitiated: true,
-          silent: false,
-          scope: deriveScopeForBatch(child.data)
-        });
-        return;
-      }
-
-        try {
-          const scheduledOut = (execRes && typeof execRes === 'object' && execRes.scheduled && typeof execRes.scheduled === 'object') ? execRes.scheduled : null;
-          const authId0 =
-            scheduledOut && scheduledOut.auth_request_id ? String(scheduledOut.auth_request_id).trim() :
-            null;
-
-          const reqQty0 = scheduledOut && Number.isFinite(Number(scheduledOut.required_quantity)) ? Math.trunc(Number(scheduledOut.required_quantity)) : null;
-          const appr0 = scheduledOut && Number.isFinite(Number(scheduledOut.approved_count)) ? Math.trunc(Number(scheduledOut.approved_count)) : null;
-
-          const batchGet0 = (execRes && typeof execRes === 'object' && execRes.batch_get && typeof execRes.batch_get === 'object') ? execRes.batch_get : null;
-          const auth0 = (batchGet0 && batchGet0.auth && typeof batchGet0.auth === 'object') ? batchGet0.auth : null;
-
-          const authId =
-            (authId0 && authId0.length) ? authId0 :
-            (auth0 && auth0.auth_request_id ? String(auth0.auth_request_id).trim() : '');
-
-          const reqQty =
-            (reqQty0 != null) ? reqQty0 :
-            (auth0 && Number.isFinite(Number(auth0.required_quantity)) ? Math.trunc(Number(auth0.required_quantity)) : 1);
-
-          const approvedCount =
-            (appr0 != null) ? appr0 :
-            (auth0 && Number.isFinite(Number(auth0.approved_count)) ? Math.trunc(Number(auth0.approved_count)) : 0);
-
-          const authState = auth0 ? String(auth0.auth_state || '').trim().toUpperCase() : '';
-
-          if (actorIntent === 'USE_GOLDEN_KEY') {
-            // no-op
-          } else {
-            const needsInvites =
-              !!authId &&
-              reqQty > 1 &&
-              approvedCount < reqQty &&
-              (
-                authState === '' ||
-                authState === 'AWAITING' ||
-                authState === 'AWAITING_AUTHORISATION' ||
-                authState === 'AUTHORISE_REQUIRED' ||
-                authState === 'PENDING' ||
-                authState === 'AUTHORISED'
-              );
-
-            if (needsInvites) {
-              if (typeof openPayAuthorisationRequestModal === 'function') {
-                await openPayAuthorisationRequestModal(authId, { kind: 'import-summary-banking-auth-requests', pay_batch_id: id });
-              } else {
-                try { if (typeof window.__toast === 'function') window.__toast('Authorisation request modal is not available.'); } catch {}
-              }
-            }
-          }
-        } catch {}
-
-      await loadBatch({ forcePoll: false });
     } catch (e) {
+      throw new Error(String(e?.message || e || 'Unable to open execute confirm'));
+    }
+
+    const cancelled = !!(execCfg && (execCfg.cancelled === true || execCfg.confirmed === false));
+    if (cancelled) {
       child.actionsBusy.executing = false;
       await rerenderChild();
-      await reportChildFriendlyError(e, 'BANKING_EXECUTE_PAYMENT_FAILED', {
-        action: 'EXECUTE_PAYMENT',
-        userInitiated: true,
-        silent: false,
-        scope: deriveScopeForBatch(child.data)
-      });
+      return;
+    }
 
+    const executionModeRaw = String(execCfg?.execution_mode || execCfg?.executionMode || 'STANDARD_BANK').trim().toUpperCase();
+    const execution_mode = (
+      executionModeRaw === 'CSV_SETTLEMENT' ||
+      executionModeRaw === 'EXTERNAL_SETTLEMENT' ||
+      executionModeRaw === 'STANDARD_BANK'
+    ) ? executionModeRaw : 'STANDARD_BANK';
+
+    const scheduleKindRaw0 = String(execCfg?.schedule_kind || execCfg?.scheduleKind || execCfg?.kind || 'IMMEDIATE').trim().toUpperCase();
+    const scheduleKindRaw = (scheduleKindRaw0 === 'AT_TIME') ? 'SCHEDULED' : scheduleKindRaw0;
+    const scheduleKind = (scheduleKindRaw === 'IMMEDIATE' || scheduleKindRaw === 'SCHEDULED') ? scheduleKindRaw : 'IMMEDIATE';
+
+    const scheduledAtUtcRaw =
+      (execCfg?.scheduled_at_utc !== null && execCfg?.scheduled_at_utc !== undefined)
+        ? String(execCfg.scheduled_at_utc || '').trim()
+        : (execCfg?.scheduledAtUtc !== null && execCfg?.scheduledAtUtc !== undefined)
+          ? String(execCfg.scheduledAtUtc || '').trim()
+          : '';
+    const scheduledAtUtc = scheduledAtUtcRaw ? scheduledAtUtcRaw : null;
+
+    const londonYmdFromDateValue = (value) => {
+      const d = value instanceof Date ? value : new Date(value);
+      if (!d || !Number.isFinite(d.getTime())) return '';
       try {
-        const friendlyCode = String(e?.json?.error_code || e?.json?.code || e?.error_code || '').trim().toUpperCase();
-        if (friendlyCode === 'BATCH_STALE') {
-          child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
-          child.ui.activeTabKey = child.ui.activeTabKey || 'overview';
-        }
-      } catch {}
-    } finally {
-      child.actionsBusy.executing = false;
-      await rerenderChild();
-    }
-  };
+        const fmt = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Europe/London',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const ymd = String(fmt.format(d) || '').trim();
+        return /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? ymd : '';
+      } catch {
+        return '';
+      }
+    };
 
-
- const retryBlockedFundsPipeline = async () => {
-    if (child.actionsBusy.retryingBlockedFunds) return;
-    if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
-
-    const b = deriveBatchObj(child.data) || {};
-    const status = String(b.status || child.data?.status || '').trim().toUpperCase();
-    const canRetryBlockedFunds = !!(
-      child.data?.can_retry_blocked_funds === true ||
-      b.can_retry_blocked_funds === true ||
-      child.correction?.issueState?.canRetryBlockedFunds === true ||
-      child.correction?.issueState?.can_retry_blocked_funds === true
-    );
-
-    if (status !== 'BLOCKED_FUNDS') {
-      await showBlockedFundsRetryModal({
-        title: 'Retry payment unavailable',
-        message: `Retry payment is only available for bank rejected payments caused by blocked funds. Current status: ${status || '—'}.`,
-        detailRows: [['Current status', status || '—']]
-      });
-      return;
+    let payment_date = '';
+    if (execution_mode === 'STANDARD_BANK') {
+      if (scheduleKind === 'SCHEDULED') {
+        if (!scheduledAtUtc) throw new Error('Scheduled time is required.');
+        payment_date = londonYmdFromDateValue(scheduledAtUtc);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(payment_date)) throw new Error('Scheduled payment date could not be resolved.');
+      } else {
+        payment_date = londonYmdFromDateValue(new Date());
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(payment_date)) throw new Error('Immediate payment date could not be resolved.');
+      }
+    } else {
+      payment_date = String(execCfg?.payment_date || execCfg?.paymentDate || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(payment_date)) throw new Error('Payment date is required.');
     }
 
-    if (canRetryBlockedFunds !== true) {
-      await showBlockedFundsRetryModal({
-        title: 'Retry payment unavailable',
-        message: 'Blocked-funds retry is not currently safe for this batch. Refresh the batch or review the Payment Issues panel before trying again.'
-      });
-      return;
-    }
+    const fundingAccountRefRaw =
+      (execCfg?.funding_account_ref !== null && execCfg?.funding_account_ref !== undefined)
+        ? String(execCfg.funding_account_ref || '').trim()
+        : (execCfg?.fundingAccountRef !== null && execCfg?.fundingAccountRef !== undefined)
+          ? String(execCfg.fundingAccountRef || '').trim()
+          : '';
+    const fundingAccountRef = fundingAccountRefRaw ? fundingAccountRefRaw : null;
 
-    child.actionsBusy.retryingBlockedFunds = true;
-    child.error = '';
-    child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
-    child.ui.activeTabKey = 'payment_issues';
-    await rerenderChild();
+    let warningHoursJson = null;
+    if (execCfg && Object.prototype.hasOwnProperty.call(execCfg, 'warning_hours_json')) warningHoursJson = Array.isArray(execCfg.warning_hours_json) ? execCfg.warning_hours_json : null;
+    else if (execCfg && Object.prototype.hasOwnProperty.call(execCfg, 'warningHoursJson')) warningHoursJson = Array.isArray(execCfg.warningHoursJson) ? execCfg.warningHoursJson : null;
+
+    const actorIntentRaw = String(execCfg?.actor_intent || execCfg?.actorIntent || '').trim().toUpperCase();
+    const actorIntent = (actorIntentRaw === 'USE_GOLDEN_KEY') ? 'USE_GOLDEN_KEY' : null;
+
+    const suppress_remittances = !!(execCfg?.suppress_remittances === true || execCfg?.suppressRemittances === true);
+    const suppress_remittances_confirmed = !!(execCfg?.suppress_remittances_confirmed === true || execCfg?.suppressRemittancesConfirmed === true);
+    const csv_uploaded_confirmed = !!(execCfg?.csv_uploaded_confirmed === true || execCfg?.csvUploadedConfirmed === true);
+    const csv_bank_confirm_ref = String(execCfg?.csv_bank_confirm_ref || execCfg?.csvBankConfirmRef || '').trim() || null;
+    const external_settlement_comment = String(execCfg?.external_settlement_comment || execCfg?.externalSettlementComment || '').trim() || null;
 
     let reauthToken = null;
     try {
-      if (typeof openBankingReauthModal === 'function') {
-        reauthToken = await openBankingReauthModal({ purpose: 'PAYMENT_SCHEDULE' });
-      } else {
-        throw new Error('Payment verification modal is not available.');
-      }
+      if (typeof openBankingReauthModal === 'function') reauthToken = await openBankingReauthModal({ purpose: 'PAYMENT_SCHEDULE' });
+      else throw new Error('Payment verification modal is not available.');
     } catch (e) {
-      const message = pickSafeChildMessage([e?.json?.user_message, e?.json?.message, e?.message], 'Payment verification failed. Please try again.');
-      child.error = message;
-      await showBlockedFundsRetryModal({
-        title: 'Payment verification failed',
-        message
-      });
-      child.actionsBusy.retryingBlockedFunds = false;
-      await rerenderChild();
-      return;
+      throw new Error(String(e?.message || e || 'Payment verification failed'));
     }
 
     if (!reauthToken || !String(reauthToken).trim()) {
-      child.error = 'Payment verification did not complete. Retry was not attempted — please try again.';
-      await showBlockedFundsRetryModal({
-        title: 'Payment verification incomplete',
-        message: child.error
-      });
-      child.actionsBusy.retryingBlockedFunds = false;
+      child.error = 'Payment verification did not complete. Execution was not attempted — please try again.';
+      try { if (typeof window.__toast === 'function') window.__toast('Payment verification did not complete. Execution was not attempted.'); } catch {}
       await rerenderChild();
       return;
     }
 
+    if (typeof bankingPayBatchExecutePayment !== 'function') {
+      throw new Error('Payment operation runner is not available. Refresh Banking and try again.');
+    }
+
+    const execRes = await bankingPayBatchExecutePayment(id, {
+      execution_mode,
+      payment_date,
+      scope,
+      pay_channel_scope: scope,
+      schedule_kind: execution_mode === 'STANDARD_BANK' ? scheduleKind : 'IMMEDIATE',
+      scheduled_at_utc: (execution_mode === 'STANDARD_BANK' && scheduleKind === 'SCHEDULED') ? scheduledAtUtc : null,
+      funding_account_ref: execution_mode === 'STANDARD_BANK' ? fundingAccountRef : null,
+      warning_hours_json: warningHoursJson,
+      actor_intent: actorIntent,
+      suppress_remittances,
+      suppress_remittances_confirmed,
+      csv_uploaded_confirmed,
+      csv_bank_confirm_ref,
+      external_settlement_comment,
+      reauth_token: reauthToken
+    });
+
+    const status = String(execRes?.status || execRes?.post_execution_status || '').trim().toUpperCase();
+    const waitingForAuth = execRes?.awaiting_authorisation === true || execRes?.awaiting_authorization === true || status === 'AWAITING_AUTHORISATION' || status === 'AWAITING_AUTHORIZATION';
+    const blockedFunds = execRes?.blocked_funds === true || status === 'BLOCKED_FUNDS';
+    const scheduled = execRes?.scheduled === true;
+    const reviewRequired = execRes?.review_required === true || String(execRes?.operation_status || '').trim().toUpperCase() === 'REVIEW_REQUIRED';
+
+    child.error = '';
+    child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
+    child.ui.activeTabKey = (blockedFunds || reviewRequired) ? 'payment_issues' : (waitingForAuth ? 'overview' : (child.ui.activeTabKey || 'overview'));
+
+    if (typeof loadBatch === 'function') await loadBatch({ forcePoll: false, silent: true });
+
+    if (waitingForAuth) {
+      await showChildFriendlyNotice({
+        title: 'Payment authorisation requested',
+        message: 'Payment is waiting for authorisation. No bank submission has been reported as complete yet.',
+        confirmLabel: 'OK',
+        kind: 'import-summary-banking-execute-awaiting-authorisation',
+        confirmClass: 'btn btn-primary'
+      });
+      return;
+    }
+
+    if (blockedFunds) {
+      await showChildFriendlyNotice({
+        title: 'Bank rejected payment — blocked funds',
+        message: 'Bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.',
+        confirmLabel: 'OK',
+        kind: 'import-summary-banking-execute-blocked-funds',
+        confirmClass: 'btn btn-primary'
+      });
+      return;
+    }
+
+    if (scheduled) {
+      await showChildFriendlyNotice({
+        title: 'Payment scheduled',
+        message: 'Payment scheduled. Funds will be checked when CloudTMS submits the payment to the bank on the scheduled date.',
+        confirmLabel: 'OK',
+        kind: 'import-summary-banking-execute-scheduled',
+        confirmClass: 'btn btn-primary'
+      });
+      return;
+    }
+
+    if (reviewRequired) {
+      await showChildFriendlyNotice({
+        title: 'Payment status needs review',
+        message: 'CloudTMS needs you to review the payment state before any further payment action is taken.',
+        confirmLabel: 'OK',
+        kind: 'import-summary-banking-execute-review-needed',
+        confirmClass: 'btn btn-primary'
+      });
+      return;
+    }
+  } catch (e) {
+    child.actionsBusy.executing = false;
+    await rerenderChild();
+    await reportChildFriendlyError(e, 'BANKING_EXECUTE_PAYMENT_FAILED', {
+      action: 'EXECUTE_PAYMENT',
+      userInitiated: true,
+      silent: false,
+      scope: deriveScopeForBatch(child.data)
+    });
+
     try {
-      const scope = deriveScopeForBatch(child.data);
-      const fundingAccountRef = String(
-        b.funding_account_ref ||
-        child.data?.funding_account_ref ||
-        b.blocked_funds_account_ref ||
-        child.data?.blocked_funds_account_ref ||
-        b.last_funds_check_json?.funding_account_ref ||
-        child.data?.last_funds_check_json?.funding_account_ref ||
-        ''
-      ).trim() || null;
-
-      const retryPayload = {
-        reauth_token: reauthToken,
-        pay_channel_scope: scope,
-        scope
-      };
-      if (fundingAccountRef) retryPayload.funding_account_ref = fundingAccountRef;
-
-      const retryResult = (typeof bankingPayBatchRetryBlockedFunds === 'function')
-        ? await bankingPayBatchRetryBlockedFunds(id, retryPayload)
-        : await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/retry-blocked-funds`, retryPayload);
-
-      if (retryResult && typeof retryResult === 'object' && retryResult.batch_get && typeof retryResult.batch_get === 'object') {
-        child.data = deep(retryResult.batch_get);
-        hydratePaymentIssueState();
-        syncChildCommunicationsState(child.data);
-        normalizeCandidateExpansionStateForData(child.data);
-        syncChildCsvEvidenceFromData(child.data);
+      const friendlyCode = String(e?.json?.error_code || e?.json?.code || e?.error_code || '').trim().toUpperCase();
+      if (friendlyCode === 'BATCH_STALE') {
+        child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
+        child.ui.activeTabKey = child.ui.activeTabKey || 'overview';
       }
+    } catch {}
+  } finally {
+    child.actionsBusy.executing = false;
+    await rerenderChild();
+  }
+};
 
-      await loadBatch({ forcePoll: false });
 
-      try {
-        if (typeof bankingPayBatchesList === 'function') {
-          await bankingPayBatchesList({
-            status: (st && st.pay && st.pay.list) ? st.pay.list.statusFilter : null,
-            limit: (st && st.pay && st.pay.list) ? st.pay.list.limit : null,
-            offset: (st && st.pay && st.pay.list) ? st.pay.list.offset : null
-          });
-        }
-      } catch {}
+const retryBlockedFundsPipeline = async () => {
+  if (child.actionsBusy.retryingBlockedFunds) return;
+  if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
 
-      try {
-        if (typeof refreshBankingNavAttentionFromCachedRows === 'function') refreshBankingNavAttentionFromCachedRows();
-      } catch {}
+  const b = deriveBatchObj(child.data) || {};
+  const status = String(b.status || child.data?.status || '').trim().toUpperCase();
+  const canRetryBlockedFunds = !!(
+    child.data?.can_retry_blocked_funds === true ||
+    b.can_retry_blocked_funds === true ||
+    child.correction?.issueState?.canRetryBlockedFunds === true ||
+    child.correction?.issueState?.can_retry_blocked_funds === true
+  );
 
-      const latestStatus = getBatchStatusUpper(child.data);
-      const retryBlockedAgain = latestStatus === 'BLOCKED_FUNDS' || retryResult?.status === 'BLOCKED_FUNDS' || retryResult?.blocked_funds === true;
-      child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
-      child.ui.activeTabKey = retryBlockedAgain ? 'payment_issues' : 'overview';
+  if (status !== 'BLOCKED_FUNDS') {
+    await showBlockedFundsRetryModal({
+      title: 'Retry payment unavailable',
+      message: `Retry payment is only available for bank rejected payments caused by blocked funds. Current status: ${status || '—'}.`,
+      detailRows: [['Current status', status || '—']]
+    });
+    return;
+  }
 
-      if (retryBlockedAgain) {
-        const copy = buildBlockedFundsRetryModalCopy(retryResult, null, 'The retry was attempted after payment verification, but the bank account still does not have enough funds. No payment has been submitted. Fund the account and retry again.');
-        copy.title = copy.title || 'Bank rejected payment — blocked funds';
-        if (!copy.message || copy.message === 'Payment retry completed.') {
-          copy.message = 'The retry was attempted after payment verification, but the bank account still does not have enough funds. No payment has been submitted. Fund the account and retry again.';
-        }
-        await showBlockedFundsRetryModal(copy);
-      } else {
-        await showBlockedFundsRetryModal({
-          title: 'Payment retry submitted',
-          message: 'The blocked-funds retry was submitted or progressed. Check the Payment Issues panel for the latest bank status.',
-          detailRows: [['Status', latestStatus || retryResult?.status || 'Submitted']]
+  if (canRetryBlockedFunds !== true) {
+    await showBlockedFundsRetryModal({
+      title: 'Retry payment unavailable',
+      message: 'Blocked-funds retry is not currently safe for this batch. Refresh the batch or review the Payment Issues panel before trying again.'
+    });
+    return;
+  }
+
+  child.actionsBusy.retryingBlockedFunds = true;
+  child.error = '';
+  child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
+  child.ui.activeTabKey = 'payment_issues';
+  await rerenderChild();
+
+  let reauthToken = null;
+  try {
+    if (typeof openBankingReauthModal === 'function') {
+      reauthToken = await openBankingReauthModal({ purpose: 'PAYMENT_SCHEDULE' });
+    } else {
+      throw new Error('Payment verification modal is not available.');
+    }
+  } catch (e) {
+    const message = pickSafeChildMessage([e?.json?.user_message, e?.json?.message, e?.message], 'Payment verification failed. Please try again.');
+    child.error = message;
+    await showBlockedFundsRetryModal({ title: 'Payment verification failed', message });
+    child.actionsBusy.retryingBlockedFunds = false;
+    await rerenderChild();
+    return;
+  }
+
+  if (!reauthToken || !String(reauthToken).trim()) {
+    child.error = 'Payment verification did not complete. Retry was not attempted — please try again.';
+    await showBlockedFundsRetryModal({ title: 'Payment verification incomplete', message: child.error });
+    child.actionsBusy.retryingBlockedFunds = false;
+    await rerenderChild();
+    return;
+  }
+
+  try {
+    const scope = deriveScopeForBatch(child.data);
+    const fundingAccountRef = String(
+      b.funding_account_ref ||
+      child.data?.funding_account_ref ||
+      b.blocked_funds_account_ref ||
+      child.data?.blocked_funds_account_ref ||
+      b.last_funds_check_json?.funding_account_ref ||
+      child.data?.last_funds_check_json?.funding_account_ref ||
+      ''
+    ).trim() || null;
+
+    const retryPayload = {
+      reauth_token: reauthToken,
+      pay_channel_scope: scope,
+      scope
+    };
+    if (fundingAccountRef) retryPayload.funding_account_ref = fundingAccountRef;
+
+    if (typeof bankingPayBatchRetryBlockedFunds !== 'function') {
+      throw new Error('Blocked-funds retry operation runner is not available. Refresh Banking and try again.');
+    }
+
+    const retryResult = await bankingPayBatchRetryBlockedFunds(id, retryPayload);
+
+    child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
+
+    try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
+
+    try {
+      if (typeof bankingPayBatchesList === 'function') {
+        await bankingPayBatchesList({
+          status: (st && st.pay && st.pay.list) ? st.pay.list.statusFilter : null,
+          limit: (st && st.pay && st.pay.list) ? st.pay.list.limit : null,
+          offset: (st && st.pay && st.pay.list) ? st.pay.list.offset : null
         });
       }
-    } catch (e) {
-      const payload = extractBlockedFundsRetryErrorPayload(e);
-      const normalized = normaliseChildFriendlyError(payload || e, 'BANKING_ACTION_FAILED', {
-        action: 'RETRY_BLOCKED_FUNDS',
-        userInitiated: true,
-        silent: true,
-        scope: deriveScopeForBatch(child.data),
-        payload: payload || null,
-        backendPayload: payload || e?.backendPayload || e?.payload || e?.json || null,
-        technicalError: e
-      });
-      const copy = buildBlockedFundsRetryModalCopy(payload || normalized || {}, normalized || e, normalized?.message || 'Blocked-funds retry failed.');
-      child.error = String(copy.message || normalized?.message || 'Blocked-funds retry failed.').trim();
-      child.friendlyError = normalized || null;
+    } catch {}
 
-      try {
-        if (payload && typeof payload === 'object' && payload.batch_get && typeof payload.batch_get === 'object') {
-          child.data = deep(payload.batch_get);
-          hydratePaymentIssueState();
-          syncChildCommunicationsState(child.data);
-          normalizeCandidateExpansionStateForData(child.data);
-          syncChildCsvEvidenceFromData(child.data);
-        }
-      } catch {}
+    try {
+      if (typeof refreshBankingNavAttentionFromCachedRows === 'function') refreshBankingNavAttentionFromCachedRows();
+    } catch {}
 
-      try { await loadBatch({ forcePoll: false }); } catch {}
+    const latestStatus = getBatchStatusUpper(child.data);
+    const retryBlockedAgain = latestStatus === 'BLOCKED_FUNDS' || retryResult?.status === 'BLOCKED_FUNDS' || retryResult?.blocked_funds === true;
+    const reviewRequired = retryResult?.review_required === true || String(retryResult?.operation_status || '').trim().toUpperCase() === 'REVIEW_REQUIRED';
+    const waitingForAuth = retryResult?.awaiting_authorisation === true || String(retryResult?.status || '').trim().toUpperCase() === 'AWAITING_AUTHORISATION';
 
-      try {
-        if (typeof bankingPayBatchesList === 'function') {
-          await bankingPayBatchesList({
-            status: (st && st.pay && st.pay.list) ? st.pay.list.statusFilter : null,
-            limit: (st && st.pay && st.pay.list) ? st.pay.list.limit : null,
-            offset: (st && st.pay && st.pay.list) ? st.pay.list.offset : null
-          });
-        }
-      } catch {}
+    child.ui.activeTabKey = (retryBlockedAgain || reviewRequired) ? 'payment_issues' : 'overview';
 
-      try {
-        if (typeof refreshBankingNavAttentionFromCachedRows === 'function') refreshBankingNavAttentionFromCachedRows();
-      } catch {}
-
-      child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
-      child.ui.activeTabKey = 'payment_issues';
-      if (String(normalized?.error_code || normalized?.code || '').trim().toUpperCase() === 'BATCH_STALE') {
-        try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
-      }
+    if (retryBlockedAgain) {
+      const copy = buildBlockedFundsRetryModalCopy(retryResult, null, 'The retry was attempted after payment verification, but the bank account still does not have enough funds. No payment has been submitted. Fund the account and retry again.');
+      copy.title = copy.title || 'Bank rejected payment — blocked funds';
+      if (!copy.message || copy.message === 'Payment retry completed.') copy.message = 'The retry was attempted after payment verification, but the bank account still does not have enough funds. No payment has been submitted. Fund the account and retry again.';
       await showBlockedFundsRetryModal(copy);
-    } finally {
-      child.actionsBusy.retryingBlockedFunds = false;
-      await rerenderChild();
+    } else if (waitingForAuth) {
+      await showBlockedFundsRetryModal({
+        title: 'Payment authorisation requested',
+        message: 'The blocked-funds retry is waiting for authorisation. No successful payment submission has been reported yet.',
+        detailRows: [['Status', latestStatus || retryResult?.status || 'Awaiting authorisation']]
+      });
+    } else if (reviewRequired) {
+      await showBlockedFundsRetryModal({
+        title: 'Payment retry needs review',
+        message: 'The blocked-funds retry reached a review-required state. Review Payment Issues before taking any further action.',
+        detailRows: [['Status', latestStatus || retryResult?.status || 'Review required']]
+      });
+    } else {
+      await showBlockedFundsRetryModal({
+        title: 'Payment retry completed',
+        message: 'The blocked-funds retry operation has completed. Check the Payment Issues panel for the latest bank status.',
+        detailRows: [['Status', latestStatus || retryResult?.status || 'Completed']]
+      });
     }
-  };
+  } catch (e) {
+    const payload = extractBlockedFundsRetryErrorPayload(e);
+    const normalized = normaliseChildFriendlyError(payload || e, 'BANKING_ACTION_FAILED', {
+      action: 'RETRY_BLOCKED_FUNDS',
+      userInitiated: true,
+      silent: true,
+      scope: deriveScopeForBatch(child.data),
+      payload: payload || null,
+      backendPayload: payload || e?.backendPayload || e?.payload || e?.json || null,
+      technicalError: e
+    });
+    const copy = buildBlockedFundsRetryModalCopy(payload || normalized || {}, normalized || e, normalized?.message || 'Blocked-funds retry failed.');
+    child.error = String(copy.message || normalized?.message || 'Blocked-funds retry failed.').trim();
+    child.friendlyError = normalized || null;
+
+    try {
+      if (payload && typeof payload === 'object' && payload.batch_get && typeof payload.batch_get === 'object') {
+        child.data = deep(payload.batch_get);
+        hydratePaymentIssueState();
+        syncChildCommunicationsState(child.data);
+        if (!child.data?.bootstrap_only && !child.data?.batch?.bootstrap_only) normalizeCandidateExpansionStateForData(child.data);
+        syncChildCsvEvidenceFromData(child.data);
+      }
+    } catch {}
+
+    try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
+
+    try {
+      if (typeof bankingPayBatchesList === 'function') {
+        await bankingPayBatchesList({
+          status: (st && st.pay && st.pay.list) ? st.pay.list.statusFilter : null,
+          limit: (st && st.pay && st.pay.list) ? st.pay.list.limit : null,
+          offset: (st && st.pay && st.pay.list) ? st.pay.list.offset : null
+        });
+      }
+    } catch {}
+
+    try {
+      if (typeof refreshBankingNavAttentionFromCachedRows === 'function') refreshBankingNavAttentionFromCachedRows();
+    } catch {}
+
+    child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
+    child.ui.activeTabKey = 'payment_issues';
+    await showBlockedFundsRetryModal(copy);
+  } finally {
+    child.actionsBusy.retryingBlockedFunds = false;
+    await rerenderChild();
+  }
+};
+
+
 
 
   const generateCsv = async () => {
@@ -47035,6 +47372,13 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
     try { setTimeout(syncChildFooterState, 0); } catch {}
 
     const safeKey = String(key || '').trim() || 'overview';
+    ensureFirstPageForActiveTab(safeKey);
+
+    const withPagedControls = (html) => {
+      const pagingHtml = renderSectionLoadMoreHtml(safeKey);
+      if (!pagingHtml) return html;
+      return `${html}${pagingHtml}`;
+    };
 
     if (!currentChildStateMatches()) {
       return `
@@ -47058,16 +47402,16 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
 
     if (safeKey === 'payment_issues') {
       if (typeof renderBankingPayBatchChildModalPaymentIssues === 'function') {
-        return renderBankingPayBatchChildModalPaymentIssues(child.data, child.correction);
+        return withPagedControls(renderBankingPayBatchChildModalPaymentIssues(child.data, child.correction));
       }
       if (typeof renderBankingPaymentIssuePanel === 'function') {
-        return `
+        return withPagedControls(`
           <div id="${enc(rootId)}" class="payment-issues-tab">
             ${renderBankingPaymentIssuePanel(child.data, child.correction)}
           </div>
-        `;
+        `);
       }
-      return `
+      return withPagedControls(`
         <div id="${enc(rootId)}" class="card payment-issues-tab">
           <div class="row">
             <label>Payment Issues</label>
@@ -47076,24 +47420,24 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
             </div>
           </div>
         </div>
-      `;
+      `);
     }
 
     if (safeKey === 'paye_worksheet') {
       if (typeof renderBankingPayBatchChildModalPayeWorksheetTab === 'function') {
-        return renderBankingPayBatchChildModalPayeWorksheetTab();
+        return withPagedControls(renderBankingPayBatchChildModalPayeWorksheetTab());
       }
       if (typeof renderBankingPayBatchChildModalOverview === 'function') {
-        return renderBankingPayBatchChildModalOverview();
+        return withPagedControls(renderBankingPayBatchChildModalOverview());
       }
     }
 
     if (safeKey === 'remittance') {
       if (typeof renderBankingPayBatchChildModalRemittanceTab === 'function') {
-        return renderBankingPayBatchChildModalRemittanceTab();
+        return withPagedControls(renderBankingPayBatchChildModalRemittanceTab());
       }
       if (typeof renderBankingPayBatchChildModalOverview === 'function') {
-        return renderBankingPayBatchChildModalOverview();
+        return withPagedControls(renderBankingPayBatchChildModalOverview());
       }
     }
 
@@ -47112,7 +47456,6 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
       </div>
     `;
   };
-
   const onDismiss = () => {
     try { stopAutoPoll(); } catch {}
     try {
@@ -47222,14 +47565,27 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
         ev.preventDefault();
         ev.stopPropagation();
 
+          if (act === 'banking:pay:child:loadSectionMore') {
+          const sectionKey = normaliseChildSectionKey(
+            el.getAttribute('data-section') ||
+            el.dataset?.section ||
+            ''
+          );
+          if (!sectionKey) return;
+          await loadChildSectionPage(sectionKey, { reset: false, silent: false });
+          await rerenderChild();
+          return;
+        }
+
         if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
 
         if (act === 'banking:pay:child:openPaymentIssues' || act === 'banking:pay:child:switchTab') {
           const nextTabKey = act === 'banking:pay:child:openPaymentIssues'
             ? 'payment_issues'
             : (normalizeChildTabKey(el.getAttribute('data-tab-key') || el.getAttribute('data-tab') || el.dataset?.tabKey || el.dataset?.tab || '') || 'overview');
-          child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
+           child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
           child.ui.activeTabKey = nextTabKey;
+          ensureFirstPageForActiveTab(nextTabKey);
           await rerenderChild();
           return;
         }
@@ -48049,6 +48405,12 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
   };
 
   await loadBatch({ forcePoll: false });
+
+  try {
+    if (isBootstrapBatchPayload(child.data)) {
+      ensureChildLazySections(child.data);
+    }
+  } catch {}
 
   try {
     child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
@@ -49130,6 +49492,134 @@ function renderBankingPayBatchChildModalOverview() {
   const items = (data && Array.isArray(data.items)) ? data.items : [];
   const linesRawTop = (data && Array.isArray(data.candidate_lines)) ? data.candidate_lines : [];
   const financeCaseGroups = (data && Array.isArray(data.finance_case_groups)) ? data.finance_case_groups : [];
+
+  const isBootstrapOnly = data?.bootstrap_only === true || batch?.bootstrap_only === true;
+  if (isBootstrapOnly) {
+    const b = batch || {};
+    const statusText = upperTrim(b.status || data?.status || '—') || '—';
+    const providerText = upperTrim(b.rail_provider_snapshot || b.rail_provider || data?.rail_provider_snapshot || data?.rail_provider || '');
+    const envText = upperTrim(b.rail_env_snapshot || b.rail_env || data?.rail_env_snapshot || data?.rail_env || '');
+    const payDateText = trimStr(b.pay_date || data?.pay_date || '');
+    const executionCommitStateText = upperTrim(b.execution_commit_state || data?.execution_commit_state || '');
+    const activeOperation = asObj(data?.active_operation) || asObj(data?.operation) || asObj(b.active_operation) || null;
+    const freshness = asObj(data?.freshness) || asObj(data?.freshness_result_json) || asObj(b.freshness_result_json) || data || {};
+    const availableSections = Array.isArray(data?.available_sections)
+      ? data.available_sections.map((section) => trimStr(section)).filter(Boolean)
+      : [];
+    const recommendedPageSize = asNum(data?.recommended_page_size || b.recommended_page_size || child.recommended_page_size, 100);
+    const countValue = (...values) => {
+      for (const value of values) {
+        const n = Number(value);
+        if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
+      }
+      return 0;
+    };
+    const amountValue = (...values) => {
+      for (const value of values) {
+        const n = Number(value);
+        if (Number.isFinite(n)) return n;
+      }
+      return 0;
+    };
+    const candidateCount = countValue(data?.candidate_count, data?.candidates_count, b.candidate_count, b.candidates_count);
+    const itemCount = countValue(data?.item_count, data?.items_count, b.item_count, b.items_count);
+    const breakdownCount = countValue(data?.item_breakdown_count, data?.breakdown_count, b.item_breakdown_count, b.breakdown_count);
+    const transferCount = countValue(data?.transfer_count, data?.transfers_count, b.transfer_count, b.transfers_count);
+    const remittanceCount = countValue(data?.remittance_count, data?.remittances_count, b.remittance_count, b.remittances_count);
+    const submittedTransferCount = countValue(data?.provider_submitted_transfer_count, data?.submitted_transfer_count, data?.submitted_transfers, b.provider_submitted_transfer_count, b.submitted_transfer_count);
+    const localOnlyTransferCount = countValue(data?.local_only_transfer_count, data?.local_idempotency_only_count, b.local_only_transfer_count, b.local_idempotency_only_count);
+    const pendingTransferCount = countValue(data?.pending_transfer_count, data?.pending_transfers, b.pending_transfer_count, b.pending_transfers);
+    const failedTransferCount = countValue(data?.failed_transfer_count, data?.failed_transfers, b.failed_transfer_count, b.failed_transfers);
+    const ambiguousTransferCount = countValue(data?.ambiguous_transfer_count, b.ambiguous_transfer_count);
+    const totalAmount = amountValue(data?.total_amount, data?.total_amount_inc_vat, data?.total_pay_amount, b.total_amount, b.total_amount_inc_vat, b.total_pay_amount);
+    const batchKindLabel = upperTrim(data?.batch_kind || b.batch_kind || b.batch_kind_fixed || '') || 'UNKNOWN';
+    const freshnessStatus = upperTrim(data?.freshness_validation_status || b.freshness_validation_status || freshness.freshness_validation_status || freshness.status || 'NOT_CHECKED');
+    const freshnessCheckedAt = trimStr(data?.freshness_checked_at_utc || b.freshness_checked_at_utc || freshness.freshness_checked_at_utc || '');
+    const freshnessHash = trimStr(data?.freshness_result_hash || b.freshness_result_hash || freshness.freshness_result_hash || '');
+    const scopeHash = trimStr(data?.freshness_scope_hash || b.freshness_scope_hash || freshness.freshness_scope_hash || '');
+    const opId = trimStr(activeOperation?.operation_id || activeOperation?.id || data?.active_operation_id || data?.operation_id || '');
+    const opStatus = upperTrim(activeOperation?.status || data?.active_operation_status || data?.operation_status || '');
+    const opPhase = upperTrim(activeOperation?.phase || data?.active_operation_phase || data?.operation_phase || '');
+    const sectionPillsHtml = availableSections.length
+      ? availableSections.map((section) => `<span class="pill pill-info">${enc(section.replace(/_/g, ' '))}</span>`).join(' ')
+      : `<span class="mini" style="opacity:.75;">No section list returned.</span>`;
+    const errHtml = String(child.error || '').trim()
+      ? `<div class="error" style="white-space:pre-wrap;">${enc(String(child.error || '').trim())}</div>`
+      : '';
+    const providerEnvText = [providerText || '—', envText || ''].filter(Boolean).join('/');
+
+    return `
+      <div id="${enc(rootId)}">
+        <div class="card">
+          <div class="row">
+            <label>Overview</label>
+            <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+              ${errHtml}
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <span class="pill pill-info">BOOTSTRAP</span>
+                <span class="pill">${enc(statusText)}</span>
+                <span class="pill pill-info">${enc(batchKindLabel)}</span>
+                <span class="mini">${enc(providerEnvText)}</span>
+                <span class="mini">Pay date: <span class="mono">${enc(payDateText ? formatIsoToUkLocal(payDateText) : '—')}</span></span>
+                <span class="mini">Execution state: <span class="mono">${enc(executionCommitStateText || '—')}</span></span>
+                <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
+                </div>
+              </div>
+
+              <div class="card" style="padding:10px;">
+                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Batch summary</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Candidates</div><div class="mono">${enc(String(candidateCount))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Items</div><div class="mono">${enc(String(itemCount))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Breakdowns</div><div class="mono">${enc(String(breakdownCount))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Transfers</div><div class="mono">${enc(String(transferCount))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Remittances</div><div class="mono">${enc(String(remittanceCount))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Total amount</div><div class="mono">£${enc(fmtMoney(totalAmount))}</div></div>
+                </div>
+              </div>
+
+              <div class="card" style="padding:10px;">
+                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Provider / transfer state</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;">
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Provider submitted</div><div class="mono">${enc(String(submittedTransferCount))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Local-only evidence</div><div class="mono">${enc(String(localOnlyTransferCount))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Pending</div><div class="mono">${enc(String(pendingTransferCount))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Failed</div><div class="mono">${enc(String(failedTransferCount))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Ambiguous</div><div class="mono">${enc(String(ambiguousTransferCount))}</div></div>
+                </div>
+              </div>
+
+              <div class="card" style="padding:10px;">
+                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Freshness at execution boundary</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">
+                  <div><strong>Status</strong><br><span class="mono">${enc(freshnessStatus || 'NOT_CHECKED')}</span></div>
+                  <div><strong>Checked</strong><br><span class="mono">${enc(freshnessCheckedAt ? fmtUtcToUk(freshnessCheckedAt) : 'Not recorded')}</span></div>
+                  <div><strong>Result hash</strong><br><span class="mono">${enc(freshnessHash || '—')}</span></div>
+                  <div><strong>Scope hash</strong><br><span class="mono">${enc(scopeHash || '—')}</span></div>
+                </div>
+              </div>
+
+              <div class="card" style="padding:10px;">
+                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Active operation</div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">
+                  <div><strong>Operation ID</strong><br><span class="mono">${enc(opId || '—')}</span></div>
+                  <div><strong>Status</strong><br><span class="mono">${enc(opStatus || '—')}</span></div>
+                  <div><strong>Phase</strong><br><span class="mono">${enc(opPhase || '—')}</span></div>
+                </div>
+              </div>
+
+              <div class="card" style="padding:10px;">
+                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Lazy detail sections</div>
+                <div class="mini" style="opacity:.86;margin-bottom:8px;">This is a large batch. Details load page-by-page when you open the relevant tab. Recommended page size: <span class="mono">${enc(String(recommendedPageSize))}</span>.</div>
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">${sectionPillsHtml}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
 
   const financeGroupById = new Map(
     financeCaseGroups
@@ -50794,6 +51284,8 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
+
+
 
 
 async function openBankingPayBatchPayeEntryModal(payBatchId) {
@@ -52654,6 +53146,7 @@ function renderBankingPayBatchPayeEntryModal() {
   `;
 }
 
+
 function renderBankingPayBatchChildModalRemittanceTab() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -52696,100 +53189,61 @@ function renderBankingPayBatchChildModalRemittanceTab() {
   if (!mc || String(mc.entity || '') !== 'banking' || !child) {
     return `
       <div>
-        <div class="card">
-          <div class="row">
-            <label>Remittance</label>
-            <div class="controls">
-              <div class="mini" style="opacity:.85;">Child modal state not available.</div>
-            </div>
-          </div>
-        </div>
+        <div class="card"><div class="row"><label>Remittance</label><div class="controls"><div class="mini" style="opacity:.85;">Child modal state not available.</div></div></div></div>
       </div>
     `;
   }
 
-  const KIND = 'banking-pay-batch-child';
   const rootId = trimStr(child.rootId);
   const batchId = trimStr(child.batchId);
   const data = asObj(child.data);
   const batch = asObj(data?.batch);
-  const candidates = asArr(data?.candidates);
+  const isBootstrap = !!(data?.bootstrap_only === true || batch?.bootstrap_only === true);
 
-  pay.child.remittanceTab = (pay.child.remittanceTab && typeof pay.child.remittanceTab === 'object')
-    ? pay.child.remittanceTab
-    : {
-        sourceKey: '',
-        loading: false,
-        loaded: false,
-        error: '',
-        items: [],
-        total_count: 0,
-        fetched: 0,
-        loaded_count: 0,
-        server_total_count: 0,
-        truncated: false,
-        complete: false,
-        last_loaded_at_utc: '',
-        requestSeq: 0
-      };
-
-  const remState = pay.child.remittanceTab;
-
-  if (!('fetched' in remState)) remState.fetched = 0;
-  if (!('loaded_count' in remState)) remState.loaded_count = 0;
-  if (!('server_total_count' in remState)) remState.server_total_count = 0;
-  if (!('truncated' in remState)) remState.truncated = false;
-  if (!('complete' in remState)) remState.complete = false;
-
-  const candidateNameById = new Map();
-  const umbrellaNameById = new Map();
-
-  for (const c of candidates) {
-    const cid = trimStr(c?.candidate_id || c?.id);
-    const candName =
-      trimStr(c?.candidate_display_name) ||
-      trimStr(c?.display_name) ||
-      trimStr(c?.candidate_name) ||
-      trimStr(c?.candidate_tms_ref) ||
-      trimStr(c?.tms_ref);
-
-    if (cid && candName && !candidateNameById.has(cid)) {
-      candidateNameById.set(cid, candName);
-    }
-
-    const umbrellaId = trimStr(
-      c?.umbrella_id ||
-      c?.umbrellaId ||
-      c?.payee_entity_id ||
-      ''
-    );
-
-    const umbrellaName =
-      trimStr(c?.umbrella_display_name) ||
-      trimStr(c?.umbrella_name) ||
-      trimStr(c?.umbrella_company_name) ||
-      trimStr(c?.payee_display_name) ||
-      trimStr(c?.payee_name);
-
-    if (umbrellaId && umbrellaName && !umbrellaNameById.has(umbrellaId)) {
-      umbrellaNameById.set(umbrellaId, umbrellaName);
-    }
-  }
+  const sectionState = (sectionKey) => {
+    const section = child.sections && child.sections[sectionKey] && typeof child.sections[sectionKey] === 'object' ? child.sections[sectionKey] : {};
+    const rows = Array.isArray(section.rows) ? section.rows : (Array.isArray(section.items) ? section.items : []);
+    return {
+      rows,
+      items: Array.isArray(section.items) ? section.items : rows,
+      loading: section.loading === true,
+      loaded: section.loaded === true,
+      next_cursor: section.next_cursor ?? section.nextCursor ?? null,
+      known_total_count: Number.isFinite(Number(section.known_total_count ?? section.knownTotalCount ?? section.total_count ?? section.totalCount))
+        ? Math.max(0, Math.trunc(Number(section.known_total_count ?? section.knownTotalCount ?? section.total_count ?? section.totalCount)))
+        : null,
+      error: trimStr(section.error)
+    };
+  };
 
   const childComms = asObj(child.communications) || {};
   const commSummary = asObj(childComms.summary) || {};
   const commResult = asObj(childComms.result) || {};
-  const remittanceSummary = asObj(commSummary.remittance);
-  const payoutNoticeSummary = asObj(commSummary.payout_notice);
-  const remittanceResult = asObj(commResult.remittance);
-  const payoutNoticeResult = asObj(commResult.payout_notice);
-  const lastSendResult = asObj(child.lastCommunicationSendResult);
+  const remittanceSummary = asObj(commSummary.remittance) || asObj(data?.remittance_summary) || asObj(batch?.remittance_summary) || {};
+  const payoutNoticeSummary = asObj(commSummary.payout_notice) || asObj(data?.payout_notice_summary) || asObj(batch?.payout_notice_summary) || {};
+  const remittanceResult = asObj(commResult.remittance) || asObj(data?.remittance_result) || {};
+  const payoutNoticeResult = asObj(commResult.payout_notice) || asObj(data?.payout_notice_result) || {};
+
+  const remittanceSection = sectionState('remittances');
+  const communicationSection = sectionState('communications');
+
+  const candidates = isBootstrap ? [] : asArr(data?.candidates);
+  const candidateNameById = new Map();
+  const umbrellaNameById = new Map();
+  for (const c of candidates) {
+    const cid = trimStr(c?.candidate_id || c?.id);
+    const candName = trimStr(c?.candidate_display_name) || trimStr(c?.display_name) || trimStr(c?.candidate_name) || trimStr(c?.candidate_tms_ref) || trimStr(c?.tms_ref);
+    if (cid && candName && !candidateNameById.has(cid)) candidateNameById.set(cid, candName);
+    const umbrellaId = trimStr(c?.umbrella_id || c?.umbrellaId || c?.payee_entity_id || '');
+    const umbrellaName = trimStr(c?.umbrella_display_name) || trimStr(c?.umbrella_name) || trimStr(c?.umbrella_company_name) || trimStr(c?.payee_display_name) || trimStr(c?.payee_name);
+    if (umbrellaId && umbrellaName && !umbrellaNameById.has(umbrellaId)) umbrellaNameById.set(umbrellaId, umbrellaName);
+  }
 
   const pickCount = (obj, keys) => {
     const src = asObj(obj) || {};
     for (const key of keys) {
       const n = Number(src[key]);
-      if (Number.isFinite(n)) return Math.trunc(n);
+      if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
     }
     return 0;
   };
@@ -52814,89 +53268,11 @@ function renderBankingPayBatchChildModalRemittanceTab() {
   const payoutSentCount = pickCount(payoutNoticeResult, ['sent_count']);
   const payoutSkippedCount = pickCount(payoutNoticeResult, ['skipped_count']);
 
-  const hasRemittances =
-    childComms.has_remittances === true ||
-    remittanceTargetCount > 0 ||
-    remittanceQueuedCount > 0 ||
-    remittanceSentCount > 0 ||
-    remittanceSkippedCount > 0;
+  const hasRemittances = childComms.has_remittances === true || remittanceTargetCount > 0 || remittanceQueuedCount > 0 || remittanceSentCount > 0 || remittanceSkippedCount > 0 || remittanceSection.rows.length > 0 || Number(remittanceSection.known_total_count || 0) > 0;
+  const hasPayoutNotices = childComms.has_payout_notices === true || payoutNoticeTargetCount > 0 || payoutQueuedCount > 0 || payoutSentCount > 0 || payoutSkippedCount > 0 || communicationSection.rows.length > 0 || Number(communicationSection.known_total_count || 0) > 0;
+  const modeLabel = communicationModeLabel(childComms.mode || commResult.mode || '', hasRemittances, hasPayoutNotices);
 
-  const hasPayoutNotices =
-    childComms.has_payout_notices === true ||
-    payoutNoticeTargetCount > 0 ||
-    payoutQueuedCount > 0 ||
-    payoutSentCount > 0 ||
-    payoutSkippedCount > 0;
-
-  const modeLabel = communicationModeLabel(
-    childComms.mode || commResult.mode || '',
-    hasRemittances,
-    hasPayoutNotices
-  );
-
-  const sourceKey = JSON.stringify({
-    batchId,
-    remittanceTargets: remittanceTargetCount,
-    remittanceQueued: remittanceQueuedCount,
-    remittanceSent: remittanceSentCount,
-    remittanceSkipped: remittanceSkippedCount,
-    payoutTargets: payoutNoticeTargetCount,
-    payoutQueued: payoutQueuedCount,
-    payoutSent: payoutSentCount,
-    payoutSkipped: payoutSkippedCount,
-    batchStatus: trimStr(batch?.status),
-    payDate: trimStr(batch?.pay_date),
-    lastCheck: trimStr(batch?.last_status_checked_at_utc)
-  });
-
-  if (trimStr(remState.sourceKey) !== sourceKey) {
-    remState.sourceKey = sourceKey;
-    remState.loading = false;
-    remState.loaded = false;
-    remState.error = '';
-    remState.items = [];
-    remState.total_count = 0;
-    remState.fetched = 0;
-    remState.loaded_count = 0;
-    remState.server_total_count = 0;
-    remState.truncated = false;
-    remState.complete = false;
-    remState.last_loaded_at_utc = '';
-  }
-
-  const stillTopIsThisChild = () => {
-    try {
-      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      if (!fr) return false;
-      if (String(fr.kind || '') !== KIND) return false;
-      const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-      if (!ctx || String(ctx.entity || '') !== 'banking') return false;
-      if (fr._ctxRef !== ctx) return false;
-      const c2 = (ctx.banking && ctx.banking.pay && ctx.banking.pay.child && typeof ctx.banking.pay.child === 'object') ? ctx.banking.pay.child : null;
-      if (!c2) return false;
-      if (String(c2.openToken || '') !== String(child.openToken || '')) return false;
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  const rerenderIfStillOnRemittance = async () => {
-    try {
-      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      if (!fr) return;
-      if (String(fr.kind || '') !== KIND) return;
-      if (!stillTopIsThisChild()) return;
-      const currentTab = String(fr.currentTabKey || child?.ui?.activeTabKey || '').trim();
-      if (currentTab !== 'remittance') return;
-      fr._suppressDirty = true;
-      await fr.setTab('remittance');
-      fr._suppressDirty = false;
-      fr._updateButtons && fr._updateButtons();
-    } catch {}
-  };
-
-  const normalizeOutboxRow = (raw) => {
+  const normalizeOutboxRow = (raw, idx = 0) => {
     const row = asObj(raw) || {};
     const outboxId = trimStr(row.outbox_id || row.id);
     const channel = upperTrim(row.channel || 'EMAIL');
@@ -52904,28 +53280,17 @@ function renderBankingPayBatchChildModalRemittanceTab() {
     const queueState = upperTrim(row.queue_state || row.delivery_status || row.status);
     const reference = trimStr(row.reference);
     const referenceLower = reference.toLowerCase();
-    const kindKey = referenceLower.startsWith('payout_notice:') ? 'PAYOUT_NOTICE' : 'REMITTANCE';
+    const kindRaw = upperTrim(row.kind_key || row.remittance_type || row.message_kind || row.job_kind || row.type || '');
+    const kindKey = kindRaw === 'PAYOUT_NOTICE' || referenceLower.startsWith('payout_notice:') ? 'PAYOUT_NOTICE' : 'REMITTANCE';
     const recipientKind = lowerTrim(row.recipient_kind);
-    const recipientId = trimStr(row.recipient_id);
-    const toAddress = trimStr(row.to_address);
+    const recipientId = trimStr(row.recipient_id || row.candidate_id || row.umbrella_id);
+    const toAddress = trimStr(row.to_address || row.to);
     const subject = trimStr(row.subject);
-    const bodyPreview =
-      trimStr(row.body_preview) ||
-      trimStr(row.preview) ||
-      trimStr(row.body_text) ||
-      trimStr(row.message_preview) ||
-      '';
-
-    let recipientLabel = '';
-    if (recipientKind === 'candidate' && recipientId && candidateNameById.has(recipientId)) {
-      recipientLabel = candidateNameById.get(recipientId) || '';
-    } else if (recipientKind === 'umbrella' && recipientId && umbrellaNameById.has(recipientId)) {
-      recipientLabel = umbrellaNameById.get(recipientId) || '';
-    }
-
-    if (!recipientLabel) {
-      recipientLabel = trimStr(row.recipient_display_name) || toAddress || recipientId || 'Recipient';
-    }
+    const bodyPreview = trimStr(row.body_preview) || trimStr(row.preview) || trimStr(row.body_text) || trimStr(row.message_preview) || '';
+    let recipientLabel = trimStr(row.recipient_display_name) || trimStr(row.recipient_label);
+    if (!recipientLabel && recipientKind === 'candidate' && recipientId && candidateNameById.has(recipientId)) recipientLabel = candidateNameById.get(recipientId) || '';
+    if (!recipientLabel && recipientKind === 'umbrella' && recipientId && umbrellaNameById.has(recipientId)) recipientLabel = umbrellaNameById.get(recipientId) || '';
+    if (!recipientLabel) recipientLabel = toAddress || recipientId || 'Recipient';
 
     const typeLabel = kindKey === 'PAYOUT_NOTICE' ? 'Candidate payout notice' : 'Umbrella remittance';
     const latestResultLabel = (() => {
@@ -52935,37 +53300,23 @@ function renderBankingPayBatchChildModalRemittanceTab() {
       if (queueState === 'FAILED') return 'Failed';
       if (queueState === 'SCHEDULED') return 'Scheduled';
       if (queueState === 'QUEUED') return 'Queued';
+      if (queueState === 'SKIPPED') return 'Skipped';
       return status || 'Queued';
     })();
-
     const latestResultMeta = (() => {
       if (queueState === 'READ' && row.read_at) return `Read ${fmtUtcToUk(row.read_at)}`;
       if (queueState === 'DELIVERED' && row.delivered_at) return `Delivered ${fmtUtcToUk(row.delivered_at)}`;
       if (queueState === 'SENT' && row.sent_at) return `Sent ${fmtUtcToUk(row.sent_at)}`;
-      if (queueState === 'FAILED') {
-        const failedAt = trimStr(row.failed_at);
-        const lastError = trimStr(row.last_error);
-        if (failedAt && lastError) return `${fmtUtcToUk(failedAt)} • ${lastError}`;
-        if (failedAt) return fmtUtcToUk(failedAt);
-        if (lastError) return lastError;
-      }
+      if (queueState === 'FAILED') return trimStr(row.failed_at ? `${fmtUtcToUk(row.failed_at)}${row.last_error ? ` • ${row.last_error}` : ''}` : row.last_error);
       if (queueState === 'SCHEDULED' && row.scheduled_for_utc) return `Scheduled ${fmtUtcToUk(row.scheduled_for_utc)}`;
       if (queueState === 'QUEUED' && row.created_at_utc) return `Queued ${fmtUtcToUk(row.created_at_utc)}`;
-      return '';
+      return trimStr(row.result_meta || row.latest_result_meta);
     })();
-
-    const resultPillClass =
-      (queueState === 'READ' || queueState === 'DELIVERED' || queueState === 'SENT')
-        ? 'pill pill-ok'
-        : (queueState === 'FAILED')
-          ? 'pill pill-bad'
-          : (queueState === 'SCHEDULED' || queueState === 'QUEUED')
-            ? 'pill pill-info'
-            : 'pill';
+    const resultPillClass = (queueState === 'READ' || queueState === 'DELIVERED' || queueState === 'SENT') ? 'pill pill-ok' : (queueState === 'FAILED') ? 'pill pill-bad' : (queueState === 'SCHEDULED' || queueState === 'QUEUED') ? 'pill pill-info' : (queueState === 'SKIPPED') ? 'pill pill-warn' : 'pill';
 
     return {
-      source: 'OUTBOX',
-      rowKey: outboxId ? `EMAIL::${outboxId}` : `REF::${reference}`,
+      source: row.source || 'OUTBOX',
+      rowKey: trimStr(row.rowKey || row.row_key || (outboxId ? `EMAIL::${outboxId}` : `ROW::${idx}`)),
       outbox_id: outboxId,
       channel,
       reference,
@@ -52983,220 +53334,27 @@ function renderBankingPayBatchChildModalRemittanceTab() {
       latest_result_meta: latestResultMeta,
       result_pill_class: resultPillClass,
       created_at_utc: trimStr(row.created_at_utc),
-      sent_at: trimStr(row.sent_at),
-      delivered_at: trimStr(row.delivered_at),
-      read_at: trimStr(row.read_at),
-      failed_at: trimStr(row.failed_at),
-      last_error: trimStr(row.last_error),
       is_previewable: !!outboxId && channel === 'EMAIL'
     };
   };
 
-  const buildSkippedItems = (resultObj, forcedKindKey) => {
-    const src = asObj(resultObj) || {};
-    const skipped = asArr(src.skipped);
-    return skipped.map((item, idx) => {
-      const raw = asObj(item) || {};
-      const kindRaw = upperTrim(forcedKindKey || raw.job_kind || raw.comm_kind || raw.message_kind || '');
-      const kindKey = (kindRaw === 'PAYOUT_NOTICE') ? 'PAYOUT_NOTICE' : 'REMITTANCE';
-      const recipientKind = lowerTrim(raw.payee_entity_kind);
-      const recipientId = trimStr(raw.payee_entity_id || raw.candidate_id || raw.umbrella_id);
-      let recipientLabel = '';
-      if (recipientKind === 'candidate' && recipientId && candidateNameById.has(recipientId)) {
-        recipientLabel = candidateNameById.get(recipientId) || '';
-      } else if (recipientKind === 'umbrella' && recipientId && umbrellaNameById.has(recipientId)) {
-        recipientLabel = umbrellaNameById.get(recipientId) || '';
-      }
-      const toAddress = trimStr(raw.to || raw.intended_to);
-      if (!recipientLabel) recipientLabel = toAddress || recipientId || 'Recipient';
-
-      return {
-        source: 'SKIPPED',
-        rowKey: `SKIPPED:${kindKey}:${recipientId || toAddress || idx}`,
-        outbox_id: '',
-        channel: 'EMAIL',
-        reference: trimStr(raw.reference),
-        kind_key: kindKey,
-        kind_label: kindKey === 'PAYOUT_NOTICE' ? 'Candidate payout notice' : 'Umbrella remittance',
-        recipient_kind: recipientKind,
-        recipient_id: recipientId,
-        recipient_label: recipientLabel,
-        to_address: toAddress,
-        subject: trimStr(raw.subject),
-        body_preview: '',
-        status: 'SKIPPED',
-        queue_state: 'SKIPPED',
-        latest_result_label: 'Skipped',
-        latest_result_meta: trimStr(raw.trigger_status || raw.reason || raw.error),
-        result_pill_class: 'pill pill-warn',
-        created_at_utc: '',
-        sent_at: '',
-        delivered_at: '',
-        read_at: '',
-        failed_at: '',
-        last_error: trimStr(raw.error),
-        is_previewable: false
-      };
-    });
-  };
-
-  const loadRemittanceRows = async () => {
-    const requestSeq = Number(remState.requestSeq || 0) + 1;
-    remState.requestSeq = requestSeq;
-    remState.loading = true;
-    remState.error = '';
-    await rerenderIfStillOnRemittance();
-
-    try {
-      if (typeof bankingOutboxList !== 'function') {
-        throw new Error('bankingOutboxList is not available.');
-      }
-
-      const out = await bankingOutboxList({
-        state_scope: 'child',
-        context_kind: 'pay_batches',
-        context_id: batchId,
-        channel: 'EMAIL',
-        limit: 500,
-        offset: 0,
-        sort_by: 'created_at_utc',
-        sort_dir: 'desc'
-      });
-
-      const stateNow = (pay.child && pay.child.remittanceTab && typeof pay.child.remittanceTab === 'object')
-        ? pay.child.remittanceTab
-        : remState;
-
-      if (!out && !trimStr(stateNow.error)) {
-        throw new Error('Failed to load remittance rows');
-      }
-
-      const outboxRows = asArr(stateNow.items && stateNow.items.length ? stateNow.items : out?.items);
-
-      const authoritativeTotalCount = Number(
-        stateNow.total_count != null ? stateNow.total_count : out?.total_count
-      );
-      const fetchedCount = Number(
-        stateNow.fetched != null ? stateNow.fetched : out?.fetched
-      );
-      const loadedCount = Number(
-        stateNow.loaded_count != null ? stateNow.loaded_count : out?.loaded_count
-      );
-      const serverTotalCount = Number(
-        stateNow.server_total_count != null ? stateNow.server_total_count : out?.server_total_count
-      );
-      const truncated = (stateNow.truncated === true) || (out?.truncated === true);
-      const complete = (stateNow.complete === true) || (out?.complete === true);
-
-      const skippedFromLastSend = [
-        ...buildSkippedItems(asObj(lastSendResult?.remittance_result), 'REMITTANCE'),
-        ...buildSkippedItems(asObj(lastSendResult?.payout_notice_result), 'PAYOUT_NOTICE')
-      ];
-
-      const merged = [];
-      const seenKeys = new Set();
-
-      for (const rowRaw of outboxRows) {
-        const row = (rowRaw && typeof rowRaw === 'object' && trimStr(rowRaw.row_key || rowRaw.rowKey || rowRaw.outbox_id))
-          ? rowRaw
-          : normalizeOutboxRow(rowRaw);
-
-        const key = trimStr(
-          row?.rowKey ||
-          row?.row_key ||
-          row?.preview_key ||
-          ((trimStr(row?.channel) && trimStr(row?.outbox_id)) ? `${trimStr(row.channel)}::${trimStr(row.outbox_id)}` : '')
-        );
-        if (!key) continue;
-        if (seenKeys.has(key)) continue;
-        seenKeys.add(key);
-        merged.push(row);
-      }
-
-      for (const row of skippedFromLastSend) {
-        const key = trimStr(
-          row?.rowKey ||
-          row?.row_key ||
-          row?.preview_key ||
-          ((trimStr(row?.channel) && trimStr(row?.outbox_id)) ? `${trimStr(row.channel)}::${trimStr(row.outbox_id)}` : '')
-        );
-        if (!key) continue;
-        if (seenKeys.has(key)) continue;
-        seenKeys.add(key);
-        merged.push(row);
-      }
-
-      merged.sort((a, b) => {
-        const ta = trimStr(a?.created_at_utc);
-        const tb = trimStr(b?.created_at_utc);
-        if (ta && tb && ta !== tb) return tb.localeCompare(ta);
-        if (ta && !tb) return -1;
-        if (!ta && tb) return 1;
-        return String(a?.rowKey || a?.row_key || '').localeCompare(String(b?.rowKey || b?.row_key || ''));
-      });
-
-      if (!stillTopIsThisChild()) return;
-      if (Number(remState.requestSeq || 0) !== requestSeq) return;
-
-      remState.items = merged;
-      remState.total_count = Number.isFinite(authoritativeTotalCount) ? Math.trunc(authoritativeTotalCount) : 0;
-      remState.fetched = Number.isFinite(fetchedCount) ? Math.trunc(fetchedCount) : 0;
-      remState.loaded_count = Number.isFinite(loadedCount) ? Math.trunc(loadedCount) : outboxRows.length;
-      remState.server_total_count = Number.isFinite(serverTotalCount) ? Math.trunc(serverTotalCount) : remState.fetched;
-      remState.truncated = !!truncated;
-      remState.complete = !!complete;
-      remState.error = trimStr(stateNow.error || '');
-      remState.loaded = true;
-      remState.loading = false;
-      remState.last_loaded_at_utc = trimStr(
-        stateNow.last_loaded_at_utc ||
-        stateNow.list?.loaded_at_utc ||
-        new Date().toISOString()
-      );
-
-      await rerenderIfStillOnRemittance();
-    } catch (e) {
-      if (!stillTopIsThisChild()) return;
-      if (Number(remState.requestSeq || 0) !== requestSeq) return;
-
-      remState.error = String(e?.message || e || 'Failed to load remittance rows');
-      remState.loaded = true;
-      remState.loading = false;
-      remState.items = [];
-      remState.total_count = 0;
-      remState.fetched = 0;
-      remState.loaded_count = 0;
-      remState.server_total_count = 0;
-      remState.truncated = false;
-      remState.complete = false;
-      await rerenderIfStillOnRemittance();
-    }
-  };
-
-  if (!remState.loaded && !remState.loading && batchId) {
-    try {
-      setTimeout(() => { void loadRemittanceRows(); }, 0);
-    } catch {
-      void loadRemittanceRows();
-    }
-  }
-
-  const items = asArr(remState.items);
+  const items = isBootstrap
+    ? [...remittanceSection.rows, ...communicationSection.rows].map(normalizeOutboxRow)
+    : asArr(data?.communications?.items || data?.outbox_rows || data?.remittance_rows || []).map(normalizeOutboxRow);
 
   const umbrellaRows = items.filter((row) => upperTrim(row?.kind_key) === 'REMITTANCE');
   const payoutRows = items.filter((row) => upperTrim(row?.kind_key) === 'PAYOUT_NOTICE');
-
   const countByState = (rows, state) => rows.filter((row) => upperTrim(row?.queue_state || row?.status) === state).length;
 
-  const sectionSummaryHtml = (title, rows, targets, queuedCount, sentCount, skippedCount) => {
+  const sectionSummaryHtml = (title, rows, targets, queuedCount, sentCount, skippedCount, sectionObj = null) => {
     const failedCount = countByState(rows, 'FAILED');
     const deliveredCount = countByState(rows, 'DELIVERED');
     const readCount = countByState(rows, 'READ');
-
+    const totalKnown = sectionObj && sectionObj.known_total_count != null ? sectionObj.known_total_count : null;
     return `
       <div class="card" style="padding:8px;">
         <div class="mini" style="opacity:.8;">${enc(title)}</div>
-        <div class="mono">${enc(String(rows.length))} row${rows.length === 1 ? '' : 's'}</div>
+        <div class="mono">${enc(String(rows.length))}${totalKnown != null && totalKnown > rows.length ? ` / ${enc(String(totalKnown))}` : ''} row${rows.length === 1 ? '' : 's'}</div>
         <div class="mini" style="opacity:.85;">
           Targets: <span class="mono">${enc(String(targets))}</span>
           • Queued: <span class="mono">${enc(String(queuedCount))}</span>
@@ -53205,6 +53363,7 @@ function renderBankingPayBatchChildModalRemittanceTab() {
           • Skipped: <span class="mono">${enc(String(skippedCount))}</span>
           ${deliveredCount > 0 ? ` • Delivered: <span class="mono">${enc(String(deliveredCount))}</span>` : ''}
           ${readCount > 0 ? ` • Read: <span class="mono">${enc(String(readCount))}</span>` : ''}
+          ${sectionObj?.loading ? ' • loading…' : ''}
         </div>
       </div>
     `;
@@ -53213,51 +53372,18 @@ function renderBankingPayBatchChildModalRemittanceTab() {
   const rowsTableHtml = (rows, emptyLabel) => {
     const rowsHtml = rows.length
       ? rows.map((row) => {
-          const previewableAttrs = row.is_previewable
-            ? ` data-remittance-outbox-id="${enc(row.outbox_id)}" data-channel="${enc(row.channel || 'EMAIL')}" data-action="banking:pay:child:openRemittanceHtml" style="cursor:pointer;"`
-            : '';
-
-          const latestMetaHtml = trimStr(row.latest_result_meta)
-            ? `<div class="mini" style="opacity:.8; white-space:pre-wrap;">${enc(row.latest_result_meta)}</div>`
-            : '';
-
-          const previewHtml = trimStr(row.body_preview)
-            ? `<div class="mini" style="opacity:.8; white-space:pre-wrap;">${enc(row.body_preview)}</div>`
-            : '';
-
-          const referenceHtml = trimStr(row.reference)
-            ? `<div class="mini"><span class="mono">${enc(row.reference)}</span></div>`
-            : '';
-
+          const previewableAttrs = row.is_previewable ? ` data-remittance-outbox-id="${enc(row.outbox_id)}" data-channel="${enc(row.channel || 'EMAIL')}" data-action="banking:pay:child:openRemittanceHtml" style="cursor:pointer;"` : '';
+          const latestMetaHtml = trimStr(row.latest_result_meta) ? `<div class="mini" style="opacity:.8; white-space:pre-wrap;">${enc(row.latest_result_meta)}</div>` : '';
+          const previewHtml = trimStr(row.body_preview) ? `<div class="mini" style="opacity:.8; white-space:pre-wrap;">${enc(row.body_preview)}</div>` : '';
+          const referenceHtml = trimStr(row.reference) ? `<div class="mini"><span class="mono">${enc(row.reference)}</span></div>` : '';
           return `
             <tr${previewableAttrs} title="${enc(row.is_previewable ? 'Double-click to open the exact rendered communication.' : 'No exact rendered outbox item is available for preview.')}">
               <td class="mini" style="white-space:nowrap;">${enc(row.created_at_utc ? fmtUtcToUk(row.created_at_utc) : '—')}</td>
-              <td>
-                <div style="display:flex; flex-direction:column; gap:4px;">
-                  <div>${enc(row.recipient_label || 'Recipient')}</div>
-                  ${trimStr(row.to_address) ? `<div class="mini mono" style="opacity:.8;">${enc(row.to_address)}</div>` : ''}
-                </div>
-              </td>
-              <td>
-                <div style="display:flex; flex-direction:column; gap:4px;">
-                  <span class="pill ${upperTrim(row.kind_key) === 'PAYOUT_NOTICE' ? 'pill-warn' : 'pill-info'}">${enc(row.kind_label || 'Communication')}</span>
-                </div>
-              </td>
-              <td>
-                <div style="display:flex; flex-direction:column; gap:4px;">
-                  <span class="${enc(row.result_pill_class || 'pill')}">${enc(row.latest_result_label || '—')}</span>
-                  ${latestMetaHtml}
-                </div>
-              </td>
-              <td>
-                <div style="display:flex; flex-direction:column; gap:4px;">
-                  <div>${enc(trimStr(row.subject) || '—')}</div>
-                  ${previewHtml}
-                </div>
-              </td>
-              <td>
-                ${referenceHtml || `<span class="mini" style="opacity:.75;">—</span>`}
-              </td>
+              <td><div style="display:flex; flex-direction:column; gap:4px;"><div>${enc(row.recipient_label || 'Recipient')}</div>${trimStr(row.to_address) ? `<div class="mini mono" style="opacity:.8;">${enc(row.to_address)}</div>` : ''}</div></td>
+              <td><span class="pill ${upperTrim(row.kind_key) === 'PAYOUT_NOTICE' ? 'pill-warn' : 'pill-info'}">${enc(row.kind_label || 'Communication')}</span></td>
+              <td><span class="${enc(row.result_pill_class || 'pill')}">${enc(row.latest_result_label || '—')}</span>${latestMetaHtml}</td>
+              <td><div>${enc(trimStr(row.subject) || '—')}</div>${previewHtml}</td>
+              <td>${referenceHtml || `<span class="mini" style="opacity:.75;">—</span>`}</td>
             </tr>
           `;
         }).join('')
@@ -53266,51 +53392,18 @@ function renderBankingPayBatchChildModalRemittanceTab() {
     return `
       <div style="max-height:min(52vh, 560px); overflow:auto; border:1px solid var(--line); border-radius:10px;">
         <table class="grid" style="min-width:1100px; table-layout:auto;">
-          <thead>
-            <tr>
-              <th style="width:160px; position:sticky; top:0; z-index:1; background:var(--panel, #fff);">Created</th>
-              <th style="position:sticky; top:0; z-index:1; background:var(--panel, #fff);">Recipient</th>
-              <th style="width:200px; position:sticky; top:0; z-index:1; background:var(--panel, #fff);">Remittance / notice type</th>
-              <th style="width:220px; position:sticky; top:0; z-index:1; background:var(--panel, #fff);">Latest result</th>
-              <th style="position:sticky; top:0; z-index:1; background:var(--panel, #fff);">Subject / preview</th>
-              <th style="width:300px; position:sticky; top:0; z-index:1; background:var(--panel, #fff);">Reference</th>
-            </tr>
-          </thead>
+          <thead><tr><th style="width:160px;">Created</th><th>Recipient</th><th style="width:200px;">Remittance / notice type</th><th style="width:220px;">Latest result</th><th>Subject / preview</th><th style="width:300px;">Reference</th></tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
       </div>
     `;
   };
 
-  const latestResultSummaryLabel = (() => {
-    const hasResult =
-      remittanceQueuedCount > 0 ||
-      remittanceSentCount > 0 ||
-      remittanceSkippedCount > 0 ||
-      payoutQueuedCount > 0 ||
-      payoutSentCount > 0 ||
-      payoutSkippedCount > 0;
-
-    return hasResult ? modeLabel : 'Not sent yet';
-  })();
-
-  const loadingHtml = remState.loading
-    ? `<div class="mini" style="opacity:.85;">Loading remittance outbox rows…</div>`
-    : '';
-
-  const errorHtml = trimStr(remState.error)
-    ? `<div class="error" style="white-space:pre-wrap; margin-bottom:10px;">${enc(remState.error)}</div>`
-    : '';
-
-  const lastLoadedHtml = trimStr(remState.last_loaded_at_utc)
-    ? `<div class="mini" style="opacity:.8;">Last loaded: <span class="mono">${enc(fmtUtcToUk(remState.last_loaded_at_utc))}</span></div>`
-    : '';
-
-  const loadedRowsCount = Number.isFinite(Number(remState.loaded_count)) ? Math.trunc(Number(remState.loaded_count)) : 0;
-  const totalRowsCount = Number.isFinite(Number(remState.total_count)) ? Math.trunc(Number(remState.total_count)) : 0;
-  const fetchedRowsCount = Number.isFinite(Number(remState.fetched)) ? Math.trunc(Number(remState.fetched)) : 0;
-  const serverTotalRowsCount = Number.isFinite(Number(remState.server_total_count)) ? Math.trunc(Number(remState.server_total_count)) : 0;
-  const skippedSupplementCount = items.filter((row) => upperTrim(row?.queue_state || row?.status) === 'SKIPPED').length;
+  const latestResultSummaryLabel = (remittanceQueuedCount > 0 || remittanceSentCount > 0 || remittanceSkippedCount > 0 || payoutQueuedCount > 0 || payoutSentCount > 0 || payoutSkippedCount > 0) ? modeLabel : 'Not sent yet';
+  const loadingHtml = remittanceSection.loading || communicationSection.loading ? `<div class="mini" style="opacity:.85;">Loading remittance/communication rows…</div>` : '';
+  const errorHtml = remittanceSection.error || communicationSection.error ? `<div class="error" style="white-space:pre-wrap; margin-bottom:10px;">${enc(remittanceSection.error || communicationSection.error)}</div>` : '';
+  const loadedRowsCount = items.length;
+  const totalRowsCount = (remittanceSection.known_total_count || 0) + (communicationSection.known_total_count || 0);
 
   return `
     <div id="${enc(rootId)}">
@@ -53318,80 +53411,39 @@ function renderBankingPayBatchChildModalRemittanceTab() {
         <div class="row">
           <label>Remittance</label>
           <div class="controls" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-            <span class="mini" style="opacity:.85;">
-              Read-only view of remittance and payout-notice outbox rows for this pay batch. Double-click a row to open the exact rendered communication sent or queued for the recipient.
-            </span>
+            <span class="mini" style="opacity:.85;">Read-only view of remittance and payout-notice rows for this pay batch. Double-click a row to open the exact rendered communication where available.</span>
             <span class="pill pill-info" title="Batch id">${enc(batchId ? `${batchId.slice(0, 8)}…` : 'No batch')}</span>
             <span class="pill">${enc(modeLabel)}</span>
+            ${isBootstrap ? `<span class="pill pill-info">Paged detail</span>` : ''}
             <span class="mini">Pay date: <span class="mono">${enc(trimStr(batch?.pay_date) || '—')}</span></span>
             <span class="mini">Batch status: <span class="mono">${enc(trimStr(batch?.status) || '—')}</span></span>
             <span class="mini">Latest communication result: <span class="mono">${enc(latestResultSummaryLabel)}</span></span>
-            ${lastLoadedHtml}
           </div>
         </div>
       </div>
-
       ${errorHtml}
-
       <div class="card" style="padding:10px; margin-bottom:10px;">
         <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Communication summary</div>
         <div style="display:grid; grid-template-columns:repeat(3,minmax(200px,1fr)); gap:8px;">
-          ${sectionSummaryHtml(
-            'Umbrella remittance rows',
-            umbrellaRows,
-            remittanceTargetCount,
-            remittanceQueuedCount,
-            remittanceSentCount,
-            remittanceSkippedCount
-          )}
-          ${sectionSummaryHtml(
-            'Candidate payout notice rows',
-            payoutRows,
-            payoutNoticeTargetCount,
-            payoutQueuedCount,
-            payoutSentCount,
-            payoutSkippedCount
-          )}
+          ${sectionSummaryHtml('Umbrella remittance rows', umbrellaRows, remittanceTargetCount, remittanceQueuedCount, remittanceSentCount, remittanceSkippedCount, remittanceSection)}
+          ${sectionSummaryHtml('Candidate payout notice rows', payoutRows, payoutNoticeTargetCount, payoutQueuedCount, payoutSentCount, payoutSkippedCount, communicationSection)}
           <div class="card" style="padding:8px;">
             <div class="mini" style="opacity:.8;">Outbox load state</div>
             <div class="mono">${enc(String(loadedRowsCount))}${totalRowsCount > loadedRowsCount ? ` / ${enc(String(totalRowsCount))}` : ''}</div>
-            <div class="mini" style="opacity:.85;">
-              Matching outbox rows: <span class="mono">${enc(String(totalRowsCount))}</span>
-              • Displayed outbox rows: <span class="mono">${enc(String(loadedRowsCount))}</span>
-              • Source rows fetched: <span class="mono">${enc(String(fetchedRowsCount))}</span>
-              ${serverTotalRowsCount > 0 ? ` • Server total: <span class="mono">${enc(String(serverTotalRowsCount))}</span>` : ''}
-              ${skippedSupplementCount > 0 ? ` • Added skipped rows: <span class="mono">${enc(String(skippedSupplementCount))}</span>` : ''}
-              • Complete: <span class="mono">${enc(remState.complete ? 'Yes' : 'No')}</span>
-              • Truncated: <span class="mono">${enc(remState.truncated ? 'Yes' : 'No')}</span>
-            </div>
+            <div class="mini" style="opacity:.85;">Rows are loaded page-by-page${isBootstrap ? ' from the batch section API' : ''}. ${remittanceSection.next_cursor || communicationSection.next_cursor ? 'More rows are available.' : 'No further cursor currently available.'}</div>
           </div>
         </div>
       </div>
-
       ${loadingHtml}
-
-      <div class="card" style="padding:10px; margin-bottom:10px;">
-        <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Umbrella remittance rows</div>
-        ${rowsTableHtml(
-          umbrellaRows,
-          hasRemittances
-            ? 'No umbrella remittance outbox rows are currently available in this modal.'
-            : 'This batch currently has no umbrella remittance items.'
-        )}
-      </div>
-
-      <div class="card" style="padding:10px;">
-        <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Candidate payout notice rows</div>
-        ${rowsTableHtml(
-          payoutRows,
-          hasPayoutNotices
-            ? 'No candidate payout-notice outbox rows are currently available in this modal.'
-            : 'This batch currently has no candidate payout-notice items.'
-        )}
-      </div>
+      <div class="card" style="padding:10px; margin-bottom:10px;"><div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Umbrella remittance rows</div>${rowsTableHtml(umbrellaRows, hasRemittances ? 'No umbrella remittance rows are currently loaded in this modal.' : 'This batch currently has no umbrella remittance items.')}</div>
+      <div class="card" style="padding:10px;"><div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Candidate payout notice rows</div>${rowsTableHtml(payoutRows, hasPayoutNotices ? 'No candidate payout-notice rows are currently loaded in this modal.' : 'This batch currently has no candidate payout-notice items.')}</div>
     </div>
   `;
 }
+
+
+
+
 
 function renderBankingPayBatchChildModalPayeWorksheetTab() {
   const enc = (typeof escapeHtml === 'function')
@@ -53426,9 +53478,7 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
         <div class="card">
           <div class="row">
             <label>PAYE Worksheet</label>
-            <div class="controls">
-              <div class="mini" style="opacity:.85;">Child modal state not available.</div>
-            </div>
+            <div class="controls"><div class="mini" style="opacity:.85;">Child modal state not available.</div></div>
           </div>
         </div>
       </div>
@@ -53436,10 +53486,32 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
   }
 
   const rootId = String(child.rootId || '').trim();
-  const id = String(child.batchId || '').trim();
+  const data = (child.data && typeof child.data === 'object' && !Array.isArray(child.data)) ? child.data : null;
+  const batch = (data && data.batch && typeof data.batch === 'object' && !Array.isArray(data.batch)) ? data.batch : null;
+  const isBootstrap = !!(data?.bootstrap_only === true || batch?.bootstrap_only === true);
 
-  const data = (child.data && typeof child.data === 'object') ? child.data : null;
-  const batch = (data && data.batch && typeof data.batch === 'object') ? data.batch : null;
+  const sectionState = (sectionKey) => {
+    const section = child.sections && child.sections[sectionKey] && typeof child.sections[sectionKey] === 'object' ? child.sections[sectionKey] : {};
+    const rows = Array.isArray(section.rows) ? section.rows : (Array.isArray(section.items) ? section.items : []);
+    return {
+      rows,
+      items: Array.isArray(section.items) ? section.items : rows,
+      loading: section.loading === true,
+      loaded: section.loaded === true,
+      next_cursor: section.next_cursor ?? section.nextCursor ?? null,
+      known_total_count: Number.isFinite(Number(section.known_total_count ?? section.knownTotalCount ?? section.total_count ?? section.totalCount))
+        ? Math.max(0, Math.trunc(Number(section.known_total_count ?? section.knownTotalCount ?? section.total_count ?? section.totalCount)))
+        : null,
+      error: String(section.error || '').trim()
+    };
+  };
+
+  const candidatesSection = sectionState('candidates');
+  const itemsSection = sectionState('items');
+  const candidateRowsFromSection = candidatesSection.rows.filter((row) => row && typeof row === 'object');
+  const fullCandidates = Array.isArray(data?.candidates) ? data.candidates : [];
+  const candidatesAll = isBootstrap ? candidateRowsFromSection : fullCandidates;
+
   const batchKindInfo = (typeof bankingNormalizeBatchKind === 'function')
     ? bankingNormalizeBatchKind(data)
     : {
@@ -53458,14 +53530,7 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
   if (batchKindInfo.isLoans) {
     return `
       <div id="${enc(rootId)}">
-        <div class="card">
-          <div class="row">
-            <label>PAYE Worksheet</label>
-            <div class="controls">
-              <div class="mini" style="opacity:.85;">This is a LOANS batch. PAYE worksheet is not applicable.</div>
-            </div>
-          </div>
-        </div>
+        <div class="card"><div class="row"><label>PAYE Worksheet</label><div class="controls"><div class="mini" style="opacity:.85;">This is a LOANS batch. PAYE worksheet is not applicable.</div></div></div></div>
       </div>
     `;
   }
@@ -53473,37 +53538,23 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
   if (!batchKindInfo.isPayeish) {
     return `
       <div id="${enc(rootId)}">
-        <div class="card">
-          <div class="row">
-            <label>PAYE Worksheet</label>
-            <div class="controls">
-              <div class="mini" style="opacity:.85;">This batch has no PAYE candidates.</div>
-            </div>
-          </div>
-        </div>
+        <div class="card"><div class="row"><label>PAYE Worksheet</label><div class="controls"><div class="mini" style="opacity:.85;">This batch has no PAYE candidates.</div></div></div></div>
       </div>
     `;
   }
 
-  const candidatesAll = (data && Array.isArray(data.candidates)) ? data.candidates : [];
   const candidates = candidatesAll.filter((candidate) => {
     const payeState = String(candidate?.paye_state || '').trim();
     if (payeState) return true;
-    const summary = (typeof bankingNormalizeCandidateDeductionsSummary === 'function')
-      ? bankingNormalizeCandidateDeductionsSummary(candidate)
-      : null;
-    return !!summary?.awaitingNet || summary?.payeNetAmount != null;
+    const summary = (typeof bankingNormalizeCandidateDeductionsSummary === 'function') ? bankingNormalizeCandidateDeductionsSummary(candidate) : null;
+    return !!summary?.awaitingNet || summary?.payeNetAmount != null || isBootstrap;
   });
 
   const filterId = String(child?.paye?.filterCandidateId || 'ALL').trim() || 'ALL';
-  const list = (filterId !== 'ALL')
-    ? candidates.filter(c => String(c?.candidate_id || '').trim() === filterId)
-    : candidates;
-
+  const list = (filterId !== 'ALL') ? candidates.filter(c => String(c?.candidate_id || c?.id || '').trim() === filterId) : candidates;
   const netDraft = (child?.paye?.netDraft && typeof child.paye.netDraft === 'object') ? child.paye.netDraft : {};
   const importBusy = !!child?.paye?.importBusy;
   const saveBusy = !!child?.paye?.saveBusy;
-
   const importErr = String(child?.paye?.importError || '').trim();
   const saveErr = String(child?.paye?.saveError || '').trim();
 
@@ -53519,15 +53570,12 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
     let any = false;
     let changedCount = 0;
     for (const c of candidates) {
-      const cid = String(c?.candidate_id || '').trim();
+      const cid = String(c?.candidate_id || c?.id || '').trim();
       if (!cid) continue;
       if (!Object.prototype.hasOwnProperty.call(netDraft, cid)) continue;
-
       const draftRaw = String(netDraft[cid] || '').trim();
       if (!draftRaw) continue;
-
       any = true;
-
       const existingNet = (c?.paye_net_amount != null) ? fmtMoney(c.paye_net_amount) : '';
       const d2 = normMoney2(draftRaw);
       if (d2 != null && d2 !== String(existingNet || '').trim()) changedCount += 1;
@@ -53535,229 +53583,12 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
     return { any, changedCount };
   })();
 
-  const toUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
-  const toNumberOrNull = (v) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  };
-  const pickSnapshotNumber = (...vals) => {
-    for (const v of vals) {
-      const n = toNumberOrNull(v);
-      if (n != null) return n;
-    }
-    return null;
-  };
-  const pickSnapshotText = (...vals) => {
-    for (const v of vals) {
-      const s = String(v == null ? '' : v).trim();
-      if (s) return s;
-    }
-    return '';
-  };
-  const classificationLabel = (classification) => {
-    const c = toUpper(classification);
-    if (c === 'REIMBURSEMENT_GROSS_FIXED') return 'Fixed reimbursement';
-    if (c === 'TAXABLE_CHANNEL_SENSITIVE') return 'Taxable';
-    return c ? c.replace(/_/g, ' ') : '';
-  };
-  const resolutionModeLabel = (mode) => {
-    const m = toUpper(mode);
-    if (m === 'SUGGESTED_EQUIVALENT_BASIS') return 'Suggested basis';
-    if (m === 'MANUAL_REPLACEMENT_RATE') return 'Manual rate';
-    if (m === 'MANUAL_AMOUNT') return 'Manual amount';
-    return m ? m.replace(/_/g, ' ') : '';
-  };
-  const treatmentLabel = (ctx) => {
-    const classification = toUpper(ctx?.classification);
-    const sourceMethod = toUpper(ctx?.source_pay_method);
-    const targetMethod = toUpper(ctx?.target_pay_method);
-    if (classification === 'REIMBURSEMENT_GROSS_FIXED') return 'Fixed reimbursement';
-    if (classification === 'TAXABLE_CHANNEL_SENSITIVE' && sourceMethod && targetMethod && sourceMethod !== targetMethod) {
-      return 'Taxable converted';
-    }
-    if (classification === 'TAXABLE_CHANNEL_SENSITIVE') return 'Frozen finance adjustment';
-    return 'Frozen finance';
-  };
-  const normaliseFrozenFinanceContext = (src) => {
-    if (!src || typeof src !== 'object') return null;
-
-    const classification = pickSnapshotText(
-      src.classification,
-      src.finance_component_classification,
-      src.frozen_component_classification,
-      src.snapshot_classification
-    );
-
-    const sourcePayMethod = pickSnapshotText(
-      src.source_pay_method,
-      src.finance_source_pay_method,
-      src.frozen_source_pay_method,
-      src.snapshot_source_pay_method
-    );
-
-    const targetPayMethod = pickSnapshotText(
-      src.target_pay_method,
-      src.current_target_pay_method,
-      src.saved_target_pay_method,
-      src.finance_target_pay_method,
-      src.frozen_target_pay_method,
-      src.snapshot_target_pay_method
-    );
-
-    const resolutionMode = pickSnapshotText(
-      src.resolution_mode,
-      src.saved_resolution_mode,
-      src.matched_saved_resolution_mode,
-      src.finance_resolution_mode,
-      src.frozen_resolution_mode,
-      src.snapshot_resolution_mode
-    );
-
-    const resolvedAmount = pickSnapshotNumber(
-      src.resolved_amount,
-      src.resolved_amount_ex_vat,
-      src.target_amount,
-      src.target_amount_ex_vat,
-      src.saved_resolution_result_json?.resolved_amount,
-      src.saved_resolution_result_json?.resolved_amount_ex_vat,
-      src.saved_resolution_result_json?.target_amount,
-      src.saved_resolution_result_json?.target_amount_ex_vat,
-      src.matched_saved_resolution_result_json?.resolved_amount,
-      src.matched_saved_resolution_result_json?.resolved_amount_ex_vat,
-      src.matched_saved_resolution_result_json?.target_amount,
-      src.matched_saved_resolution_result_json?.target_amount_ex_vat,
-      src.finance_resolved_amount,
-      src.frozen_resolved_amount,
-      src.snapshot_resolved_amount
-    );
-
-    const lineKind = pickSnapshotText(
-      src.line_kind,
-      src.kind,
-      src.item_type,
-      src.normalizedKind
-    );
-
-    const mixedCase = (
-      src.is_mixed_case === true ||
-      src.finance_is_mixed_case === true ||
-      src.snapshot_is_mixed_case === true
-    );
-
-    const hasMeaningful =
-      !!classification ||
-      !!sourcePayMethod ||
-      !!targetPayMethod ||
-      !!resolutionMode ||
-      resolvedAmount != null ||
-      mixedCase;
-
-    if (!hasMeaningful) return null;
-
-    return {
-      classification,
-      source_pay_method: sourcePayMethod,
-      target_pay_method: targetPayMethod,
-      resolution_mode: resolutionMode,
-      resolved_amount: resolvedAmount,
-      line_kind: lineKind,
-      is_mixed_case: mixedCase
-    };
-  };
-  const collectFrozenFinanceContextsFromLine = (ln) => {
-    const contexts = [];
-
-    const directCandidates = [
-      ln?.finance_component_snapshot,
-      ln?.frozen_finance_component_snapshot,
-      ln?.frozen_component_snapshot,
-      ln?.finance_snapshot,
-      ln?.finance_context,
-      ln?.frozen_finance_context,
-      ln?.finance_component,
-      ln?.finance_component_snapshot_json
-    ];
-
-    for (const candidate of directCandidates) {
-      const ctx = normaliseFrozenFinanceContext(candidate);
-      if (ctx) contexts.push(ctx);
-    }
-
-    const directFromLine = normaliseFrozenFinanceContext(ln);
-    if (directFromLine) contexts.push(directFromLine);
-
-    if (Array.isArray(ln?.breakdown_lines)) {
-      for (const bl of ln.breakdown_lines) {
-        const directBreakdownCandidates = [
-          bl?.finance_component_snapshot,
-          bl?.frozen_finance_component_snapshot,
-          bl?.frozen_component_snapshot,
-          bl?.finance_snapshot,
-          bl?.finance_context,
-          bl?.frozen_finance_context,
-          bl?.finance_component,
-          bl?.finance_component_snapshot_json
-        ];
-        for (const candidate of directBreakdownCandidates) {
-          const ctx = normaliseFrozenFinanceContext(candidate);
-          if (ctx) contexts.push(ctx);
-        }
-        const breakdownLineCtx = normaliseFrozenFinanceContext(bl);
-        if (breakdownLineCtx) contexts.push(breakdownLineCtx);
-      }
-    }
-
-    const dedup = [];
-    const seen = new Set();
-    for (const ctx of contexts) {
-      const key = [
-        toUpper(ctx.classification),
-        toUpper(ctx.source_pay_method),
-        toUpper(ctx.target_pay_method),
-        toUpper(ctx.resolution_mode),
-        ctx.resolved_amount == null ? '' : fmtMoney(ctx.resolved_amount),
-        ctx.is_mixed_case ? '1' : '0',
-        toUpper(ctx.line_kind)
-      ].join('|');
-      if (seen.has(key)) continue;
-      seen.add(key);
-      dedup.push(ctx);
-    }
-
-    return dedup;
-  };
-  const renderFrozenFinanceContextSummary = (contexts) => {
-    const list0 = Array.isArray(contexts) ? contexts : [];
-    if (!list0.length) return `<span class="mini" style="opacity:.65;">—</span>`;
-
-    const lines = list0.map((ctx) => {
-      const classification = classificationLabel(ctx.classification);
-      const sourceMethod = pickSnapshotText(ctx.source_pay_method);
-      const targetMethod = pickSnapshotText(ctx.target_pay_method);
-      const resolutionMode = resolutionModeLabel(ctx.resolution_mode);
-      const resolvedAmount = ctx.resolved_amount != null ? `£${fmtMoney(ctx.resolved_amount)}` : '';
-      const treatment = treatmentLabel(ctx);
-
-      const bits = [];
-      if (classification) bits.push(classification);
-      if (sourceMethod || targetMethod) bits.push(`${sourceMethod || '—'} → ${targetMethod || '—'}`);
-      if (resolutionMode) bits.push(resolutionMode);
-      if (resolvedAmount) bits.push(resolvedAmount);
-      bits.push(treatment);
-      if (ctx.is_mixed_case) bits.push('Mixed case');
-
-      return `<div class="mini" style="opacity:.9;">${enc(bits.join(' • '))}</div>`;
-    }).join('');
-
-    return lines;
-  };
-
   const optionsHtml = [
-    `<option value="ALL"${filterId === 'ALL' ? ' selected' : ''}>All</option>`,
+    `<option value="ALL"${filterId === 'ALL' ? ' selected' : ''}>All loaded candidates</option>`,
     ...candidates.map(c => {
-      const cid = String(c?.candidate_id || '').trim();
+      const cid = String(c?.candidate_id || c?.id || '').trim();
       if (!cid) return '';
-      const name = String(c?.candidate_display_name || c?.display_name || '').trim();
+      const name = String(c?.candidate_display_name || c?.display_name || c?.candidate_name || '').trim();
       const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
       const label = `${name || '—'}${tms ? ` (${tms})` : ''}`;
       return `<option value="${enc(cid)}"${cid === filterId ? ' selected' : ''}>${enc(label)}</option>`;
@@ -53776,106 +53607,67 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
           hasAnyDeductions: false,
           raw: candidate?.candidate_lines || {}
         };
-
     return [
       ...(Array.isArray(normalized.tsLines) ? normalized.tsLines : []),
       ...(Array.isArray(normalized.nonTsLines) ? normalized.nonTsLines : [])
     ].filter((ln) => ln && typeof ln === 'object');
   };
 
-  const flattenWorksheetRows = (candidate) => {
-    const linesForCand = normaliseCandidateLineEntries(candidate);
-    const out = [];
+  const itemRowsByCandidate = (() => {
+    const map = new Map();
+    for (const item of itemsSection.rows) {
+      const candidateId = String(item?.candidate_id || item?.pay_batch_candidate_id || item?.candidateId || '').trim();
+      if (!candidateId) continue;
+      if (!map.has(candidateId)) map.set(candidateId, []);
+      map.get(candidateId).push(item);
+    }
+    return map;
+  })();
 
-    for (const ln of linesForCand) {
-      const breakdownLines = Array.isArray(ln?.breakdown_lines)
-        ? ln.breakdown_lines.filter((bl) => bl && typeof bl === 'object')
-        : [];
-      const rowSources = breakdownLines.length > 0 ? breakdownLines : [null];
-      const frozenContexts = collectFrozenFinanceContextsFromLine(ln);
+  const renderLineRows = (candidate) => {
+    const lines = normaliseCandidateLineEntries(candidate);
+    const cid = String(candidate?.candidate_id || candidate?.id || candidate?.pay_batch_candidate_id || '').trim();
+    const itemRows = cid && itemRowsByCandidate.has(cid) ? itemRowsByCandidate.get(cid) : [];
+    const sources = lines.length ? lines : itemRows;
 
-      for (const breakdown of rowSources) {
-        const we = String(breakdown?.week_ending_date || ln?.week_ending_date || ln?.week_ending_bucket || ln?.timesheet?.week_ending_date || '').trim();
-        const cl = String(breakdown?.client_name || ln?.client_name || ln?.timesheet?.client_name || '').trim();
-        const un = String(breakdown?.unit_name || breakdown?.unit || breakdown?.ward_name || ln?.unit_name || ln?.unit || ln?.ward_name || '').trim();
-        const units = (breakdown?.units != null) ? String(breakdown.units) : ((ln?.units != null) ? String(ln.units) : '');
-        const rate = (breakdown?.rate != null) ? String(breakdown.rate) : ((ln?.rate != null) ? String(ln.rate) : '');
-        const sub =
-          (breakdown?.subtotal != null) ? fmtMoney(breakdown.subtotal)
-          : (breakdown?.payment_amount != null) ? fmtMoney(breakdown.payment_amount)
-          : (breakdown?.amount_ex_vat != null) ? fmtMoney(breakdown.amount_ex_vat)
-          : (breakdown?.amount != null) ? fmtMoney(breakdown.amount)
-          : (ln?.subtotal != null) ? fmtMoney(ln.subtotal)
-          : (ln?.payment_amount != null) ? fmtMoney(ln.payment_amount)
-          : (ln?.amount_ex_vat != null) ? fmtMoney(ln.amount_ex_vat)
-          : (ln?.amount != null) ? fmtMoney(ln.amount)
-          : '';
-
-        const displayKind = ln?.isOverpaymentRecovery
-          ? 'Overpayment recovery'
-          : (ln?.isManualDebtRecovery || ln?.isPaymentAdvanceRepayment)
-            ? 'Repayment'
-            : (String(ln?.line_kind || ln?.kind || ln?.item_type || '').trim() || '—');
-
-        out.push({
-          line: ln,
-          breakdown,
-          weekEnding: we,
-          clientName: cl,
-          unitName: un,
-          units,
-          rate,
-          subtotal: sub,
-          displayKind,
-          isNetDeduction: ln?.isNetDeduction === true,
-          isGrossDeduction: ln?.isGrossDeduction === true,
-          frozenContexts
-        });
-      }
+    if (!sources.length) {
+      return `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(isBootstrap ? 'Line detail has not been loaded for this candidate yet.' : 'No line breakdown available in this response.')}</td></tr>`;
     }
 
-    return out;
-  };
-
-  const renderWorksheetRow = (row) => {
-    const netRowStyle = row.isNetDeduction
-      ? ' style="color:var(--danger,#c62828);"'
-      : '';
-    const typeHtml = row.isNetDeduction
-      ? `<span class="pill pill-warn" style="background:rgba(198,40,40,.12);color:var(--danger,#c62828);border-color:rgba(198,40,40,.25);">${enc(row.displayKind)}</span>`
-      : row.line?.deductionLabel
-        ? `<span class="pill pill-warn">${enc(row.displayKind)}</span>`
-        : `<span class="mini">${enc(row.displayKind)}</span>`;
-
-    return `
-      <tr${netRowStyle}>
-        <td class="mini" style="white-space:nowrap;">${enc(row.weekEnding ? formatIsoToUkLocal(row.weekEnding) : '—')}</td>
-        <td class="mini">${enc(row.clientName || '—')}</td>
-        <td class="mini">${enc(row.unitName || '—')}</td>
-        <td class="mono" style="text-align:right;">${enc(row.units || '')}</td>
-        <td class="mono" style="text-align:right;">${enc(row.rate || '')}</td>
-        <td class="mono" style="text-align:right;">${enc(row.subtotal || '')}</td>
-        <td>${typeHtml}</td>
-        <td>${renderFrozenFinanceContextSummary(row.frozenContexts)}</td>
-      </tr>
-    `;
+    return sources.map((ln) => {
+      const we = String(ln?.week_ending_date || ln?.week_ending_bucket || ln?.timesheet?.week_ending_date || '').trim();
+      const cl = String(ln?.client_name || ln?.timesheet?.client_name || '').trim();
+      const un = String(ln?.unit_name || ln?.unit || ln?.ward_name || '').trim();
+      const units = (ln?.units != null) ? String(ln.units) : '';
+      const rate = (ln?.rate != null) ? String(ln.rate) : '';
+      const sub = (ln?.subtotal != null) ? fmtMoney(ln.subtotal) : (ln?.payment_amount != null) ? fmtMoney(ln.payment_amount) : (ln?.amount_inc_vat != null) ? fmtMoney(ln.amount_inc_vat) : (ln?.amount_ex_vat != null) ? fmtMoney(ln.amount_ex_vat) : (ln?.amount != null) ? fmtMoney(ln.amount) : '';
+      const displayKind = ln?.isOverpaymentRecovery ? 'Overpayment recovery' : (ln?.isManualDebtRecovery || ln?.isPaymentAdvanceRepayment) ? 'Repayment' : (String(ln?.line_kind || ln?.kind || ln?.item_type || '').trim() || '—');
+      const netRowStyle = ln?.isNetDeduction === true ? ' style="color:var(--danger,#c62828);"' : '';
+      return `
+        <tr${netRowStyle}>
+          <td class="mini" style="white-space:nowrap;">${enc(we ? formatIsoToUkLocal(we) : '—')}</td>
+          <td class="mini">${enc(cl || '—')}</td>
+          <td class="mini">${enc(un || '—')}</td>
+          <td class="mono" style="text-align:right;">${enc(units || '')}</td>
+          <td class="mono" style="text-align:right;">${enc(rate || '')}</td>
+          <td class="mono" style="text-align:right;">${enc(sub || '')}</td>
+          <td><span class="mini">${enc(displayKind)}</span></td>
+          <td><span class="mini" style="opacity:.65;">${enc(isBootstrap ? 'Paged/frozen item data' : 'Frozen finance data')}</span></td>
+        </tr>
+      `;
+    }).join('');
   };
 
   const rowsHtml = list.length
     ? list.map((c) => {
-        const cid = String(c?.candidate_id || '').trim();
-        const name = String(c?.candidate_display_name || c?.display_name || '').trim() || '—';
+        const cid = String(c?.candidate_id || c?.id || '').trim();
+        const name = String(c?.candidate_display_name || c?.display_name || c?.candidate_name || '').trim() || '—';
         const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
-
         const deductions = (typeof bankingNormalizeCandidateDeductionsSummary === 'function')
           ? bankingNormalizeCandidateDeductionsSummary(c)
           : {
-              grossPositive: Number(c?.gross_preview || 0),
-              manualDebtRecovery: 0,
-              manualDebtNetDeductions: 0,
-              paymentAdvanceRepayment: Number(c?.loan_repayment_taken || 0),
-              loanRepayment: Number(c?.loan_repayment_taken || 0),
-              repayment: Number(c?.loan_repayment_taken || 0),
+              grossPositive: Number(c?.gross_preview || c?.gross || c?.amount || 0),
+              repayment: Number(c?.repayment || c?.loan_repayment_taken || 0),
               overpaymentRecovery: Number(c?.overpayment_recovery_taken || 0),
               finalPayable: (c?.net_bank_amount != null) ? Number(c.net_bank_amount) : null,
               awaitingNet: !!c?.awaiting_net_amount,
@@ -53884,39 +53676,14 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
               hasKnownFinalPayable: c?.net_bank_amount != null,
               raw: c
             };
-
         const payeState = String(c?.paye_state || '').trim().toUpperCase();
         const existingNet = (deductions.payeNetAmount != null) ? fmtMoney(deductions.payeNetAmount) : ((c?.paye_net_amount != null) ? fmtMoney(c.paye_net_amount) : '');
         const existingSource = String(c?.paye_net_source || '').trim().toUpperCase();
-
         const draftRaw = Object.prototype.hasOwnProperty.call(netDraft, cid) ? String(netDraft[cid] || '').trim() : '';
         const displayNet = draftRaw ? draftRaw : (existingNet ? existingNet : '');
-
-        const statusPill = (payeState && payeState !== 'READY')
-          ? `<span class="pill pill-warn">Awaiting Net amount</span>`
-          : `<span class="pill pill-ok">READY</span>`;
-
-        const allRows = flattenWorksheetRows(c);
-        const ordinaryRows = allRows.filter((row) => !row.isNetDeduction);
-        const netDeductionRows = allRows.filter((row) => row.isNetDeduction);
-        const lineRows = allRows.length
-          ? `${ordinaryRows.map(renderWorksheetRow).join('')}${netDeductionRows.length ? `<tr><td colspan="8" class="mini" style="opacity:.9; border-top:2px solid var(--line); color:var(--danger,#c62828);">NET deductions</td></tr>${netDeductionRows.map(renderWorksheetRow).join('')}` : ''}`
-          : `<tr><td colspan="8" class="mini" style="opacity:.85;">No line breakdown available in this response.</td></tr>`;
-
-        const finalBankAmountHtml = (deductions.finalPayable != null)
-          ? `£${fmtMoney(deductions.finalPayable)}`
-          : (deductions.awaitingNet ? 'Pending' : '—');
-
-        const pendingAdvisoryHtml = deductions.awaitingNet
-          ? `<div class="mini" style="opacity:.85; margin-top:8px;">${enc(deductions.pendingAdvisory || 'PAYE net is pending, so final deduction impact is not yet fixed.')}</div>`
-          : '';
-
-        const repaymentBreakdownBits = [];
-        if (Number(deductions.manualDebtNetDeductions || 0) > 0) repaymentBreakdownBits.push(`Manual debt £${fmtMoney(deductions.manualDebtNetDeductions)}`);
-        if (Number(deductions.paymentAdvanceRepayment || 0) > 0) repaymentBreakdownBits.push(`Payment advance £${fmtMoney(deductions.paymentAdvanceRepayment)}`);
-        const repaymentBreakdownHtml = repaymentBreakdownBits.length
-          ? `<div class="mini" style="opacity:.8; margin-top:6px;">${enc(repaymentBreakdownBits.join(' • '))}</div>`
-          : '';
+        const statusPill = (payeState && payeState !== 'READY') ? `<span class="pill pill-warn">Awaiting Net amount</span>` : `<span class="pill pill-ok">READY</span>`;
+        const finalBankAmountHtml = (deductions.finalPayable != null) ? `£${fmtMoney(deductions.finalPayable)}` : (deductions.awaitingNet ? 'Pending' : '—');
+        const pendingAdvisoryHtml = deductions.awaitingNet ? `<div class="mini" style="opacity:.85; margin-top:8px;">${enc(deductions.pendingAdvisory || 'PAYE net is pending, so final deduction impact is not yet fixed.')}</div>` : '';
 
         return `
           <div class="card" style="padding:10px; margin-top:10px;">
@@ -53927,149 +53694,66 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
                   ${tms ? `<span class="mono">${enc(tms)}</span>` : ``}
                   ${statusPill}
                   ${existingSource ? `<span class="mini" style="opacity:.75;">(Net source: ${enc(existingSource)})</span>` : ``}
+                  ${isBootstrap ? `<span class="pill pill-info">Paged candidate</span>` : ``}
                 </div>
               </div>
-
               <div style="min-width:560px;">
                 <div style="display:grid; grid-template-columns:repeat(5,minmax(90px,1fr)); gap:8px;">
-                  <div class="card" style="padding:8px;">
-                    <div class="mini" style="opacity:.8;">Gross / Base</div>
-                    <div class="mono">£${enc(fmtMoney(deductions.grossPositive))}</div>
-                  </div>
-                  <div class="card" style="padding:8px;">
-                    <div class="mini" style="opacity:.8;">PAYE net</div>
-                    <div class="mono">${enc(existingNet ? `£${existingNet}` : '—')}</div>
-                  </div>
-                  <div class="card" style="padding:8px;">
-                    <div class="mini" style="opacity:.8;">Overpayment</div>
-                    <div class="mono">£${enc(fmtMoney(deductions.overpaymentRecovery))}</div>
-                  </div>
-                  <div class="card" style="padding:8px;">
-                    <div class="mini" style="opacity:.8;">Repayment</div>
-                    <div class="mono">£${enc(fmtMoney(deductions.repayment))}</div>
-                    ${repaymentBreakdownHtml}
-                  </div>
-                  <div class="card" style="padding:8px;">
-                    <div class="mini" style="opacity:.8;">Final bank amount</div>
-                    <div class="mono">${enc(finalBankAmountHtml)}</div>
-                  </div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Gross / Base</div><div class="mono">£${enc(fmtMoney(deductions.grossPositive))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">PAYE net</div><div class="mono">${enc(existingNet ? `£${existingNet}` : '—')}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Overpayment</div><div class="mono">£${enc(fmtMoney(deductions.overpaymentRecovery))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Repayment</div><div class="mono">£${enc(fmtMoney(deductions.repayment))}</div></div>
+                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Final bank amount</div><div class="mono">${enc(finalBankAmountHtml)}</div></div>
                 </div>
-
                 <div style="margin-top:10px; min-width:260px;">
                   <div class="mini" style="opacity:.8;">Net Payment</div>
-                  <input
-                    class="input"
-                    style="width:100%;"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value="${enc(displayNet)}"
-                    data-action="banking:pay:child:paye:setNetDraft"
-                    data-candidate-id="${enc(cid)}"
-                    title="Enter net payment for this candidate (save via modal footer Save). Use modal footer Edit to enable changes."
-                  />
+                  <input class="input" style="width:100%;" type="number" step="0.01" min="0" value="${enc(displayNet)}" data-action="banking:pay:child:paye:setNetDraft" data-candidate-id="${enc(cid)}" title="Enter net payment for this candidate (save via modal footer Save). Use modal footer Edit to enable changes." />
                 </div>
-
                 ${pendingAdvisoryHtml}
               </div>
             </div>
-
             <div style="margin-top:10px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
               <table class="grid" style="min-width:1280px; table-layout:auto;">
-                <thead>
-                  <tr>
-                    <th style="width:140px;">Week ending</th>
-                    <th>Client</th>
-                    <th>Unit</th>
-                    <th style="width:90px; text-align:right;">Units</th>
-                    <th style="width:110px; text-align:right;">Rate</th>
-                    <th style="width:140px; text-align:right;">Subtotal</th>
-                    <th style="width:180px;">Type</th>
-                    <th style="width:320px;">Frozen finance</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${lineRows}
-                </tbody>
+                <thead><tr><th style="width:140px;">Week ending</th><th>Client</th><th>Unit</th><th style="width:90px; text-align:right;">Units</th><th style="width:110px; text-align:right;">Rate</th><th style="width:140px; text-align:right;">Subtotal</th><th style="width:180px;">Type</th><th style="width:320px;">Frozen finance</th></tr></thead>
+                <tbody>${renderLineRows(c)}</tbody>
               </table>
             </div>
           </div>
         `;
       }).join('')
-    : `<div class="mini" style="opacity:.85;">No PAYE candidates found.</div>`;
+    : `<div class="mini" style="opacity:.85;">${enc(isBootstrap ? 'No PAYE candidates are loaded yet. Use Load more to fetch candidate pages.' : 'No PAYE candidates found.')}</div>`;
+
+  const bootstrapStatusHtml = isBootstrap ? `
+    <div class="card" style="padding:8px;margin-bottom:10px;">
+      <div class="mini" style="font-weight:700;opacity:.9;">Paged worksheet data</div>
+      <div class="mini" style="opacity:.85;">Loaded candidates: <span class="mono">${enc(String(candidatesSection.rows.length))}</span>${candidatesSection.known_total_count == null ? '' : ` / <span class="mono">${enc(String(candidatesSection.known_total_count))}</span>`} • Loaded items: <span class="mono">${enc(String(itemsSection.rows.length))}</span>${itemsSection.known_total_count == null ? '' : ` / <span class="mono">${enc(String(itemsSection.known_total_count))}</span>`}${candidatesSection.loading || itemsSection.loading ? ' • loading…' : ''}</div>
+      ${candidatesSection.error || itemsSection.error ? `<div class="error" style="white-space:pre-wrap;margin-top:6px;">${enc(candidatesSection.error || itemsSection.error)}</div>` : ''}
+    </div>
+  ` : '';
 
   return `
     <div id="${enc(rootId)}">
       <input id="${enc(rootId)}__payeFile" type="file" accept=".csv,text/csv" style="display:none;" />
-
       <div class="card">
         <div class="row">
           <label>PAYE Worksheet</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${bootstrapStatusHtml}
             ${saveErr ? `<div class="error" style="white-space:pre-wrap;">${enc(saveErr)}</div>` : ''}
             ${importErr ? `<div class="error" style="white-space:pre-wrap;">${enc(importErr)}</div>` : ''}
-
-            ${
-              unsaved.any
-                ? `
-                  <div class="mini" style="opacity:.9;">
-                    <span class="pill pill-warn">Unsaved</span>
-                    <span style="margin-left:6px;">
-                      You have ${enc(String(unsaved.changedCount || 0))} unsaved net change(s). Click the modal footer <strong>Save</strong> to commit.
-                    </span>
-                  </div>
-                `
-                : ``
-            }
-
-            <div class="mini" style="opacity:.8;">
-              This worksheet shows PAYE gross/base, PAYE net, overpayment recovery, Repayment, and final bank amount.
-              NET deductions are shown in red at the bottom of each candidate worksheet section. When PAYE net is missing, deduction impact remains advisory until net is entered. Frozen finance/component truth is shown alongside finance-related lines.
-            </div>
-
+            ${unsaved.any ? `<div class="mini" style="opacity:.9;"><span class="pill pill-warn">Unsaved</span><span style="margin-left:6px;">You have ${enc(String(unsaved.changedCount || 0))} unsaved net change(s). Click the modal footer <strong>Save</strong> to commit.</span></div>` : ``}
+            <div class="mini" style="opacity:.8;">This worksheet shows PAYE gross/base, PAYE net, overpayment recovery, Repayment, and final bank amount. NET deductions are shown in red at the bottom of each candidate worksheet section. When PAYE net is missing, deduction impact remains advisory until net is entered.</div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
               <label class="inline mini" style="opacity:.85;">Candidate</label>
-              <select
-                class="input"
-                style="min-width:320px;max-width:520px;"
-                data-action="banking:pay:child:paye:setFilterCandidate"
-              >
-                ${optionsHtml}
-              </select>
-
+              <select class="input" style="min-width:320px;max-width:520px;" data-action="banking:pay:child:paye:setFilterCandidate">${optionsHtml}</select>
               <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                <button
-                  type="button"
-                  class="btn btn-sm btn-outline"
-                  data-action="banking:pay:child:paye:exportWorksheet"
-                  ${child.actionsBusy.exportingWorksheet ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
-                  title="Export worksheet CSV (client-side)"
-                >Export</button>
-
-                <button
-                  type="button"
-                  class="btn btn-sm btn-outline"
-                  data-action="banking:pay:child:paye:importSage"
-                  ${importBusy ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
-                  title="Import Sage net amounts (CSV)"
-                >${importBusy ? 'Importing…' : 'Import CSV'}</button>
-
-                <button
-                  type="button"
-                  class="btn btn-sm btn-outline"
-                  data-action="banking:pay:child:paye:printWorksheet"
-                  ${child.actionsBusy.printingWorksheet ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
-                  title="Print worksheet (gross totals + blank net fields)"
-                >Print</button>
-
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:paye:exportWorksheet" ${child.actionsBusy.exportingWorksheet ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''} title="Export worksheet CSV (client-side)">Export</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:paye:importSage" ${importBusy ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''} title="Import Sage net amounts (CSV)">${importBusy ? 'Importing…' : 'Import CSV'}</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:paye:printWorksheet" ${child.actionsBusy.printingWorksheet ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''} title="Print worksheet (gross totals + blank net fields)">Print</button>
                 ${saveBusy ? `<span class="mini" style="opacity:.8;">Saving…</span>` : ``}
               </div>
             </div>
-
-            <div class="mini" style="opacity:.8;">
-              Use the modal footer <strong>Edit</strong> to enable changes. Use the modal footer <strong>Save</strong> to commit changes (Close becomes Discard when dirty).
-            </div>
-
+            <div class="mini" style="opacity:.8;">Use the modal footer <strong>Edit</strong> to enable changes. Use the modal footer <strong>Save</strong> to commit changes (Close becomes Discard when dirty).</div>
             ${rowsHtml}
           </div>
         </div>
@@ -54077,6 +53761,8 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
     </div>
   `;
 }
+
+
 
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
@@ -70474,6 +70160,7 @@ function buildSummaryFilterQSForIdList(section, filters){
   return sp.toString();
 }
 
+
 async function fetchContractWeekManualDraftDetails(weekId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][CW-DRAFT-DETAILS]');
   GC('fetchContractWeekManualDraftDetails');
@@ -70568,6 +70255,8 @@ async function fetchContractWeekManualDraftDetails(weekId) {
 
     if (upper === 'WEEKLY_NHSP_ADJUSTMENT') return 'NHSP Adjustment';
     if (upper === 'WEEKLY_NHSP') return 'NHSP';
+    if (upper === 'WEEKLY_HEALTHROSTER_ADJUSTMENT') return 'HealthRoster Adjustment';
+    if (upper === 'WEEKLY_MANUAL_ADJUSTMENT') return 'Manual Adjustment';
     if (upper === 'WEEKLY_HEALTHROSTER') {
       return noTimesheetRequired ? 'HealthRoster (no timesheets)' : 'HealthRoster (timesheets required)';
     }
@@ -70700,11 +70389,74 @@ async function fetchContractWeekManualDraftDetails(weekId) {
 
   const isHealthRosterLike =
     explicitSpecialRouteType === 'WEEKLY_HEALTHROSTER' ||
+    explicitSpecialRouteType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+    routeTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
     weeklyMode === 'HEALTHROSTER' ||
     boolish(policy.autoprocess_hr) ||
     boolish(effective.client_autoprocess_hr);
 
+  const importDerivedCorrectionSignal = !!(
+    String(contractWeek.adjustment_origin || effective.adjustment_origin || actionFlags.adjustment_origin || '').trim().toUpperCase() === 'IMPORT_CORRECTION' ||
+    String(contractWeek.adjustment_origin || effective.adjustment_origin || actionFlags.adjustment_origin || '').trim().toUpperCase() === 'IMPORT_CANCELLATION' ||
+    String(contractWeek.correction_id || effective.correction_id || actionFlags.correction_id || '').trim() ||
+    String(contractWeek.correction_kind || effective.correction_kind || actionFlags.correction_kind || '').trim()
+  );
+
+  const routeFamilySignal = String(
+    actionFlags.route_family ||
+    actionFlags.route_subfamily ||
+    actionFlags.underlying_channel_family ||
+    effective.route_family ||
+    effective.route_subfamily ||
+    effective.underlying_channel_family ||
+    contractWeek.route_family ||
+    contractWeek.route_subfamily ||
+    contractWeek.underlying_channel_family ||
+    ''
+  ).trim().toUpperCase();
+
+  const adjustmentRouteSignal = !!(
+    routeTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' ||
+    routeTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+    routeTypeCandidate === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+    (routeTypeCandidate && routeTypeCandidate.endsWith('_ADJUSTMENT')) ||
+    explicitSpecialRouteType === 'WEEKLY_NHSP_ADJUSTMENT' ||
+    explicitSpecialRouteType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT'
+  );
+
+  const manualRouteSignal = !!(
+    canonicalSubmissionMode === 'MANUAL' ||
+    routeFamilySignal === 'MANUAL_NON_QR' ||
+    routeFamilySignal === 'MANUAL'
+  );
+
+  const manualAdditionalDraft = !!(
+    !hasCanonicalTimesheet &&
+    canonicalSheetScope === 'WEEKLY' &&
+    isAdjustment &&
+    manualRouteSignal &&
+    !importDerivedCorrectionSignal &&
+    (
+      boolish(contractWeek.is_adjustment) ||
+      Number(contractWeek.additional_seq || 0) > 0 ||
+      boolish(effective.is_adjustment) ||
+      boolish(actionFlags.is_adjustment) ||
+      adjustmentRouteSignal
+    )
+  );
+
+  const deriveManualAdditionalRouteType = () => {
+    if (routeTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' || explicitSpecialRouteType === 'WEEKLY_NHSP_ADJUSTMENT' || isNhspLike) {
+      return 'WEEKLY_NHSP_ADJUSTMENT';
+    }
+    if (routeTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' || explicitSpecialRouteType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' || isHealthRosterLike) {
+      return 'WEEKLY_HEALTHROSTER_ADJUSTMENT';
+    }
+    return 'WEEKLY_MANUAL_ADJUSTMENT';
+  };
+
   const deriveSpecialWeeklyRouteType = () => {
+    if (manualAdditionalDraft) return deriveManualAdditionalRouteType();
     if (explicitSpecialRouteType) return explicitSpecialRouteType;
     if (isNhspLike) return isAdjustment ? 'WEEKLY_NHSP_ADJUSTMENT' : 'WEEKLY_NHSP';
     if (isHealthRosterLike && (noTimesheetRequired || hrWeeklyBehaviour === 'CREATE' || boolish(actionFlags.is_import_authoritative))) {
@@ -70757,35 +70509,61 @@ async function fetchContractWeekManualDraftDetails(weekId) {
     'UNPROCESSED'
   ).trim().toUpperCase() || 'UNPROCESSED';
 
-  const canonicalImportAuthoritative =
-    isImportAuthoritativeWeeklyRouteType(canonicalRouteType) && (
-      canonicalRouteType !== 'WEEKLY_HEALTHROSTER' ||
-      noTimesheetRequired ||
-      hrWeeklyBehaviour === 'CREATE' ||
-      boolish(actionFlags.is_import_authoritative)
-    );
+  const explicitEmptyPlannedSchedule = Array.isArray(contractWeek.planned_schedule_json) && contractWeek.planned_schedule_json.length === 0;
+  const contractWeekTotalsJson = (contractWeek.totals_json && typeof contractWeek.totals_json === 'object') ? contractWeek.totals_json : {};
+  const contractWeekHoursJson = (contractWeekTotalsJson.hours && typeof contractWeekTotalsJson.hours === 'object') ? contractWeekTotalsJson.hours : {};
+  const contractWeekHoursAreZero = ['day', 'night', 'sat', 'sun', 'bh'].every((key) => Number(contractWeekHoursJson[key] || 0) === 0);
+  const keepEmptyAdditionalManualSchedule = !!(
+    manualAdditionalDraft &&
+    (
+      boolish(json.keep_additional_manual_adjustment_schedule_empty) ||
+      boolish(json.suppress_standard_schedule_fallback) ||
+      boolish(json.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+      boolish(json.__suppressStandardScheduleFallback) ||
+      boolish(effective.keep_additional_manual_adjustment_schedule_empty) ||
+      boolish(effective.suppress_standard_schedule_fallback) ||
+      boolish(effective.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+      boolish(effective.__suppressStandardScheduleFallback) ||
+      boolish(actionFlags.keep_additional_manual_adjustment_schedule_empty) ||
+      boolish(actionFlags.suppress_standard_schedule_fallback) ||
+      boolish(contractWeek.keep_additional_manual_adjustment_schedule_empty) ||
+      boolish(contractWeek.suppress_standard_schedule_fallback) ||
+      (explicitEmptyPlannedSchedule && contractWeekHoursAreZero)
+    )
+  );
+
+  const canonicalImportAuthoritative = manualAdditionalDraft
+    ? false
+    : (
+        isImportAuthoritativeWeeklyRouteType(canonicalRouteType) && (
+          canonicalRouteType !== 'WEEKLY_HEALTHROSTER' ||
+          noTimesheetRequired ||
+          hrWeeklyBehaviour === 'CREATE' ||
+          boolish(actionFlags.is_import_authoritative)
+        )
+      );
 
   const canonicalUnderlyingChannelFamily = canonicalImportAuthoritative
     ? null
-    : ((canonicalSubmissionMode === 'ELECTRONIC') ? 'ELECTRONIC' : 'MANUAL_NON_QR');
+    : (manualAdditionalDraft ? 'MANUAL_NON_QR' : ((canonicalSubmissionMode === 'ELECTRONIC') ? 'ELECTRONIC' : 'MANUAL_NON_QR'));
 
   const canonicalRouteFamily = canonicalImportAuthoritative
     ? 'IMPORT_AUTHORITATIVE'
     : canonicalUnderlyingChannelFamily;
 
   const canonicalCompareBlockRequired =
-    canonicalRouteType === 'WEEKLY_HEALTHROSTER' && !canonicalImportAuthoritative;
+    !manualAdditionalDraft && canonicalRouteType === 'WEEKLY_HEALTHROSTER' && !canonicalImportAuthoritative;
 
   const canonicalPolicyWeeklyMode = (() => {
     if (isNhspWeeklyRouteType(canonicalRouteType) || isNhspLike) return 'NHSP';
-    if (canonicalRouteType === 'WEEKLY_HEALTHROSTER' || (isHealthRosterLike && (noTimesheetRequired || hrWeeklyBehaviour === 'CREATE'))) {
+    if (canonicalRouteType === 'WEEKLY_HEALTHROSTER' || canonicalRouteType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' || (isHealthRosterLike && (noTimesheetRequired || hrWeeklyBehaviour === 'CREATE' || manualAdditionalDraft))) {
       return 'HEALTHROSTER';
     }
     return String(policy.weekly_mode || '').trim().toUpperCase() || 'NONE';
   })();
 
   const canonicalHrWeeklyBehaviour = (() => {
-    if (canonicalRouteType === 'WEEKLY_HEALTHROSTER') {
+    if (canonicalRouteType === 'WEEKLY_HEALTHROSTER' || canonicalRouteType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT') {
       return (noTimesheetRequired || hrWeeklyBehaviour === 'CREATE') ? 'CREATE' : 'VERIFY';
     }
     return String(policy.hr_weekly_behaviour || '').trim();
@@ -70796,6 +70574,17 @@ async function fetchContractWeekManualDraftDetails(weekId) {
     id: contractWeek.id || json.contract_week_id || String(weekId),
     route_type: canonicalRouteType || null,
     route_display: canonicalRouteDisplay || null,
+    route_family: canonicalRouteFamily,
+    route_subfamily: canonicalUnderlyingChannelFamily,
+    underlying_channel_family: canonicalUnderlyingChannelFamily,
+    is_import_authoritative: canonicalImportAuthoritative,
+    is_adjustment: manualAdditionalDraft ? true : isAdjustment,
+    additional_seq: Number(contractWeek.additional_seq || 0),
+    planned_schedule_json: keepEmptyAdditionalManualSchedule ? [] : contractWeek.planned_schedule_json,
+    suppress_standard_schedule_fallback: keepEmptyAdditionalManualSchedule || boolish(contractWeek.suppress_standard_schedule_fallback),
+    keep_additional_manual_adjustment_schedule_empty: keepEmptyAdditionalManualSchedule || boolish(contractWeek.keep_additional_manual_adjustment_schedule_empty),
+    __suppressStandardScheduleFallback: keepEmptyAdditionalManualSchedule || boolish(contractWeek.__suppressStandardScheduleFallback),
+    __keepAdditionalManualAdjustmentScheduleEmpty: keepEmptyAdditionalManualSchedule || boolish(contractWeek.__keepAdditionalManualAdjustmentScheduleEmpty),
     submission_mode_snapshot:
       canonicalSubmissionMode ||
       contractWeek.submission_mode_snapshot ||
@@ -70823,6 +70612,16 @@ async function fetchContractWeekManualDraftDetails(weekId) {
     }) ||
     buildWeeklyRouteDisplayFromMode(canonicalSubmissionMode);
   json.summary_stage = canonicalSummaryStage;
+  json.route_family = canonicalRouteFamily;
+  json.route_subfamily = canonicalUnderlyingChannelFamily;
+  json.underlying_channel_family = canonicalUnderlyingChannelFamily;
+  json.is_import_authoritative = canonicalImportAuthoritative;
+  json.is_adjustment = manualAdditionalDraft ? true : isAdjustment;
+  json.additional_seq = Number(contractWeek.additional_seq || 0);
+  json.suppress_standard_schedule_fallback = keepEmptyAdditionalManualSchedule || boolish(json.suppress_standard_schedule_fallback);
+  json.keep_additional_manual_adjustment_schedule_empty = keepEmptyAdditionalManualSchedule || boolish(json.keep_additional_manual_adjustment_schedule_empty);
+  json.__suppressStandardScheduleFallback = keepEmptyAdditionalManualSchedule || boolish(json.__suppressStandardScheduleFallback);
+  json.__keepAdditionalManualAdjustmentScheduleEmpty = keepEmptyAdditionalManualSchedule || boolish(json.__keepAdditionalManualAdjustmentScheduleEmpty);
 
   json.effective = {
     ...effective,
@@ -70835,7 +70634,17 @@ async function fetchContractWeekManualDraftDetails(weekId) {
         noTimesheetRequired
       }) ||
       buildWeeklyRouteDisplayFromMode(canonicalSubmissionMode),
-    summary_stage: canonicalSummaryStage
+    summary_stage: canonicalSummaryStage,
+    route_family: canonicalRouteFamily,
+    route_subfamily: canonicalUnderlyingChannelFamily,
+    underlying_channel_family: canonicalUnderlyingChannelFamily,
+    is_import_authoritative: canonicalImportAuthoritative,
+    is_adjustment: manualAdditionalDraft ? true : isAdjustment,
+    additional_seq: Number(contractWeek.additional_seq || 0),
+    suppress_standard_schedule_fallback: keepEmptyAdditionalManualSchedule || boolish(effective.suppress_standard_schedule_fallback),
+    keep_additional_manual_adjustment_schedule_empty: keepEmptyAdditionalManualSchedule || boolish(effective.keep_additional_manual_adjustment_schedule_empty),
+    __suppressStandardScheduleFallback: keepEmptyAdditionalManualSchedule || boolish(effective.__suppressStandardScheduleFallback),
+    __keepAdditionalManualAdjustmentScheduleEmpty: keepEmptyAdditionalManualSchedule || boolish(effective.__keepAdditionalManualAdjustmentScheduleEmpty)
   };
 
   if (json.policy && typeof json.policy === 'object') {
@@ -70850,11 +70659,18 @@ async function fetchContractWeekManualDraftDetails(weekId) {
   if (json.action_flags && typeof json.action_flags === 'object') {
     json.action_flags = {
       ...actionFlags,
+      route_type: canonicalRouteType || null,
       route_family: canonicalRouteFamily,
+      route_subfamily: canonicalUnderlyingChannelFamily,
       underlying_channel_family: canonicalUnderlyingChannelFamily,
       is_import_authoritative: canonicalImportAuthoritative,
+      is_adjustment: manualAdditionalDraft ? true : isAdjustment,
+      additional_seq: Number(contractWeek.additional_seq || 0),
+      manual_additional_draft: manualAdditionalDraft,
       compare_block_required: canonicalCompareBlockRequired,
       healthroster_compare_required: canonicalCompareBlockRequired,
+      suppress_standard_schedule_fallback: keepEmptyAdditionalManualSchedule || boolish(actionFlags.suppress_standard_schedule_fallback),
+      keep_additional_manual_adjustment_schedule_empty: keepEmptyAdditionalManualSchedule || boolish(actionFlags.keep_additional_manual_adjustment_schedule_empty),
       cw_submission_mode_snapshot: json.cw_submission_mode_snapshot,
       submission_mode_snapshot: json.cw_submission_mode_snapshot
     };
@@ -70877,6 +70693,7 @@ async function fetchContractWeekManualDraftDetails(weekId) {
   GE();
   return json;
 }
+
 
 
 
@@ -70920,17 +70737,212 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
 
   if (hasRealTimesheet) {
     try {
-      const detail = await fetchTimesheetDetails(realTimesheetId);
+      const detailRaw = await fetchTimesheetDetails(realTimesheetId);
+      const detail = (detailRaw && typeof detailRaw === 'object') ? { ...detailRaw } : {};
+      const detailTimesheet = (detail.timesheet && typeof detail.timesheet === 'object') ? detail.timesheet : {};
+      const detailContractWeek = (detail.contract_week && typeof detail.contract_week === 'object') ? detail.contract_week : {};
+      const detailEffective = (detail.effective && typeof detail.effective === 'object') ? detail.effective : {};
+      const detailActionFlags = (detail.action_flags && typeof detail.action_flags === 'object') ? detail.action_flags : {};
+      const trimReal = (value) => String(value == null ? '' : value).trim();
+      const upperReal = (value) => trimReal(value).toUpperCase();
+      const boolishReal = (value) => {
+        if (value === true || value === 1) return true;
+        if (value === false || value == null) return false;
+        const raw = String(value).trim().toLowerCase();
+        return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
+      };
+      const pickReal = (...values) => {
+        for (const value of values) {
+          const clean = trimReal(value);
+          if (clean) return clean;
+        }
+        return '';
+      };
+      const additionalSeq = Number(
+        detail.additional_seq ??
+        detail.contract_week_additional_seq ??
+        detailContractWeek.additional_seq ??
+        detailEffective.additional_seq ??
+        detailActionFlags.additional_seq ??
+        row.additional_seq ??
+        row.contract_week_additional_seq ??
+        row.contract_week?.additional_seq ??
+        0
+      ) || 0;
+      const routeTypeCandidate = upperReal(pickReal(
+        detail.route_type,
+        detailEffective.route_type,
+        detailActionFlags.route_type,
+        detailContractWeek.route_type,
+        row.route_type,
+        row.contract_week?.route_type
+      ));
+      const rowRouteTypeCandidate = upperReal(pickReal(row.route_type, row.contract_week?.route_type));
+      const routeFamilyCandidate = upperReal(pickReal(
+        detail.route_family,
+        detailEffective.route_family,
+        detailActionFlags.route_family,
+        detailContractWeek.route_family,
+        row.route_family,
+        row.contract_week?.route_family
+      ));
+      const routeSubfamilyCandidate = upperReal(pickReal(
+        detail.route_subfamily,
+        detailEffective.route_subfamily,
+        detailActionFlags.route_subfamily,
+        detailContractWeek.route_subfamily,
+        row.route_subfamily,
+        row.contract_week?.route_subfamily
+      ));
+      const underlyingFamilyCandidate = upperReal(pickReal(
+        detail.underlying_channel_family,
+        detailEffective.underlying_channel_family,
+        detailActionFlags.underlying_channel_family,
+        detailContractWeek.underlying_channel_family,
+        row.underlying_channel_family,
+        row.contract_week?.underlying_channel_family
+      ));
+      const submissionModeCandidate = upperReal(pickReal(
+        detail.cw_submission_mode_snapshot,
+        detail.submission_mode_snapshot,
+        detailTimesheet.submission_mode,
+        detailContractWeek.submission_mode_snapshot,
+        row.submission_mode_snapshot,
+        row.submission_mode,
+        row.contract_week?.submission_mode_snapshot
+      ));
+      const isAdjustment = !!(
+        boolishReal(detail.is_adjustment) ||
+        boolishReal(detailEffective.is_adjustment) ||
+        boolishReal(detailActionFlags.is_adjustment) ||
+        boolishReal(detailContractWeek.is_adjustment) ||
+        boolishReal(row.is_adjustment) ||
+        boolishReal(row.contract_week?.is_adjustment) ||
+        additionalSeq > 0
+      );
+      const routeProvesAdjustment = !!(
+        routeTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' ||
+        routeTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+        routeTypeCandidate === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+        routeTypeCandidate.includes('_ADJUSTMENT') ||
+        rowRouteTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' ||
+        rowRouteTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+        rowRouteTypeCandidate === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+        rowRouteTypeCandidate.includes('_ADJUSTMENT')
+      );
+      const manualProvenance = !!(
+        submissionModeCandidate === 'MANUAL' ||
+        routeFamilyCandidate === 'MANUAL_NON_QR' ||
+        routeSubfamilyCandidate === 'MANUAL_NON_QR' ||
+        underlyingFamilyCandidate === 'MANUAL_NON_QR' ||
+        additionalSeq > 0
+      );
+      const manualAdditional = !!(routeProvesAdjustment && (isAdjustment || manualProvenance || additionalSeq > 0));
+      const nhspLike = !!(
+        routeTypeCandidate === 'WEEKLY_NHSP' ||
+        routeTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' ||
+        rowRouteTypeCandidate === 'WEEKLY_NHSP' ||
+        rowRouteTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' ||
+        upperReal(detail?.policy?.weekly_mode || row.weekly_mode || row.contract_weekly_mode || '') === 'NHSP' ||
+        boolishReal(detailEffective.client_is_nhsp) ||
+        boolishReal(row.client_is_nhsp) ||
+        boolishReal(row.is_nhsp)
+      );
+      const healthRosterLike = !!(
+        routeTypeCandidate === 'WEEKLY_HEALTHROSTER' ||
+        routeTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+        rowRouteTypeCandidate === 'WEEKLY_HEALTHROSTER' ||
+        rowRouteTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+        upperReal(detail?.policy?.weekly_mode || row.weekly_mode || row.contract_weekly_mode || '') === 'HEALTHROSTER' ||
+        boolishReal(detailEffective.client_autoprocess_hr) ||
+        boolishReal(row.client_autoprocess_hr) ||
+        boolishReal(row.autoprocess_hr)
+      );
+      const canonicalManualRouteType = (() => {
+        if (!manualAdditional) return routeTypeCandidate || rowRouteTypeCandidate || '';
+        if (routeTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' || rowRouteTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' || nhspLike) return 'WEEKLY_NHSP_ADJUSTMENT';
+        if (routeTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' || rowRouteTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' || healthRosterLike) return 'WEEKLY_HEALTHROSTER_ADJUSTMENT';
+        if (routeTypeCandidate === 'WEEKLY_MANUAL_ADJUSTMENT' || rowRouteTypeCandidate === 'WEEKLY_MANUAL_ADJUSTMENT') return 'WEEKLY_MANUAL_ADJUSTMENT';
+        return routeTypeCandidate || rowRouteTypeCandidate || 'WEEKLY_MANUAL_ADJUSTMENT';
+      })();
+      const preservedRouteType = canonicalManualRouteType || routeTypeCandidate || rowRouteTypeCandidate || null;
+      const preservedRouteFamily = manualAdditional ? 'MANUAL_NON_QR' : (pickReal(detail.route_family, detailEffective.route_family, detailActionFlags.route_family, detailContractWeek.route_family, row.route_family, row.contract_week?.route_family) || null);
+      const preservedRouteSubfamily = manualAdditional ? 'MANUAL_NON_QR' : (pickReal(detail.route_subfamily, detailEffective.route_subfamily, detailActionFlags.route_subfamily, detailContractWeek.route_subfamily, row.route_subfamily, row.contract_week?.route_subfamily) || null);
+      const preservedUnderlyingFamily = manualAdditional ? 'MANUAL_NON_QR' : (pickReal(detail.underlying_channel_family, detailEffective.underlying_channel_family, detailActionFlags.underlying_channel_family, detailContractWeek.underlying_channel_family, row.underlying_channel_family, row.contract_week?.underlying_channel_family) || null);
+      const mergedDetail = {
+        ...detail,
+        contract_week_id: detail.contract_week_id || detailContractWeek.id || row.contract_week_id || row.contract_week?.id || null,
+        route_type: preservedRouteType,
+        route_family: preservedRouteFamily,
+        route_subfamily: preservedRouteSubfamily,
+        underlying_channel_family: preservedUnderlyingFamily
+      };
+
+      if (manualAdditional) {
+        mergedDetail.is_import_authoritative = false;
+        mergedDetail.is_adjustment = true;
+        mergedDetail.additional_seq = additionalSeq || 1;
+        mergedDetail.cw_submission_mode_snapshot = submissionModeCandidate || 'MANUAL';
+        mergedDetail.effective = {
+          ...detailEffective,
+          route_type: preservedRouteType,
+          route_family: 'MANUAL_NON_QR',
+          route_subfamily: 'MANUAL_NON_QR',
+          underlying_channel_family: 'MANUAL_NON_QR',
+          is_import_authoritative: false,
+          is_adjustment: true,
+          additional_seq: additionalSeq || 1
+        };
+        mergedDetail.action_flags = {
+          ...detailActionFlags,
+          route_type: preservedRouteType,
+          route_family: 'MANUAL_NON_QR',
+          route_subfamily: 'MANUAL_NON_QR',
+          underlying_channel_family: 'MANUAL_NON_QR',
+          is_import_authoritative: false,
+          is_adjustment: true,
+          additional_seq: additionalSeq || 1,
+          cw_submission_mode_snapshot: submissionModeCandidate || 'MANUAL',
+          submission_mode_snapshot: submissionModeCandidate || 'MANUAL'
+        };
+        mergedDetail.contract_week = {
+          ...detailContractWeek,
+          id: detailContractWeek.id || detail.contract_week_id || row.contract_week_id || row.contract_week?.id || null,
+          route_type: preservedRouteType,
+          route_family: 'MANUAL_NON_QR',
+          route_subfamily: 'MANUAL_NON_QR',
+          underlying_channel_family: 'MANUAL_NON_QR',
+          is_adjustment: true,
+          additional_seq: additionalSeq || 1,
+          submission_mode_snapshot: detailContractWeek.submission_mode_snapshot || row.submission_mode_snapshot || 'MANUAL'
+        };
+        mergedDetail.timesheet = detail.timesheet && typeof detail.timesheet === 'object'
+          ? { ...detail.timesheet, is_adjustment: true }
+          : detail.timesheet;
+      } else if (preservedRouteType || preservedRouteFamily || preservedRouteSubfamily || preservedUnderlyingFamily) {
+        mergedDetail.effective = {
+          ...detailEffective,
+          ...(preservedRouteType && !detailEffective.route_type ? { route_type: preservedRouteType } : {}),
+          ...(preservedRouteFamily && !detailEffective.route_family ? { route_family: preservedRouteFamily } : {}),
+          ...(preservedRouteSubfamily && !detailEffective.route_subfamily ? { route_subfamily: preservedRouteSubfamily } : {}),
+          ...(preservedUnderlyingFamily && !detailEffective.underlying_channel_family ? { underlying_channel_family: preservedUnderlyingFamily } : {})
+        };
+      }
+
       L('REAL_TIMESHEET_RESULT', {
-        requested_timesheet_id: detail?.requested_timesheet_id || realTimesheetId,
-        current_timesheet_id: detail?.current_timesheet_id || realTimesheetId,
-        was_stale: !!detail?.was_stale,
-        hasTimesheet: !!detail?.timesheet,
-        hasTsfin: !!detail?.tsfin,
-        contract_week_id: detail?.contract_week_id || null
+        requested_timesheet_id: mergedDetail?.requested_timesheet_id || realTimesheetId,
+        current_timesheet_id: mergedDetail?.current_timesheet_id || realTimesheetId,
+        was_stale: !!mergedDetail?.was_stale,
+        hasTimesheet: !!mergedDetail?.timesheet,
+        hasTsfin: !!mergedDetail?.tsfin,
+        contract_week_id: mergedDetail?.contract_week_id || null,
+        route_type: mergedDetail?.route_type || null,
+        route_family: mergedDetail?.route_family || null,
+        is_import_authoritative: mergedDetail?.is_import_authoritative === true,
+        manual_additional: manualAdditional
       });
       GE();
-      return detail;
+      return mergedDetail;
     } catch (err) {
       L('REAL_TIMESHEET_ERROR', err);
       GE();
@@ -71168,7 +71180,62 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
       boolish(row.client_autoprocess_hr) ||
       boolish(row.autoprocess_hr);
 
+    const additionalSeq = Number(
+      plannedDetail.additional_seq ??
+      plannedDetail.contract_week_additional_seq ??
+      backendContractWeek?.additional_seq ??
+      row.additional_seq ??
+      row.contract_week_additional_seq ??
+      row.contract_week?.additional_seq ??
+      0
+    ) || 0;
+    const routeFamilyCandidate = String(
+      plannedDetail.route_family ||
+      backendContractWeek?.route_family ||
+      effective.route_family ||
+      row.route_family ||
+      row.contract_week?.route_family ||
+      ''
+    ).trim().toUpperCase();
+    const routeSubfamilyCandidate = String(
+      plannedDetail.route_subfamily ||
+      backendContractWeek?.route_subfamily ||
+      effective.route_subfamily ||
+      row.route_subfamily ||
+      row.contract_week?.route_subfamily ||
+      ''
+    ).trim().toUpperCase();
+    const underlyingFamilyCandidate = String(
+      plannedDetail.underlying_channel_family ||
+      backendContractWeek?.underlying_channel_family ||
+      effective.underlying_channel_family ||
+      row.underlying_channel_family ||
+      row.contract_week?.underlying_channel_family ||
+      ''
+    ).trim().toUpperCase();
+    const adjustmentRouteCandidate = normalizeRouteType(explicitSpecialRouteType || routeTypeCandidate || '');
+    const adjustmentRouteProvesManualAdditional = !!(
+      additionalSeq > 0 ||
+      adjustmentRouteCandidate === 'WEEKLY_NHSP_ADJUSTMENT' ||
+      adjustmentRouteCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+      adjustmentRouteCandidate === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+      adjustmentRouteCandidate.includes('_ADJUSTMENT')
+    );
+    const manualSignalsProveManualAdditional = !!(
+      canonicalSubmissionMode === 'MANUAL' ||
+      String(backendContractWeek?.submission_mode_snapshot || row.submission_mode_snapshot || row.submission_mode || '').trim().toUpperCase() === 'MANUAL' ||
+      routeFamilyCandidate === 'MANUAL_NON_QR' ||
+      routeSubfamilyCandidate === 'MANUAL_NON_QR' ||
+      underlyingFamilyCandidate === 'MANUAL_NON_QR' ||
+      additionalSeq > 0
+    );
+    const isManualAdditionalAdjustment = !!(
+      adjustmentRouteProvesManualAdditional &&
+      (isAdjustment || manualSignalsProveManualAdditional || additionalSeq > 0)
+    );
+
     const deriveSpecialWeeklyRouteType = () => {
+      if (isManualAdditionalAdjustment && isNhspLike) return 'WEEKLY_NHSP_ADJUSTMENT';
       if (explicitSpecialRouteType) return explicitSpecialRouteType;
       if (isNhspLike) return isAdjustment ? 'WEEKLY_NHSP_ADJUSTMENT' : 'WEEKLY_NHSP';
       if (isHealthRosterLike && (noTimesheetRequired || hrWeeklyBehaviour === 'CREATE' || boolish(actionFlags.is_import_authoritative))) {
@@ -71232,6 +71299,7 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     ).trim().toUpperCase() || 'UNPROCESSED';
 
     const canonicalImportAuthoritative =
+      !isManualAdditionalAdjustment &&
       isImportAuthoritativeWeeklyRouteType(canonicalRouteType) && (
         canonicalRouteType !== 'WEEKLY_HEALTHROSTER' ||
         noTimesheetRequired ||
@@ -71275,6 +71343,11 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
               contractWeekId,
             route_type: canonicalRouteType || null,
             route_display: canonicalRouteDisplay || null,
+            route_family: canonicalRouteFamily || backendContractWeek.route_family || null,
+            route_subfamily: canonicalRouteFamily || backendContractWeek.route_subfamily || null,
+            underlying_channel_family: canonicalUnderlyingChannelFamily || backendContractWeek.underlying_channel_family || null,
+            is_adjustment: isAdjustment,
+            additional_seq: additionalSeq || backendContractWeek.additional_seq || 0,
             submission_mode_snapshot:
               canonicalSubmissionMode ||
               backendContractWeek.submission_mode_snapshot ||
@@ -71287,6 +71360,11 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
             status: plannedDetail.contract_week_status || row.status || row.contract_week_status || null,
             route_type: canonicalRouteType || null,
             route_display: canonicalRouteDisplay || null,
+            route_family: canonicalRouteFamily || null,
+            route_subfamily: canonicalRouteFamily || null,
+            underlying_channel_family: canonicalUnderlyingChannelFamily || null,
+            is_adjustment: isAdjustment,
+            additional_seq: additionalSeq || 0,
             submission_mode_snapshot: canonicalSubmissionMode || null,
             timesheet_id: plannedDetail.current_timesheet_id || null,
             planned_schedule_json:
@@ -71311,8 +71389,11 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
         ? {
             ...plannedDetail.action_flags,
             route_family: canonicalRouteFamily,
+            route_subfamily: canonicalRouteFamily,
             underlying_channel_family: canonicalUnderlyingChannelFamily,
             is_import_authoritative: canonicalImportAuthoritative,
+            is_adjustment: isAdjustment,
+            additional_seq: additionalSeq || 0,
             compare_block_required: canonicalCompareBlockRequired,
             healthroster_compare_required: canonicalCompareBlockRequired,
             cw_submission_mode_snapshot: canonicalSubmissionMode || contractWeek?.submission_mode_snapshot || null,
@@ -71332,6 +71413,12 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
         }) ||
         buildWeeklyRouteDisplayFromMode(canonicalSubmissionMode),
       summary_stage: canonicalSummaryStage,
+      route_family: canonicalRouteFamily,
+      route_subfamily: canonicalRouteFamily,
+      underlying_channel_family: canonicalUnderlyingChannelFamily,
+      is_import_authoritative: canonicalImportAuthoritative,
+      is_adjustment: isAdjustment,
+      additional_seq: additionalSeq || 0,
       client_no_timesheet_required:
         Object.prototype.hasOwnProperty.call(plannedDetail.effective || {}, 'client_no_timesheet_required')
           ? plannedDetail.effective.client_no_timesheet_required
@@ -71428,6 +71515,12 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
       was_stale: !!plannedDetail.was_stale,
 
       summary_stage: canonicalSummaryStage,
+      route_family: canonicalRouteFamily,
+      route_subfamily: canonicalRouteFamily,
+      underlying_channel_family: canonicalUnderlyingChannelFamily,
+      is_import_authoritative: canonicalImportAuthoritative,
+      is_adjustment: isAdjustment,
+      additional_seq: additionalSeq || 0,
 
       route_type:
         canonicalRouteType ||
@@ -71467,9 +71560,6 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     throw err;
   }
 }
-
-
-
 
 
 function renderImportSummaryModal(importType, summaryState) {
@@ -77557,410 +77647,130 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
   throw timeoutError;
 }
 
+
 async function bankingPayWorkbenchSessionOpen(payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const cloneJson = (value) => {
-    try {
-      return JSON.parse(JSON.stringify(value));
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
   };
   const parseJsonResponse = async (res) => {
     const text = await res.text().catch(() => '');
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
-  const extractPayloadCode = (payloadObj) => {
-    const seen = new Set();
-    const codes = [];
-    const visit = (value, depth = 0) => {
-      if (value == null || depth > 5) return;
-      if (typeof value === 'string') {
-        const raw = trimStr(value);
-        if (!raw) return;
-        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
-          try { visit(JSON.parse(raw), depth + 1); } catch {}
-        }
-        return;
-      }
-      if (!isPlainObject(value)) return;
-      if (seen.has(value)) return;
-      seen.add(value);
-      for (const key of ['error_code', 'code', 'raw_code']) {
-        const s = trimStr(value[key]);
-        if (s) codes.push(s);
-      }
-      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
-        visit(value[key], depth + 1);
-      }
-    };
-    visit(payloadObj);
-    return trimStr(codes[0] || '');
+  const toNumber = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
   };
-  const looksTechnicalPayloadMessage = (value) => {
-    const s = trimStr(value);
-    if (!s) return true;
-    if (s === '[object Object]') return true;
-    if (/^[\[{]/.test(s)) return true;
-    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
-    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
-    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
-    return false;
+  const normaliseProgress = (raw, fallbackSessionId = '') => {
+    const obj = isPlainObject(raw) ? raw : {};
+    const progress = isPlainObject(obj.progress) ? obj.progress : obj;
+    const total = toNumber(progress.total_candidates ?? progress.total_candidate_count ?? progress.total_count ?? progress.total ?? progress.candidate_count ?? obj.total_candidates ?? obj.candidate_count);
+    const failed = toNumber(progress.failed_candidates ?? progress.failed_candidate_count ?? progress.failed_count ?? progress.failed ?? obj.failed_candidates ?? obj.failed_count);
+    const completed = toNumber(progress.completed_candidates ?? progress.ready_candidates ?? progress.ready_candidate_count ?? progress.completed_count ?? progress.ready_count ?? progress.completed ?? obj.completed_candidates ?? obj.ready_candidates);
+    const pendingFromPayload = progress.pending_candidates ?? progress.pending_candidate_count ?? progress.pending_count ?? progress.pending ?? obj.pending_candidates ?? obj.pending_count;
+    const pending = Number.isFinite(Number(pendingFromPayload)) ? toNumber(pendingFromPayload) : Math.max(0, total - completed - failed);
+    const readyFlag = progress.ready_flag === true || progress.ready === true || obj.ready_flag === true || obj.ready === true || (total > 0 && pending <= 0 && failed <= 0);
+    const phase = trimStr(progress.phase || progress.current_phase || progress.status_phase || obj.phase || obj.current_phase || (readyFlag ? 'READY' : 'REFRESHING'));
+    const statusText = trimStr(progress.status_text || progress.message || progress.statusText || obj.status_text || obj.message || (readyFlag ? 'Preview ready' : 'Preview is still refreshing'));
+    return {
+      session_id: trimStr(obj.session_id || progress.session_id || fallbackSessionId),
+      snapshot_run_id: trimStr(obj.snapshot_run_id || progress.snapshot_run_id || ''),
+      session_version: obj.session_version ?? progress.session_version ?? null,
+      session_signature: trimStr(obj.session_signature || progress.session_signature || ''),
+      total_candidates: total,
+      completed_candidates: completed,
+      ready_candidates: completed,
+      pending_candidates: pending,
+      failed_candidates: failed,
+      ready_flag: !!readyFlag,
+      ready: !!readyFlag,
+      phase,
+      status_text: statusText,
+      progress: cloneJson(progress) || progress,
+      raw: cloneJson(obj) || obj
+    };
   };
-  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
-    const fallback = trimStr(fallbackMessage) || 'Request failed.';
-    const seen = new Set();
-    const candidates = [];
-    const add = (value) => {
-      const s = trimStr(value);
-      if (s) candidates.push(s);
+  const normaliseOpenPayload = (json) => {
+    const payloadObj = isPlainObject(json) ? json : {};
+    const progress = normaliseProgress(payloadObj, payloadObj.session_id || payloadObj.session?.session_id || '');
+    const sessionObj = isPlainObject(payloadObj.session) ? payloadObj.session : {};
+    const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : null;
+    const bootstrapOnly = payloadObj.bootstrap_only === true || payloadObj.preview_bootstrap === true || payloadObj.large_preview === true || previewObj?.bootstrap_only === true;
+    const readyFlag = payloadObj.ready === true || payloadObj.ready_flag === true || progress.ready_flag === true;
+    return {
+      ok: payloadObj.ok !== false,
+      ...(cloneJson(payloadObj) || {}),
+      session_id: trimStr(payloadObj.session_id || sessionObj.session_id || progress.session_id),
+      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || sessionObj.snapshot_run_id || progress.snapshot_run_id),
+      session_version: payloadObj.session_version ?? sessionObj.session_version ?? progress.session_version,
+      session_signature: trimStr(payloadObj.session_signature || sessionObj.session_signature || progress.session_signature),
+      ready: !!readyFlag,
+      ready_flag: !!readyFlag,
+      deferred: !readyFlag,
+      progress,
+      candidate_counts: {
+        total: progress.total_candidates,
+        completed: progress.completed_candidates,
+        ready: progress.ready_candidates,
+        pending: progress.pending_candidates,
+        failed: progress.failed_candidates
+      },
+      preview: readyFlag && previewObj && !bootstrapOnly ? (cloneJson(previewObj) || previewObj) : null,
+      bootstrap_only: !!bootstrapOnly,
+      preview_bootstrap: !!bootstrapOnly,
+      available_sections: Array.isArray(payloadObj.available_sections || previewObj?.available_sections) ? cloneJson(payloadObj.available_sections || previewObj.available_sections) || [] : [],
+      recommended_page_size: Number.isFinite(Number(payloadObj.recommended_page_size || previewObj?.recommended_page_size)) ? Math.max(1, Math.min(250, Math.trunc(Number(payloadObj.recommended_page_size || previewObj?.recommended_page_size)))) : null,
+      pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids || previewObj?.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids || previewObj.pending_candidate_ids) || [] : [],
+      failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids || previewObj?.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids || previewObj.failed_candidate_ids) || [] : [],
+      server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids || previewObj?.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids || previewObj.server_selected_preview_row_ids) || [] : [],
+      server_selected_preview_row_ids_provided: payloadObj.server_selected_preview_row_ids_provided === true || previewObj?.server_selected_preview_row_ids_provided === true || sessionObj.server_selected_preview_row_ids_provided === true
     };
-    const visit = (value, depth = 0) => {
-      if (value == null || depth > 5) return;
-      if (typeof value === 'string') {
-        const raw = trimStr(value);
-        if (!raw) return;
-        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
-          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
-        }
-        add(raw);
-        return;
-      }
-      if (!isPlainObject(value)) return;
-      if (seen.has(value)) return;
-      seen.add(value);
-      add(value.user_message);
-      add(value.friendly_message);
-      add(value.message);
-      add(value.title);
-      add(value.error_description);
-      if (isPlainObject(value.friendly_error)) {
-        add(value.friendly_error.user_message);
-        add(value.friendly_error.message);
-        add(value.friendly_error.title);
-      }
-      if (isPlainObject(value.error)) {
-        visit(value.error, depth + 1);
-      } else if (typeof value.error === 'string') {
-        visit(value.error, depth + 1);
-      }
-      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
-        visit(value[key], depth + 1);
-      }
-    };
-    visit(payloadObj);
-    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
-    return trimStr(picked || fallback) || fallback;
   };
   const makeApiPayloadError = (json, status, fallbackMessage) => {
     const payloadObj = isPlainObject(json) ? json : { raw_response: json };
-    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const message = trimStr(payloadObj.user_message || payloadObj.message || payloadObj.error || fallbackMessage || `Request failed (${status})`) || `Request failed (${status})`;
     const err = new Error(message);
     err.status = status;
     err.payload = json;
     err.json = json;
     err.response_json = cloneJson(json) || json;
-    const code = extractPayloadCode(payloadObj);
+    const code = trimStr(payloadObj.error_code || payloadObj.code || '');
     if (code) {
       err.code = code;
       err.error_code = code;
     }
     return err;
   };
-  const workbenchFailureCodes = new Set([
-    'BATCH_STALE',
-    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
-    'WORKBENCH_SESSION_INVALID',
-    'WORKBENCH_SESSION_NOT_FOUND',
-    'STALE_SESSION',
-    'OBSOLETE_SESSION',
-    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
-    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
-    'PAYE_NOT_READY',
-    'PAYE_NET_MISSING',
-    'PAYE_NET_INVALID',
-    'PAYE_NET_REQUIRED',
-    'PAYE_NET_BANK_AMOUNT_MISSING',
-    'PAYE_NET_BANK_AMOUNT_INVALID',
-    'HAS_HARD_BLOCKERS',
-    'BLOCKED_BANK_DETAILS',
-    'SELECTED_PAYEE_ROUTE_NOT_READY',
-    'RAIL_ENV_MISMATCH',
-    'RAIL_NOT_CONFIGURED',
-    'UNKNOWN_RAIL_PROVIDER',
-    'MISSING_RAIL_PROVIDER',
-    'FUNDING_ACCOUNT_MISSING',
-    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
-    'PAYMENT_AUTHORISER_REQUIRED',
-    'NO_TIMESHEETS_READY_FOR_DRAFT',
-    'BANKING_PAY_PREVIEW_FAILED',
-    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
-    'BANKING_PREVIEW_INVALID_PAY_DATE',
-    'BANKING_PREVIEW_INVALID_INPUT',
-    'BANKING_ACTION_FAILED'
-  ]);
-  const normalizeWorkbenchFailureCode = (value) => {
-    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-    if (!code) return '';
-    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
-    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
-    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
-    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
-    return code;
-  };
-  const parseWorkbenchEmbeddedObject = (value) => {
-    if (isPlainObject(value)) return value;
-    const text = trimStr(value);
-    if (!text) return null;
-    try {
-      const parsed = JSON.parse(text);
-      if (isPlainObject(parsed)) return parsed;
-    } catch {}
-    const firstBrace = text.indexOf('{');
-    const lastBrace = text.lastIndexOf('}');
-    if (firstBrace >= 0 && lastBrace > firstBrace) {
-      try {
-        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
-        if (isPlainObject(parsed)) return parsed;
-      } catch {}
-    }
-    return null;
-  };
-  const detectWorkbenchFailureEnvelope = (value) => {
-    const queue = [];
-    const seenObjects = new Set();
-    const seenStrings = new Set();
-    const enqueue = (candidate) => {
-      if (candidate == null) return;
-      if (typeof candidate === 'string') {
-        const text = candidate.trim();
-        if (!text || seenStrings.has(text)) return;
-        seenStrings.add(text);
-        queue.push(text);
-        return;
-      }
-      if (candidate && typeof candidate === 'object') {
-        if (seenObjects.has(candidate)) return;
-        seenObjects.add(candidate);
-      }
-      queue.push(candidate);
-    };
 
-    enqueue(value);
-
-    while (queue.length) {
-      const node = queue.shift();
-
-      if (node instanceof Error) {
-        enqueue({
-          name: node.name,
-          message: node.message,
-          code: node.code,
-          error_code: node.error_code,
-          body: node.body,
-          json: node.json,
-          payload: node.payload,
-          backendPayload: node.backendPayload,
-          details: node.details,
-          detail: node.detail,
-          reason: node.reason,
-          cause: node.cause,
-          friendly_error: node.friendly_error,
-          friendlyError: node.friendlyError,
-          raw_response_text: node.raw_response_text,
-          technical_message: node.technical_message
-        });
-        continue;
-      }
-
-      if (typeof node === 'string') {
-        const parsed = parseWorkbenchEmbeddedObject(node);
-        if (parsed) enqueue(parsed);
-        const upper = node.toUpperCase();
-        for (const knownCode of workbenchFailureCodes) {
-          const canonical = normalizeWorkbenchFailureCode(knownCode);
-          if (!canonical) continue;
-          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
-          if (pattern.test(upper)) {
-            return {
-              ok: false,
-              error_code: canonical,
-              code: canonical,
-              message: node
-            };
-          }
-        }
-        continue;
-      }
-
-      if (!isPlainObject(node)) continue;
-
-      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
-      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
-      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
-      const hasErrorishContent = !!(
-        Object.prototype.hasOwnProperty.call(node, 'error') ||
-        Object.prototype.hasOwnProperty.call(node, 'message') ||
-        Object.prototype.hasOwnProperty.call(node, 'details') ||
-        Object.prototype.hasOwnProperty.call(node, 'detail') ||
-        Object.prototype.hasOwnProperty.call(node, 'reason') ||
-        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
-        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
-      );
-
-      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
-        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
-        return {
-          ...node,
-          ok: false,
-          error_code: finalCode,
-          code: finalCode
-        };
-      }
-
-      for (const key of [
-        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
-        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
-        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
-      ]) {
-        const nested = node[key];
-        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
-        const parsed = parseWorkbenchEmbeddedObject(nested);
-        if (parsed) enqueue(parsed);
-      }
-      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
-    }
-
-    return null;
-  };
-
-
-  const parseIsoOrUkDateToIso = (raw) => {
-    const s = trimStr(raw);
-    if (!s) return '';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
-    return '';
-  };
-  const normalizeCutoffDate = (raw) => parseIsoOrUkDateToIso(raw) || '9999-12-31';
-  const stableStringify = (value) => {
-    if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
-    if (value && typeof value === 'object') {
-      return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
-    }
-    return JSON.stringify(value);
-  };
-  const normalizeSignatureForCompare = (raw) => {
-    const s = trimStr(raw);
-    if (!s) return '';
-    try { return stableStringify(JSON.parse(s)); } catch { return s; }
-  };
-  const getEnvelopeContext = (payloadObj, previewObj) => {
-    const sessionObj = isPlainObject(payloadObj?.session) ? payloadObj.session : {};
-    const previewSessionObj = isPlainObject(previewObj?.session) ? previewObj.session : {};
-    return {
-      pay_date: parseIsoOrUkDateToIso(payloadObj?.pay_date || payloadObj?.payDate || sessionObj.pay_date || sessionObj.payDate || previewObj?.pay_date || previewObj?.payDate || previewSessionObj.pay_date || previewSessionObj.payDate || ''),
-      week_ending_cutoff_date: normalizeCutoffDate(payloadObj?.week_ending_cutoff_date || payloadObj?.weekEndingCutoffDate || payloadObj?.week_ending_cutoff || payloadObj?.weekEndingCutoff || sessionObj.week_ending_cutoff_date || sessionObj.weekEndingCutoffDate || sessionObj.week_ending_cutoff || sessionObj.weekEndingCutoff || previewObj?.week_ending_cutoff_date || previewObj?.weekEndingCutoffDate || previewObj?.week_ending_cutoff || previewObj?.weekEndingCutoff || previewSessionObj.week_ending_cutoff_date || previewSessionObj.weekEndingCutoffDate || previewSessionObj.week_ending_cutoff || previewSessionObj.weekEndingCutoff || ''),
-      session_signature: trimStr(payloadObj?.session_signature || payloadObj?.sessionSignature || sessionObj.session_signature || sessionObj.sessionSignature || previewObj?.session_signature || previewObj?.sessionSignature || previewSessionObj.session_signature || previewSessionObj.sessionSignature || '')
-    };
-  };
   const uiOptions = isPlainObject(payload?.ui_options) ? payload.ui_options : (isPlainObject(payload) ? payload : {});
   const userInitiated = uiOptions.userInitiated === true || uiOptions.user_initiated === true || uiOptions.showModal === true || uiOptions.show_modal === true;
   const silent = uiOptions.silent === true || uiOptions.silent === 'true';
   const background = uiOptions.background === true || uiOptions.background === 'true';
 
   try {
+    if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
     const res = await authFetch(API('/api/banking/pay/workbench/session/open'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(isPlainObject(payload) ? payload : {})
     });
     const json = await parseJsonResponse(res);
-    if (!res.ok) {
-      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
-      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
-    }
-    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
-    if (successFailureEnvelope) {
-      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
-      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
-    }
-    const payloadObj = isPlainObject(json) ? json : {};
-    const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : payloadObj;
-    const expectedPayDate = parseIsoOrUkDateToIso(payload?.pay_date || payload?.payDate || '');
-    const expectedWeekEndingCutoffDate = normalizeCutoffDate(payload?.week_ending_cutoff_date || payload?.weekEndingCutoffDate || payload?.week_ending_cutoff || payload?.weekEndingCutoff || '');
-    const expectedSessionSignature = trimStr(payload?.session_signature || payload?.sessionSignature || '');
-    const returnedContext = getEnvelopeContext(payloadObj, previewObj);
-    if (expectedPayDate && returnedContext.pay_date && returnedContext.pay_date !== expectedPayDate) {
-      const err = new Error('Banking preview returned a different payroll date from the requested workbench session.');
-      err.status = 409;
-      err.payload = {
-        ok: false,
-        code: 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
-        expected_pay_date: expectedPayDate,
-        returned_pay_date: returnedContext.pay_date,
-        response: payloadObj
-      };
-      throw err;
-    }
-  if (expectedWeekEndingCutoffDate && returnedContext.week_ending_cutoff_date && returnedContext.week_ending_cutoff_date !== expectedWeekEndingCutoffDate) {
-    const err = new Error('Banking preview returned a different week-ending cutoff from the requested workbench session.');
-    err.status = 409;
-    err.payload = {
-      ok: false,
-      code: 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
-      expected_week_ending_cutoff_date: expectedWeekEndingCutoffDate,
-      returned_week_ending_cutoff_date: returnedContext.week_ending_cutoff_date,
-      response: payloadObj
-    };
-    throw err;
-  }
-  if (expectedSessionSignature && returnedContext.session_signature) {
-    const expectedNorm = normalizeSignatureForCompare(expectedSessionSignature);
-    const returnedNorm = normalizeSignatureForCompare(returnedContext.session_signature);
-    if (expectedNorm && returnedNorm && expectedNorm !== returnedNorm) {
-      const err = new Error('Banking preview returned a different session signature from the requested workbench session.');
-      err.status = 409;
-      err.payload = {
-        ok: false,
-        code: 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
-        expected_session_signature: expectedSessionSignature,
-        returned_session_signature: returnedContext.session_signature,
-        response: payloadObj
-      };
-      throw err;
-    }
-  }
-    return {
-      ok: true,
-      ...(cloneJson(payloadObj) || {}),
-      preview: cloneJson(previewObj) || previewObj,
-      session_id: trimStr(payloadObj.session_id || previewObj.session_id || payloadObj.session?.session_id || ''),
-      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || payloadObj.session?.snapshot_run_id || ''),
-      session_version: payloadObj.session_version ?? previewObj.session_version ?? payloadObj.session?.session_version ?? null,
-      pay_date: returnedContext.pay_date || trimStr(payloadObj.pay_date || previewObj.pay_date || payloadObj.session?.pay_date || ''),
-      week_ending_cutoff_date: returnedContext.week_ending_cutoff_date,
-      week_ending_cutoff: returnedContext.week_ending_cutoff_date,
-      session_signature: returnedContext.session_signature || trimStr(payloadObj.session_signature || previewObj.session_signature || payloadObj.session?.session_signature || ''),
-      pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) || [] : [],
-      failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) || [] : [],
-      server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) || [] : [],
-      server_selected_preview_row_ids_provided: payloadObj.server_selected_preview_row_ids_provided === true || previewObj.server_selected_preview_row_ids_provided === true || payloadObj.session?.server_selected_preview_row_ids_provided === true
-    };
+    if (!res.ok) throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+    return normaliseOpenPayload(json);
   } catch (error) {
-    const isContextMismatch = trimStr(error?.payload?.code || error?.payload?.error_code || error?.code || error?.error_code) === 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH';
-    const fallbackCode = isContextMismatch
-      ? 'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH'
-      : 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED';
     const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'WORKBENCH_SESSION_OPEN', fallbackCode, userInitiated, silent, background, showModal: userInitiated && !silent && !background })
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'WORKBENCH_SESSION_OPEN', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated, silent, background, showModal: userInitiated && !silent && !background })
       : null;
-    throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking workbench session open failed');
+    if (typeof bankingBuildEnrichedFriendlyError === 'function') {
+      throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking workbench session open failed');
+    }
+    throw error;
   }
 }
+
+
 
 function classifyTimesheetEditDomains(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
@@ -79056,303 +78866,100 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const cloneJson = (value) => {
-    try {
-      return JSON.parse(JSON.stringify(value));
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
   };
   const parseJsonResponse = async (res) => {
     const text = await res.text().catch(() => '');
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
-  const extractPayloadCode = (payloadObj) => {
-    const seen = new Set();
-    const codes = [];
-    const visit = (value, depth = 0) => {
-      if (value == null || depth > 5) return;
-      if (typeof value === 'string') {
-        const raw = trimStr(value);
-        if (!raw) return;
-        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
-          try { visit(JSON.parse(raw), depth + 1); } catch {}
-        }
-        return;
-      }
-      if (!isPlainObject(value)) return;
-      if (seen.has(value)) return;
-      seen.add(value);
-      for (const key of ['error_code', 'code', 'raw_code']) {
-        const s = trimStr(value[key]);
-        if (s) codes.push(s);
-      }
-      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
-        visit(value[key], depth + 1);
-      }
-    };
-    visit(payloadObj);
-    return trimStr(codes[0] || '');
-  };
-  const looksTechnicalPayloadMessage = (value) => {
-    const s = trimStr(value);
-    if (!s) return true;
-    if (s === '[object Object]') return true;
-    if (/^[\[{]/.test(s)) return true;
-    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
-    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
-    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
-    return false;
-  };
-  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
-    const fallback = trimStr(fallbackMessage) || 'Request failed.';
-    const seen = new Set();
-    const candidates = [];
-    const add = (value) => {
-      const s = trimStr(value);
-      if (s) candidates.push(s);
-    };
-    const visit = (value, depth = 0) => {
-      if (value == null || depth > 5) return;
-      if (typeof value === 'string') {
-        const raw = trimStr(value);
-        if (!raw) return;
-        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
-          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
-        }
-        add(raw);
-        return;
-      }
-      if (!isPlainObject(value)) return;
-      if (seen.has(value)) return;
-      seen.add(value);
-      add(value.user_message);
-      add(value.friendly_message);
-      add(value.message);
-      add(value.title);
-      add(value.error_description);
-      if (isPlainObject(value.friendly_error)) {
-        add(value.friendly_error.user_message);
-        add(value.friendly_error.message);
-        add(value.friendly_error.title);
-      }
-      if (isPlainObject(value.error)) {
-        visit(value.error, depth + 1);
-      } else if (typeof value.error === 'string') {
-        visit(value.error, depth + 1);
-      }
-      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
-        visit(value[key], depth + 1);
-      }
-    };
-    visit(payloadObj);
-    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
-    return trimStr(picked || fallback) || fallback;
-  };
   const makeApiPayloadError = (json, status, fallbackMessage) => {
     const payloadObj = isPlainObject(json) ? json : { raw_response: json };
-    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const message = trimStr(payloadObj.user_message || payloadObj.message || payloadObj.error || fallbackMessage || `Request failed (${status})`) || `Request failed (${status})`;
     const err = new Error(message);
     err.status = status;
     err.payload = json;
     err.json = json;
     err.response_json = cloneJson(json) || json;
-    const code = extractPayloadCode(payloadObj);
+    const code = trimStr(payloadObj.error_code || payloadObj.code || '');
     if (code) {
       err.code = code;
       err.error_code = code;
     }
     return err;
   };
-  const workbenchFailureCodes = new Set([
-    'BATCH_STALE',
-    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
-    'WORKBENCH_SESSION_INVALID',
-    'WORKBENCH_SESSION_NOT_FOUND',
-    'STALE_SESSION',
-    'OBSOLETE_SESSION',
-    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
-    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
-    'PAYE_NOT_READY',
-    'PAYE_NET_MISSING',
-    'PAYE_NET_INVALID',
-    'PAYE_NET_REQUIRED',
-    'PAYE_NET_BANK_AMOUNT_MISSING',
-    'PAYE_NET_BANK_AMOUNT_INVALID',
-    'HAS_HARD_BLOCKERS',
-    'BLOCKED_BANK_DETAILS',
-    'SELECTED_PAYEE_ROUTE_NOT_READY',
-    'RAIL_ENV_MISMATCH',
-    'RAIL_NOT_CONFIGURED',
-    'UNKNOWN_RAIL_PROVIDER',
-    'MISSING_RAIL_PROVIDER',
-    'FUNDING_ACCOUNT_MISSING',
-    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
-    'PAYMENT_AUTHORISER_REQUIRED',
-    'NO_TIMESHEETS_READY_FOR_DRAFT',
-    'BANKING_PAY_PREVIEW_FAILED',
-    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
-    'BANKING_PREVIEW_INVALID_PAY_DATE',
-    'BANKING_PREVIEW_INVALID_INPUT',
-    'BANKING_ACTION_FAILED'
-  ]);
-  const normalizeWorkbenchFailureCode = (value) => {
-    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-    if (!code) return '';
-    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
-    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
-    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
-    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
-    return code;
-  };
-  const parseWorkbenchEmbeddedObject = (value) => {
-    if (isPlainObject(value)) return value;
-    const text = trimStr(value);
-    if (!text) return null;
-    try {
-      const parsed = JSON.parse(text);
-      if (isPlainObject(parsed)) return parsed;
-    } catch {}
-    const firstBrace = text.indexOf('{');
-    const lastBrace = text.lastIndexOf('}');
-    if (firstBrace >= 0 && lastBrace > firstBrace) {
-      try {
-        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
-        if (isPlainObject(parsed)) return parsed;
-      } catch {}
-    }
-    return null;
-  };
-  const detectWorkbenchFailureEnvelope = (value) => {
-    const queue = [];
-    const seenObjects = new Set();
-    const seenStrings = new Set();
-    const enqueue = (candidate) => {
-      if (candidate == null) return;
-      if (typeof candidate === 'string') {
-        const text = candidate.trim();
-        if (!text || seenStrings.has(text)) return;
-        seenStrings.add(text);
-        queue.push(text);
-        return;
-      }
-      if (candidate && typeof candidate === 'object') {
-        if (seenObjects.has(candidate)) return;
-        seenObjects.add(candidate);
-      }
-      queue.push(candidate);
-    };
-
-    enqueue(value);
-
-    while (queue.length) {
-      const node = queue.shift();
-
-      if (node instanceof Error) {
-        enqueue({
-          name: node.name,
-          message: node.message,
-          code: node.code,
-          error_code: node.error_code,
-          body: node.body,
-          json: node.json,
-          payload: node.payload,
-          backendPayload: node.backendPayload,
-          details: node.details,
-          detail: node.detail,
-          reason: node.reason,
-          cause: node.cause,
-          friendly_error: node.friendly_error,
-          friendlyError: node.friendlyError,
-          raw_response_text: node.raw_response_text,
-          technical_message: node.technical_message
-        });
-        continue;
-      }
-
-      if (typeof node === 'string') {
-        const parsed = parseWorkbenchEmbeddedObject(node);
-        if (parsed) enqueue(parsed);
-        const upper = node.toUpperCase();
-        for (const knownCode of workbenchFailureCodes) {
-          const canonical = normalizeWorkbenchFailureCode(knownCode);
-          if (!canonical) continue;
-          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
-          if (pattern.test(upper)) {
-            return {
-              ok: false,
-              error_code: canonical,
-              code: canonical,
-              message: node
-            };
-          }
-        }
-        continue;
-      }
-
-      if (!isPlainObject(node)) continue;
-
-      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
-      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
-      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
-      const hasErrorishContent = !!(
-        Object.prototype.hasOwnProperty.call(node, 'error') ||
-        Object.prototype.hasOwnProperty.call(node, 'message') ||
-        Object.prototype.hasOwnProperty.call(node, 'details') ||
-        Object.prototype.hasOwnProperty.call(node, 'detail') ||
-        Object.prototype.hasOwnProperty.call(node, 'reason') ||
-        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
-        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
-      );
-
-      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
-        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
-        return {
-          ...node,
-          ok: false,
-          error_code: finalCode,
-          code: finalCode
-        };
-      }
-
-      for (const key of [
-        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
-        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
-        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
-      ]) {
-        const nested = node[key];
-        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
-        const parsed = parseWorkbenchEmbeddedObject(nested);
-        if (parsed) enqueue(parsed);
-      }
-      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
-    }
-
-    return null;
-  };
-
   const sessionIdText = trimStr(sessionId);
+  if (!sessionIdText) throw new Error('bankingPayWorkbenchSessionGet: sessionId is required');
+
   try {
+    const progress = (typeof bankingPayWorkbenchSessionGetProgress === 'function')
+      ? await bankingPayWorkbenchSessionGetProgress(sessionIdText, { ...options, staleSessionGuard: options.staleSessionGuard, enforceActiveSession: options.enforceActiveSession })
+      : null;
+
+    if (progress && progress.ready_flag !== true && progress.ready !== true) {
+      return {
+        ok: true,
+        session_id: sessionIdText,
+        progress_only: true,
+        ready: false,
+        ready_flag: false,
+        deferred: true,
+        progress,
+        candidate_counts: {
+          total: progress.total_candidates || 0,
+          completed: progress.completed_candidates || progress.ready_candidates || 0,
+          ready: progress.ready_candidates || progress.completed_candidates || 0,
+          pending: progress.pending_candidates || 0,
+          failed: progress.failed_candidates || 0
+        },
+        pending_candidate_ids: Array.isArray(progress.pending_candidate_ids) ? cloneJson(progress.pending_candidate_ids) || [] : [],
+        failed_candidate_ids: Array.isArray(progress.failed_candidate_ids) ? cloneJson(progress.failed_candidate_ids) || [] : [],
+        session_version: progress.session_version ?? null,
+        session_signature: trimStr(progress.session_signature || ''),
+        snapshot_run_id: trimStr(progress.snapshot_run_id || '')
+      };
+    }
+
+    if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}`));
     const json = await parseJsonResponse(res);
-    if (!res.ok) {
-      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
-      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
+    if (!res.ok) throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+
+    const payloadObj = isPlainObject(json) ? json : {};
+    const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : payloadObj;
+    const bootstrapOnly = payloadObj.bootstrap_only === true || payloadObj.preview_bootstrap === true || payloadObj.large_preview === true || previewObj.bootstrap_only === true;
+
+    if (bootstrapOnly) {
+      return {
+        ok: true,
+        ...(cloneJson(payloadObj) || {}),
+        session_id: trimStr(payloadObj.session_id || previewObj.session_id || sessionIdText),
+        snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || progress?.snapshot_run_id || ''),
+        session_version: payloadObj.session_version ?? previewObj.session_version ?? progress?.session_version ?? null,
+        session_signature: trimStr(payloadObj.session_signature || previewObj.session_signature || progress?.session_signature || ''),
+        ready: true,
+        ready_flag: true,
+        bootstrap_only: true,
+        preview_bootstrap: true,
+        large_preview: payloadObj.large_preview === true || previewObj.large_preview === true,
+        progress: progress || null,
+        available_sections: Array.isArray(payloadObj.available_sections || previewObj.available_sections) ? cloneJson(payloadObj.available_sections || previewObj.available_sections) || [] : [],
+        recommended_page_size: Number.isFinite(Number(payloadObj.recommended_page_size || previewObj.recommended_page_size)) ? Math.max(1, Math.min(250, Math.trunc(Number(payloadObj.recommended_page_size || previewObj.recommended_page_size)))) : null,
+        preview: null
+      };
     }
-    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
-    if (successFailureEnvelope) {
-      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
-      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
-    }
-    const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-    const previewObj = (payloadObj.preview && typeof payloadObj.preview === 'object' && !Array.isArray(payloadObj.preview)) ? payloadObj.preview : payloadObj;
+
     return {
       ok: true,
       ...(cloneJson(payloadObj) || {}),
       preview: cloneJson(previewObj) || previewObj,
-      session_id: trimStr(payloadObj.session_id || previewObj.session_id || ''),
-      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || ''),
-      session_version: payloadObj.session_version ?? previewObj.session_version ?? null,
+      session_id: trimStr(payloadObj.session_id || previewObj.session_id || sessionIdText),
+      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || progress?.snapshot_run_id || ''),
+      session_version: payloadObj.session_version ?? previewObj.session_version ?? progress?.session_version ?? null,
+      session_signature: trimStr(payloadObj.session_signature || previewObj.session_signature || progress?.session_signature || ''),
+      ready: true,
+      ready_flag: true,
+      progress: progress || null,
       pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) || [] : [],
       failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) || [] : [],
       server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) || [] : []
@@ -79361,9 +78968,14 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
     const friendly = (typeof bankingNormalizeApiError === 'function')
       ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
       : null;
-    throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview could not be refreshed');
+    if (typeof bankingBuildEnrichedFriendlyError === 'function') {
+      throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview could not be refreshed');
+    }
+    throw error;
   }
 }
+
+
 
 async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -79676,403 +79288,91 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, op
   }
 }
 
-
 async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const cloneJson = (value) => {
-    try {
-      return JSON.parse(JSON.stringify(value));
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
   };
   const parseJsonResponse = async (res) => {
     const text = await res.text().catch(() => '');
     if (!text) return {};
     try { return JSON.parse(text); } catch { return { error: text, message: text }; }
   };
-  const extractPayloadCode = (payloadObj) => {
-    const seen = new Set();
-    const codes = [];
-    const visit = (value, depth = 0) => {
-      if (value == null || depth > 5) return;
-      if (typeof value === 'string') {
-        const raw = trimStr(value);
-        if (!raw) return;
-        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
-          try { visit(JSON.parse(raw), depth + 1); } catch {}
-        }
-        return;
-      }
-      if (!isPlainObject(value)) return;
-      if (seen.has(value)) return;
-      seen.add(value);
-      for (const key of ['error_code', 'code', 'raw_code']) {
-        const s = trimStr(value[key]);
-        if (s) codes.push(s);
-      }
-      for (const key of ['error', 'friendly_error', 'details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'technical_message', 'rpc_error', 'original_error', 'inner_error', 'response']) {
-        visit(value[key], depth + 1);
-      }
-    };
-    visit(payloadObj);
-    return trimStr(codes[0] || '');
-  };
-  const looksTechnicalPayloadMessage = (value) => {
-    const s = trimStr(value);
-    if (!s) return true;
-    if (s === '[object Object]') return true;
-    if (/^[\[{]/.test(s)) return true;
-    if (/\b(P\d{4}|SQLSTATE|PostgREST|RPC\s+|constraint|function\s+|stack trace)\b/i.test(s)) return true;
-    if (/\b(MANUAL_DEBT_RECOVERY|key_type|key_value|timesheet_id|expected|actual|diff)\b/i.test(s)) return true;
-    if (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s)) return true;
-    return false;
-  };
-  const extractPayloadMessage = (payloadObj, fallbackMessage) => {
-    const fallback = trimStr(fallbackMessage) || 'Request failed.';
-    const seen = new Set();
-    const candidates = [];
-    const add = (value) => {
-      const s = trimStr(value);
-      if (s) candidates.push(s);
-    };
-    const visit = (value, depth = 0) => {
-      if (value == null || depth > 5) return;
-      if (typeof value === 'string') {
-        const raw = trimStr(value);
-        if (!raw) return;
-        if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
-          try { visit(JSON.parse(raw), depth + 1); return; } catch {}
-        }
-        add(raw);
-        return;
-      }
-      if (!isPlainObject(value)) return;
-      if (seen.has(value)) return;
-      seen.add(value);
-      add(value.user_message);
-      add(value.friendly_message);
-      add(value.message);
-      add(value.title);
-      add(value.error_description);
-      if (isPlainObject(value.friendly_error)) {
-        add(value.friendly_error.user_message);
-        add(value.friendly_error.message);
-        add(value.friendly_error.title);
-      }
-      if (isPlainObject(value.error)) {
-        visit(value.error, depth + 1);
-      } else if (typeof value.error === 'string') {
-        visit(value.error, depth + 1);
-      }
-      for (const key of ['details', 'body', 'json', 'payload', 'data', 'cause', 'reason', 'rpc_error', 'original_error', 'inner_error', 'response']) {
-        visit(value[key], depth + 1);
-      }
-    };
-    visit(payloadObj);
-    const picked = candidates.find((candidate) => !looksTechnicalPayloadMessage(candidate));
-    return trimStr(picked || fallback) || fallback;
+  const toNumber = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
   };
   const makeApiPayloadError = (json, status, fallbackMessage) => {
     const payloadObj = isPlainObject(json) ? json : { raw_response: json };
-    const message = extractPayloadMessage(payloadObj, fallbackMessage || `Request failed (${status})`);
+    const message = trimStr(payloadObj.user_message || payloadObj.message || payloadObj.error || fallbackMessage || `Request failed (${status})`) || `Request failed (${status})`;
     const err = new Error(message);
     err.status = status;
     err.payload = json;
     err.json = json;
     err.response_json = cloneJson(json) || json;
-    const code = extractPayloadCode(payloadObj);
+    const code = trimStr(payloadObj.error_code || payloadObj.code || '');
     if (code) {
       err.code = code;
       err.error_code = code;
     }
     return err;
   };
-  const workbenchFailureCodes = new Set([
-    'BATCH_STALE',
-    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
-    'WORKBENCH_SESSION_INVALID',
-    'WORKBENCH_SESSION_NOT_FOUND',
-    'STALE_SESSION',
-    'OBSOLETE_SESSION',
-    'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
-    'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
-    'PAYE_NOT_READY',
-    'PAYE_NET_MISSING',
-    'PAYE_NET_INVALID',
-    'PAYE_NET_REQUIRED',
-    'PAYE_NET_BANK_AMOUNT_MISSING',
-    'PAYE_NET_BANK_AMOUNT_INVALID',
-    'HAS_HARD_BLOCKERS',
-    'BLOCKED_BANK_DETAILS',
-    'SELECTED_PAYEE_ROUTE_NOT_READY',
-    'RAIL_ENV_MISMATCH',
-    'RAIL_NOT_CONFIGURED',
-    'UNKNOWN_RAIL_PROVIDER',
-    'MISSING_RAIL_PROVIDER',
-    'FUNDING_ACCOUNT_MISSING',
-    'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED',
-    'PAYMENT_AUTHORISER_REQUIRED',
-    'NO_TIMESHEETS_READY_FOR_DRAFT',
-    'BANKING_PAY_PREVIEW_FAILED',
-    'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED',
-    'BANKING_PREVIEW_INVALID_PAY_DATE',
-    'BANKING_PREVIEW_INVALID_INPUT',
-    'BANKING_ACTION_FAILED'
-  ]);
-  const normalizeWorkbenchFailureCode = (value) => {
-    const code = trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-    if (!code) return '';
-    if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
-    if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
-    if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
-    if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
-    return code;
-  };
-  const parseWorkbenchEmbeddedObject = (value) => {
-    if (isPlainObject(value)) return value;
-    const text = trimStr(value);
-    if (!text) return null;
-    try {
-      const parsed = JSON.parse(text);
-      if (isPlainObject(parsed)) return parsed;
-    } catch {}
-    const firstBrace = text.indexOf('{');
-    const lastBrace = text.lastIndexOf('}');
-    if (firstBrace >= 0 && lastBrace > firstBrace) {
-      try {
-        const parsed = JSON.parse(text.slice(firstBrace, lastBrace + 1));
-        if (isPlainObject(parsed)) return parsed;
-      } catch {}
-    }
-    return null;
-  };
-  const detectWorkbenchFailureEnvelope = (value) => {
-    const queue = [];
-    const seenObjects = new Set();
-    const seenStrings = new Set();
-    const enqueue = (candidate) => {
-      if (candidate == null) return;
-      if (typeof candidate === 'string') {
-        const text = candidate.trim();
-        if (!text || seenStrings.has(text)) return;
-        seenStrings.add(text);
-        queue.push(text);
-        return;
-      }
-      if (candidate && typeof candidate === 'object') {
-        if (seenObjects.has(candidate)) return;
-        seenObjects.add(candidate);
-      }
-      queue.push(candidate);
+  const normaliseProgress = (json, fallbackSessionId) => {
+    const payloadObj = isPlainObject(json) ? json : {};
+    const src = isPlainObject(payloadObj.progress) ? payloadObj.progress : payloadObj;
+    const total = toNumber(src.total_candidates ?? src.total_candidate_count ?? src.total_count ?? src.total ?? src.candidate_count);
+    const completed = toNumber(src.completed_candidates ?? src.ready_candidates ?? src.completed_count ?? src.ready_count ?? src.completed);
+    const failed = toNumber(src.failed_candidates ?? src.failed_candidate_count ?? src.failed_count ?? src.failed);
+    const pendingRaw = src.pending_candidates ?? src.pending_candidate_count ?? src.pending_count ?? src.pending;
+    const pending = Number.isFinite(Number(pendingRaw)) ? toNumber(pendingRaw) : Math.max(0, total - completed - failed);
+    const readyFlag = src.ready_flag === true || src.ready === true || payloadObj.ready_flag === true || payloadObj.ready === true || (total > 0 && pending <= 0 && failed <= 0);
+    const phase = trimStr(src.phase || src.current_phase || src.status_phase || payloadObj.phase || payloadObj.current_phase || (readyFlag ? 'READY' : 'REFRESHING'));
+    const statusText = trimStr(src.status_text || src.statusText || src.message || payloadObj.status_text || payloadObj.message || (readyFlag ? 'Preview ready' : 'Preview is still refreshing'));
+    return {
+      ok: payloadObj.ok !== false,
+      ...(cloneJson(payloadObj) || {}),
+      session_id: trimStr(payloadObj.session_id || src.session_id || fallbackSessionId),
+      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || src.snapshot_run_id || ''),
+      session_version: payloadObj.session_version ?? src.session_version ?? null,
+      session_signature: trimStr(payloadObj.session_signature || src.session_signature || ''),
+      total_candidates: total,
+      completed_candidates: completed,
+      ready_candidates: completed,
+      pending_candidates: pending,
+      failed_candidates: failed,
+      ready_flag: !!readyFlag,
+      ready: !!readyFlag,
+      phase,
+      status_text: statusText,
+      candidate_status_rows: Array.isArray(payloadObj.candidate_status_rows || src.candidate_status_rows) ? cloneJson(payloadObj.candidate_status_rows || src.candidate_status_rows) || [] : [],
+      pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids || src.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids || src.pending_candidate_ids) || [] : [],
+      failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids || src.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids || src.failed_candidate_ids) || [] : [],
+      progress: cloneJson(src) || src
     };
-
-    enqueue(value);
-
-    while (queue.length) {
-      const node = queue.shift();
-
-      if (node instanceof Error) {
-        enqueue({
-          name: node.name,
-          message: node.message,
-          code: node.code,
-          error_code: node.error_code,
-          body: node.body,
-          json: node.json,
-          payload: node.payload,
-          backendPayload: node.backendPayload,
-          details: node.details,
-          detail: node.detail,
-          reason: node.reason,
-          cause: node.cause,
-          friendly_error: node.friendly_error,
-          friendlyError: node.friendlyError,
-          raw_response_text: node.raw_response_text,
-          technical_message: node.technical_message
-        });
-        continue;
-      }
-
-      if (typeof node === 'string') {
-        const parsed = parseWorkbenchEmbeddedObject(node);
-        if (parsed) enqueue(parsed);
-        const upper = node.toUpperCase();
-        for (const knownCode of workbenchFailureCodes) {
-          const canonical = normalizeWorkbenchFailureCode(knownCode);
-          if (!canonical) continue;
-          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
-          if (pattern.test(upper)) {
-            return {
-              ok: false,
-              error_code: canonical,
-              code: canonical,
-              message: node
-            };
-          }
-        }
-        continue;
-      }
-
-      if (!isPlainObject(node)) continue;
-
-      const code = normalizeWorkbenchFailureCode(node.error_code || node.errorCode || node.code || '');
-      const hasFailureFlag = node.ok === false || node.preview_unavailable === true || node.create_draft_unavailable === true || node.aborted === true || node.success === false;
-      const hasKnownDirectCode = !!(code && workbenchFailureCodes.has(code));
-      const hasErrorishContent = !!(
-        Object.prototype.hasOwnProperty.call(node, 'error') ||
-        Object.prototype.hasOwnProperty.call(node, 'message') ||
-        Object.prototype.hasOwnProperty.call(node, 'details') ||
-        Object.prototype.hasOwnProperty.call(node, 'detail') ||
-        Object.prototype.hasOwnProperty.call(node, 'reason') ||
-        Object.prototype.hasOwnProperty.call(node, 'friendly_error') ||
-        Object.prototype.hasOwnProperty.call(node, 'friendlyError')
-      );
-
-      if (hasFailureFlag || (hasKnownDirectCode && node.ok !== true && hasErrorishContent)) {
-        const finalCode = code || normalizeWorkbenchFailureCode(node.error_code || node.code || '') || 'BANKING_ACTION_FAILED';
-        return {
-          ...node,
-          ok: false,
-          error_code: finalCode,
-          code: finalCode
-        };
-      }
-
-      for (const key of [
-        'error', 'message', 'details', 'detail', 'reason', 'hint', 'body', 'json', 'payload', 'backendPayload',
-        'response_json', 'raw_response_text', 'technical_message', 'technicalMessage', 'friendly_error', 'friendlyError',
-        'rpc_error', 'rpcError', 'original_error', 'originalError', 'inner_error', 'innerError', 'cause'
-      ]) {
-        const nested = node[key];
-        if (isPlainObject(nested) || nested instanceof Error || typeof nested === 'string') enqueue(nested);
-        const parsed = parseWorkbenchEmbeddedObject(nested);
-        if (parsed) enqueue(parsed);
-      }
-      if (Array.isArray(node.errors)) node.errors.forEach(enqueue);
-    }
-
-    return null;
   };
 
-  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
-  const getCurrentSessionId = () => {
-    try {
-      if (typeof options.getCurrentSessionId === 'function') {
-        const explicit = trimStr(options.getCurrentSessionId());
-        if (uuidRe.test(explicit)) return explicit;
-      }
-    } catch {}
-    try {
-      const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
-      const candidates = [
-        st?.pay?.draftWizard?.workbench?.__active_progress_session_id,
-        st?.pay?.draftWizard?.workbench?.__active_workbench_session_id,
-        st?.pay?.draftWizard?.workbench?.session_id,
-        st?.pay?.draftWizard?.decisions?.__active_progress_session_id,
-        st?.pay?.draftWizard?.decisions?.__active_workbench_session_id,
-        st?.pay?.draftWizard?.decisions?.session_id,
-        st?.pay?.draftWizard?.preview?.data?.session?.session_id,
-        st?.pay?.draftWizard?.preview?.data?.session_id
-      ];
-      for (const value of candidates) {
-        const text = trimStr(value);
-        if (uuidRe.test(text)) return text;
-      }
-    } catch {}
-    return '';
-  };
-  const sessionIsObsolete = (value) => {
-    const idText = trimStr(value);
-    if (!uuidRe.test(idText)) return false;
-    try {
-      const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
-      const containers = [
-        st,
-        st?.pay,
-        st?.pay?.draftWizard,
-        st?.pay?.draftWizard?.workbench,
-        st?.pay?.draftWizard?.decisions,
-        st?.pay?.draftWizard?.preview,
-        st?.pay?.draftWizard?.preview?.data,
-        st?.pay?.draftWizard?.preview?.data?.session
-      ].filter((item) => item && typeof item === 'object');
-      for (const obj of containers) {
-        for (const key of ['__obsolete_progress_session_ids', '__obsolete_workbench_session_ids', 'obsolete_progress_session_ids', 'obsolete_workbench_session_ids']) {
-          const list = Array.isArray(obj[key]) ? obj[key] : [];
-          if (list.map((item) => trimStr(item)).includes(idText)) return true;
-        }
-      }
-    } catch {}
-    return false;
-  };
-  const raiseStaleSession = (code, message, currentSessionId = '') => {
-    const err = new Error(message || 'Workbench session is no longer active.');
-    err.status = 409;
-    err.payload = {
-      ok: false,
-      aborted: true,
-      code,
-      error_code: code,
-      message: err.message,
-      session_id: sessionIdText,
-      expected_session_id: trimStr(options.expectedSessionId || options.expected_session_id || sessionIdText),
-      current_session_id: trimStr(currentSessionId)
-    };
-    throw err;
-  };
   const sessionIdText = trimStr(sessionId);
+  if (!sessionIdText) throw new Error('bankingPayWorkbenchSessionGetProgress: sessionId is required');
+
   try {
-    if (options.staleSessionGuard === true || options.enforceActiveSession === true) {
-      const expectedSessionIdText = trimStr(options.expectedSessionId || options.expected_session_id || sessionIdText);
-      if (sessionIsObsolete(sessionIdText) || sessionIsObsolete(expectedSessionIdText)) {
-        raiseStaleSession('OBSOLETE_SESSION', 'Workbench session was replaced before progress could be read.', getCurrentSessionId());
-      }
-      const currentSessionId = getCurrentSessionId();
-      if (uuidRe.test(currentSessionId) && uuidRe.test(expectedSessionIdText) && currentSessionId !== expectedSessionIdText) {
-        raiseStaleSession('STALE_SESSION', 'Workbench session was replaced before progress could be read.', currentSessionId);
-      }
-    }
+    if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/progress`));
     const json = await parseJsonResponse(res);
-  if (options.staleSessionGuard === true || options.enforceActiveSession === true) {
-    const expectedSessionIdText = trimStr(options.expectedSessionId || options.expected_session_id || sessionIdText);
-    if (sessionIsObsolete(sessionIdText) || sessionIsObsolete(expectedSessionIdText)) {
-      raiseStaleSession('OBSOLETE_SESSION', 'Workbench session was replaced before progress response could be applied.', getCurrentSessionId());
-    }
-    const currentSessionId = getCurrentSessionId();
-    if (uuidRe.test(currentSessionId) && uuidRe.test(expectedSessionIdText) && currentSessionId !== expectedSessionIdText) {
-      raiseStaleSession('STALE_SESSION', 'Workbench session was replaced before progress response could be applied.', currentSessionId);
-    }
-  }
-    if (!res.ok) {
-      const failureEnvelope = detectWorkbenchFailureEnvelope(json);
-      throw makeApiPayloadError(failureEnvelope || json, res.status, `Request failed (${res.status})`);
-    }
-    const successFailureEnvelope = detectWorkbenchFailureEnvelope(json);
-    if (successFailureEnvelope) {
-      const status = Number(successFailureEnvelope.http_status || successFailureEnvelope.status_code || 400) || 400;
-      throw makeApiPayloadError(successFailureEnvelope, status, 'Request failed.');
-    }
-    const payloadObj = (json && typeof json === 'object' && !Array.isArray(json)) ? json : {};
-    return {
-      ok: true,
-      ...(cloneJson(payloadObj) || {}),
-      session_id: trimStr(payloadObj.session_id || sessionIdText),
-      snapshot_run_id: trimStr(payloadObj.snapshot_run_id || ''),
-      session_version: payloadObj.session_version ?? null,
-      pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids) || [] : [],
-      failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids) || [] : [],
-      candidate_status_rows: Array.isArray(payloadObj.candidate_status_rows) ? cloneJson(payloadObj.candidate_status_rows) || [] : []
-    };
+    if (!res.ok) throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+    return normaliseProgress(json, sessionIdText);
   } catch (error) {
     const friendly = (typeof bankingNormalizeApiError === 'function')
       ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
       : null;
-    throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview progress could not be refreshed');
+    if (typeof bankingBuildEnrichedFriendlyError === 'function') {
+      throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview progress could not be refreshed');
+    }
+    throw error;
   }
 }
+
+
 
 async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -88958,7 +88258,6 @@ function resetBulkProcessDirtyBaseline(state, reason, detail = {}) {
   );
 }
 
-
 async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   const mc =
     (modalCtxArg && typeof modalCtxArg === 'object')
@@ -89416,12 +88715,38 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
     baseRow.submission_mode_snapshot ||
     ''
   ).trim().toUpperCase();
-  const explicitPlannedScheduleForManualAdjustment = parseScheduleLike(cwForManualAdjustment.planned_schedule_json);
+  const explicitActualScheduleForManualAdjustment = parseScheduleLike(
+    tsLocal.actual_schedule_json ??
+    tsfinLocal.actual_schedule_json ??
+    details.actual_schedule_json ??
+    baseRow.actual_schedule_json ??
+    null
+  );
+  const actualScheduleExplicitlyEmptyForManualAdjustment = Array.isArray(explicitActualScheduleForManualAdjustment) && explicitActualScheduleForManualAdjustment.length === 0;
+  const explicitPlannedScheduleForManualAdjustment = parseScheduleLike(cwForManualAdjustment.planned_schedule_json ?? details.planned_schedule_json ?? baseRow.planned_schedule_json ?? null);
   const plannedScheduleExplicitlyEmptyForManualAdjustment = Array.isArray(explicitPlannedScheduleForManualAdjustment) && explicitPlannedScheduleForManualAdjustment.length === 0;
   const cwTotalsForManualAdjustment = parseObjectLikeForManualAdjustment(cwForManualAdjustment.totals_json);
   const cwHoursForManualAdjustment = (cwTotalsForManualAdjustment.hours && typeof cwTotalsForManualAdjustment.hours === 'object')
     ? cwTotalsForManualAdjustment.hours
     : {};
+  const invoiceBreakdownForManualAdjustment = parseObjectLikeForManualAdjustment(
+    details.invoiceBreakdown ||
+    details.invoice_breakdown_json ||
+    tsfinLocal.invoice_breakdown_json ||
+    baseRow.invoice_breakdown_json ||
+    null
+  );
+  const invoiceSegmentsForManualAdjustment = Array.isArray(invoiceBreakdownForManualAdjustment.segments)
+    ? invoiceBreakdownForManualAdjustment.segments
+    : [];
+  const additionalSeqForManualAdjustment = num0ForManualAdjustment(
+    details.additional_seq ??
+    details.contract_week_additional_seq ??
+    cwForManualAdjustment.additional_seq ??
+    baseRow.additional_seq ??
+    baseRow.contract_week_additional_seq ??
+    0
+  );
   const isWeeklyContextForManualAdjustment = !!(
     sheetScope === 'WEEKLY' ||
     routeTypeUpperForManualAdjustment.startsWith('WEEKLY') ||
@@ -89433,34 +88758,74 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
     routeTypeUpperForManualAdjustment.includes('MANUAL') ||
     routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
     routeSubfamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
-    underlyingFamilyUpperForManualAdjustment === 'MANUAL_NON_QR'
+    underlyingFamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    additionalSeqForManualAdjustment > 0
   );
   const hasAdditionalManualAdjustmentMarker = !!(
     routeTypeUpperForManualAdjustment === 'WEEKLY_NHSP_ADJUSTMENT' ||
     routeTypeUpperForManualAdjustment === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
     routeTypeUpperForManualAdjustment === 'WEEKLY_MANUAL_ADJUSTMENT' ||
-    routeTypeUpperForManualAdjustment.includes('_ADJUSTMENT')
+    routeTypeUpperForManualAdjustment.includes('_ADJUSTMENT') ||
+    additionalSeqForManualAdjustment > 0 ||
+    boolish(baseRow.is_adjustment) ||
+    boolish(cwForManualAdjustment.is_adjustment) ||
+    boolish(details.is_adjustment)
   );
-  const routeFamilyConfirmsAdditionalManualAdjustment = routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR';
+  const routeFamilyConfirmsAdditionalManualAdjustment = !!(
+    routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    routeSubfamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    underlyingFamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    cwModeSnapshotForManualAdjustment === 'MANUAL' ||
+    subMode === 'MANUAL' ||
+    additionalSeqForManualAdjustment > 0
+  );
   const zeroHourAdditionalManualAdjustment = !!(
     num0ForManualAdjustment(baseRow.total_hours) === 0 &&
+    num0ForManualAdjustment(tsfinLocal.total_hours) === 0 &&
+    num0ForManualAdjustment(tsfinLocal.hours_day) === 0 &&
+    num0ForManualAdjustment(tsfinLocal.hours_night) === 0 &&
+    num0ForManualAdjustment(tsfinLocal.hours_sat) === 0 &&
+    num0ForManualAdjustment(tsfinLocal.hours_sun) === 0 &&
+    num0ForManualAdjustment(tsfinLocal.hours_bh) === 0 &&
     num0ForManualAdjustment(cwHoursForManualAdjustment.day) === 0 &&
     num0ForManualAdjustment(cwHoursForManualAdjustment.night) === 0 &&
     num0ForManualAdjustment(cwHoursForManualAdjustment.sat) === 0 &&
     num0ForManualAdjustment(cwHoursForManualAdjustment.sun) === 0 &&
     num0ForManualAdjustment(cwHoursForManualAdjustment.bh) === 0
   );
-  const keepAdditionalManualAdjustmentScheduleEmpty = !!(
-    !hasTs &&
-    !!weekId &&
-    isWeeklyContextForManualAdjustment &&
-    isManualModeForManualAdjustment &&
-    hasAdditionalManualAdjustmentMarker &&
-    routeFamilyConfirmsAdditionalManualAdjustment &&
-    plannedScheduleExplicitlyEmptyForManualAdjustment &&
-    zeroHourAdditionalManualAdjustment
+  const explicitKeepEmptyAdditionalManualAdjustment = !!(
+    boolish(details.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(details.keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(details.keep_additional_manual_adjustment_schedule_empty) ||
+    boolish(baseRow.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(baseRow.keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(baseRow.keep_additional_manual_adjustment_schedule_empty) ||
+    boolish(cwForManualAdjustment.keep_additional_manual_adjustment_schedule_empty)
   );
-  const suppressStandardScheduleFallbackForAdditionalManualAdjustment = keepAdditionalManualAdjustmentScheduleEmpty;
+  const keepAdditionalManualAdjustmentScheduleEmpty = !!(
+    explicitKeepEmptyAdditionalManualAdjustment ||
+    (
+      !!weekId &&
+      isWeeklyContextForManualAdjustment &&
+      isManualModeForManualAdjustment &&
+      hasAdditionalManualAdjustmentMarker &&
+      routeFamilyConfirmsAdditionalManualAdjustment &&
+      plannedScheduleExplicitlyEmptyForManualAdjustment &&
+      (!hasTs || actualScheduleExplicitlyEmptyForManualAdjustment) &&
+      zeroHourAdditionalManualAdjustment &&
+      invoiceSegmentsForManualAdjustment.length === 0
+    )
+  );
+  const suppressStandardScheduleFallbackForAdditionalManualAdjustment = !!(
+    keepAdditionalManualAdjustmentScheduleEmpty ||
+    boolish(details.__suppressStandardScheduleFallback) ||
+    boolish(details.suppressStandardScheduleFallback) ||
+    boolish(details.suppress_standard_schedule_fallback) ||
+    boolish(baseRow.__suppressStandardScheduleFallback) ||
+    boolish(baseRow.suppressStandardScheduleFallback) ||
+    boolish(baseRow.suppress_standard_schedule_fallback) ||
+    boolish(cwForManualAdjustment.suppress_standard_schedule_fallback)
+  );
 
   let schedule = null;
   try {
@@ -89491,9 +88856,9 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
         const cw2 = (details && details.contract_week) ? details.contract_week : null;
 
         const src = (cw2 && cw2.planned_schedule_json != null) ? cw2.planned_schedule_json
-                 : (cw2 && cw2.std_schedule_json != null) ? cw2.std_schedule_json
-                 : (contractTemplateSchedule != null) ? contractTemplateSchedule
-                 : (baseRow.std_schedule_json != null) ? baseRow.std_schedule_json
+                 : (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && cw2 && cw2.std_schedule_json != null) ? cw2.std_schedule_json
+                 : (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && contractTemplateSchedule != null) ? contractTemplateSchedule
+                 : (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && baseRow.std_schedule_json != null) ? baseRow.std_schedule_json
                  : null;
 
         if (src) {
@@ -89510,7 +88875,9 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   state.__suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
   state.__keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
   state.suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
+  state.suppress_standard_schedule_fallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
   state.keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
+  state.keep_additional_manual_adjustment_schedule_empty = keepAdditionalManualAdjustmentScheduleEmpty;
   if (keepAdditionalManualAdjustmentScheduleEmpty) {
     state.baselineSchedule = [];
     state.weeklyLinesByDate = null;
@@ -89630,7 +88997,7 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
     if ((!seedSchedule || !seedSchedule.length) && details && details.contract_week) {
       const cw2 = details.contract_week;
       const src = (cw2.planned_schedule_json != null) ? cw2.planned_schedule_json
-               : (cw2.std_schedule_json != null) ? cw2.std_schedule_json
+               : (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && cw2.std_schedule_json != null) ? cw2.std_schedule_json
                : null;
       seedSchedule = tryParse(src);
     }
@@ -89906,7 +89273,13 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
       const out = buildWeeklyScheduleFromLinesAndValidate(
         state.weeklyLinesByDate,
         weekDays || undefined,
-        { allowOvernight: true, allowBreakMins: true }
+        {
+          allowOvernight: true,
+          allowBreakMins: true,
+          keepEmptyAdditionalManualAdjustmentScheduleEmpty: keepAdditionalManualAdjustmentScheduleEmpty,
+          suppressStandardScheduleFallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
+          scheduleUserTouched: !!(state.__weeklyScheduleTouched || state.weeklyScheduleUserTouched || state.scheduleUserTouched || state.__scheduleUserTouched)
+        }
       );
 
       state.schedule = Array.isArray(out?.schedule) ? out.schedule : [];
@@ -89932,7 +89305,6 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
 
   return { row: baseRow, details, related, state };
 }
-
 
 async function openSendMailshotWizard() {
   const trimStr = (v) => String(v == null ? '' : v).trim();
@@ -108520,6 +107892,7 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     throw err;
   }
 }
+
 function renderTimesheetExpensesTab(ctx) {
   const c = normaliseTimesheetCtx(ctx);
   const row     = c.row || {};
@@ -108534,15 +107907,132 @@ function renderTimesheetExpensesTab(ctx) {
   const editPolicy = (typeof classifyTimesheetEditDomains === 'function')
     ? classifyTimesheetEditDomains({ row, details, tsfin: tf, timesheet: ts, contract_week: cw, state, ctx: c, related })
     : null;
-  const expenseStorageTarget = String(
+
+  const boolishExpense = (v) => {
+    if (v === true) return true;
+    if (v === false) return false;
+    if (v == null) return false;
+    const s = String(v).trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  };
+  const upperExpense = (v) => String(v || '').trim().toUpperCase();
+  const numExpense = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const actionFlags = (details.action_flags && typeof details.action_flags === 'object') ? details.action_flags : {};
+  const effective = (details.effective && typeof details.effective === 'object') ? details.effective : {};
+
+  const routeTypeExpense = upperExpense(
+    details.route_type ||
+    effective.route_type ||
+    actionFlags.route_type ||
+    cw?.route_type ||
+    row.route_type ||
+    ''
+  );
+  const routeFamilyExpense = upperExpense(
+    details.route_family ||
+    effective.route_family ||
+    actionFlags.route_family ||
+    cw?.route_family ||
+    row.route_family ||
+    ''
+  );
+  const routeSubfamilyExpense = upperExpense(
+    details.route_subfamily ||
+    effective.route_subfamily ||
+    actionFlags.route_subfamily ||
+    cw?.route_subfamily ||
+    row.route_subfamily ||
+    ''
+  );
+  const underlyingFamilyExpense = upperExpense(
+    details.underlying_channel_family ||
+    effective.underlying_channel_family ||
+    actionFlags.underlying_channel_family ||
+    cw?.underlying_channel_family ||
+    row.underlying_channel_family ||
+    ''
+  );
+  const submissionModeSnapshotExpense = upperExpense(
+    details.cw_submission_mode_snapshot ||
+    cw?.submission_mode_snapshot ||
+    row.submission_mode_snapshot ||
+    row.submission_mode ||
+    ts?.submission_mode ||
+    ''
+  );
+  const additionalSeqExpense = numExpense(
+    details.additional_seq ??
+    details.contract_week_additional_seq ??
+    effective.additional_seq ??
+    actionFlags.additional_seq ??
+    cw?.additional_seq ??
+    row.additional_seq ??
+    row.contract_week_additional_seq ??
+    0
+  );
+
+  const routeProvesAdditionalExpense = !!(
+    routeTypeExpense === 'WEEKLY_NHSP_ADJUSTMENT' ||
+    routeTypeExpense === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+    routeTypeExpense === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+    routeTypeExpense.includes('_ADJUSTMENT')
+  );
+
+  const effectiveAdditionalManualExpense = !!(
+    additionalSeqExpense > 0 ||
+    routeProvesAdditionalExpense ||
+    boolishExpense(details.is_adjustment) ||
+    boolishExpense(effective.is_adjustment) ||
+    boolishExpense(actionFlags.is_adjustment) ||
+    boolishExpense(cw?.is_adjustment) ||
+    boolishExpense(ts?.is_adjustment) ||
+    boolishExpense(row.is_adjustment)
+  ) && !!(
+    additionalSeqExpense > 0 ||
+    routeFamilyExpense === 'MANUAL_NON_QR' ||
+    routeSubfamilyExpense === 'MANUAL_NON_QR' ||
+    underlyingFamilyExpense === 'MANUAL_NON_QR' ||
+    submissionModeSnapshotExpense === 'MANUAL' ||
+    routeProvesAdditionalExpense
+  );
+
+  const hasRealTimesheetExpense = !!(
+    row.timesheet_id ||
+    row.current_timesheet_id ||
+    details.current_timesheet_id ||
+    ts?.timesheet_id
+  );
+  const hasContractWeekExpense = !!(
+    row.contract_week_id ||
+    details.contract_week_id ||
+    cw?.id
+  );
+
+  let expenseStorageTarget = String(
     c.expenseStorageTarget ||
     c.expense_storage_target ||
     c?.policy?.expenseStorageTarget ||
+    c?.policy?.expense_storage_target ||
     editPolicy?.expenseStorageTarget ||
+    editPolicy?.expense_storage_target ||
+    row.expenseStorageTarget ||
+    row.expense_storage_target ||
+    details.expenseStorageTarget ||
+    details.expense_storage_target ||
     ''
   ).trim().toUpperCase() || null;
+
+  if (!expenseStorageTarget && effectiveAdditionalManualExpense) {
+    expenseStorageTarget = hasRealTimesheetExpense ? 'TSFIN' : (hasContractWeekExpense ? 'CONTRACT_WEEK_DRAFT' : null);
+  }
+
   const isContractWeekDraftTarget = expenseStorageTarget === 'CONTRACT_WEEK_DRAFT';
   const isTsfinTarget = expenseStorageTarget === 'TSFIN';
+  const hasSupportedExpenseTarget = isContractWeekDraftTarget || isTsfinTarget;
   const parseMaybeJson = (value) => {
     if (!value) return null;
     if (typeof value === 'object') return value;
@@ -108674,20 +108164,66 @@ function renderTimesheetExpensesTab(ctx) {
     'view';
   const isEditMode = (frameMode === 'edit' || frameMode === 'create');
   const isBulkProcessModal = String(window?.modalCtx?.entity || '').trim().toLowerCase() === 'bulk-process';
-  const defaultBlockedReason = editPolicy?.requiresAdditionalManualForExpenses
+  const lockedByFinanceExpense = !!(
+    tf?.locked_by_invoice_id ||
+    tf?.paid_at_utc ||
+    row.locked_by_invoice_id ||
+    row.paid_at_utc ||
+    details.locked_by_invoice_id ||
+    details.paid_at_utc
+  );
+  const authorisedExpense = !!(
+    ts?.authorised_at_server ||
+    row.authorised_at_server ||
+    details.authorised_at_server
+  );
+  const policyHardLockExpense = !!(
+    editPolicy &&
+    (
+      editPolicy.expensesReadOnly === true ||
+      editPolicy.expensesLocked === true ||
+      editPolicy.expenseLocked === true ||
+      editPolicy.locked === true
+    )
+  );
+  const hardLockedExpense = !!(lockedByFinanceExpense || authorisedExpense || policyHardLockExpense);
+  const additionalManualExpenseSupported = !!(effectiveAdditionalManualExpense && hasSupportedExpenseTarget && !hardLockedExpense);
+  const trueSourceImportExpense = !!(
+    !effectiveAdditionalManualExpense &&
+    (
+      editPolicy?.requiresAdditionalManualForExpenses === true ||
+      editPolicy?.isOriginalImportAuthoritative === true ||
+      row.is_import_authoritative === true ||
+      details.is_import_authoritative === true ||
+      effective.is_import_authoritative === true ||
+      routeFamilyExpense === 'IMPORT_AUTHORITATIVE' ||
+      routeTypeExpense === 'WEEKLY_NHSP' ||
+      routeTypeExpense === 'WEEKLY_HEALTHROSTER'
+    )
+  );
+  const defaultBlockedReason = trueSourceImportExpense
     ? 'Direct expenses are blocked for this source row. Use Add Additional Manual if expenses need to be claimed.'
     : (!expenseStorageTarget
         ? 'Expenses cannot be saved because this row does not yet have a supported expenses draft target.'
-        : 'Expenses cannot be edited directly for this row.');
-  const expensesTabDisabled = !!(editPolicy && (editPolicy.expensesTabDisabled === true || editPolicy.expensesActionDisabled === true || !expenseStorageTarget));
+        : (hardLockedExpense
+            ? 'Expenses cannot be edited because this row is locked, authorised, paid, or invoiced.'
+            : 'Expenses cannot be edited directly for this row.'));
+  let expensesTabDisabled = !!(editPolicy && (editPolicy.expensesTabDisabled === true || editPolicy.expensesActionDisabled === true || !expenseStorageTarget));
+  if (additionalManualExpenseSupported) expensesTabDisabled = false;
+  if (!hasSupportedExpenseTarget) expensesTabDisabled = true;
+  if (trueSourceImportExpense) expensesTabDisabled = true;
   const expensesTabDisabledReason = String(
-    (editPolicy && (editPolicy.expensesTabDisabledReason || editPolicy.expensesActionDisabledReason || editPolicy.expensesDisabledReason)) ||
+    (editPolicy && !additionalManualExpenseSupported && (editPolicy.expensesTabDisabledReason || editPolicy.expensesActionDisabledReason || editPolicy.expensesDisabledReason)) ||
     defaultBlockedReason
   );
-  const enabled = editPolicy ? ((isTsfinTarget || isContractWeekDraftTarget) && editPolicy.canOpenExpenses === true && !expensesTabDisabled) : true;
-  const canEditExpenseControls = editPolicy ? (editPolicy.canEditExpenses === true && (isTsfinTarget || isContractWeekDraftTarget) && !expensesTabDisabled) : true;
+  const enabled = editPolicy
+    ? (hasSupportedExpenseTarget && (editPolicy.canOpenExpenses === true || additionalManualExpenseSupported) && !expensesTabDisabled)
+    : hasSupportedExpenseTarget;
+  const canEditExpenseControls = editPolicy
+    ? (hasSupportedExpenseTarget && !hardLockedExpense && (editPolicy.canEditExpenses === true || additionalManualExpenseSupported) && !expensesTabDisabled)
+    : (hasSupportedExpenseTarget && !hardLockedExpense);
   const readOnly = !(canEditExpenseControls && (isEditMode || isBulkProcessModal));
-  const blockedReason = expensesTabDisabled ? expensesTabDisabledReason : (editPolicy?.expensesDisabledReason || defaultBlockedReason);
+  const blockedReason = expensesTabDisabled ? expensesTabDisabledReason : (readOnly ? (editPolicy?.expensesDisabledReason || defaultBlockedReason) : '');
 
   const needsMileageEvidence = mileageUnits > 0 || mileagePay > 0 || mileageChg > 0;
   const needsTravelEvidence  = (travelPay > 0 || travelChg > 0);
@@ -108842,6 +108378,7 @@ function renderTimesheetExpensesTab(ctx) {
     </div>
   `;
 }
+
 
 async function openBulkAuthoriseWorkbench() {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-AUTH][OPEN]');
@@ -116569,6 +116106,1286 @@ function bulkAuthoriseHasProcessedExpensesValue(ctxInput) {
   return !!(hasTimesheetAnchor && (numericDetected || descriptionDetected || stagedDetected));
 }
 
+function normaliseBankingPayOperationProgress(operationPayload = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const upperTrim = (value) => trimStr(value).toUpperCase();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const toNumber = (value, fallback = 0) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const unwrap = (value) => {
+    let payload = value;
+    try {
+      if (Array.isArray(payload) && payload.length === 1 && payload[0] && typeof payload[0] === 'object') payload = payload[0];
+      const knownKeys = [
+        'operation',
+        'banking_pay_operation_get',
+        'banking_pay_operation_start',
+        'banking_pay_operation_claim_next',
+        'banking_pay_operation_save_progress',
+        'banking_pay_operation_finish',
+        'result'
+      ];
+      for (let i = 0; i < 4; i += 1) {
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) break;
+        let changed = false;
+        for (const key of knownKeys) {
+          if (Object.prototype.hasOwnProperty.call(payload, key) && payload[key] && typeof payload[key] === 'object' && !Array.isArray(payload[key])) {
+            const nested = payload[key];
+            if (nested.operation_id || nested.id || nested.operation_type || nested.status || nested.phase || nested.progress_json || nested.result_json || nested.error_json) {
+              payload = nested;
+              changed = true;
+              break;
+            }
+          }
+        }
+        if (!changed) break;
+      }
+    } catch {}
+    return isPlainObject(payload) ? payload : {};
+  };
+
+  const src = unwrap(operationPayload);
+  const progress = isPlainObject(src.progress_json) ? src.progress_json : (isPlainObject(src.progress) ? src.progress : {});
+  const resultJson = isPlainObject(src.result_json) ? src.result_json : (isPlainObject(src.result) ? src.result : null);
+  const errorJson = isPlainObject(src.error_json) ? src.error_json : (isPlainObject(src.error) ? src.error : null);
+
+  const operationId = trimStr(src.operation_id || src.id || progress.operation_id || '');
+  const operationType = upperTrim(src.operation_type || progress.operation_type || '');
+  const status = upperTrim(src.status || progress.status || '');
+  const phase = upperTrim(src.phase || progress.phase || 'INITIALISE');
+
+  const phaseLabels = {
+    INITIALISE: 'Starting operation',
+    VALIDATE_SESSION: 'Checking selected payment rows',
+    SYNC_SELECTED_ROWS: 'Checking selected payment rows',
+    WAIT_FOR_PREVIEW_READY: 'Waiting for payment preview',
+    DRAIN_TSFIN: 'Preparing timesheet financials',
+    ENSURE_PAYEE_READINESS: 'Checking payee readiness',
+    SEED_CANDIDATE_SCOPE: 'Calculating candidate payrun totals',
+    SEED_CANDIDATE_TOTALS: 'Calculating candidate payrun totals',
+    SEED_ALLOCATION_ROWS: 'Calculating deductions and recoveries',
+    SEED_DEDUCTION_ALLOCATIONS: 'Calculating deductions and recoveries',
+    CREATE_BATCH_SHELLS: 'Creating draft batch',
+    SEED_DRAFT_CHUNKS: 'Creating draft batch',
+    INSERT_CANDIDATES: 'Adding candidates',
+    INSERT_ITEMS: 'Adding payment items',
+    APPLY_FINANCE_ADJUSTMENTS: 'Applying finance adjustments',
+    FINALISE_RESERVATIONS: 'Finalising reservations',
+    POPULATE_CANDIDATE_SUMMARIES: 'Finalising candidate summaries',
+    CREATE_TIMESHEET_SNAPSHOTS: 'Creating timesheet snapshots',
+    BUILD_ITEM_BREAKDOWNS: 'Building payment breakdowns',
+    ASSERT_INTEGRITY: 'Checking draft integrity',
+    POST_CREATE_REFRESH: 'Refreshing payment preview',
+    VALIDATE_BATCH: 'Checking payment batch',
+    VALIDATE_AUTHORISER: 'Verifying authorisation',
+    VALIDATE_REAUTH: 'Verifying authorisation',
+    VALIDATE_FRESHNESS: 'Checking payment freshness',
+    PREPARE_TRANSFER_SCOPE: 'Preparing transfer groups',
+    SEED_TRANSFER_CHUNKS: 'Preparing transfer groups',
+    PREPARE_TRANSFER_CHUNKS: 'Preparing bank transfers',
+    PREPARE_BATCH: 'Checking payment blockers',
+    START_AUTHORISATION: 'Starting payment authorisation',
+    WAIT_FOR_AUTHORISATION: 'Waiting for payment authorisation',
+    SCHEDULE_OR_SUBMIT: 'Scheduling or submitting payment',
+    SUBMIT_PROVIDER_TRANSFERS: 'Submitting transfers to the bank',
+    APPLY_RAIL_UPDATES: 'Confirming bank submission state',
+    QUEUE_REMITTANCES: 'Queueing remittances',
+    FINALISING_PAYMENT: 'Finalising payment',
+    SEED_REMITTANCE_SCOPE: 'Queueing remittances',
+    QUEUE_REMITTANCE_CHUNKS: 'Queueing remittances',
+    QUEUE_PAYOUT_NOTICE_CHUNKS: 'Queueing payout notices',
+    SEED_SETTLEMENT_SCOPE: 'Preparing settlement',
+    APPLY_SETTLEMENT_CHUNKS: 'Finalising settlement',
+    COMPLETE: 'Operation complete'
+  };
+
+  const operationTitles = {
+    DRAFT_CREATE: 'Creating payment draft',
+    PAYMENT_EXECUTE: 'Processing payment',
+    PAYMENT_RETRY_BLOCKED_FUNDS: 'Retrying blocked-funds payment',
+    PAYMENT_SETTLEMENT: 'Finalising payment settlement',
+    REMITTANCE_QUEUE: 'Queueing remittances',
+    PREVIEW_REFRESH: 'Refreshing payment preview'
+  };
+
+  const terminalStatuses = new Set(['COMPLETE', 'FAILED', 'CANCELLED', 'REVIEW_REQUIRED']);
+  const terminal = terminalStatuses.has(status) || src.terminal === true;
+  const notClaimed = src.claimed === false || !!trimStr(src.not_claimed_reason || src.notClaimedReason || '');
+  const waiting = notClaimed || status === 'WAITING' || src.waiting === true;
+  const failed = status === 'FAILED' || src.failed === true;
+  const reviewRequired = status === 'REVIEW_REQUIRED' || src.review_required === true;
+  const cancelled = status === 'CANCELLED' || src.cancelled === true;
+  const complete = status === 'COMPLETE' || src.complete === true || src.completed === true;
+
+  const totalUnits = Math.max(0, Math.trunc(toNumber(src.total_units ?? src.totalUnits ?? progress.total_units ?? progress.total ?? 0, 0)));
+  const completedUnits = Math.max(0, Math.trunc(toNumber(src.completed_units ?? src.completedUnits ?? progress.completed_units ?? progress.completed ?? 0, 0)));
+  const failedUnits = Math.max(0, Math.trunc(toNumber(src.failed_units ?? src.failedUnits ?? progress.failed_units ?? progress.failed ?? 0, 0)));
+  const currentChunkIndex = Math.max(0, Math.trunc(toNumber(src.current_chunk_index ?? src.currentChunkIndex ?? progress.current_chunk_index ?? 0, 0)));
+  const chunkCount = Math.max(0, Math.trunc(toNumber(src.chunk_count ?? src.chunkCount ?? progress.chunk_count ?? 0, 0)));
+  const attemptedUnits = clamp(completedUnits + failedUnits, 0, totalUnits || (completedUnits + failedUnits));
+  const explicitPercent = toNumber(src.percent ?? src.percentage ?? progress.percent ?? progress.percentage, NaN);
+  const percent = Number.isFinite(explicitPercent)
+    ? clamp(Math.round(explicitPercent), 0, 100)
+    : (totalUnits > 0 ? clamp(Math.round((attemptedUnits / totalUnits) * 100), 0, 100) : (terminal && complete ? 100 : 0));
+
+  const phaseLabel = trimStr(src.phase_label || src.phaseLabel || progress.phase_label || phaseLabels[phase] || phase.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()));
+  const title = trimStr(src.title || progress.title || operationTitles[operationType] || 'Processing payment operation');
+  const statusText = trimStr(src.status_text || src.statusText || progress.status_text || progress.message || src.message || (notClaimed ? 'Another operation step is finishing. CloudTMS will retry shortly.' : (waiting ? `${phaseLabel}...` : phaseLabel)));
+
+  const providerSubmissionStarted = ['SUBMIT_PROVIDER_TRANSFERS', 'APPLY_RAIL_UPDATES', 'QUEUE_REMITTANCES', 'COMPLETE'].includes(phase);
+  const canCancel = src.can_cancel === true && !terminal && !providerSubmissionStarted;
+  const retryAfterMsRaw = Number(src.retry_after_ms ?? src.retryAfterMs ?? progress.retry_after_ms ?? progress.retryAfterMs ?? 0);
+  const retryAfterMs = Number.isFinite(retryAfterMsRaw) && retryAfterMsRaw > 0 ? Math.max(250, Math.min(30000, Math.trunc(retryAfterMsRaw))) : null;
+  const canAdvance = !notClaimed && src.can_advance !== false && !terminal;
+
+  const finalResult = terminal ? (resultJson || (isPlainObject(src.final_result) ? src.final_result : null)) : null;
+  const finalError = (failed || reviewRequired || cancelled || status === 'FAILED')
+    ? (errorJson || (isPlainObject(src.friendly_error) ? src.friendly_error : null) || (trimStr(src.error_code || src.code || src.message) ? { error_code: src.error_code || src.code || status, message: src.message || src.error || status } : null))
+    : null;
+
+  return {
+    operation_id: operationId || null,
+    id: operationId || null,
+    operation_type: operationType || null,
+    status: status || null,
+    phase: phase || null,
+    phase_label: phaseLabel,
+    title,
+    status_text: statusText,
+    total_units: totalUnits,
+    completed_units: completedUnits,
+    failed_units: failedUnits,
+    current_chunk_index: currentChunkIndex,
+    chunk_count: chunkCount,
+    percent,
+    can_advance: canAdvance,
+    can_cancel: canCancel,
+    terminal,
+    complete,
+    failed,
+    cancelled,
+    review_required: reviewRequired,
+    waiting,
+    claimed: src.claimed === false ? false : true,
+    not_claimed_reason: trimStr(src.not_claimed_reason || src.notClaimedReason || '') || null,
+    retry_after_ms: retryAfterMs,
+    locked_by: src.locked_by || progress.locked_by || null,
+    lock_expires_at_utc: src.lock_expires_at_utc || progress.lock_expires_at_utc || null,
+    waiting_for_authorisation: waiting && phase === 'WAIT_FOR_AUTHORISATION',
+    waiting_for_preview: waiting && phase === 'WAIT_FOR_PREVIEW_READY',
+    provider_submission_started: providerSubmissionStarted,
+    result: finalResult,
+    error: finalError,
+    raw_payload: src
+  };
+}
+
+
+
+function openBankingPayOperationProgressModal(options = {}) {
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  const normalise = (payload) => (typeof normaliseBankingPayOperationProgress === 'function')
+    ? normaliseBankingPayOperationProgress(payload)
+    : (payload && typeof payload === 'object' ? payload : {});
+
+  let state = normalise(opts.operation || opts.initialOperation || opts.initial_operation || {});
+  if (!state.operation_id && opts.operation_id) state.operation_id = trimStr(opts.operation_id);
+  if (opts.title) state.title = trimStr(opts.title) || state.title;
+  if (opts.statusText || opts.status_text) state.status_text = trimStr(opts.statusText || opts.status_text) || state.status_text;
+
+  const toBulkValues = (operationState) => ({
+    title: operationState.title || 'Processing payment operation',
+    statusText: `${operationState.phase_label || 'Processing'}${operationState.status_text ? ` — ${operationState.status_text}` : ''}`,
+    totalRows: operationState.total_units || 0,
+    completedRows: operationState.completed_units || 0,
+    failedRows: operationState.failed_units || 0,
+    chunkCount: operationState.chunk_count || 0,
+    currentChunkIndex: operationState.current_chunk_index || 0,
+    currentChunkSize: 0
+  });
+
+  const hideUnsafeStopButton = (controller, operationState) => {
+    try {
+      const root = controller && controller.root ? controller.root : null;
+      const stopButton = root && root.querySelector ? root.querySelector('[data-act="bulk-ts-progress-stop"]') : null;
+      if (!stopButton) return;
+      const allowStop = operationState && operationState.can_cancel === true && operationState.provider_submission_started !== true;
+      stopButton.style.display = allowStop ? '' : 'none';
+      stopButton.disabled = !allowStop;
+    } catch {}
+  };
+
+  if (typeof openBulkTimesheetActionProgressModal === 'function') {
+    const controller = openBulkTimesheetActionProgressModal({
+      action: 'AUTHORISE',
+      title: state.title || opts.title || 'Processing payment operation',
+      statusText: state.status_text || 'Preparing payment operation...',
+      totalRows: state.total_units || 0,
+      completedRows: state.completed_units || 0,
+      failedRows: state.failed_units || 0,
+      chunkCount: state.chunk_count || 0,
+      chunkSize: opts.chunkSize || opts.chunk_size || 1,
+      onStopRequested: (modalState) => {
+        try {
+          if (typeof opts.onStopRequested === 'function') opts.onStopRequested(modalState, state);
+        } catch {}
+      }
+    });
+
+    const originalUpdate = typeof controller.update === 'function' ? controller.update.bind(controller) : null;
+    const originalMarkCompleted = typeof controller.markCompleted === 'function' ? controller.markCompleted.bind(controller) : null;
+    const originalMarkStructuralFailure = typeof controller.markStructuralFailure === 'function' ? controller.markStructuralFailure.bind(controller) : null;
+
+    const updateFromOperation = (operationPayload) => {
+      state = normalise(operationPayload || state.raw_payload || state);
+      if (opts.title && !state.title) state.title = trimStr(opts.title);
+      if (originalUpdate) originalUpdate(toBulkValues(state));
+      hideUnsafeStopButton(controller, state);
+      return wrapper;
+    };
+
+    const wrapper = {
+      id: controller.id,
+      root: controller.root,
+      overlay: controller.overlay,
+      update(values = {}) {
+        if (values && typeof values === 'object' && (values.operation_id || values.operation_type || values.phase || values.status || values.progress_json || values.result_json || values.error_json)) {
+          return updateFromOperation(values);
+        }
+        if (originalUpdate) originalUpdate(values);
+        return wrapper;
+      },
+      updateFromOperation,
+      markCompleted(summaryText) {
+        if (originalMarkCompleted) originalMarkCompleted(summaryText || state.status_text || 'Operation complete.');
+        hideUnsafeStopButton(controller, { ...state, terminal: true, can_cancel: false, provider_submission_started: true });
+        return wrapper;
+      },
+      markStructuralFailure(error, statusText) {
+        if (originalMarkStructuralFailure) originalMarkStructuralFailure(error, statusText || (error && (error.user_message || error.message || error.error)) || 'Operation failed.');
+        hideUnsafeStopButton(controller, { ...state, terminal: true, can_cancel: false, provider_submission_started: true });
+        return wrapper;
+      },
+      markStopped(summaryText) {
+        if (typeof controller.markStopped === 'function') controller.markStopped(summaryText || 'Operation paused.');
+        return wrapper;
+      },
+      appendFailures(failures = [], context = {}) {
+        if (typeof controller.appendFailures === 'function') controller.appendFailures(failures, context);
+        return wrapper;
+      },
+      requestStop() {
+        if (state && state.can_cancel === true && state.provider_submission_started !== true && typeof controller.requestStop === 'function') controller.requestStop();
+        return wrapper;
+      },
+      isStopRequested() {
+        return typeof controller.isStopRequested === 'function' ? controller.isStopRequested() : false;
+      },
+      close() {
+        if (typeof controller.close === 'function') controller.close();
+        return wrapper;
+      },
+      destroy() {
+        if (typeof controller.destroy === 'function') controller.destroy();
+        else if (typeof controller.close === 'function') controller.close();
+        return wrapper;
+      },
+      getState() {
+        const base = typeof controller.getState === 'function' ? controller.getState() : {};
+        return { ...base, operation: state };
+      }
+    };
+
+    updateFromOperation(state);
+    return wrapper;
+  }
+
+  const instanceId = `banking_pay_operation_progress_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const modalState = { closed: false, operation: state };
+  if (typeof document === 'undefined' || !document.body) {
+    return {
+      id: instanceId,
+      root: null,
+      overlay: null,
+      update() { return this; },
+      updateFromOperation(payload) { modalState.operation = normalise(payload); return this; },
+      markCompleted() { return this; },
+      markStructuralFailure() { return this; },
+      markStopped() { return this; },
+      appendFailures() { return this; },
+      requestStop() { return this; },
+      isStopRequested() { return false; },
+      close() { modalState.closed = true; return this; },
+      destroy() { modalState.closed = true; return this; },
+      getState() { return JSON.parse(JSON.stringify(modalState)); }
+    };
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = `${instanceId}_overlay`;
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,0.46);backdrop-filter:blur(3px)';
+  const root = document.createElement('div');
+  root.id = `${instanceId}_root`;
+  root.setAttribute('role', 'dialog');
+  root.setAttribute('aria-modal', 'true');
+  root.style.cssText = 'width:min(720px,calc(100vw - 36px));max-height:calc(100vh - 36px);overflow:hidden;border-radius:18px;background:#fff;box-shadow:0 24px 70px rgba(15,23,42,0.32);border:1px solid rgba(148,163,184,0.35);font-family:inherit;color:#0f172a';
+  root.innerHTML = `
+    <div style="padding:20px 22px 16px;border-bottom:1px solid rgba(226,232,240,0.95);display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
+      <div><div data-role="op-title" style="font-size:18px;font-weight:800;letter-spacing:-0.01em;"></div><div data-role="op-status" style="font-size:13px;color:#475569;margin-top:6px;line-height:1.45;"></div></div>
+      <div data-role="op-chip" style="flex:0 0 auto;border-radius:999px;background:#eef2ff;color:#3730a3;padding:6px 10px;font-size:12px;font-weight:800;white-space:nowrap;">0%</div>
+    </div>
+    <div style="padding:18px 22px 16px;">
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;">
+        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Total</div><div data-role="op-total" style="font-size:20px;font-weight:900;margin-top:3px;">0</div></div>
+        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Completed</div><div data-role="op-completed" style="font-size:20px;font-weight:900;margin-top:3px;">0</div></div>
+        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Failed</div><div data-role="op-failed" style="font-size:20px;font-weight:900;margin-top:3px;">0</div></div>
+        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Chunk</div><div data-role="op-chunk" style="font-size:20px;font-weight:900;margin-top:3px;">0/0</div></div>
+      </div>
+      <div style="height:12px;border-radius:999px;background:#e2e8f0;overflow:hidden;border:1px solid rgba(148,163,184,0.38);"><div data-role="op-bar" style="height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#22c55e);transition:width .18s ease;"></div></div>
+      <div data-role="op-meta" style="font-size:12px;color:#64748b;margin-top:9px;line-height:1.45;"></div>
+      <div data-role="op-final" style="display:none;margin-top:14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#14532d;border-radius:14px;padding:10px 12px;font-size:13px;line-height:1.45;"></div>
+    </div>
+    <div style="padding:14px 22px 20px;border-top:1px solid rgba(226,232,240,0.95);display:flex;align-items:center;justify-content:flex-end;gap:12px;"><button type="button" data-act="op-close" class="btn btn-primary" style="min-width:110px;" disabled>Running...</button></div>
+  `;
+  overlay.appendChild(root);
+  document.body.appendChild(overlay);
+
+  const role = (name) => root.querySelector(`[data-role="${name}"]`);
+  const closeButton = root.querySelector('[data-act="op-close"]');
+  const render = () => {
+    const op = modalState.operation || {};
+    if (role('op-title')) role('op-title').textContent = op.title || 'Processing payment operation';
+    if (role('op-status')) role('op-status').textContent = `${op.phase_label || 'Processing'}${op.status_text ? ` — ${op.status_text}` : ''}`;
+    if (role('op-chip')) role('op-chip').textContent = `${op.percent || 0}%`;
+    if (role('op-total')) role('op-total').textContent = String(op.total_units || 0);
+    if (role('op-completed')) role('op-completed').textContent = String(op.completed_units || 0);
+    if (role('op-failed')) role('op-failed').textContent = String(op.failed_units || 0);
+    if (role('op-chunk')) role('op-chunk').textContent = `${op.current_chunk_index || 0}/${op.chunk_count || 0}`;
+    if (role('op-bar')) role('op-bar').style.width = `${op.percent || 0}%`;
+    if (role('op-meta')) role('op-meta').textContent = `${op.completed_units || 0} completed, ${op.failed_units || 0} failed, ${op.total_units || 0} total.`;
+    if (role('op-final')) {
+      role('op-final').style.display = op.terminal ? '' : 'none';
+      role('op-final').textContent = op.failed ? 'Operation failed.' : (op.review_required ? 'Operation needs review.' : (op.cancelled ? 'Operation cancelled.' : 'Operation complete.'));
+    }
+    if (closeButton) {
+      closeButton.disabled = !op.terminal;
+      closeButton.textContent = op.terminal ? 'Close' : 'Running...';
+    }
+  };
+  const controller = {
+    id: instanceId,
+    root,
+    overlay,
+    update(values = {}) { if (values && typeof values === 'object') modalState.operation = { ...modalState.operation, ...values }; render(); return controller; },
+    updateFromOperation(payload) { modalState.operation = normalise(payload); render(); return controller; },
+    markCompleted(summaryText) { modalState.operation = { ...modalState.operation, terminal: true, complete: true, status_text: trimStr(summaryText || 'Operation complete.') }; render(); return controller; },
+    markStructuralFailure(error, statusText) { modalState.operation = { ...modalState.operation, terminal: true, failed: true, error, status_text: trimStr(statusText || error?.message || 'Operation failed.') }; render(); return controller; },
+    markStopped(summaryText) { modalState.operation = { ...modalState.operation, waiting: true, status_text: trimStr(summaryText || 'Operation paused.') }; render(); return controller; },
+    appendFailures() { return controller; },
+    requestStop() { return controller; },
+    isStopRequested() { return false; },
+    close() { modalState.closed = true; try { overlay.remove(); } catch {} return controller; },
+    destroy() { return controller.close(); },
+    getState() { return JSON.parse(JSON.stringify(modalState)); }
+  };
+  if (closeButton) closeButton.addEventListener('click', () => { if (!closeButton.disabled) controller.close(); });
+  render();
+  return controller;
+}
+async function bankingPayOperationGet(operationId, options = {}) {
+  const id = String(operationId || '').trim();
+  if (!id) throw new Error('bankingPayOperationGet: operationId is required');
+  if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingPayOperationGet: authFetch/API is required');
+
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const response = await authFetch(API(`/api/banking/pay/operation/${encodeURIComponent(id)}`), { method: 'GET' });
+  const text = await response.text().catch(() => '');
+  let parsed = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
+
+  if (!response.ok) {
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(parsed || text || null, parsed, { action: opts.action || 'BANKING_PAY_OPERATION_GET', operationId: id, userInitiated: opts.userInitiated !== false })
+      : { ok: false, error_code: 'BANKING_PAY_OPERATION_GET_FAILED', message: text || `Request failed (${response.status})` };
+    const err = new Error(String(friendly.user_message || friendly.message || friendly.error || `Operation status could not be loaded (${response.status}).`));
+    err.status = response.status;
+    err.body = text;
+    err.json = friendly;
+    err.error_code = friendly.error_code || friendly.code || 'BANKING_PAY_OPERATION_GET_FAILED';
+    throw err;
+  }
+
+  if (parsed && typeof parsed === 'object' && parsed.ok === false) {
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(parsed, parsed, { action: opts.action || 'BANKING_PAY_OPERATION_GET', operationId: id, userInitiated: opts.userInitiated !== false })
+      : parsed;
+    const err = new Error(String(friendly.user_message || friendly.message || friendly.error || 'Operation status could not be loaded.'));
+    err.status = Number(friendly.http_status || friendly.status_code || 400) || 400;
+    err.body = text;
+    err.json = friendly;
+    err.error_code = friendly.error_code || friendly.code || 'BANKING_PAY_OPERATION_GET_FAILED';
+    throw err;
+  }
+
+  return (typeof normaliseBankingPayOperationProgress === 'function')
+    ? normaliseBankingPayOperationProgress(parsed || {})
+    : (parsed || {});
+}
+async function bankingPayOperationAdvance(operationId, options = {}) {
+  const id = String(operationId || '').trim();
+  if (!id) throw new Error('bankingPayOperationAdvance: operationId is required');
+  if (typeof apiPostJson !== 'function') throw new Error('bankingPayOperationAdvance: apiPostJson is required');
+
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const payload = (opts.payload && typeof opts.payload === 'object' && !Array.isArray(opts.payload)) ? opts.payload : {};
+
+  let responsePayload = null;
+  try {
+    responsePayload = await apiPostJson(`/api/banking/pay/operation/${encodeURIComponent(id)}/advance`, payload, {
+      action: opts.action || 'BANKING_PAY_OPERATION_ADVANCE',
+      userInitiated: opts.userInitiated !== false,
+      silent: opts.silent === true,
+      background: opts.background === true,
+      fallbackCode: 'BANKING_PAY_OPERATION_ADVANCE_FAILED',
+      fallbackTitle: 'Payment operation could not continue',
+      fallbackMessage: 'CloudTMS could not continue the payment operation. Review the operation status and try again.'
+    });
+  } catch (error) {
+    if (typeof bankingNormalizeApiError === 'function' && !(error && error.json)) {
+      const friendly = bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: opts.action || 'BANKING_PAY_OPERATION_ADVANCE', operationId: id, userInitiated: opts.userInitiated !== false });
+      const err = new Error(String(friendly.user_message || friendly.message || friendly.error || 'Payment operation could not continue.'));
+      err.status = Number(friendly.http_status || friendly.status_code || error?.status || 400) || 400;
+      err.json = friendly;
+      err.body = (() => { try { return JSON.stringify(friendly); } catch { return String(err.message || ''); } })();
+      err.error_code = friendly.error_code || friendly.code || 'BANKING_PAY_OPERATION_ADVANCE_FAILED';
+      throw err;
+    }
+    throw error;
+  }
+
+  return (typeof normaliseBankingPayOperationProgress === 'function')
+    ? normaliseBankingPayOperationProgress(responsePayload || {})
+    : (responsePayload || {});
+}
+
+
+
+async function runBankingPayOperationWithProgress(initialOperationPayload, options = {}) {
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const normalise = (payload) => (typeof normaliseBankingPayOperationProgress === 'function')
+    ? normaliseBankingPayOperationProgress(payload)
+    : (payload && typeof payload === 'object' ? payload : {});
+  const makeFriendlyError = (errorValue, operationState = null) => {
+    let friendly = null;
+    try {
+      if (typeof bankingNormalizeApiError === 'function') {
+        friendly = bankingNormalizeApiError(errorValue, errorValue?.json || errorValue?.payload || operationState?.error || operationState?.raw_payload || null, {
+          action: opts.action || 'BANKING_PAY_OPERATION_RUN',
+          operationId: operationState?.operation_id || null,
+          userInitiated: opts.userInitiated !== false
+        });
+      }
+    } catch {}
+    const message = trimStr(friendly?.user_message || friendly?.message || friendly?.error || errorValue?.message || errorValue?.error || operationState?.error?.message || 'Payment operation failed.');
+    const err = new Error(message || 'Payment operation failed.');
+    err.status = Number(friendly?.http_status || friendly?.status_code || errorValue?.status || 400) || 400;
+    err.json = friendly || errorValue?.json || operationState?.error || { ok: false, message };
+    err.error_code = friendly?.error_code || friendly?.code || errorValue?.error_code || operationState?.error?.error_code || operationState?.status || 'BANKING_PAY_OPERATION_FAILED';
+    return err;
+  };
+
+  let current = normalise(initialOperationPayload || {});
+  const operationId = trimStr(current.operation_id || opts.operationId || opts.operation_id || '');
+  if (!operationId) throw new Error('runBankingPayOperationWithProgress: operation_id is required');
+
+  const modal = (typeof openBankingPayOperationProgressModal === 'function' && opts.progressModal !== false)
+    ? openBankingPayOperationProgressModal({ operation: current, title: opts.title || current.title, onStopRequested: opts.onStopRequested })
+    : null;
+
+  const updateModal = (operationState) => {
+    try {
+      if (modal && typeof modal.updateFromOperation === 'function') modal.updateFromOperation(operationState.raw_payload || operationState);
+      else if (modal && typeof modal.update === 'function') {
+        modal.update({
+          title: operationState.title,
+          statusText: `${operationState.phase_label || 'Processing'}${operationState.status_text ? ` — ${operationState.status_text}` : ''}`,
+          totalRows: operationState.total_units || 0,
+          completedRows: operationState.completed_units || 0,
+          failedRows: operationState.failed_units || 0,
+          chunkCount: operationState.chunk_count || 0,
+          currentChunkIndex: operationState.current_chunk_index || 0
+        });
+      }
+    } catch {}
+  };
+
+  const finishSuccess = (operationState) => {
+    try {
+      if (modal && typeof modal.markCompleted === 'function') modal.markCompleted(operationState.status_text || operationState.phase_label || 'Operation complete.');
+    } catch {}
+    if (typeof opts.finalResultExtractor === 'function') return opts.finalResultExtractor(operationState.result, operationState);
+    if (typeof opts.extractFinalResult === 'function') return opts.extractFinalResult(operationState.result, operationState);
+    return operationState.result || operationState.raw_payload || operationState;
+  };
+
+  updateModal(current);
+  if (current.terminal) {
+    if (current.failed || current.cancelled) {
+      try { if (modal && typeof modal.markStructuralFailure === 'function') modal.markStructuralFailure(current.error || current.raw_payload, current.status_text || 'Operation failed.'); } catch {}
+      throw makeFriendlyError(current.error || current.raw_payload || current, current);
+    }
+    return finishSuccess(current);
+  }
+
+  const maxAdvanceCalls = Math.max(1, Math.min(2000, Number(opts.maxAdvanceCalls || opts.max_advance_calls || 500) || 500));
+  const waitingPollMs = Math.max(250, Math.min(30000, Number(opts.waitingPollMs || opts.waiting_poll_ms || 1500) || 1500));
+  const transientRetryMs = Math.max(250, Math.min(30000, Number(opts.transientRetryMs || opts.transient_retry_ms || 1500) || 1500));
+  const maxTransientRetries = Math.max(0, Math.min(20, Number(opts.maxTransientRetries ?? opts.max_transient_retries ?? 3) || 3));
+  const returnOnAuthorisationWait = opts.returnOnAuthorisationWait !== false && opts.return_on_authorisation_wait !== false;
+  let transientFailures = 0;
+  let advanceCalls = 0;
+  let waitingLoops = 0;
+  const maxWaitingLoops = Math.max(1, Math.min(2000, Number(opts.maxWaitingLoops || opts.max_waiting_loops || 500) || 500));
+
+  while (!current.terminal && advanceCalls < maxAdvanceCalls) {
+    if (current.waiting_for_authorisation && returnOnAuthorisationWait) {
+      try { if (modal && typeof modal.markStopped === 'function') modal.markStopped(current.status_text || 'Waiting for payment authorisation.'); } catch {}
+      return current.result || current.raw_payload || current;
+    }
+
+    if (current.waiting && !current.waiting_for_authorisation) {
+      waitingLoops += 1;
+      if (waitingLoops > maxWaitingLoops) break;
+      const waitMs = Math.max(250, Math.min(30000, Number(current.retry_after_ms || waitingPollMs) || waitingPollMs));
+      await delay(waitMs);
+      if (typeof bankingPayOperationGet === 'function') {
+        try {
+          current = normalise(await bankingPayOperationGet(operationId, {
+            action: opts.action || 'BANKING_PAY_OPERATION_GET',
+            userInitiated: opts.userInitiated !== false,
+            silent: true,
+            background: true
+          }));
+          updateModal(current);
+          if (current.terminal) break;
+          if (current.waiting && !current.can_advance) continue;
+        } catch {}
+      }
+    }
+
+    try {
+      advanceCalls += 1;
+      current = normalise(await bankingPayOperationAdvance(operationId, {
+        action: opts.action || 'BANKING_PAY_OPERATION_ADVANCE',
+        userInitiated: opts.userInitiated !== false,
+        silent: opts.silent === true,
+        background: opts.background === true
+      }));
+      transientFailures = 0;
+      updateModal(current);
+    } catch (error) {
+      transientFailures += 1;
+      if (transientFailures <= maxTransientRetries) {
+        try {
+          if (modal && typeof modal.update === 'function') modal.update({ statusText: `Connection issue while continuing operation. Retrying ${transientFailures} of ${maxTransientRetries}...` });
+        } catch {}
+        await delay(transientRetryMs);
+        try {
+          current = normalise(await bankingPayOperationGet(operationId, { action: opts.action || 'BANKING_PAY_OPERATION_GET', userInitiated: opts.userInitiated !== false, silent: true, background: true }));
+          updateModal(current);
+          if (current.terminal) break;
+        } catch {}
+        continue;
+      }
+      try { if (modal && typeof modal.markStructuralFailure === 'function') modal.markStructuralFailure(error, error?.message || 'Payment operation could not continue.'); } catch {}
+      throw makeFriendlyError(error, current);
+    }
+  }
+
+  if (!current.terminal) {
+    const timeoutError = new Error('Payment operation did not reach a terminal state before the progress runner limit was reached.');
+    timeoutError.error_code = 'BANKING_PAY_OPERATION_RUNNER_LIMIT_REACHED';
+    try { if (modal && typeof modal.markStructuralFailure === 'function') modal.markStructuralFailure(timeoutError, timeoutError.message); } catch {}
+    throw makeFriendlyError(timeoutError, current);
+  }
+
+  if (current.failed || current.cancelled) {
+    try { if (modal && typeof modal.markStructuralFailure === 'function') modal.markStructuralFailure(current.error || current.raw_payload, current.status_text || 'Operation failed.'); } catch {}
+    throw makeFriendlyError(current.error || current.raw_payload || current, current);
+  }
+
+  if (current.review_required) {
+    try { if (modal && typeof modal.markCompleted === 'function') modal.markCompleted(current.status_text || 'Operation needs review.'); } catch {}
+    return current.result || current.raw_payload || current;
+  }
+
+  return finishSuccess(current);
+}
+
+
+
+
+
+
+
+async function bankingPayBatchGetSectionPage(payBatchId, section, options = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const id = trimStr(payBatchId && typeof payBatchId === 'object' ? (payBatchId.pay_batch_id || payBatchId.payBatchId || payBatchId.id) : payBatchId);
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const sectionText = trimStr(section || opts.section || (payBatchId && typeof payBatchId === 'object' ? payBatchId.section : '')).toLowerCase();
+  if (!id) throw new Error('bankingPayBatchGetSectionPage: payBatchId is required');
+  if (!sectionText) throw new Error('bankingPayBatchGetSectionPage: section is required');
+  if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingPayBatchGetSectionPage: authFetch/API is required');
+
+  const allowedSections = new Set([
+    'candidates',
+    'items',
+    'item_breakdowns',
+    'transfers',
+    'finance_case_groups',
+    'remittances',
+    'communications',
+    'auth_history',
+    'events'
+  ]);
+  if (!allowedSections.has(sectionText)) {
+    throw new Error(`bankingPayBatchGetSectionPage: invalid section ${sectionText}`);
+  }
+
+  const asPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const safeJson = (value) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'string') {
+      const raw = value.trim();
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : raw;
+      } catch {
+        return raw;
+      }
+    }
+    if (typeof value === 'object') {
+      try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+    }
+    return value;
+  };
+  const unwrapPayload = (payload) => {
+    let out = payload;
+    try {
+      if (Array.isArray(out) && out.length === 1 && out[0] && typeof out[0] === 'object') out = out[0];
+      if (out && typeof out === 'object' && Object.prototype.hasOwnProperty.call(out, 'pay_batch_get_section_page')) out = out.pay_batch_get_section_page;
+      if (Array.isArray(out) && out.length === 1 && out[0] && typeof out[0] === 'object') out = out[0];
+    } catch {}
+    return asPlainObject(out) ? out : {};
+  };
+  const makeFriendlyError = (errorValue, parsedPayload = null, response = null) => {
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(errorValue, parsedPayload, {
+          action: opts.action || 'BANKING_PAY_BATCH_SECTION_PAGE',
+          payBatchId: id,
+          section: sectionText,
+          userInitiated: opts.userInitiated !== false
+        })
+      : {
+          ok: false,
+          error_code: 'BANKING_PAY_BATCH_SECTION_PAGE_FAILED',
+          message: errorValue && errorValue.message ? String(errorValue.message) : `Payment batch ${sectionText} page could not be loaded.`
+        };
+    const err = new Error(String(friendly.user_message || friendly.message || friendly.error || `Payment batch ${sectionText} page could not be loaded.`));
+    err.status = Number(friendly.http_status || friendly.status_code || response?.status || 400) || 400;
+    err.json = friendly;
+    err.error_code = friendly.error_code || friendly.code || 'BANKING_PAY_BATCH_SECTION_PAGE_FAILED';
+    return err;
+  };
+
+  const limitRaw = Number(opts.limit ?? opts.pageSize ?? opts.page_size ?? opts.recommendedPageSize ?? opts.recommended_page_size ?? 100);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(250, Math.trunc(limitRaw))) : 100;
+  const cursorJson = safeJson(opts.cursor ?? opts.cursor_json ?? null);
+  const filtersJson = safeJson(opts.filters ?? opts.filters_json ?? {});
+  const sortJson = safeJson(opts.sort ?? opts.sort_json ?? {});
+
+  const query = new URLSearchParams();
+  query.set('section', sectionText);
+  query.set('limit', String(limit));
+  if (cursorJson !== null && cursorJson !== undefined && cursorJson !== '') query.set('cursor', typeof cursorJson === 'string' ? cursorJson : JSON.stringify(cursorJson));
+  if (filtersJson && typeof filtersJson === 'object' && Object.keys(filtersJson).length) query.set('filters', JSON.stringify(filtersJson));
+  if (sortJson && typeof sortJson === 'object' && Object.keys(sortJson).length) query.set('sort', JSON.stringify(sortJson));
+
+  let response;
+  let text = '';
+  let parsed = null;
+  try {
+    response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/page?${query.toString()}`), { method: 'GET' });
+    text = await response.text().catch(() => '');
+    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
+  } catch (networkError) {
+    throw makeFriendlyError(networkError, null, response || null);
+  }
+
+  if (!response.ok) throw makeFriendlyError(parsed || text || { message: text }, parsed, response);
+  if (parsed && typeof parsed === 'object' && parsed.ok === false) throw makeFriendlyError(parsed, parsed, response);
+
+  const payload = unwrapPayload(parsed || {});
+  const rows = Array.isArray(payload.items)
+    ? payload.items
+    : Array.isArray(payload.rows)
+      ? payload.rows
+      : Array.isArray(payload.data)
+        ? payload.data
+        : [];
+  const returnedCountRaw = Number(payload.returned_count ?? payload.returnedCount ?? rows.length);
+  const knownTotalRaw = Number(payload.known_total_count ?? payload.knownTotalCount ?? payload.total_count ?? payload.totalCount);
+
+  return {
+    ...payload,
+    ok: payload.ok !== false,
+    pay_batch_id: String(payload.pay_batch_id || payload.payBatchId || id),
+    section: String(payload.section || sectionText).trim() || sectionText,
+    items: rows,
+    rows,
+    next_cursor: payload.next_cursor ?? payload.nextCursor ?? null,
+    returned_count: Number.isFinite(returnedCountRaw) ? returnedCountRaw : rows.length,
+    known_total_count: Number.isFinite(knownTotalRaw) ? knownTotalRaw : null,
+    limit
+  };
+}
+
+
+async function bankingPayApplyExecutePaymentResult(finalOperationResult, options = {}) {
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const upperTrim = (value) => trimStr(value).toUpperCase();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const cloneJson = (value) => {
+    try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+  };
+  const unwrapOperationResult = (value) => {
+    let payload = value;
+    try {
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        if (isPlainObject(payload.result)) return payload.result;
+        if (isPlainObject(payload.result_json)) return payload.result_json;
+        if (isPlainObject(payload.final_result)) return payload.final_result;
+        if (isPlainObject(payload.raw_payload)) {
+          if (isPlainObject(payload.raw_payload.result_json)) return payload.raw_payload.result_json;
+          if (isPlainObject(payload.raw_payload.result)) return payload.raw_payload.result;
+        }
+      }
+    } catch {}
+    return isPlainObject(payload) ? payload : {};
+  };
+  const operationState = (typeof normaliseBankingPayOperationProgress === 'function')
+    ? normaliseBankingPayOperationProgress(finalOperationResult || {})
+    : (isPlainObject(finalOperationResult) ? finalOperationResult : {});
+  const terminalResult = unwrapOperationResult(finalOperationResult || {});
+  const rootPayload = isPlainObject(finalOperationResult) ? finalOperationResult : {};
+  const result = {
+    ...cloneJson(terminalResult),
+    operation_id: trimStr(operationState.operation_id || rootPayload.operation_id || terminalResult.operation_id || '') || null,
+    operation_type: trimStr(operationState.operation_type || rootPayload.operation_type || terminalResult.operation_type || '') || null,
+    operation_status: trimStr(operationState.status || rootPayload.status || terminalResult.operation_status || '') || null,
+    operation_phase: trimStr(operationState.phase || rootPayload.phase || terminalResult.operation_phase || '') || null
+  };
+
+  const payBatchId = trimStr(
+    result.pay_batch_id ||
+    result.payBatchId ||
+    result.batch_id ||
+    rootPayload.pay_batch_id ||
+    operationState.raw_payload?.pay_batch_id ||
+    opts.payBatchId ||
+    opts.pay_batch_id ||
+    opts.batchId ||
+    opts.batch_id ||
+    ''
+  );
+  if (payBatchId) result.pay_batch_id = payBatchId;
+
+  const executionMode = upperTrim(result.execution_mode || result.mode || opts.executionMode || opts.execution_mode || '');
+  const postExecutionStatus = upperTrim(result.post_execution_status || result.status || result.batch_status || result.batchStatus || '');
+  const executionCommitState = upperTrim(result.execution_commit_state || result.executionCommitState || '');
+  const blockedFunds = result.blocked_funds === true || postExecutionStatus === 'BLOCKED_FUNDS' || upperTrim(result.error_code || result.code || '') === 'BLOCKED_FUNDS';
+  const scheduled = result.scheduled === true || postExecutionStatus === 'SCHEDULED' || upperTrim(result.schedule_kind || result.scheduleKind || '') === 'SCHEDULED';
+  const awaitingAuthorisation = result.awaiting_authorisation === true || result.awaitingAuthorisation === true || operationState.waiting_for_authorisation === true || postExecutionStatus === 'AWAITING_AUTHORISATION';
+  const csvSettlement = result.csv_settlement === true || executionMode === 'CSV_SETTLEMENT' || upperTrim(result.settlement_mode || result.settlementMode || '') === 'CSV_SETTLEMENT';
+  const externalSettlement = result.external_settlement === true || executionMode === 'EXTERNAL_SETTLEMENT' || upperTrim(result.settlement_mode || result.settlementMode || '') === 'EXTERNAL_SETTLEMENT';
+  const reviewRequired = result.review_required === true || operationState.review_required === true || upperTrim(result.status || '') === 'REVIEW_REQUIRED';
+  const submittedToBank = result.submitted_to_bank === true || result.submittedToBank === true;
+  const committed = executionCommitState === 'COMMITTED' || postExecutionStatus === 'COMMITTED' || postExecutionStatus === 'SETTLED' || postExecutionStatus === 'PAID';
+
+  const normalisedResult = {
+    ...result,
+    ok: result.ok !== false,
+    pay_batch_id: payBatchId || result.pay_batch_id || null,
+    execution_mode: executionMode || result.execution_mode || null,
+    post_execution_status: postExecutionStatus || result.post_execution_status || null,
+    execution_commit_state: executionCommitState || result.execution_commit_state || null,
+    submitted_to_bank: !!submittedToBank && !blockedFunds,
+    scheduled: !!scheduled,
+    blocked_funds: !!blockedFunds,
+    awaiting_authorisation: !!awaitingAuthorisation,
+    csv_settlement: !!csvSettlement,
+    external_settlement: !!externalSettlement,
+    review_required: !!reviewRequired,
+    committed: !!committed,
+    terminal_operation_result: true
+  };
+
+  const refreshBatch = async () => {
+    if (!payBatchId) return null;
+    if (opts.refreshBatch === false || opts.refresh_batch === false) return null;
+    if (typeof opts.loadBatch === 'function') return opts.loadBatch(payBatchId, normalisedResult);
+    if (typeof opts.refreshBatchFn === 'function') return opts.refreshBatchFn(payBatchId, normalisedResult);
+    if (typeof bankingPayBatchGet === 'function') {
+      try {
+        return await bankingPayBatchGet(payBatchId, {
+          detail_mode: 'AUTO',
+          detailMode: 'AUTO',
+          recommended_page_size: opts.recommendedPageSize || opts.recommended_page_size || 100,
+          userInitiated: opts.userInitiated !== false,
+          silent: opts.silent === true,
+          background: opts.background === true
+        });
+      } catch (firstError) {
+        try { return await bankingPayBatchGet(payBatchId); } catch { throw firstError; }
+      }
+    }
+    return null;
+  };
+
+  let refreshedBatch = null;
+  try {
+    refreshedBatch = await refreshBatch();
+    if (refreshedBatch && typeof refreshedBatch === 'object') normalisedResult.batch_get = refreshedBatch;
+  } catch (refreshError) {
+    normalisedResult.refresh_warning = String(refreshError?.message || refreshError || 'BANKING_BATCH_REFRESH_FAILED');
+  }
+
+  const safeCall = async (fn, ...args) => {
+    if (typeof fn !== 'function') return null;
+    try { return await fn(...args); } catch { return null; }
+  };
+
+  if (typeof opts.onBatchRefreshed === 'function' && refreshedBatch) await safeCall(opts.onBatchRefreshed, refreshedBatch, normalisedResult);
+  if (typeof opts.setSelectedBatch === 'function' && refreshedBatch) await safeCall(opts.setSelectedBatch, refreshedBatch, normalisedResult);
+  if (typeof opts.onResult === 'function') await safeCall(opts.onResult, normalisedResult, refreshedBatch);
+  if (typeof opts.refreshBankingSurfaces === 'function') await safeCall(opts.refreshBankingSurfaces, normalisedResult, refreshedBatch);
+
+  for (const globalName of [
+    'refreshBankingPayBatches',
+    'refreshBankingPayWorkbench',
+    'refreshBankingPayView',
+    'renderBankingPay',
+    'renderBankingPayDashboard'
+  ]) {
+    try {
+      const fn = (typeof window !== 'undefined' && window && typeof window[globalName] === 'function') ? window[globalName] : null;
+      if (fn && opts.callGlobalRefresh !== false && opts.call_global_refresh !== false) await safeCall(fn, normalisedResult, refreshedBatch);
+    } catch {}
+  }
+
+  return normalisedResult;
+}
+
+
+
+
+
+async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, options = {}) {
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const cloneJson = (value) => {
+    try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+  };
+  const unwrapOperationResult = (value) => {
+    let payload = value;
+    try {
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        if (isPlainObject(payload.result)) return payload.result;
+        if (isPlainObject(payload.result_json)) return payload.result_json;
+        if (isPlainObject(payload.final_result)) return payload.final_result;
+        if (isPlainObject(payload.raw_payload)) {
+          if (isPlainObject(payload.raw_payload.result_json)) return payload.raw_payload.result_json;
+          if (isPlainObject(payload.raw_payload.result)) return payload.raw_payload.result;
+        }
+      }
+    } catch {}
+    return isPlainObject(payload) ? payload : {};
+  };
+  const operationState = (typeof normaliseBankingPayOperationProgress === 'function')
+    ? normaliseBankingPayOperationProgress(finalDraftOperationResult || {})
+    : (isPlainObject(finalDraftOperationResult) ? finalDraftOperationResult : {});
+  const terminalResult = unwrapOperationResult(finalDraftOperationResult || {});
+  const rootPayload = isPlainObject(finalDraftOperationResult) ? finalDraftOperationResult : {};
+  const result = {
+    ...cloneJson(terminalResult),
+    operation_id: trimStr(operationState.operation_id || rootPayload.operation_id || terminalResult.operation_id || '') || null,
+    operation_type: trimStr(operationState.operation_type || rootPayload.operation_type || terminalResult.operation_type || '') || null,
+    operation_status: trimStr(operationState.status || rootPayload.status || terminalResult.operation_status || '') || null,
+    operation_phase: trimStr(operationState.phase || rootPayload.phase || terminalResult.operation_phase || '') || null
+  };
+
+  const postCreateRefresh = isPlainObject(result.post_create_refresh)
+    ? result.post_create_refresh
+    : isPlainObject(result.postCreateRefresh)
+      ? result.postCreateRefresh
+      : {};
+  const session = isPlainObject(result.session) ? result.session : {};
+  const createdBatchesFromResult = Array.isArray(result.created_batches)
+    ? result.created_batches
+    : (Array.isArray(result.createdBatches) ? result.createdBatches : []);
+
+  const collectBatchIdsFrom = (value, out = [], depth = 0, seen = new WeakSet()) => {
+    if (value == null || depth > 6) return out;
+    if (typeof value === 'string' || typeof value === 'number') {
+      const s = trimStr(value);
+      if (s) out.push(s);
+      return out;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) collectBatchIdsFrom(item, out, depth + 1, seen);
+      return out;
+    }
+    if (!isPlainObject(value)) return out;
+    if (seen.has(value)) return out;
+    seen.add(value);
+
+    for (const key of [
+      'pay_batch_id',
+      'payBatchId',
+      'batch_id',
+      'batchId',
+      'selected_pay_batch_id',
+      'selectedPayBatchId',
+      'paye_pay_batch_id',
+      'payePayBatchId',
+      'umbrella_pay_batch_id',
+      'umbrellaPayBatchId',
+      'non_paye_pay_batch_id',
+      'nonPayePayBatchId'
+    ]) {
+      const s = trimStr(value[key]);
+      if (s) out.push(s);
+    }
+
+    for (const key of [
+      'pay_batch_ids',
+      'payBatchIds',
+      'created_pay_batch_ids',
+      'createdPayBatchIds',
+      'batch_ids',
+      'batchIds'
+    ]) {
+      if (Array.isArray(value[key])) {
+        for (const id of value[key]) {
+          const s = trimStr(id);
+          if (s) out.push(s);
+        }
+      }
+    }
+
+    for (const key of [
+      'created_batches',
+      'createdBatches',
+      'batch_shells',
+      'batchShells',
+      'shell_results',
+      'shellResults',
+      'scope_results',
+      'scopeResults',
+      'scope_result',
+      'scopeResult',
+      'batch_results',
+      'batchResults',
+      'results',
+      'result',
+      'result_json',
+      'post_create_refresh',
+      'postCreateRefresh'
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) collectBatchIdsFrom(value[key], out, depth + 1, seen);
+    }
+
+    return out;
+  };
+
+  const recursivelyDiscoveredBatchIds = collectBatchIdsFrom({
+    result,
+    postCreateRefresh,
+    createdBatchesFromResult
+  });
+  const createdPayBatchIds = Array.from(new Set([
+    result.pay_batch_id,
+    result.payBatchId,
+    result.batch_id,
+    result.umbrella_pay_batch_id,
+    result.paye_pay_batch_id,
+    result.umbrellaPayBatchId,
+    result.payePayBatchId,
+    ...(Array.isArray(result.pay_batch_ids) ? result.pay_batch_ids : []),
+    ...(Array.isArray(result.payBatchIds) ? result.payBatchIds : []),
+    ...(Array.isArray(result.created_pay_batch_ids) ? result.created_pay_batch_ids : []),
+    ...(Array.isArray(result.createdPayBatchIds) ? result.createdPayBatchIds : []),
+    ...(Array.isArray(postCreateRefresh.created_pay_batch_ids) ? postCreateRefresh.created_pay_batch_ids : []),
+    ...createdBatchesFromResult.map((row) => isPlainObject(row) ? (row.pay_batch_id || row.payBatchId || row.batch_id || row.id) : row),
+    ...recursivelyDiscoveredBatchIds
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const createdBatches = createdBatchesFromResult.length
+    ? createdBatchesFromResult.map((row) => isPlainObject(row) ? cloneJson(row) : { pay_batch_id: trimStr(row) }).filter((row) => trimStr(row.pay_batch_id || row.payBatchId || row.batch_id || row.id))
+    : createdPayBatchIds.map((id) => ({ pay_batch_id: id }));
+  const selectedBatchId = trimStr(
+    opts.selectedPayBatchId ||
+    opts.selected_pay_batch_id ||
+    result.selected_pay_batch_id ||
+    result.pay_batch_id ||
+    result.umbrella_pay_batch_id ||
+    result.paye_pay_batch_id ||
+    createdPayBatchIds[0] ||
+    ''
+  ) || null;
+
+  const replacementSessionId = trimStr(
+    postCreateRefresh.replacement_session_id ||
+    postCreateRefresh.replacementSessionId ||
+    session.replacement_session_id ||
+    result.replacement_session_id ||
+    ''
+  ) || null;
+  const replacementSnapshotRunId = trimStr(
+    postCreateRefresh.replacement_snapshot_run_id ||
+    postCreateRefresh.replacementSnapshotRunId ||
+    session.replacement_snapshot_run_id ||
+    result.replacement_snapshot_run_id ||
+    ''
+  ) || null;
+  const replacementSessionSignature = trimStr(
+    postCreateRefresh.replacement_session_signature ||
+    postCreateRefresh.replacementSessionSignature ||
+    session.replacement_session_signature ||
+    result.replacement_session_signature ||
+    ''
+  ) || null;
+  const replacementSessionVersion = postCreateRefresh.replacement_session_version ?? postCreateRefresh.replacementSessionVersion ?? session.replacement_session_version ?? result.replacement_session_version ?? null;
+  const dirtyCandidateIds = Array.from(new Set([
+    ...(Array.isArray(postCreateRefresh.dirty_candidate_ids) ? postCreateRefresh.dirty_candidate_ids : []),
+    ...(Array.isArray(result.dirty_candidate_ids) ? result.dirty_candidate_ids : []),
+    ...(Array.isArray(result.decision_sync?.touched_candidate_ids) ? result.decision_sync.touched_candidate_ids : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const refreshJobIds = Array.from(new Set([
+    ...(Array.isArray(postCreateRefresh.dirty_refresh_job_ids) ? postCreateRefresh.dirty_refresh_job_ids : []),
+    ...(Array.isArray(result.refresh_job_ids) ? result.refresh_job_ids : []),
+    ...(Array.isArray(result.decision_sync?.job_ids) ? result.decision_sync.job_ids : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
+
+  const normalisedResult = {
+    ...result,
+    ok: result.ok !== false,
+    create_draft_operation_result: true,
+    selected_pay_batch_id: selectedBatchId,
+    pay_batch_ids: createdPayBatchIds,
+    created_pay_batch_ids: createdPayBatchIds,
+    created_batches: createdBatches,
+    replacement_session_id: replacementSessionId,
+    replacement_snapshot_run_id: replacementSnapshotRunId,
+    replacement_session_signature: replacementSessionSignature,
+    replacement_session_version: replacementSessionVersion,
+    dirty_candidate_ids: dirtyCandidateIds,
+    refresh_job_ids: refreshJobIds,
+    post_create_refresh: postCreateRefresh,
+    session: {
+      ...session,
+      replacement_session_id: replacementSessionId,
+      replacement_snapshot_run_id: replacementSnapshotRunId,
+      replacement_session_signature: replacementSessionSignature,
+      replacement_session_version: replacementSessionVersion
+    }
+  };
+
+  const safeCall = async (fn, ...args) => {
+    if (typeof fn !== 'function') return null;
+    try { return await fn(...args); } catch { return null; }
+  };
+
+  if (typeof opts.updateWizardState === 'function') await safeCall(opts.updateWizardState, normalisedResult);
+  if (typeof opts.setSelectedBatchId === 'function' && selectedBatchId) await safeCall(opts.setSelectedBatchId, selectedBatchId, normalisedResult);
+  if (typeof opts.setReplacementSession === 'function') {
+    await safeCall(opts.setReplacementSession, {
+      session_id: replacementSessionId,
+      snapshot_run_id: replacementSnapshotRunId,
+      session_signature: replacementSessionSignature,
+      session_version: replacementSessionVersion
+    }, normalisedResult);
+  }
+  if (typeof opts.setDirtyCandidateIds === 'function') await safeCall(opts.setDirtyCandidateIds, dirtyCandidateIds, normalisedResult);
+  if (typeof opts.applyRefreshJobSummary === 'function') await safeCall(opts.applyRefreshJobSummary, { refresh_job_ids: refreshJobIds, dirty_candidate_ids: dirtyCandidateIds }, normalisedResult);
+  if (typeof opts.onResult === 'function') await safeCall(opts.onResult, normalisedResult);
+  if (typeof opts.refreshBankingSurfaces === 'function') await safeCall(opts.refreshBankingSurfaces, normalisedResult);
+
+  try {
+    if (typeof window !== 'undefined' && window) {
+      if (window.bankingPayState && typeof window.bankingPayState === 'object') {
+        if (selectedBatchId) window.bankingPayState.selected_pay_batch_id = selectedBatchId;
+        if (replacementSessionId) window.bankingPayState.workbench_session_id = replacementSessionId;
+        if (replacementSessionSignature) window.bankingPayState.workbench_session_signature = replacementSessionSignature;
+        if (replacementSessionVersion !== null && replacementSessionVersion !== undefined) window.bankingPayState.workbench_session_version = replacementSessionVersion;
+        window.bankingPayState.dirty_candidate_ids = dirtyCandidateIds;
+        window.bankingPayState.refresh_job_ids = refreshJobIds;
+      }
+      if (window.modalCtx && typeof window.modalCtx === 'object') {
+        if (selectedBatchId) window.modalCtx.selectedPayBatchId = selectedBatchId;
+        if (replacementSessionId) window.modalCtx.bankingPayWorkbenchSessionId = replacementSessionId;
+      }
+    }
+  } catch {}
+
+  for (const globalName of [
+    'refreshBankingPayWorkbench',
+    'refreshBankingPayBatches',
+    'refreshBankingPayView',
+    'renderBankingPay',
+    'renderBankingPayDashboard'
+  ]) {
+    try {
+      const fn = (typeof window !== 'undefined' && window && typeof window[globalName] === 'function') ? window[globalName] : null;
+      if (fn && opts.callGlobalRefresh !== false && opts.call_global_refresh !== false) await safeCall(fn, normalisedResult);
+    } catch {}
+  }
+
+  return normalisedResult;
+}
+
+
+async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, options = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const id = trimStr(sessionId && typeof sessionId === 'object' ? (sessionId.session_id || sessionId.sessionId || sessionId.id) : sessionId);
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const sectionText = trimStr(section || opts.section || (sessionId && typeof sessionId === 'object' ? sessionId.section : '')).toLowerCase();
+  if (!id) throw new Error('bankingPayWorkbenchSessionGetPreviewPage: sessionId is required');
+  if (!sectionText) throw new Error('bankingPayWorkbenchSessionGetPreviewPage: section is required');
+  if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingPayWorkbenchSessionGetPreviewPage: authFetch/API is required');
+
+  const allowedSections = new Set([
+    'candidates',
+    'canonical_preview_lines',
+    'itemisation',
+    'blocked_items',
+    'do_not_pay_items',
+    'snoozed_items',
+    'baseline_component_rows',
+    'paye_candidates',
+    'non_paye_payees',
+    'payees',
+    'finance_case_groups'
+  ]);
+  if (!allowedSections.has(sectionText)) {
+    throw new Error(`bankingPayWorkbenchSessionGetPreviewPage: invalid section ${sectionText}`);
+  }
+
+  const asPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const safeJson = (value) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'string') {
+      const raw = value.trim();
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : raw;
+      } catch {
+        return raw;
+      }
+    }
+    if (typeof value === 'object') {
+      try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+    }
+    return value;
+  };
+  const unwrapPayload = (payload) => {
+    let out = payload;
+    try {
+      if (Array.isArray(out) && out.length === 1 && out[0] && typeof out[0] === 'object') out = out[0];
+      if (out && typeof out === 'object' && Object.prototype.hasOwnProperty.call(out, 'pay_workbench_session_get_preview_page')) out = out.pay_workbench_session_get_preview_page;
+      if (Array.isArray(out) && out.length === 1 && out[0] && typeof out[0] === 'object') out = out[0];
+    } catch {}
+    return asPlainObject(out) ? out : {};
+  };
+  const makeFriendlyError = (errorValue, parsedPayload = null, response = null) => {
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(errorValue, parsedPayload, {
+          action: opts.action || 'BANKING_PAY_WORKBENCH_PREVIEW_PAGE',
+          sessionId: id,
+          section: sectionText,
+          userInitiated: opts.userInitiated !== false
+        })
+      : {
+          ok: false,
+          error_code: 'BANKING_PAY_WORKBENCH_PREVIEW_PAGE_FAILED',
+          message: errorValue && errorValue.message ? String(errorValue.message) : `Payment preview ${sectionText} page could not be loaded.`
+        };
+    const err = new Error(String(friendly.user_message || friendly.message || friendly.error || `Payment preview ${sectionText} page could not be loaded.`));
+    err.status = Number(friendly.http_status || friendly.status_code || response?.status || 400) || 400;
+    err.json = friendly;
+    err.error_code = friendly.error_code || friendly.code || 'BANKING_PAY_WORKBENCH_PREVIEW_PAGE_FAILED';
+    return err;
+  };
+
+  const limitRaw = Number(opts.limit ?? opts.pageSize ?? opts.page_size ?? 100);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(250, Math.trunc(limitRaw))) : 100;
+  const cursorJson = safeJson(opts.cursor ?? opts.cursor_json ?? null);
+
+  const query = new URLSearchParams();
+  query.set('section', sectionText);
+  query.set('limit', String(limit));
+  if (cursorJson !== null && cursorJson !== undefined && cursorJson !== '') query.set('cursor', typeof cursorJson === 'string' ? cursorJson : JSON.stringify(cursorJson));
+
+  let response;
+  let text = '';
+  let parsed = null;
+  try {
+    response = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(id)}/preview-page?${query.toString()}`), { method: 'GET' });
+    text = await response.text().catch(() => '');
+    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
+  } catch (networkError) {
+    throw makeFriendlyError(networkError, null, response || null);
+  }
+
+  if (!response.ok) throw makeFriendlyError(parsed || text || { message: text }, parsed, response);
+  if (parsed && typeof parsed === 'object' && parsed.ok === false) throw makeFriendlyError(parsed, parsed, response);
+
+  const payload = unwrapPayload(parsed || {});
+  const rows = Array.isArray(payload.items)
+    ? payload.items
+    : Array.isArray(payload.rows)
+      ? payload.rows
+      : Array.isArray(payload.data)
+        ? payload.data
+        : [];
+  const returnedCountRaw = Number(payload.returned_count ?? payload.returnedCount ?? rows.length);
+
+  return {
+    ...payload,
+    ok: payload.ok !== false,
+    session_id: String(payload.session_id || payload.sessionId || id),
+    section: String(payload.section || sectionText).trim() || sectionText,
+    items: rows,
+    rows,
+    next_cursor: payload.next_cursor ?? payload.nextCursor ?? null,
+    returned_count: Number.isFinite(returnedCountRaw) ? returnedCountRaw : rows.length,
+    session_version: payload.session_version ?? payload.sessionVersion ?? null,
+    session_signature: payload.session_signature ?? payload.sessionSignature ?? null,
+    limit
+  };
+}
 
 function classifyBulkAuthoriseEditability(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
@@ -116579,6 +117396,72 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     : ((activeCtx.state && typeof activeCtx.state === 'object')
       ? activeCtx.state
       : ((activeContext.state && typeof activeContext.state === 'object') ? activeContext.state : {}));
+  const ownerCandidateValues = [
+    ctx.owner_kind,
+    ctx.ownerKind,
+    ctx.modal_kind,
+    ctx.modalKind,
+    ctx.context_kind,
+    ctx.contextKind,
+    ctx.context_type,
+    ctx.contextType,
+    activeCtx.owner_kind,
+    activeCtx.ownerKind,
+    activeCtx.modal_kind,
+    activeCtx.modalKind,
+    activeContext.owner_kind,
+    activeContext.ownerKind,
+    activeContext.modal_kind,
+    activeContext.modalKind,
+    activeState.owner_kind,
+    activeState.ownerKind,
+    activeState.modal_kind,
+    activeState.modalKind,
+    (typeof window !== 'undefined' && window.modalCtx && (window.modalCtx.owner_kind || window.modalCtx.ownerKind || window.modalCtx.modal_kind || window.modalCtx.modalKind || window.modalCtx.context_kind || window.modalCtx.contextKind || window.modalCtx.context_type || window.modalCtx.contextType))
+  ].filter((value) => value !== undefined && value !== null && String(value).trim() !== '');
+  const ownerKindUpper = ownerCandidateValues.map((value) => String(value).trim().toUpperCase()).find(Boolean) || '';
+  const explicitNonBulkAuthoriseOwner = !!(
+    ownerKindUpper &&
+    !ownerKindUpper.includes('BULK_AUTHORISE') &&
+    !ownerKindUpper.includes('BULK-AUTHORISE') &&
+    !ownerKindUpper.includes('BULK_AUTH') &&
+    !ownerKindUpper.includes('BULK-AUTH') &&
+    (
+      ownerKindUpper.includes('BULK_PROCESS') ||
+      ownerKindUpper.includes('BULK-PROCESS') ||
+      ownerKindUpper.includes('SIMPLE_TIMESHEET') ||
+      ownerKindUpper.includes('SIMPLE-TIMESHEET') ||
+      ownerKindUpper.includes('TIMESHEET_MODAL') ||
+      ownerKindUpper.includes('TIMESHEET-MODAL') ||
+      ownerKindUpper.includes('BULK_PROCESS_ROW_CONTEXT') ||
+      ownerKindUpper.includes('BULK-PROCESS-ROW-CONTEXT')
+    )
+  );
+
+  if (explicitNonBulkAuthoriseOwner) {
+    const domainPolicy = (typeof classifyTimesheetEditDomains === 'function')
+      ? classifyTimesheetEditDomains(ctx)
+      : {};
+    return {
+      ...domainPolicy,
+      staleBulkAuthoriseOwner: true,
+      ownerKind: ownerKindUpper,
+      canAuthorise: false,
+      canUnauthorise: false,
+      canBulkAuthorise: false,
+      canBulkUnauthorise: false,
+      canSave: false,
+      canProcess: false,
+      canUnprocess: false,
+      canAddAdditionalManual: false,
+      canManageEvidence: false,
+      canManageExpenseEvidence: false,
+      reviewOnly: true,
+      paymentScheduleLocked: true,
+      paymentScheduleLockReason: 'stale-bulk-authorise-owner'
+    };
+  }
+
   const row = (ctx.row && typeof ctx.row === 'object')
     ? ctx.row
     : ((activeCtx.row && typeof activeCtx.row === 'object')
@@ -116849,7 +117732,6 @@ function classifyBulkAuthoriseEditability(ctxInput) {
     isSegmentOnlyContext
   };
 }
-
 
 
 function bindBulkAuthoriseShellControls(state) {
@@ -118008,6 +118890,7 @@ async function unauthoriseSelectedTimesheets(payload) {
   return out;
 }
 
+
 function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   const deep = (v) => {
     try { return JSON.parse(JSON.stringify(v)); } catch { return v; }
@@ -118391,14 +119274,42 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   const routeSubfamilyUpperForManualAdjustment = upper(row.route_subfamily || details.route_subfamily || '');
   const underlyingFamilyUpperForManualAdjustment = upper(row.underlying_channel_family || details.underlying_channel_family || '');
   const cwTotalsForManualAdjustment = (() => {
-    const parsed = safeJsonParse(cw?.totals_json);
+    const parsed = safeJsonParse(cw?.totals_json || row?.totals_json || null);
     return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
   })();
   const cwHoursForManualAdjustment = (cwTotalsForManualAdjustment.hours && typeof cwTotalsForManualAdjustment.hours === 'object')
     ? cwTotalsForManualAdjustment.hours
     : {};
-  const explicitPlannedScheduleForManualAdjustment = parseScheduleLike(cw?.planned_schedule_json);
+  const explicitPlannedScheduleForManualAdjustment = (() => {
+    const candidates = [cw?.planned_schedule_json, details?.contract_week?.planned_schedule_json, row?.planned_schedule_json];
+    for (const candidate of candidates) {
+      const parsed = parseScheduleLike(candidate);
+      if (Array.isArray(parsed)) return parsed;
+    }
+    return null;
+  })();
+  const explicitActualScheduleForManualAdjustment = (() => {
+    const candidates = [ts?.actual_schedule_json, tsfin?.actual_schedule_json, row?.actual_schedule_json];
+    for (const candidate of candidates) {
+      const parsed = parseScheduleLike(candidate);
+      if (Array.isArray(parsed)) return parsed;
+    }
+    return null;
+  })();
+  const invoiceBreakdownForManualAdjustment = (() => {
+    const candidates = [details.invoiceBreakdown, details.invoice_breakdown_json, tsfin?.invoice_breakdown_json, row?.invoice_breakdown_json];
+    for (const candidate of candidates) {
+      const parsed = safeJsonParse(candidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    }
+    return {};
+  })();
+  const invoiceSegmentsForManualAdjustment = Array.isArray(invoiceBreakdownForManualAdjustment.segments)
+    ? invoiceBreakdownForManualAdjustment.segments
+    : [];
   const plannedScheduleExplicitlyEmptyForManualAdjustment = Array.isArray(explicitPlannedScheduleForManualAdjustment) && explicitPlannedScheduleForManualAdjustment.length === 0;
+  const actualScheduleExplicitlyEmptyForManualAdjustment = Array.isArray(explicitActualScheduleForManualAdjustment) && explicitActualScheduleForManualAdjustment.length === 0;
+  const invoiceSegmentsExplicitlyEmptyForManualAdjustment = invoiceSegmentsForManualAdjustment.length === 0;
   const isWeeklyContextForManualAdjustment = !!(
     sheetScope === 'WEEKLY' ||
     routeTypeUpperForManualAdjustment.startsWith('WEEKLY') ||
@@ -118413,15 +119324,36 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     routeSubfamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
     underlyingFamilyUpperForManualAdjustment === 'MANUAL_NON_QR'
   );
+  const additionalSeqForManualAdjustment = num0(
+    cw?.additional_seq ??
+    details?.additional_seq ??
+    details?.contract_week_additional_seq ??
+    row?.additional_seq ??
+    row?.contract_week_additional_seq ??
+    0
+  );
   const hasAdditionalManualAdjustmentMarker = !!(
     routeTypeUpperForManualAdjustment === 'WEEKLY_NHSP_ADJUSTMENT' ||
     routeTypeUpperForManualAdjustment === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
     routeTypeUpperForManualAdjustment === 'WEEKLY_MANUAL_ADJUSTMENT' ||
-    routeTypeUpperForManualAdjustment.includes('_ADJUSTMENT')
+    routeTypeUpperForManualAdjustment.includes('_ADJUSTMENT') ||
+    additionalSeqForManualAdjustment > 0 ||
+    cw?.is_adjustment === true ||
+    row?.is_adjustment === true ||
+    details?.is_adjustment === true
   );
-  const routeFamilyConfirmsAdditionalManualAdjustment = routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR';
+  const routeFamilyConfirmsAdditionalManualAdjustment = !!(
+    routeFamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    routeSubfamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    underlyingFamilyUpperForManualAdjustment === 'MANUAL_NON_QR' ||
+    additionalSeqForManualAdjustment > 0 ||
+    cw?.is_adjustment === true ||
+    row?.is_adjustment === true ||
+    details?.is_adjustment === true
+  );
   const zeroHourAdditionalManualAdjustment = !!(
     num0(row.total_hours) === 0 &&
+    num0(tsfin?.total_hours) === 0 &&
     num0(cwHoursForManualAdjustment.day) === 0 &&
     num0(cwHoursForManualAdjustment.night) === 0 &&
     num0(cwHoursForManualAdjustment.sat) === 0 &&
@@ -118429,13 +119361,14 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     num0(cwHoursForManualAdjustment.bh) === 0
   );
   const keepAdditionalManualAdjustmentScheduleEmpty = !!(
-    !hasTs &&
     !!contractWeekId &&
     isWeeklyContextForManualAdjustment &&
     isManualModeForManualAdjustment &&
     hasAdditionalManualAdjustmentMarker &&
     routeFamilyConfirmsAdditionalManualAdjustment &&
     plannedScheduleExplicitlyEmptyForManualAdjustment &&
+    (!hasTs || actualScheduleExplicitlyEmptyForManualAdjustment) &&
+    invoiceSegmentsExplicitlyEmptyForManualAdjustment &&
     zeroHourAdditionalManualAdjustment
   );
   const suppressStandardScheduleFallbackForAdditionalManualAdjustment = keepAdditionalManualAdjustmentScheduleEmpty;
@@ -118655,8 +119588,8 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
         }
         return buildDailyScheduleFromCanonicalFields();
       }
-      if (hasTs) return parseScheduleLike(ts?.actual_schedule_json);
       if (keepAdditionalManualAdjustmentScheduleEmpty) return [];
+      if (hasTs) return parseScheduleLike(ts?.actual_schedule_json);
       return parseScheduleLike(cw?.planned_schedule_json) || parseScheduleLike(cw?.std_schedule_json) || parseScheduleLike(related?.contract?.std_schedule_json);
     })(),
     __dailyScheduleShapeMode: (hasTs && sheetScope === 'DAILY')
@@ -118811,6 +119744,7 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
 
 
 
+
 function traceBulkProcessDirty(state, reason, detail = {}) {
   const st = (state && typeof state === 'object') ? state : null;
   if (!st) return;
@@ -118821,6 +119755,7 @@ function traceBulkProcessDirty(state, reason, detail = {}) {
     detail: (detail && typeof detail === 'object') ? detail : {}
   });
 }
+
 
 function buildBulkProcessEditableDraftSnapshot(stateOrCtx) {
   const trimStr = (v) => String(v == null ? '' : v).trim();
@@ -119004,6 +119939,76 @@ function buildBulkProcessEditableDraftSnapshot(stateOrCtx) {
   const hasFin = !!tsfin;
   const hasContractWeek = !!(details.contract_week_id || row.contract_week_id || contractWeek?.id);
 
+  const boolish = (v) => {
+    if (v === true || v === 1) return true;
+    if (v === false || v == null) return false;
+    const s = String(v).trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  };
+  const lineHasMeaningfulScheduleValue = (line) => {
+    const ln = (line && typeof line === 'object') ? line : {};
+    return !!(
+      trimStr(ln.ref || ln.reference || '') ||
+      trimStr(ln.start || ln.worked_start || '') ||
+      trimStr(ln.end || ln.worked_end || '') ||
+      trimStr(ln.break_start || '') ||
+      trimStr(ln.break_end || '') ||
+      trimStr(ln.break_mins ?? ln.break_minutes ?? '')
+    );
+  };
+  const hasMeaningfulScheduleArray = (raw) => {
+    if (!Array.isArray(raw)) return false;
+    return raw.some((entry) => {
+      if (Array.isArray(entry)) return hasMeaningfulScheduleArray(entry);
+      return lineHasMeaningfulScheduleValue(entry);
+    });
+  };
+  const hasMeaningfulWeeklyLines = (raw) => {
+    const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    return Object.values(src).some((entry) => {
+      const lines = Array.isArray(entry)
+        ? entry
+        : (entry && typeof entry === 'object' ? Object.values(entry) : []);
+      return lines.some((line) => lineHasMeaningfulScheduleValue(line));
+    });
+  };
+  const keepEmptyAdditionalManualSchedule = !!(
+    boolish(state.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(state.keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(row.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(row.keep_additional_manual_adjustment_schedule_empty) ||
+    boolish(details.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(details.keep_additional_manual_adjustment_schedule_empty)
+  );
+  const suppressStandardScheduleFallback = !!(
+    keepEmptyAdditionalManualSchedule ||
+    boolish(state.__suppressStandardScheduleFallback) ||
+    boolish(state.suppressStandardScheduleFallback) ||
+    boolish(row.__suppressStandardScheduleFallback) ||
+    boolish(row.suppress_standard_schedule_fallback) ||
+    boolish(details.__suppressStandardScheduleFallback) ||
+    boolish(details.suppress_standard_schedule_fallback)
+  );
+  const userTouchedSchedule = !!(
+    boolish(state.__scheduleUserTouched) ||
+    boolish(state.scheduleUserTouched) ||
+    boolish(state.__weeklyScheduleUserTouched) ||
+    boolish(state.weeklyScheduleUserTouched) ||
+    boolish(state.__manualScheduleUserTouched) ||
+    boolish(state.manualScheduleUserTouched) ||
+    boolish(state.scheduleTouched) ||
+    boolish(state.hoursScheduleTouched)
+  );
+  const keepEmptyFallbackPollution = !!(
+    keepEmptyAdditionalManualSchedule &&
+    suppressStandardScheduleFallback &&
+    !userTouchedSchedule &&
+    (
+      hasMeaningfulWeeklyLines(state.weeklyLinesByDate) ||
+      hasMeaningfulScheduleArray(state.schedule)
+    )
+  );
+
   const sheetScope = String(details.sheet_scope || row.sheet_scope || ts?.sheet_scope || '').trim().toUpperCase();
   const subMode = String(ts?.submission_mode || row.submission_mode || '').trim().toUpperCase();
   const cwModeSnapshot = String(
@@ -119085,12 +120090,14 @@ function buildBulkProcessEditableDraftSnapshot(stateOrCtx) {
   const hasExpenseState = !!(existingDraft || existingBaseline);
 
   if (isWeeklyManualContext && canEditHoursSchedule) {
-    return sortObjectDeep({
+    const commonWeeklySnapshot = {
       route_kind: 'weekly-manual',
-      extra_shift_count: Number.isFinite(Number(state.extraShiftCount))
-        ? Math.max(0, Number(state.extraShiftCount))
-        : 0,
-      weekly_lines_by_date: normaliseWeeklyLinesByDate(state.weeklyLinesByDate),
+      extra_shift_count: keepEmptyAdditionalManualSchedule && !userTouchedSchedule
+        ? 0
+        : (Number.isFinite(Number(state.extraShiftCount)) ? Math.max(0, Number(state.extraShiftCount)) : 0),
+      weekly_lines_by_date: keepEmptyAdditionalManualSchedule && !userTouchedSchedule
+        ? {}
+        : normaliseWeeklyLinesByDate(state.weeklyLinesByDate),
       additional_rates: normaliseAdditionalRates(state.additionalRates),
       expenses_draft: (typeof normaliseTimesheetExpensesDraft === 'function')
         ? normaliseTimesheetExpensesDraft(state.expensesDraft || existingDraft || {})
@@ -119098,7 +120105,15 @@ function buildBulkProcessEditableDraftSnapshot(stateOrCtx) {
       expenses_baseline: (typeof normaliseTimesheetExpensesDraft === 'function')
         ? normaliseTimesheetExpensesDraft(state.expensesBaseline || existingBaseline || {})
         : normaliseExpensesDraft(state.expensesBaseline || existingBaseline || {})
-    });
+    };
+    if (keepEmptyFallbackPollution) {
+      commonWeeklySnapshot.route_kind = 'weekly-manual-keep-empty-blocked';
+      commonWeeklySnapshot.invalid = true;
+      commonWeeklySnapshot.invalid_reason = 'KEEP_EMPTY_ADDITIONAL_MANUAL_SCHEDULE_POLLUTION';
+      commonWeeklySnapshot.blocked_schedule_source = 'standard-schedule-fallback';
+      commonWeeklySnapshot.weekly_lines_by_date = {};
+    }
+    return sortObjectDeep(commonWeeklySnapshot);
   }
 
   if (isDailyManualContext && canEditHoursSchedule) {
@@ -119308,6 +120323,98 @@ async function openBulkProcessWorkbench(seed = {}) {
 
   const trimStr = (v) => String(v == null ? '' : v).trim();
 
+  const boolishOpen = (value) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value == null) return false;
+    const s = String(value).trim().toLowerCase();
+    if (!s) return false;
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  };
+
+  const toNumberOpen = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const hasOpenValue = (value) => trimStr(value) !== '';
+
+  const seedSourceContext = trimStr(seed?.source_context || seed?.sourceContext || '').toLowerCase();
+  const openedFromBulkAuthorise = !!(
+    seedSourceContext === 'bulk_authorise' ||
+    seed?.clear_bulk_authorise_context === true ||
+    seed?.clearBulkAuthoriseContext === true ||
+    seed?.invalidate_bulk_authorise_preview === true ||
+    seed?.invalidateBulkAuthorisePreview === true
+  );
+
+  const makeBulkProcessOwnerIdentity = () => {
+    try {
+      if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+        return `bulk-process:${globalThis.crypto.randomUUID()}`;
+      }
+    } catch {}
+    return `bulk-process:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  };
+
+  const bulkProcessOwnerIdentity = makeBulkProcessOwnerIdentity();
+
+  const invalidateBulkAuthorisePreviewOwnershipForBulkProcessOpen = (payload = {}) => {
+    if (!openedFromBulkAuthorise || typeof window === 'undefined') return '';
+
+    const p = (payload && typeof payload === 'object') ? payload : {};
+    const token = `bulk-authorise-invalidated-by-${bulkProcessOwnerIdentity}`;
+    const sourceRowKey = trimStr(p.source_row_key || p.previous_row_key || seed?.source_row_key || seed?.sourceRowKey || '');
+    const targetRowKey = trimStr(p.target_row_key || p.row_key || p.focus_row_key || '');
+
+    const stores = [
+      window.modalCtx,
+      window.modalCtx?.bulkAuthoriseState,
+      window.modalCtx?.bulk_authorise_state,
+      window.__bulkAuthoriseState,
+      seed?.bulk_authorise_state,
+      seed?.bulkAuthoriseState,
+      seed?.state
+    ].filter((store) => store && typeof store === 'object');
+
+    for (const store of stores) {
+      try { store.__bulk_authorise_preview_owner_identity = token; } catch {}
+      try { store.__bulkAuthorisePreviewOwnerIdentity = token; } catch {}
+      try { store.__bulk_authorise_preview_row_key = '__invalidated__'; } catch {}
+      try { store.__bulkAuthorisePreviewRowKey = '__invalidated__'; } catch {}
+      try { store.__bulk_authorise_preview_render_seq = Math.max(0, Number(store.__bulk_authorise_preview_render_seq || 0) || 0) + 1; } catch {}
+      try { store.__bulkAuthorisePreviewRenderSeq = Math.max(0, Number(store.__bulkAuthorisePreviewRenderSeq || 0) || 0) + 1; } catch {}
+      try { store.__bulk_authorise_row_change_seq = Math.max(0, Number(store.__bulk_authorise_row_change_seq || 0) || 0) + 1; } catch {}
+      try { store.__bulkAuthoriseRowChangeSeq = Math.max(0, Number(store.__bulkAuthoriseRowChangeSeq || 0) || 0) + 1; } catch {}
+      try { store.__bulk_authorise_evidence_owner_identity = token; } catch {}
+      try { store.__bulkAuthoriseEvidenceOwnerIdentity = token; } catch {}
+      try { store.__bulk_authorise_preview_cancelled_at = new Date().toISOString(); } catch {}
+      try { store.__bulk_authorise_preview_cancel_reason = 'open-bulk-process-workbench'; } catch {}
+      try { store.__bulk_authorise_transition_source_row_key = sourceRowKey || null; } catch {}
+      try { store.__bulk_authorise_transition_target_row_key = targetRowKey || null; } catch {}
+      try { store.__bulk_authorise_transition_owner_identity = bulkProcessOwnerIdentity; } catch {}
+    }
+
+    try {
+      window.__bulkAuthorisePreviewInvalidationSeq = Math.max(0, Number(window.__bulkAuthorisePreviewInvalidationSeq || 0) || 0) + 1;
+      window.__bulkAuthorisePreviewInvalidationToken = token;
+      window.__bulkProcessOwnerIdentity = bulkProcessOwnerIdentity;
+    } catch {}
+
+    try {
+      if (typeof invalidateBulkAuthorisePreviewOwnership === 'function') {
+        invalidateBulkAuthorisePreviewOwnership({
+          token,
+          reason: 'open-bulk-process-workbench',
+          source_row_key: sourceRowKey || null,
+          target_row_key: targetRowKey || null,
+          bulk_process_owner_identity: bulkProcessOwnerIdentity
+        });
+      }
+    } catch {}
+
+    return token;
+  };
+
   const normaliseSeedIdentityKey = (candidate, ids = {}) => {
     const raw = trimStr(candidate);
     const identity = (ids && typeof ids === 'object') ? ids : {};
@@ -119422,6 +120529,108 @@ async function openBulkProcessWorkbench(seed = {}) {
     }
     if (cwId) patch.contract_week_id = patch.contract_week_id || cwId;
 
+    const additionalSeq = Math.max(0, toNumberOpen(
+      patch.additional_seq ||
+      patch.contract_week_additional_seq ||
+      patch.contract_week?.additional_seq ||
+      patch.action_flags?.additional_seq ||
+      0
+    ));
+    const routeTypeUpper = trimStr(patch.route_type || patch.action_flags?.route_type || '').toUpperCase();
+    const routeFamilyUpper = trimStr(patch.route_family || patch.action_flags?.route_family || '').toUpperCase();
+    const routeSubfamilyUpper = trimStr(patch.route_subfamily || patch.action_flags?.route_subfamily || '').toUpperCase();
+    const underlyingUpper = trimStr(patch.underlying_channel_family || patch.action_flags?.underlying_channel_family || '').toUpperCase();
+    const basisUpper = trimStr(patch.basis || patch.tsfin_basis || '').toUpperCase();
+    const submissionModeUpper = trimStr(patch.submission_mode || patch.submission_mode_snapshot || patch.contract_week?.submission_mode_snapshot || '').toUpperCase();
+    const adjustmentOriginUpper = trimStr(patch.adjustment_origin || '').toUpperCase();
+    const importDerivedAdjustment = !!(
+      adjustmentOriginUpper === 'IMPORT_CORRECTION' ||
+      adjustmentOriginUpper === 'IMPORT_CANCELLATION' ||
+      hasOpenValue(patch.correction_id) ||
+      hasOpenValue(patch.correction_kind)
+    );
+    const manualSignal = !!(
+      submissionModeUpper === 'MANUAL' ||
+      routeFamilyUpper === 'MANUAL_NON_QR' ||
+      routeSubfamilyUpper === 'MANUAL_NON_QR' ||
+      underlyingUpper === 'MANUAL_NON_QR' ||
+      routeFamilyUpper.includes('MANUAL') ||
+      routeSubfamilyUpper.includes('MANUAL') ||
+      boolishOpen(patch.is_manual) ||
+      boolishOpen(patch.action_flags?.is_manual)
+    );
+    const effectiveAdditionalManualSeed = !!(
+      !importDerivedAdjustment &&
+      (
+        additionalSeq > 0 ||
+        boolishOpen(patch.is_adjustment) ||
+        boolishOpen(patch.contract_week?.is_adjustment) ||
+        boolishOpen(patch.action_flags?.is_adjustment) ||
+        hasOpenValue(patch.parent_timesheet_id) ||
+        ((routeTypeUpper === 'WEEKLY_NHSP_ADJUSTMENT' || routeTypeUpper === 'WEEKLY_HEALTHROSTER_ADJUSTMENT') && manualSignal)
+      )
+    );
+
+    if (effectiveAdditionalManualSeed) {
+      const nextAdditionalSeq = additionalSeq > 0 ? additionalSeq : 1;
+      const plannedSchedule = Array.isArray(patch.planned_schedule_json) ? patch.planned_schedule_json : [];
+      const actualSchedule = Array.isArray(patch.actual_schedule_json) ? patch.actual_schedule_json : [];
+      const totalsJson = (patch.totals_json && typeof patch.totals_json === 'object' && !Array.isArray(patch.totals_json))
+        ? patch.totals_json
+        : ((patch.contract_week_totals_json && typeof patch.contract_week_totals_json === 'object' && !Array.isArray(patch.contract_week_totals_json)) ? patch.contract_week_totals_json : {});
+      const hoursObj = (totalsJson.hours && typeof totalsJson.hours === 'object' && !Array.isArray(totalsJson.hours)) ? totalsJson.hours : {};
+      const totalHours = toNumberOpen(
+        patch.total_hours ??
+        patch.tsfin_total_hours ??
+        patch.financial_total_hours ??
+        (toNumberOpen(hoursObj.day) + toNumberOpen(hoursObj.night) + toNumberOpen(hoursObj.sat) + toNumberOpen(hoursObj.sun) + toNumberOpen(hoursObj.bh))
+      );
+      const keepEmpty = !!(plannedSchedule.length === 0 && actualSchedule.length === 0 && totalHours === 0);
+
+      patch.is_adjustment = true;
+      patch.additional_seq = nextAdditionalSeq;
+      patch.route_family = 'MANUAL_NON_QR';
+      patch.route_subfamily = 'MANUAL_NON_QR';
+      patch.underlying_channel_family = 'MANUAL_NON_QR';
+      patch.is_import_authoritative = false;
+      if (routeTypeUpper === 'WEEKLY_NHSP' || routeTypeUpper === 'WEEKLY_NHSP_ADJUSTMENT' || basisUpper === 'NHSP' || basisUpper === 'NHSP_ADJUSTMENT' || boolishOpen(patch.client_is_nhsp)) {
+        patch.route_type = 'WEEKLY_NHSP_ADJUSTMENT';
+      }
+      if (keepEmpty) {
+        patch.actual_schedule_json = [];
+        patch.planned_schedule_json = [];
+        patch.total_hours = 0;
+        patch.suppress_standard_schedule_fallback = true;
+        patch.keep_additional_manual_adjustment_schedule_empty = true;
+        patch.__suppressStandardScheduleFallback = true;
+        patch.__keepAdditionalManualAdjustmentScheduleEmpty = true;
+        patch.totals_json = {
+          ...(totalsJson && typeof totalsJson === 'object' ? totalsJson : {}),
+          hours: { day: 0, night: 0, sat: 0, sun: 0, bh: 0 }
+        };
+        patch.contract_week_totals_json = {
+          ...(patch.contract_week_totals_json && typeof patch.contract_week_totals_json === 'object' && !Array.isArray(patch.contract_week_totals_json) ? patch.contract_week_totals_json : {}),
+          hours: { day: 0, night: 0, sat: 0, sun: 0, bh: 0 }
+        };
+      }
+      const nextActionFlags = (patch.action_flags && typeof patch.action_flags === 'object' && !Array.isArray(patch.action_flags)) ? { ...patch.action_flags } : {};
+      patch.action_flags = {
+        ...nextActionFlags,
+        is_adjustment: true,
+        additional_seq: nextAdditionalSeq,
+        route_family: 'MANUAL_NON_QR',
+        route_subfamily: 'MANUAL_NON_QR',
+        underlying_channel_family: 'MANUAL_NON_QR',
+        is_import_authoritative: false,
+        suppress_standard_schedule_fallback: keepEmpty,
+        keep_additional_manual_adjustment_schedule_empty: keepEmpty,
+        expense_storage_target: tsId ? (nextActionFlags.expense_storage_target || 'TSFIN') : (nextActionFlags.expense_storage_target || 'CONTRACT_WEEK_DRAFT'),
+        expense_evidence_storage_target: tsId ? (nextActionFlags.expense_evidence_storage_target || 'TIMESHEET_EVIDENCE') : (nextActionFlags.expense_evidence_storage_target || 'CONTRACT_WEEK_STAGED_EVIDENCE'),
+        supportsUnprocessedExpenseDraft: tsId ? nextActionFlags.supportsUnprocessedExpenseDraft : true,
+        supports_unprocessed_expense_draft: tsId ? nextActionFlags.supports_unprocessed_expense_draft : true
+      };
+    }
+
     const bucket = normaliseSeedBucket(patch);
     patch.bulk_process_bucket = bucket;
     patch.summary_stage = patch.summary_stage || bucket;
@@ -119519,7 +120728,28 @@ async function openBulkProcessWorkbench(seed = {}) {
     total: seedUnprocessedRows.length + seedProcessedRows.length
   };
 
+  const initialBulkProcessRowChangeSeq = 1;
+  const bulkAuthoriseInvalidationToken = invalidateBulkAuthorisePreviewOwnershipForBulkProcessOpen({
+    source_row_key: trimStr(seed?.source_row_key || seed?.sourceRowKey || seed?.previous_row_key || seed?.previousRowKey || seed?.original_row_key || seed?.originalRowKey || ''),
+    target_row_key: seedFocusRowKey || '',
+    row_key: seedFocusRowKey || ''
+  });
+
   const state = {
+    owner_kind: 'bulk_process',
+    modal_kind: 'bulk-process-workbench',
+    context_kind: 'bulk_process',
+    __bulk_process_owner_identity: bulkProcessOwnerIdentity,
+    __bulkProcessOwnerIdentity: bulkProcessOwnerIdentity,
+    __bulk_process_owner_row_key: seedFocusRowKey || '',
+    __bulkProcessOwnerRowKey: seedFocusRowKey || '',
+    __bulk_process_row_change_seq: initialBulkProcessRowChangeSeq,
+    __bulkProcessRowChangeSeq: initialBulkProcessRowChangeSeq,
+    __bulk_process_preview_owner_identity: bulkProcessOwnerIdentity,
+    __bulk_process_preview_row_key: seedFocusRowKey || '',
+    __bulk_process_evidence_owner_identity: bulkProcessOwnerIdentity,
+    __bulk_process_opened_from_bulk_authorise: openedFromBulkAuthorise,
+    __bulk_authorise_invalidation_token: bulkAuthoriseInvalidationToken || '',
     filters: deep(initialFilters),
     dataset: {
       filters: deep(initialFilters),
@@ -119957,6 +121187,9 @@ async function openBulkProcessWorkbench(seed = {}) {
         ok: true,
         context_type: 'bulk_process',
         context_kind: 'bulk_process_row_context',
+        owner_kind: 'bulk_process',
+        modal_kind: 'bulk-process-workbench',
+        owner_identity: bulkProcessOwnerIdentity,
         profile: 'status_header',
         context_profile: 'status_header',
         row: deep(state.active_row),
@@ -121685,6 +122918,11 @@ async function openBulkProcessWorkbench(seed = {}) {
 
   window.modalCtx = {
     entity: 'bulk-process',
+    owner_kind: 'bulk_process',
+    modal_kind: 'bulk-process-workbench',
+    context_kind: 'bulk_process',
+    owner_identity: bulkProcessOwnerIdentity,
+    __bulk_process_owner_identity: bulkProcessOwnerIdentity,
     data: {},
     bulkProcessState: state,
     __summaryCtx: resolveActiveSummaryCtx((() => {
@@ -121711,6 +122949,9 @@ async function openBulkProcessWorkbench(seed = {}) {
     undefined,
     {
       kind: 'bulk-process-workbench',
+      owner_kind: 'bulk_process',
+      context_kind: 'bulk_process',
+      owner_identity: bulkProcessOwnerIdentity,
       noParentGate: true,
       showSave: false,
       showApply: false,
@@ -121745,7 +122986,6 @@ async function openBulkProcessWorkbench(seed = {}) {
 
   GE();
 }
-
 
 
 function renderBulkProcessPreviewPane(state) {
@@ -122359,7 +123599,7 @@ function classifyBulkProcessEditability(ctxInput) {
   const isElectronic = !!(!isQr && !isManual && (effectiveMode === 'ELECTRONIC' || routeFamily === 'ELECTRONIC' || underlyingChannelFamily === 'ELECTRONIC'));
 
 
-  const isImportAuthoritativeCurrent = !!(
+  let isImportAuthoritativeCurrent = !!(
     readBool([ctx, 'is_import_authoritative'], [row, 'is_import_authoritative'], [details, 'is_import_authoritative'], [actionFlags, 'is_import_authoritative']) === true ||
     routeFamily === 'IMPORT_AUTHORITATIVE' ||
     underlyingChannelFamily === 'IMPORT_AUTHORITATIVE'
@@ -122383,7 +123623,33 @@ function classifyBulkProcessEditability(ctxInput) {
     )
   );
   const hasAnyLockBlocker = isLockedByInvoice || isPaid;
-  const isAdjustment = !!(ts.is_adjustment || cw.is_adjustment || row.is_adjustment || actionFlags.is_adjustment);
+  const baseAdditionalSeqForAdjustment = Number(
+    readFirst(
+      [cw, 'additional_seq'],
+      [details, 'additional_seq'],
+      [details, 'contract_week_additional_seq'],
+      [row, 'additional_seq'],
+      [row, 'contract_week_additional_seq'],
+      [actionFlags, 'additional_seq'],
+      [ctx, 'additional_seq'],
+      [ctx, 'contract_week_additional_seq']
+    ) || 0
+  );
+  const baseParentTimesheetIdForAdjustment = readFirst(
+    [ts, 'parent_timesheet_id'],
+    [row, 'parent_timesheet_id'],
+    [details, 'parent_timesheet_id'],
+    [actionFlags, 'parent_timesheet_id'],
+    [ctx, 'parent_timesheet_id']
+  );
+  const isAdjustment = !!(
+    ts.is_adjustment ||
+    cw.is_adjustment ||
+    row.is_adjustment ||
+    actionFlags.is_adjustment ||
+    baseAdditionalSeqForAdjustment > 0 ||
+    hasValue(baseParentTimesheetIdForAdjustment)
+  );
 
   const backendCanSave = readBool([row, 'can_save'], [details, 'can_save'], [actionFlags, 'can_save'], [ctx, 'can_save']);
   const backendCanProcess = readBool([row, 'can_process'], [details, 'can_process'], [actionFlags, 'can_process'], [ctx, 'can_process']);
@@ -122434,6 +123700,47 @@ function classifyBulkProcessEditability(ctxInput) {
   const effectiveIsElectronic = hasSharedDomainPolicy && typeof domainPolicy.isElectronicRoute === 'boolean'
     ? !!domainPolicy.isElectronicRoute
     : isElectronic;
+  const additionalSeqForEditability = Number(
+    readFirst(
+      [cw, 'additional_seq'],
+      [details, 'additional_seq'],
+      [details, 'contract_week_additional_seq'],
+      [row, 'additional_seq'],
+      [row, 'contract_week_additional_seq'],
+      [actionFlags, 'additional_seq'],
+      [ctx, 'additional_seq'],
+      [ctx, 'contract_week_additional_seq']
+    ) || 0
+  );
+  const routeTypeForEditability = upper(readFirst([ctx, 'route_type'], [row, 'route_type'], [details, 'route_type'], [actionFlags, 'route_type']) || '');
+  const adjustmentOriginForEditability = upper(readFirst([ts, 'adjustment_origin'], [row, 'adjustment_origin'], [details, 'adjustment_origin']) || '');
+  const hasImportDerivedCorrectionLink = !!(
+    adjustmentOriginForEditability === 'IMPORT_CORRECTION' ||
+    adjustmentOriginForEditability === 'IMPORT_CANCELLATION' ||
+    hasValue(readFirst([ts, 'correction_id'], [row, 'correction_id'], [details, 'correction_id'])) ||
+    hasValue(readFirst([ts, 'correction_kind'], [row, 'correction_kind'], [details, 'correction_kind']))
+  );
+  const effectiveAdditionalManualRoute = !!(
+    !hasImportDerivedCorrectionLink &&
+    (
+      domainPolicy.isAdditionalManualRoute === true ||
+      domainPolicy.hasContractWeekExpenseDraftTarget === true ||
+      domainPolicy.supportsUnprocessedExpenseDraft === true ||
+      (domainPolicy.expenseStorageTarget === 'CONTRACT_WEEK_DRAFT') ||
+      (domainPolicy.expenseEvidenceStorageTarget === 'CONTRACT_WEEK_STAGED_EVIDENCE') ||
+      additionalSeqForEditability > 0 ||
+      cw.is_adjustment === true ||
+      ts.is_adjustment === true ||
+      row.is_adjustment === true ||
+      actionFlags.is_adjustment === true ||
+      (routeTypeForEditability === 'WEEKLY_NHSP_ADJUSTMENT' && effectiveIsManual) ||
+      (routeTypeForEditability === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' && effectiveIsManual)
+    )
+  );
+  if (effectiveAdditionalManualRoute) {
+    isImportAuthoritativeCurrent = false;
+  }
+  const effectiveAdjustmentForEditability = !!(isAdjustment || effectiveAdditionalManualRoute);
 
   manualNonQrEditable =
     effectiveIsManual &&
@@ -122505,7 +123812,7 @@ function classifyBulkProcessEditability(ctxInput) {
   const canUnprocess = !!((domainPolicy.canUnprocess === true || manualNonQrEditable) && !!tsId && backendCanUnprocess !== false);
 
   const routeActionBaseAllowed =
-    !isAdjustment &&
+    !effectiveAdjustmentForEditability &&
     !isImportAuthoritativeCurrent &&
     !hasAnyLockBlocker &&
     !isAuthorisedBlocked &&
@@ -122554,7 +123861,7 @@ function classifyBulkProcessEditability(ctxInput) {
     requiresAdditionalManualForExpenses ||
     domainPolicy.isOriginalImportAuthoritative === true ||
     domainPolicy.isNoTimesheetRequiredOriginal === true ||
-    ((isImportAuthoritativeCurrent || boolish(row.client_no_timesheet_required) || boolish(details.client_no_timesheet_required) || boolish(row.no_timesheet_required) || boolish(details.no_timesheet_required)) && !isAdjustment)
+    ((isImportAuthoritativeCurrent || boolish(row.client_no_timesheet_required) || boolish(details.client_no_timesheet_required) || boolish(row.no_timesheet_required) || boolish(details.no_timesheet_required)) && !effectiveAdjustmentForEditability)
   );
 
   const canAddAdditionalManual = !!(
@@ -122564,7 +123871,7 @@ function classifyBulkProcessEditability(ctxInput) {
     !hasAnyLockBlocker &&
     !isAuthorisedBlocked &&
     !reviewOnlyEffective &&
-    !isAdjustment &&
+    !effectiveAdjustmentForEditability &&
     (
       backendCanAddAdditionalManual === true ||
       domainPolicy.canAddAdditionalManual === true ||
@@ -122595,7 +123902,10 @@ function classifyBulkProcessEditability(ctxInput) {
     tsId,
     weekId,
     actionFlags,
-    isAdjustment,
+    isAdjustment: effectiveAdjustmentForEditability,
+    isAdditionalManualRoute: effectiveAdditionalManualRoute,
+    isImportDerivedAdjustment: hasImportDerivedCorrectionLink,
+    additionalSeq: additionalSeqForEditability,
     backendCanSave,
     backendCanProcess,
     backendCanUnprocess,
@@ -122630,6 +123940,7 @@ function classifyBulkProcessEditability(ctxInput) {
     canAddAdditionalManual
   };
 }
+
 
 
 function bindBulkProcessManualEditor(state) {
@@ -124910,8 +126221,31 @@ function bindBulkProcessPreviewPane(state) {
   pane.__attached_manual_override = !!pane.__attached_manual_override;
   pane.pdf_page_by_target = (pane.pdf_page_by_target && typeof pane.pdf_page_by_target === 'object') ? pane.pdf_page_by_target : {};
 
+  const isCurrentBulkAuthorisePreviewSurface = () => {
+    const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+    const frameKind = upper(frame?.kind || frame?.entity || '');
+    const modalKind = upper(window.modalCtx?.modal_kind || window.modalCtx?.modalKind || window.modalCtx?.kind || window.modalCtx?.entity || '');
+    const ownerKind = upper(st.owner_kind || st.ownerKind || window.modalCtx?.owner_kind || window.modalCtx?.ownerKind || '');
+    const explicitBulkProcess = frameKind.includes('BULK-PROCESS') || frameKind.includes('BULK_PROCESS') || modalKind.includes('BULK-PROCESS') || modalKind.includes('BULK_PROCESS') || ownerKind.includes('BULK_PROCESS') || ownerKind.includes('BULK-PROCESS');
+    if (explicitBulkProcess) return false;
+    return !!(
+      frameKind.includes('BULK-AUTHORISE') ||
+      frameKind.includes('BULK_AUTHORISE') ||
+      frameKind.includes('BULK-AUTH') ||
+      frameKind.includes('BULK_AUTH') ||
+      modalKind.includes('BULK-AUTHORISE') ||
+      modalKind.includes('BULK_AUTHORISE') ||
+      modalKind.includes('BULK-AUTH') ||
+      modalKind.includes('BULK_AUTH') ||
+      ownerKind.includes('BULK_AUTHORISE') ||
+      ownerKind.includes('BULK-AUTHORISE') ||
+      ownerKind.includes('BULK_AUTH') ||
+      ownerKind.includes('BULK-AUTH')
+    );
+  };
   const resolveBulkAuthorisePreviewOwnerIdentity = () => {
     const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+    if (!isCurrentBulkAuthorisePreviewSurface()) return '';
     const bulkAuthContext = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
       ? resolveBulkAuthoriseTimesheetsEvidenceContext(st, { frame })
       : { isBulkAuthoriseTimesheets: false };
@@ -124972,6 +126306,10 @@ function bindBulkProcessPreviewPane(state) {
     const ownerIdentity = trimStr(resolveBulkAuthorisePreviewOwnerIdentity() || '');
     if (!ownerIdentity) return null;
     const identityParts = resolveBulkAuthorisePreviewIdentityParts();
+    const rowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
+    const rowChangeSeq = Number(st.__bulk_authorise_row_change_seq || st.__bulkAuthoriseRowChangeSeq || 0) || 0;
+    const renderSignature = trimStr(identityParts.renderSignature || st.__bulk_authorise_preview_render_signature || st.__bulkAuthorisePreviewRenderSignature || '');
+    if (!rowKey || rowChangeSeq <= 0 || !renderSignature) return null;
     const stateObj = (previewStateInput && typeof previewStateInput === 'object') ? previewStateInput : getPreviewState();
     const previewItem = (stateObj.previewItem && typeof stateObj.previewItem === 'object') ? stateObj.previewItem : null;
     const activeTab = trimStr(stateObj.activeTab || pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
@@ -124980,11 +126318,11 @@ function bindBulkProcessPreviewPane(state) {
     return {
       ownerIdentity,
       recordIdentity: identityParts.recordIdentity || ownerIdentity,
-      rowKey: trimStr(st.active_row_key || st.active_row?.row_key || ''),
-      rowSignature: identityParts.renderSignature,
-      renderSignature: identityParts.renderSignature,
+      rowKey,
+      rowSignature: renderSignature,
+      renderSignature,
       backendRowSignature: identityParts.backendRowSignature,
-      rowChangeSeq: Number(st.__bulk_authorise_row_change_seq || 0) || 0,
+      rowChangeSeq,
       activeTab,
       activeAttachedId: trimStr(pane.active_attached_id || pane.active_attached_item?.id || pane.active_attached_item?.evidence_id || pane.active_attached_item?.queue_id || ''),
       activeQueueId: trimStr(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id || ''),
@@ -124995,38 +126333,109 @@ function bindBulkProcessPreviewPane(state) {
       renderSeq: Number(pane.__preview_render_seq || 0) || 0
     };
   };
-  const checkBulkAuthorisePreviewStale = (capturedSnapshot, phase = 'presign') => {
-    if (!capturedSnapshot) return { stale: false, reason: 'not-bulk-authorise' };
-    const live = captureBulkAuthorisePreviewSnapshot();
+  const checkBulkAuthorisePreviewStale = (capturedSnapshot, phase = 'presign', staleOptions = {}) => {
     const same = (a, b) => String(a || '') === String(b || '');
+    const opts = (staleOptions && typeof staleOptions === 'object') ? staleOptions : {};
+    const requireBulkAuthoriseAuthority = opts.requireBulkAuthoriseAuthority === true || opts.bulkAuthoriseCommit === true;
+    const buildStale = (reason, live = null) => {
+      if (window.__LOG_MODAL === true) {
+        console.log('[TS][BULK-AUTH][PREVIEW]', {
+          event: 'stale-drop',
+          reason,
+          ownerIdentityCaptured: trimStr(capturedSnapshot?.ownerIdentity || ''),
+          ownerIdentityLive: trimStr(live?.ownerIdentity || ''),
+          rowKeyCaptured: trimStr(capturedSnapshot?.rowKey || ''),
+          rowKeyLive: trimStr(live?.rowKey || ''),
+          rowChangeSeqCaptured: Number(capturedSnapshot?.rowChangeSeq || 0) || 0,
+          rowChangeSeqLive: Number(live?.rowChangeSeq || 0) || 0,
+          renderSignatureCaptured: trimStr(capturedSnapshot?.renderSignature || capturedSnapshot?.rowSignature || ''),
+          renderSignatureLive: trimStr(live?.renderSignature || live?.rowSignature || ''),
+          selectionKeyCaptured: trimStr(capturedSnapshot?.selectionKey || ''),
+          selectionKeyLive: trimStr(live?.selectionKey || ''),
+          activeTabCaptured: trimStr(capturedSnapshot?.activeTab || ''),
+          activeTabLive: trimStr(live?.activeTab || ''),
+          phase
+        });
+      }
+      return { stale: true, reason, live };
+    };
+
+    if (!capturedSnapshot) {
+      if (requireBulkAuthoriseAuthority) return buildStale('missing-snapshot');
+      if (isCurrentBulkAuthorisePreviewSurface()) return buildStale('missing-snapshot');
+      if (
+        typeof bulkAuthoriseSurfaceAtBind !== 'undefined' &&
+        bulkAuthoriseSurfaceAtBind === true
+      ) {
+        return buildStale('modal-owner-changed-missing-snapshot');
+      }
+      if (
+        typeof bulkAuthoriseOwnerIdentity !== 'undefined' &&
+        trimStr(bulkAuthoriseOwnerIdentity || '')
+      ) {
+        return buildStale('modal-owner-changed-missing-snapshot');
+      }
+      return { stale: false, reason: 'not-bulk-authorise' };
+    }
+
+    if (!isCurrentBulkAuthorisePreviewSurface()) {
+      return buildStale('modal-owner-changed');
+    }
+
+    const capturedOwnerIdentity = trimStr(capturedSnapshot.ownerIdentity || '');
+    const capturedRowKey = trimStr(capturedSnapshot.rowKey || '');
+    const capturedRenderSignature = trimStr(capturedSnapshot.renderSignature || capturedSnapshot.rowSignature || '');
+    const capturedRowChangeSeq = Number(capturedSnapshot.rowChangeSeq || 0) || 0;
+    if (!capturedOwnerIdentity || !capturedRowKey || !capturedRenderSignature || capturedRowChangeSeq <= 0) {
+      return buildStale('invalid-captured-snapshot');
+    }
+
+    const live = captureBulkAuthorisePreviewSnapshot();
+    if (!live) return buildStale('missing-live-snapshot');
+
     let reason = '';
-    if (!live || !same(capturedSnapshot.ownerIdentity, live.ownerIdentity)) reason = 'owner-changed';
-    else if (!same(capturedSnapshot.rowKey, live.rowKey)) reason = 'row-key-changed';
+    if (!same(capturedOwnerIdentity, live.ownerIdentity)) reason = 'owner-changed';
+    else if (!same(capturedRowKey, live.rowKey)) reason = 'row-key-changed';
+    else if (capturedRowChangeSeq !== (Number(live.rowChangeSeq || 0) || 0)) reason = 'row-change-seq-changed';
+    else if (!same(capturedRenderSignature, live.renderSignature || live.rowSignature)) reason = 'render-signature-changed';
     else if (!same(capturedSnapshot.activeTab, live.activeTab)) reason = 'tab-changed';
     else if (!same(capturedSnapshot.selectionKey, live.selectionKey)) reason = 'selection-changed';
     else if (!same(capturedSnapshot.previewFileCacheKey, live.previewFileCacheKey)) reason = 'file-key-changed';
     else if ((capturedSnapshot.activeTab === 'attached' && !same(capturedSnapshot.activeAttachedId, live.activeAttachedId)) || (capturedSnapshot.activeTab === 'queue' && !same(capturedSnapshot.activeQueueId, live.activeQueueId))) reason = 'item-changed';
-    const stale = !!reason;
-    if (stale && window.__LOG_MODAL === true) {
-      console.log('[TS][BULK-AUTH][PREVIEW]', {
-        event: 'stale-drop',
-        reason,
-        ownerIdentityCaptured: capturedSnapshot.ownerIdentity,
-        ownerIdentityLive: trimStr(live?.ownerIdentity || ''),
-        rowKeyCaptured: capturedSnapshot.rowKey,
-        rowKeyLive: trimStr(live?.rowKey || ''),
-        rowChangeSeqCaptured: Number(capturedSnapshot.rowChangeSeq || 0) || 0,
-        rowChangeSeqLive: Number(live?.rowChangeSeq || 0) || 0,
-        selectionKeyCaptured: capturedSnapshot.selectionKey,
-        selectionKeyLive: trimStr(live?.selectionKey || ''),
-        activeTabCaptured: capturedSnapshot.activeTab,
-        activeTabLive: trimStr(live?.activeTab || ''),
-        phase
-      });
-    }
-    return { stale, reason, live };
+
+    if (reason) return buildStale(reason, live);
+    return { stale: false, reason: '', live };
   };
 
+
+  const isValidBulkAuthorisePreviewSnapshot = (capturedSnapshot) => !!(
+    capturedSnapshot &&
+    trimStr(capturedSnapshot.ownerIdentity || '') &&
+    trimStr(capturedSnapshot.rowKey || '') &&
+    (Number(capturedSnapshot.rowChangeSeq || 0) || 0) > 0 &&
+    trimStr(capturedSnapshot.renderSignature || capturedSnapshot.rowSignature || '')
+  );
+
+  const logPreviewCommitEvent = (capturedSnapshot, payload = {}) => {
+    if (window.__LOG_MODAL !== true) return;
+    const body = (payload && typeof payload === 'object') ? { ...payload } : {};
+    if (isValidBulkAuthorisePreviewSnapshot(capturedSnapshot)) {
+      console.log('[TS][BULK-AUTH][PREVIEW]', {
+        ...body,
+        ownerIdentity: trimStr(capturedSnapshot.ownerIdentity || ''),
+        rowKey: trimStr(capturedSnapshot.rowKey || ''),
+        rowChangeSeq: Number(capturedSnapshot.rowChangeSeq || 0) || 0,
+        selectionKey: trimStr(capturedSnapshot.selectionKey || body.selectionKey || '')
+      });
+      return;
+    }
+    delete body.ownerIdentity;
+    delete body.rowKey;
+    delete body.rowChangeSeq;
+    console.log('[TS][BULK-PROCESS][PREVIEW]', body);
+  };
+
+  const bulkAuthoriseSurfaceAtBind = isCurrentBulkAuthorisePreviewSurface();
   const bulkAuthoriseOwnerIdentity = resolveBulkAuthorisePreviewOwnerIdentity();
   const isBulkAuthorisePreviewContext = !!trimStr(bulkAuthoriseOwnerIdentity || '');
   const activeAuthorisePreviewItemNow = resolveActiveBulkProcessPreviewItem();
@@ -125061,6 +126470,11 @@ function bindBulkProcessPreviewPane(state) {
 
   const isActiveBind = () => {
     if (!document.getElementById('bulkProcessPreviewPaneRoot')) return false;
+    if (bulkAuthoriseSurfaceAtBind) {
+      if (!trimStr(bulkAuthoriseOwnerIdentity || '')) return false;
+      if (!isCurrentBulkAuthorisePreviewSurface()) return false;
+    }
+    if (bulkAuthoriseOwnerIdentity && !isCurrentBulkAuthorisePreviewSurface()) return false;
     return (
       Number(pane.__preview_bind_seq || 0) === bindSeq &&
       String(pane.__preview_bind_identity || '') === String(bindIdentity || '') &&
@@ -125103,6 +126517,14 @@ function bindBulkProcessPreviewPane(state) {
       return { synced: false, done: false, reason: 'inactive-bind' };
     }
 
+    if (bulkAuthoriseSurfaceAtBind) {
+      const bulkAuthSnapshot = captureBulkAuthorisePreviewSnapshot(previewState);
+      const staleBulkAuthoriseCachePromotion = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'cache-promote', { requireBulkAuthoriseAuthority: true });
+      if (staleBulkAuthoriseCachePromotion.stale) {
+        return { synced: false, done: false, reason: `bulk-authorise-${staleBulkAuthoriseCachePromotion.reason || 'stale'}` };
+      }
+    }
+
     const parts = getPreviewIdentityParts(previewState);
     const previewItem = parts.previewItem;
     const previewFileCacheKey = parts.previewFileCacheKey;
@@ -125138,7 +126560,7 @@ function bindBulkProcessPreviewPane(state) {
     }
     if (isBulkAuthoriseTimesheetsPreview() && !cachedOwnerIdentity) {
       const bulkAuthSnapshot = captureBulkAuthorisePreviewSnapshot(previewState);
-      const staleOwnerlessPromotion = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'cache-promote');
+      const staleOwnerlessPromotion = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'cache-promote', { requireBulkAuthoriseAuthority: true });
       if (staleOwnerlessPromotion.stale) {
         return { synced: false, done: false, reason: 'cache-ownerless-stale' };
       }
@@ -125251,29 +126673,23 @@ function bindBulkProcessPreviewPane(state) {
     const previewState = (previewStateInput && typeof previewStateInput === 'object') ? previewStateInput : getPreviewState();
     const stage = q('#bulkProcessPreviewStage');
     if (!stage) return false;
+    const bulkAuthSnapshotAtEntry = captureBulkAuthorisePreviewSnapshot(previewState);
     const stageText = trimStr(stage.innerText || '').toLowerCase();
     const imageEl = q('#bulkProcessImagePreviewEl');
     const pdfFrame = q('#bulkProcessPdfPreviewFrame');
     const fallbackLink = stage.querySelector('a[href]');
     const stageHasRenderablePreview = !!(imageEl || pdfFrame || fallbackLink);
     if (stageHasRenderablePreview || !stageText.includes('preview is loading')) {
-      if (window.__LOG_MODAL === true) {
-        const bulkAuthSnapshot = captureBulkAuthorisePreviewSnapshot(previewState);
-        console.log('[TS][BULK-AUTH][PREVIEW]', {
-          event: 'live-loading-final-commit',
-          phase: 'not-applicable',
-          ownerIdentity: trimStr(bulkAuthSnapshot?.ownerIdentity || ''),
-          rowKey: trimStr(bulkAuthSnapshot?.rowKey || ''),
-          rowChangeSeq: Number(bulkAuthSnapshot?.rowChangeSeq || 0) || 0,
-          selectionKey: trimStr(bulkAuthSnapshot?.selectionKey || ''),
-          targetKey: trimStr(normalisePreviewSelectionKey(pane.__preview_target_key || '') || ''),
-          signedUrlPresent: !!trimStr(pane.__preview_signed_url || ''),
-          stageHasRenderablePreview,
-          imageElExists: !!imageEl,
-          pdfFrameExists: !!pdfFrame,
-          fallbackLinkExists: !!fallbackLink
-        });
-      }
+      logPreviewCommitEvent(bulkAuthSnapshotAtEntry, {
+        event: 'live-loading-final-commit',
+        phase: 'not-applicable',
+        targetKey: trimStr(normalisePreviewSelectionKey(pane.__preview_target_key || '') || ''),
+        signedUrlPresent: !!trimStr(pane.__preview_signed_url || ''),
+        stageHasRenderablePreview,
+        imageElExists: !!imageEl,
+        pdfFrameExists: !!pdfFrame,
+        fallbackLinkExists: !!fallbackLink
+      });
       return false;
     }
 
@@ -125286,36 +126702,20 @@ function bindBulkProcessPreviewPane(state) {
     const signedUrl = trimStr(pane.__preview_signed_url || '');
     if (!signedUrl || !previewSelectionKey || liveTargetKey !== previewSelectionKey) return false;
     if (liveRequestedKey && liveRequestedKey !== previewSelectionKey) return false;
-    pane.__preview_load_requested_target_key = previewSelectionKey;
 
     const bulkAuthSnapshot = captureBulkAuthorisePreviewSnapshot(previewState);
-    if (window.__LOG_MODAL === true) {
-      console.log('[TS][BULK-AUTH][PREVIEW]', {
-        event: 'live-loading-final-commit',
-        phase: 'detected',
-        ownerIdentity: trimStr(bulkAuthSnapshot?.ownerIdentity || ''),
-        rowKey: trimStr(bulkAuthSnapshot?.rowKey || ''),
-        rowChangeSeq: Number(bulkAuthSnapshot?.rowChangeSeq || 0) || 0,
-        selectionKey: trimStr(bulkAuthSnapshot?.selectionKey || previewSelectionKey),
-        targetKey: previewSelectionKey,
-        signedUrlPresent: true,
-        stageHasRenderablePreview: false,
-        imageElExists: !!imageEl,
-        pdfFrameExists: !!pdfFrame,
-        fallbackLinkExists: !!fallbackLink
-      });
-    }
-    const staleRecovery = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'live-loading-final-commit');
-    if (staleRecovery.stale) {
-      if (window.__LOG_MODAL === true) {
-        console.log('[TS][BULK-AUTH][PREVIEW]', {
+    const bulkAuthoriseCommitRequired = !!(
+      bulkAuthoriseSurfaceAtBind ||
+      isCurrentBulkAuthorisePreviewSurface() ||
+      isValidBulkAuthorisePreviewSnapshot(bulkAuthSnapshot)
+    );
+    if (bulkAuthoriseCommitRequired) {
+      const staleRecovery = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'live-loading-final-commit', { requireBulkAuthoriseAuthority: true });
+      if (staleRecovery.stale) {
+        logPreviewCommitEvent(bulkAuthSnapshot, {
           event: 'live-loading-final-commit',
           phase: 'stale-drop',
           reason: trimStr(staleRecovery.reason || ''),
-          ownerIdentity: trimStr(bulkAuthSnapshot?.ownerIdentity || ''),
-          rowKey: trimStr(bulkAuthSnapshot?.rowKey || ''),
-          rowChangeSeq: Number(bulkAuthSnapshot?.rowChangeSeq || 0) || 0,
-          selectionKey: trimStr(bulkAuthSnapshot?.selectionKey || previewSelectionKey),
           targetKey: previewSelectionKey,
           signedUrlPresent: true,
           stageHasRenderablePreview: false,
@@ -125323,9 +126723,22 @@ function bindBulkProcessPreviewPane(state) {
           pdfFrameExists: !!q('#bulkProcessPdfPreviewFrame'),
           fallbackLinkExists: !!stage.querySelector('a[href]')
         });
+        return false;
       }
-      return false;
     }
+
+    pane.__preview_load_requested_target_key = previewSelectionKey;
+
+    logPreviewCommitEvent(bulkAuthSnapshot, {
+      event: 'live-loading-final-commit',
+      phase: 'detected',
+      targetKey: previewSelectionKey,
+      signedUrlPresent: true,
+      stageHasRenderablePreview: false,
+      imageElExists: !!imageEl,
+      pdfFrameExists: !!pdfFrame,
+      fallbackLinkExists: !!fallbackLink
+    });
 
     const previewFileCacheKey = resolvePreviewFileCacheKey(previewItem, previewSelectionKey);
     const previewType = getBulkProcessPreviewTypeParts(previewItem, previewFileCacheKey);
@@ -125347,23 +126760,18 @@ function bindBulkProcessPreviewPane(state) {
       stage.innerHTML = `<div style="min-height:320px;display:flex;align-items:center;justify-content:center;"><a class="btn btn-outline" href="${enc(signedUrl)}" target="_blank" rel="noopener">Open file</a></div>`;
     }
     renderToolbar(previewState, previewItem, previewSelectionKey, previewRenderKey, signedUrl, isPdf, pageCount, activePage, rotationDeg, zoom);
-    if (window.__LOG_MODAL === true) {
-      console.log('[TS][BULK-AUTH][PREVIEW]', {
-        event: 'live-loading-final-commit',
-        phase: 'committed',
-        renderedType: isPdf ? 'pdf' : (isImage ? 'image' : 'fallback'),
-        ownerIdentity: trimStr(bulkAuthSnapshot?.ownerIdentity || ''),
-        rowKey: trimStr(bulkAuthSnapshot?.rowKey || ''),
-        rowChangeSeq: Number(bulkAuthSnapshot?.rowChangeSeq || 0) || 0,
-        selectionKey: trimStr(bulkAuthSnapshot?.selectionKey || previewSelectionKey),
-        targetKey: previewSelectionKey,
-        imageElExists: !!q('#bulkProcessImagePreviewEl'),
-        pdfFrameExists: !!q('#bulkProcessPdfPreviewFrame'),
-        fallbackLinkExists: !!stage.querySelector('a[href]')
-      });
-    }
+    logPreviewCommitEvent(bulkAuthSnapshot, {
+      event: 'live-loading-final-commit',
+      phase: 'committed',
+      renderedType: isPdf ? 'pdf' : (isImage ? 'image' : 'fallback'),
+      targetKey: previewSelectionKey,
+      imageElExists: !!q('#bulkProcessImagePreviewEl'),
+      pdfFrameExists: !!q('#bulkProcessPdfPreviewFrame'),
+      fallbackLinkExists: !!stage.querySelector('a[href]')
+    });
     return true;
   };
+
 
   const schedulePreviewStateRecovery = (reason = 'preview-bind') => {
     const recoveryReason = trimStr(reason || 'preview-bind') || 'preview-bind';
@@ -126845,6 +128253,10 @@ function bindBulkProcessPreviewPane(state) {
     let usedLiveSignedUrl = false;
     let usedCachedSignedUrl = false;
     const bulkAuthSnapshot = captureBulkAuthorisePreviewSnapshot(previewState);
+    if (bulkAuthoriseSurfaceAtBind) {
+      const renderAuthority = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'render-authority', { requireBulkAuthoriseAuthority: true });
+      if (renderAuthority.stale) return;
+    }
     const cachedSignedUrl = trimStr(pane.__preview_signed_url_cache[previewFileCacheKey] || '');
     const prerenderLiveTargetSelectionKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
     let prerenderLiveRequestedSelectionKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
@@ -127023,14 +128435,11 @@ function bindBulkProcessPreviewPane(state) {
     }
 
     renderToolbar(previewState, previewItem, previewSelectionKey, previewRenderKey, signedUrl, isPdf, pageCount, activePage, rotationDeg, zoom);
-    if (window.__LOG_MODAL === true && signedUrl) {
-      console.log('[TS][BULK-AUTH][PREVIEW]', {
+    if (signedUrl) {
+      logPreviewCommitEvent(bulkAuthSnapshot, {
         event: 'signed-url-prerender-commit',
         phase: 'detected',
-        ownerIdentity: trimStr(bulkAuthSnapshot?.ownerIdentity || ''),
-        rowKey: trimStr(bulkAuthSnapshot?.rowKey || ''),
-        rowChangeSeq: Number(bulkAuthSnapshot?.rowChangeSeq || 0) || 0,
-        selectionKey: trimStr(bulkAuthSnapshot?.selectionKey || previewSelectionKey),
+        selectionKey: previewSelectionKey,
         targetKey: previewSelectionKey,
         requestedKey: trimStr(normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '') || ''),
         signedUrlPresent: true,
@@ -127040,14 +128449,11 @@ function bindBulkProcessPreviewPane(state) {
     }
     const staleDomCommit = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'dom');
     if (staleDomCommit.stale) {
-      if (window.__LOG_MODAL === true && signedUrl) {
-        console.log('[TS][BULK-AUTH][PREVIEW]', {
+      if (signedUrl) {
+        logPreviewCommitEvent(bulkAuthSnapshot, {
           event: 'signed-url-prerender-commit',
           phase: 'stale-drop',
-          ownerIdentity: trimStr(bulkAuthSnapshot?.ownerIdentity || ''),
-          rowKey: trimStr(bulkAuthSnapshot?.rowKey || ''),
-          rowChangeSeq: Number(bulkAuthSnapshot?.rowChangeSeq || 0) || 0,
-          selectionKey: trimStr(bulkAuthSnapshot?.selectionKey || previewSelectionKey),
+          selectionKey: previewSelectionKey,
           targetKey: previewSelectionKey,
           requestedKey: trimStr(normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '') || ''),
           signedUrlPresent: true,
@@ -127115,14 +128521,11 @@ function bindBulkProcessPreviewPane(state) {
     }
 
     renderToolbar(previewState, previewItem, previewSelectionKey, previewRenderKey, signedUrl, isPdf, pageCount, activePage, rotationDeg, zoom);
-    if (window.__LOG_MODAL === true && signedUrl) {
-      console.log('[TS][BULK-AUTH][PREVIEW]', {
+    if (signedUrl) {
+      logPreviewCommitEvent(bulkAuthSnapshot, {
         event: 'signed-url-prerender-commit',
         phase: 'committed',
-        ownerIdentity: trimStr(bulkAuthSnapshot?.ownerIdentity || ''),
-        rowKey: trimStr(bulkAuthSnapshot?.rowKey || ''),
-        rowChangeSeq: Number(bulkAuthSnapshot?.rowChangeSeq || 0) || 0,
-        selectionKey: trimStr(bulkAuthSnapshot?.selectionKey || previewSelectionKey),
+        selectionKey: previewSelectionKey,
         targetKey: previewSelectionKey,
         requestedKey: trimStr(normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '') || ''),
         signedUrlPresent: true,
@@ -127142,6 +128545,12 @@ function bindBulkProcessPreviewPane(state) {
     if (!isActiveBind()) return false;
     const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
     if (!liveRoot || !root.isConnected || liveRoot !== root) return false;
+
+    const commitBulkAuthoriseSnapshot = captureBulkAuthorisePreviewSnapshot();
+    if (bulkAuthoriseSurfaceAtBind) {
+      const commitAuthority = checkBulkAuthorisePreviewStale(commitBulkAuthoriseSnapshot, 'commit-live-preview-if-stale', { requireBulkAuthoriseAuthority: true });
+      if (commitAuthority.stale) return false;
+    }
 
     const expectedSelectionKey = normalisePreviewSelectionKey(opts.expectedSelectionKey || '');
     const expectedFileKey = trimStr(opts.expectedFileKey || '').replace(/^\/+/, '');
@@ -127232,15 +128641,12 @@ function bindBulkProcessPreviewPane(state) {
       targetKey === previewSelectionKey &&
       (!requestedKey || requestedKey === previewSelectionKey)
     );
-    if (window.__LOG_MODAL === true) {
+    {
       const bulkAuthSnapshot = captureBulkAuthorisePreviewSnapshot(previewState);
-      console.log('[TS][BULK-AUTH][PREVIEW]', {
+      logPreviewCommitEvent(bulkAuthSnapshot, {
         event: 'final-live-loading-reconcile',
         phase: canReconcile ? 'checked' : 'not-applicable',
-        ownerIdentity: trimStr(bulkAuthSnapshot?.ownerIdentity || ''),
-        rowKey: trimStr(bulkAuthSnapshot?.rowKey || ''),
-        rowChangeSeq: Number(bulkAuthSnapshot?.rowChangeSeq || 0) || 0,
-        selectionKey: trimStr(bulkAuthSnapshot?.selectionKey || previewSelectionKey),
+        selectionKey: previewSelectionKey,
         targetKey,
         signedUrlPresent,
         stageHasRenderablePreview,
@@ -127259,6 +128665,10 @@ function bindBulkProcessPreviewPane(state) {
     warnPreview('bind failed', e);
   });
 }
+
+
+
+
 
 
 function renderBulkProcessDockedEvidenceViewer(state) {
@@ -131657,8 +133067,8 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
 
-  const payload = (batchPayload && typeof batchPayload === 'object') ? batchPayload : {};
-  let state = (correctionState && typeof correctionState === 'object') ? correctionState : null;
+  const payload = (batchPayload && typeof batchPayload === 'object' && !Array.isArray(batchPayload)) ? batchPayload : {};
+  let state = (correctionState && typeof correctionState === 'object' && !Array.isArray(correctionState)) ? correctionState : null;
 
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
   const child = (mc && mc.banking && mc.banking.pay && mc.banking.pay.child && typeof mc.banking.pay.child === 'object')
@@ -131673,15 +133083,13 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
   }
 
   const toText = (value) => String(value == null ? '' : value).trim();
-  const rootAttr = child && toText(child.rootId) ? ` id="${enc(toText(child.rootId))}"` : '';
   const toUpper = (value) => toText(value).toUpperCase();
   const toNum = (value) => {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
   };
   const asArray = (value) => Array.isArray(value) ? value : [];
-  const uniqueStrings = (value) => Array.from(new Set(asArray(value).map((item) => toText(item)).filter(Boolean)));
-  const flatten = (value) => Array.isArray(value) ? value : [value];
+  const asObj = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : null;
   const formatAmount = (value) => {
     const num = toNum(value);
     try {
@@ -131689,6 +133097,25 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     } catch {
       return `£${num.toFixed(2)}`;
     }
+  };
+  const rootAttr = child && toText(child.rootId) ? ` id="${enc(toText(child.rootId))}"` : '';
+
+  const isBootstrap = !!(payload.bootstrap_only === true || payload.batch?.bootstrap_only === true || child?.data?.bootstrap_only === true || child?.data?.batch?.bootstrap_only === true);
+  const sectionState = (sectionKey) => {
+    const section = child && child.sections && child.sections[sectionKey] && typeof child.sections[sectionKey] === 'object' ? child.sections[sectionKey] : {};
+    const rows = Array.isArray(section.rows) ? section.rows : (Array.isArray(section.items) ? section.items : []);
+    return {
+      ...section,
+      rows,
+      items: Array.isArray(section.items) ? section.items : rows,
+      loading: section.loading === true,
+      loaded: section.loaded === true,
+      next_cursor: section.next_cursor ?? section.nextCursor ?? null,
+      known_total_count: Number.isFinite(Number(section.known_total_count ?? section.knownTotalCount ?? section.total_count ?? section.totalCount))
+        ? Math.max(0, Math.trunc(Number(section.known_total_count ?? section.knownTotalCount ?? section.total_count ?? section.totalCount)))
+        : null,
+      error: toText(section.error)
+    };
   };
 
   const makeSet = (value) => {
@@ -131701,7 +133128,8 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
 
   const addValuesToSet = (target, value) => {
     try {
-      for (const item of flatten(value)) {
+      const list = Array.isArray(value) ? value : [value];
+      for (const item of list) {
         const text = toText(item);
         if (text) target.add(text);
       }
@@ -131720,8 +133148,9 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     (index != null ? `row-${index}` : '')
   );
 
+  const previousRows = asArray(state.rows);
   const selectedKeysBefore = makeSet(state.selectedRowKeys);
-  for (const row of asArray(state.rows)) {
+  for (const row of previousRows) {
     if (row && row.selected === true) {
       const key = rowKeyOf(row);
       if (key) selectedKeysBefore.add(key);
@@ -131734,36 +133163,38 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     state.manual_paid_action_mode === true
   );
 
-  const buildIssueState = () => {
-    if (typeof normaliseBankingPaymentIssueState !== 'function') {
-      return {};
-    }
-    try {
-      const next = normaliseBankingPaymentIssueState(payload, { manualPaidActionMode, correctionState: state });
-      return (next && typeof next === 'object') ? { ...next } : {};
-    } catch {
-      try {
-        const next = normaliseBankingPaymentIssueState(payload);
-        return (next && typeof next === 'object') ? { ...next } : {};
-      } catch {
-        return {};
-      }
-    }
-  };
+  const compactIssueSource = asObj(payload.payment_issue_summary) || asObj(payload.payment_correction) || asObj(payload.issue_summary) || asObj(payload.batch?.payment_issue_summary) || {};
+  const financeSection = sectionState('finance_case_groups');
+  const itemSection = sectionState('items');
+  const transferSection = sectionState('transfers');
+  const eventSection = sectionState('events');
 
-  const buildRows = () => {
-    if (typeof buildBankingPaymentIssueRows !== 'function') {
-      return Array.isArray(state.rows) ? state.rows.slice() : [];
-    }
-    try {
-      return buildBankingPaymentIssueRows(payload, { manualPaidActionMode, correctionState: state });
-    } catch {
-      try {
-        return buildBankingPaymentIssueRows(payload);
-      } catch {
-        return Array.isArray(state.rows) ? state.rows.slice() : [];
-      }
-    }
+  const renderPagedSectionSummary = () => {
+    if (!isBootstrap) return '';
+    const sectionRow = (label, stateObj) => {
+      const loaded = asArray(stateObj.rows).length;
+      const known = stateObj.known_total_count;
+      const suffix = known == null ? '' : ` / ${known}`;
+      return `
+        <div class="card" style="padding:8px;">
+          <div class="mini" style="opacity:.78;">${enc(label)}</div>
+          <div class="mono">${enc(String(loaded))}${enc(suffix)}</div>
+          <div class="mini" style="opacity:.82;">${stateObj.loading ? 'Loading…' : (stateObj.loaded ? 'Loaded page data' : 'Not loaded yet')}${stateObj.error ? ` • ${enc(stateObj.error)}` : ''}</div>
+        </div>
+      `;
+    };
+    return `
+      <div class="card" style="padding:10px;margin-bottom:10px;">
+        <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Paged issue detail</div>
+        <div class="mini" style="opacity:.84;margin-bottom:8px;">Only summary data is loaded initially. Open or load the paged rows below to review detailed items, finance groups, transfers, and events.</div>
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:8px;">
+          ${sectionRow('Finance case groups', financeSection)}
+          ${sectionRow('Items', itemSection)}
+          ${sectionRow('Transfers', transferSection)}
+          ${sectionRow('Events', eventSection)}
+        </div>
+      </div>
+    `;
   };
 
   const isPaidCleanRow = (row) => {
@@ -131773,22 +133204,17 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     const status = toUpper(row?.statusLabel || row?.status_label || row?.status || '');
     const backendAction = toUpper(row?.backendAction || row?.backend_action || '');
     if (backendAction && backendAction !== 'REVERSE_SETTLED_PAYMENT') return false;
-    if (issueKind === 'RETURNED' || issueKind === 'REJECTED' || issueKind === 'REVIEW' || issueKind === 'NOT_SENT' || issueKind === 'DRAFT_REMOVE' || issueKind === 'PROCESSING' || issueKind === 'WAITING') return false;
-    return (
-      issueKind === 'PAID' ||
-      issueKind === 'NONE' ||
-      issueKind === 'CLEAN_PAID' ||
-      bankStatus === 'PAID' ||
-      status === 'PAID' ||
-      happened === 'PAID SUCCESSFULLY'
-    );
+    if (['RETURNED', 'REJECTED', 'REVIEW', 'NOT_SENT', 'DRAFT_REMOVE', 'PROCESSING', 'WAITING'].includes(issueKind)) return false;
+    return issueKind === 'PAID' || issueKind === 'NONE' || issueKind === 'CLEAN_PAID' || bankStatus === 'PAID' || status === 'PAID' || happened === 'PAID SUCCESSFULLY';
   };
 
   const rowHasManualIdentifiers = (row) => {
-    const transferIds = uniqueStrings(flatten(row?.payBankTransferIds || row?.pay_bank_transfer_ids || row?.payBankTransferId || row?.pay_bank_transfer_id || row?.transferId || row?.transfer_id));
-    const candidateIds = uniqueStrings(flatten(row?.payBatchCandidateIds || row?.pay_batch_candidate_ids || row?.payBatchCandidateId || row?.pay_batch_candidate_id));
-    const itemIds = uniqueStrings(flatten(row?.payBatchItemIds || row?.pay_batch_item_ids || row?.payBatchItemId || row?.pay_batch_item_id || row?.itemId || row?.item_id));
-    return transferIds.length > 0 || candidateIds.length > 0 || itemIds.length > 0;
+    const values = [
+      row?.payBankTransferIds, row?.pay_bank_transfer_ids, row?.payBankTransferId, row?.pay_bank_transfer_id, row?.transferId, row?.transfer_id,
+      row?.payBatchCandidateIds, row?.pay_batch_candidate_ids, row?.payBatchCandidateId, row?.pay_batch_candidate_id,
+      row?.payBatchItemIds, row?.pay_batch_item_ids, row?.payBatchItemId, row?.pay_batch_item_id, row?.itemId, row?.item_id
+    ];
+    return values.some((value) => Array.isArray(value) ? value.some((item) => toText(item)) : !!toText(value));
   };
 
   const isDraftOnlyRow = (row) => {
@@ -131830,6 +133256,56 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
       }
     }
     return list;
+  };
+
+  const buildIssueState = () => {
+    if (isBootstrap) {
+      return {
+        ...(asObj(state.issueState) || {}),
+        ...(compactIssueSource || {}),
+        bootstrap_only: true,
+        manualPaidActionMode,
+        requiresUserAction: compactIssueSource.requires_user_action === true || compactIssueSource.requiresUserAction === true || compactIssueSource.has_issue === true || compactIssueSource.hasIssue === true || Number(financeSection.known_total_count || 0) > 0,
+        hasActionableIssueRows: compactIssueSource.has_actionable_issue_rows === true || compactIssueSource.hasActionableIssueRows === true || Number(financeSection.known_total_count || 0) > 0,
+        hasSelectableRows: previousRows.some((row) => row && (row.selectableForApply === true || row.selectableForReview === true)),
+        headline: toText(compactIssueSource.headline || compactIssueSource.status_text || compactIssueSource.statusText || (Number(financeSection.known_total_count || 0) > 0 ? 'Needs review' : 'Payment status'))
+      };
+    }
+
+    if (typeof normaliseBankingPaymentIssueState !== 'function') return {};
+    try {
+      const next = normaliseBankingPaymentIssueState(payload, { manualPaidActionMode, correctionState: state });
+      return (next && typeof next === 'object') ? { ...next } : {};
+    } catch {
+      try {
+        const next = normaliseBankingPaymentIssueState(payload);
+        return (next && typeof next === 'object') ? { ...next } : {};
+      } catch {
+        return {};
+      }
+    }
+  };
+
+  const buildRows = () => {
+    if (isBootstrap) {
+      const rows = [];
+      const compactRows = asArray(compactIssueSource.rows || compactIssueSource.issue_rows || compactIssueSource.items);
+      if (compactRows.length) rows.push(...compactRows);
+      rows.push(...asArray(financeSection.rows));
+      rows.push(...asArray(itemSection.rows).filter((row) => row && (row.issueKindForDisplay || row.issue_kind || row.payment_issue || row.payment_issue_kind)));
+      rows.push(...asArray(transferSection.rows).filter((row) => row && (row.issueKindForDisplay || row.issue_kind || row.payment_issue || row.payment_issue_kind || toUpper(row.status) === 'FAILED')));
+      return rows;
+    }
+    if (typeof buildBankingPaymentIssueRows !== 'function') return previousRows.slice();
+    try {
+      return buildBankingPaymentIssueRows(payload, { manualPaidActionMode, correctionState: state });
+    } catch {
+      try {
+        return buildBankingPaymentIssueRows(payload);
+      } catch {
+        return previousRows.slice();
+      }
+    }
   };
 
   const issueState = buildIssueState();
@@ -131880,17 +133356,10 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     } catch {}
   }
 
-  const objectHasKeys = (value) => !!(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0);
   const issueKind = toUpper(issueState.issueKindForDisplay || issueState.issueKind || issueState.issue_kind || '');
   const headline = toUpper(issueState.headline || issueState.statusText || issueState.summaryText || '');
   const cleanIssueKinds = new Set(['', 'NONE', 'PAID', 'CLEAN_PAID', 'SETTLED_NO_CORRECTION_REQUIRED', 'MANUAL_PAID_ACTION']);
   const actionIssueKinds = new Set(['RETURNED', 'REJECTED', 'REVIEW', 'NOT_SENT', 'DRAFT_REMOVE', 'PROCESSING', 'WAITING', 'APPLIED']);
-  const hasBackendEvidence = !!(
-    objectHasKeys(payload.payment_correction) ||
-    objectHasKeys(payload.correction_progress) ||
-    objectHasKeys(payload.manual_actions) ||
-    (Array.isArray(payload.bank_evidence) && payload.bank_evidence.length > 0)
-  );
   const hasActionableIssueRows = rows.some((row) => {
     if (!row || typeof row !== 'object') return false;
     if (row.manualActionAvailable === true || row.manual_action_available === true) return false;
@@ -131910,7 +133379,8 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     headline.includes('REJECTED') ||
     headline.includes('NEEDS REVIEW') ||
     (issueState.hasIssue === true && !cleanIssueKinds.has(issueKind)) ||
-    hasActionableIssueRows
+    hasActionableIssueRows ||
+    (isBootstrap && Number(financeSection.known_total_count || 0) > 0)
   );
   const manualPaidActionAvailable = rows.some((row) => row && (row.manualActionAvailable === true || row.manual_action_available === true));
   const cleanPaidNoIssue = !manualPaidActionMode && !hasStatusIssue && (
@@ -131943,6 +133413,17 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
     : '';
 
+  const compactSummaryHtml = isBootstrap ? `
+    <div class="payment-issue-summary-card card" style="padding:10px;">
+      <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Payment issue summary</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+        <span class="pill ${hasStatusIssue ? 'pill-warn' : 'pill-ok'}">${enc(toText(issueState.headline || issueState.statusText || issueState.status_text || (hasStatusIssue ? 'Needs review' : 'No current issue')))}</span>
+        <span class="pill pill-info">Paged details</span>
+      </div>
+      <div class="mini" style="opacity:.86;white-space:pre-wrap;">${enc(toText(issueState.summaryText || issueState.status_text || issueState.message || compactIssueSource.message || 'Detailed payment issue rows are loaded by page when needed.'))}</div>
+    </div>
+  ` : '';
+
   const cleanPaidHtml = cleanPaidNoIssue ? `
     <div class="payment-issue-summary-card card" style="padding:10px;">
       <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Payment status</div>
@@ -131962,9 +133443,7 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
 
   const manualRowsHtml = (() => {
     const manualRows = rows.filter((row) => row && (row.manualActionAvailable === true || row.manual_action_available === true));
-    if (!manualRows.length) {
-      return `<div class="mini" style="opacity:.85;">No paid payments are available for manual action.</div>`;
-    }
+    if (!manualRows.length) return `<div class="mini" style="opacity:.85;">No paid payments are available for manual action.</div>`;
     return `
       <div class="payment-issue-table-wrap" style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
         <table class="payment-issue-table grid" style="min-width:980px; margin:0; table-layout:auto;">
@@ -132008,9 +133487,7 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     <section id="payment-issue-panel" class="payment-issue-panel payment-issue-manual-mode">
       <div class="payment-issue-summary-card card" style="padding:10px; margin-bottom:10px;">
         <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Payment status</div>
-        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
-          <span class="pill pill-ok">Paid successfully</span>
-        </div>
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px;"><span class="pill pill-ok">Paid successfully</span></div>
         <div class="mini" style="opacity:.88; white-space:pre-wrap;">This payment was paid successfully.</div>
       </div>
       <div class="payment-issue-manual-action-card card" style="padding:10px; margin-bottom:10px;">
@@ -132037,7 +133514,31 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
 
   let issuePanelHtml = '';
   if (!cleanPaidNoIssue && !manualPaidActionMode) {
-    if (typeof renderBankingPaymentIssuePanel === 'function') {
+    if (isBootstrap) {
+      const loadedRows = rows.length
+        ? rows.slice(0, 50).map((row, index) => {
+            const rowKind = toText(row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || row.kind || 'Issue');
+            const label = toText(row.candidateName || row.candidate_name || row.display_name || row.payee_name || row.umbrellaName || row.umbrella_name || 'Payment row');
+            const amount = row.paymentAmount ?? row.amount ?? row.amount_inc_vat ?? row.amount_ex_vat ?? null;
+            return `
+              <tr>
+                <td>${enc(label)}</td>
+                <td>${enc(rowKind)}</td>
+                <td class="mono" style="text-align:right;">${amount == null ? '—' : enc(formatAmount(amount))}</td>
+                <td>${enc(toText(row.statusLabel || row.status_label || row.status || row.actionLabel || row.action_label || 'Review'))}</td>
+              </tr>
+            `;
+          }).join('')
+        : `<tr><td colspan="4" class="mini" style="opacity:.85;">No detailed issue rows have been loaded yet.</td></tr>`;
+      issuePanelHtml = `
+        <div class="payment-issue-table-wrap" style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
+          <table class="grid" style="min-width:760px;table-layout:auto;margin:0;">
+            <thead><tr><th>Payment</th><th>Issue</th><th style="text-align:right;">Amount</th><th>Status/action</th></tr></thead>
+            <tbody>${loadedRows}</tbody>
+          </table>
+        </div>
+      `;
+    } else if (typeof renderBankingPaymentIssuePanel === 'function') {
       try {
         issuePanelHtml = String(renderBankingPaymentIssuePanel(payload, state) || '');
       } catch (e) {
@@ -132049,7 +133550,7 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
   }
 
   try {
-    if (manualPaidActionMode && typeof renderBankingPaymentIssuePanel === 'function') {
+    if (manualPaidActionMode && typeof renderBankingPaymentIssuePanel === 'function' && !isBootstrap) {
       renderBankingPaymentIssuePanel(payload, state);
     }
   } catch {}
@@ -132065,6 +133566,8 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
           ${manualPaidActionMode ? `<span class="pill pill-info">Manual action</span>` : (draftOnlyDisplayMode ? `<span class="pill pill-info">Draft only</span>` : (hasStatusIssue ? `<span class="pill pill-warn">Needs review</span>` : `<span class="pill pill-ok">Paid successfully</span>`))}
         </div>
         <div style="display:flex; flex-direction:column; gap:10px;">
+          ${compactSummaryHtml}
+          ${renderPagedSectionSummary()}
           ${cleanPaidNoIssue ? cleanPaidHtml : ''}
           ${manualPaidActionMode ? manualPanelHtml : ''}
           ${(!cleanPaidNoIssue && !manualPaidActionMode) ? issuePanelHtml : ''}
@@ -132073,6 +133576,7 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     </div>
   `;
 }
+
 
 
 function renderBulkProcessManualEditor(state) {
@@ -134436,6 +135940,36 @@ async function handleBulkProcessOpenExpensesModal(state) {
   const stableStringify = (v) => {
     try { return JSON.stringify(v); } catch { return ''; }
   };
+  const boolish = (value) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value == null) return false;
+    const raw = String(value).trim().toLowerCase();
+    return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
+  };
+  const keepEmptyAdditionalManualAdjustment = !!(
+    boolish(ctx?.state?.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(ctx?.state?.keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(ctx?.state?.keep_additional_manual_adjustment_schedule_empty) ||
+    boolish(ctx?.row?.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(ctx?.row?.keep_additional_manual_adjustment_schedule_empty) ||
+    boolish(ctx?.details?.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolish(ctx?.details?.keep_additional_manual_adjustment_schedule_empty)
+  );
+  const preserveKeepEmptyScheduleState = (target) => {
+    if (!keepEmptyAdditionalManualAdjustment || !target || typeof target !== 'object') return;
+    target.schedule = [];
+    target.baselineSchedule = [];
+    target.weeklyLinesByDate = null;
+    target.extraShiftCount = 0;
+    target.scheduleHasErrors = false;
+    target.scheduleErrorsByDate = {};
+    target.__keepAdditionalManualAdjustmentScheduleEmpty = true;
+    target.keepAdditionalManualAdjustmentScheduleEmpty = true;
+    target.keep_additional_manual_adjustment_schedule_empty = true;
+    target.__suppressStandardScheduleFallback = true;
+    target.suppressStandardScheduleFallback = true;
+    target.suppress_standard_schedule_fallback = true;
+  };
   const editability = (typeof classifyBulkProcessEditability === 'function')
     ? classifyBulkProcessEditability(ctx || {})
     : { canEditExpenses: true, canOpenExpenses: true, expensesReadOnly: false };
@@ -134544,12 +136078,14 @@ async function handleBulkProcessOpenExpensesModal(state) {
       ? isTimesheetExpensesDraftDirty(normDraft, baselineRef, { context: ctx, details, tsfin })
       : { dirty: stableStringify(normDraft) !== stableStringify(baselineRef) };
     childCtx.state.expensesDraft = deep(normDraft);
+    preserveKeepEmptyScheduleState(childCtx.state);
     if (!dirtyResult.dirty) {
       updateChildDirty();
       return true;
     }
     const targets = [st?.active_ctx?.state, st?.active_context?.state].filter((t) => t && typeof t === 'object');
     for (const target of targets) {
+      preserveKeepEmptyScheduleState(target);
       target.expensesDraft = deep(normDraft);
       if (!Object.prototype.hasOwnProperty.call(target, 'expensesBaseline')) target.expensesBaseline = deep(baselineRef);
       target.expensesDirty = true;
@@ -134602,7 +136138,6 @@ async function handleBulkProcessOpenExpensesModal(state) {
   };
   setTimeout(wire, 0);
 }
-
 
 
 function syncBulkProcessExpensesDraftFromDom(state) {
@@ -134756,6 +136291,8 @@ function captureBulkProcessUiSnapshot(state) {
   return snapshot;
 }
 
+
+
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const st = (state && typeof state === 'object') ? state : {};
   st.evidence_pane_state =
@@ -134774,6 +136311,17 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     if (value === false || value == null) return false;
     const s = trimStr(value).toLowerCase();
     return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  };
+  const parseObjectMaybeJson = (value) => {
+    if (!value) return {};
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+      } catch {}
+    }
+    return {};
   };
 
   const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
@@ -134856,15 +136404,15 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   };
 
   const collectAttachedRows = () => {
-    const sources = [
-      st.active_ctx?.state?.evidence,
-      st.active_ctx?.evidence,
-      st.active_context?.evidence,
-      st.active_context?.details?.evidence,
-      st.active_details?.evidence,
-      pane.attached_rows,
-      pane.attached_all_rows,
-      window.modalCtx?.timesheetState?.evidence
+    const sourceSets = [
+      { rows: st.active_ctx?.state?.evidence, scope: 'active_ctx_state', currentContext: true },
+      { rows: st.active_ctx?.evidence, scope: 'active_ctx', currentContext: true },
+      { rows: st.active_context?.evidence, scope: 'active_context', currentContext: true },
+      { rows: st.active_context?.details?.evidence, scope: 'active_context_details', currentContext: true },
+      { rows: st.active_details?.evidence, scope: 'active_details', currentContext: true },
+      { rows: pane.attached_rows, scope: 'pane_attached_rows', currentContext: false },
+      { rows: pane.attached_all_rows, scope: 'pane_attached_all_rows', currentContext: false },
+      { rows: window.modalCtx?.timesheetState?.evidence, scope: 'modal_timesheet_state', currentContext: false }
     ];
     const rows = [];
     const syntheticRows = [];
@@ -134904,21 +136452,86 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       return '';
     };
 
-    const activeContractWeekId = getActiveContractWeekId();
+    const getActiveTimesheetId = () => {
+      const direct = trimStr(
+        st.active_row?.timesheet_id ||
+        st.active_row?.current_timesheet_id ||
+        st.active_ctx?.row?.timesheet_id ||
+        st.active_ctx?.row?.current_timesheet_id ||
+        st.active_ctx?.data_row?.timesheet_id ||
+        st.active_ctx?.data_row?.current_timesheet_id ||
+        st.active_context?.row?.timesheet_id ||
+        st.active_context?.row?.current_timesheet_id ||
+        st.active_context?.data_row?.timesheet_id ||
+        st.active_context?.data_row?.current_timesheet_id ||
+        st.active_details?.current_timesheet_id ||
+        st.active_details?.timesheet?.timesheet_id ||
+        window.modalCtx?.active_row?.timesheet_id ||
+        window.modalCtx?.active_row?.current_timesheet_id ||
+        window.modalCtx?.formState?.timesheet_id ||
+        ''
+      );
+      if (direct) return direct;
 
-    const getItemContractWeekId = (item) => trimStr(
-      item?.contract_week_id ||
-      item?.contractWeekId ||
-      item?.contract_week?.id ||
-      item?.meta_json?.contract_week_id ||
-      item?.metaJson?.contract_week_id ||
-      item?.meta?.contract_week_id ||
-      item?.queue_meta?.contract_week_id ||
-      item?.queueMeta?.contract_week_id ||
-      item?.source_context?.contract_week_id ||
-      item?.sourceContext?.contract_week_id ||
-      ''
-    );
+      const identities = [
+        st.active_row_key,
+        st.active_row?.row_key,
+        st.active_ctx?.row?.row_key,
+        st.active_ctx?.data_row?.row_key,
+        st.active_context?.row?.row_key,
+        st.active_context?.data_row?.row_key,
+        window.modalCtx?.__bulkProcessRecordIdentity,
+        window.modalCtx?.formState?.__forId
+      ];
+      for (const value of identities) {
+        const identity = trimStr(value || '');
+        const match = identity.match(/^timesheet:(.+)$/i);
+        if (match && trimStr(match[1])) return trimStr(match[1]);
+      }
+      return '';
+    };
+
+    const activeContractWeekId = getActiveContractWeekId();
+    const activeTimesheetId = getActiveTimesheetId();
+
+    const getItemMetaObject = (item) => {
+      const candidates = [item?.meta_json, item?.metaJson, item?.meta, item?.queue_meta, item?.queueMeta, item?.source_context, item?.sourceContext];
+      for (const candidate of candidates) {
+        const parsed = parseObjectMaybeJson(candidate);
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length) return parsed;
+      }
+      return {};
+    };
+
+    const getItemContractWeekId = (item) => {
+      const meta = getItemMetaObject(item);
+      return trimStr(
+        item?.contract_week_id ||
+        item?.contractWeekId ||
+        item?.contract_week?.id ||
+        meta.contract_week_id ||
+        meta.contractWeekId ||
+        meta.week_id ||
+        meta.weekId ||
+        ''
+      );
+    };
+
+    const getItemTimesheetId = (item) => {
+      const meta = getItemMetaObject(item);
+      return trimStr(
+        item?.timesheet_id ||
+        item?.timesheetId ||
+        item?.current_timesheet_id ||
+        item?.expected_timesheet_id ||
+        item?.timesheet?.timesheet_id ||
+        meta.timesheet_id ||
+        meta.timesheetId ||
+        meta.current_timesheet_id ||
+        meta.expected_timesheet_id ||
+        ''
+      );
+    };
 
     const isSyntheticAttachedFallback = (item, evidenceId) => {
       const explicitEvidenceId = trimStr(item?.evidence_id || item?.evidenceId || '');
@@ -134929,11 +136542,29 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       if (!explicitEvidenceId && /^(timesheet|contract_week|row):/i.test(trimStr(item?.id || ''))) return true;
       return false;
     };
-    const add = (item) => {
+    const add = (item, sourceInfo = {}) => {
       if (!item || typeof item !== 'object') return;
+      const sourceScope = trimStr(sourceInfo.scope || '');
+      const sourceIsCurrentContext = sourceInfo.currentContext === true;
 
-      const stagedContext = item.is_staged_context === true || boolish(item.is_staged_context);
       const itemContractWeekId = getItemContractWeekId(item);
+      const itemTimesheetId = getItemTimesheetId(item);
+      const itemMeta = getItemMetaObject(item);
+      const itemSourceLabel = upper(item.source_label || item.source_badge || item.source || itemMeta.source_label || itemMeta.source_badge || itemMeta.source || '');
+      const stagedContext = !!(
+        item.is_staged_context === true ||
+        boolish(item.is_staged_context) ||
+        itemSourceLabel === 'STAGED' ||
+        (
+          activeContractWeekId &&
+          itemContractWeekId &&
+          itemContractWeekId === activeContractWeekId &&
+          (
+            trimStr(item.queue_id || item.manual_timesheet_queue_id || item.manual_queue_id || '') ||
+            trimStr(itemMeta.queue_id || itemMeta.manual_timesheet_queue_id || itemMeta.manual_queue_id || '')
+          )
+        )
+      );
       const stagedContextMatchesActiveContractWeek = !!(
         stagedContext &&
         !isBulkAuthoriseTimesheets &&
@@ -134942,13 +136573,32 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
         itemContractWeekId === activeContractWeekId
       );
 
+      if (itemTimesheetId && activeTimesheetId && itemTimesheetId !== activeTimesheetId) return;
+      if (itemContractWeekId && activeContractWeekId && itemContractWeekId !== activeContractWeekId) return;
+      if (!isBulkAuthoriseTimesheets && !sourceIsCurrentContext && !stagedContextMatchesActiveContractWeek) {
+        const hasExplicitActiveScopeMatch = !!(
+          (activeTimesheetId && itemTimesheetId && itemTimesheetId === activeTimesheetId) ||
+          (activeContractWeekId && itemContractWeekId && itemContractWeekId === activeContractWeekId)
+        );
+        if (!hasExplicitActiveScopeMatch) return;
+      }
+      if (!activeTimesheetId && activeContractWeekId && !stagedContextMatchesActiveContractWeek && itemSourceLabel === 'ATTACHED') return;
       if (stagedContext && !stagedContextMatchesActiveContractWeek) return;
-      if (!stagedContextMatchesActiveContractWeek && item.queue_id && !item.evidence_id && upper(item.source_label || item.source_badge || '') !== 'ATTACHED') return;
-      if (!stagedContextMatchesActiveContractWeek && item.system === true && upper(item.source_label || item.source_badge || '') !== 'ATTACHED') return;
+      if (!stagedContextMatchesActiveContractWeek && item.queue_id && !item.evidence_id && itemSourceLabel !== 'ATTACHED') return;
+      if (!stagedContextMatchesActiveContractWeek && item.system === true && itemSourceLabel !== 'ATTACHED') return;
 
       const evidenceId = trimStr(item.evidence_id || item.id || '');
-      const queueId = trimStr(item.queue_id || (stagedContextMatchesActiveContractWeek ? item.id : '') || '');
-      const storageKey = trimStr(item.storage_key || item.r2_key || item.download_storage_key || '');
+      const queueId = trimStr(
+        item.queue_id ||
+        item.manual_timesheet_queue_id ||
+        item.manual_queue_id ||
+        itemMeta.queue_id ||
+        itemMeta.manual_timesheet_queue_id ||
+        itemMeta.manual_queue_id ||
+        (stagedContextMatchesActiveContractWeek ? item.id : '') ||
+        ''
+      );
+      const storageKey = trimStr(item.storage_key || item.r2_key || item.download_storage_key || itemMeta.storage_key || itemMeta.r2_key || itemMeta.file_key || '');
       if (!evidenceId && !queueId && !storageKey) return;
 
       const synthetic = isSyntheticAttachedFallback(item, evidenceId);
@@ -134996,9 +136646,10 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       }
       rows.push(normalized);
     };
-    for (const source of sources) {
-      if (!Array.isArray(source)) continue;
-      for (const item of source) add(item);
+    for (const sourceInfo of sourceSets) {
+      const sourceRows = sourceInfo && Array.isArray(sourceInfo.rows) ? sourceInfo.rows : [];
+      if (!sourceRows.length) continue;
+      for (const item of sourceRows) add(item, sourceInfo);
     }
     return { rows, syntheticRows };
   };
@@ -135220,9 +136871,6 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     requires_evidence_hydration: pane.__requires_evidence_hydration === true
   };
 }
-
-
-
 async function rerenderBulkProcessWorkbench(state, logPrefix) {
   const prefix = String(logPrefix || '[TS][BULK-PROCESS]');
   const st = (state && typeof state === 'object') ? state : null;
@@ -135745,6 +137393,8 @@ async function handleBulkProcessSave(state) {
     const uiSnapshot = captureBulkProcessUiSnapshot(st);
     st.__suppress_dirty_marking = true;
     st.saving = true;
+    st.save_in_flight = true;
+    st.__bulk_process_save_in_flight = true;
     st.error_text = '';
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
 
@@ -135759,6 +137409,63 @@ async function handleBulkProcessSave(state) {
     const currentRowKey = trimStr(st.active_row_key || row.row_key || makeRowKey(row));
     const activeRowSignature = trimStr(row.row_signature || ctx.row_signature || st.active_row?.row_signature || '');
 
+    const parseSavedJsonForKeepEmpty = (value) => {
+      if (value == null) return null;
+      if (Array.isArray(value) || (value && typeof value === 'object')) return deep(value);
+      if (typeof value !== 'string') return null;
+      const rawValue = value.trim();
+      if (!rawValue) return null;
+      try {
+        const parsed = JSON.parse(rawValue);
+        return (Array.isArray(parsed) || (parsed && typeof parsed === 'object')) ? parsed : null;
+      } catch {
+        return null;
+      }
+    };
+    const objectForKeepEmpty = (value) => {
+      const parsed = parseSavedJsonForKeepEmpty(value);
+      return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+    };
+    const scheduleHasMeaningfulRowsForKeepEmpty = (value) => {
+      const parsed = parseSavedJsonForKeepEmpty(value);
+      if (!Array.isArray(parsed)) return false;
+      return parsed.some((entry) => {
+        if (Array.isArray(entry)) return scheduleHasMeaningfulRowsForKeepEmpty(entry);
+        if (!entry || typeof entry !== 'object') return false;
+        return !!(
+          trimStr(entry.start || entry.worked_start || '') ||
+          trimStr(entry.end || entry.worked_end || '') ||
+          trimStr(entry.break_start || '') ||
+          trimStr(entry.break_end || '') ||
+          trimStr(entry.ref || entry.reference || '') ||
+          trimStr(entry.break_mins ?? entry.break_minutes ?? '')
+        );
+      });
+    };
+    const hasMeaningfulWeeklyLinesByDateForKeepEmpty = (value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      return Object.values(value).some((entry) => {
+        const list = Array.isArray(entry) ? entry : (entry && typeof entry === 'object' ? Object.values(entry) : []);
+        return list.some((line) => {
+          const ln = (line && typeof line === 'object') ? line : {};
+          return !!(
+            trimStr(ln.start || '') ||
+            trimStr(ln.end || '') ||
+            trimStr(ln.break_start || '') ||
+            trimStr(ln.break_end || '') ||
+            trimStr(ln.ref || ln.reference || '') ||
+            trimStr(ln.break_mins ?? ln.break_minutes ?? '')
+          );
+        });
+      });
+    };
+    const boolishKeepEmpty = (value) => {
+      if (value === true || value === 1) return true;
+      if (value === false || value == null) return false;
+      const s = String(value).trim().toLowerCase();
+      return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+    };
+
     const sheetScope = String(details.sheet_scope || row.sheet_scope || ts.sheet_scope || '').toUpperCase();
     const subMode = String(ts.submission_mode || row.submission_mode || '').toUpperCase();
 
@@ -135767,6 +137474,58 @@ async function handleBulkProcessSave(state) {
     const isPlannedWeeklyWithoutTs = (sheetScope === 'WEEKLY' && !!weekId && !tsId);
     const isWeeklyManualContext = (sheetScope === 'WEEKLY' && (subMode === 'MANUAL' || isPlannedWeeklyWithoutTs));
     const isDailyManualContext = (sheetScope === 'DAILY' && subMode === 'MANUAL' && !!tsId);
+    const contractWeekForKeepEmpty = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : {};
+    const totalsForKeepEmpty = objectForKeepEmpty(contractWeekForKeepEmpty.totals_json || row.totals_json || null);
+    const hoursForKeepEmpty = (totalsForKeepEmpty.hours && typeof totalsForKeepEmpty.hours === 'object') ? totalsForKeepEmpty.hours : {};
+    const routeTypeForKeepEmpty = upper(details.route_type || row.route_type || '');
+    const routeFamilyForKeepEmpty = upper(row.route_family || details.route_family || '');
+    const routeSubfamilyForKeepEmpty = upper(row.route_subfamily || details.route_subfamily || '');
+    const underlyingFamilyForKeepEmpty = upper(row.underlying_channel_family || details.underlying_channel_family || '');
+    const additionalSeqForKeepEmpty = Number(contractWeekForKeepEmpty.additional_seq || details.additional_seq || details.contract_week_additional_seq || row.additional_seq || row.contract_week_additional_seq || 0) || 0;
+    const plannedEmptyForKeepEmpty = [contractWeekForKeepEmpty.planned_schedule_json, row.planned_schedule_json].some((value) => {
+      const parsed = parseSavedJsonForKeepEmpty(value);
+      return Array.isArray(parsed) && parsed.length === 0;
+    });
+    const actualEmptyForKeepEmpty = [ts.actual_schedule_json, tsfin.actual_schedule_json, row.actual_schedule_json].some((value) => {
+      const parsed = parseSavedJsonForKeepEmpty(value);
+      return Array.isArray(parsed) && parsed.length === 0;
+    });
+    const invoiceBreakdownForKeepEmpty = objectForKeepEmpty(details.invoiceBreakdown || details.invoice_breakdown_json || tsfin.invoice_breakdown_json || row.invoice_breakdown_json || null);
+    const invoiceSegmentsForKeepEmpty = Array.isArray(invoiceBreakdownForKeepEmpty.segments) ? invoiceBreakdownForKeepEmpty.segments : [];
+    const keepEmptyAdditionalManualAdjustment = !!(
+      isWeeklyManualContext &&
+      !!weekId &&
+      (additionalSeqForKeepEmpty > 0 || contractWeekForKeepEmpty.is_adjustment === true || row.is_adjustment === true || routeTypeForKeepEmpty.includes('_ADJUSTMENT')) &&
+      (routeFamilyForKeepEmpty === 'MANUAL_NON_QR' || routeSubfamilyForKeepEmpty === 'MANUAL_NON_QR' || underlyingFamilyForKeepEmpty === 'MANUAL_NON_QR' || additionalSeqForKeepEmpty > 0 || contractWeekForKeepEmpty.is_adjustment === true) &&
+      plannedEmptyForKeepEmpty &&
+      (!tsId || actualEmptyForKeepEmpty) &&
+      invoiceSegmentsForKeepEmpty.length === 0 &&
+      Number(row.total_hours || 0) === 0 &&
+      Number(tsfin.total_hours || 0) === 0 &&
+      Number(hoursForKeepEmpty.day || 0) === 0 &&
+      Number(hoursForKeepEmpty.night || 0) === 0 &&
+      Number(hoursForKeepEmpty.sat || 0) === 0 &&
+      Number(hoursForKeepEmpty.sun || 0) === 0 &&
+      Number(hoursForKeepEmpty.bh || 0) === 0
+    );
+    const keepEmptyScheduleTouched = !!(
+      boolishKeepEmpty(stateCtx.__scheduleUserTouched) ||
+      boolishKeepEmpty(stateCtx.scheduleUserTouched) ||
+      boolishKeepEmpty(stateCtx.__weeklyScheduleUserTouched) ||
+      boolishKeepEmpty(stateCtx.weeklyScheduleUserTouched) ||
+      boolishKeepEmpty(stateCtx.__manualScheduleUserTouched) ||
+      boolishKeepEmpty(stateCtx.manualScheduleUserTouched) ||
+      boolishKeepEmpty(stateCtx.scheduleTouched) ||
+      boolishKeepEmpty(stateCtx.hoursScheduleTouched)
+    );
+    const keepEmptySchedulePollutionBlocked = !!(
+      keepEmptyAdditionalManualAdjustment &&
+      !keepEmptyScheduleTouched &&
+      (
+        scheduleHasMeaningfulRowsForKeepEmpty(stateCtx.schedule) ||
+        hasMeaningfulWeeklyLinesByDateForKeepEmpty(stateCtx.weeklyLinesByDate)
+      )
+    );
 
     const currentWeeklyScheduleBaseline = (() => {
       const src = tsId
@@ -135818,6 +137577,7 @@ async function handleBulkProcessSave(state) {
     const scheduleChangedWeekly =
       isWeeklyManualContext &&
       hasExplicitWeeklyScheduleDraft &&
+      (!keepEmptyAdditionalManualAdjustment || keepEmptyScheduleTouched) &&
       stableStringify(stagedSchedule || []) !== stableStringify(currentWeeklyScheduleBaseline || []);
 
     const currentExtrasWeek = (() => {
@@ -135945,6 +137705,17 @@ async function handleBulkProcessSave(state) {
       )
     );
 
+    if (keepEmptySchedulePollutionBlocked) {
+      st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
+      st.error_text = 'This additional manual adjustment is explicitly zero-hours. Standard schedule fallback rows cannot be saved unless the user deliberately enters hours.';
+      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE][KEEP-EMPTY-SCHEDULE-BLOCKED]');
+      st.__suppress_dirty_marking = false;
+      GE();
+      return { ok: false, error: 'KEEP_EMPTY_SCHEDULE_POLLUTION_BLOCKED', message: st.error_text, evidenceRequired: false };
+    }
+
     const weeklyScheduleDirtyAttempt = !!(scheduleChangedWeekly || extrasChangedWeekly);
     const hoursScheduleDirtyAttempt = !!(weeklyScheduleDirtyAttempt || dailyScheduleChanged);
     const nonExpenseDirty = !!(hoursScheduleDirtyAttempt || referenceChanged);
@@ -135967,6 +137738,8 @@ async function handleBulkProcessSave(state) {
 
     if (expensesChanged && editability?.canEditExpenses === false) {
       st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
       st.error_text = trimStr(editability?.expensesDisabledReason || '') || 'Expenses cannot be edited for this row.';
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE][EXPENSES-BLOCKED]');
       st.__suppress_dirty_marking = false;
@@ -135985,6 +137758,8 @@ async function handleBulkProcessSave(state) {
 
     if (expensesChanged && !actualTimesheetId && !plannedContractWeekExpenseDraftSave) {
       st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
       st.error_text = expenseStorageTarget === 'CONTRACT_WEEK_DRAFT'
         ? 'contract_week_id missing; cannot save planned-week expenses.'
         : 'A real current timesheet is required before saving staged expenses.';
@@ -135995,6 +137770,8 @@ async function handleBulkProcessSave(state) {
     }
     if (expensesChanged && !plannedContractWeekExpenseDraftSave && expenseStorageTarget !== 'TSFIN') {
       st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
       st.error_text = trimStr(editability?.expensesDisabledReason || '') || 'Expenses cannot be edited for this row.';
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
       st.__suppress_dirty_marking = false;
@@ -136003,6 +137780,8 @@ async function handleBulkProcessSave(state) {
     }
     if (tsfinExpenseSave && typeof commitTimesheetExpensesMileageDraft !== 'function') {
       st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
       st.error_text = 'Unable to save expenses right now.';
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
       st.__suppress_dirty_marking = false;
@@ -136012,6 +137791,8 @@ async function handleBulkProcessSave(state) {
 
     if (hoursScheduleDirtyAttempt && editability?.canEditHoursSchedule === false) {
       st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
       st.error_text = trimStr(editability?.hoursScheduleDisabledReason || '') || 'Hours/schedule cannot be edited for this row.';
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
       st.__suppress_dirty_marking = false;
@@ -136021,6 +137802,8 @@ async function handleBulkProcessSave(state) {
 
     if (!expensesChanged && !nonExpenseDirty) {
       st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
       st.__suppress_dirty_marking = false;
       GE();
       return { ok: false, no_changes: true };
@@ -136028,6 +137811,8 @@ async function handleBulkProcessSave(state) {
 
     if (!editability.canSave && !(expensesChanged && editability.canEditExpenses === true) && !plannedContractWeekExpenseDraftSave) {
       st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
       st.error_text = 'This row cannot currently be saved.';
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
       st.__suppress_dirty_marking = false;
@@ -136046,6 +137831,11 @@ async function handleBulkProcessSave(state) {
         const plannedDraftExpensesOnly = !!(plannedContractWeekExpenseDraftSave && !scheduleChangedWeekly && !extrasChangedWeekly);
         const plannedDraftPayload = plannedDraftExpensesOnly
           ? {
+              ...(keepEmptyAdditionalManualAdjustment ? {
+                planned_schedule_json: [],
+                keep_additional_manual_adjustment_schedule_empty: true,
+                suppress_standard_schedule_fallback: true
+              } : {}),
               expenses_draft: deep(stagedExpenses),
               bulk_process: true,
               return_bulk_patch: true,
@@ -136054,9 +137844,11 @@ async function handleBulkProcessSave(state) {
               row_signature: activeRowSignature || null
             }
           : {
-              planned_schedule_json: scheduleChangedWeekly
-                ? (Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [])
-                : (Array.isArray(currentWeeklyScheduleBaseline) ? currentWeeklyScheduleBaseline : []),
+              planned_schedule_json: keepEmptyAdditionalManualAdjustment && !keepEmptyScheduleTouched
+                ? []
+                : (scheduleChangedWeekly
+                    ? (Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [])
+                    : (Array.isArray(currentWeeklyScheduleBaseline) ? currentWeeklyScheduleBaseline : [])),
               additional_units_week: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasWeek || {}) } : { ...(currentExtrasWeek || {}) },
               additional_units_per_day: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasPerDay || {}) } : { ...(currentExtrasPerDay || {}) },
               bulk_process: true,
@@ -136064,22 +137856,32 @@ async function handleBulkProcessSave(state) {
               context: 'bulk_process',
               expected_row_signature: activeRowSignature || null,
               row_signature: activeRowSignature || null,
+              ...(keepEmptyAdditionalManualAdjustment ? {
+                keep_additional_manual_adjustment_schedule_empty: true,
+                suppress_standard_schedule_fallback: true
+              } : {}),
               ...(expensesChanged ? { expenses_draft: deep(stagedExpenses) } : {})
             };
         saveResult = await contractWeekManualDraftUpsert(String(weekId), plannedDraftPayload);
       } else {
         const payload = {
           expected_timesheet_id: details.current_timesheet_id || ts.timesheet_id || tsId || null,
-          actual_schedule_json: scheduleChangedWeekly
-            ? (Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [])
-            : (Array.isArray(currentWeeklyScheduleBaseline) ? currentWeeklyScheduleBaseline : []),
+          actual_schedule_json: keepEmptyAdditionalManualAdjustment && !keepEmptyScheduleTouched
+            ? []
+            : (scheduleChangedWeekly
+                ? (Array.isArray(stateCtx.schedule) ? stateCtx.schedule : [])
+                : (Array.isArray(currentWeeklyScheduleBaseline) ? currentWeeklyScheduleBaseline : [])),
           additional_units_week: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasWeek || {}) } : { ...(currentExtrasWeek || {}) },
           additional_units_per_day: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasPerDay || {}) } : { ...(currentExtrasPerDay || {}) },
           bulk_process: true,
           return_bulk_patch: true,
           context: 'bulk_process',
           expected_row_signature: activeRowSignature || null,
-          row_signature: activeRowSignature || null
+          row_signature: activeRowSignature || null,
+          ...(keepEmptyAdditionalManualAdjustment ? {
+            keep_additional_manual_adjustment_schedule_empty: true,
+            suppress_standard_schedule_fallback: true
+          } : {})
         };
         saveResult = await manualUpsertContractWeek(String(weekId), payload, {
           bulkProcessOwnsTransition: true,
@@ -136103,6 +137905,8 @@ async function handleBulkProcessSave(state) {
         if (!sanitisedDaily.ok) {
           st.error_text = 'Fix the highlighted daily shift/break fields before saving.';
           st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
           await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
           st.__suppress_dirty_marking = false;
           GE();
@@ -136155,6 +137959,8 @@ async function handleBulkProcessSave(state) {
       if (!expenseCommitResult?.ok) {
         const msg = trimStr(expenseCommitResult?.message || expenseCommitResult?.error || 'Unable to save expenses.');
         st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
         st.error_text = msg;
         await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
         st.__suppress_dirty_marking = false;
@@ -136233,6 +138039,8 @@ async function handleBulkProcessSave(state) {
         };
       }
       st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
       st.__suppress_dirty_marking = false;
       st.dirty = false;
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE][EXPENSES]');
@@ -136352,6 +138160,8 @@ async function handleBulkProcessSave(state) {
     });
 
     st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
     st.__suppress_dirty_marking = false;
 
@@ -136359,6 +138169,8 @@ async function handleBulkProcessSave(state) {
     return { ok: true };
   } catch (err) {
     st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
     st.error_text = String(err?.message || err || 'Failed to save Bulk Process changes.');
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE]');
     st.__suppress_dirty_marking = false;
@@ -136389,6 +138201,7 @@ async function handleBulkProcessProcess(state) {
     try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
   };
   const trimStr = (value) => String(value == null ? '' : value).trim();
+  const hasValue = (value) => trimStr(value) !== '';
   const upper = (value) => trimStr(value).toUpperCase();
   const pickObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? deep(value) : {};
   const rowKeyOf = (row) => {
@@ -136622,6 +138435,29 @@ async function handleBulkProcessProcess(state) {
     st.activeRecordIdentity = recordIdentity;
     st.activeTimesheetId = nextTimesheetId || null;
     st.activeContractWeekId = nextContractWeekId || null;
+
+    if (/^contract_week:/i.test(trimStr(previousKey || '')) && /^timesheet:/i.test(patchedKey)) {
+      st.filters = (st.filters && typeof st.filters === 'object') ? { ...st.filters } : {};
+      st.filters.row_key = patchedKey;
+      st.filters.row_keys = [patchedKey];
+      st.filters.timesheet_id = nextTimesheetId || '';
+      st.filters.timesheet_ids = nextTimesheetId ? [nextTimesheetId] : [];
+      st.filters.contract_week_id = '';
+      st.filters.contract_week_ids = [];
+      st.filters.previous_row_key = trimStr(previousKey || '');
+
+      st.seed = (st.seed && typeof st.seed === 'object') ? { ...st.seed } : {};
+      st.seed.focus_row_key = patchedKey;
+      st.seed.focusRowKey = patchedKey;
+      st.seed.row_key = patchedKey;
+      st.seed.rowKey = patchedKey;
+      st.seed.timesheet_id = nextTimesheetId || '';
+      st.seed.timesheetId = nextTimesheetId || '';
+      st.seed.contract_week_id = '';
+      st.seed.contractWeekId = '';
+      st.__bulk_process_seed_focus_row_key = patchedKey;
+    }
+
     if (!st.formState || typeof st.formState !== 'object') st.formState = {};
     st.formState.__forId = recordIdentity;
     if (window.modalCtx && window.modalCtx.bulkProcessState === st) {
@@ -136919,6 +138755,11 @@ async function handleBulkProcessProcess(state) {
 
     st.__suppress_dirty_marking = true;
     st.processing = true;
+    st.process_in_flight = true;
+    st.__bulk_process_process_in_flight = true;
+    st.saving = false;
+    st.save_in_flight = false;
+    st.__bulk_process_save_in_flight = false;
     st.error_text = '';
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][START]');
 
@@ -136934,6 +138775,11 @@ async function handleBulkProcessProcess(state) {
     const evidenceOk = await confirmNoEvidence(active);
     if (!evidenceOk) {
       st.processing = false;
+      st.process_in_flight = false;
+      st.__bulk_process_process_in_flight = false;
+      st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
       st.__suppress_dirty_marking = false;
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][CANCELLED]');
       GE();
@@ -137121,12 +138967,22 @@ async function handleBulkProcessProcess(state) {
     }
 
     st.processing = false;
+    st.process_in_flight = false;
+    st.__bulk_process_process_in_flight = false;
+    st.saving = false;
+    st.save_in_flight = false;
+    st.__bulk_process_save_in_flight = false;
     st.__suppress_dirty_marking = false;
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][PATCHED]');
     GE();
     return { ok: true, result: processResult, row_patch: processResult?.row_patch || patchedRow, data_row: processResult?.data_row || patchedRow };
   } catch (err) {
     st.processing = false;
+    st.process_in_flight = false;
+    st.__bulk_process_process_in_flight = false;
+    st.saving = false;
+    st.save_in_flight = false;
+    st.__bulk_process_save_in_flight = false;
     st.__suppress_dirty_marking = false;
     st.error_text = String(err?.message || err || 'Failed to process Bulk Process row.');
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][ERROR]');
@@ -141316,11 +143172,88 @@ async function bindBulkAuthorisePreviewPane(state) {
       }
       return activeRowKey;
     };
+    const ensureBulkAuthorisePreviewRowChangeSeq = () => {
+      let seq = Number(st.__bulk_authorise_row_change_seq || st.__bulkAuthoriseRowChangeSeq || 0) || 0;
+      if (seq <= 0) {
+        seq = 1;
+        try { st.__bulk_authorise_row_change_seq = seq; } catch {}
+        try { st.__bulkAuthoriseRowChangeSeq = seq; } catch {}
+        try { if (window.modalCtx && typeof window.modalCtx === 'object') window.modalCtx.__bulk_authorise_row_change_seq = seq; } catch {}
+        try { if (window.modalCtx && typeof window.modalCtx === 'object') window.modalCtx.__bulkAuthoriseRowChangeSeq = seq; } catch {}
+      }
+      return seq;
+    };
+    const isBulkAuthorisePreviewSurfaceLive = () => {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      const frameKind = upper(frame?.kind || frame?.entity || '');
+      const modalKind = upper(window.modalCtx?.modal_kind || window.modalCtx?.modalKind || window.modalCtx?.kind || window.modalCtx?.entity || '');
+      const ownerKind = upper(st.owner_kind || st.ownerKind || window.modalCtx?.owner_kind || window.modalCtx?.ownerKind || '');
+      const explicitBulkProcess = frameKind.includes('BULK-PROCESS') || frameKind.includes('BULK_PROCESS') || modalKind.includes('BULK-PROCESS') || modalKind.includes('BULK_PROCESS') || ownerKind.includes('BULK_PROCESS') || ownerKind.includes('BULK-PROCESS');
+      if (explicitBulkProcess) return false;
+      return !!(
+        frameKind.includes('BULK-AUTHORISE') ||
+        frameKind.includes('BULK_AUTHORISE') ||
+        frameKind.includes('BULK-AUTH') ||
+        frameKind.includes('BULK_AUTH') ||
+        modalKind.includes('BULK-AUTHORISE') ||
+        modalKind.includes('BULK_AUTHORISE') ||
+        modalKind.includes('BULK-AUTH') ||
+        modalKind.includes('BULK_AUTH') ||
+        ownerKind.includes('BULK_AUTHORISE') ||
+        ownerKind.includes('BULK-AUTHORISE') ||
+        ownerKind.includes('BULK_AUTH') ||
+        ownerKind.includes('BULK-AUTH') ||
+        document.getElementById('bulkAuthorisePreviewPaneRoot')
+      );
+    };
+    const clearBulkAuthorisePreviewForInvalidOwner = (reason) => {
+      const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+      if (pane) {
+        try { if (typeof pane.__abortPreviewPresignRequests === 'function') pane.__abortPreviewPresignRequests(reason || 'invalid-bulk-authorise-preview-owner'); } catch {}
+        pane.__preview_target_key = '';
+        pane.__preview_signed_url = '';
+        pane.__preview_load_requested_target_key = '';
+        pane.__preview_recovery_key = '';
+        pane.__preview_recovery_attempt = 0;
+        pane.__active_attached_preview_target = '';
+        pane.__preview_identity = '';
+      }
+      try { st.__bulk_authorise_preview_owner_identity = ''; } catch {}
+      try { st.__bulkAuthorisePreviewOwnerIdentity = ''; } catch {}
+      try { st.__bulk_authorise_preview_row_key = ''; } catch {}
+      try { st.__bulkAuthorisePreviewRowKey = ''; } catch {}
+      try { st.__bulk_authorise_preview_invalid_reason = reason || 'invalid-bulk-authorise-preview-owner'; } catch {}
+    };
     const ownerIdentity = resolveOwnerIdentity();
     const activeRowSignature = trimStr(
       st.__bulk_authorise_active_row_signature ||
-      (activeRow && typeof buildBulkAuthoriseRowSignature === 'function' ? buildBulkAuthoriseRowSignature(activeRow, st) : '')
+      st.__bulk_authorise_active_render_signature ||
+      (activeRow && typeof buildBulkAuthoriseRowSignature === 'function' ? buildBulkAuthoriseRowSignature(activeRow, st) : '') ||
+      activeRowKey
     );
+    const rowChangeSeq = ensureBulkAuthorisePreviewRowChangeSeq();
+    if (!isBulkAuthorisePreviewSurfaceLive() || !ownerIdentity || !activeRowKey || rowChangeSeq <= 0 || !activeRowSignature) {
+      clearBulkAuthorisePreviewForInvalidOwner(!isBulkAuthorisePreviewSurfaceLive() ? 'modal-owner-changed' : 'missing-preview-owner');
+      if ((typeof window.__LOG_MODAL === 'boolean') && window.__LOG_MODAL === true) {
+        console.log('[TS][BULK-AUTH][PREVIEW]', {
+          event: 'identity-bind-refused',
+          ownerIdentity: ownerIdentity || '',
+          activeRowKey,
+          activeRowSignature,
+          rowChangeSeq,
+          reason: !isBulkAuthorisePreviewSurfaceLive() ? 'modal-owner-changed' : 'missing-owner-row-or-sequence'
+        });
+      }
+      return;
+    }
+    st.__bulk_authorise_preview_owner_identity = ownerIdentity;
+    st.__bulkAuthorisePreviewOwnerIdentity = ownerIdentity;
+    st.__bulk_authorise_preview_row_key = activeRowKey;
+    st.__bulkAuthorisePreviewRowKey = activeRowKey;
+    st.__bulk_authorise_preview_row_change_seq = rowChangeSeq;
+    st.__bulkAuthorisePreviewRowChangeSeq = rowChangeSeq;
+    st.__bulk_authorise_preview_render_signature = activeRowSignature;
+    st.__bulkAuthorisePreviewRenderSignature = activeRowSignature;
     const previousRowSignature = trimStr(st.__bulkAuthorisePreviewActiveRowSignature || '');
     const previousRowKey = trimStr(st.__bulkAuthorisePreviewActiveRowKey || '');
     const rowChanged = activeRowSignature !== previousRowSignature || activeRowKey !== previousRowKey;
@@ -141356,6 +143289,10 @@ async function bindBulkAuthorisePreviewPane(state) {
           }
         }
         pane.__preview_identity = ownerIdentity || '';
+        pane.__preview_owner_identity = ownerIdentity || '';
+        pane.__preview_row_key = activeRowKey || '';
+        pane.__preview_row_change_seq = rowChangeSeq;
+        pane.__preview_render_signature = activeRowSignature || '';
         if ((typeof window.__LOG_MODAL === 'boolean') && window.__LOG_MODAL === true) {
           console.log('[TS][BULK-AUTH][PREVIEW]', {
             event: 'identity-bind',
@@ -141709,6 +143646,7 @@ async function bindBulkAuthorisePreviewPane(state) {
 
   await fetchForCurrentState();
 }
+
 
 
 
@@ -146454,7 +148392,6 @@ async function enqueueQrTimesheetEmail(timesheetId, options = {}) {
 }
 
 
-
 async function handleBulkAuthoriseAddAdditionalManual(state, row) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][ADD-ADDITIONAL]');
   GC('handleBulkAuthoriseAddAdditionalManual');
@@ -146492,6 +148429,55 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
   const readBool = (...entries) => {
     const value = readFirst(...entries);
     return value === undefined ? null : boolish(value);
+  };
+
+
+  const invalidateBulkAuthorisePreviewOwnershipForAddAdditional = (extra = {}) => {
+    const token = `bulk-authorise-invalidated:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const sourceRowKey = trimStr(extra.source_row_key || extra.row_key || '');
+    const stores = [
+      st,
+      activeCtx,
+      activeContext,
+      window.modalCtx,
+      window.modalCtx?.bulkAuthoriseState,
+      window.modalCtx?.bulk_authorise_state
+    ].filter((store) => store && typeof store === 'object');
+
+    for (const store of stores) {
+      try { store.__bulk_authorise_preview_owner_identity = token; } catch {}
+      try { store.__bulkAuthorisePreviewOwnerIdentity = token; } catch {}
+      try { store.__bulk_authorise_preview_row_key = '__invalidated__'; } catch {}
+      try { store.__bulkAuthorisePreviewRowKey = '__invalidated__'; } catch {}
+      try { store.__bulk_authorise_preview_render_seq = Math.max(0, Number(store.__bulk_authorise_preview_render_seq || 0) || 0) + 1; } catch {}
+      try { store.__bulkAuthorisePreviewRenderSeq = Math.max(0, Number(store.__bulkAuthorisePreviewRenderSeq || 0) || 0) + 1; } catch {}
+      try { store.__bulk_authorise_row_change_seq = Math.max(0, Number(store.__bulk_authorise_row_change_seq || 0) || 0) + 1; } catch {}
+      try { store.__bulkAuthoriseRowChangeSeq = Math.max(0, Number(store.__bulkAuthoriseRowChangeSeq || 0) || 0) + 1; } catch {}
+      try { store.__bulk_authorise_evidence_owner_identity = token; } catch {}
+      try { store.__bulkAuthoriseEvidenceOwnerIdentity = token; } catch {}
+      try { store.__bulk_authorise_preview_cancelled_at = new Date().toISOString(); } catch {}
+      try { store.__bulk_authorise_preview_cancel_reason = 'add-additional-manual-switch-to-bulk-process'; } catch {}
+      try { store.__bulk_authorise_transition_source_row_key = sourceRowKey || null; } catch {}
+    }
+
+    try {
+      if (typeof window !== 'undefined') {
+        window.__bulkAuthorisePreviewInvalidationSeq = Math.max(0, Number(window.__bulkAuthorisePreviewInvalidationSeq || 0) || 0) + 1;
+        window.__bulkAuthorisePreviewInvalidationToken = token;
+      }
+    } catch {}
+
+    try {
+      if (typeof invalidateBulkAuthorisePreviewOwnership === 'function') {
+        invalidateBulkAuthorisePreviewOwnership({
+          token,
+          reason: 'add-additional-manual-switch-to-bulk-process',
+          source_row_key: sourceRowKey || null
+        });
+      }
+    } catch {}
+
+    return token;
   };
 
   try {
@@ -146557,7 +148543,9 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
       mutationRefresh: true,
       replace_current_workbench: true,
       open_as_root: true,
-      source_context: 'bulk_authorise'
+      source_context: 'bulk_authorise',
+      clear_bulk_authorise_context: true,
+      invalidate_bulk_authorise_preview: true
     };
 
     if (typeof handleBulkAuthoriseUnsavedChangeGuard === 'function') {
@@ -146575,6 +148563,10 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
       GE();
       return { ok: false, error: 'Save or discard the current manual edits before creating an additional timesheet.' };
     }
+
+    invalidateBulkAuthorisePreviewOwnershipForAddAdditional({
+      source_row_key: sourceRowKey || trimStr(srcRow.row_key || '') || null
+    });
 
     const priorBusyState = {
       loading: !!st.loading,
@@ -146753,7 +148745,6 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
     return { ok: false, error: st.error_text };
   }
 }
-
 
 
 async function handleBulkAuthoriseRouteConversion(state, row, action) {
@@ -158994,6 +160985,7 @@ function buildWeekIndex(weeks) {
  *    errorsByDate: { [ymd]: string[] }
  *  }
  */
+
 function buildWeeklyScheduleFromLinesAndValidate(weeklyLinesByDate, weekDays, opts = {}) {
   const allowOvernight = (opts.allowOvernight !== false);
   const allowBreakMins = (opts.allowBreakMins !== false);
@@ -159014,6 +161006,68 @@ function buildWeeklyScheduleFromLinesAndValidate(weeklyLinesByDate, weekDays, op
 
   const str = (x) => (x == null) ? '' : String(x).trim();
   const pad2 = (n) => String(n).padStart(2, '0');
+  const boolishKeepEmpty = (value) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value == null) return false;
+    const raw = String(value).trim().toLowerCase();
+    return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
+  };
+  const keepEmptyMode = !!(
+    boolishKeepEmpty(opts.keepEmpty) ||
+    boolishKeepEmpty(opts.keep_empty) ||
+    boolishKeepEmpty(opts.keepEmptyAdditionalManualAdjustmentScheduleEmpty) ||
+    boolishKeepEmpty(opts.keep_additional_manual_adjustment_schedule_empty) ||
+    boolishKeepEmpty(opts.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolishKeepEmpty(opts.suppressStandardScheduleFallback) ||
+    boolishKeepEmpty(opts.suppress_standard_schedule_fallback) ||
+    boolishKeepEmpty(opts.__suppressStandardScheduleFallback)
+  );
+  const keepEmptyScheduleTouched = !!(
+    boolishKeepEmpty(opts.scheduleUserTouched) ||
+    boolishKeepEmpty(opts.schedule_user_touched) ||
+    boolishKeepEmpty(opts.__scheduleUserTouched) ||
+    boolishKeepEmpty(opts.weeklyScheduleUserTouched) ||
+    boolishKeepEmpty(opts.weekly_schedule_user_touched) ||
+    boolishKeepEmpty(opts.__weeklyScheduleUserTouched) ||
+    boolishKeepEmpty(opts.manualScheduleUserTouched) ||
+    boolishKeepEmpty(opts.manual_schedule_user_touched) ||
+    boolishKeepEmpty(opts.__manualScheduleUserTouched) ||
+    boolishKeepEmpty(opts.scheduleTouched) ||
+    boolishKeepEmpty(opts.hoursScheduleTouched)
+  );
+  const keepEmptyLineHasMeaningfulValue = (line) => {
+    if (Array.isArray(line)) return line.some((entry) => keepEmptyLineHasMeaningfulValue(entry));
+    const ln = (line && typeof line === 'object') ? line : {};
+    return !!(
+      str(ln.ref || ln.reference || '') ||
+      str(ln.start || ln.worked_start || '') ||
+      str(ln.end || ln.worked_end || '') ||
+      str(ln.break_start || '') ||
+      str(ln.break_end || '') ||
+      str(ln.break_mins ?? ln.break_minutes ?? '')
+    );
+  };
+  if (keepEmptyMode && !keepEmptyScheduleTouched) {
+    const pollutedDates = [];
+    for (const ymd of dayList) {
+      const lines = Array.isArray(byDate[ymd]) ? byDate[ymd] : [];
+      if (lines.some((line) => keepEmptyLineHasMeaningfulValue(line))) pollutedDates.push(ymd);
+    }
+    if (pollutedDates.length) {
+      for (const ymd of pollutedDates) {
+        err(ymd, 'This additional manual adjustment is explicitly zero-hours. Standard schedule fallback rows cannot be saved or processed unless the user deliberately enters hours.');
+      }
+      return {
+        schedule: [],
+        hasErrors: true,
+        errorsByDate,
+        invalid: true,
+        invalid_reason: 'KEEP_EMPTY_ADDITIONAL_MANUAL_SCHEDULE_POLLUTION',
+        blocked_schedule_source: 'standard-schedule-fallback'
+      };
+    }
+    return { schedule: [], hasErrors: false, errorsByDate: {} };
+  }
 
   const addDaysYmd = (ymd, days) => {
     const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -193301,6 +195355,22 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     );
   };
 
+  const pickFirstUpper = (...values) => {
+    for (const value of values) {
+      const v = upper(value);
+      if (v) return v;
+    }
+    return '';
+  };
+
+  const pickFirstNumber = (...values) => {
+    for (const value of values) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n !== 0) return n;
+    }
+    return 0;
+  };
+
   const pickBackendBoolean = (key) => {
     const sources = [
       isPlainObject(det.action_flags) ? det.action_flags : null,
@@ -193453,10 +195523,90 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     qrUnsigned = false;
   }
 
+  const routeTypeForFooter = pickFirstUpper(
+    data.route_type,
+    meta.routeType,
+    meta.route_type,
+    det.route_type,
+    det.effective?.route_type,
+    det.action_flags?.route_type,
+    cw.route_type
+  );
+
+  const routeFamilyForFooter = pickFirstUpper(
+    data.route_family,
+    meta.routeFamily,
+    meta.route_family,
+    det.route_family,
+    det.effective?.route_family,
+    det.action_flags?.route_family,
+    cw.route_family
+  );
+
+  const routeSubfamilyForFooter = pickFirstUpper(
+    data.route_subfamily,
+    meta.routeSubfamily,
+    meta.route_subfamily,
+    det.route_subfamily,
+    det.effective?.route_subfamily,
+    det.action_flags?.route_subfamily,
+    cw.route_subfamily
+  );
+
+  const underlyingFamilyForFooter = pickFirstUpper(
+    data.underlying_channel_family,
+    meta.underlyingChannelFamily,
+    meta.underlying_channel_family,
+    det.underlying_channel_family,
+    det.effective?.underlying_channel_family,
+    det.action_flags?.underlying_channel_family,
+    cw.underlying_channel_family
+  );
+
+  const additionalSeqForFooter = pickFirstNumber(
+    data.additional_seq,
+    data.contract_week_additional_seq,
+    meta.additionalSeq,
+    meta.additional_seq,
+    det.additional_seq,
+    det.contract_week_additional_seq,
+    det.effective?.additional_seq,
+    det.action_flags?.additional_seq,
+    cw.additional_seq
+  );
+
+  const effectiveAdjustmentForFooter = !!(
+    boolish(data.is_adjustment) ||
+    boolish(meta.isAdjustment) ||
+    boolish(meta.is_adjustment) ||
+    boolish(det.is_adjustment) ||
+    boolish(det.effective?.is_adjustment) ||
+    boolish(det.action_flags?.is_adjustment) ||
+    boolish(ts.is_adjustment) ||
+    boolish(cw.is_adjustment) ||
+    additionalSeqForFooter > 0 ||
+    routeTypeForFooter.includes('_ADJUSTMENT')
+  );
+
+  const manualAdditionalForFooter = !!(
+    (routeTypeForFooter === 'WEEKLY_NHSP_ADJUSTMENT' || routeTypeForFooter === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' || routeTypeForFooter === 'WEEKLY_MANUAL_ADJUSTMENT' || routeTypeForFooter.includes('_ADJUSTMENT') || additionalSeqForFooter > 0) &&
+    (
+      effectiveAdjustmentForFooter ||
+      additionalSeqForFooter > 0 ||
+      routeFamilyForFooter === 'MANUAL_NON_QR' ||
+      routeSubfamilyForFooter === 'MANUAL_NON_QR' ||
+      underlyingFamilyForFooter === 'MANUAL_NON_QR' ||
+      cwModeSnapshot === 'MANUAL' ||
+      subMode === 'MANUAL'
+    )
+  );
+
   const backendImportAuthoritative = pickBackendBoolean('is_import_authoritative');
-  const importAuthoritative = (backendImportAuthoritative !== null)
-    ? backendImportAuthoritative
-    : isImportAuthoritativeFromSummary(data.route_type, data.client_no_timesheet_required);
+  const importAuthoritative = manualAdditionalForFooter
+    ? false
+    : ((backendImportAuthoritative !== null)
+        ? backendImportAuthoritative
+        : isImportAuthoritativeFromSummary(data.route_type || det.route_type || cw.route_type || routeTypeForFooter, data.client_no_timesheet_required));
 
   const backendUnprocessed =
     processingStatus === 'UNPROCESSED' ||
@@ -193504,11 +195654,20 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const canDeleteBase =
     ((frameMode === 'edit' || frameMode === 'view') && !locked && (hasTs || isPlannedWeek));
 
+  const safeRealTimesheetDeletePreview = !!(
+    dpEligible === true &&
+    (
+      manualAdditionalForFooter
+        ? dpKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE'
+        : (dpKind && dpKind !== 'IMPORT_CHILD_ADJUSTMENT')
+    )
+  );
+
   const canDelete =
     canDeleteBase &&
     (
       isPlannedWeek ||
-      (dpEligible === true && dpKind !== 'IMPORT_CHILD_ADJUSTMENT')
+      (hasTs && safeRealTimesheetDeletePreview)
     );
 
   const canUnprocess =
@@ -193545,6 +195704,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     canUnprocess
   };
 }
+
 
 
 // ✅ Canonical timesheet refresh helper (must exist BEFORE any footer clicks)
@@ -195671,21 +197831,30 @@ const boolish = (v) => {
 
 const normalizeOverviewRouteType = (v) => String(v || '').trim().toUpperCase();
 
+const isOverviewAdjustmentRouteType = (routeType) => {
+  const rt = normalizeOverviewRouteType(routeType);
+  return !!(
+    rt === 'WEEKLY_NHSP_ADJUSTMENT' ||
+    rt === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+    rt === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+    (rt && rt.includes('_ADJUSTMENT'))
+  );
+};
+
 const isSpecialImportAuthoritativeRouteType = (routeType) => {
   const rt = normalizeOverviewRouteType(routeType);
   return (
     rt === 'WEEKLY_NHSP' ||
-    rt === 'WEEKLY_NHSP_ADJUSTMENT' ||
     rt === 'WEEKLY_HEALTHROSTER'
   );
 };
 
-const isImportAuthoritativeFromSummary = (routeType, noTimesheetRequired) => {
+const isImportAuthoritativeFromSummary = (routeType, noTimesheetRequired, manualAdditionalForOverviewWiring = false) => {
+  if (manualAdditionalForOverviewWiring) return false;
   const rt = normalizeOverviewRouteType(routeType);
   const noTs = boolish(noTimesheetRequired);
   return (
     rt === 'WEEKLY_NHSP' ||
-    rt === 'WEEKLY_NHSP_ADJUSTMENT' ||
     (rt === 'WEEKLY_HEALTHROSTER' && noTs === true)
   );
 };
@@ -195694,6 +197863,9 @@ const pickEffectiveOverviewRouteType = (...candidates) => {
   const list = candidates
     .map(normalizeOverviewRouteType)
     .filter(Boolean);
+
+  const adjustment = list.find(isOverviewAdjustmentRouteType);
+  if (adjustment) return adjustment;
 
   const special = list.find(isSpecialImportAuthoritativeRouteType);
   if (special) return special;
@@ -195711,6 +197883,14 @@ const pickFirstBoolishValue = (...candidates) => {
     if (['false', '0', 'no', 'n', 'off'].includes(s)) return false;
   }
   return false;
+};
+
+const pickFirstOverviewNumber = (...candidates) => {
+  for (const candidate of candidates) {
+    const n = Number(candidate);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
 };
 
 const computeEffectiveOverviewRouteState = () => {
@@ -195743,14 +197923,36 @@ const computeEffectiveOverviewRouteState = () => {
     (detNow.effective && typeof detNow.effective === 'object')
       ? detNow.effective
       : {};
+  const actionFlagsNow =
+    (detNow.action_flags && typeof detNow.action_flags === 'object')
+      ? detNow.action_flags
+      : {};
+  const artifactHintsNow =
+    (detNow.artifact_hints && typeof detNow.artifact_hints === 'object')
+      ? detNow.artifact_hints
+      : {};
+  const bulkAuthoriseNow =
+    (detNow.bulk_authorise && typeof detNow.bulk_authorise === 'object')
+      ? detNow.bulk_authorise
+      : {};
+  const tsfinNow =
+    (detNow.tsfin && typeof detNow.tsfin === 'object')
+      ? detNow.tsfin
+      : {};
 
-  const routeType = pickEffectiveOverviewRouteType(
+  const routeTypeCandidates = [
     detNow.route_type,
     effectiveNow.route_type,
+    actionFlagsNow.route_type,
+    artifactHintsNow.route_type,
+    bulkAuthoriseNow.route_type,
     cwNow.route_type,
     metaNow.route_type,
+    metaNow.routeType,
     dataNow.route_type
-  );
+  ];
+
+  const rawRouteType = pickEffectiveOverviewRouteType(...routeTypeCandidates);
 
   const noTimesheetRequired = boolish(
     pickFirstBoolishValue(
@@ -195811,6 +198013,149 @@ const computeEffectiveOverviewRouteState = () => {
     ? (tsSubModeNow || cwModeSnapshotNow)
     : (cwModeSnapshotNow || tsSubModeNow);
 
+  const routeFamilyNow = String(
+    dataNow.route_family ||
+    effectiveNow.route_family ||
+    actionFlagsNow.route_family ||
+    artifactHintsNow.route_family ||
+    bulkAuthoriseNow.route_family ||
+    cwNow.route_family ||
+    ''
+  ).toUpperCase();
+
+  const routeSubfamilyNow = String(
+    dataNow.route_subfamily ||
+    effectiveNow.route_subfamily ||
+    actionFlagsNow.route_subfamily ||
+    artifactHintsNow.route_subfamily ||
+    bulkAuthoriseNow.route_subfamily ||
+    cwNow.route_subfamily ||
+    ''
+  ).toUpperCase();
+
+  const underlyingFamilyNow = String(
+    dataNow.underlying_channel_family ||
+    effectiveNow.underlying_channel_family ||
+    actionFlagsNow.underlying_channel_family ||
+    artifactHintsNow.underlying_channel_family ||
+    bulkAuthoriseNow.underlying_channel_family ||
+    cwNow.underlying_channel_family ||
+    ''
+  ).toUpperCase();
+
+  const additionalSeqNow = pickFirstOverviewNumber(
+    dataNow.additional_seq,
+    dataNow.contract_week_additional_seq,
+    effectiveNow.additional_seq,
+    actionFlagsNow.additional_seq,
+    artifactHintsNow.additional_seq,
+    bulkAuthoriseNow.additional_seq,
+    detNow.additional_seq,
+    detNow.contract_week_additional_seq,
+    cwNow.additional_seq
+  );
+
+  const adjustmentOriginNow = String(
+    tsNowObj.adjustment_origin ||
+    cwNow.adjustment_origin ||
+    dataNow.adjustment_origin ||
+    effectiveNow.adjustment_origin ||
+    actionFlagsNow.adjustment_origin ||
+    ''
+  ).toUpperCase();
+
+  const correctionIdNow = String(
+    tsNowObj.correction_id ||
+    cwNow.correction_id ||
+    dataNow.correction_id ||
+    effectiveNow.correction_id ||
+    actionFlagsNow.correction_id ||
+    ''
+  ).trim();
+
+  const correctionKindNow = String(
+    tsNowObj.correction_kind ||
+    cwNow.correction_kind ||
+    dataNow.correction_kind ||
+    effectiveNow.correction_kind ||
+    actionFlagsNow.correction_kind ||
+    ''
+  ).trim();
+
+  const importDerivedCorrectionSignal = !!(
+    adjustmentOriginNow === 'IMPORT_CORRECTION' ||
+    adjustmentOriginNow === 'IMPORT_CANCELLATION' ||
+    correctionIdNow ||
+    correctionKindNow
+  );
+
+  const adjustmentSignal = !!(
+    isOverviewAdjustmentRouteType(rawRouteType) ||
+    routeTypeCandidates.map(normalizeOverviewRouteType).some(isOverviewAdjustmentRouteType) ||
+    additionalSeqNow > 0 ||
+    boolish(dataNow.is_adjustment) ||
+    boolish(effectiveNow.is_adjustment) ||
+    boolish(actionFlagsNow.is_adjustment) ||
+    boolish(artifactHintsNow.is_adjustment) ||
+    boolish(bulkAuthoriseNow.is_adjustment) ||
+    boolish(detNow.is_adjustment) ||
+    boolish(tsNowObj.is_adjustment) ||
+    boolish(cwNow.is_adjustment)
+  );
+
+  const manualRouteSignal = !!(
+    effectiveSubMode === 'MANUAL' ||
+    cwModeSnapshotNow === 'MANUAL' ||
+    routeFamilyNow === 'MANUAL_NON_QR' ||
+    routeSubfamilyNow === 'MANUAL_NON_QR' ||
+    underlyingFamilyNow === 'MANUAL_NON_QR'
+  );
+
+  const manualAdditionalForOverviewWiring = !!(
+    adjustmentSignal &&
+    manualRouteSignal &&
+    !importDerivedCorrectionSignal
+  );
+
+  const basisNow = String(
+    tsfinNow.basis ||
+    dataNow.basis ||
+    effectiveNow.basis ||
+    ''
+  ).toUpperCase();
+
+  const routeListNow = routeTypeCandidates.map(normalizeOverviewRouteType).filter(Boolean);
+
+  const hasNhspLineage = !!(
+    routeListNow.includes('WEEKLY_NHSP') ||
+    routeListNow.includes('WEEKLY_NHSP_ADJUSTMENT') ||
+    basisNow.includes('NHSP') ||
+    boolish(effectiveNow.client_is_nhsp) ||
+    boolish(dataNow.client_is_nhsp) ||
+    boolish(policyNow.is_nhsp)
+  );
+
+  const hasHealthRosterLineage = !!(
+    routeListNow.includes('WEEKLY_HEALTHROSTER') ||
+    routeListNow.includes('WEEKLY_HEALTHROSTER_ADJUSTMENT') ||
+    basisNow.includes('HEALTHROSTER') ||
+    String(policyNow.weekly_mode || '').toUpperCase() === 'HEALTHROSTER' ||
+    boolish(effectiveNow.client_autoprocess_hr) ||
+    boolish(dataNow.client_autoprocess_hr) ||
+    boolish(policyNow.autoprocess_hr)
+  );
+
+  const manualAdditionalRouteType = (() => {
+    if (!manualAdditionalForOverviewWiring) return '';
+    if (routeListNow.includes('WEEKLY_NHSP_ADJUSTMENT') || hasNhspLineage) return 'WEEKLY_NHSP_ADJUSTMENT';
+    if (routeListNow.includes('WEEKLY_HEALTHROSTER_ADJUSTMENT') || hasHealthRosterLineage) return 'WEEKLY_HEALTHROSTER_ADJUSTMENT';
+    return 'WEEKLY_MANUAL_ADJUSTMENT';
+  })();
+
+  const routeType = manualAdditionalForOverviewWiring
+    ? manualAdditionalRouteType
+    : rawRouteType;
+
   return {
     clickedRouteType: String((mc.data && mc.data.route_type) || '').toUpperCase(),
     clickedSheetScope: String((mc.data && mc.data.sheet_scope) || '').toUpperCase(),
@@ -195820,7 +198165,11 @@ const computeEffectiveOverviewRouteState = () => {
     sheetScope: sheetScopeNow,
     subMode: effectiveSubMode,
     cwModeSnapshot: cwModeSnapshotNow,
-    importAuthoritative: isImportAuthoritativeFromSummary(routeType, noTimesheetRequired),
+    importAuthoritative: isImportAuthoritativeFromSummary(routeType, noTimesheetRequired, manualAdditionalForOverviewWiring),
+    manualAdditionalForOverviewWiring,
+    routeFamily: manualAdditionalForOverviewWiring ? 'MANUAL_NON_QR' : routeFamilyNow,
+    routeSubfamily: manualAdditionalForOverviewWiring ? 'MANUAL_NON_QR' : routeSubfamilyNow,
+    underlyingChannelFamily: manualAdditionalForOverviewWiring ? 'MANUAL_NON_QR' : underlyingFamilyNow,
     noTimesheetRequired,
     hasTs: hasCurrentTs,
     hasContractWeek: hasCurrentContractWeek,
@@ -195828,6 +198177,7 @@ const computeEffectiveOverviewRouteState = () => {
     currentContractWeekId
   };
 };
+
 
 const routeState = computeEffectiveOverviewRouteState();
 
@@ -195936,6 +198286,10 @@ const weeklyManualPlanned =
             },
             effective: {
               importAuthoritative,
+              manualAdditionalForOverviewWiring: !!routeState.manualAdditionalForOverviewWiring,
+              routeFamily: routeState.routeFamily || null,
+              routeSubfamily: routeState.routeSubfamily || null,
+              underlyingChannelFamily: routeState.underlyingChannelFamily || null,
               sheetScope,
               subMode,
               cwModeSnapshot,
@@ -200032,27 +202386,187 @@ if (btnTsProcess) {
 
           const isPlannedOnly = (!tsIdX && !!weekIdX);
 
-          // ✅ Enforce backend delete-preview policy for real timesheets (planned weeks keep existing behaviour)
-          const dpX =
-            (mc && mc.timesheetDeletePreview && typeof mc.timesheetDeletePreview === 'object')
-              ? mc.timesheetDeletePreview
-              : null;
+              const boolishDelete = (v) => {
+            if (v === true) return true;
+            if (v === false) return false;
+            if (v == null) return false;
+            const s = String(v).trim().toLowerCase();
+            return (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on');
+          };
 
-          const dpKindX = String((dpX && dpX.kind) ? dpX.kind : '').toUpperCase();
-          const dpEligibleX = (dpX && typeof dpX.eligible === 'boolean') ? dpX.eligible : false;
+          const upperDelete = (v) => String(v || '').trim().toUpperCase();
+
+          const numDelete = (v) => {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : 0;
+          };
+
+          const routeTypeDelete = upperDelete(
+            det?.route_type ||
+            det?.effective?.route_type ||
+            det?.action_flags?.route_type ||
+            det?.contract_week?.route_type ||
+            mc?.data?.route_type ||
+            ''
+          );
+
+          const routeFamilyDelete = upperDelete(
+            det?.route_family ||
+            det?.effective?.route_family ||
+            det?.action_flags?.route_family ||
+            det?.contract_week?.route_family ||
+            mc?.data?.route_family ||
+            ''
+          );
+
+          const routeSubfamilyDelete = upperDelete(
+            det?.route_subfamily ||
+            det?.effective?.route_subfamily ||
+            det?.action_flags?.route_subfamily ||
+            det?.contract_week?.route_subfamily ||
+            mc?.data?.route_subfamily ||
+            ''
+          );
+
+          const underlyingFamilyDelete = upperDelete(
+            det?.underlying_channel_family ||
+            det?.effective?.underlying_channel_family ||
+            det?.action_flags?.underlying_channel_family ||
+            det?.contract_week?.underlying_channel_family ||
+            mc?.data?.underlying_channel_family ||
+            ''
+          );
+
+          const cwModeDelete = upperDelete(
+            det?.cw_submission_mode_snapshot ||
+            det?.contract_week?.submission_mode_snapshot ||
+            mc?.timesheetMeta?.cw_submission_mode_snapshot ||
+            mc?.data?.submission_mode_snapshot ||
+            ''
+          );
+
+          const additionalSeqDelete = numDelete(
+            det?.additional_seq ??
+            det?.contract_week_additional_seq ??
+            det?.effective?.additional_seq ??
+            det?.action_flags?.additional_seq ??
+            det?.contract_week?.additional_seq ??
+            mc?.data?.additional_seq ??
+            mc?.data?.contract_week_additional_seq ??
+            0
+          );
+
+          const deleteTargetLooksManualAdditional = !!(
+            additionalSeqDelete > 0 ||
+            routeTypeDelete === 'WEEKLY_NHSP_ADJUSTMENT' ||
+            routeTypeDelete === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+            routeTypeDelete === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+            routeTypeDelete.includes('_ADJUSTMENT') ||
+            boolishDelete(det?.is_adjustment) ||
+            boolishDelete(det?.effective?.is_adjustment) ||
+            boolishDelete(det?.action_flags?.is_adjustment) ||
+            boolishDelete(det?.contract_week?.is_adjustment) ||
+            boolishDelete(det?.timesheet?.is_adjustment) ||
+            boolishDelete(mc?.data?.is_adjustment)
+          );
+
+          const deleteTargetLooksManualRoute = !!(
+            routeFamilyDelete === 'MANUAL_NON_QR' ||
+            routeSubfamilyDelete === 'MANUAL_NON_QR' ||
+            underlyingFamilyDelete === 'MANUAL_NON_QR' ||
+            cwModeDelete === 'MANUAL' ||
+            additionalSeqDelete > 0
+          );
+
+          const isKnownManualAdditionalDeleteTarget = !!(
+            !isPlannedOnly &&
+            !!tsIdX &&
+            !!weekIdX &&
+            deleteTargetLooksManualAdditional &&
+            deleteTargetLooksManualRoute
+          );
+
+          const refreshDeletePreviewNow = async () => {
+            if (isPlannedOnly) return null;
+
+            if (!tsIdX) throw new Error('Timesheet id missing.');
+
+            if (typeof fetchTimesheetDeletePreview === 'function') {
+              const out = await fetchTimesheetDeletePreview(String(tsIdX));
+              if (out && typeof out === 'object') return out.preview || out.delete_preview || out;
+            }
+
+            if (typeof authFetch !== 'function' || typeof API !== 'function') {
+              throw new Error('Delete preview refresh is unavailable.');
+            }
+
+            const res = await authFetch(API(`/api/timesheets/${encodeURIComponent(String(tsIdX))}/delete-preview`), {
+              method: 'GET'
+            });
+
+            let body = null;
+            try { body = await res.json(); } catch { body = null; }
+
+            if (!res.ok || !body) {
+              throw new Error((body && (body.message || body.error)) || 'Delete preview could not be refreshed.');
+            }
+
+            if (body.ok === false) {
+              throw new Error(body.message || body.error || 'Delete preview could not be refreshed.');
+            }
+
+            return body.preview || body.delete_preview || body;
+          };
+
+          // ✅ Always refresh delete preview immediately before showing destructive confirmation.
+          // Never trust cached mc.timesheetDeletePreview for real timesheet deletes.
+          let freshDpX =
+            isPlannedOnly
+              ? null
+              : await refreshDeletePreviewNow();
+
+          if (freshDpX && typeof freshDpX === 'object') {
+            try { mc.timesheetDeletePreview = freshDpX; } catch {}
+          }
+
+          const dpKindX = String((freshDpX && freshDpX.kind) ? freshDpX.kind : '').toUpperCase();
+          const dpEligibleX = (freshDpX && typeof freshDpX.eligible === 'boolean') ? freshDpX.eligible : false;
 
           if (!isPlannedOnly) {
             if (dpKindX === 'IMPORT_CHILD_ADJUSTMENT') {
               alert("This is an NHSP/HR child adjustment and can't be deleted directly. Delete must be performed via the parent timesheet (if eligible).");
               return;
             }
+
+            if (isKnownManualAdditionalDeleteTarget && dpKindX === 'WEEKLY_CHAIN_DELETE_PARENT') {
+              alert('Delete has been blocked for safety. This is an additional manual adjustment, but the refreshed preview is trying to delete a parent weekly chain.');
+              return;
+            }
+
+            if (isKnownManualAdditionalDeleteTarget && dpKindX !== 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') {
+              alert('Delete has been blocked for safety. This additional manual adjustment did not return an additional-only delete preview.');
+              return;
+            }
+
             if (dpEligibleX !== true) {
               alert('Delete is not available for this timesheet (it may be locked, invoiced/paid, or not eligible).');
               return;
             }
+            const previewContractWeekIds = Array.isArray(freshDpX?.contract_week_ids)
+              ? freshDpX.contract_week_ids.map((id) => String(id || '').trim()).filter(Boolean)
+              : [];
+
+            if (
+              (isKnownManualAdditionalDeleteTarget || dpKindX === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') &&
+              weekIdX &&
+              previewContractWeekIds.some((id) => String(id) !== String(weekIdX))
+            ) {
+              alert('Delete has been blocked for safety. The refreshed preview includes a source/base contract week as a destructive target.');
+              return;
+            }
           }
 
-          // Friendly confirm modal (uses preview.delete_items for details)
+          // Friendly confirm modal (uses refreshed preview.delete_items for details)
           const enc2 = escapeHtml;
 
           const fmtGBP = (n) => {
@@ -200066,9 +202580,9 @@ if (btnTsProcess) {
             const v = Number.isFinite(x) ? x : 0;
             return v.toFixed(2);
           };
-
-          const roleLabel = (it) => {
+           const roleLabel = (it) => {
             const r = String(it?.display_role || '').toUpperCase();
+            if (dpKindX === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') return 'Manual Adjustment';
             if (r === 'PARENT') return 'Parent';
             if (r === 'MANUAL_ADJUSTMENT') return 'Manual Adjustment';
             if (r === 'IMPORT_CHILD_ADJUSTMENT') return 'Import Adjustment';
@@ -200133,15 +202647,19 @@ if (btnTsProcess) {
             `;
           };
 
-          const dpItems = (!isPlannedOnly && dpX && Array.isArray(dpX.delete_items)) ? dpX.delete_items : [];
+            const dpItems = (!isPlannedOnly && freshDpX && Array.isArray(freshDpX.delete_items)) ? freshDpX.delete_items : [];
           const weYmdX =
             (dpItems[0] && dpItems[0].week_ending_date) ? String(dpItems[0].week_ending_date) :
             (det?.timesheet?.week_ending_date) ? String(det.timesheet.week_ending_date) :
             (mc.data?.week_ending_date) ? String(mc.data.week_ending_date) :
             '';
 
+          const isAdditionalOnlyDelete = !!(!isPlannedOnly && dpKindX === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE');
+
           const title =
-            isPlannedOnly ? 'Delete planned week?' : 'Delete timesheet(s)?';
+            isPlannedOnly
+              ? 'Delete planned week?'
+              : (isAdditionalOnlyDelete ? 'Delete additional manual adjustment?' : 'Delete timesheet(s)?');
 
           const messageHtml =
             isPlannedOnly
@@ -200157,23 +202675,37 @@ if (btnTsProcess) {
                   This action cannot be undone.
                 </div>
               `
-              : `
-                <div style="font-size:14px;font-weight:700;margin-bottom:6px;">
-                  Delete timesheet(s) for week ending ${enc2(weYmdX || 'Unknown')}?
-                </div>
-                <div class="mini" style="white-space:pre-wrap;">
-                  This will permanently delete the timesheet(s) listed below. Associated evidence, images and files will also be permanently deleted and will not return to Timesheet Imports.
-                </div>
-                <div class="mini" style="margin-top:10px;opacity:.8;">
-                  This action cannot be undone.
-                </div>
-              `;
+              : (isAdditionalOnlyDelete
+                ? `
+                  <div style="font-size:14px;font-weight:700;margin-bottom:6px;">
+                    Delete this additional manual adjustment?
+                  </div>
+                  <div class="mini" style="white-space:pre-wrap;">
+                    This will permanently delete only the additional manual adjustment listed below. The original/source timesheet and source contract week must not be deleted, detached, or changed.
+                  </div>
+                  <div class="mini" style="margin-top:10px;opacity:.8;">
+                    This action cannot be undone.
+                  </div>
+                `
+                : `
+                  <div style="font-size:14px;font-weight:700;margin-bottom:6px;">
+                    Delete timesheet(s) for week ending ${enc2(weYmdX || 'Unknown')}?
+                  </div>
+                  <div class="mini" style="white-space:pre-wrap;">
+                    This will permanently delete the timesheet(s) listed below. Associated evidence, images and files will also be permanently deleted and will not return to Timesheet Imports.
+                  </div>
+                  <div class="mini" style="margin-top:10px;opacity:.8;">
+                    This action cannot be undone.
+                  </div>
+                `);
 
           const extraHtml =
             isPlannedOnly ? '' : buildDeleteTableHtml(dpItems);
 
           const confirmLabel =
-            isPlannedOnly ? 'Delete planned week' : 'Delete timesheet(s)';
+            isPlannedOnly
+              ? 'Delete planned week'
+              : (isAdditionalOnlyDelete ? 'Delete additional adjustment' : 'Delete timesheet(s)');
 
           const confirmRes = await openUiConfirmModal({
             title,
@@ -200240,12 +202772,25 @@ if (btnTsProcess) {
           try { mc.__summaryCtx = summaryCtx || null; } catch {}
 
           try {
-            if (isPlannedOnly) {
+               if (isPlannedOnly) {
               if (!weekIdX) throw new Error('Contract week id missing.');
               await deletePlannedContractWeek(weekIdX);
             } else {
               if (!tsIdX) throw new Error('Timesheet id missing.');
-              await deleteTimesheetPermanent(tsIdX);
+
+              const expectedDeleteContractWeekId =
+                isAdditionalOnlyDelete
+                  ? (weekIdX || freshDpX?.contract_week_id || null)
+                  : (weekIdX || freshDpX?.contract_week_id || null);
+
+              await deleteTimesheetPermanent(tsIdX, {
+                expected_timesheet_id: tsIdX,
+                expected_contract_week_id: expectedDeleteContractWeekId,
+                expected_delete_kind: dpKindX || null,
+                contractWeekId: expectedDeleteContractWeekId,
+                expectedContractWeekId: expectedDeleteContractWeekId,
+                expectedDeleteKind: dpKindX || null
+              });
             }
 
             await showOkInfoModal(
@@ -200259,7 +202804,7 @@ if (btnTsProcess) {
               if (typeof applyTimesheetDeleteImpactToSummary === 'function') {
                 await applyTimesheetDeleteImpactToSummary({
                   entity: 'timesheets',
-                  preview: dpX || null,
+                         preview: freshDpX || null,
                   opened_timesheet_id: tsIdX || null,
                   planned_contract_week_id: (isPlannedOnly ? (weekIdX || null) : null),
                   summaryCtx: summaryCtx || null,
@@ -202361,7 +204906,6 @@ async function applyTimesheetDeleteImpactToSummary(opts = {}) {
 }
 
 
-
 async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
   const o = (opts && typeof opts === 'object') ? opts : {};
   const sourceContext = String(o.source_context || 'single_modal').trim().toLowerCase();
@@ -202466,6 +205010,161 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
     }
     if (contractWeekId) patchRow.contract_week_id = patchRow.contract_week_id || contractWeekId;
     return { patchRow, rowKey };
+  };
+
+
+  const toBulkBool = (value) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value == null) return false;
+    const txt = String(value).trim().toLowerCase();
+    return txt === 'true' || txt === '1' || txt === 'yes' || txt === 'y' || txt === 'on';
+  };
+
+  const toBulkNumber = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const normaliseAdditionalManualCreatedPatchRow = (patchRowInput, createdInput = {}, defaults = {}) => {
+    const row = (patchRowInput && typeof patchRowInput === 'object' && !Array.isArray(patchRowInput)) ? { ...patchRowInput } : {};
+    const createdObj = (createdInput && typeof createdInput === 'object' && !Array.isArray(createdInput)) ? createdInput : {};
+    const defaultObj = (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) ? defaults : {};
+    const timesheetId = firstBulkString(
+      row.current_timesheet_id,
+      row.timesheet_id,
+      createdObj.current_timesheet_id,
+      createdObj.timesheet_id,
+      createdObj.new_timesheet_id,
+      defaultObj.timesheet_id
+    );
+    const contractWeekId = firstBulkString(
+      row.contract_week_id,
+      createdObj.contract_week_id,
+      createdObj.week_id,
+      createdObj.contract_week?.id,
+      defaultObj.contract_week_id
+    );
+    const rowKey = firstBulkString(
+      row.row_key,
+      row.new_row_key,
+      createdObj.row_key,
+      createdObj.new_row_key,
+      timesheetId ? `timesheet:${timesheetId}` : '',
+      contractWeekId ? `contract_week:${contractWeekId}` : ''
+    );
+    const additionalSeq = Math.max(1, toBulkNumber(firstBulkString(row.additional_seq, createdObj.additional_seq, createdObj.contract_week?.additional_seq, defaultObj.additional_seq, '1')));
+    const routeTypeUpper = firstBulkString(row.route_type, defaultObj.route_type, defaultObj.source_route_type).toUpperCase();
+    const isWeekly = defaultObj.is_weekly === true || firstBulkString(row.sheet_scope, defaultObj.sheet_scope).toUpperCase() === 'WEEKLY' || !!contractWeekId;
+    const plannedSchedule = Array.isArray(row.planned_schedule_json)
+      ? row.planned_schedule_json
+      : (Array.isArray(createdObj.contract_week?.planned_schedule_json) ? createdObj.contract_week.planned_schedule_json : []);
+    const actualSchedule = Array.isArray(row.actual_schedule_json) ? row.actual_schedule_json : [];
+    const totalHours = toBulkNumber(firstBulkString(row.total_hours, row.contract_week_totals_json?.total_hours, defaultObj.total_hours, '0'));
+    const keepEmpty = !!(
+      isWeekly &&
+      plannedSchedule.length === 0 &&
+      actualSchedule.length === 0 &&
+      totalHours === 0
+    );
+
+    row.row_key = rowKey || row.row_key || null;
+    row.new_row_key = firstBulkString(row.new_row_key, createdObj.new_row_key, rowKey) || row.row_key || null;
+    if (timesheetId) {
+      row.timesheet_id = row.timesheet_id || timesheetId;
+      row.current_timesheet_id = row.current_timesheet_id || timesheetId;
+    }
+    if (contractWeekId) row.contract_week_id = row.contract_week_id || contractWeekId;
+    row.is_adjustment = true;
+    row.additional_seq = additionalSeq;
+    row.route_family = 'MANUAL_NON_QR';
+    row.route_subfamily = 'MANUAL_NON_QR';
+    row.underlying_channel_family = 'MANUAL_NON_QR';
+    row.is_import_authoritative = false;
+    if (isWeekly && (!row.route_type || routeTypeUpper === 'WEEKLY_NHSP' || routeTypeUpper === 'WEEKLY_NHSP_ADJUSTMENT' || defaultObj.client_is_nhsp === true)) {
+      row.route_type = 'WEEKLY_NHSP_ADJUSTMENT';
+    }
+    if (keepEmpty) {
+      row.actual_schedule_json = [];
+      row.planned_schedule_json = [];
+      row.total_hours = 0;
+      row.suppress_standard_schedule_fallback = true;
+      row.keep_additional_manual_adjustment_schedule_empty = true;
+      row.__suppressStandardScheduleFallback = true;
+      row.__keepAdditionalManualAdjustmentScheduleEmpty = true;
+      if (!row.contract_week_totals_json || typeof row.contract_week_totals_json !== 'object' || Array.isArray(row.contract_week_totals_json)) {
+        row.contract_week_totals_json = {};
+      }
+      row.contract_week_totals_json = {
+        ...row.contract_week_totals_json,
+        hours: { day: 0, night: 0, sat: 0, sun: 0, bh: 0 }
+      };
+    }
+    const actionFlags = (row.action_flags && typeof row.action_flags === 'object' && !Array.isArray(row.action_flags)) ? { ...row.action_flags } : {};
+    row.action_flags = {
+      ...actionFlags,
+      is_adjustment: true,
+      additional_seq: additionalSeq,
+      route_family: 'MANUAL_NON_QR',
+      route_subfamily: 'MANUAL_NON_QR',
+      underlying_channel_family: 'MANUAL_NON_QR',
+      is_import_authoritative: false,
+      supportsUnprocessedExpenseDraft: timesheetId ? actionFlags.supportsUnprocessedExpenseDraft : true,
+      supports_unprocessed_expense_draft: timesheetId ? actionFlags.supports_unprocessed_expense_draft : true,
+      expense_storage_target: timesheetId ? (actionFlags.expense_storage_target || 'TSFIN') : 'CONTRACT_WEEK_DRAFT',
+      expense_evidence_storage_target: timesheetId ? (actionFlags.expense_evidence_storage_target || 'TIMESHEET_EVIDENCE') : 'CONTRACT_WEEK_STAGED_EVIDENCE',
+      suppress_standard_schedule_fallback: keepEmpty,
+      keep_additional_manual_adjustment_schedule_empty: keepEmpty
+    };
+    return row;
+  };
+
+  const invalidateBulkAuthorisePreviewOwnershipForBulkProcessSwitch = (payload = {}) => {
+    const token = `bulk-authorise-invalidated:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const sourceRowKey = firstBulkString(payload.source_row_key, payload.previous_row_key, o.source_row_key, bulkProcessSeedBase?.source_row_key);
+    const targetRowKey = firstBulkString(payload.target_row_key, payload.row_key, payload.focus_row_key);
+    const stores = [
+      window.modalCtx,
+      window.modalCtx?.bulkAuthoriseState,
+      window.modalCtx?.bulk_authorise_state,
+      o.bulk_authorise_state,
+      o.state,
+      bulkProcessContext?.bulkAuthoriseState
+    ].filter((store) => store && typeof store === 'object');
+
+    for (const store of stores) {
+      try { store.__bulk_authorise_preview_owner_identity = token; } catch {}
+      try { store.__bulkAuthorisePreviewOwnerIdentity = token; } catch {}
+      try { store.__bulk_authorise_preview_row_key = '__invalidated__'; } catch {}
+      try { store.__bulkAuthorisePreviewRowKey = '__invalidated__'; } catch {}
+      try { store.__bulk_authorise_preview_render_seq = Math.max(0, Number(store.__bulk_authorise_preview_render_seq || 0) || 0) + 1; } catch {}
+      try { store.__bulkAuthorisePreviewRenderSeq = Math.max(0, Number(store.__bulkAuthorisePreviewRenderSeq || 0) || 0) + 1; } catch {}
+      try { store.__bulk_authorise_row_change_seq = Math.max(0, Number(store.__bulk_authorise_row_change_seq || 0) || 0) + 1; } catch {}
+      try { store.__bulkAuthoriseRowChangeSeq = Math.max(0, Number(store.__bulkAuthoriseRowChangeSeq || 0) || 0) + 1; } catch {}
+      try { store.__bulk_authorise_evidence_owner_identity = token; } catch {}
+      try { store.__bulkAuthoriseEvidenceOwnerIdentity = token; } catch {}
+      try { store.__bulk_authorise_preview_cancelled_at = new Date().toISOString(); } catch {}
+      try { store.__bulk_authorise_preview_cancel_reason = 'switch-to-bulk-process-after-additional-manual-create'; } catch {}
+      try { store.__bulk_authorise_transition_source_row_key = sourceRowKey || null; } catch {}
+      try { store.__bulk_authorise_transition_target_row_key = targetRowKey || null; } catch {}
+    }
+
+    try {
+      window.__bulkAuthorisePreviewInvalidationSeq = Math.max(0, Number(window.__bulkAuthorisePreviewInvalidationSeq || 0) || 0) + 1;
+      window.__bulkAuthorisePreviewInvalidationToken = token;
+    } catch {}
+
+    try {
+      if (typeof invalidateBulkAuthorisePreviewOwnership === 'function') {
+        invalidateBulkAuthorisePreviewOwnership({
+          token,
+          reason: 'switch-to-bulk-process-after-additional-manual-create',
+          source_row_key: sourceRowKey || null,
+          target_row_key: targetRowKey || null
+        });
+      }
+    } catch {}
+
+    return token;
   };
 
   const closeCurrentBulkAuthoriseBeforeBulkProcess = async () => {
@@ -202851,7 +205550,13 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
     }
 
     const createdPatch = requireBulkCreatedPatch(created, isWeekly ? 'Additional weekly manual timesheet' : 'Additional daily manual timesheet');
-    const canonicalRow = createdPatch.patchRow;
+    let canonicalRow = normaliseAdditionalManualCreatedPatchRow(createdPatch.patchRow, created, {
+      is_weekly: isWeekly,
+      is_daily: isDaily,
+      sheet_scope: sheetScope,
+      source_route_type: row.route_type || det.route_type || null,
+      client_is_nhsp: row.client_is_nhsp === true || det.client_is_nhsp === true
+    });
     const canonicalTimesheetId = firstBulkString(
       canonicalRow.current_timesheet_id,
       canonicalRow.timesheet_id,
@@ -203034,7 +205739,13 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
     }
 
     const createdPatch = requireBulkCreatedPatch(created, isWeekly ? 'Additional weekly manual timesheet' : 'Additional daily manual timesheet');
-    const createdPatchRow = createdPatch.patchRow;
+    let createdPatchRow = normaliseAdditionalManualCreatedPatchRow(createdPatch.patchRow, created, {
+      is_weekly: isWeekly,
+      is_daily: isDaily,
+      sheet_scope: sheetScope,
+      source_route_type: baRow.route_type || baDetails.route_type || null,
+      client_is_nhsp: baRow.client_is_nhsp === true || baDetails.client_is_nhsp === true
+    });
     const createdTimesheetId = trimStr(
       createdPatchRow.current_timesheet_id ||
       createdPatchRow.timesheet_id ||
@@ -203118,7 +205829,11 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
         mutationRefresh: true,
         replace_current_workbench: true,
         open_as_root: true,
-        source_context: 'bulk_authorise'
+        source_context: 'bulk_authorise',
+        clear_bulk_authorise_context: true,
+        invalidate_bulk_authorise_preview: true,
+        owner_kind: 'bulk_process',
+        modal_kind: 'bulk-process-workbench'
       };
       const switchToBulk = await openConfirm({
         title: 'Open in Bulk Process?',
@@ -203131,6 +205846,11 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
         cancel_class: 'btn btn-outline'
       });
       if (switchToBulk && typeof openBulkProcessWorkbench === 'function') {
+        invalidateBulkAuthorisePreviewOwnershipForBulkProcessSwitch({
+          source_row_key: baRow.row_key || baCtx.row_key || null,
+          target_row_key: focusIdentity || null,
+          row_key: focusIdentity || null
+        });
         await closeCurrentBulkAuthoriseBeforeBulkProcess();
         await Promise.resolve();
         await openBulkProcessWorkbench(switchSeed);
@@ -203638,11 +206358,21 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
     const focusIdentity = isWeekly
       ? (canonicalTimesheetId ? `timesheet:${canonicalTimesheetId}` : (canonicalContractWeekId ? `contract_week:${canonicalContractWeekId}` : ''))
       : (canonicalTimesheetId ? `timesheet:${canonicalTimesheetId}` : (createdTimesheetId ? `timesheet:${createdTimesheetId}` : ''));
-    const seedRowPatch = (canonicalRow && typeof canonicalRow === 'object')
+    let seedRowPatch = (canonicalRow && typeof canonicalRow === 'object')
       ? { ...canonicalRow, row_key: focusIdentity || canonicalRow.row_key || null }
       : (openRow && typeof openRow === 'object')
         ? { ...openRow, row_key: focusIdentity || openRow.row_key || null }
         : null;
+    if (seedRowPatch) {
+      seedRowPatch = normaliseAdditionalManualCreatedPatchRow(seedRowPatch, created, {
+        is_weekly: isWeekly,
+        is_daily: isDaily,
+        sheet_scope: sheetScope,
+        source_route_type: mc?.data?.route_type || det.route_type || null,
+        client_is_nhsp: mc?.data?.client_is_nhsp === true || det.client_is_nhsp === true
+      });
+      seedRowPatch.row_key = focusIdentity || seedRowPatch.row_key || null;
+    }
 
     const switchSeed = {
       ...(bulkProcessSeedBase || {}),
@@ -203658,6 +206388,10 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
       replace_current_workbench: true,
       open_as_root: true,
       source_context: 'bulk_authorise',
+      clear_bulk_authorise_context: true,
+      invalidate_bulk_authorise_preview: true,
+      owner_kind: 'bulk_process',
+      modal_kind: 'bulk-process-workbench',
       candidate_id:
         (bulkProcessSeedBase && Object.prototype.hasOwnProperty.call(bulkProcessSeedBase, 'candidate_id'))
           ? bulkProcessSeedBase.candidate_id
@@ -203689,6 +206423,11 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
     });
 
     if (switchToBulk) {
+      invalidateBulkAuthorisePreviewOwnershipForBulkProcessSwitch({
+        source_row_key: o.source_row_key || bulkProcessSeedBase?.source_row_key || null,
+        target_row_key: focusIdentity || null,
+        row_key: focusIdentity || null
+      });
       await closeCurrentBulkAuthoriseBeforeBulkProcess();
       await Promise.resolve();
 
@@ -203774,7 +206513,6 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
   await openTimesheet(openRow);
   return singleModalReturnPayload;
 }
-
 
 
 
@@ -223344,10 +226082,81 @@ function renderTimesheetOverviewTab(ctx) {
               ? boolish(row.client_no_timesheet_required)
               : false;
 
+  const routeFamilyForOverview = String(
+    details.route_family ||
+    details.effective?.route_family ||
+    actionFlags.route_family ||
+    cw.route_family ||
+    baseSummary.route_family ||
+    row.route_family ||
+    ''
+  ).toUpperCase();
+
+  const routeSubfamilyForOverview = String(
+    details.route_subfamily ||
+    details.effective?.route_subfamily ||
+    actionFlags.route_subfamily ||
+    cw.route_subfamily ||
+    baseSummary.route_subfamily ||
+    row.route_subfamily ||
+    ''
+  ).toUpperCase();
+
+  const underlyingFamilyForOverview = String(
+    details.underlying_channel_family ||
+    details.effective?.underlying_channel_family ||
+    actionFlags.underlying_channel_family ||
+    cw.underlying_channel_family ||
+    baseSummary.underlying_channel_family ||
+    row.underlying_channel_family ||
+    ''
+  ).toUpperCase();
+
+  const additionalSeqForOverview = Number(
+    details.additional_seq ??
+    details.contract_week_additional_seq ??
+    details.effective?.additional_seq ??
+    actionFlags.additional_seq ??
+    cw.additional_seq ??
+    baseSummary.additional_seq ??
+    baseSummary.contract_week_additional_seq ??
+    row.additional_seq ??
+    row.contract_week_additional_seq ??
+    0
+  ) || 0;
+
+  const effectiveAdjustmentForOverview = !!(
+    boolish(ts.is_adjustment) ||
+    boolish(cw.is_adjustment) ||
+    boolish(details.is_adjustment) ||
+    boolish(details.effective?.is_adjustment) ||
+    boolish(actionFlags.is_adjustment) ||
+    boolish(row.is_adjustment) ||
+    boolish(baseSummary.is_adjustment) ||
+    additionalSeqForOverview > 0 ||
+    routeType.includes('_ADJUSTMENT')
+  );
+
+  const manualAdditionalForOverview = !!(
+    (routeType === 'WEEKLY_NHSP_ADJUSTMENT' || routeType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' || routeType === 'WEEKLY_MANUAL_ADJUSTMENT' || routeType.includes('_ADJUSTMENT') || additionalSeqForOverview > 0) &&
+    (
+      effectiveAdjustmentForOverview ||
+      additionalSeqForOverview > 0 ||
+      routeFamilyForOverview === 'MANUAL_NON_QR' ||
+      routeSubfamilyForOverview === 'MANUAL_NON_QR' ||
+      underlyingFamilyForOverview === 'MANUAL_NON_QR' ||
+      cwModeSnapshot === 'MANUAL' ||
+      subModeEff === 'MANUAL'
+    )
+  );
+
   const importAuthoritative =
-    (routeType === 'WEEKLY_NHSP') ||
-    (routeType === 'WEEKLY_NHSP_ADJUSTMENT') ||
-    (routeType === 'WEEKLY_HEALTHROSTER' && noTimesheetRequired === true);
+    !manualAdditionalForOverview &&
+    (
+      (routeType === 'WEEKLY_NHSP') ||
+      (routeType === 'WEEKLY_NHSP_ADJUSTMENT') ||
+      (routeType === 'WEEKLY_HEALTHROSTER' && noTimesheetRequired === true)
+    );
 
   const routeTypeForDisplay = (() => {
     if (!isPlannedWeeklyRow) return routeType || '';
@@ -223421,6 +226230,7 @@ function renderTimesheetOverviewTab(ctx) {
         summary_stage: summaryStageRaw || null,
         sub_mode: subModeEff || null,
         import_authoritative: importAuthoritative,
+        manual_additional: manualAdditionalForOverview,
         no_timesheet_required: noTimesheetRequired,
         planned_weekly: isPlannedWeeklyRow
       }
@@ -223432,12 +226242,8 @@ function renderTimesheetOverviewTab(ctx) {
   // ─────────────────────────────────────────────────────────────
 
   // ✅ NEW: adjustment safety flag (defence-in-depth)
-  // Only reads fields that exist in your pasted objects.
-  const isAdjustment =
-    boolish(Object.prototype.hasOwnProperty.call(ts, 'is_adjustment') ? ts.is_adjustment : null) ||
-    boolish(Object.prototype.hasOwnProperty.call(cw, 'is_adjustment') ? cw.is_adjustment : null) ||
-    boolish(Object.prototype.hasOwnProperty.call(row, 'is_adjustment') ? row.is_adjustment : null) ||
-    boolish(Object.prototype.hasOwnProperty.call(baseSummary, 'is_adjustment') ? baseSummary.is_adjustment : null);
+  // Must include contract-week additional/manual truth so source import semantics do not leak onto add-additional rows.
+  const isAdjustment = effectiveAdjustmentForOverview || manualAdditionalForOverview;
 
   const requiresHr =
     (row && Object.prototype.hasOwnProperty.call(row, 'client_requires_hr'))
@@ -223986,6 +226792,7 @@ function renderTimesheetOverviewTab(ctx) {
     if (isQr && qrStatus) return 'QR';
 
     if (sheetScope === 'WEEKLY') {
+      if (manualAdditionalForOverview) return 'Manual';
       if (routeTypeForDisplay === 'WEEKLY_NHSP' || routeTypeForDisplay === 'WEEKLY_NHSP_ADJUSTMENT') return 'NHSP';
       if (routeTypeForDisplay === 'WEEKLY_HEALTHROSTER') {
         return noTimesheetRequired ? 'HealthRoster (no timesheets)' : 'HealthRoster (timesheets required)';
@@ -224481,6 +227288,32 @@ function renderTimesheetOverviewTab(ctx) {
   const dpEligible = (dp && typeof dp.eligible === 'boolean') ? dp.eligible : false;
 
   const deletePolicyBadgeHtml = (() => {
+    if (manualAdditionalForOverview && dpKind === 'WEEKLY_CHAIN_DELETE_PARENT') {
+      const t = 'Delete preview is unsafe for this manual additional adjustment because it is returning a parent-chain delete. Refresh the delete preview before deleting.';
+      return `<span class="pill pill-bad" style="font-weight:600;" title="${enc(t)}">${enc('Manual adjustment – delete preview unsafe')}</span>`;
+    }
+
+    if (manualAdditionalForOverview && dpKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') {
+      if (dpEligible) {
+        const t = 'This manual additional adjustment can be deleted without deleting the source/parent timesheet.';
+        return `<span class="pill pill-ok" style="font-weight:600;" title="${enc(t)}">${enc('Manual adjustment – Can Delete')}</span>`;
+      }
+
+      const reasons =
+        (dp && Array.isArray(dp.blocked_reasons) && dp.blocked_reasons.length)
+          ? dp.blocked_reasons
+              .map(r => (r && r.message) ? String(r.message) : '')
+              .filter(Boolean)
+              .join(' ')
+          : '';
+
+      const t = reasons
+        ? `Can't delete yet. ${reasons}`
+        : "Can't delete yet. This manual additional adjustment is locked, invoiced, paid, or otherwise not eligible.";
+
+      return `<span class="pill pill-bad" style="font-weight:600;" title="${enc(t)}">${enc("Manual adjustment – Can't delete yet")}</span>`;
+    }
+
     if (dpKind === 'IMPORT_CHILD_ADJUSTMENT') {
       const t = 'This is an NHSP/HR child adjustment and cannot be deleted directly. Delete must be performed via the parent timesheet (if eligible).';
       return `<span class="pill pill-bad" style="font-weight:600;" title="${enc(t)}">${enc("Adjustment – Can't Delete")}</span>`;
@@ -224551,7 +227384,6 @@ function renderTimesheetOverviewTab(ctx) {
     </div>
   `;
 }
-
 
 async function handleHrRotaFileDrop(file) {
   const summaryEl = document.getElementById('hrRotaImportSummary');
@@ -227137,6 +229969,8 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
   if (shouldFetchDetails) {
     try {
       freshDetails = await fetchTimesheetDetails(idArg);
+      const routedFreshDetails = preserveOpenTimesheetManualAdditionalIdentity(freshDetails, modalCtx?.data || baseRow || {});
+      freshDetails = routedFreshDetails.details;
       traceOpen('finance-refresh-after-details', {
         id_arg: idArg,
         fresh_current_timesheet_id: String(freshDetails?.current_timesheet_id || freshDetails?.timesheet?.timesheet_id || '').trim() || null,
@@ -227318,6 +230152,374 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
     if (details && typeof details === 'object') {
       mergeSegmentSnoozeStateIntoDetails(details, timesheetPayState);
     }
+      const preserveOpenTimesheetManualAdditionalIdentity = (detailsObj, rowObj = {}) => {
+      const det = (detailsObj && typeof detailsObj === 'object') ? detailsObj : {};
+      const rowLike = (rowObj && typeof rowObj === 'object') ? rowObj : {};
+      const ts = (det.timesheet && typeof det.timesheet === 'object') ? det.timesheet : {};
+      const cw = (det.contract_week && typeof det.contract_week === 'object') ? det.contract_week : {};
+      const fin = (det.tsfin && typeof det.tsfin === 'object') ? det.tsfin : {};
+      const effective = (det.effective && typeof det.effective === 'object') ? det.effective : {};
+      const actionFlags = (det.action_flags && typeof det.action_flags === 'object') ? det.action_flags : {};
+
+      const trimOpen = (value) => String(value == null ? '' : value).trim();
+      const upperOpen = (value) => trimOpen(value).toUpperCase();
+      const boolishOpen = (value) => {
+        if (value === true || value === 1) return true;
+        if (value === false || value == null) return false;
+        const raw = String(value).trim().toLowerCase();
+        return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
+      };
+      const numOpen = (value) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : 0;
+      };
+      const pickOpen = (...values) => {
+        for (const value of values) {
+          const clean = trimOpen(value);
+          if (clean) return clean;
+        }
+        return '';
+      };
+      const parseOpenMaybeJson = (value) => {
+        if (value == null) return null;
+        if (Array.isArray(value) || (value && typeof value === 'object')) {
+          try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+        }
+        if (typeof value !== 'string') return null;
+        const raw = value.trim();
+        if (!raw) return null;
+        try {
+          const parsed = JSON.parse(raw);
+          return (Array.isArray(parsed) || (parsed && typeof parsed === 'object')) ? parsed : null;
+        } catch {
+          return null;
+        }
+      };
+      const parseOpenObject = (value) => {
+        const parsed = parseOpenMaybeJson(value);
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+      };
+      const parseOpenArray = (value) => {
+        const parsed = parseOpenMaybeJson(value);
+        return Array.isArray(parsed) ? parsed : null;
+      };
+
+      const additionalSeq = numOpen(
+        det.additional_seq ??
+        det.contract_week_additional_seq ??
+        effective.additional_seq ??
+        actionFlags.additional_seq ??
+        cw.additional_seq ??
+        rowLike.additional_seq ??
+        rowLike.contract_week_additional_seq ??
+        rowLike.contract_week?.additional_seq ??
+        0
+      );
+
+      const routeTypeCandidate = upperOpen(pickOpen(
+        det.route_type,
+        effective.route_type,
+        actionFlags.route_type,
+        cw.route_type,
+        rowLike.route_type,
+        rowLike.contract_week?.route_type,
+        routeTypeRaw
+      ));
+      const routeFamilyCandidate = upperOpen(pickOpen(
+        det.route_family,
+        effective.route_family,
+        actionFlags.route_family,
+        cw.route_family,
+        rowLike.route_family,
+        rowLike.contract_week?.route_family
+      ));
+      const routeSubfamilyCandidate = upperOpen(pickOpen(
+        det.route_subfamily,
+        effective.route_subfamily,
+        actionFlags.route_subfamily,
+        cw.route_subfamily,
+        rowLike.route_subfamily,
+        rowLike.contract_week?.route_subfamily
+      ));
+      const underlyingFamilyCandidate = upperOpen(pickOpen(
+        det.underlying_channel_family,
+        effective.underlying_channel_family,
+        actionFlags.underlying_channel_family,
+        cw.underlying_channel_family,
+        rowLike.underlying_channel_family,
+        rowLike.contract_week?.underlying_channel_family
+      ));
+      const submissionModeCandidate = upperOpen(pickOpen(
+        det.cw_submission_mode_snapshot,
+        det.submission_mode_snapshot,
+        ts.submission_mode,
+        cw.submission_mode_snapshot,
+        rowLike.submission_mode_snapshot,
+        rowLike.submission_mode,
+        rowLike.contract_week?.submission_mode_snapshot,
+        subModeRaw
+      ));
+
+      const routeProvesAdjustment = !!(
+        routeTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' ||
+        routeTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+        routeTypeCandidate === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+        routeTypeCandidate.includes('_ADJUSTMENT')
+      );
+
+      const manualProvenance = !!(
+        submissionModeCandidate === 'MANUAL' ||
+        routeFamilyCandidate === 'MANUAL_NON_QR' ||
+        routeSubfamilyCandidate === 'MANUAL_NON_QR' ||
+        underlyingFamilyCandidate === 'MANUAL_NON_QR' ||
+        additionalSeq > 0
+      );
+
+      const effectiveAdjustment = !!(
+        boolishOpen(det.is_adjustment) ||
+        boolishOpen(effective.is_adjustment) ||
+        boolishOpen(actionFlags.is_adjustment) ||
+        boolishOpen(cw.is_adjustment) ||
+        boolishOpen(rowLike.is_adjustment) ||
+        boolishOpen(rowLike.contract_week?.is_adjustment) ||
+        additionalSeq > 0 ||
+        routeProvesAdjustment
+      );
+
+      const manualAdditional = !!(routeProvesAdjustment && (effectiveAdjustment || manualProvenance || additionalSeq > 0));
+
+      const nhspLike = !!(
+        routeTypeCandidate === 'WEEKLY_NHSP' ||
+        routeTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' ||
+        upperOpen(det.policy?.weekly_mode || rowLike.weekly_mode || rowLike.contract_weekly_mode || '') === 'NHSP' ||
+        boolishOpen(effective.client_is_nhsp) ||
+        boolishOpen(rowLike.client_is_nhsp) ||
+        boolishOpen(rowLike.is_nhsp)
+      );
+
+      const healthRosterLike = !!(
+        routeTypeCandidate === 'WEEKLY_HEALTHROSTER' ||
+        routeTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+        upperOpen(det.policy?.weekly_mode || rowLike.weekly_mode || rowLike.contract_weekly_mode || '') === 'HEALTHROSTER' ||
+        boolishOpen(effective.client_autoprocess_hr) ||
+        boolishOpen(rowLike.client_autoprocess_hr) ||
+        boolishOpen(rowLike.autoprocess_hr)
+      );
+
+      const canonicalRouteTypeForIdentity = (() => {
+        if (!manualAdditional) return routeTypeCandidate;
+        if (routeTypeCandidate === 'WEEKLY_NHSP_ADJUSTMENT' || nhspLike) return 'WEEKLY_NHSP_ADJUSTMENT';
+        if (routeTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' || healthRosterLike) return 'WEEKLY_HEALTHROSTER_ADJUSTMENT';
+        if (routeTypeCandidate === 'WEEKLY_MANUAL_ADJUSTMENT') return 'WEEKLY_MANUAL_ADJUSTMENT';
+        return routeTypeCandidate || 'WEEKLY_MANUAL_ADJUSTMENT';
+      })();
+
+      const canonicalRouteDisplayForIdentity = pickOpen(
+        det.route_display,
+        effective.route_display,
+        actionFlags.route_display,
+        cw.route_display,
+        rowLike.route_display,
+        rowLike.contract_week?.route_display,
+        canonicalRouteTypeForIdentity === 'WEEKLY_NHSP_ADJUSTMENT' ? 'NHSP Adjustment' : ''
+      );
+
+      const canonicalRouteFamilyForIdentity = manualAdditional
+        ? 'MANUAL_NON_QR'
+        : (pickOpen(det.route_family, effective.route_family, actionFlags.route_family, cw.route_family, rowLike.route_family, rowLike.contract_week?.route_family) || null);
+
+      const canonicalRouteSubfamilyForIdentity = manualAdditional
+        ? 'MANUAL_NON_QR'
+        : (pickOpen(det.route_subfamily, effective.route_subfamily, actionFlags.route_subfamily, cw.route_subfamily, rowLike.route_subfamily, rowLike.contract_week?.route_subfamily) || null);
+
+      const canonicalUnderlyingFamilyForIdentity = manualAdditional
+        ? 'MANUAL_NON_QR'
+        : (pickOpen(det.underlying_channel_family, effective.underlying_channel_family, actionFlags.underlying_channel_family, cw.underlying_channel_family, rowLike.underlying_channel_family, rowLike.contract_week?.underlying_channel_family) || null);
+
+      const contractWeekIdForIdentity = pickOpen(
+        det.contract_week_id,
+        cw.id,
+        rowLike.contract_week_id,
+        rowLike.contract_week?.id,
+        weekId
+      ) || null;
+
+      const actualScheduleCandidates = [
+        ts.actual_schedule_json,
+        fin.actual_schedule_json,
+        det.actual_schedule_json,
+        rowLike.actual_schedule_json
+      ];
+      const plannedScheduleCandidates = [
+        cw.planned_schedule_json,
+        det.planned_schedule_json,
+        rowLike.planned_schedule_json,
+        rowLike.contract_week?.planned_schedule_json
+      ];
+
+      const actualExplicitEmpty = actualScheduleCandidates.some((value) => {
+        const parsed = parseOpenArray(value);
+        return Array.isArray(parsed) && parsed.length === 0;
+      });
+      const plannedExplicitEmpty = plannedScheduleCandidates.some((value) => {
+        const parsed = parseOpenArray(value);
+        return Array.isArray(parsed) && parsed.length === 0;
+      });
+
+      const totals = parseOpenObject(cw.totals_json || rowLike.totals_json || rowLike.contract_week?.totals_json || null);
+      const hours = (totals.hours && typeof totals.hours === 'object') ? totals.hours : {};
+      const invoiceBreakdown = parseOpenObject(det.invoiceBreakdown || det.invoice_breakdown_json || fin.invoice_breakdown_json || rowLike.invoice_breakdown_json || null);
+      const invoiceSegments = Array.isArray(invoiceBreakdown.segments) ? invoiceBreakdown.segments : [];
+      const timesheetIdForIdentity = pickOpen(det.current_timesheet_id, ts.timesheet_id, rowLike.timesheet_id, rowLike.current_timesheet_id, tsId);
+
+      const zeroHours = !!(
+        numOpen(rowLike.total_hours) === 0 &&
+        numOpen(fin.total_hours) === 0 &&
+        numOpen(hours.day) === 0 &&
+        numOpen(hours.night) === 0 &&
+        numOpen(hours.sat) === 0 &&
+        numOpen(hours.sun) === 0 &&
+        numOpen(hours.bh) === 0
+      );
+
+      const explicitKeepEmpty = !!(
+        boolishOpen(det.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+        boolishOpen(det.keep_additional_manual_adjustment_schedule_empty) ||
+        boolishOpen(det.keepAdditionalManualAdjustmentScheduleEmpty) ||
+        boolishOpen(cw.keep_additional_manual_adjustment_schedule_empty) ||
+        boolishOpen(rowLike.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+        boolishOpen(rowLike.keep_additional_manual_adjustment_schedule_empty) ||
+        boolishOpen(rowLike.keepAdditionalManualAdjustmentScheduleEmpty)
+      );
+
+      const keepEmptySchedule = !!(
+        explicitKeepEmpty ||
+        (
+          manualAdditional &&
+          contractWeekIdForIdentity &&
+          plannedExplicitEmpty &&
+          (!timesheetIdForIdentity || actualExplicitEmpty) &&
+          zeroHours &&
+          invoiceSegments.length === 0
+        )
+      );
+
+      const suppressStandardScheduleFallback = !!(
+        keepEmptySchedule ||
+        boolishOpen(det.__suppressStandardScheduleFallback) ||
+        boolishOpen(det.suppress_standard_schedule_fallback) ||
+        boolishOpen(det.suppressStandardScheduleFallback) ||
+        boolishOpen(cw.suppress_standard_schedule_fallback) ||
+        boolishOpen(rowLike.__suppressStandardScheduleFallback) ||
+        boolishOpen(rowLike.suppress_standard_schedule_fallback) ||
+        boolishOpen(rowLike.suppressStandardScheduleFallback)
+      );
+
+      const out = {
+        ...det,
+        contract_week_id: contractWeekIdForIdentity,
+        route_type: canonicalRouteTypeForIdentity || det.route_type || rowLike.route_type || null,
+        route_display: canonicalRouteDisplayForIdentity || det.route_display || rowLike.route_display || null,
+        route_family: canonicalRouteFamilyForIdentity,
+        route_subfamily: canonicalRouteSubfamilyForIdentity,
+        underlying_channel_family: canonicalUnderlyingFamilyForIdentity,
+        is_adjustment: manualAdditional ? true : effectiveAdjustment,
+        additional_seq: additionalSeq || det.additional_seq || rowLike.additional_seq || 0,
+        is_import_authoritative: manualAdditional ? false : boolishOpen(det.is_import_authoritative || effective.is_import_authoritative || actionFlags.is_import_authoritative || rowLike.is_import_authoritative),
+        __keepAdditionalManualAdjustmentScheduleEmpty: keepEmptySchedule,
+        keep_additional_manual_adjustment_schedule_empty: keepEmptySchedule,
+        keepAdditionalManualAdjustmentScheduleEmpty: keepEmptySchedule,
+        __suppressStandardScheduleFallback: suppressStandardScheduleFallback,
+        suppress_standard_schedule_fallback: suppressStandardScheduleFallback,
+        suppressStandardScheduleFallback: suppressStandardScheduleFallback
+      };
+
+      out.effective = {
+        ...effective,
+        route_type: out.route_type,
+        route_family: out.route_family,
+        route_subfamily: out.route_subfamily,
+        underlying_channel_family: out.underlying_channel_family,
+        is_adjustment: out.is_adjustment,
+        additional_seq: out.additional_seq,
+        is_import_authoritative: out.is_import_authoritative
+      };
+
+      out.action_flags = {
+        ...actionFlags,
+        route_type: out.route_type,
+        route_family: out.route_family,
+        route_subfamily: out.route_subfamily,
+        underlying_channel_family: out.underlying_channel_family,
+        is_adjustment: out.is_adjustment,
+        additional_seq: out.additional_seq,
+        is_import_authoritative: out.is_import_authoritative,
+        cw_submission_mode_snapshot: submissionModeCandidate || actionFlags.cw_submission_mode_snapshot || null,
+        submission_mode_snapshot: submissionModeCandidate || actionFlags.submission_mode_snapshot || null
+      };
+
+      out.contract_week = contractWeekIdForIdentity
+        ? {
+            ...cw,
+            id: cw.id || contractWeekIdForIdentity,
+            route_type: out.route_type,
+            route_display: out.route_display,
+            route_family: out.route_family,
+            route_subfamily: out.route_subfamily,
+            underlying_channel_family: out.underlying_channel_family,
+            is_adjustment: out.is_adjustment,
+            additional_seq: out.additional_seq,
+            submission_mode_snapshot: cw.submission_mode_snapshot || submissionModeCandidate || null,
+            keep_additional_manual_adjustment_schedule_empty: keepEmptySchedule,
+            suppress_standard_schedule_fallback: suppressStandardScheduleFallback
+          }
+        : out.contract_week;
+
+      if (out.timesheet && typeof out.timesheet === 'object' && manualAdditional) {
+        out.timesheet = {
+          ...out.timesheet,
+          is_adjustment: true
+        };
+      }
+
+      if (rowObj && typeof rowObj === 'object') {
+        rowObj.route_type = out.route_type;
+        rowObj.route_display = out.route_display;
+        rowObj.route_family = out.route_family;
+        rowObj.route_subfamily = out.route_subfamily;
+        rowObj.underlying_channel_family = out.underlying_channel_family;
+        rowObj.is_adjustment = out.is_adjustment;
+        rowObj.additional_seq = out.additional_seq;
+        rowObj.is_import_authoritative = out.is_import_authoritative;
+        rowObj.contract_week_id = out.contract_week_id || rowObj.contract_week_id || null;
+        rowObj.__keepAdditionalManualAdjustmentScheduleEmpty = keepEmptySchedule;
+        rowObj.keep_additional_manual_adjustment_schedule_empty = keepEmptySchedule;
+        rowObj.keepAdditionalManualAdjustmentScheduleEmpty = keepEmptySchedule;
+        rowObj.__suppressStandardScheduleFallback = suppressStandardScheduleFallback;
+        rowObj.suppress_standard_schedule_fallback = suppressStandardScheduleFallback;
+        rowObj.suppressStandardScheduleFallback = suppressStandardScheduleFallback;
+      }
+
+      return {
+        details: out,
+        facts: {
+          route_type: out.route_type || null,
+          route_display: out.route_display || null,
+          route_family: out.route_family || null,
+          route_subfamily: out.route_subfamily || null,
+          underlying_channel_family: out.underlying_channel_family || null,
+          is_import_authoritative: out.is_import_authoritative === true,
+          is_adjustment: out.is_adjustment === true,
+          additional_seq: Number(out.additional_seq || 0) || 0,
+          keep_empty: keepEmptySchedule,
+          suppress_fallback: suppressStandardScheduleFallback
+        }
+      };
+    };
+
+    const openRouteIdentity = preserveOpenTimesheetManualAdditionalIdentity(details, baseRow);
+    details = openRouteIdentity.details;
+
     const tsLocal =
       (details && details.timesheet && typeof details.timesheet === 'object')
         ? details.timesheet
@@ -227377,6 +230579,7 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
     ).toUpperCase();
 
     const canonicalRouteType = String(
+      openRouteIdentity.facts.route_type ||
       details.route_type ||
       cwLocal.route_type ||
       baseRow.route_type ||
@@ -227385,6 +230588,7 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
     ).toUpperCase();
 
     const canonicalRouteDisplay = String(
+      openRouteIdentity.facts.route_display ||
       details.route_display ||
       cwLocal.route_display ||
       baseRow.route_display ||
@@ -227405,6 +230609,15 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
       subMode ||
       ''
     ).toUpperCase();
+
+    const canonicalRouteFamily = openRouteIdentity.facts.route_family || details.route_family || baseRow.route_family || null;
+    const canonicalRouteSubfamily = openRouteIdentity.facts.route_subfamily || details.route_subfamily || baseRow.route_subfamily || null;
+    const canonicalUnderlyingChannelFamily = openRouteIdentity.facts.underlying_channel_family || details.underlying_channel_family || baseRow.underlying_channel_family || null;
+    const canonicalIsAdjustment = openRouteIdentity.facts.is_adjustment === true;
+    const canonicalAdditionalSeq = Number(openRouteIdentity.facts.additional_seq || 0) || 0;
+    const canonicalIsImportAuthoritative = openRouteIdentity.facts.is_import_authoritative === true;
+    const canonicalKeepEmptyAdditionalManualAdjustment = openRouteIdentity.facts.keep_empty === true;
+    const canonicalSuppressStandardScheduleFallback = openRouteIdentity.facts.suppress_fallback === true;
 
     const canonicalHasTs = !!canonicalTimesheetId;
     const canonicalIsPlannedWeek = !canonicalHasTs && !!canonicalContractWeekId;
@@ -227797,30 +231010,34 @@ try {
     }
 
 
-   let schedule = null;
+     let schedule = null;
 try {
-  if (hasTs && tsLocal.actual_schedule_json) {
-    if (Array.isArray(tsLocal.actual_schedule_json) || typeof tsLocal.actual_schedule_json === 'object') {
-      schedule = JSON.parse(JSON.stringify(tsLocal.actual_schedule_json));
-    } else if (typeof tsLocal.actual_schedule_json === 'string') {
-      try {
-        const parsed = JSON.parse(tsLocal.actual_schedule_json);
-        if (Array.isArray(parsed) || typeof parsed === 'object') schedule = parsed;
-      } catch {}
+  if (canonicalKeepEmptyAdditionalManualAdjustment) {
+    schedule = [];
+  } else {
+    if (hasTs && tsLocal.actual_schedule_json) {
+      if (Array.isArray(tsLocal.actual_schedule_json) || typeof tsLocal.actual_schedule_json === 'object') {
+        schedule = JSON.parse(JSON.stringify(tsLocal.actual_schedule_json));
+      } else if (typeof tsLocal.actual_schedule_json === 'string') {
+        try {
+          const parsed = JSON.parse(tsLocal.actual_schedule_json);
+          if (Array.isArray(parsed) || typeof parsed === 'object') schedule = parsed;
+        } catch {}
+      }
     }
-  }
-  if (!hasTs && !schedule) {
-    const cw2 = (details && details.contract_week) ? details.contract_week : null;
+    if (!hasTs && !schedule) {
+      const cw2 = (details && details.contract_week) ? details.contract_week : null;
 
-    const src = (cw2 && cw2.planned_schedule_json != null) ? cw2.planned_schedule_json
-             : (cw2 && cw2.std_schedule_json != null) ? cw2.std_schedule_json
-             : (contractTemplateSchedule != null) ? contractTemplateSchedule
-             : (baseRow.std_schedule_json != null) ? baseRow.std_schedule_json
-             : null;
+      const src = (cw2 && cw2.planned_schedule_json != null) ? cw2.planned_schedule_json
+               : (!canonicalSuppressStandardScheduleFallback && cw2 && cw2.std_schedule_json != null) ? cw2.std_schedule_json
+               : (!canonicalSuppressStandardScheduleFallback && contractTemplateSchedule != null) ? contractTemplateSchedule
+               : (!canonicalSuppressStandardScheduleFallback && baseRow.std_schedule_json != null) ? baseRow.std_schedule_json
+               : null;
 
-    if (src) {
-      if (Array.isArray(src) || typeof src === 'object') schedule = JSON.parse(JSON.stringify(src));
-      else if (typeof src === 'string') { try { const p = JSON.parse(src); if (Array.isArray(p) || typeof p === 'object') schedule = p; } catch {} }
+      if (src != null) {
+        if (Array.isArray(src) || typeof src === 'object') schedule = JSON.parse(JSON.stringify(src));
+        else if (typeof src === 'string') { try { const p = JSON.parse(src); if (Array.isArray(p) || typeof p === 'object') schedule = p; } catch {} }
+      }
     }
   }
 } catch {
@@ -227921,6 +231138,18 @@ try {
       submission_mode_snapshot: cwSubSnap || '',
       route_type: canonicalRouteType || null,
       route_display: canonicalRouteDisplay || null,
+      route_family: canonicalRouteFamily || null,
+      route_subfamily: canonicalRouteSubfamily || null,
+      underlying_channel_family: canonicalUnderlyingChannelFamily || null,
+      is_import_authoritative: canonicalIsImportAuthoritative,
+      is_adjustment: canonicalIsAdjustment,
+      additional_seq: canonicalAdditionalSeq || 0,
+      __keepAdditionalManualAdjustmentScheduleEmpty: canonicalKeepEmptyAdditionalManualAdjustment,
+      keep_additional_manual_adjustment_schedule_empty: canonicalKeepEmptyAdditionalManualAdjustment,
+      keepAdditionalManualAdjustmentScheduleEmpty: canonicalKeepEmptyAdditionalManualAdjustment,
+      __suppressStandardScheduleFallback: canonicalSuppressStandardScheduleFallback,
+      suppress_standard_schedule_fallback: canonicalSuppressStandardScheduleFallback,
+      suppressStandardScheduleFallback: canonicalSuppressStandardScheduleFallback,
       summary_stage: canonicalSummaryStage || null,
       qr_status: qrStatus || null,
       qr_generated_at:
@@ -228002,10 +231231,28 @@ try {
     const canonicalTimesheetMeta = {
       hasTs: canonicalHasTs,
       isPlannedWeek: canonicalIsPlannedWeek,
-      sheetScope: sheetScope,
+       sheetScope: sheetScope,
       subMode: subMode,
       basis: basis,
       qrStatus: qrStatus,
+      routeType: canonicalRouteType || null,
+      route_type: canonicalRouteType || null,
+      routeFamily: canonicalRouteFamily || null,
+      route_family: canonicalRouteFamily || null,
+      routeSubfamily: canonicalRouteSubfamily || null,
+      route_subfamily: canonicalRouteSubfamily || null,
+      underlyingChannelFamily: canonicalUnderlyingChannelFamily || null,
+      underlying_channel_family: canonicalUnderlyingChannelFamily || null,
+      isImportAuthoritative: canonicalIsImportAuthoritative,
+      is_import_authoritative: canonicalIsImportAuthoritative,
+      isAdjustment: canonicalIsAdjustment,
+      is_adjustment: canonicalIsAdjustment,
+      additionalSeq: canonicalAdditionalSeq || 0,
+      additional_seq: canonicalAdditionalSeq || 0,
+      keepAdditionalManualAdjustmentScheduleEmpty: canonicalKeepEmptyAdditionalManualAdjustment,
+      keep_additional_manual_adjustment_schedule_empty: canonicalKeepEmptyAdditionalManualAdjustment,
+      suppressStandardScheduleFallback: canonicalSuppressStandardScheduleFallback,
+      suppress_standard_schedule_fallback: canonicalSuppressStandardScheduleFallback,
       isPaid,
       isInvoiced,
       isLocked: (isPaid || isInvoiced),
@@ -228109,7 +231356,14 @@ try {
     segmentInvoiceTargets: {},
     manualHours,
     additionalRates,
-    schedule,
+    schedule: canonicalKeepEmptyAdditionalManualAdjustment ? [] : schedule,
+    baselineSchedule: canonicalKeepEmptyAdditionalManualAdjustment ? [] : (Array.isArray(schedule) ? JSON.parse(JSON.stringify(schedule)) : schedule),
+    __keepAdditionalManualAdjustmentScheduleEmpty: canonicalKeepEmptyAdditionalManualAdjustment,
+    keepAdditionalManualAdjustmentScheduleEmpty: canonicalKeepEmptyAdditionalManualAdjustment,
+    keep_additional_manual_adjustment_schedule_empty: canonicalKeepEmptyAdditionalManualAdjustment,
+    __suppressStandardScheduleFallback: canonicalSuppressStandardScheduleFallback,
+    suppressStandardScheduleFallback: canonicalSuppressStandardScheduleFallback,
+    suppress_standard_schedule_fallback: canonicalSuppressStandardScheduleFallback,
     dayReferences,
     evidence,
 
@@ -230482,12 +233736,88 @@ function renderWeeklyManualScheduleEditor(opts) {
       ctx?.cw_submission_mode_snapshot ||
       ''
     );
-    const explicitPlannedScheduleForAdditionalManualAdjustment = tryParse(contractWeekObj?.planned_schedule_json);
+    const additionalSeqForAdditionalManualAdjustment = num0ForAdditionalManualAdjustment(
+      details?.additional_seq ??
+      details?.contract_week_additional_seq ??
+      details?.effective?.additional_seq ??
+      details?.action_flags?.additional_seq ??
+      contractWeekObj?.additional_seq ??
+      row?.additional_seq ??
+      row?.contract_week_additional_seq ??
+      ctx?.additional_seq ??
+      ctx?.contract_week_additional_seq ??
+      0
+    );
+    const explicitActualScheduleForAdditionalManualAdjustment = tryParse(
+      ts?.actual_schedule_json ??
+      tsfin?.actual_schedule_json ??
+      details?.actual_schedule_json ??
+      row?.actual_schedule_json ??
+      ctx?.actual_schedule_json ??
+      null
+    );
+    const actualScheduleExplicitlyEmptyForAdditionalManualAdjustment = Array.isArray(explicitActualScheduleForAdditionalManualAdjustment) && explicitActualScheduleForAdditionalManualAdjustment.length === 0;
+    const explicitPlannedScheduleForAdditionalManualAdjustment = tryParse(
+      contractWeekObj?.planned_schedule_json ??
+      details?.planned_schedule_json ??
+      row?.planned_schedule_json ??
+      ctx?.planned_schedule_json ??
+      null
+    );
     const plannedScheduleExplicitlyEmptyForAdditionalManualAdjustment = Array.isArray(explicitPlannedScheduleForAdditionalManualAdjustment) && explicitPlannedScheduleForAdditionalManualAdjustment.length === 0;
     const cwTotalsForAdditionalManualAdjustment = parseObjectLikeForAdditionalManualAdjustment(contractWeekObj?.totals_json);
     const cwHoursForAdditionalManualAdjustment = (cwTotalsForAdditionalManualAdjustment.hours && typeof cwTotalsForAdditionalManualAdjustment.hours === 'object')
       ? cwTotalsForAdditionalManualAdjustment.hours
       : {};
+    const invoiceBreakdownForAdditionalManualAdjustment = parseObjectLikeForAdditionalManualAdjustment(
+      details?.invoiceBreakdown ||
+      details?.invoice_breakdown_json ||
+      tsfin?.invoice_breakdown_json ||
+      row?.invoice_breakdown_json ||
+      ctx?.invoice_breakdown_json ||
+      null
+    );
+    const invoiceSegmentsForAdditionalManualAdjustment = Array.isArray(invoiceBreakdownForAdditionalManualAdjustment.segments)
+      ? invoiceBreakdownForAdditionalManualAdjustment.segments
+      : [];
+    const hasAdditionalManualAdjustmentIdentity = !!(
+      additionalSeqForAdditionalManualAdjustment > 0 ||
+      routeTypeUpperForAdditionalManualAdjustment === 'WEEKLY_NHSP_ADJUSTMENT' ||
+      routeTypeUpperForAdditionalManualAdjustment === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+      routeTypeUpperForAdditionalManualAdjustment === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+      routeTypeUpperForAdditionalManualAdjustment.includes('_ADJUSTMENT') ||
+      boolMarkerForAdditionalManualAdjustment(
+        row?.is_adjustment,
+        details?.is_adjustment,
+        details?.effective?.is_adjustment,
+        details?.action_flags?.is_adjustment,
+        contractWeekObj?.is_adjustment,
+        ts?.is_adjustment,
+        ctx?.is_adjustment
+      )
+    );
+    const hasAdditionalManualRouteFamily = !!(
+      routeFamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR' ||
+      routeSubfamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR' ||
+      underlyingFamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR' ||
+      cwModeSnapshotUpperForAdditionalManualAdjustment === 'MANUAL' ||
+      subModeUpperForAdditionalManualAdjustment === 'MANUAL' ||
+      additionalSeqForAdditionalManualAdjustment > 0
+    );
+    const zeroHourAdditionalManualAdjustment = !!(
+      num0ForAdditionalManualAdjustment(row?.total_hours) === 0 &&
+      num0ForAdditionalManualAdjustment(tsfin?.total_hours) === 0 &&
+      num0ForAdditionalManualAdjustment(tsfin?.hours_day) === 0 &&
+      num0ForAdditionalManualAdjustment(tsfin?.hours_night) === 0 &&
+      num0ForAdditionalManualAdjustment(tsfin?.hours_sat) === 0 &&
+      num0ForAdditionalManualAdjustment(tsfin?.hours_sun) === 0 &&
+      num0ForAdditionalManualAdjustment(tsfin?.hours_bh) === 0 &&
+      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.day) === 0 &&
+      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.night) === 0 &&
+      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.sat) === 0 &&
+      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.sun) === 0 &&
+      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.bh) === 0
+    );
     const hasExplicitSuppressStandardScheduleFallbackMarker = boolMarkerForAdditionalManualAdjustment(
       state?.__suppressStandardScheduleFallback,
       state?.suppressStandardScheduleFallback,
@@ -230515,7 +233845,6 @@ function renderWeeklyManualScheduleEditor(opts) {
       ctx?.keep_additional_manual_adjustment_schedule_empty
     );
     const recomputedSuppressStandardScheduleFallbackForAdditionalManualAdjustment = !!(
-      !timesheetIdForAdditionalManualAdjustment &&
       !!contractWeekIdForAdditionalManualAdjustment &&
       (
         sheetScopeUpperForAdditionalManualAdjustment === 'WEEKLY' ||
@@ -230525,24 +233854,14 @@ function renderWeeklyManualScheduleEditor(opts) {
         subModeUpperForAdditionalManualAdjustment === 'MANUAL' ||
         cwModeSnapshotUpperForAdditionalManualAdjustment === 'MANUAL' ||
         routeTypeUpperForAdditionalManualAdjustment.includes('MANUAL') ||
-        routeFamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR' ||
-        routeSubfamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR' ||
-        underlyingFamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR'
+        hasAdditionalManualRouteFamily
       ) &&
-      (
-        routeTypeUpperForAdditionalManualAdjustment === 'WEEKLY_NHSP_ADJUSTMENT' ||
-        routeTypeUpperForAdditionalManualAdjustment === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
-        routeTypeUpperForAdditionalManualAdjustment === 'WEEKLY_MANUAL_ADJUSTMENT' ||
-        routeTypeUpperForAdditionalManualAdjustment.includes('_ADJUSTMENT')
-      ) &&
-      routeFamilyUpperForAdditionalManualAdjustment === 'MANUAL_NON_QR' &&
+      hasAdditionalManualAdjustmentIdentity &&
+      hasAdditionalManualRouteFamily &&
       plannedScheduleExplicitlyEmptyForAdditionalManualAdjustment &&
-      num0ForAdditionalManualAdjustment(row?.total_hours) === 0 &&
-      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.day) === 0 &&
-      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.night) === 0 &&
-      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.sat) === 0 &&
-      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.sun) === 0 &&
-      num0ForAdditionalManualAdjustment(cwHoursForAdditionalManualAdjustment.bh) === 0
+      (!timesheetIdForAdditionalManualAdjustment || actualScheduleExplicitlyEmptyForAdditionalManualAdjustment) &&
+      zeroHourAdditionalManualAdjustment &&
+      invoiceSegmentsForAdditionalManualAdjustment.length === 0
     );
     const suppressStandardScheduleFallbackForAdditionalManualAdjustment = !!(
       hasExplicitSuppressStandardScheduleFallbackMarker ||
@@ -231332,14 +234651,23 @@ function renderWeeklyManualScheduleEditor(opts) {
       if (typeof buildWeeklyScheduleFromLinesAndValidate === 'function') {
         out = buildWeeklyScheduleFromLinesAndValidate(st.weeklyLinesByDate, wd, {
           allowOvernight: true,
-          allowBreakMins: true
+          allowBreakMins: true,
+          keepEmptyAdditionalManualAdjustmentScheduleEmpty: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
+          suppressStandardScheduleFallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
+          scheduleUserTouched: !!(st.__weeklyScheduleTouched || st.weeklyScheduleUserTouched || st.scheduleUserTouched || st.__scheduleUserTouched)
         });
       }
 
       const helperSchedule = Array.isArray(out?.schedule) ? out.schedule : [];
-      const effectiveSchedule = helperSchedule.length
-        ? helperSchedule
-        : ((!out?.hasErrors && fallbackSchedule.length) ? fallbackSchedule : []);
+      const keepEmptyUntouchedSchedule = !!(
+        suppressStandardScheduleFallbackForAdditionalManualAdjustment &&
+        !(st.__weeklyScheduleTouched || st.weeklyScheduleUserTouched || st.scheduleUserTouched || st.__scheduleUserTouched)
+      );
+      const effectiveSchedule = keepEmptyUntouchedSchedule
+        ? []
+        : (helperSchedule.length
+            ? helperSchedule
+            : ((!out?.hasErrors && fallbackSchedule.length) ? fallbackSchedule : []));
 
       st.schedule = effectiveSchedule;
       st.scheduleErrorsByDate = (out?.errorsByDate && typeof out.errorsByDate === 'object') ? out.errorsByDate : {};
@@ -233292,6 +236620,7 @@ function renderWeeklyManualScheduleEditor(opts) {
       </div>
     `;
 }
+
 
 
 
@@ -238165,6 +241494,8 @@ async function updateTimesheetSegmentsPayFlags(ctxOrId, overrides, expectedTimes
   return { ok: true, updatedRow, details: newDetails };
 }
 
+
+
 async function manualUpsertContractWeek(weekId, payload, opts = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][MANUAL-UPsert]');
   GC('manualUpsertContractWeek');
@@ -238249,6 +241580,73 @@ async function manualUpsertContractWeek(weekId, payload, opts = {}) {
     }
     return x;
   };
+
+  const trimStrLocal = (value) => String(value == null ? '' : value).trim();
+  const boolishLocal = (value) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value == null) return false;
+    const s = String(value).trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  };
+  const hasMeaningfulScheduleRowsLocal = (value) => {
+    const parsed = normaliseScheduleField(value);
+    if (!Array.isArray(parsed)) return false;
+    return parsed.some((entry) => {
+      if (Array.isArray(entry)) return hasMeaningfulScheduleRowsLocal(entry);
+      if (!entry || typeof entry !== 'object') return false;
+      return !!(
+        trimStrLocal(entry.start || entry.worked_start || '') ||
+        trimStrLocal(entry.end || entry.worked_end || '') ||
+        trimStrLocal(entry.break_start || '') ||
+        trimStrLocal(entry.break_end || '') ||
+        trimStrLocal(entry.ref || entry.reference || '') ||
+        trimStrLocal(entry.break_mins ?? entry.break_minutes ?? '')
+      );
+    });
+  };
+  const zeroHourBucketsLocal = () => ({ day: 0, night: 0, sat: 0, sun: 0, bh: 0 });
+  const zeroTotalsHoursIfPresentLocal = (value) => {
+    let totals = value;
+    if (typeof totals === 'string') {
+      try { totals = JSON.parse(totals); } catch { totals = {}; }
+    }
+    totals = (totals && typeof totals === 'object' && !Array.isArray(totals)) ? { ...totals } : {};
+    totals.hours = zeroHourBucketsLocal();
+    return totals;
+  };
+  const activeKeepEmptyContainers = () => ([
+    payloadObj,
+    payload,
+    options,
+    options.activeRow,
+    options.active_row,
+    options.row,
+    mc?.bulkProcessState?.active_ctx?.state,
+    mc?.bulkProcessState?.active_context?.state,
+    mc?.bulkProcessState?.active_row,
+    mc?.active_ctx?.state,
+    mc?.active_context?.state,
+    mc?.timesheetState,
+    mc?.data
+  ].filter((item) => item && typeof item === 'object'));
+  const hasKeepEmptyAdditionalManualMarker = activeKeepEmptyContainers().some((container) => !!(
+    boolishLocal(container.__keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolishLocal(container.keepAdditionalManualAdjustmentScheduleEmpty) ||
+    boolishLocal(container.keep_additional_manual_adjustment_schedule_empty) ||
+    boolishLocal(container.__suppressStandardScheduleFallback) ||
+    boolishLocal(container.suppressStandardScheduleFallback) ||
+    boolishLocal(container.suppress_standard_schedule_fallback)
+  ));
+  const explicitScheduleTouchedForKeepEmpty = activeKeepEmptyContainers().some((container) => !!(
+    boolishLocal(container.__scheduleUserTouched) ||
+    boolishLocal(container.scheduleUserTouched) ||
+    boolishLocal(container.__weeklyScheduleUserTouched) ||
+    boolishLocal(container.weeklyScheduleUserTouched) ||
+    boolishLocal(container.__manualScheduleUserTouched) ||
+    boolishLocal(container.manualScheduleUserTouched) ||
+    boolishLocal(container.scheduleTouched) ||
+    boolishLocal(container.hoursScheduleTouched)
+  ));
 
   // ✅ Ensure expected_timesheet_id is included ONLY when we truly have a timesheet
   const inferredExpected =
@@ -238351,6 +241749,29 @@ async function manualUpsertContractWeek(weekId, payload, opts = {}) {
 
   if (Object.prototype.hasOwnProperty.call(safePayload, 'actual_schedule_json')) {
     safePayload.actual_schedule_json = normaliseScheduleField(safePayload.actual_schedule_json);
+  }
+
+  if (hasKeepEmptyAdditionalManualMarker) {
+    const keepEmptyScheduleCandidates = [
+      safePayload.actual_schedule_json,
+      safePayload.planned_schedule_json,
+      safePayload.schedule_json
+    ].filter((value) => value != null);
+    const pollutedSchedule = keepEmptyScheduleCandidates.some((value) => hasMeaningfulScheduleRowsLocal(value));
+    if (pollutedSchedule && !explicitScheduleTouchedForKeepEmpty) {
+      GE();
+      throw new Error('This additional manual adjustment is explicitly zero-hours. Standard schedule fallback rows cannot be processed unless the user deliberately enters hours.');
+    }
+    if (!explicitScheduleTouchedForKeepEmpty) {
+      safePayload.actual_schedule_json = [];
+      if (Object.prototype.hasOwnProperty.call(safePayload, 'planned_schedule_json')) safePayload.planned_schedule_json = [];
+      if (Object.prototype.hasOwnProperty.call(safePayload, 'schedule_json')) safePayload.schedule_json = [];
+      if (Object.prototype.hasOwnProperty.call(safePayload, 'hours')) safePayload.hours = zeroHourBucketsLocal();
+      if (Object.prototype.hasOwnProperty.call(safePayload, 'totals_json')) safePayload.totals_json = zeroTotalsHoursIfPresentLocal(safePayload.totals_json);
+      if (Object.prototype.hasOwnProperty.call(safePayload, 'contract_week_totals_json')) safePayload.contract_week_totals_json = zeroTotalsHoursIfPresentLocal(safePayload.contract_week_totals_json);
+      safePayload.keep_additional_manual_adjustment_schedule_empty = true;
+      safePayload.suppress_standard_schedule_fallback = true;
+    }
   }
 
   if (inferredExpected) {
@@ -238474,7 +241895,6 @@ async function manualUpsertContractWeek(weekId, payload, opts = {}) {
   GE();
   return json;
 }
-
 
 
 function formatCloudTmsLondonDate(value) {
@@ -239953,51 +243373,394 @@ async function deleteManualTimesheetAndReopenWeek(timesheetId, contractWeekId, o
 }
 
 
-
-
 async function deleteTimesheetPermanent(timesheetId, opts = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][DELETE-PERM]');
   GC('deleteTimesheetPermanent');
 
-  // opts:
-  // - contractWeekId: if provided and timesheetId is null, we treat this as a planned-week delete
-  const contractWeekId = opts && opts.contractWeekId ? String(opts.contractWeekId) : null;
+  try {
+    const options = (opts && typeof opts === 'object') ? opts : {};
 
-  // Planned-week delete path (no timesheet_id yet)
-  if (!timesheetId) {
-    if (!contractWeekId) {
-      GE();
-      throw new Error('deleteTimesheetPermanent: timesheetId is required (or provide opts.contractWeekId for planned-week delete)');
+    const trimId = (value) => String(value == null ? '' : value).trim();
+    const upper = (value) => trimId(value).toUpperCase();
+    const pickFirst = (...values) => {
+      for (const value of values) {
+        const clean = trimId(value);
+        if (clean) return clean;
+      }
+      return '';
+    };
+    const boolish = (value) => {
+      if (value === true) return true;
+      if (value === false) return false;
+      if (value == null) return false;
+      const raw = String(value).trim().toLowerCase();
+      return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
+    };
+    const num = (value) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const asIdArray = (...sources) => {
+      const out = [];
+      const seen = new Set();
+      const push = (value) => {
+        if (value == null) return;
+        if (Array.isArray(value)) {
+          value.forEach(push);
+          return;
+        }
+        if (typeof value === 'object') {
+          if (Array.isArray(value.ids)) {
+            value.ids.forEach(push);
+            return;
+          }
+          if (value.id != null) {
+            push(value.id);
+            return;
+          }
+          if (value.timesheet_id != null) {
+            push(value.timesheet_id);
+            return;
+          }
+          if (value.contract_week_id != null) {
+            push(value.contract_week_id);
+            return;
+          }
+          return;
+        }
+        const clean = trimId(value);
+        if (!clean || seen.has(clean)) return;
+        seen.add(clean);
+        out.push(clean);
+      };
+      sources.forEach(push);
+      return out;
+    };
+
+    const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+    const det = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
+    const cw = (det.contract_week && typeof det.contract_week === 'object') ? det.contract_week : {};
+    const ts = (det.timesheet && typeof det.timesheet === 'object') ? det.timesheet : {};
+    const actionFlags = (det.action_flags && typeof det.action_flags === 'object') ? det.action_flags : {};
+
+    // opts:
+    // - contractWeekId: if provided and timesheetId is null, we treat this as a planned-week delete
+    // - expected_contract_week_id / expectedContractWeekId: expected additional contract_week_id for guarded deletes
+    // - expected_delete_kind / expectedDeleteKind: expected server preview/apply kind for guarded deletes
+    const contractWeekId = pickFirst(
+      options.contractWeekId,
+      options.contract_week_id,
+      options.expected_contract_week_id,
+      options.expectedContractWeekId
+    ) || null;
+
+    // Planned-week delete path (no timesheet_id yet)
+    if (!timesheetId) {
+      if (!contractWeekId) {
+        throw new Error('deleteTimesheetPermanent: timesheetId is required (or provide opts.contractWeekId for planned-week delete)');
+      }
+
+      const encCw = encodeURIComponent(contractWeekId);
+      const urlPath = `/api/contract-weeks/${encCw}/delete-planned`;
+
+      L('REQUEST (planned delete)', { urlPath, contractWeekId });
+
+      // Keep behaviour, but use apiPostJson for consistent error shape
+      const json = await apiPostJson(urlPath, {});
+      L('RESULT (planned delete)', json);
+      return json;
     }
 
-    const encCw = encodeURIComponent(contractWeekId);
-    const urlPath = `/api/contract-weeks/${encCw}/delete-planned`;
+    // Normal timesheet delete path (guarded)
+    const timesheetIdStr = String(timesheetId);
+    const encId = encodeURIComponent(timesheetIdStr);
+    const urlPath = `/api/timesheets/${encId}`;
 
-    L('REQUEST (planned delete)', { urlPath, contractWeekId });
+    const expectedTimesheetId = pickFirst(
+      options.expected_timesheet_id,
+      options.expectedTimesheetId,
+      mc?.timesheetMeta?.expected_timesheet_id,
+      det?.current_timesheet_id,
+      ts?.timesheet_id,
+      mc?.data?.timesheet_id,
+      timesheetIdStr
+    ) || timesheetIdStr;
 
-    // Keep behaviour, but use apiPostJson for consistent error shape
-    const json = await apiPostJson(urlPath, {});
-    L('RESULT (planned delete)', json);
-    GE();
+    const expectedContractWeekId = pickFirst(
+      options.expected_contract_week_id,
+      options.expectedContractWeekId,
+      options.contractWeekId,
+      options.contract_week_id,
+      mc?.timesheetMeta?.contract_week_id,
+      det?.contract_week_id,
+      cw?.id,
+      mc?.data?.contract_week_id
+    ) || null;
+
+    const expectedDeleteKind = upper(pickFirst(
+      options.expected_delete_kind,
+      options.expectedDeleteKind,
+      options.delete_kind,
+      options.deleteKind,
+      options.kind
+    )) || null;
+
+    const sourceContractWeekId = pickFirst(
+      options.source_contract_week_id,
+      options.sourceContractWeekId,
+      options.parent_contract_week_id,
+      options.parentContractWeekId
+    ) || null;
+
+    const sourceTimesheetId = pickFirst(
+      options.source_timesheet_id,
+      options.sourceTimesheetId,
+      options.parent_timesheet_id,
+      options.parentTimesheetId
+    ) || null;
+
+    const routeType = upper(
+      det?.route_type ||
+      det?.effective?.route_type ||
+      actionFlags?.route_type ||
+      cw?.route_type ||
+      mc?.data?.route_type ||
+      ''
+    );
+
+    const routeFamily = upper(
+      det?.route_family ||
+      det?.effective?.route_family ||
+      actionFlags?.route_family ||
+      cw?.route_family ||
+      mc?.data?.route_family ||
+      ''
+    );
+
+    const routeSubfamily = upper(
+      det?.route_subfamily ||
+      det?.effective?.route_subfamily ||
+      actionFlags?.route_subfamily ||
+      cw?.route_subfamily ||
+      mc?.data?.route_subfamily ||
+      ''
+    );
+
+    const underlyingFamily = upper(
+      det?.underlying_channel_family ||
+      det?.effective?.underlying_channel_family ||
+      actionFlags?.underlying_channel_family ||
+      cw?.underlying_channel_family ||
+      mc?.data?.underlying_channel_family ||
+      ''
+    );
+
+    const cwMode = upper(
+      det?.cw_submission_mode_snapshot ||
+      cw?.submission_mode_snapshot ||
+      mc?.timesheetMeta?.cw_submission_mode_snapshot ||
+      mc?.data?.submission_mode_snapshot ||
+      ''
+    );
+
+    const additionalSeq = num(
+      det?.additional_seq ??
+      det?.contract_week_additional_seq ??
+      det?.effective?.additional_seq ??
+      actionFlags?.additional_seq ??
+      cw?.additional_seq ??
+      mc?.data?.additional_seq ??
+      mc?.data?.contract_week_additional_seq ??
+      0
+    );
+
+    const modalLooksManualAdditional = !!(
+      additionalSeq > 0 ||
+      routeType === 'WEEKLY_NHSP_ADJUSTMENT' ||
+      routeType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+      routeType === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+      routeType.includes('_ADJUSTMENT') ||
+      boolish(det?.is_adjustment) ||
+      boolish(det?.effective?.is_adjustment) ||
+      boolish(actionFlags?.is_adjustment) ||
+      boolish(cw?.is_adjustment) ||
+      boolish(ts?.is_adjustment) ||
+      boolish(mc?.data?.is_adjustment)
+    ) && !!(
+      routeFamily === 'MANUAL_NON_QR' ||
+      routeSubfamily === 'MANUAL_NON_QR' ||
+      underlyingFamily === 'MANUAL_NON_QR' ||
+      cwMode === 'MANUAL' ||
+      additionalSeq > 0
+    );
+
+    const suppliedPreview =
+      (options.delete_preview && typeof options.delete_preview === 'object') ? options.delete_preview :
+      (options.deletePreview && typeof options.deletePreview === 'object') ? options.deletePreview :
+      (options.preview && typeof options.preview === 'object') ? options.preview :
+      null;
+
+    const loadFreshDeletePreview = async () => {
+      if (suppliedPreview && (options.preview_is_fresh === true || options.fresh_preview === true || options.freshDeletePreview === true)) {
+        return suppliedPreview.preview || suppliedPreview.delete_preview || suppliedPreview;
+      }
+
+      if (typeof fetchTimesheetDeletePreview === 'function') {
+        const out = await fetchTimesheetDeletePreview(timesheetIdStr);
+        if (out && typeof out === 'object') return out.preview || out.delete_preview || out;
+      }
+
+      if (typeof authFetch !== 'function' || typeof API !== 'function') {
+        if (suppliedPreview) return suppliedPreview.preview || suppliedPreview.delete_preview || suppliedPreview;
+        throw new Error('Delete preview refresh is unavailable.');
+      }
+
+      const res = await authFetch(API(`/api/timesheets/${encodeURIComponent(timesheetIdStr)}/delete-preview`), {
+        method: 'GET'
+      });
+
+      let body = null;
+      try { body = await res.json(); } catch { body = null; }
+
+      if (!res.ok || !body) {
+        throw new Error((body && (body.message || body.error)) || 'Delete preview could not be refreshed.');
+      }
+
+      if (body.ok === false) {
+        throw new Error(body.message || body.error || 'Delete preview could not be refreshed.');
+      }
+
+      return body.preview || body.delete_preview || body;
+    };
+
+    const preview = await loadFreshDeletePreview();
+    const previewKind = upper(preview?.kind || '');
+    const previewEligible = (preview && typeof preview.eligible === 'boolean') ? preview.eligible : true;
+    const previewTimesheetIds = asIdArray(preview?.timesheet_ids, preview?.current_timesheet_id);
+    const previewContractWeekIds = asIdArray(preview?.contract_week_ids, preview?.contract_week_id);
+
+    if (previewEligible !== true) {
+      throw new Error('Delete is not available for this timesheet (it may be locked, invoiced/paid, or not eligible).');
+    }
+
+    const expectedOrPreviewManualAdjustment = !!(
+      expectedDeleteKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE' ||
+      previewKind === 'WEEKLY_MANUAL_ADJUSTMENT_DELETE' ||
+      modalLooksManualAdditional
+    );
+
+    const canonicalExpectedContractWeekId =
+      expectedContractWeekId ||
+      (
+        expectedOrPreviewManualAdjustment &&
+        previewContractWeekIds.length === 1
+          ? previewContractWeekIds[0]
+          : null
+      );
+
+    if (expectedDeleteKind && previewKind && expectedDeleteKind !== previewKind) {
+      throw new Error(`Delete has been blocked for safety. Expected ${expectedDeleteKind}, but refreshed preview returned ${previewKind}.`);
+    }
+
+    if (expectedOrPreviewManualAdjustment) {
+      if (previewKind !== 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') {
+        throw new Error('Delete has been blocked for safety. This additional manual adjustment did not return an additional-only delete preview.');
+      }
+
+      if (previewTimesheetIds.length && previewTimesheetIds.some((id) => id && id !== timesheetIdStr && id !== expectedTimesheetId)) {
+        throw new Error('Delete has been blocked for safety. The refreshed preview includes a source/base timesheet as a destructive target.');
+      }
+
+      if (!canonicalExpectedContractWeekId) {
+        throw new Error('Delete has been blocked for safety. The expected additional contract week target could not be verified.');
+      }
+
+      if (previewContractWeekIds.length === 0) {
+        throw new Error('Delete has been blocked for safety. The refreshed preview did not return the expected additional contract week target.');
+      }
+
+      if (previewContractWeekIds.some((id) => id && id !== canonicalExpectedContractWeekId)) {
+        throw new Error('Delete has been blocked for safety. The refreshed preview includes a source/base contract week as a destructive target.');
+      }
+    }
+
+    if (modalLooksManualAdditional && previewKind === 'WEEKLY_CHAIN_DELETE_PARENT') {
+      throw new Error('Delete has been blocked for safety. This is an additional manual adjustment, but the refreshed preview is trying to delete a parent weekly chain.');
+    }
+
+    const payload = { expected_timesheet_id: expectedTimesheetId };
+    if (canonicalExpectedContractWeekId) payload.expected_contract_week_id = canonicalExpectedContractWeekId;
+    if (expectedDeleteKind || previewKind) payload.expected_delete_kind = expectedDeleteKind || previewKind;
+
+    L('REQUEST', {
+      urlPath,
+      timesheetId: timesheetIdStr,
+      expected: expectedTimesheetId,
+      expected_contract_week_id: payload.expected_contract_week_id || null,
+      expected_delete_kind: payload.expected_delete_kind || null,
+      preview_kind: previewKind || null
+    });
+
+    const json = await apiDeleteJson(urlPath, payload);
+
+    const resultRoot = (json && typeof json === 'object') ? json : {};
+    const resultObj = (resultRoot.result && typeof resultRoot.result === 'object') ? resultRoot.result : {};
+    const resultKind = upper(resultRoot.kind || resultObj.kind || '');
+
+    if (expectedOrPreviewManualAdjustment) {
+      if (resultKind !== 'WEEKLY_MANUAL_ADJUSTMENT_DELETE') {
+        throw new Error('Delete safety verification failed: backend did not confirm additional-only delete.');
+      }
+
+      const deletedTimesheetIds = asIdArray(
+        resultRoot.deleted_timesheet_ids,
+        resultObj.deleted_timesheet_ids
+      );
+      const deletedContractWeekIds = asIdArray(
+        resultRoot.deleted_contract_week_ids,
+        resultObj.deleted_contract_week_ids
+      );
+
+      if (deletedTimesheetIds.some((id) => id && id !== timesheetIdStr && id !== expectedTimesheetId)) {
+        throw new Error('Delete safety verification failed: backend reported deletion of an unexpected/source timesheet.');
+      }
+
+      if (deletedTimesheetIds.length > 0 && !deletedTimesheetIds.includes(timesheetIdStr) && !deletedTimesheetIds.includes(expectedTimesheetId)) {
+        throw new Error('Delete safety verification failed: backend did not report deletion of the requested additional timesheet.');
+      }
+
+      if (canonicalExpectedContractWeekId && deletedContractWeekIds.some((id) => id && id !== canonicalExpectedContractWeekId)) {
+        throw new Error('Delete safety verification failed: backend reported deletion of an unexpected/source contract week.');
+      }
+
+      if (canonicalExpectedContractWeekId && deletedContractWeekIds.length > 0 && !deletedContractWeekIds.includes(canonicalExpectedContractWeekId)) {
+        throw new Error('Delete safety verification failed: backend did not report deletion of the expected additional contract week.');
+      }
+
+      if (!canonicalExpectedContractWeekId && deletedContractWeekIds.length > 1) {
+        throw new Error('Delete safety verification failed: backend reported deletion of multiple contract weeks for an additional-only delete.');
+      }
+
+      if (sourceTimesheetId && deletedTimesheetIds.includes(sourceTimesheetId)) {
+        throw new Error('Delete safety verification failed: backend reported deletion of the source timesheet.');
+      }
+
+      if (sourceContractWeekId && deletedContractWeekIds.includes(sourceContractWeekId)) {
+        throw new Error('Delete safety verification failed: backend reported deletion of the source contract week.');
+      }
+    }
+
+    L('RESULT', json);
     return json;
+  } finally {
+    GE();
   }
-
-  // Normal timesheet delete path (✅ guarded)
-  const encId = encodeURIComponent(timesheetId);
-  const urlPath = `/api/timesheets/${encId}`;
-
-  const expected =
-    window.modalCtx?.timesheetMeta?.expected_timesheet_id ||
-    timesheetId;
-
-  L('REQUEST', { urlPath, timesheetId, expected });
-
-  const json = await apiDeleteJson(urlPath, { expected_timesheet_id: expected });
-
-  L('RESULT', json);
-  GE();
-  return json;
 }
+
+
+
+
+
 async function resendQrTimesheetEmail(timesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][QR][RESEND]');
   GC('resendQrTimesheetEmail');
