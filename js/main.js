@@ -25250,7 +25250,6 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
   return { filename, rowCount: exportRows.length };
 }
 
-
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -25993,15 +25992,24 @@ async function bankingPayPreview(pay_date) {
     const candidateStatusRows = progressCandidateStatusRows.filter((row) => isPlainObject(row));
     const pendingRows = candidateStatusRows.filter((row) => pendingCandidateIds.includes(trimStr(row?.candidate_id || '')));
     const failedRows = candidateStatusRows.filter((row) => failedCandidateIds.includes(trimStr(row?.candidate_id || '')));
-    const pendingCandidateJobs = candidateStatusRows.map((row) => ({
-      candidate_id: trimStr(row?.candidate_id || ''),
-      pending_job_id: trimStr(row?.pending_job_id || row?.job_id || ''),
-      latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
-      status: trimStr(row?.status || '') || null,
-      latest_error_json: (row?.latest_error_json && typeof row.latest_error_json === 'object' && !Array.isArray(row.latest_error_json))
-        ? deep(row.latest_error_json)
-        : null
-    })).filter((row) => row.candidate_id && row.pending_job_id);
+    const pendingCandidateJobs = candidateStatusRows.map((row) => {
+      const latestJobStatus = trimStr(row?.latest_job_status || row?.job_status || '');
+      const pendingJobId = trimStr(row?.pending_job_id || row?.latest_job_id || row?.job_id || '');
+      return {
+        candidate_id: trimStr(row?.candidate_id || ''),
+        pending_job_id: pendingJobId,
+        latest_job_id: trimStr(row?.latest_job_id || pendingJobId || '') || null,
+        latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
+        latest_job_status: latestJobStatus || null,
+        job_status: latestJobStatus || trimStr(row?.status || '') || null,
+        candidate_status: trimStr(row?.status || '') || null,
+        latest_job_attempt_count: Number.isFinite(Number(row?.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
+        latest_job_max_attempts: Number.isFinite(Number(row?.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
+        latest_error_json: (row?.latest_error_json && typeof row.latest_error_json === 'object' && !Array.isArray(row.latest_error_json))
+          ? deep(row.latest_error_json)
+          : ((row?.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json)) ? deep(row.latest_job_last_error_json) : null)
+      };
+    }).filter((row) => row.candidate_id && row.pending_job_id);
 
     wiz.workbench.pending_candidate_ids = pendingCandidateIds;
     wiz.workbench.failed_candidate_ids = failedCandidateIds;
@@ -26048,6 +26056,41 @@ async function bankingPayPreview(pay_date) {
         wiz.preview.data.preview.last_progress_at = wiz.workbench.last_progress_at;
       }
     }
+  };
+
+
+  const isTerminalWorkbenchJobStatus = (status) => {
+    const s = trimStr(status).toUpperCase();
+    if (!s) return false;
+    return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
+  };
+  const hasActiveWorkbenchPendingWork = () => {
+    const pendingIds = Array.isArray(wiz?.workbench?.pending_candidate_ids)
+      ? wiz.workbench.pending_candidate_ids.map((value) => trimStr(value)).filter(Boolean)
+      : [];
+    if (pendingIds.length > 0) return true;
+    const jobs = Array.isArray(wiz?.workbench?.pending_candidate_jobs) ? wiz.workbench.pending_candidate_jobs : [];
+    return jobs.some((job) => {
+      const jobId = trimStr(job?.pending_job_id || job?.job_id || '');
+      const jobStatus = trimStr(job?.latest_job_status || job?.job_status || job?.status || '');
+      return !!jobId && !isTerminalWorkbenchJobStatus(jobStatus);
+    });
+  };
+  const applyDeferredPreviewStateFromPayload = (payload) => {
+    const obj = isPlainObject(payload) ? payload : {};
+    const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
+    if (isPlainObject(obj.progress)) syncProgressIntoState(obj.progress);
+    const readyFlag = obj.ready === true || obj.ready_flag === true || progressObj.ready === true || progressObj.ready_flag === true;
+    const activePending = !readyFlag && hasActiveWorkbenchPendingWork();
+    wiz.workbench.create_draft_refresh_pending = activePending;
+    if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = activePending;
+    wiz.preview.loading = activePending;
+    if (activePending) {
+      wiz.preview.error = '';
+      wiz.preview.failure = null;
+      wiz.preview.status_text = trimStr(progressObj.status_text || obj.status_text || 'Preparing payment preview candidates.');
+    }
+    return activePending;
   };
 
 
@@ -26328,11 +26371,9 @@ async function bankingPayPreview(pay_date) {
         throwPreviewFailureEnvelope(replacementSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
+      if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
       applyFullWorkbenchPreviewPayload(responsePayload);
-      try {
-        wiz.workbench.create_draft_refresh_pending = false;
-        wiz.decisions.create_draft_refresh_pending = false;
-      } catch {}
+      applyDeferredPreviewStateFromPayload(responsePayload);
       applyReplacementPendingState(false);
       didFullPreviewLoad = true;
     } else if (willOpenNewWorkbenchSession) {
@@ -26342,11 +26383,9 @@ async function bankingPayPreview(pay_date) {
         throwPreviewFailureEnvelope(openedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
+      if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
       applyFullWorkbenchPreviewPayload(responsePayload);
-      try {
-        wiz.workbench.create_draft_refresh_pending = false;
-        wiz.decisions.create_draft_refresh_pending = false;
-      } catch {}
+      applyDeferredPreviewStateFromPayload(responsePayload);
       didFullPreviewLoad = true;
     } else if (softRefresh || trimStr(wiz.workbench.session_id)) {
       responsePayload = await bankingPayWorkbenchSessionGet(wiz.workbench.session_id);
@@ -26355,11 +26394,9 @@ async function bankingPayPreview(pay_date) {
         throwPreviewFailureEnvelope(existingSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
+      if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
       applyFullWorkbenchPreviewPayload(responsePayload);
-      try {
-        wiz.workbench.create_draft_refresh_pending = false;
-        wiz.decisions.create_draft_refresh_pending = false;
-      } catch {}
+      applyDeferredPreviewStateFromPayload(responsePayload);
       didFullPreviewLoad = true;
     } else {
       responsePayload = await bankingPayWorkbenchSessionOpen(openPayload);
@@ -26368,11 +26405,9 @@ async function bankingPayPreview(pay_date) {
         throwPreviewFailureEnvelope(fallbackOpenedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
+      if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
       applyFullWorkbenchPreviewPayload(responsePayload);
-      try {
-        wiz.workbench.create_draft_refresh_pending = false;
-        wiz.decisions.create_draft_refresh_pending = false;
-      } catch {}
+      applyDeferredPreviewStateFromPayload(responsePayload);
       didFullPreviewLoad = true;
     }
 
@@ -26390,8 +26425,9 @@ async function bankingPayPreview(pay_date) {
         (Array.isArray(wiz.workbench.pending_candidate_jobs) && wiz.workbench.pending_candidate_jobs.length > 0)
       )
     );
+    const activePendingWorkbenchWork = hasActiveWorkbenchPendingWork();
 
-    if (replacementPendingWork) {
+    if (replacementPendingWork || activePendingWorkbenchWork) {
       wiz.preview.loading = true;
       wiz.preview.error = '';
       wiz.preview.failure = null;
@@ -26406,7 +26442,8 @@ async function bankingPayPreview(pay_date) {
 
       if (!isLatestRequest()) return deep(wiz.preview.data);
 
-      wiz.preview.loading = false;
+      const stillPendingAfterSettleAttempt = hasActiveWorkbenchPendingWork();
+      wiz.preview.loading = stillPendingAfterSettleAttempt;
       wiz.preview.error = '';
       wiz.preview.failure = null;
 
@@ -26414,7 +26451,7 @@ async function bankingPayPreview(pay_date) {
       return deep(wiz.preview.data);
     }
 
-    wiz.preview.loading = false;
+    wiz.preview.loading = hasActiveWorkbenchPendingWork();
     wiz.preview.error = '';
     wiz.preview.failure = null;
 
@@ -26448,7 +26485,7 @@ async function bankingPayPreview(pay_date) {
     return null;
   } finally {
     if (isLatestRequest()) {
-      wiz.preview.loading = false;
+      wiz.preview.loading = hasActiveWorkbenchPendingWork();
     }
     if (trimStr(wiz?.workbench?.__preview_refresh_request_token || '') === requestToken) {
       wiz.workbench.__preview_refresh_request_token = '';
@@ -70992,6 +71029,17 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     );
   };
 
+  const isSpecialWeeklyRouteType = (routeTypeValue) => {
+    const upper = normalizeRouteType(routeTypeValue);
+    return (
+      upper === 'WEEKLY_NHSP' ||
+      upper === 'WEEKLY_NHSP_ADJUSTMENT' ||
+      upper === 'WEEKLY_HEALTHROSTER' ||
+      upper === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+      upper === 'WEEKLY_MANUAL_ADJUSTMENT'
+    );
+  };
+
   const isNhspWeeklyRouteType = (routeTypeValue) => {
     const upper = normalizeRouteType(routeTypeValue);
     return (upper === 'WEEKLY_NHSP' || upper === 'WEEKLY_NHSP_ADJUSTMENT');
@@ -71008,7 +71056,7 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
   const pickExplicitSpecialWeeklyRouteType = (...routeTypeValues) => {
     for (const routeTypeValue of routeTypeValues) {
       const upper = normalizeRouteType(routeTypeValue);
-      if (isImportAuthoritativeWeeklyRouteType(upper)) {
+      if (isSpecialWeeklyRouteType(upper)) {
         return upper;
       }
     }
@@ -71034,6 +71082,8 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     const noTimesheetRequired = !!opts.noTimesheetRequired;
 
     if (upper === 'WEEKLY_NHSP_ADJUSTMENT') return 'NHSP Adjustment';
+    if (upper === 'WEEKLY_HEALTHROSTER_ADJUSTMENT') return 'HealthRoster Adjustment';
+    if (upper === 'WEEKLY_MANUAL_ADJUSTMENT') return 'Weekly Manual Adjustment';
     if (upper === 'WEEKLY_NHSP') return 'NHSP';
     if (upper === 'WEEKLY_HEALTHROSTER') {
       return noTimesheetRequired ? 'HealthRoster (no timesheets)' : 'HealthRoster (timesheets required)';
@@ -71174,6 +71224,9 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
 
     const isHealthRosterLike =
       explicitSpecialRouteType === 'WEEKLY_HEALTHROSTER' ||
+      explicitSpecialRouteType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+      routeTypeCandidate === 'WEEKLY_HEALTHROSTER' ||
+      routeTypeCandidate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
       weeklyMode === 'HEALTHROSTER' ||
       boolish(policy.autoprocess_hr) ||
       boolish(effective.client_autoprocess_hr) ||
@@ -71235,7 +71288,11 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     );
 
     const deriveSpecialWeeklyRouteType = () => {
-      if (isManualAdditionalAdjustment && isNhspLike) return 'WEEKLY_NHSP_ADJUSTMENT';
+      if (isManualAdditionalAdjustment) {
+        if (isNhspLike) return 'WEEKLY_NHSP_ADJUSTMENT';
+        if (isHealthRosterLike) return 'WEEKLY_HEALTHROSTER_ADJUSTMENT';
+        return 'WEEKLY_MANUAL_ADJUSTMENT';
+      }
       if (explicitSpecialRouteType) return explicitSpecialRouteType;
       if (isNhspLike) return isAdjustment ? 'WEEKLY_NHSP_ADJUSTMENT' : 'WEEKLY_NHSP';
       if (isHealthRosterLike && (noTimesheetRequired || hrWeeklyBehaviour === 'CREATE' || boolish(actionFlags.is_import_authoritative))) {
@@ -71245,6 +71302,7 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     };
 
     const specialRouteType = deriveSpecialWeeklyRouteType();
+    const canonicalOutputSubmissionMode = isManualAdditionalAdjustment ? 'MANUAL' : canonicalSubmissionMode;
 
     let canonicalRouteType = specialRouteType;
 
@@ -71252,13 +71310,13 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
       !canonicalRouteType &&
       !hasCanonicalTimesheet &&
       canonicalSheetScope === 'WEEKLY' &&
-      (canonicalSubmissionMode === 'MANUAL' || canonicalSubmissionMode === 'ELECTRONIC')
+      (canonicalOutputSubmissionMode === 'MANUAL' || canonicalOutputSubmissionMode === 'ELECTRONIC')
     ) {
-      canonicalRouteType = buildWeeklyRouteTypeFromMode(canonicalSubmissionMode);
+      canonicalRouteType = buildWeeklyRouteTypeFromMode(canonicalOutputSubmissionMode);
     }
 
     if (!canonicalRouteType) {
-      canonicalRouteType = routeTypeCandidate || buildWeeklyRouteTypeFromMode(canonicalSubmissionMode);
+      canonicalRouteType = routeTypeCandidate || buildWeeklyRouteTypeFromMode(canonicalOutputSubmissionMode);
     }
 
     const routeDisplayCandidate = pickFirstNonEmptyString(
@@ -71271,23 +71329,27 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
 
     let canonicalRouteDisplay = routeDisplayCandidate;
 
-    if (isImportAuthoritativeWeeklyRouteType(canonicalRouteType)) {
-      canonicalRouteDisplay = buildRouteDisplayFromRouteType(canonicalRouteType, canonicalSubmissionMode, {
+    if (isManualAdditionalAdjustment) {
+      canonicalRouteDisplay = buildRouteDisplayFromRouteType(canonicalRouteType, canonicalOutputSubmissionMode, {
+        noTimesheetRequired
+      });
+    } else if (isImportAuthoritativeWeeklyRouteType(canonicalRouteType)) {
+      canonicalRouteDisplay = buildRouteDisplayFromRouteType(canonicalRouteType, canonicalOutputSubmissionMode, {
         noTimesheetRequired
       });
     } else if (
       !hasCanonicalTimesheet &&
       canonicalSheetScope === 'WEEKLY' &&
-      (canonicalSubmissionMode === 'MANUAL' || canonicalSubmissionMode === 'ELECTRONIC') &&
+      (canonicalOutputSubmissionMode === 'MANUAL' || canonicalOutputSubmissionMode === 'ELECTRONIC') &&
       (canonicalRouteType === 'WEEKLY_MANUAL' || canonicalRouteType === 'WEEKLY_ELECTRONIC')
     ) {
-      canonicalRouteDisplay = buildWeeklyRouteDisplayFromMode(canonicalSubmissionMode);
+      canonicalRouteDisplay = buildWeeklyRouteDisplayFromMode(canonicalOutputSubmissionMode);
     }
 
     if (!canonicalRouteDisplay) {
-      canonicalRouteDisplay = buildRouteDisplayFromRouteType(canonicalRouteType, canonicalSubmissionMode, {
+      canonicalRouteDisplay = buildRouteDisplayFromRouteType(canonicalRouteType, canonicalOutputSubmissionMode, {
         noTimesheetRequired
-      }) || buildWeeklyRouteDisplayFromMode(canonicalSubmissionMode);
+      }) || buildWeeklyRouteDisplayFromMode(canonicalOutputSubmissionMode);
     }
 
     const canonicalSummaryStage = String(
@@ -71309,18 +71371,18 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
 
     const canonicalUnderlyingChannelFamily = canonicalImportAuthoritative
       ? null
-      : ((canonicalSubmissionMode === 'ELECTRONIC') ? 'ELECTRONIC' : 'MANUAL_NON_QR');
+      : (isManualAdditionalAdjustment ? 'MANUAL_NON_QR' : ((canonicalOutputSubmissionMode === 'ELECTRONIC') ? 'ELECTRONIC' : 'MANUAL_NON_QR'));
 
     const canonicalRouteFamily = canonicalImportAuthoritative
       ? 'IMPORT_AUTHORITATIVE'
-      : canonicalUnderlyingChannelFamily;
+      : (isManualAdditionalAdjustment ? 'MANUAL_NON_QR' : canonicalUnderlyingChannelFamily);
 
     const canonicalCompareBlockRequired =
       canonicalRouteType === 'WEEKLY_HEALTHROSTER' && !canonicalImportAuthoritative;
 
     const canonicalPolicyWeeklyMode = (() => {
       if (isNhspWeeklyRouteType(canonicalRouteType) || isNhspLike) return 'NHSP';
-      if (canonicalRouteType === 'WEEKLY_HEALTHROSTER' || (isHealthRosterLike && (noTimesheetRequired || hrWeeklyBehaviour === 'CREATE'))) {
+      if (canonicalRouteType === 'WEEKLY_HEALTHROSTER' || canonicalRouteType === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' || isHealthRosterLike) {
         return 'HEALTHROSTER';
       }
       return String(policy.weekly_mode || '').trim().toUpperCase() || 'NONE';
@@ -71346,10 +71408,10 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
             route_family: canonicalRouteFamily || backendContractWeek.route_family || null,
             route_subfamily: canonicalRouteFamily || backendContractWeek.route_subfamily || null,
             underlying_channel_family: canonicalUnderlyingChannelFamily || backendContractWeek.underlying_channel_family || null,
-            is_adjustment: isAdjustment,
-            additional_seq: additionalSeq || backendContractWeek.additional_seq || 0,
+            is_adjustment: isManualAdditionalAdjustment || isAdjustment,
+            additional_seq: isManualAdditionalAdjustment ? (additionalSeq || backendContractWeek.additional_seq || 1) : (additionalSeq || backendContractWeek.additional_seq || 0),
             submission_mode_snapshot:
-              canonicalSubmissionMode ||
+              canonicalOutputSubmissionMode ||
               backendContractWeek.submission_mode_snapshot ||
               null
           }
@@ -71363,9 +71425,9 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
             route_family: canonicalRouteFamily || null,
             route_subfamily: canonicalRouteFamily || null,
             underlying_channel_family: canonicalUnderlyingChannelFamily || null,
-            is_adjustment: isAdjustment,
-            additional_seq: additionalSeq || 0,
-            submission_mode_snapshot: canonicalSubmissionMode || null,
+            is_adjustment: isManualAdditionalAdjustment || isAdjustment,
+            additional_seq: isManualAdditionalAdjustment ? (additionalSeq || 1) : (additionalSeq || 0),
+            submission_mode_snapshot: canonicalOutputSubmissionMode || null,
             timesheet_id: plannedDetail.current_timesheet_id || null,
             planned_schedule_json:
               (plannedDetail.planned_schedule_json != null)
@@ -71385,19 +71447,19 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     };
 
     const actionFlagsOut =
-      (plannedDetail.action_flags && typeof plannedDetail.action_flags === 'object')
+      (plannedDetail.action_flags && typeof plannedDetail.action_flags === 'object') || isManualAdditionalAdjustment
         ? {
-            ...plannedDetail.action_flags,
+            ...(plannedDetail.action_flags && typeof plannedDetail.action_flags === 'object' ? plannedDetail.action_flags : {}),
             route_family: canonicalRouteFamily,
             route_subfamily: canonicalRouteFamily,
             underlying_channel_family: canonicalUnderlyingChannelFamily,
-            is_import_authoritative: canonicalImportAuthoritative,
-            is_adjustment: isAdjustment,
-            additional_seq: additionalSeq || 0,
+            is_import_authoritative: isManualAdditionalAdjustment ? false : canonicalImportAuthoritative,
+            is_adjustment: isManualAdditionalAdjustment || isAdjustment,
+            additional_seq: isManualAdditionalAdjustment ? (additionalSeq || 1) : (additionalSeq || 0),
             compare_block_required: canonicalCompareBlockRequired,
             healthroster_compare_required: canonicalCompareBlockRequired,
-            cw_submission_mode_snapshot: canonicalSubmissionMode || contractWeek?.submission_mode_snapshot || null,
-            submission_mode_snapshot: canonicalSubmissionMode || contractWeek?.submission_mode_snapshot || null
+            cw_submission_mode_snapshot: canonicalOutputSubmissionMode || contractWeek?.submission_mode_snapshot || null,
+            submission_mode_snapshot: canonicalOutputSubmissionMode || contractWeek?.submission_mode_snapshot || null
           }
         : null;
 
@@ -71405,20 +71467,20 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
       ...(plannedDetail.effective && typeof plannedDetail.effective === 'object' ? plannedDetail.effective : {}),
       route_type:
         canonicalRouteType ||
-        buildWeeklyRouteTypeFromMode(canonicalSubmissionMode),
+        buildWeeklyRouteTypeFromMode(canonicalOutputSubmissionMode),
       route_display:
         canonicalRouteDisplay ||
-        buildRouteDisplayFromRouteType(canonicalRouteType, canonicalSubmissionMode, {
+        buildRouteDisplayFromRouteType(canonicalRouteType, canonicalOutputSubmissionMode, {
           noTimesheetRequired
         }) ||
-        buildWeeklyRouteDisplayFromMode(canonicalSubmissionMode),
+        buildWeeklyRouteDisplayFromMode(canonicalOutputSubmissionMode),
       summary_stage: canonicalSummaryStage,
       route_family: canonicalRouteFamily,
       route_subfamily: canonicalRouteFamily,
       underlying_channel_family: canonicalUnderlyingChannelFamily,
-      is_import_authoritative: canonicalImportAuthoritative,
-      is_adjustment: isAdjustment,
-      additional_seq: additionalSeq || 0,
+      is_import_authoritative: isManualAdditionalAdjustment ? false : canonicalImportAuthoritative,
+      is_adjustment: isManualAdditionalAdjustment || isAdjustment,
+      additional_seq: isManualAdditionalAdjustment ? (additionalSeq || 1) : (additionalSeq || 0),
       client_no_timesheet_required:
         Object.prototype.hasOwnProperty.call(plannedDetail.effective || {}, 'client_no_timesheet_required')
           ? plannedDetail.effective.client_no_timesheet_required
@@ -71518,23 +71580,23 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
       route_family: canonicalRouteFamily,
       route_subfamily: canonicalRouteFamily,
       underlying_channel_family: canonicalUnderlyingChannelFamily,
-      is_import_authoritative: canonicalImportAuthoritative,
-      is_adjustment: isAdjustment,
-      additional_seq: additionalSeq || 0,
+      is_import_authoritative: isManualAdditionalAdjustment ? false : canonicalImportAuthoritative,
+      is_adjustment: isManualAdditionalAdjustment || isAdjustment,
+      additional_seq: isManualAdditionalAdjustment ? (additionalSeq || 1) : (additionalSeq || 0),
 
       route_type:
         canonicalRouteType ||
-        buildWeeklyRouteTypeFromMode(canonicalSubmissionMode),
+        buildWeeklyRouteTypeFromMode(canonicalOutputSubmissionMode),
 
       route_display:
         canonicalRouteDisplay ||
-        buildRouteDisplayFromRouteType(canonicalRouteType, canonicalSubmissionMode, {
+        buildRouteDisplayFromRouteType(canonicalRouteType, canonicalOutputSubmissionMode, {
           noTimesheetRequired
         }) ||
-        buildWeeklyRouteDisplayFromMode(canonicalSubmissionMode),
+        buildWeeklyRouteDisplayFromMode(canonicalOutputSubmissionMode),
 
       cw_submission_mode_snapshot:
-        canonicalSubmissionMode ||
+        canonicalOutputSubmissionMode ||
         contractWeek?.submission_mode_snapshot ||
         null
     };
@@ -71560,6 +71622,7 @@ async function fetchTimesheetWorkbenchDetails(ctxOrRow) {
     throw err;
   }
 }
+
 
 
 function renderImportSummaryModal(importType, summaryState) {
@@ -76157,7 +76220,6 @@ function computePayWorkbenchSessionSignature(input = null) {
   return stableStringify(signaturePayload);
 }
 
-
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -76323,8 +76385,50 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     (sessionId && previousSessionId && sessionId !== previousSessionId) ||
     (canonicalSessionSignature && previousSessionSignature && canonicalSessionSignature !== previousSessionSignature)
   );
-  const pendingCandidateIds = normalizeStringArray(responseObj.pending_candidate_ids ?? previewObj.pending_candidate_ids);
-  const failedCandidateIds = normalizeStringArray(responseObj.failed_candidate_ids ?? previewObj.failed_candidate_ids);
+  const progressObj = isPlainObject(responseObj.progress) ? responseObj.progress : {};
+  const progressRows = Array.isArray(progressObj.candidate_status_rows)
+    ? progressObj.candidate_status_rows
+    : (Array.isArray(progressObj.candidate_statuses) ? progressObj.candidate_statuses : []);
+  const pendingCandidateIds = normalizeStringArray(
+    responseObj.pending_candidate_ids ??
+    previewObj.pending_candidate_ids ??
+    progressObj.pending_candidate_ids ??
+    progressRows.filter((row) => trimStr(row?.status).toUpperCase() === 'PENDING').map((row) => row?.candidate_id)
+  );
+  const failedCandidateIds = normalizeStringArray(
+    responseObj.failed_candidate_ids ??
+    previewObj.failed_candidate_ids ??
+    progressObj.failed_candidate_ids ??
+    progressRows.filter((row) => trimStr(row?.status).toUpperCase() === 'FAILED').map((row) => row?.candidate_id)
+  );
+  const candidateStatusRows = Array.isArray(responseObj.candidate_status_rows)
+    ? responseObj.candidate_status_rows
+    : (Array.isArray(previewObj.candidate_status_rows)
+      ? previewObj.candidate_status_rows
+      : progressRows);
+  const pendingCandidateRows = candidateStatusRows.filter((row) => pendingCandidateIds.includes(trimStr(row?.candidate_id || '')));
+  const failedCandidateRows = candidateStatusRows.filter((row) => failedCandidateIds.includes(trimStr(row?.candidate_id || '')));
+  const pendingCandidateJobs = candidateStatusRows.map((row) => {
+    const candidateId = trimStr(row?.candidate_id || '');
+    const pendingJobId = trimStr(row?.pending_job_id || row?.latest_job_id || row?.job_id || '');
+    const latestJobStatus = trimStr(row?.latest_job_status || row?.job_status || '');
+    return {
+      candidate_id: candidateId,
+      pending_job_id: pendingJobId,
+      latest_job_id: trimStr(row?.latest_job_id || pendingJobId || '') || null,
+      latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
+      latest_job_status: latestJobStatus || null,
+      job_status: latestJobStatus || trimStr(row?.status || '') || null,
+      candidate_status: trimStr(row?.status || '') || null,
+      latest_job_attempt_count: Number.isFinite(Number(row?.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
+      latest_job_max_attempts: Number.isFinite(Number(row?.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
+      latest_job_last_error_json: (row?.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json))
+        ? cloneJson(row.latest_job_last_error_json)
+        : ((row?.last_error_json && typeof row.last_error_json === 'object' && !Array.isArray(row.last_error_json)) ? cloneJson(row.last_error_json) : null)
+    };
+  }).filter((row) => row.candidate_id && row.pending_job_id);
+  const progressReadyFlag = responseObj.ready === true || responseObj.ready_flag === true || progressObj.ready === true || progressObj.ready_flag === true;
+  const hasPendingWorkbenchRefresh = !progressReadyFlag && (pendingCandidateIds.length > 0 || pendingCandidateJobs.length > 0);
 
   const hasOwn = (obj, key) => isPlainObject(obj) && Object.prototype.hasOwnProperty.call(obj, key);
   const serverSelectionProvidedMarkerPresent = (
@@ -76412,7 +76516,13 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       server_selected_preview_row_ids_provided: serverSelectedPreviewRowIdsProvided,
       server_selected_preview_row_ids: serverSelectedPreviewRowIdsProvided ? (cloneJson(serverSelectedPreviewRowIds) || []) : [],
       pending_candidate_ids: pendingCandidateIds,
-      failed_candidate_ids: failedCandidateIds
+      failed_candidate_ids: failedCandidateIds,
+      pending_candidate_rows: cloneJson(pendingCandidateRows) || [],
+      failed_candidate_rows: cloneJson(failedCandidateRows) || [],
+      pending_candidate_jobs: cloneJson(pendingCandidateJobs) || [],
+      candidate_status_rows: cloneJson(candidateStatusRows) || [],
+      pending_job_ids: Array.isArray(responseObj.pending_job_ids || progressObj.pending_job_ids) ? (cloneJson(responseObj.pending_job_ids || progressObj.pending_job_ids) || []) : [],
+      recent_jobs: Array.isArray(responseObj.recent_jobs || progressObj.recent_jobs) ? (cloneJson(responseObj.recent_jobs || progressObj.recent_jobs) || []) : []
     }
   };
   if (!serverSelectedPreviewRowIdsProvided) {
@@ -76420,7 +76530,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   }
 
   wiz.preview.data = normalizedEnvelope;
-  wiz.preview.loading = false;
+  wiz.preview.loading = hasPendingWorkbenchRefresh;
   wiz.preview.error = '';
   wiz.preview.failure = null;
   wiz.preview.readiness = normalizedEnvelope.readiness;
@@ -76463,7 +76573,14 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.decisions.week_ending_cutoff_date = canonicalWeekEndingCutoffDate || wiz.decisions.week_ending_cutoff_date || null;
   wiz.decisions.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
   wiz.decisions.server_selected_preview_row_ids = serverSelectedPreviewRowIdsProvided ? (cloneJson(serverSelectedPreviewRowIds) || []) : [];
-  wiz.decisions.pay_context_dirty = false;
+  wiz.decisions.pending_candidate_ids = pendingCandidateIds;
+  wiz.decisions.failed_candidate_ids = failedCandidateIds;
+  wiz.decisions.pending_candidate_rows = cloneJson(pendingCandidateRows) || [];
+  wiz.decisions.failed_candidate_rows = cloneJson(failedCandidateRows) || [];
+  wiz.decisions.pending_candidate_jobs = cloneJson(pendingCandidateJobs) || [];
+  wiz.decisions.dirty_candidate_ids = Array.from(new Set([...pendingCandidateIds, ...failedCandidateIds]));
+  wiz.decisions.create_draft_refresh_pending = hasPendingWorkbenchRefresh;
+  wiz.decisions.pay_context_dirty = hasPendingWorkbenchRefresh;
   wiz.decisions.dirty_reason = '';
   wiz.decisions.modal_valid = true;
   wiz.decisions.selected_preview_row_ids = selectionState.selected_preview_row_ids;
@@ -76488,12 +76605,14 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.week_ending_cutoff_date = canonicalWeekEndingCutoffDate || wiz.workbench.week_ending_cutoff_date || null;
   wiz.workbench.pending_candidate_ids = pendingCandidateIds;
   wiz.workbench.failed_candidate_ids = failedCandidateIds;
-  wiz.workbench.pending_candidate_rows = cloneJson(responseObj.pending_candidate_rows ?? previewObj.pending_candidate_rows) || [];
-  wiz.workbench.failed_candidate_rows = cloneJson(responseObj.failed_candidate_rows ?? previewObj.failed_candidate_rows) || [];
+  wiz.workbench.pending_candidate_rows = cloneJson(responseObj.pending_candidate_rows ?? previewObj.pending_candidate_rows ?? pendingCandidateRows) || [];
+  wiz.workbench.failed_candidate_rows = cloneJson(responseObj.failed_candidate_rows ?? previewObj.failed_candidate_rows ?? failedCandidateRows) || [];
+  wiz.workbench.pending_candidate_jobs = cloneJson(responseObj.pending_candidate_jobs ?? previewObj.pending_candidate_jobs ?? pendingCandidateJobs) || [];
+  wiz.workbench.dirty_candidate_ids = Array.from(new Set([...pendingCandidateIds, ...failedCandidateIds]));
   wiz.workbench.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
   wiz.workbench.server_selected_preview_row_ids = serverSelectedPreviewRowIdsProvided ? (cloneJson(serverSelectedPreviewRowIds) || []) : [];
   wiz.workbench.selected_preview_row_mode = selectionState.selected_preview_row_mode;
-  wiz.workbench.create_draft_refresh_pending = false;
+  wiz.workbench.create_draft_refresh_pending = hasPendingWorkbenchRefresh;
   wiz.workbench.case_resolution_states = cloneJson(caseResolutionStates) || [];
   wiz.workbench.canonical_preview_lines = cloneJson(canonicalPreviewLines) || [];
   wiz.workbench.payees = cloneJson(payees) || [];
@@ -77084,7 +77203,9 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
   })();
   const updateState = options.updateState !== false;
   const startedAt = Date.now();
+  const fastPollDurationMs = 60 * 1000;
   const phaseOneDurationMs = 5 * 60 * 1000;
+  const fastPollMs = 3 * 1000;
   const phaseOnePollMs = 15 * 1000;
   const phaseTwoPollMs = 60 * 1000;
   let lastProgress = null;
@@ -77217,15 +77338,25 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     const candidateStatusRows = candidateStatusRowsRaw.filter((row) => isPlainObject(row));
     const pendingRows = candidateStatusRows.filter((row) => pendingCandidateIds.includes(trimStr(row?.candidate_id)));
     const failedRows = candidateStatusRows.filter((row) => failedCandidateIds.includes(trimStr(row?.candidate_id)));
-    const pendingCandidateJobs = candidateStatusRows.map((row) => ({
-      candidate_id: trimStr(row?.candidate_id || ''),
-      pending_job_id: trimStr(row?.pending_job_id || row?.job_id || ''),
-      latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
-      status: trimStr(row?.status || '') || null,
-      latest_error_json: (row?.latest_error_json && typeof row.latest_error_json === 'object' && !Array.isArray(row.latest_error_json))
-        ? cloneJson(row.latest_error_json)
-        : null
-    })).filter((row) => row.candidate_id && row.pending_job_id);
+    const pendingCandidateJobs = candidateStatusRows.map((row) => {
+      const latestJobStatus = trimStr(row?.latest_job_status || row?.job_status || '');
+      const pendingJobId = trimStr(row?.pending_job_id || row?.latest_job_id || row?.job_id || '');
+      return {
+        candidate_id: trimStr(row?.candidate_id || ''),
+        pending_job_id: pendingJobId,
+        latest_job_id: trimStr(row?.latest_job_id || pendingJobId || '') || null,
+        latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
+        latest_job_status: latestJobStatus || null,
+        job_status: latestJobStatus || trimStr(row?.status || '') || null,
+        candidate_status: trimStr(row?.status || '') || null,
+        status: trimStr(row?.status || '') || null,
+        latest_job_attempt_count: Number.isFinite(Number(row?.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
+        latest_job_max_attempts: Number.isFinite(Number(row?.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
+        latest_error_json: (row?.latest_error_json && typeof row.latest_error_json === 'object' && !Array.isArray(row.latest_error_json))
+          ? cloneJson(row.latest_error_json)
+          : ((row?.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json)) ? cloneJson(row.latest_job_last_error_json) : null)
+      };
+    }).filter((row) => row.candidate_id && row.pending_job_id);
     const dirtyCandidateIds = Array.from(new Set([...pendingCandidateIds, ...failedCandidateIds]));
     const targetCandidateStatus = candidateStatusRows.find((row) => trimStr(row?.candidate_id) === candidateIdText) || null;
     const watchedPendingIds = watchCandidateIds.filter((id) => pendingCandidateIds.includes(id));
@@ -77239,6 +77370,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
         status: trimStr(row?.status || ''),
         pending_job_id: trimStr(row?.pending_job_id || row?.job_id || ''),
         latest_job_type: trimStr(row?.latest_job_type || row?.job_type || ''),
+        latest_job_status: trimStr(row?.latest_job_status || row?.job_status || ''),
         latest_error_message: trimStr(
           row?.latest_error_json?.message ||
           row?.latest_error_json?.error ||
@@ -77278,7 +77410,12 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     const n = isPlainObject(normalized) ? normalized : {};
     if (Array.isArray(n.pendingCandidateIds) && n.pendingCandidateIds.length > 0) return true;
     const jobs = Array.isArray(n.pendingCandidateJobs) ? n.pendingCandidateJobs : [];
-    return jobs.some((job) => job && trimStr(job.pending_job_id || job.job_id || '') && !isTerminalCandidateJobStatus(job.status));
+    return jobs.some((job) => {
+      if (!job || !trimStr(job.pending_job_id || job.job_id || '')) return false;
+      const jobStatus = trimStr(job.latest_job_status || job.job_status || '');
+      if (jobStatus) return !isTerminalCandidateJobStatus(jobStatus);
+      return !isTerminalCandidateJobStatus(job.status || job.candidate_status);
+    });
   };
   const writeProgressIntoState = (normalized) => {
     if (!updateState) return;
@@ -77628,7 +77765,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     }
 
     const elapsedMs = Date.now() - startedAt;
-    const sleepMs = elapsedMs < phaseOneDurationMs ? phaseOnePollMs : phaseTwoPollMs;
+    const sleepMs = elapsedMs < fastPollDurationMs ? fastPollMs : (elapsedMs < phaseOneDurationMs ? phaseOnePollMs : phaseTwoPollMs);
     const sleepGuard = await guardedSleep(sleepMs);
     if (sleepGuard.aborted) {
       return buildAbortResult(sleepGuard);
@@ -77646,7 +77783,6 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
   };
   throw timeoutError;
 }
-
 
 async function bankingPayWorkbenchSessionOpen(payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -77666,14 +77802,50 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
   const normaliseProgress = (raw, fallbackSessionId = '') => {
     const obj = isPlainObject(raw) ? raw : {};
     const progress = isPlainObject(obj.progress) ? obj.progress : obj;
+    const candidateStatusRows = Array.isArray(progress.candidate_status_rows)
+      ? (cloneJson(progress.candidate_status_rows) || [])
+      : (Array.isArray(progress.candidate_statuses) ? (cloneJson(progress.candidate_statuses) || []) : []);
+    const pendingJobIds = Array.isArray(progress.pending_job_ids)
+      ? (cloneJson(progress.pending_job_ids) || [])
+      : (Array.isArray(obj.pending_job_ids) ? (cloneJson(obj.pending_job_ids) || []) : []);
+    const recentJobs = Array.isArray(progress.recent_jobs)
+      ? (cloneJson(progress.recent_jobs) || [])
+      : (Array.isArray(obj.recent_jobs) ? (cloneJson(obj.recent_jobs) || []) : []);
+    const pendingCandidateIdsRaw = Array.isArray(progress.pending_candidate_ids)
+      ? progress.pending_candidate_ids
+      : (Array.isArray(obj.pending_candidate_ids) ? obj.pending_candidate_ids : candidateStatusRows.filter((row) => trimStr(row?.status).toUpperCase() === 'PENDING').map((row) => row?.candidate_id));
+    const failedCandidateIdsRaw = Array.isArray(progress.failed_candidate_ids)
+      ? progress.failed_candidate_ids
+      : (Array.isArray(obj.failed_candidate_ids) ? obj.failed_candidate_ids : candidateStatusRows.filter((row) => trimStr(row?.status).toUpperCase() === 'FAILED').map((row) => row?.candidate_id));
+    const pendingCandidateIds = Array.from(new Set(pendingCandidateIdsRaw.map((value) => trimStr(value)).filter(Boolean)));
+    const failedCandidateIds = Array.from(new Set(failedCandidateIdsRaw.map((value) => trimStr(value)).filter(Boolean)));
+    const pendingCandidateJobs = candidateStatusRows.map((row) => {
+      const candidateId = trimStr(row?.candidate_id || '');
+      const pendingJobId = trimStr(row?.pending_job_id || row?.latest_job_id || row?.job_id || '');
+      const latestJobStatus = trimStr(row?.latest_job_status || row?.job_status || '');
+      return {
+        candidate_id: candidateId,
+        pending_job_id: pendingJobId,
+        latest_job_id: trimStr(row?.latest_job_id || pendingJobId || '') || null,
+        latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
+        latest_job_status: latestJobStatus || null,
+        job_status: latestJobStatus || trimStr(row?.status || '') || null,
+        candidate_status: trimStr(row?.status || '') || null,
+        latest_job_attempt_count: Number.isFinite(Number(row?.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
+        latest_job_max_attempts: Number.isFinite(Number(row?.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
+        latest_job_last_error_json: (row?.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json))
+          ? cloneJson(row.latest_job_last_error_json)
+          : ((row?.last_error_json && typeof row.last_error_json === 'object' && !Array.isArray(row.last_error_json)) ? cloneJson(row.last_error_json) : null)
+      };
+    }).filter((row) => row.candidate_id && row.pending_job_id);
     const total = toNumber(progress.total_candidates ?? progress.total_candidate_count ?? progress.total_count ?? progress.total ?? progress.candidate_count ?? obj.total_candidates ?? obj.candidate_count);
-    const failed = toNumber(progress.failed_candidates ?? progress.failed_candidate_count ?? progress.failed_count ?? progress.failed ?? obj.failed_candidates ?? obj.failed_count);
+    const failed = toNumber(progress.failed_candidates ?? progress.failed_candidate_count ?? progress.failed_count ?? progress.failed ?? obj.failed_candidates ?? obj.failed_count ?? failedCandidateIds.length);
     const completed = toNumber(progress.completed_candidates ?? progress.ready_candidates ?? progress.ready_candidate_count ?? progress.completed_count ?? progress.ready_count ?? progress.completed ?? obj.completed_candidates ?? obj.ready_candidates);
     const pendingFromPayload = progress.pending_candidates ?? progress.pending_candidate_count ?? progress.pending_count ?? progress.pending ?? obj.pending_candidates ?? obj.pending_count;
-    const pending = Number.isFinite(Number(pendingFromPayload)) ? toNumber(pendingFromPayload) : Math.max(0, total - completed - failed);
+    const pending = Number.isFinite(Number(pendingFromPayload)) ? toNumber(pendingFromPayload) : Math.max(0, total - completed - failed, pendingCandidateIds.length);
     const readyFlag = progress.ready_flag === true || progress.ready === true || obj.ready_flag === true || obj.ready === true || (total > 0 && pending <= 0 && failed <= 0);
     const phase = trimStr(progress.phase || progress.current_phase || progress.status_phase || obj.phase || obj.current_phase || (readyFlag ? 'READY' : 'REFRESHING'));
-    const statusText = trimStr(progress.status_text || progress.message || progress.statusText || obj.status_text || obj.message || (readyFlag ? 'Preview ready' : 'Preview is still refreshing'));
+    const statusText = trimStr(progress.status_text || progress.message || progress.statusText || obj.status_text || obj.message || (readyFlag ? 'Preview ready' : 'Preparing payment preview candidates.'));
     return {
       session_id: trimStr(obj.session_id || progress.session_id || fallbackSessionId),
       snapshot_run_id: trimStr(obj.snapshot_run_id || progress.snapshot_run_id || ''),
@@ -77684,6 +77856,13 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
       ready_candidates: completed,
       pending_candidates: pending,
       failed_candidates: failed,
+      pending_candidate_ids: pendingCandidateIds,
+      failed_candidate_ids: failedCandidateIds,
+      candidate_status_rows: candidateStatusRows,
+      candidate_statuses: candidateStatusRows,
+      pending_job_ids: pendingJobIds,
+      recent_jobs: recentJobs,
+      pending_candidate_jobs: pendingCandidateJobs,
       ready_flag: !!readyFlag,
       ready: !!readyFlag,
       phase,
@@ -77722,8 +77901,15 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
       preview_bootstrap: !!bootstrapOnly,
       available_sections: Array.isArray(payloadObj.available_sections || previewObj?.available_sections) ? cloneJson(payloadObj.available_sections || previewObj.available_sections) || [] : [],
       recommended_page_size: Number.isFinite(Number(payloadObj.recommended_page_size || previewObj?.recommended_page_size)) ? Math.max(1, Math.min(250, Math.trunc(Number(payloadObj.recommended_page_size || previewObj?.recommended_page_size)))) : null,
-      pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids || previewObj?.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids || previewObj.pending_candidate_ids) || [] : [],
-      failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids || previewObj?.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids || previewObj.failed_candidate_ids) || [] : [],
+      pending_candidate_ids: progress.pending_candidate_ids,
+      failed_candidate_ids: progress.failed_candidate_ids,
+      candidate_status_rows: progress.candidate_status_rows,
+      candidate_statuses: progress.candidate_statuses,
+      pending_job_ids: progress.pending_job_ids,
+      recent_jobs: progress.recent_jobs,
+      pending_candidate_jobs: progress.pending_candidate_jobs,
+      phase: progress.phase,
+      status_text: progress.status_text,
       server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids || previewObj?.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids || previewObj.server_selected_preview_row_ids) || [] : [],
       server_selected_preview_row_ids_provided: payloadObj.server_selected_preview_row_ids_provided === true || previewObj?.server_selected_preview_row_ids_provided === true || sessionObj.server_selected_preview_row_ids_provided === true
     };
@@ -77769,6 +77955,9 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
     throw error;
   }
 }
+
+
+
 
 
 
@@ -79321,14 +79510,44 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
   const normaliseProgress = (json, fallbackSessionId) => {
     const payloadObj = isPlainObject(json) ? json : {};
     const src = isPlainObject(payloadObj.progress) ? payloadObj.progress : payloadObj;
+    const candidateStatusRows = Array.isArray(payloadObj.candidate_status_rows || src.candidate_status_rows)
+      ? (cloneJson(payloadObj.candidate_status_rows || src.candidate_status_rows) || [])
+      : (Array.isArray(payloadObj.candidate_statuses || src.candidate_statuses) ? (cloneJson(payloadObj.candidate_statuses || src.candidate_statuses) || []) : []);
+    const pendingCandidateIds = Array.isArray(payloadObj.pending_candidate_ids || src.pending_candidate_ids)
+      ? (cloneJson(payloadObj.pending_candidate_ids || src.pending_candidate_ids) || [])
+      : candidateStatusRows.filter((row) => trimStr(row?.status).toUpperCase() === 'PENDING').map((row) => trimStr(row?.candidate_id)).filter(Boolean);
+    const failedCandidateIds = Array.isArray(payloadObj.failed_candidate_ids || src.failed_candidate_ids)
+      ? (cloneJson(payloadObj.failed_candidate_ids || src.failed_candidate_ids) || [])
+      : candidateStatusRows.filter((row) => trimStr(row?.status).toUpperCase() === 'FAILED').map((row) => trimStr(row?.candidate_id)).filter(Boolean);
+    const pendingJobIds = Array.isArray(payloadObj.pending_job_ids || src.pending_job_ids) ? (cloneJson(payloadObj.pending_job_ids || src.pending_job_ids) || []) : [];
+    const recentJobs = Array.isArray(payloadObj.recent_jobs || src.recent_jobs) ? (cloneJson(payloadObj.recent_jobs || src.recent_jobs) || []) : [];
+    const pendingCandidateJobs = candidateStatusRows.map((row) => {
+      const candidateId = trimStr(row?.candidate_id || '');
+      const pendingJobId = trimStr(row?.pending_job_id || row?.latest_job_id || row?.job_id || '');
+      const latestJobStatus = trimStr(row?.latest_job_status || row?.job_status || '');
+      return {
+        candidate_id: candidateId,
+        pending_job_id: pendingJobId,
+        latest_job_id: trimStr(row?.latest_job_id || pendingJobId || '') || null,
+        latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
+        latest_job_status: latestJobStatus || null,
+        job_status: latestJobStatus || trimStr(row?.status || '') || null,
+        candidate_status: trimStr(row?.status || '') || null,
+        latest_job_attempt_count: Number.isFinite(Number(row?.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
+        latest_job_max_attempts: Number.isFinite(Number(row?.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
+        latest_job_last_error_json: (row?.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json))
+          ? cloneJson(row.latest_job_last_error_json)
+          : ((row?.last_error_json && typeof row.last_error_json === 'object' && !Array.isArray(row.last_error_json)) ? cloneJson(row.last_error_json) : null)
+      };
+    }).filter((row) => row.candidate_id && row.pending_job_id);
     const total = toNumber(src.total_candidates ?? src.total_candidate_count ?? src.total_count ?? src.total ?? src.candidate_count);
     const completed = toNumber(src.completed_candidates ?? src.ready_candidates ?? src.completed_count ?? src.ready_count ?? src.completed);
-    const failed = toNumber(src.failed_candidates ?? src.failed_candidate_count ?? src.failed_count ?? src.failed);
+    const failed = toNumber(src.failed_candidates ?? src.failed_candidate_count ?? src.failed_count ?? src.failed ?? failedCandidateIds.length);
     const pendingRaw = src.pending_candidates ?? src.pending_candidate_count ?? src.pending_count ?? src.pending;
-    const pending = Number.isFinite(Number(pendingRaw)) ? toNumber(pendingRaw) : Math.max(0, total - completed - failed);
+    const pending = Number.isFinite(Number(pendingRaw)) ? toNumber(pendingRaw) : Math.max(0, total - completed - failed, pendingCandidateIds.length);
     const readyFlag = src.ready_flag === true || src.ready === true || payloadObj.ready_flag === true || payloadObj.ready === true || (total > 0 && pending <= 0 && failed <= 0);
     const phase = trimStr(src.phase || src.current_phase || src.status_phase || payloadObj.phase || payloadObj.current_phase || (readyFlag ? 'READY' : 'REFRESHING'));
-    const statusText = trimStr(src.status_text || src.statusText || src.message || payloadObj.status_text || payloadObj.message || (readyFlag ? 'Preview ready' : 'Preview is still refreshing'));
+    const statusText = trimStr(src.status_text || src.statusText || src.message || payloadObj.status_text || payloadObj.message || (readyFlag ? 'Preview ready' : 'Preparing payment preview candidates.'));
     return {
       ok: payloadObj.ok !== false,
       ...(cloneJson(payloadObj) || {}),
@@ -79345,12 +79564,17 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       ready: !!readyFlag,
       phase,
       status_text: statusText,
-      candidate_status_rows: Array.isArray(payloadObj.candidate_status_rows || src.candidate_status_rows) ? cloneJson(payloadObj.candidate_status_rows || src.candidate_status_rows) || [] : [],
-      pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids || src.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids || src.pending_candidate_ids) || [] : [],
-      failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids || src.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids || src.failed_candidate_ids) || [] : [],
+      candidate_status_rows: candidateStatusRows,
+      candidate_statuses: candidateStatusRows,
+      pending_candidate_ids: pendingCandidateIds,
+      failed_candidate_ids: failedCandidateIds,
+      pending_job_ids: pendingJobIds,
+      recent_jobs: recentJobs,
+      pending_candidate_jobs: pendingCandidateJobs,
       progress: cloneJson(src) || src
     };
   };
+
 
   const sessionIdText = trimStr(sessionId);
   if (!sessionIdText) throw new Error('bankingPayWorkbenchSessionGetProgress: sessionId is required');
@@ -195345,16 +195569,16 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   const upper = (v) => String(v || '').trim().toUpperCase();
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
-  const isImportAuthoritativeFromSummary = (routeType, noTimesheetRequired) => {
+   const isImportAuthoritativeFromSummary = (routeType, noTimesheetRequired, importDerivedCorrectionSignal = false) => {
     const rt = String(routeType || '').toUpperCase();
     const noTs = boolish(noTimesheetRequired);
+    const isImportDerivedCorrection = boolish(importDerivedCorrectionSignal);
     return (
       rt === 'WEEKLY_NHSP' ||
-      rt === 'WEEKLY_NHSP_ADJUSTMENT' ||
+      (rt === 'WEEKLY_NHSP_ADJUSTMENT' && isImportDerivedCorrection) ||
       (rt === 'WEEKLY_HEALTHROSTER' && noTs === true)
     );
   };
-
   const pickFirstUpper = (...values) => {
     for (const value of values) {
       const v = upper(value);
@@ -195562,7 +195786,6 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     det.action_flags?.underlying_channel_family,
     cw.underlying_channel_family
   );
-
   const additionalSeqForFooter = pickFirstNumber(
     data.additional_seq,
     data.contract_week_additional_seq,
@@ -195573,6 +195796,41 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     det.effective?.additional_seq,
     det.action_flags?.additional_seq,
     cw.additional_seq
+  );
+
+  const adjustmentOriginForFooter = pickFirstUpper(
+    data.adjustment_origin,
+    det.adjustment_origin,
+    det.effective?.adjustment_origin,
+    det.action_flags?.adjustment_origin,
+    ts.adjustment_origin,
+    cw.adjustment_origin
+  );
+
+  const correctionIdForFooter = String(
+    data.correction_id ||
+    det.correction_id ||
+    det.effective?.correction_id ||
+    det.action_flags?.correction_id ||
+    ts.correction_id ||
+    cw.correction_id ||
+    ''
+  ).trim();
+
+  const correctionKindForFooter = pickFirstUpper(
+    data.correction_kind,
+    det.correction_kind,
+    det.effective?.correction_kind,
+    det.action_flags?.correction_kind,
+    ts.correction_kind,
+    cw.correction_kind
+  );
+
+  const importDerivedCorrectionForFooter = !!(
+    adjustmentOriginForFooter === 'IMPORT_CORRECTION' ||
+    adjustmentOriginForFooter === 'IMPORT_CANCELLATION' ||
+    correctionIdForFooter ||
+    correctionKindForFooter
   );
 
   const effectiveAdjustmentForFooter = !!(
@@ -195589,6 +195847,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
   );
 
   const manualAdditionalForFooter = !!(
+    !importDerivedCorrectionForFooter &&
     (routeTypeForFooter === 'WEEKLY_NHSP_ADJUSTMENT' || routeTypeForFooter === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' || routeTypeForFooter === 'WEEKLY_MANUAL_ADJUSTMENT' || routeTypeForFooter.includes('_ADJUSTMENT') || additionalSeqForFooter > 0) &&
     (
       effectiveAdjustmentForFooter ||
@@ -195606,8 +195865,7 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
     ? false
     : ((backendImportAuthoritative !== null)
         ? backendImportAuthoritative
-        : isImportAuthoritativeFromSummary(data.route_type || det.route_type || cw.route_type || routeTypeForFooter, data.client_no_timesheet_required));
-
+        : isImportAuthoritativeFromSummary(data.route_type || det.route_type || cw.route_type || routeTypeForFooter, data.client_no_timesheet_required, importDerivedCorrectionForFooter));
   const backendUnprocessed =
     processingStatus === 'UNPROCESSED' ||
     summaryStage === 'UNPROCESSED' ||
@@ -200170,7 +200428,6 @@ if (this.entity === 'timesheets' && k === 'lines') {
     const dataArtifactHints = (d.artifact_hints && typeof d.artifact_hints === 'object')
       ? d.artifact_hints
       : {};
-
     const boolish = (v) => {
       if (v === true) return true;
       if (v === false) return false;
@@ -200179,12 +200436,32 @@ if (this.entity === 'timesheets' && k === 'lines') {
       return (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on');
     };
 
-    const isImportAuthoritativeFromSummary = (routeType, noTimesheetRequired) => {
-      const rt = String(routeType || '').toUpperCase();
+    const upperImportLock = (v) => String(v || '').trim().toUpperCase();
+
+    const pickFirstImportLockNumber = (...candidates) => {
+      for (const candidate of candidates) {
+        const n = Number(candidate);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return 0;
+    };
+
+    const pickFirstImportLockUpper = (...candidates) => {
+      for (const candidate of candidates) {
+        const s = upperImportLock(candidate);
+        if (s) return s;
+      }
+      return '';
+    };
+
+    const isImportAuthoritativeFromSummary = (routeType, noTimesheetRequired, manualAdditionalSignal = false, importDerivedCorrectionSignal = false) => {
+      if (manualAdditionalSignal) return false;
+      const rt = upperImportLock(routeType);
       const noTs = boolish(noTimesheetRequired);
+      const isImportDerivedCorrection = boolish(importDerivedCorrectionSignal);
       return (
         rt === 'WEEKLY_NHSP' ||
-        rt === 'WEEKLY_NHSP_ADJUSTMENT' ||
+        (rt === 'WEEKLY_NHSP_ADJUSTMENT' && isImportDerivedCorrection) ||
         (rt === 'WEEKLY_HEALTHROSTER' && noTs === true)
       );
     };
@@ -200201,6 +200478,151 @@ if (this.entity === 'timesheets' && k === 'lines') {
       return null;
     };
 
+    const tsImportLock = (det.timesheet && typeof det.timesheet === 'object') ? det.timesheet : {};
+    const cwImportLock = (det.contract_week && typeof det.contract_week === 'object') ? det.contract_week : {};
+    const effectiveImportLock = (det.effective && typeof det.effective === 'object') ? det.effective : {};
+
+    const routeTypeImportLock = pickFirstImportLockUpper(
+      d.route_type,
+      effectiveImportLock.route_type,
+      actionFlags.route_type,
+      bulkAuthorise.route_type,
+      artifactHints.route_type,
+      dataActionFlags.route_type,
+      dataBulkAuthorise.route_type,
+      dataArtifactHints.route_type,
+      cwImportLock.route_type,
+      det.route_type
+    );
+
+    const routeFamilyImportLock = pickFirstImportLockUpper(
+      d.route_family,
+      effectiveImportLock.route_family,
+      actionFlags.route_family,
+      bulkAuthorise.route_family,
+      artifactHints.route_family,
+      dataActionFlags.route_family,
+      dataBulkAuthorise.route_family,
+      dataArtifactHints.route_family,
+      cwImportLock.route_family,
+      det.route_family
+    );
+
+    const routeSubfamilyImportLock = pickFirstImportLockUpper(
+      d.route_subfamily,
+      effectiveImportLock.route_subfamily,
+      actionFlags.route_subfamily,
+      bulkAuthorise.route_subfamily,
+      artifactHints.route_subfamily,
+      dataActionFlags.route_subfamily,
+      dataBulkAuthorise.route_subfamily,
+      dataArtifactHints.route_subfamily,
+      cwImportLock.route_subfamily,
+      det.route_subfamily
+    );
+
+    const underlyingFamilyImportLock = pickFirstImportLockUpper(
+      d.underlying_channel_family,
+      effectiveImportLock.underlying_channel_family,
+      actionFlags.underlying_channel_family,
+      bulkAuthorise.underlying_channel_family,
+      artifactHints.underlying_channel_family,
+      dataActionFlags.underlying_channel_family,
+      dataBulkAuthorise.underlying_channel_family,
+      dataArtifactHints.underlying_channel_family,
+      cwImportLock.underlying_channel_family,
+      det.underlying_channel_family
+    );
+
+    const submissionModeImportLock = pickFirstImportLockUpper(
+      tsImportLock.submission_mode,
+      d.submission_mode,
+      cwImportLock.submission_mode_snapshot,
+      d.submission_mode_snapshot,
+      meta.subMode,
+      meta.cw_submission_mode_snapshot,
+      det.cw_submission_mode_snapshot
+    );
+
+    const additionalSeqImportLock = pickFirstImportLockNumber(
+      d.additional_seq,
+      d.contract_week_additional_seq,
+      effectiveImportLock.additional_seq,
+      actionFlags.additional_seq,
+      bulkAuthorise.additional_seq,
+      artifactHints.additional_seq,
+      dataActionFlags.additional_seq,
+      dataBulkAuthorise.additional_seq,
+      dataArtifactHints.additional_seq,
+      cwImportLock.additional_seq,
+      det.additional_seq,
+      det.contract_week_additional_seq
+    );
+
+    const adjustmentOriginImportLock = pickFirstImportLockUpper(
+      tsImportLock.adjustment_origin,
+      cwImportLock.adjustment_origin,
+      d.adjustment_origin,
+      effectiveImportLock.adjustment_origin,
+      actionFlags.adjustment_origin
+    );
+
+    const correctionIdImportLock = String(
+      tsImportLock.correction_id ||
+      cwImportLock.correction_id ||
+      d.correction_id ||
+      effectiveImportLock.correction_id ||
+      actionFlags.correction_id ||
+      ''
+    ).trim();
+
+    const correctionKindImportLock = pickFirstImportLockUpper(
+      tsImportLock.correction_kind,
+      cwImportLock.correction_kind,
+      d.correction_kind,
+      effectiveImportLock.correction_kind,
+      actionFlags.correction_kind
+    );
+
+    const importDerivedCorrectionImportLock = !!(
+      adjustmentOriginImportLock === 'IMPORT_CORRECTION' ||
+      adjustmentOriginImportLock === 'IMPORT_CANCELLATION' ||
+      correctionIdImportLock ||
+      correctionKindImportLock
+    );
+
+    const adjustmentSignalImportLock = !!(
+      routeTypeImportLock === 'WEEKLY_NHSP_ADJUSTMENT' ||
+      routeTypeImportLock === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+      routeTypeImportLock === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+      routeTypeImportLock.includes('_ADJUSTMENT') ||
+      additionalSeqImportLock > 0 ||
+      boolish(d.is_adjustment) ||
+      boolish(effectiveImportLock.is_adjustment) ||
+      boolish(actionFlags.is_adjustment) ||
+      boolish(bulkAuthorise.is_adjustment) ||
+      boolish(artifactHints.is_adjustment) ||
+      boolish(dataActionFlags.is_adjustment) ||
+      boolish(dataBulkAuthorise.is_adjustment) ||
+      boolish(dataArtifactHints.is_adjustment) ||
+      boolish(tsImportLock.is_adjustment) ||
+      boolish(cwImportLock.is_adjustment) ||
+      boolish(det.is_adjustment)
+    );
+
+    const manualRouteSignalImportLock = !!(
+      submissionModeImportLock === 'MANUAL' ||
+      routeFamilyImportLock === 'MANUAL_NON_QR' ||
+      routeSubfamilyImportLock === 'MANUAL_NON_QR' ||
+      underlyingFamilyImportLock === 'MANUAL_NON_QR'
+    );
+
+    const manualAdditionalImportLock = !!(
+      adjustmentSignalImportLock &&
+      manualRouteSignalImportLock &&
+      !importDerivedCorrectionImportLock
+    );
+
     const importAuthResolved = pickFirstImportAuthoritativeValue(
       actionFlags.is_import_authoritative,
       bulkAuthorise.is_import_authoritative,
@@ -200212,9 +200634,11 @@ if (this.entity === 'timesheets' && k === 'lines') {
       d.import_authoritative
     );
 
-    const importAuth = (importAuthResolved == null)
-      ? isImportAuthoritativeFromSummary(d.route_type, d.client_no_timesheet_required)
-      : !!importAuthResolved;
+    const importAuth = manualAdditionalImportLock
+      ? false
+      : ((importAuthResolved == null)
+          ? isImportAuthoritativeFromSummary(d.route_type, d.client_no_timesheet_required, manualAdditionalImportLock, importDerivedCorrectionImportLock)
+          : !!importAuthResolved);
 
     // "Processed" = has a real timesheet id (NOT a planned week stub)
     const hasRealTs = !!(d.timesheet_id || meta.hasTs);
@@ -201513,7 +201937,6 @@ top._updateButtons = ()=> {
 
   const isDailyManualTs =
     hasTsMeta && isDaily && subMode === 'MANUAL' && !locked;
-
   const boolish = (v) => {
     if (v === true) return true;
     if (v === false) return false;
@@ -201522,12 +201945,32 @@ top._updateButtons = ()=> {
     return (s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on');
   };
 
-  const isImportAuthoritativeFromSummary = (routeType, noTimesheetRequired) => {
-    const rt = String(routeType || '').toUpperCase();
+  const upperEditGate = (v) => String(v || '').trim().toUpperCase();
+
+  const pickFirstEditGateNumber = (...candidates) => {
+    for (const candidate of candidates) {
+      const n = Number(candidate);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return 0;
+  };
+
+  const pickFirstEditGateUpper = (...candidates) => {
+    for (const candidate of candidates) {
+      const s = upperEditGate(candidate);
+      if (s) return s;
+    }
+    return '';
+  };
+
+  const isImportAuthoritativeFromSummary = (routeType, noTimesheetRequired, manualAdditionalSignal = false, importDerivedCorrectionSignal = false) => {
+    if (manualAdditionalSignal) return false;
+    const rt = upperEditGate(routeType);
     const noTs = boolish(noTimesheetRequired);
+    const isImportDerivedCorrection = boolish(importDerivedCorrectionSignal);
     return (
       rt === 'WEEKLY_NHSP' ||
-      rt === 'WEEKLY_NHSP_ADJUSTMENT' ||
+      (rt === 'WEEKLY_NHSP_ADJUSTMENT' && isImportDerivedCorrection) ||
       (rt === 'WEEKLY_HEALTHROSTER' && noTs === true)
     );
   };
@@ -201554,12 +201997,163 @@ top._updateButtons = ()=> {
   };
 
   const dSum = (mcTs && mcTs.data) ? mcTs.data : {};
-  const backendImportAuthoritative = pickBackendBoolean('is_import_authoritative');
-  const importAuthoritative =
-    (backendImportAuthoritative !== null)
-      ? backendImportAuthoritative
-      : isImportAuthoritativeFromSummary(dSum.route_type, dSum.client_no_timesheet_required);
+  const tsEditGate = (det.timesheet && typeof det.timesheet === 'object') ? det.timesheet : {};
+  const cwEditGate = (det.contract_week && typeof det.contract_week === 'object') ? det.contract_week : {};
+  const effectiveEditGate = (det.effective && typeof det.effective === 'object') ? det.effective : {};
+  const actionFlagsEditGate = (det.action_flags && typeof det.action_flags === 'object') ? det.action_flags : {};
+  const bulkAuthoriseEditGate = (det.bulk_authorise && typeof det.bulk_authorise === 'object') ? det.bulk_authorise : {};
+  const artifactHintsEditGate = (det.artifact_hints && typeof det.artifact_hints === 'object') ? det.artifact_hints : {};
+  const dataActionFlagsEditGate = (data.action_flags && typeof data.action_flags === 'object') ? data.action_flags : {};
+  const dataBulkAuthoriseEditGate = (data.bulk_authorise && typeof data.bulk_authorise === 'object') ? data.bulk_authorise : {};
+  const dataArtifactHintsEditGate = (data.artifact_hints && typeof data.artifact_hints === 'object') ? data.artifact_hints : {};
 
+  const routeTypeEditGate = pickFirstEditGateUpper(
+    dSum.route_type,
+    effectiveEditGate.route_type,
+    actionFlagsEditGate.route_type,
+    bulkAuthoriseEditGate.route_type,
+    artifactHintsEditGate.route_type,
+    dataActionFlagsEditGate.route_type,
+    dataBulkAuthoriseEditGate.route_type,
+    dataArtifactHintsEditGate.route_type,
+    cwEditGate.route_type,
+    det.route_type
+  );
+
+  const routeFamilyEditGate = pickFirstEditGateUpper(
+    dSum.route_family,
+    effectiveEditGate.route_family,
+    actionFlagsEditGate.route_family,
+    bulkAuthoriseEditGate.route_family,
+    artifactHintsEditGate.route_family,
+    dataActionFlagsEditGate.route_family,
+    dataBulkAuthoriseEditGate.route_family,
+    dataArtifactHintsEditGate.route_family,
+    cwEditGate.route_family,
+    det.route_family
+  );
+
+  const routeSubfamilyEditGate = pickFirstEditGateUpper(
+    dSum.route_subfamily,
+    effectiveEditGate.route_subfamily,
+    actionFlagsEditGate.route_subfamily,
+    bulkAuthoriseEditGate.route_subfamily,
+    artifactHintsEditGate.route_subfamily,
+    dataActionFlagsEditGate.route_subfamily,
+    dataBulkAuthoriseEditGate.route_subfamily,
+    dataArtifactHintsEditGate.route_subfamily,
+    cwEditGate.route_subfamily,
+    det.route_subfamily
+  );
+
+  const underlyingFamilyEditGate = pickFirstEditGateUpper(
+    dSum.underlying_channel_family,
+    effectiveEditGate.underlying_channel_family,
+    actionFlagsEditGate.underlying_channel_family,
+    bulkAuthoriseEditGate.underlying_channel_family,
+    artifactHintsEditGate.underlying_channel_family,
+    dataActionFlagsEditGate.underlying_channel_family,
+    dataBulkAuthoriseEditGate.underlying_channel_family,
+    dataArtifactHintsEditGate.underlying_channel_family,
+    cwEditGate.underlying_channel_family,
+    det.underlying_channel_family
+  );
+
+  const submissionModeEditGate = pickFirstEditGateUpper(
+    tsEditGate.submission_mode,
+    dSum.submission_mode,
+    cwEditGate.submission_mode_snapshot,
+    dSum.submission_mode_snapshot,
+    meta.subMode,
+    meta.cw_submission_mode_snapshot,
+    det.cw_submission_mode_snapshot
+  );
+
+  const additionalSeqEditGate = pickFirstEditGateNumber(
+    dSum.additional_seq,
+    dSum.contract_week_additional_seq,
+    effectiveEditGate.additional_seq,
+    actionFlagsEditGate.additional_seq,
+    bulkAuthoriseEditGate.additional_seq,
+    artifactHintsEditGate.additional_seq,
+    dataActionFlagsEditGate.additional_seq,
+    dataBulkAuthoriseEditGate.additional_seq,
+    dataArtifactHintsEditGate.additional_seq,
+    cwEditGate.additional_seq,
+    det.additional_seq,
+    det.contract_week_additional_seq
+  );
+
+  const adjustmentOriginEditGate = pickFirstEditGateUpper(
+    tsEditGate.adjustment_origin,
+    cwEditGate.adjustment_origin,
+    dSum.adjustment_origin,
+    effectiveEditGate.adjustment_origin,
+    actionFlagsEditGate.adjustment_origin
+  );
+
+  const correctionIdEditGate = String(
+    tsEditGate.correction_id ||
+    cwEditGate.correction_id ||
+    dSum.correction_id ||
+    effectiveEditGate.correction_id ||
+    actionFlagsEditGate.correction_id ||
+    ''
+  ).trim();
+
+  const correctionKindEditGate = pickFirstEditGateUpper(
+    tsEditGate.correction_kind,
+    cwEditGate.correction_kind,
+    dSum.correction_kind,
+    effectiveEditGate.correction_kind,
+    actionFlagsEditGate.correction_kind
+  );
+
+  const importDerivedCorrectionEditGate = !!(
+    adjustmentOriginEditGate === 'IMPORT_CORRECTION' ||
+    adjustmentOriginEditGate === 'IMPORT_CANCELLATION' ||
+    correctionIdEditGate ||
+    correctionKindEditGate
+  );
+
+  const adjustmentSignalEditGate = !!(
+    routeTypeEditGate === 'WEEKLY_NHSP_ADJUSTMENT' ||
+    routeTypeEditGate === 'WEEKLY_HEALTHROSTER_ADJUSTMENT' ||
+    routeTypeEditGate === 'WEEKLY_MANUAL_ADJUSTMENT' ||
+    routeTypeEditGate.includes('_ADJUSTMENT') ||
+    additionalSeqEditGate > 0 ||
+    boolish(dSum.is_adjustment) ||
+    boolish(effectiveEditGate.is_adjustment) ||
+    boolish(actionFlagsEditGate.is_adjustment) ||
+    boolish(bulkAuthoriseEditGate.is_adjustment) ||
+    boolish(artifactHintsEditGate.is_adjustment) ||
+    boolish(dataActionFlagsEditGate.is_adjustment) ||
+    boolish(dataBulkAuthoriseEditGate.is_adjustment) ||
+    boolish(dataArtifactHintsEditGate.is_adjustment) ||
+    boolish(tsEditGate.is_adjustment) ||
+    boolish(cwEditGate.is_adjustment) ||
+    boolish(det.is_adjustment)
+  );
+
+  const manualRouteSignalEditGate = !!(
+    submissionModeEditGate === 'MANUAL' ||
+    routeFamilyEditGate === 'MANUAL_NON_QR' ||
+    routeSubfamilyEditGate === 'MANUAL_NON_QR' ||
+    underlyingFamilyEditGate === 'MANUAL_NON_QR'
+  );
+
+  const manualAdditionalEditGate = !!(
+    adjustmentSignalEditGate &&
+    manualRouteSignalEditGate &&
+    !importDerivedCorrectionEditGate
+  );
+
+  const backendImportAuthoritative = pickBackendBoolean('is_import_authoritative');
+  const importAuthoritative = manualAdditionalEditGate
+    ? false
+    : ((backendImportAuthoritative !== null)
+        ? backendImportAuthoritative
+        : isImportAuthoritativeFromSummary(dSum.route_type, dSum.client_no_timesheet_required, manualAdditionalEditGate, importDerivedCorrectionEditGate));
   const timesheetPolicy = mcTs.timesheetEditDomains || (typeof classifyTimesheetEditDomains === 'function'
     ? classifyTimesheetEditDomains({
         row: data || {},
