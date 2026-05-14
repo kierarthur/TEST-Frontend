@@ -68637,10 +68637,16 @@ async function refreshContractWeekSummaryAfterPlannedChange(contractWeekId, ctx)
   const isDirectBulkProcessHandoff = !!(
     handoffCtx.direct_bulk_process_handoff === true ||
     handoffCtx.directBulkProcessHandoff === true ||
+    handoffCtx.bulk_process_handoff === true ||
+    handoffCtx.bulkProcessHandoff === true ||
+    handoffCtx.protected_bulk_process_handoff === true ||
+    handoffCtx.protectedBulkProcessHandoff === true ||
     handoffCtx.suppress_summary_refresh_before_open === true ||
     handoffCtx.suppressSummaryRefreshBeforeOpen === true ||
     handoffCtx.defer_summary_refresh === true ||
     handoffCtx.deferSummaryRefresh === true ||
+    String(handoffCtx.next_owner_kind || handoffCtx.nextOwnerKind || handoffCtx.__next_owner_kind || handoffCtx.__nextOwnerKind || '').trim().toLowerCase() === 'bulk_process' ||
+    String(window.modalCtx?.next_owner_kind || window.modalCtx?.nextOwnerKind || window.modalCtx?.__next_owner_kind || window.modalCtx?.__nextOwnerKind || '').trim().toLowerCase() === 'bulk_process' ||
     String(handoffCtx.source_context || '').trim().toLowerCase() === 'bulk_authorise_direct_handoff'
   );
   const recordPendingSummaryRefresh = (reason) => {
@@ -68754,6 +68760,31 @@ async function refreshContractWeekSummaryAfterPlannedChange(contractWeekId, ctx)
       incoming_ctx: describeSummaryCtx(ctx)
     });
   } catch {}
+
+  if (isDirectBulkProcessHandoff) {
+    recordPendingSummaryRefresh('direct-handoff-deferred-before-canonical-fetch');
+    const outcome = {
+      ok: false,
+      action: 'pending-summary-refresh',
+      non_blocking: true,
+      direct_bulk_process_handoff: true,
+      dom_mutation_skipped: true,
+      canonical_fetch_skipped: true,
+      render_all_skipped: true,
+      focus_restore_skipped: true,
+      reason: 'direct-handoff-deferred-before-canonical-fetch',
+      contract_week_id: targetContractWeekId,
+      row_key: `contract_week:${targetContractWeekId}`
+    };
+    try {
+      console.log('[TS][BULK-PROCESS][PLANNED-SUMMARY][DIRECT_HANDOFF_DEFERRED]', {
+        target_contract_week_id: targetContractWeekId,
+        outcome,
+        incoming_ctx: describeSummaryCtx(ctx)
+      });
+    } catch {}
+    return outcome;
+  }
 
   if (!isDirectBulkProcessHandoff) {
     try {
@@ -112188,7 +112219,6 @@ function buildBulkAuthoriseDatasetRequestFilters(state) {
   };
 }
 
-
 function bindBulkAuthoriseEvidencePane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -112498,6 +112528,69 @@ function bindBulkAuthoriseEvidencePane(state) {
       });
     }
   };
+  const getBulkAuthoriseEvidenceOwnerSnapshot = () => {
+    let resolved = null;
+    if (typeof resolveBulkAuthoriseModalIdentity === 'function') {
+      try { resolved = resolveBulkAuthoriseModalIdentity({ state: st, source: 'bindBulkAuthoriseEvidencePane' }) || null; } catch { resolved = null; }
+    }
+    const activeRowKey = trimStr(st?.active_row_key || st?.active_row?.row_key || '');
+    const identity = trimStr(
+      resolved?.recordIdentity ||
+      resolved?.record_identity ||
+      resolved?.identity ||
+      (typeof getBulkAuthoriseEvidenceActiveIdentity === 'function' ? getBulkAuthoriseEvidenceActiveIdentity(st) : '') ||
+      st.__bulkAuthoriseRecordIdentity ||
+      window.modalCtx?.__bulkAuthoriseRecordIdentity ||
+      (activeRowKey ? (/^(timesheet:|contract_week:|row:)/i.test(activeRowKey) ? activeRowKey : `row:${activeRowKey}`) : '')
+    );
+    const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+    return {
+      identity,
+      rowKey: activeRowKey,
+      rowChangeSeq: Number(st.__bulk_authorise_row_change_seq || st.__bulkAuthoriseRowChangeSeq || 0) || 0,
+      modalKind: upper(frame?.kind || frame?.entity || window.modalCtx?.modal_kind || window.modalCtx?.modalKind || window.modalCtx?.kind || window.modalCtx?.entity || ''),
+      ownerKind: upper(st.owner_kind || st.ownerKind || window.modalCtx?.owner_kind || window.modalCtx?.ownerKind || ''),
+      nextOwnerKind: upper(st.next_owner_kind || st.nextOwnerKind || st.__next_owner_kind || st.__nextOwnerKind || window.modalCtx?.next_owner_kind || window.modalCtx?.nextOwnerKind || window.modalCtx?.__next_owner_kind || window.modalCtx?.__nextOwnerKind || '')
+    };
+  };
+
+  const isBulkProcessOwnerOrNext = () => {
+    const snap = getBulkAuthoriseEvidenceOwnerSnapshot();
+    return !!(
+      snap.modalKind.includes('BULK-PROCESS') ||
+      snap.modalKind.includes('BULK_PROCESS') ||
+      snap.ownerKind.includes('BULK_PROCESS') ||
+      snap.ownerKind.includes('BULK-PROCESS') ||
+      snap.nextOwnerKind.includes('BULK_PROCESS') ||
+      snap.nextOwnerKind.includes('BULK-PROCESS')
+    );
+  };
+
+  const isBulkAuthoriseEvidenceSurfaceLive = (snapshot = null) => {
+    if (isBulkProcessOwnerOrNext()) return false;
+    const snap = snapshot && typeof snapshot === 'object' ? snapshot : getBulkAuthoriseEvidenceOwnerSnapshot();
+    const live = getBulkAuthoriseEvidenceOwnerSnapshot();
+    if (snap.identity && live.identity && snap.identity !== live.identity) return false;
+    if (snap.rowKey && live.rowKey && snap.rowKey !== live.rowKey) return false;
+    if (Number(snap.rowChangeSeq || 0) && Number(live.rowChangeSeq || 0) && Number(snap.rowChangeSeq || 0) !== Number(live.rowChangeSeq || 0)) return false;
+    if (snap.modalKind && snap.modalKind.includes('BULK-PROCESS')) return false;
+    if (live.modalKind && live.modalKind.includes('BULK-PROCESS')) return false;
+    return true;
+  };
+
+  const isRefreshResultDegraded = (result) => !!(
+    result === false ||
+    (result && typeof result === 'object' && (
+      result.ok === false ||
+      result.soft_failure === true ||
+      result.evidence_refresh_failed === true ||
+      result.auth_failed === true ||
+      result.__bulk_process_context_auth_failed === true ||
+      result.__bulk_process_context_degraded === true ||
+      result.__bulk_authorise_context_degraded === true
+    ))
+  );
+
 
   const permissions = getPermissionState();
 
@@ -112521,21 +112614,38 @@ function bindBulkAuthoriseEvidencePane(state) {
         ? trimStr(renderOptions)
         : trimStr(opts.reason || opts.logPrefix || opts.prefix || '');
       const evidenceMutationReason = /(^|\b)(evidence-attach|preview-attached-remove|evidence-attached|evidence-queue|evidence-kind|evidence-return|evidence-delete)/i.test(reason);
+      const ownerSnapshot = getBulkAuthoriseEvidenceOwnerSnapshot();
+
+      if (isBulkProcessOwnerOrNext()) return false;
 
       if (evidenceMutationReason && st.__bulk_authorise_evidence_refresh_inflight !== true) {
         st.__bulk_authorise_evidence_refresh_inflight = true;
         try {
+          let refreshResult = true;
           if (typeof refreshBulkAuthoriseActiveContext === 'function') {
-            await refreshBulkAuthoriseActiveContext(st, { invalidateCache: true, rerender: false });
+            refreshResult = await refreshBulkAuthoriseActiveContext(st, {
+              invalidateCache: true,
+              rerender: false,
+              recordIdentity: ownerSnapshot.identity,
+              row_key: ownerSnapshot.rowKey,
+              rowChangeSeq: ownerSnapshot.rowChangeSeq,
+              include_evidence: true,
+              source: 'evidence_patch'
+            });
+          }
+          if (!isBulkAuthoriseEvidenceSurfaceLive(ownerSnapshot) || isRefreshResultDegraded(refreshResult)) {
+            return false;
           }
           if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
             try { reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch {}
           }
+          if (!isBulkAuthoriseEvidenceSurfaceLive(ownerSnapshot)) return false;
         } finally {
           st.__bulk_authorise_evidence_refresh_inflight = false;
         }
       }
 
+      if (!isBulkAuthoriseEvidenceSurfaceLive(ownerSnapshot)) return false;
       const base = (typeof st.__bulk_authorise_evidence_base_rerender === 'function')
         ? st.__bulk_authorise_evidence_base_rerender
         : existingRerender;
@@ -112550,10 +112660,22 @@ function bindBulkAuthoriseEvidencePane(state) {
     return;
   }
 
-  if (typeof bindBulkProcessEvidencePane === 'function') {
+  if (isBulkProcessOwnerOrNext()) return;
+  const delegateSnapshot = getBulkAuthoriseEvidenceOwnerSnapshot();
+  const isTimesheetsEvidenceSurface = (() => {
+    if (typeof resolveBulkAuthoriseTimesheetsEvidenceContext !== 'function') return true;
+    try {
+      const ctx = resolveBulkAuthoriseTimesheetsEvidenceContext(st);
+      return !!ctx?.isBulkAuthoriseTimesheets;
+    } catch {
+      return true;
+    }
+  })();
+  if (typeof bindBulkProcessEvidencePane === 'function' && isTimesheetsEvidenceSurface && isBulkAuthoriseEvidenceSurfaceLive(delegateSnapshot)) {
     bindBulkProcessEvidencePane(st);
   }
 }
+
 
 
 function renderBulkAuthoriseEvidencePane(state) {
@@ -114601,7 +114723,6 @@ function setBulkAuthoriseSelectionForSection(state, section, rowKeys, mode) {
 }
 
 
-
 async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-AUTH][CTX]');
   GC('fetchTimesheetBulkAuthoriseContext');
@@ -114626,18 +114747,13 @@ async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}
   const tsId = trimStr(
     (typeof timesheetIdOrRow === 'string' || typeof timesheetIdOrRow === 'number')
       ? timesheetIdOrRow
-      : (sourceRow.current_timesheet_id || sourceRow.timesheet_id || sourceRow.requested_timesheet_id || sourceRow.expected_timesheet_id || opts.timesheet_id || opts.timesheetId || opts.current_timesheet_id || opts.currentTimesheetId || '')
+      : (sourceRow.current_timesheet_id || sourceRow.timesheet_id || opts.timesheet_id || opts.timesheetId || opts.current_timesheet_id || opts.currentTimesheetId || '')
   );
   const rowKey = trimStr(opts.row_key || opts.rowKey || sourceRow.row_key || '');
   const currentTimesheetId = trimStr(opts.current_timesheet_id || opts.currentTimesheetId || sourceRow.current_timesheet_id || sourceRow.timesheet_id || tsId || '');
   const requestedTimesheetId = trimStr(opts.requested_timesheet_id || opts.requestedTimesheetId || sourceRow.requested_timesheet_id || sourceRow.timesheet_id || tsId || '');
   const expectedTimesheetId = trimStr(opts.expected_timesheet_id || opts.expectedTimesheetId || opts.expected_current_timesheet_id || opts.expectedCurrentTimesheetId || sourceRow.expected_timesheet_id || sourceRow.current_timesheet_id || sourceRow.timesheet_id || tsId || '');
   const contractWeekId = trimStr(opts.contract_week_id || opts.contractWeekId || opts.week_id || opts.weekId || sourceRow.contract_week_id || '');
-
-  if (!tsId && !rowKey && !contractWeekId) {
-    GE();
-    throw new Error('fetchTimesheetBulkAuthoriseContext: row_key, timesheet_id, or contract_week_id is required');
-  }
 
   const normalizeProfile = (value, baseOnlyValue = false) => {
     const s = trimStr(value).toLowerCase();
@@ -114655,6 +114771,73 @@ async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}
   const includeCompare = ['compare_import', 'full'].includes(profile);
   const includeImportSourceRows = ['compare_import', 'full'].includes(profile);
 
+  const buildStructuredContextFailure = (reason, payload = {}, extra = {}) => {
+    const sourcePayload = (payload && typeof payload === 'object') ? payload : {};
+    const authFailed = extra.auth_failed === true || extra.authFailed === true || Number(extra.status || sourcePayload.status || 0) === 401;
+    const message = trimStr(
+      extra.message ||
+      sourcePayload.message ||
+      sourcePayload.error ||
+      (
+        authFailed
+          ? 'Bulk Authorise context could not be refreshed because the session is no longer authorised.'
+          : 'Bulk Authorise context could not be refreshed. Please refresh the row or reopen Bulk Authorise.'
+      )
+    );
+    return {
+      ...deep(sourcePayload),
+      ok: false,
+      soft_failure: authFailed ? false : true,
+      auth_failed: authFailed,
+      evidence_refresh_failed: sourcePayload.evidence_refresh_failed === true || includeEvidence === true,
+      __bulk_authorise_context_degraded: true,
+      __bulk_authorise_context_auth_failed: authFailed,
+      __bulk_authorise_context_soft_failure: authFailed ? false : true,
+      reason: trimStr(reason || 'bulk-authorise-context-soft-failure') || 'bulk-authorise-context-soft-failure',
+      message,
+      error: trimStr(extra.error || sourcePayload.error || message),
+      status: extra.status || sourcePayload.status || null,
+      requested_timesheet_id: requestedTimesheetId || tsId || null,
+      current_timesheet_id: currentTimesheetId || requestedTimesheetId || tsId || null,
+      expected_timesheet_id: expectedTimesheetId || currentTimesheetId || tsId || null,
+      contract_week_id: contractWeekId || null,
+      row_key: rowKey || sourceRow.row_key || null,
+      row: sourceRow && Object.keys(sourceRow).length ? deep(sourceRow) : null,
+      data_row: sourceRow && Object.keys(sourceRow).length ? deep(sourceRow) : null,
+      row_patch: {},
+      details: null,
+      related: null,
+      evidence: [],
+      left_pane: {},
+      compare_payload: { required: false, rows: [], imported_detail_refs: {} },
+      __context_options: {
+        include_evidence: includeEvidence,
+        include_compare: includeCompare,
+        include_import_source_rows: includeImportSourceRows,
+        base_only: baseOnly,
+        profile
+      }
+    };
+  };
+
+  if (!tsId && !rowKey && !contractWeekId) {
+    const out = buildStructuredContextFailure('missing-context-identity', {}, {
+      message: 'Bulk Authorise context cannot be refreshed because no row identity is available.'
+    });
+    L('SOFT_FAILURE', { reason: out.reason, rowKey: rowKey || null, contractWeekId: contractWeekId || null, timesheetId: tsId || null });
+    GE();
+    return out;
+  }
+
+  if (!tsId) {
+    const out = buildStructuredContextFailure('missing-timesheet-route', {}, {
+      message: 'Bulk Authorise context refresh requires a timesheet id. Contract-week-only rows are preserved until a registered backend context route is available.'
+    });
+    L('SOFT_FAILURE', { reason: out.reason, rowKey: rowKey || null, contractWeekId: contractWeekId || null, timesheetId: null });
+    GE();
+    return out;
+  }
+
   const qs = new URLSearchParams();
   if (rowKey) qs.set('row_key', rowKey);
   if (tsId) qs.set('timesheet_id', tsId);
@@ -114669,18 +114852,20 @@ async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}
   qs.set('include_import_source_rows', String(includeImportSourceRows));
   if (baseOnly) qs.set('base_only', 'true');
 
-  const url = tsId
-    ? API(`/api/timesheets/${encodeURIComponent(tsId)}/bulk-authorise-context?${qs.toString()}`)
-    : API(`/api/timesheets/bulk-authorise-context?${qs.toString()}`);
+  const url = API(`/api/timesheets/${encodeURIComponent(tsId)}/bulk-authorise-context?${qs.toString()}`);
   L('→ GET', { url, timesheetId: tsId || null, rowKey: rowKey || null, contractWeekId: contractWeekId || null, includeEvidence, includeCompare, includeImportSourceRows, baseOnly, profile });
 
   let res;
   try {
     res = await authFetch(url);
   } catch (err) {
-    L('network error', { url, error: err });
+    const out = buildStructuredContextFailure('network-error', {}, {
+      message: String(err?.message || err || 'Bulk Authorise context request failed.'),
+      error: String(err?.message || err || 'Bulk Authorise context request failed.')
+    });
+    L('network soft failure', { url, error: err });
     GE();
-    throw err;
+    return out;
   }
 
   const text = await res.text().catch(() => '');
@@ -114693,16 +114878,28 @@ async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}
         ? String(json.message || json.error)
         : (text || `Bulk authorise context failed (${res.status})`);
 
-    const err = new Error(msg);
-    err.status = res.status;
-    err.body = text || '';
-    err.json = json;
-    L('server error', { status: res.status, bodyPreview: (text || '').slice(0, 400), json });
+    const out = buildStructuredContextFailure(Number(res.status) === 401 ? 'auth-failed' : 'http-error', (json && typeof json === 'object') ? json : {}, {
+      status: Number(res.status) || null,
+      auth_failed: Number(res.status) === 401,
+      message: msg,
+      error: msg
+    });
+    out.body = text || '';
+    L('server soft failure', { status: res.status, bodyPreview: (text || '').slice(0, 400), json });
     GE();
-    throw err;
+    return out;
   }
 
   if (!json || typeof json !== 'object') json = {};
+
+  if (json.ok === false || json.soft_failure === true || json.evidence_refresh_failed === true) {
+    const out = buildStructuredContextFailure('degraded-context-payload', json, {
+      message: json.message || json.error || 'Bulk Authorise context refresh returned a degraded response.'
+    });
+    L('degraded soft failure', { rowKey: rowKey || null, timesheetId: tsId || null, contractWeekId: contractWeekId || null, json });
+    GE();
+    return out;
+  }
 
   const details = (json.details && typeof json.details === 'object') ? deep(json.details) : null;
   const related = (json.related && typeof json.related === 'object') ? deep(json.related) : null;
@@ -114720,6 +114917,9 @@ async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}
 
   const out = {
     ...deep(json),
+    ok: true,
+    soft_failure: false,
+    auth_failed: false,
     requested_timesheet_id: json.requested_timesheet_id || requestedTimesheetId || tsId || null,
     current_timesheet_id: json.current_timesheet_id || currentTimesheetId || json.requested_timesheet_id || requestedTimesheetId || tsId || null,
     expected_timesheet_id: json.expected_timesheet_id || expectedTimesheetId || json.current_timesheet_id || currentTimesheetId || tsId || null,
@@ -118623,6 +118823,7 @@ function bulkAuthoriseHasProcessedExpensesValue(ctxInput) {
   return !!(hasTimesheetAnchor && (numericDetected || descriptionDetected || stagedDetected));
 }
 
+
 function normaliseBankingPayOperationProgress(operationPayload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const upperTrim = (value) => trimStr(value).toUpperCase();
@@ -118763,6 +118964,119 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     ? (errorJson || (isPlainObject(src.friendly_error) ? src.friendly_error : null) || (trimStr(src.error_code || src.code || src.message) ? { error_code: src.error_code || src.code || status, message: src.message || src.error || status } : null))
     : null;
 
+  const collectBatchIdsFrom = (value, out = [], depth = 0, seen = new WeakSet()) => {
+    if (value == null || depth > 6) return out;
+    if (typeof value === 'string' || typeof value === 'number') {
+      const s = trimStr(value);
+      if (s) out.push(s);
+      return out;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) collectBatchIdsFrom(entry, out, depth + 1, seen);
+      return out;
+    }
+    if (!isPlainObject(value)) return out;
+    if (seen.has(value)) return out;
+    seen.add(value);
+
+    for (const key of [
+      'pay_batch_id',
+      'payBatchId',
+      'batch_id',
+      'batchId',
+      'selected_pay_batch_id',
+      'selectedPayBatchId',
+      'paye_pay_batch_id',
+      'payePayBatchId',
+      'umbrella_pay_batch_id',
+      'umbrellaPayBatchId',
+      'non_paye_pay_batch_id',
+      'nonPayePayBatchId'
+    ]) {
+      const idText = trimStr(value[key]);
+      if (idText) out.push(idText);
+    }
+
+    for (const key of [
+      'pay_batch_ids',
+      'payBatchIds',
+      'created_pay_batch_ids',
+      'createdPayBatchIds',
+      'batch_ids',
+      'batchIds'
+    ]) {
+      if (!Array.isArray(value[key])) continue;
+      for (const idValue of value[key]) {
+        const idText = trimStr(idValue);
+        if (idText) out.push(idText);
+      }
+    }
+
+    for (const key of [
+      'created_batches',
+      'createdBatches',
+      'batch_shells',
+      'batchShells',
+      'shell_results',
+      'shellResults',
+      'scope_results',
+      'scopeResults',
+      'batch_results',
+      'batchResults',
+      'results',
+      'result',
+      'result_json',
+      'post_create_refresh',
+      'postCreateRefresh',
+      'progress_json',
+      'progress'
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) collectBatchIdsFrom(value[key], out, depth + 1, seen);
+    }
+
+    return out;
+  };
+  const batchIdUniverse = Array.from(new Set([
+    ...collectBatchIdsFrom(src),
+    ...collectBatchIdsFrom(progress),
+    ...collectBatchIdsFrom(resultJson)
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const primaryPayBatchId = trimStr(
+    src.pay_batch_id ||
+    src.payBatchId ||
+    src.selected_pay_batch_id ||
+    src.selectedPayBatchId ||
+    resultJson?.pay_batch_id ||
+    resultJson?.payBatchId ||
+    resultJson?.selected_pay_batch_id ||
+    resultJson?.selectedPayBatchId ||
+    batchIdUniverse[0] ||
+    ''
+  ) || null;
+  const payePayBatchId = trimStr(
+    src.paye_pay_batch_id ||
+    src.payePayBatchId ||
+    resultJson?.paye_pay_batch_id ||
+    resultJson?.payePayBatchId ||
+    ''
+  ) || null;
+  const umbrellaPayBatchId = trimStr(
+    src.umbrella_pay_batch_id ||
+    src.umbrellaPayBatchId ||
+    resultJson?.umbrella_pay_batch_id ||
+    resultJson?.umbrellaPayBatchId ||
+    resultJson?.non_paye_pay_batch_id ||
+    resultJson?.nonPayePayBatchId ||
+    ''
+  ) || null;
+  const createdBatches = Array.isArray(resultJson?.created_batches)
+    ? resultJson.created_batches
+    : (Array.isArray(resultJson?.createdBatches)
+        ? resultJson.createdBatches
+        : (Array.isArray(src.created_batches)
+            ? src.created_batches
+            : (Array.isArray(src.createdBatches) ? src.createdBatches : [])));
+
   return {
     operation_id: operationId || null,
     id: operationId || null,
@@ -118794,11 +119108,19 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     waiting_for_authorisation: waiting && phase === 'WAIT_FOR_AUTHORISATION',
     waiting_for_preview: waiting && phase === 'WAIT_FOR_PREVIEW_READY',
     provider_submission_started: providerSubmissionStarted,
+    pay_batch_id: primaryPayBatchId,
+    pay_batch_ids: batchIdUniverse,
+    created_pay_batch_ids: batchIdUniverse,
+    paye_pay_batch_id: payePayBatchId,
+    umbrella_pay_batch_id: umbrellaPayBatchId,
+    created_batches: createdBatches,
     result: finalResult,
     error: finalError,
     raw_payload: src
   };
 }
+
+
 
 
 
@@ -118839,90 +119161,29 @@ function openBankingPayOperationProgressModal(options = {}) {
     } catch {}
   };
 
-  if (typeof openBulkTimesheetActionProgressModal === 'function') {
-    const controller = openBulkTimesheetActionProgressModal({
-      action: 'AUTHORISE',
-      title: state.title || opts.title || 'Processing payment operation',
-      statusText: state.status_text || 'Preparing payment operation...',
-      totalRows: state.total_units || 0,
-      completedRows: state.completed_units || 0,
-      failedRows: state.failed_units || 0,
-      chunkCount: state.chunk_count || 0,
-      chunkSize: opts.chunkSize || opts.chunk_size || 1,
-      onStopRequested: (modalState) => {
-        try {
-          if (typeof opts.onStopRequested === 'function') opts.onStopRequested(modalState, state);
-        } catch {}
+  const cleanupStaleBankingOperationProgressOverlays = () => {
+    try {
+      if (typeof document === 'undefined' || !document.querySelectorAll) return;
+      const nodes = Array.from(document.querySelectorAll([
+        '[data-cloudtms-banking-pay-operation-progress="true"]',
+        '[id^="banking_pay_operation_progress_"][id$="_overlay"]',
+        '[id^="bulk_ts_progress_"][id$="_overlay"]'
+      ].join(',')));
+      for (const node of nodes) {
+        if (!node || !node.parentNode) continue;
+        const idText = trimStr(node.id || '');
+        const text = trimStr(node.innerText || node.textContent || '');
+        const isBankingOwned = node.getAttribute && node.getAttribute('data-cloudtms-banking-pay-operation-progress') === 'true';
+        const isOwnId = /^banking_pay_operation_progress_/.test(idText);
+        const isLegacyBulkBankingProgress = /^bulk_ts_progress_/.test(idText) && /payment\s+(operation|draft)|creating\s+payment\s+draft|processing\s+payment\s+operation/i.test(text);
+        if (!isBankingOwned && !isOwnId && !isLegacyBulkBankingProgress) continue;
+        try { node.remove(); } catch { try { node.parentNode.removeChild(node); } catch {} }
       }
-    });
+    } catch {}
+  };
 
-    const originalUpdate = typeof controller.update === 'function' ? controller.update.bind(controller) : null;
-    const originalMarkCompleted = typeof controller.markCompleted === 'function' ? controller.markCompleted.bind(controller) : null;
-    const originalMarkStructuralFailure = typeof controller.markStructuralFailure === 'function' ? controller.markStructuralFailure.bind(controller) : null;
 
-    const updateFromOperation = (operationPayload) => {
-      state = normalise(operationPayload || state.raw_payload || state);
-      if (opts.title && !state.title) state.title = trimStr(opts.title);
-      if (originalUpdate) originalUpdate(toBulkValues(state));
-      hideUnsafeStopButton(controller, state);
-      return wrapper;
-    };
-
-    const wrapper = {
-      id: controller.id,
-      root: controller.root,
-      overlay: controller.overlay,
-      update(values = {}) {
-        if (values && typeof values === 'object' && (values.operation_id || values.operation_type || values.phase || values.status || values.progress_json || values.result_json || values.error_json)) {
-          return updateFromOperation(values);
-        }
-        if (originalUpdate) originalUpdate(values);
-        return wrapper;
-      },
-      updateFromOperation,
-      markCompleted(summaryText) {
-        if (originalMarkCompleted) originalMarkCompleted(summaryText || state.status_text || 'Operation complete.');
-        hideUnsafeStopButton(controller, { ...state, terminal: true, can_cancel: false, provider_submission_started: true });
-        return wrapper;
-      },
-      markStructuralFailure(error, statusText) {
-        if (originalMarkStructuralFailure) originalMarkStructuralFailure(error, statusText || (error && (error.user_message || error.message || error.error)) || 'Operation failed.');
-        hideUnsafeStopButton(controller, { ...state, terminal: true, can_cancel: false, provider_submission_started: true });
-        return wrapper;
-      },
-      markStopped(summaryText) {
-        if (typeof controller.markStopped === 'function') controller.markStopped(summaryText || 'Operation paused.');
-        return wrapper;
-      },
-      appendFailures(failures = [], context = {}) {
-        if (typeof controller.appendFailures === 'function') controller.appendFailures(failures, context);
-        return wrapper;
-      },
-      requestStop() {
-        if (state && state.can_cancel === true && state.provider_submission_started !== true && typeof controller.requestStop === 'function') controller.requestStop();
-        return wrapper;
-      },
-      isStopRequested() {
-        return typeof controller.isStopRequested === 'function' ? controller.isStopRequested() : false;
-      },
-      close() {
-        if (typeof controller.close === 'function') controller.close();
-        return wrapper;
-      },
-      destroy() {
-        if (typeof controller.destroy === 'function') controller.destroy();
-        else if (typeof controller.close === 'function') controller.close();
-        return wrapper;
-      },
-      getState() {
-        const base = typeof controller.getState === 'function' ? controller.getState() : {};
-        return { ...base, operation: state };
-      }
-    };
-
-    updateFromOperation(state);
-    return wrapper;
-  }
+  cleanupStaleBankingOperationProgressOverlays();
 
   const instanceId = `banking_pay_operation_progress_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const modalState = { closed: false, operation: state };
@@ -118947,6 +119208,8 @@ function openBankingPayOperationProgressModal(options = {}) {
 
   const overlay = document.createElement('div');
   overlay.id = `${instanceId}_overlay`;
+  overlay.setAttribute('data-cloudtms-banking-pay-operation-progress', 'true');
+  overlay.setAttribute('data-operation-id', state.operation_id || '');
   overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,0.46);backdrop-filter:blur(3px)';
   const root = document.createElement('div');
   root.id = `${instanceId}_root`;
@@ -119001,8 +119264,35 @@ function openBankingPayOperationProgressModal(options = {}) {
     root,
     overlay,
     update(values = {}) { if (values && typeof values === 'object') modalState.operation = { ...modalState.operation, ...values }; render(); return controller; },
-    updateFromOperation(payload) { modalState.operation = normalise(payload); render(); return controller; },
-    markCompleted(summaryText) { modalState.operation = { ...modalState.operation, terminal: true, complete: true, status_text: trimStr(summaryText || 'Operation complete.') }; render(); return controller; },
+    updateFromOperation(payload) {
+      const next = normalise(payload || modalState.operation || {});
+      modalState.operation = { ...modalState.operation, ...next };
+      try { overlay.setAttribute('data-operation-id', modalState.operation.operation_id || ''); } catch {}
+      render();
+      return controller;
+    },
+    markCompleted(summaryText) {
+      const op = modalState.operation || {};
+      const totalUnits = Math.max(0, Number(op.total_units || 0) || 0);
+      const completedUnits = Math.max(0, Number(op.completed_units || 0) || 0);
+      const failedUnits = Math.max(0, Number(op.failed_units || 0) || 0);
+      const attemptedUnits = Math.max(completedUnits + failedUnits, 0);
+      const inferredPercent = totalUnits > 0 ? Math.max(0, Math.min(100, Math.round((attemptedUnits / totalUnits) * 100))) : 100;
+      modalState.operation = {
+        ...op,
+        terminal: true,
+        complete: true,
+        can_advance: false,
+        can_cancel: false,
+        percent: Number.isFinite(Number(op.percent)) && Number(op.percent) > 0 ? Number(op.percent) : inferredPercent,
+        status: op.status || 'COMPLETE',
+        phase: op.phase || 'COMPLETE',
+        phase_label: op.phase_label || 'Operation complete',
+        status_text: trimStr(summaryText || op.status_text || 'Operation complete.')
+      };
+      render();
+      return controller;
+    },
     markStructuralFailure(error, statusText) { modalState.operation = { ...modalState.operation, terminal: true, failed: true, error, status_text: trimStr(statusText || error?.message || 'Operation failed.') }; render(); return controller; },
     markStopped(summaryText) { modalState.operation = { ...modalState.operation, waiting: true, status_text: trimStr(summaryText || 'Operation paused.') }; render(); return controller; },
     appendFailures() { return controller; },
@@ -119175,7 +119465,6 @@ async function bankingPayOperationAdvance(operationId, options = {}) {
 
 
 
-
 async function runBankingPayOperationWithProgress(initialOperationPayload, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -119314,7 +119603,7 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
 
   const updateModal = (operationState) => {
     try {
-      if (modal && typeof modal.updateFromOperation === 'function') modal.updateFromOperation(operationState.raw_payload || operationState);
+      if (modal && typeof modal.updateFromOperation === 'function') modal.updateFromOperation(operationState);
       else if (modal && typeof modal.update === 'function') {
         modal.update({
           title: operationState.title,
@@ -119330,12 +119619,22 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
   };
 
   const finishSuccess = (operationState) => {
+    const finalOperationState = normaliseOperation({
+      ...operationState,
+      status: operationState.status || 'COMPLETE',
+      phase: operationState.phase || 'COMPLETE',
+      terminal: true,
+      complete: true,
+      can_advance: false,
+      can_cancel: false
+    });
+    try { updateModal(finalOperationState); } catch {}
     try {
-      if (modal && typeof modal.markCompleted === 'function') modal.markCompleted(operationState.status_text || operationState.phase_label || 'Operation complete.');
+      if (modal && typeof modal.markCompleted === 'function') modal.markCompleted(finalOperationState.status_text || finalOperationState.phase_label || 'Operation complete.');
     } catch {}
-    if (typeof opts.finalResultExtractor === 'function') return opts.finalResultExtractor(operationState.result, operationState);
-    if (typeof opts.extractFinalResult === 'function') return opts.extractFinalResult(operationState.result, operationState);
-    return operationState.result || operationState.raw_payload || operationState;
+    if (typeof opts.finalResultExtractor === 'function') return opts.finalResultExtractor(finalOperationState.result, finalOperationState);
+    if (typeof opts.extractFinalResult === 'function') return opts.extractFinalResult(finalOperationState.result, finalOperationState);
+    return finalOperationState.result || finalOperationState.raw_payload || finalOperationState;
   };
 
   updateModal(current);
@@ -119454,7 +119753,6 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
 
   return finishSuccess(current);
 }
-
 
 
 
@@ -119721,8 +120019,6 @@ async function bankingPayApplyExecutePaymentResult(finalOperationResult, options
 
 
 
-
-
 async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -119967,9 +120263,65 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
       if (window.modalCtx && typeof window.modalCtx === 'object') {
         if (selectedBatchId) window.modalCtx.selectedPayBatchId = selectedBatchId;
         if (replacementSessionId) window.modalCtx.bankingPayWorkbenchSessionId = replacementSessionId;
+        if (String(window.modalCtx.entity || '') === 'banking') {
+          window.modalCtx.banking = (window.modalCtx.banking && typeof window.modalCtx.banking === 'object') ? window.modalCtx.banking : {};
+          window.modalCtx.banking.pay = (window.modalCtx.banking.pay && typeof window.modalCtx.banking.pay === 'object') ? window.modalCtx.banking.pay : {};
+          if (selectedBatchId) window.modalCtx.banking.pay.selectedBatchId = selectedBatchId;
+          window.modalCtx.banking.pay.lastCreateDraftResult = cloneJson(normalisedResult);
+          window.modalCtx.banking.pay.draftWizard = (window.modalCtx.banking.pay.draftWizard && typeof window.modalCtx.banking.pay.draftWizard === 'object') ? window.modalCtx.banking.pay.draftWizard : {};
+          window.modalCtx.banking.pay.draftWizard.lastCreateDraftResult = cloneJson(normalisedResult);
+          window.modalCtx.banking.pay.draftWizard.createDraftBusy = false;
+          window.modalCtx.banking.pay.draftWizard.createDraftError = '';
+          if (replacementSessionId || replacementSessionSignature || replacementSnapshotRunId || replacementSessionVersion !== null) {
+            window.modalCtx.banking.pay.draftWizard.workbench = (window.modalCtx.banking.pay.draftWizard.workbench && typeof window.modalCtx.banking.pay.draftWizard.workbench === 'object') ? window.modalCtx.banking.pay.draftWizard.workbench : {};
+            if (replacementSessionId) window.modalCtx.banking.pay.draftWizard.workbench.session_id = replacementSessionId;
+            if (replacementSnapshotRunId) window.modalCtx.banking.pay.draftWizard.workbench.snapshot_run_id = replacementSnapshotRunId;
+            if (replacementSessionSignature) window.modalCtx.banking.pay.draftWizard.workbench.session_signature = replacementSessionSignature;
+            if (replacementSessionVersion !== null && replacementSessionVersion !== undefined) window.modalCtx.banking.pay.draftWizard.workbench.session_version = replacementSessionVersion;
+          }
+        }
       }
     }
   } catch {}
+
+  try {
+    if (typeof bankingPayBatchesList === 'function') {
+      const mc = (typeof window !== 'undefined' && window && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      const payState = (mc && String(mc.entity || '') === 'banking' && mc.banking && mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : null;
+      await bankingPayBatchesList({
+        status: payState && payState.list ? payState.list.statusFilter : null,
+        limit: payState && payState.list ? payState.list.limit : null,
+        offset: 0,
+        reportError: false,
+        silent: true,
+        context: { source: 'bankingPayApplyCreateDraftResult', operation_id: normalisedResult.operation_id || null }
+      });
+    }
+  } catch {}
+
+  try {
+    const sourceSessionId = trimStr(opts.session_id || opts.sessionId || result.source_session_id || postCreateRefresh.source_session_id || postCreateRefresh.sourceSessionId || '');
+    const shouldReopenPreview = !!(replacementSessionId || replacementSessionSignature || replacementSnapshotRunId || dirtyCandidateIds.length > 0 || refreshJobIds.length > 0);
+    if (shouldReopenPreview && typeof resetPayPreviewAndDecisions === 'function') {
+      await resetPayPreviewAndDecisions({
+        mode: 'POST_ACTION_REOPEN',
+        reason: 'CREATE_DRAFT_SUCCESS',
+        source_session_id: sourceSessionId || null,
+        replacement_session_id: replacementSessionId || null,
+        replacement_session_signature: replacementSessionSignature || null,
+        replacement_snapshot_run_id: replacementSnapshotRunId || null,
+        replacement_session_version: replacementSessionVersion ?? null,
+        dirty_candidate_ids: [...dirtyCandidateIds],
+        pending_candidate_ids: [...dirtyCandidateIds],
+        refresh_job_ids: [...refreshJobIds],
+        preview_reopen_required: true,
+        created_pay_batch_ids: [...createdPayBatchIds],
+        selected_pay_batch_id: selectedBatchId || null
+      });
+    }
+  } catch {}
+
+  try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
 
   for (const globalName of [
     'refreshBankingPayWorkbench',
@@ -119986,6 +120338,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
 
   return normalisedResult;
 }
+
 
 
 async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, options = {}) {
@@ -120636,6 +120989,53 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
     return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
   };
   const opts = (options && typeof options === 'object') ? options : {};
+  const getCurrentBulkAuthoriseModalKind = () => {
+    try {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      return trimStr(frame?.kind || frame?.entity || window.modalCtx?.modal_kind || window.modalCtx?.modalKind || window.modalCtx?.kind || window.modalCtx?.entity || '').toUpperCase();
+    } catch {
+      return '';
+    }
+  };
+  const isBulkProcessOwnerOrNext = () => {
+    const modalKind = getCurrentBulkAuthoriseModalKind();
+    const ownerKind = trimStr(st.owner_kind || st.ownerKind || window.modalCtx?.owner_kind || window.modalCtx?.ownerKind || '').toUpperCase();
+    const nextOwnerKind = trimStr(st.next_owner_kind || st.nextOwnerKind || st.__next_owner_kind || st.__nextOwnerKind || window.modalCtx?.next_owner_kind || window.modalCtx?.nextOwnerKind || window.modalCtx?.__next_owner_kind || window.modalCtx?.__nextOwnerKind || '').toUpperCase();
+    return !!(
+      modalKind.includes('BULK-PROCESS') ||
+      modalKind.includes('BULK_PROCESS') ||
+      ownerKind.includes('BULK_PROCESS') ||
+      ownerKind.includes('BULK-PROCESS') ||
+      nextOwnerKind.includes('BULK_PROCESS') ||
+      nextOwnerKind.includes('BULK-PROCESS')
+    );
+  };
+  const isBulkAuthoriseLiveSurface = () => {
+    if (isBulkProcessOwnerOrNext()) return false;
+    const modalKind = getCurrentBulkAuthoriseModalKind();
+    if (!modalKind) return true;
+    return !!(
+      modalKind.includes('BULK-AUTHORISE') ||
+      modalKind.includes('BULK_AUTHORISE') ||
+      modalKind.includes('BULK-AUTH') ||
+      modalKind.includes('BULK_AUTH') ||
+      document.getElementById('bulkAuthoriseWorkbenchRoot') ||
+      document.getElementById('bulkAuthorisePreviewPaneRoot') ||
+      document.getElementById('bulkAuthoriseRightPaneRoot')
+    );
+  };
+  const isDegradedContextPayload = (payload) => !!(
+    !payload ||
+    typeof payload !== 'object' ||
+    payload.ok === false ||
+    payload.soft_failure === true ||
+    payload.evidence_refresh_failed === true ||
+    payload.__bulk_process_context_auth_failed === true ||
+    payload.__bulk_process_context_degraded === true ||
+    payload.__bulk_authorise_context_degraded === true ||
+    payload.__bulk_authorise_context_auth_failed === true
+  );
+  if (!isBulkAuthoriseLiveSurface()) return false;
   const refreshSource = trimStr(opts.source || opts.actionSource || opts.reason || '').toLowerCase();
   const cacheHints = (opts.cache_invalidation_hints && typeof opts.cache_invalidation_hints === 'object')
     ? opts.cache_invalidation_hints
@@ -120956,6 +121356,11 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
     : {};
 
   if (!row) {
+    if (!isBulkAuthoriseLiveSurface() || opts.allowClearMissingRow !== true) {
+      st.__bulk_authorise_row_context_ready = false;
+      st.__bulk_authorise_row_context_ready_seq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
+      return false;
+    }
     const previousSuppressDirty = !!st.__suppress_dirty_marking;
     st.__suppress_dirty_marking = true;
     try {
@@ -120968,7 +121373,7 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
     } finally {
       st.__suppress_dirty_marking = previousSuppressDirty;
     }
-    if (opts.rerender !== false) {
+    if (opts.rerender !== false && isBulkAuthoriseLiveSurface()) {
       await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][CTX-REFRESH]');
     }
     return true;
@@ -121027,22 +121432,38 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
   };
 
   const isAcceptedRow = () => {
+    if (!isBulkAuthoriseLiveSurface()) return false;
     const activeRowKey = trimStr(st.active_row_key || '');
     const activeRenderSignature = trimStr(
       st.__bulk_authorise_active_render_signature ||
       (st.active_row ? getRenderSignatureFromRow(st.active_row) : '')
     );
     const liveIdentity = trimStr(st.__bulkAuthoriseRecordIdentity || getBulkAuthoriseRecordIdentityFromState(st) || '');
+    const liveRowChangeSeq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
     return (!rowKey || !activeRowKey || activeRowKey === rowKey)
       && (!renderSignature || !activeRenderSignature || activeRenderSignature === renderSignature)
-      && Number(st.__bulk_authorise_row_change_seq || 0) === rowChangeSeq
+      && liveRowChangeSeq === rowChangeSeq
       && (!recordIdentity || !liveIdentity || liveIdentity === recordIdentity);
   };
 
   const applyContextIfCurrent = async (contextPayload) => {
-    let normalised = normaliseContextPayload(contextPayload, row);
+    if (isDegradedContextPayload(contextPayload)) {
+      st.warning_text = trimStr(contextPayload?.message || contextPayload?.error || 'Bulk Authorise context refresh was degraded.');
+      logContextDecision(false, { reason: 'degraded-context' });
+      return false;
+    }
     if (!isAcceptedRow()) {
       logContextDecision(false, { reason: 'stale-async-result' });
+      return false;
+    }
+    let normalised = normaliseContextPayload(contextPayload, row);
+    if (!normalised || !normalised.contextPayload || isDegradedContextPayload(normalised.contextPayload)) {
+      st.warning_text = trimStr(normalised?.contextPayload?.message || normalised?.contextPayload?.error || 'Bulk Authorise context refresh was degraded.');
+      logContextDecision(false, { reason: 'degraded-normalised-context' });
+      return false;
+    }
+    if (!isAcceptedRow()) {
+      logContextDecision(false, { reason: 'stale-before-commit' });
       return false;
     }
     const evidenceRows = Array.isArray(normalised.contextPayload?.evidence)
@@ -121098,10 +121519,14 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
     } finally {
       st.__suppress_dirty_marking = previousSuppressDirty;
     }
+    if (!isAcceptedRow()) {
+      logContextDecision(false, { reason: 'stale-after-commit' });
+      return false;
+    }
     if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
       try { reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch {}
     }
-    if (opts.rerender !== false) {
+    if (opts.rerender !== false && isBulkAuthoriseLiveSurface()) {
       await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][CTX-REFRESH]');
     }
     logContextDecision(true);
@@ -121128,9 +121553,10 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
     }
   }
 
+  if (!isBulkAuthoriseLiveSurface()) return false;
   if (!bypassCache && cacheKey && st.__bulk_authorise_context_cache[cacheKey]) {
     const cachedByCacheKey = st.__bulk_authorise_context_cache[cacheKey];
-    if (contextHasRequiredOptions(cachedByCacheKey) && contextBelongsToRequestedRow(cachedByCacheKey)) {
+    if (!isDegradedContextPayload(cachedByCacheKey) && contextHasRequiredOptions(cachedByCacheKey) && contextBelongsToRequestedRow(cachedByCacheKey)) {
       return applyContextIfCurrent(cachedByCacheKey);
     }
     try { delete st.__bulk_authorise_context_cache[cacheKey]; } catch {}
@@ -121237,9 +121663,11 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
     return true;
   }
 
+  if (!isBulkAuthoriseLiveSurface()) return false;
   if (!bypassCache && cacheKey && st.__bulk_authorise_context_inflight[cacheKey]) {
     try {
       const inflightPayload = await st.__bulk_authorise_context_inflight[cacheKey];
+      if (isDegradedContextPayload(inflightPayload)) return false;
       return applyContextIfCurrent(inflightPayload);
     } catch {
       return false;
@@ -121272,10 +121700,14 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
       delete st.__bulk_authorise_context_inflight[cacheKey];
     }
   }
+  if (!isBulkAuthoriseLiveSurface()) return false;
+  if (isDegradedContextPayload(fetchedContextPayload)) {
+    st.warning_text = trimStr(fetchedContextPayload?.message || fetchedContextPayload?.error || 'Bulk Authorise context refresh was degraded.');
+    return false;
+  }
   if (cacheKey) st.__bulk_authorise_context_cache[cacheKey] = deep(fetchedContextPayload);
   return applyContextIfCurrent(fetchedContextPayload);
 }
-
 
 
 async function authoriseSelectedTimesheets(payload) {
@@ -121612,7 +122044,6 @@ async function unauthoriseSelectedTimesheets(payload) {
   return out;
 }
 
-
 function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   const deep = (v) => {
     try { return JSON.parse(JSON.stringify(v)); } catch { return v; }
@@ -121937,6 +122368,46 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   };
 
   const incomingEvidence = Array.isArray(details.evidence) ? deep(details.evidence) : [];
+  const contextOptionsForAuthority = (details.__context_options && typeof details.__context_options === 'object')
+    ? details.__context_options
+    : ((contextPayload?.__context_options && typeof contextPayload.__context_options === 'object') ? contextPayload.__context_options : {});
+  const degradedContextInput = !!(
+    contextPayload?.ok === false ||
+    contextPayload?.soft_failure === true ||
+    contextPayload?.evidence_refresh_failed === true ||
+    contextPayload?.__bulk_process_context_degraded === true ||
+    contextPayload?.__bulk_authorise_context_degraded === true ||
+    contextPayload?.__bulk_process_context_auth_failed === true ||
+    contextPayload?.__bulk_authorise_context_auth_failed === true ||
+    details.ok === false ||
+    details.soft_failure === true ||
+    details.evidence_refresh_failed === true
+  );
+  const statusHeaderOnlyContext = !!(
+    contextOptionsForAuthority.profile === 'status_header' ||
+    contextOptionsForAuthority.base_only === true ||
+    details.profile === 'status_header' ||
+    details.context_profile === 'status_header'
+  );
+  const slimOrMinimalContext = !!(
+    details.slim_context === true ||
+    details.hydration_required === true ||
+    details.is_hydrated === false ||
+    contextPayload?.slim_context === true ||
+    contextPayload?.hydration_required === true ||
+    contextPayload?.is_hydrated === false
+  );
+  const hasHydratedTimesheetOrContractWeek = !!(
+    (details.timesheet && typeof details.timesheet === 'object') ||
+    (details.contract_week && typeof details.contract_week === 'object')
+  );
+  const nonAuthoritativeScheduleInput = !!(
+    isDatasetRowOnly ||
+    degradedContextInput ||
+    statusHeaderOnlyContext ||
+    slimOrMinimalContext ||
+    !hasHydratedTimesheetOrContractWeek
+  );
 
   const normaliseUnitsWeekMap = (src) => {
     const out = {};
@@ -122292,6 +122763,12 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     scheduleErrorsByDate: {},
     __suppressStandardScheduleFallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
     __keepAdditionalManualAdjustmentScheduleEmpty: keepAdditionalManualAdjustmentScheduleEmpty,
+    __scheduleHydrationPending: nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty,
+    __scheduleAuthoritative: !nonAuthoritativeScheduleInput || keepAdditionalManualAdjustmentScheduleEmpty,
+    __scheduleAuthority: keepAdditionalManualAdjustmentScheduleEmpty
+      ? 'explicit_blank_additional_manual'
+      : (nonAuthoritativeScheduleInput ? 'pending_hydration' : 'hydrated'),
+    __nonAuthoritativeScheduleInput: nonAuthoritativeScheduleInput,
     suppressStandardScheduleFallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
     keepAdditionalManualAdjustmentScheduleEmpty: keepAdditionalManualAdjustmentScheduleEmpty,
     expensesDraft: null,
@@ -122299,6 +122776,7 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     evidence: incomingEvidence,
     __expensesSeededFromTsfinCols: false,
     schedule: (() => {
+      if (nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty) return undefined;
       if (hasTs && sheetScope === 'DAILY') {
         const parsedDaily = parseScheduleLike(ts?.actual_schedule_json);
         if (isMeaningfulDailySchedule(parsedDaily)) {
@@ -122369,8 +122847,21 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   }
   normalisedState.__suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
   normalisedState.__keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
+  normalisedState.__scheduleHydrationPending = nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty;
+  normalisedState.__scheduleAuthoritative = !nonAuthoritativeScheduleInput || keepAdditionalManualAdjustmentScheduleEmpty;
+  normalisedState.__scheduleAuthority = keepAdditionalManualAdjustmentScheduleEmpty
+    ? 'explicit_blank_additional_manual'
+    : (nonAuthoritativeScheduleInput ? 'pending_hydration' : 'hydrated');
+  normalisedState.__nonAuthoritativeScheduleInput = nonAuthoritativeScheduleInput;
   normalisedState.suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
   normalisedState.keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
+  if (nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty) {
+    try { delete normalisedState.schedule; } catch {}
+    try { delete normalisedState.baselineSchedule; } catch {}
+    normalisedState.weeklyLinesByDate = normalisedState.weeklyLinesByDate || null;
+    normalisedState.scheduleHasErrors = false;
+    normalisedState.scheduleErrorsByDate = normalisedState.scheduleErrorsByDate || {};
+  }
   if (keepAdditionalManualAdjustmentScheduleEmpty) {
     normalisedState.schedule = [];
     normalisedState.baselineSchedule = [];
@@ -122429,9 +122920,11 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   const isHydrated = hasExplicitHydratedFlag
     ? details.is_hydrated === true
     : (!isDatasetRowOnly && hasFullOrSlimPayload);
+  const contextIsAuthoritativeForSchedule = !nonAuthoritativeScheduleInput || keepAdditionalManualAdjustmentScheduleEmpty;
+  const effectiveIsHydrated = !!(isHydrated && contextIsAuthoritativeForSchedule);
   const hydrationRequired = hasExplicitHydrationRequiredFlag
     ? details.hydration_required === true
-    : !isHydrated;
+    : !effectiveIsHydrated;
 
   return {
     row: normalisedRow,
@@ -122458,12 +122951,17 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     compare_payload: preservedComparePayload,
     suppress_standard_schedule_fallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
     keep_additional_manual_adjustment_schedule_empty: keepAdditionalManualAdjustmentScheduleEmpty,
-    is_hydrated: isHydrated,
-    hydration_required: hydrationRequired,
-    slim_context: details.slim_context === true
+    schedule_hydration_pending: nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty,
+    schedule_authoritative: !nonAuthoritativeScheduleInput || keepAdditionalManualAdjustmentScheduleEmpty,
+    schedule_authority: keepAdditionalManualAdjustmentScheduleEmpty
+      ? 'explicit_blank_additional_manual'
+      : (nonAuthoritativeScheduleInput ? 'pending_hydration' : 'hydrated'),
+    non_authoritative_schedule_input: nonAuthoritativeScheduleInput,
+    is_hydrated: effectiveIsHydrated,
+    hydration_required: hydrationRequired || (nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty),
+    slim_context: details.slim_context === true || nonAuthoritativeScheduleInput
   };
 }
-
 
 
 
@@ -127388,7 +127886,6 @@ function classifyBulkProcessEditability(ctxInput) {
 }
 
 
-
 function bindBulkProcessManualEditor(state) {
   const st = (state && typeof state === 'object') ? state : null;
   if (!st) return;
@@ -127427,6 +127924,44 @@ function bindBulkProcessManualEditor(state) {
   };
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const isActionBusy = () => !!(st.loading || st.saving || st.processing || st.unprocessing);
+  const getBulkProcessOwnerToken = () => trimStr(
+    st.__bulk_process_modal_open_token ||
+    st.__bulkProcessModalOpenToken ||
+    window.modalCtx?.__bulk_process_modal_open_token ||
+    window.modalCtx?.__bulkProcessModalOpenToken ||
+    ''
+  );
+  const getBulkProcessActiveIdentity = () => trimStr(
+    st.active_row_key ||
+    st.active_row?.row_key ||
+    (typeof getBulkProcessRecordIdentityFromState === 'function' ? getBulkProcessRecordIdentityFromState(st) : '') ||
+    window.modalCtx?.__bulkProcessRecordIdentity ||
+    window.modalCtx?.formState?.__forId ||
+    ''
+  );
+  const isBulkProcessOwnerStillCurrent = (ownerToken = '', activeIdentity = '') => {
+    const expectedToken = trimStr(ownerToken || '');
+    const expectedIdentity = trimStr(activeIdentity || '');
+    const liveToken = getBulkProcessOwnerToken();
+    const liveIdentity = getBulkProcessActiveIdentity();
+    if (expectedToken && liveToken && expectedToken !== liveToken) return false;
+    if (expectedIdentity && liveIdentity && expectedIdentity !== liveIdentity) return false;
+    if (window.modalCtx?.bulkProcessState && window.modalCtx.bulkProcessState !== st && !isBulkAuthoriseCtx()) return false;
+    return true;
+  };
+  const isDegradedContextLike = (payload) => !!(
+    payload &&
+    typeof payload === 'object' &&
+    (
+      payload.ok === false ||
+      payload.soft_failure === true ||
+      payload.evidence_refresh_failed === true ||
+      payload.__bulk_process_context_degraded === true ||
+      payload.__bulk_process_context_auth_failed === true ||
+      payload.__bulk_authorise_context_degraded === true ||
+      payload.__bulk_authorise_context_auth_failed === true
+    )
+  );
   const getCurrentBulkProcessEditability = () => {
     try {
       return classifyBulkProcessEditability(st.active_ctx || st.active_context || {});
@@ -127506,55 +128041,118 @@ function bindBulkProcessManualEditor(state) {
   };
 
   const refreshActiveContextInPlace = async () => {
-    const row = (st.active_row && typeof st.active_row === 'object') ? st.active_row : null;
-    if (!row) {
-      st.active_details = null;
-      st.active_ctx = null;
-      return;
-    }
+    const row = (st.active_row && typeof st.active_row === 'object') ? deep(st.active_row) : null;
+    const ownerToken = getBulkProcessOwnerToken();
+    const activeIdentity = getBulkProcessActiveIdentity();
+    const previousDetails = (st.active_details && typeof st.active_details === 'object') ? deep(st.active_details) : st.active_details;
+    const previousCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? deep(st.active_ctx) : st.active_ctx;
+    const previousContext = (st.active_context && typeof st.active_context === 'object') ? deep(st.active_context) : st.active_context;
+    const previousEvidencePaneState = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? deep(st.evidence_pane_state) : st.evidence_pane_state;
 
-    const details = await fetchTimesheetWorkbenchDetails(row);
-    const evidenceCtx = await fetchEvidenceContextItems({ row, details });
-
-    let related = null;
-    const tsId =
-      row.timesheet_id ||
-      details?.current_timesheet_id ||
-      details?.timesheet?.timesheet_id ||
-      null;
-
-    if (tsId && typeof fetchTimesheetRelated === 'function') {
-      try {
-        related = await fetchTimesheetRelated(tsId);
-        if (!Array.isArray(related.invoices)) related.invoices = [];
-        if (!related.invoice_no_by_invoice_id || typeof related.invoice_no_by_invoice_id !== 'object') {
-          related.invoice_no_by_invoice_id = {};
-        }
-      } catch {
-        related = null;
-      }
-    }
-
-    if (!related) {
-      related = buildFallbackRelated(row, details);
-    }
-    related = ensureBulkProcessRelatedContract(related, row, details);
-
-    st.active_details = {
-      ...(details && typeof details === 'object' ? deep(details) : {}),
-      evidence: Array.isArray(evidenceCtx?.evidence) ? deep(evidenceCtx.evidence) : [],
-      related: deep(related)
+    const restorePreviousHydratedState = () => {
+      if (previousDetails && typeof previousDetails === 'object') st.active_details = deep(previousDetails);
+      if (previousCtx && typeof previousCtx === 'object') st.active_ctx = deep(previousCtx);
+      if (previousContext && typeof previousContext === 'object') st.active_context = deep(previousContext);
+      if (previousEvidencePaneState && typeof previousEvidencePaneState === 'object') st.evidence_pane_state = deep(previousEvidencePaneState);
+      installBulkProcessModalCtxPatch(st);
     };
 
-    st.active_ctx = normaliseBulkTimesheetWorkbenchCtx(
-      deep(row),
-      st.active_details
-    );
-
-    if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
-      reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
+    if (!row) {
+      st.__active_context_hydration_pending = true;
+      return false;
     }
-    installBulkProcessModalCtxPatch(st);
+
+    try {
+      const requestedRowKey = rowKeyOf(row) || trimStr(row.row_key || '');
+      const details = await fetchTimesheetWorkbenchDetails(row);
+      if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) {
+        restorePreviousHydratedState();
+        return false;
+      }
+      if (isDegradedContextLike(details)) {
+        restorePreviousHydratedState();
+        return false;
+      }
+
+      const evidenceCtx = await fetchEvidenceContextItems({ row, details });
+      if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) {
+        restorePreviousHydratedState();
+        return false;
+      }
+      if (isDegradedContextLike(evidenceCtx)) {
+        restorePreviousHydratedState();
+        return false;
+      }
+
+      const liveRowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
+      if (requestedRowKey && liveRowKey && requestedRowKey !== liveRowKey) {
+        restorePreviousHydratedState();
+        return false;
+      }
+
+      let related = null;
+      const tsId =
+        row.timesheet_id ||
+        details?.current_timesheet_id ||
+        details?.timesheet?.timesheet_id ||
+        null;
+
+      if (tsId && typeof fetchTimesheetRelated === 'function') {
+        try {
+          related = await fetchTimesheetRelated(tsId);
+          if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) {
+            restorePreviousHydratedState();
+            return false;
+          }
+          if (!Array.isArray(related.invoices)) related.invoices = [];
+          if (!related.invoice_no_by_invoice_id || typeof related.invoice_no_by_invoice_id !== 'object') {
+            related.invoice_no_by_invoice_id = {};
+          }
+        } catch {
+          related = null;
+        }
+      }
+
+      if (!related) {
+        related = buildFallbackRelated(row, details);
+      }
+      related = ensureBulkProcessRelatedContract(related, row, details);
+
+      if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) {
+        restorePreviousHydratedState();
+        return false;
+      }
+
+      const nextDetails = {
+        ...(details && typeof details === 'object' ? deep(details) : {}),
+        evidence: Array.isArray(evidenceCtx?.evidence) ? deep(evidenceCtx.evidence) : [],
+        related: deep(related),
+        is_hydrated: true,
+        hydration_required: false,
+        slim_context: false
+      };
+      const nextCtx = normaliseBulkTimesheetWorkbenchCtx(deep(row), nextDetails);
+
+      if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) {
+        restorePreviousHydratedState();
+        return false;
+      }
+
+      st.active_details = nextDetails;
+      st.active_ctx = nextCtx;
+      st.__active_context_is_minimal = false;
+      st.__active_context_hydration_pending = false;
+
+      if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
+        reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
+      }
+      installBulkProcessModalCtxPatch(st);
+      return true;
+    } catch (err) {
+      restorePreviousHydratedState();
+      try { console.warn('[TS][BULK-PROCESS][MANUAL-EDITOR] active context refresh failed without clearing hydrated state', err); } catch {}
+      return false;
+    }
   };
 
   const buildRouteActionSummaryIdentityAfter = ({
@@ -128095,21 +128693,39 @@ function bindBulkProcessManualEditor(state) {
     return st.active_row;
   };
   const scheduleBulkProcessBackgroundReconciliation = (reason = 'route-action') => {
+    const ownerToken = getBulkProcessOwnerToken();
+    const activeIdentity = getBulkProcessActiveIdentity();
+    const reconcileKey = `${ownerToken || 'no-token'}|${activeIdentity || 'no-identity'}`;
+    if (trimStr(st.__bulk_process_background_reconcile_key || '') === reconcileKey && st.__bulk_process_background_reconcile_timer) {
+      return;
+    }
     if (st.__bulk_process_background_reconcile_timer) {
       try { clearTimeout(st.__bulk_process_background_reconcile_timer); } catch {}
       st.__bulk_process_background_reconcile_timer = null;
     }
+    st.__bulk_process_background_reconcile_key = reconcileKey;
+
     const run = async () => {
       st.__bulk_process_background_reconcile_timer = null;
       try {
+        if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) return;
         const latestDataset = await fetchBulkProcessDataset(st.filters || {}, { force: true });
+        if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) return;
         st.dataset = latestDataset;
       } catch (err) {
         try { console.warn('[TS][BULK-PROCESS][ROUTE-ACTION] background dataset reconciliation failed', { reason, err: err?.message || String(err) }); } catch {}
       }
       try {
+        if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) return;
         const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
-        if (pane && typeof refreshTimesheetImportsQueue === 'function') await refreshTimesheetImportsQueue(pane);
+        if (pane && typeof refreshTimesheetImportsQueue === 'function') {
+          await refreshTimesheetImportsQueue(pane, {
+            ownerState: st,
+            ownerToken,
+            activeIdentity,
+            suppressWhileBusy: true
+          });
+        }
       } catch (err) {
         try { console.warn('[TS][BULK-PROCESS][ROUTE-ACTION] background queue reconciliation failed', { reason, err: err?.message || String(err) }); } catch {}
       }
@@ -129424,6 +130040,7 @@ function bindBulkProcessManualEditor(state) {
 }
 
 
+
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -129552,7 +130169,7 @@ function bindBulkProcessPreviewPane(state) {
     const liveSigned = trimStr(pane.__preview_signed_url || '');
     if (liveSigned && targetKey && targetKey === currentSelectionKey) return liveSigned;
     if (liveSigned && targetKey && fileKey && targetKey.endsWith(`|${fileKey}`)) return liveSigned;
-    const cached = fileKey ? trimStr(pane.__preview_signed_url_cache?.[fileKey] || '') : '';
+    const cached = fileKey ? trimStr(getCachedSignedUrlForPreview(fileKey, capturePreviewCommitSnapshot(null, { reason: 'docked-signed-url' })) || '') : '';
     if (cached) return cached;
     return trimStr(item.signed_url || item.preview_url || '');
   };
@@ -129748,6 +130365,7 @@ function bindBulkProcessPreviewPane(state) {
     return { recordIdentity, backendRowSignature, renderSignature };
   };
   pane.__preview_signed_url_owner_by_cache_key = (pane.__preview_signed_url_owner_by_cache_key && typeof pane.__preview_signed_url_owner_by_cache_key === 'object') ? pane.__preview_signed_url_owner_by_cache_key : {};
+  pane.__preview_signed_url_context_by_cache_key = (pane.__preview_signed_url_context_by_cache_key && typeof pane.__preview_signed_url_context_by_cache_key === 'object') ? pane.__preview_signed_url_context_by_cache_key : {};
   const captureBulkAuthorisePreviewSnapshot = (previewStateInput = null) => {
     const ownerIdentity = trimStr(resolveBulkAuthorisePreviewOwnerIdentity() || '');
     if (!ownerIdentity) return null;
@@ -129928,6 +130546,228 @@ function bindBulkProcessPreviewPane(state) {
     );
   };
 
+
+  const getCurrentPreviewModalKind = () => {
+    try {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      return trimStr(frame?.kind || frame?.entity || window.modalCtx?.modal_kind || window.modalCtx?.modalKind || window.modalCtx?.kind || window.modalCtx?.entity || '');
+    } catch {
+      return '';
+    }
+  };
+
+  const getPreviewOwnerKind = () => (bulkAuthoriseSurfaceAtBind || isCurrentBulkAuthorisePreviewSurface() || trimStr(bulkAuthoriseOwnerIdentity || '')) ? 'bulk_authorise' : 'bulk_process';
+
+  const getPreviewOwnerToken = () => trimStr(
+    st.__bulk_process_modal_open_token ||
+    st.__bulkProcessModalOpenToken ||
+    st.__bulk_authorise_modal_open_token ||
+    st.__bulkAuthoriseModalOpenToken ||
+    window.modalCtx?.__bulk_process_modal_open_token ||
+    window.modalCtx?.__bulkProcessModalOpenToken ||
+    window.modalCtx?.__bulk_authorise_modal_open_token ||
+    window.modalCtx?.__bulkAuthoriseModalOpenToken ||
+    ''
+  );
+
+  const getPreviewOwnerIdentity = () => trimStr(
+    (getPreviewOwnerKind() === 'bulk_authorise' ? (resolveBulkAuthorisePreviewOwnerIdentity() || bulkAuthoriseOwnerIdentity) : '') ||
+    st.__bulk_process_owner_identity ||
+    st.__bulkProcessOwnerIdentity ||
+    st.__bulk_authorise_owner_identity ||
+    st.__bulkAuthoriseOwnerIdentity ||
+    window.modalCtx?.owner_identity ||
+    window.modalCtx?.__bulk_process_owner_identity ||
+    window.modalCtx?.__bulk_authorise_owner_identity ||
+    ''
+  );
+
+  const getPreviewRowChangeSeq = () => Number(
+    getPreviewOwnerKind() === 'bulk_authorise'
+      ? (st.__bulk_authorise_row_change_seq || st.__bulkAuthoriseRowChangeSeq || 0)
+      : (st.__bulk_process_row_change_seq || st.__bulkProcessRowChangeSeq || 0)
+  ) || 0;
+
+  const getPreviewActiveRowKey = () => trimStr(st.active_row_key || st.active_row?.row_key || '');
+
+  const isBlankPreviewSelectionKey = (key) => {
+    const value = trimStr(key || '');
+    return !value || value === 'queue||' || value === 'attached||' || /^\w+\|\|$/.test(value) || !value.replace(/\|/g, '');
+  };
+  const isValidPreviewSelectionKey = (key) => !isBlankPreviewSelectionKey(key);
+
+  const getCurrentPreviewSelectionKey = () => {
+    const tab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const item = tab === 'attached'
+      ? ((pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null)
+      : ((pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null);
+    const itemId = trimStr((tab === 'attached' ? pane.active_attached_id : pane.active_queue_id) || item?.id || item?.evidence_id || item?.queue_id || '');
+    const fileKey = trimStr(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || '').replace(/^\/+/, '');
+    return buildPreviewSelectionKey(tab, itemId, fileKey);
+  };
+
+  const capturePreviewCommitSnapshot = (previewStateInput = null, snapshotOptions = {}) => {
+    const opts = (snapshotOptions && typeof snapshotOptions === 'object') ? snapshotOptions : {};
+    let previewItem = null;
+    let activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    let selectionKey = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+    let fileKey = '';
+    try {
+      const stateObj = (previewStateInput && typeof previewStateInput === 'object') ? previewStateInput : null;
+      if (stateObj) {
+        const parts = getPreviewIdentityParts(stateObj);
+        previewItem = parts.previewItem || null;
+        activeTab = parts.activeTab || activeTab;
+        fileKey = trimStr(parts.previewFileCacheKey || '').replace(/^\/+/, '');
+        selectionKey = normalisePreviewSelectionKey(parts.previewSelectionKey || getSelectionSignature(activeTab, previewItem));
+      } else {
+        previewItem = resolveActiveBulkProcessPreviewItem();
+        fileKey = resolvePreviewFileCacheKey(previewItem, selectionKey);
+      }
+    } catch {
+      previewItem = resolveActiveBulkProcessPreviewItem();
+      fileKey = resolvePreviewFileCacheKey(previewItem, selectionKey);
+    }
+    if (!fileKey) fileKey = resolvePreviewFileCacheKey(previewItem, selectionKey);
+    const ownerKind = getPreviewOwnerKind();
+    const ownerIdentity = getPreviewOwnerIdentity();
+    const ownerToken = getPreviewOwnerToken();
+    const activeIdentity = trimStr(opts.activeIdentity || getActiveIdentity() || '');
+    const rowKey = getPreviewActiveRowKey();
+    return {
+      reason: trimStr(opts.reason || 'preview-commit'),
+      ownerKind,
+      ownerIdentity,
+      ownerToken,
+      modalKind: getCurrentPreviewModalKind(),
+      stateRef: st,
+      activeIdentity,
+      rowKey,
+      rowChangeSeq: getPreviewRowChangeSeq(),
+      bindSeq,
+      activeTab,
+      selectionKey,
+      fileKey: trimStr(fileKey || '').replace(/^\/+/, ''),
+      previewItemId: trimStr(previewItem?.id || previewItem?.evidence_id || previewItem?.queue_id || ''),
+      previewTargetKey: normalisePreviewSelectionKey(pane.__preview_target_key || ''),
+      requestedTargetKey: normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '')
+    };
+  };
+
+  const isPreviewCommitSnapshotCurrent = (snapshot, options = {}) => {
+    const snap = (snapshot && typeof snapshot === 'object') ? snapshot : null;
+    const opts = (options && typeof options === 'object') ? options : {};
+    if (!snap) return false;
+    const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
+    if (!liveRoot || !root.isConnected || liveRoot !== root) return false;
+    if (Number(pane.__preview_bind_seq || 0) !== Number(snap.bindSeq || bindSeq)) return false;
+    if (snap.stateRef && snap.stateRef !== st) return false;
+    const liveKind = getCurrentPreviewModalKind();
+    if (snap.ownerKind === 'bulk_process') {
+      if (liveKind && liveKind !== 'bulk-process-workbench' && !/bulk[-_]?process/i.test(liveKind)) return false;
+      if (window.modalCtx?.bulkProcessState && window.modalCtx.bulkProcessState !== st) return false;
+      const liveOwnerKind = trimStr(window.modalCtx?.owner_kind || '').toLowerCase();
+      if (liveOwnerKind && liveOwnerKind !== 'bulk_process') return false;
+    } else if (snap.ownerKind === 'bulk_authorise') {
+      if (liveKind === 'bulk-process-workbench' || /bulk[-_]?process/i.test(liveKind)) return false;
+      const liveBulkAuthState = window.modalCtx?.bulkAuthoriseState || window.modalCtx?.bulk_authorise_state || null;
+      if (liveBulkAuthState && liveBulkAuthState !== st) return false;
+      if (!isCurrentBulkAuthorisePreviewSurface()) return false;
+    }
+    const liveToken = getPreviewOwnerToken();
+    if (snap.ownerToken && liveToken && trimStr(snap.ownerToken) !== trimStr(liveToken)) return false;
+    const liveOwnerIdentity = getPreviewOwnerIdentity();
+    if (snap.ownerIdentity && liveOwnerIdentity && trimStr(snap.ownerIdentity) !== trimStr(liveOwnerIdentity)) return false;
+    const liveIdentity = getActiveIdentity();
+    if (snap.activeIdentity && liveIdentity && trimStr(snap.activeIdentity) !== trimStr(liveIdentity)) return false;
+    const liveRowKey = getPreviewActiveRowKey();
+    if (snap.rowKey && liveRowKey && trimStr(snap.rowKey) !== trimStr(liveRowKey)) return false;
+    if (snap.rowChangeSeq !== getPreviewRowChangeSeq()) return false;
+    if (opts.requireTabUnchanged === true) {
+      const liveTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+      if (snap.activeTab && liveTab !== snap.activeTab) return false;
+    }
+    if (opts.requireSelectionUnchanged === true) {
+      const liveSelection = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+      if (isValidPreviewSelectionKey(snap.selectionKey) && liveSelection !== snap.selectionKey) return false;
+    }
+    if (opts.requireFileKeyUnchanged === true) {
+      const liveState = getPreviewState();
+      const liveParts = getPreviewIdentityParts(liveState);
+      if (snap.fileKey && liveParts.previewFileCacheKey !== snap.fileKey) return false;
+    }
+    return true;
+  };
+
+  const getPreviewOwnerCacheKey = (fileKeyInput = '', snapshotInput = null) => {
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    if (!fileKey) return '';
+    const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : capturePreviewCommitSnapshot(null, { reason: 'cache-key' });
+    return [snap.ownerKind || 'preview', snap.ownerIdentity || snap.ownerToken || 'owner', snap.rowKey || snap.activeIdentity || 'row', fileKey].map((part) => trimStr(part || '').replace(/\|/g, '%7C')).join('|');
+  };
+
+  const getCachedSignedUrlForPreview = (fileKeyInput = '', snapshotInput = null) => {
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    if (!fileKey) return '';
+    const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : null;
+    const ownerCacheKey = getPreviewOwnerCacheKey(fileKey, snap);
+    const ownerCached = ownerCacheKey ? trimStr(pane.__preview_signed_url_cache?.[ownerCacheKey] || '') : '';
+    if (ownerCached) return ownerCached;
+
+    const legacyCached = trimStr(pane.__preview_signed_url_cache?.[fileKey] || '');
+    if (!legacyCached || !snap) return '';
+
+    const context = (pane.__preview_signed_url_context_by_cache_key && typeof pane.__preview_signed_url_context_by_cache_key === 'object')
+      ? pane.__preview_signed_url_context_by_cache_key[fileKey]
+      : null;
+    if (!context || typeof context !== 'object') return '';
+
+    const sameOrBlank = (a, b) => {
+      const left = trimStr(a || '');
+      const right = trimStr(b || '');
+      return !left || !right || left === right;
+    };
+
+    if (!sameOrBlank(context.ownerKind, snap.ownerKind)) return '';
+    if (!sameOrBlank(context.ownerToken, snap.ownerToken)) return '';
+    if (!sameOrBlank(context.ownerIdentity, snap.ownerIdentity)) return '';
+    if (!sameOrBlank(context.activeIdentity, snap.activeIdentity)) return '';
+    if (!sameOrBlank(context.rowKey, snap.rowKey)) return '';
+    if (Number(context.rowChangeSeq || 0) && Number(snap.rowChangeSeq || 0) && Number(context.rowChangeSeq || 0) !== Number(snap.rowChangeSeq || 0)) return '';
+    if (!sameOrBlank(context.fileKey, fileKey)) return '';
+
+    return legacyCached;
+  };
+
+  const setCachedSignedUrlForPreview = (fileKeyInput = '', signedUrlInput = '', snapshotInput = null) => {
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    const signedUrl = trimStr(signedUrlInput || '');
+    const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : capturePreviewCommitSnapshot(null, { reason: 'cache-store' });
+    if (!fileKey || !signedUrl) return '';
+    const ownerCacheKey = getPreviewOwnerCacheKey(fileKey, snap);
+    const cacheContext = {
+      ownerKind: trimStr(snap?.ownerKind || ''),
+      ownerToken: trimStr(snap?.ownerToken || ''),
+      ownerIdentity: trimStr(snap?.ownerIdentity || ''),
+      activeIdentity: trimStr(snap?.activeIdentity || ''),
+      rowKey: trimStr(snap?.rowKey || ''),
+      rowChangeSeq: Number(snap?.rowChangeSeq || 0) || 0,
+      selectionKey: trimStr(snap?.selectionKey || ''),
+      fileKey
+    };
+    if (ownerCacheKey) {
+      pane.__preview_signed_url_cache[ownerCacheKey] = signedUrl;
+      pane.__preview_signed_url_context_by_cache_key[ownerCacheKey] = { ...cacheContext };
+    }
+    pane.__preview_signed_url_cache[fileKey] = signedUrl;
+    pane.__preview_signed_url_context_by_cache_key[fileKey] = { ...cacheContext };
+    if (snap?.ownerIdentity) {
+      pane.__preview_signed_url_owner_by_cache_key[fileKey] = trimStr(snap.ownerIdentity || '');
+      if (ownerCacheKey) pane.__preview_signed_url_owner_by_cache_key[ownerCacheKey] = trimStr(snap.ownerIdentity || '');
+    }
+    return ownerCacheKey || fileKey;
+  };
+
   if (pane.__preview_recovery_timer) {
     try { window.clearTimeout(pane.__preview_recovery_timer); } catch {}
     pane.__preview_recovery_timer = null;
@@ -129975,8 +130815,13 @@ function bindBulkProcessPreviewPane(state) {
     const previewItem = parts.previewItem;
     const previewFileCacheKey = parts.previewFileCacheKey;
     const previewSelectionKey = parts.previewSelectionKey;
-    const cachedSignedUrl = trimStr(pane.__preview_signed_url_cache?.[previewFileCacheKey] || '');
-    const cachedOwnerIdentity = trimStr(pane.__preview_signed_url_owner_by_cache_key?.[previewFileCacheKey] || '');
+    const cacheSnapshot = capturePreviewCommitSnapshot(previewState, { reason: 'cache-promote' });
+    if (!isPreviewCommitSnapshotCurrent(cacheSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) {
+      return { synced: false, done: false, reason: 'stale-cache-snapshot' };
+    }
+    const cachedSignedUrl = getCachedSignedUrlForPreview(previewFileCacheKey, cacheSnapshot);
+    const ownerCacheKey = getPreviewOwnerCacheKey(previewFileCacheKey, cacheSnapshot);
+    const cachedOwnerIdentity = trimStr(pane.__preview_signed_url_owner_by_cache_key?.[ownerCacheKey] || pane.__preview_signed_url_owner_by_cache_key?.[previewFileCacheKey] || '');
 
     if (!previewItem || !previewFileCacheKey || !cachedSignedUrl) {
       return { synced: false, done: false, reason: 'no-cached-preview' };
@@ -130032,6 +130877,9 @@ function bindBulkProcessPreviewPane(state) {
       };
     }
 
+    if (!isPreviewCommitSnapshotCurrent(cacheSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) {
+      return { synced: false, done: false, reason: 'stale-cache-promote-commit' };
+    }
     pane.__preview_signed_url = cachedSignedUrl;
     pane.__preview_target_key = previewSelectionKey;
     pane.__preview_load_requested_target_key = previewSelectionKey;
@@ -130106,11 +130954,14 @@ function bindBulkProcessPreviewPane(state) {
   const tryImmediateSameSelectionRenderRecovery = async (previewSelectionKeyInput = '', reason = 'stale-loading') => {
     if (!isActiveBind()) return false;
     const previewSelectionKey = normalisePreviewSelectionKey(previewSelectionKeyInput || '');
-    if (!previewSelectionKey) return false;
+    if (!previewSelectionKey || isBlankPreviewSelectionKey(previewSelectionKey)) return false;
+    const recoverySnapshot = capturePreviewCommitSnapshot(getPreviewState(), { reason: `immediate-recovery-${reason}` });
+    if (!isPreviewCommitSnapshotCurrent(recoverySnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return false;
     const recoveryKey = `${String(getActiveIdentity() || '')}|${previewSelectionKey}`;
     if (trimStr(pane.__preview_same_selection_recovery_key || '') === recoveryKey) return false;
     pane.__preview_same_selection_recovery_key = recoveryKey;
     logPreview('[RECOVERY][IMMEDIATE]', reason, { previewSelectionKey });
+    if (!isPreviewCommitSnapshotCurrent(recoverySnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return false;
     await renderStage();
     return true;
   };
@@ -130143,6 +130994,9 @@ function bindBulkProcessPreviewPane(state) {
     const previewItem = parts.previewItem;
     if (!previewItem) return false;
     const previewSelectionKey = normalisePreviewSelectionKey(parts.previewSelectionKey || getSelectionSignature(parts.activeTab, previewItem));
+    if (isBlankPreviewSelectionKey(previewSelectionKey)) return false;
+    const sharedCommitSnapshot = capturePreviewCommitSnapshot(previewState, { reason });
+    if (!isPreviewCommitSnapshotCurrent(sharedCommitSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return false;
     const liveTargetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
     const liveRequestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
     const signedUrl = trimStr(pane.__preview_signed_url || '');
@@ -130233,9 +131087,10 @@ function bindBulkProcessPreviewPane(state) {
     clearPreviewStateRecovery();
     pane.__preview_recovery_key = recoveryKey;
     pane.__preview_recovery_attempt = 0;
+    const recoverySnapshotAtSchedule = capturePreviewCommitSnapshot(getPreviewState(), { reason: `recovery-${recoveryReason}` });
 
     const runRecoveryAttempt = async () => {
-      if (!isActiveBind()) {
+      if (!isActiveBind() || !isPreviewCommitSnapshotCurrent(recoverySnapshotAtSchedule)) {
         clearPreviewStateRecovery();
         return;
       }
@@ -130289,6 +131144,18 @@ function bindBulkProcessPreviewPane(state) {
   const abortPreviewPresignRequests = (reason = 'aborted', abortOptions = {}) => {
     const opts = (abortOptions && typeof abortOptions === 'object') ? abortOptions : {};
     const keepKey = trimStr(opts.keepKey || '');
+    const forceAbort = !!(
+      opts.force === true ||
+      opts.identityChanged === true ||
+      opts.identity_changed === true ||
+      opts.ownerChanged === true ||
+      opts.owner_changed === true ||
+      opts.userSelectionChanged === true ||
+      opts.user_selection_changed === true ||
+      opts.artifactRemoved === true ||
+      opts.artifact_removed === true
+    );
+    const liveSnapshot = capturePreviewCommitSnapshot(null, { reason: 'abort-check' });
     const inflight = (pane.__preview_presign_inflight && typeof pane.__preview_presign_inflight === 'object')
       ? pane.__preview_presign_inflight
       : {};
@@ -130296,6 +131163,19 @@ function bindBulkProcessPreviewPane(state) {
     Object.keys(inflight).forEach((key) => {
       if (keepKey && key === keepKey) return;
       const record = inflight[key];
+      const recordSnapshot = (record && typeof record === 'object') ? record.snapshot : null;
+      const sameOwnerRowSelection = !!(
+        recordSnapshot &&
+        trimStr(recordSnapshot.ownerKind || '') === trimStr(liveSnapshot.ownerKind || '') &&
+        trimStr(recordSnapshot.ownerToken || '') === trimStr(liveSnapshot.ownerToken || '') &&
+        trimStr(recordSnapshot.ownerIdentity || '') === trimStr(liveSnapshot.ownerIdentity || '') &&
+        trimStr(recordSnapshot.activeIdentity || '') === trimStr(liveSnapshot.activeIdentity || '') &&
+        trimStr(recordSnapshot.rowKey || '') === trimStr(liveSnapshot.rowKey || '') &&
+        Number(recordSnapshot.rowChangeSeq || 0) === Number(liveSnapshot.rowChangeSeq || 0) &&
+        trimStr(recordSnapshot.selectionKey || '') === trimStr(liveSnapshot.selectionKey || '') &&
+        trimStr(recordSnapshot.fileKey || '') === trimStr(liveSnapshot.fileKey || '')
+      );
+      if (!forceAbort && sameOwnerRowSelection) return;
       const abortController = (record && typeof record === 'object') ? record.abortController : null;
       if (abortController && typeof abortController.abort === 'function') {
         try { abortController.abort(reason); } catch {}
@@ -130307,19 +131187,78 @@ function bindBulkProcessPreviewPane(state) {
 
   const clearPreviewRequestState = (clearOptions = {}) => {
     const clearOpts = (clearOptions && typeof clearOptions === 'object') ? clearOptions : {};
-    if (clearOpts.abort) abortPreviewPresignRequests(String(clearOpts.reason || 'cleared'));
+    const reason = trimStr(clearOpts.reason || 'cleared');
+    const liveSelection = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+    const liveTarget = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+    const liveRequested = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+    const hasValidLivePreview = !!(
+      trimStr(pane.__preview_signed_url || '') ||
+      isValidPreviewSelectionKey(liveTarget) ||
+      isValidPreviewSelectionKey(liveRequested)
+    );
+    const authorisedClear = !!(
+      clearOpts.force === true ||
+      clearOpts.allowClear === true ||
+      clearOpts.identityChanged === true ||
+      clearOpts.identity_changed === true ||
+      clearOpts.ownerChanged === true ||
+      clearOpts.owner_changed === true ||
+      clearOpts.userSelectionChanged === true ||
+      clearOpts.user_selection_changed === true ||
+      clearOpts.artifactRemoved === true ||
+      clearOpts.artifact_removed === true ||
+      reason === 'identity-changed' ||
+      reason === 'owner-changed' ||
+      reason === 'preview-selection-changed' ||
+      reason === 'selected-evidence-removed'
+    );
+    const transientReason = !!(
+      reason === 'busy-state' ||
+      reason === 'lazy-shell' ||
+      reason === 'no-preview-item' ||
+      reason === 'no-file-key' ||
+      reason === 'queue-not-loaded' ||
+      reason === 'degraded-context' ||
+      reason === 'metadata-only-refresh' ||
+      reason === 'transient-no-identity'
+    );
+    if (hasValidLivePreview && (!authorisedClear || transientReason)) {
+      return false;
+    }
+    const keepKey = trimStr(clearOpts.keepKey || '');
+    if (clearOpts.abort) {
+      abortPreviewPresignRequests(String(reason || 'cleared'), {
+        keepKey,
+        identityChanged: clearOpts.identityChanged === true || clearOpts.identity_changed === true,
+        ownerChanged: clearOpts.ownerChanged === true || clearOpts.owner_changed === true,
+        userSelectionChanged: clearOpts.userSelectionChanged === true || clearOpts.user_selection_changed === true,
+        artifactRemoved: clearOpts.artifactRemoved === true || clearOpts.artifact_removed === true,
+        force: clearOpts.force === true
+      });
+    }
     pane.__preview_target_key = '';
     pane.__preview_signed_url = '';
     if (clearOpts.clearRequested !== false) pane.__preview_load_requested_target_key = '';
-    if (clearOpts.clearCache) pane.__preview_signed_url_cache = {};
+    if (clearOpts.clearCache === true && authorisedClear) pane.__preview_signed_url_cache = {};
+    return true;
   };
 
   const ensurePreviewIdentityState = () => {
     const liveIdentity = getActiveIdentity();
-    if (trimStr(pane.__preview_identity || '') !== liveIdentity) {
-      clearPreviewRequestState({ clearRequested: true, clearCache: false, abort: true, reason: 'identity-changed' });
-      pane.__preview_identity = liveIdentity;
+    const previousIdentity = trimStr(pane.__preview_identity || '');
+    if (!liveIdentity) {
+      return previousIdentity;
     }
+    if (previousIdentity && previousIdentity !== liveIdentity) {
+      clearPreviewRequestState({
+        clearRequested: true,
+        clearCache: false,
+        abort: true,
+        reason: 'identity-changed',
+        identityChanged: true
+      });
+    }
+    pane.__preview_identity = liveIdentity;
     return liveIdentity;
   };
 
@@ -130328,8 +131267,13 @@ function bindBulkProcessPreviewPane(state) {
     pane.__preview_load_requested_target_key = key || '__AUTO__';
   };
 
-  const presignDownload = async (key, signal) => {
+  const presignDownload = async (key, signal, presignOptions = {}) => {
+    const opts = (presignOptions && typeof presignOptions === 'object') ? presignOptions : {};
     const cleanKey = trimStr(key || '').replace(/^\/+/, '');
+    const snapshot = opts.snapshot && typeof opts.snapshot === 'object' ? opts.snapshot : capturePreviewCommitSnapshot(opts.previewState || null, { reason: 'presign-download' });
+    if (!isPreviewCommitSnapshotCurrent(snapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) {
+      return '';
+    }
     const res = await authFetch(API('/api/files/presign-download'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -130341,6 +131285,9 @@ function bindBulkProcessPreviewPane(state) {
     const json = text ? JSON.parse(text) : {};
     const url = json.url || json.signed_url || json.download_url || null;
     if (!url) throw new Error('No URL returned from presign-download');
+    if (!isPreviewCommitSnapshotCurrent(snapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) {
+      return '';
+    }
     return String(url);
   };
 
@@ -130356,17 +131303,22 @@ function bindBulkProcessPreviewPane(state) {
   const syncQueueItem = () => {
     const activeIdentity = getActiveIdentity();
     const queueLoadedForIdentity = isQueueLoadedForIdentity(activeIdentity);
+    const previousItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    const previousId = trimStr(pane.active_queue_id || previousItem?.id || previousItem?.queue_id || '');
     if (!queueLoadedForIdentity) {
+      return previousItem || null;
+    }
+    const queueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    const wanted = previousId;
+    let active = wanted ? (queueRows.find((row) => trimStr(row?.id || row?.queue_id || '') === wanted) || null) : null;
+    if (!active) active = queueRows[0] || null;
+    if (!active) {
       pane.active_queue_id = null;
       pane.active_queue_item = null;
       return null;
     }
-    const queueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
-    const wanted = trimStr(pane.active_queue_id || '');
-    let active = wanted ? (queueRows.find((row) => trimStr(row?.id || '') === wanted) || null) : null;
-    if (!active) active = queueRows[0] || null;
-    pane.active_queue_id = active ? trimStr(active.id || '') : null;
-    pane.active_queue_item = active ? { ...deep(active) } : null;
+    pane.active_queue_id = trimStr(active.id || active.queue_id || '') || null;
+    pane.active_queue_item = { ...deep(active) };
     return pane.active_queue_item;
   };
 
@@ -130379,6 +131331,29 @@ function bindBulkProcessPreviewPane(state) {
     const requestedTimesheetId = trimStr(row.requested_timesheet_id || row.timesheet_id || currentTimesheetId || '');
     const expectedTimesheetId = trimStr(row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || currentTimesheetId || '');
     const contractWeekId = trimStr(row.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
+    const snapshot = opts.snapshot && typeof opts.snapshot === 'object' ? opts.snapshot : capturePreviewCommitSnapshot(null, { reason: 'preview-row-context' });
+
+    const buildDegraded = (reason, payload = {}, extra = {}) => ({
+      ok: false,
+      soft_failure: extra.auth_failed === true ? false : true,
+      evidence_refresh_failed: true,
+      __bulk_process_preview_context_degraded: true,
+      __bulk_process_preview_context_auth_failed: extra.auth_failed === true,
+      __bulk_process_preview_context_stale: extra.stale === true,
+      reason: trimStr(reason || 'preview-row-context-failed'),
+      row_key: rowKey || null,
+      timesheet_id: currentTimesheetId || requestedTimesheetId || null,
+      current_timesheet_id: currentTimesheetId || null,
+      requested_timesheet_id: requestedTimesheetId || null,
+      expected_timesheet_id: expectedTimesheetId || null,
+      contract_week_id: contractWeekId || null,
+      message: trimStr(extra.message || payload?.message || payload?.error || reason || 'Bulk Process row context could not be refreshed.'),
+      error: trimStr(extra.error || payload?.error || payload?.message || reason || '')
+    });
+
+    if (!isPreviewCommitSnapshotCurrent(snapshot)) {
+      return buildDegraded('stale-before-fetch', {}, { stale: true });
+    }
 
     const qs = new URLSearchParams();
     const add = (key, value) => {
@@ -130399,25 +131374,61 @@ function bindBulkProcessPreviewPane(state) {
     const text = await res.text().catch(() => '');
     let json = null;
     try { json = text ? JSON.parse(text) : {}; } catch { json = null; }
+    const payload = (json && typeof json === 'object') ? json : {};
 
     if (!res.ok) {
-      const msg = (json && typeof json === 'object' && (json.message || json.error))
-        ? String(json.message || json.error)
+      const msg = (payload.message || payload.error)
+        ? String(payload.message || payload.error)
         : (text || `Bulk process row context failed (${res.status})`);
-      const err = new Error(msg);
-      err.status = res.status;
-      err.body = text || '';
-      err.json = json;
-      throw err;
+      return buildDegraded(Number(res.status) === 401 ? 'auth-failed' : 'http-error', payload, {
+        auth_failed: Number(res.status) === 401,
+        message: msg,
+        error: msg
+      });
     }
 
-    return (json && typeof json === 'object') ? json : {};
+    if (payload.ok === false || payload.evidence_refresh_failed === true || payload.soft_failure === true) {
+      return buildDegraded('degraded-row-context', payload, {
+        message: payload.message || payload.error || 'Bulk Process row context was degraded.'
+      });
+    }
+
+    if (!isPreviewCommitSnapshotCurrent(snapshot)) {
+      return buildDegraded('stale-after-fetch', payload, { stale: true });
+    }
+
+    return payload;
   };
 
   const refreshAttachedContext = async (refreshOptions = {}) => {
     const opts = (refreshOptions && typeof refreshOptions === 'object') ? refreshOptions : {};
     const reason = trimStr(opts.reason || 'preview-refresh-attached') || 'preview-refresh-attached';
     const row = st.active_row;
+    const refreshSnapshot = capturePreviewCommitSnapshot(getPreviewState(), { reason: `attached-refresh-${reason}` });
+    const previewBeforeRefresh = {
+      target: pane.__preview_target_key,
+      signed: pane.__preview_signed_url,
+      requested: pane.__preview_load_requested_target_key,
+      cache: pane.__preview_signed_url_cache && typeof pane.__preview_signed_url_cache === 'object' ? deep(pane.__preview_signed_url_cache) : pane.__preview_signed_url_cache,
+      cache_context: pane.__preview_signed_url_context_by_cache_key && typeof pane.__preview_signed_url_context_by_cache_key === 'object' ? deep(pane.__preview_signed_url_context_by_cache_key) : pane.__preview_signed_url_context_by_cache_key,
+      queue_id: pane.active_queue_id,
+      queue_item: pane.active_queue_item && typeof pane.active_queue_item === 'object' ? deep(pane.active_queue_item) : pane.active_queue_item,
+      attached_id: pane.active_attached_id,
+      attached_item: pane.active_attached_item && typeof pane.active_attached_item === 'object' ? deep(pane.active_attached_item) : pane.active_attached_item,
+      active_tab: pane.active_tab
+    };
+    const restorePreviewAfterFailedRefresh = () => {
+      pane.__preview_target_key = previewBeforeRefresh.target || '';
+      pane.__preview_signed_url = previewBeforeRefresh.signed || '';
+      pane.__preview_load_requested_target_key = previewBeforeRefresh.requested || '';
+      if (previewBeforeRefresh.cache && typeof previewBeforeRefresh.cache === 'object') pane.__preview_signed_url_cache = deep(previewBeforeRefresh.cache);
+      if (previewBeforeRefresh.cache_context && typeof previewBeforeRefresh.cache_context === 'object') pane.__preview_signed_url_context_by_cache_key = deep(previewBeforeRefresh.cache_context);
+      pane.active_queue_id = previewBeforeRefresh.queue_id || null;
+      pane.active_queue_item = previewBeforeRefresh.queue_item && typeof previewBeforeRefresh.queue_item === 'object' ? deep(previewBeforeRefresh.queue_item) : previewBeforeRefresh.queue_item;
+      pane.active_attached_id = previewBeforeRefresh.attached_id || null;
+      pane.active_attached_item = previewBeforeRefresh.attached_item && typeof previewBeforeRefresh.attached_item === 'object' ? deep(previewBeforeRefresh.attached_item) : previewBeforeRefresh.attached_item;
+      pane.active_tab = previewBeforeRefresh.active_tab || pane.active_tab;
+    };
     if (!row) {
       logPreview('[ATTACHED-REFRESH][SKIP:NO-ROW]', { reason });
       return;
@@ -130443,7 +131454,9 @@ function bindBulkProcessPreviewPane(state) {
           ? deep(existingDetails.related)
           : ensureBulkProcessRelatedContract(buildFallbackRelated(row, existingDetails), row, existingDetails)
       };
-      st.active_ctx = normaliseBulkTimesheetWorkbenchCtx(deep(st.active_row || row), st.active_details);
+      if (!st.active_ctx || st.__active_context_is_minimal === true) {
+        st.active_ctx = normaliseBulkTimesheetWorkbenchCtx(deep(st.active_row || row), st.active_details);
+      }
       if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
         reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
       }
@@ -130462,7 +131475,7 @@ function bindBulkProcessPreviewPane(state) {
       : { isBulkAuthoriseTimesheets: false };
     if (bulkAuthContext?.isBulkAuthoriseTimesheets && typeof refreshBulkAuthoriseActiveContext === 'function') {
       const identityParts = resolveBulkAuthorisePreviewIdentityParts();
-      await refreshBulkAuthoriseActiveContext(st, {
+      const bulkAuthRefreshResult = await refreshBulkAuthoriseActiveContext(st, {
         row,
         rowSignature: identityParts.renderSignature,
         renderSignature: identityParts.renderSignature,
@@ -130476,6 +131489,15 @@ function bindBulkProcessPreviewPane(state) {
         invalidateCache: true,
         rerender: false
       });
+      if (!isPreviewCommitSnapshotCurrent(refreshSnapshot)) {
+        restorePreviewAfterFailedRefresh();
+        return;
+      }
+      if (bulkAuthRefreshResult === false || bulkAuthRefreshResult?.ok === false || bulkAuthRefreshResult?.soft_failure === true || bulkAuthRefreshResult?.evidence_refresh_failed === true) {
+        restorePreviewAfterFailedRefresh();
+        st.warning_text = trimStr(bulkAuthRefreshResult?.message || bulkAuthRefreshResult?.error || 'Evidence could not be refreshed.');
+        return;
+      }
       if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
         reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
       }
@@ -130490,7 +131512,12 @@ function bindBulkProcessPreviewPane(state) {
       return;
     }
 
-    const contextPayload = await fetchBulkProcessPreviewRowContext(row, { includeEvidence: true });
+    const contextPayload = await fetchBulkProcessPreviewRowContext(row, { includeEvidence: true, snapshot: refreshSnapshot });
+    if (!isPreviewCommitSnapshotCurrent(refreshSnapshot) || contextPayload?.ok === false || contextPayload?.soft_failure === true || contextPayload?.evidence_refresh_failed === true || contextPayload?.__bulk_process_preview_context_degraded === true) {
+      restorePreviewAfterFailedRefresh();
+      st.warning_text = trimStr(contextPayload?.message || contextPayload?.error || 'Evidence could not be refreshed.');
+      return;
+    }
     const payloadRow = (contextPayload.data_row && typeof contextPayload.data_row === 'object')
       ? contextPayload.data_row
       : ((contextPayload.row && typeof contextPayload.row === 'object') ? contextPayload.row : null);
@@ -130505,6 +131532,14 @@ function bindBulkProcessPreviewPane(state) {
     if (!activeRowKey || !mergedRowKey || activeRowKey === mergedRowKey) {
       st.active_row = deep(mergedRow);
       st.active_row_key = mergedRowKey || activeRowKey || st.active_row_key || null;
+    } else {
+      restorePreviewAfterFailedRefresh();
+      return;
+    }
+
+    if (!isPreviewCommitSnapshotCurrent(refreshSnapshot)) {
+      restorePreviewAfterFailedRefresh();
+      return;
     }
 
     const detailsPayload = (contextPayload.details && typeof contextPayload.details === 'object') ? deep(contextPayload.details) : {};
@@ -131635,13 +132670,14 @@ function bindBulkProcessPreviewPane(state) {
     const currentPreviewSelectionKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
     if (currentPreviewSelectionKey && currentPreviewSelectionKey !== previewSelectionKey) {
       pane.__preview_same_selection_recovery_key = '';
-      clearPreviewRequestState({ clearRequested: true, abort: true, reason: 'preview-selection-changed' });
+      clearPreviewRequestState({ clearRequested: true, abort: true, reason: 'preview-selection-changed', userSelectionChanged: true });
     }
 
     const liveTargetSelectionKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
     const liveRequestedSelectionKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
     const liveSignedUrl = trimStr(pane.__preview_signed_url || '');
-    const cachedBusySignedUrl = trimStr(pane.__preview_signed_url_cache?.[previewFileCacheKey] || '');
+    const busySnapshot = capturePreviewCommitSnapshot(previewState, { reason: 'busy-cache-check' });
+    const cachedBusySignedUrl = getCachedSignedUrlForPreview(previewFileCacheKey, busySnapshot);
     const hasLiveSignedForSelection = !!(
       liveSignedUrl &&
       liveTargetSelectionKey === previewSelectionKey &&
@@ -131703,7 +132739,8 @@ function bindBulkProcessPreviewPane(state) {
       const renderAuthority = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'render-authority', { requireBulkAuthoriseAuthority: true });
       if (renderAuthority.stale) return;
     }
-    const cachedSignedUrl = trimStr(pane.__preview_signed_url_cache[previewFileCacheKey] || '');
+    const renderSnapshot = capturePreviewCommitSnapshot(previewState, { reason: 'render-stage' });
+    const cachedSignedUrl = getCachedSignedUrlForPreview(previewFileCacheKey, renderSnapshot);
     const prerenderLiveTargetSelectionKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
     let prerenderLiveRequestedSelectionKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
     const liveSignedUrlForRender = trimStr(pane.__preview_signed_url || '');
@@ -131726,7 +132763,8 @@ function bindBulkProcessPreviewPane(state) {
       usedLiveSignedUrl = true;
     } else if (cachedSignedUrl) {
       if (bulkAuthSnapshot) {
-        const cachedOwner = trimStr(pane.__preview_signed_url_owner_by_cache_key?.[previewFileCacheKey] || '');
+        const ownerCacheKeyForRender = getPreviewOwnerCacheKey(previewFileCacheKey, renderSnapshot);
+        const cachedOwner = trimStr(pane.__preview_signed_url_owner_by_cache_key?.[ownerCacheKeyForRender] || pane.__preview_signed_url_owner_by_cache_key?.[previewFileCacheKey] || '');
         if (cachedOwner && cachedOwner !== bulkAuthSnapshot.ownerIdentity) {
           checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'cache-promote');
           return;
@@ -131742,7 +132780,7 @@ function bindBulkProcessPreviewPane(state) {
       pane.__preview_target_key = previewSelectionKey;
       pane.__preview_load_requested_target_key = previewSelectionKey;
     } else {
-      const inflightKey = previewFileCacheKey;
+      const inflightKey = getPreviewOwnerCacheKey(previewFileCacheKey, capturePreviewCommitSnapshot(previewState, { reason: 'presign-inflight-key' })) || previewFileCacheKey;
       if (bulkAuthSnapshot && window.__LOG_MODAL === true) {
         console.log('[TS][BULK-AUTH][PREVIEW]', {
           event: 'presign-start',
@@ -131761,7 +132799,7 @@ function bindBulkProcessPreviewPane(state) {
       const presignRecord = existingRecord || (() => {
         const abortController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         const promise = (async () => {
-          const url = await presignDownload(previewFileCacheKey, abortController ? abortController.signal : undefined);
+          const url = await presignDownload(previewFileCacheKey, abortController ? abortController.signal : undefined, { snapshot: capturePreviewCommitSnapshot(previewState, { reason: 'presign-start' }), previewState });
           return trimStr(url || '');
         })();
         const record = {
@@ -131769,7 +132807,8 @@ function bindBulkProcessPreviewPane(state) {
           abortController,
           identity: currentIdentity,
           preview_selection_key: previewSelectionKey,
-          file_key: previewFileCacheKey
+          file_key: previewFileCacheKey,
+          snapshot: capturePreviewCommitSnapshot(previewState, { reason: 'presign-inflight-record' })
         };
         pane.__preview_presign_inflight[inflightKey] = record;
         return record;
@@ -131777,6 +132816,9 @@ function bindBulkProcessPreviewPane(state) {
 
       try {
         signedUrl = await presignRecord.promise;
+        if (!isPreviewCommitSnapshotCurrent(presignRecord.snapshot || capturePreviewCommitSnapshot(previewState, { reason: 'presign-after-await' }), { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) {
+          return;
+        }
       } catch (e) {
         const aborted =
           (e && trimStr(e?.name || '') === 'AbortError') ||
@@ -131804,9 +132846,11 @@ function bindBulkProcessPreviewPane(state) {
         liveFileKey
       );
       if (signedUrl) {
+        const sharedPresignSnapshot = presignRecord.snapshot || capturePreviewCommitSnapshot(previewState, { reason: 'presign-commit' });
+        if (!isPreviewCommitSnapshotCurrent(sharedPresignSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return;
         const stalePresign = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'presign');
         if (stalePresign.stale) return;
-        pane.__preview_signed_url_cache[previewFileCacheKey] = signedUrl;
+        setCachedSignedUrlForPreview(previewFileCacheKey, signedUrl, capturePreviewCommitSnapshot(previewState, { reason: 'presign-cache-write' }));
         if (bulkAuthSnapshot) pane.__preview_signed_url_owner_by_cache_key[previewFileCacheKey] = bulkAuthSnapshot.ownerIdentity;
         if (bulkAuthSnapshot && window.__LOG_MODAL === true) {
           console.log('[TS][BULK-AUTH][PREVIEW]', {
@@ -131846,6 +132890,8 @@ function bindBulkProcessPreviewPane(state) {
             if (latestFileKey === previewFileCacheKey && latestSelectionKey === previewSelectionKey) {
               const staleDeferredRecovery = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'recovery');
               if (staleDeferredRecovery.stale) return;
+              const deferredSnapshot = capturePreviewCommitSnapshot(latestPreview, { reason: 'presign-deferred-recovery' });
+              if (!isPreviewCommitSnapshotCurrent(deferredSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return;
               pane.__preview_signed_url = signedUrl;
               pane.__preview_target_key = previewSelectionKey;
               pane.__preview_load_requested_target_key = previewSelectionKey;
@@ -132044,7 +133090,7 @@ function bindBulkProcessPreviewPane(state) {
     if (liveSignedUrl && (!expectedSelectionKey || liveTargetKey === expectedSelectionKey)) {
       signedUrl = liveSignedUrl;
     } else if (expectedFileKey) {
-      signedUrl = trimStr(pane.__preview_signed_url_cache?.[expectedFileKey] || '');
+      signedUrl = getCachedSignedUrlForPreview(expectedFileKey, capturePreviewCommitSnapshot(getPreviewState(), { reason: 'commit-live-preview-cache' }));
       if (!signedUrl) return false;
       const promoteSelectionKey = expectedSelectionKey || currentSelectionKey;
       pane.__preview_signed_url = signedUrl;
@@ -132111,7 +133157,6 @@ function bindBulkProcessPreviewPane(state) {
     warnPreview('bind failed', e);
   });
 }
-
 
 
 
@@ -147539,6 +148584,38 @@ async function bindBulkAuthorisePreviewPane(state) {
   if (!st) return;
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const upper = (value) => trimStr(value).toUpperCase();
+  const isImmediateBulkProcessOwnerOrNext = () => {
+    try {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      const frameKind = upper(frame?.kind || frame?.entity || '');
+      const modalKind = upper(window.modalCtx?.modal_kind || window.modalCtx?.modalKind || window.modalCtx?.kind || window.modalCtx?.entity || '');
+      const ownerKind = upper(st.owner_kind || st.ownerKind || window.modalCtx?.owner_kind || window.modalCtx?.ownerKind || '');
+      const nextOwnerKind = upper(
+        st.next_owner_kind ||
+        st.nextOwnerKind ||
+        st.__next_owner_kind ||
+        st.__nextOwnerKind ||
+        window.modalCtx?.next_owner_kind ||
+        window.modalCtx?.nextOwnerKind ||
+        window.modalCtx?.__next_owner_kind ||
+        window.modalCtx?.__nextOwnerKind ||
+        ''
+      );
+      return !!(
+        frameKind.includes('BULK-PROCESS') ||
+        frameKind.includes('BULK_PROCESS') ||
+        modalKind.includes('BULK-PROCESS') ||
+        modalKind.includes('BULK_PROCESS') ||
+        ownerKind.includes('BULK_PROCESS') ||
+        ownerKind.includes('BULK-PROCESS') ||
+        nextOwnerKind.includes('BULK_PROCESS') ||
+        nextOwnerKind.includes('BULK-PROCESS')
+      );
+    } catch {
+      return false;
+    }
+  };
+  if (isImmediateBulkProcessOwnerOrNext()) return;
   const classificationRaw = upper(st.classification || '');
   const classification = (classificationRaw === 'NHSP' || classificationRaw === 'HR' || classificationRaw === 'HEALTHROSTER') ? classificationRaw : 'TIMESHEETS';
   syncBulkAuthoriseModalCtxToActiveRow(st, { source: 'bindBulkAuthorisePreviewPane' });
@@ -147557,7 +148634,7 @@ async function bindBulkAuthorisePreviewPane(state) {
       if (modalIdentity) return modalIdentity;
       if (typeof resolveBulkAuthoriseModalIdentity === 'function') {
         const resolved = resolveBulkAuthoriseModalIdentity({ state: st, source: 'bind-bulk-authorise-preview' });
-        const resolvedIdentity = trimStr(resolved?.identity || '');
+        const resolvedIdentity = trimStr(resolved?.recordIdentity || resolved?.record_identity || resolved?.identity || '');
         if (resolvedIdentity) return resolvedIdentity;
       }
       if (activeRowKey) {
@@ -147600,6 +148677,44 @@ async function bindBulkAuthorisePreviewPane(state) {
         document.getElementById('bulkAuthorisePreviewPaneRoot')
       );
     };
+    const isBulkProcessOwnerOrNext = () => {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      const frameKind = upper(frame?.kind || frame?.entity || '');
+      const modalKind = upper(window.modalCtx?.modal_kind || window.modalCtx?.modalKind || window.modalCtx?.kind || window.modalCtx?.entity || '');
+      const ownerKind = upper(st.owner_kind || st.ownerKind || window.modalCtx?.owner_kind || window.modalCtx?.ownerKind || '');
+      const nextOwnerKind = upper(
+        st.next_owner_kind ||
+        st.nextOwnerKind ||
+        st.__next_owner_kind ||
+        st.__nextOwnerKind ||
+        window.modalCtx?.next_owner_kind ||
+        window.modalCtx?.nextOwnerKind ||
+        window.modalCtx?.__next_owner_kind ||
+        window.modalCtx?.__nextOwnerKind ||
+        ''
+      );
+      return !!(
+        frameKind.includes('BULK-PROCESS') ||
+        frameKind.includes('BULK_PROCESS') ||
+        modalKind.includes('BULK-PROCESS') ||
+        modalKind.includes('BULK_PROCESS') ||
+        ownerKind.includes('BULK_PROCESS') ||
+        ownerKind.includes('BULK-PROCESS') ||
+        nextOwnerKind.includes('BULK_PROCESS') ||
+        nextOwnerKind.includes('BULK-PROCESS')
+      );
+    };
+    const suspendBulkAuthorisePreviewBind = (reason, meta = {}) => {
+      try { st.__bulk_authorise_preview_bind_suspended = true; } catch {}
+      try { st.__bulk_authorise_preview_invalid_reason = reason || 'preview-bind-suspended'; } catch {}
+      if ((typeof window.__LOG_MODAL === 'boolean') && window.__LOG_MODAL === true) {
+        console.log('[TS][BULK-AUTH][PREVIEW]', {
+          event: 'identity-bind-suspended',
+          reason: reason || 'preview-bind-suspended',
+          ...((meta && typeof meta === 'object') ? meta : {})
+        });
+      }
+    };
     const clearBulkAuthorisePreviewForInvalidOwner = (reason) => {
       const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
       if (pane) {
@@ -147626,20 +148741,29 @@ async function bindBulkAuthorisePreviewPane(state) {
       activeRowKey
     );
     const rowChangeSeq = ensureBulkAuthorisePreviewRowChangeSeq();
-    if (!isBulkAuthorisePreviewSurfaceLive() || !ownerIdentity || !activeRowKey || rowChangeSeq <= 0 || !activeRowSignature) {
-      clearBulkAuthorisePreviewForInvalidOwner(!isBulkAuthorisePreviewSurfaceLive() ? 'modal-owner-changed' : 'missing-preview-owner');
-      if ((typeof window.__LOG_MODAL === 'boolean') && window.__LOG_MODAL === true) {
-        console.log('[TS][BULK-AUTH][PREVIEW]', {
-          event: 'identity-bind-refused',
-          ownerIdentity: ownerIdentity || '',
-          activeRowKey,
-          activeRowSignature,
-          rowChangeSeq,
-          reason: !isBulkAuthorisePreviewSurfaceLive() ? 'modal-owner-changed' : 'missing-owner-row-or-sequence'
-        });
-      }
+    const previewSurfaceLive = isBulkAuthorisePreviewSurfaceLive();
+    if (isBulkProcessOwnerOrNext()) {
+      clearBulkAuthorisePreviewForInvalidOwner('bulk-process-owner-or-next-owner');
       return;
     }
+    if (!previewSurfaceLive || !ownerIdentity || !activeRowKey || rowChangeSeq <= 0 || !activeRowSignature) {
+      suspendBulkAuthorisePreviewBind(!previewSurfaceLive ? 'modal-surface-not-live' : 'missing-owner-row-or-sequence', {
+        ownerIdentity: ownerIdentity || '',
+        activeRowKey,
+        activeRowSignature,
+        rowChangeSeq
+      });
+      return;
+    }
+    const previousOwnerIdentity = trimStr(st.__bulkAuthorisePreviewOwnerIdentity || st.__bulk_authorise_preview_owner_identity || '');
+    const previousRowSignature = trimStr(st.__bulkAuthorisePreviewActiveRowSignature || '');
+    const previousRowKey = trimStr(st.__bulkAuthorisePreviewActiveRowKey || '');
+    const ownerChanged = !!(previousOwnerIdentity && ownerIdentity && previousOwnerIdentity !== ownerIdentity);
+    const rowIdentityChanged = !!(previousRowKey && activeRowKey && previousRowKey !== activeRowKey);
+    const rowChanged = ownerChanged || rowIdentityChanged;
+
+    try { st.__bulk_authorise_preview_bind_suspended = false; } catch {}
+    try { st.__bulk_authorise_preview_invalid_reason = ''; } catch {}
     st.__bulk_authorise_preview_owner_identity = ownerIdentity;
     st.__bulkAuthorisePreviewOwnerIdentity = ownerIdentity;
     st.__bulk_authorise_preview_row_key = activeRowKey;
@@ -147648,11 +148772,8 @@ async function bindBulkAuthorisePreviewPane(state) {
     st.__bulkAuthorisePreviewRowChangeSeq = rowChangeSeq;
     st.__bulk_authorise_preview_render_signature = activeRowSignature;
     st.__bulkAuthorisePreviewRenderSignature = activeRowSignature;
-    const previousRowSignature = trimStr(st.__bulkAuthorisePreviewActiveRowSignature || '');
-    const previousRowKey = trimStr(st.__bulkAuthorisePreviewActiveRowKey || '');
-    const rowChanged = activeRowSignature !== previousRowSignature || activeRowKey !== previousRowKey;
-    st.__bulkAuthorisePreviewActiveRowSignature = activeRowSignature;
-    st.__bulkAuthorisePreviewActiveRowKey = activeRowKey;
+    st.__bulkAuthorisePreviewActiveRowSignature = activeRowSignature || previousRowSignature;
+    st.__bulkAuthorisePreviewActiveRowKey = activeRowKey || previousRowKey;
     if (rowChanged) {
       const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
       if (pane) {
@@ -147669,7 +148790,7 @@ async function bindBulkAuthorisePreviewPane(state) {
             try { delete pane.__preview_presign_inflight[inflightKey]; } catch {}
           }
         }
-        if (!previousPreviewIdentity || !ownerIdentity || previousPreviewIdentity !== ownerIdentity) {
+        if (ownerChanged || rowIdentityChanged || !previousPreviewIdentity || !ownerIdentity || previousPreviewIdentity !== ownerIdentity) {
           pane.__preview_target_key = '';
           pane.__preview_signed_url = '';
           pane.__preview_load_requested_target_key = '';
@@ -147724,7 +148845,9 @@ async function bindBulkAuthorisePreviewPane(state) {
         });
       }
     }
+    if (isBulkProcessOwnerOrNext() || !isBulkAuthorisePreviewSurfaceLive()) return;
     if (typeof bindBulkAuthoriseEvidencePane === 'function') await bindBulkAuthoriseEvidencePane(st);
+    if (isBulkProcessOwnerOrNext() || !isBulkAuthorisePreviewSurfaceLive()) return;
     if (typeof bindBulkProcessPreviewPane === 'function') await bindBulkProcessPreviewPane(st);
     return;
   }
@@ -148040,7 +149163,6 @@ async function bindBulkAuthorisePreviewPane(state) {
 
   await fetchForCurrentState();
 }
-
 
 
 
@@ -150208,7 +151330,6 @@ async function handleBulkAuthoriseUnprocess(state, row) {
     return { ok: false, error: st.error_text };
   }
 }
-
 async function wireBulkAuthoriseEmbeddedEvidence(state) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][EVIDENCE-WIRE]');
   GC('wireBulkAuthoriseEmbeddedEvidence');
@@ -150356,27 +151477,104 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
       rowChangeSeq: Number(st?.__bulk_authorise_row_change_seq || 0) || 0
     };
   };
-  const refreshAfterEvidenceMutation = async (snapshot = null, mutationType = 'unknown') => {
-    const captured = (snapshot && typeof snapshot === 'object') ? snapshot : null;
-    const getLiveSnapshot = () => getBulkAuthoriseEmbeddedEvidenceIdentityParts();
-    const staleAgainstSnapshot = () => {
-      if (!captured) return false;
-      const live = getLiveSnapshot();
-      const capturedIdentity = trimStr(captured.identity || captured.recordIdentity || '');
-      const liveIdentity = trimStr(live.identity || live.recordIdentity || '');
-      const capturedRowKey = trimStr(captured.rowKey || '');
-      const liveRowKey = trimStr(live.rowKey || '');
-      return !!(
-        (capturedIdentity && liveIdentity && capturedIdentity !== liveIdentity) ||
-        (capturedRowKey && liveRowKey && capturedRowKey !== liveRowKey)
-      );
+  const getCurrentBulkAuthoriseEvidenceModalKind = () => {
+    try {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      return upper(frame?.kind || frame?.entity || window.modalCtx?.modal_kind || window.modalCtx?.modalKind || window.modalCtx?.kind || window.modalCtx?.entity || '');
+    } catch {
+      return '';
+    }
+  };
+  const isBulkProcessOwnerOrNext = () => {
+    const modalKind = getCurrentBulkAuthoriseEvidenceModalKind();
+    const ownerKind = upper(st.owner_kind || st.ownerKind || window.modalCtx?.owner_kind || window.modalCtx?.ownerKind || '');
+    const nextOwnerKind = upper(st.next_owner_kind || st.nextOwnerKind || st.__next_owner_kind || st.__nextOwnerKind || window.modalCtx?.next_owner_kind || window.modalCtx?.nextOwnerKind || window.modalCtx?.__next_owner_kind || window.modalCtx?.__nextOwnerKind || '');
+    return !!(
+      modalKind.includes('BULK-PROCESS') ||
+      modalKind.includes('BULK_PROCESS') ||
+      ownerKind.includes('BULK_PROCESS') ||
+      ownerKind.includes('BULK-PROCESS') ||
+      nextOwnerKind.includes('BULK_PROCESS') ||
+      nextOwnerKind.includes('BULK-PROCESS')
+    );
+  };
+  const isBulkAuthoriseEvidenceSurfaceLive = (snapshot = null) => {
+    if (isBulkProcessOwnerOrNext()) return false;
+    const modalKind = getCurrentBulkAuthoriseEvidenceModalKind();
+    if (modalKind && !(modalKind.includes('BULK-AUTHORISE') || modalKind.includes('BULK_AUTHORISE') || modalKind.includes('BULK-AUTH') || modalKind.includes('BULK_AUTH'))) return false;
+    const snap = (snapshot && typeof snapshot === 'object') ? snapshot : null;
+    if (!snap) return true;
+    const live = getBulkAuthoriseEmbeddedEvidenceIdentityParts();
+    const snapIdentity = trimStr(snap.identity || snap.recordIdentity || '');
+    const liveIdentity = trimStr(live.identity || live.recordIdentity || '');
+    const snapRowKey = trimStr(snap.rowKey || '');
+    const liveRowKey = trimStr(live.rowKey || st?.active_row?.row_key || st?.active_row_key || '');
+    if (snapIdentity && liveIdentity && snapIdentity !== liveIdentity) return false;
+    if (snapRowKey && liveRowKey && snapRowKey !== liveRowKey) return false;
+    if (Number(snap.rowChangeSeq || 0) && Number(live.rowChangeSeq || 0) && Number(snap.rowChangeSeq || 0) !== Number(live.rowChangeSeq || 0)) return false;
+    return true;
+  };
+  const isDegradedRefreshResult = (result) => !!(
+    result === false ||
+    (result && typeof result === 'object' && (
+      result.ok === false ||
+      result.soft_failure === true ||
+      result.evidence_refresh_failed === true ||
+      result.auth_failed === true ||
+      result.__bulk_process_context_auth_failed === true ||
+      result.__bulk_process_context_degraded === true ||
+      result.__bulk_authorise_context_degraded === true
+    ))
+  );
+  const getEmbeddedPreviewSnapshot = () => {
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
+    return {
+      active_tab: pane.active_tab,
+      active_queue_id: pane.active_queue_id,
+      active_queue_item: pane.active_queue_item && typeof pane.active_queue_item === 'object' ? deep(pane.active_queue_item) : pane.active_queue_item,
+      active_attached_id: pane.active_attached_id,
+      active_attached_item: pane.active_attached_item && typeof pane.active_attached_item === 'object' ? deep(pane.active_attached_item) : pane.active_attached_item,
+      __preview_target_key: pane.__preview_target_key,
+      __preview_signed_url: pane.__preview_signed_url,
+      __preview_load_requested_target_key: pane.__preview_load_requested_target_key,
+      __active_attached_preview_target: pane.__active_attached_preview_target
     };
+  };
+  const restoreEmbeddedPreviewSnapshot = (snapshot) => {
+    const snap = (snapshot && typeof snapshot === 'object') ? snapshot : null;
+    if (!snap) return;
+    st.evidence_pane_state = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
+    const pane = st.evidence_pane_state;
+    pane.active_tab = snap.active_tab || pane.active_tab;
+    pane.active_queue_id = snap.active_queue_id || null;
+    pane.active_queue_item = snap.active_queue_item && typeof snap.active_queue_item === 'object' ? deep(snap.active_queue_item) : snap.active_queue_item;
+    pane.active_attached_id = snap.active_attached_id || null;
+    pane.active_attached_item = snap.active_attached_item && typeof snap.active_attached_item === 'object' ? deep(snap.active_attached_item) : snap.active_attached_item;
+    pane.__preview_target_key = snap.__preview_target_key || '';
+    pane.__preview_signed_url = snap.__preview_signed_url || '';
+    pane.__preview_load_requested_target_key = snap.__preview_load_requested_target_key || '';
+    pane.__active_attached_preview_target = snap.__active_attached_preview_target || '';
+  };
+  const hasValidQueuePreviewSelection = () => {
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
+    const tab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (tab !== 'queue') return false;
+    const queueItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    const queueId = trimStr(pane.active_queue_id || queueItem?.id || queueItem?.queue_id || '');
+    const fileKey = trimStr(queueItem?.storage_key || queueItem?.r2_key || queueItem?.file_key || queueItem?.download_storage_key || '');
+    const target = trimStr(pane.__preview_target_key || pane.__preview_load_requested_target_key || '');
+    return !!((queueId && fileKey) || (target && target.startsWith('queue|') && target !== 'queue||'));
+  };
+  const refreshAfterEvidenceMutation = async (snapshot = null, mutationType = 'unknown') => {
+    const captured = (snapshot && typeof snapshot === 'object') ? snapshot : getBulkAuthoriseEmbeddedEvidenceIdentityParts();
+    const previewBeforeRefresh = getEmbeddedPreviewSnapshot();
+    const staleAgainstSnapshot = () => !isBulkAuthoriseEvidenceSurfaceLive(captured);
     if (staleAgainstSnapshot()) {
       if (window.__LOG_MODAL === true) console.log('[TS][BULK-AUTH][EVIDENCE] embedded-mutation', { mutationType, stale: true, result: 'dropped-before-refresh' });
       return false;
     }
-    const refreshIdentity = captured || getLiveSnapshot();
-    await refreshBulkAuthoriseActiveContext(st, {
+    const refreshIdentity = captured || getBulkAuthoriseEmbeddedEvidenceIdentityParts();
+    const refreshResult = await refreshBulkAuthoriseActiveContext(st, {
       row: st.active_row || null,
       recordIdentity: trimStr(refreshIdentity.recordIdentity || refreshIdentity.identity || ''),
       backendRowSignature: trimStr(refreshIdentity.backendRowSignature || ''),
@@ -150389,20 +151587,28 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
       include_evidence: true,
       base_only: false,
       include_compare: false,
-      include_import_source_rows: false
+      include_import_source_rows: false,
+      source: 'evidence_patch'
     });
     if (staleAgainstSnapshot()) {
+      restoreEmbeddedPreviewSnapshot(previewBeforeRefresh);
       if (window.__LOG_MODAL === true) console.log('[TS][BULK-AUTH][EVIDENCE] embedded-mutation', { mutationType, stale: true, result: 'dropped-after-refresh' });
+      return false;
+    }
+    if (isDegradedRefreshResult(refreshResult)) {
+      restoreEmbeddedPreviewSnapshot(previewBeforeRefresh);
+      if (window.__LOG_MODAL === true) console.log('[TS][BULK-AUTH][EVIDENCE] embedded-mutation', { mutationType, stale: false, result: 'refresh-degraded' });
       return false;
     }
     if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
       try { reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch {}
     }
     if (staleAgainstSnapshot()) {
+      restoreEmbeddedPreviewSnapshot(previewBeforeRefresh);
       if (window.__LOG_MODAL === true) console.log('[TS][BULK-AUTH][EVIDENCE] embedded-mutation', { mutationType, stale: true, result: 'dropped-before-rerender' });
       return false;
     }
-    await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][EVIDENCE]');
+    if (!isBulkProcessOwnerOrNext()) await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][EVIDENCE]');
     return true;
   };
   const patchModalCtxForEvidence = () => {
@@ -150448,7 +151654,8 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     return out;
   };
 
-  const bridgeAttachedEvidenceIntoPaneState = () => {
+  const bridgeAttachedEvidenceIntoPaneState = (bridgeOptions = {}) => {
+    const opts = (bridgeOptions && typeof bridgeOptions === 'object') ? bridgeOptions : {};
     st.evidence_pane_state =
       (st.evidence_pane_state && typeof st.evidence_pane_state === 'object')
         ? st.evidence_pane_state
@@ -150460,6 +151667,17 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
       trimStr(pane.__queue_manual_override_identity || '') &&
       trimStr(pane.__queue_manual_override_identity || '') === activeIdentity
     );
+    const explicitAttachedAction = !!(
+      opts.explicitAttach === true ||
+      opts.explicit_attach === true ||
+      opts.explicitMutation === true ||
+      opts.explicit_mutation === true ||
+      opts.userSelectedAttached === true ||
+      opts.user_selected_attached === true ||
+      trimStr(pane.active_tab || '').toLowerCase() === 'attached' ||
+      pane.__attached_manual_override === true
+    );
+    const previewSnapshot = getEmbeddedPreviewSnapshot();
     const beforeActiveAttachedId = trimStr(pane.active_attached_id || pane.active_attached_item?.id || pane.active_attached_item?.evidence_id || '');
     const beforePreviewTargetKey = trimStr(pane.__preview_target_key || '');
     const beforeKey = `${trimStr(pane.active_tab || '')}|${beforeActiveAttachedId}|${trimStr(pane.active_queue_id || '')}|${beforePreviewTargetKey}`;
@@ -150483,24 +151701,27 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     );
 
     if (!attachedRows.length) {
+      pane.__bulk_authorise_evidence_identity = activeIdentity;
+      if (!hasAuthoritativeEvidenceSource) {
+        restoreEmbeddedPreviewSnapshot(previewSnapshot);
+        st.evidence_pane_state = pane;
+        return { attached_rows: [], changed: false, transient_missing_attached_rows: true };
+      }
+
       const queueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows.map((item) => ({ ...deep(item) })) : [];
       pane.attached_rows = [];
       pane.attached_all_rows = [];
       pane.active_attached_item = null;
       pane.active_attached_id = null;
       pane.__attached_manual_override = false;
-      pane.__bulk_authorise_evidence_identity = activeIdentity;
-      if (!queueOverrideForCurrentRow) {
+      if (!queueOverrideForCurrentRow && !hasValidQueuePreviewSelection()) {
         pane.__queue_manual_override = false;
         pane.__queue_manual_override_identity = '';
-        pane.active_tab = queueRows.length ? 'queue' : 'attached';
+        pane.active_tab = queueRows.length ? 'queue' : (explicitAttachedAction ? 'attached' : (pane.active_tab || 'queue'));
         pane.active_queue_id = queueRows.length ? (pane.active_queue_id || null) : null;
         pane.active_queue_item = queueRows.length ? (pane.active_queue_item || null) : null;
-        pane.__preview_target_key = '';
-        pane.__preview_signed_url = '';
-        pane.__preview_load_requested_target_key = '';
-        pane.__active_attached_preview_target = '';
-      } else {
+      } else if (queueOverrideForCurrentRow || hasValidQueuePreviewSelection()) {
+        restoreEmbeddedPreviewSnapshot(previewSnapshot);
         pane.active_tab = 'queue';
       }
       pane.all_rows = queueRows;
@@ -150509,7 +151730,7 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
       window.modalCtx.timesheetState = (window.modalCtx.timesheetState && typeof window.modalCtx.timesheetState === 'object') ? window.modalCtx.timesheetState : {};
       window.modalCtx.timesheetState.evidence = [];
       const afterKey = `${trimStr(pane.active_tab || '')}|${trimStr(pane.active_attached_id || '')}|${trimStr(pane.active_queue_id || '')}|${trimStr(pane.__preview_target_key || '')}`;
-      return { attached_rows: [], changed: beforeKey !== afterKey || beforeActiveAttachedId !== '' || beforePreviewTargetKey !== '' };
+      return { attached_rows: [], changed: beforeKey !== afterKey || beforeActiveAttachedId !== '' };
     }
 
     const currentAttachedId = beforeActiveAttachedId;
@@ -150551,11 +151772,18 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     pane.attached_all_rows = attachedRows.map((item) => ({ ...deep(item) }));
     pane.active_attached_item = activeAttached ? { ...deep(activeAttached) } : null;
     pane.active_attached_id = nextActiveAttachedId || null;
-    pane.active_tab = queueOverrideForCurrentRow ? 'queue' : 'attached';
-    pane.__attached_manual_override = true;
     pane.__bulk_authorise_evidence_identity = activeIdentity;
 
-    if (!queueOverrideForCurrentRow) {
+    if (queueOverrideForCurrentRow || (hasValidQueuePreviewSelection() && !explicitAttachedAction)) {
+      restoreEmbeddedPreviewSnapshot(previewSnapshot);
+      pane.attached_rows = attachedRows.map((item) => ({ ...deep(item) }));
+      pane.attached_all_rows = attachedRows.map((item) => ({ ...deep(item) }));
+      pane.active_attached_item = activeAttached ? { ...deep(activeAttached) } : pane.active_attached_item;
+      pane.active_attached_id = nextActiveAttachedId || pane.active_attached_id || null;
+      pane.active_tab = 'queue';
+    } else {
+      pane.active_tab = 'attached';
+      pane.__attached_manual_override = true;
       pane.__queue_manual_override = false;
       pane.__queue_manual_override_identity = '';
       pane.active_queue_id = null;
@@ -150565,11 +151793,13 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
         pane.__preview_signed_url = beforePreviewSignedUrl;
         pane.__preview_load_requested_target_key = beforePreviewLoadRequestedTargetKey;
         pane.__active_attached_preview_target = beforeActiveAttachedPreviewTarget;
-      } else {
+      } else if (explicitAttachedAction) {
         pane.__preview_target_key = '';
         pane.__preview_signed_url = '';
         pane.__preview_load_requested_target_key = '';
         pane.__active_attached_preview_target = '';
+      } else {
+        restoreEmbeddedPreviewSnapshot(previewSnapshot);
       }
     }
 
@@ -150578,9 +151808,10 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     window.modalCtx.timesheetState = (window.modalCtx.timesheetState && typeof window.modalCtx.timesheetState === 'object') ? window.modalCtx.timesheetState : {};
     window.modalCtx.timesheetState.evidence = attachedRows.map((item) => ({ ...deep(item) }));
 
-    const afterKey = `${trimStr(pane.active_tab || '')}|${trimStr(pane.active_attached_id || '')}|${trimStr(pane.active_queue_id || '')}`;
+    const afterKey = `${trimStr(pane.active_tab || '')}|${trimStr(pane.active_attached_id || '')}|${trimStr(pane.active_queue_id || '')}|${trimStr(pane.__preview_target_key || '')}`;
     return { attached_rows: attachedRows, changed: beforeKey !== afterKey };
   };
+
 
   try {
     patchModalCtxForEvidence();
@@ -150601,12 +151832,14 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
       return !!(bindRowKey && liveRowKey && bindRowKey === liveRowKey);
     };
     const isStaleBinding = () => {
+      if (!isBulkAuthoriseEvidenceSurfaceLive(mutationSnapshot())) return true;
       const live = getBulkAuthoriseEmbeddedEvidenceIdentityParts();
       const liveIdentity = trimStr(live.recordIdentity || live.identity || '');
       const liveRowKey = trimStr(live.rowKey || st?.active_row?.row_key || st?.active_row_key || '');
       return !!(
         (bindIdentity && liveIdentity && bindIdentity !== liveIdentity) ||
-        (bindRowKey && liveRowKey && bindRowKey !== liveRowKey)
+        (bindRowKey && liveRowKey && bindRowKey !== liveRowKey) ||
+        (bindRowChangeSeq && Number(live.rowChangeSeq || 0) && Number(live.rowChangeSeq || 0) !== bindRowChangeSeq)
       );
     };
     const mutationSnapshot = () => ({
@@ -150743,6 +151976,7 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     return { ok: false, error: st.error_text };
   }
 }
+
 
 async function handleBulkAuthoriseSelected(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][AUTHORISE-SELECTED]');
