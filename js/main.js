@@ -108517,42 +108517,109 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     throw new Error('refreshTimesheetImportsQueue: state is required');
   }
 
+  const trimQueueStr = (v) => String(v == null ? '' : v).trim();
   const bulkProcessState = (window.modalCtx?.bulkProcessState && typeof window.modalCtx.bulkProcessState === 'object')
     ? window.modalCtx.bulkProcessState
     : null;
+  const bulkAuthoriseState = (window.modalCtx?.bulkAuthoriseState && typeof window.modalCtx.bulkAuthoriseState === 'object')
+    ? window.modalCtx.bulkAuthoriseState
+    : (
+        (window.modalCtx?.bulk_authorise_state && typeof window.modalCtx.bulk_authorise_state === 'object')
+          ? window.modalCtx.bulk_authorise_state
+          : null
+      );
   const ownerState =
     (options.ownerState && typeof options.ownerState === 'object')
       ? options.ownerState
-      : ((bulkProcessState && (st === bulkProcessState || st === bulkProcessState.evidence_pane_state)) ? bulkProcessState : null);
+      : (
+          (bulkProcessState && (st === bulkProcessState || st === bulkProcessState.evidence_pane_state))
+            ? bulkProcessState
+            : ((bulkAuthoriseState && (st === bulkAuthoriseState || st === bulkAuthoriseState.evidence_pane_state)) ? bulkAuthoriseState : null)
+        );
+  const ownerKind = trimQueueStr(
+    options.owner_kind ||
+    options.ownerKind ||
+    ownerState?.owner_kind ||
+    ownerState?.modal_kind ||
+    ownerState?.context_kind ||
+    (ownerState === bulkProcessState ? 'bulk_process' : (ownerState === bulkAuthoriseState ? 'bulk_authorise' : ''))
+  ).toLowerCase();
+  const modalOpenToken = trimQueueStr(
+    options.modal_open_token ||
+    options.modalOpenToken ||
+    ownerState?.__bulk_process_modal_open_token ||
+    ownerState?.__bulkProcessModalOpenToken ||
+    ownerState?.__bulk_authorise_modal_open_token ||
+    ownerState?.__bulkAuthoriseModalOpenToken ||
+    ''
+  );
+  const ownerIdentity = trimQueueStr(
+    options.owner_identity ||
+    options.ownerIdentity ||
+    ownerState?.__bulk_process_owner_identity ||
+    ownerState?.__bulkProcessOwnerIdentity ||
+    ownerState?.__bulk_authorise_owner_identity ||
+    ownerState?.__bulkAuthoriseOwnerIdentity ||
+    ''
+  );
   const force = !!options.force;
   const suppressWhileBusy = !!options.suppressWhileBusy;
-  const isBulkProcessQueueRefresh = !!(
-    ownerState &&
-    bulkProcessState &&
-    ownerState === bulkProcessState &&
-    st === ownerState.evidence_pane_state
-  );
+  const isOwnerQueueRefresh = !!ownerState;
   const resolveOwnerActiveIdentity = () => {
+    if (options.active_identity || options.activeIdentity) return trimQueueStr(options.active_identity || options.activeIdentity);
     if (!ownerState || typeof ownerState !== 'object') return '';
     const row = (ownerState.active_row && typeof ownerState.active_row === 'object') ? ownerState.active_row : {};
     const details = (ownerState.active_details && typeof ownerState.active_details === 'object') ? ownerState.active_details : {};
-    const explicit = String(ownerState.active_row_key || row.row_key || '').trim();
+    const explicit = trimQueueStr(ownerState.active_row_key || row.row_key || '');
     if (explicit) return explicit;
-    const tsId = String(row.current_timesheet_id || row.timesheet_id || details.current_timesheet_id || details.timesheet?.timesheet_id || '').trim();
+    const tsId = trimQueueStr(row.current_timesheet_id || row.timesheet_id || details.current_timesheet_id || details.timesheet?.timesheet_id || '');
     if (tsId) return `timesheet:${tsId}`;
-    const cwId = String(row.contract_week_id || details.contract_week_id || details.contract_week?.id || '').trim();
+    const cwId = trimQueueStr(row.contract_week_id || details.contract_week_id || details.contract_week?.id || '');
     if (cwId) return `contract_week:${cwId}`;
     return '';
   };
   const ownerActiveIdentityAtStart = resolveOwnerActiveIdentity();
+  const resolveLiveOwnerState = () => {
+    if (!ownerState) return null;
+    if (ownerKind === 'bulk_process' || ownerState === bulkProcessState) return window.modalCtx?.bulkProcessState || null;
+    if (ownerKind === 'bulk_authorise' || ownerState === bulkAuthoriseState) return window.modalCtx?.bulkAuthoriseState || window.modalCtx?.bulk_authorise_state || null;
+    return ownerState;
+  };
+  const validateOwnerContext = () => {
+    if (!ownerState) return true;
+    const liveOwner = resolveLiveOwnerState();
+    if (liveOwner && liveOwner !== ownerState) return false;
+    const currentKind = trimQueueStr(window.modalCtx?.modal_kind || window.modalCtx?.kind || '').toLowerCase();
+    const currentEntity = trimQueueStr(window.modalCtx?.entity || '').toLowerCase();
+    if ((ownerKind === 'bulk_process' || ownerState === bulkProcessState) && currentKind && currentKind !== 'bulk-process-workbench') return false;
+    if ((ownerKind === 'bulk_process' || ownerState === bulkProcessState) && currentEntity && currentEntity !== 'bulk-process') return false;
+    if ((ownerKind === 'bulk_authorise' || ownerState === bulkAuthoriseState) && currentKind === 'bulk-process-workbench') return false;
+    if (modalOpenToken) {
+      const liveToken = trimQueueStr(
+        ownerState.__bulk_process_modal_open_token ||
+        ownerState.__bulkProcessModalOpenToken ||
+        ownerState.__bulk_authorise_modal_open_token ||
+        ownerState.__bulkAuthoriseModalOpenToken ||
+        window.modalCtx?.__bulk_process_modal_open_token ||
+        window.modalCtx?.__bulkProcessModalOpenToken ||
+        window.modalCtx?.__bulk_authorise_modal_open_token ||
+        window.modalCtx?.__bulkAuthoriseModalOpenToken ||
+        ''
+      );
+      if (liveToken && liveToken !== modalOpenToken) return false;
+    }
+    const currentIdentity = resolveOwnerActiveIdentity();
+    if (ownerActiveIdentityAtStart && currentIdentity && currentIdentity !== ownerActiveIdentityAtStart) return false;
+    return true;
+  };
 
-  if (isBulkProcessQueueRefresh && !ownerActiveIdentityAtStart && options.allowWithoutActiveIdentity !== true) {
-    st.__queue_refresh_last_result = 'no-active-row-skip';
-    st.__queue_loaded = false;
-    st.__queue_loaded_identity = '';
+  if (isOwnerQueueRefresh && !ownerActiveIdentityAtStart && options.allowWithoutActiveIdentity !== true) {
+    st.__queue_refresh_last_result = 'no-active-row-skip-preserved';
     st.__queue_loading = false;
-    L('SKIP NO ACTIVE BULK PROCESS ROW', {
+    st.__queue_last_error = '';
+    L('SKIP NO ACTIVE OWNER ROW - PRESERVED', {
       modal_entity: window.modalCtx?.entity || null,
+      owner_kind: ownerKind || null,
       owner_has_active_row: !!ownerState?.active_row,
       active_row_key: ownerState?.active_row_key || null
     });
@@ -108572,13 +108639,22 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
   }
 
   st.__queue_refresh_inflight = st.__queue_refresh_inflight || null;
+  st.__queue_refresh_inflight_by_owner =
+    (st.__queue_refresh_inflight_by_owner && typeof st.__queue_refresh_inflight_by_owner === 'object')
+      ? st.__queue_refresh_inflight_by_owner
+      : {};
   st.__queue_refresh_seq = Number(st.__queue_refresh_seq || 0) || 0;
   st.__queue_refresh_last_result = '';
 
-  if (st.__queue_refresh_inflight && !force) {
-    L('INFLIGHT REUSE', { request_seq: Number(st.__queue_refresh_seq || 0) });
+  const ownerInflightKey = isOwnerQueueRefresh
+    ? `${ownerKind || 'owner'}|${ownerIdentity || modalOpenToken || 'modal'}|${ownerActiveIdentityAtStart || 'no-active'}`
+    : '';
+  const existingInflight = ownerInflightKey ? st.__queue_refresh_inflight_by_owner[ownerInflightKey] : st.__queue_refresh_inflight;
+
+  if (existingInflight && !force) {
+    L('INFLIGHT REUSE', { request_seq: Number(st.__queue_refresh_seq || 0), owner_key: ownerInflightKey || null });
     try {
-      const reused = await st.__queue_refresh_inflight;
+      const reused = await existingInflight;
       GE();
       return reused;
     } catch (err) {
@@ -108589,6 +108665,12 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
 
   const requestSeq = Number(st.__queue_refresh_seq || 0) + 1;
   st.__queue_refresh_seq = requestSeq;
+  if (!validateOwnerContext()) {
+    st.__queue_refresh_last_result = 'stale-owner-skip';
+    st.__queue_loading = false;
+    GE();
+    return st;
+  }
 
   const previousActiveId = String(st.active_queue_id || '').trim();
   const previousPage = Number(st.active_pdf_page || 1) || 1;
@@ -108763,6 +108845,17 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     const normalizedRows = normalizeAndSort(rows);
     const normalizedQueueSignature = queueSignatureFor(normalizedRows);
 
+    if (!validateOwnerContext()) {
+      st.__queue_refresh_last_result = 'stale-owner-ignored';
+      L('STALE OWNER RESULT IGNORED', {
+        request_seq: requestSeq,
+        owner_kind: ownerKind || null,
+        owner_identity: ownerIdentity || null,
+        active_identity_at_start: ownerActiveIdentityAtStart || null
+      });
+      return st;
+    }
+
     if (Number(st.__queue_refresh_seq || 0) !== requestSeq) {
       st.__queue_refresh_last_result = 'stale-ignored';
       L('STALE RESULT IGNORED', {
@@ -108778,12 +108871,25 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
         ? (normalizedRows.find((r) => String(r.id) === previousActiveId) || null)
         : null;
 
-    const usedRelativeProgression = !nextActive && !!previousActiveId;
+    const usedRelativeProgression = !nextActive && !!previousActiveId && !!progressionContext;
     if (!nextActive && usedRelativeProgression) {
       nextActive = chooseNextRelativeItem(normalizedRows);
     }
 
-    if (!nextActive) {
+    const preserveMissingOwnerSelection = !!(
+      isOwnerQueueRefresh &&
+      previousActiveId &&
+      !nextActive &&
+      !usedRelativeProgression &&
+      st.active_queue_item &&
+      typeof st.active_queue_item === 'object'
+    );
+
+    if (preserveMissingOwnerSelection) {
+      nextActive = JSON.parse(JSON.stringify(st.active_queue_item));
+      st.active_pdf_page = previousPage;
+      st.active_zoom = previousZoom;
+    } else if (!nextActive) {
       nextActive = normalizedRows[0] || null;
       st.active_pdf_page = 1;
       st.active_zoom = 1;
@@ -108854,7 +108960,11 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
   };
 
   const inflightPromise = doRefresh();
-  st.__queue_refresh_inflight = inflightPromise;
+  if (ownerInflightKey) {
+    st.__queue_refresh_inflight_by_owner[ownerInflightKey] = inflightPromise;
+  } else {
+    st.__queue_refresh_inflight = inflightPromise;
+  }
 
   try {
     const out = await inflightPromise;
@@ -108869,7 +108979,11 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     GE();
     throw err;
   } finally {
-    if (st.__queue_refresh_inflight === inflightPromise) {
+    if (ownerInflightKey) {
+      if (st.__queue_refresh_inflight_by_owner && st.__queue_refresh_inflight_by_owner[ownerInflightKey] === inflightPromise) {
+        try { delete st.__queue_refresh_inflight_by_owner[ownerInflightKey]; } catch {}
+      }
+    } else if (st.__queue_refresh_inflight === inflightPromise) {
       st.__queue_refresh_inflight = null;
     }
   }
@@ -135862,14 +135976,181 @@ function bindBulkProcessEvidencePane(state) {
   const bindSeq = pane.__evidence_bind_seq;
   pane.__evidence_bind_identity = bindIdentity;
 
-  const isActiveBind = () => {
-    if (!document.getElementById('bulkProcessEvidencePaneRoot')) return false;
-    return (
-      Number(pane.__evidence_bind_seq || 0) === bindSeq &&
-      String(pane.__evidence_bind_identity || '') === String(bindIdentity || '') &&
-      String(getActiveIdentity() || '') === String(bindIdentity || '')
-    );
+  const getCurrentModalKindForEvidenceBind = () => {
+    try {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      return trimStr(frame?.kind || window.modalCtx?.modal_kind || window.modalCtx?.kind || '');
+    } catch {
+      return '';
+    }
   };
+
+  const getEvidenceOwnerKind = () => {
+    if (isBulkAuthoriseContext || isBulkAuthoriseTimesheetsContext()) return 'bulk_authorise';
+    return 'bulk_process';
+  };
+
+  const getEvidenceOwnerToken = () => trimStr(
+    st.__bulk_process_modal_open_token ||
+    st.__bulkProcessModalOpenToken ||
+    st.__bulk_authorise_modal_open_token ||
+    st.__bulkAuthoriseModalOpenToken ||
+    window.modalCtx?.__bulk_process_modal_open_token ||
+    window.modalCtx?.__bulkProcessModalOpenToken ||
+    window.modalCtx?.__bulk_authorise_modal_open_token ||
+    window.modalCtx?.__bulkAuthoriseModalOpenToken ||
+    ''
+  );
+
+  const getEvidenceOwnerIdentity = () => trimStr(
+    st.__bulk_process_owner_identity ||
+    st.__bulkProcessOwnerIdentity ||
+    st.__bulk_authorise_owner_identity ||
+    st.__bulkAuthoriseOwnerIdentity ||
+    window.modalCtx?.owner_identity ||
+    window.modalCtx?.__bulk_process_owner_identity ||
+    window.modalCtx?.__bulk_authorise_owner_identity ||
+    ''
+  );
+
+  const getEvidenceRowChangeSeq = () => Number(
+    st.__bulk_process_row_change_seq ||
+    st.__bulkProcessRowChangeSeq ||
+    st.__bulk_authorise_row_change_seq ||
+    st.__bulkAuthoriseRowChangeSeq ||
+    0
+  ) || 0;
+
+  const getPreviewSelectionKeyForPane = () => {
+    const tab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const item = tab === 'attached'
+      ? ((pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null)
+      : ((pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null);
+    const itemId = trimStr(
+      (tab === 'attached' ? pane.active_attached_id : pane.active_queue_id) ||
+      item?.id ||
+      item?.evidence_id ||
+      item?.queue_id ||
+      ''
+    );
+    const fileKey = trimStr(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || '');
+    return `${tab}|${itemId}|${fileKey}`;
+  };
+
+  const isBlankPreviewSelectionKey = (key) => {
+    const value = trimStr(key || '');
+    return !value || value === 'queue||' || value === 'attached||' || /^\w+\|\|$/.test(value) || !value.replace(/\|/g, '');
+  };
+
+  const isValidPreviewSelectionKey = (key) => !isBlankPreviewSelectionKey(key);
+
+  const capturePreviewStateSnapshot = () => ({
+    active_tab: pane.active_tab,
+    active_queue_id: pane.active_queue_id,
+    active_queue_item: (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? deep(pane.active_queue_item) : pane.active_queue_item,
+    active_pdf_page: pane.active_pdf_page,
+    active_zoom: pane.active_zoom,
+    active_rotation_deg: pane.active_rotation_deg,
+    active_attached_id: pane.active_attached_id,
+    active_attached_item: (pane.active_attached_item && typeof pane.active_attached_item === 'object') ? deep(pane.active_attached_item) : pane.active_attached_item,
+    active_attached_pdf_page: pane.active_attached_pdf_page,
+    __attached_manual_override: pane.__attached_manual_override,
+    __queue_manual_override: pane.__queue_manual_override,
+    __queue_manual_override_identity: pane.__queue_manual_override_identity,
+    __preview_target_key: pane.__preview_target_key,
+    __preview_signed_url: pane.__preview_signed_url,
+    __preview_load_requested_target_key: pane.__preview_load_requested_target_key,
+    __active_attached_preview_target: pane.__active_attached_preview_target,
+    __preview_signed_url_cache: (pane.__preview_signed_url_cache && typeof pane.__preview_signed_url_cache === 'object') ? deep(pane.__preview_signed_url_cache) : pane.__preview_signed_url_cache
+  });
+
+  const restorePreviewStateSnapshot = (snapshot) => {
+    const snap = (snapshot && typeof snapshot === 'object') ? snapshot : null;
+    if (!snap) return;
+    pane.active_tab = snap.active_tab;
+    pane.active_queue_id = snap.active_queue_id;
+    pane.active_queue_item = snap.active_queue_item && typeof snap.active_queue_item === 'object' ? deep(snap.active_queue_item) : snap.active_queue_item;
+    pane.active_pdf_page = snap.active_pdf_page;
+    pane.active_zoom = snap.active_zoom;
+    pane.active_rotation_deg = snap.active_rotation_deg;
+    pane.active_attached_id = snap.active_attached_id;
+    pane.active_attached_item = snap.active_attached_item && typeof snap.active_attached_item === 'object' ? deep(snap.active_attached_item) : snap.active_attached_item;
+    pane.active_attached_pdf_page = snap.active_attached_pdf_page;
+    pane.__attached_manual_override = !!snap.__attached_manual_override;
+    pane.__queue_manual_override = !!snap.__queue_manual_override;
+    pane.__queue_manual_override_identity = trimStr(snap.__queue_manual_override_identity || '');
+    pane.__preview_target_key = snap.__preview_target_key || '';
+    pane.__preview_signed_url = snap.__preview_signed_url || '';
+    pane.__preview_load_requested_target_key = snap.__preview_load_requested_target_key || '';
+    pane.__active_attached_preview_target = snap.__active_attached_preview_target || '';
+    if (snap.__preview_signed_url_cache && typeof snap.__preview_signed_url_cache === 'object') {
+      pane.__preview_signed_url_cache = deep(snap.__preview_signed_url_cache);
+    }
+  };
+
+  const isPreviewPresignPending = () => {
+    if (trimStr(pane.__preview_load_requested_target_key || '')) return true;
+    const inflight = (pane.__preview_presign_inflight && typeof pane.__preview_presign_inflight === 'object') ? pane.__preview_presign_inflight : {};
+    return Object.keys(inflight).some((key) => !!inflight[key]);
+  };
+
+  const hasValidQueuePreviewSelection = () => {
+    const tab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (tab !== 'queue') return false;
+    const item = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    const itemId = trimStr(pane.active_queue_id || item?.id || item?.queue_id || '');
+    const fileKey = trimStr(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || '');
+    const targetKey = trimStr(pane.__preview_target_key || pane.__preview_load_requested_target_key || '');
+    return !!((itemId && fileKey) || (targetKey && targetKey.startsWith('queue|') && isValidPreviewSelectionKey(targetKey)));
+  };
+
+  const captureOwnerSnapshot = (reason = '') => ({
+    reason: trimStr(reason || 'evidence-bind'),
+    bindSeq,
+    ownerKind: getEvidenceOwnerKind(),
+    modalKind: getCurrentModalKindForEvidenceBind(),
+    ownerToken: getEvidenceOwnerToken(),
+    ownerIdentity: getEvidenceOwnerIdentity(),
+    activeIdentity: getActiveIdentity(),
+    rowChangeSeq: getEvidenceRowChangeSeq(),
+    activeTab: trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue',
+    previewSelectionKey: getPreviewSelectionKeyForPane()
+  });
+
+  const isOwnerSnapshotCurrent = (snapshot, options = {}) => {
+    const snap = (snapshot && typeof snapshot === 'object') ? snapshot : {};
+    const opts = (options && typeof options === 'object') ? options : {};
+    if (!document.getElementById('bulkProcessEvidencePaneRoot')) return false;
+    if (Number(pane.__evidence_bind_seq || 0) !== Number(snap.bindSeq || bindSeq)) return false;
+    const liveIdentity = getActiveIdentity();
+    if (snap.activeIdentity && liveIdentity && trimStr(liveIdentity) !== trimStr(snap.activeIdentity)) return false;
+    if (snap.rowChangeSeq != null && getEvidenceRowChangeSeq() !== Number(snap.rowChangeSeq || 0)) return false;
+    const liveToken = getEvidenceOwnerToken();
+    if (snap.ownerToken && liveToken && trimStr(liveToken) !== trimStr(snap.ownerToken)) return false;
+    const liveKind = getCurrentModalKindForEvidenceBind();
+    if (snap.ownerKind === 'bulk_process') {
+      if (liveKind && liveKind !== 'bulk-process-workbench') return false;
+      if (window.modalCtx?.bulkProcessState && window.modalCtx.bulkProcessState !== st) return false;
+    }
+    if (snap.ownerKind === 'bulk_authorise') {
+      if (liveKind === 'bulk-process-workbench') return false;
+      const liveBulkAuthState = window.modalCtx?.bulkAuthoriseState || window.modalCtx?.bulk_authorise_state || null;
+      if (liveBulkAuthState && liveBulkAuthState !== st) return false;
+    }
+    if (opts.requireTabUnchanged === true) {
+      const liveTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+      if (snap.activeTab && liveTab !== snap.activeTab) return false;
+    }
+    if (opts.requirePreviewSelectionUnchanged === true) {
+      const liveSelection = getPreviewSelectionKeyForPane();
+      if (snap.previewSelectionKey && liveSelection !== snap.previewSelectionKey) return false;
+    }
+    return true;
+  };
+
+  const bindSnapshot = captureOwnerSnapshot('initial-bind');
+
+  const isActiveBind = () => isOwnerSnapshotCurrent(bindSnapshot);
 
   const capturePaneSignature = () => {
     const activeIdentity = getActiveIdentity();
@@ -135957,10 +136238,17 @@ function bindBulkProcessEvidencePane(state) {
     };
   };
 
-  const syncQueue = async (queueOptions = {}) => {
+    const syncQueue = async (queueOptions = {}) => {
     const opts = (queueOptions && typeof queueOptions === 'object') ? queueOptions : {};
-    const activeIdentity = getActiveIdentity();
+    const ownerSnapshot = captureOwnerSnapshot('syncQueue');
+    const activeIdentity = trimStr(opts.identity || ownerSnapshot.activeIdentity || getActiveIdentity());
     const shouldLoad = !!opts.force || !isQueueLoadedForIdentity(activeIdentity);
+    const previewBefore = capturePreviewStateSnapshot();
+    const selectionBefore = getPreviewSelectionKeyForPane();
+
+    if (!activeIdentity || !isOwnerSnapshotCurrent(ownerSnapshot)) {
+      return { didLoad: false, active: pane.active_queue_item || null, skipped: true, preserved: true };
+    }
 
     let didLoad = false;
     if (shouldLoad && typeof refreshTimesheetImportsQueue === 'function') {
@@ -135969,9 +136257,18 @@ function bindBulkProcessEvidencePane(state) {
       const beforeRowsCount = Array.isArray(pane.queue_rows) ? pane.queue_rows.length : 0;
       await refreshTimesheetImportsQueue(pane, {
         ownerState: st,
+        owner_kind: ownerSnapshot.ownerKind,
+        owner_identity: ownerSnapshot.ownerIdentity,
+        modal_open_token: ownerSnapshot.ownerToken,
+        active_identity: activeIdentity,
         suppressWhileBusy: true,
         force: !!opts.force
       });
+
+      if (!isOwnerSnapshotCurrent(ownerSnapshot)) {
+        restorePreviewStateSnapshot(previewBefore);
+        return { didLoad: false, active: pane.active_queue_item || null, stale: true, preserved: true };
+      }
 
       const afterIdentity = getActiveIdentity();
       const afterSeq = Number(pane.__queue_refresh_seq || 0) || 0;
@@ -135982,7 +136279,9 @@ function bindBulkProcessEvidencePane(state) {
         (
           afterSeq > beforeSeq ||
           beforeRowsRef !== afterRows ||
-          afterRows.length !== beforeRowsCount
+          afterRows.length !== beforeRowsCount ||
+          pane.__queue_refresh_last_result === 'applied' ||
+          pane.__queue_refresh_last_result === 'unchanged'
         );
 
       if (refreshApplied) {
@@ -135994,32 +136293,72 @@ function bindBulkProcessEvidencePane(state) {
     }
 
     pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
-    const wanted = trimStr(pane.active_queue_id || '');
-    let active = wanted ? (pane.queue_rows.find((x) => trimStr(x?.id || '') === wanted) || null) : null;
+    const wanted = trimStr(pane.active_queue_id || previewBefore.active_queue_id || '');
+    let active = wanted ? (pane.queue_rows.find((x) => trimStr(x?.id || x?.queue_id || '') === wanted) || null) : null;
+
+    if (!active && previewBefore.active_queue_item && !pane.__queue_loaded) {
+      pane.active_queue_id = previewBefore.active_queue_id || null;
+      pane.active_queue_item = previewBefore.active_queue_item ? deep(previewBefore.active_queue_item) : null;
+      return { didLoad, active: pane.active_queue_item, preserved: true };
+    }
+
+    if (!active && previewBefore.active_queue_item && opts.allowSelectFallback !== true && pane.__queue_loaded_identity === activeIdentity) {
+      pane.active_queue_id = previewBefore.active_queue_id || null;
+      pane.active_queue_item = previewBefore.active_queue_item ? deep(previewBefore.active_queue_item) : null;
+      pane.__preview_target_key = previewBefore.__preview_target_key || pane.__preview_target_key || '';
+      pane.__preview_signed_url = previewBefore.__preview_signed_url || pane.__preview_signed_url || '';
+      pane.__preview_load_requested_target_key = previewBefore.__preview_load_requested_target_key || pane.__preview_load_requested_target_key || '';
+      pane.__active_attached_preview_target = previewBefore.__active_attached_preview_target || pane.__active_attached_preview_target || '';
+      return { didLoad, active: pane.active_queue_item, preserved: true };
+    }
+
     if (!active) active = pane.queue_rows[0] || null;
-    pane.active_queue_id = active ? trimStr(active.id || '') : null;
+    pane.active_queue_id = active ? (trimStr(active.id || active.queue_id || '') || null) : null;
     pane.active_queue_item = active ? { ...deep(active) } : null;
+
+    const selectionAfter = getPreviewSelectionKeyForPane();
+    if (isValidPreviewSelectionKey(selectionBefore) && isBlankPreviewSelectionKey(selectionAfter)) {
+      restorePreviewStateSnapshot(previewBefore);
+      return { didLoad, active: pane.active_queue_item, restored_valid_preview_selection: true };
+    }
 
     return { didLoad, active: pane.active_queue_item };
   };
 
-  const syncQueueSelectionOnly = () => {
+    const syncQueueSelectionOnly = () => {
     pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
     const wanted = trimStr(pane.active_queue_id || '');
-    let active = wanted ? (pane.queue_rows.find((x) => trimStr(x?.id || '') === wanted) || null) : null;
+    const previousItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    let active = wanted ? (pane.queue_rows.find((x) => trimStr(x?.id || x?.queue_id || '') === wanted) || null) : null;
+    if (!active && previousItem && pane.__queue_loaded !== true) return previousItem;
     if (!active) active = pane.queue_rows[0] || null;
-    pane.active_queue_id = active ? trimStr(active.id || '') : null;
-    pane.active_queue_item = active ? { ...deep(active) } : null;
+    if (!active) {
+      if (pane.__queue_loaded === true) {
+        pane.active_queue_id = null;
+        pane.active_queue_item = null;
+      }
+      return pane.active_queue_item || null;
+    }
+    pane.active_queue_id = trimStr(active.id || active.queue_id || '') || null;
+    pane.active_queue_item = { ...deep(active) };
     return pane.active_queue_item;
   };
 
-  const ensureQueueLoadedForActiveTab = async (queueOptions = {}) => {
+    const ensureQueueLoadedForActiveTab = async (queueOptions = {}) => {
     const opts = (queueOptions && typeof queueOptions === 'object') ? queueOptions : {};
+    const ownerSnapshot = captureOwnerSnapshot('ensureQueueLoadedForActiveTab');
     const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
-    const activeIdentity = getActiveIdentity();
+    const activeIdentity = trimStr(ownerSnapshot.activeIdentity || getActiveIdentity());
     const queueLoadedForIdentity = isQueueLoadedForIdentity(activeIdentity);
 
     pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+
+    if (!activeIdentity || !isOwnerSnapshotCurrent(ownerSnapshot)) return false;
+    if ((st.__active_context_pending === true || st.__hydrating_active_context) && opts.force !== true) {
+      syncQueueSelectionOnly();
+      return false;
+    }
+
     if (activeTab !== 'queue' && !opts.force) {
       syncQueueSelectionOnly();
       return false;
@@ -136032,17 +136371,26 @@ function bindBulkProcessEvidencePane(state) {
       return false;
     }
 
-    if (pane.__queue_loading) return false;
+    if (pane.__queue_loading && trimStr(pane.__queue_loading_identity || '') === activeIdentity) return false;
 
     pane.__queue_loading = true;
+    pane.__queue_loading_identity = activeIdentity;
+    const previewBefore = capturePreviewStateSnapshot();
     try {
-      const result = await syncQueue({ force: true });
+      const result = await syncQueue({ force: true, identity: activeIdentity });
+      if (!isOwnerSnapshotCurrent(ownerSnapshot)) {
+        restorePreviewStateSnapshot(previewBefore);
+        return false;
+      }
       return !!result?.didLoad;
     } catch (e) {
-      pane.__queue_last_error = trimStr(e?.message || e || 'Failed to refresh queue.');
+      if (isOwnerSnapshotCurrent(ownerSnapshot)) pane.__queue_last_error = trimStr(e?.message || e || 'Failed to refresh queue.');
       throw e;
     } finally {
-      pane.__queue_loading = false;
+      if (trimStr(pane.__queue_loading_identity || '') === activeIdentity) {
+        pane.__queue_loading = false;
+        pane.__queue_loading_identity = '';
+      }
     }
   };
 
@@ -136127,10 +136475,14 @@ function bindBulkProcessEvidencePane(state) {
     return (json && typeof json === 'object') ? json : {};
   };
 
-  const refreshAttachedContext = async (refreshOptions = {}) => {
+    const refreshAttachedContext = async (refreshOptions = {}) => {
     const opts = (refreshOptions && typeof refreshOptions === 'object') ? refreshOptions : {};
     const row = st.active_row;
     if (!row) return { ok: true, skipped: true, reason: 'no-active-row' };
+
+    const ownerSnapshot = captureOwnerSnapshot('refreshAttachedContext');
+    const previewBefore = capturePreviewStateSnapshot();
+    if (!isOwnerSnapshotCurrent(ownerSnapshot)) return { ok: false, stale: true, skipped: true, reason: 'stale-owner-before-refresh' };
 
     const softRefresh = !!(
       opts.soft === true ||
@@ -136153,7 +136505,7 @@ function bindBulkProcessEvidencePane(state) {
         : { isBulkAuthoriseTimesheets: false };
       if (bulkAuthContext.isBulkAuthoriseTimesheets && typeof refreshBulkAuthoriseActiveContext === 'function') {
         const identityParts = getBulkAuthoriseEvidenceIdentityParts();
-        await refreshBulkAuthoriseActiveContext(st, {
+        const refreshResult = await refreshBulkAuthoriseActiveContext(st, {
           row,
           rowSignature: identityParts.renderSignature,
           renderSignature: identityParts.renderSignature,
@@ -136167,6 +136519,16 @@ function bindBulkProcessEvidencePane(state) {
           invalidateCache: true,
           rerender: false
         });
+        if (!isOwnerSnapshotCurrent(ownerSnapshot)) {
+          restorePreviewStateSnapshot(previewBefore);
+          return { ok: false, stale: true, skipped: true, source: 'bulk-authorise-context' };
+        }
+        if (refreshResult === false || refreshResult?.ok === false || refreshResult?.soft_failure === true || refreshResult?.evidence_refresh_failed === true) {
+          restorePreviewStateSnapshot(previewBefore);
+          pane.__last_nonfatal_warning = trimStr(refreshResult?.message || refreshResult?.error || 'Evidence was attached, but the row could not be refreshed.');
+          st.warning_text = pane.__last_nonfatal_warning;
+          return { ok: false, soft_failure: true, evidence_refresh_failed: true, source: 'bulk-authorise-context', message: pane.__last_nonfatal_warning };
+        }
         return { ok: true, source: 'bulk-authorise-context' };
       }
 
@@ -136177,8 +136539,14 @@ function bindBulkProcessEvidencePane(state) {
         staged_kind: opts.staged_kind || opts.stagedKind || localItem?.kind || localItem?.staged_kind || ''
       });
 
-      if (contextPayload && contextPayload.evidence_refresh_failed === true) {
+      if (!isOwnerSnapshotCurrent(ownerSnapshot)) {
+        restorePreviewStateSnapshot(previewBefore);
+        return { ok: false, stale: true, skipped: true, source: 'bulk-process-context' };
+      }
+
+      if (contextPayload && (contextPayload.evidence_refresh_failed === true || contextPayload.soft_failure === true || contextPayload.ok === false)) {
         if (localItem) upsertLocalStagedContractWeekEvidence(localItem);
+        restorePreviewStateSnapshot(previewBefore);
         pane.__last_nonfatal_warning = trimStr(contextPayload.message || '') || 'Evidence was attached, but the row could not be refreshed. Please refresh the row or reopen Bulk Process.';
         st.warning_text = pane.__last_nonfatal_warning;
         return contextPayload;
@@ -136198,6 +136566,14 @@ function bindBulkProcessEvidencePane(state) {
       if (!activeRowKey || !mergedRowKey || activeRowKey === mergedRowKey) {
         st.active_row = deep(mergedRow);
         st.active_row_key = mergedRowKey || activeRowKey || st.active_row_key || null;
+      } else {
+        restorePreviewStateSnapshot(previewBefore);
+        return { ok: false, stale: true, skipped: true, reason: 'row-key-mismatch' };
+      }
+
+      if (!isOwnerSnapshotCurrent(ownerSnapshot)) {
+        restorePreviewStateSnapshot(previewBefore);
+        return { ok: false, stale: true, skipped: true, source: 'bulk-process-context-after-row' };
       }
 
       const detailsPayload = (contextPayload.details && typeof contextPayload.details === 'object') ? deep(contextPayload.details) : {};
@@ -136240,6 +136616,7 @@ function bindBulkProcessEvidencePane(state) {
     } catch (err) {
       if (!softRefresh) throw err;
       if (localItem) upsertLocalStagedContractWeekEvidence(localItem);
+      restorePreviewStateSnapshot(previewBefore);
       pane.__last_nonfatal_warning = 'Evidence was attached, but the row could not be refreshed. Please refresh the row or reopen Bulk Process.';
       st.warning_text = pane.__last_nonfatal_warning;
       try {
@@ -136369,13 +136746,38 @@ function bindBulkProcessEvidencePane(state) {
     return collected.badgeRows.some((item) => upper(item?.kind || '') === kind);
   };
 
-  const patchBulkAuthoriseModalEvidenceState = () => {
+    const patchBulkAuthoriseModalEvidenceState = (patchOptions = {}) => {
+    const opts = (patchOptions && typeof patchOptions === 'object') ? patchOptions : {};
     const attachedRows = getAuthoritativeAttachedRows();
     if (!isBulkAuthoriseContext) return attachedRows;
+    const forceAttached = !!(
+      opts.forceAttached === true ||
+      opts.force_attached === true ||
+      opts.explicitAttach === true ||
+      opts.explicit_attach === true ||
+      opts.explicitMutation === true ||
+      opts.explicit_mutation === true ||
+      opts.userSelectedAttached === true ||
+      opts.user_selected_attached === true
+    );
+    const currentTab = trimStr(st.evidence_pane_state?.active_tab || pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const activeIdentity = getActiveIdentity();
+    const queueOverrideForCurrentRow = !!(
+      st.evidence_pane_state?.__queue_manual_override === true &&
+      trimStr(st.evidence_pane_state?.__queue_manual_override_identity || '') &&
+      trimStr(st.evidence_pane_state?.__queue_manual_override_identity || '') === trimStr(activeIdentity || '')
+    );
+    const shouldSelectAttached = !!(
+      forceAttached ||
+      currentTab === 'attached' ||
+      (opts.authoritativeSameRowEvidence === true && !queueOverrideForCurrentRow)
+    );
+
     st.evidence_pane_state = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : pane;
     st.evidence_pane_state.attached_rows = attachedRows.map((item) => ({ ...deep(item) }));
     st.evidence_pane_state.attached_all_rows = attachedRows.map((item) => ({ ...deep(item) }));
-    if (attachedRows.length) {
+
+    if (attachedRows.length && shouldSelectAttached) {
       const currentAttachedId = trimStr(st.evidence_pane_state.active_attached_id || st.evidence_pane_state.active_attached_item?.id || st.evidence_pane_state.active_attached_item?.evidence_id || '');
       let activeAttached = currentAttachedId
         ? attachedRows.find((item) => trimStr(item.id || item.evidence_id || '') === currentAttachedId) || null
@@ -136385,11 +136787,18 @@ function bindBulkProcessEvidencePane(state) {
       st.evidence_pane_state.active_attached_id = activeAttached ? (trimStr(activeAttached.evidence_id || activeAttached.id || '') || null) : null;
       st.evidence_pane_state.active_tab = 'attached';
       st.evidence_pane_state.__attached_manual_override = true;
-      st.evidence_pane_state.__queue_manual_override = false;
-      st.evidence_pane_state.__queue_manual_override_identity = '';
-      st.evidence_pane_state.active_queue_id = null;
-      st.evidence_pane_state.active_queue_item = null;
+      if (forceAttached) {
+        st.evidence_pane_state.__queue_manual_override = false;
+        st.evidence_pane_state.__queue_manual_override_identity = '';
+        st.evidence_pane_state.active_queue_id = null;
+        st.evidence_pane_state.active_queue_item = null;
+      }
+    } else if (!attachedRows.length && shouldSelectAttached) {
+      st.evidence_pane_state.active_attached_item = null;
+      st.evidence_pane_state.active_attached_id = null;
+      st.evidence_pane_state.active_attached_pdf_page = 1;
     }
+
     window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
     window.modalCtx.timesheetState = (window.modalCtx.timesheetState && typeof window.modalCtx.timesheetState === 'object') ? window.modalCtx.timesheetState : {};
     window.modalCtx.timesheetState.evidence = attachedRows.map((item) => ({ ...deep(item) }));
@@ -136542,7 +136951,7 @@ function bindBulkProcessEvidencePane(state) {
     }
   };
 
-  const ensureBulkAuthoriseQueueCountLoadedForAttachedDefault = async (queueOptions = {}) => {
+    const ensureBulkAuthoriseQueueCountLoadedForAttachedDefault = async (queueOptions = {}) => {
     const opts = (queueOptions && typeof queueOptions === 'object') ? queueOptions : {};
     const bulkAuthContext = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
       ? resolveBulkAuthoriseTimesheetsEvidenceContext(st)
@@ -136551,6 +136960,7 @@ function bindBulkProcessEvidencePane(state) {
 
     const activeIdentity = getActiveIdentity();
     if (!activeIdentity) return { didLoad: false, stateChanged: false };
+    const ownerSnapshot = captureOwnerSnapshot('bulk-authorise-queue-count');
     const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
     const queueOverrideForCurrentRow = !!(
       pane.__queue_manual_override === true &&
@@ -136575,71 +136985,25 @@ function bindBulkProcessEvidencePane(state) {
       return { didLoad: false, stateChanged: false };
     }
     const signatureBeforeLoad = capturePaneSignature();
-
-    const snapshot = {
-      active_tab: trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue',
-      attached_manual_override: !!pane.__attached_manual_override,
-      queue_manual_override: !!pane.__queue_manual_override,
-      queue_manual_override_identity: trimStr(pane.__queue_manual_override_identity || ''),
-      active_queue_id: trimStr(pane.active_queue_id || ''),
-      active_queue_item: pane.active_queue_item ? deep(pane.active_queue_item) : null,
-      active_attached_id: trimStr(pane.active_attached_id || ''),
-      active_attached_item: pane.active_attached_item ? deep(pane.active_attached_item) : null,
-      preview_target_key: trimStr(pane.__preview_target_key || ''),
-      preview_signed_url: trimStr(pane.__preview_signed_url || ''),
-      preview_load_requested_target_key: trimStr(pane.__preview_load_requested_target_key || ''),
-      active_pdf_page: Number(pane.active_pdf_page || 1) || 1,
-      active_attached_pdf_page: Number(pane.active_attached_pdf_page || 1) || 1,
-      active_zoom: Number(pane.active_zoom || 1) || 1,
-      active_rotation_deg: Number(pane.active_rotation_deg || 0) || 0
-    };
+    const snapshot = capturePreviewStateSnapshot();
 
     pane.__queue_count_loading = true;
     pane.__queue_count_loading_identity = activeIdentity;
     let didLoad = false;
     let encounteredError = null;
     try {
-      const result = await syncQueue({ force: true });
+      const result = await syncQueue({ force: true, identity: activeIdentity });
       didLoad = !!result?.didLoad;
-      pane.__queue_loaded = true;
-      pane.__queue_loaded_identity = activeIdentity;
-      pane.__queue_last_error = '';
-
-      const liveIdentity = getActiveIdentity();
-      if (trimStr(liveIdentity || '') === trimStr(activeIdentity || '')) {
-        const queueOverrideForCurrentRow = !!(
-          snapshot.queue_manual_override === true &&
-          snapshot.queue_manual_override_identity &&
-          snapshot.queue_manual_override_identity === trimStr(activeIdentity || '')
-        );
-        if (!(snapshot.active_tab === 'queue' && queueOverrideForCurrentRow)) {
-          pane.active_tab = 'attached';
-          pane.__attached_manual_override = true;
-          pane.__queue_manual_override = false;
-          pane.__queue_manual_override_identity = '';
-          pane.active_queue_id = null;
-          pane.active_queue_item = null;
-          pane.active_attached_id = snapshot.active_attached_id || null;
-          pane.active_attached_item = snapshot.active_attached_item ? deep(snapshot.active_attached_item) : null;
-          pane.__preview_target_key = snapshot.preview_target_key || '';
-          pane.__preview_signed_url = snapshot.preview_signed_url || '';
-          pane.__preview_load_requested_target_key = snapshot.preview_load_requested_target_key || '';
-          pane.active_pdf_page = snapshot.active_pdf_page;
-          pane.active_attached_pdf_page = snapshot.active_attached_pdf_page;
-          pane.active_zoom = snapshot.active_zoom;
-          pane.active_rotation_deg = snapshot.active_rotation_deg;
-        } else {
-          pane.active_tab = snapshot.active_tab === 'attached' ? 'attached' : 'queue';
-          pane.__attached_manual_override = !!snapshot.attached_manual_override;
-          pane.__queue_manual_override = !!snapshot.queue_manual_override;
-          pane.__queue_manual_override_identity = snapshot.queue_manual_override_identity || '';
-          pane.active_queue_id = snapshot.active_queue_id || null;
-          pane.active_queue_item = snapshot.active_queue_item ? deep(snapshot.active_queue_item) : null;
-        }
+      if (isOwnerSnapshotCurrent(ownerSnapshot)) {
+        pane.__queue_loaded = true;
+        pane.__queue_loaded_identity = activeIdentity;
+        pane.__queue_last_error = '';
       }
+      restorePreviewStateSnapshot(snapshot);
     } catch (e) {
       encounteredError = e;
       didLoad = false;
+      restorePreviewStateSnapshot(snapshot);
     } finally {
       if (encounteredError) {
         pane.__queue_last_error = trimStr(encounteredError?.message || encounteredError || 'Failed to refresh queue.');
@@ -136653,7 +137017,7 @@ function bindBulkProcessEvidencePane(state) {
     return { didLoad, stateChanged };
   };
 
-  const refreshBulkAuthoriseEvidenceAfterExplicitAttach = async (options = {}) => {
+    const refreshBulkAuthoriseEvidenceAfterExplicitAttach = async (options = {}) => {
     const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
     const bulkAuthContext = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
       ? resolveBulkAuthoriseTimesheetsEvidenceContext(st, { frame })
@@ -136661,70 +137025,92 @@ function bindBulkProcessEvidencePane(state) {
     if (!bulkAuthContext?.isBulkAuthoriseTimesheets) return false;
 
     const opts = (options && typeof options === 'object') ? options : {};
+    const ownerSnapshot = captureOwnerSnapshot('bulk-authorise-explicit-attach');
+    const previewBefore = capturePreviewStateSnapshot();
     const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : null;
     const identityParts = getBulkAuthoriseEvidenceIdentityParts();
 
-    if (typeof pane.__abortPreviewPresignRequests === 'function') {
-      try { pane.__abortPreviewPresignRequests('bulk-authorise-explicit-attach-success'); } catch {}
-    }
-    if (pane.__preview_recovery_timer) {
-      try { window.clearTimeout(pane.__preview_recovery_timer); } catch {}
-      pane.__preview_recovery_timer = null;
-    }
-    pane.attached_rows = [];
-    pane.attached_all_rows = [];
-    pane.active_attached_id = null;
-    pane.active_attached_item = null;
-    pane.active_queue_id = null;
-    pane.active_queue_item = null;
-    pane.__preview_target_key = '';
-    pane.__preview_signed_url = '';
-    pane.__preview_load_requested_target_key = '';
-    pane.__preview_recovery_key = '';
-    pane.__preview_recovery_attempt = 0;
-    pane.active_tab = 'attached';
-    pane.__attached_manual_override = true;
-    pane.__queue_manual_override = false;
-    pane.__queue_manual_override_identity = '';
+    if (!isOwnerSnapshotCurrent(ownerSnapshot)) return false;
 
-    if (typeof refreshBulkAuthoriseActiveContext === 'function') {
-      await refreshBulkAuthoriseActiveContext(st, {
-        row: activeRow,
-        rowSignature: identityParts.renderSignature,
-        renderSignature: identityParts.renderSignature,
-        backendRowSignature: identityParts.backendRowSignature,
-        recordIdentity: identityParts.recordIdentity,
-        base_only: false,
-        include_evidence: true,
-        include_compare: false,
-        include_import_source_rows: false,
-        bypassCache: true,
-        invalidateCache: true,
-        rerender: false
-      });
-    } else {
-      await refreshAttachedContext();
-    }
+    try {
+      if (typeof refreshBulkAuthoriseActiveContext === 'function') {
+        const refreshResult = await refreshBulkAuthoriseActiveContext(st, {
+          row: activeRow,
+          rowSignature: identityParts.renderSignature,
+          renderSignature: identityParts.renderSignature,
+          backendRowSignature: identityParts.backendRowSignature,
+          recordIdentity: identityParts.recordIdentity,
+          base_only: false,
+          include_evidence: true,
+          include_compare: false,
+          include_import_source_rows: false,
+          bypassCache: true,
+          invalidateCache: true,
+          rerender: false
+        });
+        if (!isOwnerSnapshotCurrent(ownerSnapshot)) {
+          restorePreviewStateSnapshot(previewBefore);
+          return false;
+        }
+        if (refreshResult === false || refreshResult?.ok === false || refreshResult?.soft_failure === true || refreshResult?.evidence_refresh_failed === true) {
+          restorePreviewStateSnapshot(previewBefore);
+          pane.__last_nonfatal_warning = trimStr(refreshResult?.message || refreshResult?.error || 'Evidence was attached, but the row could not be refreshed.');
+          st.warning_text = pane.__last_nonfatal_warning;
+          return false;
+        }
+      } else {
+        const refreshResult = await refreshAttachedContext({ softRefresh: true });
+        if (!isOwnerSnapshotCurrent(ownerSnapshot)) {
+          restorePreviewStateSnapshot(previewBefore);
+          return false;
+        }
+        if (refreshResult === false || refreshResult?.ok === false || refreshResult?.soft_failure === true || refreshResult?.evidence_refresh_failed === true) {
+          restorePreviewStateSnapshot(previewBefore);
+          pane.__last_nonfatal_warning = trimStr(refreshResult?.message || refreshResult?.error || 'Evidence was attached, but the row could not be refreshed.');
+          st.warning_text = pane.__last_nonfatal_warning;
+          return false;
+        }
+      }
 
-    syncActiveRowEvidencePresence();
-    const queueCountLoadResult = await ensureBulkAuthoriseQueueCountLoadedForAttachedDefault({ force: true });
-    if (queueCountLoadResult?.stateChanged && typeof opts.rerenderWorkbench === 'function') {
-      await opts.rerenderWorkbench('evidence-queue-count-loaded');
-    }
-    pane.active_queue_id = null;
-    pane.active_queue_item = null;
-    reconcileEvidenceState();
-    pane.active_tab = 'attached';
-    pane.__attached_manual_override = true;
-    pane.__queue_manual_override = false;
-    pane.__queue_manual_override_identity = '';
+      if (typeof pane.__abortPreviewPresignRequests === 'function') {
+        try { pane.__abortPreviewPresignRequests('bulk-authorise-explicit-attach-success'); } catch {}
+      }
+      if (pane.__preview_recovery_timer) {
+        try { window.clearTimeout(pane.__preview_recovery_timer); } catch {}
+        pane.__preview_recovery_timer = null;
+      }
+      pane.__preview_target_key = '';
+      pane.__preview_signed_url = '';
+      pane.__preview_load_requested_target_key = '';
+      pane.__preview_recovery_key = '';
+      pane.__preview_recovery_attempt = 0;
 
-    if (typeof opts.rerenderWorkbench === 'function') {
-      await opts.rerenderWorkbench('evidence-attach-success-refresh');
-    } else if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
-      await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][ATTACH-REFRESH]');
+      syncActiveRowEvidencePresence();
+      patchBulkAuthoriseModalEvidenceState({ forceAttached: true, explicitAttach: true });
+      const queueCountLoadResult = await ensureBulkAuthoriseQueueCountLoadedForAttachedDefault({ force: true });
+      if (queueCountLoadResult?.stateChanged && typeof opts.rerenderWorkbench === 'function') {
+        await opts.rerenderWorkbench('evidence-queue-count-loaded');
+      }
+      pane.active_queue_id = null;
+      pane.active_queue_item = null;
+      reconcileEvidenceState();
+      pane.active_tab = 'attached';
+      pane.__attached_manual_override = true;
+      pane.__queue_manual_override = false;
+      pane.__queue_manual_override_identity = '';
+
+      if (typeof opts.rerenderWorkbench === 'function') {
+        await opts.rerenderWorkbench('evidence-attach-success-refresh');
+      } else if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
+        await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][ATTACH-REFRESH]');
+      }
+      return true;
+    } catch (err) {
+      restorePreviewStateSnapshot(previewBefore);
+      pane.__last_nonfatal_warning = trimStr(err?.message || err || 'Evidence was attached, but the row could not be refreshed.');
+      st.warning_text = pane.__last_nonfatal_warning;
+      return false;
     }
-    return true;
   };
 
   if (!getLiveEvidencePaneRoot()) return;
@@ -136734,11 +137120,19 @@ function bindBulkProcessEvidencePane(state) {
     if (!isActiveBind()) return;
 
     const signatureBefore = capturePaneSignature();
-    const reconcileResult = reconcileEvidenceState();
+    const suppressInitialDefaultCorrection = !!(isPreviewPresignPending() || hasValidQueuePreviewSelection());
+    const reconcileResult = suppressInitialDefaultCorrection
+      ? {
+          active_identity: getActiveIdentity(),
+          resolved_source: trimStr(pane.active_tab || '').toLowerCase() === 'attached' ? 'attached' : 'queue',
+          selected_preview_changed: false,
+          skipped_default_correction: true
+        }
+      : reconcileEvidenceState();
     let shouldRerenderAfterQueueCountLoad = false;
     if (!isActiveBind()) return;
 
-    if (String(reconcileResult?.resolved_source || '').trim().toLowerCase() === 'queue') {
+    if (!suppressInitialDefaultCorrection && String(reconcileResult?.resolved_source || '').trim().toLowerCase() === 'queue') {
       const bulkAuthContext = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
         ? resolveBulkAuthoriseTimesheetsEvidenceContext(st)
         : { isBulkAuthoriseTimesheets: false };
@@ -136752,19 +137146,13 @@ function bindBulkProcessEvidencePane(state) {
         if (queueOverrideForCurrentRow) {
           await ensureQueueLoadedForActiveTab();
         } else {
-          pane.active_tab = 'attached';
-          pane.__attached_manual_override = true;
-          pane.__queue_manual_override = false;
-          pane.__queue_manual_override_identity = '';
-          pane.active_queue_id = null;
-          pane.active_queue_item = null;
           const queueCountLoadResult = await ensureBulkAuthoriseQueueCountLoadedForAttachedDefault();
           shouldRerenderAfterQueueCountLoad = shouldRerenderAfterQueueCountLoad || !!queueCountLoadResult?.stateChanged;
         }
       } else {
         await ensureQueueLoadedForActiveTab();
       }
-    } else {
+    } else if (!suppressInitialDefaultCorrection) {
       const bulkAuthContext = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
         ? resolveBulkAuthoriseTimesheetsEvidenceContext(st)
         : { isBulkAuthoriseTimesheets: false };
@@ -136774,6 +137162,8 @@ function bindBulkProcessEvidencePane(state) {
       } else {
         syncQueueSelectionOnly();
       }
+    } else {
+      syncQueueSelectionOnly();
     }
     if (!isActiveBind()) return;
     const signatureAfter = capturePaneSignature();
@@ -140227,8 +140617,6 @@ function captureBulkProcessUiSnapshot(state) {
   return snapshot;
 }
 
-
-
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const st = (state && typeof state === 'object') ? state : {};
   st.evidence_pane_state =
@@ -140338,6 +140726,56 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       key: `${mode}|${itemId}|${fileKey}`
     };
   };
+
+  const previewSelectionAtStart = getSelectionIdentity(pane);
+  const previewStateAtStart = {
+    active_tab: pane.active_tab,
+    active_queue_id: pane.active_queue_id,
+    active_queue_item: (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? deep(pane.active_queue_item) : pane.active_queue_item,
+    active_attached_id: pane.active_attached_id,
+    active_attached_item: (pane.active_attached_item && typeof pane.active_attached_item === 'object') ? deep(pane.active_attached_item) : pane.active_attached_item,
+    active_attached_pdf_page: pane.active_attached_pdf_page,
+    __preview_target_key: pane.__preview_target_key,
+    __preview_signed_url: pane.__preview_signed_url,
+    __preview_load_requested_target_key: pane.__preview_load_requested_target_key,
+    __active_attached_preview_target: pane.__active_attached_preview_target,
+    __preview_signed_url_cache: (pane.__preview_signed_url_cache && typeof pane.__preview_signed_url_cache === 'object') ? deep(pane.__preview_signed_url_cache) : pane.__preview_signed_url_cache
+  };
+  const activeIdentityAtStart = getActiveIdentity();
+  const activeContextProfile = trimStr(st.active_context?.profile || st.active_context?.context_profile || st.active_ctx?.profile || st.active_ctx?.context_profile || '').toLowerCase();
+  const activeContextAuthoritative = !!(
+    st.active_context &&
+    st.active_context.ok !== false &&
+    st.active_context.evidence_refresh_failed !== true &&
+    st.active_context.soft_failure !== true &&
+    st.active_context.__bulk_process_context_degraded !== true &&
+    st.active_context.__bulk_process_context_stale !== true &&
+    st.active_context.__bulk_process_context_auth_failed !== true &&
+    st.active_context.hydration_required !== true &&
+    st.active_context.context_stale !== true &&
+    st.active_context.is_hydrated !== false &&
+    st.__active_context_is_minimal !== true &&
+    activeContextProfile !== 'status_header' &&
+    activeContextProfile !== 'list' &&
+    activeContextProfile !== 'dataset_row' &&
+    st.__bulk_process_row_change_in_progress !== true &&
+    st.__active_context_pending !== true
+  );
+  if (!activeContextAuthoritative) {
+    st.evidence_pane_state = pane;
+    return {
+      active_identity: activeIdentityAtStart,
+      resolved_source: trimStr(pane.active_tab || '').toLowerCase() === 'attached' ? 'attached' : 'queue',
+      has_any_attached: Array.isArray(pane.attached_rows) && pane.attached_rows.length > 0,
+      has_timesheet_attached: Array.isArray(pane.attached_rows) && pane.attached_rows.some((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET'),
+      active_attached_id: trimStr(pane.active_attached_id || '') || null,
+      active_queue_id: trimStr(pane.active_queue_id || '') || null,
+      selected_preview_changed: false,
+      requires_evidence_hydration: pane.__requires_evidence_hydration === true,
+      non_authoritative_context_ignored: true,
+      preserved_existing_preview: !!previewSelectionAtStart.key
+    };
+  }
 
   const collectAttachedRows = () => {
     const sourceSets = [
@@ -140661,14 +141099,8 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       pane.active_queue_item = null;
       pane.__requires_evidence_hydration = false;
     } else if (metadataExpectsEvidence) {
-      resolvedSource = 'attached';
-      pane.active_tab = 'attached';
-      pane.__queue_manual_override = false;
-      pane.__queue_manual_override_identity = '';
       pane.__attached_manual_override = false;
       pane.__requires_evidence_hydration = true;
-      pane.active_queue_id = null;
-      pane.active_queue_item = null;
     } else {
       pane.__requires_evidence_hydration = false;
     }
@@ -140683,12 +141115,9 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       resolvedSource = 'attached';
       pane.__requires_evidence_hydration = false;
     } else if (metadataExpectsEvidence && !queueOverride) {
-      resolvedSource = 'attached';
       pane.__attached_manual_override = false;
       pane.__requires_evidence_hydration = true;
       pane.__synthetic_attached_fallback_suppressed = hasSyntheticAttachedFallback;
-      pane.active_queue_id = null;
-      pane.active_queue_item = null;
     } else if (!hasAnyAttachedEvidence) {
       resolvedSource = 'queue';
       pane.__requires_evidence_hydration = false;
@@ -140757,7 +141186,10 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   }
 
   const nextSelection = getSelectionIdentity(pane);
-  const selectedPreviewChanged = previousSelection.key !== nextSelection.key;
+  const nextSelectionBlank = nextSelection.key === 'queue||' || nextSelection.key === 'attached||' || /^\w+\|\|$/.test(nextSelection.key) || !String(nextSelection.key || '').replace(/\|/g, '');
+  const previousSelectionValid = !!previousSelection.key && previousSelection.key !== 'queue||' && previousSelection.key !== 'attached||' && !/^\w+\|\|$/.test(previousSelection.key);
+  const validToBlankSelection = !!(previousSelectionValid && nextSelectionBlank && activeIdentityAtStart === activeIdentity);
+  const selectedPreviewChanged = previousSelection.key !== nextSelection.key && !validToBlankSelection;
   const ownerIdentity = getBulkAuthoriseOwnerIdentity();
   const previousPreviewIdentity = trimStr(pane.__preview_identity || '');
   if (isBulkAuthoriseTimesheets && previousPreviewIdentity && ownerIdentity && previousPreviewIdentity !== ownerIdentity) {
@@ -140781,7 +141213,23 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     }
   }
 
-  if (selectedPreviewChanged) {
+  let preservedExistingPreview = false;
+  if (validToBlankSelection) {
+    pane.active_tab = previewStateAtStart.active_tab;
+    pane.active_queue_id = previewStateAtStart.active_queue_id;
+    pane.active_queue_item = previewStateAtStart.active_queue_item;
+    pane.active_attached_id = previewStateAtStart.active_attached_id;
+    pane.active_attached_item = previewStateAtStart.active_attached_item;
+    pane.active_attached_pdf_page = previewStateAtStart.active_attached_pdf_page;
+    pane.__preview_target_key = previewStateAtStart.__preview_target_key;
+    pane.__preview_signed_url = previewStateAtStart.__preview_signed_url;
+    pane.__preview_load_requested_target_key = previewStateAtStart.__preview_load_requested_target_key;
+    pane.__active_attached_preview_target = previewStateAtStart.__active_attached_preview_target;
+    if (previewStateAtStart.__preview_signed_url_cache && typeof previewStateAtStart.__preview_signed_url_cache === 'object') {
+      pane.__preview_signed_url_cache = previewStateAtStart.__preview_signed_url_cache;
+    }
+    preservedExistingPreview = true;
+  } else if (selectedPreviewChanged) {
     if (typeof pane.__abortPreviewPresignRequests === 'function') {
       try { pane.__abortPreviewPresignRequests('selection-changed'); } catch {}
     }
@@ -140804,9 +141252,19 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     active_attached_id: trimStr(pane.active_attached_id || '') || null,
     active_queue_id: trimStr(pane.active_queue_id || '') || null,
     selected_preview_changed: selectedPreviewChanged,
-    requires_evidence_hydration: pane.__requires_evidence_hydration === true
+    requires_evidence_hydration: pane.__requires_evidence_hydration === true,
+    preserved_existing_preview: preservedExistingPreview,
+    real_selected_artifact_changed: selectedPreviewChanged,
+    active_row_changed: activeIdentityAtStart !== activeIdentity,
+    selected_artifact_removed: false,
+    non_authoritative_context_ignored: false
   };
 }
+
+
+
+
+
 async function rerenderBulkProcessWorkbench(state, logPrefix) {
   const prefix = String(logPrefix || '[TS][BULK-PROCESS]');
   const st = (state && typeof state === 'object') ? state : null;
@@ -154389,7 +154847,6 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
   return { ok: true };
 }
 
-
 async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][ROW-CHANGE]');
   GC('handleBulkProcessRowChange');
@@ -154443,6 +154900,131 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     opts.adoption_flow === true
   );
   const skipDirtyGuard = opts.skipDirtyGuard === true || opts.skip_dirty_guard === true || deferContextRefreshAfterPatch;
+  const getModalOpenToken = () => trimStr(
+    opts.modalOpenToken ||
+    opts.modal_open_token ||
+    st.__bulk_process_modal_open_token ||
+    st.__bulkProcessModalOpenToken ||
+    window.modalCtx?.__bulk_process_modal_open_token ||
+    window.modalCtx?.__bulkProcessModalOpenToken ||
+    ''
+  );
+  const getFrameKind = () => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      return trimStr(fr?.kind || window.modalCtx?.modal_kind || window.modalCtx?.kind || '');
+    } catch {
+      return '';
+    }
+  };
+  const getBulkProcessLiveState = () => {
+    try {
+      const live = window.modalCtx?.bulkProcessState;
+      return (live && typeof live === 'object') ? live : null;
+    } catch {
+      return null;
+    }
+  };
+  const buildActiveIdentityFromState = () => {
+    const activeRowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
+    if (activeRowKey) return activeRowKey;
+    const activeTsId = trimStr(st.active_row?.timesheet_id || st.active_row?.current_timesheet_id || st.active_details?.current_timesheet_id || st.active_details?.timesheet?.timesheet_id || '');
+    if (activeTsId) return `timesheet:${activeTsId}`;
+    const activeCwId = trimStr(st.active_row?.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
+    if (activeCwId) return `contract_week:${activeCwId}`;
+    return '';
+  };
+  const isModalOwnerCurrent = (token = getModalOpenToken(), expectedIdentity = '') => {
+    if (st.__bulk_process_auth_failed === true || st.__bulk_process_async_cancelled === true) return false;
+    const expectedToken = trimStr(st.__bulk_process_modal_open_token || st.__bulkProcessModalOpenToken || '');
+    const actualToken = trimStr(token || '');
+    if (expectedToken && actualToken && expectedToken !== actualToken) return false;
+    const liveState = getBulkProcessLiveState();
+    if (liveState && liveState !== st) return false;
+    const kind = getFrameKind();
+    if (kind && kind !== 'bulk-process-workbench') return false;
+    const ownerKind = trimStr(window.modalCtx?.owner_kind || '').toLowerCase();
+    if (ownerKind && ownerKind !== 'bulk_process') return false;
+    const modalEntity = trimStr(window.modalCtx?.entity || '').toLowerCase();
+    if (modalEntity && modalEntity !== 'bulk-process') return false;
+    const expected = trimStr(expectedIdentity || '');
+    if (expected) {
+      const liveIdentity = buildActiveIdentityFromState();
+      if (liveIdentity && liveIdentity !== expected) return false;
+    }
+    return true;
+  };
+  const isAuthFailureError = (err) => {
+    const status = Number(err?.status || err?.statusCode || err?.response?.status || 0) || 0;
+    if (status === 401) return true;
+    const text = trimStr(err?.message || err?.error || err?.body || err || '').toLowerCase();
+    return !!(text.includes('401') && (text.includes('auth') || text.includes('unauthor') || text.includes('session')));
+  };
+  const markRowChangeAuthFailure = (err = {}) => {
+    st.__bulk_process_auth_failed = true;
+    st.__bulk_process_async_cancelled = true;
+    st.__bulk_process_auth_failed_at = new Date().toISOString();
+    st.__bulk_process_auth_failed_status = Number(err?.status || err?.statusCode || 401) || 401;
+  };
+  const makeRowContextFailurePayload = (reason, rowObj = {}, payload = {}, extra = {}) => ({
+    ok: false,
+    context_kind: 'bulk_process_row_context',
+    context_type: 'bulk_process',
+    row_key: trimStr(extra.row_key || payload?.row_key || rowObj?.row_key || ''),
+    current_timesheet_id: trimStr(extra.current_timesheet_id || payload?.current_timesheet_id || payload?.timesheet_id || rowObj?.current_timesheet_id || rowObj?.timesheet_id || ''),
+    requested_timesheet_id: trimStr(extra.requested_timesheet_id || payload?.requested_timesheet_id || rowObj?.requested_timesheet_id || rowObj?.timesheet_id || ''),
+    expected_timesheet_id: trimStr(extra.expected_timesheet_id || payload?.expected_timesheet_id || rowObj?.expected_timesheet_id || rowObj?.current_timesheet_id || rowObj?.timesheet_id || ''),
+    contract_week_id: trimStr(extra.contract_week_id || payload?.contract_week_id || rowObj?.contract_week_id || ''),
+    __bulk_process_row_context_failed: true,
+    __bulk_process_context_degraded: extra.degraded !== false,
+    __bulk_process_context_stale: extra.stale === true,
+    __bulk_process_context_auth_failed: extra.auth_failed === true,
+    __bulk_process_context_failure_reason: trimStr(reason || 'row-context-failed'),
+    message: trimStr(extra.message || payload?.message || payload?.error || reason || 'Bulk Process row context could not be refreshed.'),
+    error: trimStr(extra.error || payload?.error || payload?.message || reason || '')
+  });
+  const isRowContextPayloadDegraded = (payload) => {
+    if (!payload || typeof payload !== 'object') return true;
+    return !!(
+      payload.ok === false ||
+      payload.evidence_refresh_failed === true ||
+      payload.soft_failure === true ||
+      payload.__bulk_process_row_context_failed === true ||
+      payload.__bulk_process_context_degraded === true ||
+      payload.__bulk_process_context_stale === true ||
+      payload.__bulk_process_context_auth_failed === true
+    );
+  };
+  const getIdentityPartsFromRow = (rowLike = {}) => {
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const rowKey = trimStr(row.row_key || row.new_row_key || '');
+    const timesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
+    const contractWeekId = trimStr(row.contract_week_id || '');
+    return {
+      rowKey,
+      timesheetId,
+      contractWeekId,
+      identity: rowKey || (timesheetId ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : ''))
+    };
+  };
+  const identitiesCompatible = (expected = {}, actual = {}) => {
+    const exp = (expected && typeof expected === 'object') ? expected : {};
+    const got = (actual && typeof actual === 'object') ? actual : {};
+    const expKey = trimStr(exp.rowKey || exp.row_key || exp.identity || '');
+    const gotKey = trimStr(got.rowKey || got.row_key || got.identity || '');
+    const expTs = trimStr(exp.timesheetId || exp.timesheet_id || '');
+    const gotTs = trimStr(got.timesheetId || got.timesheet_id || '');
+    const expCw = trimStr(exp.contractWeekId || exp.contract_week_id || '');
+    const gotCw = trimStr(got.contractWeekId || got.contract_week_id || '');
+    if (expKey && gotKey && expKey !== gotKey) return false;
+    if (/^timesheet:/i.test(expKey) && gotCw && !gotTs) return false;
+    if (/^contract_week:/i.test(expKey) && gotTs && !gotCw) return false;
+    if (expTs && gotTs && expTs !== gotTs) return false;
+    if (expCw && gotCw && expCw !== gotCw) return false;
+    if (expTs && gotCw && !gotTs) return false;
+    if (expCw && gotTs && !gotCw && /^contract_week:/i.test(expKey)) return false;
+    return true;
+  };
   const currentKey = trimStr(st.active_row_key || '');
   if (!wantedKey && forceRefresh) wantedKey = currentKey;
   if (!wantedKey) {
@@ -154451,13 +155033,29 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   }
 
   if (wantedKey === currentKey && !forceRefresh && !deferContextRefreshAfterPatch) {
-    traceBulkProcessDirty(st, 'row-selection-noop', {
-      source: 'handleBulkProcessRowChange',
-      dirty_source: 'row selection',
-      note: 'same row selected; dirty unchanged'
-    });
-    GE();
-    return true;
+    const activeContextHydrated = !!(
+      st.__active_context_is_minimal !== true &&
+      st.active_context &&
+      st.active_ctx &&
+      st.active_details &&
+      st.active_context.hydration_required !== true &&
+      st.active_context.context_stale !== true &&
+      !isRowContextPayloadDegraded(st.active_context)
+    );
+    if (activeContextHydrated) {
+      traceBulkProcessDirty(st, 'row-selection-noop', {
+        source: 'handleBulkProcessRowChange',
+        dirty_source: 'row selection',
+        note: 'same row selected and already hydrated; dirty unchanged'
+      });
+      GE();
+      return true;
+    }
+    if (st.__bulk_process_row_context_hydration_inflight && trimStr(st.__bulk_process_row_context_hydration_identity || '') === wantedKey) {
+      try { await st.__bulk_process_row_context_hydration_inflight; } catch {}
+      GE();
+      return true;
+    }
   }
 
   const rerenderWorkbench = async (reason = 'row-change', force = false) => {
@@ -154578,9 +155176,32 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     return `${activeTab}|${itemId}|${fileKey}`;
   };
 
-  const clearLivePreviewTargetState = (paneState, reason = 'row-change') => {
+  const clearLivePreviewTargetState = (paneState, reason = 'row-change', clearOptions = {}) => {
     const paneObj = (paneState && typeof paneState === 'object') ? paneState : null;
-    if (!paneObj) return;
+    const clearOpts = (clearOptions && typeof clearOptions === 'object') ? clearOptions : {};
+    if (!paneObj) return false;
+    const hasLivePreview = !!(
+      trimStr(paneObj.__preview_target_key || '') ||
+      trimStr(paneObj.__preview_signed_url || '') ||
+      trimStr(paneObj.__preview_load_requested_target_key || '') ||
+      trimStr(paneObj.__active_attached_preview_target || '')
+    );
+    const allowed = !!(
+      clearOpts.force === true ||
+      clearOpts.allowClear === true ||
+      clearOpts.identityChanged === true ||
+      clearOpts.identity_changed === true ||
+      clearOpts.ownerChanged === true ||
+      clearOpts.owner_changed === true ||
+      clearOpts.userSelectionChanged === true ||
+      clearOpts.user_selection_changed === true ||
+      clearOpts.artifactRemoved === true ||
+      clearOpts.artifact_removed === true ||
+      reason === 'row-change-identity' ||
+      reason === 'row-change-force-clear' ||
+      reason === 'selected-evidence-removed'
+    );
+    if (hasLivePreview && !allowed) return false;
     if (typeof paneObj.__abortPreviewPresignRequests === 'function') {
       try { paneObj.__abortPreviewPresignRequests(String(reason || 'row-change')); } catch {}
     }
@@ -154588,6 +155209,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     paneObj.__preview_signed_url = '';
     paneObj.__preview_load_requested_target_key = '';
     paneObj.__active_attached_preview_target = '';
+    return true;
   };
 
   const syncQueueSelectionFromRows = (paneState) => {
@@ -154595,12 +155217,22 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     if (!paneObj) return null;
     const queueRows = Array.isArray(paneObj.queue_rows) ? paneObj.queue_rows : [];
     const wantedQueueId = trimStr(paneObj.active_queue_id || '');
+    const previousItem = (paneObj.active_queue_item && typeof paneObj.active_queue_item === 'object') ? paneObj.active_queue_item : null;
+    const queueLoaded = paneObj.__queue_loaded === true;
     let activeQueueItem = wantedQueueId
       ? (queueRows.find((item) => trimStr(item?.id || item?.queue_id || '') === wantedQueueId) || null)
       : null;
+    if (!activeQueueItem && previousItem && !queueLoaded) return previousItem;
     if (!activeQueueItem) activeQueueItem = queueRows[0] || null;
-    paneObj.active_queue_id = activeQueueItem ? trimStr(activeQueueItem.id || activeQueueItem.queue_id || '') || null : null;
-    paneObj.active_queue_item = activeQueueItem ? deep(activeQueueItem) : null;
+    if (!activeQueueItem) {
+      if (queueLoaded) {
+        paneObj.active_queue_id = null;
+        paneObj.active_queue_item = null;
+      }
+      return paneObj.active_queue_item || null;
+    }
+    paneObj.active_queue_id = trimStr(activeQueueItem.id || activeQueueItem.queue_id || '') || null;
+    paneObj.active_queue_item = deep(activeQueueItem);
     return paneObj.active_queue_item;
   };
 
@@ -154618,14 +155250,40 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     return trimStr(st.active_row_key || st.active_row?.row_key || '');
   };
 
-     const prepareQueueStateForActiveIdentity = async (prepareOptions = {}) => {
+  const prepareQueueStateForActiveIdentity = async (prepareOptions = {}) => {
     const prepareOpts = (prepareOptions && typeof prepareOptions === 'object') ? prepareOptions : {};
     const paneObj = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
     const activeIdentity = trimStr(prepareOpts.identity || getActiveRowIdentity());
-    if (!paneObj || !activeIdentity) {
+    const requestTokenObj = prepareOpts.requestToken && typeof prepareOpts.requestToken === 'object' ? prepareOpts.requestToken : null;
+    const modalToken = trimStr(prepareOpts.modalOpenToken || prepareOpts.modal_open_token || getModalOpenToken());
+    const isCurrent = (typeof prepareOpts.isCurrent === 'function') ? prepareOpts.isCurrent : null;
+    if (!paneObj) {
       return { active_identity: activeIdentity, queue_prepared: false, selected_preview_changed: false };
     }
+    if (!activeIdentity) {
+      paneObj.__queue_loading = false;
+      paneObj.__queue_last_error = '';
+      return { active_identity: activeIdentity, queue_prepared: false, selected_preview_changed: false, preserved: true };
+    }
+    if (!isModalOwnerCurrent(modalToken, activeIdentity)) {
+      return { active_identity: activeIdentity, queue_prepared: false, selected_preview_changed: false, stale: true };
+    }
+    if (requestTokenObj && (requestTokenObj.cancelled === true || trimStr(st.__bulk_process_active_row_change_request?.id || '') !== trimStr(requestTokenObj.id || ''))) {
+      return { active_identity: activeIdentity, queue_prepared: false, selected_preview_changed: false, stale: true };
+    }
+    if (isCurrent && !isCurrent()) {
+      return { active_identity: activeIdentity, queue_prepared: false, selected_preview_changed: false, stale: true };
+    }
+
     const selectionBefore = getPreviewSelectionSignature(paneObj);
+    const previewBefore = {
+      active_queue_id: paneObj.active_queue_id,
+      active_queue_item: paneObj.active_queue_item && typeof paneObj.active_queue_item === 'object' ? deep(paneObj.active_queue_item) : paneObj.active_queue_item,
+      __preview_target_key: paneObj.__preview_target_key,
+      __preview_signed_url: paneObj.__preview_signed_url,
+      __preview_load_requested_target_key: paneObj.__preview_load_requested_target_key,
+      __active_attached_preview_target: paneObj.__active_attached_preview_target
+    };
     const queueLoadedForIdentity = !!paneObj.__queue_loaded && trimStr(paneObj.__queue_loaded_identity || '') === activeIdentity;
     const hasAttachedPreviewForActiveRow = !!(
       String(paneObj.active_tab || '').trim().toLowerCase() === 'attached' &&
@@ -154649,9 +155307,22 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       paneObj.__queue_last_error = '';
       await refreshTimesheetImportsQueue(paneObj, {
         ownerState: st,
+        owner_kind: 'bulk_process',
+        modal_open_token: modalToken,
+        active_identity: activeIdentity,
+        request_token: requestTokenObj ? requestTokenObj.id : '',
         force: !!prepareOpts.forceQueueRefresh,
         suppressWhileBusy: false
       });
+    }
+    if (!isModalOwnerCurrent(modalToken, activeIdentity) || (isCurrent && !isCurrent())) {
+      paneObj.active_queue_id = previewBefore.active_queue_id;
+      paneObj.active_queue_item = previewBefore.active_queue_item;
+      paneObj.__preview_target_key = previewBefore.__preview_target_key;
+      paneObj.__preview_signed_url = previewBefore.__preview_signed_url;
+      paneObj.__preview_load_requested_target_key = previewBefore.__preview_load_requested_target_key;
+      paneObj.__active_attached_preview_target = previewBefore.__active_attached_preview_target;
+      return { active_identity: activeIdentity, queue_prepared: false, selected_preview_changed: false, stale: true };
     }
     paneObj.__queue_loaded = true;
     paneObj.__queue_loaded_identity = activeIdentity;
@@ -154660,7 +155331,20 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     syncQueueSelectionFromRows(paneObj);
     const selectionAfter = getPreviewSelectionSignature(paneObj);
     const selectedPreviewChanged = selectionBefore !== selectionAfter;
-    if (selectedPreviewChanged) clearLivePreviewTargetState(paneObj, 'row-change-queue-selection');
+    const selectionBeforeValid = !!selectionBefore && selectionBefore !== 'queue||' && selectionBefore !== 'attached||' && !/^\w+\|\|$/.test(selectionBefore);
+    const selectionAfterBlank = selectionAfter === 'queue||' || selectionAfter === 'attached||' || /^\w+\|\|$/.test(selectionAfter) || !selectionAfter.replace(/\|/g, '');
+    if (selectionBeforeValid && selectionAfterBlank) {
+      paneObj.active_queue_id = previewBefore.active_queue_id;
+      paneObj.active_queue_item = previewBefore.active_queue_item;
+      paneObj.__preview_target_key = previewBefore.__preview_target_key;
+      paneObj.__preview_signed_url = previewBefore.__preview_signed_url;
+      paneObj.__preview_load_requested_target_key = previewBefore.__preview_load_requested_target_key;
+      paneObj.__active_attached_preview_target = previewBefore.__active_attached_preview_target;
+      return { active_identity: activeIdentity, queue_prepared: true, selected_preview_changed: false, restored_valid_preview_selection: true };
+    }
+    if (selectedPreviewChanged) {
+      clearLivePreviewTargetState(paneObj, 'row-change-queue-selection', { userSelectionChanged: true });
+    }
     return { active_identity: activeIdentity, queue_prepared: true, selected_preview_changed: selectedPreviewChanged };
   };
 
@@ -154668,8 +155352,29 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const clearPreviewAndAttachedState = (optionsForClear = {}) => {
     const clearOpts = (optionsForClear && typeof optionsForClear === 'object') ? optionsForClear : {};
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
-    if (!pane) return;
-    if (clearOpts.clearPreview !== false) clearLivePreviewTargetState(pane, 'row-change');
+    if (!pane) return false;
+    const allowed = !!(
+      clearOpts.force === true ||
+      clearOpts.identityChanged === true ||
+      clearOpts.identity_changed === true ||
+      clearOpts.userSelectionChanged === true ||
+      clearOpts.user_selection_changed === true ||
+      clearOpts.artifactRemoved === true ||
+      clearOpts.artifact_removed === true
+    );
+    if (!allowed) return false;
+    if (clearOpts.clearPreview !== false) {
+      clearLivePreviewTargetState(
+        pane,
+        clearOpts.force ? 'row-change-force-clear' : 'row-change-identity',
+        {
+          force: clearOpts.force === true,
+          identityChanged: clearOpts.identityChanged === true || clearOpts.identity_changed === true,
+          userSelectionChanged: clearOpts.userSelectionChanged === true || clearOpts.user_selection_changed === true,
+          artifactRemoved: clearOpts.artifactRemoved === true || clearOpts.artifact_removed === true
+        }
+      );
+    }
     pane.active_tab = '';
     pane.__attached_manual_override = false;
     pane.__queue_manual_override = false;
@@ -154683,7 +155388,9 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     pane.active_pdf_page = 1;
     pane.active_zoom = 1;
     pane.active_rotation_deg = 0;
+    return true;
   };
+
 
   const applyEvidencePaneFromContext = async (applyOptions = {}) => {
     const applyOpts = (applyOptions && typeof applyOptions === 'object') ? applyOptions : {};
@@ -154693,6 +155400,16 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
     if (!pane) {
       return { active_identity: trimStr(getActiveRowIdentity()), resolved_source: 'queue', selected_preview_changed: false };
+    }
+    const requestTokenObj = applyOpts.requestToken && typeof applyOpts.requestToken === 'object' ? applyOpts.requestToken : null;
+    const modalToken = trimStr(applyOpts.modalOpenToken || applyOpts.modal_open_token || requestTokenObj?.modalOpenToken || getModalOpenToken());
+    const expectedIdentity = trimStr(applyOpts.expectedRowKey || applyOpts.expected_row_key || requestTokenObj?.rowKey || getActiveRowIdentity());
+    const stillCurrent = (typeof applyOpts.isCurrent === 'function') ? applyOpts.isCurrent : null;
+    if (!isModalOwnerCurrent(modalToken, expectedIdentity) || (stillCurrent && !stillCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
+      return { active_identity: expectedIdentity, resolved_source: trimStr(pane.active_tab || '').toLowerCase() || 'queue', selected_preview_changed: false, skipped: true, stale: true };
+    }
+    if (isRowContextPayloadDegraded(st.active_context) && applyOpts.allowDegradedContext !== true) {
+      return { active_identity: expectedIdentity, resolved_source: trimStr(pane.active_tab || '').toLowerCase() || 'queue', selected_preview_changed: false, skipped: true, degraded: true };
     }
     const selectionBefore = getPreviewSelectionSignature(pane);
     let reconcileResult = null;
@@ -154707,6 +155424,9 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         requires_evidence_hydration: false
       };
     }
+    if (!isModalOwnerCurrent(modalToken, expectedIdentity) || (stillCurrent && !stillCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
+      return { ...reconcileResult, selected_preview_changed: false, skipped: true, stale: true };
+    }
 
     let metadataRequiredEvidenceHydration = reconcileResult.requires_evidence_hydration === true;
     let evidenceHydrationAttempted = false;
@@ -154716,9 +155436,25 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         const activeRowForHydration = (st.active_row && typeof st.active_row === 'object') ? clone(st.active_row) : null;
         if (activeRowForHydration) {
           evidenceHydrationAttempted = true;
-          const hydratedLoad = await loadRowContext(activeRowForHydration, { includeEvidence: true, force: true });
+          const hydratedLoad = await loadRowContext(activeRowForHydration, {
+            includeEvidence: true,
+            force: true,
+            requestToken: requestTokenObj,
+            modalOpenToken: modalToken,
+            identity: expectedIdentity,
+            isCurrent: () => (!stillCurrent || stillCurrent()) && isModalOwnerCurrent(modalToken, expectedIdentity)
+          });
           if (!stillCurrent || stillCurrent()) {
             const hydratedContext = buildContextPayload({ rowObj: activeRowForHydration, contextPayload: hydratedLoad.payload });
+            if (!hydratedContext || hydratedContext.failed === true || isRowContextPayloadDegraded(hydratedContext.payload)) {
+              return {
+                active_identity: expectedIdentity,
+                resolved_source: trimStr(pane.active_tab || '').toLowerCase() || 'queue',
+                selected_preview_changed: false,
+                skipped: true,
+                degraded: true
+              };
+            }
             st.__suppress_dirty_marking = true;
             st.active_row = clone(hydratedContext.row || activeRowForHydration);
             st.active_row_key = trimStr(st.active_row?.row_key || st.active_row_key || '') || st.active_row_key || null;
@@ -154798,20 +155534,25 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         pane.active_tab = 'queue';
         pane.__attached_manual_override = false;
         pane.__queue_manual_override = true;
-        const queueResult = await prepareQueueStateForActiveIdentity({ identity: activeIdentity, forceQueueRefresh: !!applyOpts.forceQueueRefresh });
+        const queueResult = await prepareQueueStateForActiveIdentity({ identity: activeIdentity, forceQueueRefresh: !!applyOpts.forceQueueRefresh, requestToken: requestTokenObj, modalOpenToken: modalToken, isCurrent: () => !stillCurrent || stillCurrent() });
         reconcileResult.resolved_source = 'queue';
         reconcileResult.requires_evidence_hydration = false;
         reconcileResult.selected_preview_changed = !!(reconcileResult.selected_preview_changed || queueResult.selected_preview_changed);
       }
     } else if (!effectiveTimesheetEvidence && resolvedSource === 'queue' && activeIdentity && applyOpts.prepareQueue !== false) {
-      const queueResult = await prepareQueueStateForActiveIdentity({ identity: activeIdentity, forceQueueRefresh: !!applyOpts.forceQueueRefresh });
+      const queueResult = await prepareQueueStateForActiveIdentity({ identity: activeIdentity, forceQueueRefresh: !!applyOpts.forceQueueRefresh, requestToken: requestTokenObj, modalOpenToken: modalToken, isCurrent: () => !stillCurrent || stillCurrent() });
       reconcileResult.selected_preview_changed = !!(reconcileResult.selected_preview_changed || queueResult.selected_preview_changed);
     } else {
       syncQueueSelectionFromRows(pane);
     }
     const selectionAfter = getPreviewSelectionSignature(pane);
-    if (selectionBefore !== selectionAfter && !reconcileResult.selected_preview_changed) {
-      clearLivePreviewTargetState(pane, 'row-change-selection');
+    const selectionBeforeValid = !!selectionBefore && selectionBefore !== 'queue||' && selectionBefore !== 'attached||' && !/^\w+\|\|$/.test(selectionBefore);
+    const selectionAfterBlank = selectionAfter === 'queue||' || selectionAfter === 'attached||' || /^\w+\|\|$/.test(selectionAfter) || !selectionAfter.replace(/\|/g, '');
+    if (selectionBeforeValid && selectionAfterBlank) {
+      reconcileResult.selected_preview_changed = false;
+      reconcileResult.restored_valid_preview_selection = true;
+    } else if (selectionBefore !== selectionAfter && !reconcileResult.selected_preview_changed) {
+      clearLivePreviewTargetState(pane, 'row-change-selection', { userSelectionChanged: true });
       reconcileResult.selected_preview_changed = true;
     }
     st.evidence_pane_state = pane;
@@ -154821,6 +155562,18 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const buildContextPayload = ({ rowObj, contextPayload }) => {
     const row = (rowObj && typeof rowObj === 'object') ? deep(rowObj) : {};
     const payload = (contextPayload && typeof contextPayload === 'object') ? deep(contextPayload) : {};
+    if (isRowContextPayloadDegraded(payload)) {
+      return {
+        failed: true,
+        degraded: true,
+        details: null,
+        ctx: null,
+        related: null,
+        row,
+        payload,
+        message: trimStr(payload.message || payload.error || 'Bulk Process row context was not authoritative.')
+      };
+    }
     const dataRow = (payload.data_row && typeof payload.data_row === 'object')
       ? { ...row, ...payload.data_row, ...((payload.row_patch && typeof payload.row_patch === 'object') ? payload.row_patch : {}) }
       : { ...row, ...((payload.row_patch && typeof payload.row_patch === 'object') ? payload.row_patch : {}) };
@@ -154944,6 +155697,23 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const fetchSlimRowContext = async (rowObj, loadOptions = {}) => {
     const row = (rowObj && typeof rowObj === 'object') ? rowObj : {};
     const loadOpts = (loadOptions && typeof loadOptions === 'object') ? loadOptions : {};
+    const requestTokenObj = loadOpts.requestToken && typeof loadOpts.requestToken === 'object' ? loadOpts.requestToken : null;
+    const modalToken = trimStr(loadOpts.modalOpenToken || loadOpts.modal_open_token || requestTokenObj?.modalOpenToken || getModalOpenToken());
+    const requestIdentity = trimStr(loadOpts.identity || requestTokenObj?.rowKey || row.row_key || getIdentityPartsFromRow(row).identity || '');
+    const ownerExpectedIdentity = trimStr(
+      loadOpts.ownerExpectedIdentity ||
+      loadOpts.owner_expected_identity ||
+      loadOpts.activeIdentity ||
+      loadOpts.active_identity ||
+      requestTokenObj?.ownerExpectedIdentity ||
+      requestTokenObj?.owner_expected_identity ||
+      requestIdentity
+    );
+    const isCurrent = (typeof loadOpts.isCurrent === 'function') ? loadOpts.isCurrent : null;
+    if (!isModalOwnerCurrent(modalToken, ownerExpectedIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
+      return makeRowContextFailurePayload('stale-before-fetch', row, {}, { stale: true, degraded: true });
+    }
+
     const qs = new URLSearchParams();
     const add = (key, value) => {
       const s = trimStr(value);
@@ -154972,17 +155742,51 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const text = await res.text().catch(() => '');
     let json = null;
     try { json = text ? JSON.parse(text) : {}; } catch { json = null; }
+    const payload = (json && typeof json === 'object') ? json : {};
+
     if (!res.ok) {
-      const msg = (json && typeof json === 'object' && (json.message || json.error))
-        ? String(json.message || json.error)
+      const msg = (payload.message || payload.error)
+        ? String(payload.message || payload.error)
         : (text || `Bulk process row context failed (${res.status})`);
-      const err = new Error(msg);
-      err.status = res.status;
-      err.body = text || '';
-      err.json = json;
-      throw err;
+      if (Number(res.status) === 401) {
+        markRowChangeAuthFailure({ status: res.status, message: msg, payload });
+        return makeRowContextFailurePayload('auth-failed', row, payload, { auth_failed: true, degraded: true, message: msg, error: msg });
+      }
+      return makeRowContextFailurePayload('http-error', row, payload, { degraded: true, message: msg, error: msg });
     }
-    return (json && typeof json === 'object') ? json : {};
+
+    payload.profile = trimStr(payload.profile || payload.context_profile || profile || 'active_row_visible') || 'active_row_visible';
+    payload.context_profile = trimStr(payload.context_profile || payload.profile || profile || 'active_row_visible') || 'active_row_visible';
+    payload.__context_options = {
+      profile: payload.profile,
+      context_profile: payload.context_profile,
+      include_evidence: includeEvidence
+    };
+
+    if (isRowContextPayloadDegraded(payload)) {
+      return makeRowContextFailurePayload('degraded-row-context', row, payload, {
+        degraded: true,
+        message: payload.message || payload.error || 'Bulk Process row context was degraded.'
+      });
+    }
+
+    const expectedParts = getIdentityPartsFromRow(row);
+    const actualParts = getIdentityPartsFromRow({
+      ...(payload.data_row && typeof payload.data_row === 'object' ? payload.data_row : {}),
+      ...(payload.row && typeof payload.row === 'object' ? payload.row : {}),
+      row_key: payload.row_key || payload.data_row?.row_key || payload.row?.row_key,
+      current_timesheet_id: payload.current_timesheet_id || payload.timesheet_id || payload.data_row?.current_timesheet_id || payload.data_row?.timesheet_id || payload.row?.current_timesheet_id || payload.row?.timesheet_id,
+      contract_week_id: payload.contract_week_id || payload.data_row?.contract_week_id || payload.row?.contract_week_id
+    });
+    if (!identitiesCompatible(expectedParts, actualParts)) {
+      return makeRowContextFailurePayload('identity-mismatch', row, payload, { stale: true, degraded: true, message: 'Bulk Process row context belonged to a different row.' });
+    }
+
+    if (!isModalOwnerCurrent(modalToken, ownerExpectedIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
+      return makeRowContextFailurePayload('stale-after-fetch', row, payload, { stale: true, degraded: true });
+    }
+
+    return payload;
   };
 
   const getRowContextCacheKey = (rowObj, cacheOptions = {}) => {
@@ -155012,6 +155816,19 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const loadRowContext = async (rowObj, loadOptions = {}) => {
     const row = (rowObj && typeof rowObj === 'object') ? deep(rowObj) : {};
     const loadOpts = (loadOptions && typeof loadOptions === 'object') ? loadOptions : {};
+    const requestTokenObj = loadOpts.requestToken && typeof loadOpts.requestToken === 'object' ? loadOpts.requestToken : null;
+    const modalToken = trimStr(loadOpts.modalOpenToken || loadOpts.modal_open_token || requestTokenObj?.modalOpenToken || getModalOpenToken());
+    const requestIdentity = trimStr(loadOpts.identity || requestTokenObj?.rowKey || row.row_key || getIdentityPartsFromRow(row).identity || '');
+    const ownerExpectedIdentity = trimStr(
+      loadOpts.ownerExpectedIdentity ||
+      loadOpts.owner_expected_identity ||
+      loadOpts.activeIdentity ||
+      loadOpts.active_identity ||
+      requestTokenObj?.ownerExpectedIdentity ||
+      requestTokenObj?.owner_expected_identity ||
+      requestIdentity
+    );
+    const isCurrent = (typeof loadOpts.isCurrent === 'function') ? loadOpts.isCurrent : null;
     const profile = trimStr(loadOpts.profile || loadOpts.context_profile || 'active_row_visible').toLowerCase() || 'active_row_visible';
     const includeEvidence = !!(
       loadOpts.includeEvidence === true ||
@@ -155023,16 +155840,32 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const cacheStore = getCacheStore();
     const inflightStore = getInflightStore();
     const cacheKey = getRowContextCacheKey(row, { includeEvidence, profile });
-    const cached = (!force && cacheKey && cacheStore[cacheKey] && contextHasRequiredOptions(cacheStore[cacheKey], { includeEvidence, profile }))
+    const inflightKey = `${cacheKey}|${trimStr(requestTokenObj?.id || requestIdentity || '')}`;
+
+    if (!isModalOwnerCurrent(modalToken, ownerExpectedIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
+      return { payload: makeRowContextFailurePayload('stale-load-context', row, {}, { stale: true, degraded: true }), fromCache: false, failed: true };
+    }
+
+    const cached = (!force && cacheKey && cacheStore[cacheKey] && contextHasRequiredOptions(cacheStore[cacheKey], { includeEvidence, profile }) && !isRowContextPayloadDegraded(cacheStore[cacheKey]))
       ? cacheStore[cacheKey]
       : null;
     if (cached) return { payload: deep(cached), fromCache: true };
-    if (!force && cacheKey && inflightStore[cacheKey]) {
-      const reused = await inflightStore[cacheKey];
-      return { payload: deep(reused), fromCache: true };
+    if (!force && inflightKey && inflightStore[inflightKey]) {
+      const reused = await inflightStore[inflightKey];
+      return { payload: deep(reused), fromCache: false };
     }
+
     const loader = (async () => {
-      const payload = await fetchSlimRowContext(row, { includeEvidence, profile });
+      const payload = await fetchSlimRowContext(row, {
+        includeEvidence,
+        profile,
+        requestToken: requestTokenObj,
+        modalOpenToken: modalToken,
+        identity: requestIdentity,
+        ownerExpectedIdentity,
+        isCurrent
+      });
+      if (isRowContextPayloadDegraded(payload)) return payload;
       const stored = {
         ...deep(payload),
         __context_options: {
@@ -155042,16 +155875,22 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         },
         __cached_at: Date.now()
       };
-      if (cacheKey) cacheStore[cacheKey] = deep(stored);
+      if (cacheKey && !isRowContextPayloadDegraded(stored)) cacheStore[cacheKey] = deep(stored);
       return stored;
     })();
-    if (cacheKey) inflightStore[cacheKey] = loader;
+    if (inflightKey) inflightStore[inflightKey] = loader;
     try {
       const loaded = await loader;
+      if (isRowContextPayloadDegraded(loaded)) {
+        return { payload: deep(loaded), fromCache: false, failed: true };
+      }
+      if (!isModalOwnerCurrent(modalToken, ownerExpectedIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
+        return { payload: makeRowContextFailurePayload('stale-loaded-context', row, loaded, { stale: true, degraded: true }), fromCache: false, failed: true };
+      }
       return { payload: deep(loaded), fromCache: false };
     } finally {
-      if (cacheKey && inflightStore[cacheKey] === loader) {
-        try { delete inflightStore[cacheKey]; } catch {}
+      if (inflightKey && inflightStore[inflightKey] === loader) {
+        try { delete inflightStore[inflightKey]; } catch {}
       }
     }
   };
@@ -155059,19 +155898,38 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const preloadAdjacentRows = (activeRow, preloadOptions = {}) => {
     const cfg = (preloadOptions && typeof preloadOptions === 'object') ? preloadOptions : {};
     const activeKey = trimStr(activeRow?.row_key || '');
+    const modalToken = trimStr(cfg.modalOpenToken || cfg.modal_open_token || getModalOpenToken());
     if (!activeKey) return;
+    if (st.__bulk_process_auth_failed === true || st.__bulk_process_async_cancelled === true) return;
+    if (st.__bulk_process_direct_seed_open === true && st.__bulk_process_direct_seed_hydration_complete !== true) return;
+    if (st.__bulk_process_row_change_in_progress === true && cfg.allowDuringCompletedRowChange !== true) return;
+    if (!isModalOwnerCurrent(modalToken, activeKey)) return;
     const visible = (typeof getBulkProcessVisibleRows === 'function') ? getBulkProcessVisibleRows(st) : null;
     const visibleRows = Array.isArray(visible?.visible_rows) ? visible.visible_rows : allRows;
     const index = visibleRows.findIndex((row) => trimStr(row?.row_key || '') === activeKey);
     if (index < 0) return;
     const candidates = [visibleRows[index - 1], visibleRows[index + 1]].filter((row) => row && typeof row === 'object');
     for (const candidate of candidates) {
-      const candidateCacheKey = getRowContextCacheKey(candidate, { includeEvidence: false });
+      const candidateCacheKey = getRowContextCacheKey(candidate, { includeEvidence: false, profile: 'status_header' });
       const cacheStore = getCacheStore();
       const inflightStore = getInflightStore();
       if (!candidateCacheKey || cacheStore[candidateCacheKey] || inflightStore[candidateCacheKey]) continue;
+      const candidateIdentity = trimStr(candidate.row_key || getIdentityPartsFromRow(candidate).identity || '');
       const run = async () => {
-        try { await loadRowContext(candidate, { profile: 'status_header', includeEvidence: false, force: false }); } catch (err) { L('adjacent preload failed', err); }
+        try {
+          if (!isModalOwnerCurrent(modalToken, activeKey)) return;
+          await loadRowContext(candidate, {
+            profile: 'status_header',
+            includeEvidence: false,
+            force: false,
+            modalOpenToken: modalToken,
+            identity: candidateIdentity,
+            ownerExpectedIdentity: activeKey,
+            isCurrent: () => isModalOwnerCurrent(modalToken, activeKey) && trimStr(st.active_row_key || '') === activeKey
+          });
+        } catch (err) {
+          L('adjacent preload failed', err);
+        }
       };
       try {
         window.requestAnimationFrame(() => { void run(); });
@@ -155114,7 +155972,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       st.__active_context_is_minimal = false;
       st.selected_row_keys = [];
       st.weekly_line_clipboard = null;
-      clearPreviewAndAttachedState({ clearPreview: true });
+      clearPreviewAndAttachedState({ clearPreview: true, force: true });
       await rerenderWorkbench('row-change-force-clear', true);
       resetBulkProcessDirtyBaseline(st, 'row-change-force-clear', {
         source: 'handleBulkProcessRowChange',
@@ -155157,24 +156015,75 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     }
   }
 
+  let restorePreviousHydratedState = null;
+  let activeRowChangeRequestToken = null;
+
   try {
     const prevRouteKind = getBulkProcessRouteKindFromRow(st.active_row, st.active_details);
     const prevIdentity = getBulkProcessRecordIdentityFromState(st);
     const previousStorageKey = trimStr(st.active_row?.primary_artifact_storage_key || st.active_row?.manual_pdf_r2_key || st.active_row?.uploaded_pdf_r2_key || st.evidence_pane_state?.active_attached_item?.storage_key || st.evidence_pane_state?.active_attached_item?.r2_key || '');
     const nextStorageKey = trimStr(nextRow.primary_artifact_storage_key || nextRow.manual_pdf_r2_key || nextRow.uploaded_pdf_r2_key || '');
     const storageKeyChanged = !!(previousStorageKey || nextStorageKey) && previousStorageKey !== nextStorageKey;
-    const requestToken = Number(st.__bulk_process_row_change_seq || 0) + 1;
-    st.__bulk_process_row_change_seq = requestToken;
+    const requestSeq = Number(st.__bulk_process_row_change_seq || 0) + 1;
+    const modalOpenTokenAtStart = getModalOpenToken();
     const cacheKey = trimStr(nextRow.row_key || wantedKey || '');
     const guardedExpectedRowKey = expectedRowKey || cacheKey;
+    const identityPartsForRequest = getIdentityPartsFromRow(nextRow);
     const requestMutationSeq = mutationSeq;
+    const previousRequestToken = (st.__bulk_process_active_row_change_request && typeof st.__bulk_process_active_row_change_request === 'object')
+      ? st.__bulk_process_active_row_change_request
+      : null;
+    if (previousRequestToken) previousRequestToken.cancelled = true;
+    const requestToken = {
+      id: `${modalOpenTokenAtStart || 'bulk-process'}:${requestSeq}:${cacheKey || wantedKey}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      seq: requestSeq,
+      modalOpenToken: modalOpenTokenAtStart,
+      rowKey: cacheKey || guardedExpectedRowKey,
+      expectedTimesheetId: identityPartsForRequest.timesheetId || '',
+      expectedContractWeekId: identityPartsForRequest.contractWeekId || '',
+      mutationSeq: requestMutationSeq,
+      cancelled: false
+    };
+    activeRowChangeRequestToken = requestToken;
+    st.__bulk_process_row_change_seq = requestSeq;
+    st.__bulk_process_active_row_change_request = requestToken;
+    st.__bulk_process_row_change_in_progress = true;
     const isStaleRequest = () => {
       const activeKeyNow = trimStr(st.active_row_key || '');
-      if (Number(st.__bulk_process_row_change_seq || 0) !== requestToken) return true;
+      if (requestToken.cancelled === true) return true;
+      if (Number(st.__bulk_process_row_change_seq || 0) !== requestSeq) return true;
+      if (trimStr(st.__bulk_process_active_row_change_request?.id || '') !== requestToken.id) return true;
+      if (!isModalOwnerCurrent(modalOpenTokenAtStart, activeKeyNow || cacheKey)) return true;
       if (activeKeyNow !== cacheKey) return true;
       if (guardedExpectedRowKey && activeKeyNow !== guardedExpectedRowKey) return true;
       if (requestMutationSeq > 0 && (Number(st.__bulk_process_mutation_seq || 0) || 0) > requestMutationSeq) return true;
       return false;
+    };
+    const previousStateBeforeRowChange = {
+      active_row: deep(st.active_row || null),
+      active_row_key: trimStr(st.active_row_key || '') || null,
+      selected_row_keys: deep(st.selected_row_keys || []),
+      active_details: deep(st.active_details || null),
+      active_ctx: deep(st.active_ctx || null),
+      active_context: deep(st.active_context || null),
+      active_context_profile: st.active_context_profile || '',
+      evidence_pane_state: deep(st.evidence_pane_state || {}),
+      weekly_line_clipboard: deep(st.weekly_line_clipboard || null),
+      __active_context_is_minimal: st.__active_context_is_minimal === true
+    };
+    restorePreviousHydratedState = () => {
+      st.__suppress_dirty_marking = true;
+      st.active_row = deep(previousStateBeforeRowChange.active_row || null);
+      st.active_row_key = previousStateBeforeRowChange.active_row_key || null;
+      st.selected_row_keys = Array.isArray(previousStateBeforeRowChange.selected_row_keys) ? deep(previousStateBeforeRowChange.selected_row_keys) : [];
+      st.active_details = deep(previousStateBeforeRowChange.active_details || null);
+      st.active_ctx = deep(previousStateBeforeRowChange.active_ctx || null);
+      st.active_context = deep(previousStateBeforeRowChange.active_context || null);
+      st.active_context_profile = previousStateBeforeRowChange.active_context_profile || '';
+      st.evidence_pane_state = deep(previousStateBeforeRowChange.evidence_pane_state || {});
+      st.weekly_line_clipboard = deep(previousStateBeforeRowChange.weekly_line_clipboard || null);
+      st.__active_context_is_minimal = previousStateBeforeRowChange.__active_context_is_minimal;
+      st.__suppress_dirty_marking = false;
     };
 
     st.error_text = '';
@@ -155182,7 +156091,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     st.active_row = deep(nextRow);
     st.active_row_key = cacheKey || null;
     st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
-    if (storageKeyChanged && !suppressPreviewRefresh) clearPreviewAndAttachedState({ clearPreview: true });
+    if (storageKeyChanged && !suppressPreviewRefresh) clearPreviewAndAttachedState({ clearPreview: true, identityChanged: true });
 
     const minimalContext = buildMinimalContextFromRow(nextRow);
     st.active_details = minimalContext.details;
@@ -155203,24 +156112,73 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         dirty_source: 'row/context hydrate',
         note: 'patch-driven row switch adopted minimal context; full hydration deferred'
       });
+      st.__bulk_process_row_change_in_progress = false;
+      if (st.__bulk_process_active_row_change_request && st.__bulk_process_active_row_change_request.id === requestToken.id) {
+        st.__bulk_process_active_row_change_request = null;
+      }
       GE();
       return true;
     }
 
     const includeEvidence = !(opts.includeEvidence === false || opts.loadEvidence === false);
     const contextProfile = trimStr(opts.profile || opts.context_profile || 'active_row_visible').toLowerCase() || 'active_row_visible';
-    const loaded = await loadRowContext(nextRow, { profile: contextProfile, includeEvidence, force: forceRefresh });
+    st.__bulk_process_row_context_hydration_identity = cacheKey;
+    const loadedPromise = loadRowContext(nextRow, {
+      profile: contextProfile,
+      includeEvidence,
+      force: forceRefresh,
+      requestToken,
+      modalOpenToken: modalOpenTokenAtStart,
+      identity: cacheKey,
+      isCurrent: () => !isStaleRequest()
+    });
+    st.__bulk_process_row_context_hydration_inflight = loadedPromise;
+    let loaded;
+    try {
+      loaded = await loadedPromise;
+    } finally {
+      if (st.__bulk_process_row_context_hydration_inflight === loadedPromise) {
+        st.__bulk_process_row_context_hydration_inflight = null;
+        st.__bulk_process_row_context_hydration_identity = '';
+      }
+    }
     if (isStaleRequest()) {
       GE();
       return false;
     }
+    if (loaded?.failed === true || isRowContextPayloadDegraded(loaded?.payload)) {
+      restorePreviousHydratedState();
+      st.error_text = trimStr(loaded?.payload?.message || loaded?.payload?.error || 'Failed to load the selected Bulk Process row.');
+      await rerenderWorkbench('row-change-degraded-context', true);
+      GE();
+      return false;
+    }
     const finalContext = buildContextPayload({ rowObj: nextRow, contextPayload: loaded.payload });
+    if (!finalContext || finalContext.failed === true || isRowContextPayloadDegraded(finalContext.payload)) {
+      restorePreviousHydratedState();
+      st.error_text = trimStr(finalContext?.message || 'Failed to load the selected Bulk Process row.');
+      await rerenderWorkbench('row-change-degraded-context', true);
+      GE();
+      return false;
+    }
     st.__suppress_dirty_marking = true;
     st.active_row = deep(finalContext.row || nextRow);
     st.active_row_key = trimStr(st.active_row?.row_key || cacheKey || '') || cacheKey || null;
     st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
     st.active_details = finalContext.details;
     st.active_ctx = finalContext.ctx;
+    st.active_context = {
+      ...deep(finalContext.payload || {}),
+      ok: true,
+      row: deep(finalContext.row || nextRow),
+      data_row: deep(finalContext.row || nextRow),
+      details: deep(finalContext.details || {}),
+      related: deep(finalContext.related || {}),
+      is_hydrated: true,
+      hydration_required: false,
+      context_stale: false
+    };
+    st.active_context_profile = trimStr(st.active_context.profile || st.active_context.context_profile || contextProfile) || contextProfile;
     st.__active_context_is_minimal = false;
     st.__suppress_dirty_marking = false;
 
@@ -155229,6 +156187,9 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         forceQueueRefresh: false,
         prepareQueue: includeEvidence,
         hydrateEvidence: includeEvidence,
+        requestToken,
+        modalOpenToken: modalOpenTokenAtStart,
+        expectedRowKey: cacheKey,
         isCurrent: () => !isStaleRequest()
       });
       if (isStaleRequest()) {
@@ -155244,15 +156205,49 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       dirty_source: 'row/context hydrate',
       note: 'row/context loaded from slim bulk process context; baseline reset; dirty unchanged by selection/load'
     });
-    if (!deferContextRefreshAfterPatch && !mutationSeq && !suppressAdjacentPrefetch && st.__bulk_process_suppress_context_hydration !== true) preloadAdjacentRows(st.active_row, { includeEvidence: false });
+    st.__bulk_process_row_change_in_progress = false;
+    if (!deferContextRefreshAfterPatch && !mutationSeq && !suppressAdjacentPrefetch && st.__bulk_process_suppress_context_hydration !== true) {
+      preloadAdjacentRows(st.active_row, { includeEvidence: false, modalOpenToken: modalOpenTokenAtStart, allowDuringCompletedRowChange: true });
+    }
     GE();
     return true;
   } catch (err) {
-    st.__suppress_dirty_marking = false;
-    st.error_text = String(err?.message || err || 'Failed to load the selected Bulk Process row.');
-    await rerenderWorkbench('row-change-error', true);
+    const catchRequestStillCurrent = !!(
+      !activeRowChangeRequestToken ||
+      (
+        st.__bulk_process_active_row_change_request &&
+        st.__bulk_process_active_row_change_request.id === activeRowChangeRequestToken.id
+      )
+    );
+
+    if (catchRequestStillCurrent) {
+      st.__suppress_dirty_marking = false;
+      if (isAuthFailureError(err)) markRowChangeAuthFailure(err);
+      try {
+        if (typeof restorePreviousHydratedState === 'function') restorePreviousHydratedState();
+      } catch {}
+      st.__bulk_process_row_change_in_progress = false;
+      st.error_text = String(err?.message || err || 'Failed to load the selected Bulk Process row.');
+      if (isModalOwnerCurrent(getModalOpenToken(), trimStr(st.active_row_key || ''))) {
+        await rerenderWorkbench('row-change-error', true);
+      }
+    }
+
     GE();
     return false;
+  } finally {
+    const finalRequestStillCurrent = !!(
+      activeRowChangeRequestToken &&
+      st.__bulk_process_active_row_change_request &&
+      st.__bulk_process_active_row_change_request.id === activeRowChangeRequestToken.id
+    );
+
+    if (finalRequestStillCurrent) {
+      st.__bulk_process_active_row_change_request = null;
+      st.__bulk_process_row_change_in_progress = false;
+    } else if (!st.__bulk_process_active_row_change_request) {
+      st.__bulk_process_row_change_in_progress = false;
+    }
   }
 }
 
