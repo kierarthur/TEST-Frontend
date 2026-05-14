@@ -108703,10 +108703,20 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     return st;
   }
 
-  const previousActiveId = String(st.active_queue_id || '').trim();
+  const previousQueueLoadedIdentity = trimQueueStr(st.__queue_loaded_identity || '');
+  const previousSelectionBelongsToOwnerIdentity = !isOwnerQueueRefresh || !previousQueueLoadedIdentity || previousQueueLoadedIdentity === ownerActiveIdentityAtStart;
+  const previousActiveId = previousSelectionBelongsToOwnerIdentity ? String(st.active_queue_id || '').trim() : '';
   const previousPage = Number(st.active_pdf_page || 1) || 1;
   const previousZoom = Number(st.active_zoom || 1) || 1;
-  const progressionContext = (st.__bulk_process_progression_context && typeof st.__bulk_process_progression_context === 'object')
+  if (isOwnerQueueRefresh && !previousSelectionBelongsToOwnerIdentity) {
+    st.__queue_stale_preserved_identity = previousQueueLoadedIdentity;
+    st.__queue_stale_preserved_active_queue_id = String(st.active_queue_id || '').trim();
+    st.active_queue_id = null;
+    st.active_queue_item = null;
+    st.__queue_loaded = false;
+    st.__queue_loaded_identity = ownerActiveIdentityAtStart || '';
+  }
+  const progressionContext = (previousSelectionBelongsToOwnerIdentity && st.__bulk_process_progression_context && typeof st.__bulk_process_progression_context === 'object')
     ? {
         queue_id_order: Array.isArray(st.__bulk_process_progression_context.queue_id_order)
           ? st.__bulk_process_progression_context.queue_id_order.map((id) => String(id || '').trim()).filter(Boolean)
@@ -108947,10 +108957,17 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
 
     if (unchanged) {
       st.__queue_refresh_last_result = 'unchanged';
+      if (isOwnerQueueRefresh && ownerActiveIdentityAtStart) {
+        st.__queue_loaded = true;
+        st.__queue_loaded_identity = ownerActiveIdentityAtStart;
+        st.__queue_loading = false;
+        st.__queue_last_error = '';
+      }
       L('UNCHANGED RESULT', {
         queue_count: normalizedRows.length,
         active_queue_id: previousActiveId || null,
-        request_seq: requestSeq
+        request_seq: requestSeq,
+        queue_loaded_identity: st.__queue_loaded_identity || null
       });
       return st;
     }
@@ -108981,10 +108998,19 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     }
 
     st.__queue_refresh_last_result = 'applied';
+    if (isOwnerQueueRefresh && ownerActiveIdentityAtStart) {
+      st.__queue_loaded = true;
+      st.__queue_loaded_identity = ownerActiveIdentityAtStart;
+      st.__queue_loading = false;
+      st.__queue_last_error = '';
+      st.__queue_stale_preserved_identity = '';
+      st.__queue_stale_preserved_active_queue_id = '';
+    }
     L('RESULT', {
       queue_count: normalizedRows.length,
       active_queue_id: st.active_queue_id || null,
-      request_seq: requestSeq
+      request_seq: requestSeq,
+      queue_loaded_identity: st.__queue_loaded_identity || null
     });
 
     return st;
@@ -109019,8 +109045,6 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     }
   }
 }
-
-
 async function wireTimesheetImportsViewer(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][IMPORTS][VIEWER]');
   GC('wireTimesheetImportsViewer');
@@ -115975,6 +115999,101 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
       ? st.evidence_pane_state
       : {};
   const pane = st.evidence_pane_state;
+  const deep = (value) => {
+    try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+  };
+  const pickFirst = (...values) => {
+    for (const value of values) {
+      const clean = trimStr(value);
+      if (clean) return clean;
+    }
+    return '';
+  };
+  const normalisePreviewSelectionKeyForReset = (selectionKeyInput = '') => {
+    const raw = trimStr(selectionKeyInput || '');
+    if (!raw) return '';
+    const parts = raw.split('|');
+    const tab = trimStr(parts[0] || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const targetId = trimStr(parts[1] || '');
+    const fileKey = trimStr(parts.slice(2).join('|') || '').replace(/^\/+/, '');
+    return `${tab}|${targetId}|${fileKey}`;
+  };
+  const buildAttachedSelectionKeyForReset = (itemLike = {}) => {
+    const item = (itemLike && typeof itemLike === 'object') ? itemLike : {};
+    const itemId = pickFirst(item.id, item.evidence_id, item.queue_id);
+    const fileKey = pickFirst(item.storage_key, item.r2_key, item.file_key, item.download_storage_key).replace(/^\/+/, '');
+    if (!itemId || !fileKey) return '';
+    return `attached|${itemId}|${fileKey}`;
+  };
+  const collectAttachedPreviewCandidatesForReset = () => {
+    const sources = [
+      opts.nextAttachedItem,
+      opts.next_attached_item,
+      opts.attachedItem,
+      opts.attached_item,
+      opts.previewItem,
+      opts.preview_item,
+      opts.nextRow?.active_attached_item,
+      opts.next_row?.active_attached_item,
+      st.evidence_pane_state?.active_attached_item,
+      st.active_context?.active_attached_item,
+      st.active_context?.details?.active_attached_item,
+      st.active_ctx?.state?.active_attached_item
+    ];
+    const rowSources = [
+      opts.nextAttachedRows,
+      opts.next_attached_rows,
+      opts.attachedRows,
+      opts.attached_rows,
+      opts.nextRow?.evidence,
+      opts.next_row?.evidence,
+      st.active_context?.evidence,
+      st.active_context?.details?.evidence,
+      st.active_details?.evidence,
+      st.active_ctx?.evidence,
+      st.active_ctx?.state?.evidence,
+      st.evidence_pane_state?.attached_rows,
+      st.evidence_pane_state?.attached_all_rows,
+      window.modalCtx?.timesheetState?.evidence
+    ];
+    for (const source of rowSources) {
+      if (Array.isArray(source)) sources.push(...source);
+    }
+    return sources.filter((item) => item && typeof item === 'object');
+  };
+  const resolveSeedAttachedPreviewForReset = () => {
+    const nextTsId = (() => {
+      const identity = trimStr(opts.nextIdentity || opts.next_record_identity || '');
+      const rowKey = trimStr(opts.nextRowKey || opts.next_row_key || st.active_row_key || st.active_row?.row_key || '');
+      const matchIdentity = identity.match(/^timesheet:(.+)$/i);
+      const matchRow = rowKey.match(/^timesheet:(.+)$/i);
+      return trimStr(matchIdentity?.[1] || matchRow?.[1] || st.active_row?.timesheet_id || st.active_row?.current_timesheet_id || st.active_details?.current_timesheet_id || st.active_details?.timesheet?.timesheet_id || '');
+    })();
+    const nextCwId = (() => {
+      const identity = trimStr(opts.nextIdentity || opts.next_record_identity || '');
+      const rowKey = trimStr(opts.nextRowKey || opts.next_row_key || st.active_row_key || st.active_row?.row_key || '');
+      const matchIdentity = identity.match(/^contract_week:(.+)$/i);
+      const matchRow = rowKey.match(/^contract_week:(.+)$/i);
+      return trimStr(matchIdentity?.[1] || matchRow?.[1] || st.active_row?.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
+    })();
+    const belongsToNextRow = (item) => {
+      const itemTsId = trimStr(item?.timesheet_id || item?.current_timesheet_id || '');
+      const itemCwId = trimStr(item?.contract_week_id || item?.contractWeekId || '');
+      if (nextTsId && itemTsId && itemTsId !== nextTsId) return false;
+      if (nextCwId && itemCwId && itemCwId !== nextCwId) return false;
+      if (nextTsId && itemCwId && !itemTsId) return false;
+      return true;
+    };
+    const candidates = collectAttachedPreviewCandidatesForReset()
+      .filter((item) => belongsToNextRow(item))
+      .filter((item) => buildAttachedSelectionKeyForReset(item));
+    if (!candidates.length) return null;
+    const timesheetEvidence = candidates.find((item) => trimStr(item.kind || item.staged_kind || item.evidence_kind || '').toUpperCase() === 'TIMESHEET') || null;
+    const item = timesheetEvidence || candidates[0];
+    const selectionKey = normalisePreviewSelectionKeyForReset(buildAttachedSelectionKeyForReset(item));
+    if (!selectionKey || selectionKey === 'attached||') return null;
+    return { item: deep(item), selectionKey };
+  };
   const previousIdentity = trimStr(opts.previousIdentity || opts.previous_record_identity || '');
   const nextIdentity = trimStr(opts.nextIdentity || opts.next_record_identity || '');
   const previousRowKey = trimStr(opts.previousRowKey || opts.previous_row_key || '');
@@ -116077,6 +116196,28 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
   );
   pane.__bulk_authorise_preview_row_key = fallbackRowKey || '';
   pane.__bulk_authorise_preview_reset_source = trimStr(opts.source || 'row-change') || 'row-change';
+
+  const seededAttachedPreview = resolveSeedAttachedPreviewForReset();
+  if (seededAttachedPreview && seededAttachedPreview.selectionKey) {
+    const seededItem = seededAttachedPreview.item;
+    pane.active_tab = 'attached';
+    pane.__attached_manual_override = true;
+    pane.__queue_manual_override = false;
+    pane.__queue_manual_override_identity = '';
+    pane.active_attached_item = seededItem ? deep(seededItem) : null;
+    pane.active_attached_id = pickFirst(seededItem?.id, seededItem?.evidence_id, seededItem?.queue_id) || null;
+    pane.__preview_load_requested_target_key = seededAttachedPreview.selectionKey;
+    pane.__preview_attached_request_key = seededAttachedPreview.selectionKey;
+    pane.__preview_request_owner_identity = pane.__preview_identity || '';
+    pane.__preview_pending_attached = false;
+    pane.__preview_pending_attached_identity = '';
+  } else {
+    pane.__preview_pending_attached = true;
+    pane.__preview_pending_attached_identity = pane.__preview_identity || '';
+    pane.__preview_attached_request_key = pane.__preview_identity ? `pending-attached:${pane.__preview_identity}` : 'pending-attached';
+    pane.__preview_request_owner_identity = pane.__preview_identity || '';
+  }
+
   if (!preserveSignedUrlCache) {
     if (pane.__preview_signed_url_cache && typeof pane.__preview_signed_url_cache === 'object') pane.__preview_signed_url_cache = {};
     if (pane.__preview_signed_url_owner_by_cache_key && typeof pane.__preview_signed_url_owner_by_cache_key === 'object') pane.__preview_signed_url_owner_by_cache_key = {};
@@ -116098,12 +116239,13 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
       signed_cache_count_after: nextSignedCount,
       inflight_presign_count_before: prevInflightCount,
       inflight_presign_count_after: nextInflightCount,
-      preserve_signed_url_cache: preserveSignedUrlCache
+      preserve_signed_url_cache: preserveSignedUrlCache,
+      seeded_attached_preview_key: trimStr(pane.__preview_load_requested_target_key || ''),
+      preview_pending_attached: pane.__preview_pending_attached === true
     });
   }
   return true;
 }
-
 async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, options = {}) {
   const st = (state && typeof state === 'object')
     ? state
@@ -118823,7 +118965,6 @@ function bulkAuthoriseHasProcessedExpensesValue(ctxInput) {
   return !!(hasTimesheetAnchor && (numericDetected || descriptionDetected || stagedDetected));
 }
 
-
 function normaliseBankingPayOperationProgress(operationPayload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const upperTrim = (value) => trimStr(value).toUpperCase();
@@ -118833,6 +118974,38 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     return Number.isFinite(n) ? n : fallback;
   };
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const looksLikeOperationPayload = (value) => {
+    if (!isPlainObject(value)) return false;
+    return !!(
+      value.operation_id ||
+      value.operationId ||
+      value.operation_type ||
+      value.operationType ||
+      value.status ||
+      value.phase ||
+      value.progress_json ||
+      value.progress ||
+      value.result_json ||
+      value.error_json ||
+      value.total_units != null ||
+      value.totalUnits != null ||
+      value.completed_units != null ||
+      value.completedUnits != null ||
+      value.failed_units != null ||
+      value.failedUnits != null ||
+      value.current_chunk_index != null ||
+      value.currentChunkIndex != null ||
+      value.chunk_count != null ||
+      value.chunkCount != null ||
+      value.percent != null ||
+      value.percentage != null ||
+      value.terminal != null ||
+      value.can_advance != null ||
+      value.canAdvance != null ||
+      value.can_cancel != null ||
+      value.canCancel != null
+    );
+  };
   const unwrap = (value) => {
     let payload = value;
     try {
@@ -118848,11 +119021,13 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
       ];
       for (let i = 0; i < 4; i += 1) {
         if (!payload || typeof payload !== 'object' || Array.isArray(payload)) break;
+        const currentLooksLikeOperation = looksLikeOperationPayload(payload);
         let changed = false;
         for (const key of knownKeys) {
+          if (currentLooksLikeOperation && key === 'result') continue;
           if (Object.prototype.hasOwnProperty.call(payload, key) && payload[key] && typeof payload[key] === 'object' && !Array.isArray(payload[key])) {
             const nested = payload[key];
-            if (nested.operation_id || nested.id || nested.operation_type || nested.status || nested.phase || nested.progress_json || nested.result_json || nested.error_json) {
+            if (looksLikeOperationPayload(nested)) {
               payload = nested;
               changed = true;
               break;
@@ -118873,7 +119048,8 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
   const operationId = trimStr(src.operation_id || src.id || progress.operation_id || '');
   const operationType = upperTrim(src.operation_type || progress.operation_type || '');
   const status = upperTrim(src.status || progress.status || '');
-  const phase = upperTrim(src.phase || progress.phase || 'INITIALISE');
+  const rawPhase = upperTrim(src.phase || progress.phase || '');
+  const phase = rawPhase || (status === 'COMPLETE' ? 'COMPLETE' : (status === 'FAILED' ? 'FAILED' : (status === 'CANCELLED' || status === 'CANCELED' ? 'CANCELLED' : (status === 'REVIEW_REQUIRED' ? 'REVIEW_REQUIRED' : 'INITIALISE'))));
 
   const phaseLabels = {
     INITIALISE: 'Starting operation',
@@ -118917,7 +119093,10 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     QUEUE_PAYOUT_NOTICE_CHUNKS: 'Queueing payout notices',
     SEED_SETTLEMENT_SCOPE: 'Preparing settlement',
     APPLY_SETTLEMENT_CHUNKS: 'Finalising settlement',
-    COMPLETE: 'Operation complete'
+    COMPLETE: 'Operation complete',
+    FAILED: 'Operation failed',
+    CANCELLED: 'Operation cancelled',
+    REVIEW_REQUIRED: 'Operation needs review'
   };
 
   const operationTitles = {
@@ -119122,8 +119301,6 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
 
 
 
-
-
 function openBankingPayOperationProgressModal(options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -119193,8 +119370,25 @@ function openBankingPayOperationProgressModal(options = {}) {
       root: null,
       overlay: null,
       update() { return this; },
-      updateFromOperation(payload) { modalState.operation = normalise(payload); return this; },
-      markCompleted() { return this; },
+      updateFromOperation(payload) { modalState.operation = { ...modalState.operation, ...normalise(payload || modalState.operation || {}) }; return this; },
+      markCompleted(summaryOrOperation) {
+        const isOperationPayload = summaryOrOperation && typeof summaryOrOperation === 'object' && !Array.isArray(summaryOrOperation);
+        const next = isOperationPayload ? normalise(summaryOrOperation) : {};
+        modalState.operation = {
+          ...modalState.operation,
+          ...next,
+          terminal: true,
+          complete: next.review_required ? modalState.operation.complete : true,
+          can_advance: false,
+          can_cancel: false,
+          percent: Number.isFinite(Number(next.percent ?? modalState.operation.percent)) && Number(next.percent ?? modalState.operation.percent) > 0 ? Number(next.percent ?? modalState.operation.percent) : 100,
+          status: next.review_required ? (next.status || modalState.operation.status || 'REVIEW_REQUIRED') : (next.status || modalState.operation.status || 'COMPLETE'),
+          phase: next.phase || modalState.operation.phase || (next.review_required ? 'REVIEW_REQUIRED' : 'COMPLETE'),
+          phase_label: next.phase_label || modalState.operation.phase_label || (next.review_required ? 'Operation needs review' : 'Operation complete'),
+          status_text: trimStr(isOperationPayload ? (next.status_text || modalState.operation.status_text || (next.review_required ? 'Operation needs review.' : 'Operation complete.')) : (summaryOrOperation || modalState.operation.status_text || 'Operation complete.'))
+        };
+        return this;
+      },
       markStructuralFailure() { return this; },
       markStopped() { return this; },
       appendFailures() { return this; },
@@ -119271,24 +119465,33 @@ function openBankingPayOperationProgressModal(options = {}) {
       render();
       return controller;
     },
-    markCompleted(summaryText) {
-      const op = modalState.operation || {};
+    markCompleted(summaryOrOperation) {
+      const isOperationPayload = summaryOrOperation && typeof summaryOrOperation === 'object' && !Array.isArray(summaryOrOperation);
+      const suppliedOperation = isOperationPayload ? normalise(summaryOrOperation) : {};
+      const suppliedText = isOperationPayload ? '' : trimStr(summaryOrOperation);
+      const op = { ...(modalState.operation || {}), ...suppliedOperation };
       const totalUnits = Math.max(0, Number(op.total_units || 0) || 0);
       const completedUnits = Math.max(0, Number(op.completed_units || 0) || 0);
       const failedUnits = Math.max(0, Number(op.failed_units || 0) || 0);
       const attemptedUnits = Math.max(completedUnits + failedUnits, 0);
       const inferredPercent = totalUnits > 0 ? Math.max(0, Math.min(100, Math.round((attemptedUnits / totalUnits) * 100))) : 100;
+      const statusText = trimStr(suppliedText || suppliedOperation.status_text || op.status_text || (op.review_required ? 'Operation needs review.' : (op.cancelled ? 'Operation cancelled.' : 'Operation complete.')));
+      const statusUpper = trimStr(op.status).toUpperCase();
+      const phaseUpper = trimStr(op.phase).toUpperCase();
+      const isCompleteOutcome = op.complete === true || statusUpper === 'COMPLETE' || phaseUpper === 'COMPLETE';
+      const isReviewOutcome = op.review_required === true || statusUpper === 'REVIEW_REQUIRED';
+      const isCancelledOutcome = op.cancelled === true || statusUpper === 'CANCELLED' || statusUpper === 'CANCELED';
       modalState.operation = {
         ...op,
         terminal: true,
-        complete: true,
+        complete: isReviewOutcome || isCancelledOutcome ? op.complete === true : true,
         can_advance: false,
         can_cancel: false,
         percent: Number.isFinite(Number(op.percent)) && Number(op.percent) > 0 ? Number(op.percent) : inferredPercent,
-        status: op.status || 'COMPLETE',
-        phase: op.phase || 'COMPLETE',
-        phase_label: op.phase_label || 'Operation complete',
-        status_text: trimStr(summaryText || op.status_text || 'Operation complete.')
+        status: isReviewOutcome ? (op.status || 'REVIEW_REQUIRED') : (isCancelledOutcome ? (op.status || 'CANCELLED') : (isCompleteOutcome ? 'COMPLETE' : (op.status || 'COMPLETE'))),
+        phase: isReviewOutcome ? (op.phase || 'REVIEW_REQUIRED') : (isCancelledOutcome ? (op.phase || 'CANCELLED') : (isCompleteOutcome ? 'COMPLETE' : (op.phase || 'COMPLETE'))),
+        phase_label: isReviewOutcome ? 'Operation needs review' : (isCancelledOutcome ? 'Operation cancelled' : (isCompleteOutcome ? 'Operation complete' : (op.phase_label || 'Operation complete'))),
+        status_text: statusText
       };
       render();
       return controller;
@@ -119306,6 +119509,9 @@ function openBankingPayOperationProgressModal(options = {}) {
   render();
   return controller;
 }
+
+
+
 
 
 async function bankingPayOperationGet(operationId, options = {}) {
@@ -119630,7 +119836,7 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
     });
     try { updateModal(finalOperationState); } catch {}
     try {
-      if (modal && typeof modal.markCompleted === 'function') modal.markCompleted(finalOperationState.status_text || finalOperationState.phase_label || 'Operation complete.');
+      if (modal && typeof modal.markCompleted === 'function') modal.markCompleted(finalOperationState);
     } catch {}
     if (typeof opts.finalResultExtractor === 'function') return opts.finalResultExtractor(finalOperationState.result, finalOperationState);
     if (typeof opts.extractFinalResult === 'function') return opts.extractFinalResult(finalOperationState.result, finalOperationState);
@@ -119747,14 +119953,23 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
   }
 
   if (operationNeedsReview(current)) {
-    try { if (modal && typeof modal.markCompleted === 'function') modal.markCompleted(current.status_text || 'Operation needs review.'); } catch {}
+    try {
+      if (modal && typeof modal.markCompleted === 'function') {
+        modal.markCompleted({
+          ...current,
+          terminal: true,
+          review_required: true,
+          can_advance: false,
+          can_cancel: false,
+          status_text: current.status_text || 'Operation needs review.'
+        });
+      }
+    } catch {}
     return current.result || current.raw_payload || current;
   }
 
   return finishSuccess(current);
 }
-
-
 
 
 async function bankingPayBatchGetSectionPage(payBatchId, section, options = {}) {
@@ -130041,6 +130256,8 @@ function bindBulkProcessManualEditor(state) {
 
 
 
+
+
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -130660,7 +130877,9 @@ function bindBulkProcessPreviewPane(state) {
     if (!snap) return false;
     const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
     if (!liveRoot || !root.isConnected || liveRoot !== root) return false;
-    if (Number(pane.__preview_bind_seq || 0) !== Number(snap.bindSeq || bindSeq)) return false;
+    const bindSeqMatches = Number(pane.__preview_bind_seq || 0) === Number(snap.bindSeq || bindSeq);
+    const allowSupersededBindForSameSelection = opts.allowSupersededBindForSameSelection === true || opts.allow_same_owner_row_selection === true || opts.allowSameOwnerRowSelection === true;
+    if (!bindSeqMatches && !allowSupersededBindForSameSelection) return false;
     if (snap.stateRef && snap.stateRef !== st) return false;
     const liveKind = getCurrentPreviewModalKind();
     if (snap.ownerKind === 'bulk_process') {
@@ -130766,6 +130985,47 @@ function bindBulkProcessPreviewPane(state) {
       if (ownerCacheKey) pane.__preview_signed_url_owner_by_cache_key[ownerCacheKey] = trimStr(snap.ownerIdentity || '');
     }
     return ownerCacheKey || fileKey;
+  };
+
+
+  const commitSignedPreviewAtomically = (previewStateInput = null, selectionKeyInput = '', signedUrlInput = '', commitOptions = {}) => {
+    const opts = (commitOptions && typeof commitOptions === 'object') ? commitOptions : {};
+    const previewState = (previewStateInput && typeof previewStateInput === 'object') ? previewStateInput : getPreviewState();
+    const signedUrl = trimStr(signedUrlInput || '');
+    const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || getSelectionSignature(previewState.activeTab, previewState.previewItem));
+    if (!signedUrl || !selectionKey || isBlankPreviewSelectionKey(selectionKey)) return false;
+
+    const commitSnapshot = (opts.snapshot && typeof opts.snapshot === 'object')
+      ? opts.snapshot
+      : capturePreviewCommitSnapshot(previewState, { reason: opts.reason || 'atomic-preview-commit' });
+    if (!isPreviewCommitSnapshotCurrent(commitSnapshot, {
+      requireSelectionUnchanged: true,
+      requireFileKeyUnchanged: true,
+      allowSupersededBindForSameSelection: opts.allowSupersededBindForSameSelection === true || opts.allowSameOwnerRowSelection === true
+    })) return false;
+
+    const livePreviewState = getPreviewState();
+    const liveSelectionKey = normalisePreviewSelectionKey(getSelectionSignature(livePreviewState.activeTab, livePreviewState.previewItem));
+    const liveRequestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+    const liveTargetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+    const liveTargetMatches = !liveTargetKey || liveTargetKey === selectionKey;
+    const liveRequestedMatches = !liveRequestedKey || liveRequestedKey === selectionKey;
+    const liveSelectionMatches = !liveSelectionKey || liveSelectionKey === selectionKey;
+
+    if (!liveSelectionMatches) return false;
+    if (!liveTargetMatches && liveRequestedKey !== selectionKey) return false;
+    if (!liveRequestedMatches && liveTargetKey !== selectionKey) return false;
+
+    const previewItem = (previewState.previewItem && typeof previewState.previewItem === 'object') ? previewState.previewItem : livePreviewState.previewItem;
+    const fileKey = resolvePreviewFileCacheKey(previewItem, selectionKey);
+    if (!fileKey) return false;
+
+    setCachedSignedUrlForPreview(fileKey, signedUrl, commitSnapshot);
+    pane.__preview_target_key = selectionKey;
+    pane.__preview_load_requested_target_key = selectionKey;
+    pane.__preview_signed_url = signedUrl;
+
+    return true;
   };
 
   if (pane.__preview_recovery_timer) {
@@ -130952,11 +131212,22 @@ function bindBulkProcessPreviewPane(state) {
   };
 
   const tryImmediateSameSelectionRenderRecovery = async (previewSelectionKeyInput = '', reason = 'stale-loading') => {
-    if (!isActiveBind()) return false;
     const previewSelectionKey = normalisePreviewSelectionKey(previewSelectionKeyInput || '');
     if (!previewSelectionKey || isBlankPreviewSelectionKey(previewSelectionKey)) return false;
     const recoverySnapshot = capturePreviewCommitSnapshot(getPreviewState(), { reason: `immediate-recovery-${reason}` });
-    if (!isPreviewCommitSnapshotCurrent(recoverySnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return false;
+    if (
+      !isActiveBind() &&
+      !isPreviewCommitSnapshotCurrent(recoverySnapshot, {
+        requireSelectionUnchanged: true,
+        requireFileKeyUnchanged: true,
+        allowSupersededBindForSameSelection: true
+      })
+    ) return false;
+    if (!isPreviewCommitSnapshotCurrent(recoverySnapshot, {
+      requireSelectionUnchanged: true,
+      requireFileKeyUnchanged: true,
+      allowSupersededBindForSameSelection: true
+    })) return false;
     const recoveryKey = `${String(getActiveIdentity() || '')}|${previewSelectionKey}`;
     if (trimStr(pane.__preview_same_selection_recovery_key || '') === recoveryKey) return false;
     pane.__preview_same_selection_recovery_key = recoveryKey;
@@ -130966,8 +131237,16 @@ function bindBulkProcessPreviewPane(state) {
     return true;
   };
   const commitLiveSignedUrlIfCurrentStageStillLoading = (previewStateInput = null, reason = 'live-loading-final-commit') => {
-    if (!isActiveBind()) return false;
     const previewState = (previewStateInput && typeof previewStateInput === 'object') ? previewStateInput : getPreviewState();
+    const entryCommitSnapshot = capturePreviewCommitSnapshot(previewState, { reason: `${reason}-entry` });
+    if (
+      !isActiveBind() &&
+      !isPreviewCommitSnapshotCurrent(entryCommitSnapshot, {
+        requireSelectionUnchanged: true,
+        requireFileKeyUnchanged: true,
+        allowSupersededBindForSameSelection: true
+      })
+    ) return false;
     const stage = q('#bulkProcessPreviewStage');
     if (!stage) return false;
     const bulkAuthSnapshotAtEntry = captureBulkAuthorisePreviewSnapshot(previewState);
@@ -130996,12 +131275,21 @@ function bindBulkProcessPreviewPane(state) {
     const previewSelectionKey = normalisePreviewSelectionKey(parts.previewSelectionKey || getSelectionSignature(parts.activeTab, previewItem));
     if (isBlankPreviewSelectionKey(previewSelectionKey)) return false;
     const sharedCommitSnapshot = capturePreviewCommitSnapshot(previewState, { reason });
-    if (!isPreviewCommitSnapshotCurrent(sharedCommitSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return false;
+    if (!isPreviewCommitSnapshotCurrent(sharedCommitSnapshot, {
+      requireSelectionUnchanged: true,
+      requireFileKeyUnchanged: true,
+      allowSupersededBindForSameSelection: true
+    })) return false;
     const liveTargetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
     const liveRequestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
     const signedUrl = trimStr(pane.__preview_signed_url || '');
-    if (!signedUrl || !previewSelectionKey || liveTargetKey !== previewSelectionKey) return false;
+    const targetOrRequestedMatches = !!(
+      liveTargetKey === previewSelectionKey ||
+      (!liveTargetKey && liveRequestedKey === previewSelectionKey)
+    );
+    if (!signedUrl || !previewSelectionKey || !targetOrRequestedMatches) return false;
     if (liveRequestedKey && liveRequestedKey !== previewSelectionKey) return false;
+    if (!liveTargetKey && liveRequestedKey === previewSelectionKey) pane.__preview_target_key = previewSelectionKey;
 
     const bulkAuthSnapshot = captureBulkAuthorisePreviewSnapshot(previewState);
     const bulkAuthoriseCommitRequired = !!(
@@ -131271,7 +131559,11 @@ function bindBulkProcessPreviewPane(state) {
     const opts = (presignOptions && typeof presignOptions === 'object') ? presignOptions : {};
     const cleanKey = trimStr(key || '').replace(/^\/+/, '');
     const snapshot = opts.snapshot && typeof opts.snapshot === 'object' ? opts.snapshot : capturePreviewCommitSnapshot(opts.previewState || null, { reason: 'presign-download' });
-    if (!isPreviewCommitSnapshotCurrent(snapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) {
+    if (!isPreviewCommitSnapshotCurrent(snapshot, {
+      requireSelectionUnchanged: true,
+      requireFileKeyUnchanged: true,
+      allowSupersededBindForSameSelection: opts.allowSupersededBindForSameSelection === true || opts.allowSameOwnerRowSelection === true
+    })) {
       return '';
     }
     const res = await authFetch(API('/api/files/presign-download'), {
@@ -131285,7 +131577,11 @@ function bindBulkProcessPreviewPane(state) {
     const json = text ? JSON.parse(text) : {};
     const url = json.url || json.signed_url || json.download_url || null;
     if (!url) throw new Error('No URL returned from presign-download');
-    if (!isPreviewCommitSnapshotCurrent(snapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) {
+    if (!isPreviewCommitSnapshotCurrent(snapshot, {
+      requireSelectionUnchanged: true,
+      requireFileKeyUnchanged: true,
+      allowSupersededBindForSameSelection: opts.allowSupersededBindForSameSelection === true || opts.allowSameOwnerRowSelection === true
+    })) {
       return '';
     }
     return String(url);
@@ -132799,7 +133095,11 @@ function bindBulkProcessPreviewPane(state) {
       const presignRecord = existingRecord || (() => {
         const abortController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         const promise = (async () => {
-          const url = await presignDownload(previewFileCacheKey, abortController ? abortController.signal : undefined, { snapshot: capturePreviewCommitSnapshot(previewState, { reason: 'presign-start' }), previewState });
+          const url = await presignDownload(previewFileCacheKey, abortController ? abortController.signal : undefined, {
+            snapshot: capturePreviewCommitSnapshot(previewState, { reason: 'presign-start' }),
+            previewState,
+            allowSupersededBindForSameSelection: true
+          });
           return trimStr(url || '');
         })();
         const record = {
@@ -132816,7 +133116,11 @@ function bindBulkProcessPreviewPane(state) {
 
       try {
         signedUrl = await presignRecord.promise;
-        if (!isPreviewCommitSnapshotCurrent(presignRecord.snapshot || capturePreviewCommitSnapshot(previewState, { reason: 'presign-after-await' }), { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) {
+        if (!isPreviewCommitSnapshotCurrent(presignRecord.snapshot || capturePreviewCommitSnapshot(previewState, { reason: 'presign-after-await' }), {
+          requireSelectionUnchanged: true,
+          requireFileKeyUnchanged: true,
+          allowSupersededBindForSameSelection: true
+        })) {
           return;
         }
       } catch (e) {
@@ -132847,10 +133151,19 @@ function bindBulkProcessPreviewPane(state) {
       );
       if (signedUrl) {
         const sharedPresignSnapshot = presignRecord.snapshot || capturePreviewCommitSnapshot(previewState, { reason: 'presign-commit' });
-        if (!isPreviewCommitSnapshotCurrent(sharedPresignSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return;
+        if (!isPreviewCommitSnapshotCurrent(sharedPresignSnapshot, {
+          requireSelectionUnchanged: true,
+          requireFileKeyUnchanged: true,
+          allowSupersededBindForSameSelection: true
+        })) return;
         const stalePresign = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'presign');
         if (stalePresign.stale) return;
-        setCachedSignedUrlForPreview(previewFileCacheKey, signedUrl, capturePreviewCommitSnapshot(previewState, { reason: 'presign-cache-write' }));
+        const atomicCommitted = commitSignedPreviewAtomically(previewState, previewSelectionKey, signedUrl, {
+          snapshot: sharedPresignSnapshot,
+          reason: 'presign-commit',
+          allowSupersededBindForSameSelection: true
+        });
+        if (!atomicCommitted) return;
         if (bulkAuthSnapshot) pane.__preview_signed_url_owner_by_cache_key[previewFileCacheKey] = bulkAuthSnapshot.ownerIdentity;
         if (bulkAuthSnapshot && window.__LOG_MODAL === true) {
           console.log('[TS][BULK-AUTH][PREVIEW]', {
@@ -132861,7 +133174,8 @@ function bindBulkProcessPreviewPane(state) {
             selectionKey: bulkAuthSnapshot.selectionKey,
             targetKey: previewSelectionKey,
             previewKind: isPdf ? 'pdf' : (isImage ? 'image' : 'other'),
-            cacheWritten: true
+            cacheWritten: true,
+            atomicCommitted: true
           });
         }
       }
@@ -132902,12 +133216,23 @@ function bindBulkProcessPreviewPane(state) {
         }
         return;
       }
-      if (!isActiveBind()) return;
+      const postPresignRenderSnapshot = capturePreviewCommitSnapshot(previewState, { reason: 'presign-post-commit-render' });
+      if (
+        !isActiveBind() &&
+        !isPreviewCommitSnapshotCurrent(postPresignRenderSnapshot, {
+          requireSelectionUnchanged: true,
+          requireFileKeyUnchanged: true,
+          allowSupersededBindForSameSelection: true
+        })
+      ) return;
 
-      pane.__preview_signed_url = signedUrl;
-      pane.__preview_target_key = previewSelectionKey;
-      pane.__preview_load_requested_target_key = previewSelectionKey;
+      commitSignedPreviewAtomically(previewState, previewSelectionKey, signedUrl, {
+        snapshot: capturePreviewCommitSnapshot(previewState, { reason: 'presign-final-atomic-commit' }),
+        reason: 'presign-final-atomic-commit',
+        allowSupersededBindForSameSelection: true
+      });
       if (hasStaleLoadingDomForLivePreview(previewState)) {
+        if (commitLiveSignedUrlIfCurrentStageStillLoading(previewState, 'presign-complete')) return;
         if (checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'recovery').stale) return;
         const recovered = await tryImmediateSameSelectionRenderRecovery(previewSelectionKey, 'presign-complete');
         if (recovered) return;
@@ -133130,9 +133455,12 @@ function bindBulkProcessPreviewPane(state) {
       !stageHasRenderablePreview &&
       signedUrlPresent &&
       previewSelectionKey &&
-      targetKey === previewSelectionKey &&
+      (targetKey === previewSelectionKey || (!targetKey && requestedKey === previewSelectionKey)) &&
       (!requestedKey || requestedKey === previewSelectionKey)
     );
+    if (canReconcile && !targetKey && requestedKey === previewSelectionKey) {
+      pane.__preview_target_key = previewSelectionKey;
+    }
     {
       const bulkAuthSnapshot = captureBulkAuthorisePreviewSnapshot(previewState);
       logPreviewCommitEvent(bulkAuthSnapshot, {
@@ -133157,7 +133485,6 @@ function bindBulkProcessPreviewPane(state) {
     warnPreview('bind failed', e);
   });
 }
-
 
 
 
@@ -137008,6 +137335,51 @@ function bindBulkProcessEvidencePane(state) {
     return !!pane.__queue_loaded && trimStr(pane.__queue_loaded_identity || '') === identity;
   };
 
+  const markQueueStatePendingForActiveIdentity = (reason = 'active-identity-changed') => {
+    const activeIdentity = trimStr(getActiveIdentity() || '');
+    if (!activeIdentity) return false;
+    const loadedIdentity = trimStr(pane.__queue_loaded_identity || '');
+    if (!loadedIdentity || loadedIdentity === activeIdentity) return false;
+
+    const previousQueueId = trimStr(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id || '');
+    pane.__queue_stale_preserved_identity = loadedIdentity;
+    pane.__queue_stale_preserved_active_queue_id = previousQueueId;
+    pane.__queue_stale_preserved_reason = trimStr(reason || 'active-identity-changed') || 'active-identity-changed';
+    pane.__queue_loaded = false;
+    pane.__queue_loaded_identity = activeIdentity;
+    pane.__queue_loading = false;
+    pane.__queue_count_loading = false;
+    if (trimStr(pane.__queue_loading_identity || '') === loadedIdentity) pane.__queue_loading_identity = '';
+    if (trimStr(pane.__queue_count_loading_identity || '') === loadedIdentity) pane.__queue_count_loading_identity = '';
+
+    const queueOverrideForCurrentRow = !!(
+      pane.__queue_manual_override === true &&
+      trimStr(pane.__queue_manual_override_identity || '') &&
+      trimStr(pane.__queue_manual_override_identity || '') === activeIdentity
+    );
+
+    if (!queueOverrideForCurrentRow) {
+      pane.active_queue_id = null;
+      pane.active_queue_item = null;
+      if (trimStr(pane.active_tab || '').toLowerCase() !== 'queue') {
+        pane.__queue_manual_override = false;
+        pane.__queue_manual_override_identity = '';
+      }
+    }
+
+    if (window.__LOG_MODAL === true) {
+      console.debug('[TS][BULK-PROCESS][EVIDENCE] queue state marked pending for active identity', {
+        reason: pane.__queue_stale_preserved_reason,
+        previous_queue_loaded_identity: loadedIdentity,
+        active_identity: activeIdentity,
+        previous_active_queue_id: previousQueueId || null,
+        active_tab: trimStr(pane.active_tab || '') || null
+      });
+    }
+
+    return true;
+  };
+
   const rerenderWorkbench = async (reason = 'evidence-pane') => {
     if (typeof st.__rerenderWorkbench === 'function') {
       await st.__rerenderWorkbench({ reason: trimStr(reason || 'evidence-pane') || 'evidence-pane', force: false });
@@ -137194,6 +137566,7 @@ function bindBulkProcessEvidencePane(state) {
   };
 
   const bindSnapshot = captureOwnerSnapshot('initial-bind');
+  markQueueStatePendingForActiveIdentity('evidence-bind-active-identity-check');
 
   const isActiveBind = () => isOwnerSnapshotCurrent(bindSnapshot);
 
@@ -137287,6 +137660,7 @@ function bindBulkProcessEvidencePane(state) {
     const opts = (queueOptions && typeof queueOptions === 'object') ? queueOptions : {};
     const ownerSnapshot = captureOwnerSnapshot('syncQueue');
     const activeIdentity = trimStr(opts.identity || ownerSnapshot.activeIdentity || getActiveIdentity());
+    if (activeIdentity) markQueueStatePendingForActiveIdentity('syncQueue-active-identity-check');
     const shouldLoad = !!opts.force || !isQueueLoadedForIdentity(activeIdentity);
     const previewBefore = capturePreviewStateSnapshot();
     const selectionBefore = getPreviewSelectionKeyForPane();
@@ -137372,10 +137746,17 @@ function bindBulkProcessEvidencePane(state) {
 
     const syncQueueSelectionOnly = () => {
     pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    markQueueStatePendingForActiveIdentity('syncQueueSelectionOnly-active-identity-check');
     const wanted = trimStr(pane.active_queue_id || '');
     const previousItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    const activeIdentity = trimStr(getActiveIdentity() || '');
+    const queueLoadedForCurrentIdentity = !!(
+      pane.__queue_loaded === true &&
+      activeIdentity &&
+      trimStr(pane.__queue_loaded_identity || '') === activeIdentity
+    );
     let active = wanted ? (pane.queue_rows.find((x) => trimStr(x?.id || x?.queue_id || '') === wanted) || null) : null;
-    if (!active && previousItem && pane.__queue_loaded !== true) return previousItem;
+    if (!active && previousItem && pane.__queue_loaded !== true && queueLoadedForCurrentIdentity) return previousItem;
     if (!active) active = pane.queue_rows[0] || null;
     if (!active) {
       if (pane.__queue_loaded === true) {
@@ -137394,6 +137775,7 @@ function bindBulkProcessEvidencePane(state) {
     const ownerSnapshot = captureOwnerSnapshot('ensureQueueLoadedForActiveTab');
     const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
     const activeIdentity = trimStr(ownerSnapshot.activeIdentity || getActiveIdentity());
+    if (activeIdentity) markQueueStatePendingForActiveIdentity('ensureQueueLoadedForActiveTab-active-identity-check');
     const queueLoadedForIdentity = isQueueLoadedForIdentity(activeIdentity);
 
     pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
@@ -138426,8 +138808,6 @@ function bindBulkProcessEvidencePane(state) {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
-
-
 function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionState) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -156125,7 +156505,14 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const mutationSeq = Math.max(0, Math.floor(Number(opts.mutationSeq ?? opts.mutation_seq ?? 0) || 0));
   const deferContextRefreshAfterPatch = opts.deferContextRefreshAfterPatch === true || opts.defer_context_refresh_after_patch === true;
   const suppressPreviewRefresh = opts.suppressPreviewRefresh === true || opts.suppress_preview_refresh === true;
+  const allowAdjacentPrefetch = !!(
+    opts.allowAdjacentPrefetch === true ||
+    opts.allow_adjacent_prefetch === true ||
+    opts.enableAdjacentPrefetch === true ||
+    opts.enable_adjacent_prefetch === true
+  );
   const suppressAdjacentPrefetch = !!(
+    !allowAdjacentPrefetch ||
     opts.suppressAdjacentPrefetch === true ||
     opts.suppress_adjacent_prefetch === true ||
     opts.mutationRefresh === true ||
@@ -156934,17 +157321,8 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const requestTokenObj = loadOpts.requestToken && typeof loadOpts.requestToken === 'object' ? loadOpts.requestToken : null;
     const modalToken = trimStr(loadOpts.modalOpenToken || loadOpts.modal_open_token || requestTokenObj?.modalOpenToken || getModalOpenToken());
     const requestIdentity = trimStr(loadOpts.identity || requestTokenObj?.rowKey || row.row_key || getIdentityPartsFromRow(row).identity || '');
-    const ownerExpectedIdentity = trimStr(
-      loadOpts.ownerExpectedIdentity ||
-      loadOpts.owner_expected_identity ||
-      loadOpts.activeIdentity ||
-      loadOpts.active_identity ||
-      requestTokenObj?.ownerExpectedIdentity ||
-      requestTokenObj?.owner_expected_identity ||
-      requestIdentity
-    );
     const isCurrent = (typeof loadOpts.isCurrent === 'function') ? loadOpts.isCurrent : null;
-    if (!isModalOwnerCurrent(modalToken, ownerExpectedIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
+    if (!isModalOwnerCurrent(modalToken, requestIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
       return makeRowContextFailurePayload('stale-before-fetch', row, {}, { stale: true, degraded: true });
     }
 
@@ -157016,7 +157394,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       return makeRowContextFailurePayload('identity-mismatch', row, payload, { stale: true, degraded: true, message: 'Bulk Process row context belonged to a different row.' });
     }
 
-    if (!isModalOwnerCurrent(modalToken, ownerExpectedIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
+    if (!isModalOwnerCurrent(modalToken, requestIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
       return makeRowContextFailurePayload('stale-after-fetch', row, payload, { stale: true, degraded: true });
     }
 
@@ -157053,15 +157431,6 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const requestTokenObj = loadOpts.requestToken && typeof loadOpts.requestToken === 'object' ? loadOpts.requestToken : null;
     const modalToken = trimStr(loadOpts.modalOpenToken || loadOpts.modal_open_token || requestTokenObj?.modalOpenToken || getModalOpenToken());
     const requestIdentity = trimStr(loadOpts.identity || requestTokenObj?.rowKey || row.row_key || getIdentityPartsFromRow(row).identity || '');
-    const ownerExpectedIdentity = trimStr(
-      loadOpts.ownerExpectedIdentity ||
-      loadOpts.owner_expected_identity ||
-      loadOpts.activeIdentity ||
-      loadOpts.active_identity ||
-      requestTokenObj?.ownerExpectedIdentity ||
-      requestTokenObj?.owner_expected_identity ||
-      requestIdentity
-    );
     const isCurrent = (typeof loadOpts.isCurrent === 'function') ? loadOpts.isCurrent : null;
     const profile = trimStr(loadOpts.profile || loadOpts.context_profile || 'active_row_visible').toLowerCase() || 'active_row_visible';
     const includeEvidence = !!(
@@ -157076,7 +157445,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const cacheKey = getRowContextCacheKey(row, { includeEvidence, profile });
     const inflightKey = `${cacheKey}|${trimStr(requestTokenObj?.id || requestIdentity || '')}`;
 
-    if (!isModalOwnerCurrent(modalToken, ownerExpectedIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
+    if (!isModalOwnerCurrent(modalToken, requestIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
       return { payload: makeRowContextFailurePayload('stale-load-context', row, {}, { stale: true, degraded: true }), fromCache: false, failed: true };
     }
 
@@ -157096,7 +157465,6 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         requestToken: requestTokenObj,
         modalOpenToken: modalToken,
         identity: requestIdentity,
-        ownerExpectedIdentity,
         isCurrent
       });
       if (isRowContextPayloadDegraded(payload)) return payload;
@@ -157118,7 +157486,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       if (isRowContextPayloadDegraded(loaded)) {
         return { payload: deep(loaded), fromCache: false, failed: true };
       }
-      if (!isModalOwnerCurrent(modalToken, ownerExpectedIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
+      if (!isModalOwnerCurrent(modalToken, requestIdentity) || (isCurrent && !isCurrent()) || (requestTokenObj && requestTokenObj.cancelled === true)) {
         return { payload: makeRowContextFailurePayload('stale-loaded-context', row, loaded, { stale: true, degraded: true }), fromCache: false, failed: true };
       }
       return { payload: deep(loaded), fromCache: false };
@@ -157134,9 +157502,16 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const activeKey = trimStr(activeRow?.row_key || '');
     const modalToken = trimStr(cfg.modalOpenToken || cfg.modal_open_token || getModalOpenToken());
     if (!activeKey) return;
+    const preloadExplicitlyAllowed = !!(
+      cfg.allowAdjacentPrefetch === true ||
+      cfg.allow_adjacent_prefetch === true ||
+      cfg.enableAdjacentPrefetch === true ||
+      cfg.enable_adjacent_prefetch === true
+    );
+    if (!preloadExplicitlyAllowed) return;
     if (st.__bulk_process_auth_failed === true || st.__bulk_process_async_cancelled === true) return;
-    if (st.__bulk_process_direct_seed_open === true && st.__bulk_process_direct_seed_hydration_complete !== true) return;
-    if (st.__bulk_process_row_change_in_progress === true && cfg.allowDuringCompletedRowChange !== true) return;
+    if (st.__bulk_process_direct_seed_open === true || st.__bulk_process_direct_handoff === true || st.__bulk_process_from_bulk_authorise === true) return;
+    if (st.__bulk_process_row_change_in_progress === true) return;
     if (!isModalOwnerCurrent(modalToken, activeKey)) return;
     const visible = (typeof getBulkProcessVisibleRows === 'function') ? getBulkProcessVisibleRows(st) : null;
     const visibleRows = Array.isArray(visible?.visible_rows) ? visible.visible_rows : allRows;
@@ -157158,7 +157533,6 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
             force: false,
             modalOpenToken: modalToken,
             identity: candidateIdentity,
-            ownerExpectedIdentity: activeKey,
             isCurrent: () => isModalOwnerCurrent(modalToken, activeKey) && trimStr(st.active_row_key || '') === activeKey
           });
         } catch (err) {
@@ -157441,49 +157815,35 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     });
     st.__bulk_process_row_change_in_progress = false;
     if (!deferContextRefreshAfterPatch && !mutationSeq && !suppressAdjacentPrefetch && st.__bulk_process_suppress_context_hydration !== true) {
-      preloadAdjacentRows(st.active_row, { includeEvidence: false, modalOpenToken: modalOpenTokenAtStart, allowDuringCompletedRowChange: true });
+      preloadAdjacentRows(st.active_row, {
+        includeEvidence: false,
+        modalOpenToken: modalOpenTokenAtStart,
+        allowAdjacentPrefetch: true
+      });
     }
     GE();
     return true;
   } catch (err) {
-    const catchRequestStillCurrent = !!(
-      !activeRowChangeRequestToken ||
-      (
-        st.__bulk_process_active_row_change_request &&
-        st.__bulk_process_active_row_change_request.id === activeRowChangeRequestToken.id
-      )
-    );
-
-    if (catchRequestStillCurrent) {
-      st.__suppress_dirty_marking = false;
-      if (isAuthFailureError(err)) markRowChangeAuthFailure(err);
-      try {
-        if (typeof restorePreviousHydratedState === 'function') restorePreviousHydratedState();
-      } catch {}
-      st.__bulk_process_row_change_in_progress = false;
-      st.error_text = String(err?.message || err || 'Failed to load the selected Bulk Process row.');
-      if (isModalOwnerCurrent(getModalOpenToken(), trimStr(st.active_row_key || ''))) {
-        await rerenderWorkbench('row-change-error', true);
-      }
+    st.__suppress_dirty_marking = false;
+    if (isAuthFailureError(err)) markRowChangeAuthFailure(err);
+    try {
+      if (typeof restorePreviousHydratedState === 'function') restorePreviousHydratedState();
+    } catch {}
+    st.__bulk_process_row_change_in_progress = false;
+    st.error_text = String(err?.message || err || 'Failed to load the selected Bulk Process row.');
+    if (isModalOwnerCurrent(getModalOpenToken(), trimStr(st.active_row_key || ''))) {
+      await rerenderWorkbench('row-change-error', true);
     }
-
     GE();
     return false;
   } finally {
-    const finalRequestStillCurrent = !!(
-      activeRowChangeRequestToken &&
-      st.__bulk_process_active_row_change_request &&
-      st.__bulk_process_active_row_change_request.id === activeRowChangeRequestToken.id
-    );
-
-    if (finalRequestStillCurrent) {
+    if (st.__bulk_process_active_row_change_request && st.__bulk_process_active_row_change_request.id === activeRowChangeRequestToken?.id) {
       st.__bulk_process_active_row_change_request = null;
-      st.__bulk_process_row_change_in_progress = false;
-    } else if (!st.__bulk_process_active_row_change_request) {
-      st.__bulk_process_row_change_in_progress = false;
     }
+    st.__bulk_process_row_change_in_progress = false;
   }
 }
+
 
 
 
