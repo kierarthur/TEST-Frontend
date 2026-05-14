@@ -27390,7 +27390,8 @@ async function bankingPayCreateDraft(input = {}) {
     if (!s) return false;
     return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
   };
-  const collectPendingRefreshState = () => {
+
+const collectPendingRefreshState = () => {
     const previewData = isPlainObject(wiz.preview?.data) ? wiz.preview.data : {};
     const previewSession = isPlainObject(previewData.session) ? previewData.session : {};
     const previewPreview = isPlainObject(previewData.preview) ? previewData.preview : {};
@@ -27417,15 +27418,46 @@ async function bankingPayCreateDraft(input = {}) {
         if (s) target.push(s);
       }
     };
+    const terminalRefreshJobStatuses = new Set(['SUCCEEDED', 'SUCCESS', 'COMPLETE', 'COMPLETED', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED']);
+    const normalizeRefreshJobStatus = (job) => trimStr(
+      job?.latest_job_status ||
+      job?.job_status ||
+      job?.latest_status ||
+      job?.state ||
+      job?.status ||
+      job?.candidate_status ||
+      job?.candidateStatus ||
+      ''
+    ).toUpperCase();
+    const normalizeRefreshCandidateStatus = (job) => trimStr(
+      job?.candidate_status ||
+      job?.candidateStatus ||
+      job?.candidate_state ||
+      job?.candidateState ||
+      job?.status ||
+      ''
+    ).toUpperCase();
+    const isTerminalRefreshJobStatus = (status) => terminalRefreshJobStatuses.has(trimStr(status).toUpperCase());
     const appendJobs = (list, sourceName) => {
       if (!Array.isArray(list)) return;
       for (const job of list) {
         if (!isPlainObject(job)) continue;
-        const jobId = trimStr(job.pending_job_id || job.job_id || job.id || '');
+        const pendingJobId = trimStr(job.pending_job_id || job.pendingJobId || '');
+        const jobId = trimStr(pendingJobId || job.job_id || job.latest_job_id || job.latestJobId || job.id || '');
+        const latestJobId = trimStr(job.latest_job_id || job.latestJobId || '');
         const candidateId = trimStr(job.candidate_id || job.candidateId || '');
-        const status = trimStr(job.status || job.state || job.latest_status || '');
-        if (!jobId && !candidateId && !status) continue;
-        pendingJobs.push({ source: sourceName, job_id: jobId, candidate_id: candidateId, status });
+        const candidateStatus = normalizeRefreshCandidateStatus(job);
+        const status = normalizeRefreshJobStatus(job);
+        if (!jobId && !candidateId && !status && !candidateStatus) continue;
+        pendingJobs.push({
+          source: sourceName,
+          job_id: jobId,
+          pending_job_id: pendingJobId || null,
+          latest_job_id: latestJobId || null,
+          candidate_id: candidateId,
+          status,
+          candidate_status: candidateStatus
+        });
       }
     };
 
@@ -27442,17 +27474,50 @@ async function bankingPayCreateDraft(input = {}) {
       appendJobs(obj.pending_candidate_jobs || obj.pendingCandidateJobs, source.name);
     }
 
-    const uniquePendingCandidateIds = uniqTrimmed(pendingCandidateIds);
-    const uniqueDirtyCandidateIds = uniqTrimmed(dirtyCandidateIds);
+    const activeJobByCandidateId = new Set();
+    const terminalJobByCandidateId = new Set();
+    const nonTerminalJobs = [];
+    const seenNonTerminalJobKeys = new Set();
+    for (const job of pendingJobs) {
+      const status = trimStr(job?.status || '').toUpperCase();
+      const candidateStatus = trimStr(job?.candidate_status || '').toUpperCase();
+      const candidateId = trimStr(job?.candidate_id || '');
+      const hasExplicitPendingJobId = !!trimStr(job?.pending_job_id || '');
+      const terminal = isTerminalRefreshJobStatus(status) || isTerminalRefreshJobStatus(candidateStatus) || (
+        typeof isTerminalPendingJobStatusForCreate === 'function' && isTerminalPendingJobStatusForCreate(status)
+      );
+      if (terminal) {
+        if (candidateId) terminalJobByCandidateId.add(candidateId);
+        continue;
+      }
+      if (!hasExplicitPendingJobId) continue;
+      if (candidateId) activeJobByCandidateId.add(candidateId);
+      const dedupeKey = `${candidateId || ''}|${trimStr(job?.pending_job_id || '')}|${status}|${candidateStatus}`;
+      if (seenNonTerminalJobKeys.has(dedupeKey)) continue;
+      seenNonTerminalJobKeys.add(dedupeKey);
+      nonTerminalJobs.push(job);
+    }
+
+    const filterRefreshIds = (ids) => uniqTrimmed(ids).filter((candidateId) => {
+      if (activeJobByCandidateId.has(candidateId)) return true;
+      if (terminalJobByCandidateId.has(candidateId)) return false;
+      return true;
+    });
+    const uniquePendingCandidateIds = filterRefreshIds(pendingCandidateIds);
+    const uniqueDirtyCandidateIds = filterRefreshIds(dirtyCandidateIds);
     const uniqueFailedCandidateIds = uniqTrimmed(failedCandidateIds);
-    const nonTerminalJobs = pendingJobs.filter((job) => !isTerminalPendingJobStatusForCreate(job.status));
-    const hasPending = flags.length > 0 || loading || uniquePendingCandidateIds.length > 0 || uniqueDirtyCandidateIds.length > 0 || nonTerminalJobs.length > 0;
+    const blockingFlags = flags.filter((flag) => {
+      const flagText = trimStr(flag);
+      if (!flagText.endsWith('.create_draft_refresh_pending')) return true;
+      return loading || uniquePendingCandidateIds.length > 0 || uniqueDirtyCandidateIds.length > 0 || nonTerminalJobs.length > 0;
+    });
+    const hasPending = blockingFlags.length > 0 || loading || uniquePendingCandidateIds.length > 0 || uniqueDirtyCandidateIds.length > 0 || nonTerminalJobs.length > 0;
 
     return {
       hasPending,
       loading,
       errorText,
-      flags,
+      flags: blockingFlags,
       pending_candidate_ids: uniquePendingCandidateIds,
       dirty_candidate_ids: uniqueDirtyCandidateIds,
       failed_candidate_ids: uniqueFailedCandidateIds,
@@ -27460,6 +27525,8 @@ async function bankingPayCreateDraft(input = {}) {
       non_terminal_pending_candidate_jobs: nonTerminalJobs
     };
   };
+
+
 
   const activeRefreshState = collectPendingRefreshState();
   if (activeRefreshState.errorText) {
@@ -78082,6 +78149,73 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const normalizeStringArray = (arr) => Array.isArray(arr)
     ? Array.from(new Set(arr.map((x) => trimStr(x)).filter(Boolean)))
     : [];
+  const terminalWorkbenchJobStatuses = new Set(['SUCCEEDED', 'SUCCESS', 'COMPLETE', 'COMPLETED', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED']);
+  const isTerminalWorkbenchJobStatus = (status) => terminalWorkbenchJobStatuses.has(trimStr(status).toUpperCase());
+  const normalizeWorkbenchJobStatus = (row) => trimStr(
+    row?.latest_job_status ||
+    row?.job_status ||
+    row?.latest_status ||
+    row?.state ||
+    row?.status ||
+    row?.candidate_status ||
+    row?.candidateStatus ||
+    ''
+  ).toUpperCase();
+  const isActiveWorkbenchPendingJobRow = (row) => {
+    if (!isPlainObject(row)) return false;
+    const candidateId = trimStr(row.candidate_id || row.candidateId || '');
+    const pendingJobId = trimStr(row.pending_job_id || row.pendingJobId || '');
+    const jobId = trimStr(pendingJobId || row.job_id || row.latest_job_id || row.id || '');
+    const status = normalizeWorkbenchJobStatus(row);
+    const candidateStatus = trimStr(row.candidate_status || row.candidateStatus || row.status || '').toUpperCase();
+    if (!candidateId || !jobId) return false;
+    if (!pendingJobId) return false;
+    if (isTerminalWorkbenchJobStatus(status) || isTerminalWorkbenchJobStatus(candidateStatus)) return false;
+    return true;
+  };
+  const normalizeActivePendingCandidateJobs = (rows) => asArray(rows)
+    .filter(isActiveWorkbenchPendingJobRow)
+    .map((row) => {
+      const pendingJobId = trimStr(row.pending_job_id || row.pendingJobId || '');
+      const jobId = trimStr(pendingJobId || row.job_id || row.latest_job_id || row.id || '');
+      const latestJobId = trimStr(row.latest_job_id || row.latestJobId || (!pendingJobId ? jobId : '') || '') || null;
+      const status = normalizeWorkbenchJobStatus(row);
+      const candidateStatus = trimStr(row.candidate_status || row.candidateStatus || row.status || '') || null;
+      return {
+        candidate_id: trimStr(row.candidate_id || row.candidateId || ''),
+        pending_job_id: pendingJobId,
+        latest_job_id: latestJobId,
+        latest_job_type: trimStr(row.latest_job_type || row.job_type || row.jobType || '') || null,
+        latest_job_status: status || null,
+        job_status: status || null,
+        candidate_status: candidateStatus,
+        latest_job_attempt_count: Number.isFinite(Number(row.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
+        latest_job_max_attempts: Number.isFinite(Number(row.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
+        latest_job_last_error_json: (row.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json))
+          ? cloneJson(row.latest_job_last_error_json)
+          : ((row.last_error_json && typeof row.last_error_json === 'object' && !Array.isArray(row.last_error_json)) ? cloneJson(row.last_error_json) : null)
+      };
+    });
+  const normalizeActivePendingCandidateIds = (candidateIds, statusRows, activeJobs) => {
+    const ids = normalizeStringArray(candidateIds);
+    if (ids.length <= 0) return [];
+    const rows = asArray(statusRows).filter(isPlainObject);
+    const activeJobCandidateIds = new Set(asArray(activeJobs).map((job) => trimStr(job?.candidate_id || job?.candidateId || '')).filter(Boolean));
+    return ids.filter((candidateId) => {
+      if (!candidateId) return false;
+      if (activeJobCandidateIds.has(candidateId)) return true;
+      const candidateRows = rows.filter((row) => trimStr(row?.candidate_id || row?.candidateId || '') === candidateId);
+      if (candidateRows.length <= 0) return true;
+      const hasActiveRow = candidateRows.some(isActiveWorkbenchPendingJobRow);
+      if (hasActiveRow) return true;
+      const hasTerminalRow = candidateRows.some((row) => {
+        const jobStatus = normalizeWorkbenchJobStatus(row);
+        const candidateStatus = trimStr(row?.candidate_status || row?.candidateStatus || row?.status || '').toUpperCase();
+        return isTerminalWorkbenchJobStatus(jobStatus) || isTerminalWorkbenchJobStatus(candidateStatus);
+      });
+      return !hasTerminalRow;
+    });
+  };
   const blankComponentStateCache = () => ({
     case_resolution_states: [],
     blocked_case_states: [],
@@ -78237,7 +78371,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const progressRows = Array.isArray(progressObj.candidate_status_rows)
     ? progressObj.candidate_status_rows
     : (Array.isArray(progressObj.candidate_statuses) ? progressObj.candidate_statuses : []);
-  const pendingCandidateIds = normalizeStringArray(
+  let pendingCandidateIds = normalizeStringArray(
     responseObj.pending_candidate_ids ??
     previewObj.pending_candidate_ids ??
     progressObj.pending_candidate_ids ??
@@ -78254,28 +78388,20 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     : (Array.isArray(previewObj.candidate_status_rows)
       ? previewObj.candidate_status_rows
       : progressRows);
-  const pendingCandidateRows = candidateStatusRows.filter((row) => pendingCandidateIds.includes(trimStr(row?.candidate_id || '')));
+  let pendingCandidateRows = candidateStatusRows.filter((row) => pendingCandidateIds.includes(trimStr(row?.candidate_id || '')));
   const failedCandidateRows = candidateStatusRows.filter((row) => failedCandidateIds.includes(trimStr(row?.candidate_id || '')));
-  const pendingCandidateJobs = candidateStatusRows.map((row) => {
-    const candidateId = trimStr(row?.candidate_id || '');
-    const pendingJobId = trimStr(row?.pending_job_id || row?.latest_job_id || row?.job_id || '');
-    const latestJobStatus = trimStr(row?.latest_job_status || row?.job_status || '');
-    return {
-      candidate_id: candidateId,
-      pending_job_id: pendingJobId,
-      latest_job_id: trimStr(row?.latest_job_id || pendingJobId || '') || null,
-      latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
-      latest_job_status: latestJobStatus || null,
-      job_status: latestJobStatus || trimStr(row?.status || '') || null,
-      candidate_status: trimStr(row?.status || '') || null,
-      latest_job_attempt_count: Number.isFinite(Number(row?.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
-      latest_job_max_attempts: Number.isFinite(Number(row?.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
-      latest_job_last_error_json: (row?.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json))
-        ? cloneJson(row.latest_job_last_error_json)
-        : ((row?.last_error_json && typeof row.last_error_json === 'object' && !Array.isArray(row.last_error_json)) ? cloneJson(row.last_error_json) : null)
-    };
-  }).filter((row) => row.candidate_id && row.pending_job_id);
+  const rawPendingCandidateJobRows = candidateStatusRows.length > 0
+    ? candidateStatusRows
+    : asArray(responseObj.pending_candidate_jobs ?? previewObj.pending_candidate_jobs ?? progressObj.pending_candidate_jobs);
+  let pendingCandidateJobs = normalizeActivePendingCandidateJobs(rawPendingCandidateJobRows);
+  pendingCandidateIds = normalizeActivePendingCandidateIds(pendingCandidateIds, rawPendingCandidateJobRows, pendingCandidateJobs);
+  pendingCandidateRows = candidateStatusRows.filter((row) => pendingCandidateIds.includes(trimStr(row?.candidate_id || '')));
   const progressReadyFlag = responseObj.ready === true || responseObj.ready_flag === true || progressObj.ready === true || progressObj.ready_flag === true;
+  if (progressReadyFlag) {
+    pendingCandidateIds = [];
+    pendingCandidateRows = [];
+    pendingCandidateJobs = [];
+  }
   const hasPendingWorkbenchRefresh = !progressReadyFlag && (pendingCandidateIds.length > 0 || pendingCandidateJobs.length > 0);
 
   const hasOwn = (obj, key) => isPlainObject(obj) && Object.prototype.hasOwnProperty.call(obj, key);
@@ -78455,7 +78581,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.failed_candidate_ids = failedCandidateIds;
   wiz.workbench.pending_candidate_rows = cloneJson(responseObj.pending_candidate_rows ?? previewObj.pending_candidate_rows ?? pendingCandidateRows) || [];
   wiz.workbench.failed_candidate_rows = cloneJson(responseObj.failed_candidate_rows ?? previewObj.failed_candidate_rows ?? failedCandidateRows) || [];
-  wiz.workbench.pending_candidate_jobs = cloneJson(responseObj.pending_candidate_jobs ?? previewObj.pending_candidate_jobs ?? pendingCandidateJobs) || [];
+  wiz.workbench.pending_candidate_jobs = cloneJson(pendingCandidateJobs) || [];
   wiz.workbench.dirty_candidate_ids = Array.from(new Set([...pendingCandidateIds, ...failedCandidateIds]));
   wiz.workbench.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
   wiz.workbench.server_selected_preview_row_ids = serverSelectedPreviewRowIdsProvided ? (cloneJson(serverSelectedPreviewRowIds) || []) : [];
@@ -78469,8 +78595,6 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
 
   return normalizedEnvelope;
 }
-
-
 
 function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -78486,6 +78610,73 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   const normalizeStringArray = (arr) => Array.isArray(arr)
     ? Array.from(new Set(arr.map((x) => trimStr(x)).filter(Boolean)))
     : [];
+  const terminalWorkbenchJobStatuses = new Set(['SUCCEEDED', 'SUCCESS', 'COMPLETE', 'COMPLETED', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED']);
+  const isTerminalWorkbenchJobStatus = (status) => terminalWorkbenchJobStatuses.has(trimStr(status).toUpperCase());
+  const normalizeWorkbenchJobStatus = (row) => trimStr(
+    row?.latest_job_status ||
+    row?.job_status ||
+    row?.latest_status ||
+    row?.state ||
+    row?.status ||
+    row?.candidate_status ||
+    row?.candidateStatus ||
+    ''
+  ).toUpperCase();
+  const isActiveWorkbenchPendingJobRow = (row) => {
+    if (!isPlainObject(row)) return false;
+    const candidateId = trimStr(row.candidate_id || row.candidateId || '');
+    const pendingJobId = trimStr(row.pending_job_id || row.pendingJobId || '');
+    const jobId = trimStr(pendingJobId || row.job_id || row.latest_job_id || row.id || '');
+    const status = normalizeWorkbenchJobStatus(row);
+    const candidateStatus = trimStr(row.candidate_status || row.candidateStatus || row.status || '').toUpperCase();
+    if (!candidateId || !jobId) return false;
+    if (!pendingJobId) return false;
+    if (isTerminalWorkbenchJobStatus(status) || isTerminalWorkbenchJobStatus(candidateStatus)) return false;
+    return true;
+  };
+  const normalizeActivePendingCandidateJobs = (rows) => asArray(rows)
+    .filter(isActiveWorkbenchPendingJobRow)
+    .map((row) => {
+      const pendingJobId = trimStr(row.pending_job_id || row.pendingJobId || '');
+      const jobId = trimStr(pendingJobId || row.job_id || row.latest_job_id || row.id || '');
+      const latestJobId = trimStr(row.latest_job_id || row.latestJobId || (!pendingJobId ? jobId : '') || '') || null;
+      const status = normalizeWorkbenchJobStatus(row);
+      const candidateStatus = trimStr(row.candidate_status || row.candidateStatus || row.status || '') || null;
+      return {
+        candidate_id: trimStr(row.candidate_id || row.candidateId || ''),
+        pending_job_id: pendingJobId,
+        latest_job_id: latestJobId,
+        latest_job_type: trimStr(row.latest_job_type || row.job_type || row.jobType || '') || null,
+        latest_job_status: status || null,
+        job_status: status || null,
+        candidate_status: candidateStatus,
+        latest_job_attempt_count: Number.isFinite(Number(row.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
+        latest_job_max_attempts: Number.isFinite(Number(row.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
+        latest_job_last_error_json: (row.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json))
+          ? cloneJson(row.latest_job_last_error_json)
+          : ((row.last_error_json && typeof row.last_error_json === 'object' && !Array.isArray(row.last_error_json)) ? cloneJson(row.last_error_json) : null)
+      };
+    });
+  const normalizeActivePendingCandidateIds = (candidateIds, statusRows, activeJobs) => {
+    const ids = normalizeStringArray(candidateIds);
+    if (ids.length <= 0) return [];
+    const rows = asArray(statusRows).filter(isPlainObject);
+    const activeJobCandidateIds = new Set(asArray(activeJobs).map((job) => trimStr(job?.candidate_id || job?.candidateId || '')).filter(Boolean));
+    return ids.filter((candidateId) => {
+      if (!candidateId) return false;
+      if (activeJobCandidateIds.has(candidateId)) return true;
+      const candidateRows = rows.filter((row) => trimStr(row?.candidate_id || row?.candidateId || '') === candidateId);
+      if (candidateRows.length <= 0) return true;
+      const hasActiveRow = candidateRows.some(isActiveWorkbenchPendingJobRow);
+      if (hasActiveRow) return true;
+      const hasTerminalRow = candidateRows.some((row) => {
+        const jobStatus = normalizeWorkbenchJobStatus(row);
+        const candidateStatus = trimStr(row?.candidate_status || row?.candidateStatus || row?.status || '').toUpperCase();
+        return isTerminalWorkbenchJobStatus(jobStatus) || isTerminalWorkbenchJobStatus(candidateStatus);
+      });
+      return !hasTerminalRow;
+    });
+  };
   const blankComponentStateCache = () => ({
     case_resolution_states: [],
     blocked_case_states: [],
@@ -78837,6 +79028,61 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   nextEnvelopeSession.pending_candidate_ids = cloneJson(pendingCandidateIds) || [];
   nextEnvelopeSession.failed_candidate_ids = cloneJson(failedCandidateIds) || [];
 
+  const rawPendingCandidateJobRows = [
+    ...asArray(nextEnvelope.pending_candidate_jobs),
+    ...asArray(nextPreview.pending_candidate_jobs),
+    ...asArray(nextEnvelopeSession.pending_candidate_jobs),
+    ...asArray(currentEnvelope.pending_candidate_jobs),
+    ...asArray(currentPreview.pending_candidate_jobs),
+    ...asArray(currentSession.pending_candidate_jobs)
+  ];
+  let pendingCandidateJobs = normalizeActivePendingCandidateJobs(rawPendingCandidateJobRows)
+    .filter((job, index, rows) => {
+      const candidateId = trimStr(job?.candidate_id || '');
+      const jobId = trimStr(job?.pending_job_id || job?.job_id || job?.latest_job_id || '');
+      if (!candidateId || !jobId) return false;
+      return rows.findIndex((other) => trimStr(other?.candidate_id || '') === candidateId && trimStr(other?.pending_job_id || other?.job_id || other?.latest_job_id || '') === jobId) === index;
+    });
+  pendingCandidateIds = normalizeActivePendingCandidateIds(pendingCandidateIds, rawPendingCandidateJobRows, pendingCandidateJobs);
+  if (responseCandidateId && !pendingCandidateIdsProvided && !pendingCandidateJobs.some((job) => trimStr(job?.candidate_id || '') === responseCandidateId)) {
+    const responseStatusText = trimStr(
+      responseObj.status ||
+      responseObj.candidate_status ||
+      responseObj.candidateStatus ||
+      responseObj.candidate?.status ||
+      responseObj.candidate?.candidate_status ||
+      responseObj.candidate_preview?.status ||
+      responseObj.candidate_preview?.candidate_status ||
+      responsePreview?.status ||
+      responsePreview?.candidate_status ||
+      ''
+    ).toUpperCase();
+    const responseJobStatus = normalizeWorkbenchJobStatus(responseObj) || normalizeWorkbenchJobStatus(responseObj.candidate_preview || {}) || normalizeWorkbenchJobStatus(responsePreview || {});
+    const responsePendingJobId = trimStr(
+      responseObj.pending_job_id ||
+      responseObj.pendingJobId ||
+      responseObj.candidate?.pending_job_id ||
+      responseObj.candidate_preview?.pending_job_id ||
+      responsePreview?.pending_job_id ||
+      ''
+    );
+    const responseReady = responseObj.ready === true || responseObj.ready_flag === true || responsePreview?.ready === true || responsePreview?.ready_flag === true;
+    if (!responsePendingJobId && (responseReady || isTerminalWorkbenchJobStatus(responseStatusText) || isTerminalWorkbenchJobStatus(responseJobStatus))) {
+      pendingCandidateIds = pendingCandidateIds.filter((candidateId) => candidateId !== responseCandidateId);
+    }
+  }
+  const activePendingCandidateIdSet = new Set(pendingCandidateIds);
+  pendingCandidateJobs = pendingCandidateJobs.filter((job) => {
+    const candidateId = trimStr(job?.candidate_id || '');
+    if (!candidateId) return false;
+    if (responseCandidateId && candidateId === responseCandidateId && !activePendingCandidateIdSet.has(candidateId)) return false;
+    return true;
+  });
+  const hasPendingWorkbenchRefresh = pendingCandidateIds.length > 0 || pendingCandidateJobs.length > 0;
+  nextEnvelope.pending_candidate_jobs = cloneJson(pendingCandidateJobs) || [];
+  nextPreview.pending_candidate_jobs = cloneJson(pendingCandidateJobs) || [];
+  nextEnvelopeSession.pending_candidate_jobs = cloneJson(pendingCandidateJobs) || [];
+
   const caseResolutionStates = Array.isArray(nextPreview.case_resolution_states) ? nextPreview.case_resolution_states : [];
   const blockedCaseStates = Array.isArray(nextPreview.blocked_case_states) ? nextPreview.blocked_case_states : [];
   const safeCaseStates = Array.isArray(nextPreview.safe_case_states) ? nextPreview.safe_case_states : [];
@@ -78869,7 +79115,7 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   })();
 
   wiz.preview.data = nextEnvelope;
-  wiz.preview.loading = false;
+  wiz.preview.loading = hasPendingWorkbenchRefresh;
   wiz.preview.error = '';
   wiz.preview.failure = null;
   if (isPlainObject(nextEnvelope.readiness)) {
@@ -78913,6 +79159,12 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   wiz.decisions.week_ending_cutoff = sessionWeekEndingCutoffDate;
   wiz.decisions.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
   wiz.decisions.server_selected_preview_row_ids = serverSelectedPreviewRowIdsProvided ? (cloneJson(serverSelectedPreviewRowIds) || []) : [];
+  wiz.decisions.pending_candidate_ids = cloneJson(pendingCandidateIds) || [];
+  wiz.decisions.failed_candidate_ids = cloneJson(failedCandidateIds) || [];
+  wiz.decisions.pending_candidate_jobs = cloneJson(pendingCandidateJobs) || [];
+  wiz.decisions.dirty_candidate_ids = Array.from(new Set([...pendingCandidateIds, ...failedCandidateIds]));
+  wiz.decisions.create_draft_refresh_pending = hasPendingWorkbenchRefresh;
+  wiz.decisions.pay_context_dirty = hasPendingWorkbenchRefresh;
   wiz.decisions.selected_preview_row_ids = selectionState.selected_preview_row_ids;
   wiz.selected_preview_row_mode = selectionState.selected_preview_row_mode;
   wiz.local_selected_preview_row_ids_dirty = serverSelectedPreviewRowIdsProvided && serverSelectedPreviewRowIds.length <= 0 ? false : localSelectionDirty;
@@ -78926,8 +79178,12 @@ function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = n
   wiz.workbench.week_ending_cutoff = sessionWeekEndingCutoffDate;
   wiz.workbench.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
   wiz.workbench.server_selected_preview_row_ids = serverSelectedPreviewRowIdsProvided ? (cloneJson(serverSelectedPreviewRowIds) || []) : [];
-  wiz.workbench.pending_candidate_ids = pendingCandidateIds;
-  wiz.workbench.failed_candidate_ids = failedCandidateIds;
+  wiz.workbench.pending_candidate_ids = cloneJson(pendingCandidateIds) || [];
+  wiz.workbench.failed_candidate_ids = cloneJson(failedCandidateIds) || [];
+  wiz.workbench.pending_candidate_jobs = cloneJson(pendingCandidateJobs) || [];
+  wiz.workbench.dirty_candidate_ids = Array.from(new Set([...pendingCandidateIds, ...failedCandidateIds]));
+  wiz.workbench.create_draft_refresh_pending = hasPendingWorkbenchRefresh;
+  wiz.workbench.pay_context_dirty = hasPendingWorkbenchRefresh;
   wiz.workbench.case_resolution_states = cloneJson(caseResolutionStates) || [];
   wiz.workbench.canonical_preview_lines = cloneJson(canonicalPreviewLines) || [];
   wiz.workbench.payees = cloneJson(payees) || [];
@@ -79174,7 +79430,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
 
   const normalizeProgress = (progress) => {
     const progressObj = isPlainObject(progress) ? progress : {};
-    const pendingCandidateIds = Array.isArray(progressObj.pending_candidate_ids)
+    let pendingCandidateIds = Array.isArray(progressObj.pending_candidate_ids)
       ? Array.from(new Set(progressObj.pending_candidate_ids.map((x) => trimStr(x)).filter(Boolean)))
       : [];
     const failedCandidateIds = Array.isArray(progressObj.failed_candidate_ids)
@@ -79184,27 +79440,67 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       ? progressObj.candidate_status_rows
       : (Array.isArray(progressObj.candidate_statuses) ? progressObj.candidate_statuses : []);
     const candidateStatusRows = candidateStatusRowsRaw.filter((row) => isPlainObject(row));
-    const pendingRows = candidateStatusRows.filter((row) => pendingCandidateIds.includes(trimStr(row?.candidate_id)));
-    const failedRows = candidateStatusRows.filter((row) => failedCandidateIds.includes(trimStr(row?.candidate_id)));
-    const pendingCandidateJobs = candidateStatusRows.map((row) => {
-      const latestJobStatus = trimStr(row?.latest_job_status || row?.job_status || '');
-      const pendingJobId = trimStr(row?.pending_job_id || row?.latest_job_id || row?.job_id || '');
+    const terminalProgressJobStatuses = new Set(['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED']);
+    const isTerminalProgressJobStatus = (status) => terminalProgressJobStatuses.has(trimStr(status).toUpperCase());
+    const normalizeProgressJobStatus = (row) => trimStr(
+      row?.latest_job_status ||
+      row?.job_status ||
+      row?.latest_status ||
+      row?.state ||
+      row?.status ||
+      row?.candidate_status ||
+      row?.candidateStatus ||
+      ''
+    ).toUpperCase();
+    const isActiveProgressPendingJobRow = (row) => {
+      if (!isPlainObject(row)) return false;
+      const candidateId = trimStr(row?.candidate_id || row?.candidateId || '');
+      const pendingJobId = trimStr(row?.pending_job_id || row?.pendingJobId || '');
+      const jobId = trimStr(pendingJobId || row?.job_id || row?.latest_job_id || row?.id || '');
+      const status = normalizeProgressJobStatus(row);
+      const candidateStatus = trimStr(row?.candidate_status || row?.candidateStatus || row?.status || '').toUpperCase();
+      if (!candidateId || !jobId) return false;
+      if (!pendingJobId) return false;
+      if (isTerminalProgressJobStatus(status) || isTerminalProgressJobStatus(candidateStatus)) return false;
+      return true;
+    };
+    const pendingCandidateJobs = candidateStatusRows.filter(isActiveProgressPendingJobRow).map((row) => {
+      const pendingJobId = trimStr(row?.pending_job_id || row?.pendingJobId || '');
+      const jobId = trimStr(pendingJobId || row?.job_id || row?.latest_job_id || row?.id || '');
+      const latestJobStatus = normalizeProgressJobStatus(row);
       return {
-        candidate_id: trimStr(row?.candidate_id || ''),
+        candidate_id: trimStr(row?.candidate_id || row?.candidateId || ''),
         pending_job_id: pendingJobId,
-        latest_job_id: trimStr(row?.latest_job_id || pendingJobId || '') || null,
+        latest_job_id: trimStr(row?.latest_job_id || (!pendingJobId ? jobId : '') || '') || null,
         latest_job_type: trimStr(row?.latest_job_type || row?.job_type || '') || null,
         latest_job_status: latestJobStatus || null,
-        job_status: latestJobStatus || trimStr(row?.status || '') || null,
-        candidate_status: trimStr(row?.status || '') || null,
-        status: trimStr(row?.status || '') || null,
+        job_status: latestJobStatus || null,
+        candidate_status: trimStr(row?.candidate_status || row?.candidateStatus || row?.status || '') || null,
+        status: trimStr(row?.status || row?.candidate_status || '') || null,
         latest_job_attempt_count: Number.isFinite(Number(row?.latest_job_attempt_count)) ? Number(row.latest_job_attempt_count) : null,
         latest_job_max_attempts: Number.isFinite(Number(row?.latest_job_max_attempts)) ? Number(row.latest_job_max_attempts) : null,
         latest_error_json: (row?.latest_error_json && typeof row.latest_error_json === 'object' && !Array.isArray(row.latest_error_json))
           ? cloneJson(row.latest_error_json)
           : ((row?.latest_job_last_error_json && typeof row.latest_job_last_error_json === 'object' && !Array.isArray(row.latest_job_last_error_json)) ? cloneJson(row.latest_job_last_error_json) : null)
       };
-    }).filter((row) => row.candidate_id && row.pending_job_id);
+    });
+    const activePendingJobCandidateIds = new Set(pendingCandidateJobs.map((job) => trimStr(job?.candidate_id || '')).filter(Boolean));
+    pendingCandidateIds = pendingCandidateIds.filter((candidateId) => {
+      if (!candidateId) return false;
+      if (activePendingJobCandidateIds.has(candidateId)) return true;
+      const candidateRows = candidateStatusRows.filter((row) => trimStr(row?.candidate_id || row?.candidateId || '') === candidateId);
+      if (candidateRows.length <= 0) return true;
+      const hasActiveRow = candidateRows.some(isActiveProgressPendingJobRow);
+      if (hasActiveRow) return true;
+      const hasTerminalRow = candidateRows.some((row) => {
+        const jobStatus = normalizeProgressJobStatus(row);
+        const candidateStatus = trimStr(row?.candidate_status || row?.candidateStatus || row?.status || '').toUpperCase();
+        return isTerminalProgressJobStatus(jobStatus) || isTerminalProgressJobStatus(candidateStatus);
+      });
+      return !hasTerminalRow;
+    });
+    const pendingRows = candidateStatusRows.filter((row) => pendingCandidateIds.includes(trimStr(row?.candidate_id)));
+    const failedRows = candidateStatusRows.filter((row) => failedCandidateIds.includes(trimStr(row?.candidate_id)));
     const dirtyCandidateIds = Array.from(new Set([...pendingCandidateIds, ...failedCandidateIds]));
     const targetCandidateStatus = candidateStatusRows.find((row) => trimStr(row?.candidate_id) === candidateIdText) || null;
     const watchedPendingIds = watchCandidateIds.filter((id) => pendingCandidateIds.includes(id));
@@ -79252,7 +79548,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
   const isTerminalCandidateJobStatus = (status) => {
     const s = trimStr(status).toUpperCase();
     if (!s) return false;
-    return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
+    return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
   };
   const hasActiveCandidateRefreshWork = (normalized) => {
     const n = isPlainObject(normalized) ? normalized : {};
@@ -79260,9 +79556,9 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     const jobs = Array.isArray(n.pendingCandidateJobs) ? n.pendingCandidateJobs : [];
     return jobs.some((job) => {
       if (!job || !trimStr(job.pending_job_id || job.job_id || '')) return false;
-      const jobStatus = trimStr(job.latest_job_status || job.job_status || '');
-      if (jobStatus) return !isTerminalCandidateJobStatus(jobStatus);
-      return !isTerminalCandidateJobStatus(job.status || job.candidate_status);
+      const jobStatus = trimStr(job.latest_job_status || job.job_status || job.status || job.state || job.latest_status || job.candidate_status || '');
+      if (!jobStatus) return !!trimStr(job.pending_job_id || '');
+      return !isTerminalCandidateJobStatus(jobStatus);
     });
   };
   const writeProgressIntoState = (normalized) => {
@@ -79631,6 +79927,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
   };
   throw timeoutError;
 }
+
 
 async function bankingPayWorkbenchSessionOpen(payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
