@@ -26637,6 +26637,8 @@ function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, opti
 }
 
 
+
+
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -27388,10 +27390,9 @@ async function bankingPayCreateDraft(input = {}) {
   const isTerminalPendingJobStatusForCreate = (status) => {
     const s = upperTrim(status);
     if (!s) return false;
-    return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
+    return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
   };
-
-const collectPendingRefreshState = () => {
+  const collectPendingRefreshState = () => {
     const previewData = isPlainObject(wiz.preview?.data) ? wiz.preview.data : {};
     const previewSession = isPlainObject(previewData.session) ? previewData.session : {};
     const previewPreview = isPlainObject(previewData.preview) ? previewData.preview : {};
@@ -27418,36 +27419,45 @@ const collectPendingRefreshState = () => {
         if (s) target.push(s);
       }
     };
-    const terminalRefreshJobStatuses = new Set(['SUCCEEDED', 'SUCCESS', 'COMPLETE', 'COMPLETED', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED']);
-    const normalizeRefreshJobStatus = (job) => trimStr(
+    const normalizeRefreshJobStatus = (job) => upperTrim(
       job?.latest_job_status ||
+      job?.latestJobStatus ||
       job?.job_status ||
+      job?.jobStatus ||
       job?.latest_status ||
+      job?.latestStatus ||
+      job?.current_status ||
+      job?.currentStatus ||
       job?.state ||
       job?.status ||
-      job?.candidate_status ||
-      job?.candidateStatus ||
-      ''
-    ).toUpperCase();
-    const normalizeRefreshCandidateStatus = (job) => trimStr(
+      job?.status_code ||
+      job?.statusCode ||
       job?.candidate_status ||
       job?.candidateStatus ||
       job?.candidate_state ||
       job?.candidateState ||
+      ''
+    );
+    const normalizeRefreshCandidateStatus = (job) => upperTrim(
+      job?.candidate_status ||
+      job?.candidateStatus ||
+      job?.candidate_state ||
+      job?.candidateState ||
+      job?.ready_status ||
+      job?.readyStatus ||
       job?.status ||
       ''
-    ).toUpperCase();
-    const isTerminalRefreshJobStatus = (status) => terminalRefreshJobStatuses.has(trimStr(status).toUpperCase());
+    );
     const appendJobs = (list, sourceName) => {
       if (!Array.isArray(list)) return;
       for (const job of list) {
         if (!isPlainObject(job)) continue;
         const pendingJobId = trimStr(job.pending_job_id || job.pendingJobId || '');
-        const jobId = trimStr(pendingJobId || job.job_id || job.latest_job_id || job.latestJobId || job.id || '');
         const latestJobId = trimStr(job.latest_job_id || job.latestJobId || '');
+        const jobId = trimStr(pendingJobId || job.job_id || job.jobId || latestJobId || job.id || '');
         const candidateId = trimStr(job.candidate_id || job.candidateId || '');
-        const candidateStatus = normalizeRefreshCandidateStatus(job);
         const status = normalizeRefreshJobStatus(job);
+        const candidateStatus = normalizeRefreshCandidateStatus(job);
         if (!jobId && !candidateId && !status && !candidateStatus) continue;
         pendingJobs.push({
           source: sourceName,
@@ -27478,21 +27488,24 @@ const collectPendingRefreshState = () => {
     const terminalJobByCandidateId = new Set();
     const nonTerminalJobs = [];
     const seenNonTerminalJobKeys = new Set();
+
     for (const job of pendingJobs) {
-      const status = trimStr(job?.status || '').toUpperCase();
-      const candidateStatus = trimStr(job?.candidate_status || '').toUpperCase();
       const candidateId = trimStr(job?.candidate_id || '');
-      const hasExplicitPendingJobId = !!trimStr(job?.pending_job_id || '');
-      const terminal = isTerminalRefreshJobStatus(status) || isTerminalRefreshJobStatus(candidateStatus) || (
-        typeof isTerminalPendingJobStatusForCreate === 'function' && isTerminalPendingJobStatusForCreate(status)
-      );
+      const pendingJobId = trimStr(job?.pending_job_id || '');
+      const jobId = trimStr(job?.job_id || '');
+      const status = upperTrim(job?.status || '');
+      const candidateStatus = upperTrim(job?.candidate_status || '');
+      const terminal = isTerminalPendingJobStatusForCreate(status) || isTerminalPendingJobStatusForCreate(candidateStatus);
+
       if (terminal) {
         if (candidateId) terminalJobByCandidateId.add(candidateId);
         continue;
       }
-      if (!hasExplicitPendingJobId) continue;
+
+      if (!pendingJobId) continue;
+
       if (candidateId) activeJobByCandidateId.add(candidateId);
-      const dedupeKey = `${candidateId || ''}|${trimStr(job?.pending_job_id || '')}|${status}|${candidateStatus}`;
+      const dedupeKey = `${candidateId || ''}|${pendingJobId || jobId || ''}|${status}|${candidateStatus}`;
       if (seenNonTerminalJobKeys.has(dedupeKey)) continue;
       seenNonTerminalJobKeys.add(dedupeKey);
       nonTerminalJobs.push(job);
@@ -27503,6 +27516,7 @@ const collectPendingRefreshState = () => {
       if (terminalJobByCandidateId.has(candidateId)) return false;
       return true;
     });
+
     const uniquePendingCandidateIds = filterRefreshIds(pendingCandidateIds);
     const uniqueDirtyCandidateIds = filterRefreshIds(dirtyCandidateIds);
     const uniqueFailedCandidateIds = uniqTrimmed(failedCandidateIds);
@@ -27525,8 +27539,6 @@ const collectPendingRefreshState = () => {
       non_terminal_pending_candidate_jobs: nonTerminalJobs
     };
   };
-
-
 
   const activeRefreshState = collectPendingRefreshState();
   if (activeRefreshState.errorText) {
@@ -28348,7 +28360,6 @@ const collectPendingRefreshState = () => {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
-
 
 
 
