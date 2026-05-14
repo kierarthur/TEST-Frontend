@@ -68549,7 +68549,6 @@ function summaryMaybeResortDom(section) {
   return true;
 }
 
-
 async function refreshContractWeekSummaryAfterPlannedChange(contractWeekId, ctx) {
   const targetContractWeekId = String(contractWeekId || '').trim();
   if (!targetContractWeekId) {
@@ -68631,6 +68630,43 @@ async function refreshContractWeekSummaryAfterPlannedChange(contractWeekId, ctx)
       const rowContractWeekId = trimStr(row.contract_week_id || '');
       return rowId === targetId || rowContractWeekId === targetId;
     }) || null;
+  };
+
+  const buildHintedCanonicalRow = () => {
+    const candidates = [
+      handoffCtx.row_patch,
+      handoffCtx.rowPatch,
+      handoffCtx.summary_row_hint,
+      handoffCtx.summaryRowHint,
+      handoffCtx.data_row,
+      handoffCtx.dataRow,
+      handoffCtx.row,
+      handoffCtx.created_row,
+      handoffCtx.createdRow
+    ].filter((candidate) => candidate && typeof candidate === 'object' && !Array.isArray(candidate));
+
+    if (!candidates.length) return null;
+
+    const hinted = candidates.reduce((acc, candidate) => ({ ...(acc || {}), ...(safeClone(candidate) || {}) }), {});
+    const hintedContractWeekId = trimStr(hinted.contract_week_id || hinted.contractWeekId || hinted.id || '');
+    const hintedTimesheetId = trimStr(hinted.timesheet_id || hinted.current_timesheet_id || hinted.currentTimesheetId || '');
+
+    if (hintedTimesheetId) return null;
+    if (hintedContractWeekId && hintedContractWeekId !== targetContractWeekId) return null;
+
+    hinted.id = trimStr(hinted.id || hinted.contract_week_id || hinted.contractWeekId || targetContractWeekId) || targetContractWeekId;
+    hinted.contract_week_id = trimStr(hinted.contract_week_id || hinted.contractWeekId || targetContractWeekId) || targetContractWeekId;
+    hinted.timesheet_id = null;
+    hinted.current_timesheet_id = null;
+    hinted.row_key = trimStr(hinted.row_key || `contract_week:${targetContractWeekId}`) || `contract_week:${targetContractWeekId}`;
+    hinted.summary_stage = trimStr(hinted.summary_stage || hinted.tools_stage || hinted.bulk_process_bucket || 'UNPROCESSED') || 'UNPROCESSED';
+    hinted.tools_stage = trimStr(hinted.tools_stage || hinted.summary_stage || 'UNPROCESSED') || 'UNPROCESSED';
+    hinted.bulk_process_bucket = trimStr(hinted.bulk_process_bucket || 'unprocessed') || 'unprocessed';
+    hinted.sheet_scope = trimStr(hinted.sheet_scope || 'WEEKLY') || 'WEEKLY';
+    hinted.submission_mode = trimStr(hinted.submission_mode || hinted.submission_mode_snapshot || 'MANUAL') || 'MANUAL';
+    hinted.submission_mode_snapshot = trimStr(hinted.submission_mode_snapshot || hinted.submission_mode || 'MANUAL') || 'MANUAL';
+    hinted.status = trimStr(hinted.status || 'OPEN') || 'OPEN';
+    return hinted;
   };
 
   try {
@@ -68788,7 +68824,19 @@ async function refreshContractWeekSummaryAfterPlannedChange(contractWeekId, ctx)
   } catch {}
 
   if (!canonical || typeof canonical !== 'object') {
-    return await fallbackRenderAll('no-canonical-row');
+    const hintedCanonical = buildHintedCanonicalRow();
+    if (hintedCanonical) {
+      canonical = hintedCanonical;
+      try {
+        console.log('[TS][BULK-PROCESS][PLANNED-SUMMARY][CANONICAL_HINT_FALLBACK]', {
+          target_contract_week_id: targetContractWeekId,
+          canonical_row: deepRowSnapshot(canonical),
+          summary_ctx: describeSummaryCtx(summaryCtx)
+        });
+      } catch {}
+    } else {
+      return await fallbackRenderAll('no-canonical-row');
+    }
   }
 
   if (typeof normalizeSavedRecordForSummary === 'function') {
@@ -68961,6 +69009,7 @@ async function refreshContractWeekSummaryAfterPlannedChange(contractWeekId, ctx)
     row_id: canonicalId || targetContractWeekId
   };
 }
+
 
 
 async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
@@ -69958,9 +70007,12 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
 
     let switchedToBulkProcess = false;
     if (createdUnprocessed || isBulkAuthoriseDirectHandoff) {
-      if (!isBulkAuthoriseDirectHandoff) {
-        await beforePostCreatePrompt({ source_context: 'bulk_authorise', created, created_unprocessed: true });
-      }
+      await beforePostCreatePrompt({
+        source_context: 'bulk_authorise',
+        created,
+        created_unprocessed: true,
+        direct_bulk_process_handoff: isBulkAuthoriseDirectHandoff
+      });
       const focusIdentity = createdRowKey || (createdTimesheetId ? `timesheet:${createdTimesheetId}` : (createdContractWeekId ? `contract_week:${createdContractWeekId}` : ''));
       const switchSeed = {
         ...(bulkProcessSeedBase || {}),
@@ -69993,7 +70045,7 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
         prevent_bulk_authorise_resume: true,
         preventBulkAuthoriseResume: true
       };
-      const switchToBulk = isBulkAuthoriseDirectHandoff ? true : await openConfirm({
+      const switchToBulk = await openConfirm({
         title: 'Open in Bulk Process?',
         message: (isWeekly
           ? 'The new additional weekly manual row was created as unprocessed.\n\nWould you like to switch to Bulk Process now?'
@@ -70001,9 +70053,29 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
         confirm_label: 'Switch to Bulk Process',
         cancel_label: 'Stay here',
         confirm_class: 'btn btn-primary',
-        cancel_class: 'btn btn-outline'
+        cancel_class: 'btn btn-outline',
+        kind: 'bulk-process-handoff-ui-confirm',
+        next_owner_kind: 'bulk_process',
+        nextOwnerKind: 'bulk_process',
+        direct_bulk_process_handoff: true,
+        directBulkProcessHandoff: true,
+        suppress_parent_persist: true,
+        suppressParentPersist: true,
+        suppress_parent_resume: true,
+        suppressParentResume: true,
+        prevent_bulk_authorise_resume: true,
+        preventBulkAuthoriseResume: true,
+        suppress_summary_refresh_before_open: true,
+        suppressSummaryRefreshBeforeOpen: true
       });
-      if (switchToBulk && typeof openBulkProcessWorkbench === 'function') {
+      if (!switchToBulk) {
+        queueNonBlockingSummaryRefreshAfterHandoff(
+          createdContractWeekId,
+          o.summary_ctx || o.summaryCtx || null,
+          createdPatchRow || created?.summary_row_hint || null,
+          'bulk-authorise-add-additional-stay-in-bulk-authorise'
+        );
+      } else if (typeof openBulkProcessWorkbench === 'function') {
         invalidateBulkAuthorisePreviewOwnershipForBulkProcessSwitch({
           source_row_key: baRow.row_key || baCtx.row_key || null,
           target_row_key: focusIdentity || null,
@@ -70011,19 +70083,23 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
         });
         await closeCurrentBulkAuthoriseBeforeBulkProcess();
         await Promise.resolve();
-        if (isBulkAuthoriseDirectHandoff) {
-          await finishCreatePhase({ source_context: 'bulk_authorise', created, switching_to_bulk_process: true });
-        }
+        await finishCreatePhase({ source_context: 'bulk_authorise', created, switching_to_bulk_process: true });
         await openBulkProcessWorkbench(switchSeed);
         switchedToBulkProcess = true;
-        if (isBulkAuthoriseDirectHandoff) {
-          queueNonBlockingSummaryRefreshAfterHandoff(
-            createdContractWeekId,
-            o.summary_ctx || o.summaryCtx || null,
-            createdPatchRow || created?.summary_row_hint || null,
-            'bulk-authorise-add-additional-direct-handoff-after-open'
-          );
-        }
+        queueNonBlockingSummaryRefreshAfterHandoff(
+          createdContractWeekId,
+          o.summary_ctx || o.summaryCtx || null,
+          createdPatchRow || created?.summary_row_hint || null,
+          'bulk-authorise-add-additional-direct-handoff-after-open'
+        );
+      } else {
+        queueNonBlockingSummaryRefreshAfterHandoff(
+          createdContractWeekId,
+          o.summary_ctx || o.summaryCtx || null,
+          createdPatchRow || created?.summary_row_hint || null,
+          'bulk-authorise-add-additional-bulk-process-unavailable'
+        );
+        try { if (typeof window.__toast === 'function') window.__toast('Bulk Process is not available. The additional manual row was created.'); } catch {}
       }
     }
     if (!isBulkAuthoriseDirectHandoff || !switchedToBulkProcess) {
@@ -70684,8 +70760,6 @@ async function createAdditionalManualAdjustmentAndOpen(opts = {}) {
   await openTimesheet(openRow);
   return singleModalReturnPayload;
 }
-
-
 
 async function summaryFetchCanonicalRow(section, id, ctx) {
   section = String(section || '').trim();
@@ -151152,6 +151226,7 @@ async function enqueueQrTimesheetEmail(timesheetId, options = {}) {
   return out;
 }
 
+
 async function handleBulkAuthoriseAddAdditionalManual(state, row) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][ADD-ADDITIONAL]');
   GC('handleBulkAuthoriseAddAdditionalManual');
@@ -151347,15 +151422,13 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
       }
     }
 
-    const ownershipInvalidationToken = invalidateBulkAuthorisePreviewOwnershipForAddAdditional({
-      source_row_key: sourceRowKey || trimStr(srcRow.row_key || '') || null
-    });
+    const ownershipInvalidationToken = null;
 
     try {
-      st.__bulk_authorise_direct_handoff_to_bulk_process = true;
-      st.__bulkAuthoriseDirectHandoffToBulkProcess = true;
-      st.__bulk_authorise_handoff_reason = 'add-additional-manual-switch-to-bulk-process';
-      st.__bulk_authorise_handoff_owner_token = ownershipInvalidationToken;
+      st.__bulk_authorise_direct_handoff_to_bulk_process = false;
+      st.__bulkAuthoriseDirectHandoffToBulkProcess = false;
+      st.__bulk_authorise_handoff_reason = 'add-additional-manual-post-create-switch-prompt';
+      st.__bulk_authorise_handoff_owner_token = null;
       st.loading = false;
       st.saving = false;
       st.processing = false;
@@ -151366,8 +151439,8 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
       source_context: 'bulk_authorise',
       direct_bulk_process_handoff: true,
       directBulkProcessHandoff: true,
-      skip_post_create_prompt: true,
-      skipPostCreatePrompt: true,
+      ask_post_create_switch_prompt: true,
+      askPostCreateSwitchPrompt: true,
       defer_summary_refresh: true,
       deferSummaryRefresh: true,
       suppress_summary_refresh_before_open: true,
@@ -151431,7 +151504,6 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
     return { ok: false, error: st.error_text };
   }
 }
-
 
 async function handleBulkAuthoriseRouteConversion(state, row, action) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][ROUTE-CONVERSION]');
