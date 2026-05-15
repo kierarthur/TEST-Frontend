@@ -3453,6 +3453,7 @@ function normalizeClientSettingsForSave(raw) {
 
 // ===== Auth fetch with refresh retry =====
 
+
 async function apiPostJson(path, body, options = {}) {
   const url = API(path);
 
@@ -3588,11 +3589,18 @@ async function apiPostJson(path, body, options = {}) {
     if (code === 'PAY_EXECUTE_BANK_FAILED') return 'BANKING_EXECUTE_PAYMENT_FAILED';
     if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
     if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (code === 'NO_PENDING_TRANSFERS') return 'NO_AUTHORISATION_READY_TRANSFERS';
+    if (code === 'PAY_EXECUTE_OPERATION_CLEANUP_FAILED_LOCAL_ARTIFACTS') return 'PAYMENT_EXECUTE_CLEANUP_FAILED';
+    if (code === 'BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED' || code === 'PROVIDER_SUBMISSION_EVIDENCE_REQUIRED') return 'EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE';
     if (/^[0-9]{5}$/.test(code) || /^P[0-9A-Z]{4}$/.test(code)) return '';
     return code;
   };
   const failureCodes = new Set([
-    'BATCH_STALE', 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED', 'PAYE_NOT_READY', 'PAYE_NET_MISSING', 'PAYE_NET_INVALID', 'PAYE_NET_REQUIRED',
+    'BATCH_STALE', 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'NO_AUTHORISATION_READY_TRANSFERS', 'NO_PENDING_TRANSFERS', 'TRANSFER_SCOPE_RETRY_BLOCKER_DETECTED',
+    'TRANSFER_SCOPE_GROUP_HELD_BY_ACTIVE_OR_UNSAFE_OPERATION', 'EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE',
+    'PAYMENT_EXECUTE_CLEANUP_FAILED', 'BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED', 'NO_SAFE_LOCAL_CLEANUP_AVAILABLE',
+    'AUTH_REQUEST_HELD_BY_PREVIOUS_OPERATION', 'PAYE_NOT_READY', 'PAYE_NET_MISSING', 'PAYE_NET_INVALID', 'PAYE_NET_REQUIRED',
     'PAYE_NET_BANK_AMOUNT_MISSING', 'PAYE_NET_BANK_AMOUNT_INVALID', 'HAS_HARD_BLOCKERS', 'BLOCKED_BANK_DETAILS', 'SELECTED_PAYEE_ROUTE_NOT_READY',
     'FUNDING_ACCOUNT_MISSING', 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED', 'RAIL_ENV_MISMATCH', 'RAIL_NOT_CONFIGURED', 'UNKNOWN_RAIL_PROVIDER',
     'MISSING_RAIL_PROVIDER', 'PAYMENT_AUTHORISER_REQUIRED', 'NO_ACTIVE_PAYMENTS_IN_BATCH', 'NO_TIMESHEETS_READY_FOR_DRAFT',
@@ -3634,6 +3642,12 @@ async function apiPostJson(path, body, options = {}) {
         if (!canonical) continue;
         const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
         if (pattern.test(rawUpper)) addFinding({ error_code: canonical, message: rawText }, canonical, canonical === 'BATCH_STALE' ? 100 : 60);
+      }
+      if (rawUpper.includes('UX_BANKING_PAY_OPERATION_TRANSFER_SCOPE_BATCH_GROUP') || (rawUpper.includes('DUPLICATE KEY') && rawUpper.includes('BANKING_PAY_OPERATION_TRANSFER_SCOPE'))) {
+        addFinding({ error_code: 'TRANSFER_SCOPE_RETRY_BLOCKER_DETECTED', message: rawText }, 'TRANSFER_SCOPE_RETRY_BLOCKER_DETECTED', 90);
+      }
+      if (rawUpper.includes('PROVIDER SUBMISSION EVIDENCE') || rawUpper.includes('AMBIGUOUS PROVIDER') || rawUpper.includes('BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED')) {
+        addFinding({ error_code: 'EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE', message: rawText }, 'EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE', 90);
       }
     }
     if (!best) return null;
@@ -25265,25 +25279,91 @@ async function bankingPayPreview(pay_date) {
   const replacementSessionVersion = (options.replacement_session_version !== undefined && options.replacement_session_version !== null)
     ? options.replacement_session_version
     : ((options.replacementSessionVersion !== undefined && options.replacementSessionVersion !== null) ? options.replacementSessionVersion : null);
-  const replacementPendingCandidateIds = Array.from(new Set(
-    asArray(options.pending_candidate_ids || options.pendingCandidateIds || options.dirty_candidate_ids || options.dirtyCandidateIds)
+  const optionDirtyCandidateIds = Array.from(new Set(
+    asArray(options.dirty_candidate_ids || options.dirtyCandidateIds)
       .map((value) => trimStr(value))
       .filter(Boolean)
   ));
+  const optionPendingCandidateIds = Array.from(new Set(
+    asArray(options.pending_candidate_ids || options.pendingCandidateIds)
+      .map((value) => trimStr(value))
+      .filter(Boolean)
+  ));
+  const replacementPendingCandidateIds = Array.from(new Set([
+    ...optionPendingCandidateIds,
+    ...optionDirtyCandidateIds
+  ].map((value) => trimStr(value)).filter(Boolean)));
   const replacementRefreshJobIds = Array.from(new Set(
     asArray(options.refresh_job_ids || options.refreshJobIds)
       .map((value) => trimStr(value))
       .filter(Boolean)
   ));
-  const replacementPreviewReopen = options.preview_reopen_required === true || options.previewReopenRequired === true || options.mode === 'POST_ACTION_REOPEN';
-  const hardSessionReload = options.hard_session_reload === true || options.hardSessionReload === true || options.mode === 'HARD_SESSION_RELOAD';
-  const softRefresh = options.soft_refresh === true || options.softRefresh === true || options.mode === 'SOFT_REFRESH';
-  const candidateScopedRefresh = options.candidate_scoped_refresh === true || options.candidateScopedRefresh === true || !!requestedCandidateId;
-  const useReplacementSessionBootstrap = !!replacementSessionId;
+  const createdPayBatchIdsForPostMutation = Array.from(new Set([
+    ...(Array.isArray(options.created_pay_batch_ids) ? options.created_pay_batch_ids : []),
+    ...(Array.isArray(options.createdPayBatchIds) ? options.createdPayBatchIds : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const selectedPreviewRowIdsForPostMutation = Array.from(new Set(
+    asArray(options.selected_preview_row_ids || options.selectedPreviewRowIds)
+      .map((value) => trimStr(value))
+      .filter(Boolean)
+  ));
   const ORDINARY_BANKING_CUTOFF_SENTINEL = '9999-12-31';
   const previewMode = trimStr(options.mode || options.previewMode || options.preview_mode || '').toUpperCase();
+  const sourceSessionId = trimStr(options.source_session_id || options.sourceSessionId || '');
+  const sourceSnapshotRunId = trimStr(options.source_snapshot_run_id || options.sourceSnapshotRunId || '');
+  const sourceSessionSignature = trimStr(options.source_session_signature || options.sourceSessionSignature || '');
+  let obsoleteSessionIds = Array.from(new Set([
+    ...(Array.isArray(options.obsolete_session_ids) ? options.obsolete_session_ids : []),
+    ...(Array.isArray(options.obsoleteSessionIds) ? options.obsoleteSessionIds : []),
+    sourceSessionId
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const rawMutationContext = trimStr(
+    options.mutation_context ||
+    options.mutationContext ||
+    options.reason ||
+    options.reset_reason ||
+    options.action ||
+    options.resetAction ||
+    ''
+  ).toUpperCase();
+  const previewReopenRequiredOption = options.preview_reopen_required === true || options.previewReopenRequired === true;
+  const hasCreateSuccessEvidence = !!(
+    rawMutationContext === 'CREATE_DRAFT_SUCCESS' ||
+    rawMutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' ||
+    previewMode === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' ||
+    createdPayBatchIdsForPostMutation.length > 0
+  );
+  const hasCancelSuccessEvidence = !!(
+    rawMutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' ||
+    rawMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' ||
+    previewMode === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN'
+  );
+  const hasBatchMutationContext = !!(
+    hasCreateSuccessEvidence ||
+    hasCancelSuccessEvidence ||
+    /(^|_)(DRAFT|BATCH|PAY_BATCH)(_|$)/.test(rawMutationContext)
+  );
+  const hasDirtyCandidatesWithBatchMutation = hasBatchMutationContext && (optionDirtyCandidateIds.length > 0 || optionPendingCandidateIds.length > 0 || replacementRefreshJobIds.length > 0);
+  const hasPreviewReopenWithSourceSession = previewReopenRequiredOption && !!sourceSessionId;
+  const requiresPostMutationRebase = hasCreateSuccessEvidence || hasCancelSuccessEvidence || hasPreviewReopenWithSourceSession || hasDirtyCandidatesWithBatchMutation;
+  const forceNewSession = options.force_new_session === true || options.forceNewSession === true || previewMode === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' || previewMode === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN' || requiresPostMutationRebase;
+  const discardSourceSession = options.discard_source_session === true || options.discardSourceSession === true || forceNewSession || requiresPostMutationRebase;
+  const ignoreReplacementSession = options.ignore_replacement_session === true || options.ignoreReplacementSession === true || forceNewSession || requiresPostMutationRebase;
+  const mutationContext = hasCreateSuccessEvidence
+    ? 'CREATE_DRAFT_SUCCESS'
+    : (hasCancelSuccessEvidence
+        ? 'CANCEL_DELETE_DRAFT_SUCCESS'
+        : rawMutationContext);
+  const isPostDraftCreateRefresh = mutationContext === 'CREATE_DRAFT_SUCCESS' || mutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' || previewMode === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN';
+  const isPostDraftCancelRefresh = mutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' || mutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' || previewMode === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN';
+  const isPostMutationRefresh = isPostDraftCreateRefresh || isPostDraftCancelRefresh || forceNewSession || discardSourceSession || requiresPostMutationRebase;
+  const replacementPreviewReopen = !ignoreReplacementSession && (previewReopenRequiredOption || options.mode === 'POST_ACTION_REOPEN');
+  const hardSessionReload = options.hard_session_reload === true || options.hardSessionReload === true || options.mode === 'HARD_SESSION_RELOAD' || forceNewSession || discardSourceSession || requiresPostMutationRebase;
+  const softRefresh = options.soft_refresh === true || options.softRefresh === true || options.mode === 'SOFT_REFRESH';
+  const candidateScopedRefresh = options.candidate_scoped_refresh === true || options.candidateScopedRefresh === true || !!requestedCandidateId;
+  const useReplacementSessionBootstrap = !!replacementSessionId && !ignoreReplacementSession && !isPostMutationRefresh;
   const previewSilent = options.silent === true || options.silent === 'true';
-  const previewBackground = options.background === true || options.background === 'true' || previewMode === 'BACKGROUND' || previewMode === 'SILENT' || previewMode === 'POST_ACTION_REOPEN';
+  const previewBackground = options.background === true || options.background === 'true' || previewMode === 'BACKGROUND' || previewMode === 'SILENT' || previewMode === 'POST_ACTION_REOPEN' || isPostMutationRefresh;
   const previewUserInitiated = (
     options.userInitiated === true ||
     options.user_initiated === true ||
@@ -25338,11 +25418,23 @@ async function bankingPayPreview(pay_date) {
     preview_epoch: 0
   };
   wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
+  obsoleteSessionIds = Array.from(new Set([
+    ...obsoleteSessionIds,
+    ...(Array.isArray(wiz.workbench.__obsolete_workbench_session_ids) ? wiz.workbench.__obsolete_workbench_session_ids : []),
+    ...(Array.isArray(wiz.workbench.__obsolete_progress_session_ids) ? wiz.workbench.__obsolete_progress_session_ids : []),
+    ...(Array.isArray(wiz.decisions?.__obsolete_workbench_session_ids) ? wiz.decisions.__obsolete_workbench_session_ids : []),
+    ...(Array.isArray(wiz.decisions?.__obsolete_progress_session_ids) ? wiz.decisions.__obsolete_progress_session_ids : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
 
-  const presentPreviewFriendlyError = async (friendly, fallbackTitle = 'Payment preview could not be loaded', fallbackMessage = 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.') => {
+  const presentPreviewFriendlyError = async (friendly, fallbackTitle = 'Payment preview could not be loaded', fallbackMessage = 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.') => {
     if (!previewUserInitiated || previewSilent || previewBackground) return;
     const title = trimStr(friendly?.title || friendly?.friendly_error?.title || fallbackTitle) || fallbackTitle;
-    const message = trimStr(friendly?.user_message || friendly?.message || friendly?.friendly_error?.message || fallbackMessage) || fallbackMessage;
+    const contextFallbackMessage = isPostDraftCreateRefresh
+      ? 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.'
+      : (isPostDraftCancelRefresh
+          ? 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.'
+          : fallbackMessage);
+    const message = trimStr(friendly?.user_message || friendly?.message || friendly?.friendly_error?.message || contextFallbackMessage) || contextFallbackMessage;
     try {
       if (typeof openUiConfirmModal === 'function') {
         await openUiConfirmModal({
@@ -25587,9 +25679,12 @@ async function bankingPayPreview(pay_date) {
     computedSessionSignatureMismatch
   );
   const willOpenNewWorkbenchSession = !useReplacementSessionBootstrap && (
+    forceNewSession ||
+    discardSourceSession ||
     hardSessionReload ||
     !existingWorkbenchSessionId ||
-    activeWorkbenchContextMismatch
+    activeWorkbenchContextMismatch ||
+    obsoleteSessionIds.includes(existingWorkbenchSessionId)
   );
   const sessionSignatureHint = (() => {
     if (useReplacementSessionBootstrap) {
@@ -25602,12 +25697,23 @@ async function bankingPayPreview(pay_date) {
     const priorSessionId = trimStr(wiz.workbench.session_id || '');
     const priorSessionSignature = trimStr(wiz.workbench.session_signature || '');
     const priorPayDate = trimStr(wiz.workbench.pay_date || wiz.pay_date || pay.pay_date || pay.selectedPayDate || '');
+    const nextObsoleteSessionIds = Array.from(new Set([
+      ...obsoleteSessionIds,
+      priorSessionId,
+      sourceSessionId
+    ].map((value) => trimStr(value)).filter(Boolean)));
+    obsoleteSessionIds = nextObsoleteSessionIds;
 
     wiz.preview.data = null;
     wiz.preview.readiness = null;
     wiz.preview.candidateDebtInfo = {};
     wiz.preview.failure = null;
     wiz.preview.summary = null;
+    wiz.preview.preview_page_cache = {};
+    wiz.preview.previewPageCache = {};
+    wiz.preview.page_cache = {};
+    wiz.preview.pageCache = {};
+    wiz.preview.pages = {};
     wiz.preview.componentStateCache = {
       case_resolution_states: [],
       blocked_case_states: [],
@@ -25643,6 +25749,17 @@ async function bankingPayPreview(pay_date) {
     wiz.workbench.canonical_preview_lines = [];
     wiz.workbench.payees = [];
     wiz.workbench.summary = {};
+    wiz.workbench.preview_page_cache = {};
+    wiz.workbench.previewPageCache = {};
+    wiz.workbench.page_cache = {};
+    wiz.workbench.pageCache = {};
+    wiz.workbench.preview_pages = {};
+    wiz.workbench.previewPages = {};
+    wiz.workbench.__obsolete_progress_session_ids = nextObsoleteSessionIds;
+    wiz.workbench.__obsolete_workbench_session_ids = nextObsoleteSessionIds;
+    wiz.workbench.__active_progress_session_id = null;
+    wiz.workbench.__active_workbench_session_id = null;
+    wiz.workbench.preview_reopen_required = isPostMutationRefresh || previewReopenRequiredOption || false;
     wiz.workbench.create_draft_refresh_pending = true;
     wiz.workbench.stale_session_replaced_reason = trimStr(reason) || 'SESSION_CONTEXT_CHANGED';
     wiz.workbench.replaced_session_snapshot = {
@@ -25680,14 +25797,16 @@ async function bankingPayPreview(pay_date) {
     wiz.decisions.ready_to_pay_now = [];
     wiz.decisions.blocked_for_pay_now = [];
     wiz.decisions.hidden_indefinite_snoozes = [];
+    wiz.decisions.__obsolete_progress_session_ids = nextObsoleteSessionIds;
+    wiz.decisions.__obsolete_workbench_session_ids = nextObsoleteSessionIds;
     wiz.decisions.create_draft_refresh_pending = true;
 
     wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
     wiz.local_selected_preview_row_ids_dirty = false;
   };
 
-  if (willOpenNewWorkbenchSession && existingWorkbenchSessionId) {
-    resetWorkbenchStateForFreshSession(activeWorkbenchContextMismatch ? 'SESSION_CONTEXT_CHANGED' : 'HARD_SESSION_RELOAD');
+  if (willOpenNewWorkbenchSession && (existingWorkbenchSessionId || isPostMutationRefresh)) {
+    resetWorkbenchStateForFreshSession(isPostMutationRefresh ? (mutationContext || 'POST_MUTATION_DISCARD_AND_REOPEN') : (activeWorkbenchContextMismatch ? 'SESSION_CONTEXT_CHANGED' : 'HARD_SESSION_RELOAD'));
   }
 
   wiz.pay_date = effectivePayDate;
@@ -25705,6 +25824,17 @@ async function bankingPayPreview(pay_date) {
     session_signature: sessionSignatureHint,
     filters_json: openFiltersJson
   };
+  if (forceNewSession || discardSourceSession) {
+    openPayload.force_new_session = true;
+    openPayload.discard_source_session = discardSourceSession === true;
+    openPayload.source_session_id = sourceSessionId || existingWorkbenchSessionId || null;
+    openPayload.obsolete_session_ids = [...obsoleteSessionIds];
+    openPayload.mutation_context = mutationContext || (isPostDraftCreateRefresh ? 'CREATE_DRAFT_SUCCESS' : (isPostDraftCancelRefresh ? 'CANCEL_DELETE_DRAFT_SUCCESS' : null));
+    openPayload.created_pay_batch_ids = [...createdPayBatchIdsForPostMutation];
+    openPayload.dirty_candidate_ids = [...optionDirtyCandidateIds];
+    openPayload.pending_candidate_ids = [...optionPendingCandidateIds];
+    openPayload.refresh_job_ids = [...replacementRefreshJobIds];
+  }
 
 
   if (useReplacementSessionBootstrap) {
@@ -25729,9 +25859,17 @@ async function bankingPayPreview(pay_date) {
   const shouldAbortDetachedSettler = (expectedSessionId) => !isLatestRequest() || !isSameWorkbenchSession(expectedSessionId);
 
   const applyFailure = async (error) => {
+    const failureAction = isPostDraftCreateRefresh
+      ? 'POST_DRAFT_CREATE_PREVIEW_REFRESH'
+      : (isPostDraftCancelRefresh ? 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' : 'PREVIEW');
+    const fallbackPreviewMessage = isPostDraftCreateRefresh
+      ? 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.'
+      : (isPostDraftCancelRefresh
+          ? 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.'
+          : 'Payment preview could not be loaded. CloudTMS could not calculate the payment preview. Refresh Banking and try again.');
     const friendly = (typeof bankingNormalizeApiError === 'function')
       ? bankingNormalizeApiError(error, error?.payload || error?.json || null, {
-          action: 'PREVIEW',
+          action: failureAction,
           fallbackCode: 'BANKING_PAY_PREVIEW_FAILED',
           userInitiated: previewUserInitiated,
           silent: previewSilent,
@@ -25739,11 +25877,14 @@ async function bankingPayPreview(pay_date) {
           showModal: previewUserInitiated && !previewSilent && !previewBackground
         })
       : null;
-    const message = trimStr(
+    let message = trimStr(
       friendly?.user_message ||
       friendly?.message ||
-      'Payment preview could not be loaded. CloudTMS could not calculate the payment preview. Refresh Banking and try again.'
-    ) || 'Payment preview could not be loaded. CloudTMS could not calculate the payment preview. Refresh Banking and try again.';
+      fallbackPreviewMessage
+    ) || fallbackPreviewMessage;
+    if ((isPostDraftCreateRefresh || isPostDraftCancelRefresh) && /no\s+payment\s+batch\s+has\s+been\s+created/i.test(message)) {
+      message = fallbackPreviewMessage;
+    }
     wiz.preview.data = null;
     wiz.preview.error = message;
     wiz.preview.friendlyError = friendly && typeof friendly === 'object' ? friendly : null;
@@ -25772,6 +25913,10 @@ async function bankingPayPreview(pay_date) {
     'WORKBENCH_SESSION_NOT_FOUND',
     'STALE_SESSION',
     'OBSOLETE_SESSION',
+    'REBASE_REQUIRED',
+    'WORKBENCH_SESSION_NOT_OPEN',
+    'WORKBENCH_SESSION_DISCARDED',
+    'OBSOLETE_SESSION_REUSED',
     'WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE',
     'BANKING_PAY_WORKBENCH_SESSION_OPEN_CONTEXT_MISMATCH',
     'BANKING_PAY_PREVIEW_FAILED',
@@ -25931,9 +26076,12 @@ async function bankingPayPreview(pay_date) {
     const sourcePayload = isPlainObject(failurePayload)
       ? failurePayload
       : { ok: false, error_code: fallbackCode, code: fallbackCode, message: trimStr(failurePayload) || fallbackCode };
+    const actionForPreviewFailure = isPostDraftCreateRefresh
+      ? 'POST_DRAFT_CREATE_PREVIEW_REFRESH'
+      : (isPostDraftCancelRefresh ? 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' : 'PREVIEW');
     const friendly = (typeof bankingNormalizeApiError === 'function')
       ? bankingNormalizeApiError(sourcePayload, sourcePayload, {
-          action: 'PREVIEW',
+          action: actionForPreviewFailure,
           fallbackCode: sourcePayload.error_code || sourcePayload.code || fallbackCode,
           userInitiated: previewUserInitiated,
           silent: previewSilent,
@@ -25943,6 +26091,11 @@ async function bankingPayPreview(pay_date) {
           backendPayload: sourcePayload
         })
       : null;
+    const contextDefaultMessage = isPostDraftCreateRefresh
+      ? 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.'
+      : (isPostDraftCancelRefresh
+          ? 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.'
+          : 'Payment preview could not be loaded. CloudTMS could not calculate the payment preview. Refresh Banking and try again.');
     const message = trimStr(
       friendly?.user_message ||
       friendly?.message ||
@@ -25950,8 +26103,8 @@ async function bankingPayPreview(pay_date) {
       sourcePayload.user_message ||
       sourcePayload.message ||
       sourcePayload.error ||
-      'Payment preview could not be loaded. CloudTMS could not calculate the payment preview. Refresh Banking and try again.'
-    ) || 'Payment preview could not be loaded. CloudTMS could not calculate the payment preview. Refresh Banking and try again.';
+      contextDefaultMessage
+    ) || contextDefaultMessage;
     const err = new Error(message);
     err.status = Number(friendly?.status_code || friendly?.http_status || sourcePayload.status_code || sourcePayload.http_status || 400) || 400;
     err.payload = sourcePayload;
@@ -25967,6 +26120,105 @@ async function bankingPayPreview(pay_date) {
       throw bankingBuildEnrichedFriendlyError(err, friendly, message);
     }
     throw err;
+  };
+
+  const staleSessionFailureCodes = new Set([
+    'OBSOLETE_SESSION',
+    'STALE_SESSION',
+    'REBASE_REQUIRED',
+    'WORKBENCH_SESSION_NOT_OPEN',
+    'WORKBENCH_SESSION_DISCARDED',
+    'WORKBENCH_SESSION_NOT_FOUND',
+    'WORKBENCH_SESSION_INVALID',
+    'OBSOLETE_SESSION_REUSED'
+  ]);
+  const normalisePreviewRebaseCode = (value) => normalizePreviewFailureCode(value);
+  const isRebaseRequiredPayload = (payload) => {
+    const obj = isPlainObject(payload) ? payload : {};
+    const code = normalisePreviewRebaseCode(obj.error_code || obj.code || obj.reason_code || obj.reason || '');
+    return obj.rebase_required === true || obj.requires_new_session === true || staleSessionFailureCodes.has(code);
+  };
+  const getPayloadSessionId = (payload) => {
+    const obj = isPlainObject(payload) ? payload : {};
+    const sessionObj = isPlainObject(obj.session) ? obj.session : {};
+    const previewObj = isPlainObject(obj.preview) ? obj.preview : {};
+    return trimStr(obj.session_id || obj.sessionId || obj.id || sessionObj.session_id || sessionObj.id || previewObj.session_id || '');
+  };
+  const isObsoleteSessionId = (sessionIdLike) => {
+    const sessionIdText = trimStr(sessionIdLike);
+    if (!sessionIdText) return false;
+    if (sourceSessionId && sessionIdText === sourceSessionId) return true;
+    return obsoleteSessionIds.includes(sessionIdText);
+  };
+  const isReturnedWorkbenchContextObsolete = (ctxLike) => {
+    const ctx = isPlainObject(ctxLike) ? ctxLike : {};
+    const sessionIdText = trimStr(ctx.session_id || ctx.sessionId || '');
+    const snapshotRunIdText = trimStr(ctx.snapshot_run_id || ctx.snapshotRunId || '');
+    const sessionSignatureText = trimStr(ctx.session_signature || ctx.sessionSignature || '');
+    if (sessionIdText && isObsoleteSessionId(sessionIdText)) return true;
+    if (sourceSnapshotRunId && snapshotRunIdText && snapshotRunIdText === sourceSnapshotRunId) return true;
+    if (sourceSessionSignature && sessionSignatureText && sessionSignatureText === sourceSessionSignature) return true;
+    return false;
+  };
+  const isReturnedSessionObsolete = (payload) => {
+    if (!forceNewSession && !discardSourceSession && !isPostMutationRefresh) return false;
+    const ctx = extractWorkbenchContextFromPayload(payload);
+    return isReturnedWorkbenchContextObsolete(ctx);
+  };
+  const makeRebaseRequiredPayload = (code = 'REBASE_REQUIRED', message = 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.') => ({
+    ok: false,
+    error_code: code,
+    code,
+    rebase_required: true,
+    requires_new_session: true,
+    source_session_id: sourceSessionId || null,
+    obsolete_session_ids: [...obsoleteSessionIds],
+    mutation_context: mutationContext || null,
+    message
+  });
+  const discardSourceSessionIfPossible = async () => {
+    const discardId = sourceSessionId || existingWorkbenchSessionId || '';
+    if (!discardId || typeof bankingPayWorkbenchSessionDiscard !== 'function') return;
+    try {
+      await bankingPayWorkbenchSessionDiscard(discardId, {
+        reason: mutationContext || previewMode || 'PREVIEW_FORCE_NEW_SESSION',
+        source: 'bankingPayPreview',
+        force_new_session: true,
+        discard_source_session: true
+      });
+    } catch (discardError) {
+      const discardCode = normalisePreviewRebaseCode(discardError?.error_code || discardError?.code || discardError?.payload?.error_code || discardError?.json?.error_code || '');
+      const discardMessage = trimStr(discardError?.user_message || discardError?.message || discardError?.error || '');
+      const acceptableDiscardFailure = staleSessionFailureCodes.has(discardCode) || /already\s+discarded|not\s+open|not\s+found|stale|obsolete/i.test(discardMessage);
+      if (!acceptableDiscardFailure) throw discardError;
+    }
+  };
+  const openFreshWorkbenchSession = async ({ allowRetry = true } = {}) => {
+    if (discardSourceSession) await discardSourceSessionIfPossible();
+    let openedPayload = await bankingPayWorkbenchSessionOpen(openPayload);
+    let openedFailure = detectPreviewFailureEnvelope(openedPayload);
+    if (openedFailure && staleSessionFailureCodes.has(normalisePreviewRebaseCode(openedFailure.error_code || openedFailure.code || ''))) {
+      if (allowRetry && (sourceSessionId || existingWorkbenchSessionId)) {
+        await discardSourceSessionIfPossible();
+        openedPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: true });
+        openedFailure = detectPreviewFailureEnvelope(openedPayload);
+      }
+    }
+    if (openedFailure) throwPreviewFailureEnvelope(openedFailure, 'BANKING_PAY_PREVIEW_FAILED');
+    if (isRebaseRequiredPayload(openedPayload) || isReturnedSessionObsolete(openedPayload)) {
+      if (allowRetry && (sourceSessionId || existingWorkbenchSessionId)) {
+        await discardSourceSessionIfPossible();
+        const retriedPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: true });
+        const retriedFailure = detectPreviewFailureEnvelope(retriedPayload);
+        if (retriedFailure) throwPreviewFailureEnvelope(retriedFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        if (isRebaseRequiredPayload(retriedPayload) || isReturnedSessionObsolete(retriedPayload)) {
+          throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
+        }
+        return retriedPayload;
+      }
+      throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
+    }
+    return openedPayload;
   };
 
   const syncProgressIntoState = (progress) => {
@@ -26076,16 +26328,152 @@ async function bankingPayPreview(pay_date) {
       return !!jobId && !isTerminalWorkbenchJobStatus(jobStatus);
     });
   };
+  const clearPreviewRowsForDeferredPostMutation = (statusText = '') => {
+    if (!isPostMutationRefresh) return;
+    wiz.preview.data = null;
+    wiz.preview.readiness = null;
+    wiz.preview.candidateDebtInfo = {};
+    wiz.preview.failure = null;
+    wiz.preview.componentStateCache = {
+      case_resolution_states: [],
+      blocked_case_states: [],
+      safe_case_states: [],
+      reusable_component_resolutions: {},
+      stale_component_resolutions: {},
+      draftable_now: [],
+      blocked_now: [],
+      ready_to_pay_now: [],
+      blocked_for_pay_now: [],
+      hidden_indefinite_snoozes: [],
+      ready_preview_lines: [],
+      blocked_preview_lines: [],
+      hidden_preview_lines: []
+    };
+    wiz.preview.pageData = null;
+    wiz.preview.page_data = null;
+    wiz.preview.pages = {};
+    wiz.preview.pageCache = {};
+    wiz.preview.page_cache = {};
+    wiz.preview.previewPageCache = {};
+    wiz.preview.preview_page_cache = {};
+    wiz.preview.status_text = trimStr(statusText || wiz.preview.status_text || 'Preparing payment preview candidates.');
+    wiz.workbench.canonical_preview_lines = [];
+    wiz.workbench.preview_rows = [];
+    wiz.workbench.ready_preview_lines = [];
+    wiz.workbench.preview_pages = {};
+    wiz.workbench.preview_page_cache = {};
+    wiz.workbench.pageCache = {};
+    wiz.workbench.payees = [];
+    wiz.workbench.summary = {};
+    if (wiz.decisions && typeof wiz.decisions === 'object') {
+      wiz.decisions.canonical_preview_lines = [];
+      wiz.decisions.preview_rows = [];
+      wiz.decisions.ready_preview_lines = [];
+      wiz.decisions.draftable_now = [];
+      wiz.decisions.ready_to_pay_now = [];
+      wiz.decisions.blocked_now = [];
+      wiz.decisions.blocked_for_pay_now = [];
+    }
+  };
+
+  const isReadyEmptyPayload = (payload) => {
+    const obj = isPlainObject(payload) ? payload : {};
+    const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
+    return obj.ready_empty === true || progressObj.ready_empty === true || progressObj.readyEmpty === true;
+  };
+
+  const payloadHasFullPreviewData = (payload) => {
+    const obj = isPlainObject(payload) ? payload : {};
+    const previewObj = isPlainObject(obj.preview) ? obj.preview : null;
+    return !!previewObj && obj.bootstrap_only !== true && obj.preview_bootstrap !== true && previewObj.bootstrap_only !== true;
+  };
+
+  const applyReadyEmptyPreviewState = (payload) => {
+    const obj = isPlainObject(payload) ? payload : {};
+    const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
+    const ctx = extractWorkbenchContextFromPayload(obj);
+    if (isPostMutationRefresh && isReturnedWorkbenchContextObsolete(ctx)) {
+      throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
+    }
+    wiz.preview.data = {
+      ok: true,
+      ready: true,
+      ready_flag: true,
+      ready_empty: true,
+      session_id: ctx.session_id || trimStr(obj.session_id || ''),
+      snapshot_run_id: ctx.snapshot_run_id || trimStr(obj.snapshot_run_id || ''),
+      session_version: ctx.session_version ?? obj.session_version ?? null,
+      session_signature: ctx.session_signature || trimStr(obj.session_signature || ''),
+      pay_date: ctx.pay_date || effectivePayDate,
+      week_ending_cutoff_date: ctx.week_ending_cutoff_date || weekEndingCutoffDate,
+      preview: {
+        ok: true,
+        ready: true,
+        ready_empty: true,
+        paye_candidates: [],
+        non_paye_payees: [],
+        canonical_preview_lines: [],
+        preview_rows: [],
+        rows: [],
+        componentStateCache: {
+          case_resolution_states: [],
+          blocked_case_states: [],
+          safe_case_states: [],
+          reusable_component_resolutions: {},
+          stale_component_resolutions: {},
+          draftable_now: [],
+          blocked_now: [],
+          ready_to_pay_now: [],
+          blocked_for_pay_now: [],
+          hidden_indefinite_snoozes: [],
+          ready_preview_lines: [],
+          blocked_preview_lines: [],
+          hidden_preview_lines: []
+        }
+      },
+      progress: cloneJson(progressObj) || progressObj
+    };
+    wiz.preview.loading = false;
+    wiz.preview.error = '';
+    wiz.preview.failure = null;
+    wiz.preview.readiness = null;
+    wiz.preview.candidateDebtInfo = {};
+    wiz.preview.componentStateCache = wiz.preview.data.preview.componentStateCache;
+    wiz.workbench.pending_candidate_ids = [];
+    wiz.workbench.failed_candidate_ids = [];
+    wiz.workbench.pending_candidate_rows = [];
+    wiz.workbench.failed_candidate_rows = [];
+    wiz.workbench.pending_candidate_jobs = [];
+    wiz.workbench.dirty_candidate_ids = [];
+    wiz.workbench.canonical_preview_lines = [];
+    wiz.workbench.preview_rows = [];
+    wiz.workbench.ready_preview_lines = [];
+    wiz.workbench.payees = [];
+    wiz.workbench.summary = {};
+    wiz.workbench.create_draft_refresh_pending = false;
+    wiz.workbench.preview_reopen_required = false;
+    wiz.workbench.__post_create_refresh_pending = false;
+    wiz.workbench.__post_cancel_refresh_pending = false;
+    stampAppliedWorkbenchContext(wiz.preview.data);
+    reconcileSelectedRowsAfterFreshPreview(wiz.preview.data);
+    return wiz.preview.data;
+  };
+
   const applyDeferredPreviewStateFromPayload = (payload) => {
     const obj = isPlainObject(payload) ? payload : {};
     const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
     if (isPlainObject(obj.progress)) syncProgressIntoState(obj.progress);
-    const readyFlag = obj.ready === true || obj.ready_flag === true || progressObj.ready === true || progressObj.ready_flag === true;
-    const activePending = !readyFlag && hasActiveWorkbenchPendingWork();
+    const readyEmptyFlag = isReadyEmptyPayload(obj);
+    const readyFlag = readyEmptyFlag || obj.ready === true || obj.ready_flag === true || progressObj.ready === true || progressObj.ready_flag === true;
+    const bootstrapOnly = obj.bootstrap_only === true || obj.preview_bootstrap === true || progressObj.bootstrap_only === true || progressObj.preview_bootstrap === true;
+    const readyWithoutFullPreview = isPostMutationRefresh && readyFlag && !readyEmptyFlag && !payloadHasFullPreviewData(obj);
+    const activePending = readyEmptyFlag ? false : (bootstrapOnly || readyWithoutFullPreview || (!readyFlag && hasActiveWorkbenchPendingWork()));
     wiz.workbench.create_draft_refresh_pending = activePending;
+    wiz.workbench.preview_reopen_required = activePending && isPostMutationRefresh;
     if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = activePending;
     wiz.preview.loading = activePending;
     if (activePending) {
+      clearPreviewRowsForDeferredPostMutation(trimStr(progressObj.status_text || obj.status_text || 'Preparing payment preview candidates.'));
       wiz.preview.error = '';
       wiz.preview.failure = null;
       wiz.preview.status_text = trimStr(progressObj.status_text || obj.status_text || 'Preparing payment preview candidates.');
@@ -26246,6 +26634,9 @@ async function bankingPayPreview(pay_date) {
 
   const stampAppliedWorkbenchContext = (payload) => {
     const ctx = extractWorkbenchContextFromPayload(payload);
+    if (isPostMutationRefresh && isReturnedWorkbenchContextObsolete(ctx)) {
+      throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
+    }
     const stableSessionSignature = ctx.session_signature || sessionSignatureHint || computedSessionSignature || suppliedSessionSignature || '';
     const stablePayDate = ctx.pay_date || effectivePayDate;
     const stableCutoffDate = ctx.week_ending_cutoff_date || weekEndingCutoffDate;
@@ -26258,6 +26649,10 @@ async function bankingPayPreview(pay_date) {
     wiz.workbench.week_ending_cutoff_date = stableCutoffDate;
     wiz.workbench.week_ending_cutoff = stableCutoffDate;
     wiz.workbench.create_draft_refresh_pending = false;
+    wiz.workbench.preview_reopen_required = false;
+    wiz.workbench.__post_create_refresh_pending = false;
+    wiz.workbench.__post_cancel_refresh_pending = false;
+    wiz.workbench.__post_mutation_preview_refresh_failed = false;
     wiz.workbench.stale_session_replaced_reason = '';
 
     wiz.decisions = (typeof normalizePayWizardDecisionState === 'function')
@@ -26290,10 +26685,165 @@ async function bankingPayPreview(pay_date) {
     return ctx;
   };
 
+  const collectFreshDraftablePreviewRowIds = (previewLike) => {
+    const preview = isPlainObject(previewLike) ? previewLike : {};
+    const out = [];
+    const seen = new Set();
+    const pushId = (rowLike) => {
+      const row = isPlainObject(rowLike) ? rowLike : null;
+      if (!row) return;
+      const rowId = trimStr(row.preview_row_id || row.previewRowId || row.row_id || row.rowId || row.line_id || row.lineId || row.id || '');
+      if (!rowId || seen.has(rowId)) return;
+
+      const presentationRole = trimStr(row.presentation_role || row.presentationRole || '').toUpperCase();
+      if (presentationRole === 'HIDDEN') return;
+
+      const presentationSection = trimStr(row.presentation_section || row.presentationSection || '').toUpperCase();
+      const readinessState = trimStr(row.readiness_state || row.readinessState || '').toUpperCase();
+      const isReadyToPay = presentationSection
+        ? presentationSection === 'READY_TO_PAY'
+        : (readinessState ? readinessState === 'READY_TO_PAY' : false);
+      const draftable = row.draftable === true || row.is_draftable === true || row.isDraftable === true;
+      const readyForDraft = row.is_ready_for_draft === true || row.isReadyForDraft === true || row.ready_for_draft === true || row.readyForDraft === true;
+
+      if (!isReadyToPay) return;
+      if (!(draftable && readyForDraft)) return;
+
+      seen.add(rowId);
+      out.push(rowId);
+    };
+
+    const componentStateCache = isPlainObject(preview.componentStateCache)
+      ? preview.componentStateCache
+      : (isPlainObject(preview.component_state_cache) ? preview.component_state_cache : null);
+
+    if (componentStateCache) {
+      for (const row of Array.isArray(componentStateCache.ready_preview_lines) ? componentStateCache.ready_preview_lines : []) pushId(row);
+      for (const row of Array.isArray(componentStateCache.ready_to_pay_now) ? componentStateCache.ready_to_pay_now : []) pushId(row);
+      for (const row of Array.isArray(componentStateCache.draftable_now) ? componentStateCache.draftable_now : []) pushId(row);
+    }
+
+    for (const candidate of Array.isArray(preview.paye_candidates) ? preview.paye_candidates : []) {
+      if (!isPlainObject(candidate)) continue;
+      for (const row of Array.isArray(candidate.itemisation) ? candidate.itemisation : []) pushId(row);
+      for (const row of Array.isArray(candidate.preview_rows) ? candidate.preview_rows : []) pushId(row);
+      for (const row of Array.isArray(candidate.preview_lines) ? candidate.preview_lines : []) pushId(row);
+    }
+
+    for (const payee of Array.isArray(preview.non_paye_payees) ? preview.non_paye_payees : []) {
+      if (!isPlainObject(payee)) continue;
+      for (const row of Array.isArray(payee.itemisation) ? payee.itemisation : []) pushId(row);
+      for (const row of Array.isArray(payee.preview_rows) ? payee.preview_rows : []) pushId(row);
+      for (const row of Array.isArray(payee.preview_lines) ? payee.preview_lines : []) pushId(row);
+    }
+
+    for (const row of Array.isArray(preview.canonical_preview_lines) ? preview.canonical_preview_lines : []) pushId(row);
+    for (const row of Array.isArray(preview.ready_preview_lines) ? preview.ready_preview_lines : []) pushId(row);
+    for (const row of Array.isArray(preview.preview_rows) ? preview.preview_rows : []) pushId(row);
+    for (const row of Array.isArray(preview.rows) ? preview.rows : []) pushId(row);
+
+    return out;
+  };
+
+  const reconcileSelectedRowsAfterFreshPreview = (payload) => {
+    if (!isPostMutationRefresh) return null;
+    const originalSelectedIds = selectedPreviewRowIdsForPostMutation.length > 0
+      ? [...selectedPreviewRowIdsForPostMutation]
+      : [];
+    if (originalSelectedIds.length <= 0) {
+      try {
+        wiz.decisions = (typeof normalizePayWizardDecisionState === 'function')
+          ? normalizePayWizardDecisionState(wiz.decisions)
+          : ((wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {});
+        wiz.decisions.selected_preview_row_ids = [];
+        wiz.decisions.server_selected_preview_row_ids = [];
+        wiz.decisions.server_selected_preview_row_ids_provided = true;
+        wiz.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+        wiz.workbench.server_selected_preview_row_ids = [];
+        wiz.workbench.server_selected_preview_row_ids_provided = true;
+        wiz.workbench.selected_preview_row_ids = [];
+        wiz.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+        wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
+        wiz.local_selected_preview_row_ids_dirty = false;
+      } catch {}
+      return {
+        original_selected_preview_row_ids: [],
+        fresh_draftable_preview_row_ids: [],
+        reconciled_selected_preview_row_ids: [],
+        selected_preview_row_mode: 'EXPLICIT_NONE'
+      };
+    }
+
+    const envelope = isPlainObject(payload) ? payload : {};
+    const previewPayload = isPlainObject(envelope.preview) ? envelope.preview : envelope;
+    const freshDraftableRowIds = collectFreshDraftablePreviewRowIds(previewPayload);
+    const freshDraftableSet = new Set(freshDraftableRowIds);
+    const reconciledSelectedIds = originalSelectedIds.filter((rowId) => freshDraftableSet.has(rowId));
+    const nextMode = reconciledSelectedIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE';
+
+    try {
+      wiz.decisions = (typeof normalizePayWizardDecisionState === 'function')
+        ? normalizePayWizardDecisionState(wiz.decisions)
+        : ((wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {});
+      wiz.decisions.selected_preview_row_ids = [...reconciledSelectedIds];
+      wiz.decisions.server_selected_preview_row_ids = [...reconciledSelectedIds];
+      wiz.decisions.server_selected_preview_row_ids_provided = true;
+      wiz.decisions.selected_preview_row_mode = nextMode;
+      wiz.workbench.server_selected_preview_row_ids = [...reconciledSelectedIds];
+      wiz.workbench.server_selected_preview_row_ids_provided = true;
+      wiz.workbench.selected_preview_row_ids = [...reconciledSelectedIds];
+      wiz.workbench.selected_preview_row_mode = nextMode;
+      wiz.selected_preview_row_mode = nextMode;
+      wiz.local_selected_preview_row_ids_dirty = false;
+    } catch {}
+
+    return {
+      original_selected_preview_row_ids: originalSelectedIds,
+      fresh_draftable_preview_row_ids: freshDraftableRowIds,
+      reconciled_selected_preview_row_ids: reconciledSelectedIds,
+      selected_preview_row_mode: nextMode
+    };
+  };
+
   const applyFullWorkbenchPreviewPayload = (payload) => {
-    validateWorkbenchPayloadContext(payload);
+    const ctx = validateWorkbenchPayloadContext(payload);
+    if (isPostMutationRefresh && isReturnedWorkbenchContextObsolete(ctx)) {
+      throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
+    }
+    if (isPostMutationRefresh && isReadyEmptyPayload(payload)) {
+      return applyReadyEmptyPreviewState(payload);
+    }
+    if (isPostMutationRefresh && (!payloadHasFullPreviewData(payload) || isRebaseRequiredPayload(payload))) {
+      applyDeferredPreviewStateFromPayload(payload);
+      return null;
+    }
+    if (isPostMutationRefresh) {
+      wiz.preview.data = null;
+      wiz.preview.readiness = null;
+      wiz.preview.candidateDebtInfo = {};
+      wiz.preview.failure = null;
+      wiz.preview.componentStateCache = {
+        case_resolution_states: [],
+        blocked_case_states: [],
+        safe_case_states: [],
+        reusable_component_resolutions: {},
+        stale_component_resolutions: {},
+        draftable_now: [],
+        blocked_now: [],
+        ready_to_pay_now: [],
+        blocked_for_pay_now: [],
+        hidden_indefinite_snoozes: [],
+        ready_preview_lines: [],
+        blocked_preview_lines: [],
+        hidden_preview_lines: []
+      };
+      wiz.workbench.canonical_preview_lines = [];
+      wiz.workbench.payees = [];
+      wiz.workbench.summary = {};
+    }
     const appliedEnvelope = applyPayWorkbenchPreviewToState(payload, stLocal);
     stampAppliedWorkbenchContext(appliedEnvelope || payload);
+    reconcileSelectedRowsAfterFreshPreview(appliedEnvelope || payload);
     return appliedEnvelope;
   };
 
@@ -26339,7 +26889,13 @@ async function bankingPayPreview(pay_date) {
     const beforeFullRefreshGuard = shouldAbortDetachedSettler(expectedSessionId);
     if (beforeFullRefreshGuard) return;
 
-    const refreshedPreview = await bankingPayWorkbenchSessionGet(expectedSessionId);
+    const refreshedPreview = await bankingPayWorkbenchSessionGet(expectedSessionId, {
+      obsolete_session_ids: [...obsoleteSessionIds],
+      source_session_id: sourceSessionId || null,
+      force_new_session: forceNewSession,
+      mutation_context: mutationContext || null
+    });
+    if (isRebaseRequiredPayload(refreshedPreview)) return;
     const refreshedPreviewFailure = detectPreviewFailureEnvelope(refreshedPreview);
     if (refreshedPreviewFailure) {
       throwPreviewFailureEnvelope(refreshedPreviewFailure, 'BANKING_PAY_PREVIEW_FAILED');
@@ -26356,7 +26912,7 @@ async function bankingPayPreview(pay_date) {
     let responsePayload;
     let didFullPreviewLoad = false;
 
-    if (candidateScopedRefresh && !willOpenNewWorkbenchSession && trimStr(wiz.workbench.session_id) && requestedCandidateId) {
+    if (candidateScopedRefresh && !isPostMutationRefresh && !willOpenNewWorkbenchSession && trimStr(wiz.workbench.session_id) && !isObsoleteSessionId(wiz.workbench.session_id) && requestedCandidateId) {
       responsePayload = await bankingPayWorkbenchSessionGetCandidate(wiz.workbench.session_id, requestedCandidateId);
       const responsePayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (responsePayloadFailure) {
@@ -26364,8 +26920,17 @@ async function bankingPayPreview(pay_date) {
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       mergePayWorkbenchCandidatePreviewIntoState(responsePayload, stLocal);
-    } else if (useReplacementSessionBootstrap && trimStr(replacementSessionId) && typeof bankingPayWorkbenchSessionGet === 'function') {
-      responsePayload = await bankingPayWorkbenchSessionGet(replacementSessionId);
+    } else if (useReplacementSessionBootstrap && trimStr(replacementSessionId) && !isObsoleteSessionId(replacementSessionId) && typeof bankingPayWorkbenchSessionGet === 'function') {
+      responsePayload = await bankingPayWorkbenchSessionGet(replacementSessionId, {
+        obsolete_session_ids: [...obsoleteSessionIds],
+        source_session_id: sourceSessionId || null,
+        force_new_session: forceNewSession,
+        mutation_context: mutationContext || null
+      });
+      if (isRebaseRequiredPayload(responsePayload) || isReturnedSessionObsolete(responsePayload)) {
+        resetWorkbenchStateForFreshSession('REPLACEMENT_SESSION_OBSOLETE');
+        responsePayload = await openFreshWorkbenchSession();
+      }
       const replacementSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (replacementSessionPayloadFailure) {
         throwPreviewFailureEnvelope(replacementSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
@@ -26377,7 +26942,7 @@ async function bankingPayPreview(pay_date) {
       applyReplacementPendingState(false);
       didFullPreviewLoad = true;
     } else if (willOpenNewWorkbenchSession) {
-      responsePayload = await bankingPayWorkbenchSessionOpen(openPayload);
+      responsePayload = await openFreshWorkbenchSession();
       const openedSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (openedSessionPayloadFailure) {
         throwPreviewFailureEnvelope(openedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
@@ -26387,8 +26952,17 @@ async function bankingPayPreview(pay_date) {
       applyFullWorkbenchPreviewPayload(responsePayload);
       applyDeferredPreviewStateFromPayload(responsePayload);
       didFullPreviewLoad = true;
-    } else if (softRefresh || trimStr(wiz.workbench.session_id)) {
-      responsePayload = await bankingPayWorkbenchSessionGet(wiz.workbench.session_id);
+    } else if ((softRefresh || trimStr(wiz.workbench.session_id)) && !isObsoleteSessionId(wiz.workbench.session_id)) {
+      responsePayload = await bankingPayWorkbenchSessionGet(wiz.workbench.session_id, {
+        obsolete_session_ids: [...obsoleteSessionIds],
+        source_session_id: sourceSessionId || null,
+        force_new_session: forceNewSession,
+        mutation_context: mutationContext || null
+      });
+      if (isRebaseRequiredPayload(responsePayload) || isReturnedSessionObsolete(responsePayload)) {
+        resetWorkbenchStateForFreshSession('EXISTING_SESSION_OBSOLETE');
+        responsePayload = await openFreshWorkbenchSession();
+      }
       const existingSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (existingSessionPayloadFailure) {
         throwPreviewFailureEnvelope(existingSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
@@ -26399,7 +26973,7 @@ async function bankingPayPreview(pay_date) {
       applyDeferredPreviewStateFromPayload(responsePayload);
       didFullPreviewLoad = true;
     } else {
-      responsePayload = await bankingPayWorkbenchSessionOpen(openPayload);
+      responsePayload = await openFreshWorkbenchSession();
       const fallbackOpenedSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (fallbackOpenedSessionPayloadFailure) {
         throwPreviewFailureEnvelope(fallbackOpenedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
@@ -26638,7 +27212,6 @@ function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, opti
 
 
 
-
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -26872,7 +27445,85 @@ async function bankingPayCreateDraft(input = {}) {
     };
   };
 
-  const clearPostCreatePreviewState = async () => {
+  const collectCreatedPayBatchIdsForPostCreate = (value) => {
+    const out = [];
+    const seenObjects = new Set();
+    const pushId = (raw) => {
+      const s = trimStr(raw);
+      if (s) out.push(s);
+    };
+    const walk = (node, depth = 0) => {
+      if (node == null || depth > 7) return;
+      if (typeof node === 'string' || typeof node === 'number') {
+        return;
+      }
+      if (Array.isArray(node)) {
+        for (const entry of node) walk(entry, depth + 1);
+        return;
+      }
+      if (!isPlainObject(node)) return;
+      if (seenObjects.has(node)) return;
+      seenObjects.add(node);
+
+      for (const key of [
+        'pay_batch_id',
+        'payBatchId',
+        'batch_id',
+        'batchId',
+        'selected_pay_batch_id',
+        'selectedPayBatchId',
+        'paye_pay_batch_id',
+        'payePayBatchId',
+        'umbrella_pay_batch_id',
+        'umbrellaPayBatchId',
+        'non_paye_pay_batch_id',
+        'nonPayePayBatchId'
+      ]) {
+        pushId(node[key]);
+      }
+
+      for (const key of [
+        'pay_batch_ids',
+        'payBatchIds',
+        'created_pay_batch_ids',
+        'createdPayBatchIds',
+        'batch_ids',
+        'batchIds'
+      ]) {
+        if (Array.isArray(node[key])) {
+          for (const id of node[key]) pushId(id);
+        }
+      }
+
+      for (const key of [
+        'result',
+        'result_json',
+        'final_result',
+        'raw_payload',
+        'payload',
+        'post_create_refresh',
+        'postCreateRefresh',
+        'created_batches',
+        'createdBatches',
+        'batch_shells',
+        'batchShells',
+        'scope_results',
+        'scopeResults',
+        'batch_results',
+        'batchResults',
+        'results'
+      ]) {
+        if (Object.prototype.hasOwnProperty.call(node, key)) walk(node[key], depth + 1);
+      }
+    };
+
+    walk(value, 0);
+    return Array.from(new Set(out));
+  };
+
+
+  const clearPostCreatePreviewState = async (details = {}) => {
+    const detail = isPlainObject(details) ? details : {};
     const blankComponentStateCache = {
       case_resolution_states: [],
       blocked_case_states: [],
@@ -26888,8 +27539,38 @@ async function bankingPayCreateDraft(input = {}) {
       blocked_preview_lines: [],
       hidden_preview_lines: []
     };
+    const sourceSessionId = trimStr(detail.source_session_id || detail.sourceSessionId || detail.session_id || detail.sessionId || '');
+    const sourceSnapshotRunId = trimStr(detail.source_snapshot_run_id || detail.sourceSnapshotRunId || detail.snapshot_run_id || detail.snapshotRunId || '');
+    const sourceSessionSignature = trimStr(detail.source_session_signature || detail.sourceSessionSignature || detail.session_signature || detail.sessionSignature || '');
+    const sourceSessionVersion = detail.source_session_version ?? detail.sourceSessionVersion ?? detail.session_version ?? detail.sessionVersion ?? null;
+    const dirtyCandidateIds = uniqTrimmed(detail.dirty_candidate_ids || detail.dirtyCandidateIds || []);
+    const pendingCandidateIds = uniqTrimmed(detail.pending_candidate_ids || detail.pendingCandidateIds || dirtyCandidateIds);
+    const refreshJobIds = uniqTrimmed(detail.refresh_job_ids || detail.refreshJobIds || []);
+    const createdPayBatchIds = uniqTrimmed(detail.created_pay_batch_ids || detail.createdPayBatchIds || []);
+    const selectedPreviewRowIds = uniqTrimmed(detail.selected_preview_row_ids || detail.selectedPreviewRowIds || []);
+    const obsoleteSessionIds = Array.from(new Set([
+      ...(Array.isArray(detail.obsolete_session_ids) ? detail.obsolete_session_ids : []),
+      ...(Array.isArray(detail.obsoleteSessionIds) ? detail.obsoleteSessionIds : []),
+      sourceSessionId,
+      trimStr(wiz?.workbench?.session_id || ''),
+      trimStr(wiz?.decisions?.session_id || ''),
+      trimStr(wiz?.preview?.data?.session_id || ''),
+      trimStr(wiz?.preview?.data?.session?.session_id || '')
+    ].map((value) => trimStr(value)).filter(Boolean)));
+    const pendingJobs = refreshJobIds.map((jobId, index) => ({
+      pending_job_id: jobId,
+      job_id: jobId,
+      candidate_id: pendingCandidateIds[index] || dirtyCandidateIds[index] || null,
+      latest_job_type: 'SESSION_CANDIDATE_RECOMPUTE',
+      status: 'QUEUED'
+    }));
+    const nowIso = new Date().toISOString();
 
     try {
+      wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
+      wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
+      wiz.decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {};
+
       wiz.preview.data = null;
       wiz.preview.loading = true;
       wiz.preview.error = '';
@@ -26897,20 +27578,82 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.preview.readiness = null;
       wiz.preview.candidateDebtInfo = {};
       wiz.preview.componentStateCache = blankComponentStateCache;
+      wiz.preview.pageData = null;
+      wiz.preview.page_data = null;
+      wiz.preview.pages = {};
+      wiz.preview.pageCache = {};
+      wiz.preview.page_cache = {};
+      wiz.preview.previewPageCache = {};
+      wiz.preview.preview_page_cache = {};
+      wiz.preview.context_signature = '';
+      wiz.preview.preview_epoch = Number.isFinite(Number(wiz.preview.preview_epoch)) ? Number(wiz.preview.preview_epoch) + 1 : 1;
+      wiz.preview.__post_create_refresh_pending = true;
+      wiz.preview.__post_create_refresh_started_at_utc = nowIso;
+      wiz.preview.__post_create_source_session_id = sourceSessionId || null;
+      wiz.preview.__post_create_created_pay_batch_ids = [...createdPayBatchIds];
+
+
+      wiz.workbench.session_id = null;
+      wiz.workbench.snapshot_run_id = null;
+      wiz.workbench.session_version = null;
+      wiz.workbench.session_signature = '';
       wiz.workbench.server_selected_preview_row_ids = [];
-      wiz.decisions.server_selected_preview_row_ids = [];
       wiz.workbench.server_selected_preview_row_ids_provided = false;
-      wiz.decisions.server_selected_preview_row_ids_provided = false;
+      wiz.workbench.selected_preview_row_ids = [];
+      wiz.workbench.selected_preview_row_mode = 'IMPLICIT_ALL';
+      wiz.workbench.pending_candidate_ids = [...pendingCandidateIds];
+      wiz.workbench.dirty_candidate_ids = Array.from(new Set([...dirtyCandidateIds, ...pendingCandidateIds]));
+      wiz.workbench.failed_candidate_ids = [];
+      wiz.workbench.pending_candidate_jobs = pendingJobs;
       wiz.workbench.pending_candidate_rows = [];
       wiz.workbench.failed_candidate_rows = [];
       wiz.workbench.case_resolution_states = [];
       wiz.workbench.canonical_preview_lines = [];
+      wiz.workbench.preview_rows = [];
+      wiz.workbench.ready_preview_lines = [];
+      wiz.workbench.preview_pages = {};
+      wiz.workbench.preview_page_cache = {};
+      wiz.workbench.pageCache = {};
       wiz.workbench.payees = [];
       wiz.workbench.summary = {};
+      wiz.workbench.create_draft_refresh_pending = true;
+      wiz.workbench.preview_reopen_required = true;
+      wiz.workbench.__source_session_id_discarded = sourceSessionId || null;
+      wiz.workbench.__source_snapshot_run_id_discarded = sourceSnapshotRunId || null;
+      wiz.workbench.__source_session_signature_discarded = sourceSessionSignature || null;
+      wiz.workbench.__source_session_version_discarded = sourceSessionVersion ?? null;
+      wiz.workbench.__obsolete_progress_session_ids = obsoleteSessionIds;
+      wiz.workbench.__obsolete_workbench_session_ids = obsoleteSessionIds;
+      wiz.workbench.__active_progress_session_id = null;
+      wiz.workbench.__active_workbench_session_id = null;
+      wiz.workbench.__post_mutation_context = 'CREATE_DRAFT_SUCCESS';
+      wiz.workbench.__post_create_created_pay_batch_ids = [...createdPayBatchIds];
+      wiz.workbench.__post_create_selected_preview_row_ids = [...selectedPreviewRowIds];
+      wiz.workbench.__post_create_refresh_started_at_utc = nowIso;
+      wiz.workbench.__workbench_session_generation = Number.isFinite(Number(wiz.workbench.__workbench_session_generation))
+        ? Number(wiz.workbench.__workbench_session_generation) + 1
+        : 1;
+      wiz.workbench.__progress_poll_generation = wiz.workbench.__workbench_session_generation;
+
+      wiz.decisions.session_id = null;
+      wiz.decisions.snapshot_run_id = null;
+      wiz.decisions.session_version = null;
+      wiz.decisions.session_signature = '';
+      wiz.decisions.server_selected_preview_row_ids = [];
+      wiz.decisions.server_selected_preview_row_ids_provided = false;
       wiz.decisions.selected_preview_row_ids = [];
+      wiz.decisions.pending_candidate_ids = [...pendingCandidateIds];
+      wiz.decisions.dirty_candidate_ids = Array.from(new Set([...dirtyCandidateIds, ...pendingCandidateIds]));
+      wiz.decisions.pending_candidate_jobs = pendingJobs;
       wiz.decisions.pending_candidate_rows = [];
       wiz.decisions.failed_candidate_rows = [];
       wiz.decisions.case_resolution_states = [];
+      wiz.decisions.canonical_preview_lines = [];
+      wiz.decisions.preview_rows = [];
+      wiz.decisions.ready_preview_lines = [];
+      wiz.decisions.preview_pages = {};
+      wiz.decisions.preview_page_cache = {};
+      wiz.decisions.pageCache = {};
       wiz.decisions.blocked_case_states = [];
       wiz.decisions.safe_case_states = [];
       wiz.decisions.reusable_component_resolutions = {};
@@ -26920,8 +27663,16 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.decisions.ready_to_pay_now = [];
       wiz.decisions.blocked_for_pay_now = [];
       wiz.decisions.hidden_indefinite_snoozes = [];
+      wiz.decisions.preview_request_seq = 0;
+      wiz.decisions.preview_epoch = Number.isFinite(Number(wiz.decisions.preview_epoch)) ? Number(wiz.decisions.preview_epoch) + 1 : 1;
+      wiz.decisions.pay_context_dirty = true;
+      wiz.decisions.dirty_reason = 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN';
+      wiz.decisions.modal_valid = false;
+      wiz.decisions.active_modal_epoch = null;
+
       wiz.selected_preview_row_mode = 'IMPLICIT_ALL';
       wiz.local_selected_preview_row_ids_dirty = false;
+      wiz.lastPreviewFailure = null;
     } catch {}
 
     try {
@@ -28292,18 +29043,161 @@ async function bankingPayCreateDraft(input = {}) {
       throwCreateDraftFailureEnvelope(terminalFailure, 'BANKING_PAY_CREATE_DRAFT_FAILED');
     }
 
-    const appliedResult = await bankingPayApplyCreateDraftResult(terminalOperation, {
-      pay_date: pd,
-      week_ending_cutoff_date: cutoffIso,
-      session_id: sessionId,
-      session_signature: trimStr(wiz.workbench.session_signature || wiz.decisions.session_signature || ''),
-      selected_preview_row_ids: [...selectedPreviewRowIdsForServer],
-      selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
-      pay_channel_scope: payChannelScope || 'ALL',
-      same_week_paye_override_reason_present: !!overrideReason,
-      same_week_paye_override_continue: overrideContinue === true,
-      source: 'bankingPayCreateDraft'
-    });
+    const terminalCreatedPayBatchIds = collectCreatedPayBatchIdsForPostCreate(terminalOperation);
+    const sourceWorkbenchSessionId = sessionId;
+    const sourceWorkbenchSnapshotRunId = trimStr(
+      wiz.workbench?.snapshot_run_id ||
+      wiz.decisions?.snapshot_run_id ||
+      previewEnvelope.session?.snapshot_run_id ||
+      previewEnvelope.snapshot_run_id ||
+      previewObj.snapshot_run_id ||
+      ''
+    ) || null;
+    const sourceWorkbenchSessionVersion = (
+      wiz.workbench?.session_version ??
+      wiz.decisions?.session_version ??
+      previewEnvelope.session?.session_version ??
+      previewEnvelope.session_version ??
+      previewObj.session_version ??
+      null
+    );
+    const sourceWorkbenchSessionSignature = trimStr(
+      wiz.workbench?.session_signature ||
+      wiz.decisions?.session_signature ||
+      activeSessionSignature ||
+      previewSessionSignature ||
+      computedLiveSessionSignature ||
+      ''
+    ) || null;
+    const operationIdForPostCreate = trimStr(operationPayload.operation_id || operationPayload.id || terminalOperation?.operation_id || terminalOperation?.id || '');
+    const terminalResultForPostCreate = isPlainObject(terminalOperation?.result)
+      ? terminalOperation.result
+      : (isPlainObject(terminalOperation?.result_json)
+          ? terminalOperation.result_json
+          : (isPlainObject(terminalOperation?.final_result)
+              ? terminalOperation.final_result
+              : (isPlainObject(terminalOperation) ? terminalOperation : {})));
+    const terminalPostCreateRefresh = isPlainObject(terminalResultForPostCreate.post_create_refresh)
+      ? terminalResultForPostCreate.post_create_refresh
+      : (isPlainObject(terminalResultForPostCreate.postCreateRefresh) ? terminalResultForPostCreate.postCreateRefresh : {});
+    const terminalDirtyCandidateIds = uniqTrimmed([
+      ...(Array.isArray(terminalPostCreateRefresh.dirty_candidate_ids) ? terminalPostCreateRefresh.dirty_candidate_ids : []),
+      ...(Array.isArray(terminalPostCreateRefresh.dirtyCandidateIds) ? terminalPostCreateRefresh.dirtyCandidateIds : []),
+      ...(Array.isArray(terminalResultForPostCreate.dirty_candidate_ids) ? terminalResultForPostCreate.dirty_candidate_ids : []),
+      ...(Array.isArray(terminalResultForPostCreate.dirtyCandidateIds) ? terminalResultForPostCreate.dirtyCandidateIds : []),
+      ...(Array.isArray(terminalResultForPostCreate.decision_sync?.touched_candidate_ids) ? terminalResultForPostCreate.decision_sync.touched_candidate_ids : [])
+    ]);
+    const terminalPendingCandidateIds = uniqTrimmed([
+      ...(Array.isArray(terminalPostCreateRefresh.pending_candidate_ids) ? terminalPostCreateRefresh.pending_candidate_ids : []),
+      ...(Array.isArray(terminalPostCreateRefresh.pendingCandidateIds) ? terminalPostCreateRefresh.pendingCandidateIds : []),
+      ...terminalDirtyCandidateIds
+    ]);
+    const terminalRefreshJobIds = uniqTrimmed([
+      ...(Array.isArray(terminalPostCreateRefresh.dirty_refresh_job_ids) ? terminalPostCreateRefresh.dirty_refresh_job_ids : []),
+      ...(Array.isArray(terminalPostCreateRefresh.refresh_job_ids) ? terminalPostCreateRefresh.refresh_job_ids : []),
+      ...(Array.isArray(terminalPostCreateRefresh.refreshJobIds) ? terminalPostCreateRefresh.refreshJobIds : []),
+      ...(Array.isArray(terminalResultForPostCreate.refresh_job_ids) ? terminalResultForPostCreate.refresh_job_ids : []),
+      ...(Array.isArray(terminalResultForPostCreate.refreshJobIds) ? terminalResultForPostCreate.refreshJobIds : []),
+      ...(Array.isArray(terminalResultForPostCreate.decision_sync?.job_ids) ? terminalResultForPostCreate.decision_sync.job_ids : [])
+    ]);
+
+    if (terminalCreatedPayBatchIds.length > 0) {
+      await clearPostCreatePreviewState({
+        source_session_id: sourceWorkbenchSessionId,
+        source_snapshot_run_id: sourceWorkbenchSnapshotRunId,
+        source_session_version: sourceWorkbenchSessionVersion,
+        source_session_signature: sourceWorkbenchSessionSignature,
+        obsolete_session_ids: sourceWorkbenchSessionId ? [sourceWorkbenchSessionId] : [],
+        dirty_candidate_ids: [...terminalDirtyCandidateIds],
+        pending_candidate_ids: [...terminalPendingCandidateIds],
+        refresh_job_ids: [...terminalRefreshJobIds],
+        created_pay_batch_ids: [...terminalCreatedPayBatchIds],
+        selected_preview_row_ids: [...selectedPreviewRowIdsForServer]
+      });
+      logTroubleshoot('info', 'POST_CREATE_PREVIEW_STATE_CLEARED', {
+        operation_id: operationIdForPostCreate || null,
+        source_session_id: sourceWorkbenchSessionId || null,
+        created_pay_batch_ids: terminalCreatedPayBatchIds,
+        selected_preview_row_ids_count: selectedPreviewRowIdsForServer.length,
+        dirty_candidate_ids: terminalDirtyCandidateIds,
+        pending_candidate_ids: terminalPendingCandidateIds,
+        refresh_job_ids: terminalRefreshJobIds
+      });
+    }
+
+    let appliedResult = null;
+    let postCreateRefreshApplyError = null;
+    try {
+      appliedResult = await bankingPayApplyCreateDraftResult(terminalOperation, {
+        pay_date: pd,
+        week_ending_cutoff_date: cutoffIso,
+        session_id: sourceWorkbenchSessionId,
+        source_session_id: sourceWorkbenchSessionId,
+        source_snapshot_run_id: sourceWorkbenchSnapshotRunId,
+        source_session_version: sourceWorkbenchSessionVersion,
+        source_session_signature: sourceWorkbenchSessionSignature,
+        session_signature: sourceWorkbenchSessionSignature || trimStr(wiz.workbench.session_signature || wiz.decisions.session_signature || ''),
+        selected_preview_row_ids: [...selectedPreviewRowIdsForServer],
+        selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
+        pay_channel_scope: payChannelScope || 'ALL',
+        same_week_paye_override_reason_present: !!overrideReason,
+        same_week_paye_override_continue: overrideContinue === true,
+        operation_id: operationIdForPostCreate || null,
+        pay_batch_id: terminalCreatedPayBatchIds[0] || null,
+        created_pay_batch_ids: [...terminalCreatedPayBatchIds],
+        dirty_candidate_ids: [...terminalDirtyCandidateIds],
+        pending_candidate_ids: [...terminalPendingCandidateIds],
+        refresh_job_ids: [...terminalRefreshJobIds],
+        mutation_context: 'CREATE_DRAFT_SUCCESS',
+        mode: 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN',
+        force_new_session: true,
+        discard_source_session: true,
+        ignore_replacement_session: true,
+        callGlobalRefresh: false,
+        call_global_refresh: false,
+        source: 'bankingPayCreateDraft'
+      });
+    } catch (applyErr) {
+      postCreateRefreshApplyError = applyErr;
+      if (terminalCreatedPayBatchIds.length <= 0) throw applyErr;
+
+      const refreshFriendly = (typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(applyErr, applyErr?.payload || applyErr?.json || null, {
+            action: 'POST_DRAFT_CREATE_PREVIEW_REFRESH',
+            fallbackCode: 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+            fallbackTitle: 'Payment preview could not be refreshed',
+            fallbackMessage: 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.',
+            userInitiated: createDraftUserInitiated,
+            silent: true,
+            background: true,
+            showModal: false,
+            created_pay_batch_ids: [...terminalCreatedPayBatchIds],
+            source_session_id: sourceWorkbenchSessionId
+          })
+        : null;
+
+      appliedResult = {
+        ...(isPlainObject(terminalOperation?.result) ? terminalOperation.result : (isPlainObject(terminalOperation?.final_result) ? terminalOperation.final_result : (isPlainObject(terminalOperation) ? terminalOperation : {}))),
+        ok: true,
+        create_draft_operation_result: true,
+        pay_batch_ids: [...terminalCreatedPayBatchIds],
+        created_pay_batch_ids: [...terminalCreatedPayBatchIds],
+        selected_pay_batch_id: terminalCreatedPayBatchIds[0] || null,
+        preview_refresh_failed: true,
+        preview_refresh_warning: {
+          code: trimStr(refreshFriendly?.error_code || refreshFriendly?.code || 'BANKING_PAY_PREVIEW_REFRESH_FAILED') || 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+          title: trimStr(refreshFriendly?.title || refreshFriendly?.friendly_error?.title || 'Payment preview could not be refreshed') || 'Payment preview could not be refreshed',
+          message: trimStr(refreshFriendly?.user_message || refreshFriendly?.message || refreshFriendly?.friendly_error?.message || 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.') || 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.'
+        }
+      };
+
+      logTroubleshoot('warn', 'POST_CREATE_PREVIEW_REFRESH_FAILED_AFTER_BATCH_CREATED', {
+        operation_id: operationIdForPostCreate || null,
+        source_session_id: sourceWorkbenchSessionId || null,
+        created_pay_batch_ids: terminalCreatedPayBatchIds,
+        message: trimStr(applyErr?.message || applyErr?.user_message || applyErr?.error || applyErr) || null
+      });
+    }
 
     const finalResult = (appliedResult && typeof appliedResult === 'object')
       ? appliedResult
@@ -28360,9 +29254,6 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
-
-
-
 
 
 async function openPayDraftSkippedTimesheetsModal(exclusions) {
@@ -37374,6 +38265,8 @@ function deriveBankingAttentionStateFromBatchList(input) {
   };
 }
 
+
+
 function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   const argumentCount = arguments.length;
   const isPlainObject = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -37652,6 +38545,15 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     'BATCH_STALE',
     'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
     'BLOCKED_FUNDS',
+    'NO_AUTHORISATION_READY_TRANSFERS',
+    'NO_PENDING_TRANSFERS',
+    'TRANSFER_SCOPE_RETRY_BLOCKER_DETECTED',
+    'TRANSFER_SCOPE_GROUP_HELD_BY_ACTIVE_OR_UNSAFE_OPERATION',
+    'EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE',
+    'PAYMENT_EXECUTE_CLEANUP_FAILED',
+    'BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED',
+    'NO_SAFE_LOCAL_CLEANUP_AVAILABLE',
+    'AUTH_REQUEST_HELD_BY_PREVIOUS_OPERATION',
     'BLOCKED_FUNDS_RETRY_FAILED',
     'BLOCKED_FUNDS_RETRY_REQUIRED',
     'BLOCKED_FUNDS_RETRY_STATUS_MISMATCH',
@@ -37751,6 +38653,9 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     const code = normaliseCode(value);
     if (!code) return '';
     if (code === 'REAUTH_REQUIRED') return 'PAYMENT_REAUTH_REQUIRED';
+    if (code === 'NO_PENDING_TRANSFERS') return 'NO_AUTHORISATION_READY_TRANSFERS';
+    if (code === 'PAY_EXECUTE_OPERATION_CLEANUP_FAILED_LOCAL_ARTIFACTS') return 'PAYMENT_EXECUTE_CLEANUP_FAILED';
+    if (code === 'BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED' || code === 'PROVIDER_SUBMISSION_EVIDENCE_REQUIRED') return 'EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE';
     if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
     if (code === 'PAY_EXECUTE_BANK_FAILED') return 'BANKING_EXECUTE_PAYMENT_FAILED';
     if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
@@ -37829,6 +38734,13 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     if (rawUpper.includes('SETTLEMENT_FINALISATION_FAILED') || rawUpper.includes('SETTLEMENT FINALISATION FAILED')) return 'SETTLEMENT_FINALISATION_FAILED';
     if (rawUpper.includes('STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED')) return 'STANDARD_BANK_IMMEDIATE_SAFE_STATE_NOT_RECORDED';
     if (rawUpper.includes('STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') || rawUpper.includes('FUNDING ACCOUNT IS REQUIRED')) return 'FUNDING_ACCOUNT_MISSING';
+    if (rawUpper.includes('NO_PENDING_TRANSFERS') || rawUpper.includes('NO_AUTHORISATION_READY_TRANSFERS')) return 'NO_AUTHORISATION_READY_TRANSFERS';
+    if (rawUpper.includes('UX_BANKING_PAY_OPERATION_TRANSFER_SCOPE_BATCH_GROUP') || (rawUpper.includes('DUPLICATE KEY') && rawUpper.includes('BANKING_PAY_OPERATION_TRANSFER_SCOPE'))) return 'TRANSFER_SCOPE_RETRY_BLOCKER_DETECTED';
+    if (rawUpper.includes('TRANSFER_SCOPE_GROUP_HELD_BY_ACTIVE_OR_UNSAFE_OPERATION')) return 'TRANSFER_SCOPE_GROUP_HELD_BY_ACTIVE_OR_UNSAFE_OPERATION';
+    if (rawUpper.includes('EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE') || rawUpper.includes('BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED') || rawUpper.includes('PROVIDER SUBMISSION EVIDENCE') || rawUpper.includes('AMBIGUOUS PROVIDER')) return 'EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE';
+    if (rawUpper.includes('PAYMENT_EXECUTE_CLEANUP_FAILED') || rawUpper.includes('PAY_EXECUTE_OPERATION_CLEANUP_FAILED_LOCAL_ARTIFACTS')) return 'PAYMENT_EXECUTE_CLEANUP_FAILED';
+    if (rawUpper.includes('NO_SAFE_LOCAL_CLEANUP_AVAILABLE')) return 'NO_SAFE_LOCAL_CLEANUP_AVAILABLE';
+    if (rawUpper.includes('AUTH_REQUEST_HELD_BY_PREVIOUS_OPERATION')) return 'AUTH_REQUEST_HELD_BY_PREVIOUS_OPERATION';
 
     if (rawUpper.includes('23505') && rawUpper.includes('UQ_BANKING_ALERT_ACK_USER_FINGERPRINT_SCOPE')) return 'ACKNOWLEDGEMENT_ALREADY_EXISTS';
     if (rawUpper.includes('DUPLICATE KEY') && rawUpper.includes('UQ_BANKING_ALERT_ACK_USER_FINGERPRINT_SCOPE')) return 'ACKNOWLEDGEMENT_ALREADY_EXISTS';
@@ -37888,6 +38800,14 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 
   const priorityBusinessCodes = [
     'BATCH_STALE',
+    'NO_AUTHORISATION_READY_TRANSFERS',
+    'TRANSFER_SCOPE_RETRY_BLOCKER_DETECTED',
+    'TRANSFER_SCOPE_GROUP_HELD_BY_ACTIVE_OR_UNSAFE_OPERATION',
+    'EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE',
+    'PAYMENT_EXECUTE_CLEANUP_FAILED',
+    'BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED',
+    'NO_SAFE_LOCAL_CLEANUP_AVAILABLE',
+    'AUTH_REQUEST_HELD_BY_PREVIOUS_OPERATION',
     'PAYE_NOT_READY',
     'PAYE_NET_MISSING',
     'PAYE_NET_INVALID',
@@ -37984,6 +38904,86 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       submitted_to_bank: false,
       status: 'BLOCKED_FUNDS',
       post_execution_status: 'BLOCKED_FUNDS'
+    },
+    NO_AUTHORISATION_READY_TRANSFERS: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment could not be started',
+      message: 'The bank transfer was prepared but is not currently in a safe authorisation-ready state. Refresh the batch and try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    TRANSFER_SCOPE_RETRY_BLOCKER_DETECTED: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Previous payment attempt needs cleanup',
+      message: 'A previous payment attempt left local transfer artefacts attached to this batch. Retry after the cleanup completes or review the batch.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    TRANSFER_SCOPE_GROUP_HELD_BY_ACTIVE_OR_UNSAFE_OPERATION: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Previous payment attempt needs review',
+      message: 'A previous payment attempt still owns local transfer artefacts for this batch. Review the payment state before retrying.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE: {
+      ok: false,
+      http_status: 409,
+      severity: 'critical',
+      title: 'Payment needs review before retry',
+      message: 'This payment may already have reached the banking provider. Review or reconcile the transfer before retrying.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    PAYMENT_EXECUTE_CLEANUP_FAILED: {
+      ok: false,
+      http_status: 409,
+      severity: 'critical',
+      title: 'Payment retry needs review',
+      message: 'The payment failed and some local execution artefacts could not be cleaned up automatically.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED: {
+      ok: false,
+      http_status: 409,
+      severity: 'critical',
+      title: 'Payment needs review before retry',
+      message: 'This payment may already have reached the banking provider. Review or reconcile the transfer before retrying.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    NO_SAFE_LOCAL_CLEANUP_AVAILABLE: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment retry needs review',
+      message: 'The payment retry needs review because CloudTMS could not confirm that local execution artefacts are safe to clean.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    AUTH_REQUEST_HELD_BY_PREVIOUS_OPERATION: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Previous payment authorisation needs review',
+      message: 'A previous authorisation request is still attached to this batch. Review or reconcile that request before retrying.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
     },
     BLOCKED_FUNDS_RETRY_FAILED: {
       ok: false,
@@ -38524,22 +39524,130 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     }
   };
 
-  const action = normaliseCode(contextInput.action || contextInput.context_action || '');
+  const action = normaliseCode(contextInput.action || contextInput.context_action || contextInput.mutation_context || contextInput.mutationContext || '');
+  const collectPostMutationEvidence = () => {
+    const evidence = [];
+    const appendValue = (value) => {
+      const code = normaliseCode(value);
+      if (code) evidence.push(code);
+      const text = safeTrim(value);
+      if (text && text !== code) evidence.push(text.toUpperCase());
+    };
+    const appendObject = (obj) => {
+      if (!isPlainObject(obj)) return;
+      [
+        obj.action,
+        obj.context_action,
+        obj.mutation_context,
+        obj.mutationContext,
+        obj.reason,
+        obj.reset_reason,
+        obj.resetReason,
+        obj.status,
+        obj.classification,
+        obj.cancel_reason,
+        obj.cancelReason,
+        obj.cancelled_pay_batch_id,
+        obj.cancelledPayBatchId,
+        obj.pay_batch_id,
+        obj.payBatchId,
+        obj.selected_pay_batch_id,
+        obj.selectedPayBatchId
+      ].forEach(appendValue);
+      if (obj.batch_cancelled === true || obj.cancelled === true || obj.cancel_succeeded === true || obj.cancelSucceeded === true) appendValue('CANCEL_DELETE_DRAFT_SUCCESS');
+      if (obj.create_draft_operation_result === true || obj.draft_created === true || obj.draftCreated === true) appendValue('CREATE_DRAFT_SUCCESS');
+      if (Array.isArray(obj.created_pay_batch_ids) && obj.created_pay_batch_ids.length > 0) appendValue('CREATED_PAY_BATCH_IDS_PRESENT');
+      if (Array.isArray(obj.createdPayBatchIds) && obj.createdPayBatchIds.length > 0) appendValue('CREATED_PAY_BATCH_IDS_PRESENT');
+      [
+        obj.payload,
+        obj.body,
+        obj.json,
+        obj.data,
+        obj.result,
+        obj.response,
+        obj.friendly_error,
+        obj.friendlyError,
+        obj.postCancelRefresh,
+        obj.post_cancel_refresh,
+        obj.postCancelResetOptions,
+        obj.post_cancel_reset_options,
+        obj.previewResetOptions,
+        obj.preview_reset_options,
+        obj.postCreateRefresh,
+        obj.post_create_refresh,
+        obj.snapshot_rebuild,
+        obj.snapshotRebuild
+      ].forEach(appendObject);
+    };
+    appendValue(action);
+    appendValue(rawUpper);
+    appendValue(contextInput.reason || contextInput.reset_reason || '');
+    appendValue(contextInput.mutation_context || contextInput.mutationContext || '');
+    appendValue(contextInput.cancelled_pay_batch_id || contextInput.cancelledPayBatchId || '');
+    appendValue(contextInput.pay_batch_id || contextInput.payBatchId || '');
+    if (Array.isArray(contextInput.created_pay_batch_ids) && contextInput.created_pay_batch_ids.length > 0) appendValue('CREATED_PAY_BATCH_IDS_PRESENT');
+    if (Array.isArray(contextInput.createdPayBatchIds) && contextInput.createdPayBatchIds.length > 0) appendValue('CREATED_PAY_BATCH_IDS_PRESENT');
+    appendObject(contextInput);
+    appendObject(contextInput.payload);
+    appendObject(contextInput.backendPayload);
+    appendObject(payloadInput);
+    payloads.forEach(appendObject);
+    return Array.from(new Set(evidence.map((value) => safeTrim(value).toUpperCase()).filter(Boolean))).join('|');
+  };
+  const postMutationEvidenceText = collectPostMutationEvidence();
+  const hasSuccessfulBatchMutationEvidence = /(^|\|)(CANCEL_DELETE_DRAFT_SUCCESS|POST_DRAFT_CANCEL_PREVIEW_REFRESH|POST_DRAFT_CANCEL_DISCARD_AND_REOPEN|DRAFT_CANCELLED|DRAFT_CANCELED|PAY_BATCH_CANCELLED|PAY_BATCH_CANCELED|BATCH_CANCELLED|BATCH_CANCELED|CREATE_DRAFT_SUCCESS|POST_DRAFT_CREATE_PREVIEW_REFRESH|POST_DRAFT_CREATE_DISCARD_AND_REOPEN|DRAFT_CREATED|CREATED_PAY_BATCH_IDS_PRESENT)(\||$)/.test(postMutationEvidenceText);
+  const isPostCancelPreviewRefreshError = () => {
+    if (/(^|\|)(CANCEL_DELETE_DRAFT_SUCCESS|POST_DRAFT_CANCEL_PREVIEW_REFRESH|POST_DRAFT_CANCEL_DISCARD_AND_REOPEN|DRAFT_CANCELLED|DRAFT_CANCELED|PAY_BATCH_CANCELLED|PAY_BATCH_CANCELED|BATCH_CANCELLED|BATCH_CANCELED)(\||$)/.test(postMutationEvidenceText)) return true;
+    if ((action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN' || action === 'BANKING_PAY_PREVIEW_FAILED') && /(CANCELLED|CANCELED)/.test(postMutationEvidenceText) && /PAY_BATCH|DRAFT|BATCH/.test(postMutationEvidenceText)) return true;
+    return false;
+  };
+  const isPostCreatePreviewRefreshError = () => {
+    if (/(^|\|)(CREATE_DRAFT_SUCCESS|POST_DRAFT_CREATE_PREVIEW_REFRESH|POST_DRAFT_CREATE_DISCARD_AND_REOPEN|DRAFT_CREATED|CREATED_PAY_BATCH_IDS_PRESENT)(\||$)/.test(postMutationEvidenceText)) return true;
+    if ((action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN' || action === 'BANKING_PAY_PREVIEW_FAILED') && /(CREATED_PAY_BATCH_IDS_PRESENT|CREATE_DRAFT_SUCCESS|DRAFT_CREATED)/.test(postMutationEvidenceText)) return true;
+    return false;
+  };
+  const stripCreateDraftNoBatchCopyForPostMutation = (message, fallbackMessage) => {
+    const fallbackText = safeTrim(fallbackMessage);
+    const text = safeTrim(message);
+    if (!text) return fallbackText;
+    if (hasSuccessfulBatchMutationEvidence && /no\s+payment\s+batch\s+has\s+been\s+created/i.test(text)) return fallbackText;
+    return text;
+  };
+  const isPostCancelPreviewRefresh = isPostCancelPreviewRefreshError();
+  const isPostCreatePreviewRefresh = !isPostCancelPreviewRefresh && isPostCreatePreviewRefreshError();
+  const postCancelPreviewRefreshCopy = {
+    title: 'Payment preview could not be refreshed',
+    message: 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.',
+    user_action: 'REFRESH_BANKING',
+    confirm_label: 'OK',
+    show_modal: false
+  };
+  const postCreatePreviewRefreshCopy = {
+    title: 'Payment preview could not be refreshed',
+    message: 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.',
+    user_action: 'REFRESH_BANKING',
+    confirm_label: 'OK',
+    show_modal: false
+  };
   const baseTemplate = templates[errorCode] || templates.BANKING_ACTION_FAILED;
   let actionAwareTemplate = { ...baseTemplate };
-  if (errorCode === 'BATCH_STALE') {
+  if (isPostCancelPreviewRefresh) {
+    actionAwareTemplate = { ...actionAwareTemplate, ok: false, http_status: 500, severity: actionAwareTemplate.severity || 'warning', ...postCancelPreviewRefreshCopy };
+  } else if (isPostCreatePreviewRefresh) {
+    actionAwareTemplate = { ...actionAwareTemplate, ok: false, http_status: 500, severity: actionAwareTemplate.severity || 'warning', ...postCreatePreviewRefreshCopy };
+  } else if (errorCode === 'BATCH_STALE') {
     if (action === 'RETRY_BLOCKED_FUNDS') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch has changed', message: 'This blocked-funds batch is no longer up to date. No payment was submitted. Refresh Banking, review the latest payment differences, then create or authorise a new payment batch.', user_action: 'REFRESH_BATCH' };
     else if (action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'Payment details changed while the batch was being prepared. Refresh the preview, review the latest payment details, then try again.', user_action: 'REFRESH_PREVIEW' };
     else if (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'The payment preview is no longer up to date. Refresh the preview, review the latest payment details, then try again.', user_action: 'REFRESH_PREVIEW' };
     else if (action === 'PAYE_NET_IMPORT' || action === 'PAYE_NET_SAVE') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch has changed', message: 'This batch is no longer up to date. Refresh the batch, review the latest payment details, then try again.', user_action: 'REFRESH_BATCH' };
   } else if (errorCode === 'BANKING_ACTION_FAILED' && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.', user_action: 'REFRESH_PREVIEW' };
-  else if (errorCode === 'BANKING_ACTION_FAILED' && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN')) actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be loaded', message: 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.', user_action: 'REFRESH_PREVIEW' };
+  else if (errorCode === 'BANKING_ACTION_FAILED' && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN')) actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be loaded', message: 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.', user_action: 'REFRESH_PREVIEW' };
   else if (errorCode === 'BANKING_ACTION_FAILED' && action === 'WORKBENCH_MODAL_ACTION') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be updated', message: 'CloudTMS could not save this payment decision. Refresh the preview and try again.', user_action: 'REFRESH_PREVIEW' };
   else if (errorCode === 'BLOCKED_FUNDS' && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, ok: false, http_status: 400, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.' };
   else if (errorCode === 'BLOCKED_FUNDS' && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN' || action === 'WORKBENCH_MODAL_ACTION')) {
     const map = action === 'WORKBENCH_MODAL_ACTION'
       ? { title: 'Payment preview could not be updated', message: 'CloudTMS could not save this payment decision. Refresh the preview and try again.' }
-      : { title: 'Payment preview could not be loaded', message: action === 'WORKBENCH_SESSION_OPEN' ? 'CloudTMS could not open the Banking Pay workbench session. Refresh Banking and try again. No payment batch has been created.' : 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.' };
+      : { title: 'Payment preview could not be loaded', message: action === 'WORKBENCH_SESSION_OPEN' ? 'CloudTMS could not open the Banking Pay workbench session. Refresh Banking and try again.' : 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.' };
     actionAwareTemplate = { ...actionAwareTemplate, ok: false, http_status: 400, ...map };
   } else if (['PAYE_NET_MISSING', 'PAYE_NET_REQUIRED', 'PAYE_NET_BANK_AMOUNT_MISSING'].includes(errorCode)) actionAwareTemplate = { ...actionAwareTemplate, title: 'PAYE net amounts are missing', message: 'Enter the missing PAYE net amounts, click Save, then try again.' };
   else if (['PAYE_NET_INVALID', 'PAYE_NET_BANK_AMOUNT_INVALID'].includes(errorCode)) actionAwareTemplate = { ...actionAwareTemplate, title: 'PAYE net amounts are invalid', message: 'Correct the PAYE net amounts, click Save, then try again.' };
@@ -38550,11 +39658,21 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   else if (['MISSING_RAIL_PROVIDER', 'RAIL_ENV_MISMATCH', 'RAIL_NOT_CONFIGURED', 'UNKNOWN_RAIL_PROVIDER', 'FUNDING_ACCOUNT_MISSING'].includes(errorCode)) actionAwareTemplate = { ...actionAwareTemplate, title: 'Banking setup needs attention', message: 'CloudTMS could not submit this payment because the banking setup is incomplete or unavailable. Review Banking settings and try again.' };
   else if (errorCode === 'NO_TIMESHEETS_READY_FOR_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'There are no payment items ready for this batch. Refresh Banking, review the preview, then try again.' };
   else if (['BANKING_PAY_CREATE_DRAFT_FAILED', 'BANKING_PAY_CREATE_DRAFT_SESSION_BACKED_FAILED', 'BANKING_PAY_CREATE_DRAFT_ROUTE_FAILED', 'BANKING_CREATE_DRAFT_INVALID_PAY_DATE', 'BANKING_CREATE_DRAFT_INVALID_INPUT'].includes(errorCode) && action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.' };
-  else if (['BANKING_PAY_PREVIEW_FAILED', 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', 'BANKING_PREVIEW_INVALID_PAY_DATE', 'BANKING_PREVIEW_INVALID_INPUT'].includes(errorCode) && action === 'PREVIEW') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be loaded', message: 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.' };
+  else if (['BANKING_PAY_PREVIEW_FAILED', 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', 'BANKING_PREVIEW_INVALID_PAY_DATE', 'BANKING_PREVIEW_INVALID_INPUT'].includes(errorCode) && action === 'PREVIEW') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be loaded', message: 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.' };
   else if (['WORKBENCH_SESSION_CANDIDATE_PROJECTION_STALE', 'STALE_SESSION', 'OBSOLETE_SESSION'].includes(errorCode) && (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN')) actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'The payment preview is no longer up to date. Refresh the preview, review the latest payment details, then try again.' };
   else if (/^WORKBENCH_MODAL_ACTION_INVALID_/.test(errorCode) && action === 'WORKBENCH_MODAL_ACTION') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview could not be updated', message: 'CloudTMS could not save this payment decision. Refresh the preview and try again.' };
   else if (['WORKBENCH_SESSION_INVALID', 'WORKBENCH_SESSION_NOT_FOUND'].includes(errorCode) && action === 'PREVIEW') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'The payment preview is no longer up to date. Refresh the preview, review the latest payment details, then try again.' };
   const template = actionAwareTemplate;
+  const finalTemplateMessage = stripCreateDraftNoBatchCopyForPostMutation(
+    template.message,
+    isPostCancelPreviewRefresh
+      ? postCancelPreviewRefreshCopy.message
+      : (isPostCreatePreviewRefresh ? postCreatePreviewRefreshCopy.message : template.message)
+  );
+  const finalTemplateTitle = isPostCancelPreviewRefresh
+    ? postCancelPreviewRefreshCopy.title
+    : (isPostCreatePreviewRefresh ? postCreatePreviewRefreshCopy.title : template.title);
+
 
   const pickSafeIdentifier = (values) => {
     for (const value of Array.isArray(values) ? values : []) {
@@ -38600,10 +39718,10 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     ok: template.ok === true,
     error_code: errorCode,
     code: errorCode,
-    title: template.title,
-    message: template.message,
-    error: template.message,
-    user_message: template.message,
+    title: finalTemplateTitle,
+    message: finalTemplateMessage,
+    error: finalTemplateMessage,
+    user_message: finalTemplateMessage,
     confirm_label: template.confirm_label || 'OK',
     user_action: template.user_action || 'REFRESH_AND_RETRY',
     severity: template.severity || (template.ok === true ? 'info' : 'error'),
@@ -38612,8 +39730,8 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     status_code: boundedHttpStatus(template.http_status, template.ok === true ? 200 : 400),
     friendly_error: {
       code: errorCode,
-      title: template.title,
-      message: template.message,
+      title: finalTemplateTitle,
+      message: finalTemplateMessage,
       error_code: errorCode,
       confirm_label: template.confirm_label || 'OK',
       user_action: template.user_action || 'REFRESH_AND_RETRY',
@@ -38644,7 +39762,6 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 
   return result;
 }
-
 
 
 
@@ -48219,7 +49336,70 @@ const retryBlockedFundsPipeline = async () => {
               mode: resolvedMode,
               st,
               deepClone: deep,
-              onSuccess: async ({ postCancelRefresh, currentWorkbenchSessionId }) => {
+                  onSuccess: async ({ responsePayload, postCancelRefresh, postCancelResetOptions, previewResetOptions, currentWorkbenchSessionId }) => {
+              const postCancelRefreshObj = (postCancelRefresh && typeof postCancelRefresh === 'object' && !Array.isArray(postCancelRefresh))
+                ? postCancelRefresh
+                : {};
+              const canonicalPostCancelResetOptions = (() => {
+                const candidates = [
+                  postCancelResetOptions,
+                  previewResetOptions,
+                  responsePayload?.post_cancel_reset_options,
+                  responsePayload?.preview_reset_options
+                ];
+
+                for (const candidate of candidates) {
+                  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+                  const modeText = String(candidate.mode || '').trim().toUpperCase();
+                  const reasonText = String(candidate.reason || candidate.mutation_context || candidate.mutationContext || '').trim().toUpperCase();
+                  if (
+                    modeText === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN' ||
+                    reasonText === 'CANCEL_DELETE_DRAFT_SUCCESS'
+                  ) {
+                    return {
+                      ...candidate,
+                      mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+                      reason: 'CANCEL_DELETE_DRAFT_SUCCESS',
+                      mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+                      force_new_session: true,
+                      discard_source_session: true,
+                      ignore_replacement_session: true,
+                      preview_reopen_required: true
+                    };
+                  }
+                }
+
+                return null;
+              })();
+              const postCancelResetOptionsForPreview = canonicalPostCancelResetOptions || {
+                mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+                reason: 'CANCEL_DELETE_DRAFT_SUCCESS',
+                mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+                force_new_session: true,
+                discard_source_session: true,
+                ignore_replacement_session: true,
+                preview_reopen_required: true,
+                source_session_id: String(postCancelRefreshObj.source_session_id || postCancelRefreshObj.sourceSessionId || currentWorkbenchSessionId || '').trim() || null,
+                obsolete_session_ids: Array.isArray(postCancelRefreshObj.obsolete_session_ids)
+                  ? postCancelRefreshObj.obsolete_session_ids
+                  : (String(postCancelRefreshObj.source_session_id || postCancelRefreshObj.sourceSessionId || currentWorkbenchSessionId || '').trim()
+                      ? [String(postCancelRefreshObj.source_session_id || postCancelRefreshObj.sourceSessionId || currentWorkbenchSessionId || '').trim()]
+                      : []),
+                dirty_candidate_ids: Array.isArray(postCancelRefreshObj.dirty_candidate_ids) ? postCancelRefreshObj.dirty_candidate_ids : [],
+                pending_candidate_ids: Array.isArray(postCancelRefreshObj.pending_candidate_ids)
+                  ? postCancelRefreshObj.pending_candidate_ids
+                  : (Array.isArray(postCancelRefreshObj.dirty_candidate_ids) ? postCancelRefreshObj.dirty_candidate_ids : []),
+                refresh_job_ids: Array.isArray(postCancelRefreshObj.refresh_job_ids) ? postCancelRefreshObj.refresh_job_ids : [],
+                source_snapshot_run_id: String(postCancelRefreshObj.source_snapshot_run_id || postCancelRefreshObj.sourceSnapshotRunId || '').trim() || null,
+                source_session_version: postCancelRefreshObj.source_session_version ?? postCancelRefreshObj.sourceSessionVersion ?? null,
+                source_session_signature: String(postCancelRefreshObj.source_session_signature || postCancelRefreshObj.sourceSessionSignature || '').trim() || null,
+                snapshot_rebuild: (postCancelRefreshObj.snapshot_rebuild && typeof postCancelRefreshObj.snapshot_rebuild === 'object' && !Array.isArray(postCancelRefreshObj.snapshot_rebuild))
+                  ? postCancelRefreshObj.snapshot_rebuild
+                  : null,
+                post_cancel_refresh: postCancelRefreshObj
+              };
+              const postCancelPreviewRefreshMessage = 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.';
+
               try {
                 if (st && st.pay && typeof st.pay === 'object') {
                   if (String(st.pay.selectedBatchId || '').trim() === id) st.pay.selectedBatchId = null;
@@ -48236,37 +49416,53 @@ const retryBlockedFundsPipeline = async () => {
                 }
               } catch {}
 
-              if (typeof resetPayPreviewAndDecisions === 'function') {
-                await resetPayPreviewAndDecisions({
-                  mode: 'POST_ACTION_REOPEN',
-                  reason: 'CANCEL_DELETE_DRAFT_SUCCESS',
-                  source_session_id: String(postCancelRefresh.source_session_id || currentWorkbenchSessionId || '').trim() || null,
-                  replacement_session_id: String(postCancelRefresh.replacement_session_id || '').trim() || null,
-                  replacement_session_signature: String(postCancelRefresh.replacement_session_signature || '').trim() || null,
-                  replacement_snapshot_run_id: String(postCancelRefresh.replacement_snapshot_run_id || '').trim() || null,
-                  replacement_session_version: postCancelRefresh.replacement_session_version ?? null,
-                  dirty_candidate_ids: Array.isArray(postCancelRefresh.dirty_candidate_ids) ? postCancelRefresh.dirty_candidate_ids : [],
-                  refresh_job_ids: Array.isArray(postCancelRefresh.refresh_job_ids) ? postCancelRefresh.refresh_job_ids : [],
-                  preview_reopen_required: true
-                });
-              } else {
-                try {
+              try {
+                if (typeof resetPayPreviewAndDecisions === 'function') {
+                  await resetPayPreviewAndDecisions(postCancelResetOptionsForPreview);
+                } else {
                   const pd = String(st?.pay?.draftWizard?.pay_date || '').trim();
                   if (pd && typeof bankingPayPreview === 'function') {
                     await bankingPayPreview({
                       pay_date: pd,
-                      mode: 'POST_ACTION_REOPEN',
+                      mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
                       hard_session_reload: true,
-                      replacement_session_id: String(postCancelRefresh.replacement_session_id || '').trim() || null,
-                      replacement_session_signature: String(postCancelRefresh.replacement_session_signature || '').trim() || null,
-                      replacement_snapshot_run_id: String(postCancelRefresh.replacement_snapshot_run_id || '').trim() || null,
-                      replacement_session_version: postCancelRefresh.replacement_session_version ?? null,
-                      dirty_candidate_ids: Array.isArray(postCancelRefresh.dirty_candidate_ids) ? postCancelRefresh.dirty_candidate_ids : [],
-                      refresh_job_ids: Array.isArray(postCancelRefresh.refresh_job_ids) ? postCancelRefresh.refresh_job_ids : [],
-                      preview_reopen_required: true
+                      force_new_session: true,
+                      discard_source_session: true,
+                      ignore_replacement_session: true,
+                      preview_reopen_required: true,
+                      source_session_id: postCancelResetOptionsForPreview.source_session_id || null,
+                      obsolete_session_ids: Array.isArray(postCancelResetOptionsForPreview.obsolete_session_ids) ? postCancelResetOptionsForPreview.obsolete_session_ids : [],
+                      dirty_candidate_ids: Array.isArray(postCancelResetOptionsForPreview.dirty_candidate_ids) ? postCancelResetOptionsForPreview.dirty_candidate_ids : [],
+                      pending_candidate_ids: Array.isArray(postCancelResetOptionsForPreview.pending_candidate_ids) ? postCancelResetOptionsForPreview.pending_candidate_ids : [],
+                      refresh_job_ids: Array.isArray(postCancelResetOptionsForPreview.refresh_job_ids) ? postCancelResetOptionsForPreview.refresh_job_ids : [],
+                      source_snapshot_run_id: postCancelResetOptionsForPreview.source_snapshot_run_id || null,
+                      source_session_version: postCancelResetOptionsForPreview.source_session_version ?? null,
+                      source_session_signature: postCancelResetOptionsForPreview.source_session_signature || null,
+                      mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS'
                     });
                   }
-                } catch {}
+                }
+              } catch (previewRefreshError) {
+                try {
+                  const friendly = await reportChildFriendlyError(previewRefreshError, 'BANKING_PAY_PREVIEW_FAILED', {
+                    action: 'POST_DRAFT_CANCEL_PREVIEW_REFRESH',
+                    userInitiated: false,
+                    silent: true,
+                    scope: null,
+                    payload: postCancelResetOptionsForPreview,
+                    backendPayload: previewRefreshError?.backendPayload || previewRefreshError?.payload || previewRefreshError?.json || postCancelResetOptionsForPreview,
+                    technicalError: previewRefreshError
+                  });
+                  const friendlyMessage = String(friendly?.user_message || friendly?.message || postCancelPreviewRefreshMessage).trim();
+                  const safeMessage = /no\s+payment\s+batch\s+has\s+been\s+created/i.test(friendlyMessage)
+                    ? postCancelPreviewRefreshMessage
+                    : (friendlyMessage || postCancelPreviewRefreshMessage);
+                  child.error = safeMessage;
+                  try { toast(safeMessage); } catch {}
+                } catch {
+                  child.error = postCancelPreviewRefreshMessage;
+                  try { toast(postCancelPreviewRefreshMessage); } catch {}
+                }
               }
 
               try { stopAutoPoll(); } catch {}
@@ -55272,6 +56468,54 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
   const wiz = stLocal.pay.draftWizard;
 
   const requestedModeRaw = trimStr(options.mode || options.reset_mode || 'FULL_LOCAL_RESET').toUpperCase();
+  const rawMutationContext = trimStr(
+    options.mutation_context ||
+    options.mutationContext ||
+    options.reason ||
+    options.reset_reason ||
+    options.action ||
+    options.resetAction ||
+    ''
+  ).toUpperCase();
+  const rawPayloadEvidence = (() => {
+    const values = [];
+    const append = (value) => {
+      const s = trimStr(value).toUpperCase();
+      if (s) values.push(s);
+    };
+    append(requestedModeRaw);
+    append(rawMutationContext);
+    append(options.reason);
+    append(options.reset_reason);
+    append(options.action);
+    append(options.resetAction);
+    append(options.payload?.reason);
+    append(options.payload?.mutation_context);
+    append(options.payload?.mutationContext);
+    append(options.payload?.status);
+    append(options.payload?.classification);
+    append(options.post_create_refresh?.reason);
+    append(options.postCreateRefresh?.reason);
+    append(options.post_cancel_refresh?.reason);
+    append(options.postCancelRefresh?.reason);
+    append(options.snapshot_rebuild?.reason);
+    append(options.snapshotRebuild?.reason);
+    if (Array.isArray(options.created_pay_batch_ids) && options.created_pay_batch_ids.length > 0) append('CREATED_PAY_BATCH_IDS_PRESENT');
+    if (Array.isArray(options.createdPayBatchIds) && options.createdPayBatchIds.length > 0) append('CREATED_PAY_BATCH_IDS_PRESENT');
+    if (options.selected_pay_batch_id || options.selectedPayBatchId) append('SELECTED_PAY_BATCH_ID_PRESENT');
+    return values.join('|');
+  })();
+  const hasCreateSuccessEvidence = !!(
+    requestedModeRaw === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' ||
+    /(^|\|)(CREATE_DRAFT_SUCCESS|POST_DRAFT_CREATE|DRAFT_CREATED|CREATED_PAY_BATCH_IDS_PRESENT)(\||$)/.test(rawPayloadEvidence)
+  );
+  const hasCancelSuccessEvidence = !!(
+    requestedModeRaw === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN' ||
+    /(^|\|)(CANCEL_DELETE_DRAFT_SUCCESS|POST_DRAFT_CANCEL|DRAFT_CANCELLED|DRAFT_CANCELED|PAY_BATCH_CANCELLED|PAY_BATCH_CANCELED|BATCH_CANCELLED|BATCH_CANCELED)(\||$)/.test(rawPayloadEvidence)
+  );
+  const effectiveRequestedModeRaw = hasCancelSuccessEvidence
+    ? 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN'
+    : (hasCreateSuccessEvidence ? 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' : requestedModeRaw);
   const mode = {
     SOFT: 'SOFT_REFRESH',
     SOFT_REFRESH: 'SOFT_REFRESH',
@@ -55279,6 +56523,8 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     HARD_RELOAD: 'HARD_SESSION_RELOAD',
     HARD_SESSION_RELOAD: 'HARD_SESSION_RELOAD',
     POST_ACTION_REOPEN: 'POST_ACTION_REOPEN',
+    POST_DRAFT_CREATE_DISCARD_AND_REOPEN: 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN',
+    POST_DRAFT_CANCEL_DISCARD_AND_REOPEN: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
     DISCARD: 'DISCARD_SESSION',
     DISCARD_SESSION: 'DISCARD_SESSION',
     FULL: 'FULL_LOCAL_RESET',
@@ -55286,7 +56532,19 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     FULL_LOCAL_RESET: 'FULL_LOCAL_RESET',
     CLEAR: 'CLEAR_ALL_DECISIONS',
     CLEAR_ALL_DECISIONS: 'CLEAR_ALL_DECISIONS'
-  }[requestedModeRaw] || 'FULL_LOCAL_RESET';
+  }[effectiveRequestedModeRaw] || 'FULL_LOCAL_RESET';
+
+  const isPostDraftCreateDiscardAndReopen = mode === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN';
+  const isPostDraftCancelDiscardAndReopen = mode === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN';
+  const isPostMutationDiscardAndReopen = isPostDraftCreateDiscardAndReopen || isPostDraftCancelDiscardAndReopen;
+  const mutationContext = isPostDraftCreateDiscardAndReopen
+    ? 'CREATE_DRAFT_SUCCESS'
+    : (isPostDraftCancelDiscardAndReopen
+        ? 'CANCEL_DELETE_DRAFT_SUCCESS'
+        : rawMutationContext);
+  const postMutationFriendlyContext = isPostDraftCreateDiscardAndReopen
+    ? 'POST_DRAFT_CREATE_PREVIEW_REFRESH'
+    : (isPostDraftCancelDiscardAndReopen ? 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' : mutationContext);
 
   const currentPayDate = trimStr(options.pay_date || options.payDate || wiz.pay_date || stLocal.pay?.pay_date || stLocal.pay?.selectedPayDate || '');
   const currentWeekEndingCutoffDate = trimStr(
@@ -55356,6 +56614,15 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         wiz.preview.error = '';
         wiz.preview.failure = null;
         wiz.preview.componentStateCache = blankComponentStateCache();
+        wiz.preview.pageData = null;
+        wiz.preview.page_data = null;
+        wiz.preview.pages = {};
+        wiz.preview.pageCache = {};
+        wiz.preview.page_cache = {};
+        wiz.preview.previewPageCache = {};
+        wiz.preview.preview_page_cache = {};
+        wiz.preview.status_text = postMutationRefreshingMessage;
+        wiz.preview.preview_source = isPostMutationDiscardAndReopen ? 'post_mutation_rebase' : 'reset';
         wiz.decisions.case_resolution_states = [];
         wiz.decisions.blocked_case_states = [];
         wiz.decisions.safe_case_states = [];
@@ -55379,6 +56646,12 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     decisions.session_id ||
     ''
   );
+  const obsoleteSessionIds = Array.from(new Set([
+    ...(Array.isArray(options.obsolete_session_ids) ? options.obsolete_session_ids : []),
+    ...(Array.isArray(options.obsoleteSessionIds) ? options.obsoleteSessionIds : []),
+    explicitSourceSessionId,
+    isPostMutationDiscardAndReopen ? sessionIdBeforeReset : ''
+  ].map((value) => trimStr(value)).filter(Boolean)));
 
   const markWorkbenchProgressSessionObsolete = (sourceSessionId, replacementId, reasonText) => {
     const sourceId = trimStr(sourceSessionId);
@@ -55444,11 +56717,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     try { appendObsoleteSession(decisions); } catch {}
   };
 
-  if (mode === 'POST_ACTION_REOPEN') {
+  if (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) {
     markWorkbenchProgressSessionObsolete(
       explicitSourceSessionId || sessionIdBeforeReset,
-      replacementSessionId,
-      trimStr(options.reason || options.reset_reason || 'POST_ACTION_REOPEN') || 'POST_ACTION_REOPEN'
+      isPostMutationDiscardAndReopen ? '' : replacementSessionId,
+      trimStr(mutationContext || options.reason || options.reset_reason || mode) || mode
     );
   }
 
@@ -55603,17 +56876,23 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     const contextObj = isPlainObject(context) ? context : {};
     const failure = extractPreviewResetFailure(errorValue, fallbackCode);
     const code = normalizePreviewResetErrorCode(failure.code || fallbackCode) || normalizePreviewResetErrorCode(fallbackCode) || 'BANKING_PAY_PREVIEW_FAILED';
-    const action = trimStr(contextObj.action || 'PREVIEW').toUpperCase();
+    const action = trimStr(contextObj.action || postMutationFriendlyContext || 'PREVIEW').toUpperCase();
+    const isPostCreateRefresh = action === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' || action === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' || action === 'CREATE_DRAFT_SUCCESS';
+    const isPostCancelRefresh = action === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' || action === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN' || action === 'CANCEL_DELETE_DRAFT_SUCCESS';
     const isDiscard = action === 'DISCARD_SESSION' || code === 'BANKING_PAY_WORKBENCH_DISCARD_FAILED';
     const isStaleOrSession = new Set(['BATCH_STALE', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID', 'STALE_SESSION', 'OBSOLETE_SESSION']).has(code);
     const title = isDiscard
       ? 'Payment preview could not be updated'
-      : (isStaleOrSession ? 'Payment preview needs refreshing' : 'Payment preview could not be loaded');
-    const message = isDiscard
-      ? 'CloudTMS could not discard this preview session. Refresh Banking and try again.'
-      : (isStaleOrSession
-          ? 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.'
-          : 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.');
+      : (isStaleOrSession ? 'Payment preview needs refreshing' : 'Payment preview could not be refreshed');
+    const message = isPostCreateRefresh
+      ? 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.'
+      : (isPostCancelRefresh
+          ? 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.'
+          : (isDiscard
+              ? 'CloudTMS could not discard this preview session. Refresh Banking and try again.'
+              : (isStaleOrSession
+                  ? 'Payment details have changed. Refresh Banking Pay preview, review the latest details, then try again.'
+                  : 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.')));
     const backendPayload = isPlainObject(contextObj.backendPayload)
       ? contextObj.backendPayload
       : (isPlainObject(errorValue?.payload)
@@ -55623,7 +56902,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
               : (isPlainObject(failure.payload) ? failure.payload : null)));
     const normalized = (typeof bankingNormalizeApiError === 'function')
       ? bankingNormalizeApiError(errorValue, backendPayload || failure.payload || null, {
-          action: isDiscard ? 'DISCARD_SESSION' : 'PREVIEW',
+          action: isDiscard ? 'DISCARD_SESSION' : (action || 'PREVIEW'),
           fallbackCode: code,
           fallbackTitle: title,
           fallbackMessage: message,
@@ -55663,10 +56942,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
 
   const setPreviewResetFriendlyError = (errorValue, fallbackCode = 'BANKING_PAY_PREVIEW_FAILED', context = {}) => {
     const friendly = normalisePreviewResetFriendlyError(errorValue, fallbackCode, context);
-    const message = trimStr(friendly.user_message || friendly.message || friendly.error || 'CloudTMS could not calculate the payment preview. Refresh Banking and try again. No payment batch has been created.');
+    const message = trimStr(friendly.user_message || friendly.message || friendly.error || 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.');
     const code = trimStr(friendly.error_code || friendly.code || fallbackCode) || fallbackCode;
     try {
       wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
+      wiz.preview.loading = false;
       wiz.preview.error = message;
       wiz.preview.friendlyError = friendly;
       wiz.preview.failure = {
@@ -55677,9 +56957,144 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           message
         }
       };
+      wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
+      if (isPostMutationDiscardAndReopen) {
+        wiz.workbench.create_draft_refresh_pending = false;
+        wiz.workbench.preview_reopen_required = true;
+        wiz.workbench.__post_mutation_preview_refresh_failed = true;
+        wiz.workbench.__post_mutation_preview_refresh_failed_at_utc = new Date().toISOString();
+        wiz.workbench.__post_mutation_preview_refresh_error_code = code;
+        wiz.workbench.__post_mutation_preview_refresh_error_message = message;
+      }
     } catch {}
     return friendly;
   };
+
+  const postMutationRefreshingMessage = isPostDraftCreateDiscardAndReopen
+    ? 'Payment draft was created. CloudTMS is refreshing the payment preview.'
+    : (isPostDraftCancelDiscardAndReopen
+        ? 'Draft was cancelled. CloudTMS is refreshing the payment preview.'
+        : 'CloudTMS is refreshing the payment preview.');
+
+  const isTerminalPreviewResetJobStatus = (status) => {
+    const s = trimStr(status).toUpperCase();
+    if (!s) return false;
+    return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
+  };
+
+  const hasActivePreviewResetPendingWork = () => {
+    try {
+      const candidateIds = [
+        ...(Array.isArray(wiz?.workbench?.pending_candidate_ids) ? wiz.workbench.pending_candidate_ids : []),
+        ...(Array.isArray(decisions?.pending_candidate_ids) ? decisions.pending_candidate_ids : []),
+        ...(Array.isArray(wiz?.workbench?.dirty_candidate_ids) ? wiz.workbench.dirty_candidate_ids : []),
+        ...(Array.isArray(decisions?.dirty_candidate_ids) ? decisions.dirty_candidate_ids : [])
+      ].map((value) => trimStr(value)).filter(Boolean);
+      if (candidateIds.length > 0) return true;
+
+      const jobs = [
+        ...(Array.isArray(wiz?.workbench?.pending_candidate_jobs) ? wiz.workbench.pending_candidate_jobs : []),
+        ...(Array.isArray(decisions?.pending_candidate_jobs) ? decisions.pending_candidate_jobs : [])
+      ].filter((job) => isPlainObject(job));
+      return jobs.some((job) => {
+        const jobId = trimStr(job.pending_job_id || job.pendingJobId || job.job_id || job.jobId || job.id || '');
+        const status = trimStr(job.latest_job_status || job.latestJobStatus || job.job_status || job.jobStatus || job.status || job.candidate_status || job.candidateStatus || '');
+        return !!jobId && !isTerminalPreviewResetJobStatus(status);
+      });
+    } catch {
+      return false;
+    }
+  };
+
+  const readPreviewResetSessionId = () => {
+    try {
+      const previewData = isPlainObject(wiz?.preview?.data) ? wiz.preview.data : {};
+      const previewSession = isPlainObject(previewData.session) ? previewData.session : {};
+      const previewPayload = isPlainObject(previewData.preview) ? previewData.preview : {};
+      return trimStr(
+        wiz?.workbench?.session_id ||
+        decisions?.session_id ||
+        previewData.session_id ||
+        previewData.sessionId ||
+        previewSession.session_id ||
+        previewSession.sessionId ||
+        previewPayload.session_id ||
+        previewPayload.sessionId ||
+        ''
+      );
+    } catch {
+      return '';
+    }
+  };
+
+  const isPreviewResetSessionObsolete = (sessionIdLike) => {
+    const sessionIdText = trimStr(sessionIdLike);
+    if (!sessionIdText) return false;
+    if (obsoleteSessionIds.includes(sessionIdText)) return true;
+    if (explicitSourceSessionId && sessionIdText === explicitSourceSessionId) return true;
+    if (sessionIdBeforeReset && isPostMutationDiscardAndReopen && sessionIdText === sessionIdBeforeReset) return true;
+    try {
+      const workbenchObsolete = Array.isArray(wiz?.workbench?.__obsolete_workbench_session_ids) ? wiz.workbench.__obsolete_workbench_session_ids : [];
+      const progressObsolete = Array.isArray(wiz?.workbench?.__obsolete_progress_session_ids) ? wiz.workbench.__obsolete_progress_session_ids : [];
+      return [...workbenchObsolete, ...progressObsolete].map((value) => trimStr(value)).filter(Boolean).includes(sessionIdText);
+    } catch {
+      return false;
+    }
+  };
+
+  const inferPreviewResetOutcome = (fallbackOutcome = 'pending') => {
+    try {
+      const previewState = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
+      const workbenchState = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
+      const sessionId = readPreviewResetSessionId();
+      const hasPreviewData = isPlainObject(previewState.data);
+      const hasError = !!trimStr(previewState.error || previewState.failure?.error?.message || previewState.friendlyError?.message || previewState.friendlyError?.user_message || '');
+      if (hasError) return 'error';
+      if (isPostMutationDiscardAndReopen && sessionId && isPreviewResetSessionObsolete(sessionId)) return 'rebase_required';
+      if (
+        previewState.loading === true ||
+        workbenchState.create_draft_refresh_pending === true ||
+        workbenchState.preview_reopen_required === true ||
+        hasActivePreviewResetPendingWork()
+      ) {
+        return 'pending';
+      }
+      if (hasPreviewData) {
+        if (!isPostMutationDiscardAndReopen) return 'ready';
+        return sessionId && !isPreviewResetSessionObsolete(sessionId) ? 'ready' : 'rebase_required';
+      }
+      return trimStr(fallbackOutcome || 'pending').toLowerCase() || 'pending';
+    } catch {
+      return trimStr(fallbackOutcome || 'pending').toLowerCase() || 'pending';
+    }
+  };
+
+  const buildPreviewResetOutcome = (fallbackOutcome = 'pending', extra = {}) => {
+    const extraObj = isPlainObject(extra) ? extra : {};
+    const sessionId = trimStr(extraObj.session_id || extraObj.sessionId || readPreviewResetSessionId() || '');
+    const outcome = trimStr(extraObj.outcome || extraObj.refresh_outcome || inferPreviewResetOutcome(fallbackOutcome)).toLowerCase() || 'pending';
+    const previewSource = trimStr(extraObj.preview_source || extraObj.previewSource || (isPostMutationDiscardAndReopen ? 'post_mutation_rebase' : mode.toLowerCase())) || 'resetPayPreviewAndDecisions';
+    const decisionSnapshot = isPlainObject(decisions) ? (cloneJson(decisions) || decisions) : {};
+    return {
+      ...decisionSnapshot,
+      outcome,
+      refresh_outcome: outcome,
+      status: outcome,
+      session_id: sessionId || null,
+      mutation_context: mutationContext || null,
+      preview_source: previewSource,
+      source_session_id: explicitSourceSessionId || sessionIdBeforeReset || null,
+      obsolete_session_ids: [...obsoleteSessionIds],
+      pending_candidate_ids: [...pendingCandidateIds],
+      dirty_candidate_ids: [...dirtyCandidateIds],
+      refresh_job_ids: [...refreshJobIds],
+      preview_reopen_required: !!(wiz?.workbench?.preview_reopen_required === true),
+      preview_refresh_pending: outcome === 'pending' || outcome === 'rebase_required',
+      preview_refresh_failed: outcome === 'error',
+      decisions: decisionSnapshot
+    };
+  };
+
 
   if (mode === 'CLEAR_ALL_DECISIONS') {
     wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {
@@ -55743,7 +57158,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           }
         } catch {}
         wiz.preview.loading = false;
-        return decisions;
+        return buildPreviewResetOutcome();
       } catch (e) {
         setPreviewResetFriendlyError(e, 'BANKING_PAY_PREVIEW_FAILED', {
           action: 'PREVIEW',
@@ -55751,13 +57166,13 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
           previewUnavailable: true
         });
         wiz.preview.loading = false;
-        return decisions;
+        return buildPreviewResetOutcome();
       }
     }
 
     if (!currentPayDate) {
       wiz.preview.loading = false;
-      return decisions;
+      return buildPreviewResetOutcome();
     }
 
     let fallbackRefreshSucceeded = false;
@@ -55780,16 +57195,25 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     }
     markExplicitNoPreviewSelection({ refreshPending: !fallbackRefreshSucceeded });
     wiz.preview.loading = false;
-    return decisions;
+    return buildPreviewResetOutcome();
   }
     wiz.preview = {
     data: null,
-    loading: (mode === 'POST_ACTION_REOPEN'),
+    loading: (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen),
     error: '',
     readiness: null,
     candidateDebtInfo: {},
     failure: null,
     componentStateCache: blankComponentStateCache(),
+    pageData: null,
+    page_data: null,
+    pages: {},
+    pageCache: {},
+    page_cache: {},
+    previewPageCache: {},
+    preview_page_cache: {},
+    status_text: (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) ? postMutationRefreshingMessage : '',
+    preview_source: isPostMutationDiscardAndReopen ? 'post_mutation_rebase' : mode.toLowerCase(),
     context_signature: nextSessionSignature || trimStr(decisions.context_signature || ''),
     preview_epoch: Number.isFinite(Number(decisions.preview_epoch)) ? Number(decisions.preview_epoch) + 1 : 1
   };
@@ -55800,7 +57224,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
   wiz.workbench.server_selected_preview_row_ids = [];
   wiz.workbench.server_selected_preview_row_ids_provided = false;
 
-  if (mode === 'FULL_LOCAL_RESET' || mode === 'DISCARD_SESSION' || mode === 'HARD_SESSION_RELOAD' || mode === 'POST_ACTION_REOPEN') {
+  if (mode === 'FULL_LOCAL_RESET' || mode === 'DISCARD_SESSION' || mode === 'HARD_SESSION_RELOAD' || mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) {
     wiz.workbench.session_id = null;
     wiz.workbench.snapshot_run_id = null;
     wiz.workbench.session_version = null;
@@ -55814,6 +57238,11 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     wiz.workbench.pending_candidate_jobs = [];
     wiz.workbench.case_resolution_states = [];
     wiz.workbench.canonical_preview_lines = [];
+    wiz.workbench.preview_rows = [];
+    wiz.workbench.ready_preview_lines = [];
+    wiz.workbench.preview_pages = {};
+    wiz.workbench.preview_page_cache = {};
+    wiz.workbench.pageCache = {};
     wiz.workbench.payees = [];
     wiz.workbench.summary = {};
   }
@@ -55844,20 +57273,55 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       : Number(wiz.workbench.__workbench_session_generation || 1);
   }
 
+  if (isPostMutationDiscardAndReopen) {
+    wiz.workbench.session_id = null;
+    wiz.workbench.snapshot_run_id = null;
+    wiz.workbench.session_version = null;
+    wiz.workbench.session_signature = '';
+    wiz.workbench.pending_candidate_ids = [...pendingCandidateIds];
+    wiz.workbench.failed_candidate_ids = [];
+    wiz.workbench.pending_candidate_rows = [];
+    wiz.workbench.failed_candidate_rows = [];
+    wiz.workbench.dirty_candidate_ids = Array.from(new Set([...dirtyCandidateIds, ...pendingCandidateIds]));
+    wiz.workbench.pending_candidate_jobs = refreshJobIds.map((jobId, index) => ({
+      pending_job_id: jobId,
+      job_id: jobId,
+      candidate_id: pendingCandidateIds[index] || dirtyCandidateIds[index] || null,
+      latest_job_type: 'SESSION_CANDIDATE_RECOMPUTE',
+      status: 'QUEUED'
+    }));
+    wiz.workbench.__active_progress_session_id = null;
+    wiz.workbench.__active_workbench_session_id = null;
+    wiz.workbench.__source_session_id_discarded = explicitSourceSessionId || sessionIdBeforeReset || null;
+    wiz.workbench.__obsolete_progress_session_ids = obsoleteSessionIds;
+    wiz.workbench.__obsolete_workbench_session_ids = obsoleteSessionIds;
+    wiz.workbench.__post_mutation_discard_reopen_at_utc = new Date().toISOString();
+    wiz.workbench.__post_mutation_context = mutationContext || mode;
+    wiz.workbench.__progress_poll_generation = Number.isFinite(Number(wiz.workbench.__progress_poll_generation))
+      ? Number(wiz.workbench.__progress_poll_generation)
+      : Number(wiz.workbench.__workbench_session_generation || 1);
+  }
+
   decisions.session_id = wiz.workbench.session_id || null;
   decisions.snapshot_run_id = wiz.workbench.snapshot_run_id || null;
   decisions.session_version = wiz.workbench.session_version ?? null;
   decisions.session_signature = nextSessionSignature || wiz.workbench.session_signature || decisions.session_signature || '';
   decisions.server_selected_preview_row_ids = [];
   decisions.server_selected_preview_row_ids_provided = false;
-  decisions.dirty_candidate_ids = (mode === 'POST_ACTION_REOPEN')
+  decisions.dirty_candidate_ids = (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen)
     ? Array.from(new Set([...dirtyCandidateIds, ...pendingCandidateIds]))
     : [];
-  decisions.pending_candidate_ids = (mode === 'POST_ACTION_REOPEN') ? [...pendingCandidateIds] : [];
-  decisions.pending_candidate_jobs = (mode === 'POST_ACTION_REOPEN')
+  decisions.pending_candidate_ids = (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) ? [...pendingCandidateIds] : [];
+  decisions.pending_candidate_jobs = (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen)
     ? (cloneJson(wiz.workbench.pending_candidate_jobs) || [])
     : [];
   decisions.case_resolution_states = (mode === 'SOFT_REFRESH') ? decisions.case_resolution_states : [];
+  decisions.canonical_preview_lines = [];
+  decisions.preview_rows = [];
+  decisions.ready_preview_lines = [];
+  decisions.preview_pages = {};
+  decisions.preview_page_cache = {};
+  decisions.pageCache = {};
   decisions.blocked_case_states = (mode === 'SOFT_REFRESH') ? decisions.blocked_case_states : [];
   decisions.safe_case_states = (mode === 'SOFT_REFRESH') ? decisions.safe_case_states : [];
   decisions.reusable_component_resolutions = (mode === 'SOFT_REFRESH') ? decisions.reusable_component_resolutions : {};
@@ -55896,18 +57360,47 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         });
       }
     }
-    return decisions;
+    return buildPreviewResetOutcome();
+  }
+
+  if (isPostMutationDiscardAndReopen && sessionIdBeforeReset && typeof bankingPayWorkbenchSessionDiscard === 'function') {
+    try {
+      await bankingPayWorkbenchSessionDiscard(sessionIdBeforeReset, {
+        reason: mutationContext || mode,
+        source: 'resetPayPreviewAndDecisions',
+        force_new_session: true,
+        discard_source_session: true
+      });
+    } catch (e) {
+      const discardCode = trimStr(e?.error_code || e?.code || e?.payload?.error_code || e?.json?.error_code || '').toUpperCase();
+      const discardMessage = trimStr(e?.user_message || e?.message || e?.error || '');
+      const acceptableDiscardFailure = (
+        discardCode === 'OBSOLETE_SESSION' ||
+        discardCode === 'STALE_SESSION' ||
+        discardCode === 'WORKBENCH_SESSION_NOT_FOUND' ||
+        discardCode === 'WORKBENCH_SESSION_NOT_OPEN' ||
+        discardCode === 'WORKBENCH_SESSION_DISCARDED' ||
+        /already\s+discarded|not\s+open|not\s+found|stale|obsolete/i.test(discardMessage)
+      );
+      if (!acceptableDiscardFailure) {
+        setPreviewResetFriendlyError(e, 'BANKING_PAY_WORKBENCH_DISCARD_FAILED', {
+          action: postMutationFriendlyContext || 'DISCARD_SESSION',
+          stage: 'post_mutation_discard_source_session',
+          previewUnavailable: false
+        });
+      }
+    }
   }
 
   if (mode === 'FULL_LOCAL_RESET') {
-    return decisions;
+    return buildPreviewResetOutcome();
   }
 
   if (!currentPayDate) {
-    return decisions;
+    return buildPreviewResetOutcome();
   }
 
-  if (mode === 'POST_ACTION_REOPEN') {
+  if (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) {
     try {
       if (typeof recomputePayWizardLiveTruth === 'function') {
         recomputePayWizardLiveTruth();
@@ -55926,28 +57419,42 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         pay_date: currentPayDate,
         week_ending_cutoff_date: currentWeekEndingCutoffDate,
         mode: mode,
-        hard_session_reload: mode === 'HARD_SESSION_RELOAD',
+        hard_session_reload: mode === 'HARD_SESSION_RELOAD' || isPostMutationDiscardAndReopen,
         soft_refresh: mode === 'SOFT_REFRESH',
-        replacement_session_id: mode === 'POST_ACTION_REOPEN' ? (replacementSessionId || null) : null,
-        replacement_session_signature: mode === 'POST_ACTION_REOPEN' ? (replacementSessionSignature || null) : null,
-        replacement_snapshot_run_id: mode === 'POST_ACTION_REOPEN' ? (replacementSnapshotRunId || null) : null,
-        replacement_session_version: mode === 'POST_ACTION_REOPEN' ? replacementSessionVersion : null,
-        dirty_candidate_ids: mode === 'POST_ACTION_REOPEN' ? [...dirtyCandidateIds] : [],
-        pending_candidate_ids: mode === 'POST_ACTION_REOPEN' ? [...pendingCandidateIds] : [],
-        refresh_job_ids: mode === 'POST_ACTION_REOPEN' ? [...refreshJobIds] : [],
-        preview_reopen_required: mode === 'POST_ACTION_REOPEN'
+        replacement_session_id: (mode === 'POST_ACTION_REOPEN' && !isPostMutationDiscardAndReopen) ? (replacementSessionId || null) : null,
+        replacement_session_signature: (mode === 'POST_ACTION_REOPEN' && !isPostMutationDiscardAndReopen) ? (replacementSessionSignature || null) : null,
+        replacement_snapshot_run_id: (mode === 'POST_ACTION_REOPEN' && !isPostMutationDiscardAndReopen) ? (replacementSnapshotRunId || null) : null,
+        replacement_session_version: (mode === 'POST_ACTION_REOPEN' && !isPostMutationDiscardAndReopen) ? replacementSessionVersion : null,
+        dirty_candidate_ids: (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) ? [...dirtyCandidateIds] : [],
+        pending_candidate_ids: (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) ? [...pendingCandidateIds] : [],
+        refresh_job_ids: (mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen) ? [...refreshJobIds] : [],
+        preview_reopen_required: mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen,
+        force_new_session: isPostMutationDiscardAndReopen || options.force_new_session === true || options.forceNewSession === true,
+        discard_source_session: isPostMutationDiscardAndReopen || options.discard_source_session === true || options.discardSourceSession === true,
+        ignore_replacement_session: isPostMutationDiscardAndReopen || options.ignore_replacement_session === true || options.ignoreReplacementSession === true,
+        source_session_id: explicitSourceSessionId || sessionIdBeforeReset || null,
+        source_snapshot_run_id: trimStr(options.source_snapshot_run_id || options.sourceSnapshotRunId || ''),
+        source_session_version: options.source_session_version ?? options.sourceSessionVersion ?? null,
+        source_session_signature: trimStr(options.source_session_signature || options.sourceSessionSignature || ''),
+        obsolete_session_ids: [...obsoleteSessionIds],
+        mutation_context: mutationContext || postMutationFriendlyContext || null,
+        created_pay_batch_ids: uniqTrimmed(options.created_pay_batch_ids || options.createdPayBatchIds),
+        selected_pay_batch_id: trimStr(options.selected_pay_batch_id || options.selectedPayBatchId || '') || null,
+        selected_preview_row_ids: uniqTrimmed(options.selected_preview_row_ids || options.selectedPreviewRowIds)
       });
     }
   } catch (previewErr) {
     setPreviewResetFriendlyError(previewErr, 'BANKING_PAY_PREVIEW_FAILED', {
-      action: 'PREVIEW',
+      action: postMutationFriendlyContext || 'PREVIEW',
       stage: 'final_preview_reload',
       previewUnavailable: false
     });
   }
 
-  return decisions;
+  return buildPreviewResetOutcome();
 };
+
+
 
 
 
@@ -59082,7 +60589,63 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           mode,
           st,
           deepClone: deep,
-          onSuccess: async ({ postCancelRefresh, currentWorkbenchSessionId }) => {
+               onSuccess: async ({ responsePayload, postCancelRefresh, postCancelResetOptions, previewResetOptions, currentWorkbenchSessionId }) => {
+          const postCancelRefreshObj = (postCancelRefresh && typeof postCancelRefresh === 'object' && !Array.isArray(postCancelRefresh))
+            ? postCancelRefresh
+            : {};
+          const canonicalPostCancelResetOptions =
+            (postCancelResetOptions && typeof postCancelResetOptions === 'object' && !Array.isArray(postCancelResetOptions))
+              ? postCancelResetOptions
+              : ((previewResetOptions && typeof previewResetOptions === 'object' && !Array.isArray(previewResetOptions))
+                  ? previewResetOptions
+                  : ((responsePayload?.post_cancel_reset_options && typeof responsePayload.post_cancel_reset_options === 'object' && !Array.isArray(responsePayload.post_cancel_reset_options))
+                      ? responsePayload.post_cancel_reset_options
+                      : ((responsePayload?.preview_reset_options && typeof responsePayload.preview_reset_options === 'object' && !Array.isArray(responsePayload.preview_reset_options))
+                          ? responsePayload.preview_reset_options
+                          : null)));
+          const sourceSessionId = String(
+            canonicalPostCancelResetOptions?.source_session_id ||
+            canonicalPostCancelResetOptions?.sourceSessionId ||
+            postCancelRefreshObj.source_session_id ||
+            postCancelRefreshObj.sourceSessionId ||
+            currentWorkbenchSessionId ||
+            ''
+          ).trim();
+          const canonicalObsoleteSessionIds = Array.isArray(canonicalPostCancelResetOptions?.obsolete_session_ids)
+            ? canonicalPostCancelResetOptions.obsolete_session_ids
+            : (Array.isArray(canonicalPostCancelResetOptions?.obsoleteSessionIds)
+                ? canonicalPostCancelResetOptions.obsoleteSessionIds
+                : (sourceSessionId ? [sourceSessionId] : []));
+          const postCancelPreviewRefreshOptions = {
+            ...(canonicalPostCancelResetOptions || {}),
+            mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+            reason: 'CANCEL_DELETE_DRAFT_SUCCESS',
+            mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+            force_new_session: true,
+            discard_source_session: true,
+            ignore_replacement_session: true,
+            preview_reopen_required: true,
+            source_session_id: sourceSessionId || null,
+            obsolete_session_ids: canonicalObsoleteSessionIds,
+            dirty_candidate_ids: Array.isArray(canonicalPostCancelResetOptions?.dirty_candidate_ids)
+              ? canonicalPostCancelResetOptions.dirty_candidate_ids
+              : (Array.isArray(postCancelRefreshObj.dirty_candidate_ids) ? postCancelRefreshObj.dirty_candidate_ids : []),
+            pending_candidate_ids: Array.isArray(canonicalPostCancelResetOptions?.pending_candidate_ids)
+              ? canonicalPostCancelResetOptions.pending_candidate_ids
+              : (Array.isArray(postCancelRefreshObj.pending_candidate_ids)
+                  ? postCancelRefreshObj.pending_candidate_ids
+                  : (Array.isArray(postCancelRefreshObj.dirty_candidate_ids) ? postCancelRefreshObj.dirty_candidate_ids : [])),
+            refresh_job_ids: Array.isArray(canonicalPostCancelResetOptions?.refresh_job_ids)
+              ? canonicalPostCancelResetOptions.refresh_job_ids
+              : (Array.isArray(postCancelRefreshObj.refresh_job_ids) ? postCancelRefreshObj.refresh_job_ids : []),
+            source_snapshot_run_id: canonicalPostCancelResetOptions?.source_snapshot_run_id || postCancelRefreshObj.source_snapshot_run_id || postCancelRefreshObj.sourceSnapshotRunId || null,
+            source_session_version: canonicalPostCancelResetOptions?.source_session_version ?? postCancelRefreshObj.source_session_version ?? postCancelRefreshObj.sourceSessionVersion ?? null,
+            source_session_signature: canonicalPostCancelResetOptions?.source_session_signature || postCancelRefreshObj.source_session_signature || postCancelRefreshObj.sourceSessionSignature || null,
+            snapshot_rebuild: canonicalPostCancelResetOptions?.snapshot_rebuild || postCancelRefreshObj.snapshot_rebuild || null,
+            post_cancel_refresh: canonicalPostCancelResetOptions?.post_cancel_refresh || postCancelRefreshObj
+          };
+          const postCancelPreviewRefreshMessage = 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.';
+
           try {
             if (String(st.pay?.selectedBatchId || '').trim() === id) {
               st.pay.selectedBatchId = null;
@@ -59099,22 +60662,59 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
             }
           } catch {}
 
-          if (typeof resetPayPreviewAndDecisions === 'function') {
-            await resetPayPreviewAndDecisions({
-              mode: 'POST_ACTION_REOPEN',
-              reason: 'CANCEL_DELETE_DRAFT_SUCCESS',
-              source_session_id: String(postCancelRefresh.source_session_id || currentWorkbenchSessionId || '').trim() || null,
-              replacement_session_id: String(postCancelRefresh.replacement_session_id || '').trim() || null,
-              replacement_session_signature: String(postCancelRefresh.replacement_session_signature || '').trim() || null,
-              replacement_snapshot_run_id: String(postCancelRefresh.replacement_snapshot_run_id || '').trim() || null,
-              replacement_session_version: postCancelRefresh.replacement_session_version ?? null,
-              dirty_candidate_ids: Array.isArray(postCancelRefresh.dirty_candidate_ids) ? postCancelRefresh.dirty_candidate_ids : [],
-              refresh_job_ids: Array.isArray(postCancelRefresh.refresh_job_ids) ? postCancelRefresh.refresh_job_ids : [],
-              preview_reopen_required: true
-            });
+          try {
+            if (typeof resetPayPreviewAndDecisions === 'function') {
+              await resetPayPreviewAndDecisions(postCancelPreviewRefreshOptions);
+              await safeRerender(null);
+            } else {
+              const pd = String(st.pay?.draftWizard?.pay_date || st.pay?.pay_date || st.pay?.selectedPayDate || '').trim();
+              if (pd && typeof bankingPayPreview === 'function') {
+                await bankingPayPreview({
+                  pay_date: pd,
+                  mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+                  hard_session_reload: true,
+                  force_new_session: true,
+                  discard_source_session: true,
+                  ignore_replacement_session: true,
+                  preview_reopen_required: true,
+                  source_session_id: postCancelPreviewRefreshOptions.source_session_id || null,
+                  obsolete_session_ids: Array.isArray(postCancelPreviewRefreshOptions.obsolete_session_ids) ? postCancelPreviewRefreshOptions.obsolete_session_ids : [],
+                  dirty_candidate_ids: Array.isArray(postCancelPreviewRefreshOptions.dirty_candidate_ids) ? postCancelPreviewRefreshOptions.dirty_candidate_ids : [],
+                  pending_candidate_ids: Array.isArray(postCancelPreviewRefreshOptions.pending_candidate_ids) ? postCancelPreviewRefreshOptions.pending_candidate_ids : [],
+                  refresh_job_ids: Array.isArray(postCancelPreviewRefreshOptions.refresh_job_ids) ? postCancelPreviewRefreshOptions.refresh_job_ids : [],
+                  source_snapshot_run_id: postCancelPreviewRefreshOptions.source_snapshot_run_id || null,
+                  source_session_version: postCancelPreviewRefreshOptions.source_session_version ?? null,
+                  source_session_signature: postCancelPreviewRefreshOptions.source_session_signature || null,
+                  mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS'
+                });
+                await safeRerender(null);
+              } else {
+                await refreshPayWorkbench({ reason: 'CANCEL_DELETE_DRAFT_SUCCESS', mode: 'HARD' });
+              }
+            }
+          } catch (previewRefreshError) {
+            try {
+              const friendly = (typeof bankingNormalizeApiError === 'function')
+                ? bankingNormalizeApiError(previewRefreshError, previewRefreshError?.payload || previewRefreshError?.json || postCancelPreviewRefreshOptions, {
+                    action: 'POST_DRAFT_CANCEL_PREVIEW_REFRESH',
+                    mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+                    userInitiated: false,
+                    silent: true,
+                    background: true,
+                    showModal: false,
+                    payload: postCancelPreviewRefreshOptions,
+                    backendPayload: previewRefreshError?.backendPayload || previewRefreshError?.payload || previewRefreshError?.json || postCancelPreviewRefreshOptions
+                  })
+                : null;
+              const friendlyMessage = String(friendly?.user_message || friendly?.message || postCancelPreviewRefreshMessage).trim();
+              const safeMessage = /no\s+payment\s+batch\s+has\s+been\s+created/i.test(friendlyMessage)
+                ? postCancelPreviewRefreshMessage
+                : (friendlyMessage || postCancelPreviewRefreshMessage);
+              toast(safeMessage);
+            } catch {
+              toast(postCancelPreviewRefreshMessage);
+            }
             await safeRerender(null);
-          } else {
-            await refreshPayWorkbench({ reason: 'CANCEL_DELETE_DRAFT_SUCCESS', mode: 'HARD' });
           }
           }
         });
@@ -80002,12 +81602,25 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
           : ((row?.last_error_json && typeof row.last_error_json === 'object' && !Array.isArray(row.last_error_json)) ? cloneJson(row.last_error_json) : null)
       };
     }).filter((row) => row.candidate_id && row.pending_job_id);
+    const isTerminalJobStatus = (status) => {
+      const s = trimStr(status).toUpperCase();
+      if (!s) return false;
+      return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
+    };
+    const hasActivePendingJobEvidence = pendingJobIds.length > 0 || pendingCandidateJobs.some((job) => {
+      const jobId = trimStr(job?.pending_job_id || job?.job_id || '');
+      const status = trimStr(job?.latest_job_status || job?.job_status || job?.status || job?.candidate_status || '');
+      return !!jobId && !isTerminalJobStatus(status);
+    });
     const total = toNumber(progress.total_candidates ?? progress.total_candidate_count ?? progress.total_count ?? progress.total ?? progress.candidate_count ?? obj.total_candidates ?? obj.candidate_count);
     const failed = toNumber(progress.failed_candidates ?? progress.failed_candidate_count ?? progress.failed_count ?? progress.failed ?? obj.failed_candidates ?? obj.failed_count ?? failedCandidateIds.length);
     const completed = toNumber(progress.completed_candidates ?? progress.ready_candidates ?? progress.ready_candidate_count ?? progress.completed_count ?? progress.ready_count ?? progress.completed ?? obj.completed_candidates ?? obj.ready_candidates);
     const pendingFromPayload = progress.pending_candidates ?? progress.pending_candidate_count ?? progress.pending_count ?? progress.pending ?? obj.pending_candidates ?? obj.pending_count;
     const pending = Number.isFinite(Number(pendingFromPayload)) ? toNumber(pendingFromPayload) : Math.max(0, total - completed - failed, pendingCandidateIds.length);
-    const readyFlag = progress.ready_flag === true || progress.ready === true || obj.ready_flag === true || obj.ready === true || (total > 0 && pending <= 0 && failed <= 0);
+    const explicitReadyEmptyFlag = progress.ready_empty === true || progress.readyEmpty === true || obj.ready_empty === true || obj.readyEmpty === true;
+    const explicitReadyFlag = explicitReadyEmptyFlag || progress.ready_flag === true || progress.ready === true || obj.ready_flag === true || obj.ready === true;
+    const explicitNotReadyFlag = !explicitReadyEmptyFlag && (progress.ready_flag === false || progress.ready === false || obj.ready_flag === false || obj.ready === false);
+    const readyFlag = explicitReadyEmptyFlag || explicitReadyFlag || (!explicitNotReadyFlag && total > 0 && pending <= 0 && failed <= 0 && !hasActivePendingJobEvidence);
     const phase = trimStr(progress.phase || progress.current_phase || progress.status_phase || obj.phase || obj.current_phase || (readyFlag ? 'READY' : 'REFRESHING'));
     const statusText = trimStr(progress.status_text || progress.message || progress.statusText || obj.status_text || obj.message || (readyFlag ? 'Preview ready' : 'Preparing payment preview candidates.'));
     return {
@@ -80029,6 +81642,7 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
       pending_candidate_jobs: pendingCandidateJobs,
       ready_flag: !!readyFlag,
       ready: !!readyFlag,
+      ready_empty: explicitReadyEmptyFlag || (!!readyFlag && total <= 0),
       phase,
       status_text: statusText,
       progress: cloneJson(progress) || progress,
@@ -80041,17 +81655,54 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
     const sessionObj = isPlainObject(payloadObj.session) ? payloadObj.session : {};
     const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : null;
     const bootstrapOnly = payloadObj.bootstrap_only === true || payloadObj.preview_bootstrap === true || payloadObj.large_preview === true || previewObj?.bootstrap_only === true;
-    const readyFlag = payloadObj.ready === true || payloadObj.ready_flag === true || progress.ready_flag === true;
+    const readyEmptyFlag = payloadObj.ready_empty === true || payloadObj.readyEmpty === true || progress.ready_empty === true;
+    const readyFlag = readyEmptyFlag || payloadObj.ready === true || payloadObj.ready_flag === true || progress.ready_flag === true || progress.ready === true;
     return {
       ok: payloadObj.ok !== false,
       ...(cloneJson(payloadObj) || {}),
+      mutation_context: trimStr(payloadObj.mutation_context || payloadObj.mutationContext || payload?.mutation_context || payload?.mutationContext || '') || null,
+      source_session_id: trimStr(payloadObj.source_session_id || payloadObj.sourceSessionId || payload?.source_session_id || payload?.sourceSessionId || '') || null,
+      obsolete_session_ids: Array.from(new Set([
+        ...(Array.isArray(payloadObj.obsolete_session_ids) ? payloadObj.obsolete_session_ids : []),
+        ...(Array.isArray(payloadObj.obsoleteSessionIds) ? payloadObj.obsoleteSessionIds : []),
+        ...(Array.isArray(payload?.obsolete_session_ids) ? payload.obsolete_session_ids : []),
+        ...(Array.isArray(payload?.obsoleteSessionIds) ? payload.obsoleteSessionIds : [])
+      ].map((value) => trimStr(value)).filter(Boolean))),
+      created_pay_batch_ids: Array.from(new Set([
+        ...(Array.isArray(payloadObj.created_pay_batch_ids) ? payloadObj.created_pay_batch_ids : []),
+        ...(Array.isArray(payloadObj.createdPayBatchIds) ? payloadObj.createdPayBatchIds : []),
+        ...(Array.isArray(payload?.created_pay_batch_ids) ? payload.created_pay_batch_ids : []),
+        ...(Array.isArray(payload?.createdPayBatchIds) ? payload.createdPayBatchIds : [])
+      ].map((value) => trimStr(value)).filter(Boolean))),
+      dirty_candidate_ids: Array.from(new Set([
+        ...(Array.isArray(payloadObj.dirty_candidate_ids) ? payloadObj.dirty_candidate_ids : []),
+        ...(Array.isArray(payloadObj.dirtyCandidateIds) ? payloadObj.dirtyCandidateIds : []),
+        ...(Array.isArray(payload?.dirty_candidate_ids) ? payload.dirty_candidate_ids : []),
+        ...(Array.isArray(payload?.dirtyCandidateIds) ? payload.dirtyCandidateIds : [])
+      ].map((value) => trimStr(value)).filter(Boolean))),
+      pending_candidate_ids: Array.from(new Set([
+        ...progress.pending_candidate_ids,
+        ...(Array.isArray(payloadObj.pending_candidate_ids) ? payloadObj.pending_candidate_ids : []),
+        ...(Array.isArray(payloadObj.pendingCandidateIds) ? payloadObj.pendingCandidateIds : []),
+        ...(Array.isArray(payload?.pending_candidate_ids) ? payload.pending_candidate_ids : []),
+        ...(Array.isArray(payload?.pendingCandidateIds) ? payload.pendingCandidateIds : [])
+      ].map((value) => trimStr(value)).filter(Boolean))),
+      refresh_job_ids: Array.from(new Set([
+        ...progress.pending_job_ids,
+        ...(Array.isArray(payloadObj.refresh_job_ids) ? payloadObj.refresh_job_ids : []),
+        ...(Array.isArray(payloadObj.refreshJobIds) ? payloadObj.refreshJobIds : []),
+        ...(Array.isArray(payload?.refresh_job_ids) ? payload.refresh_job_ids : []),
+        ...(Array.isArray(payload?.refreshJobIds) ? payload.refreshJobIds : [])
+      ].map((value) => trimStr(value)).filter(Boolean))),
       session_id: trimStr(payloadObj.session_id || sessionObj.session_id || progress.session_id),
       snapshot_run_id: trimStr(payloadObj.snapshot_run_id || sessionObj.snapshot_run_id || progress.snapshot_run_id),
       session_version: payloadObj.session_version ?? sessionObj.session_version ?? progress.session_version,
       session_signature: trimStr(payloadObj.session_signature || sessionObj.session_signature || progress.session_signature),
       ready: !!readyFlag,
       ready_flag: !!readyFlag,
+      ready_empty: readyEmptyFlag || (!!readyFlag && progress.total_candidates <= 0),
       deferred: !readyFlag,
+      progress_only: !readyFlag || bootstrapOnly || (!previewObj && !readyEmptyFlag),
       progress,
       candidate_counts: {
         total: progress.total_candidates,
@@ -80065,11 +81716,24 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
       preview_bootstrap: !!bootstrapOnly,
       available_sections: Array.isArray(payloadObj.available_sections || previewObj?.available_sections) ? cloneJson(payloadObj.available_sections || previewObj.available_sections) || [] : [],
       recommended_page_size: Number.isFinite(Number(payloadObj.recommended_page_size || previewObj?.recommended_page_size)) ? Math.max(1, Math.min(250, Math.trunc(Number(payloadObj.recommended_page_size || previewObj?.recommended_page_size)))) : null,
-      pending_candidate_ids: progress.pending_candidate_ids,
+      pending_candidate_ids: Array.from(new Set([
+        ...progress.pending_candidate_ids,
+        ...(Array.isArray(payloadObj.pending_candidate_ids) ? payloadObj.pending_candidate_ids : []),
+        ...(Array.isArray(payloadObj.pendingCandidateIds) ? payloadObj.pendingCandidateIds : []),
+        ...(Array.isArray(payload?.pending_candidate_ids) ? payload.pending_candidate_ids : []),
+        ...(Array.isArray(payload?.pendingCandidateIds) ? payload.pendingCandidateIds : [])
+      ].map((value) => trimStr(value)).filter(Boolean))),
       failed_candidate_ids: progress.failed_candidate_ids,
       candidate_status_rows: progress.candidate_status_rows,
       candidate_statuses: progress.candidate_statuses,
       pending_job_ids: progress.pending_job_ids,
+      refresh_job_ids: Array.from(new Set([
+        ...progress.pending_job_ids,
+        ...(Array.isArray(payloadObj.refresh_job_ids) ? payloadObj.refresh_job_ids : []),
+        ...(Array.isArray(payloadObj.refreshJobIds) ? payloadObj.refreshJobIds : []),
+        ...(Array.isArray(payload?.refresh_job_ids) ? payload.refresh_job_ids : []),
+        ...(Array.isArray(payload?.refreshJobIds) ? payload.refreshJobIds : [])
+      ].map((value) => trimStr(value)).filter(Boolean))),
       recent_jobs: progress.recent_jobs,
       pending_candidate_jobs: progress.pending_candidate_jobs,
       phase: progress.phase,
@@ -80098,20 +81762,97 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
   const userInitiated = uiOptions.userInitiated === true || uiOptions.user_initiated === true || uiOptions.showModal === true || uiOptions.show_modal === true;
   const silent = uiOptions.silent === true || uiOptions.silent === 'true';
   const background = uiOptions.background === true || uiOptions.background === 'true';
+  const forceNewSession = payload?.force_new_session === true || payload?.forceNewSession === true;
+  const discardSourceSession = payload?.discard_source_session === true || payload?.discardSourceSession === true;
+  const sourceSessionId = trimStr(payload?.source_session_id || payload?.sourceSessionId || '');
+  const obsoleteSessionIds = Array.from(new Set([
+    ...(Array.isArray(payload?.obsolete_session_ids) ? payload.obsolete_session_ids : []),
+    ...(Array.isArray(payload?.obsoleteSessionIds) ? payload.obsoleteSessionIds : []),
+    sourceSessionId
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const mutationContext = trimStr(payload?.mutation_context || payload?.mutationContext || '');
+  const staleCodes = new Set(['OBSOLETE_SESSION', 'STALE_SESSION', 'REBASE_REQUIRED', 'WORKBENCH_SESSION_NOT_OPEN', 'WORKBENCH_SESSION_DISCARDED', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID']);
+  const normaliseOpenCode = (value) => trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  const serialiseErrorPayloadForOpen = (value) => {
+    try {
+      if (value == null) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+      return JSON.stringify(value);
+    } catch {
+      try { return String(value || ''); } catch { return ''; }
+    }
+  };
+  const looksFatalOpenFailure = (value) => {
+    const text = serialiseErrorPayloadForOpen(value).toUpperCase();
+    if (!text) return false;
+    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
+    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
+    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
+    return false;
+  };
+  const shouldTreatOpenStatusAsRebase = (status) => {
+    const n = Number(status);
+    if (!Number.isFinite(n)) return false;
+    if (n === 401 || n === 403) return false;
+    return [404, 409, 410, 423, 425, 500, 502, 503, 504].includes(Math.trunc(n));
+  };
+  const isObsoleteSessionId = (sessionIdLike) => {
+    const sessionIdText = trimStr(sessionIdLike);
+    return !!sessionIdText && (sessionIdText === sourceSessionId || obsoleteSessionIds.includes(sessionIdText));
+  };
+  const makeRebaseRequiredPayload = (returnedSessionId = '', code = 'OBSOLETE_SESSION_REUSED', message = 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.') => ({
+    ok: false,
+    error_code: code,
+    code,
+    rebase_required: true,
+    requires_new_session: true,
+    session_id: trimStr(returnedSessionId) || null,
+    source_session_id: sourceSessionId || null,
+    obsolete_session_ids: [...obsoleteSessionIds],
+    mutation_context: mutationContext || null,
+    message
+  });
 
   try {
     if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
+    const requestPayload = {
+      ...(isPlainObject(payload) ? payload : {})
+    };
+    if (forceNewSession) requestPayload.force_new_session = true;
+    if (discardSourceSession) requestPayload.discard_source_session = true;
+    if (sourceSessionId) requestPayload.source_session_id = sourceSessionId;
+    if (obsoleteSessionIds.length) requestPayload.obsolete_session_ids = [...obsoleteSessionIds];
+    if (mutationContext) requestPayload.mutation_context = mutationContext;
+
     const res = await authFetch(API('/api/banking/pay/workbench/session/open'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(isPlainObject(payload) ? payload : {})
+      body: JSON.stringify(requestPayload)
     });
     const json = await parseJsonResponse(res);
-    if (!res.ok) throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
-    return normaliseOpenPayload(json);
+    if (!res.ok) {
+      const code = normaliseOpenCode(json?.error_code || json?.code || '');
+      if (
+        (forceNewSession || discardSourceSession) &&
+        (
+          staleCodes.has(code) ||
+          (shouldTreatOpenStatusAsRebase(res.status) && !looksFatalOpenFailure(json))
+        )
+      ) {
+        return makeRebaseRequiredPayload(sourceSessionId || '', code || 'REBASE_REQUIRED', trimStr(json?.message || json?.error || '') || 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.');
+      }
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+    }
+    const openedPayload = normaliseOpenPayload(json);
+    const returnedSessionId = trimStr(openedPayload.session_id || openedPayload.session?.session_id || '');
+    if ((forceNewSession || discardSourceSession) && isObsoleteSessionId(returnedSessionId)) {
+      return makeRebaseRequiredPayload(returnedSessionId);
+    }
+    return openedPayload;
   } catch (error) {
     const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'WORKBENCH_SESSION_OPEN', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated, silent, background, showModal: userInitiated && !silent && !background })
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: mutationContext || 'WORKBENCH_SESSION_OPEN', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated, silent, background, showModal: userInitiated && !silent && !background })
       : null;
     if (typeof bankingBuildEnrichedFriendlyError === 'function') {
       throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking workbench session open failed');
@@ -80119,7 +81860,6 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
     throw error;
   }
 }
-
 
 
 
@@ -81244,19 +82984,250 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
   const sessionIdText = trimStr(sessionId);
   if (!sessionIdText) throw new Error('bankingPayWorkbenchSessionGet: sessionId is required');
 
+  const readSharedWorkbenchPostMutationContext = () => {
+    try {
+      const mc = (typeof window !== 'undefined' && window && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      const payState = (mc && String(mc.entity || '') === 'banking' && mc.banking && mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : null;
+      const wizard = (payState && payState.draftWizard && typeof payState.draftWizard === 'object') ? payState.draftWizard : null;
+      const workbench = (wizard && wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
+      const decisions = (wizard && wizard.decisions && typeof wizard.decisions === 'object') ? wizard.decisions : {};
+      const preview = (wizard && wizard.preview && typeof wizard.preview === 'object') ? wizard.preview : {};
+      const previewData = (preview.data && typeof preview.data === 'object' && !Array.isArray(preview.data)) ? preview.data : {};
+      const previewSession = (previewData.session && typeof previewData.session === 'object' && !Array.isArray(previewData.session)) ? previewData.session : {};
+      const arr = (...values) => Array.from(new Set(values.flatMap((value) => Array.isArray(value) ? value : []).map((value) => trimStr(value)).filter(Boolean)));
+      const sourceId = trimStr(
+        workbench.__source_session_id_discarded ||
+        workbench.__source_session_id_replaced ||
+        decisions.__source_session_id_discarded ||
+        preview.__post_create_source_session_id ||
+        preview.__post_cancel_source_session_id ||
+        ''
+      );
+      return {
+        session_id: trimStr(workbench.session_id || decisions.session_id || previewData.session_id || previewSession.session_id || ''),
+        source_session_id: sourceId,
+        obsolete_session_ids: arr(
+          workbench.__obsolete_workbench_session_ids,
+          workbench.__obsolete_progress_session_ids,
+          decisions.__obsolete_workbench_session_ids,
+          decisions.__obsolete_progress_session_ids,
+          preview.__obsolete_workbench_session_ids,
+          preview.__obsolete_progress_session_ids,
+          sourceId ? [sourceId] : []
+        ),
+        mutation_context: trimStr(
+          workbench.__post_mutation_context ||
+          decisions.__post_mutation_context ||
+          preview.__post_mutation_context ||
+          ''
+        ).toUpperCase(),
+        created_pay_batch_ids: arr(workbench.__post_create_created_pay_batch_ids, preview.__post_create_created_pay_batch_ids),
+        dirty_candidate_ids: arr(workbench.dirty_candidate_ids, workbench.dirtyCandidateIds, decisions.dirty_candidate_ids, decisions.dirtyCandidateIds),
+        pending_candidate_ids: arr(workbench.pending_candidate_ids, workbench.pendingCandidateIds, decisions.pending_candidate_ids, decisions.pendingCandidateIds),
+        refresh_job_ids: arr(
+          workbench.refresh_job_ids,
+          workbench.refreshJobIds,
+          decisions.refresh_job_ids,
+          decisions.refreshJobIds,
+          Array.isArray(workbench.pending_candidate_jobs) ? workbench.pending_candidate_jobs.map((job) => job && (job.pending_job_id || job.job_id || job.id)) : [],
+          Array.isArray(decisions.pending_candidate_jobs) ? decisions.pending_candidate_jobs.map((job) => job && (job.pending_job_id || job.job_id || job.id)) : []
+        ),
+        preview_reopen_required: !!(
+          workbench.preview_reopen_required === true ||
+          workbench.create_draft_refresh_pending === true ||
+          workbench.__post_mutation_preview_refresh_failed === true ||
+          decisions.create_draft_refresh_pending === true ||
+          preview.__post_create_refresh_pending === true ||
+          preview.__post_cancel_refresh_pending === true
+        )
+      };
+    } catch {
+      return {};
+    }
+  };
+  const sharedPostMutationContext = readSharedWorkbenchPostMutationContext();
+  const sourceSessionId = trimStr(options?.source_session_id || options?.sourceSessionId || sharedPostMutationContext.source_session_id || '');
+  const obsoleteSessionIds = Array.from(new Set([
+    ...(Array.isArray(options?.obsolete_session_ids) ? options.obsolete_session_ids : []),
+    ...(Array.isArray(options?.obsoleteSessionIds) ? options.obsoleteSessionIds : []),
+    ...(Array.isArray(sharedPostMutationContext.obsolete_session_ids) ? sharedPostMutationContext.obsolete_session_ids : []),
+    sourceSessionId
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const rawMutationContext = trimStr(
+    options?.mutation_context ||
+    options?.mutationContext ||
+    options?.reason ||
+    options?.reset_reason ||
+    options?.action ||
+    options?.resetAction ||
+    sharedPostMutationContext.mutation_context ||
+    ''
+  ).toUpperCase();
+  const createdPayBatchIds = Array.from(new Set([
+    ...(Array.isArray(options?.created_pay_batch_ids) ? options.created_pay_batch_ids : []),
+    ...(Array.isArray(options?.createdPayBatchIds) ? options.createdPayBatchIds : []),
+    ...(Array.isArray(sharedPostMutationContext.created_pay_batch_ids) ? sharedPostMutationContext.created_pay_batch_ids : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const dirtyCandidateIds = Array.from(new Set([
+    ...(Array.isArray(options?.dirty_candidate_ids) ? options.dirty_candidate_ids : []),
+    ...(Array.isArray(options?.dirtyCandidateIds) ? options.dirtyCandidateIds : []),
+    ...(Array.isArray(options?.pending_candidate_ids) ? options.pending_candidate_ids : []),
+    ...(Array.isArray(options?.pendingCandidateIds) ? options.pendingCandidateIds : []),
+    ...(Array.isArray(sharedPostMutationContext.dirty_candidate_ids) ? sharedPostMutationContext.dirty_candidate_ids : []),
+    ...(Array.isArray(sharedPostMutationContext.pending_candidate_ids) ? sharedPostMutationContext.pending_candidate_ids : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const refreshJobIds = Array.from(new Set([
+    ...(Array.isArray(options?.refresh_job_ids) ? options.refresh_job_ids : []),
+    ...(Array.isArray(options?.refreshJobIds) ? options.refreshJobIds : []),
+    ...(Array.isArray(sharedPostMutationContext.refresh_job_ids) ? sharedPostMutationContext.refresh_job_ids : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const previewReopenRequired = options?.preview_reopen_required === true || options?.previewReopenRequired === true || sharedPostMutationContext.preview_reopen_required === true;
+  const hasCreateSuccessEvidence = rawMutationContext === 'CREATE_DRAFT_SUCCESS' || rawMutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' || rawMutationContext === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' || createdPayBatchIds.length > 0;
+  const hasCancelSuccessEvidence = rawMutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' || rawMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' || rawMutationContext === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN';
+  const hasBatchMutationContext = hasCreateSuccessEvidence || hasCancelSuccessEvidence || /(^|_)(DRAFT|BATCH|PAY_BATCH)(_|$)/.test(rawMutationContext);
+  const hasDirtyCandidatesWithBatchMutation = hasBatchMutationContext && (dirtyCandidateIds.length > 0 || refreshJobIds.length > 0);
+  const hasPreviewReopenWithSourceSession = previewReopenRequired && !!sourceSessionId;
+  const mutationContext = hasCreateSuccessEvidence
+    ? 'CREATE_DRAFT_SUCCESS'
+    : (hasCancelSuccessEvidence ? 'CANCEL_DELETE_DRAFT_SUCCESS' : rawMutationContext);
+  const forceNewSession = options?.force_new_session === true || options?.forceNewSession === true || hasCreateSuccessEvidence || hasCancelSuccessEvidence || hasPreviewReopenWithSourceSession || hasDirtyCandidatesWithBatchMutation;
+  const discardSourceSession = options?.discard_source_session === true || options?.discardSourceSession === true || forceNewSession;
+  const staleCodes = new Set(['OBSOLETE_SESSION', 'STALE_SESSION', 'REBASE_REQUIRED', 'WORKBENCH_SESSION_NOT_OPEN', 'WORKBENCH_SESSION_DISCARDED', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID']);
+  const normaliseSessionCode = (value) => trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  const serialiseSessionErrorPayload = (value) => {
+    try {
+      if (value == null) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+      return JSON.stringify(value);
+    } catch {
+      try { return String(value || ''); } catch { return ''; }
+    }
+  };
+  const looksFatalSessionFailure = (value) => {
+    const text = serialiseSessionErrorPayload(value).toUpperCase();
+    if (!text) return false;
+    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
+    if (text.includes('RLS') || text.includes('ROW LEVEL SECURITY') || text.includes('POLICY')) return true;
+    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
+    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
+    if (text.includes('SQLSTATE') || text.includes('SQL STATE') || text.includes('POSTGRES') || text.includes('SUPABASE') || text.includes('POSTGREST')) return true;
+    if (text.includes('INVALID INPUT SYNTAX') || text.includes('AMBIGUOUS') || text.includes('CONSTRAINT') || text.includes('VIOLATES')) return true;
+    if (/\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|INDEX)\b[^\n]*\b(DOES NOT EXIST|NOT FOUND|IS AMBIGUOUS)\b/.test(text)) return true;
+    return false;
+  };
+  const shouldTreatSessionStatusAsRebase = (status) => {
+    const n = Number(status);
+    if (!Number.isFinite(n)) return false;
+    if (n === 401 || n === 403) return false;
+    return [404, 409, 410, 423, 425, 500, 502, 503, 504].includes(Math.trunc(n));
+  };
+  const isObsoleteSessionId = (value) => {
+    const id = trimStr(value);
+    return !!id && obsoleteSessionIds.includes(id);
+  };
+  const makeRebaseRequiredPayload = (code = 'REBASE_REQUIRED', message = 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.') => ({
+    ok: false,
+    error_code: code,
+    code,
+    rebase_required: true,
+    requires_new_session: true,
+    session_id: sessionIdText,
+    source_session_id: sourceSessionId || null,
+    obsolete_session_ids: [...obsoleteSessionIds],
+    mutation_context: mutationContext || null,
+    ready: false,
+    ready_flag: false,
+    deferred: true,
+    progress_only: true,
+    message
+  });
+  const isRebaseRequiredPayload = (payload) => {
+    const obj = isPlainObject(payload) ? payload : {};
+    const code = normaliseSessionCode(obj.error_code || obj.code || obj.reason_code || '');
+    return obj.rebase_required === true || obj.requires_new_session === true || staleCodes.has(code);
+  };
+  const progressIndicatesPendingOrProgressOnly = (progress) => {
+    const p = isPlainObject(progress) ? progress : {};
+    const phase = normaliseSessionCode(p.phase || p.current_phase || p.status_phase || p.status || '');
+    if (p.progress_only === true || p.deferred === true || p.pending_refresh === true || p.refreshing === true) return true;
+    if (['PENDING', 'REFRESHING', 'REFRESHING_CANDIDATES', 'SNAPSHOT_REFRESH_PENDING', 'SNAPSHOT_REBUILD_PENDING', 'WORKBENCH_REFRESH_PENDING', 'WORKBENCH_JOBS_RUNNING', 'PROGRESS_ONLY'].includes(phase)) return true;
+    return !(p.ready_empty === true || p.ready_flag === true || p.ready === true);
+  };
+
+  const isPostMutationContext = !!(mutationContext || forceNewSession || discardSourceSession || obsoleteSessionIds.length > 0 || previewReopenRequired || hasDirtyCandidatesWithBatchMutation);
+
+  if (isObsoleteSessionId(sessionIdText)) {
+    return makeRebaseRequiredPayload('OBSOLETE_SESSION');
+  }
+
+  if ((forceNewSession || discardSourceSession || hasPreviewReopenWithSourceSession) && (!sourceSessionId || sessionIdText === sourceSessionId)) {
+    return makeRebaseRequiredPayload('REBASE_REQUIRED');
+  }
+
   try {
     const progress = (typeof bankingPayWorkbenchSessionGetProgress === 'function')
-      ? await bankingPayWorkbenchSessionGetProgress(sessionIdText, { ...options, staleSessionGuard: options.staleSessionGuard, enforceActiveSession: options.enforceActiveSession })
+      ? await bankingPayWorkbenchSessionGetProgress(sessionIdText, {
+          ...options,
+          staleSessionGuard: options.staleSessionGuard,
+          enforceActiveSession: options.enforceActiveSession,
+          obsolete_session_ids: [...obsoleteSessionIds],
+          source_session_id: sourceSessionId || '',
+          force_new_session: forceNewSession,
+          discard_source_session: discardSourceSession,
+          preview_reopen_required: previewReopenRequired,
+          mutation_context: mutationContext || null,
+          dirty_candidate_ids: [...dirtyCandidateIds],
+          refresh_job_ids: [...refreshJobIds],
+          created_pay_batch_ids: [...createdPayBatchIds]
+        })
       : null;
 
-    if (progress && progress.ready_flag !== true && progress.ready !== true) {
+    if (isRebaseRequiredPayload(progress)) {
+      return progress;
+    }
+
+    if (progress && progress.ready_empty === true) {
       return {
         ok: true,
         session_id: sessionIdText,
+        snapshot_run_id: trimStr(progress.snapshot_run_id || ''),
+        session_version: progress.session_version ?? null,
+        session_signature: trimStr(progress.session_signature || ''),
+        ready: true,
+        ready_flag: true,
+        ready_empty: true,
+        deferred: false,
         progress_only: true,
-        ready: false,
-        ready_flag: false,
-        deferred: true,
+        mutation_context: mutationContext || null,
+        source_session_id: sourceSessionId || null,
+        obsolete_session_ids: [...obsoleteSessionIds],
+        progress,
+        candidate_counts: {
+          total: 0,
+          completed: 0,
+          ready: 0,
+          pending: 0,
+          failed: 0
+        },
+        pending_candidate_ids: [],
+        failed_candidate_ids: [],
+        preview: null
+      };
+    }
+
+    if (progress && progress.ready_empty !== true && progressIndicatesPendingOrProgressOnly(progress)) {
+      const progressReady = progress.ready_flag === true || progress.ready === true;
+      return {
+        ok: true,
+        session_id: sessionIdText,
+        mutation_context: mutationContext || null,
+        source_session_id: sourceSessionId || null,
+        obsolete_session_ids: [...obsoleteSessionIds],
+        progress_only: true,
+        ready: progressReady,
+        ready_flag: progressReady,
+        deferred: !progressReady,
         progress,
         candidate_counts: {
           total: progress.total_candidates || 0,
@@ -81276,9 +83247,25 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
     if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}`));
     const json = await parseJsonResponse(res);
-    if (!res.ok) throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+    if (!res.ok) {
+      const code = normaliseSessionCode(json?.error_code || json?.code || '');
+      if (
+        staleCodes.has(code) ||
+        (isPostMutationContext && shouldTreatSessionStatusAsRebase(res.status) && !looksFatalSessionFailure(json))
+      ) return makeRebaseRequiredPayload(code || 'REBASE_REQUIRED', trimStr(json?.message || json?.error || '') || undefined);
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+    }
+    if (isPlainObject(json) && json.ok === false) {
+      const code = normaliseSessionCode(json.error_code || json.code || '');
+      if (staleCodes.has(code) || json.rebase_required === true || json.requires_new_session === true) return makeRebaseRequiredPayload(code || 'REBASE_REQUIRED', trimStr(json.message || json.error || '') || undefined);
+      throw makeApiPayloadError(json, 400, 'Request failed (400)');
+    }
 
     const payloadObj = isPlainObject(json) ? json : {};
+    const returnedSessionId = trimStr(payloadObj.session_id || payloadObj.session?.session_id || payloadObj.preview?.session_id || sessionIdText);
+    if ((forceNewSession || obsoleteSessionIds.length > 0) && isObsoleteSessionId(returnedSessionId)) {
+      return makeRebaseRequiredPayload('OBSOLETE_SESSION');
+    }
     const previewObj = isPlainObject(payloadObj.preview) ? payloadObj.preview : payloadObj;
     const bootstrapOnly = payloadObj.bootstrap_only === true || payloadObj.preview_bootstrap === true || payloadObj.large_preview === true || previewObj.bootstrap_only === true;
 
@@ -81298,7 +83285,10 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
         progress: progress || null,
         available_sections: Array.isArray(payloadObj.available_sections || previewObj.available_sections) ? cloneJson(payloadObj.available_sections || previewObj.available_sections) || [] : [],
         recommended_page_size: Number.isFinite(Number(payloadObj.recommended_page_size || previewObj.recommended_page_size)) ? Math.max(1, Math.min(250, Math.trunc(Number(payloadObj.recommended_page_size || previewObj.recommended_page_size)))) : null,
-        preview: null
+        preview: null,
+        mutation_context: mutationContext || null,
+        source_session_id: sourceSessionId || null,
+        obsolete_session_ids: [...obsoleteSessionIds]
       };
     }
 
@@ -81313,13 +83303,23 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
       ready: true,
       ready_flag: true,
       progress: progress || null,
+      mutation_context: mutationContext || null,
+      source_session_id: sourceSessionId || null,
+      obsolete_session_ids: [...obsoleteSessionIds],
       pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) || [] : [],
       failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) || [] : [],
       server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) || [] : []
     };
   } catch (error) {
+    const errorCode = normaliseSessionCode(error?.error_code || error?.code || error?.payload?.error_code || error?.json?.error_code || '');
+    if (
+      staleCodes.has(errorCode) ||
+      (isPostMutationContext && shouldTreatSessionStatusAsRebase(error?.status || 0) && !looksFatalSessionFailure(error?.payload || error?.json || error))
+    ) {
+      return makeRebaseRequiredPayload(errorCode || 'REBASE_REQUIRED', trimStr(error?.user_message || error?.message || '') || undefined);
+    }
     const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: mutationContext || 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
       : null;
     if (typeof bankingBuildEnrichedFriendlyError === 'function') {
       throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview could not be refreshed');
@@ -81704,12 +83704,25 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
           : ((row?.last_error_json && typeof row.last_error_json === 'object' && !Array.isArray(row.last_error_json)) ? cloneJson(row.last_error_json) : null)
       };
     }).filter((row) => row.candidate_id && row.pending_job_id);
+    const isTerminalJobStatus = (status) => {
+      const s = trimStr(status).toUpperCase();
+      if (!s) return false;
+      return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
+    };
+    const hasActivePendingJobEvidence = pendingJobIds.length > 0 || pendingCandidateJobs.some((job) => {
+      const jobId = trimStr(job?.pending_job_id || job?.job_id || '');
+      const status = trimStr(job?.latest_job_status || job?.job_status || job?.status || job?.candidate_status || '');
+      return !!jobId && !isTerminalJobStatus(status);
+    });
     const total = toNumber(src.total_candidates ?? src.total_candidate_count ?? src.total_count ?? src.total ?? src.candidate_count);
     const completed = toNumber(src.completed_candidates ?? src.ready_candidates ?? src.completed_count ?? src.ready_count ?? src.completed);
     const failed = toNumber(src.failed_candidates ?? src.failed_candidate_count ?? src.failed_count ?? src.failed ?? failedCandidateIds.length);
     const pendingRaw = src.pending_candidates ?? src.pending_candidate_count ?? src.pending_count ?? src.pending;
     const pending = Number.isFinite(Number(pendingRaw)) ? toNumber(pendingRaw) : Math.max(0, total - completed - failed, pendingCandidateIds.length);
-    const readyFlag = src.ready_flag === true || src.ready === true || payloadObj.ready_flag === true || payloadObj.ready === true || (total > 0 && pending <= 0 && failed <= 0);
+    const explicitReadyFlag = src.ready_flag === true || src.ready === true || payloadObj.ready_flag === true || payloadObj.ready === true;
+    const explicitReadyEmptyFlag = src.ready_empty === true || src.readyEmpty === true || payloadObj.ready_empty === true || payloadObj.readyEmpty === true;
+    const explicitNotReadyFlag = src.ready_flag === false || src.ready === false || payloadObj.ready_flag === false || payloadObj.ready === false;
+    const readyFlag = explicitReadyFlag || explicitReadyEmptyFlag || (!explicitNotReadyFlag && total > 0 && pending <= 0 && failed <= 0 && !hasActivePendingJobEvidence);
     const phase = trimStr(src.phase || src.current_phase || src.status_phase || payloadObj.phase || payloadObj.current_phase || (readyFlag ? 'READY' : 'REFRESHING'));
     const statusText = trimStr(src.status_text || src.statusText || src.message || payloadObj.status_text || payloadObj.message || (readyFlag ? 'Preview ready' : 'Preparing payment preview candidates.'));
     return {
@@ -81726,6 +83739,7 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       failed_candidates: failed,
       ready_flag: !!readyFlag,
       ready: !!readyFlag,
+      ready_empty: explicitReadyEmptyFlag || (!!readyFlag && total <= 0),
       phase,
       status_text: statusText,
       candidate_status_rows: candidateStatusRows,
@@ -81743,15 +83757,224 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
   const sessionIdText = trimStr(sessionId);
   if (!sessionIdText) throw new Error('bankingPayWorkbenchSessionGetProgress: sessionId is required');
 
+  const readSharedWorkbenchPostMutationContext = () => {
+    try {
+      const mc = (typeof window !== 'undefined' && window && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      const payState = (mc && String(mc.entity || '') === 'banking' && mc.banking && mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : null;
+      const wizard = (payState && payState.draftWizard && typeof payState.draftWizard === 'object') ? payState.draftWizard : null;
+      const workbench = (wizard && wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
+      const decisions = (wizard && wizard.decisions && typeof wizard.decisions === 'object') ? wizard.decisions : {};
+      const preview = (wizard && wizard.preview && typeof wizard.preview === 'object') ? wizard.preview : {};
+      const previewData = (preview.data && typeof preview.data === 'object' && !Array.isArray(preview.data)) ? preview.data : {};
+      const previewSession = (previewData.session && typeof previewData.session === 'object' && !Array.isArray(previewData.session)) ? previewData.session : {};
+      const arr = (...values) => Array.from(new Set(values.flatMap((value) => Array.isArray(value) ? value : []).map((value) => trimStr(value)).filter(Boolean)));
+      const sourceId = trimStr(
+        workbench.__source_session_id_discarded ||
+        workbench.__source_session_id_replaced ||
+        decisions.__source_session_id_discarded ||
+        preview.__post_create_source_session_id ||
+        preview.__post_cancel_source_session_id ||
+        ''
+      );
+      return {
+        session_id: trimStr(workbench.session_id || decisions.session_id || previewData.session_id || previewSession.session_id || ''),
+        source_session_id: sourceId,
+        obsolete_session_ids: arr(
+          workbench.__obsolete_workbench_session_ids,
+          workbench.__obsolete_progress_session_ids,
+          decisions.__obsolete_workbench_session_ids,
+          decisions.__obsolete_progress_session_ids,
+          preview.__obsolete_workbench_session_ids,
+          preview.__obsolete_progress_session_ids,
+          sourceId ? [sourceId] : []
+        ),
+        mutation_context: trimStr(
+          workbench.__post_mutation_context ||
+          decisions.__post_mutation_context ||
+          preview.__post_mutation_context ||
+          ''
+        ).toUpperCase(),
+        created_pay_batch_ids: arr(workbench.__post_create_created_pay_batch_ids, preview.__post_create_created_pay_batch_ids),
+        dirty_candidate_ids: arr(workbench.dirty_candidate_ids, workbench.dirtyCandidateIds, decisions.dirty_candidate_ids, decisions.dirtyCandidateIds),
+        pending_candidate_ids: arr(workbench.pending_candidate_ids, workbench.pendingCandidateIds, decisions.pending_candidate_ids, decisions.pendingCandidateIds),
+        refresh_job_ids: arr(
+          workbench.refresh_job_ids,
+          workbench.refreshJobIds,
+          decisions.refresh_job_ids,
+          decisions.refreshJobIds,
+          Array.isArray(workbench.pending_candidate_jobs) ? workbench.pending_candidate_jobs.map((job) => job && (job.pending_job_id || job.job_id || job.id)) : [],
+          Array.isArray(decisions.pending_candidate_jobs) ? decisions.pending_candidate_jobs.map((job) => job && (job.pending_job_id || job.job_id || job.id)) : []
+        ),
+        preview_reopen_required: !!(
+          workbench.preview_reopen_required === true ||
+          workbench.create_draft_refresh_pending === true ||
+          workbench.__post_mutation_preview_refresh_failed === true ||
+          decisions.create_draft_refresh_pending === true ||
+          preview.__post_create_refresh_pending === true ||
+          preview.__post_cancel_refresh_pending === true
+        )
+      };
+    } catch {
+      return {};
+    }
+  };
+  const sharedPostMutationContext = readSharedWorkbenchPostMutationContext();
+  const sourceSessionId = trimStr(options?.source_session_id || options?.sourceSessionId || sharedPostMutationContext.source_session_id || '');
+  const obsoleteSessionIds = Array.from(new Set([
+    ...(Array.isArray(options?.obsolete_session_ids) ? options.obsolete_session_ids : []),
+    ...(Array.isArray(options?.obsoleteSessionIds) ? options.obsoleteSessionIds : []),
+    ...(Array.isArray(sharedPostMutationContext.obsolete_session_ids) ? sharedPostMutationContext.obsolete_session_ids : []),
+    sourceSessionId
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const rawMutationContext = trimStr(
+    options?.mutation_context ||
+    options?.mutationContext ||
+    options?.reason ||
+    options?.reset_reason ||
+    options?.action ||
+    options?.resetAction ||
+    sharedPostMutationContext.mutation_context ||
+    ''
+  ).toUpperCase();
+  const createdPayBatchIds = Array.from(new Set([
+    ...(Array.isArray(options?.created_pay_batch_ids) ? options.created_pay_batch_ids : []),
+    ...(Array.isArray(options?.createdPayBatchIds) ? options.createdPayBatchIds : []),
+    ...(Array.isArray(sharedPostMutationContext.created_pay_batch_ids) ? sharedPostMutationContext.created_pay_batch_ids : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const dirtyCandidateIds = Array.from(new Set([
+    ...(Array.isArray(options?.dirty_candidate_ids) ? options.dirty_candidate_ids : []),
+    ...(Array.isArray(options?.dirtyCandidateIds) ? options.dirtyCandidateIds : []),
+    ...(Array.isArray(options?.pending_candidate_ids) ? options.pending_candidate_ids : []),
+    ...(Array.isArray(options?.pendingCandidateIds) ? options.pendingCandidateIds : []),
+    ...(Array.isArray(sharedPostMutationContext.dirty_candidate_ids) ? sharedPostMutationContext.dirty_candidate_ids : []),
+    ...(Array.isArray(sharedPostMutationContext.pending_candidate_ids) ? sharedPostMutationContext.pending_candidate_ids : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const refreshJobIds = Array.from(new Set([
+    ...(Array.isArray(options?.refresh_job_ids) ? options.refresh_job_ids : []),
+    ...(Array.isArray(options?.refreshJobIds) ? options.refreshJobIds : []),
+    ...(Array.isArray(sharedPostMutationContext.refresh_job_ids) ? sharedPostMutationContext.refresh_job_ids : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const previewReopenRequired = options?.preview_reopen_required === true || options?.previewReopenRequired === true || sharedPostMutationContext.preview_reopen_required === true;
+  const hasCreateSuccessEvidence = rawMutationContext === 'CREATE_DRAFT_SUCCESS' || rawMutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' || rawMutationContext === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' || createdPayBatchIds.length > 0;
+  const hasCancelSuccessEvidence = rawMutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' || rawMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' || rawMutationContext === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN';
+  const hasBatchMutationContext = hasCreateSuccessEvidence || hasCancelSuccessEvidence || /(^|_)(DRAFT|BATCH|PAY_BATCH)(_|$)/.test(rawMutationContext);
+  const hasDirtyCandidatesWithBatchMutation = hasBatchMutationContext && (dirtyCandidateIds.length > 0 || refreshJobIds.length > 0);
+  const mutationContext = hasCreateSuccessEvidence
+    ? 'CREATE_DRAFT_SUCCESS'
+    : (hasCancelSuccessEvidence ? 'CANCEL_DELETE_DRAFT_SUCCESS' : rawMutationContext);
+  const forceNewSession = options?.force_new_session === true || options?.forceNewSession === true || hasCreateSuccessEvidence || hasCancelSuccessEvidence || (previewReopenRequired && !!sourceSessionId) || hasDirtyCandidatesWithBatchMutation;
+  const discardSourceSession = options?.discard_source_session === true || options?.discardSourceSession === true || forceNewSession;
+  const staleCodes = new Set(['OBSOLETE_SESSION', 'STALE_SESSION', 'REBASE_REQUIRED', 'WORKBENCH_SESSION_NOT_OPEN', 'WORKBENCH_SESSION_DISCARDED', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID']);
+  const normaliseProgressCode = (value) => trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  const serialiseProgressErrorPayload = (value) => {
+    try {
+      if (value == null) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+      return JSON.stringify(value);
+    } catch {
+      try { return String(value || ''); } catch { return ''; }
+    }
+  };
+  const looksFatalProgressFailure = (value) => {
+    const text = serialiseProgressErrorPayload(value).toUpperCase();
+    if (!text) return false;
+    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
+    if (text.includes('RLS') || text.includes('ROW LEVEL SECURITY') || text.includes('POLICY')) return true;
+    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
+    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
+    if (text.includes('SQLSTATE') || text.includes('SQL STATE') || text.includes('POSTGRES') || text.includes('SUPABASE') || text.includes('POSTGREST')) return true;
+    if (text.includes('INVALID INPUT SYNTAX') || text.includes('AMBIGUOUS') || text.includes('CONSTRAINT') || text.includes('VIOLATES')) return true;
+    if (/\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|INDEX)\b[^\n]*\b(DOES NOT EXIST|NOT FOUND|IS AMBIGUOUS)\b/.test(text)) return true;
+    return false;
+  };
+  const shouldTreatProgressStatusAsRebase = (status) => {
+    const n = Number(status);
+    if (!Number.isFinite(n)) return false;
+    if (n === 401 || n === 403) return false;
+    return [404, 409, 410, 423, 425, 500, 502, 503, 504].includes(Math.trunc(n));
+  };
+  const isObsoleteSessionId = (value) => {
+    const id = trimStr(value);
+    return !!id && obsoleteSessionIds.includes(id);
+  };
+  const makeRebaseRequiredProgress = (code = 'REBASE_REQUIRED', message = 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.') => ({
+    ok: false,
+    error_code: code,
+    code,
+    rebase_required: true,
+    requires_new_session: true,
+    session_id: sessionIdText,
+    source_session_id: sourceSessionId || null,
+    obsolete_session_ids: [...obsoleteSessionIds],
+    mutation_context: mutationContext || null,
+    ready: false,
+    ready_flag: false,
+    ready_empty: false,
+    deferred: true,
+    total_candidates: 0,
+    completed_candidates: 0,
+    ready_candidates: 0,
+    pending_candidates: 0,
+    failed_candidates: 0,
+    pending_candidate_ids: [],
+    failed_candidate_ids: [],
+    candidate_status_rows: [],
+    candidate_statuses: [],
+    pending_job_ids: [],
+    recent_jobs: [],
+    pending_candidate_jobs: [],
+    phase: 'REBASE_REQUIRED',
+    status_text: message,
+    message
+  });
+
+  const isPostMutationContext = !!(mutationContext || forceNewSession || discardSourceSession || obsoleteSessionIds.length > 0 || previewReopenRequired || hasDirtyCandidatesWithBatchMutation);
+
+  if (isObsoleteSessionId(sessionIdText)) {
+    return makeRebaseRequiredProgress('OBSOLETE_SESSION');
+  }
+
+  if ((forceNewSession || discardSourceSession || (previewReopenRequired && !!sourceSessionId)) && (!sourceSessionId || sessionIdText === sourceSessionId)) {
+    return makeRebaseRequiredProgress('REBASE_REQUIRED');
+  }
+
   try {
     if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
     const res = await authFetch(API(`/api/banking/pay/workbench/session/${encodeURIComponent(sessionIdText)}/progress`));
     const json = await parseJsonResponse(res);
-    if (!res.ok) throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
-    return normaliseProgress(json, sessionIdText);
+    if (!res.ok) {
+      const code = normaliseProgressCode(json?.error_code || json?.code || '');
+      if (
+        staleCodes.has(code) ||
+        (isPostMutationContext && shouldTreatProgressStatusAsRebase(res.status) && !looksFatalProgressFailure(json))
+      ) {
+        return makeRebaseRequiredProgress(code || 'REBASE_REQUIRED', trimStr(json?.message || json?.error || '') || undefined);
+      }
+      throw makeApiPayloadError(json, res.status, `Request failed (${res.status})`);
+    }
+    if (isPlainObject(json) && json.ok === false) {
+      const code = normaliseProgressCode(json.error_code || json.code || '');
+      if (staleCodes.has(code) || json.rebase_required === true || json.requires_new_session === true) {
+        return makeRebaseRequiredProgress(code || 'REBASE_REQUIRED', trimStr(json.message || json.error || '') || undefined);
+      }
+    }
+    const progress = normaliseProgress(json, sessionIdText);
+    const returnedSessionId = trimStr(progress.session_id || '');
+    if ((forceNewSession || obsoleteSessionIds.length > 0) && isObsoleteSessionId(returnedSessionId)) {
+      return makeRebaseRequiredProgress('OBSOLETE_SESSION');
+    }
+    return progress;
   } catch (error) {
+    const errorCode = normaliseProgressCode(error?.error_code || error?.code || error?.payload?.error_code || error?.json?.error_code || '');
+    if (
+      staleCodes.has(errorCode) ||
+      (isPostMutationContext && shouldTreatProgressStatusAsRebase(error?.status || 0) && !looksFatalProgressFailure(error?.payload || error?.json || error))
+    ) {
+      return makeRebaseRequiredProgress(errorCode || 'REBASE_REQUIRED', trimStr(error?.user_message || error?.message || '') || undefined);
+    }
     const friendly = (typeof bankingNormalizeApiError === 'function')
-      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
+      ? bankingNormalizeApiError(error, error?.payload || error?.json || null, { action: mutationContext || 'PREVIEW', fallbackCode: 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', userInitiated: options?.userInitiated === true || options?.user_initiated === true, silent: options?.silent === true || options?.silent === 'true', background: options?.background === true || options?.background === 'true', showModal: (options?.userInitiated === true || options?.user_initiated === true) && !(options?.silent === true || options?.silent === 'true') && !(options?.background === true || options?.background === 'true') })
       : null;
     if (typeof bankingBuildEnrichedFriendlyError === 'function') {
       throw bankingBuildEnrichedFriendlyError(error, friendly, 'Banking preview progress could not be refreshed');
@@ -108529,6 +110752,8 @@ async function wireTimesheetImportsUpload(state) {
     window.__tsImportsGlobalDropGuardBound = true;
   }
 }
+
+
 async function refreshTimesheetImportsQueue(state, opts = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][IMPORTS][QUEUE][REFRESH]');
   GC('refreshTimesheetImportsQueue');
@@ -108595,6 +110820,9 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
   );
   const force = !!options.force;
   const suppressWhileBusy = !!options.suppressWhileBusy;
+  const queueStatus = trimQueueStr(options.status || options.queue_status || 'QUEUED').toUpperCase() || 'QUEUED';
+  const queueScope = trimQueueStr(options.queue_scope || options.queueScope || `global:${queueStatus}`) || `global:${queueStatus}`;
+  const isGlobalQueueScope = queueScope.toLowerCase().startsWith('global:');
   const isOwnerQueueRefresh = !!ownerState;
   const resolveOwnerActiveIdentity = () => {
     if (options.active_identity || options.activeIdentity) return trimQueueStr(options.active_identity || options.activeIdentity);
@@ -108640,11 +110868,11 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
       if (liveToken && liveToken !== modalOpenToken) return false;
     }
     const currentIdentity = resolveOwnerActiveIdentity();
-    if (ownerActiveIdentityAtStart && currentIdentity && currentIdentity !== ownerActiveIdentityAtStart) return false;
+    if (!isGlobalQueueScope && ownerActiveIdentityAtStart && currentIdentity && currentIdentity !== ownerActiveIdentityAtStart) return false;
     return true;
   };
 
-  if (isOwnerQueueRefresh && !ownerActiveIdentityAtStart && options.allowWithoutActiveIdentity !== true) {
+  if (isOwnerQueueRefresh && !isGlobalQueueScope && !ownerActiveIdentityAtStart && options.allowWithoutActiveIdentity !== true) {
     st.__queue_refresh_last_result = 'no-active-row-skip-preserved';
     st.__queue_loading = false;
     st.__queue_last_error = '';
@@ -108678,7 +110906,7 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
   st.__queue_refresh_last_result = '';
 
   const ownerInflightKey = isOwnerQueueRefresh
-    ? `${ownerKind || 'owner'}|${ownerIdentity || modalOpenToken || 'modal'}|${ownerActiveIdentityAtStart || 'no-active'}`
+    ? `${ownerKind || 'owner'}|${ownerIdentity || modalOpenToken || 'modal'}|${queueScope}|${queueStatus}`
     : '';
   const existingInflight = ownerInflightKey ? st.__queue_refresh_inflight_by_owner[ownerInflightKey] : st.__queue_refresh_inflight;
 
@@ -108703,18 +110931,21 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     return st;
   }
 
-  const previousQueueLoadedIdentity = trimQueueStr(st.__queue_loaded_identity || '');
-  const previousSelectionBelongsToOwnerIdentity = !isOwnerQueueRefresh || !previousQueueLoadedIdentity || previousQueueLoadedIdentity === ownerActiveIdentityAtStart;
+  const previousQueueLoadedScopeRaw = trimQueueStr(st.__queue_loaded_scope || st.__queue_scope || st.__queue_loaded_identity || '');
+  const previousQueueLoadedScope = /^(timesheet|contract_week):/i.test(previousQueueLoadedScopeRaw) ? queueScope : previousQueueLoadedScopeRaw;
+  const previousSelectionBelongsToOwnerIdentity = !isOwnerQueueRefresh || !previousQueueLoadedScope || previousQueueLoadedScope === queueScope;
   const previousActiveId = previousSelectionBelongsToOwnerIdentity ? String(st.active_queue_id || '').trim() : '';
   const previousPage = Number(st.active_pdf_page || 1) || 1;
   const previousZoom = Number(st.active_zoom || 1) || 1;
   if (isOwnerQueueRefresh && !previousSelectionBelongsToOwnerIdentity) {
-    st.__queue_stale_preserved_identity = previousQueueLoadedIdentity;
+    st.__queue_stale_preserved_identity = previousQueueLoadedScope;
     st.__queue_stale_preserved_active_queue_id = String(st.active_queue_id || '').trim();
     st.active_queue_id = null;
     st.active_queue_item = null;
     st.__queue_loaded = false;
-    st.__queue_loaded_identity = ownerActiveIdentityAtStart || '';
+    st.__queue_loaded_scope = queueScope;
+    st.__queue_scope = queueScope;
+    st.__queue_loaded_identity = '';
   }
   const progressionContext = (previousSelectionBelongsToOwnerIdentity && st.__bulk_process_progression_context && typeof st.__bulk_process_progression_context === 'object')
     ? {
@@ -108878,7 +111109,7 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
   };
 
   const doRefresh = async () => {
-    const res = await authFetch(API('/api/manual-timesheet-queue?status=QUEUED'), {
+    const res = await authFetch(API(`/api/manual-timesheet-queue?status=${encodeURIComponent(queueStatus)}`), {
       method: 'GET'
     });
 
@@ -108917,20 +111148,7 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
       nextActive = chooseNextRelativeItem(normalizedRows);
     }
 
-    const preserveMissingOwnerSelection = !!(
-      isOwnerQueueRefresh &&
-      previousActiveId &&
-      !nextActive &&
-      !usedRelativeProgression &&
-      st.active_queue_item &&
-      typeof st.active_queue_item === 'object'
-    );
-
-    if (preserveMissingOwnerSelection) {
-      nextActive = JSON.parse(JSON.stringify(st.active_queue_item));
-      st.active_pdf_page = previousPage;
-      st.active_zoom = previousZoom;
-    } else if (!nextActive) {
+    if (!nextActive) {
       nextActive = normalizedRows[0] || null;
       st.active_pdf_page = 1;
       st.active_zoom = 1;
@@ -108956,10 +111174,13 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     );
 
     if (unchanged) {
+      st.queue_rows = normalizedRows;
       st.__queue_refresh_last_result = 'unchanged';
-      if (isOwnerQueueRefresh && ownerActiveIdentityAtStart) {
+      if (isOwnerQueueRefresh) {
         st.__queue_loaded = true;
-        st.__queue_loaded_identity = ownerActiveIdentityAtStart;
+        st.__queue_loaded_scope = queueScope;
+        st.__queue_scope = queueScope;
+        st.__queue_loaded_identity = '';
         st.__queue_loading = false;
         st.__queue_last_error = '';
       }
@@ -108967,7 +111188,7 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
         queue_count: normalizedRows.length,
         active_queue_id: previousActiveId || null,
         request_seq: requestSeq,
-        queue_loaded_identity: st.__queue_loaded_identity || null
+        queue_loaded_scope: st.__queue_loaded_scope || st.__queue_scope || null
       });
       return st;
     }
@@ -108998,9 +111219,11 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     }
 
     st.__queue_refresh_last_result = 'applied';
-    if (isOwnerQueueRefresh && ownerActiveIdentityAtStart) {
+    if (isOwnerQueueRefresh) {
       st.__queue_loaded = true;
-      st.__queue_loaded_identity = ownerActiveIdentityAtStart;
+      st.__queue_loaded_scope = queueScope;
+      st.__queue_scope = queueScope;
+      st.__queue_loaded_identity = '';
       st.__queue_loading = false;
       st.__queue_last_error = '';
       st.__queue_stale_preserved_identity = '';
@@ -109010,7 +111233,7 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
       queue_count: normalizedRows.length,
       active_queue_id: st.active_queue_id || null,
       request_seq: requestSeq,
-      queue_loaded_identity: st.__queue_loaded_identity || null
+      queue_loaded_scope: st.__queue_loaded_scope || st.__queue_scope || null
     });
 
     return st;
@@ -109045,6 +111268,7 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     }
   }
 }
+
 async function wireTimesheetImportsViewer(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][IMPORTS][VIEWER]');
   GC('wireTimesheetImportsViewer');
@@ -110951,7 +113175,6 @@ function renderTimesheetExpensesTab(ctx) {
   `;
 }
 
-
 async function openBulkAuthoriseWorkbench() {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-AUTH][OPEN]');
   GC('openBulkAuthoriseWorkbench');
@@ -111031,6 +113254,10 @@ async function openBulkAuthoriseWorkbench() {
       pending_attach_kind: 'TIMESHEET',
       __queue_loaded: false,
       __queue_loaded_identity: '',
+      __queue_scope: 'global:QUEUED',
+      __queue_loaded_scope: '',
+      __queue_loading_scope: '',
+      __queue_count_loading_scope: '',
       __queue_loading: false,
       __queue_last_error: '',
       __preview_signed_url_cache: {},
@@ -111041,7 +113268,8 @@ async function openBulkAuthoriseWorkbench() {
       __preview_identity: '',
       __attached_manual_override: true,
       __queue_manual_override: false,
-      __queue_manual_override_identity: ''
+      __queue_manual_override_identity: '',
+      __queue_manual_override_scope: ''
     },
     active_row_key: null,
     active_row: null,
@@ -111062,6 +113290,8 @@ async function openBulkAuthoriseWorkbench() {
     summary_message: '',
     error_text: '',
     shell_open: false,
+    __bulk_authorise_modal_open_token: `bulk-authorise:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    __bulkAuthoriseModalOpenToken: '',
     __bulk_authorise_scroll: {
       left_pane: 0,
       middle_pane: 0,
@@ -111126,6 +113356,8 @@ async function openBulkAuthoriseWorkbench() {
     __runPostRenderBindings: null,
     __rerenderWorkbench: null
   };
+
+  state.__bulkAuthoriseModalOpenToken = state.__bulk_authorise_modal_open_token;
 
   if (typeof ensureBulkAuthoriseManualDraftState === 'function') {
     try { ensureBulkAuthoriseManualDraftState(state); } catch {}
@@ -111416,23 +113648,13 @@ async function openBulkAuthoriseWorkbench() {
         state.__bulk_authorise_active_render_signature ||
         (state.active_row ? getBulkAuthoriseRenderSignatureFromRow(state.active_row) : '')
       ) === renderSignature;
+    const activeRowKey = trimStr(state.active_row_key || state.active_row?.row_key || '');
     const rowDependentContextReady = !!(
       opts.allowRowDependent === true &&
       state.__bulk_authorise_dataset_ready === true &&
-      state.__bulk_authorise_row_context_ready === true &&
-      trimStr(state.__bulk_authorise_row_context_ready_render_signature || state.__bulk_authorise_row_context_ready_signature || '') === renderSignature &&
-      Number(state.__bulk_authorise_row_context_ready_seq || 0) === Number(state.__bulk_authorise_row_change_seq || 0)
+      !!activeRowKey
     );
-    const activeRowKey = trimStr(state.active_row_key || state.active_row?.row_key || '');
-    const allowRowDependentBinders = !!(
-      rowDependentContextReady ||
-      (
-        forcedPostMutationRebind &&
-        opts.allowRowDependent === true &&
-        state.__bulk_authorise_dataset_ready === true &&
-        !!activeRowKey
-      )
-    );
+    const allowRowDependentBinders = rowDependentContextReady;
     const shouldForceScopeRebind = (scope) => !!(forcedPostMutationRebind && trimStr(scope || '') === 'action');
     const rowChangeSeq = Number(state.__bulk_authorise_row_change_seq || 0) || 0;
     const contextReadySignatureMatches = trimStr(state.__bulk_authorise_row_context_ready_render_signature || state.__bulk_authorise_row_context_ready_signature || '') === renderSignature;
@@ -111471,7 +113693,7 @@ async function openBulkAuthoriseWorkbench() {
       attached_all_count: Array.isArray(evidencePane.attached_all_rows) ? evidencePane.attached_all_rows.length : 0,
       queue_count: Array.isArray(evidencePane.queue_rows) ? evidencePane.queue_rows.length : 0,
       queue_loaded: !!evidencePane.__queue_loaded,
-      queue_loaded_identity: trimStr(evidencePane.__queue_loaded_identity || ''),
+      queue_loaded_scope: trimStr(evidencePane.__queue_loaded_scope || evidencePane.__queue_scope || ''),
       batch_busy: !!state.batch_busy,
       saving: !!state.saving,
       unprocessing: !!state.unprocessing,
@@ -111558,22 +113780,67 @@ async function openBulkAuthoriseWorkbench() {
     }
 
     const binders = [
+      { scope: 'evidence', fn: (typeof wireBulkAuthoriseEmbeddedEvidence === 'function') ? wireBulkAuthoriseEmbeddedEvidence : null },
       { scope: 'preview', fn: (typeof bindBulkAuthorisePreviewPane === 'function') ? bindBulkAuthorisePreviewPane : null },
       { scope: 'editor', fn: (typeof bindBulkProcessManualEditor === 'function') ? bindBulkProcessManualEditor : null },
-      { scope: 'action', fn: (typeof bindBulkAuthoriseActionRow === 'function') ? bindBulkAuthoriseActionRow : null },
-      { scope: 'evidence', fn: (typeof wireBulkAuthoriseEmbeddedEvidence === 'function') ? wireBulkAuthoriseEmbeddedEvidence : null }
+      { scope: 'action', fn: (typeof bindBulkAuthoriseActionRow === 'function') ? bindBulkAuthoriseActionRow : null }
     ];
+
+    const canBindScope = (scope) => {
+      const s = trimStr(scope || '');
+      if (!state.__bulk_authorise_dataset_ready || !activeRowKey) return false;
+      if (s === 'evidence' || s === 'preview') return true;
+      if (s === 'editor') return true;
+      if (s === 'action') return true;
+      return allowRowDependentBinders;
+    };
+    const getScopeFreshnessKey = (scope) => {
+      const s = trimStr(scope || '');
+      if (s === 'evidence' || s === 'preview') {
+        return JSON.stringify({
+          record_identity: recordIdentity,
+          row_change_seq: rowChangeSeq,
+          active_row_key: activeRowKey,
+          active_tab: activeEvidenceTab,
+          preview_selection_key: previewSelectionKey
+        });
+      }
+      if (s === 'editor') {
+        const editorLoaded = !!(
+          state.active_context?.editor_loaded === true ||
+          state.active_context?.details?.editor_loaded === true ||
+          state.active_details?.editor_loaded === true ||
+          state.active_ctx?.editor_loaded === true ||
+          state.active_ctx?.state?.editor_loaded === true ||
+          trimStr(state.active_context?.context_profile || state.active_ctx?.context_profile || state.active_details?.context_profile || '').toLowerCase() === 'editor'
+        );
+        return JSON.stringify({
+          record_identity: recordIdentity,
+          row_change_seq: rowChangeSeq,
+          active_row_key: activeRowKey,
+          editor_loaded: editorLoaded,
+          render_signature: renderSignature
+        });
+      }
+      return JSON.stringify({
+        record_identity: recordIdentity,
+        row_change_seq: rowChangeSeq,
+        active_row_key: activeRowKey,
+        render_signature: renderSignature
+      });
+    };
 
     for (const binder of binders) {
       if (!isCurrentRender()) return;
       if (typeof binder.fn !== 'function') continue;
-      if (binder.scope && !allowRowDependentBinders && !shouldForceScopeRebind(binder.scope)) {
+      const scopeFreshnessKey = binder.scope ? getScopeFreshnessKey(binder.scope) : binderFreshnessKey;
+      if (binder.scope && !canBindScope(binder.scope) && !shouldForceScopeRebind(binder.scope)) {
         skippedScopes.push(binder.scope);
         continue;
       }
-      if (binder.scope && binderFreshnessKey) {
+      if (binder.scope && scopeFreshnessKey) {
         if (
-          trimStr(boundScopeIdentity[binder.scope] || '') === binderFreshnessKey &&
+          trimStr(boundScopeIdentity[binder.scope] || '') === scopeFreshnessKey &&
           Number(boundScopeRenderSeq[binder.scope] || 0) === renderSeq &&
           !shouldForceScopeRebind(binder.scope)
         ) {
@@ -111584,8 +113851,8 @@ async function openBulkAuthoriseWorkbench() {
       try {
         const result = binder.fn(state);
         if (result && typeof result.then === 'function') await result;
-        if (binder.scope && binderFreshnessKey && isCurrentRender()) {
-          boundScopeIdentity[binder.scope] = binderFreshnessKey;
+        if (binder.scope && scopeFreshnessKey && isCurrentRender()) {
+          boundScopeIdentity[binder.scope] = scopeFreshnessKey;
           boundScopeRenderSeq[binder.scope] = renderSeq;
           boundScopes.push(binder.scope);
         }
@@ -111829,7 +114096,23 @@ async function openBulkAuthoriseWorkbench() {
       segment_snoozes: [],
       is_hydrated: false,
       hydration_required: true,
-      slim_context: true
+      slim_context: true,
+      profile: 'status_header',
+      context_profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      schedule_authority: 'pending_hydration',
+      include_evidence: false,
+      loaded_layers: ['header'],
+      context_degraded: false,
+      degraded_context: false,
+      evidence_authoritative: false
     };
 
     return {
@@ -111839,6 +114122,21 @@ async function openBulkAuthoriseWorkbench() {
       slim_context: true,
       is_hydrated: false,
       hydration_required: true,
+      profile: 'status_header',
+      context_profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      schedule_authority: 'pending_hydration',
+      include_evidence: false,
+      loaded_layers: ['header'],
+      context_degraded: false,
+      degraded_context: false,
       requested_timesheet_id: details.requested_timesheet_id,
       current_timesheet_id: details.current_timesheet_id,
       expected_timesheet_id: details.expected_timesheet_id,
@@ -111919,8 +114217,22 @@ async function openBulkAuthoriseWorkbench() {
       state.__bulk_authorise_row_context_ready_seq = Number(state.__bulk_authorise_row_change_seq || 0) || 0;
       const minimalContext = buildMinimalBulkAuthoriseContextFromRow(nextRow);
       state.active_context = minimalContext;
-      state.active_ctx = null;
       state.active_details = deep(minimalContext.details || {});
+      state.active_ctx = (typeof normaliseBulkTimesheetWorkbenchCtx === 'function')
+        ? normaliseBulkTimesheetWorkbenchCtx(deep(minimalContext))
+        : null;
+      if (state.active_ctx && typeof state.active_ctx === 'object') {
+        state.active_ctx.profile = 'status_header';
+        state.active_ctx.context_profile = 'status_header';
+        state.active_ctx.header_loaded = true;
+        state.active_ctx.header_only = true;
+        state.active_ctx.editor_loaded = false;
+        state.active_ctx.evidence_loaded = false;
+        state.active_ctx.schedule_pending = true;
+        state.active_ctx.schedule_authoritative = false;
+        state.active_ctx.is_hydrated = false;
+        state.active_ctx.hydration_required = true;
+      }
       state.__bulkAuthoriseRecordIdentity = (typeof getBulkAuthoriseRecordIdentityFromState === 'function')
         ? getBulkAuthoriseRecordIdentityFromState(state)
         : nextRowKey;
@@ -111939,39 +114251,50 @@ async function openBulkAuthoriseWorkbench() {
     const renderSignature = trimStr(state.__bulk_authorise_active_render_signature || getBulkAuthoriseRenderSignatureFromRow(row));
     const rowSignature = renderSignature || backendRowSignature;
     const rowChangeSeq = Number(state.__bulk_authorise_row_change_seq || 0) || 0;
-    const recordIdentity = trimStr(state.__bulkAuthoriseRecordIdentity || getBulkAuthoriseRecordIdentityFromState(state) || '');
+    const recordIdentity = trimStr(
+      state.__bulkAuthoriseRecordIdentity ||
+      ((typeof getBulkAuthoriseRecordIdentityFromState === 'function') ? getBulkAuthoriseRecordIdentityFromState(state) : '') ||
+      state.active_row_key ||
+      row?.row_key ||
+      ''
+    );
     if (!row || !rowSignature) return;
 
-    const run = async () => {
-      if (!state.active_row) return;
-      if (renderSignature && trimStr(state.__bulk_authorise_active_render_signature || '') !== renderSignature) return;
-      if (backendRowSignature && trimStr(state.__bulk_authorise_active_backend_row_signature || '') !== backendRowSignature) return;
-      if ((Number(state.__bulk_authorise_row_change_seq || 0) || 0) !== rowChangeSeq) return;
-      if (typeof refreshBulkAuthoriseActiveContext !== 'function') return;
+    const rowStillCurrent = () => !!(
+      state.active_row &&
+      (renderSignature ? trimStr(state.__bulk_authorise_active_render_signature || '') === renderSignature : true) &&
+      (backendRowSignature ? trimStr(state.__bulk_authorise_active_backend_row_signature || '') === backendRowSignature : true) &&
+      (Number(state.__bulk_authorise_row_change_seq || 0) || 0) === rowChangeSeq
+    );
+
+    const runEditorHydration = async () => {
+      if (!rowStillCurrent() || typeof refreshBulkAuthoriseActiveContext !== 'function') return false;
       try {
-        await refreshBulkAuthoriseActiveContext(state, {
+        const result = await refreshBulkAuthoriseActiveContext(state, {
           row,
           rowSignature,
           renderSignature,
           backendRowSignature,
           rowChangeSeq,
           recordIdentity,
-          source: 'row_click',
-          profile: 'active_row_visible',
-          context_profile: 'active_row_visible',
+          source: 'initial-editor-hydration',
+          profile: 'editor',
+          context_profile: 'editor',
           base_only: false,
-          include_evidence: true,
+          include_evidence: false,
           include_compare: false,
           include_import_source_rows: false,
           rerender: true
         });
+        if (!rowStillCurrent()) return false;
+        if (result === false || result?.ok === false || result?.soft_failure === true) return false;
         if (typeof ensureBulkAuthoriseManualDraftState === 'function') {
           try {
             const draftState = ensureBulkAuthoriseManualDraftState(state);
             if (draftState && typeof draftState.rebaseBaselineFromActiveContext === 'function') {
               draftState.rebaseBaselineFromActiveContext({
-                source: 'openBulkAuthoriseWorkbench.scheduleInitialBulkAuthoriseHydration',
-                reason: 'initial-authoritative-context-hydrated',
+                source: 'openBulkAuthoriseWorkbench.scheduleInitialBulkAuthoriseHydration.editor',
+                reason: 'initial-editor-context-hydrated',
                 rowSignature,
                 renderSignature,
                 backendRowSignature,
@@ -111983,9 +114306,67 @@ async function openBulkAuthoriseWorkbench() {
             }
           } catch {}
         }
+        return true;
       } catch (err) {
-        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][OPEN] deferred hydration failed', err);
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][OPEN] initial editor hydration failed', err);
+        return false;
       }
+    };
+
+    const runEvidenceHydration = async () => {
+      if (!rowStillCurrent() || typeof refreshBulkAuthoriseActiveContext !== 'function') return false;
+      try {
+        const result = await refreshBulkAuthoriseActiveContext(state, {
+          row,
+          rowSignature,
+          renderSignature,
+          backendRowSignature,
+          rowChangeSeq,
+          recordIdentity,
+          source: 'initial-evidence-hydration',
+          profile: 'evidence',
+          context_profile: 'evidence',
+          base_only: false,
+          include_evidence: true,
+          include_compare: false,
+          include_import_source_rows: false,
+          rerender: true
+        });
+        return !(result === false || result?.ok === false || result?.soft_failure === true || result?.evidence_refresh_failed === true);
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][OPEN] initial evidence hydration failed', err);
+        return false;
+      }
+    };
+
+    const runQueueHydration = async () => {
+      if (!rowStillCurrent() || typeof refreshTimesheetImportsQueue !== 'function') return false;
+      try {
+        const pane = (state.evidence_pane_state && typeof state.evidence_pane_state === 'object') ? state.evidence_pane_state : null;
+        if (!pane) return false;
+        pane.__queue_scope = 'global:QUEUED';
+        await refreshTimesheetImportsQueue(pane, {
+          ownerState: state,
+          owner_kind: 'bulk_authorise',
+          modal_open_token: trimStr(state.__bulk_authorise_modal_open_token || ''),
+          queue_scope: 'global:QUEUED',
+          status: 'QUEUED',
+          allowWithoutActiveIdentity: true,
+          suppressWhileBusy: false
+        });
+        return true;
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][OPEN] initial queue hydration failed', err);
+        return false;
+      }
+    };
+
+    const run = async () => {
+      await Promise.allSettled([
+        runEditorHydration(),
+        runEvidenceHydration(),
+        runQueueHydration()
+      ]);
     };
 
     try {
@@ -112192,6 +114573,7 @@ async function openBulkAuthoriseWorkbench() {
     return state;
   }
 }
+
 
 
 function buildBulkAuthoriseDatasetRequestFilters(state) {
@@ -112405,6 +114787,7 @@ function bindBulkAuthoriseEvidencePane(state) {
       isAuthorised,
       evidenceDocumentLocked,
       isImportAuthoritative,
+      canViewEvidence: !!row,
       canManageEvidence: !!(
         row &&
         hasTimesheetId &&
@@ -112618,9 +115001,11 @@ function bindBulkAuthoriseEvidencePane(state) {
 
   const permissions = getPermissionState();
 
+  st.__bulk_authorise_can_view_evidence = permissions.canViewEvidence === true;
+  st.__bulk_authorise_can_manage_evidence = permissions.canManageEvidence === true;
+  if (!permissions.canViewEvidence) return;
   if (!permissions.canManageEvidence) {
     bindReadOnlyPreviewControls(permissions);
-    return;
   }
 
   const existingRerender = (typeof st.__rerenderWorkbench === 'function')
@@ -112653,7 +115038,11 @@ function bindBulkAuthoriseEvidencePane(state) {
               recordIdentity: ownerSnapshot.identity,
               row_key: ownerSnapshot.rowKey,
               rowChangeSeq: ownerSnapshot.rowChangeSeq,
+              profile: 'evidence',
+              context_profile: 'evidence',
               include_evidence: true,
+              include_compare: false,
+              include_import_source_rows: false,
               source: 'evidence_patch'
             });
           }
@@ -112679,9 +115068,11 @@ function bindBulkAuthoriseEvidencePane(state) {
   }
 
   const currentPermissions = getPermissionState();
+  st.__bulk_authorise_can_view_evidence = currentPermissions.canViewEvidence === true;
+  st.__bulk_authorise_can_manage_evidence = currentPermissions.canManageEvidence === true;
+  if (!currentPermissions.canViewEvidence) return;
   if (!currentPermissions.canManageEvidence || currentPermissions.isImportAuthoritative || currentPermissions.backendCanManageEvidence !== true) {
     bindReadOnlyPreviewControls(currentPermissions);
-    return;
   }
 
   if (isBulkProcessOwnerOrNext()) return;
@@ -112858,7 +115249,18 @@ function renderBulkAuthoriseEvidencePane(state) {
     !evidenceDocumentLocked
   );
 
-  if (canManageEvidence && typeof renderBulkProcessEvidencePane === 'function') {
+  const canViewEvidence = !!row;
+  st.__bulk_authorise_can_view_evidence = canViewEvidence;
+  st.__bulk_authorise_can_manage_evidence = canManageEvidence;
+  st.evidence_pane_state = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
+  st.evidence_pane_state.__bulk_authorise_can_view_evidence = canViewEvidence;
+  st.evidence_pane_state.__bulk_authorise_can_manage_evidence = canManageEvidence;
+  st.evidence_pane_state.__bulk_authorise_readonly_evidence = canViewEvidence && !canManageEvidence;
+  st.evidence_pane_state.__hide_mutation_controls = canViewEvidence && !canManageEvidence;
+  st.evidence_pane_state.__disable_mutation_controls = canViewEvidence && !canManageEvidence;
+  st.evidence_pane_state.__queue_scope = st.evidence_pane_state.__queue_scope || 'global:QUEUED';
+
+  if (canViewEvidence && typeof renderBulkProcessEvidencePane === 'function') {
     return renderBulkProcessEvidencePane(st);
   }
 
@@ -112868,25 +115270,6 @@ function renderBulkAuthoriseEvidencePane(state) {
         ? activeDetails.evidence
         : (Array.isArray(activeCtx?.state?.evidence) ? activeCtx.state.evidence : []));
   const attachedCount = Array.isArray(evidenceRows) ? evidenceRows.length : 0;
-
-  const reason = !row
-    ? 'Select a row to manage or view evidence.'
-    : (
-        evidenceDocumentLocked
-          ? 'Evidence files are read-only because this row is invoice/document locked.'
-          : (
-              isImportAuthoritative
-                ? 'Import source evidence is review-only. Use Add additional manual timesheet for expenses or extra supporting items.'
-                : (
-                    backendCanManageEvidence !== true
-                      ? 'Evidence is read-only because backend permissions do not allow evidence management for this row.'
-                      : 'Evidence is read-only for this row.'
-                  )
-            )
-      );
-  const authorisedMessage = isAuthorised
-    ? '<div class="mini" style="margin-top:4px;opacity:.92;">Payment values are locked because this row is authorised. Evidence files can still be managed if permitted.</div>'
-    : '';
 
   return htmlWrap(`
     <div class="card" id="bulkAuthoriseEvidencePaneRoot" data-bulk-authorise-evidence-readonly="1" style="padding:6px 7px;overflow:visible;">
@@ -112898,12 +115281,13 @@ function renderBulkAuthoriseEvidencePane(state) {
         </div>
       </div>
       <div class="mini" style="margin-top:5px;opacity:.82;line-height:1.25;">
-        ${enc(reason)}
+        ${enc(row ? 'Evidence viewer is unavailable for this row.' : 'Select a row to view evidence.')}
       </div>
-      ${authorisedMessage}
     </div>
   `);
+
 }
+
 
 const BANKING_PAY_DRAFT_STATUSES = new Set(['DRAFT', 'DRAFT_CREATED']);
 
@@ -112971,7 +115355,6 @@ function bankingPayBuildCancelPromptCopy({ batch, mode }) {
     defaultReason: 'Cancel batch'
   };
 }
-
 
 async function runBankingPayBatchCancelFlow({
   batch = null,
@@ -113094,16 +115477,348 @@ async function runBankingPayBatchCancelFlow({
     }
 
     const responsePayload = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
-    const postCancelRefresh = (responsePayload.post_cancel_refresh && typeof responsePayload.post_cancel_refresh === 'object' && !Array.isArray(responsePayload.post_cancel_refresh))
+    const nestedPostCancelRefresh = (responsePayload.post_cancel_refresh && typeof responsePayload.post_cancel_refresh === 'object' && !Array.isArray(responsePayload.post_cancel_refresh))
       ? responsePayload.post_cancel_refresh
       : {};
+    const uniqTrimmed = (arr) => Array.isArray(arr)
+      ? Array.from(new Set(arr.map((value) => String(value == null ? '' : value).trim()).filter(Boolean)))
+      : [];
+    const dirtiedCandidateIds = uniqTrimmed(
+      nestedPostCancelRefresh.dirty_candidate_ids ||
+      nestedPostCancelRefresh.dirtyCandidateIds ||
+      nestedPostCancelRefresh.dirtied_candidate_ids ||
+      nestedPostCancelRefresh.dirtiedCandidateIds ||
+      responsePayload.dirty_candidate_ids ||
+      responsePayload.dirtyCandidateIds ||
+      responsePayload.dirtied_candidate_ids ||
+      responsePayload.dirtiedCandidateIds ||
+      responsePayload.dirtied_candidates?.candidate_ids ||
+      responsePayload.dirtiedCandidates?.candidateIds ||
+      responsePayload.snapshot_rebuild?.dirtied_candidate_ids ||
+      responsePayload.snapshotRebuild?.dirtiedCandidateIds
+    );
+    const snapshotRefreshJobIds = uniqTrimmed(
+      nestedPostCancelRefresh.refresh_job_ids ||
+      nestedPostCancelRefresh.refreshJobIds ||
+      nestedPostCancelRefresh.snapshot_refresh_job_ids ||
+      nestedPostCancelRefresh.snapshotRefreshJobIds ||
+      responsePayload.refresh_job_ids ||
+      responsePayload.refreshJobIds ||
+      responsePayload.snapshot_refresh?.job_ids ||
+      responsePayload.snapshotRefresh?.jobIds
+    );
+    const snapshotRebuildRunIds = uniqTrimmed(
+      nestedPostCancelRefresh.snapshot_run_ids ||
+      nestedPostCancelRefresh.snapshotRunIds ||
+      nestedPostCancelRefresh.snapshot_rebuild_run_ids ||
+      nestedPostCancelRefresh.snapshotRebuildRunIds ||
+      responsePayload.snapshot_rebuild?.snapshot_run_ids ||
+      responsePayload.snapshotRebuild?.snapshotRunIds
+    );
+    const sourceSessionId = String(
+      nestedPostCancelRefresh.source_workbench_session_id ||
+      nestedPostCancelRefresh.sourceWorkbenchSessionId ||
+      nestedPostCancelRefresh.source_session_id ||
+      nestedPostCancelRefresh.sourceSessionId ||
+      responsePayload.source_workbench_session_id ||
+      responsePayload.sourceWorkbenchSessionId ||
+      responsePayload.source_session_id ||
+      responsePayload.sourceSessionId ||
+      currentWorkbenchSessionId ||
+      ''
+    ).trim() || null;
+    const sourceSessionDiscarded = !!(
+      nestedPostCancelRefresh.source_session_discarded === true ||
+      nestedPostCancelRefresh.sourceSessionDiscarded === true ||
+      responsePayload.source_session_discarded === true ||
+      responsePayload.sourceSessionDiscarded === true
+    );
+    const sourceSnapshotRunId = String(
+      nestedPostCancelRefresh.source_snapshot_run_id ||
+      nestedPostCancelRefresh.sourceSnapshotRunId ||
+      responsePayload.source_snapshot_run_id ||
+      responsePayload.sourceSnapshotRunId ||
+      st?.pay?.draftWizard?.workbench?.snapshot_run_id ||
+      st?.pay?.draftWizard?.decisions?.snapshot_run_id ||
+      ''
+    ).trim() || null;
+    const sourceSessionVersion = (
+      nestedPostCancelRefresh.source_session_version ??
+      nestedPostCancelRefresh.sourceSessionVersion ??
+      responsePayload.source_session_version ??
+      responsePayload.sourceSessionVersion ??
+      st?.pay?.draftWizard?.workbench?.session_version ??
+      st?.pay?.draftWizard?.decisions?.session_version ??
+      null
+    );
+    const sourceSessionSignature = String(
+      nestedPostCancelRefresh.source_session_signature ||
+      nestedPostCancelRefresh.sourceSessionSignature ||
+      responsePayload.source_session_signature ||
+      responsePayload.sourceSessionSignature ||
+      currentSessionSignature ||
+      ''
+    ).trim() || null;
+    const snapshotRebuildCountRaw = Number(
+      nestedPostCancelRefresh.snapshot_rebuild_count ??
+      nestedPostCancelRefresh.snapshotRebuildCount ??
+      responsePayload.snapshot_rebuild?.count ??
+      responsePayload.snapshotRebuild?.count ??
+      0
+    );
+    const snapshotRebuildCount = Number.isFinite(snapshotRebuildCountRaw) ? Math.max(0, Math.trunc(snapshotRebuildCountRaw)) : 0;
+    const requiresNewSession = !!(
+      sourceSessionDiscarded ||
+      sourceSessionId ||
+      dirtiedCandidateIds.length > 0 ||
+      snapshotRefreshJobIds.length > 0 ||
+      snapshotRebuildRunIds.length > 0 ||
+      snapshotRebuildCount > 0
+    );
+    const canonicalObsoleteSessionIds = sourceSessionId ? [sourceSessionId] : [];
+    const canonicalSnapshotRebuild = (responsePayload.snapshot_rebuild && typeof responsePayload.snapshot_rebuild === 'object' && !Array.isArray(responsePayload.snapshot_rebuild))
+      ? responsePayload.snapshot_rebuild
+      : ((responsePayload.snapshotRebuild && typeof responsePayload.snapshotRebuild === 'object' && !Array.isArray(responsePayload.snapshotRebuild))
+          ? responsePayload.snapshotRebuild
+          : null);
+    const postCancelRefresh = {
+      ...nestedPostCancelRefresh,
+      mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+      reason: 'CANCEL_DELETE_DRAFT_SUCCESS',
+      mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+      batch_cancelled: true,
+      requires_new_session: true,
+      force_new_session: true,
+      discard_source_session: true,
+      ignore_replacement_session: true,
+      preview_reopen_required: true,
+      source_workbench_session_id: sourceSessionId,
+      source_session_id: sourceSessionId,
+      source_snapshot_run_id: sourceSnapshotRunId,
+      source_session_version: sourceSessionVersion,
+      source_session_signature: sourceSessionSignature,
+      source_session_discarded: sourceSessionDiscarded,
+      dirty_candidate_ids: dirtiedCandidateIds,
+      pending_candidate_ids: dirtiedCandidateIds,
+      refresh_job_ids: snapshotRefreshJobIds,
+      snapshot_refresh_job_ids: snapshotRefreshJobIds,
+      snapshot_rebuild_run_ids: snapshotRebuildRunIds,
+      snapshot_rebuild_count: snapshotRebuildCount,
+      snapshot_rebuild: canonicalSnapshotRebuild,
+      current_workbench_session_id: currentWorkbenchSessionId || sourceSessionId || null,
+      cancel_reason: String(responsePayload.cancel_reason || responsePayload.cancelReason || reason || '').trim() || null,
+      classification: String(responsePayload.classification || responsePayload.cancel_classification || responsePayload.cancelClassification || '').trim() || null,
+      obsolete_session_ids: canonicalObsoleteSessionIds
+    };
+    const postCancelResetOptions = {
+      mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+      reason: 'CANCEL_DELETE_DRAFT_SUCCESS',
+      mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+      force_new_session: true,
+      discard_source_session: true,
+      ignore_replacement_session: true,
+      preview_reopen_required: true,
+      source_session_id: sourceSessionId,
+      obsolete_session_ids: canonicalObsoleteSessionIds,
+      dirty_candidate_ids: dirtiedCandidateIds,
+      pending_candidate_ids: dirtiedCandidateIds,
+      refresh_job_ids: snapshotRefreshJobIds,
+      source_snapshot_run_id: sourceSnapshotRunId,
+      source_session_version: sourceSessionVersion,
+      source_session_signature: sourceSessionSignature,
+      snapshot_rebuild: canonicalSnapshotRebuild,
+      cancelled_pay_batch_id: id,
+      pay_batch_id: id,
+      post_cancel_refresh: postCancelRefresh
+    };
+    responsePayload.post_cancel_refresh = postCancelRefresh;
+    responsePayload.post_cancel_reset_options = postCancelResetOptions;
+    responsePayload.preview_reset_options = postCancelResetOptions;
+
+    const markPostCancelPreviewRefreshing = () => {
+      try {
+        const state = (st && typeof st === 'object') ? st : ((window.modalCtx && window.modalCtx.banking && typeof window.modalCtx.banking === 'object') ? window.modalCtx.banking : null);
+        const wizard = state && state.pay && state.pay.draftWizard && typeof state.pay.draftWizard === 'object' ? state.pay.draftWizard : null;
+        if (!wizard) return;
+        wizard.preview = (wizard.preview && typeof wizard.preview === 'object') ? wizard.preview : {};
+        wizard.workbench = (wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
+        wizard.decisions = (wizard.decisions && typeof wizard.decisions === 'object') ? wizard.decisions : {};
+        wizard.preview.data = null;
+        wizard.preview.loading = true;
+        wizard.preview.error = '';
+        wizard.preview.failure = null;
+        wizard.preview.status_text = 'Draft cancelled. Refreshing payment preview…';
+        wizard.preview.pageData = null;
+        wizard.preview.page_data = null;
+        wizard.preview.pages = {};
+        wizard.preview.pageCache = {};
+        wizard.preview.page_cache = {};
+        wizard.preview.previewPageCache = {};
+        wizard.preview.preview_page_cache = {};
+        wizard.preview.componentStateCache = {
+          case_resolution_states: [],
+          blocked_case_states: [],
+          safe_case_states: [],
+          reusable_component_resolutions: {},
+          stale_component_resolutions: {},
+          draftable_now: [],
+          blocked_now: [],
+          ready_to_pay_now: [],
+          blocked_for_pay_now: [],
+          hidden_indefinite_snoozes: [],
+          ready_preview_lines: [],
+          blocked_preview_lines: [],
+          hidden_preview_lines: []
+        };
+        wizard.workbench.session_id = null;
+        wizard.workbench.snapshot_run_id = null;
+        wizard.workbench.session_version = null;
+        wizard.workbench.session_signature = '';
+        wizard.workbench.server_selected_preview_row_ids = [];
+        wizard.workbench.server_selected_preview_row_ids_provided = false;
+        wizard.workbench.selected_preview_row_ids = [];
+        wizard.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+        wizard.workbench.canonical_preview_lines = [];
+        wizard.workbench.preview_rows = [];
+        wizard.workbench.ready_preview_lines = [];
+        wizard.workbench.payees = [];
+        wizard.workbench.summary = {};
+        wizard.workbench.preview_page_cache = {};
+        wizard.workbench.pageCache = {};
+        wizard.workbench.preview_reopen_required = true;
+        wizard.workbench.create_draft_refresh_pending = true;
+        wizard.workbench.__source_session_id_discarded = sourceSessionId || currentWorkbenchSessionId || null;
+        wizard.workbench.__obsolete_progress_session_ids = canonicalObsoleteSessionIds;
+        wizard.workbench.__obsolete_workbench_session_ids = canonicalObsoleteSessionIds;
+        wizard.workbench.__post_mutation_context = 'CANCEL_DELETE_DRAFT_SUCCESS';
+        wizard.decisions.selected_preview_row_ids = [];
+        wizard.decisions.server_selected_preview_row_ids = [];
+        wizard.decisions.server_selected_preview_row_ids_provided = false;
+        wizard.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+        wizard.decisions.canonical_preview_lines = [];
+        wizard.decisions.preview_rows = [];
+        wizard.decisions.ready_preview_lines = [];
+        wizard.decisions.draftable_now = [];
+        wizard.decisions.ready_to_pay_now = [];
+        wizard.selected_preview_row_mode = 'EXPLICIT_NONE';
+        wizard.local_selected_preview_row_ids_dirty = false;
+      } catch {}
+    };
+
+    const applyPostCancelPreviewWarning = (warningInput) => {
+      const fallbackMessage = 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.';
+      const message = String(
+        warningInput?.user_message ||
+        warningInput?.message ||
+        warningInput?.friendly_error?.message ||
+        fallbackMessage
+      ).replace(/No payment batch has been created\.?/gi, fallbackMessage).trim() || fallbackMessage;
+      const warning = {
+        ok: false,
+        error_code: String(warningInput?.error_code || warningInput?.code || 'BANKING_PAY_PREVIEW_REFRESH_FAILED').trim() || 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+        code: String(warningInput?.code || warningInput?.error_code || 'BANKING_PAY_PREVIEW_REFRESH_FAILED').trim() || 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+        title: 'Payment preview could not be refreshed',
+        message,
+        user_message: message,
+        user_action: 'REFRESH_BANKING',
+        show_modal: false
+      };
+      try {
+        const state = (st && typeof st === 'object') ? st : ((window.modalCtx && window.modalCtx.banking && typeof window.modalCtx.banking === 'object') ? window.modalCtx.banking : null);
+        const wizard = state && state.pay && state.pay.draftWizard && typeof state.pay.draftWizard === 'object' ? state.pay.draftWizard : null;
+        if (wizard) {
+          wizard.preview = (wizard.preview && typeof wizard.preview === 'object') ? wizard.preview : {};
+          wizard.preview.loading = false;
+          wizard.preview.error = message;
+          wizard.preview.friendlyError = warning;
+          wizard.preview.failure = {
+            preview_unavailable: false,
+            can_retry: true,
+            error: {
+              code: warning.error_code,
+              message
+            }
+          };
+          wizard.workbench = (wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
+          wizard.workbench.preview_reopen_required = true;
+          wizard.workbench.__post_mutation_preview_refresh_failed = true;
+          wizard.workbench.__post_mutation_preview_refresh_error_code = warning.error_code;
+          wizard.workbench.__post_mutation_preview_refresh_error_message = message;
+        }
+      } catch {}
+      return warning;
+    };
+
+    markPostCancelPreviewRefreshing();
+
+    let postCancelPreviewResetOutcome = null;
+    let postCancelPreviewResetWarning = null;
+
+    try {
+      if (typeof bankingPayBatchesList === 'function') {
+        const listState = st?.pay?.list && typeof st.pay.list === 'object' ? st.pay.list : null;
+        await bankingPayBatchesList({
+          status: listState ? listState.statusFilter : null,
+          limit: listState ? listState.limit : null,
+          offset: 0,
+          reportError: false,
+          silent: true,
+          context: {
+            source: 'runBankingPayBatchCancelFlow',
+            action: 'CANCEL_DELETE_DRAFT_SUCCESS',
+            pay_batch_id: id
+          }
+        });
+      }
+    } catch {}
+
+    try {
+      if (typeof resetPayPreviewAndDecisions === 'function') {
+        postCancelPreviewResetOutcome = await resetPayPreviewAndDecisions(postCancelResetOptions);
+      } else {
+        postCancelPreviewResetWarning = applyPostCancelPreviewWarning({
+          error_code: 'BANKING_PAY_PREVIEW_RESET_HELPER_MISSING',
+          message: 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.'
+        });
+      }
+    } catch (previewResetError) {
+      const normalisedWarning = (typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(previewResetError, previewResetError?.payload || previewResetError?.json || null, {
+            action: 'POST_DRAFT_CANCEL_PREVIEW_REFRESH',
+            mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+            cancelled_pay_batch_id: id,
+            pay_batch_id: id,
+            postCancelResetOptions,
+            post_cancel_reset_options: postCancelResetOptions,
+            fallbackCode: 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+            fallbackTitle: 'Payment preview could not be refreshed',
+            fallbackMessage: 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.',
+            silent: true,
+            background: true,
+            showModal: false
+          })
+        : previewResetError;
+      postCancelPreviewResetWarning = applyPostCancelPreviewWarning(normalisedWarning);
+    }
+
+    if (postCancelPreviewResetOutcome && typeof postCancelPreviewResetOutcome === 'object') {
+      const outcomeText = String(postCancelPreviewResetOutcome.outcome || postCancelPreviewResetOutcome.refresh_outcome || postCancelPreviewResetOutcome.status || '').trim().toLowerCase();
+      if (outcomeText === 'error') {
+        postCancelPreviewResetWarning = applyPostCancelPreviewWarning(postCancelPreviewResetOutcome.preview_refresh_warning || postCancelPreviewResetOutcome.friendly_error || postCancelPreviewResetOutcome);
+      }
+    }
+
+    responsePayload.post_cancel_preview_reset_outcome = postCancelPreviewResetOutcome;
+    responsePayload.post_cancel_preview_reset_warning = postCancelPreviewResetWarning;
+    responsePayload.preview_reset_applied = true;
 
     if (typeof onSuccess === 'function') {
-      await onSuccess({ id, responsePayload, postCancelRefresh, currentWorkbenchSessionId });
+      await onSuccess({ id, responsePayload, postCancelRefresh, postCancelResetOptions, previewResetOptions: postCancelResetOptions, postCancelPreviewResetOutcome, postCancelPreviewResetWarning, currentWorkbenchSessionId });
     }
     return true;
   }
 }
+
 
 function isBulkAuthoriseEditableDirty(state) {
   const st = (state && typeof state === 'object')
@@ -114779,21 +117494,59 @@ async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}
   const expectedTimesheetId = trimStr(opts.expected_timesheet_id || opts.expectedTimesheetId || opts.expected_current_timesheet_id || opts.expectedCurrentTimesheetId || sourceRow.expected_timesheet_id || sourceRow.current_timesheet_id || sourceRow.timesheet_id || tsId || '');
   const contractWeekId = trimStr(opts.contract_week_id || opts.contractWeekId || opts.week_id || opts.weekId || sourceRow.contract_week_id || '');
 
-  const normalizeProfile = (value, baseOnlyValue = false) => {
+  const normalizeProfile = (value, defaultProfile = 'status_header') => {
     const s = trimStr(value).toLowerCase();
     const allowed = new Set(['active_row_visible', 'status_header', 'editor', 'evidence', 'compare_import', 'full']);
     if (allowed.has(s)) return s;
-    return baseOnlyValue ? 'status_header' : 'active_row_visible';
+    return defaultProfile;
   };
   const hasExplicitBaseOnly = hasOwn(opts, 'base_only') || hasOwn(opts, 'baseOnly');
   const legacyBaseOnly = hasExplicitBaseOnly
     ? (hasOwn(opts, 'base_only') ? toBool(opts.base_only) : toBool(opts.baseOnly))
     : false;
-  const profile = normalizeProfile(opts.profile || opts.context_profile || opts.contextProfile, legacyBaseOnly);
+  const explicitEvidenceRequest = !!(
+    opts.evidence === true ||
+    opts.evidenceRefresh === true ||
+    opts.evidence_refresh === true ||
+    opts.evidencePatch === true ||
+    opts.evidence_patch === true ||
+    opts.source === 'evidence_patch' ||
+    opts.source === 'initial-evidence-hydration'
+  );
+  const explicitEditorRequest = !!(
+    opts.editor === true ||
+    opts.detail === true ||
+    opts.details === true ||
+    opts.editorRefresh === true ||
+    opts.editor_refresh === true ||
+    opts.source === 'initial-editor-hydration' ||
+    opts.source === 'row_click'
+  );
+  const explicitCompareRequest = !!(
+    opts.compare === true ||
+    opts.compare_import === true ||
+    opts.include_compare === true ||
+    opts.includeCompare === true ||
+    opts.include_import_source_rows === true ||
+    opts.includeImportSourceRows === true
+  );
+  const explicitFullRequest = !!(opts.full === true || opts.forceFull === true || opts.force_full === true);
+  const defaultProfile = legacyBaseOnly
+    ? 'status_header'
+    : (explicitFullRequest
+        ? 'full'
+        : (explicitCompareRequest
+            ? 'compare_import'
+            : (explicitEvidenceRequest ? 'evidence' : (explicitEditorRequest ? 'editor' : 'status_header'))));
+  const profile = normalizeProfile(opts.profile || opts.context_profile || opts.contextProfile, defaultProfile);
   const baseOnly = profile === 'status_header';
-  const includeEvidence = ['active_row_visible', 'evidence', 'full'].includes(profile);
-  const includeCompare = ['compare_import', 'full'].includes(profile);
-  const includeImportSourceRows = ['compare_import', 'full'].includes(profile);
+  const hasExplicitIncludeEvidence = hasOwn(opts, 'include_evidence') || hasOwn(opts, 'includeEvidence');
+  const explicitIncludeEvidenceValue = hasOwn(opts, 'include_evidence') ? toBool(opts.include_evidence) : toBool(opts.includeEvidence);
+  const includeEvidence = profile === 'evidence'
+    ? true
+    : (hasExplicitIncludeEvidence ? explicitIncludeEvidenceValue : (profile === 'full' && explicitFullRequest === true));
+  const includeCompare = profile === 'compare_import' || profile === 'full' || toBool(opts.include_compare || opts.includeCompare);
+  const includeImportSourceRows = profile === 'compare_import' || profile === 'full' || toBool(opts.include_import_source_rows || opts.includeImportSourceRows);
 
   const buildStructuredContextFailure = (reason, payload = {}, extra = {}) => {
     const sourcePayload = (payload && typeof payload === 'object') ? payload : {};
@@ -114834,12 +117587,26 @@ async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}
       evidence: [],
       left_pane: {},
       compare_payload: { required: false, rows: [], imported_detail_refs: {} },
+      profile,
+      context_profile: profile,
+      header_loaded: false,
+      header_only: false,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      loaded_layers: [],
+      context_degraded: true,
+      degraded_context: true,
       __context_options: {
         include_evidence: includeEvidence,
         include_compare: includeCompare,
         include_import_source_rows: includeImportSourceRows,
         base_only: baseOnly,
-        profile
+        profile,
+        context_profile: profile
       }
     };
   };
@@ -114993,12 +117760,34 @@ async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}
     evidence,
     left_pane: leftPane,
     compare_payload: comparePayload,
+    profile,
+    context_profile: profile,
+    header_loaded: json.header_loaded === true || details?.header_loaded === true || ['status_header', 'editor', 'evidence', 'compare_import', 'active_row_visible', 'full'].includes(profile),
+    header_only: profile === 'status_header',
+    editor_loaded: json.editor_loaded === true || details?.editor_loaded === true || profile === 'editor',
+    evidence_loaded: json.evidence_loaded === true || details?.evidence_loaded === true || profile === 'evidence',
+    compare_loaded: json.compare_loaded === true || profile === 'compare_import',
+    full_loaded: json.full_loaded === true || profile === 'full',
+    schedule_pending: profile === 'editor' ? false : true,
+    schedule_authoritative: json.schedule_authoritative === true || details?.schedule_authoritative === true || profile === 'editor',
+    loaded_layers: Array.isArray(json.loaded_layers)
+      ? deep(json.loaded_layers)
+      : [
+          'header',
+          ...(profile === 'editor' ? ['editor'] : []),
+          ...(profile === 'evidence' ? ['evidence'] : []),
+          ...(profile === 'compare_import' ? ['compare_import'] : []),
+          ...(profile === 'full' ? ['full'] : [])
+        ],
+    context_degraded: false,
+    degraded_context: false,
     __context_options: {
       include_evidence: includeEvidence,
       include_compare: includeCompare,
       include_import_source_rows: includeImportSourceRows,
       base_only: baseOnly,
-      profile
+      profile,
+      context_profile: profile
     }
   };
 
@@ -115031,6 +117820,7 @@ async function fetchTimesheetBulkAuthoriseContext(timesheetIdOrRow, options = {}
   GE();
   return out;
 }
+
 
 
 
@@ -116077,12 +118867,14 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
       return trimStr(matchIdentity?.[1] || matchRow?.[1] || st.active_row?.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
     })();
     const belongsToNextRow = (item) => {
-      const itemTsId = trimStr(item?.timesheet_id || item?.current_timesheet_id || '');
+      const itemTsId = trimStr(item?.timesheet_id || item?.current_timesheet_id || item?.requested_timesheet_id || '');
       const itemCwId = trimStr(item?.contract_week_id || item?.contractWeekId || '');
-      if (nextTsId && itemTsId && itemTsId !== nextTsId) return false;
-      if (nextCwId && itemCwId && itemCwId !== nextCwId) return false;
-      if (nextTsId && itemCwId && !itemTsId) return false;
-      return true;
+      const itemRowKey = trimStr(item?.row_key || item?.rowKey || '');
+      const nextRowKeyForMatch = trimStr(opts.nextRowKey || opts.next_row_key || st.active_row_key || st.active_row?.row_key || '');
+      if (nextRowKeyForMatch && itemRowKey && itemRowKey === nextRowKeyForMatch) return true;
+      if (nextTsId) return itemTsId === nextTsId || itemRowKey === `timesheet:${nextTsId}`;
+      if (nextCwId) return itemCwId === nextCwId || itemRowKey === `contract_week:${nextCwId}`;
+      return false;
     };
     const candidates = collectAttachedPreviewCandidatesForReset()
       .filter((item) => belongsToNextRow(item))
@@ -116153,12 +118945,27 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
     }
   }
 
-  pane.active_tab = 'attached';
-  pane.__attached_manual_override = true;
-  pane.__queue_manual_override = false;
+  const queueScopeForReset = 'global:QUEUED';
+  const previousQueueRowsForReset = Array.isArray(pane.queue_rows) ? pane.queue_rows.map((item) => deep(item)) : [];
+  const previousQueueIdForReset = trimStr(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id || '');
+  const previousQueueItemForReset = previousQueueIdForReset
+    ? (previousQueueRowsForReset.find((item) => trimStr(item?.id || item?.queue_id || '') === previousQueueIdForReset) || null)
+    : null;
+  const userExplicitQueueForReset = !!(
+    trimStr(pane.active_tab || '').toLowerCase() === 'queue' &&
+    (pane.__queue_manual_override === true || opts.preserveQueueActive === true || opts.preserveQueue === true)
+  );
+  const keepQueueSelectionForReset = !!(userExplicitQueueForReset && previousQueueItemForReset);
+
+  pane.active_tab = keepQueueSelectionForReset ? 'queue' : 'attached';
+  pane.__attached_manual_override = !keepQueueSelectionForReset;
+  pane.__queue_scope = queueScopeForReset;
+  pane.__queue_loaded_identity = '';
+  pane.__queue_manual_override = keepQueueSelectionForReset;
   pane.__queue_manual_override_identity = '';
-  pane.active_queue_id = null;
-  pane.active_queue_item = null;
+  pane.__queue_manual_override_scope = keepQueueSelectionForReset ? queueScopeForReset : '';
+  pane.active_queue_id = keepQueueSelectionForReset ? previousQueueIdForReset : null;
+  pane.active_queue_item = keepQueueSelectionForReset ? deep(previousQueueItemForReset) : null;
   pane.active_attached_id = null;
   pane.active_attached_item = null;
 
@@ -116200,10 +119007,11 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
   const seededAttachedPreview = resolveSeedAttachedPreviewForReset();
   if (seededAttachedPreview && seededAttachedPreview.selectionKey) {
     const seededItem = seededAttachedPreview.item;
-    pane.active_tab = 'attached';
-    pane.__attached_manual_override = true;
-    pane.__queue_manual_override = false;
+    pane.active_tab = keepQueueSelectionForReset ? 'queue' : 'attached';
+    pane.__attached_manual_override = !keepQueueSelectionForReset;
+    pane.__queue_manual_override = keepQueueSelectionForReset;
     pane.__queue_manual_override_identity = '';
+    pane.__queue_manual_override_scope = keepQueueSelectionForReset ? queueScopeForReset : '';
     pane.active_attached_item = seededItem ? deep(seededItem) : null;
     pane.active_attached_id = pickFirst(seededItem?.id, seededItem?.evidence_id, seededItem?.queue_id) || null;
     pane.__preview_load_requested_target_key = seededAttachedPreview.selectionKey;
@@ -116211,11 +119019,77 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
     pane.__preview_request_owner_identity = pane.__preview_identity || '';
     pane.__preview_pending_attached = false;
     pane.__preview_pending_attached_identity = '';
+    pane.pendingAttached = false;
+    pane.__pending_attached = false;
+    pane.__pendingAttached = false;
+    pane.pendingAttachedIdentity = '';
+    pane.__pending_attached_identity = '';
+    pane.pendingAttachedRequestKey = '';
+    pane.__pending_attached_request_key = '';
+    st.pendingAttached = false;
+    st.__pending_attached = false;
+    st.__bulk_authorise_pending_attached = false;
+    st.pendingAttachedIdentity = '';
+    st.__pending_attached_identity = '';
   } else {
+    const pendingAttachedIdentity = pane.__preview_identity || '';
+    const pendingAttachedRequestKey = pendingAttachedIdentity ? `pending-attached:${pendingAttachedIdentity}` : 'pending-attached';
     pane.__preview_pending_attached = true;
-    pane.__preview_pending_attached_identity = pane.__preview_identity || '';
-    pane.__preview_attached_request_key = pane.__preview_identity ? `pending-attached:${pane.__preview_identity}` : 'pending-attached';
-    pane.__preview_request_owner_identity = pane.__preview_identity || '';
+    pane.__preview_pending_attached_identity = pendingAttachedIdentity;
+    pane.__preview_attached_request_key = pendingAttachedRequestKey;
+    pane.__preview_request_owner_identity = pendingAttachedIdentity;
+    pane.pendingAttached = true;
+    pane.__pending_attached = true;
+    pane.__pendingAttached = true;
+    pane.pendingAttachedIdentity = pendingAttachedIdentity;
+    pane.__pending_attached_identity = pendingAttachedIdentity;
+    pane.pendingAttachedRequestKey = pendingAttachedRequestKey;
+    pane.__pending_attached_request_key = pendingAttachedRequestKey;
+    st.pendingAttached = true;
+    st.__pending_attached = true;
+    st.__bulk_authorise_pending_attached = true;
+    st.pendingAttachedIdentity = pendingAttachedIdentity;
+    st.__pending_attached_identity = pendingAttachedIdentity;
+
+    if (typeof refreshBulkAuthoriseActiveContext === 'function' && opts.skipEvidenceRefresh !== true && opts.skip_evidence_refresh !== true) {
+      const requestRow = st.active_row && typeof st.active_row === 'object' ? deep(st.active_row) : null;
+      const requestSeq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
+      const requestRowKey = fallbackRowKey || trimStr(st.active_row_key || '');
+      const requestIdentity = pendingAttachedIdentity;
+      const runEvidenceRefresh = async () => {
+        if (!requestRow) return false;
+        if (requestRowKey && trimStr(st.active_row_key || '') !== requestRowKey) return false;
+        if (requestSeq && (Number(st.__bulk_authorise_row_change_seq || 0) || 0) !== requestSeq) return false;
+        try {
+          const result = await refreshBulkAuthoriseActiveContext(st, {
+            row: requestRow,
+            row_key: requestRowKey,
+            recordIdentity: requestIdentity,
+            rowChangeSeq: requestSeq,
+            source: 'evidence_patch',
+            profile: 'evidence',
+            context_profile: 'evidence',
+            include_evidence: true,
+            include_compare: false,
+            include_import_source_rows: false,
+            rerender: true
+          });
+          if (result === false || result?.ok === false || result?.soft_failure === true || result?.evidence_refresh_failed === true) return false;
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(() => { void runEvidenceRefresh(); });
+        } else {
+          setTimeout(() => { void runEvidenceRefresh(); }, 0);
+        }
+      } catch {
+        setTimeout(() => { void runEvidenceRefresh(); }, 0);
+      }
+    }
   }
 
   if (!preserveSignedUrlCache) {
@@ -116246,6 +119120,9 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
   }
   return true;
 }
+
+
+
 async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, options = {}) {
   const st = (state && typeof state === 'object')
     ? state
@@ -116319,11 +119196,19 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
     const nextIdentity = trimStr(details.nextIdentity || '');
     const nextRowKeyForPane = trimStr(details.nextRowKey || '');
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
-    const hasNextRowForPane = !!(nextIdentity || nextRowKeyForPane);
+    const queueScope = 'global:QUEUED';
     const existingQueueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows.map((item) => deep(item)) : [];
-    const queueRows = hasNextRowForPane ? existingQueueRows : [];
-    const preserveQueueActive = details.preserveQueueActive === true || details.preserveQueue === true;
-    const keepQueueActive = !!(hasNextRowForPane && preserveQueueActive && trimStr(pane.active_tab || '').toLowerCase() === 'queue' && queueRows.length > 0);
+    const currentQueueId = trimStr(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id || '');
+    const preservedQueueItem = currentQueueId
+      ? (existingQueueRows.find((item) => trimStr(item?.id || item?.queue_id || '') === currentQueueId) || null)
+      : null;
+    const queueWasUserSelected = !!(
+      trimStr(pane.active_tab || '').toLowerCase() === 'queue' &&
+      (pane.__queue_manual_override === true || details.preserveQueueActive === true || details.preserveQueue === true)
+    );
+    const keepQueueActive = !!(queueWasUserSelected && preservedQueueItem);
+    const nextQueueRows = existingQueueRows;
+
     st.evidence_pane_state = {
       ...pane,
       active_tab: keepQueueActive ? 'queue' : 'attached',
@@ -116331,21 +119216,31 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       active_attached_item: null,
       attached_rows: [],
       attached_all_rows: [],
-      queue_rows: queueRows,
-      all_rows: queueRows,
+      queue_rows: nextQueueRows,
+      all_rows: nextQueueRows,
+      active_queue_id: keepQueueActive ? trimStr(preservedQueueItem.id || preservedQueueItem.queue_id || '') || null : null,
+      active_queue_item: keepQueueActive ? deep(preservedQueueItem) : null,
+      __queue_scope: queueScope,
+      __queue_loaded_identity: '',
+      __queue_loaded_scope: trimStr(pane.__queue_loaded_scope || pane.__queue_scope || '') || queueScope,
+      __queue_loading_scope: trimStr(pane.__queue_loading_scope || ''),
+      __queue_manual_override: keepQueueActive,
+      __queue_manual_override_identity: '',
+      __queue_manual_override_scope: keepQueueActive ? queueScope : '',
       __attached_manual_override: false,
       __bulk_authorise_evidence_identity: nextIdentity || nextRowKeyForPane || '',
+      pendingAttached: false,
+      __pending_attached: false,
+      __pendingAttached: false,
+      pendingAttachedIdentity: '',
+      __pending_attached_identity: '',
+      pendingAttachedRequestKey: '',
+      __pending_attached_request_key: '',
       __preview_target_key: '',
       __preview_signed_url: '',
       __preview_load_requested_target_key: '',
       __active_attached_preview_target: ''
     };
-    if (!keepQueueActive) {
-      st.evidence_pane_state.active_queue_id = null;
-      st.evidence_pane_state.active_queue_item = null;
-      st.evidence_pane_state.__queue_manual_override = false;
-      st.evidence_pane_state.__queue_manual_override_identity = '';
-    }
     if (window.modalCtx && typeof window.modalCtx === 'object') {
       window.modalCtx.timesheetState = (window.modalCtx.timesheetState && typeof window.modalCtx.timesheetState === 'object') ? window.modalCtx.timesheetState : {};
       window.modalCtx.timesheetState.evidence = [];
@@ -116591,7 +119486,23 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       segment_snoozes: [],
       is_hydrated: false,
       hydration_required: true,
-      slim_context: true
+      slim_context: true,
+      profile: 'status_header',
+      context_profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      schedule_authority: 'pending_hydration',
+      include_evidence: false,
+      loaded_layers: ['header'],
+      context_degraded: false,
+      degraded_context: false,
+      evidence_authoritative: false
     };
 
     return {
@@ -116601,6 +119512,21 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       slim_context: true,
       is_hydrated: false,
       hydration_required: true,
+      profile: 'status_header',
+      context_profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      schedule_authority: 'pending_hydration',
+      include_evidence: false,
+      loaded_layers: ['header'],
+      context_degraded: false,
+      degraded_context: false,
       requested_timesheet_id: details.requested_timesheet_id,
       current_timesheet_id: details.current_timesheet_id,
       expected_timesheet_id: details.expected_timesheet_id,
@@ -116642,30 +119568,68 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
     if (!row || typeof refreshBulkAuthoriseActiveContext !== 'function') return false;
     const cfg = (refreshOptions && typeof refreshOptions === 'object') ? refreshOptions : {};
     const rowKey = trimStr(row.row_key || '');
-    const rowSignature = trimStr(cfg.rowSignature || row.row_signature || (typeof buildBulkAuthoriseRowSignature === 'function' ? buildBulkAuthoriseRowSignature(row, st) : ''));
+    const expectedRenderSignature = trimStr(cfg.renderSignature || cfg.render_signature || '');
+    const expectedBackendSignature = trimStr(cfg.backendRowSignature || cfg.backend_row_signature || '');
+    const rowSignature = trimStr(
+      cfg.rowSignature ||
+      cfg.row_signature ||
+      expectedRenderSignature ||
+      expectedBackendSignature ||
+      row.row_signature ||
+      (typeof buildBulkAuthoriseRowSignature === 'function' ? buildBulkAuthoriseRowSignature(row, st) : '')
+    );
     const recordIdentity = trimStr(cfg.recordIdentity || resolveIdentityFromRow(row) || '');
     const rowChangeSeq = Number(cfg.rowChangeSeq || st.__bulk_authorise_row_change_seq || 0) || 0;
+    const refreshProfile = (() => {
+      const requested = trimStr(cfg.profile || cfg.context_profile || cfg.contextProfile || '').toLowerCase();
+      if (['status_header', 'editor', 'evidence', 'compare_import', 'full'].includes(requested)) return requested;
+      if (cfg.evidence === true || cfg.evidenceRefresh === true || cfg.evidence_refresh === true) return 'evidence';
+      if (cfg.statusOnly === true || cfg.status_only === true) return 'status_header';
+      if (cfg.compare === true || cfg.compare_import === true) return 'compare_import';
+      if (cfg.full === true || cfg.forceFull === true || cfg.force_full === true) return 'full';
+      return 'editor';
+    })();
+    const explicitEvidenceRefreshRequest = cfg.include_evidence === true || cfg.includeEvidence === true;
+    const refreshIncludeEvidence = refreshProfile === 'evidence'
+      ? true
+      : (refreshProfile === 'full' ? explicitEvidenceRefreshRequest : false);
+    const refreshIncludeCompare = refreshProfile === 'compare_import' || refreshProfile === 'full' || cfg.include_compare === true || cfg.includeCompare === true;
+    const refreshIncludeImportSourceRows = refreshProfile === 'compare_import' || refreshProfile === 'full' || cfg.include_import_source_rows === true || cfg.includeImportSourceRows === true;
     if (!rowKey || !rowSignature) return false;
 
-    const run = async () => {
+    const rowLayerStillCurrent = () => {
       if (trimStr(st.active_row_key || '') !== rowKey) return false;
-      if (trimStr(st.__bulk_authorise_active_row_signature || '') !== rowSignature) return false;
       if ((Number(st.__bulk_authorise_row_change_seq || 0) || 0) !== rowChangeSeq) return false;
+      const liveRenderSignature = trimStr(st.__bulk_authorise_active_render_signature || '');
+      const liveBackendSignature = trimStr(st.__bulk_authorise_active_backend_row_signature || '');
+      const liveAnySignature = trimStr(st.__bulk_authorise_active_row_signature || '');
+      if (expectedRenderSignature && liveRenderSignature && liveRenderSignature !== expectedRenderSignature) return false;
+      if (expectedBackendSignature && liveBackendSignature && liveBackendSignature !== expectedBackendSignature) return false;
+      if (!expectedRenderSignature && !expectedBackendSignature && rowSignature && liveAnySignature && liveAnySignature !== rowSignature) return false;
+      return true;
+    };
+
+    const run = async () => {
+      if (!rowLayerStillCurrent()) return false;
       try {
         const accepted = await refreshBulkAuthoriseActiveContext(st, {
           row,
           rowSignature,
+          renderSignature: expectedRenderSignature || rowSignature,
+          backendRowSignature: expectedBackendSignature,
           recordIdentity,
           rowChangeSeq,
           source: cfg.source || 'row_click',
-          profile: cfg.profile || 'active_row_visible',
+          profile: refreshProfile,
+          context_profile: refreshProfile,
+          include_evidence: refreshIncludeEvidence,
+          include_compare: refreshIncludeCompare,
+          include_import_source_rows: refreshIncludeImportSourceRows,
           bypassCache: !!cfg.bypassCache,
           rerender: cfg.rerender !== false
         });
         if (accepted === false) return false;
-        if (trimStr(st.active_row_key || '') !== rowKey) return false;
-        if (trimStr(st.__bulk_authorise_active_row_signature || '') !== rowSignature) return false;
-        if ((Number(st.__bulk_authorise_row_change_seq || 0) || 0) !== rowChangeSeq) return false;
+        if (!rowLayerStillCurrent()) return false;
         return true;
       } catch (err) {
         if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][SET-ACTIVE] deferred hydration failed', err);
@@ -116851,6 +119815,19 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       target.activeRecordIdentity = recordIdentity || target.activeRecordIdentity || null;
       target.activeTimesheetId = timesheetId || target.activeTimesheetId || null;
       target.activeContractWeekId = contractWeekId || target.activeContractWeekId || null;
+      target.profile = target.profile || 'status_header';
+      target.context_profile = target.context_profile || 'status_header';
+      target.header_loaded = true;
+      target.header_only = target.editor_loaded === true || target.evidence_loaded === true || target.compare_loaded === true || target.full_loaded === true ? false : true;
+      target.editor_loaded = target.editor_loaded === true;
+      target.evidence_loaded = target.evidence_loaded === true;
+      target.compare_loaded = target.compare_loaded === true;
+      target.full_loaded = target.full_loaded === true;
+      target.schedule_pending = target.schedule_authoritative === true ? false : true;
+      target.schedule_authoritative = target.schedule_authoritative === true;
+      target.loaded_layers = Array.isArray(target.loaded_layers)
+        ? Array.from(new Set(['header', ...target.loaded_layers.map((v) => trimStr(v).toLowerCase()).filter(Boolean)]))
+        : ['header'];
       target.current_timesheet_id = timesheetId || target.current_timesheet_id || null;
       target.requested_timesheet_id = trimStr(row.requested_timesheet_id || timesheetId || '') || target.requested_timesheet_id || null;
       target.expected_timesheet_id = trimStr(row.expected_timesheet_id || timesheetId || '') || target.expected_timesheet_id || null;
@@ -117125,14 +120102,6 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
   }
 
   if (isGenuineRowChange) {
-    resetBulkAuthorisePreviewToAttachedForRowChange(st, {
-      previousRowKey: currentRowKey,
-      nextRowKey,
-      previousIdentity: currentIdentity,
-      nextIdentity: nextIdentity,
-      source: 'set-active-row-assigned',
-      preserveSignedUrlCache: opts.preserveSignedUrlCache === true
-    });
     clearBulkAuthoriseEvidencePaneForRowChange({
       previousRowKey: currentRowKey,
       nextRowKey,
@@ -117144,6 +120113,15 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       nextRowKey,
       nextIdentity: activeRecordIdentity || nextIdentity,
       clearModalCtx: false
+    });
+    resetBulkAuthorisePreviewToAttachedForRowChange(st, {
+      previousRowKey: currentRowKey,
+      nextRowKey,
+      previousIdentity: currentIdentity,
+      nextIdentity: nextIdentity,
+      source: 'set-active-row-assigned',
+      preserveSignedUrlCache: opts.preserveSignedUrlCache === true,
+      skipEvidenceRefresh: true
     });
   }
   syncBulkAuthoriseModalCtxToActiveRow(st, { source: 'set-active-row-assigned' });
@@ -117162,25 +120140,23 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
   const shouldRefreshContext = !isStatusPatchSource && !deferContextRefresh && (opts.refreshContext !== false || isGenuineRowChange || !st.active_context || isRowClickSource);
   let hydrateAccepted = true;
   if (shouldRefreshContext) {
-    const previousHydrateSuppressDirty = !!st.__suppress_dirty_marking;
-    st.__suppress_dirty_marking = true;
-    try {
-      hydrateAccepted = await refreshBulkAuthoriseActiveContext(st, {
-        row: nextRow,
-        rowSignature: nextRenderSignature || nextBackendSignature,
-        renderSignature: nextRenderSignature,
-        backendRowSignature: nextBackendSignature,
-        recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || ''),
-        rowChangeSeq,
-        source: isIdentityPatchSource ? 'identity_patch' : 'row_click',
-        profile: 'active_row_visible',
-        bypassCache: !!opts.bypassCache,
-        rerender: false
-      });
-    } finally {
-      st.__suppress_dirty_marking = previousHydrateSuppressDirty;
-    }
-    syncBulkAuthoriseModalCtxToActiveRow(st, { source: 'set-active-row-after-refresh-context' });
+    hydrateAccepted = true;
+    scheduleDeferredContextRefresh(nextRow, {
+      rowSignature: nextRenderSignature || nextBackendSignature,
+      renderSignature: nextRenderSignature,
+      backendRowSignature: nextBackendSignature,
+      recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || ''),
+      rowChangeSeq,
+      source: isIdentityPatchSource ? 'identity_patch' : 'row_click',
+      profile: 'editor',
+      context_profile: 'editor',
+      include_evidence: false,
+      include_compare: false,
+      include_import_source_rows: false,
+      bypassCache: !!opts.bypassCache,
+      rerender: opts.hydrationRerender !== false
+    });
+    syncBulkAuthoriseModalCtxToActiveRow(st, { source: 'set-active-row-deferred-context' });
     st.__bulkAuthRightPaneRowKey = nextRowKey;
     st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
   } else if (scheduleHydration && nextRow) {
@@ -117191,7 +120167,29 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || ''),
       rowChangeSeq,
       source: isIdentityPatchSource ? 'identity_patch' : 'row_click',
-      profile: 'active_row_visible',
+      profile: 'editor',
+      context_profile: 'editor',
+      include_evidence: false,
+      include_compare: false,
+      include_import_source_rows: false,
+      bypassCache: !!opts.bypassCache,
+      rerender: opts.hydrationRerender !== false
+    });
+  }
+
+  if (!isStatusPatchSource && nextRow && opts.skipEvidenceHydration !== true && opts.skip_evidence_hydration !== true) {
+    scheduleDeferredContextRefresh(nextRow, {
+      rowSignature: nextRenderSignature || nextBackendSignature,
+      renderSignature: nextRenderSignature,
+      backendRowSignature: nextBackendSignature,
+      recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || ''),
+      rowChangeSeq,
+      source: 'evidence_patch',
+      profile: 'evidence',
+      context_profile: 'evidence',
+      include_evidence: true,
+      include_compare: false,
+      include_import_source_rows: false,
       bypassCache: !!opts.bypassCache,
       rerender: opts.hydrationRerender !== false
     });
@@ -117232,6 +120230,7 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
 
   return true;
 }
+
 
 
 async function refreshBulkAuthoriseDatasetPreservingState(state, options = {}) {
@@ -118618,12 +121617,11 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
         try {
           const liveResolvedForBinding = resolveBulkAuthoriseModalIdentity({ state: st, frame: fr, ctx: fr && fr._ctxRef, source: 'rerenderBulkAuthoriseWorkbench' });
           const liveRecordIdentityForBinding = trimStr(liveResolvedForBinding.recordIdentity || liveResolvedForBinding.record_identity || liveResolvedForBinding.identity || '');
-          const contextReadyForBinding = !!(
+          const activeRowKeyForBinding = trimStr(st.active_row_key || st.active_row?.row_key || '');
+          const layerReadyForBinding = !!(
             renderRecordIdentity === liveRecordIdentityForBinding &&
             st.__bulk_authorise_dataset_ready === true &&
-            st.__bulk_authorise_row_context_ready === true &&
-            trimStr(st.__bulk_authorise_row_context_ready_render_signature || st.__bulk_authorise_row_context_ready_signature || '') === renderSignature &&
-            Number(st.__bulk_authorise_row_context_ready_seq || 0) === Number(st.__bulk_authorise_row_change_seq || 0)
+            !!activeRowKeyForBinding
           );
           const result = st.__runPostRenderBindings({
             renderSeq,
@@ -118631,7 +121629,7 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
             renderSignature,
             backendRowSignature: renderBackendRowSignature,
             recordIdentity: renderRecordIdentity,
-            allowRowDependent: contextReadyForBinding || mutationPostRenderReason,
+            allowRowDependent: layerReadyForBinding || mutationPostRenderReason,
             bindStableControls: true,
             binderOnly: false,
             forceActionRebind: mutationPostRenderReason,
@@ -118788,6 +121786,10 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
         trimStr(st?.__bulk_authorise_row_context_ready_render_signature || st?.__bulk_authorise_row_context_ready_signature || '') === liveActiveRowSignature &&
         (Number(st?.__bulk_authorise_row_context_ready_seq || 0) || 0) === liveRowChangeSeq
       );
+      const liveLayerReadyForBinding = !!(
+        st?.__bulk_authorise_dataset_ready === true &&
+        !!trimStr(st?.active_row_key || st?.active_row?.row_key || '')
+      );
       const livePendingRowDependentBind = (st && st.__bulk_authorise_pending_row_dependent_bind && typeof st.__bulk_authorise_pending_row_dependent_bind === 'object')
         ? st.__bulk_authorise_pending_row_dependent_bind
         : null;
@@ -118815,7 +121817,7 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
           });
         }
         await rerenderBulkAuthoriseWorkbench(st, pendingReason);
-      } else if (liveContextReadyMatches && liveRowDependentBindRequired && typeof st.__runPostRenderBindings === 'function') {
+      } else if (liveLayerReadyForBinding && (liveRowDependentBindRequired || pendingRowDependentReason) && typeof st.__runPostRenderBindings === 'function') {
         const binderRenderSeq = Number(st.__bulk_authorise_render_seq || 0) || 0;
         try {
           await st.__runPostRenderBindings({
@@ -118846,7 +121848,7 @@ async function rerenderBulkAuthoriseWorkbench(state, logPrefix) {
         } catch (err) {
           console.warn(`${prefix} binder-only pass failed`, err);
         }
-      } else if (pendingRowDependentReason) {
+      } else if (pendingRowDependentReason && !liveLayerReadyForBinding) {
         if (window.__LOG_MODAL === true) {
           console.log('[TS][BULK-AUTH][PERF] drain-pending-full', {
             reason: pendingReason,
@@ -120232,8 +123234,6 @@ async function bankingPayApplyExecutePaymentResult(finalOperationResult, options
   return normalisedResult;
 }
 
-
-
 async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -120356,9 +123356,20 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
   const recursivelyDiscoveredBatchIds = collectBatchIdsFrom({
     result,
     postCreateRefresh,
-    createdBatchesFromResult
+    createdBatchesFromResult,
+    options: opts
   });
   const createdPayBatchIds = Array.from(new Set([
+    opts.pay_batch_id,
+    opts.payBatchId,
+    opts.batch_id,
+    opts.batchId,
+    opts.selected_pay_batch_id,
+    opts.selectedPayBatchId,
+    opts.umbrella_pay_batch_id,
+    opts.paye_pay_batch_id,
+    opts.umbrellaPayBatchId,
+    opts.payePayBatchId,
     result.pay_batch_id,
     result.payBatchId,
     result.batch_id,
@@ -120366,6 +123377,10 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
     result.paye_pay_batch_id,
     result.umbrellaPayBatchId,
     result.payePayBatchId,
+    ...(Array.isArray(opts.pay_batch_ids) ? opts.pay_batch_ids : []),
+    ...(Array.isArray(opts.payBatchIds) ? opts.payBatchIds : []),
+    ...(Array.isArray(opts.created_pay_batch_ids) ? opts.created_pay_batch_ids : []),
+    ...(Array.isArray(opts.createdPayBatchIds) ? opts.createdPayBatchIds : []),
     ...(Array.isArray(result.pay_batch_ids) ? result.pay_batch_ids : []),
     ...(Array.isArray(result.payBatchIds) ? result.payBatchIds : []),
     ...(Array.isArray(result.created_pay_batch_ids) ? result.created_pay_batch_ids : []),
@@ -120411,15 +123426,91 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
   ) || null;
   const replacementSessionVersion = postCreateRefresh.replacement_session_version ?? postCreateRefresh.replacementSessionVersion ?? session.replacement_session_version ?? result.replacement_session_version ?? null;
   const dirtyCandidateIds = Array.from(new Set([
+    ...(Array.isArray(opts.dirty_candidate_ids) ? opts.dirty_candidate_ids : []),
+    ...(Array.isArray(opts.dirtyCandidateIds) ? opts.dirtyCandidateIds : []),
     ...(Array.isArray(postCreateRefresh.dirty_candidate_ids) ? postCreateRefresh.dirty_candidate_ids : []),
+    ...(Array.isArray(postCreateRefresh.dirtyCandidateIds) ? postCreateRefresh.dirtyCandidateIds : []),
     ...(Array.isArray(result.dirty_candidate_ids) ? result.dirty_candidate_ids : []),
+    ...(Array.isArray(result.dirtyCandidateIds) ? result.dirtyCandidateIds : []),
     ...(Array.isArray(result.decision_sync?.touched_candidate_ids) ? result.decision_sync.touched_candidate_ids : [])
   ].map((value) => trimStr(value)).filter(Boolean)));
+  const pendingCandidateIds = Array.from(new Set([
+    ...(Array.isArray(opts.pending_candidate_ids) ? opts.pending_candidate_ids : []),
+    ...(Array.isArray(opts.pendingCandidateIds) ? opts.pendingCandidateIds : []),
+    ...(Array.isArray(postCreateRefresh.pending_candidate_ids) ? postCreateRefresh.pending_candidate_ids : []),
+    ...(Array.isArray(postCreateRefresh.pendingCandidateIds) ? postCreateRefresh.pendingCandidateIds : []),
+    ...(Array.isArray(result.pending_candidate_ids) ? result.pending_candidate_ids : []),
+    ...(Array.isArray(result.pendingCandidateIds) ? result.pendingCandidateIds : []),
+    ...dirtyCandidateIds
+  ].map((value) => trimStr(value)).filter(Boolean)));
   const refreshJobIds = Array.from(new Set([
+    ...(Array.isArray(opts.refresh_job_ids) ? opts.refresh_job_ids : []),
+    ...(Array.isArray(opts.refreshJobIds) ? opts.refreshJobIds : []),
+    ...(Array.isArray(opts.dirty_refresh_job_ids) ? opts.dirty_refresh_job_ids : []),
+    ...(Array.isArray(opts.dirtyRefreshJobIds) ? opts.dirtyRefreshJobIds : []),
     ...(Array.isArray(postCreateRefresh.dirty_refresh_job_ids) ? postCreateRefresh.dirty_refresh_job_ids : []),
+    ...(Array.isArray(postCreateRefresh.dirtyRefreshJobIds) ? postCreateRefresh.dirtyRefreshJobIds : []),
+    ...(Array.isArray(postCreateRefresh.refresh_job_ids) ? postCreateRefresh.refresh_job_ids : []),
+    ...(Array.isArray(postCreateRefresh.refreshJobIds) ? postCreateRefresh.refreshJobIds : []),
     ...(Array.isArray(result.refresh_job_ids) ? result.refresh_job_ids : []),
+    ...(Array.isArray(result.refreshJobIds) ? result.refreshJobIds : []),
     ...(Array.isArray(result.decision_sync?.job_ids) ? result.decision_sync.job_ids : [])
   ].map((value) => trimStr(value)).filter(Boolean)));
+
+  const optionARequired = createdPayBatchIds.length > 0;
+  const sourceSessionIdForOptionA = trimStr(
+    opts.source_session_id ||
+    opts.sourceSessionId ||
+    opts.session_id ||
+    opts.sessionId ||
+    result.source_session_id ||
+    result.sourceSessionId ||
+    postCreateRefresh.source_session_id ||
+    postCreateRefresh.sourceSessionId ||
+    ''
+  ) || null;
+  const sourceSnapshotRunIdForOptionA = trimStr(
+    opts.source_snapshot_run_id ||
+    opts.sourceSnapshotRunId ||
+    result.source_snapshot_run_id ||
+    result.sourceSnapshotRunId ||
+    postCreateRefresh.source_snapshot_run_id ||
+    postCreateRefresh.sourceSnapshotRunId ||
+    ''
+  ) || null;
+  const sourceSessionSignatureForOptionA = trimStr(
+    opts.source_session_signature ||
+    opts.sourceSessionSignature ||
+    opts.session_signature ||
+    opts.sessionSignature ||
+    result.source_session_signature ||
+    result.sourceSessionSignature ||
+    postCreateRefresh.source_session_signature ||
+    postCreateRefresh.sourceSessionSignature ||
+    ''
+  ) || null;
+  const sourceSessionVersionForOptionA = (
+    opts.source_session_version ??
+    opts.sourceSessionVersion ??
+    result.source_session_version ??
+    result.sourceSessionVersion ??
+    postCreateRefresh.source_session_version ??
+    postCreateRefresh.sourceSessionVersion ??
+    null
+  );
+  const selectedPreviewRowIdsForOptionA = Array.from(new Set([
+    ...(Array.isArray(opts.selected_preview_row_ids) ? opts.selected_preview_row_ids : []),
+    ...(Array.isArray(opts.selectedPreviewRowIds) ? opts.selectedPreviewRowIds : []),
+    ...(Array.isArray(result.selected_preview_row_ids) ? result.selected_preview_row_ids : []),
+    ...(Array.isArray(postCreateRefresh.selected_preview_row_ids) ? postCreateRefresh.selected_preview_row_ids : [])
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const operationIdForOptionA = trimStr(
+    opts.operation_id ||
+    opts.operationId ||
+    result.operation_id ||
+    result.operationId ||
+    ''
+  ) || null;
 
   const normalisedResult = {
     ...result,
@@ -120434,6 +123525,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
     replacement_session_signature: replacementSessionSignature,
     replacement_session_version: replacementSessionVersion,
     dirty_candidate_ids: dirtyCandidateIds,
+    pending_candidate_ids: pendingCandidateIds,
     refresh_job_ids: refreshJobIds,
     post_create_refresh: postCreateRefresh,
     session: {
@@ -120452,7 +123544,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
 
   if (typeof opts.updateWizardState === 'function') await safeCall(opts.updateWizardState, normalisedResult);
   if (typeof opts.setSelectedBatchId === 'function' && selectedBatchId) await safeCall(opts.setSelectedBatchId, selectedBatchId, normalisedResult);
-  if (typeof opts.setReplacementSession === 'function') {
+  if (!optionARequired && typeof opts.setReplacementSession === 'function') {
     await safeCall(opts.setReplacementSession, {
       session_id: replacementSessionId,
       snapshot_run_id: replacementSnapshotRunId,
@@ -120461,23 +123553,23 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
     }, normalisedResult);
   }
   if (typeof opts.setDirtyCandidateIds === 'function') await safeCall(opts.setDirtyCandidateIds, dirtyCandidateIds, normalisedResult);
-  if (typeof opts.applyRefreshJobSummary === 'function') await safeCall(opts.applyRefreshJobSummary, { refresh_job_ids: refreshJobIds, dirty_candidate_ids: dirtyCandidateIds }, normalisedResult);
+  if (typeof opts.applyRefreshJobSummary === 'function') await safeCall(opts.applyRefreshJobSummary, { refresh_job_ids: refreshJobIds, dirty_candidate_ids: dirtyCandidateIds, pending_candidate_ids: pendingCandidateIds }, normalisedResult);
   if (typeof opts.onResult === 'function') await safeCall(opts.onResult, normalisedResult);
-  if (typeof opts.refreshBankingSurfaces === 'function') await safeCall(opts.refreshBankingSurfaces, normalisedResult);
+  if (!optionARequired && typeof opts.refreshBankingSurfaces === 'function') await safeCall(opts.refreshBankingSurfaces, normalisedResult);
 
   try {
     if (typeof window !== 'undefined' && window) {
       if (window.bankingPayState && typeof window.bankingPayState === 'object') {
         if (selectedBatchId) window.bankingPayState.selected_pay_batch_id = selectedBatchId;
-        if (replacementSessionId) window.bankingPayState.workbench_session_id = replacementSessionId;
-        if (replacementSessionSignature) window.bankingPayState.workbench_session_signature = replacementSessionSignature;
-        if (replacementSessionVersion !== null && replacementSessionVersion !== undefined) window.bankingPayState.workbench_session_version = replacementSessionVersion;
+        if (!optionARequired && replacementSessionId) window.bankingPayState.workbench_session_id = replacementSessionId;
+        if (!optionARequired && replacementSessionSignature) window.bankingPayState.workbench_session_signature = replacementSessionSignature;
+        if (!optionARequired && replacementSessionVersion !== null && replacementSessionVersion !== undefined) window.bankingPayState.workbench_session_version = replacementSessionVersion;
         window.bankingPayState.dirty_candidate_ids = dirtyCandidateIds;
         window.bankingPayState.refresh_job_ids = refreshJobIds;
       }
       if (window.modalCtx && typeof window.modalCtx === 'object') {
         if (selectedBatchId) window.modalCtx.selectedPayBatchId = selectedBatchId;
-        if (replacementSessionId) window.modalCtx.bankingPayWorkbenchSessionId = replacementSessionId;
+        if (!optionARequired && replacementSessionId) window.modalCtx.bankingPayWorkbenchSessionId = replacementSessionId;
         if (String(window.modalCtx.entity || '') === 'banking') {
           window.modalCtx.banking = (window.modalCtx.banking && typeof window.modalCtx.banking === 'object') ? window.modalCtx.banking : {};
           window.modalCtx.banking.pay = (window.modalCtx.banking.pay && typeof window.modalCtx.banking.pay === 'object') ? window.modalCtx.banking.pay : {};
@@ -120487,7 +123579,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
           window.modalCtx.banking.pay.draftWizard.lastCreateDraftResult = cloneJson(normalisedResult);
           window.modalCtx.banking.pay.draftWizard.createDraftBusy = false;
           window.modalCtx.banking.pay.draftWizard.createDraftError = '';
-          if (replacementSessionId || replacementSessionSignature || replacementSnapshotRunId || replacementSessionVersion !== null) {
+          if (!optionARequired && (replacementSessionId || replacementSessionSignature || replacementSnapshotRunId || replacementSessionVersion !== null)) {
             window.modalCtx.banking.pay.draftWizard.workbench = (window.modalCtx.banking.pay.draftWizard.workbench && typeof window.modalCtx.banking.pay.draftWizard.workbench === 'object') ? window.modalCtx.banking.pay.draftWizard.workbench : {};
             if (replacementSessionId) window.modalCtx.banking.pay.draftWizard.workbench.session_id = replacementSessionId;
             if (replacementSnapshotRunId) window.modalCtx.banking.pay.draftWizard.workbench.snapshot_run_id = replacementSnapshotRunId;
@@ -120514,29 +123606,468 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
     }
   } catch {}
 
-  try {
-    const sourceSessionId = trimStr(opts.session_id || opts.sessionId || result.source_session_id || postCreateRefresh.source_session_id || postCreateRefresh.sourceSessionId || '');
-    const shouldReopenPreview = !!(replacementSessionId || replacementSessionSignature || replacementSnapshotRunId || dirtyCandidateIds.length > 0 || refreshJobIds.length > 0);
-    if (shouldReopenPreview && typeof resetPayPreviewAndDecisions === 'function') {
-      await resetPayPreviewAndDecisions({
-        mode: 'POST_ACTION_REOPEN',
-        reason: 'CREATE_DRAFT_SUCCESS',
-        source_session_id: sourceSessionId || null,
-        replacement_session_id: replacementSessionId || null,
-        replacement_session_signature: replacementSessionSignature || null,
-        replacement_snapshot_run_id: replacementSnapshotRunId || null,
-        replacement_session_version: replacementSessionVersion ?? null,
-        dirty_candidate_ids: [...dirtyCandidateIds],
-        pending_candidate_ids: [...dirtyCandidateIds],
-        refresh_job_ids: [...refreshJobIds],
-        preview_reopen_required: true,
-        created_pay_batch_ids: [...createdPayBatchIds],
-        selected_pay_batch_id: selectedBatchId || null
-      });
+  const markPostCreatePreviewRefreshFailure = (errorValue) => {
+    const fallbackMessage = 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.';
+    const backendPayload = isPlainObject(errorValue?.payload)
+      ? errorValue.payload
+      : (isPlainObject(errorValue?.json) ? errorValue.json : null);
+    const friendly = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(errorValue, backendPayload, {
+          action: 'POST_DRAFT_CREATE_PREVIEW_REFRESH',
+          fallbackCode: 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+          fallbackTitle: 'Payment preview could not be refreshed',
+          fallbackMessage,
+          userInitiated: false,
+          silent: true,
+          background: true,
+          showModal: false,
+          created_pay_batch_ids: [...createdPayBatchIds],
+          source_session_id: sourceSessionIdForOptionA || null,
+          operation_id: operationIdForOptionA || normalisedResult.operation_id || null
+        })
+      : null;
+    const warning = {
+      code: trimStr(friendly?.error_code || friendly?.code || errorValue?.error_code || errorValue?.code || 'BANKING_PAY_PREVIEW_REFRESH_FAILED') || 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+      title: trimStr(friendly?.title || friendly?.friendly_error?.title || 'Payment preview could not be refreshed') || 'Payment preview could not be refreshed',
+      message: trimStr(friendly?.user_message || friendly?.message || friendly?.friendly_error?.message || errorValue?.user_message || errorValue?.message || fallbackMessage) || fallbackMessage
+    };
+    normalisedResult.preview_refresh_failed = true;
+    normalisedResult.preview_refresh_pending = false;
+    normalisedResult.preview_refresh_warning = warning;
+    try {
+      const mc = (typeof window !== 'undefined' && window && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      const payState = (mc && String(mc.entity || '') === 'banking' && mc.banking && mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : null;
+      const wizard = payState && payState.draftWizard && typeof payState.draftWizard === 'object' ? payState.draftWizard : null;
+      if (wizard) {
+        wizard.preview = (wizard.preview && typeof wizard.preview === 'object') ? wizard.preview : {};
+        wizard.preview.data = null;
+        wizard.preview.loading = false;
+        wizard.preview.error = warning.message;
+        wizard.preview.failure = {
+          preview_unavailable: false,
+          can_retry: true,
+          error: {
+            code: warning.code,
+            message: warning.message
+          }
+        };
+        wizard.preview.friendlyError = friendly || {
+          ok: false,
+          error_code: warning.code,
+          code: warning.code,
+          title: warning.title,
+          message: warning.message,
+          user_message: warning.message,
+          friendly_error: {
+            code: warning.code,
+            title: warning.title,
+            message: warning.message
+          }
+        };
+        wizard.preview.componentStateCache = {
+          case_resolution_states: [],
+          blocked_case_states: [],
+          safe_case_states: [],
+          reusable_component_resolutions: {},
+          stale_component_resolutions: {},
+          draftable_now: [],
+          blocked_now: [],
+          ready_to_pay_now: [],
+          blocked_for_pay_now: [],
+          hidden_indefinite_snoozes: [],
+          ready_preview_lines: [],
+          blocked_preview_lines: [],
+          hidden_preview_lines: []
+        };
+        wizard.workbench = (wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
+        wizard.workbench.session_id = null;
+        wizard.workbench.snapshot_run_id = null;
+        wizard.workbench.session_signature = '';
+        wizard.workbench.session_version = null;
+        wizard.workbench.server_selected_preview_row_ids = [];
+        wizard.workbench.server_selected_preview_row_ids_provided = false;
+        wizard.workbench.canonical_preview_lines = [];
+        wizard.workbench.payees = [];
+        wizard.workbench.summary = {};
+        wizard.workbench.create_draft_refresh_pending = false;
+        wizard.workbench.preview_reopen_required = true;
+        wizard.workbench.__source_session_id_discarded = sourceSessionIdForOptionA || null;
+        wizard.workbench.__obsolete_progress_session_ids = sourceSessionIdForOptionA ? [sourceSessionIdForOptionA] : [];
+        wizard.workbench.__obsolete_workbench_session_ids = sourceSessionIdForOptionA ? [sourceSessionIdForOptionA] : [];
+        wizard.decisions = (wizard.decisions && typeof wizard.decisions === 'object') ? wizard.decisions : {};
+        wizard.decisions.selected_preview_row_ids = [];
+        wizard.decisions.server_selected_preview_row_ids = [];
+        wizard.decisions.server_selected_preview_row_ids_provided = false;
+        wizard.decisions.ready_to_pay_now = [];
+        wizard.decisions.draftable_now = [];
+        wizard.selected_preview_row_mode = 'IMPLICIT_ALL';
+        wizard.local_selected_preview_row_ids_dirty = false;
+      }
+    } catch {}
+    return warning;
+  };
+
+  const collectFreshDraftablePreviewRowIds = (previewLike) => {
+    const preview = isPlainObject(previewLike) ? previewLike : {};
+    const out = [];
+    const seen = new Set();
+    const pushId = (rowLike) => {
+      const row = isPlainObject(rowLike) ? rowLike : null;
+      if (!row) return;
+      const rowId = trimStr(row.preview_row_id || row.previewRowId || row.row_id || row.rowId || row.line_id || row.lineId || row.id || '');
+      if (!rowId || seen.has(rowId)) return;
+
+      const presentationRole = trimStr(row.presentation_role || row.presentationRole || '').toUpperCase();
+      if (presentationRole === 'HIDDEN') return;
+
+      const presentationSection = trimStr(row.presentation_section || row.presentationSection || '').toUpperCase();
+      const readinessState = trimStr(row.readiness_state || row.readinessState || '').toUpperCase();
+      const isReadyToPay = presentationSection
+        ? presentationSection === 'READY_TO_PAY'
+        : readinessState
+          ? readinessState === 'READY_TO_PAY'
+          : false;
+      const draftable = row.draftable === true || row.is_draftable === true || row.isDraftable === true;
+      const readyForDraft = row.is_ready_for_draft === true || row.isReadyForDraft === true || row.ready_for_draft === true || row.readyForDraft === true;
+
+      if (!isReadyToPay) return;
+      if (!(draftable && readyForDraft)) return;
+
+      seen.add(rowId);
+      out.push(rowId);
+    };
+
+    const componentStateCache = isPlainObject(preview.componentStateCache)
+      ? preview.componentStateCache
+      : (isPlainObject(preview.component_state_cache) ? preview.component_state_cache : null);
+
+    if (componentStateCache) {
+      for (const row of Array.isArray(componentStateCache.ready_preview_lines) ? componentStateCache.ready_preview_lines : []) pushId(row);
+      for (const row of Array.isArray(componentStateCache.ready_to_pay_now) ? componentStateCache.ready_to_pay_now : []) pushId(row);
+      for (const row of Array.isArray(componentStateCache.draftable_now) ? componentStateCache.draftable_now : []) pushId(row);
     }
-  } catch {}
+
+    for (const candidate of Array.isArray(preview.paye_candidates) ? preview.paye_candidates : []) {
+      if (!isPlainObject(candidate)) continue;
+      for (const row of Array.isArray(candidate.itemisation) ? candidate.itemisation : []) pushId(row);
+      for (const row of Array.isArray(candidate.preview_rows) ? candidate.preview_rows : []) pushId(row);
+      for (const row of Array.isArray(candidate.preview_lines) ? candidate.preview_lines : []) pushId(row);
+    }
+
+    for (const payee of Array.isArray(preview.non_paye_payees) ? preview.non_paye_payees : []) {
+      if (!isPlainObject(payee)) continue;
+      for (const row of Array.isArray(payee.itemisation) ? payee.itemisation : []) pushId(row);
+      for (const row of Array.isArray(payee.preview_rows) ? payee.preview_rows : []) pushId(row);
+      for (const row of Array.isArray(payee.preview_lines) ? payee.preview_lines : []) pushId(row);
+    }
+
+    for (const row of Array.isArray(preview.canonical_preview_lines) ? preview.canonical_preview_lines : []) pushId(row);
+    for (const row of Array.isArray(preview.ready_preview_lines) ? preview.ready_preview_lines : []) pushId(row);
+    for (const row of Array.isArray(preview.preview_rows) ? preview.preview_rows : []) pushId(row);
+    for (const row of Array.isArray(preview.rows) ? preview.rows : []) pushId(row);
+
+    return out;
+  };
+
+  const readPostCreatePreviewRefreshState = () => {
+    try {
+      const mc = (typeof window !== 'undefined' && window && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      const payState = (mc && String(mc.entity || '') === 'banking' && mc.banking && mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : null;
+      const wizard = payState && payState.draftWizard && typeof payState.draftWizard === 'object' ? payState.draftWizard : null;
+      if (!wizard) {
+        return {
+          wizard: null,
+          previewData: null,
+          previewSessionId: '',
+          error: '',
+          loading: false,
+          refreshPending: true,
+          hasPreviewData: false,
+          hasFreshPreviewData: false,
+          stalePreviewData: false,
+          previewSessionIsObsolete: false,
+          outcome: 'pending'
+        };
+      }
+
+      const previewState = isPlainObject(wizard.preview) ? wizard.preview : {};
+      const workbenchState = isPlainObject(wizard.workbench) ? wizard.workbench : {};
+      const decisionsState = isPlainObject(wizard.decisions) ? wizard.decisions : {};
+      const previewData = isPlainObject(previewState.data) ? previewState.data : null;
+      const previewSession = isPlainObject(previewData?.session) ? previewData.session : {};
+      const previewPayload = isPlainObject(previewData?.preview) ? previewData.preview : {};
+      const previewSessionId = trimStr(
+        previewData?.session_id ||
+        previewData?.sessionId ||
+        previewSession.session_id ||
+        previewSession.sessionId ||
+        previewPayload.session_id ||
+        previewPayload.sessionId ||
+        workbenchState.session_id ||
+        decisionsState.session_id ||
+        ''
+      );
+      const sourceSessionIds = Array.from(new Set([
+        sourceSessionIdForOptionA,
+        opts.source_session_id,
+        opts.sourceSessionId,
+        opts.session_id,
+        opts.sessionId,
+        result.source_session_id,
+        result.sourceSessionId,
+        postCreateRefresh.source_session_id,
+        postCreateRefresh.sourceSessionId,
+        workbenchState.__source_session_id_discarded,
+        previewState.__post_create_source_session_id
+      ].map((value) => trimStr(value)).filter(Boolean)));
+      const obsoleteSessionIds = Array.from(new Set([
+        ...sourceSessionIds,
+        ...(Array.isArray(opts.obsolete_session_ids) ? opts.obsolete_session_ids : []),
+        ...(Array.isArray(opts.obsoleteSessionIds) ? opts.obsoleteSessionIds : []),
+        ...(Array.isArray(workbenchState.__obsolete_progress_session_ids) ? workbenchState.__obsolete_progress_session_ids : []),
+        ...(Array.isArray(workbenchState.__obsolete_workbench_session_ids) ? workbenchState.__obsolete_workbench_session_ids : [])
+      ].map((value) => trimStr(value)).filter(Boolean)));
+      const sourceSessionSet = new Set(sourceSessionIds);
+      const obsoleteSessionSet = new Set(obsoleteSessionIds);
+      const previewSessionMatchesSource = !!(previewSessionId && sourceSessionSet.has(previewSessionId));
+      const previewSessionIsObsolete = !!(previewSessionId && obsoleteSessionSet.has(previewSessionId));
+      const requiresFreshNonObsoleteSession = optionARequired && sourceSessionIds.length > 0;
+      const hasPreviewData = !!previewData;
+      const hasFreshPreviewData = hasPreviewData && (
+        !requiresFreshNonObsoleteSession ||
+        (!!previewSessionId && !previewSessionMatchesSource && !previewSessionIsObsolete)
+      );
+      const stalePreviewData = hasPreviewData && requiresFreshNonObsoleteSession && !hasFreshPreviewData;
+      const error = trimStr(
+        previewState.error ||
+        previewState.preview_error ||
+        previewState.failure?.error?.message ||
+        previewState.failure?.message ||
+        previewState.friendlyError?.user_message ||
+        previewState.friendlyError?.message ||
+        ''
+      );
+      const loading = previewState.loading === true;
+      const pendingCandidateIds = Array.from(new Set([
+        ...(Array.isArray(workbenchState.pending_candidate_ids) ? workbenchState.pending_candidate_ids : []),
+        ...(Array.isArray(workbenchState.pendingCandidateIds) ? workbenchState.pendingCandidateIds : []),
+        ...(Array.isArray(decisionsState.pending_candidate_ids) ? decisionsState.pending_candidate_ids : []),
+        ...(Array.isArray(decisionsState.pendingCandidateIds) ? decisionsState.pendingCandidateIds : [])
+      ].map((value) => trimStr(value)).filter(Boolean)));
+      const dirtyCandidateIds = Array.from(new Set([
+        ...(Array.isArray(workbenchState.dirty_candidate_ids) ? workbenchState.dirty_candidate_ids : []),
+        ...(Array.isArray(workbenchState.dirtyCandidateIds) ? workbenchState.dirtyCandidateIds : []),
+        ...(Array.isArray(decisionsState.dirty_candidate_ids) ? decisionsState.dirty_candidate_ids : []),
+        ...(Array.isArray(decisionsState.dirtyCandidateIds) ? decisionsState.dirtyCandidateIds : [])
+      ].map((value) => trimStr(value)).filter(Boolean)));
+      const pendingCandidateJobs = [
+        ...(Array.isArray(workbenchState.pending_candidate_jobs) ? workbenchState.pending_candidate_jobs : []),
+        ...(Array.isArray(workbenchState.pendingCandidateJobs) ? workbenchState.pendingCandidateJobs : []),
+        ...(Array.isArray(decisionsState.pending_candidate_jobs) ? decisionsState.pending_candidate_jobs : []),
+        ...(Array.isArray(decisionsState.pendingCandidateJobs) ? decisionsState.pendingCandidateJobs : [])
+      ].filter((job) => isPlainObject(job));
+      const hasPendingCandidates = pendingCandidateIds.length > 0 || dirtyCandidateIds.length > 0 || pendingCandidateJobs.length > 0;
+      const reopenFlagIsPending = !!(
+        !hasFreshPreviewData && (
+          workbenchState.create_draft_refresh_pending === true ||
+          workbenchState.preview_reopen_required === true ||
+          previewState.__post_create_refresh_pending === true
+        )
+      );
+      const refreshPending = !!(stalePreviewData || loading || hasPendingCandidates || reopenFlagIsPending || (!hasFreshPreviewData && optionARequired));
+      const outcome = error
+        ? 'error'
+        : stalePreviewData
+          ? 'rebase_required'
+          : refreshPending
+            ? 'pending'
+            : hasFreshPreviewData
+              ? 'ready'
+              : 'pending';
+
+      return {
+        wizard,
+        previewData,
+        previewSessionId,
+        sourceSessionIds,
+        obsoleteSessionIds,
+        error,
+        loading,
+        refreshPending,
+        hasPreviewData,
+        hasFreshPreviewData,
+        stalePreviewData,
+        previewSessionIsObsolete: previewSessionIsObsolete || previewSessionMatchesSource,
+        pending_candidate_ids: pendingCandidateIds,
+        dirty_candidate_ids: dirtyCandidateIds,
+        pending_candidate_jobs: pendingCandidateJobs,
+        outcome
+      };
+    } catch {
+      return {
+        wizard: null,
+        previewData: null,
+        previewSessionId: '',
+        error: '',
+        loading: false,
+        refreshPending: true,
+        hasPreviewData: false,
+        hasFreshPreviewData: false,
+        stalePreviewData: false,
+        previewSessionIsObsolete: false,
+        outcome: 'pending'
+      };
+    }
+  };
+
+  const reconcilePostCreateSelectedPreviewRows = () => {
+    const state = readPostCreatePreviewRefreshState();
+    const wizard = state.wizard;
+    if (!wizard || !state.hasFreshPreviewData || state.stalePreviewData) return null;
+
+    const previewEnvelope = isPlainObject(state.previewData) ? state.previewData : {};
+    const previewPayload = isPlainObject(previewEnvelope.preview) ? previewEnvelope.preview : previewEnvelope;
+    const freshDraftableRowIds = collectFreshDraftablePreviewRowIds(previewPayload);
+    const freshDraftableSet = new Set(freshDraftableRowIds);
+    const originalSelectedIds = Array.from(new Set(selectedPreviewRowIdsForOptionA.map((value) => trimStr(value)).filter(Boolean)));
+    const reconciledSelectedIds = originalSelectedIds.filter((rowId) => freshDraftableSet.has(rowId));
+    const nextMode = reconciledSelectedIds.length > 0 ? 'EXPLICIT_SUBSET' : 'EXPLICIT_NONE';
+
+    try {
+      wizard.decisions = (wizard.decisions && typeof wizard.decisions === 'object') ? wizard.decisions : {};
+      wizard.workbench = (wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
+      wizard.decisions.selected_preview_row_ids = [...reconciledSelectedIds];
+      wizard.decisions.server_selected_preview_row_ids = [...reconciledSelectedIds];
+      wizard.decisions.server_selected_preview_row_ids_provided = true;
+      wizard.decisions.selected_preview_row_mode = nextMode;
+      wizard.workbench.server_selected_preview_row_ids = [...reconciledSelectedIds];
+      wizard.workbench.server_selected_preview_row_ids_provided = true;
+      wizard.workbench.selected_preview_row_ids = [...reconciledSelectedIds];
+      wizard.workbench.selected_preview_row_mode = nextMode;
+      wizard.selected_preview_row_mode = nextMode;
+      wizard.local_selected_preview_row_ids_dirty = false;
+    } catch {}
+
+    return {
+      original_selected_preview_row_ids: originalSelectedIds,
+      fresh_draftable_preview_row_ids: freshDraftableRowIds,
+      reconciled_selected_preview_row_ids: reconciledSelectedIds,
+      selected_preview_row_mode: nextMode
+    };
+  };
+
+  try {
+    const resetRequired = optionARequired || !!(replacementSessionId || replacementSessionSignature || replacementSnapshotRunId || dirtyCandidateIds.length > 0 || pendingCandidateIds.length > 0 || refreshJobIds.length > 0);
+    if (resetRequired) {
+      if (typeof resetPayPreviewAndDecisions !== 'function') {
+        throw new Error('Payment draft was created, but the payment preview reset helper is not available. Refresh Banking and try again.');
+      }
+      if (optionARequired) {
+        const postCreateResetOutcome = await resetPayPreviewAndDecisions({
+          mode: 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN',
+          reason: 'CREATE_DRAFT_SUCCESS',
+          mutation_context: 'CREATE_DRAFT_SUCCESS',
+          source_session_id: sourceSessionIdForOptionA || null,
+          source_snapshot_run_id: sourceSnapshotRunIdForOptionA || null,
+          source_session_version: sourceSessionVersionForOptionA ?? null,
+          source_session_signature: sourceSessionSignatureForOptionA || null,
+          obsolete_session_ids: sourceSessionIdForOptionA ? [sourceSessionIdForOptionA] : [],
+          dirty_candidate_ids: [...dirtyCandidateIds],
+          pending_candidate_ids: [...pendingCandidateIds],
+          refresh_job_ids: [...refreshJobIds],
+          preview_reopen_required: true,
+          force_new_session: true,
+          discard_source_session: true,
+          ignore_replacement_session: true,
+          created_pay_batch_ids: [...createdPayBatchIds],
+          selected_pay_batch_id: selectedBatchId || null,
+          selected_preview_row_ids: [...selectedPreviewRowIdsForOptionA],
+          operation_id: operationIdForOptionA || normalisedResult.operation_id || null
+        });
+        const postResetState = readPostCreatePreviewRefreshState();
+        const postCreateResetOutcomeText = trimStr(
+          postCreateResetOutcome?.outcome ||
+          postCreateResetOutcome?.status ||
+          postCreateResetOutcome?.refresh_outcome ||
+          postCreateResetOutcome?.preview_refresh_outcome ||
+          postResetState.outcome ||
+          ''
+        ).toLowerCase();
+        normalisedResult.preview_refresh_outcome = postResetState.outcome || postCreateResetOutcomeText || null;
+        if (postResetState.error) {
+          markPostCreatePreviewRefreshFailure({
+            ok: false,
+            error_code: 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+            code: 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+            message: postResetState.error
+          });
+        } else if (postResetState.outcome === 'rebase_required' || postCreateResetOutcomeText === 'rebase_required') {
+          normalisedResult.preview_refresh_failed = false;
+          normalisedResult.preview_refresh_pending = true;
+          normalisedResult.preview_refresh_outcome = 'rebase_required';
+          normalisedResult.preview_refresh_warning = {
+            code: 'BANKING_PAY_PREVIEW_REBASE_REQUIRED',
+            title: 'Refreshing payment preview',
+            message: 'Payment draft was created. CloudTMS is reopening the payment preview so drafted rows are removed.'
+          };
+        } else if (postResetState.loading || postResetState.refreshPending || postResetState.outcome === 'pending' || postCreateResetOutcomeText === 'pending') {
+          normalisedResult.preview_refresh_failed = false;
+          normalisedResult.preview_refresh_pending = true;
+          normalisedResult.preview_refresh_outcome = 'pending';
+          normalisedResult.preview_refresh_warning = {
+            code: 'BANKING_PAY_PREVIEW_REFRESH_PENDING',
+            title: 'Refreshing payment preview',
+            message: 'Payment draft was created. CloudTMS is refreshing the payment preview.'
+          };
+        } else if (postResetState.hasFreshPreviewData && postResetState.outcome === 'ready') {
+          const reconciliation = reconcilePostCreateSelectedPreviewRows();
+          normalisedResult.preview_refresh_failed = false;
+          normalisedResult.preview_refresh_pending = false;
+          normalisedResult.preview_refresh_outcome = 'ready';
+          if (reconciliation) {
+            normalisedResult.post_create_selection_reconciliation = reconciliation;
+          }
+        } else {
+          normalisedResult.preview_refresh_failed = false;
+          normalisedResult.preview_refresh_pending = true;
+          normalisedResult.preview_refresh_outcome = 'pending';
+          normalisedResult.preview_refresh_warning = {
+            code: 'BANKING_PAY_PREVIEW_REFRESH_PENDING',
+            title: 'Refreshing payment preview',
+            message: 'Payment draft was created. CloudTMS is refreshing the payment preview.'
+          };
+        }
+      } else {
+        const sourceSessionId = trimStr(opts.session_id || opts.sessionId || result.source_session_id || postCreateRefresh.source_session_id || postCreateRefresh.sourceSessionId || '');
+        await resetPayPreviewAndDecisions({
+          mode: 'POST_ACTION_REOPEN',
+          reason: 'CREATE_DRAFT_SUCCESS',
+          source_session_id: sourceSessionId || null,
+          replacement_session_id: replacementSessionId || null,
+          replacement_session_signature: replacementSessionSignature || null,
+          replacement_snapshot_run_id: replacementSnapshotRunId || null,
+          replacement_session_version: replacementSessionVersion ?? null,
+          dirty_candidate_ids: [...dirtyCandidateIds],
+          pending_candidate_ids: [...pendingCandidateIds],
+          refresh_job_ids: [...refreshJobIds],
+          preview_reopen_required: true,
+          created_pay_batch_ids: [...createdPayBatchIds],
+          selected_pay_batch_id: selectedBatchId || null
+        });
+      }
+    }
+  } catch (resetErr) {
+    if (optionARequired) {
+      markPostCreatePreviewRefreshFailure(resetErr);
+    }
+  }
 
   try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+
+  const suppressGenericPostCreateRefresh = !!(optionARequired && opts.callGlobalRefresh !== true && opts.call_global_refresh !== true);
+  if (!suppressGenericPostCreateRefresh && optionARequired && typeof opts.refreshBankingSurfaces === 'function') {
+    await safeCall(opts.refreshBankingSurfaces, normalisedResult);
+  }
 
   for (const globalName of [
     'refreshBankingPayWorkbench',
@@ -120547,7 +124078,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
   ]) {
     try {
       const fn = (typeof window !== 'undefined' && window && typeof window[globalName] === 'function') ? window[globalName] : null;
-      if (fn && opts.callGlobalRefresh !== false && opts.call_global_refresh !== false) await safeCall(fn, normalisedResult);
+      if (fn && !suppressGenericPostCreateRefresh && opts.callGlobalRefresh !== false && opts.call_global_refresh !== false) await safeCall(fn, normalisedResult);
     } catch {}
   }
 
@@ -120561,8 +124092,83 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
   const id = trimStr(sessionId && typeof sessionId === 'object' ? (sessionId.session_id || sessionId.sessionId || sessionId.id) : sessionId);
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const sectionText = trimStr(section || opts.section || (sessionId && typeof sessionId === 'object' ? sessionId.section : '')).toLowerCase();
+  const obsoleteSessionIds = Array.from(new Set([
+    ...(Array.isArray(opts.obsolete_session_ids) ? opts.obsolete_session_ids : []),
+    ...(Array.isArray(opts.obsoleteSessionIds) ? opts.obsoleteSessionIds : []),
+    opts.source_session_id,
+    opts.sourceSessionId
+  ].map((value) => trimStr(value)).filter(Boolean)));
+  const mutationContext = trimStr(opts.mutation_context || opts.mutationContext || '');
+  const forceNewSession = opts.force_new_session === true || opts.forceNewSession === true;
+  const staleCodes = new Set(['OBSOLETE_SESSION', 'STALE_SESSION', 'REBASE_REQUIRED', 'WORKBENCH_SESSION_NOT_OPEN', 'WORKBENCH_SESSION_DISCARDED', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID']);
+  const normalisePageCode = (value) => trimStr(value).toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  const serialisePageErrorPayload = (value) => {
+    try {
+      if (value == null) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+      return JSON.stringify(value);
+    } catch {
+      try { return String(value || ''); } catch { return ''; }
+    }
+  };
+  const looksFatalPageFailure = (value) => {
+    const text = serialisePageErrorPayload(value).toUpperCase();
+    if (!text) return false;
+    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
+    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
+    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
+    return false;
+  };
+  const shouldTreatPageStatusAsRebase = (status) => {
+    const n = Number(status);
+    if (!Number.isFinite(n)) return false;
+    if (n === 401 || n === 403) return false;
+    return [404, 409, 410, 423, 425, 500, 502, 503, 504].includes(Math.trunc(n));
+  };
+  const isObsoleteSessionId = (value) => {
+    const sessionIdText = trimStr(value);
+    return !!sessionIdText && obsoleteSessionIds.includes(sessionIdText);
+  };
+  const getActiveWorkbenchSessionId = () => {
+    const explicitExpected = trimStr(opts.expected_session_id || opts.expectedSessionId || opts.current_session_id || opts.currentSessionId || '');
+    if (explicitExpected) return explicitExpected;
+    try {
+      const mc = (typeof window !== 'undefined' && window && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      const wiz = mc && String(mc.entity || '') === 'banking'
+        ? mc.banking?.pay?.draftWizard
+        : null;
+      return trimStr(
+        wiz?.workbench?.session_id ||
+        wiz?.decisions?.session_id ||
+        mc?.bankingPayWorkbenchSessionId ||
+        ''
+      );
+    } catch {}
+    return '';
+  };
+  const activeSessionAtRequestStart = getActiveWorkbenchSessionId();
+  const shouldEnforceActiveSessionPage = opts.enforce_active_session !== false && opts.enforceActiveSession !== false && opts.allow_detached_session_page !== true && opts.allowDetachedSessionPage !== true;
+  const makeRebaseRequiredPage = (code = 'REBASE_REQUIRED', message = 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.') => ({
+    ok: false,
+    error_code: code,
+    code,
+    rebase_required: true,
+    requires_new_session: true,
+    session_id: id || null,
+    section: sectionText || null,
+    obsolete_session_ids: [...obsoleteSessionIds],
+    mutation_context: mutationContext || null,
+    items: [],
+    rows: [],
+    next_cursor: null,
+    returned_count: 0,
+    message
+  });
+
   if (!id) throw new Error('bankingPayWorkbenchSessionGetPreviewPage: sessionId is required');
   if (!sectionText) throw new Error('bankingPayWorkbenchSessionGetPreviewPage: section is required');
+  if ((forceNewSession || obsoleteSessionIds.length > 0) && isObsoleteSessionId(id)) return makeRebaseRequiredPage('OBSOLETE_SESSION');
   if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingPayWorkbenchSessionGetPreviewPage: authFetch/API is required');
 
   const allowedSections = new Set([
@@ -120612,7 +124218,7 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
   const makeFriendlyError = (errorValue, parsedPayload = null, response = null) => {
     const friendly = (typeof bankingNormalizeApiError === 'function')
       ? bankingNormalizeApiError(errorValue, parsedPayload, {
-          action: opts.action || 'BANKING_PAY_WORKBENCH_PREVIEW_PAGE',
+          action: mutationContext || opts.action || 'BANKING_PAY_WORKBENCH_PREVIEW_PAGE',
           sessionId: id,
           section: sectionText,
           userInitiated: opts.userInitiated !== false
@@ -120649,10 +124255,39 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
     throw makeFriendlyError(networkError, null, response || null);
   }
 
-  if (!response.ok) throw makeFriendlyError(parsed || text || { message: text }, parsed, response);
-  if (parsed && typeof parsed === 'object' && parsed.ok === false) throw makeFriendlyError(parsed, parsed, response);
+  if (!response.ok) {
+    const code = normalisePageCode(parsed?.error_code || parsed?.code || '');
+    if (
+      staleCodes.has(code) ||
+      ((mutationContext || forceNewSession || obsoleteSessionIds.length > 0) && shouldTreatPageStatusAsRebase(response.status) && !looksFatalPageFailure(parsed || text))
+    ) {
+      return makeRebaseRequiredPage(code || 'REBASE_REQUIRED', trimStr(parsed?.message || parsed?.error || text || '') || undefined);
+    }
+    throw makeFriendlyError(parsed || text || { message: text }, parsed, response);
+  }
+  if (parsed && typeof parsed === 'object' && parsed.ok === false) {
+    const code = normalisePageCode(parsed.error_code || parsed.code || '');
+    if (staleCodes.has(code) || parsed.rebase_required === true || parsed.requires_new_session === true) {
+      return makeRebaseRequiredPage(code || 'REBASE_REQUIRED', trimStr(parsed.message || parsed.error || '') || undefined);
+    }
+    throw makeFriendlyError(parsed, parsed, response);
+  }
 
   const payload = unwrapPayload(parsed || {});
+  const returnedSessionId = trimStr(payload.session_id || payload.sessionId || id);
+  if ((forceNewSession || obsoleteSessionIds.length > 0) && isObsoleteSessionId(returnedSessionId)) {
+    return makeRebaseRequiredPage('OBSOLETE_SESSION');
+  }
+  if (shouldEnforceActiveSessionPage) {
+    const activeSessionAfterResponse = getActiveWorkbenchSessionId();
+    const expectedActiveSessionId = activeSessionAtRequestStart || trimStr(opts.expected_session_id || opts.expectedSessionId || opts.current_session_id || opts.currentSessionId || '');
+    if (expectedActiveSessionId && returnedSessionId && expectedActiveSessionId !== returnedSessionId) {
+      return makeRebaseRequiredPage('STALE_SESSION', 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.');
+    }
+    if (activeSessionAfterResponse && returnedSessionId && activeSessionAfterResponse !== returnedSessionId) {
+      return makeRebaseRequiredPage('STALE_SESSION', 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.');
+    }
+  }
   const rows = Array.isArray(payload.items)
     ? payload.items
     : Array.isArray(payload.rows)
@@ -120676,6 +124311,10 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
     limit
   };
 }
+
+
+
+
 
 function classifyBulkAuthoriseEditability(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
@@ -121186,6 +124825,7 @@ function bindBulkAuthoriseShellControls(state) {
 }
 
 
+
 async function refreshBulkAuthoriseActiveContext(state, options = {}) {
   const st = (state && typeof state === 'object')
     ? state
@@ -121385,7 +125025,7 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
     /^timesheet:/i.test(rowKey) ||
     trimStr(row?.timesheet_id || row?.current_timesheet_id || row?.requested_timesheet_id || row?.expected_timesheet_id || '')
   );
-  const normalizeProfile = (value, defaultProfile = 'active_row_visible') => {
+  const normalizeProfile = (value, defaultProfile = 'status_header') => {
     const s = trimStr(value).toLowerCase();
     const allowed = new Set(['active_row_visible', 'status_header', 'editor', 'evidence', 'compare_import', 'full']);
     if (allowed.has(s)) return s;
@@ -121395,15 +125035,43 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
   const legacyBaseOnly = hasExplicitBaseOnly
     ? (hasOwn(opts, 'base_only') ? toBool(opts.base_only) : toBool(opts.baseOnly))
     : !isActiveTimesheetRow;
+  const explicitCompareRequest = !!(
+    opts.compare === true ||
+    opts.compare_import === true ||
+    opts.include_compare === true ||
+    opts.includeCompare === true ||
+    opts.include_import_source_rows === true ||
+    opts.includeImportSourceRows === true
+  );
+  const rawRequestedProfileForFull = trimStr(opts.profile || opts.context_profile || opts.contextProfile || '').toLowerCase();
+  const explicitFullRequest = !!(
+    opts.full === true ||
+    opts.forceFull === true ||
+    opts.force_full === true ||
+    rawRequestedProfileForFull === 'full'
+  );
+  const defaultProfile = legacyBaseOnly
+    ? 'status_header'
+    : (statusOnlyPatch
+        ? 'status_header'
+        : (evidencePatch
+            ? 'evidence'
+            : (manualPatch || identityPatch || refreshSource === 'row_click' || refreshSource === 'initial-editor-hydration'
+                ? 'editor'
+                : (explicitCompareRequest ? 'compare_import' : (explicitFullRequest ? 'full' : 'status_header')))));
   const requestedProfile = normalizeProfile(
     opts.profile || opts.context_profile || opts.contextProfile,
-    legacyBaseOnly ? 'status_header' : (evidencePatch ? 'evidence' : 'active_row_visible')
+    defaultProfile
   );
   const effectiveProfile = statusOnlyPatch ? 'status_header' : requestedProfile;
   const baseOnly = effectiveProfile === 'status_header';
-  const effectiveIncludeEvidence = ['active_row_visible', 'evidence', 'full'].includes(effectiveProfile);
-  const effectiveIncludeCompare = ['compare_import', 'full'].includes(effectiveProfile);
-  const effectiveIncludeImportSourceRows = ['compare_import', 'full'].includes(effectiveProfile);
+  const hasExplicitIncludeEvidence = hasOwn(opts, 'include_evidence') || hasOwn(opts, 'includeEvidence');
+  const explicitIncludeEvidenceValue = hasOwn(opts, 'include_evidence') ? toBool(opts.include_evidence) : toBool(opts.includeEvidence);
+  const effectiveIncludeEvidence = effectiveProfile === 'evidence'
+    ? true
+    : (hasExplicitIncludeEvidence ? explicitIncludeEvidenceValue : (effectiveProfile === 'full' && explicitFullRequest === true));
+  const effectiveIncludeCompare = effectiveProfile === 'compare_import' || effectiveProfile === 'full' || toBool(opts.include_compare || opts.includeCompare);
+  const effectiveIncludeImportSourceRows = effectiveProfile === 'compare_import' || effectiveProfile === 'full' || toBool(opts.include_import_source_rows || opts.includeImportSourceRows);
 
   const buildFallbackRelated = (rowObj) => {
     const rowLike = (rowObj && typeof rowObj === 'object') ? rowObj : {};
@@ -121446,14 +125114,151 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
       ? { ...baseRow, ...(fetchedRow || {}), ...rowPatch }
       : { ...(fetchedRow || {}), ...rowPatch, ...baseRow };
 
+    const existingEvidenceRows = Array.isArray(st.active_context?.evidence)
+      ? deep(st.active_context.evidence)
+      : (Array.isArray(st.active_context?.details?.evidence)
+          ? deep(st.active_context.details.evidence)
+          : (Array.isArray(st.active_details?.evidence)
+              ? deep(st.active_details.evidence)
+              : (Array.isArray(st.evidence_pane_state?.attached_rows) ? deep(st.evidence_pane_state.attached_rows) : [])));
+    const incomingEvidenceRows = Array.isArray(payload.evidence)
+      ? deep(payload.evidence)
+      : (Array.isArray(payload.details?.evidence) ? deep(payload.details.evidence) : (Array.isArray(payload.state?.evidence) ? deep(payload.state.evidence) : []));
+    const existingEvidenceLoaded = !!(
+      st.active_context?.evidence_loaded === true ||
+      st.active_context?.details?.evidence_loaded === true ||
+      st.active_details?.evidence_loaded === true ||
+      st.active_ctx?.evidence_loaded === true ||
+      st.active_ctx?.state?.evidence_loaded === true ||
+      st.evidence_pane_state?.__evidence_loaded === true ||
+      st.evidence_pane_state?.__attached_loaded === true
+    );
+    const existingComparePayload = (() => {
+      const candidates = [
+        st.active_context?.compare_payload,
+        st.active_context?.details?.compare_payload,
+        st.active_context?.details?.healthroster_compare,
+        st.active_details?.compare_payload,
+        st.active_details?.healthroster_compare,
+        st.active_ctx?.compare_payload,
+        st.active_ctx?.details?.compare_payload,
+        st.active_ctx?.details?.healthroster_compare,
+        st.active_ctx?.state?.compare_payload,
+        st.active_ctx?.state?.healthroster_compare
+      ];
+      for (const candidate of candidates) {
+        if (candidate && typeof candidate === 'object') return deep(candidate);
+      }
+      return { required: false, rows: [], imported_detail_refs: {} };
+    })();
+    const existingLeftPanePayload = (() => {
+      const candidates = [
+        st.active_context?.left_pane,
+        st.active_context?.details?.left_pane,
+        st.active_details?.left_pane,
+        st.active_ctx?.left_pane,
+        st.active_ctx?.details?.left_pane,
+        st.active_ctx?.state?.left_pane
+      ];
+      for (const candidate of candidates) {
+        if (candidate && typeof candidate === 'object') return deep(candidate);
+      }
+      return {};
+    })();
+    const incomingComparePayload = (payload.compare_payload && typeof payload.compare_payload === 'object')
+      ? deep(payload.compare_payload)
+      : ((payload.details?.compare_payload && typeof payload.details.compare_payload === 'object')
+          ? deep(payload.details.compare_payload)
+          : ((payload.details?.healthroster_compare && typeof payload.details.healthroster_compare === 'object')
+              ? deep(payload.details.healthroster_compare)
+              : { required: false, rows: [], imported_detail_refs: {} }));
+    const existingCompareLoaded = !!(
+      st.active_context?.compare_loaded === true ||
+      st.active_context?.details?.compare_loaded === true ||
+      st.active_details?.compare_loaded === true ||
+      st.active_ctx?.compare_loaded === true ||
+      st.active_ctx?.state?.compare_loaded === true ||
+      st.active_ctx?.details?.compare_loaded === true
+    );
+    const collectLoadedLayers = (...sources) => {
+      const out = [];
+      for (const source of sources) {
+        if (!Array.isArray(source)) continue;
+        for (const value of source) {
+          const clean = trimStr(value).toLowerCase();
+          if (clean && !out.includes(clean)) out.push(clean);
+        }
+      }
+      return out;
+    };
+    const existingLoadedLayers = collectLoadedLayers(
+      st.active_context?.loaded_layers,
+      st.active_context?.details?.loaded_layers,
+      st.active_details?.loaded_layers,
+      st.active_ctx?.loaded_layers,
+      st.active_ctx?.state?.loaded_layers
+    );
+    const payloadLoadedLayers = collectLoadedLayers(payload.loaded_layers, payload.details?.loaded_layers, payload.state?.loaded_layers);
+    const fullAuthoritative = !!(
+      effectiveProfile === 'full' ||
+      payload.full_loaded === true ||
+      payload.details?.full_loaded === true ||
+      payload.state?.full_loaded === true
+    );
+    const evidenceAuthoritative = !!(
+      effectiveProfile === 'evidence' ||
+      (effectiveProfile === 'active_row_visible' && effectiveIncludeEvidence === true) ||
+      (fullAuthoritative && effectiveIncludeEvidence === true) ||
+      payload.evidence_loaded === true ||
+      payload.details?.evidence_loaded === true ||
+      payload.state?.evidence_loaded === true
+    );
+    const compareAuthoritative = !!(
+      effectiveProfile === 'compare_import' ||
+      (fullAuthoritative && effectiveIncludeCompare === true) ||
+      payload.compare_loaded === true ||
+      payload.details?.compare_loaded === true ||
+      payload.state?.compare_loaded === true
+    );
+    const evidenceLayerLoaded = !!(evidenceAuthoritative || existingEvidenceLoaded);
+    const compareLayerLoaded = !!(compareAuthoritative || existingCompareLoaded);
+    const rawEvidenceRows = evidenceAuthoritative ? incomingEvidenceRows : existingEvidenceRows;
+    const rawComparePayload = compareAuthoritative ? incomingComparePayload : existingComparePayload;
+    const rawLeftPanePayload = (compareAuthoritative && payload.left_pane && typeof payload.left_pane === 'object')
+      ? deep(payload.left_pane)
+      : existingLeftPanePayload;
+    const mergedLoadedLayersSet = new Set([...existingLoadedLayers, ...payloadLoadedLayers]);
+    mergedLoadedLayersSet.add('header');
+    if (effectiveProfile === 'editor' || effectiveProfile === 'active_row_visible' || fullAuthoritative) mergedLoadedLayersSet.add('editor');
+    if (evidenceLayerLoaded) mergedLoadedLayersSet.add('evidence');
+    if (compareLayerLoaded) mergedLoadedLayersSet.add('compare_import');
+    if (fullAuthoritative) mergedLoadedLayersSet.add('full');
+    const mergedLoadedLayers = Array.from(mergedLoadedLayersSet).filter(Boolean);
     const rawDetails = {
       ...((payload.details && typeof payload.details === 'object') ? deep(payload.details) : {}),
       related: (payload.details?.related && typeof payload.details.related === 'object')
         ? deep(payload.details.related)
         : ((payload.related && typeof payload.related === 'object') ? deep(payload.related) : buildFallbackRelated(rowForContext)),
-      evidence: Array.isArray(payload.evidence)
-        ? deep(payload.evidence)
-        : (Array.isArray(payload.details?.evidence) ? deep(payload.details.evidence) : (Array.isArray(payload.state?.evidence) ? deep(payload.state.evidence) : []))
+      evidence: rawEvidenceRows,
+      profile: effectiveProfile,
+      context_profile: effectiveProfile,
+      header_loaded: payload.header_loaded === true || payload.details?.header_loaded === true || ['status_header', 'editor', 'evidence', 'compare_import', 'active_row_visible', 'full'].includes(effectiveProfile),
+      header_only: effectiveProfile === 'status_header',
+      editor_loaded: payload.editor_loaded === true || payload.details?.editor_loaded === true || effectiveProfile === 'editor' || effectiveProfile === 'active_row_visible' || fullAuthoritative,
+      evidence_loaded: evidenceLayerLoaded,
+      compare_loaded: compareLayerLoaded,
+      full_loaded: fullAuthoritative,
+      compare_payload: rawComparePayload,
+      healthroster_compare: rawComparePayload,
+      left_pane: rawLeftPanePayload,
+      schedule_pending: (payload.schedule_pending === true || payload.details?.schedule_pending === true)
+        ? true
+        : !(payload.schedule_authoritative === true || payload.details?.schedule_authoritative === true || effectiveProfile === 'editor' || effectiveProfile === 'active_row_visible' || fullAuthoritative),
+      schedule_authoritative: payload.schedule_authoritative === true || payload.details?.schedule_authoritative === true || effectiveProfile === 'editor' || effectiveProfile === 'active_row_visible' || fullAuthoritative,
+      include_evidence: evidenceLayerLoaded,
+      loaded_layers: mergedLoadedLayers,
+      degraded_context: false,
+      context_degraded: false
     };
 
     const normalisedCtx = (typeof normaliseBulkTimesheetWorkbenchCtx === 'function')
@@ -121476,15 +125281,30 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
       details: rawDetails,
       evidence: Array.isArray(rawDetails.evidence) ? deep(rawDetails.evidence) : [],
       related: rawDetails.related,
-      left_pane: (payload.left_pane && typeof payload.left_pane === 'object') ? deep(payload.left_pane) : {},
-      compare_payload: (payload.compare_payload && typeof payload.compare_payload === 'object') ? deep(payload.compare_payload) : { required: false, rows: [], imported_detail_refs: {} },
+      left_pane: rawLeftPanePayload,
+      compare_payload: rawComparePayload,
+      profile: effectiveProfile,
+      context_profile: effectiveProfile,
+      header_loaded: rawDetails.header_loaded === true,
+      header_only: rawDetails.header_only === true,
+      editor_loaded: rawDetails.editor_loaded === true,
+      evidence_loaded: rawDetails.evidence_loaded === true,
+      compare_loaded: rawDetails.compare_loaded === true,
+      full_loaded: rawDetails.full_loaded === true,
+      schedule_pending: rawDetails.schedule_pending === true,
+      schedule_authoritative: rawDetails.schedule_authoritative === true,
+      include_evidence: rawDetails.evidence_loaded === true,
+      loaded_layers: Array.isArray(rawDetails.loaded_layers) ? deep(rawDetails.loaded_layers) : [],
+      context_degraded: false,
+      degraded_context: false,
       normalised_ctx: normalisedCtx ? deep(normalisedCtx) : null,
       __context_options: {
         include_evidence: effectiveIncludeEvidence,
         include_compare: effectiveIncludeCompare,
         include_import_source_rows: effectiveIncludeImportSourceRows,
         base_only: baseOnly,
-        profile: effectiveProfile
+        profile: effectiveProfile,
+        context_profile: effectiveProfile
       }
     };
 
@@ -121535,10 +125355,11 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
 
   const contextHasRequiredOptions = (payload) => {
     const optionsUsed = (payload && payload.__context_options && typeof payload.__context_options === 'object') ? payload.__context_options : {};
-    if (effectiveIncludeEvidence && optionsUsed.include_evidence !== true) return false;
-    if (effectiveIncludeCompare && optionsUsed.include_compare !== true) return false;
-    if (effectiveIncludeImportSourceRows && optionsUsed.include_import_source_rows !== true) return false;
-    if (optionsUsed.profile && optionsUsed.profile !== effectiveProfile) return false;
+    const payloadProfile = trimStr(optionsUsed.profile || optionsUsed.context_profile || payload?.profile || payload?.context_profile || '').toLowerCase();
+    if (payloadProfile !== effectiveProfile) return false;
+    if (effectiveIncludeEvidence !== (optionsUsed.include_evidence === true)) return false;
+    if (effectiveIncludeCompare !== (optionsUsed.include_compare === true)) return false;
+    if (effectiveIncludeImportSourceRows !== (optionsUsed.include_import_source_rows === true)) return false;
     return true;
   };
 
@@ -121648,23 +125469,44 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
 
   const isAcceptedRow = () => {
     if (!isBulkAuthoriseLiveSurface()) return false;
-    const activeRowKey = trimStr(st.active_row_key || '');
-    const activeRenderSignature = trimStr(
-      st.__bulk_authorise_active_render_signature ||
-      (st.active_row ? getRenderSignatureFromRow(st.active_row) : '')
+    const activeRowKey = trimStr(st.active_row_key || st.activeRowKey || st.active_row?.row_key || '');
+    const activeTimesheetId = trimStr(
+      st.activeTimesheetId ||
+      st.active_row?.current_timesheet_id ||
+      st.active_row?.timesheet_id ||
+      st.active_context?.current_timesheet_id ||
+      st.active_context?.requested_timesheet_id ||
+      st.active_context?.details?.current_timesheet_id ||
+      st.active_details?.current_timesheet_id ||
+      st.active_details?.timesheet?.timesheet_id ||
+      ''
+    );
+    const activeContractWeekId = trimStr(
+      st.activeContractWeekId ||
+      st.active_row?.contract_week_id ||
+      st.active_context?.contract_week_id ||
+      st.active_context?.details?.contract_week_id ||
+      st.active_details?.contract_week_id ||
+      st.active_details?.contract_week?.id ||
+      ''
     );
     const liveIdentity = trimStr(st.__bulkAuthoriseRecordIdentity || getBulkAuthoriseRecordIdentityFromState(st) || '');
     const liveRowChangeSeq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
-    return (!rowKey || !activeRowKey || activeRowKey === rowKey)
-      && (!renderSignature || !activeRenderSignature || activeRenderSignature === renderSignature)
-      && liveRowChangeSeq === rowChangeSeq
-      && (!recordIdentity || !liveIdentity || liveIdentity === recordIdentity);
+    const rowKeyMatches = !rowKey || !activeRowKey || activeRowKey === rowKey;
+    const timesheetMatches = !currentTimesheetId || !activeTimesheetId || activeTimesheetId === currentTimesheetId;
+    const contractWeekMatches = !contractWeekId || !activeContractWeekId || activeContractWeekId === contractWeekId;
+    const recordMatches = !recordIdentity || !liveIdentity || liveIdentity === recordIdentity;
+    return rowKeyMatches && timesheetMatches && contractWeekMatches && recordMatches && liveRowChangeSeq === rowChangeSeq;
   };
 
   const applyContextIfCurrent = async (contextPayload) => {
     if (isDegradedContextPayload(contextPayload)) {
       st.warning_text = trimStr(contextPayload?.message || contextPayload?.error || 'Bulk Authorise context refresh was degraded.');
       logContextDecision(false, { reason: 'degraded-context' });
+      return false;
+    }
+    if (!contextBelongsToRequestedRow(contextPayload)) {
+      logContextDecision(false, { reason: 'payload-row-mismatch' });
       return false;
     }
     if (!isAcceptedRow()) {
@@ -121681,6 +125523,224 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
       logContextDecision(false, { reason: 'stale-before-commit' });
       return false;
     }
+
+    const layerProfile = effectiveProfile;
+    if (layerProfile === 'status_header') {
+      const headerRow = (normalised.rowForContext && typeof normalised.rowForContext === 'object') ? deep(normalised.rowForContext) : deep(row || {});
+      const previousSuppressDirty = !!st.__suppress_dirty_marking;
+      st.__suppress_dirty_marking = true;
+      try {
+        st.active_row = { ...((st.active_row && typeof st.active_row === 'object') ? deep(st.active_row) : {}), ...headerRow };
+        st.active_row_key = trimStr(headerRow.row_key || st.active_row_key || rowKey || '') || st.active_row_key;
+        st.activeRowKey = st.active_row_key || null;
+        const patchHeaderContainer = (target) => {
+          if (!target || typeof target !== 'object') return;
+          target.row = { ...((target.row && typeof target.row === 'object') ? target.row : {}), ...deep(headerRow) };
+          target.data_row = { ...((target.data_row && typeof target.data_row === 'object') ? target.data_row : {}), ...deep(headerRow) };
+          target.row_patch = (normalised.contextPayload.row_patch && typeof normalised.contextPayload.row_patch === 'object') ? deep(normalised.contextPayload.row_patch) : (target.row_patch || {});
+          target.row_key = trimStr(headerRow.row_key || target.row_key || rowKey || '') || null;
+          target.row_signature = trimStr(headerRow.row_signature || normalised.contextPayload.row_signature || target.row_signature || backendRowSignature || '') || null;
+          target.backend_row_signature = trimStr(normalised.contextPayload.backend_row_signature || headerRow.backend_row_signature || headerRow.row_backend_signature || headerRow.row_signature || target.backend_row_signature || backendRowSignature || '') || null;
+          target.render_signature = trimStr(normalised.contextPayload.render_signature || getRenderSignatureFromRow(headerRow) || target.render_signature || renderSignature || '') || null;
+          target.profile = target.profile || 'status_header';
+          target.context_profile = target.context_profile || 'status_header';
+          target.header_loaded = true;
+          target.header_only = target.editor_loaded === true || target.evidence_loaded === true || target.compare_loaded === true || target.full_loaded === true ? false : true;
+          target.schedule_pending = target.schedule_authoritative === true ? false : true;
+          target.loaded_layers = Array.isArray(target.loaded_layers)
+            ? Array.from(new Set(['header', ...target.loaded_layers.map((v) => trimStr(v).toLowerCase()).filter(Boolean)]))
+            : ['header'];
+          target.action_flags = (normalised.contextPayload.action_flags && typeof normalised.contextPayload.action_flags === 'object')
+            ? deep(normalised.contextPayload.action_flags)
+            : (target.action_flags || {});
+          if (target.details && typeof target.details === 'object') {
+            target.details.action_flags = deep(target.action_flags || {});
+            target.details.header_loaded = true;
+            target.details.context_profile = target.details.context_profile || 'status_header';
+            target.details.profile = target.details.profile || 'status_header';
+            target.details.editor_loaded = target.details.editor_loaded === true;
+            target.details.evidence_loaded = target.details.evidence_loaded === true;
+            target.details.schedule_pending = target.details.schedule_authoritative === true ? false : true;
+          }
+        };
+        if (!st.active_context || typeof st.active_context !== 'object') st.active_context = {};
+        patchHeaderContainer(st.active_context);
+        if (st.active_ctx && typeof st.active_ctx === 'object') patchHeaderContainer(st.active_ctx);
+        if (st.active_details && typeof st.active_details === 'object') {
+          st.active_details.action_flags = (normalised.contextPayload.action_flags && typeof normalised.contextPayload.action_flags === 'object')
+            ? deep(normalised.contextPayload.action_flags)
+            : (st.active_details.action_flags || {});
+          st.active_details.header_loaded = true;
+          st.active_details.context_profile = st.active_details.context_profile || 'status_header';
+          st.active_details.profile = st.active_details.profile || 'status_header';
+          st.active_details.editor_loaded = st.active_details.editor_loaded === true;
+          st.active_details.evidence_loaded = st.active_details.evidence_loaded === true;
+          st.active_details.compare_loaded = st.active_details.compare_loaded === true;
+          st.active_details.full_loaded = st.active_details.full_loaded === true;
+          st.active_details.header_only = st.active_details.editor_loaded || st.active_details.evidence_loaded || st.active_details.compare_loaded || st.active_details.full_loaded ? false : true;
+          st.active_details.schedule_pending = st.active_details.schedule_authoritative === true ? false : true;
+          st.active_details.loaded_layers = Array.isArray(st.active_details.loaded_layers)
+            ? Array.from(new Set(['header', ...st.active_details.loaded_layers.map((v) => trimStr(v).toLowerCase()).filter(Boolean)]))
+            : ['header'];
+          st.active_details.current_timesheet_id = normalised.contextPayload.current_timesheet_id || st.active_details.current_timesheet_id || null;
+          st.active_details.requested_timesheet_id = normalised.contextPayload.requested_timesheet_id || st.active_details.requested_timesheet_id || null;
+          st.active_details.expected_timesheet_id = normalised.contextPayload.expected_timesheet_id || st.active_details.expected_timesheet_id || null;
+          st.active_details.contract_week_id = normalised.contextPayload.contract_week_id || st.active_details.contract_week_id || null;
+          st.active_details.row_patch = (normalised.contextPayload.row_patch && typeof normalised.contextPayload.row_patch === 'object')
+            ? deep(normalised.contextPayload.row_patch)
+            : (st.active_details.row_patch || {});
+        }
+        st.__bulkAuthoriseRecordIdentity = getBulkAuthoriseRecordIdentityFromState(st);
+        st.__bulk_authorise_row_context_ready = true;
+        st.__bulk_authorise_row_context_ready_backend_signature = backendRowSignature || st.__bulk_authorise_row_context_ready_backend_signature || '';
+        st.__bulk_authorise_row_context_ready_render_signature = renderSignature || st.__bulk_authorise_row_context_ready_render_signature || '';
+        st.__bulk_authorise_row_context_ready_signature = renderSignature || backendRowSignature || st.__bulk_authorise_row_context_ready_signature || '';
+        st.__bulk_authorise_row_context_ready_seq = rowChangeSeq;
+      } finally {
+        st.__suppress_dirty_marking = previousSuppressDirty;
+      }
+      if (cacheKey) st.__bulk_authorise_context_cache[cacheKey] = deep(normalised.contextPayload);
+      if (opts.rerender !== false && isBulkAuthoriseLiveSurface()) {
+        await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][CTX-HEADER-REFRESH]');
+      }
+      logContextDecision(true, { applied_layer: 'status_header' });
+      return true;
+    }
+
+    if (layerProfile === 'evidence') {
+      const evidenceRows = Array.isArray(normalised.contextPayload?.evidence)
+        ? deep(normalised.contextPayload.evidence)
+        : (Array.isArray(normalised.rawDetails?.evidence) ? deep(normalised.rawDetails.evidence) : []);
+      const previousSuppressDirty = !!st.__suppress_dirty_marking;
+      st.__suppress_dirty_marking = true;
+      try {
+        const markEvidenceLayer = (target) => {
+          if (!target || typeof target !== 'object') return;
+          target.evidence = evidenceRows;
+          target.evidence_loaded = true;
+          target.evidence_authoritative = true;
+          target.include_evidence = true;
+          target.evidence_context_profile = 'evidence';
+          if (!trimStr(target.context_profile || target.profile || '')) {
+            target.context_profile = 'evidence';
+            target.profile = 'evidence';
+          }
+          target.loaded_layers = Array.isArray(target.loaded_layers)
+            ? Array.from(new Set([...target.loaded_layers.map((v) => trimStr(v).toLowerCase()).filter(Boolean), 'evidence']))
+            : ['evidence'];
+        };
+        st.active_context = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+        markEvidenceLayer(st.active_context);
+        st.active_context.details = (st.active_context.details && typeof st.active_context.details === 'object') ? st.active_context.details : ((st.active_details && typeof st.active_details === 'object') ? st.active_details : {});
+        markEvidenceLayer(st.active_context.details);
+        st.active_details = (st.active_details && typeof st.active_details === 'object') ? st.active_details : st.active_context.details;
+        markEvidenceLayer(st.active_details);
+        if (st.active_ctx && typeof st.active_ctx === 'object') {
+          markEvidenceLayer(st.active_ctx);
+          st.active_ctx.state = (st.active_ctx.state && typeof st.active_ctx.state === 'object') ? st.active_ctx.state : {};
+          markEvidenceLayer(st.active_ctx.state);
+          st.active_ctx.details = (st.active_ctx.details && typeof st.active_ctx.details === 'object') ? st.active_ctx.details : {};
+          markEvidenceLayer(st.active_ctx.details);
+        }
+        st.evidence_pane_state = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
+        st.evidence_pane_state.attached_rows = evidenceRows.map((item) => deep(item));
+        st.evidence_pane_state.attached_all_rows = evidenceRows.map((item) => deep(item));
+        st.evidence_pane_state.__evidence_loaded = true;
+        st.evidence_pane_state.__attached_loaded = true;
+        st.evidence_pane_state.__requires_evidence_hydration = false;
+        if (!evidenceRows.length) {
+          st.evidence_pane_state.active_attached_id = null;
+          st.evidence_pane_state.active_attached_item = null;
+        }
+        st.evidence_pane_state.pendingAttached = false;
+        st.evidence_pane_state.__pending_attached = false;
+        st.evidence_pane_state.__pendingAttached = false;
+        st.evidence_pane_state.pendingAttachedIdentity = '';
+        st.evidence_pane_state.__pending_attached_identity = '';
+        st.evidence_pane_state.pendingAttachedRequestKey = '';
+        st.evidence_pane_state.__pending_attached_request_key = '';
+        st.evidence_pane_state.__preview_pending_attached = false;
+        st.evidence_pane_state.__preview_pending_attached_identity = '';
+        st.pendingAttached = false;
+        st.__pending_attached = false;
+        st.__bulk_authorise_pending_attached = false;
+        st.pendingAttachedIdentity = '';
+        st.__pending_attached_identity = '';
+      } finally {
+        st.__suppress_dirty_marking = previousSuppressDirty;
+      }
+      if (cacheKey) st.__bulk_authorise_context_cache[cacheKey] = deep(normalised.contextPayload);
+      if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
+        try { reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch {}
+      }
+      if (opts.rerender !== false && isBulkAuthoriseLiveSurface()) {
+        await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][CTX-EVIDENCE-REFRESH]');
+      }
+      logContextDecision(true, { applied_layer: 'evidence', evidence_count: evidenceRows.length });
+      return true;
+    }
+
+    if (layerProfile === 'compare_import') {
+      const comparePayload = (normalised.contextPayload?.compare_payload && typeof normalised.contextPayload.compare_payload === 'object')
+        ? deep(normalised.contextPayload.compare_payload)
+        : { required: false, rows: [], imported_detail_refs: {} };
+      const leftPanePayload = (normalised.contextPayload?.left_pane && typeof normalised.contextPayload.left_pane === 'object')
+        ? deep(normalised.contextPayload.left_pane)
+        : {};
+      const previousSuppressDirty = !!st.__suppress_dirty_marking;
+      st.__suppress_dirty_marking = true;
+      try {
+        st.active_context = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+        st.active_context.compare_payload = comparePayload;
+        st.active_context.left_pane = leftPanePayload;
+        st.active_context.compare_loaded = true;
+        st.active_context.loaded_layers = Array.isArray(st.active_context.loaded_layers)
+          ? Array.from(new Set([...st.active_context.loaded_layers.map((v) => trimStr(v).toLowerCase()).filter(Boolean), 'compare_import']))
+          : ['compare_import'];
+        st.active_context.details = (st.active_context.details && typeof st.active_context.details === 'object') ? st.active_context.details : ((st.active_details && typeof st.active_details === 'object') ? st.active_details : {});
+        st.active_context.details.compare_payload = comparePayload;
+        st.active_context.details.healthroster_compare = comparePayload;
+        st.active_context.details.left_pane = leftPanePayload;
+        st.active_context.details.compare_loaded = true;
+        st.active_details = (st.active_details && typeof st.active_details === 'object') ? st.active_details : st.active_context.details;
+        st.active_details.compare_payload = comparePayload;
+        st.active_details.healthroster_compare = comparePayload;
+        st.active_details.left_pane = leftPanePayload;
+        st.active_details.compare_loaded = true;
+        if (st.active_ctx && typeof st.active_ctx === 'object') {
+          st.active_ctx.compare_payload = comparePayload;
+          st.active_ctx.left_pane = leftPanePayload;
+          st.active_ctx.compare_loaded = true;
+          st.active_ctx.loaded_layers = Array.isArray(st.active_ctx.loaded_layers)
+            ? Array.from(new Set([...st.active_ctx.loaded_layers.map((v) => trimStr(v).toLowerCase()).filter(Boolean), 'compare_import']))
+            : ['compare_import'];
+          st.active_ctx.state = (st.active_ctx.state && typeof st.active_ctx.state === 'object') ? st.active_ctx.state : {};
+          st.active_ctx.state.compare_payload = comparePayload;
+          st.active_ctx.state.healthroster_compare = comparePayload;
+          st.active_ctx.state.left_pane = leftPanePayload;
+          st.active_ctx.state.compare_loaded = true;
+          st.active_ctx.details = (st.active_ctx.details && typeof st.active_ctx.details === 'object') ? st.active_ctx.details : {};
+          st.active_ctx.details.compare_payload = comparePayload;
+          st.active_ctx.details.healthroster_compare = comparePayload;
+          st.active_ctx.details.left_pane = leftPanePayload;
+          st.active_ctx.details.compare_loaded = true;
+        }
+        st.__bulk_authorise_row_context_ready = true;
+        st.__bulk_authorise_row_context_ready_backend_signature = backendRowSignature || st.__bulk_authorise_row_context_ready_backend_signature || '';
+        st.__bulk_authorise_row_context_ready_render_signature = renderSignature || st.__bulk_authorise_row_context_ready_render_signature || '';
+        st.__bulk_authorise_row_context_ready_signature = renderSignature || backendRowSignature || st.__bulk_authorise_row_context_ready_signature || '';
+        st.__bulk_authorise_row_context_ready_seq = rowChangeSeq;
+      } finally {
+        st.__suppress_dirty_marking = previousSuppressDirty;
+      }
+      if (cacheKey) st.__bulk_authorise_context_cache[cacheKey] = deep(normalised.contextPayload);
+      if (opts.rerender !== false && isBulkAuthoriseLiveSurface()) {
+        await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][CTX-COMPARE-REFRESH]');
+      }
+      logContextDecision(true, { applied_layer: 'compare_import' });
+      return true;
+    }
+
     const evidenceRows = Array.isArray(normalised.contextPayload?.evidence)
       ? deep(normalised.contextPayload.evidence)
       : (Array.isArray(normalised.rawDetails?.evidence) ? deep(normalised.rawDetails.evidence) : []);
@@ -121835,13 +125895,25 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
       evidence: [],
       left_pane: {},
       compare_payload: { required: false, rows: [], imported_detail_refs: {} },
+      profile: 'status_header',
+      context_profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      loaded_layers: ['header'],
       normalised_ctx: normalisedCtx ? deep(normalisedCtx) : null,
       __context_options: {
         include_evidence: false,
         include_compare: false,
         include_import_source_rows: false,
         base_only: true,
-        profile: 'status_header'
+        profile: 'status_header',
+        context_profile: 'status_header'
       }
     };
 
@@ -121849,19 +125921,52 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
   }
 
   if (statusOnlyPatch && !manualPatch && !evidencePatch && !identityPatch && !authoritativeRefresh) {
+    if (!isAcceptedRow()) {
+      logContextDecision(false, { reason: 'stale-status-only-patch' });
+      return false;
+    }
     const previousSuppressDirty = !!st.__suppress_dirty_marking;
     st.__suppress_dirty_marking = true;
     try {
-      if (row && st.active_context && typeof st.active_context === 'object') {
-        st.active_context.row = deep(row);
-        st.active_context.data_row = deep(row);
-        if (row.row_patch && typeof row.row_patch === 'object') st.active_context.row_patch = deep(row.row_patch);
-        st.active_context.row_signature = backendRowSignature || renderSignature || st.active_context.row_signature || '';
-        st.active_context.backend_row_signature = backendRowSignature || st.active_context.backend_row_signature || '';
-        st.active_context.render_signature = renderSignature || st.active_context.render_signature || '';
-      }
-      if (row && st.active_ctx && typeof st.active_ctx === 'object' && st.active_ctx.row && typeof st.active_ctx.row === 'object') {
-        st.active_ctx.row = deep(row);
+      if (row && typeof row === 'object') {
+        const headerRow = deep(row);
+        st.active_row = { ...((st.active_row && typeof st.active_row === 'object') ? deep(st.active_row) : {}), ...headerRow };
+        st.active_row_key = trimStr(headerRow.row_key || st.active_row_key || rowKey || '') || st.active_row_key;
+        st.activeRowKey = st.active_row_key || null;
+        const nextBackendSignature = trimStr(backendRowSignature || headerRow.backend_row_signature || headerRow.row_backend_signature || headerRow.row_signature || st.__bulk_authorise_active_backend_row_signature || '');
+        const nextRenderSignature = trimStr(renderSignature || getRenderSignatureFromRow(headerRow) || st.__bulk_authorise_active_render_signature || '');
+        st.__bulk_authorise_active_backend_row_signature = nextBackendSignature;
+        st.__bulk_authorise_active_render_signature = nextRenderSignature;
+        st.__bulk_authorise_active_row_signature = nextRenderSignature || nextBackendSignature || st.__bulk_authorise_active_row_signature || '';
+        st.activeRowSignature = st.__bulk_authorise_active_row_signature || '';
+        const patchStatusHeaderContainer = (target) => {
+          if (!target || typeof target !== 'object') return;
+          target.row = { ...((target.row && typeof target.row === 'object') ? target.row : {}), ...deep(headerRow) };
+          target.data_row = { ...((target.data_row && typeof target.data_row === 'object') ? target.data_row : {}), ...deep(headerRow) };
+          if (headerRow.row_patch && typeof headerRow.row_patch === 'object') target.row_patch = deep(headerRow.row_patch);
+          target.row_key = trimStr(headerRow.row_key || target.row_key || rowKey || '') || null;
+          target.row_signature = trimStr(headerRow.row_signature || target.row_signature || nextBackendSignature || nextRenderSignature || '') || null;
+          target.backend_row_signature = nextBackendSignature || target.backend_row_signature || '';
+          target.render_signature = nextRenderSignature || target.render_signature || '';
+          target.header_loaded = true;
+          target.header_only = target.editor_loaded === true || target.evidence_loaded === true || target.compare_loaded === true || target.full_loaded === true ? false : true;
+          target.schedule_pending = target.schedule_authoritative === true ? false : true;
+          target.loaded_layers = Array.isArray(target.loaded_layers)
+            ? Array.from(new Set(['header', ...target.loaded_layers.map((value) => trimStr(value).toLowerCase()).filter(Boolean)]))
+            : ['header'];
+          if (target.details && typeof target.details === 'object') {
+            target.details.header_loaded = true;
+            target.details.editor_loaded = target.details.editor_loaded === true;
+            target.details.evidence_loaded = target.details.evidence_loaded === true;
+            target.details.schedule_pending = target.details.schedule_authoritative === true ? false : true;
+            if (target.action_flags && typeof target.action_flags === 'object') target.details.action_flags = deep(target.action_flags);
+          }
+        };
+        if (st.active_context && typeof st.active_context === 'object') patchStatusHeaderContainer(st.active_context);
+        if (st.active_ctx && typeof st.active_ctx === 'object') patchStatusHeaderContainer(st.active_ctx);
+        if (st.active_context?.details && typeof st.active_context.details === 'object') st.active_details = st.active_details && typeof st.active_details === 'object'
+          ? { ...st.active_details, ...deep(st.active_context.details) }
+          : deep(st.active_context.details);
       }
       st.__bulk_authorise_row_context_ready = true;
       st.__bulk_authorise_row_context_ready_backend_signature = backendRowSignature || st.__bulk_authorise_row_context_ready_backend_signature || '';
@@ -121920,7 +126025,10 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
     st.warning_text = trimStr(fetchedContextPayload?.message || fetchedContextPayload?.error || 'Bulk Authorise context refresh was degraded.');
     return false;
   }
-  if (cacheKey) st.__bulk_authorise_context_cache[cacheKey] = deep(fetchedContextPayload);
+  if (!contextBelongsToRequestedRow(fetchedContextPayload)) {
+    logContextDecision(false, { reason: 'fetched-payload-row-mismatch' });
+    return false;
+  }
   return applyContextIfCurrent(fetchedContextPayload);
 }
 
@@ -122586,6 +126694,32 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   const contextOptionsForAuthority = (details.__context_options && typeof details.__context_options === 'object')
     ? details.__context_options
     : ((contextPayload?.__context_options && typeof contextPayload.__context_options === 'object') ? contextPayload.__context_options : {});
+  const contextProfileInput = trimStr(
+    contextOptionsForAuthority.context_profile ||
+    contextOptionsForAuthority.profile ||
+    contextPayload?.context_profile ||
+    contextPayload?.profile ||
+    details.context_profile ||
+    details.profile ||
+    row.context_profile ||
+    row.profile ||
+    ''
+  ).toLowerCase();
+  const contextProfile = contextProfileInput || (isDatasetRowOnly ? 'status_header' : '');
+  const includeEvidenceInput = (contextProfile === 'evidence') || !!(
+    contextOptionsForAuthority.include_evidence === true ||
+    contextOptionsForAuthority.includeEvidence === true ||
+    contextPayload?.include_evidence === true ||
+    contextPayload?.includeEvidence === true ||
+    details.include_evidence === true ||
+    details.includeEvidence === true
+  );
+  const incomingLoadedLayersRaw = Array.isArray(contextPayload?.loaded_layers)
+    ? contextPayload.loaded_layers
+    : (Array.isArray(details.loaded_layers) ? details.loaded_layers : []);
+  const incomingLoadedLayers = incomingLoadedLayersRaw
+    .map((value) => trimStr(value).toLowerCase())
+    .filter(Boolean);
   const degradedContextInput = !!(
     contextPayload?.ok === false ||
     contextPayload?.soft_failure === true ||
@@ -122780,6 +126914,91 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     zeroHourAdditionalManualAdjustment
   );
   const suppressStandardScheduleFallbackForAdditionalManualAdjustment = keepAdditionalManualAdjustmentScheduleEmpty;
+
+  const legacyHydratedEditorInput = !!(
+    !isDatasetRowOnly &&
+    !statusHeaderOnlyContext &&
+    hasHydratedTimesheetOrContractWeek &&
+    !slimOrMinimalContext &&
+    (contextProfile === 'editor' || contextProfile === 'active_row_visible' || contextProfile === 'full' || !contextProfile)
+  );
+  const layerHeaderLoaded = !degradedContextInput && !!(
+    contextPayload?.header_loaded === true ||
+    details.header_loaded === true ||
+    incomingLoadedLayers.includes('header') ||
+    contextProfile === 'status_header' ||
+    contextProfile === 'editor' ||
+    contextProfile === 'evidence' ||
+    contextProfile === 'compare_import' ||
+    contextProfile === 'active_row_visible' ||
+    contextProfile === 'full' ||
+    isDatasetRowOnly ||
+    !!row?.row_key ||
+    !!row?.timesheet_id ||
+    !!row?.contract_week_id
+  );
+  const layerEditorLoaded = !degradedContextInput && !!(
+    contextPayload?.editor_loaded === true ||
+    contextPayload?.details?.editor_loaded === true ||
+    details.editor_loaded === true ||
+    incomingLoadedLayers.includes('editor') ||
+    contextProfile === 'editor' ||
+    legacyHydratedEditorInput
+  );
+  const layerEvidenceLoaded = !degradedContextInput && !!(
+    contextPayload?.evidence_loaded === true ||
+    contextPayload?.details?.evidence_loaded === true ||
+    details.evidence_loaded === true ||
+    details.evidence_meta?.evidence_loaded === true ||
+    incomingLoadedLayers.includes('evidence') ||
+    contextProfile === 'evidence'
+  );
+  const layerCompareLoaded = !degradedContextInput && !!(
+    contextPayload?.compare_loaded === true ||
+    details.compare_loaded === true ||
+    incomingLoadedLayers.includes('compare') ||
+    incomingLoadedLayers.includes('compare_import') ||
+    contextProfile === 'compare_import'
+  );
+  const layerFullLoaded = !degradedContextInput && !!(
+    contextPayload?.full_loaded === true ||
+    details.full_loaded === true ||
+    incomingLoadedLayers.includes('full') ||
+    contextProfile === 'full'
+  );
+  const explicitBlankAdditionalManualSchedule = keepAdditionalManualAdjustmentScheduleEmpty;
+  const layerScheduleAuthoritative = !degradedContextInput && !!(
+    explicitBlankAdditionalManualSchedule ||
+    contextPayload?.schedule_authoritative === true ||
+    contextPayload?.details?.schedule_authoritative === true ||
+    details.schedule_authoritative === true ||
+    details.__scheduleAuthoritative === true ||
+    (!nonAuthoritativeScheduleInput && layerEditorLoaded)
+  );
+  const layerSchedulePending = !!(
+    !layerScheduleAuthoritative ||
+    contextPayload?.schedule_pending === true ||
+    contextPayload?.details?.schedule_pending === true ||
+    details.schedule_pending === true ||
+    (nonAuthoritativeScheduleInput && !explicitBlankAdditionalManualSchedule)
+  );
+  const layerScheduleAuthority = explicitBlankAdditionalManualSchedule
+    ? 'explicit_blank_additional_manual'
+    : (layerScheduleAuthoritative ? 'hydrated' : 'pending_hydration');
+  const layerHeaderOnly = !!(
+    layerHeaderLoaded &&
+    !layerEditorLoaded &&
+    !layerEvidenceLoaded &&
+    !layerCompareLoaded &&
+    !layerFullLoaded
+  );
+  const loadedLayersSet = new Set(incomingLoadedLayers);
+  if (layerHeaderLoaded) loadedLayersSet.add('header');
+  if (layerEditorLoaded) loadedLayersSet.add('editor');
+  if (layerEvidenceLoaded) loadedLayersSet.add('evidence');
+  if (layerCompareLoaded) loadedLayersSet.add('compare_import');
+  if (layerFullLoaded) loadedLayersSet.add('full');
+  const loadedLayers = Array.from(loadedLayersSet);
 
   const formatIsoToLondonYmd = (iso) => {
     try {
@@ -122978,12 +127197,25 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     scheduleErrorsByDate: {},
     __suppressStandardScheduleFallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
     __keepAdditionalManualAdjustmentScheduleEmpty: keepAdditionalManualAdjustmentScheduleEmpty,
-    __scheduleHydrationPending: nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty,
-    __scheduleAuthoritative: !nonAuthoritativeScheduleInput || keepAdditionalManualAdjustmentScheduleEmpty,
-    __scheduleAuthority: keepAdditionalManualAdjustmentScheduleEmpty
-      ? 'explicit_blank_additional_manual'
-      : (nonAuthoritativeScheduleInput ? 'pending_hydration' : 'hydrated'),
+    __scheduleHydrationPending: layerSchedulePending,
+    __scheduleAuthoritative: layerScheduleAuthoritative,
+    __scheduleAuthority: layerScheduleAuthority,
     __nonAuthoritativeScheduleInput: nonAuthoritativeScheduleInput,
+    header_loaded: layerHeaderLoaded,
+    header_only: layerHeaderOnly,
+    editor_loaded: layerEditorLoaded,
+    evidence_loaded: layerEvidenceLoaded,
+    compare_loaded: layerCompareLoaded,
+    full_loaded: layerFullLoaded,
+    schedule_pending: layerSchedulePending,
+    schedule_authoritative: layerScheduleAuthoritative,
+    schedule_authority: layerScheduleAuthority,
+    explicit_blank_additional_manual_schedule: explicitBlankAdditionalManualSchedule,
+    context_profile: contextProfile || null,
+    profile: contextProfile || null,
+    include_evidence: includeEvidenceInput,
+    loaded_layers: loadedLayers,
+    degraded_context: degradedContextInput,
     suppressStandardScheduleFallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
     keepAdditionalManualAdjustmentScheduleEmpty: keepAdditionalManualAdjustmentScheduleEmpty,
     expensesDraft: null,
@@ -122991,7 +127223,7 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     evidence: incomingEvidence,
     __expensesSeededFromTsfinCols: false,
     schedule: (() => {
-      if (nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty) return undefined;
+      if (layerSchedulePending && !explicitBlankAdditionalManualSchedule) return undefined;
       if (hasTs && sheetScope === 'DAILY') {
         const parsedDaily = parseScheduleLike(ts?.actual_schedule_json);
         if (isMeaningfulDailySchedule(parsedDaily)) {
@@ -123062,15 +127294,43 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   }
   normalisedState.__suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
   normalisedState.__keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
-  normalisedState.__scheduleHydrationPending = nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty;
-  normalisedState.__scheduleAuthoritative = !nonAuthoritativeScheduleInput || keepAdditionalManualAdjustmentScheduleEmpty;
-  normalisedState.__scheduleAuthority = keepAdditionalManualAdjustmentScheduleEmpty
-    ? 'explicit_blank_additional_manual'
-    : (nonAuthoritativeScheduleInput ? 'pending_hydration' : 'hydrated');
+  normalisedState.__scheduleHydrationPending = layerSchedulePending;
+  normalisedState.__scheduleAuthoritative = layerScheduleAuthoritative;
+  normalisedState.__scheduleAuthority = layerScheduleAuthority;
   normalisedState.__nonAuthoritativeScheduleInput = nonAuthoritativeScheduleInput;
+  normalisedState.header_loaded = layerHeaderLoaded;
+  normalisedState.header_only = layerHeaderOnly;
+  normalisedState.editor_loaded = layerEditorLoaded;
+  normalisedState.evidence_loaded = layerEvidenceLoaded;
+  normalisedState.compare_loaded = layerCompareLoaded;
+  normalisedState.full_loaded = layerFullLoaded;
+  normalisedState.schedule_pending = layerSchedulePending;
+  normalisedState.schedule_authoritative = layerScheduleAuthoritative;
+  normalisedState.schedule_authority = layerScheduleAuthority;
+  normalisedState.explicit_blank_additional_manual_schedule = explicitBlankAdditionalManualSchedule;
+  normalisedState.context_profile = contextProfile || null;
+  normalisedState.profile = contextProfile || null;
+  normalisedState.include_evidence = includeEvidenceInput;
+  normalisedState.loaded_layers = loadedLayers;
+  normalisedState.degraded_context = degradedContextInput;
   normalisedState.suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
   normalisedState.keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
-  if (nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty) {
+  normalisedDetails.header_loaded = layerHeaderLoaded;
+  normalisedDetails.header_only = layerHeaderOnly;
+  normalisedDetails.editor_loaded = layerEditorLoaded;
+  normalisedDetails.evidence_loaded = layerEvidenceLoaded;
+  normalisedDetails.compare_loaded = layerCompareLoaded;
+  normalisedDetails.full_loaded = layerFullLoaded;
+  normalisedDetails.schedule_pending = layerSchedulePending;
+  normalisedDetails.schedule_authoritative = layerScheduleAuthoritative;
+  normalisedDetails.schedule_authority = layerScheduleAuthority;
+  normalisedDetails.explicit_blank_additional_manual_schedule = explicitBlankAdditionalManualSchedule;
+  normalisedDetails.context_profile = contextProfile || null;
+  normalisedDetails.profile = contextProfile || null;
+  normalisedDetails.include_evidence = includeEvidenceInput;
+  normalisedDetails.loaded_layers = loadedLayers;
+  normalisedDetails.degraded_context = degradedContextInput;
+  if (layerSchedulePending && !explicitBlankAdditionalManualSchedule) {
     try { delete normalisedState.schedule; } catch {}
     try { delete normalisedState.baselineSchedule; } catch {}
     normalisedState.weeklyLinesByDate = normalisedState.weeklyLinesByDate || null;
@@ -123135,8 +127395,8 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
   const isHydrated = hasExplicitHydratedFlag
     ? details.is_hydrated === true
     : (!isDatasetRowOnly && hasFullOrSlimPayload);
-  const contextIsAuthoritativeForSchedule = !nonAuthoritativeScheduleInput || keepAdditionalManualAdjustmentScheduleEmpty;
-  const effectiveIsHydrated = !!(isHydrated && contextIsAuthoritativeForSchedule);
+  const contextIsAuthoritativeForSchedule = layerScheduleAuthoritative;
+  const effectiveIsHydrated = !!(isHydrated && contextIsAuthoritativeForSchedule && !degradedContextInput);
   const hydrationRequired = hasExplicitHydrationRequiredFlag
     ? details.hydration_required === true
     : !effectiveIsHydrated;
@@ -123166,17 +127426,31 @@ function normaliseBulkTimesheetWorkbenchCtx(rawRow, rawDetails) {
     compare_payload: preservedComparePayload,
     suppress_standard_schedule_fallback: suppressStandardScheduleFallbackForAdditionalManualAdjustment,
     keep_additional_manual_adjustment_schedule_empty: keepAdditionalManualAdjustmentScheduleEmpty,
-    schedule_hydration_pending: nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty,
-    schedule_authoritative: !nonAuthoritativeScheduleInput || keepAdditionalManualAdjustmentScheduleEmpty,
-    schedule_authority: keepAdditionalManualAdjustmentScheduleEmpty
-      ? 'explicit_blank_additional_manual'
-      : (nonAuthoritativeScheduleInput ? 'pending_hydration' : 'hydrated'),
+    header_loaded: layerHeaderLoaded,
+    header_only: layerHeaderOnly,
+    editor_loaded: layerEditorLoaded,
+    evidence_loaded: layerEvidenceLoaded,
+    compare_loaded: layerCompareLoaded,
+    full_loaded: layerFullLoaded,
+    schedule_pending: layerSchedulePending,
+    schedule_hydration_pending: layerSchedulePending,
+    schedule_authoritative: layerScheduleAuthoritative,
+    schedule_authority: layerScheduleAuthority,
+    explicit_blank_additional_manual_schedule: explicitBlankAdditionalManualSchedule,
+    context_profile: contextProfile || null,
+    profile: contextProfile || null,
+    include_evidence: includeEvidenceInput,
+    loaded_layers: loadedLayers,
+    degraded_context: degradedContextInput,
+    context_degraded: degradedContextInput,
     non_authoritative_schedule_input: nonAuthoritativeScheduleInput,
     is_hydrated: effectiveIsHydrated,
-    hydration_required: hydrationRequired || (nonAuthoritativeScheduleInput && !keepAdditionalManualAdjustmentScheduleEmpty),
+    hydration_required: hydrationRequired || layerSchedulePending,
     slim_context: details.slim_context === true || nonAuthoritativeScheduleInput
   };
 }
+
+
 
 
 
@@ -123747,6 +128021,7 @@ function ensureBulkProcessRelatedContract(relatedObj, rowObj, detailsObj) {
 }
 
 
+
 async function openBulkProcessWorkbench(seed = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][OPEN]');
   GC('openBulkProcessWorkbench');
@@ -124269,6 +128544,8 @@ async function openBulkProcessWorkbench(seed = {}) {
       active_attached_pdf_page: 1,
       pending_attach_kind: 'TIMESHEET',
       __queue_loaded: false,
+      __queue_loaded_scope: 'global:QUEUED',
+      __queue_scope: 'global:QUEUED',
       __queue_loaded_identity: '',
       __queue_loading: false,
       __queue_last_error: '',
@@ -124798,6 +129075,17 @@ async function openBulkProcessWorkbench(seed = {}) {
         : null,
       evidence: [],
       related: deep(related),
+      context_profile: 'status_header',
+      profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      loaded_layers: ['header'],
       is_hydrated: false,
       hydration_required: true,
       slim_context: true
@@ -124806,6 +129094,19 @@ async function openBulkProcessWorkbench(seed = {}) {
     const minimalCtx = normaliseBulkTimesheetWorkbenchCtx(deep(row), rawDetails);
     if (minimalCtx && minimalCtx.state && typeof minimalCtx.state === 'object') {
       minimalCtx.state.evidence = [];
+      minimalCtx.state.context_profile = 'status_header';
+      minimalCtx.state.profile = 'status_header';
+      minimalCtx.state.header_loaded = true;
+      minimalCtx.state.header_only = true;
+      minimalCtx.state.editor_loaded = false;
+      minimalCtx.state.evidence_loaded = false;
+      minimalCtx.state.compare_loaded = false;
+      minimalCtx.state.full_loaded = false;
+      minimalCtx.state.schedule_pending = true;
+      minimalCtx.state.schedule_authoritative = false;
+      minimalCtx.state.loaded_layers = ['header'];
+      minimalCtx.state.is_hydrated = false;
+      minimalCtx.state.hydration_required = true;
       minimalCtx.state.__bulkProcessWeeklyPreviewData = null;
       minimalCtx.state.__bulkProcessDailyPreviewData = null;
       minimalCtx.state.__bulkProcessDailyFinancePreview = null;
@@ -124838,6 +129139,16 @@ async function openBulkProcessWorkbench(seed = {}) {
         details: deep(minimalSeedContext.details || {}),
         row_key: trimStr(state.active_row.row_key || state.active_row_key || ''),
         row_signature: trimStr(state.active_row.row_signature || ''),
+        header_loaded: true,
+        header_only: true,
+        editor_loaded: false,
+        evidence_loaded: false,
+        compare_loaded: false,
+        full_loaded: false,
+        schedule_pending: true,
+        schedule_authoritative: false,
+        loaded_layers: ['header'],
+        evidence: [],
         is_hydrated: false,
         hydration_required: true,
         context_stale: false,
@@ -124861,9 +129172,10 @@ async function openBulkProcessWorkbench(seed = {}) {
     const row = (rowObj && typeof rowObj === 'object') ? rowObj : {};
     const opts = (options && typeof options === 'object') ? options : {};
     const allowedProfiles = new Set(['active_row_visible', 'status_header', 'editor', 'evidence', 'compare_import', 'full']);
-    const normaliseProfile = (value, fallback = 'active_row_visible') => {
-      const raw = trimStr(value || fallback).toLowerCase();
-      return allowedProfiles.has(raw) ? raw : fallback;
+    const normaliseProfile = (value, fallback = 'status_header') => {
+      const safeFallback = allowedProfiles.has(trimStr(fallback).toLowerCase()) ? trimStr(fallback).toLowerCase() : 'status_header';
+      const raw = trimStr(value || safeFallback).toLowerCase();
+      return allowedProfiles.has(raw) ? raw : safeFallback;
     };
     const boolOpt = (value, defaultValue = false) => {
       if (value === true) return true;
@@ -124875,19 +129187,27 @@ async function openBulkProcessWorkbench(seed = {}) {
     };
     const profile = normaliseProfile(
       opts.profile || opts.context_profile || opts.contextProfile || (opts.full === true ? 'full' : null),
-      'active_row_visible'
+      opts.defaultProfile || opts.default_profile || 'status_header'
     );
-    const profileNeedsEvidence = profile === 'active_row_visible' || profile === 'evidence' || profile === 'full';
-    const includeEvidence = Object.prototype.hasOwnProperty.call(opts, 'includeEvidence')
-      ? boolOpt(opts.includeEvidence, profileNeedsEvidence)
+    const explicitIncludeEvidence = Object.prototype.hasOwnProperty.call(opts, 'includeEvidence')
+      ? boolOpt(opts.includeEvidence, false)
       : (Object.prototype.hasOwnProperty.call(opts, 'include_evidence')
-          ? boolOpt(opts.include_evidence, profileNeedsEvidence)
+          ? boolOpt(opts.include_evidence, false)
           : (Object.prototype.hasOwnProperty.call(opts, 'loadEvidence')
-              ? boolOpt(opts.loadEvidence, profileNeedsEvidence)
-              : (Object.prototype.hasOwnProperty.call(opts, 'load_evidence') ? boolOpt(opts.load_evidence, profileNeedsEvidence) : profileNeedsEvidence)));
-    const includeCompare = (profile === 'compare_import' || profile === 'full') && opts.includeCompare !== false && opts.include_compare !== false;
-    const includeImportSourceRows = (profile === 'compare_import' || profile === 'full') && opts.includeImportSourceRows !== false && opts.include_import_source_rows !== false;
+              ? boolOpt(opts.loadEvidence, false)
+              : (Object.prototype.hasOwnProperty.call(opts, 'load_evidence') ? boolOpt(opts.load_evidence, false) : false)));
+    const includeEvidence = profile === 'evidence' || explicitIncludeEvidence;
+    const includeCompare = profile === 'compare_import' || boolOpt(opts.includeCompare ?? opts.include_compare ?? opts.loadCompare ?? opts.load_compare, false);
+    const includeImportSourceRows = profile === 'compare_import' || boolOpt(opts.includeImportSourceRows ?? opts.include_import_source_rows ?? opts.loadImportSourceRows ?? opts.load_import_source_rows, false);
     const force = opts.force === true || opts.forceContextRefresh === true;
+    L('row-context-request-shape', {
+      profile,
+      context_profile: profile,
+      include_evidence: includeEvidence,
+      include_compare: includeCompare,
+      include_import_source_rows: includeImportSourceRows,
+      force
+    });
     const rowKey = trimStr(row.row_key || state.active_row_key || '');
     const rowSignature = trimStr(row.row_signature || state.active_row?.row_signature || '');
     const currentTimesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || '');
@@ -125043,11 +129363,18 @@ async function openBulkProcessWorkbench(seed = {}) {
     const opts = (options && typeof options === 'object') ? options : {};
     const modalOpenTokenAtStart = trimStr(opts.modalOpenToken || opts.modal_open_token || state.__bulk_process_modal_open_token || bulkProcessModalOpenToken);
     const allowedProfiles = new Set(['active_row_visible', 'status_header', 'editor', 'evidence', 'compare_import', 'full']);
-    const normaliseProfile = (value, fallback = 'active_row_visible') => {
-      const raw = trimStr(value || fallback).toLowerCase();
-      return allowedProfiles.has(raw) ? raw : fallback;
+    const normaliseProfile = (value, fallback = 'editor') => {
+      const safeFallback = allowedProfiles.has(trimStr(fallback).toLowerCase()) ? trimStr(fallback).toLowerCase() : 'editor';
+      const raw = trimStr(value || safeFallback).toLowerCase();
+      if (!allowedProfiles.has(raw)) return safeFallback;
+      return raw === 'active_row_visible' ? 'editor' : raw;
     };
-    const requestedProfile = normaliseProfile(opts.profile || opts.context_profile || opts.contextProfile || 'active_row_visible', 'active_row_visible');
+    const requestedProfile = normaliseProfile(opts.profile || opts.context_profile || opts.contextProfile || (opts.statusOnly === true || opts.status_only === true ? 'status_header' : 'editor'), 'editor');
+    L('active-row-context-profile', {
+      requested_profile: requestedProfile,
+      minimal_mode: opts.minimalMode === true || opts.minimalOnly === true || opts.statusOnly === true,
+      include_evidence_requested: opts.includeEvidence === true || opts.include_evidence === true
+    });
     const minimalMode = opts.minimalMode === true || opts.minimalOnly === true || opts.statusOnly === true || requestedProfile === 'status_header';
     const row = state.active_row;
 
@@ -125137,8 +129464,8 @@ async function openBulkProcessWorkbench(seed = {}) {
     const contextPayload = await fetchBulkProcessRowContextPayload(row, {
       profile: requestedProfile,
       context_profile: requestedProfile,
-      includeEvidence: opts.includeEvidence !== false,
-      include_evidence: opts.includeEvidence !== false,
+      includeEvidence: opts.includeEvidence === true || opts.include_evidence === true || requestedProfile === 'evidence',
+      include_evidence: opts.includeEvidence === true || opts.include_evidence === true || requestedProfile === 'evidence',
       forceContextRefresh: opts.forceContextRefresh === true,
       modalOpenToken: modalOpenTokenAtStart,
       activeHydrationToken: activeHydrationTokenAtStart,
@@ -125197,12 +129524,33 @@ async function openBulkProcessWorkbench(seed = {}) {
       details
     );
 
+    const payloadProfile = trimStr(contextPayload.context_profile || contextPayload.profile || resolvedProfile || requestedProfile || '').toLowerCase();
+    const evidenceAuthoritative = !!(
+      contextPayload.evidence_loaded === true ||
+      payloadProfile === 'evidence' ||
+      contextPayload.__context_options?.include_evidence === true
+    );
+    const previousEvidenceRows = Array.isArray(state.active_details?.evidence) ? deep(state.active_details.evidence) : [];
+    const incomingEvidenceRows = Array.isArray(contextPayload.evidence)
+      ? deep(contextPayload.evidence)
+      : (Array.isArray(details.evidence) ? deep(details.evidence) : []);
+    const layerEvidenceRows = evidenceAuthoritative ? incomingEvidenceRows : previousEvidenceRows;
     const rawDetails = {
+      ...deep((state.active_details && typeof state.active_details === 'object') ? state.active_details : {}),
       ...deep(details || {}),
-      evidence: Array.isArray(contextPayload.evidence)
-        ? deep(contextPayload.evidence)
-        : (Array.isArray(details.evidence) ? deep(details.evidence) : []),
+      evidence: layerEvidenceRows,
       related: deep(related),
+      context_profile: payloadProfile || requestedProfile,
+      profile: payloadProfile || requestedProfile,
+      header_loaded: contextPayload.header_loaded === true || payloadProfile === 'status_header' || payloadProfile === 'editor' || payloadProfile === 'active_row_visible',
+      header_only: contextPayload.header_only === true || payloadProfile === 'status_header',
+      editor_loaded: contextPayload.editor_loaded === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible',
+      evidence_loaded: evidenceAuthoritative,
+      compare_loaded: contextPayload.compare_loaded === true || payloadProfile === 'compare_import',
+      full_loaded: contextPayload.full_loaded === true || payloadProfile === 'full',
+      schedule_pending: contextPayload.schedule_pending === true || !(contextPayload.editor_loaded === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible'),
+      schedule_authoritative: contextPayload.schedule_authoritative === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible',
+      loaded_layers: Array.isArray(contextPayload.loaded_layers) ? deep(contextPayload.loaded_layers) : (payloadProfile === 'evidence' ? ['evidence'] : (payloadProfile === 'status_header' ? ['header'] : ['header', 'editor'])),
       is_hydrated: true,
       hydration_required: false,
       slim_context: contextPayload.slim_context !== false
@@ -125218,8 +129566,22 @@ async function openBulkProcessWorkbench(seed = {}) {
       ctx.__context_options = {
         profile: resolvedProfile,
         context_profile: resolvedProfile,
-        include_evidence: contextPayload.__context_options?.include_evidence !== false
+        include_evidence: evidenceAuthoritative
       };
+      if (ctx.state && typeof ctx.state === 'object') {
+        ctx.state.evidence = layerEvidenceRows;
+        ctx.state.context_profile = rawDetails.context_profile;
+        ctx.state.profile = rawDetails.profile;
+        ctx.state.header_loaded = rawDetails.header_loaded;
+        ctx.state.header_only = rawDetails.header_only;
+        ctx.state.editor_loaded = rawDetails.editor_loaded;
+        ctx.state.evidence_loaded = rawDetails.evidence_loaded;
+        ctx.state.compare_loaded = rawDetails.compare_loaded;
+        ctx.state.full_loaded = rawDetails.full_loaded;
+        ctx.state.schedule_pending = rawDetails.schedule_pending;
+        ctx.state.schedule_authoritative = rawDetails.schedule_authoritative;
+        ctx.state.loaded_layers = rawDetails.loaded_layers;
+      }
     }
 
     if (!isBulkProcessModalOpenTokenCurrent(modalOpenTokenAtStart, { expectedRowKey: expectedRowKeyAtStart }) || !isActiveHydrationTokenCurrent(activeHydrationTokenAtStart, activeIdentityAtStart)) {
@@ -125229,6 +129591,8 @@ async function openBulkProcessWorkbench(seed = {}) {
 
     state.active_context = {
       ...deep(contextPayload || {}),
+      evidence: layerEvidenceRows,
+      evidence_loaded: evidenceAuthoritative,
       ok: true,
       context_type: 'bulk_process',
       context_kind: 'bulk_process_row_context',
@@ -125251,7 +129615,9 @@ async function openBulkProcessWorkbench(seed = {}) {
       __context_options: {
         profile: resolvedProfile,
         context_profile: resolvedProfile,
-        include_evidence: contextPayload.__context_options?.include_evidence !== false
+        include_evidence: evidenceAuthoritative,
+        include_compare: rawDetails.compare_loaded === true,
+        include_import_source_rows: rawDetails.compare_loaded === true
       }
     };
     state.active_context_profile = resolvedProfile;
@@ -125835,25 +130201,36 @@ async function openBulkProcessWorkbench(seed = {}) {
       : null;
     const modalOpenToken = trimStr(opts.modalOpenToken || opts.modal_open_token || state.__bulk_process_modal_open_token || bulkProcessModalOpenToken);
     const activeIdentity = trimStr(opts.identity || getActiveHydrationIdentity());
+    const queueScope = trimStr(opts.queueScope || opts.queue_scope || 'global:QUEUED') || 'global:QUEUED';
+    const queueStatus = trimStr(opts.status || opts.queue_status || queueScope.split(':')[1] || 'QUEUED').toUpperCase() || 'QUEUED';
+    const isGlobalQueueScope = queueScope.toLowerCase().startsWith('global:');
     const preserveExistingQueue = () => ({
       activeIdentity,
+      queueScope,
       queuePrepared: false,
       skipped: true,
       preserved: true,
       reason: state.__bulk_process_empty_state === true || !state.active_row ? 'no-active-bulk-process-row' : 'no-active-identity'
     });
     if (!pane) return preserveExistingQueue();
-    if (!activeIdentity || !state.active_row || state.__bulk_process_empty_state === true) {
+    pane.__queue_scope = queueScope;
+    if (!activeIdentity && !isGlobalQueueScope) {
       pane.__queue_loading = false;
       pane.__queue_last_error = '';
       return preserveExistingQueue();
     }
-    if (!isBulkProcessModalOpenTokenCurrent(modalOpenToken, { expectedRowKey: activeIdentity })) {
-      return { activeIdentity, queuePrepared: false, skipped: true, stale: true };
+    if (!isBulkProcessModalOpenTokenCurrent(modalOpenToken, activeIdentity ? { expectedRowKey: activeIdentity } : {})) {
+      return { activeIdentity, queueScope, queuePrepared: false, skipped: true, stale: true };
     }
 
-    const queueLoadedForIdentity = !!pane.__queue_loaded && trimStr(pane.__queue_loaded_identity || '') === activeIdentity;
-    const shouldRefreshQueue = !!opts.forceRefresh || !queueLoadedForIdentity;
+    const queueLoadedForScope = !!pane.__queue_loaded && trimStr(pane.__queue_loaded_scope || pane.__queue_scope || '') === queueScope;
+    const shouldRefreshQueue = !!opts.forceRefresh || !queueLoadedForScope;
+    L('queue-scope-prepare', {
+      active_identity: activeIdentity || null,
+      queue_scope: queueScope,
+      queue_loaded_for_scope: queueLoadedForScope,
+      should_refresh_queue: shouldRefreshQueue
+    });
 
     try {
       if (shouldRefreshQueue && typeof refreshTimesheetImportsQueue === 'function') {
@@ -125865,19 +130242,27 @@ async function openBulkProcessWorkbench(seed = {}) {
           owner_identity: bulkProcessOwnerIdentity,
           modal_open_token: modalOpenToken,
           active_identity: activeIdentity,
+          queue_scope: queueScope,
+          status: queueStatus,
           force: !!opts.forceRefresh,
-          suppressWhileBusy: false
+          suppressWhileBusy: false,
+          allowWithoutActiveIdentity: isGlobalQueueScope
         });
       }
-      if (!isBulkProcessModalOpenTokenCurrent(modalOpenToken, { expectedRowKey: activeIdentity }) || trimStr(getActiveHydrationIdentity()) !== activeIdentity) {
-        return { activeIdentity, queuePrepared: false, skipped: true, stale: true };
+      if (!isBulkProcessModalOpenTokenCurrent(modalOpenToken, activeIdentity ? { expectedRowKey: activeIdentity } : {})) {
+        return { activeIdentity, queueScope, queuePrepared: false, skipped: true, stale: true };
+      }
+      if (!isGlobalQueueScope && trimStr(getActiveHydrationIdentity()) !== activeIdentity) {
+        return { activeIdentity, queueScope, queuePrepared: false, skipped: true, stale: true };
       }
       pane.__queue_loaded = true;
-      pane.__queue_loaded_identity = activeIdentity;
+      pane.__queue_loaded_scope = queueScope;
+      pane.__queue_scope = queueScope;
+      pane.__queue_loaded_identity = '';
       pane.__queue_loading = false;
       pane.__queue_last_error = '';
       syncQueueSelectionFromRows(pane);
-      return { activeIdentity, queuePrepared: true };
+      return { activeIdentity, queueScope, queuePrepared: true };
     } catch (e) {
       pane.__queue_loading = false;
       pane.__queue_last_error = String(e?.message || e || 'Failed to refresh queue.');
@@ -125918,15 +130303,24 @@ async function openBulkProcessWorkbench(seed = {}) {
       __preview_load_requested_target_key: pane.__preview_load_requested_target_key,
       __active_attached_preview_target: pane.__active_attached_preview_target
     };
-    const activeContextAuthoritative = !!(
-      state.active_context &&
-      state.active_context.ok !== false &&
-      state.active_context.is_hydrated === true &&
-      state.active_context.hydration_required !== true &&
-      state.active_context.context_stale !== true &&
-      !isBulkProcessRowContextPayloadDegraded(state.active_context) &&
-      !state.__active_context_is_minimal
+    const activeContextProfile = trimStr(
+      state.active_context?.context_profile ||
+      state.active_context?.profile ||
+      state.active_details?.context_profile ||
+      state.active_details?.profile ||
+      state.active_ctx?.context_profile ||
+      state.active_ctx?.profile ||
+      ''
+    ).toLowerCase();
+    const evidenceContextAuthoritative = !!(
+      state.active_context?.evidence_loaded === true ||
+      state.active_details?.evidence_loaded === true ||
+      state.active_ctx?.evidence_loaded === true ||
+      activeContextProfile === 'evidence' ||
+      pane.__evidence_loaded === true ||
+      pane.__attached_loaded === true
     );
+    const activeContextAuthoritative = evidenceContextAuthoritative;
 
     if (!activeIdentity || !state.active_row || state.__bulk_process_empty_state === true) {
       const cleared = state.__bulk_process_empty_state === true
@@ -126077,13 +130471,20 @@ async function openBulkProcessWorkbench(seed = {}) {
 
     const requestedProfile = (() => {
       const raw = trimStr(opts.profile || opts.context_profile || opts.contextProfile || '').toLowerCase();
+      const scope = trimStr(opts.scope || '').toLowerCase();
       if (raw === 'full' || opts.full === true || opts.forceFull === true) return 'full';
       if (raw === 'compare_import' || opts.compare === true || opts.includeCompare === true || opts.include_import_source_rows === true) return 'compare_import';
-      if (raw === 'evidence' || cacheHints.evidence_changed === true || cacheHints.storage_changed === true || opts.evidence === true || opts.includeEvidence === true || opts.include_evidence === true) return 'evidence';
-      if (raw === 'editor' || opts.editor === true || opts.includeEditor === true || cacheHints.manual_changed === true || cacheHints.invalidate_editor_context === true) return 'active_row_visible';
-      if (raw === 'active_row_visible') return 'active_row_visible';
-      return 'active_row_visible';
+      if (raw === 'evidence' || scope === 'evidence' || scope === 'preview' || cacheHints.evidence_changed === true || cacheHints.storage_changed === true || opts.evidence === true || opts.includeEvidence === true || opts.include_evidence === true) return 'evidence';
+      if (raw === 'editor' || raw === 'active_row_visible' || scope === 'editor' || opts.editor === true || opts.includeEditor === true || cacheHints.manual_changed === true || cacheHints.invalidate_editor_context === true) return 'editor';
+      if (raw === 'status_header' || opts.statusOnly === true || opts.status_only === true) return 'status_header';
+      return 'status_header';
     })();
+    L('ensure-hydrated-active-context-profile', {
+      scope: opts.scope || '',
+      requested_profile: requestedProfile,
+      requested_scopes: requestedScopes,
+      active_identity: initialIdentity || null
+    });
 
     if (state.__hydrating_active_context) {
       const inflightPromise = state.__hydrating_active_context;
@@ -126108,7 +130509,7 @@ async function openBulkProcessWorkbench(seed = {}) {
       state.__active_context_is_minimal !== true &&
       state.active_context &&
       state.active_ctx &&
-      (contextProfile === 'active_row_visible' || contextProfile === 'full' || contextProfile === requestedProfile) &&
+      (contextProfile === 'full' || contextProfile === requestedProfile || (requestedProfile === 'editor' && contextProfile === 'active_row_visible')) &&
       state.active_context.hydration_required !== true &&
       state.active_context.context_stale !== true &&
       !isBulkProcessRowContextPayloadDegraded(state.active_context) &&
@@ -126116,8 +130517,8 @@ async function openBulkProcessWorkbench(seed = {}) {
     );
 
     const needsScopeBinding = requestedBinderScopesNeedBindingForIdentity(requestedScopes, liveIdentity);
-    const needsEvidenceLevel = requestedScopes.includes('evidence') || requestedScopes.includes('preview') || requestedProfile === 'evidence' || requestedProfile === 'full' || requestedProfile === 'active_row_visible';
-    const needsEditorLevel = requestedScopes.includes('editor') || requestedProfile === 'active_row_visible' || requestedProfile === 'full';
+    const needsEvidenceLevel = requestedScopes.includes('evidence') || requestedScopes.includes('preview') || requestedProfile === 'evidence';
+    const needsEditorLevel = requestedScopes.includes('editor') || requestedProfile === 'editor' || requestedProfile === 'full';
 
     if (contextReady) {
       if (needsEvidenceLevel) {
@@ -126160,7 +130561,7 @@ async function openBulkProcessWorkbench(seed = {}) {
         minimalMode: false,
         profile: requestedProfile,
         context_profile: requestedProfile,
-        includeEvidence: needsEvidenceLevel,
+        includeEvidence: requestedProfile === 'evidence' || opts.includeEvidence === true || opts.include_evidence === true,
         forceContextRefresh: opts.forceContextRefresh === true || opts.forceEvidence === true || cacheHints.evidence_changed === true || cacheHints.storage_changed === true || cacheHints.invalidate_context === true || cacheHints.invalidate_row_context === true,
         modalOpenToken,
         activeHydrationToken: activeHydrationTokenAtStart,
@@ -126226,7 +130627,10 @@ async function openBulkProcessWorkbench(seed = {}) {
       { id: 'bulkProcessActionRowAllowQrAgainBtn', scope: 'editor' },
       { id: 'bulkProcessActionRowAllowElectronicAgainBtn', scope: 'editor' },
       { id: 'bulkProcessActionRowQrConvertManualBtn', scope: 'editor' },
-      { id: 'bulkProcessOpenExpensesBtn', scope: 'editor' }
+      { id: 'bulkProcessOpenExpensesBtn', scope: 'editor' },
+      { id: 'bulkProcessEvidencePaneRoot', scope: 'evidence' },
+      { id: 'bulkProcessPreviewPaneRoot', scope: 'preview' },
+      { id: 'bulkProcessPreviewStage', scope: 'preview' }
     ];
 
     for (const target of targets) {
@@ -126277,17 +130681,12 @@ async function openBulkProcessWorkbench(seed = {}) {
     const boundScopeRenderSeq = getBoundBinderScopeRenderSeqMap();
     const activeIdentity = getActiveHydrationIdentity();
     const renderSeq = Number(state.__bulk_process_render_seq || 0) || 0;
-    const hydrationInProgress = !!state.__hydrating_active_context;
-    const hydrationStillMinimal = hydrationInProgress && state.__active_context_is_minimal === true;
     const suppressDeferredBinders = !!(
-      state.__active_context_is_minimal ||
-      state.loading ||
-      state.processing ||
-      state.unprocessing ||
-      hydrationStillMinimal ||
       !state.active_row ||
       !activeIdentity ||
-      state.__bulk_process_empty_state === true
+      state.__bulk_process_empty_state === true ||
+      state.__bulk_process_async_cancelled === true ||
+      state.__bulk_process_auth_failed === true
     );
 
     const binders = [
@@ -126669,18 +131068,41 @@ async function openBulkProcessWorkbench(seed = {}) {
         );
 
         if (state.active_row && needsActiveVisibleContext) {
-          await loadActiveRowContext({
-            minimalMode: false,
-            profile: 'active_row_visible',
-            context_profile: 'active_row_visible',
-            includeEvidence: patchHints.evidence_changed === true || patchHints.storage_changed === true || patchHints.invalidate_evidence === true || patchHints.invalidate_preview === true,
-            forceContextRefresh: true,
-            modalOpenToken
-          });
+          const editorChanged = !!(patchHints.identity_changed === true || patchHints.manual_changed === true || patchHints.invalidate_context === true || patchHints.invalidate_row_context === true || patchHints.invalidate_editor_context === true);
+          const evidenceChanged = !!(patchHints.evidence_changed === true || patchHints.storage_changed === true || patchHints.invalidate_evidence === true || patchHints.invalidate_preview === true);
+          if (editorChanged) {
+            await loadActiveRowContext({
+              minimalMode: false,
+              profile: 'editor',
+              context_profile: 'editor',
+              includeEvidence: false,
+              forceContextRefresh: true,
+              modalOpenToken
+            });
+          } else if (!evidenceChanged) {
+            await loadActiveRowContext({
+              minimalMode: false,
+              profile: 'status_header',
+              context_profile: 'status_header',
+              includeEvidence: false,
+              forceContextRefresh: true,
+              modalOpenToken
+            });
+          }
+          if (evidenceChanged) {
+            await loadActiveRowContext({
+              minimalMode: false,
+              profile: 'evidence',
+              context_profile: 'evidence',
+              includeEvidence: true,
+              forceContextRefresh: true,
+              modalOpenToken
+            });
+          }
           await reconcileActiveEvidencePaneAfterContextRefresh({
-            prepareQueue: patchHints.evidence_changed === true || patchHints.storage_changed === true,
+            prepareQueue: evidenceChanged,
             forceQueueRefresh: false,
-            reason: 'patch-only-active-row-context',
+            reason: 'patch-only-layer-context',
             modalOpenToken
           });
         } else if (state.active_row && statusOnlyPatch) {
@@ -126793,9 +131215,9 @@ async function openBulkProcessWorkbench(seed = {}) {
         if (!canPreserveActiveContext) {
           await loadActiveRowContext({
             minimalMode: minimalActiveContext,
-            profile: minimalActiveContext ? 'status_header' : 'active_row_visible',
-            context_profile: minimalActiveContext ? 'status_header' : 'active_row_visible',
-            includeEvidence: !minimalActiveContext,
+            profile: minimalActiveContext ? 'status_header' : 'editor',
+            context_profile: minimalActiveContext ? 'status_header' : 'editor',
+            includeEvidence: false,
             forceContextRefresh: opts.forceContextRefresh === true,
             modalOpenToken
           });
@@ -126849,23 +131271,11 @@ async function openBulkProcessWorkbench(seed = {}) {
       }
 
       if ((minimalActiveContext || datasetOnly) && state.evidence_pane_state && typeof state.evidence_pane_state === 'object') {
-        if (!preserveEvidencePane && !preserveSignedUrlCache) {
-          state.evidence_pane_state.queue_rows = [];
-          state.evidence_pane_state.active_queue_id = null;
-          state.evidence_pane_state.active_queue_item = null;
-          state.evidence_pane_state.attached_rows = [];
-          state.evidence_pane_state.attached_all_rows = [];
-          state.evidence_pane_state.active_attached_id = null;
-          state.evidence_pane_state.active_attached_item = null;
-          state.evidence_pane_state.__queue_loaded = false;
-          state.evidence_pane_state.__queue_loaded_identity = '';
-          state.evidence_pane_state.__queue_loading = false;
-          state.evidence_pane_state.__queue_last_error = '';
-          clearLivePreviewTargetState(state.evidence_pane_state, {
-            abort: true,
-            reason: 'minimal-active-context'
-          });
-        }
+        state.evidence_pane_state.__queue_loaded_scope = state.evidence_pane_state.__queue_loaded_scope || state.evidence_pane_state.__queue_scope || 'global:QUEUED';
+        state.evidence_pane_state.__queue_scope = state.evidence_pane_state.__queue_scope || state.evidence_pane_state.__queue_loaded_scope || 'global:QUEUED';
+        state.evidence_pane_state.__queue_loaded_identity = '';
+        state.evidence_pane_state.__queue_loading = false;
+        state.evidence_pane_state.__queue_last_error = '';
       } else if (state.active_row && !suppressContextRefresh) {
         await reconcileActiveEvidencePaneAfterContextRefresh({
           prepareQueue: !skipQueueRefresh,
@@ -126938,9 +131348,22 @@ async function openBulkProcessWorkbench(seed = {}) {
           const schedule = () => {
             if (!isBulkProcessModalOpenTokenCurrent(modalOpenToken)) return;
             if (!hydrationIdentity || getActiveHydrationIdentity() !== hydrationIdentity) return;
-            void ensureHydratedActiveContext({ scope: 'preview', profile: 'active_row_visible', context_profile: 'active_row_visible', modalOpenToken }).catch((err) => {
-              L('deferred active-row hydration failed', err);
+            void ensureHydratedActiveContext({ scope: 'editor', profile: 'editor', context_profile: 'editor', modalOpenToken }).catch((err) => {
+              L('deferred editor hydration failed', err);
             });
+            void ensureHydratedActiveContext({ scope: 'preview', profile: 'evidence', context_profile: 'evidence', modalOpenToken }).catch((err) => {
+              L('deferred evidence hydration failed', err);
+            });
+            if (state.evidence_pane_state && typeof state.evidence_pane_state === 'object') {
+              void prepareQueueStateForActiveIdentity({
+                identity: hydrationIdentity,
+                queueScope: 'global:QUEUED',
+                forceRefresh: false,
+                modalOpenToken
+              }).catch((err) => {
+                L('deferred queue refresh failed', err);
+              });
+            }
           };
           try {
             window.requestAnimationFrame(() => window.requestAnimationFrame(schedule));
@@ -126954,6 +131377,7 @@ async function openBulkProcessWorkbench(seed = {}) {
             if (queueIdentity && getActiveHydrationIdentity() !== queueIdentity) return;
             void prepareQueueStateForActiveIdentity({
               identity: queueIdentity,
+              queueScope: 'global:QUEUED',
               forceRefresh: true,
               modalOpenToken
             }).catch((err) => {
@@ -127062,8 +131486,8 @@ async function openBulkProcessWorkbench(seed = {}) {
           if (state.active_row && activeIdentityAtSchedule && getActiveHydrationIdentity() === activeIdentityAtSchedule) {
             const hydrated = await loadActiveRowContext({
               minimalMode: false,
-              profile: 'active_row_visible',
-              context_profile: 'active_row_visible',
+              profile: 'editor',
+              context_profile: 'editor',
               includeEvidence: false,
               forceContextRefresh: true,
               modalOpenToken: bulkProcessModalOpenToken,
@@ -127146,7 +131570,6 @@ async function openBulkProcessWorkbench(seed = {}) {
 }
 
 
-
 function renderBulkProcessPreviewPane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -127215,23 +131638,20 @@ function renderBulkProcessPreviewPane(state) {
     ''
   ).toLowerCase();
   const activeContextReadyForVisiblePreview = !!(
-    activeContextProfile === 'active_row_visible' ||
     activeContextProfile === 'evidence' ||
+    activeContextProfile === 'active_row_visible' ||
     activeContextProfile === 'full' ||
-    (
-      activeCtx.is_hydrated === true &&
-      activeCtx.hydration_required !== true &&
-      activeCtx.context_stale !== true &&
-      st.__active_context_is_minimal !== true &&
-      st.__active_context_pending !== true
-    )
+    activeCtx.is_hydrated === true ||
+    Array.isArray(pane.attached_rows) ||
+    Array.isArray(pane.queue_rows)
   );
 
   const activeIdentity = getActiveIdentity();
   const queueLoading = !!pane.__queue_loading;
-  const queueLoadedForIdentity = !!pane.__queue_loaded && trimStr(pane.__queue_loaded_identity || '') === activeIdentity;
-  const queueRows = queueLoadedForIdentity && Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
-  const queueItem = queueLoadedForIdentity
+  const queueScope = trimStr(pane.__queue_loaded_scope || pane.__queue_scope || 'global:QUEUED') || 'global:QUEUED';
+  const queueLoadedForScope = !!pane.__queue_loaded && queueScope.toLowerCase().startsWith('global:');
+  const queueRows = queueLoadedForScope && Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+  const queueItem = queueLoadedForScope
     ? (
         pane.active_queue_item && typeof pane.active_queue_item === 'object'
           ? pane.active_queue_item
@@ -127247,13 +131667,26 @@ function renderBulkProcessPreviewPane(state) {
     : (Array.isArray(activeCtx?.evidence)
         ? activeCtx.evidence.map((item) => ({ ...(item || {}) }))
         : (Array.isArray(activeDetails?.evidence) ? activeDetails.evidence.map((item) => ({ ...(item || {}) })) : []));
+  const attachedEvidenceLayerLoaded = !!(
+    pane.__attached_loaded === true ||
+    pane.__evidence_loaded === true ||
+    pane.__requires_evidence_hydration === false ||
+    activeCtx.evidence_loaded === true ||
+    activeDetails.evidence_loaded === true ||
+    activeContextProfile === 'evidence'
+  );
   const paneRowsAreAuthoritative = !!(
     paneAttachedRows.length > 0 ||
-    pane.__requires_evidence_hydration === false
+    attachedEvidenceLayerLoaded
   );
   const attachedRows = paneAttachedRows.length > 0
     ? paneAttachedRows
     : (paneRowsAreAuthoritative ? [] : contextAttachedRows);
+  const attachedEvidenceLoading = !!(
+    activeTab === 'attached' &&
+    attachedRows.length === 0 &&
+    !attachedEvidenceLayerLoaded
+  );
 
   const attachedById = new Map();
   for (const item of attachedRows) {
@@ -127342,7 +131775,7 @@ function renderBulkProcessPreviewPane(state) {
         message: 'Loading queue images…'
       };
     }
-    if (activeTab === 'queue' && !queueLoadedForIdentity) {
+    if (activeTab === 'queue' && !queueLoadedForScope) {
       return {
         label: 'Queue images have not been loaded yet',
         message: 'Queue images have not been loaded yet.'
@@ -127352,6 +131785,12 @@ function renderBulkProcessPreviewPane(state) {
       return {
         label: 'No images left in queue',
         message: 'No images left in queue.'
+      };
+    }
+    if (activeTab === 'attached' && attachedEvidenceLoading) {
+      return {
+        label: 'Loading attached evidence…',
+        message: 'Loading attached evidence…'
       };
     }
     if (activeTab === 'attached' && attachedRows.length === 0) {
@@ -127500,11 +131939,8 @@ function renderBulkProcessPreviewPane(state) {
     st.active_row &&
     activeIdentity &&
     (
-      st.__active_context_pending === true ||
-      st.__active_context_is_minimal === true ||
-      activeContextReadyForVisiblePreview !== true ||
-      queueLoading === true ||
-      (activeTab === 'queue' && !queueLoadedForIdentity)
+      (activeTab === 'queue' && (queueLoading === true || !queueLoadedForScope)) ||
+      (activeTab === 'attached' && attachedEvidenceLoading)
     )
   );
   const liveSignedUrlPresent = !!trimStr(livePane.__preview_signed_url || '');
@@ -127537,9 +131973,9 @@ function renderBulkProcessPreviewPane(state) {
     )
   );
   const stageContentWhenLoadingBlocked = stageEl ? stageEl.innerHTML : '';
-  const loadingPreviewMessage = visibleContextStillLoading
-    ? 'Loading selected row preview…'
-    : 'Preview is loading…';
+  const loadingPreviewMessage = activeTab === 'attached' && attachedEvidenceLoading
+    ? 'Loading attached evidence…'
+    : (visibleContextStillLoading ? 'Loading selected row preview…' : 'Preview is loading…');
   const stageContentHtml = previewItem
     ? (
         hasCurrentSignedUrl
@@ -127558,7 +131994,7 @@ function renderBulkProcessPreviewPane(state) {
       )
     : (
         visibleContextStillLoading
-          ? `<span class="mini" style="opacity:.75;">Loading selected row preview…</span>`
+          ? `<span class="mini" style="opacity:.75;">${enc(loadingPreviewMessage)}</span>`
           : `<span class="mini" style="opacity:.75;">${enc(noPreviewCopy.message)}</span>`
       );
   if ((typeof window.__LOG_MODAL === 'boolean') && window.__LOG_MODAL === true && previewItem) {
@@ -127639,6 +132075,9 @@ function renderBulkProcessPreviewPane(state) {
     </div>
   `);
 }
+
+
+
 
 function classifyBulkProcessEditability(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
@@ -128101,6 +132540,8 @@ function classifyBulkProcessEditability(ctxInput) {
 }
 
 
+
+
 function bindBulkProcessManualEditor(state) {
   const st = (state && typeof state === 'object') ? state : null;
   if (!st) return;
@@ -128263,13 +132704,39 @@ function bindBulkProcessManualEditor(state) {
     const previousCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? deep(st.active_ctx) : st.active_ctx;
     const previousContext = (st.active_context && typeof st.active_context === 'object') ? deep(st.active_context) : st.active_context;
     const previousEvidencePaneState = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? deep(st.evidence_pane_state) : st.evidence_pane_state;
+    const previousRowKey = trimStr(st.active_row_key || st.active_row?.row_key || rowKeyOf(st.active_row || {}) || '');
+    const previousEvidenceRows = Array.isArray(previousDetails?.evidence)
+      ? deep(previousDetails.evidence)
+      : (Array.isArray(previousContext?.evidence)
+          ? deep(previousContext.evidence)
+          : (Array.isArray(previousContext?.details?.evidence) ? deep(previousContext.details.evidence) : []));
+    const previousEvidenceLoaded = !!(
+      previousContext?.evidence_loaded === true ||
+      previousContext?.details?.evidence_loaded === true ||
+      previousDetails?.evidence_loaded === true ||
+      previousCtx?.evidence_loaded === true ||
+      previousCtx?.state?.evidence_loaded === true ||
+      previousEvidencePaneState?.__evidence_loaded === true ||
+      previousEvidencePaneState?.__attached_loaded === true
+    );
 
-    const restorePreviousHydratedState = () => {
+    const sameOwnerRowStillCurrent = (expectedRowKey = previousRowKey) => {
+      const liveRowKey = trimStr(st.active_row_key || st.active_row?.row_key || rowKeyOf(st.active_row || {}) || '');
+      if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) return false;
+      if (expectedRowKey && liveRowKey && expectedRowKey !== liveRowKey) return false;
+      return true;
+    };
+
+    const restorePreviousHydratedState = (restoreOptions = {}) => {
+      const opts = (restoreOptions && typeof restoreOptions === 'object') ? restoreOptions : {};
+      const expectedRowKey = trimStr(opts.expectedRowKey || opts.expected_row_key || previousRowKey || '');
+      if (opts.requireSameRow !== false && !sameOwnerRowStillCurrent(expectedRowKey)) return false;
       if (previousDetails && typeof previousDetails === 'object') st.active_details = deep(previousDetails);
       if (previousCtx && typeof previousCtx === 'object') st.active_ctx = deep(previousCtx);
       if (previousContext && typeof previousContext === 'object') st.active_context = deep(previousContext);
       if (previousEvidencePaneState && typeof previousEvidencePaneState === 'object') st.evidence_pane_state = deep(previousEvidencePaneState);
       installBulkProcessModalCtxPatch(st);
+      return true;
     };
 
     if (!row) {
@@ -128277,95 +132744,201 @@ function bindBulkProcessManualEditor(state) {
       return false;
     }
 
+    const requestedRowKey = rowKeyOf(row) || trimStr(row.row_key || '');
+    const currentTimesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
+    const requestedTimesheetId = trimStr(row.requested_timesheet_id || row.timesheet_id || currentTimesheetId || '');
+    const expectedTimesheetId = trimStr(row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || currentTimesheetId || '');
+    const contractWeekId = trimStr(row.contract_week_id || row.contractWeekId || '');
+
+    const fetchEditorLayerContext = async () => {
+      const qs = new URLSearchParams();
+      const add = (key, value) => {
+        const clean = trimStr(value);
+        if (clean) qs.set(key, clean);
+      };
+      add('row_key', requestedRowKey);
+      add('timesheet_id', currentTimesheetId || requestedTimesheetId);
+      add('current_timesheet_id', currentTimesheetId);
+      add('requested_timesheet_id', requestedTimesheetId);
+      add('expected_timesheet_id', expectedTimesheetId);
+      add('contract_week_id', contractWeekId);
+      qs.set('profile', 'editor');
+      qs.set('context_profile', 'editor');
+      qs.set('include_evidence', 'false');
+      qs.set('include_compare', 'false');
+      qs.set('include_import_source_rows', 'false');
+
+      const isBulkAuth = isBulkAuthoriseCtx();
+      const bulkAuthTimesheetId = currentTimesheetId || requestedTimesheetId || expectedTimesheetId;
+      const url = (isBulkAuth && bulkAuthTimesheetId)
+        ? API(`/api/timesheets/${encodeURIComponent(String(bulkAuthTimesheetId))}/bulk-authorise-context?${qs.toString()}`)
+        : API(`/api/timesheets/bulk-process-row-context?${qs.toString()}`);
+
+      const res = await authFetch(url);
+      const text = await res.text().catch(() => '');
+      let json = null;
+      try { json = text ? JSON.parse(text) : {}; } catch { json = null; }
+      const payload = (json && typeof json === 'object') ? json : {};
+      if (!res.ok) {
+        return {
+          ok: false,
+          soft_failure: Number(res.status) !== 401,
+          __bulk_process_context_degraded: true,
+          __bulk_process_context_auth_failed: Number(res.status) === 401,
+          status: Number(res.status) || 0,
+          message: trimStr(payload.message || payload.error || text || `Bulk Process editor context failed (${res.status})`),
+          body: text || '',
+          json: payload
+        };
+      }
+      return payload;
+    };
+
     try {
-      const requestedRowKey = rowKeyOf(row) || trimStr(row.row_key || '');
-      const details = await fetchTimesheetWorkbenchDetails(row);
-      if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) {
-        restorePreviousHydratedState();
+      st.__active_context_hydration_pending = true;
+      const contextPayload = await fetchEditorLayerContext();
+      if (!sameOwnerRowStillCurrent(requestedRowKey)) {
         return false;
       }
-      if (isDegradedContextLike(details)) {
-        restorePreviousHydratedState();
-        return false;
-      }
-
-      const evidenceCtx = await fetchEvidenceContextItems({ row, details });
-      if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) {
-        restorePreviousHydratedState();
-        return false;
-      }
-      if (isDegradedContextLike(evidenceCtx)) {
-        restorePreviousHydratedState();
+      if (isDegradedContextLike(contextPayload)) {
+        restorePreviousHydratedState({ expectedRowKey: requestedRowKey, requireSameRow: true });
+        st.__active_context_hydration_pending = false;
+        st.__bulk_process_editor_context_degraded = true;
+        st.__bulk_process_editor_context_warning = trimStr(contextPayload?.message || contextPayload?.error || 'Editor context could not be refreshed.');
         return false;
       }
 
+      const payloadRow = (contextPayload.data_row && typeof contextPayload.data_row === 'object')
+        ? contextPayload.data_row
+        : ((contextPayload.row && typeof contextPayload.row === 'object') ? contextPayload.row : row);
+      const rowPatch = (contextPayload.row_patch && typeof contextPayload.row_patch === 'object') ? contextPayload.row_patch : {};
+      const nextRow = {
+        ...(row && typeof row === 'object' ? deep(row) : {}),
+        ...(payloadRow && typeof payloadRow === 'object' ? deep(payloadRow) : {}),
+        ...(rowPatch && typeof rowPatch === 'object' ? deep(rowPatch) : {})
+      };
       const liveRowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
+      const nextRowKey = rowKeyOf(nextRow) || trimStr(nextRow.row_key || requestedRowKey || '');
       if (requestedRowKey && liveRowKey && requestedRowKey !== liveRowKey) {
-        restorePreviousHydratedState();
+        return false;
+      }
+      if (requestedRowKey && nextRowKey && requestedRowKey !== nextRowKey) {
+        restorePreviousHydratedState({ expectedRowKey: requestedRowKey, requireSameRow: true });
         return false;
       }
 
-      let related = null;
-      const tsId =
-        row.timesheet_id ||
-        details?.current_timesheet_id ||
-        details?.timesheet?.timesheet_id ||
-        null;
+      const detailsPayload = (contextPayload.details && typeof contextPayload.details === 'object') ? deep(contextPayload.details) : {};
+      const related = ensureBulkProcessRelatedContract(
+        (detailsPayload.related && typeof detailsPayload.related === 'object')
+          ? deep(detailsPayload.related)
+          : ((contextPayload.related && typeof contextPayload.related === 'object')
+              ? deep(contextPayload.related)
+              : ((previousDetails?.related && typeof previousDetails.related === 'object') ? deep(previousDetails.related) : buildFallbackRelated(nextRow, detailsPayload))),
+        nextRow,
+        detailsPayload
+      );
 
-      if (tsId && typeof fetchTimesheetRelated === 'function') {
-        try {
-          related = await fetchTimesheetRelated(tsId);
-          if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) {
-            restorePreviousHydratedState();
-            return false;
-          }
-          if (!Array.isArray(related.invoices)) related.invoices = [];
-          if (!related.invoice_no_by_invoice_id || typeof related.invoice_no_by_invoice_id !== 'object') {
-            related.invoice_no_by_invoice_id = {};
-          }
-        } catch {
-          related = null;
+      const nextDetails = {
+        ...((previousDetails && typeof previousDetails === 'object') ? deep(previousDetails) : {}),
+        ...(detailsPayload && typeof detailsPayload === 'object' ? deep(detailsPayload) : {}),
+        current_timesheet_id: contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || nextRow.current_timesheet_id || nextRow.timesheet_id || null,
+        requested_timesheet_id: contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || nextRow.requested_timesheet_id || nextRow.timesheet_id || null,
+        expected_timesheet_id: contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || nextRow.expected_timesheet_id || nextRow.current_timesheet_id || nextRow.timesheet_id || null,
+        contract_week_id: contextPayload.contract_week_id || detailsPayload.contract_week_id || nextRow.contract_week_id || null,
+        evidence: previousEvidenceRows,
+        evidence_loaded: previousEvidenceLoaded,
+        related: deep(related),
+        context_profile: 'editor',
+        profile: 'editor',
+        header_loaded: true,
+        header_only: false,
+        editor_loaded: true,
+        compare_loaded: false,
+        full_loaded: false,
+        schedule_pending: false,
+        schedule_authoritative: true,
+        loaded_layers: ['header', 'editor'],
+        is_hydrated: true,
+        hydration_required: false,
+        slim_context: contextPayload.slim_context !== false,
+        __context_options: {
+          profile: 'editor',
+          context_profile: 'editor',
+          include_evidence: false,
+          include_compare: false,
+          include_import_source_rows: false
+        }
+      };
+      const nextCtx = normaliseBulkTimesheetWorkbenchCtx(deep(nextRow), nextDetails);
+      if (nextCtx && typeof nextCtx === 'object') {
+        nextCtx.profile = 'editor';
+        nextCtx.context_profile = 'editor';
+        nextCtx.is_hydrated = true;
+        nextCtx.hydration_required = false;
+        nextCtx.__context_options = { ...nextDetails.__context_options };
+        if (nextCtx.state && typeof nextCtx.state === 'object') {
+          nextCtx.state.evidence = previousEvidenceRows;
+          nextCtx.state.evidence_loaded = previousEvidenceLoaded;
+          nextCtx.state.context_profile = 'editor';
+          nextCtx.state.profile = 'editor';
+          nextCtx.state.header_loaded = true;
+          nextCtx.state.header_only = false;
+          nextCtx.state.editor_loaded = true;
+          nextCtx.state.compare_loaded = false;
+          nextCtx.state.full_loaded = false;
+          nextCtx.state.schedule_pending = false;
+          nextCtx.state.schedule_authoritative = true;
+          nextCtx.state.loaded_layers = ['header', 'editor'];
         }
       }
 
-      if (!related) {
-        related = buildFallbackRelated(row, details);
-      }
-      related = ensureBulkProcessRelatedContract(related, row, details);
-
-      if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) {
-        restorePreviousHydratedState();
+      if (!sameOwnerRowStillCurrent(requestedRowKey)) {
         return false;
       }
 
-      const nextDetails = {
-        ...(details && typeof details === 'object' ? deep(details) : {}),
-        evidence: Array.isArray(evidenceCtx?.evidence) ? deep(evidenceCtx.evidence) : [],
-        related: deep(related),
-        is_hydrated: true,
-        hydration_required: false,
-        slim_context: false
-      };
-      const nextCtx = normaliseBulkTimesheetWorkbenchCtx(deep(row), nextDetails);
-
-      if (!isBulkProcessOwnerStillCurrent(ownerToken, activeIdentity)) {
-        restorePreviousHydratedState();
-        return false;
-      }
-
+      st.active_row = deep(nextRow);
+      st.active_row_key = nextRowKey || requestedRowKey || st.active_row_key || null;
       st.active_details = nextDetails;
       st.active_ctx = nextCtx;
+      st.active_context = {
+        ...((previousContext && typeof previousContext === 'object') ? deep(previousContext) : {}),
+        ...((contextPayload && typeof contextPayload === 'object') ? deep(contextPayload) : {}),
+        ok: contextPayload.ok !== false,
+        row: deep(nextRow),
+        data_row: deep(nextRow),
+        details: deep(nextDetails),
+        related: deep(related),
+        evidence: previousEvidenceRows,
+        evidence_loaded: previousEvidenceLoaded,
+        profile: 'editor',
+        context_profile: 'editor',
+        header_loaded: true,
+        header_only: false,
+        editor_loaded: true,
+        compare_loaded: false,
+        full_loaded: false,
+        schedule_pending: false,
+        schedule_authoritative: true,
+        loaded_layers: ['header', 'editor'],
+        is_hydrated: true,
+        hydration_required: false,
+        __context_options: { ...nextDetails.__context_options }
+      };
+      if (previousEvidencePaneState && typeof previousEvidencePaneState === 'object') {
+        st.evidence_pane_state = deep(previousEvidencePaneState);
+      }
       st.__active_context_is_minimal = false;
       st.__active_context_hydration_pending = false;
-
-      if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
-        reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
-      }
+      st.__bulk_process_editor_context_degraded = false;
+      st.__bulk_process_editor_context_warning = '';
       installBulkProcessModalCtxPatch(st);
       return true;
     } catch (err) {
-      restorePreviousHydratedState();
-      try { console.warn('[TS][BULK-PROCESS][MANUAL-EDITOR] active context refresh failed without clearing hydrated state', err); } catch {}
+      restorePreviousHydratedState({ expectedRowKey: requestedRowKey, requireSameRow: true });
+      st.__active_context_hydration_pending = false;
+      st.__bulk_process_editor_context_degraded = true;
+      st.__bulk_process_editor_context_warning = trimStr(err?.message || err || 'Editor context could not be refreshed.');
+      try { console.warn('[TS][BULK-PROCESS][MANUAL-EDITOR] editor-layer context refresh failed without clearing hydrated state', err); } catch {}
       return false;
     }
   };
@@ -128910,7 +133483,8 @@ function bindBulkProcessManualEditor(state) {
   const scheduleBulkProcessBackgroundReconciliation = (reason = 'route-action') => {
     const ownerToken = getBulkProcessOwnerToken();
     const activeIdentity = getBulkProcessActiveIdentity();
-    const reconcileKey = `${ownerToken || 'no-token'}|${activeIdentity || 'no-identity'}`;
+    const queueScope = 'global:QUEUED';
+    const reconcileKey = `${ownerToken || 'no-token'}|${activeIdentity || 'no-identity'}|${queueScope}`;
     if (trimStr(st.__bulk_process_background_reconcile_key || '') === reconcileKey && st.__bulk_process_background_reconcile_timer) {
       return;
     }
@@ -128936,8 +133510,12 @@ function bindBulkProcessManualEditor(state) {
         if (pane && typeof refreshTimesheetImportsQueue === 'function') {
           await refreshTimesheetImportsQueue(pane, {
             ownerState: st,
-            ownerToken,
-            activeIdentity,
+            owner_kind: 'bulk_process',
+            owner_identity: trimStr(st.__bulk_process_owner_identity || st.__bulkProcessOwnerIdentity || window.modalCtx?.owner_identity || ''),
+            modal_open_token: ownerToken,
+            queue_scope: queueScope,
+            status: 'QUEUED',
+            allowWithoutActiveIdentity: true,
             suppressWhileBusy: true
           });
         }
@@ -130255,9 +134833,6 @@ function bindBulkProcessManualEditor(state) {
 }
 
 
-
-
-
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -130282,6 +134857,10 @@ function bindBulkProcessPreviewPane(state) {
           active_attached_pdf_page: 1,
           pending_attach_kind: 'TIMESHEET',
           __queue_loaded: false,
+          __queue_loaded_scope: 'global:QUEUED',
+          __queue_scope: 'global:QUEUED',
+          __queue_loading_scope: '',
+          __queue_count_loading_scope: '',
           __queue_loaded_identity: '',
           __queue_loading: false,
           __queue_last_error: '',
@@ -130484,19 +135063,31 @@ function bindBulkProcessPreviewPane(state) {
     const fileKey = trimStr(parts.slice(2).join('|') || '').replace(/^\/+/, '');
     return buildPreviewSelectionKey(tab, targetId, fileKey);
   };
-  const isQueueLoadedForIdentity = (identityValue) => {
-    const identity = trimStr(identityValue || getActiveIdentity() || '');
-    if (!identity) return false;
-    return !!pane.__queue_loaded && trimStr(pane.__queue_loaded_identity || '') === identity;
+  const getPreviewQueueScope = (scopeValue = '') => {
+    const status = upper(pane.__queue_status || 'QUEUED') || 'QUEUED';
+    const raw = trimStr(scopeValue || pane.__queue_scope || pane.__queue_loaded_scope || `global:${status}`) || `global:${status}`;
+    if (raw.toLowerCase().startsWith('global:')) return raw;
+    return `global:${upper(raw) || status}`;
+  };
+  const isQueueLoadedForIdentity = (_identityValue = '', scopeValue = '') => {
+    const scope = getPreviewQueueScope(scopeValue);
+    return !!(
+      pane.__queue_loaded === true &&
+      trimStr(pane.__queue_loaded_scope || pane.__queue_scope || '').toLowerCase() === scope.toLowerCase()
+    );
   };
 
   pane.__preview_presign_inflight = (pane.__preview_presign_inflight && typeof pane.__preview_presign_inflight === 'object') ? pane.__preview_presign_inflight : {};
   pane.__preview_signed_url_cache = (pane.__preview_signed_url_cache && typeof pane.__preview_signed_url_cache === 'object') ? pane.__preview_signed_url_cache : {};
   pane.__preview_load_requested_target_key = trimStr(pane.__preview_load_requested_target_key || '');
   pane.__preview_identity = trimStr(pane.__preview_identity || '');
-  pane.__queue_loaded_identity = trimStr(pane.__queue_loaded_identity || '');
+  pane.__queue_scope = getPreviewQueueScope();
+  pane.__queue_loaded_scope = trimStr(pane.__queue_loaded_scope || pane.__queue_scope || 'global:QUEUED') || 'global:QUEUED';
+  pane.__queue_loading_scope = trimStr(pane.__queue_loading_scope || '');
+  pane.__queue_count_loading_scope = trimStr(pane.__queue_count_loading_scope || '');
+  pane.__queue_loaded_identity = '';
   pane.__queue_count_loading = !!pane.__queue_count_loading;
-  pane.__queue_count_loading_identity = trimStr(pane.__queue_count_loading_identity || '');
+  pane.__queue_count_loading_identity = '';
   pane.__queue_manual_override = !!pane.__queue_manual_override;
   pane.__attached_manual_override = !!pane.__attached_manual_override;
   pane.pdf_page_by_target = (pane.pdf_page_by_target && typeof pane.pdf_page_by_target === 'object') ? pane.pdf_page_by_target : {};
@@ -130590,7 +135181,7 @@ function bindBulkProcessPreviewPane(state) {
     const rowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
     const rowChangeSeq = Number(st.__bulk_authorise_row_change_seq || st.__bulkAuthoriseRowChangeSeq || 0) || 0;
     const renderSignature = trimStr(identityParts.renderSignature || st.__bulk_authorise_preview_render_signature || st.__bulkAuthorisePreviewRenderSignature || '');
-    if (!rowKey || rowChangeSeq <= 0 || !renderSignature) return null;
+    if (!rowKey || rowChangeSeq <= 0) return null;
     const stateObj = (previewStateInput && typeof previewStateInput === 'object') ? previewStateInput : getPreviewState();
     const previewItem = (stateObj.previewItem && typeof stateObj.previewItem === 'object') ? stateObj.previewItem : null;
     const activeTab = trimStr(stateObj.activeTab || pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
@@ -130667,7 +135258,7 @@ function bindBulkProcessPreviewPane(state) {
     const capturedRowKey = trimStr(capturedSnapshot.rowKey || '');
     const capturedRenderSignature = trimStr(capturedSnapshot.renderSignature || capturedSnapshot.rowSignature || '');
     const capturedRowChangeSeq = Number(capturedSnapshot.rowChangeSeq || 0) || 0;
-    if (!capturedOwnerIdentity || !capturedRowKey || !capturedRenderSignature || capturedRowChangeSeq <= 0) {
+    if (!capturedOwnerIdentity || !capturedRowKey || capturedRowChangeSeq <= 0) {
       return buildStale('invalid-captured-snapshot');
     }
 
@@ -130678,7 +135269,6 @@ function bindBulkProcessPreviewPane(state) {
     if (!same(capturedOwnerIdentity, live.ownerIdentity)) reason = 'owner-changed';
     else if (!same(capturedRowKey, live.rowKey)) reason = 'row-key-changed';
     else if (capturedRowChangeSeq !== (Number(live.rowChangeSeq || 0) || 0)) reason = 'row-change-seq-changed';
-    else if (!same(capturedRenderSignature, live.renderSignature || live.rowSignature)) reason = 'render-signature-changed';
     else if (!same(capturedSnapshot.activeTab, live.activeTab)) reason = 'tab-changed';
     else if (!same(capturedSnapshot.selectionKey, live.selectionKey)) reason = 'selection-changed';
     else if (!same(capturedSnapshot.previewFileCacheKey, live.previewFileCacheKey)) reason = 'file-key-changed';
@@ -130693,8 +135283,7 @@ function bindBulkProcessPreviewPane(state) {
     capturedSnapshot &&
     trimStr(capturedSnapshot.ownerIdentity || '') &&
     trimStr(capturedSnapshot.rowKey || '') &&
-    (Number(capturedSnapshot.rowChangeSeq || 0) || 0) > 0 &&
-    trimStr(capturedSnapshot.renderSignature || capturedSnapshot.rowSignature || '')
+    (Number(capturedSnapshot.rowChangeSeq || 0) || 0) > 0
   );
 
   const logPreviewCommitEvent = (capturedSnapshot, payload = {}) => {
@@ -130751,11 +135340,13 @@ function bindBulkProcessPreviewPane(state) {
 
   const isActiveBind = () => {
     if (!document.getElementById('bulkProcessPreviewPaneRoot')) return false;
-    if (bulkAuthoriseSurfaceAtBind) {
+    if (bulkAuthoriseSurfaceAtBind || bulkAuthoriseOwnerIdentity) {
       if (!trimStr(bulkAuthoriseOwnerIdentity || '')) return false;
       if (!isCurrentBulkAuthorisePreviewSurface()) return false;
+      const liveOwnerIdentity = trimStr(resolveBulkAuthorisePreviewOwnerIdentity() || '');
+      if (liveOwnerIdentity && liveOwnerIdentity !== trimStr(bulkAuthoriseOwnerIdentity || '')) return false;
+      return Number(pane.__preview_bind_seq || 0) === bindSeq && String(pane.__preview_bind_identity || '') === String(bindIdentity || '');
     }
-    if (bulkAuthoriseOwnerIdentity && !isCurrentBulkAuthorisePreviewSurface()) return false;
     return (
       Number(pane.__preview_bind_seq || 0) === bindSeq &&
       String(pane.__preview_bind_identity || '') === String(bindIdentity || '') &&
@@ -130866,6 +135457,8 @@ function bindBulkProcessPreviewPane(state) {
       selectionKey,
       fileKey: trimStr(fileKey || '').replace(/^\/+/, ''),
       previewItemId: trimStr(previewItem?.id || previewItem?.evidence_id || previewItem?.queue_id || ''),
+      activeAttachedId: trimStr(pane.active_attached_id || pane.active_attached_item?.id || pane.active_attached_item?.evidence_id || pane.active_attached_item?.queue_id || ''),
+      activeQueueId: trimStr(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id || ''),
       previewTargetKey: normalisePreviewSelectionKey(pane.__preview_target_key || ''),
       requestedTargetKey: normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '')
     };
@@ -130879,7 +135472,20 @@ function bindBulkProcessPreviewPane(state) {
     if (!liveRoot || !root.isConnected || liveRoot !== root) return false;
     const bindSeqMatches = Number(pane.__preview_bind_seq || 0) === Number(snap.bindSeq || bindSeq);
     const allowSupersededBindForSameSelection = opts.allowSupersededBindForSameSelection === true || opts.allow_same_owner_row_selection === true || opts.allowSameOwnerRowSelection === true;
-    if (!bindSeqMatches && !allowSupersededBindForSameSelection) return false;
+    if (!bindSeqMatches && !allowSupersededBindForSameSelection) {
+      const liveSameSelectionKey = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+      const sameOwnerRowSelection = !!(
+        trimStr(snap.ownerKind || '') === trimStr(getPreviewOwnerKind() || '') &&
+        (!snap.ownerToken || !getPreviewOwnerToken() || trimStr(snap.ownerToken || '') === trimStr(getPreviewOwnerToken() || '')) &&
+        (!snap.ownerIdentity || !getPreviewOwnerIdentity() || trimStr(snap.ownerIdentity || '') === trimStr(getPreviewOwnerIdentity() || '')) &&
+        (!snap.activeIdentity || !getActiveIdentity() || trimStr(snap.activeIdentity || '') === trimStr(getActiveIdentity() || '')) &&
+        (!snap.rowKey || !getPreviewActiveRowKey() || trimStr(snap.rowKey || '') === trimStr(getPreviewActiveRowKey() || '')) &&
+        Number(snap.rowChangeSeq || 0) === Number(getPreviewRowChangeSeq() || 0) &&
+        (!snap.selectionKey || liveSameSelectionKey === normalisePreviewSelectionKey(snap.selectionKey || '')) &&
+        (!snap.fileKey || resolvePreviewFileCacheKey(resolveActiveBulkProcessPreviewItem(), liveSameSelectionKey) === trimStr(snap.fileKey || ''))
+      );
+      if (!sameOwnerRowSelection) return false;
+    }
     if (snap.stateRef && snap.stateRef !== st) return false;
     const liveKind = getCurrentPreviewModalKind();
     if (snap.ownerKind === 'bulk_process') {
@@ -130988,12 +135594,52 @@ function bindBulkProcessPreviewPane(state) {
   };
 
 
+  const clearBulkAuthorisePendingAttachedForPreviewCommit = (selectionKeyInput = '') => {
+    const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || '');
+    if (!selectionKey.startsWith('attached|')) return;
+    pane.pendingAttached = false;
+    pane.__pending_attached = false;
+    pane.__pendingAttached = false;
+    pane.pendingAttachedIdentity = '';
+    pane.__pending_attached_identity = '';
+    pane.pendingAttachedRequestKey = '';
+    pane.__pending_attached_request_key = '';
+    st.pendingAttached = false;
+    st.__pending_attached = false;
+    st.__bulk_authorise_pending_attached = false;
+    st.pendingAttachedIdentity = '';
+    st.__pending_attached_identity = '';
+    if (window.modalCtx?.bulkAuthoriseState === st) {
+      try {
+        window.modalCtx.bulkAuthoriseState.pendingAttached = false;
+        window.modalCtx.bulkAuthoriseState.__pending_attached = false;
+        window.modalCtx.bulkAuthoriseState.__bulk_authorise_pending_attached = false;
+        window.modalCtx.bulkAuthoriseState.pendingAttachedIdentity = '';
+        window.modalCtx.bulkAuthoriseState.__pending_attached_identity = '';
+      } catch {}
+    }
+  };
+
   const commitSignedPreviewAtomically = (previewStateInput = null, selectionKeyInput = '', signedUrlInput = '', commitOptions = {}) => {
     const opts = (commitOptions && typeof commitOptions === 'object') ? commitOptions : {};
     const previewState = (previewStateInput && typeof previewStateInput === 'object') ? previewStateInput : getPreviewState();
     const signedUrl = trimStr(signedUrlInput || '');
     const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || getSelectionSignature(previewState.activeTab, previewState.previewItem));
-    if (!signedUrl || !selectionKey || isBlankPreviewSelectionKey(selectionKey)) return false;
+    const reject = (reason, extra = {}) => {
+      const snapshotForLog = (opts.snapshot && typeof opts.snapshot === 'object') ? opts.snapshot : captureBulkAuthorisePreviewSnapshot(previewState);
+      logPreviewCommitEvent(snapshotForLog, {
+        event: 'presign-commit-reject',
+        reason: trimStr(reason || 'unknown') || 'unknown',
+        selectionKey,
+        targetKey: trimStr(normalisePreviewSelectionKey(pane.__preview_target_key || '') || ''),
+        requestedKey: trimStr(normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '') || ''),
+        signedUrlPresent: !!signedUrl,
+        ...((extra && typeof extra === 'object') ? extra : {})
+      });
+      return false;
+    };
+    if (!signedUrl) return reject('missing-signed-url');
+    if (!selectionKey || isBlankPreviewSelectionKey(selectionKey)) return reject('invalid-selection-key');
 
     const commitSnapshot = (opts.snapshot && typeof opts.snapshot === 'object')
       ? opts.snapshot
@@ -131002,7 +135648,7 @@ function bindBulkProcessPreviewPane(state) {
       requireSelectionUnchanged: true,
       requireFileKeyUnchanged: true,
       allowSupersededBindForSameSelection: opts.allowSupersededBindForSameSelection === true || opts.allowSameOwnerRowSelection === true
-    })) return false;
+    })) return reject('snapshot-not-current', { snapshotReason: trimStr(commitSnapshot?.reason || '') });
 
     const livePreviewState = getPreviewState();
     const liveSelectionKey = normalisePreviewSelectionKey(getSelectionSignature(livePreviewState.activeTab, livePreviewState.previewItem));
@@ -131012,19 +135658,34 @@ function bindBulkProcessPreviewPane(state) {
     const liveRequestedMatches = !liveRequestedKey || liveRequestedKey === selectionKey;
     const liveSelectionMatches = !liveSelectionKey || liveSelectionKey === selectionKey;
 
-    if (!liveSelectionMatches) return false;
-    if (!liveTargetMatches && liveRequestedKey !== selectionKey) return false;
-    if (!liveRequestedMatches && liveTargetKey !== selectionKey) return false;
+    if (!liveSelectionMatches) return reject('live-selection-mismatch', { liveSelectionKey });
+    if (!liveTargetMatches && liveRequestedKey !== selectionKey) return reject('live-target-mismatch', { liveTargetKey, liveRequestedKey });
+    if (!liveRequestedMatches && liveTargetKey !== selectionKey) return reject('live-requested-mismatch', { liveTargetKey, liveRequestedKey });
 
     const previewItem = (previewState.previewItem && typeof previewState.previewItem === 'object') ? previewState.previewItem : livePreviewState.previewItem;
     const fileKey = resolvePreviewFileCacheKey(previewItem, selectionKey);
-    if (!fileKey) return false;
+    if (!fileKey) return reject('missing-file-key');
 
     setCachedSignedUrlForPreview(fileKey, signedUrl, commitSnapshot);
     pane.__preview_target_key = selectionKey;
     pane.__preview_load_requested_target_key = selectionKey;
     pane.__preview_signed_url = signedUrl;
+    pane.__preview_last_committed_at = new Date().toISOString();
+    pane.__preview_last_committed_selection_key = selectionKey;
+    pane.__preview_last_committed_file_key = fileKey;
+    pane.__preview_loading = false;
+    pane.__preview_error = '';
+    clearBulkAuthorisePendingAttachedForPreviewCommit(selectionKey);
 
+    logPreviewCommitEvent(captureBulkAuthorisePreviewSnapshot(previewState), {
+      event: 'presign-commit',
+      phase: 'atomic-committed',
+      selectionKey,
+      targetKey: selectionKey,
+      requestedKey: selectionKey,
+      signedUrlPresent: true,
+      cacheWritten: true
+    });
     return true;
   };
 
@@ -131137,12 +135798,17 @@ function bindBulkProcessPreviewPane(state) {
       };
     }
 
-    if (!isPreviewCommitSnapshotCurrent(cacheSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) {
+    if (!isPreviewCommitSnapshotCurrent(cacheSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true, allowSupersededBindForSameSelection: true })) {
       return { synced: false, done: false, reason: 'stale-cache-promote-commit' };
     }
-    pane.__preview_signed_url = cachedSignedUrl;
-    pane.__preview_target_key = previewSelectionKey;
-    pane.__preview_load_requested_target_key = previewSelectionKey;
+    const committedFromCache = commitSignedPreviewAtomically(previewState, previewSelectionKey, cachedSignedUrl, {
+      snapshot: cacheSnapshot,
+      reason: 'cache-promoted',
+      allowSupersededBindForSameSelection: true
+    });
+    if (!committedFromCache) {
+      return { synced: false, done: false, reason: 'cache-promote-commit-rejected' };
+    }
 
     return {
       synced: true,
@@ -131228,11 +135894,22 @@ function bindBulkProcessPreviewPane(state) {
       requireFileKeyUnchanged: true,
       allowSupersededBindForSameSelection: true
     })) return false;
-    const recoveryKey = `${String(getActiveIdentity() || '')}|${previewSelectionKey}`;
+    const recoveryKey = [
+      trimStr(recoverySnapshot.ownerKind || ''),
+      trimStr(recoverySnapshot.ownerIdentity || recoverySnapshot.ownerToken || ''),
+      trimStr(recoverySnapshot.rowKey || recoverySnapshot.activeIdentity || ''),
+      Number(recoverySnapshot.rowChangeSeq || 0) || 0,
+      previewSelectionKey,
+      trimStr(recoverySnapshot.fileKey || '')
+    ].join('|');
     if (trimStr(pane.__preview_same_selection_recovery_key || '') === recoveryKey) return false;
     pane.__preview_same_selection_recovery_key = recoveryKey;
     logPreview('[RECOVERY][IMMEDIATE]', reason, { previewSelectionKey });
-    if (!isPreviewCommitSnapshotCurrent(recoverySnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return false;
+    if (!isPreviewCommitSnapshotCurrent(recoverySnapshot, {
+      requireSelectionUnchanged: true,
+      requireFileKeyUnchanged: true,
+      allowSupersededBindForSameSelection: true
+    })) return false;
     await renderStage();
     return true;
   };
@@ -131290,6 +135967,7 @@ function bindBulkProcessPreviewPane(state) {
     if (!signedUrl || !previewSelectionKey || !targetOrRequestedMatches) return false;
     if (liveRequestedKey && liveRequestedKey !== previewSelectionKey) return false;
     if (!liveTargetKey && liveRequestedKey === previewSelectionKey) pane.__preview_target_key = previewSelectionKey;
+    clearBulkAuthorisePendingAttachedForPreviewCommit(previewSelectionKey);
 
     const bulkAuthSnapshot = captureBulkAuthorisePreviewSnapshot(previewState);
     const bulkAuthoriseCommitRequired = !!(
@@ -131363,7 +136041,16 @@ function bindBulkProcessPreviewPane(state) {
 
   const schedulePreviewStateRecovery = (reason = 'preview-bind') => {
     const recoveryReason = trimStr(reason || 'preview-bind') || 'preview-bind';
-    const recoveryKey = `${bindIdentity}|${bindSeq}|${recoveryReason}`;
+    const recoverySnapshotAtSchedule = capturePreviewCommitSnapshot(getPreviewState(), { reason: `recovery-${recoveryReason}` });
+    const recoveryKey = [
+      trimStr(recoverySnapshotAtSchedule.ownerKind || ''),
+      trimStr(recoverySnapshotAtSchedule.ownerIdentity || recoverySnapshotAtSchedule.ownerToken || ''),
+      trimStr(recoverySnapshotAtSchedule.rowKey || recoverySnapshotAtSchedule.activeIdentity || ''),
+      Number(recoverySnapshotAtSchedule.rowChangeSeq || 0) || 0,
+      trimStr(recoverySnapshotAtSchedule.selectionKey || ''),
+      trimStr(recoverySnapshotAtSchedule.fileKey || ''),
+      recoveryReason
+    ].join('|');
 
     if (
       pane.__preview_recovery_timer &&
@@ -131375,10 +136062,21 @@ function bindBulkProcessPreviewPane(state) {
     clearPreviewStateRecovery();
     pane.__preview_recovery_key = recoveryKey;
     pane.__preview_recovery_attempt = 0;
-    const recoverySnapshotAtSchedule = capturePreviewCommitSnapshot(getPreviewState(), { reason: `recovery-${recoveryReason}` });
 
     const runRecoveryAttempt = async () => {
-      if (!isActiveBind() || !isPreviewCommitSnapshotCurrent(recoverySnapshotAtSchedule)) {
+      if (!isPreviewCommitSnapshotCurrent(recoverySnapshotAtSchedule, {
+        requireSelectionUnchanged: true,
+        requireFileKeyUnchanged: true,
+        allowSupersededBindForSameSelection: true
+      })) {
+        clearPreviewStateRecovery();
+        return;
+      }
+      if (!isPreviewCommitSnapshotCurrent(recoverySnapshotAtSchedule, {
+        requireSelectionUnchanged: true,
+        requireFileKeyUnchanged: true,
+        allowSupersededBindForSameSelection: true
+      })) {
         clearPreviewStateRecovery();
         return;
       }
@@ -131506,6 +136204,10 @@ function bindBulkProcessPreviewPane(state) {
       reason === 'no-preview-item' ||
       reason === 'no-file-key' ||
       reason === 'queue-not-loaded' ||
+      reason === 'evidence-loading' ||
+      reason === 'evidence-context-loading' ||
+      reason === 'attached-evidence-loading' ||
+      reason === 'editor-context-pending' ||
       reason === 'degraded-context' ||
       reason === 'metadata-only-refresh' ||
       reason === 'transient-no-identity'
@@ -131566,10 +136268,36 @@ function bindBulkProcessPreviewPane(state) {
     })) {
       return '';
     }
+    if (window.__LOG_MODAL === true) {
+      logPreviewCommitEvent(captureBulkAuthorisePreviewSnapshot(opts.previewState || null), {
+        event: 'presign-request',
+        ownerKind: trimStr(snapshot.ownerKind || ''),
+        ownerTokenPresent: !!trimStr(snapshot.ownerToken || ''),
+        rowKey: trimStr(snapshot.rowKey || ''),
+        rowChangeSeq: Number(snapshot.rowChangeSeq || 0) || 0,
+        activeTab: trimStr(snapshot.activeTab || ''),
+        selectionKey: trimStr(snapshot.selectionKey || ''),
+        fileKey: cleanKey,
+        previewItemId: trimStr(snapshot.previewItemId || ''),
+        activeAttachedId: trimStr(snapshot.activeAttachedId || ''),
+        activeQueueId: trimStr(snapshot.activeQueueId || '')
+      });
+    }
     const res = await authFetch(API('/api/files/presign-download'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: cleanKey }),
+      body: JSON.stringify({
+        key: cleanKey,
+        owner_kind: snapshot.ownerKind || null,
+        owner_token: snapshot.ownerToken || null,
+        owner_identity: snapshot.ownerIdentity || null,
+        row_key: snapshot.rowKey || null,
+        row_change_seq: snapshot.rowChangeSeq || null,
+        active_tab: snapshot.activeTab || null,
+        selection_key: snapshot.selectionKey || null,
+        file_key: snapshot.fileKey || cleanKey,
+        item_id: snapshot.previewItemId || null
+      }),
       signal
     });
     const text = await res.text().catch(() => '');
@@ -131598,10 +136326,13 @@ function bindBulkProcessPreviewPane(state) {
 
   const syncQueueItem = () => {
     const activeIdentity = getActiveIdentity();
-    const queueLoadedForIdentity = isQueueLoadedForIdentity(activeIdentity);
+    const queueScope = getPreviewQueueScope();
+    const queueLoadedForScope = isQueueLoadedForIdentity(activeIdentity, queueScope);
     const previousItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (activeTab !== 'queue') return previousItem || null;
     const previousId = trimStr(pane.active_queue_id || previousItem?.id || previousItem?.queue_id || '');
-    if (!queueLoadedForIdentity) {
+    if (!queueLoadedForScope) {
       return previousItem || null;
     }
     const queueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
@@ -131621,7 +136352,7 @@ function bindBulkProcessPreviewPane(state) {
   const fetchBulkProcessPreviewRowContext = async (rowInput, fetchOptions = {}) => {
     const row = (rowInput && typeof rowInput === 'object') ? rowInput : {};
     const opts = (fetchOptions && typeof fetchOptions === 'object') ? fetchOptions : {};
-    const includeEvidence = opts.includeEvidence === true || opts.include_evidence === true;
+    const includeEvidence = true;
     const rowKey = trimStr(row.row_key || st.active_row_key || '');
     const currentTimesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || st.active_details?.current_timesheet_id || st.active_details?.timesheet?.timesheet_id || '');
     const requestedTimesheetId = trimStr(row.requested_timesheet_id || row.timesheet_id || currentTimesheetId || '');
@@ -131663,7 +136394,11 @@ function bindBulkProcessPreviewPane(state) {
     add('requested_timesheet_id', requestedTimesheetId);
     add('expected_timesheet_id', expectedTimesheetId);
     add('contract_week_id', contractWeekId);
+    qs.set('profile', 'evidence');
+    qs.set('context_profile', 'evidence');
     qs.set('include_evidence', includeEvidence ? 'true' : 'false');
+    qs.set('include_compare', 'false');
+    qs.set('include_import_source_rows', 'false');
 
     const url = API(`/api/timesheets/bulk-process-row-context?${qs.toString()}`);
     const res = await authFetch(url);
@@ -131778,6 +136513,8 @@ function bindBulkProcessPreviewPane(state) {
         backendRowSignature: identityParts.backendRowSignature,
         recordIdentity: identityParts.recordIdentity,
         base_only: false,
+        profile: 'evidence',
+        context_profile: 'evidence',
         include_evidence: true,
         include_compare: false,
         include_import_source_rows: false,
@@ -131848,14 +136585,35 @@ function bindBulkProcessPreviewPane(state) {
           ? deep(contextPayload.related)
           : ((st.active_details && st.active_details.related) ? deep(st.active_details.related) : buildFallbackRelated(mergedRow, detailsPayload)));
 
+    const existingDetails = (st.active_details && typeof st.active_details === 'object') ? deep(st.active_details) : {};
     st.active_details = {
+      ...existingDetails,
       ...detailsPayload,
-      current_timesheet_id: contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-      requested_timesheet_id: contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
-      expected_timesheet_id: contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-      contract_week_id: contextPayload.contract_week_id || detailsPayload.contract_week_id || mergedRow.contract_week_id || null,
+      current_timesheet_id: contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || existingDetails.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
+      requested_timesheet_id: contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || existingDetails.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
+      expected_timesheet_id: contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || existingDetails.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
+      contract_week_id: contextPayload.contract_week_id || detailsPayload.contract_week_id || existingDetails.contract_week_id || mergedRow.contract_week_id || null,
       evidence: evidenceRows,
-      related: ensureBulkProcessRelatedContract(related, mergedRow, detailsPayload)
+      evidence_loaded: true,
+      context_profile: 'evidence',
+      profile: 'evidence',
+      related: ensureBulkProcessRelatedContract(related, mergedRow, { ...existingDetails, ...detailsPayload })
+    };
+    st.active_context = {
+      ...((st.active_context && typeof st.active_context === 'object') ? deep(st.active_context) : {}),
+      ...((contextPayload && typeof contextPayload === 'object') ? deep(contextPayload) : {}),
+      row: deep(st.active_row || mergedRow),
+      data_row: deep(st.active_row || mergedRow),
+      details: {
+        ...(((st.active_context && typeof st.active_context === 'object' && st.active_context.details && typeof st.active_context.details === 'object') ? deep(st.active_context.details) : {})),
+        ...deep(detailsPayload || {}),
+        evidence: evidenceRows,
+        evidence_loaded: true
+      },
+      evidence: evidenceRows,
+      evidence_loaded: true,
+      context_profile: 'evidence',
+      profile: 'evidence'
     };
     st.active_ctx = normaliseBulkTimesheetWorkbenchCtx(
       deep(st.active_row || mergedRow),
@@ -131937,17 +136695,17 @@ function bindBulkProcessPreviewPane(state) {
     const stateObj = (previewState && typeof previewState === 'object') ? previewState : {};
     const activeTab = trimStr(stateObj.activeTab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
     const attachedRows = Array.isArray(stateObj.attachedRows) ? stateObj.attachedRows : [];
-    const activeIdentity = getActiveIdentity();
-    const queueLoadedForIdentity = isQueueLoadedForIdentity(activeIdentity);
-    const queueRows = queueLoadedForIdentity && Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
-    const queueLoading = !!pane.__queue_loading;
+    const queueScope = getPreviewQueueScope();
+    const queueLoadedForScope = isQueueLoadedForIdentity('', queueScope);
+    const queueRows = queueLoadedForScope && Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+    const queueLoading = !!pane.__queue_loading && (!pane.__queue_loading_scope || trimStr(pane.__queue_loading_scope || '').toLowerCase() === queueScope.toLowerCase());
     if (activeTab === 'queue' && queueLoading) {
       return {
         label: 'Loading queue images',
         message: 'Loading queue images…'
       };
     }
-    if (activeTab === 'queue' && !queueLoadedForIdentity) {
+    if (activeTab === 'queue' && !queueLoadedForScope) {
       return {
         label: 'Queue not loaded yet',
         message: 'Queue images have not been loaded yet. Open the Queue tab to load them.'
@@ -132260,12 +137018,21 @@ function bindBulkProcessPreviewPane(state) {
       }
 
       if (typeof refreshTimesheetImportsQueue === 'function') {
-        await refreshTimesheetImportsQueue(pane, { ownerState: st, suppressWhileBusy: true, force: true });
+        await refreshTimesheetImportsQueue(pane, {
+          ownerState: st,
+          suppressWhileBusy: true,
+          force: true,
+          queue_scope: getPreviewQueueScope(),
+          status: getPreviewQueueScope().split(':')[1] || 'QUEUED',
+          allowWithoutActiveIdentity: true
+        });
       }
-      const activeIdentity = getActiveIdentity();
       pane.__queue_loaded = true;
-      pane.__queue_loaded_identity = activeIdentity;
+      pane.__queue_scope = getPreviewQueueScope();
+      pane.__queue_loaded_scope = getPreviewQueueScope();
+      pane.__queue_loaded_identity = '';
       pane.__queue_loading = false;
+      pane.__queue_loading_scope = '';
       pane.__queue_last_error = '';
       const postMutationStaleCheck = checkCapturedRemoveTargetStale(capturedTarget);
       const activeRowStillMatches = !postMutationStaleCheck.stale || postMutationStaleCheck.reason === 'target-missing';
@@ -132292,6 +137059,8 @@ function bindBulkProcessPreviewPane(state) {
         await refreshBulkAuthoriseActiveContext(st, {
           row: st.active_row || null,
           base_only: false,
+          profile: 'evidence',
+          context_profile: 'evidence',
           include_evidence: true,
           include_compare: false,
           include_import_source_rows: false,
@@ -132597,7 +137366,13 @@ function bindBulkProcessPreviewPane(state) {
 
           pane.active_rotation_deg = nextDeg;
           if (typeof refreshTimesheetImportsQueue === 'function') {
-            await refreshTimesheetImportsQueue(pane, { ownerState: st, suppressWhileBusy: true });
+            await refreshTimesheetImportsQueue(pane, {
+              ownerState: st,
+              suppressWhileBusy: true,
+              queue_scope: getPreviewQueueScope(),
+              status: getPreviewQueueScope().split(':')[1] || 'QUEUED',
+              allowWithoutActiveIdentity: true
+            });
             logPreview('[ROTATE][QUEUE-REFRESH-DONE]', {
               source_mode: rotationSourceMode,
               queue_id: String(queueId),
@@ -132812,10 +137587,14 @@ function bindBulkProcessPreviewPane(state) {
   const enforceBulkAuthoriseAttachedPreviewPreference = () => {
     if (!isBulkAuthoriseTimesheetsPreview()) return { hydrationNeeded: false, attachedRows: [] };
     const activeIdentity = getActiveIdentity();
+    const queueScope = getPreviewQueueScope();
     const queueOverrideForCurrentRow = !!(
       pane.__queue_manual_override === true &&
-      trimStr(pane.__queue_manual_override_identity || '') &&
-      trimStr(pane.__queue_manual_override_identity || '') === trimStr(activeIdentity || '')
+      (
+        trimStr(pane.__queue_manual_override_scope || queueScope || '').toLowerCase() === queueScope.toLowerCase() ||
+        (!trimStr(pane.__queue_manual_override_scope || '') && !trimStr(pane.__queue_manual_override_identity || '')) ||
+        (!trimStr(pane.__queue_manual_override_scope || '') && trimStr(pane.__queue_manual_override_identity || '') === trimStr(activeIdentity || ''))
+      )
     );
     const attachedRows = syncAttachedRows();
     if (queueOverrideForCurrentRow) return { hydrationNeeded: false, attachedRows };
@@ -132835,6 +137614,24 @@ function bindBulkProcessPreviewPane(state) {
       pane.active_queue_item = null;
       pane.active_attached_item = activeAttached ? { ...deep(activeAttached) } : null;
       pane.active_attached_id = activeAttached ? (trimStr(activeAttached.id || activeAttached.evidence_id || activeAttached.queue_id || '') || null) : null;
+      pane.pendingAttached = false;
+      pane.__pending_attached = false;
+      pane.__pendingAttached = false;
+      pane.pendingAttachedIdentity = '';
+      pane.__pending_attached_identity = '';
+      pane.pendingAttachedRequestKey = '';
+      pane.__pending_attached_request_key = '';
+      st.pendingAttached = false;
+      st.__pending_attached = false;
+      st.__bulk_authorise_pending_attached = false;
+      st.pendingAttachedIdentity = '';
+      st.__pending_attached_identity = '';
+      const activeAttachedFileKey = resolvePreviewFileCacheKey(activeAttached);
+      const activeAttachedTargetId = trimStr(activeAttached?.id || activeAttached?.evidence_id || activeAttached?.queue_id || activeAttachedFileKey || '');
+      const attachedSelectionKey = activeAttached ? buildPreviewSelectionKey('attached', activeAttachedTargetId, activeAttachedFileKey) : '';
+      if (attachedSelectionKey && !isValidPreviewSelectionKey(pane.__preview_load_requested_target_key || '')) {
+        pane.__preview_load_requested_target_key = attachedSelectionKey;
+      }
       pane.__requires_evidence_hydration = false;
       if (pane.__preview_target_key && !normalisePreviewSelectionKey(pane.__preview_target_key).startsWith('attached|')) {
         clearPreviewRequestState({ clearRequested: true, abort: true, reason: 'bulk-authorise-attached-preferred' });
@@ -132891,8 +137688,9 @@ function bindBulkProcessPreviewPane(state) {
 
     const previewState = getPreviewState();
     const previewItem = previewState.previewItem;
-    const queueLoadedForIdentity = isQueueLoadedForIdentity(currentIdentity);
-    const queueLoading = !!pane.__queue_loading;
+    const queueScope = getPreviewQueueScope();
+    const queueLoadedForScope = isQueueLoadedForIdentity('', queueScope);
+    const queueLoading = !!pane.__queue_loading && (!pane.__queue_loading_scope || trimStr(pane.__queue_loading_scope || '').toLowerCase() === queueScope.toLowerCase());
     if (previewItem) {
       syncLivePreviewStateFromCache(previewState);
     }
@@ -132904,7 +137702,7 @@ function bindBulkProcessPreviewPane(state) {
       setPreviewLabel(noPreviewCopy.label);
       const isTransientQueueState =
         previewState.activeTab === 'queue' &&
-        (!queueLoadedForIdentity || queueLoading);
+        (!queueLoadedForScope || queueLoading);
 
       if (!isTransientQueueState) {
         clearPreviewRequestState({ clearRequested: true, abort: true, reason: 'no-preview-item' });
@@ -132994,37 +137792,21 @@ function bindBulkProcessPreviewPane(state) {
       return;
     }
     if (canCommitAttachedPreviewWhileBusy && !hasLiveSignedForSelection && cachedBusySignedUrl) {
-      pane.__preview_signed_url = cachedBusySignedUrl;
-      pane.__preview_target_key = previewSelectionKey;
-      pane.__preview_load_requested_target_key = previewSelectionKey;
+      commitSignedPreviewAtomically(previewState, previewSelectionKey, cachedBusySignedUrl, {
+        snapshot: busySnapshot,
+        reason: 'busy-cache-commit',
+        allowSupersededBindForSameSelection: true
+      });
     }
 
-    if (isLazyShell()) {
-      clearPreviewRequestState({ clearRequested: false, abort: true, reason: 'lazy-shell' });
-      renderToolbar(previewState, previewItem, previewSelectionKey, previewRenderKey, '', isPdf, pageCount, activePage, rotationDeg, zoom);
-      stage.innerHTML = `
-        <div style="min-height:320px;display:flex;align-items:center;justify-content:center;text-align:center;">
-          <div class="mini" style="opacity:.8;max-width:520px;">Loading preview… finishing row hydration first.</div>
-        </div>
-      `;
-      const lazyHydrationKey = `${currentIdentity}|${previewSelectionKey}`;
-      if (trimStr(pane.__preview_lazy_hydration_key || '') !== lazyHydrationKey) {
-        pane.__preview_lazy_hydration_key = lazyHydrationKey;
-        Promise.resolve().then(async () => {
-          if (!isActiveBind()) return;
-          if (typeof st.__ensureHydratedActiveContext === 'function') {
-            await st.__ensureHydratedActiveContext({ scope: 'preview', forceFull: true });
-          }
-          if (!isActiveBind()) return;
-          markPreviewLoadRequested(previewSelectionKey);
-          await renderStage();
-        }).catch((e) => {
-          if (!isActiveBind()) return;
-          st.error_text = String(e?.message || e || 'Failed to hydrate preview.');
-          console.warn('[TS][BULK-PROCESS][PREVIEW] lazy hydration failed', e);
-        });
-      }
-      return;
+    if (isLazyShell() && window.__LOG_MODAL === true) {
+      logPreview('[LAZY-SHELL][CONTINUE-WITH-LAYERED-PREVIEW]', {
+        active_identity: currentIdentity || null,
+        selection_key: previewSelectionKey,
+        active_tab: previewState.activeTab,
+        has_preview_item: !!previewItem,
+        file_key: previewFileCacheKey || null
+      });
     }
 
     let signedUrl = '';
@@ -133072,9 +137854,11 @@ function bindBulkProcessPreviewPane(state) {
       }
       signedUrl = cachedSignedUrl;
       usedCachedSignedUrl = true;
-      pane.__preview_signed_url = signedUrl;
-      pane.__preview_target_key = previewSelectionKey;
-      pane.__preview_load_requested_target_key = previewSelectionKey;
+      commitSignedPreviewAtomically(previewState, previewSelectionKey, signedUrl, {
+        snapshot: renderSnapshot,
+        reason: 'render-cache-commit',
+        allowSupersededBindForSameSelection: true
+      });
     } else {
       const inflightKey = getPreviewOwnerCacheKey(previewFileCacheKey, capturePreviewCommitSnapshot(previewState, { reason: 'presign-inflight-key' })) || previewFileCacheKey;
       if (bulkAuthSnapshot && window.__LOG_MODAL === true) {
@@ -133206,9 +137990,11 @@ function bindBulkProcessPreviewPane(state) {
               if (staleDeferredRecovery.stale) return;
               const deferredSnapshot = capturePreviewCommitSnapshot(latestPreview, { reason: 'presign-deferred-recovery' });
               if (!isPreviewCommitSnapshotCurrent(deferredSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return;
-              pane.__preview_signed_url = signedUrl;
-              pane.__preview_target_key = previewSelectionKey;
-              pane.__preview_load_requested_target_key = previewSelectionKey;
+              commitSignedPreviewAtomically(latestPreview, previewSelectionKey, signedUrl, {
+                snapshot: deferredSnapshot,
+                reason: 'presign-deferred-selection-match',
+                allowSupersededBindForSameSelection: true
+              });
               scheduleSignedPreviewRetry(previewSelectionKey, 'presign-deferred-selection-match');
               await renderStage();
             }
@@ -133244,9 +138030,11 @@ function bindBulkProcessPreviewPane(state) {
     if (signedUrl && !stageHasRenderablePreview && stageText.includes('preview is loading')) {
       if (commitLiveSignedUrlIfCurrentStageStillLoading(previewState, 'loading-text-recovery')) return;
       if (checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'recovery').stale) return;
-      pane.__preview_signed_url = signedUrl;
-      pane.__preview_target_key = previewSelectionKey;
-      pane.__preview_load_requested_target_key = previewSelectionKey;
+      commitSignedPreviewAtomically(previewState, previewSelectionKey, signedUrl, {
+        snapshot: capturePreviewCommitSnapshot(previewState, { reason: 'loading-text-recovery' }),
+        reason: 'loading-text-recovery',
+        allowSupersededBindForSameSelection: true
+      });
       const recovered = await tryImmediateSameSelectionRenderRecovery(previewSelectionKey, 'loading-text-recovery');
       if (recovered) return;
     }
@@ -133418,9 +138206,11 @@ function bindBulkProcessPreviewPane(state) {
       signedUrl = getCachedSignedUrlForPreview(expectedFileKey, capturePreviewCommitSnapshot(getPreviewState(), { reason: 'commit-live-preview-cache' }));
       if (!signedUrl) return false;
       const promoteSelectionKey = expectedSelectionKey || currentSelectionKey;
-      pane.__preview_signed_url = signedUrl;
-      pane.__preview_target_key = promoteSelectionKey;
-      pane.__preview_load_requested_target_key = promoteSelectionKey;
+      commitSignedPreviewAtomically(previewState, promoteSelectionKey, signedUrl, {
+        snapshot: capturePreviewCommitSnapshot(previewState, { reason: 'commit-live-preview-cache' }),
+        reason: 'commit-live-preview-cache',
+        allowSupersededBindForSameSelection: true
+      });
     } else {
       return false;
     }
@@ -135245,6 +140035,8 @@ function renderBulkProcessSelectedSummaryStrip(state) {
   `);
 }
 
+
+
 function renderBulkProcessEvidencePane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -135316,19 +140108,30 @@ function renderBulkProcessEvidencePane(state) {
 
   const activeIdentity = getActiveIdentity();
   const queueLoading = !!pane.__queue_loading;
-  const queueCountLoading = !!pane.__queue_count_loading && trimStr(pane.__queue_count_loading_identity || '') === activeIdentity;
-  const queueLoadedForIdentity = !!pane.__queue_loaded && trimStr(pane.__queue_loaded_identity || '') === activeIdentity;
-  const queueRows = queueLoadedForIdentity && Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
-  const visibleQueueLoadInProgress = !!(activeTab === 'queue' && queueLoading && !queueLoadedForIdentity);
+  const queueStatus = upper(pane.__queue_status || 'QUEUED') || 'QUEUED';
+  const expectedQueueScope = `global:${queueStatus}`;
+  const queueScope = trimStr(pane.__queue_loaded_scope || pane.__queue_scope || expectedQueueScope) || expectedQueueScope;
+  pane.__queue_scope = queueScope;
+  if (pane.__queue_loaded === true && !trimStr(pane.__queue_loaded_scope || '')) pane.__queue_loaded_scope = queueScope;
+  const queueLoadedForScope = !!(
+    pane.__queue_loaded === true &&
+    trimStr(pane.__queue_loaded_scope || pane.__queue_scope || '').toLowerCase() === expectedQueueScope.toLowerCase()
+  );
+  const queueCountLoading = !!(
+    pane.__queue_count_loading === true &&
+    trimStr(pane.__queue_count_loading_scope || pane.__queue_scope || expectedQueueScope).toLowerCase() === expectedQueueScope.toLowerCase()
+  );
+  const queueRows = queueLoadedForScope && Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+  const visibleQueueLoadInProgress = !!(activeTab === 'queue' && queueLoading && !queueLoadedForScope);
   const fallbackKnownQueueCount = Array.isArray(pane.queue_rows) ? pane.queue_rows.length : null;
-  const queueCountLabel = queueLoadedForIdentity
+  const queueCountLabel = queueLoadedForScope
     ? String(queueRows.length)
     : (visibleQueueLoadInProgress
         ? 'Loading…'
         : (queueCountLoading && Number.isFinite(Number(fallbackKnownQueueCount))
             ? String(Number(fallbackKnownQueueCount))
             : 'Not loaded'));
-  const activeQueueItem = queueLoadedForIdentity
+  const activeQueueItem = queueLoadedForScope
     ? (
         pane.active_queue_item && typeof pane.active_queue_item === 'object'
           ? pane.active_queue_item
@@ -135345,16 +140148,38 @@ function renderBulkProcessEvidencePane(state) {
     return u;
   };
 
+  const evidenceContextProfile = trimStr(
+    activeContext.context_profile ||
+    activeContext.profile ||
+    activeDetails.context_profile ||
+    activeDetails.profile ||
+    activeCtx.context_profile ||
+    activeCtx.profile ||
+    activeCtx?.state?.context_profile ||
+    activeCtx?.state?.profile ||
+    ''
+  ).toLowerCase();
+  const evidenceLayerAuthoritative = !!(
+    pane.__attached_loaded === true ||
+    pane.__evidence_loaded === true ||
+    activeContext.evidence_loaded === true ||
+    activeContext?.details?.evidence_loaded === true ||
+    activeDetails.evidence_loaded === true ||
+    activeDetails?.evidence_meta?.evidence_loaded === true ||
+    activeCtx.evidence_loaded === true ||
+    activeCtx?.state?.evidence_loaded === true ||
+    evidenceContextProfile === 'evidence'
+  );
   const collectAttachedRowsForRender = () => {
     const sources = [
-      activeCtx?.state?.evidence,
-      activeCtx?.evidence,
-      activeContext?.evidence,
-      activeContext?.details?.evidence,
-      activeDetails?.evidence,
+      evidenceLayerAuthoritative ? activeCtx?.state?.evidence : null,
+      evidenceLayerAuthoritative ? activeCtx?.evidence : null,
+      evidenceLayerAuthoritative ? activeContext?.evidence : null,
+      evidenceLayerAuthoritative ? activeContext?.details?.evidence : null,
+      evidenceLayerAuthoritative ? activeDetails?.evidence : null,
       pane.attached_rows,
       pane.attached_all_rows,
-      window.modalCtx?.timesheetState?.evidence
+      evidenceLayerAuthoritative ? window.modalCtx?.timesheetState?.evidence : null
     ];
     const rows = [];
     const seen = new Set();
@@ -135443,12 +140268,15 @@ function renderBulkProcessEvidencePane(state) {
 
   const queueOverrideForCurrentRow = !!(
     pane.__queue_manual_override === true &&
-    trimStr(pane.__queue_manual_override_identity || '') &&
-    trimStr(pane.__queue_manual_override_identity || '') === trimStr(activeIdentity || '')
+    (
+      trimStr(pane.__queue_manual_override_scope || queueScope || '').toLowerCase() === queueScope.toLowerCase() ||
+      (!trimStr(pane.__queue_manual_override_scope || '') && !trimStr(pane.__queue_manual_override_identity || '')) ||
+      (!trimStr(pane.__queue_manual_override_scope || '') && trimStr(pane.__queue_manual_override_identity || '') === trimStr(activeIdentity || ''))
+    )
   );
   const canAttach = !!(
     activeTab === 'queue' &&
-    queueLoadedForIdentity &&
+    queueLoadedForScope &&
     !queueLoading &&
     activeQueueItem &&
     (activeRealTimesheetId || activeContractWeekId) &&
@@ -135466,8 +140294,8 @@ function renderBulkProcessEvidencePane(state) {
     <div class="card" id="bulkProcessEvidencePaneRoot" style="padding:6px 7px;overflow:visible;">
       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:center;">
         <div style="display:flex;gap:5px;align-items:center;justify-content:flex-start;flex-wrap:wrap;">
-          <button type="button" class="btn btn-outline" id="bpQueuePrevBtn" ${queueLoadedForIdentity && !queueLoading && activeQueueItem ? '' : 'disabled'}>Previous</button>
-          <button type="button" class="btn btn-outline" id="bpQueueNextBtn" ${queueLoadedForIdentity && !queueLoading && activeQueueItem ? '' : 'disabled'}>Next</button>
+          <button type="button" class="btn btn-outline" id="bpQueuePrevBtn" ${queueLoadedForScope && !queueLoading && activeQueueItem ? '' : 'disabled'}>Previous</button>
+          <button type="button" class="btn btn-outline" id="bpQueueNextBtn" ${queueLoadedForScope && !queueLoading && activeQueueItem ? '' : 'disabled'}>Next</button>
           <span class="mini" style="opacity:.85;">Images in Queue - ${enc(queueCountLabel)}</span>
         </div>
         <div style="display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;">
@@ -135475,7 +140303,7 @@ function renderBulkProcessEvidencePane(state) {
           <button type="button" class="btn" style="${sourceBtnStyle(activeTab === 'attached')}" id="bulkProcessEvidenceTabAttached">ATTACHED</button>
         </div>
         <div style="display:flex;gap:5px;align-items:center;justify-content:flex-end;flex-wrap:wrap;">
-          <select id="bpQueueKindSelect" class="input" style="max-width:160px;" ${(queueLoadedForIdentity && !queueLoading && activeQueueItem && !noUploadKindsAvailable) ? '' : 'disabled'}>
+          <select id="bpQueueKindSelect" class="input" style="max-width:160px;" ${(queueLoadedForScope && !queueLoading && activeQueueItem && !noUploadKindsAvailable) ? '' : 'disabled'}>
             ${allKinds.map((kind) => {
               const disabled = blockedKinds.has(kind);
               const label = kind.charAt(0) + kind.slice(1).toLowerCase();
@@ -135491,6 +140319,12 @@ function renderBulkProcessEvidencePane(state) {
     </div>
   `);
 }
+
+
+
+
+
+
 
 
 function ensureBulkAuthoriseManualDraftState(state) {
@@ -136961,6 +141795,7 @@ function ensureBulkAuthoriseManualDraftState(state) {
   return controller;
 }
 
+
 function bindBulkProcessEvidencePane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -136990,6 +141825,10 @@ function bindBulkProcessEvidencePane(state) {
           __queue_loaded: false,
           __queue_loading: false,
           __queue_count_loading: false,
+          __queue_loaded_scope: 'global:QUEUED',
+          __queue_scope: 'global:QUEUED',
+          __queue_loading_scope: '',
+          __queue_count_loading_scope: '',
           __queue_loaded_identity: '',
           __queue_count_loading_identity: '',
           __queue_last_error: '',
@@ -137299,8 +142138,12 @@ function bindBulkProcessEvidencePane(state) {
   pane.__queue_loaded = !!pane.__queue_loaded;
   pane.__queue_loading = !!pane.__queue_loading;
   pane.__queue_count_loading = !!pane.__queue_count_loading;
-  pane.__queue_loaded_identity = trimStr(pane.__queue_loaded_identity || '');
-  pane.__queue_count_loading_identity = trimStr(pane.__queue_count_loading_identity || '');
+  pane.__queue_scope = trimStr(pane.__queue_scope || pane.__queue_loaded_scope || 'global:QUEUED') || 'global:QUEUED';
+  pane.__queue_loaded_scope = trimStr(pane.__queue_loaded_scope || pane.__queue_scope || 'global:QUEUED') || 'global:QUEUED';
+  pane.__queue_loading_scope = trimStr(pane.__queue_loading_scope || pane.__queue_scope || 'global:QUEUED') || 'global:QUEUED';
+  pane.__queue_count_loading_scope = trimStr(pane.__queue_count_loading_scope || pane.__queue_scope || 'global:QUEUED') || 'global:QUEUED';
+  pane.__queue_loaded_identity = '';
+  pane.__queue_count_loading_identity = '';
   pane.__queue_last_error = trimStr(pane.__queue_last_error || '');
   pane.__queue_manual_override = !!pane.__queue_manual_override;
   pane.__queue_manual_override_identity = trimStr(pane.__queue_manual_override_identity || '');
@@ -137329,55 +142172,39 @@ function bindBulkProcessEvidencePane(state) {
     );
   };
 
-  const isQueueLoadedForIdentity = (identityValue) => {
-    const identity = trimStr(identityValue || getActiveIdentity());
-    if (!identity) return false;
-    return !!pane.__queue_loaded && trimStr(pane.__queue_loaded_identity || '') === identity;
+  const getQueueScope = (scopeValue = '') => {
+    const raw = trimStr(scopeValue || pane.__queue_scope || pane.__queue_loaded_scope || 'global:QUEUED') || 'global:QUEUED';
+    if (raw.toLowerCase().startsWith('global:')) return raw;
+    return `global:${raw.toUpperCase() || 'QUEUED'}`;
+  };
+  const isQueueLoadedForIdentity = (_identityValue, scopeValue = '') => {
+    const scope = getQueueScope(scopeValue);
+    return !!(
+      pane.__queue_loaded === true &&
+      trimStr(pane.__queue_loaded_scope || pane.__queue_scope || '').toLowerCase() === scope.toLowerCase()
+    );
   };
 
-  const markQueueStatePendingForActiveIdentity = (reason = 'active-identity-changed') => {
-    const activeIdentity = trimStr(getActiveIdentity() || '');
-    if (!activeIdentity) return false;
-    const loadedIdentity = trimStr(pane.__queue_loaded_identity || '');
-    if (!loadedIdentity || loadedIdentity === activeIdentity) return false;
-
-    const previousQueueId = trimStr(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id || '');
-    pane.__queue_stale_preserved_identity = loadedIdentity;
-    pane.__queue_stale_preserved_active_queue_id = previousQueueId;
-    pane.__queue_stale_preserved_reason = trimStr(reason || 'active-identity-changed') || 'active-identity-changed';
-    pane.__queue_loaded = false;
-    pane.__queue_loaded_identity = activeIdentity;
-    pane.__queue_loading = false;
-    pane.__queue_count_loading = false;
-    if (trimStr(pane.__queue_loading_identity || '') === loadedIdentity) pane.__queue_loading_identity = '';
-    if (trimStr(pane.__queue_count_loading_identity || '') === loadedIdentity) pane.__queue_count_loading_identity = '';
-
-    const queueOverrideForCurrentRow = !!(
-      pane.__queue_manual_override === true &&
-      trimStr(pane.__queue_manual_override_identity || '') &&
-      trimStr(pane.__queue_manual_override_identity || '') === activeIdentity
-    );
-
-    if (!queueOverrideForCurrentRow) {
-      pane.active_queue_id = null;
-      pane.active_queue_item = null;
-      if (trimStr(pane.active_tab || '').toLowerCase() !== 'queue') {
-        pane.__queue_manual_override = false;
-        pane.__queue_manual_override_identity = '';
-      }
+  const markQueueStatePendingForActiveIdentity = (reason = 'queue-scope-check') => {
+    const queueScope = getQueueScope();
+    pane.__queue_scope = queueScope;
+    pane.__queue_loaded_scope = trimStr(pane.__queue_loaded_scope || queueScope) || queueScope;
+    pane.__queue_loaded_identity = '';
+    pane.__queue_loading_identity = '';
+    pane.__queue_count_loading_identity = '';
+    if (pane.__queue_manual_override === true && !trimStr(pane.__queue_manual_override_scope || '')) {
+      pane.__queue_manual_override_scope = queueScope;
     }
-
     if (window.__LOG_MODAL === true) {
-      console.debug('[TS][BULK-PROCESS][EVIDENCE] queue state marked pending for active identity', {
-        reason: pane.__queue_stale_preserved_reason,
-        previous_queue_loaded_identity: loadedIdentity,
-        active_identity: activeIdentity,
-        previous_active_queue_id: previousQueueId || null,
+      console.debug('[TS][BULK-PROCESS][EVIDENCE] queue scope checked', {
+        reason: trimStr(reason || 'queue-scope-check') || 'queue-scope-check',
+        queue_scope: queueScope,
+        queue_loaded_scope: pane.__queue_loaded_scope || null,
+        queue_loaded: !!pane.__queue_loaded,
         active_tab: trimStr(pane.active_tab || '') || null
       });
     }
-
-    return true;
+    return false;
   };
 
   const rerenderWorkbench = async (reason = 'evidence-pane') => {
@@ -137581,7 +142408,7 @@ function bindBulkProcessEvidencePane(state) {
       queue_manual_override: !!pane.__queue_manual_override,
       queue_manual_override_identity: trimStr(pane.__queue_manual_override_identity || ''),
       queue_loaded: !!pane.__queue_loaded,
-      queue_loaded_identity: trimStr(pane.__queue_loaded_identity || ''),
+      queue_loaded_scope: trimStr(pane.__queue_loaded_scope || pane.__queue_scope || 'global:QUEUED'),
       queue_count: Array.isArray(pane.queue_rows) ? pane.queue_rows.length : 0,
       active_queue_id: trimStr(pane.active_queue_id || ''),
       preview_target_key: trimStr(pane.__preview_target_key || '')
@@ -137660,12 +142487,14 @@ function bindBulkProcessEvidencePane(state) {
     const opts = (queueOptions && typeof queueOptions === 'object') ? queueOptions : {};
     const ownerSnapshot = captureOwnerSnapshot('syncQueue');
     const activeIdentity = trimStr(opts.identity || ownerSnapshot.activeIdentity || getActiveIdentity());
+    const queueScope = getQueueScope(opts.queue_scope || opts.queueScope || 'global:QUEUED');
+    pane.__queue_scope = queueScope;
     if (activeIdentity) markQueueStatePendingForActiveIdentity('syncQueue-active-identity-check');
-    const shouldLoad = !!opts.force || !isQueueLoadedForIdentity(activeIdentity);
+    const shouldLoad = !!opts.force || !isQueueLoadedForIdentity(activeIdentity, queueScope);
     const previewBefore = capturePreviewStateSnapshot();
     const selectionBefore = getPreviewSelectionKeyForPane();
 
-    if (!activeIdentity || !isOwnerSnapshotCurrent(ownerSnapshot)) {
+    if (!isOwnerSnapshotCurrent(ownerSnapshot)) {
       return { didLoad: false, active: pane.active_queue_item || null, skipped: true, preserved: true };
     }
 
@@ -137680,8 +142509,11 @@ function bindBulkProcessEvidencePane(state) {
         owner_identity: ownerSnapshot.ownerIdentity,
         modal_open_token: ownerSnapshot.ownerToken,
         active_identity: activeIdentity,
+        queue_scope: queueScope,
+        status: trimStr(queueScope.split(':')[1] || 'QUEUED').toUpperCase() || 'QUEUED',
         suppressWhileBusy: true,
-        force: !!opts.force
+        force: !!opts.force,
+        allowWithoutActiveIdentity: queueScope.toLowerCase().startsWith('global:')
       });
 
       if (!isOwnerSnapshotCurrent(ownerSnapshot)) {
@@ -137689,23 +142521,25 @@ function bindBulkProcessEvidencePane(state) {
         return { didLoad: false, active: pane.active_queue_item || null, stale: true, preserved: true };
       }
 
-      const afterIdentity = getActiveIdentity();
       const afterSeq = Number(pane.__queue_refresh_seq || 0) || 0;
       const afterRows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
-      const refreshApplied =
-        !!activeIdentity &&
-        afterIdentity === activeIdentity &&
+      const afterScope = trimStr(pane.__queue_loaded_scope || pane.__queue_scope || '');
+      const refreshApplied = !!(
+        afterScope.toLowerCase() === queueScope.toLowerCase() &&
         (
           afterSeq > beforeSeq ||
           beforeRowsRef !== afterRows ||
           afterRows.length !== beforeRowsCount ||
           pane.__queue_refresh_last_result === 'applied' ||
           pane.__queue_refresh_last_result === 'unchanged'
-        );
+        )
+      );
 
       if (refreshApplied) {
         pane.__queue_loaded = true;
-        pane.__queue_loaded_identity = activeIdentity;
+        pane.__queue_loaded_scope = queueScope;
+        pane.__queue_scope = queueScope;
+        pane.__queue_loaded_identity = '';
         pane.__queue_last_error = '';
         didLoad = true;
       }
@@ -137721,7 +142555,7 @@ function bindBulkProcessEvidencePane(state) {
       return { didLoad, active: pane.active_queue_item, preserved: true };
     }
 
-    if (!active && previewBefore.active_queue_item && opts.allowSelectFallback !== true && pane.__queue_loaded_identity === activeIdentity) {
+    if (!active && previewBefore.active_queue_item && opts.allowSelectFallback !== true && isQueueLoadedForIdentity(activeIdentity, queueScope)) {
       pane.active_queue_id = previewBefore.active_queue_id || null;
       pane.active_queue_item = previewBefore.active_queue_item ? deep(previewBefore.active_queue_item) : null;
       pane.__preview_target_key = previewBefore.__preview_target_key || pane.__preview_target_key || '';
@@ -137750,13 +142584,10 @@ function bindBulkProcessEvidencePane(state) {
     const wanted = trimStr(pane.active_queue_id || '');
     const previousItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
     const activeIdentity = trimStr(getActiveIdentity() || '');
-    const queueLoadedForCurrentIdentity = !!(
-      pane.__queue_loaded === true &&
-      activeIdentity &&
-      trimStr(pane.__queue_loaded_identity || '') === activeIdentity
-    );
+    const queueScope = getQueueScope();
+    const queueLoadedForCurrentScope = isQueueLoadedForIdentity(activeIdentity, queueScope);
     let active = wanted ? (pane.queue_rows.find((x) => trimStr(x?.id || x?.queue_id || '') === wanted) || null) : null;
-    if (!active && previousItem && pane.__queue_loaded !== true && queueLoadedForCurrentIdentity) return previousItem;
+    if (!active && previousItem && pane.__queue_loaded !== true && !queueLoadedForCurrentScope) return previousItem;
     if (!active) active = pane.queue_rows[0] || null;
     if (!active) {
       if (pane.__queue_loaded === true) {
@@ -137775,36 +142606,35 @@ function bindBulkProcessEvidencePane(state) {
     const ownerSnapshot = captureOwnerSnapshot('ensureQueueLoadedForActiveTab');
     const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
     const activeIdentity = trimStr(ownerSnapshot.activeIdentity || getActiveIdentity());
+    const queueScope = getQueueScope(opts.queue_scope || opts.queueScope || 'global:QUEUED');
+    pane.__queue_scope = queueScope;
     if (activeIdentity) markQueueStatePendingForActiveIdentity('ensureQueueLoadedForActiveTab-active-identity-check');
-    const queueLoadedForIdentity = isQueueLoadedForIdentity(activeIdentity);
+    const queueLoadedForScope = isQueueLoadedForIdentity(activeIdentity, queueScope);
 
     pane.queue_rows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
 
-    if (!activeIdentity || !isOwnerSnapshotCurrent(ownerSnapshot)) return false;
-    if ((st.__active_context_pending === true || st.__hydrating_active_context) && opts.force !== true) {
-      syncQueueSelectionOnly();
-      return false;
-    }
+    if (!isOwnerSnapshotCurrent(ownerSnapshot)) return false;
 
     if (activeTab !== 'queue' && !opts.force) {
       syncQueueSelectionOnly();
       return false;
     }
 
-    const needsLoad = !!opts.force || !queueLoadedForIdentity;
+    const needsLoad = !!opts.force || !queueLoadedForScope;
 
     if (!needsLoad) {
       syncQueueSelectionOnly();
       return false;
     }
 
-    if (pane.__queue_loading && trimStr(pane.__queue_loading_identity || '') === activeIdentity) return false;
+    if (pane.__queue_loading && trimStr(pane.__queue_loading_scope || pane.__queue_scope || '').toLowerCase() === queueScope.toLowerCase()) return false;
 
     pane.__queue_loading = true;
-    pane.__queue_loading_identity = activeIdentity;
+    pane.__queue_loading_scope = queueScope;
+    pane.__queue_loading_identity = '';
     const previewBefore = capturePreviewStateSnapshot();
     try {
-      const result = await syncQueue({ force: true, identity: activeIdentity });
+      const result = await syncQueue({ force: true, identity: activeIdentity, queue_scope: queueScope });
       if (!isOwnerSnapshotCurrent(ownerSnapshot)) {
         restorePreviewStateSnapshot(previewBefore);
         return false;
@@ -137814,8 +142644,9 @@ function bindBulkProcessEvidencePane(state) {
       if (isOwnerSnapshotCurrent(ownerSnapshot)) pane.__queue_last_error = trimStr(e?.message || e || 'Failed to refresh queue.');
       throw e;
     } finally {
-      if (trimStr(pane.__queue_loading_identity || '') === activeIdentity) {
+      if (trimStr(pane.__queue_loading_scope || '').toLowerCase() === queueScope.toLowerCase()) {
         pane.__queue_loading = false;
+        pane.__queue_loading_scope = '';
         pane.__queue_loading_identity = '';
       }
     }
@@ -137829,7 +142660,7 @@ function bindBulkProcessEvidencePane(state) {
     const requestedTimesheetId = trimStr(row.requested_timesheet_id || row.timesheet_id || currentTimesheetId || '');
     const expectedTimesheetId = trimStr(row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || currentTimesheetId || '');
     const contractWeekId = trimStr(row.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
-    const includeEvidence = opts.includeEvidence !== false && opts.include_evidence !== false;
+    const includeEvidence = true;
     const softRefresh = !!(
       opts.soft === true ||
       opts.softRefresh === true ||
@@ -137855,7 +142686,11 @@ function bindBulkProcessEvidencePane(state) {
     add('requested_timesheet_id', requestedTimesheetId);
     add('expected_timesheet_id', expectedTimesheetId);
     add('contract_week_id', contractWeekId);
+    qs.set('profile', 'evidence');
+    qs.set('context_profile', 'evidence');
     qs.set('include_evidence', includeEvidence ? 'true' : 'false');
+    qs.set('include_compare', 'false');
+    qs.set('include_import_source_rows', 'false');
 
     const buildSoftFailure = (status, message, bodyText, bodyJson) => ({
       ok: false,
@@ -137939,6 +142774,8 @@ function bindBulkProcessEvidencePane(state) {
           backendRowSignature: identityParts.backendRowSignature,
           recordIdentity: identityParts.recordIdentity,
           base_only: false,
+          profile: 'evidence',
+          context_profile: 'evidence',
           include_evidence: true,
           include_compare: false,
           include_import_source_rows: false,
@@ -138017,13 +142854,33 @@ function bindBulkProcessEvidencePane(state) {
             : ((existingDetails.related && typeof existingDetails.related === 'object') ? deep(existingDetails.related) : {}));
 
       st.active_details = {
+        ...((existingDetails && typeof existingDetails === 'object') ? deep(existingDetails) : {}),
         ...detailsPayload,
-        current_timesheet_id: contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-        requested_timesheet_id: contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
-        expected_timesheet_id: contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-        contract_week_id: contextPayload.contract_week_id || detailsPayload.contract_week_id || mergedRow.contract_week_id || null,
+        current_timesheet_id: contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || existingDetails.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
+        requested_timesheet_id: contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || existingDetails.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
+        expected_timesheet_id: contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || existingDetails.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
+        contract_week_id: contextPayload.contract_week_id || detailsPayload.contract_week_id || existingDetails.contract_week_id || mergedRow.contract_week_id || null,
         evidence: evidenceRows,
+        evidence_loaded: true,
+        context_profile: 'evidence',
+        profile: 'evidence',
         related
+      };
+      st.active_context = {
+        ...((st.active_context && typeof st.active_context === 'object') ? deep(st.active_context) : {}),
+        ...((contextPayload && typeof contextPayload === 'object') ? deep(contextPayload) : {}),
+        row: deep(st.active_row || mergedRow),
+        data_row: deep(st.active_row || mergedRow),
+        details: {
+          ...(((st.active_context && typeof st.active_context === 'object' && st.active_context.details && typeof st.active_context.details === 'object') ? deep(st.active_context.details) : {})),
+          ...deep(detailsPayload || {}),
+          evidence: evidenceRows,
+          evidence_loaded: true
+        },
+        evidence: evidenceRows,
+        evidence_loaded: true,
+        context_profile: 'evidence',
+        profile: 'evidence'
       };
       st.active_ctx = normaliseBulkTimesheetWorkbenchCtx(deep(st.active_row || mergedRow), st.active_details);
       if (localItem) upsertLocalStagedContractWeekEvidence(localItem);
@@ -138074,22 +142931,48 @@ function bindBulkProcessEvidencePane(state) {
     const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
     const activeDetails = (st.active_details && typeof st.active_details === 'object') ? st.active_details : {};
     const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
+    const activeProfile = trimStr(activeContext.context_profile || activeContext.profile || activeDetails.context_profile || activeDetails.profile || activeCtx.context_profile || activeCtx.profile || activeCtx?.state?.context_profile || activeCtx?.state?.profile || '').toLowerCase();
+    const activeEvidenceAuthoritative = !!(
+      activeProfile === 'evidence' ||
+      activeContext.evidence_loaded === true ||
+      activeContext?.details?.evidence_loaded === true ||
+      activeDetails.evidence_loaded === true ||
+      activeCtx.evidence_loaded === true ||
+      activeCtx?.state?.evidence_loaded === true ||
+      pane.__evidence_loaded === true ||
+      pane.__attached_loaded === true ||
+      pane.__requires_evidence_hydration === false
+    );
+    const bulkAuthState = (window.modalCtx?.bulkAuthoriseState && typeof window.modalCtx.bulkAuthoriseState === 'object') ? window.modalCtx.bulkAuthoriseState : {};
+    const bulkAuthProfile = trimStr(bulkAuthState.active_context?.context_profile || bulkAuthState.active_context?.profile || bulkAuthState.active_details?.context_profile || bulkAuthState.active_details?.profile || bulkAuthState.active_ctx?.context_profile || bulkAuthState.active_ctx?.profile || bulkAuthState.active_ctx?.state?.context_profile || bulkAuthState.active_ctx?.state?.profile || '').toLowerCase();
+    const bulkAuthEvidenceAuthoritative = !!(
+      bulkAuthProfile === 'evidence' ||
+      bulkAuthState.active_context?.evidence_loaded === true ||
+      bulkAuthState.active_context?.details?.evidence_loaded === true ||
+      bulkAuthState.active_details?.evidence_loaded === true ||
+      bulkAuthState.active_ctx?.evidence_loaded === true ||
+      bulkAuthState.active_ctx?.state?.evidence_loaded === true
+    );
     const sources = [
-      activeCtx?.state?.evidence,
-      activeCtx?.evidence,
-      activeContext?.evidence,
-      activeContext?.details?.evidence,
-      activeDetails?.evidence,
+      ...(activeEvidenceAuthoritative ? [
+        activeCtx?.state?.evidence,
+        activeCtx?.evidence,
+        activeContext?.evidence,
+        activeContext?.details?.evidence,
+        activeDetails?.evidence,
+        window.modalCtx?.timesheetState?.evidence
+      ] : []),
       pane.attached_rows,
       pane.attached_all_rows,
-      window.modalCtx?.timesheetState?.evidence,
       window.modalCtx?.bulkAuthoriseState?.evidence_pane_state?.attached_rows,
       window.modalCtx?.bulkAuthoriseState?.evidence_pane_state?.attached_all_rows,
-      window.modalCtx?.bulkAuthoriseState?.active_ctx?.state?.evidence,
-      window.modalCtx?.bulkAuthoriseState?.active_ctx?.evidence,
-      window.modalCtx?.bulkAuthoriseState?.active_context?.evidence,
-      window.modalCtx?.bulkAuthoriseState?.active_context?.details?.evidence,
-      window.modalCtx?.bulkAuthoriseState?.active_details?.evidence
+      ...(bulkAuthEvidenceAuthoritative ? [
+        window.modalCtx?.bulkAuthoriseState?.active_ctx?.state?.evidence,
+        window.modalCtx?.bulkAuthoriseState?.active_ctx?.evidence,
+        window.modalCtx?.bulkAuthoriseState?.active_context?.evidence,
+        window.modalCtx?.bulkAuthoriseState?.active_context?.details?.evidence,
+        window.modalCtx?.bulkAuthoriseState?.active_details?.evidence
+      ] : [])
     ];
     const rows = [];
     const seenEvidenceIds = new Set();
@@ -138189,10 +143072,14 @@ function bindBulkProcessEvidencePane(state) {
     );
     const currentTab = trimStr(st.evidence_pane_state?.active_tab || pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
     const activeIdentity = getActiveIdentity();
+    const queueScope = getQueueScope();
     const queueOverrideForCurrentRow = !!(
       st.evidence_pane_state?.__queue_manual_override === true &&
-      trimStr(st.evidence_pane_state?.__queue_manual_override_identity || '') &&
-      trimStr(st.evidence_pane_state?.__queue_manual_override_identity || '') === trimStr(activeIdentity || '')
+      (
+        trimStr(st.evidence_pane_state?.__queue_manual_override_scope || queueScope || '').toLowerCase() === queueScope.toLowerCase() ||
+        (!trimStr(st.evidence_pane_state?.__queue_manual_override_scope || '') && !trimStr(st.evidence_pane_state?.__queue_manual_override_identity || '')) ||
+        (!trimStr(st.evidence_pane_state?.__queue_manual_override_scope || '') && trimStr(st.evidence_pane_state?.__queue_manual_override_identity || '') === trimStr(activeIdentity || ''))
+      )
     );
     const shouldSelectAttached = !!(
       forceAttached ||
@@ -138211,12 +143098,31 @@ function bindBulkProcessEvidencePane(state) {
         : null;
       if (!activeAttached) activeAttached = attachedRows.find((item) => upper(item.kind) === 'TIMESHEET') || attachedRows[0] || null;
       st.evidence_pane_state.active_attached_item = activeAttached ? { ...deep(activeAttached) } : null;
-      st.evidence_pane_state.active_attached_id = activeAttached ? (trimStr(activeAttached.evidence_id || activeAttached.id || '') || null) : null;
+      st.evidence_pane_state.active_attached_id = activeAttached ? (trimStr(activeAttached.evidence_id || activeAttached.id || activeAttached.queue_id || '') || null) : null;
+      const activeFileKey = trimStr(activeAttached?.storage_key || activeAttached?.r2_key || activeAttached?.file_key || activeAttached?.download_storage_key || '');
+      const activeTargetId = trimStr(st.evidence_pane_state.active_attached_id || activeAttached?.id || activeAttached?.evidence_id || activeAttached?.queue_id || '');
+      const attachedSelectionKey = activeAttached ? `attached|${activeTargetId}|${activeFileKey}` : '';
       st.evidence_pane_state.active_tab = 'attached';
       st.evidence_pane_state.__attached_manual_override = true;
+      st.evidence_pane_state.pendingAttached = false;
+      st.evidence_pane_state.__pending_attached = false;
+      st.evidence_pane_state.__pendingAttached = false;
+      st.evidence_pane_state.pendingAttachedIdentity = '';
+      st.evidence_pane_state.__pending_attached_identity = '';
+      st.evidence_pane_state.pendingAttachedRequestKey = '';
+      st.evidence_pane_state.__pending_attached_request_key = '';
+      st.pendingAttached = false;
+      st.__pending_attached = false;
+      st.__bulk_authorise_pending_attached = false;
+      st.pendingAttachedIdentity = '';
+      st.__pending_attached_identity = '';
+      if (attachedSelectionKey && !isValidPreviewSelectionKey(st.evidence_pane_state.__preview_load_requested_target_key || '')) {
+        st.evidence_pane_state.__preview_load_requested_target_key = attachedSelectionKey;
+      }
       if (forceAttached) {
         st.evidence_pane_state.__queue_manual_override = false;
         st.evidence_pane_state.__queue_manual_override_identity = '';
+        st.evidence_pane_state.__queue_manual_override_scope = '';
         st.evidence_pane_state.active_queue_id = null;
         st.evidence_pane_state.active_queue_item = null;
       }
@@ -138238,6 +143144,17 @@ function bindBulkProcessEvidencePane(state) {
   const syncActiveRowEvidencePresence = () => {
     const activeRowKey = trimStr(st?.active_row?.row_key || st?.active_row_key || '');
     if (!activeRowKey) return;
+    const evidenceAuthorityProfile = trimStr(st.active_context?.context_profile || st.active_context?.profile || st.active_details?.context_profile || st.active_details?.profile || st.active_ctx?.context_profile || st.active_ctx?.profile || '').toLowerCase();
+    const evidenceAuthoritative = !!(
+      pane.__evidence_loaded === true ||
+      pane.__attached_loaded === true ||
+      st.active_context?.evidence_loaded === true ||
+      st.active_details?.evidence_loaded === true ||
+      st.active_ctx?.evidence_loaded === true ||
+      evidenceAuthorityProfile === 'evidence' ||
+      (Array.isArray(pane.attached_rows) && pane.attached_rows.length > 0)
+    );
+    if (!evidenceAuthoritative) return;
     const scope = resolveActiveContractWeekEvidenceScope();
     const evidenceRows = getAuthoritativeAttachedRows();
     const hasByKind = new Map();
@@ -138343,7 +143260,8 @@ function bindBulkProcessEvidencePane(state) {
         pane.active_tab = 'queue';
         pane.__attached_manual_override = false;
         pane.__queue_manual_override = true;
-        pane.__queue_manual_override_identity = trimStr(activeIdentity || '');
+        pane.__queue_manual_override_identity = '';
+        pane.__queue_manual_override_scope = getQueueScope();
         try {
           await ensureQueueLoadedForActiveTab();
           reconcileEvidenceState();
@@ -138366,9 +143284,16 @@ function bindBulkProcessEvidencePane(state) {
         pane.__attached_manual_override = true;
         pane.__queue_manual_override = false;
         pane.__queue_manual_override_identity = '';
-        pane.active_queue_id = null;
-        pane.active_queue_item = null;
+        pane.__queue_manual_override_scope = '';
         pane.active_tab = 'attached';
+        const reconcileBeforeRefresh = reconcileEvidenceState();
+        if (reconcileBeforeRefresh?.requires_evidence_hydration === true) {
+          try {
+            await refreshAttachedContext({ softRefresh: true, reason: 'attached-tab-evidence-hydration' });
+          } catch (err) {
+            pane.__last_nonfatal_warning = trimStr(err?.message || err || 'Attached evidence could not be refreshed yet.');
+          }
+        }
         reconcileEvidenceState();
         const afterSignature = capturePaneSignature();
         if (beforeSignature !== afterSignature) {
@@ -138389,41 +143314,31 @@ function bindBulkProcessEvidencePane(state) {
     if (!activeIdentity) return { didLoad: false, stateChanged: false };
     const ownerSnapshot = captureOwnerSnapshot('bulk-authorise-queue-count');
     const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const queueScope = getQueueScope(opts.queue_scope || opts.queueScope || 'global:QUEUED');
     const queueOverrideForCurrentRow = !!(
       pane.__queue_manual_override === true &&
-      trimStr(pane.__queue_manual_override_identity || '') &&
-      trimStr(pane.__queue_manual_override_identity || '') === trimStr(activeIdentity || '')
+      trimStr(pane.__queue_manual_override_scope || queueScope) === queueScope
     );
-    if (!opts.force && activeTab === 'attached' && !queueOverrideForCurrentRow) {
-      if (window.__LOG_MODAL === true) {
-        console.debug('[TS][BULK-AUTH][EVIDENCE] deferred attached queue count load', {
-          activeIdentity,
-          activeTab,
-          queue_manual_override: !!pane.__queue_manual_override,
-          queue_manual_override_identity: trimStr(pane.__queue_manual_override_identity || ''),
-          queue_loaded: !!pane.__queue_loaded,
-          queue_loaded_identity: trimStr(pane.__queue_loaded_identity || '')
-        });
-      }
-      return { didLoad: false, stateChanged: false };
-    }
-    if (!opts.force && isQueueLoadedForIdentity(activeIdentity)) return { didLoad: false, stateChanged: false };
-    if (pane.__queue_count_loading && trimStr(pane.__queue_count_loading_identity || '') === activeIdentity) {
+    if (!opts.force && isQueueLoadedForIdentity(activeIdentity, queueScope)) return { didLoad: false, stateChanged: false };
+    if (pane.__queue_count_loading && trimStr(pane.__queue_count_loading_scope || '').toLowerCase() === queueScope.toLowerCase()) {
       return { didLoad: false, stateChanged: false };
     }
     const signatureBeforeLoad = capturePaneSignature();
     const snapshot = capturePreviewStateSnapshot();
 
     pane.__queue_count_loading = true;
-    pane.__queue_count_loading_identity = activeIdentity;
+    pane.__queue_count_loading_scope = queueScope;
+    pane.__queue_count_loading_identity = '';
     let didLoad = false;
     let encounteredError = null;
     try {
-      const result = await syncQueue({ force: true, identity: activeIdentity });
+      const result = await syncQueue({ force: true, identity: activeIdentity, queue_scope: queueScope });
       didLoad = !!result?.didLoad;
       if (isOwnerSnapshotCurrent(ownerSnapshot)) {
         pane.__queue_loaded = true;
-        pane.__queue_loaded_identity = activeIdentity;
+        pane.__queue_loaded_scope = queueScope;
+        pane.__queue_scope = queueScope;
+        pane.__queue_loaded_identity = '';
         pane.__queue_last_error = '';
       }
       restorePreviewStateSnapshot(snapshot);
@@ -138436,7 +143351,8 @@ function bindBulkProcessEvidencePane(state) {
         pane.__queue_last_error = trimStr(encounteredError?.message || encounteredError || 'Failed to refresh queue.');
       }
       pane.__queue_count_loading = false;
-      if (trimStr(pane.__queue_count_loading_identity || '') === activeIdentity) {
+      if (trimStr(pane.__queue_count_loading_scope || '').toLowerCase() === queueScope.toLowerCase()) {
+        pane.__queue_count_loading_scope = '';
         pane.__queue_count_loading_identity = '';
       }
     }
@@ -138468,6 +143384,8 @@ function bindBulkProcessEvidencePane(state) {
           backendRowSignature: identityParts.backendRowSignature,
           recordIdentity: identityParts.recordIdentity,
           base_only: false,
+          profile: 'evidence',
+          context_profile: 'evidence',
           include_evidence: true,
           include_compare: false,
           include_import_source_rows: false,
@@ -138514,6 +143432,17 @@ function bindBulkProcessEvidencePane(state) {
 
       syncActiveRowEvidencePresence();
       patchBulkAuthoriseModalEvidenceState({ forceAttached: true, explicitAttach: true });
+      const activeAttachedAfterPatch = st.evidence_pane_state?.active_attached_item || pane.active_attached_item || null;
+      if (activeAttachedAfterPatch && typeof activeAttachedAfterPatch === 'object') {
+        const targetId = trimStr(activeAttachedAfterPatch.evidence_id || activeAttachedAfterPatch.id || activeAttachedAfterPatch.queue_id || '');
+        const fileKey = trimStr(activeAttachedAfterPatch.storage_key || activeAttachedAfterPatch.r2_key || activeAttachedAfterPatch.file_key || activeAttachedAfterPatch.download_storage_key || '');
+        if (targetId || fileKey) pane.__preview_load_requested_target_key = `attached|${targetId}|${fileKey}`;
+        pane.pendingAttached = false;
+        pane.__pending_attached = false;
+        st.pendingAttached = false;
+        st.__pending_attached = false;
+        st.__bulk_authorise_pending_attached = false;
+      }
       const queueCountLoadResult = await ensureBulkAuthoriseQueueCountLoadedForAttachedDefault({ force: true });
       if (queueCountLoadResult?.stateChanged && typeof opts.rerenderWorkbench === 'function') {
         await opts.rerenderWorkbench('evidence-queue-count-loaded');
@@ -138525,6 +143454,8 @@ function bindBulkProcessEvidencePane(state) {
       pane.__attached_manual_override = true;
       pane.__queue_manual_override = false;
       pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = '';
+      pane.__queue_manual_override_scope = '';
 
       if (typeof opts.rerenderWorkbench === 'function') {
         await opts.rerenderWorkbench('evidence-attach-success-refresh');
@@ -138565,10 +143496,10 @@ function bindBulkProcessEvidencePane(state) {
         : { isBulkAuthoriseTimesheets: false };
       if (bulkAuthContext.isBulkAuthoriseTimesheets) {
         const activeIdentity = getActiveIdentity();
+        const queueScope = getQueueScope();
         const queueOverrideForCurrentRow = !!(
           pane.__queue_manual_override === true &&
-          trimStr(pane.__queue_manual_override_identity || '') &&
-          trimStr(pane.__queue_manual_override_identity || '') === trimStr(activeIdentity || '')
+          trimStr(pane.__queue_manual_override_scope || queueScope) === queueScope
         );
         if (queueOverrideForCurrentRow) {
           await ensureQueueLoadedForActiveTab();
@@ -138630,10 +143561,10 @@ function bindBulkProcessEvidencePane(state) {
         const bulkAuthContext = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
           ? resolveBulkAuthoriseTimesheetsEvidenceContext(st)
           : { isBulkAuthoriseTimesheets: false };
+        const queueScope = getQueueScope();
         const queueOverrideForCurrentRow = !!(
           pane.__queue_manual_override === true &&
-          trimStr(pane.__queue_manual_override_identity || '') &&
-          trimStr(pane.__queue_manual_override_identity || '') === trimStr(activeIdentity || '')
+          trimStr(pane.__queue_manual_override_scope || queueScope) === queueScope
         );
         if (activeTab !== 'queue' || (bulkAuthContext.isBulkAuthoriseTimesheets && !queueOverrideForCurrentRow)) {
           return;
@@ -138808,6 +143739,9 @@ function bindBulkProcessEvidencePane(state) {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
+
+
+
 function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionState) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -139329,7 +144263,6 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
 }
 
 
-
 function renderBulkProcessManualEditor(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -139360,24 +144293,61 @@ function renderBulkProcessManualEditor(state) {
   }
 
   const activeContextOptions = (activeCtx.__context_options && typeof activeCtx.__context_options === 'object') ? activeCtx.__context_options : {};
+  const activeDetailsForAuthority = (activeCtx.details && typeof activeCtx.details === 'object')
+    ? activeCtx.details
+    : ((st.active_details && typeof st.active_details === 'object') ? st.active_details : {});
+  const activeStateForAuthority = (activeCtx.state && typeof activeCtx.state === 'object') ? activeCtx.state : {};
   const activeContextProfile = trimStr(
-    activeContextOptions.profile ||
     activeContextOptions.context_profile ||
-    activeCtx.profile ||
+    activeContextOptions.profile ||
     activeCtx.context_profile ||
+    activeCtx.profile ||
     activeCtx.contextProfile ||
-    st.active_context?.profile ||
+    activeDetailsForAuthority.context_profile ||
+    activeDetailsForAuthority.profile ||
+    activeStateForAuthority.context_profile ||
+    activeStateForAuthority.profile ||
     st.active_context?.context_profile ||
+    st.active_context?.profile ||
+    st.active_context?.details?.context_profile ||
+    st.active_context?.details?.profile ||
     ''
   ).toLowerCase();
+  const editorLayerLoaded = !!(
+    activeCtx.editor_loaded === true ||
+    activeDetailsForAuthority.editor_loaded === true ||
+    activeStateForAuthority.editor_loaded === true ||
+    st.active_context?.editor_loaded === true ||
+    st.active_context?.details?.editor_loaded === true ||
+    st.active_context?.state?.editor_loaded === true ||
+    activeContextProfile === 'editor'
+  );
+  const scheduleLayerAuthoritative = !!(
+    activeCtx.schedule_authoritative === true ||
+    activeDetailsForAuthority.schedule_authoritative === true ||
+    activeStateForAuthority.schedule_authoritative === true ||
+    activeStateForAuthority.__scheduleAuthoritative === true ||
+    st.active_context?.schedule_authoritative === true ||
+    st.active_context?.details?.schedule_authoritative === true ||
+    st.active_context?.state?.schedule_authoritative === true ||
+    st.active_context?.state?.__scheduleAuthoritative === true
+  );
+  const editorContextDegraded = !!(
+    activeCtx.context_stale === true ||
+    activeCtx.context_degraded === true ||
+    activeCtx.degraded_context === true ||
+    activeDetailsForAuthority.context_degraded === true ||
+    activeDetailsForAuthority.degraded_context === true ||
+    st.active_context?.context_degraded === true ||
+    st.active_context?.degraded_context === true ||
+    st.active_context?.soft_failure === true ||
+    st.active_context?.ok === false
+  );
   const hydratedEnoughForVisibleEditor = !!(
-    activeContextProfile === 'active_row_visible' ||
-    activeContextProfile === 'full' ||
+    !editorContextDegraded &&
     (
-      activeCtx.is_hydrated === true &&
-      activeCtx.hydration_required !== true &&
-      activeCtx.context_stale !== true &&
-      st.__active_context_is_minimal !== true
+      activeContextProfile === 'editor' ||
+      (editorLayerLoaded && scheduleLayerAuthoritative)
     )
   );
 
@@ -139729,8 +144699,6 @@ function renderBulkProcessManualEditor(state) {
     </div>
   `);
 }
-
-
 
 function getBulkProcessRouteKindFromRow(rowLike, detailsLike) {
   const trimStr = (v) => String(v == null ? '' : v).trim();
@@ -142042,6 +147010,8 @@ function captureBulkProcessUiSnapshot(state) {
   return snapshot;
 }
 
+
+
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const st = (state && typeof state === 'object') ? state : {};
   st.evidence_pane_state =
@@ -142167,51 +147137,42 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     __preview_signed_url_cache: (pane.__preview_signed_url_cache && typeof pane.__preview_signed_url_cache === 'object') ? deep(pane.__preview_signed_url_cache) : pane.__preview_signed_url_cache
   };
   const activeIdentityAtStart = getActiveIdentity();
-  const activeContextProfile = trimStr(st.active_context?.profile || st.active_context?.context_profile || st.active_ctx?.profile || st.active_ctx?.context_profile || '').toLowerCase();
-  const activeContextAuthoritative = !!(
-    st.active_context &&
-    st.active_context.ok !== false &&
-    st.active_context.evidence_refresh_failed !== true &&
-    st.active_context.soft_failure !== true &&
-    st.active_context.__bulk_process_context_degraded !== true &&
-    st.active_context.__bulk_process_context_stale !== true &&
-    st.active_context.__bulk_process_context_auth_failed !== true &&
-    st.active_context.hydration_required !== true &&
-    st.active_context.context_stale !== true &&
-    st.active_context.is_hydrated !== false &&
-    st.__active_context_is_minimal !== true &&
-    activeContextProfile !== 'status_header' &&
-    activeContextProfile !== 'list' &&
-    activeContextProfile !== 'dataset_row' &&
-    st.__bulk_process_row_change_in_progress !== true &&
-    st.__active_context_pending !== true
+  const activeContextProfile = trimStr(st.active_context?.profile || st.active_context?.context_profile || st.active_details?.profile || st.active_details?.context_profile || st.active_ctx?.profile || st.active_ctx?.context_profile || st.active_ctx?.state?.profile || st.active_ctx?.state?.context_profile || '').toLowerCase();
+  const evidenceContextAuthoritative = !!(
+    st.active_context?.evidence_loaded === true ||
+    st.active_context?.details?.evidence_loaded === true ||
+    st.active_details?.evidence_loaded === true ||
+    st.active_details?.evidence_meta?.evidence_loaded === true ||
+    st.active_ctx?.evidence_loaded === true ||
+    st.active_ctx?.state?.evidence_loaded === true ||
+    activeContextProfile === 'evidence' ||
+    pane.__evidence_loaded === true ||
+    pane.__attached_loaded === true
   );
-  if (!activeContextAuthoritative) {
-    st.evidence_pane_state = pane;
-    return {
-      active_identity: activeIdentityAtStart,
-      resolved_source: trimStr(pane.active_tab || '').toLowerCase() === 'attached' ? 'attached' : 'queue',
-      has_any_attached: Array.isArray(pane.attached_rows) && pane.attached_rows.length > 0,
-      has_timesheet_attached: Array.isArray(pane.attached_rows) && pane.attached_rows.some((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET'),
-      active_attached_id: trimStr(pane.active_attached_id || '') || null,
-      active_queue_id: trimStr(pane.active_queue_id || '') || null,
-      selected_preview_changed: false,
-      requires_evidence_hydration: pane.__requires_evidence_hydration === true,
-      non_authoritative_context_ignored: true,
-      preserved_existing_preview: !!previewSelectionAtStart.key
-    };
-  }
+  const activeContextAuthoritative = !!(
+    st.active_row &&
+    (!st.active_context || (
+      st.active_context.ok !== false &&
+      st.active_context.evidence_refresh_failed !== true &&
+      st.active_context.soft_failure !== true &&
+      st.active_context.__bulk_process_context_degraded !== true &&
+      st.active_context.__bulk_process_context_stale !== true &&
+      st.active_context.__bulk_process_context_auth_failed !== true &&
+      st.active_context.context_stale !== true
+    )) &&
+    st.__bulk_process_row_change_in_progress !== true
+  );
 
   const collectAttachedRows = () => {
     const sourceSets = [
-      { rows: st.active_ctx?.state?.evidence, scope: 'active_ctx_state', currentContext: true },
-      { rows: st.active_ctx?.evidence, scope: 'active_ctx', currentContext: true },
-      { rows: st.active_context?.evidence, scope: 'active_context', currentContext: true },
-      { rows: st.active_context?.details?.evidence, scope: 'active_context_details', currentContext: true },
-      { rows: st.active_details?.evidence, scope: 'active_details', currentContext: true },
+      { rows: evidenceContextAuthoritative ? st.active_ctx?.state?.evidence : null, scope: 'active_ctx_state', currentContext: true },
+      { rows: evidenceContextAuthoritative ? st.active_ctx?.evidence : null, scope: 'active_ctx', currentContext: true },
+      { rows: evidenceContextAuthoritative ? st.active_context?.evidence : null, scope: 'active_context', currentContext: true },
+      { rows: evidenceContextAuthoritative ? st.active_context?.details?.evidence : null, scope: 'active_context_details', currentContext: true },
+      { rows: evidenceContextAuthoritative ? st.active_details?.evidence : null, scope: 'active_details', currentContext: true },
       { rows: pane.attached_rows, scope: 'pane_attached_rows', currentContext: false },
       { rows: pane.attached_all_rows, scope: 'pane_attached_all_rows', currentContext: false },
-      { rows: window.modalCtx?.timesheetState?.evidence, scope: 'modal_timesheet_state', currentContext: false }
+      { rows: evidenceContextAuthoritative ? window.modalCtx?.timesheetState?.evidence : null, scope: 'modal_timesheet_state', currentContext: false }
     ];
     const rows = [];
     const syntheticRows = [];
@@ -142375,7 +147336,9 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       if (itemTimesheetId && activeTimesheetId && itemTimesheetId !== activeTimesheetId) return;
       if (itemContractWeekId && activeContractWeekId && itemContractWeekId !== activeContractWeekId) return;
       if (!isBulkAuthoriseTimesheets && !sourceIsCurrentContext && !stagedContextMatchesActiveContractWeek) {
+        const sourceIsExistingPaneEvidence = sourceScope === 'pane_attached_rows' || sourceScope === 'pane_attached_all_rows' || sourceScope === 'modal_timesheet_state';
         const hasExplicitActiveScopeMatch = !!(
+          sourceIsExistingPaneEvidence ||
           (activeTimesheetId && itemTimesheetId && itemTimesheetId === activeTimesheetId) ||
           (activeContractWeekId && itemContractWeekId && itemContractWeekId === activeContractWeekId)
         );
@@ -142482,8 +147445,10 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const hasSyntheticAttachedFallback = syntheticAttachedFallbackRows.length > 0;
   const timesheetRows = attachedAllRows.filter((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET');
 
-  pane.attached_all_rows = attachedAllRows.map((item) => ({ ...(deep(item) || {}) }));
-  pane.attached_rows = attachedAllRows.map((item) => ({ ...(deep(item) || {}) }));
+  if (evidenceContextAuthoritative || attachedAllRows.length > 0) {
+    pane.attached_all_rows = attachedAllRows.map((item) => ({ ...(deep(item) || {}) }));
+    pane.attached_rows = attachedAllRows.map((item) => ({ ...(deep(item) || {}) }));
+  }
 
   const hasAnyAttachedEvidence = (typeof hasBulkProcessAttachedEvidence === 'function')
     ? hasBulkProcessAttachedEvidence(attachedAllRows)
@@ -142491,15 +147456,16 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const hasTimesheetEvidence = timesheetRows.length > 0;
   const manualOverride = !!pane.__attached_manual_override;
   const activeIdentity = getActiveIdentity();
+  const queueScope = trimStr(pane.__queue_loaded_scope || pane.__queue_scope || 'global:QUEUED') || 'global:QUEUED';
+  pane.__queue_scope = queueScope;
+  pane.__queue_loaded_identity = '';
   pane.__queue_manual_override_identity = trimStr(pane.__queue_manual_override_identity || '');
+  pane.__queue_manual_override_scope = trimStr(pane.__queue_manual_override_scope || queueScope || '') || queueScope;
   const queueOverrideForCurrentRow = !!(
     pane.__queue_manual_override === true &&
-    pane.__queue_manual_override_identity &&
-    pane.__queue_manual_override_identity === activeIdentity
+    trimStr(pane.__queue_manual_override_scope || queueScope) === queueScope
   );
-  const queueOverride = isBulkAuthoriseTimesheets
-    ? queueOverrideForCurrentRow
-    : !!pane.__queue_manual_override;
+  const queueOverride = !!(pane.__queue_manual_override === true && trimStr(pane.__queue_manual_override_scope || queueScope) === queueScope);
 
   const requestedSource = trimStr(pane.active_tab || '').toLowerCase();
   let resolvedSource = (typeof resolveBulkProcessPreviewSourceMode === 'function')
@@ -142519,11 +147485,12 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       pane.active_tab = 'attached';
       pane.__queue_manual_override = false;
       pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = '';
       pane.__attached_manual_override = true;
       pane.active_queue_id = null;
       pane.active_queue_item = null;
       pane.__requires_evidence_hydration = false;
-    } else if (metadataExpectsEvidence) {
+    } else if (!evidenceContextAuthoritative && (metadataExpectsEvidence || requestedSource === 'attached')) {
       pane.__attached_manual_override = false;
       pane.__requires_evidence_hydration = true;
     } else {
@@ -142539,11 +147506,11 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     } else if (hasAnyAttachedEvidence && !queueOverride) {
       resolvedSource = 'attached';
       pane.__requires_evidence_hydration = false;
-    } else if (metadataExpectsEvidence && !queueOverride) {
+    } else if (!queueOverride && !evidenceContextAuthoritative && (metadataExpectsEvidence || requestedSource === 'attached')) {
       pane.__attached_manual_override = false;
       pane.__requires_evidence_hydration = true;
       pane.__synthetic_attached_fallback_suppressed = hasSyntheticAttachedFallback;
-    } else if (!hasAnyAttachedEvidence) {
+    } else if (!hasAnyAttachedEvidence && evidenceContextAuthoritative) {
       resolvedSource = 'queue';
       pane.__requires_evidence_hydration = false;
     }
@@ -142569,7 +147536,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     ? { ...(attachedById.get(currentAttachedId) || {}) }
     : null;
 
-  if (!activeAttached && pane.active_tab === 'attached') {
+  if (!activeAttached && (pane.active_tab === 'attached' || isBulkAuthoriseTimesheets)) {
     if (hasTimesheetEvidence) {
       activeAttached = timesheetRows[0] ? { ...(timesheetRows[0] || {}) } : null;
     } else if (manualOverride && hasAnyAttachedEvidence) {
@@ -142579,9 +147546,29 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     }
   }
 
-  if (pane.active_tab === 'attached' && activeAttached) {
+  if (activeAttached) {
     pane.active_attached_item = activeAttached;
     pane.active_attached_id = trimStr(activeAttached.id || activeAttached.evidence_id || activeAttached.queue_id || '') || null;
+    if (isBulkAuthoriseTimesheets) {
+      pane.pendingAttached = false;
+      pane.__pending_attached = false;
+      pane.__pendingAttached = false;
+      pane.pendingAttachedIdentity = '';
+      pane.__pending_attached_identity = '';
+      pane.pendingAttachedRequestKey = '';
+      pane.__pending_attached_request_key = '';
+      st.pendingAttached = false;
+      st.__pending_attached = false;
+      st.__bulk_authorise_pending_attached = false;
+      st.pendingAttachedIdentity = '';
+      st.__pending_attached_identity = '';
+      const activeFileKey = trimStr(activeAttached.storage_key || activeAttached.r2_key || activeAttached.file_key || activeAttached.download_storage_key || '');
+      const activeTargetId = trimStr(pane.active_attached_id || activeAttached.id || activeAttached.evidence_id || activeAttached.queue_id || '');
+      const attachedSelectionKey = activeFileKey || activeTargetId ? `attached|${activeTargetId}|${activeFileKey}` : '';
+      if (pane.active_tab === 'attached' && attachedSelectionKey && !trimStr(pane.__preview_load_requested_target_key || '')) {
+        pane.__preview_load_requested_target_key = attachedSelectionKey;
+      }
+    }
   } else {
     pane.active_attached_item = null;
     pane.active_attached_id = null;
@@ -142590,11 +147577,15 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       pane.__attached_manual_override = false;
       pane.__queue_manual_override = false;
       pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = '';
     }
   }
 
-  const queueLoadedForIdentity = !!pane.__queue_loaded && trimStr(pane.__queue_loaded_identity || '') === activeIdentity;
-  if (pane.active_tab === 'queue' && queueLoadedForIdentity) {
+  const queueLoadedForScope = !!(
+    pane.__queue_loaded === true &&
+    trimStr(pane.__queue_loaded_scope || pane.__queue_scope || '').toLowerCase() === queueScope.toLowerCase()
+  );
+  if (pane.active_tab === 'queue' && queueLoadedForScope) {
     const queueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
     const currentQueueId = trimStr(
       pane.active_queue_id ||
@@ -142685,6 +147676,8 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     non_authoritative_context_ignored: false
   };
 }
+
+
 
 
 
@@ -142861,14 +147854,25 @@ async function handleBulkProcessSave(state) {
 
   const refreshActiveContext = async (refreshOptions = {}) => {
     const row = st.active_row;
-    if (!row) {
-      st.active_details = null;
-      st.active_ctx = null;
-      return;
-    }
+    if (!row) return false;
 
     const opts = (refreshOptions && typeof refreshOptions === 'object') ? refreshOptions : {};
-    const includeEvidence = opts.includeEvidence === true || opts.include_evidence === true;
+    const normaliseProfile = (value, fallback = 'editor') => {
+      const raw = trimStr(value).toLowerCase();
+      if (raw === 'status_header' || raw === 'editor' || raw === 'evidence' || raw === 'compare_import' || raw === 'full') return raw;
+      return fallback;
+    };
+    const defaultProfile = opts.evidenceChanged === true || opts.evidence_changed === true
+      ? 'evidence'
+      : (opts.statusOnly === true || opts.status_only === true
+          ? 'status_header'
+          : (opts.compare === true || opts.compare_import === true ? 'compare_import' : 'editor'));
+    const profile = normaliseProfile(opts.profile || opts.context_profile || opts.contextProfile, defaultProfile);
+    const includeEvidence = profile === 'evidence'
+      ? true
+      : (profile === 'full' && (opts.includeEvidence === true || opts.include_evidence === true));
+    const includeCompare = profile === 'compare_import' || (profile === 'full' && (opts.includeCompare === true || opts.include_compare === true));
+    const includeImportSourceRows = profile === 'compare_import' || (profile === 'full' && (opts.includeImportSourceRows === true || opts.include_import_source_rows === true));
     const qs = new URLSearchParams();
     const add = (key, value) => {
       const clean = trimStr(value);
@@ -142880,29 +147884,41 @@ async function handleBulkProcessSave(state) {
     add('requested_timesheet_id', row.requested_timesheet_id || row.timesheet_id || st.active_details?.requested_timesheet_id || '');
     add('expected_timesheet_id', row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || st.active_details?.expected_timesheet_id || '');
     add('contract_week_id', row.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
-    const profile = trimStr(opts.profile || opts.context_profile || 'active_row_visible') || 'active_row_visible';
     qs.set('profile', profile);
     qs.set('context_profile', profile);
     qs.set('include_evidence', includeEvidence ? 'true' : 'false');
-    qs.set('include_compare', 'false');
-    qs.set('include_import_source_rows', 'false');
+    qs.set('include_compare', includeCompare ? 'true' : 'false');
+    qs.set('include_import_source_rows', includeImportSourceRows ? 'true' : 'false');
+    if (profile === 'status_header') qs.set('base_only', 'true');
 
-    const res = await authFetch(API(`/api/timesheets/bulk-process-row-context?${qs.toString()}`));
-    const text = await res.text().catch(() => '');
+    let res;
+    let text = '';
     let json = null;
-    try { json = text ? JSON.parse(text) : {}; } catch { json = null; }
+    try {
+      res = await authFetch(API(`/api/timesheets/bulk-process-row-context?${qs.toString()}`));
+      text = await res.text().catch(() => '');
+      try { json = text ? JSON.parse(text) : {}; } catch { json = null; }
+    } catch (err) {
+      st.warning_text = String(err?.message || err || 'Bulk Process row context refresh failed.');
+      if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][SAVE] layered context refresh degraded', { profile, error: err });
+      return false;
+    }
     if (!res.ok) {
       const msg = (json && typeof json === 'object' && (json.message || json.error))
         ? String(json.message || json.error)
         : (text || `Bulk process row context failed (${res.status})`);
-      const err = new Error(msg);
-      err.status = res.status;
-      err.body = text || '';
-      err.json = json;
-      throw err;
+      st.warning_text = msg;
+      if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][SAVE] layered context refresh failed', { profile, status: res.status, bodyPreview: String(text || '').slice(0, 400) });
+      return false;
     }
 
     const payload = (json && typeof json === 'object') ? json : {};
+    if (payload.ok === false || payload.soft_failure === true || payload.context_degraded === true || payload.degraded_context === true || payload.__bulk_process_context_degraded === true) {
+      st.warning_text = trimStr(payload.message || payload.error || 'Bulk Process row context refresh returned a degraded response.');
+      if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][SAVE] degraded context ignored', { profile, payload });
+      return false;
+    }
+
     const dataRow = (payload.data_row && typeof payload.data_row === 'object')
       ? payload.data_row
       : ((payload.row && typeof payload.row === 'object') ? payload.row : null);
@@ -142916,28 +147932,134 @@ async function handleBulkProcessSave(state) {
     st.active_row_key = trimStr(mergedRow.row_key || makeRowKey(mergedRow)) || st.active_row_key || null;
     st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
 
+    const previousDetails = (st.active_details && typeof st.active_details === 'object') ? deep(st.active_details) : {};
+    const previousRelated = (previousDetails.related && typeof previousDetails.related === 'object')
+      ? deep(previousDetails.related)
+      : ((st.active_ctx?.related && typeof st.active_ctx.related === 'object') ? deep(st.active_ctx.related) : null);
     const detailsPayload = (payload.details && typeof payload.details === 'object') ? deep(payload.details) : {};
-    const evidenceRows = Array.isArray(payload.evidence)
+    const incomingEvidenceRows = Array.isArray(payload.evidence)
       ? deep(payload.evidence)
-      : (Array.isArray(detailsPayload.evidence) ? deep(detailsPayload.evidence) : (Array.isArray(st.active_details?.evidence) ? deep(st.active_details.evidence) : []));
+      : (Array.isArray(detailsPayload.evidence) ? deep(detailsPayload.evidence) : []);
+    const previousEvidenceRows = Array.isArray(previousDetails.evidence)
+      ? deep(previousDetails.evidence)
+      : (Array.isArray(st.active_context?.evidence)
+          ? deep(st.active_context.evidence)
+          : (Array.isArray(st.active_ctx?.state?.evidence) ? deep(st.active_ctx.state.evidence) : []));
+    const evidenceAuthoritative = !!(
+      profile === 'evidence' ||
+      payload.evidence_loaded === true ||
+      detailsPayload.evidence_loaded === true
+    );
+    const evidenceRows = evidenceAuthoritative ? incomingEvidenceRows : previousEvidenceRows;
     const related = (detailsPayload.related && typeof detailsPayload.related === 'object')
       ? deep(detailsPayload.related)
       : ((payload.related && typeof payload.related === 'object')
           ? deep(payload.related)
-          : ensureBulkProcessRelatedContract(buildFallbackRelated(mergedRow, detailsPayload), mergedRow, detailsPayload));
+          : ensureBulkProcessRelatedContract(previousRelated || buildFallbackRelated(mergedRow, detailsPayload), mergedRow, detailsPayload));
+
+    if (profile === 'evidence') {
+      st.active_details = {
+        ...previousDetails,
+        evidence: evidenceRows,
+        evidence_loaded: true,
+        evidence_authoritative: true,
+        include_evidence: true,
+        context_profile: previousDetails.context_profile || 'editor',
+        evidence_context_profile: 'evidence',
+        loaded_layers: Array.from(new Set([...(Array.isArray(previousDetails.loaded_layers) ? previousDetails.loaded_layers : []), 'evidence']))
+      };
+      st.active_context = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+      st.active_context.evidence = deep(evidenceRows);
+      st.active_context.details = {
+        ...((st.active_context.details && typeof st.active_context.details === 'object') ? st.active_context.details : {}),
+        evidence: deep(evidenceRows),
+        evidence_loaded: true,
+        evidence_authoritative: true
+      };
+      st.active_context.evidence_loaded = true;
+      st.active_context.evidence_authoritative = true;
+      st.active_context.include_evidence = true;
+      st.active_context.loaded_layers = Array.from(new Set([...(Array.isArray(st.active_context.loaded_layers) ? st.active_context.loaded_layers : []), 'evidence']));
+      if (st.active_ctx && typeof st.active_ctx === 'object') {
+        st.active_ctx.state = (st.active_ctx.state && typeof st.active_ctx.state === 'object') ? st.active_ctx.state : {};
+        st.active_ctx.state.evidence = deep(evidenceRows);
+        st.active_ctx.state.evidence_loaded = true;
+        st.active_ctx.state.evidence_authoritative = true;
+        st.active_ctx.evidence_loaded = true;
+      }
+      st.__active_context_pending = false;
+      return true;
+    }
+
+    if (profile === 'status_header') {
+      const patchHeaderContainer = (target) => {
+        if (!target || typeof target !== 'object') return;
+        target.row = { ...((target.row && typeof target.row === 'object') ? target.row : {}), ...deep(mergedRow) };
+        target.data_row = { ...((target.data_row && typeof target.data_row === 'object') ? target.data_row : {}), ...deep(mergedRow) };
+        target.row_key = trimStr(st.active_row_key || mergedRow.row_key || '') || target.row_key || null;
+        target.row_signature = trimStr(mergedRow.row_signature || payload.row_signature || target.row_signature || '') || null;
+        target.header_loaded = true;
+        target.header_only = target.editor_loaded === true || target.evidence_loaded === true || target.compare_loaded === true || target.full_loaded === true ? false : true;
+        target.action_flags = (payload.action_flags && typeof payload.action_flags === 'object') ? deep(payload.action_flags) : (target.action_flags || {});
+        target.loaded_layers = Array.from(new Set([...(Array.isArray(target.loaded_layers) ? target.loaded_layers : []), 'header']));
+      };
+      patchHeaderContainer(st.active_context);
+      patchHeaderContainer(st.active_ctx);
+      if (st.active_details && typeof st.active_details === 'object') {
+        st.active_details = {
+          ...st.active_details,
+          action_flags: (payload.action_flags && typeof payload.action_flags === 'object') ? deep(payload.action_flags) : st.active_details.action_flags,
+          header_loaded: true,
+          header_only: st.active_details.editor_loaded === true || st.active_details.evidence_loaded === true ? false : true
+        };
+      }
+      st.__active_context_pending = false;
+      return true;
+    }
+
+    if (profile === 'compare_import') {
+      const comparePayload = (payload.compare_payload && typeof payload.compare_payload === 'object') ? deep(payload.compare_payload) : null;
+      const leftPane = (payload.left_pane && typeof payload.left_pane === 'object') ? deep(payload.left_pane) : null;
+      st.active_context = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+      if (comparePayload) st.active_context.compare_payload = comparePayload;
+      if (leftPane) st.active_context.left_pane = leftPane;
+      st.active_context.compare_loaded = true;
+      st.active_context.loaded_layers = Array.from(new Set([...(Array.isArray(st.active_context.loaded_layers) ? st.active_context.loaded_layers : []), 'compare_import']));
+      if (st.active_details && typeof st.active_details === 'object') {
+        if (comparePayload) st.active_details.compare_payload = deep(comparePayload);
+        if (leftPane) st.active_details.left_pane = deep(leftPane);
+        st.active_details.compare_loaded = true;
+        st.active_details.loaded_layers = Array.from(new Set([...(Array.isArray(st.active_details.loaded_layers) ? st.active_details.loaded_layers : []), 'compare_import']));
+      }
+      st.__active_context_pending = false;
+      return true;
+    }
 
     st.active_details = {
+      ...previousDetails,
       ...detailsPayload,
       current_timesheet_id: payload.current_timesheet_id || detailsPayload.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
       requested_timesheet_id: payload.requested_timesheet_id || detailsPayload.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
       expected_timesheet_id: payload.expected_timesheet_id || detailsPayload.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
       contract_week_id: payload.contract_week_id || detailsPayload.contract_week_id || mergedRow.contract_week_id || null,
       evidence: evidenceRows,
-      related
+      related,
+      profile,
+      context_profile: profile,
+      header_loaded: true,
+      header_only: false,
+      editor_loaded: profile === 'editor' || profile === 'full' || detailsPayload.editor_loaded === true,
+      evidence_loaded: Array.isArray(evidenceRows) && evidenceRows.length ? previousDetails.evidence_loaded === true : previousDetails.evidence_loaded === true,
+      compare_loaded: previousDetails.compare_loaded === true,
+      full_loaded: profile === 'full' || previousDetails.full_loaded === true,
+      schedule_pending: profile === 'editor' || profile === 'full' ? false : previousDetails.schedule_pending,
+      schedule_authoritative: profile === 'editor' || profile === 'full' || previousDetails.schedule_authoritative === true,
+      loaded_layers: Array.from(new Set([...(Array.isArray(previousDetails.loaded_layers) ? previousDetails.loaded_layers : []), 'header', ...(profile === 'editor' ? ['editor'] : []), ...(profile === 'full' ? ['full', 'editor'] : [])]))
     };
 
-    const resolvedProfile = trimStr(payload.profile || payload.context_profile || profile || 'active_row_visible') || 'active_row_visible';
+    const resolvedProfile = trimStr(payload.profile || payload.context_profile || profile) || profile;
     st.active_context = {
+      ...((st.active_context && typeof st.active_context === 'object') ? deep(st.active_context) : {}),
       ...deep(payload || {}),
       ok: payload.ok !== false,
       context_type: 'bulk_process',
@@ -142947,16 +148069,27 @@ async function handleBulkProcessSave(state) {
       row: deep(st.active_row),
       data_row: deep(st.active_row),
       details: deep(st.active_details),
+      evidence: deep(evidenceRows),
       related: deep(related),
       row_key: trimStr(st.active_row_key || st.active_row?.row_key || ''),
       row_signature: trimStr(st.active_row?.row_signature || payload.row_signature || ''),
-      is_hydrated: true,
-      hydration_required: false,
+      header_loaded: true,
+      header_only: false,
+      editor_loaded: profile === 'editor' || profile === 'full',
+      evidence_loaded: st.active_context?.evidence_loaded === true || (includeEvidence && evidenceAuthoritative),
+      compare_loaded: st.active_context?.compare_loaded === true,
+      full_loaded: profile === 'full',
+      schedule_pending: !(profile === 'editor' || profile === 'full'),
+      schedule_authoritative: profile === 'editor' || profile === 'full',
+      is_hydrated: profile === 'editor' || profile === 'full',
+      hydration_required: !(profile === 'editor' || profile === 'full'),
       context_stale: false,
       __context_options: {
         profile: resolvedProfile,
         context_profile: resolvedProfile,
-        include_evidence: includeEvidence
+        include_evidence: includeEvidence,
+        include_compare: includeCompare,
+        include_import_source_rows: includeImportSourceRows
       }
     };
     st.active_context_profile = resolvedProfile;
@@ -142967,17 +148100,20 @@ async function handleBulkProcessSave(state) {
     if (st.active_ctx && typeof st.active_ctx === 'object') {
       st.active_ctx.profile = resolvedProfile;
       st.active_ctx.context_profile = resolvedProfile;
-      st.active_ctx.is_hydrated = true;
-      st.active_ctx.hydration_required = false;
+      st.active_ctx.is_hydrated = profile === 'editor' || profile === 'full';
+      st.active_ctx.hydration_required = !(profile === 'editor' || profile === 'full');
       st.active_ctx.context_stale = false;
       st.active_ctx.__context_options = {
         profile: resolvedProfile,
         context_profile: resolvedProfile,
-        include_evidence: includeEvidence
+        include_evidence: includeEvidence,
+        include_compare: includeCompare,
+        include_import_source_rows: includeImportSourceRows
       };
     }
     st.__active_context_is_minimal = false;
     st.__active_context_pending = false;
+    return true;
   };
 
   const clearLivePreviewState = (identity = null) => {
@@ -143959,7 +149095,15 @@ async function handleBulkProcessSave(state) {
       st.active_row = deep(patchedRow);
       st.active_row_key = trimStr(patchedRow.row_key || makeRowKey(patchedRow)) || null;
       st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
-      await refreshActiveContext({ includeEvidence: evidenceChanged, profile: 'active_row_visible' });
+      if (manualChanged) {
+        await refreshActiveContext({ profile: 'editor', context_profile: 'editor', includeEvidence: false, manualChanged: true });
+      }
+      if (evidenceChanged) {
+        await refreshActiveContext({ profile: 'evidence', context_profile: 'evidence', includeEvidence: true, evidenceChanged: true });
+      }
+      if (!manualChanged && !evidenceChanged) {
+        await refreshActiveContext({ profile: 'status_header', context_profile: 'status_header', includeEvidence: false, statusOnly: true });
+      }
     }
 
     if (evidenceChanged && typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
@@ -143997,7 +149141,6 @@ async function handleBulkProcessSave(state) {
     return { ok: false, error: st.error_text };
   }
 }
-
 
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
@@ -144192,14 +149335,21 @@ async function handleBulkProcessProcess(state) {
       }
       try {
         const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
-        if (pane && typeof refreshTimesheetImportsQueue === 'function') await refreshTimesheetImportsQueue(pane);
+        if (pane && typeof refreshTimesheetImportsQueue === 'function') {
+          await refreshTimesheetImportsQueue(pane, {
+            ownerState: st,
+            ownerKind: 'bulk_process',
+            queue_scope: 'global:QUEUED',
+            status: 'QUEUED'
+          });
+        }
       } catch (err) {
         if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] background queue refresh failed', err);
       }
     };
     try { window.requestAnimationFrame(() => { void run(); }); } catch { setTimeout(() => { void run(); }, 0); }
   };
-  const selectNextRow = async (previousKey, patchedRow, originalVisible) => {
+  const selectNextRow = async (previousKey, patchedRow, originalVisible, selectionOptions = {}) => {
     const patchedKey = rowKeyOf(patchedRow);
     if (!patchedKey) {
       st.active_row = null;
@@ -144236,13 +149386,37 @@ async function handleBulkProcessProcess(state) {
       contract_week: nextContractWeekId ? { id: nextContractWeekId, week_ending_date: canonicalPatchedRow.contract_week_ending_date || canonicalPatchedRow.week_ending_date || null, submission_mode_snapshot: canonicalPatchedRow.submission_mode_snapshot || canonicalPatchedRow.submission_mode || null } : null,
       tsfin: nextTimesheetId ? { processing_status: canonicalPatchedRow.processing_status || null, total_hours: canonicalPatchedRow.total_hours ?? null, total_pay_ex_vat: canonicalPatchedRow.total_pay_ex_vat ?? null, total_charge_ex_vat: canonicalPatchedRow.total_charge_ex_vat ?? null, margin_ex_vat: canonicalPatchedRow.margin_ex_vat ?? null } : null,
       evidence: [],
-      related: {}
+      related: {},
+      profile: 'status_header',
+      context_profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      include_evidence: false,
+      loaded_layers: ['header']
     };
     st.active_ctx = {
       row: deep(canonicalPatchedRow),
       data_row: deep(canonicalPatchedRow),
       details: deep(st.active_details),
       state: {},
+      profile: 'status_header',
+      context_profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      include_evidence: false,
+      loaded_layers: ['header'],
       is_hydrated: false,
       hydration_required: true,
       context_stale: true,
@@ -144288,26 +149462,50 @@ async function handleBulkProcessProcess(state) {
 
     installBulkProcessModalCtxPatch?.(st, { forceIdentityRebase: true });
 
-    if (typeof handleBulkProcessRowChange === 'function') {
-      await handleBulkProcessRowChange(st, patchedKey, {
-        source: 'bulk-process-process-patch',
-        expectedRowKey: patchedKey,
-        mutationSeq,
-        datasetOnly: true,
-        minimalOnly: false,
-        deferContextRefreshAfterPatch: false,
-        suppressAdjacentPrefetch: true,
-        suppressPreviewRefresh: false,
-        skipDirtyGuard: true,
-        preserveActiveContext: false,
-        scheduleHydration: false,
-        profile: 'active_row_visible',
-        context_profile: 'active_row_visible',
-        includeEvidence: true,
-        loadEvidence: true,
-        rerender: false,
-        force: true
-      });
+    const selectionOpts = (selectionOptions && typeof selectionOptions === 'object') ? selectionOptions : {};
+    const runLayeredProcessRowRefresh = async (profile, layerOptions = {}) => {
+      if (typeof handleBulkProcessRowChange !== 'function') return false;
+      const layer = trimStr(profile || 'status_header').toLowerCase();
+      const cfg = (layerOptions && typeof layerOptions === 'object') ? layerOptions : {};
+      const includeEvidenceForLayer = layer === 'evidence';
+      try {
+        await handleBulkProcessRowChange(st, patchedKey, {
+          source: cfg.source || `bulk-process-process-${layer}`,
+          expectedRowKey: patchedKey,
+          mutationSeq,
+          datasetOnly: layer === 'status_header',
+          minimalOnly: layer === 'status_header',
+          deferContextRefreshAfterPatch: false,
+          suppressAdjacentPrefetch: true,
+          suppressPreviewRefresh: layer !== 'evidence',
+          skipDirtyGuard: true,
+          preserveActiveContext: layer !== 'status_header',
+          preserveEvidencePane: layer !== 'evidence',
+          scheduleHydration: false,
+          profile: layer,
+          context_profile: layer,
+          includeEvidence: includeEvidenceForLayer,
+          include_evidence: includeEvidenceForLayer,
+          loadEvidence: includeEvidenceForLayer,
+          includeCompare: false,
+          include_compare: false,
+          includeImportSourceRows: false,
+          include_import_source_rows: false,
+          rerender: false,
+          force: true
+        });
+        return true;
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] layered row refresh degraded', { profile: layer, rowKey: patchedKey, error: err });
+        return false;
+      }
+    };
+    await runLayeredProcessRowRefresh('status_header', { source: 'bulk-process-process-status-header' });
+    if (selectionOpts.editorChanged !== false) {
+      await runLayeredProcessRowRefresh('editor', { source: 'bulk-process-process-editor' });
+    }
+    if (selectionOpts.evidenceChanged === true) {
+      await runLayeredProcessRowRefresh('evidence', { source: 'bulk-process-process-evidence' });
     }
   };
   const maybeAttachOrStageQueueItem = async (active) => {
@@ -144339,24 +149537,54 @@ async function handleBulkProcessProcess(state) {
     if (!key) {
       throw new Error('Bulk Process row context cannot be refreshed after evidence staging because the active row key is missing.');
     }
-    await handleBulkProcessRowChange(st, key, {
-      source: reason || 'bulk-process-process-evidence-mutated',
-      includeEvidence: true,
-      loadEvidence: true,
-      forceContextRefresh: true,
-      skipDatasetRefresh: true,
-      preserveEvidencePane: true,
-      preserveActiveContext: false,
-      rerender: false
-    });
+    try {
+      await handleBulkProcessRowChange(st, key, {
+        source: (reason || 'bulk-process-process-evidence-mutated') + '-status-header',
+        profile: 'status_header',
+        context_profile: 'status_header',
+        includeEvidence: false,
+        include_evidence: false,
+        loadEvidence: false,
+        includeCompare: false,
+        include_compare: false,
+        includeImportSourceRows: false,
+        include_import_source_rows: false,
+        forceContextRefresh: true,
+        skipDatasetRefresh: true,
+        preserveEvidencePane: true,
+        preserveActiveContext: true,
+        suppressAdjacentPrefetch: true,
+        rerender: false
+      });
+      await handleBulkProcessRowChange(st, key, {
+        source: (reason || 'bulk-process-process-evidence-mutated') + '-evidence',
+        profile: 'evidence',
+        context_profile: 'evidence',
+        includeEvidence: true,
+        include_evidence: true,
+        loadEvidence: true,
+        includeCompare: false,
+        include_compare: false,
+        includeImportSourceRows: false,
+        include_import_source_rows: false,
+        forceContextRefresh: true,
+        skipDatasetRefresh: true,
+        preserveEvidencePane: true,
+        preserveActiveContext: true,
+        suppressAdjacentPrefetch: true,
+        rerender: false
+      });
+    } catch (err) {
+      if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] layered evidence refresh after evidence mutation degraded', err);
+    }
     if (preservedStateCtx && typeof preservedStateCtx === 'object' && Object.keys(preservedStateCtx).length) {
       st.active_ctx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
       st.active_ctx.state = { ...((st.active_ctx.state && typeof st.active_ctx.state === 'object') ? st.active_ctx.state : {}), ...deep(preservedStateCtx) };
     }
     const refreshed = readActive();
-    const refreshedSignature = trimStr(refreshed.row?.row_signature || refreshed.ctx?.row?.row_signature || '');
+    const refreshedSignature = trimStr(refreshed.row?.row_signature || refreshed.ctx?.row?.row_signature || st.active_row?.row_signature || st.active_ctx?.row?.row_signature || '');
     if (!refreshed.row || !rowKeyOf(refreshed.row) || !refreshedSignature) {
-      throw new Error('Bulk Process row context did not return a fresh row signature after evidence staging. Please reopen the row and try again.');
+      if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] evidence mutation refresh did not produce a fresh signature; preserving current active row');
     }
     return refreshed;
   };
@@ -144537,18 +149765,30 @@ async function handleBulkProcessProcess(state) {
       }
 
       const preservedStateAfterSave = pickObject(st.active_ctx?.state || {});
+      try {
       await handleBulkProcessRowChange(st, afterSaveRowKey, {
-        source: 'bulk-process-process-after-save',
-        includeEvidence: true,
-        loadEvidence: true,
+        source: 'bulk-process-process-after-save-editor',
+        profile: 'editor',
+        context_profile: 'editor',
+        includeEvidence: false,
+        include_evidence: false,
+        loadEvidence: false,
+        includeCompare: false,
+        include_compare: false,
+        includeImportSourceRows: false,
+        include_import_source_rows: false,
         forceContextRefresh: true,
         skipDatasetRefresh: true,
         preserveEvidencePane: true,
-        preserveActiveContext: false,
+        preserveActiveContext: true,
         rerender: false,
         skipDirtyGuard: true,
         force: true
-      });
+        });
+      } catch (err) {
+        st.warning_text = trimStr(err?.message || err || 'Bulk Process editor refresh after save degraded.');
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] after-save editor refresh degraded', err);
+      }
       if (preservedStateAfterSave && typeof preservedStateAfterSave === 'object' && Object.keys(preservedStateAfterSave).length) {
         st.active_ctx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
         st.active_ctx.state = {
@@ -144776,7 +150016,18 @@ async function handleBulkProcessProcess(state) {
         if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] in-memory summary patch failed', err);
       }
     }
-    await selectNextRow(previousRowKey, patchedRow, originalVisible);
+    const processCacheHints = (processResult?.cache_invalidation_hints && typeof processResult.cache_invalidation_hints === 'object') ? processResult.cache_invalidation_hints : {};
+    const processEvidenceChanged = !!(
+      evidenceMutated === true ||
+      processCacheHints.evidence_changed === true ||
+      processCacheHints.storage_changed === true ||
+      processCacheHints.invalidate_evidence === true ||
+      processCacheHints.invalidate_preview === true
+    );
+    await selectNextRow(previousRowKey, patchedRow, originalVisible, {
+      editorChanged: true,
+      evidenceChanged: processEvidenceChanged
+    });
     if (typeof resetBulkProcessDirtyBaseline === 'function') {
       resetBulkProcessDirtyBaseline(st, 'process-success', {
         source: 'handleBulkProcessProcess',
@@ -144809,7 +150060,6 @@ async function handleBulkProcessProcess(state) {
     return { ok: false, error: st.error_text };
   }
 }
-
 
 async function processDailyManualTimesheet(timesheetId, payload = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][PROCESS-DAILY-WRAPPER]');
@@ -145769,13 +151019,29 @@ async function handleBulkProcessUnprocess(state) {
       }
     }
   };
-  const selectNextRow = async (patchedRow) => {
+  const selectNextRow = async (patchedRow, selectionOptions = {}) => {
     const patchedKey = rowKeyOf(patchedRow);
     if (!patchedKey) {
       const visible = getVisibleRows();
       const fallback = visible.unprocessed[0] || visible.processed[0] || null;
       if (fallback && typeof handleBulkProcessRowChange === 'function') {
-        await handleBulkProcessRowChange(st, rowKeyOf(fallback), { source: 'bulk-process-unprocess-fallback', datasetOnly: true, minimalOnly: true, deferContextRefresh: true, scheduleHydration: true, rerender: false });
+        await handleBulkProcessRowChange(st, rowKeyOf(fallback), {
+          source: 'bulk-process-unprocess-fallback-status-header',
+          datasetOnly: true,
+          minimalOnly: true,
+          deferContextRefresh: true,
+          scheduleHydration: false,
+          profile: 'status_header',
+          context_profile: 'status_header',
+          includeEvidence: false,
+          include_evidence: false,
+          loadEvidence: false,
+          includeCompare: false,
+          include_compare: false,
+          includeImportSourceRows: false,
+          include_import_source_rows: false,
+          rerender: false
+        });
       }
       return;
     }
@@ -145813,13 +151079,37 @@ async function handleBulkProcessUnprocess(state) {
       tsfin: null,
       contract_week: nextContractWeekId ? { id: nextContractWeekId, week_ending_date: canonicalPatchedRow.contract_week_ending_date || canonicalPatchedRow.week_ending_date || null, submission_mode_snapshot: canonicalPatchedRow.submission_mode_snapshot || canonicalPatchedRow.submission_mode || null } : null,
       evidence: [],
-      related: {}
+      related: {},
+      profile: 'status_header',
+      context_profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      include_evidence: false,
+      loaded_layers: ['header']
     };
     st.active_ctx = {
       row: deep(st.active_row),
       data_row: deep(st.active_row),
       details: deep(st.active_details),
       state: {},
+      profile: 'status_header',
+      context_profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      include_evidence: false,
+      loaded_layers: ['header'],
       timesheet: null,
       tsfin: null,
       is_hydrated: false,
@@ -145844,26 +151134,50 @@ async function handleBulkProcessUnprocess(state) {
 
     installBulkProcessModalCtxPatch?.(st, { forceIdentityRebase: true });
 
-    if (typeof handleBulkProcessRowChange === 'function') {
-      await handleBulkProcessRowChange(st, patchedKey, {
-        source: 'bulk-process-unprocess-patch',
-        expectedRowKey: patchedKey,
-        mutationSeq,
-        datasetOnly: true,
-        minimalOnly: false,
-        deferContextRefreshAfterPatch: false,
-        suppressAdjacentPrefetch: true,
-        suppressPreviewRefresh: false,
-        skipDirtyGuard: true,
-        preserveActiveContext: false,
-        scheduleHydration: false,
-        profile: 'active_row_visible',
-        context_profile: 'active_row_visible',
-        includeEvidence: true,
-        loadEvidence: true,
-        rerender: false,
-        force: true
-      });
+    const selectionOpts = (selectionOptions && typeof selectionOptions === 'object') ? selectionOptions : {};
+    const runLayeredUnprocessRowRefresh = async (profile, layerOptions = {}) => {
+      if (typeof handleBulkProcessRowChange !== 'function') return false;
+      const layer = trimStr(profile || 'status_header').toLowerCase();
+      const cfg = (layerOptions && typeof layerOptions === 'object') ? layerOptions : {};
+      const includeEvidenceForLayer = layer === 'evidence';
+      try {
+        await handleBulkProcessRowChange(st, patchedKey, {
+          source: cfg.source || `bulk-process-unprocess-${layer}`,
+          expectedRowKey: patchedKey,
+          mutationSeq,
+          datasetOnly: layer === 'status_header',
+          minimalOnly: layer === 'status_header',
+          deferContextRefreshAfterPatch: false,
+          suppressAdjacentPrefetch: true,
+          suppressPreviewRefresh: layer !== 'evidence',
+          skipDirtyGuard: true,
+          preserveActiveContext: layer !== 'status_header',
+          preserveEvidencePane: layer !== 'evidence' || selectionOpts.evidenceChanged !== true,
+          scheduleHydration: false,
+          profile: layer,
+          context_profile: layer,
+          includeEvidence: includeEvidenceForLayer,
+          include_evidence: includeEvidenceForLayer,
+          loadEvidence: includeEvidenceForLayer,
+          includeCompare: false,
+          include_compare: false,
+          includeImportSourceRows: false,
+          include_import_source_rows: false,
+          rerender: false,
+          force: true
+        });
+        return true;
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][UNPROCESS] layered row refresh degraded', { profile: layer, rowKey: patchedKey, error: err });
+        return false;
+      }
+    };
+    await runLayeredUnprocessRowRefresh('status_header', { source: 'bulk-process-unprocess-status-header' });
+    if (selectionOpts.editorChanged === true) {
+      await runLayeredUnprocessRowRefresh('editor', { source: 'bulk-process-unprocess-editor' });
+    }
+    if (selectionOpts.evidenceChanged === true) {
+      await runLayeredUnprocessRowRefresh('evidence', { source: 'bulk-process-unprocess-evidence' });
     }
   };
 
@@ -145939,7 +151253,20 @@ async function handleBulkProcessUnprocess(state) {
         if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][UNPROCESS] in-memory summary patch failed', err);
       }
     }
-    await selectNextRow(patchedRow);
+    const unprocessCacheHints = (unprocessResult?.cache_invalidation_hints && typeof unprocessResult.cache_invalidation_hints === 'object') ? unprocessResult.cache_invalidation_hints : {};
+    const unprocessEditorChanged = true;
+    const unprocessEvidenceChanged = !!(
+      unprocessCacheHints.evidence_changed === true ||
+      unprocessCacheHints.storage_changed === true ||
+      unprocessCacheHints.invalidate_evidence === true ||
+      unprocessCacheHints.invalidate_preview === true ||
+      unprocessCacheHints.attached_evidence_changed === true ||
+      unprocessCacheHints.staged_evidence_changed === true
+    );
+    await selectNextRow(patchedRow, {
+      editorChanged: unprocessEditorChanged,
+      evidenceChanged: unprocessEvidenceChanged
+    });
     if (typeof resetBulkProcessDirtyBaseline === 'function') {
       resetBulkProcessDirtyBaseline(st, 'unprocess-success', {
         source: 'handleBulkProcessUnprocess',
@@ -145962,6 +151289,7 @@ async function handleBulkProcessUnprocess(state) {
     return { ok: false, error: st.error_text };
   }
 }
+
 
 
 function applyBulkTimesheetRowPatches(state, patches, options = {}) {
@@ -147789,6 +153117,8 @@ function renderBulkAuthoriseImportAuthoritativeSchedule(input = {}) {
   `);
 }
 
+
+
 function renderBulkAuthoriseDetailPane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -147869,13 +153199,12 @@ function renderBulkAuthoriseDetailPane(state) {
     ''
   ).toLowerCase();
   const activeContextHydratedEnough = !!(
-    activeContextProfile === 'active_row_visible' ||
-    activeContextProfile === 'full' ||
-    (
-      activeContext.is_hydrated === true &&
-      activeContext.slim_context !== true &&
-      activeContext.hydration_required !== true
-    )
+    activeContextProfile === 'editor' ||
+    activeContext.editor_loaded === true ||
+    activeContext.details?.editor_loaded === true ||
+    st.active_details?.editor_loaded === true ||
+    st.active_ctx?.editor_loaded === true ||
+    st.active_ctx?.state?.editor_loaded === true
   );
 
   if (!activeContextHydratedEnough) {
@@ -148082,7 +153411,6 @@ function renderBulkAuthoriseDetailPane(state) {
     </div>
   `);
 }
-
 
 
 function renderBulkAuthoriseShell(state) {
@@ -148955,8 +154283,6 @@ function renderBulkAuthoriseImportedEvidencePane(state) {
   return htmlWrap(`<div class="card" style="padding:8px 9px;display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;">${info}${warningHtml ? `<div class="mini">${warningHtml}</div>` : ''}<div class="mini">${imports.length ? imports.map((x, i) => `Import ${i + 1}: ${enc(trimStr(x?.display_name || x?.filename || x?.file_name || x?.import_id || x?.id || '—'))}`).join('<br/>') : 'No import metadata returned.'}</div>${table}</div>`);
 }
 
-
-
 async function bindBulkAuthorisePreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -149126,8 +154452,12 @@ async function bindBulkAuthorisePreviewPane(state) {
       clearBulkAuthorisePreviewForInvalidOwner('bulk-process-owner-or-next-owner');
       return;
     }
-    if (!previewSurfaceLive || !ownerIdentity || !activeRowKey || rowChangeSeq <= 0 || !activeRowSignature) {
-      suspendBulkAuthorisePreviewBind(!previewSurfaceLive ? 'modal-surface-not-live' : 'missing-owner-row-or-sequence', {
+    if (!previewSurfaceLive) {
+      clearBulkAuthorisePreviewForInvalidOwner('modal-surface-not-live');
+      return;
+    }
+    if (!ownerIdentity || !activeRowKey || rowChangeSeq <= 0 || !activeRowSignature) {
+      suspendBulkAuthorisePreviewBind('missing-owner-row-or-sequence', {
         ownerIdentity: ownerIdentity || '',
         activeRowKey,
         activeRowSignature,
@@ -149138,9 +154468,11 @@ async function bindBulkAuthorisePreviewPane(state) {
     const previousOwnerIdentity = trimStr(st.__bulkAuthorisePreviewOwnerIdentity || st.__bulk_authorise_preview_owner_identity || '');
     const previousRowSignature = trimStr(st.__bulkAuthorisePreviewActiveRowSignature || '');
     const previousRowKey = trimStr(st.__bulkAuthorisePreviewActiveRowKey || '');
+    const previousRowChangeSeq = Number(st.__bulkAuthorisePreviewRowChangeSeq || st.__bulk_authorise_preview_row_change_seq || 0) || 0;
     const ownerChanged = !!(previousOwnerIdentity && ownerIdentity && previousOwnerIdentity !== ownerIdentity);
     const rowIdentityChanged = !!(previousRowKey && activeRowKey && previousRowKey !== activeRowKey);
-    const rowChanged = ownerChanged || rowIdentityChanged;
+    const rowSequenceChanged = !!(previousRowChangeSeq && rowChangeSeq && previousRowChangeSeq !== rowChangeSeq);
+    const rowChanged = ownerChanged || rowIdentityChanged || rowSequenceChanged;
 
     try { st.__bulk_authorise_preview_bind_suspended = false; } catch {}
     try { st.__bulk_authorise_preview_invalid_reason = ''; } catch {}
@@ -149170,7 +154502,7 @@ async function bindBulkAuthorisePreviewPane(state) {
             try { delete pane.__preview_presign_inflight[inflightKey]; } catch {}
           }
         }
-        if (ownerChanged || rowIdentityChanged || !previousPreviewIdentity || !ownerIdentity || previousPreviewIdentity !== ownerIdentity) {
+        if (ownerChanged || rowIdentityChanged || rowSequenceChanged || !previousPreviewIdentity || !ownerIdentity || previousPreviewIdentity !== ownerIdentity) {
           pane.__preview_target_key = '';
           pane.__preview_signed_url = '';
           pane.__preview_load_requested_target_key = '';
@@ -149196,6 +154528,8 @@ async function bindBulkAuthorisePreviewPane(state) {
             activeRowKey,
             activeRowSignature,
             rowChangeSeq: Number(st.__bulk_authorise_row_change_seq || 0) || 0,
+            previousRowChangeSeq,
+            rowSequenceChanged,
             activeTab: trimStr(pane.active_tab || ''),
             activeAttachedId: trimStr(pane.active_attached_id || ''),
             activeQueueId: trimStr(pane.active_queue_id || ''),
@@ -149208,6 +154542,13 @@ async function bindBulkAuthorisePreviewPane(state) {
     }
     if (!rowChanged) {
       const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+      if (pane) {
+        pane.__preview_identity = ownerIdentity || pane.__preview_identity || '';
+        pane.__preview_owner_identity = ownerIdentity || pane.__preview_owner_identity || '';
+        pane.__preview_row_key = activeRowKey || pane.__preview_row_key || '';
+        pane.__preview_row_change_seq = rowChangeSeq;
+        pane.__preview_render_signature = activeRowSignature || pane.__preview_render_signature || '';
+      }
       if (pane && (typeof window.__LOG_MODAL === 'boolean') && window.__LOG_MODAL === true) {
         console.log('[TS][BULK-AUTH][PREVIEW]', {
           event: 'identity-bind',
@@ -149216,6 +154557,8 @@ async function bindBulkAuthorisePreviewPane(state) {
           activeRowKey,
           activeRowSignature,
           rowChangeSeq: Number(st.__bulk_authorise_row_change_seq || 0) || 0,
+          previousRowChangeSeq,
+          rowSequenceChanged,
           activeTab: trimStr(pane.active_tab || ''),
           activeAttachedId: trimStr(pane.active_attached_id || ''),
           activeQueueId: trimStr(pane.active_queue_id || ''),
@@ -149543,7 +154886,6 @@ async function bindBulkAuthorisePreviewPane(state) {
 
   await fetchForCurrentState();
 }
-
 
 
 
@@ -150019,6 +155361,7 @@ async function bankingPayWorkbenchSessionClearAllDecisions(sessionId, payload = 
     throw bankingBuildEnrichedFriendlyError(error, friendly, 'Payment preview could not be updated');
   }
 }
+
 
 async function handleBulkAuthoriseSave(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][SAVE]');
@@ -150642,7 +155985,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       }
 
       if (saveResult && typeof saveResult === 'object' && !saveResult.row_patch && !saveResult.row_patches && !saveResult.data_row && !saveResult.row) {
-        const rowKey = trimStr(row.row_key || activeContext.row_key || (contractWeekId ? `contract_week:${contractWeekId}` : ''));
+        const rowKey = trimStr(row.row_key || ctx.row_key || (contractWeekId ? `contract_week:${contractWeekId}` : ''));
         saveResult.row_patch = {
           ...(row && typeof row === 'object' ? deep(row) : {}),
           row_key: rowKey || null,
@@ -150653,7 +155996,7 @@ async function handleBulkAuthoriseSave(state, options = {}) {
           expected_timesheet_id: null,
           totals_json: st.active_details?.contract_week?.totals_json || contractWeekPayload?.totals_json || null,
           summary_stage: row.summary_stage || 'UNPROCESSED',
-          bulk_authorise_section: row.bulk_authorise_section || activeContext.bulk_authorise_section || null,
+          bulk_authorise_section: row.bulk_authorise_section || ctx.bulk_authorise_section || null,
           backend_row_signature: trimStr(saveResult.row_signature || activeBackendRowSignature || row.row_signature || ''),
           row_signature: trimStr(saveResult.row_signature || activeBackendRowSignature || row.row_signature || ''),
           render_signature: activeRenderSignature || row.render_signature || null
@@ -150732,9 +156075,17 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     const manualChangedAfterSave = !!(
       saveCacheHints.manual_changed === true ||
       saveCacheHints.invalidate_editor_context === true ||
+      referenceChanged ||
+      expensesMileageDirty ||
       shouldPersistWeeklyManual ||
       shouldPersistDailyManual ||
       plannedContractWeekExpenseDraftSave
+    );
+    const evidenceChangedAfterSave = !!(
+      saveCacheHints.evidence_changed === true ||
+      saveCacheHints.storage_changed === true ||
+      saveCacheHints.invalidate_evidence === true ||
+      saveCacheHints.invalidate_preview === true
     );
     const identityChangedAfterSave = saveCacheHints.identity_changed === true;
     const preferredSaveRowKey = trimStr(saveRowPatches[0]?.new_row_key || saveRowPatches[0]?.row_key_after || saveRowPatches[0]?.row_key || st.active_row_key || row?.row_key || '') || null;
@@ -150853,23 +156204,44 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       });
     } catch {}
 
-    if (manualChangedAfterSave && typeof refreshBulkAuthoriseActiveContext === 'function' && st.active_row) {
-      try {
-        await refreshBulkAuthoriseActiveContext(st, {
-          row: st.active_row,
-          recordIdentity: activeRecordIdentity || undefined,
-          backendRowSignature: nextBackendRowSignature || undefined,
-          renderSignature: nextRenderSignature || undefined,
-          rowSignature: nextRenderSignature || nextBackendRowSignature || undefined,
-          source: 'manual_patch',
-          profile: 'active_row_visible',
-          context_profile: 'active_row_visible',
-          cache_invalidation_hints: saveCacheHints,
-          bypassCache: true,
-          invalidateCache: true,
-          rerender: false
-        });
-      } catch {}
+    if (typeof refreshBulkAuthoriseActiveContext === 'function' && st.active_row) {
+      const refreshSavedAuthoriseLayer = async (profile, source) => {
+        const layer = trimStr(profile || 'status_header').toLowerCase();
+        const includeEvidenceForLayer = layer === 'evidence';
+        try {
+          await refreshBulkAuthoriseActiveContext(st, {
+            row: st.active_row,
+            recordIdentity: activeRecordIdentity || undefined,
+            backendRowSignature: nextBackendRowSignature || undefined,
+            renderSignature: nextRenderSignature || undefined,
+            rowSignature: nextRenderSignature || nextBackendRowSignature || undefined,
+            source: source || `${layer}_patch`,
+            profile: layer,
+            context_profile: layer,
+            include_evidence: includeEvidenceForLayer,
+            includeEvidence: includeEvidenceForLayer,
+            include_compare: false,
+            includeCompare: false,
+            include_import_source_rows: false,
+            includeImportSourceRows: false,
+            cache_invalidation_hints: saveCacheHints,
+            bypassCache: true,
+            invalidateCache: true,
+            rerender: false
+          });
+          return true;
+        } catch (err) {
+          if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][SAVE] layered refresh degraded', { profile: layer, error: err });
+          return false;
+        }
+      };
+      await refreshSavedAuthoriseLayer('status_header', 'status_patch');
+      if (manualChangedAfterSave || identityChangedAfterSave) {
+        await refreshSavedAuthoriseLayer('editor', 'manual_patch');
+      }
+      if (evidenceChangedAfterSave) {
+        await refreshSavedAuthoriseLayer('evidence', 'evidence_patch');
+      }
     }
 
     const draftStateAfterSave = getDraftController();
@@ -150895,7 +156267,6 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     return { ok: false, error: st.error_text };
   }
 }
-
 
 
 
@@ -151384,8 +156755,6 @@ async function refreshBulkAuthoriseSummaryRowAfterMutation(state, options = {}) 
 }
 
 
-
-
 async function handleBulkAuthoriseUnprocess(state, row) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][UNPROCESS]');
   GC('handleBulkAuthoriseUnprocess');
@@ -151599,7 +156968,7 @@ async function handleBulkAuthoriseUnprocess(state, row) {
 
     const cacheHints = readCacheHints(resultObj, rowPatches);
     const identityChanged = cacheHints.identity_changed === true;
-    const manualChanged = cacheHints.manual_changed === true || cacheHints.invalidate_editor_context === true;
+    const manualChanged = true;
     const evidenceChanged = cacheHints.evidence_changed === true || cacheHints.storage_changed === true || cacheHints.invalidate_evidence === true || cacheHints.invalidate_preview === true;
     const shouldFetchVisibleContext = !!(identityChanged || manualChanged || evidenceChanged);
 
@@ -151657,23 +157026,42 @@ async function handleBulkAuthoriseUnprocess(state, row) {
       });
     }
 
-    if (shouldFetchVisibleContext && typeof refreshBulkAuthoriseActiveContext === 'function' && st.active_row) {
-      try {
-        await refreshBulkAuthoriseActiveContext(st, {
-          row: st.active_row,
-          source: identityChanged ? 'identity_patch' : (manualChanged ? 'manual_patch' : 'evidence_patch'),
-          profile: 'active_row_visible',
-          context_profile: 'active_row_visible',
-          cache_invalidation_hints: cacheHints,
-          backendRowSignature: firstString(resultObj.backend_row_signature, resultObj.row_backend_signature, resultObj.row_signature, rowPatches[0]?.backend_row_signature, rowPatches[0]?.row_backend_signature, rowPatches[0]?.row_signature) || undefined,
-          renderSignature: firstString(rowPatches[0]?.render_signature, activeRenderSignature) || undefined,
-          recordIdentity: recordIdentity || undefined,
-          bypassCache: true,
-          invalidateCache: true,
-          rerender: false
-        });
-      } catch (err) {
-        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][UNPROCESS] active-row-visible refresh failed', err);
+    if (typeof refreshBulkAuthoriseActiveContext === 'function' && st.active_row) {
+      const refreshUnprocessLayer = async (profile, source) => {
+        const layer = trimStr(profile || 'status_header').toLowerCase();
+        const includeEvidenceForLayer = layer === 'evidence';
+        try {
+          await refreshBulkAuthoriseActiveContext(st, {
+            row: st.active_row,
+            source: source || `${layer}_patch`,
+            profile: layer,
+            context_profile: layer,
+            include_evidence: includeEvidenceForLayer,
+            includeEvidence: includeEvidenceForLayer,
+            include_compare: false,
+            includeCompare: false,
+            include_import_source_rows: false,
+            includeImportSourceRows: false,
+            cache_invalidation_hints: cacheHints,
+            backendRowSignature: firstString(resultObj.backend_row_signature, resultObj.row_backend_signature, resultObj.row_signature, rowPatches[0]?.backend_row_signature, rowPatches[0]?.row_backend_signature, rowPatches[0]?.row_signature) || undefined,
+            renderSignature: firstString(rowPatches[0]?.render_signature, activeRenderSignature) || undefined,
+            recordIdentity: recordIdentity || undefined,
+            bypassCache: true,
+            invalidateCache: true,
+            rerender: false
+          });
+          return true;
+        } catch (err) {
+          if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][UNPROCESS] layered refresh degraded', { profile: layer, error: err });
+          return false;
+        }
+      };
+      await refreshUnprocessLayer('status_header', identityChanged ? 'identity_patch' : 'status_patch');
+      if (manualChanged || identityChanged) {
+        await refreshUnprocessLayer('editor', manualChanged ? 'manual_patch' : 'identity_patch');
+      }
+      if (evidenceChanged) {
+        await refreshUnprocessLayer('evidence', 'evidence_patch');
       }
     }
 
@@ -151710,6 +157098,8 @@ async function handleBulkAuthoriseUnprocess(state, row) {
     return { ok: false, error: st.error_text };
   }
 }
+
+
 async function wireBulkAuthoriseEmbeddedEvidence(state) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][EVIDENCE-WIRE]');
   GC('wireBulkAuthoriseEmbeddedEvidence');
@@ -151914,10 +157304,15 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
       active_queue_item: pane.active_queue_item && typeof pane.active_queue_item === 'object' ? deep(pane.active_queue_item) : pane.active_queue_item,
       active_attached_id: pane.active_attached_id,
       active_attached_item: pane.active_attached_item && typeof pane.active_attached_item === 'object' ? deep(pane.active_attached_item) : pane.active_attached_item,
+      attached_rows: Array.isArray(pane.attached_rows) ? pane.attached_rows.map((item) => deep(item)) : [],
+      attached_all_rows: Array.isArray(pane.attached_all_rows) ? pane.attached_all_rows.map((item) => deep(item)) : [],
+      all_rows: Array.isArray(pane.all_rows) ? pane.all_rows.map((item) => deep(item)) : [],
       __preview_target_key: pane.__preview_target_key,
       __preview_signed_url: pane.__preview_signed_url,
       __preview_load_requested_target_key: pane.__preview_load_requested_target_key,
-      __active_attached_preview_target: pane.__active_attached_preview_target
+      __active_attached_preview_target: pane.__active_attached_preview_target,
+      __evidence_loaded: pane.__evidence_loaded === true,
+      __attached_loaded: pane.__attached_loaded === true
     };
   };
   const restoreEmbeddedPreviewSnapshot = (snapshot) => {
@@ -151930,10 +157325,71 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     pane.active_queue_item = snap.active_queue_item && typeof snap.active_queue_item === 'object' ? deep(snap.active_queue_item) : snap.active_queue_item;
     pane.active_attached_id = snap.active_attached_id || null;
     pane.active_attached_item = snap.active_attached_item && typeof snap.active_attached_item === 'object' ? deep(snap.active_attached_item) : snap.active_attached_item;
+    if (Array.isArray(snap.attached_rows)) pane.attached_rows = snap.attached_rows.map((item) => deep(item));
+    if (Array.isArray(snap.attached_all_rows)) pane.attached_all_rows = snap.attached_all_rows.map((item) => deep(item));
+    if (Array.isArray(snap.all_rows) && snap.all_rows.length) pane.all_rows = snap.all_rows.map((item) => deep(item));
     pane.__preview_target_key = snap.__preview_target_key || '';
     pane.__preview_signed_url = snap.__preview_signed_url || '';
     pane.__preview_load_requested_target_key = snap.__preview_load_requested_target_key || '';
     pane.__active_attached_preview_target = snap.__active_attached_preview_target || '';
+    if (snap.__evidence_loaded === true) pane.__evidence_loaded = true;
+    if (snap.__attached_loaded === true) pane.__attached_loaded = true;
+  };
+  const markEmbeddedEvidenceLayerDegraded = (reason = 'evidence-refresh-degraded') => {
+    st.evidence_pane_state = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
+    const pane = st.evidence_pane_state;
+    pane.__evidence_degraded = true;
+    pane.__attached_degraded = true;
+    pane.__evidence_loading = false;
+    pane.__attached_loading = false;
+    pane.__evidence_degraded_reason = trimStr(reason || 'evidence-refresh-degraded') || 'evidence-refresh-degraded';
+    if (st.active_context && typeof st.active_context === 'object') {
+      st.active_context.evidence_degraded = true;
+      st.active_context.evidence_context_degraded = true;
+      st.active_context.evidence_degraded_reason = pane.__evidence_degraded_reason;
+    }
+    if (st.active_details && typeof st.active_details === 'object') {
+      st.active_details.evidence_degraded = true;
+      st.active_details.evidence_context_degraded = true;
+      st.active_details.evidence_degraded_reason = pane.__evidence_degraded_reason;
+    }
+    if (st.active_ctx && typeof st.active_ctx === 'object') {
+      st.active_ctx.evidence_degraded = true;
+      st.active_ctx.evidence_context_degraded = true;
+      st.active_ctx.evidence_degraded_reason = pane.__evidence_degraded_reason;
+      if (st.active_ctx.state && typeof st.active_ctx.state === 'object') {
+        st.active_ctx.state.evidence_degraded = true;
+        st.active_ctx.state.evidence_context_degraded = true;
+        st.active_ctx.state.evidence_degraded_reason = pane.__evidence_degraded_reason;
+      }
+    }
+  };
+  const clearEmbeddedEvidenceLayerDegraded = () => {
+    st.evidence_pane_state = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
+    const pane = st.evidence_pane_state;
+    pane.__evidence_degraded = false;
+    pane.__attached_degraded = false;
+    pane.__evidence_degraded_reason = '';
+    if (st.active_context && typeof st.active_context === 'object') {
+      st.active_context.evidence_degraded = false;
+      st.active_context.evidence_context_degraded = false;
+      st.active_context.evidence_degraded_reason = '';
+    }
+    if (st.active_details && typeof st.active_details === 'object') {
+      st.active_details.evidence_degraded = false;
+      st.active_details.evidence_context_degraded = false;
+      st.active_details.evidence_degraded_reason = '';
+    }
+    if (st.active_ctx && typeof st.active_ctx === 'object') {
+      st.active_ctx.evidence_degraded = false;
+      st.active_ctx.evidence_context_degraded = false;
+      st.active_ctx.evidence_degraded_reason = '';
+      if (st.active_ctx.state && typeof st.active_ctx.state === 'object') {
+        st.active_ctx.state.evidence_degraded = false;
+        st.active_ctx.state.evidence_context_degraded = false;
+        st.active_ctx.state.evidence_degraded_reason = '';
+      }
+    }
   };
   const hasValidQueuePreviewSelection = () => {
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
@@ -151954,22 +157410,32 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
       return false;
     }
     const refreshIdentity = captured || getBulkAuthoriseEmbeddedEvidenceIdentityParts();
-    const refreshResult = await refreshBulkAuthoriseActiveContext(st, {
-      row: st.active_row || null,
-      recordIdentity: trimStr(refreshIdentity.recordIdentity || refreshIdentity.identity || ''),
-      backendRowSignature: trimStr(refreshIdentity.backendRowSignature || ''),
-      renderSignature: trimStr(refreshIdentity.renderSignature || refreshIdentity.rowSignature || ''),
-      rowSignature: trimStr(refreshIdentity.renderSignature || refreshIdentity.rowSignature || ''),
-      rowChangeSeq: Number(refreshIdentity.rowChangeSeq || 0) || 0,
-      bypassCache: true,
-      invalidateCache: true,
-      rerender: false,
-      include_evidence: true,
-      base_only: false,
-      include_compare: false,
-      include_import_source_rows: false,
-      source: 'evidence_patch'
-    });
+    let refreshResult = null;
+    try {
+      refreshResult = await refreshBulkAuthoriseActiveContext(st, {
+        row: st.active_row || null,
+        recordIdentity: trimStr(refreshIdentity.recordIdentity || refreshIdentity.identity || ''),
+        backendRowSignature: trimStr(refreshIdentity.backendRowSignature || ''),
+        renderSignature: trimStr(refreshIdentity.renderSignature || refreshIdentity.rowSignature || ''),
+        rowSignature: trimStr(refreshIdentity.renderSignature || refreshIdentity.rowSignature || ''),
+        rowChangeSeq: Number(refreshIdentity.rowChangeSeq || 0) || 0,
+        bypassCache: true,
+        invalidateCache: true,
+        rerender: false,
+        profile: 'evidence',
+        context_profile: 'evidence',
+        include_evidence: true,
+        base_only: false,
+        include_compare: false,
+        include_import_source_rows: false,
+        source: 'evidence_patch'
+      });
+    } catch (err) {
+      restoreEmbeddedPreviewSnapshot(previewBeforeRefresh);
+      markEmbeddedEvidenceLayerDegraded('evidence-refresh-threw');
+      if (window.__LOG_MODAL === true) console.log('[TS][BULK-AUTH][EVIDENCE] embedded-mutation', { mutationType, stale: false, result: 'refresh-threw', error: String(err?.message || err || '') });
+      return false;
+    }
     if (staleAgainstSnapshot()) {
       restoreEmbeddedPreviewSnapshot(previewBeforeRefresh);
       if (window.__LOG_MODAL === true) console.log('[TS][BULK-AUTH][EVIDENCE] embedded-mutation', { mutationType, stale: true, result: 'dropped-after-refresh' });
@@ -151977,9 +157443,11 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     }
     if (isDegradedRefreshResult(refreshResult)) {
       restoreEmbeddedPreviewSnapshot(previewBeforeRefresh);
+      markEmbeddedEvidenceLayerDegraded('evidence-refresh-degraded');
       if (window.__LOG_MODAL === true) console.log('[TS][BULK-AUTH][EVIDENCE] embedded-mutation', { mutationType, stale: false, result: 'refresh-degraded' });
       return false;
     }
+    clearEmbeddedEvidenceLayerDegraded();
     if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
       try { reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch {}
     }
@@ -152042,10 +157510,16 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
         : {};
     const pane = st.evidence_pane_state;
     const activeIdentity = trimStr((typeof getBulkAuthoriseEvidenceActiveIdentity === 'function' ? getBulkAuthoriseEvidenceActiveIdentity(st) : '') || st.__bulkAuthoriseRecordIdentity || window.modalCtx?.__bulkAuthoriseRecordIdentity || '');
+    const queueScopeForBulkAuthoriseEvidence = 'global:QUEUED';
+    pane.__queue_scope = queueScopeForBulkAuthoriseEvidence;
+    pane.__queue_loaded_identity = '';
     const queueOverrideForCurrentRow = !!(
-      pane.__queue_manual_override === true &&
-      trimStr(pane.__queue_manual_override_identity || '') &&
-      trimStr(pane.__queue_manual_override_identity || '') === activeIdentity
+      trimStr(pane.active_tab || '').toLowerCase() === 'queue' &&
+      (
+        pane.__queue_manual_override === true ||
+        trimStr(pane.__queue_manual_override_scope || '') === queueScopeForBulkAuthoriseEvidence ||
+        hasValidQueuePreviewSelection()
+      )
     );
     const explicitAttachedAction = !!(
       opts.explicitAttach === true ||
@@ -152061,6 +157535,26 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     const beforeActiveAttachedId = trimStr(pane.active_attached_id || pane.active_attached_item?.id || pane.active_attached_item?.evidence_id || '');
     const beforePreviewTargetKey = trimStr(pane.__preview_target_key || '');
     const beforeKey = `${trimStr(pane.active_tab || '')}|${beforeActiveAttachedId}|${trimStr(pane.active_queue_id || '')}|${beforePreviewTargetKey}`;
+    const activeContextProfile = trimStr(
+      st.active_context?.context_profile ||
+      st.active_context?.profile ||
+      st.active_context?.details?.context_profile ||
+      st.active_details?.context_profile ||
+      st.active_ctx?.context_profile ||
+      st.active_ctx?.profile ||
+      st.active_ctx?.state?.context_profile ||
+      ''
+    ).toLowerCase();
+    const paneEvidenceIdentity = trimStr(pane.__bulk_authorise_evidence_identity || '');
+    const paneRowsBelongToActiveIdentity = !!(activeIdentity && paneEvidenceIdentity && paneEvidenceIdentity === activeIdentity);
+    const evidenceLayerLoaded = !!(
+      activeContextProfile === 'evidence' ||
+      st.active_context?.evidence_loaded === true ||
+      st.active_context?.details?.evidence_loaded === true ||
+      st.active_details?.evidence_loaded === true ||
+      st.active_ctx?.evidence_loaded === true ||
+      st.active_ctx?.state?.evidence_loaded === true
+    );
     const authoritativeEvidenceSources = [
       st.active_ctx?.state?.evidence,
       st.active_ctx?.evidence,
@@ -152068,17 +157562,33 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
       st.active_context?.details?.evidence,
       st.active_details?.evidence
     ];
-    const hasAuthoritativeEvidenceSource = authoritativeEvidenceSources.some((source) => Array.isArray(source));
+    const authoritativeRows = normaliseAttachedEvidenceRowsForBulkAuthorise(authoritativeEvidenceSources);
+    const hasAuthoritativeEvidenceSource = !!(evidenceLayerLoaded || authoritativeRows.length > 0 || activeContextProfile === 'evidence');
     const attachedRows = normaliseAttachedEvidenceRowsForBulkAuthorise(
       hasAuthoritativeEvidenceSource
         ? authoritativeEvidenceSources
         : [
             ...authoritativeEvidenceSources,
             window.modalCtx?.timesheetState?.evidence,
-            pane.attached_rows,
-            pane.attached_all_rows
+            ...(paneRowsBelongToActiveIdentity ? [pane.attached_rows, pane.attached_all_rows] : [])
           ]
     );
+    const clearPendingAttachedState = () => {
+      pane.__preview_pending_attached = false;
+      pane.__preview_pending_attached_identity = '';
+      pane.pendingAttached = false;
+      pane.__pending_attached = false;
+      pane.__pendingAttached = false;
+      pane.pendingAttachedIdentity = '';
+      pane.__pending_attached_identity = '';
+      pane.pendingAttachedRequestKey = '';
+      pane.__pending_attached_request_key = '';
+      st.pendingAttached = false;
+      st.__pending_attached = false;
+      st.__bulk_authorise_pending_attached = false;
+      st.pendingAttachedIdentity = '';
+      st.__pending_attached_identity = '';
+    };
 
     if (!attachedRows.length) {
       pane.__bulk_authorise_evidence_identity = activeIdentity;
@@ -152089,20 +157599,54 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
       }
 
       const queueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows.map((item) => ({ ...deep(item) })) : [];
+      const previewTargetBeforeAuthoritativeEmpty = trimStr(
+        pane.__preview_target_key ||
+        pane.__preview_load_requested_target_key ||
+        pane.__active_attached_preview_target ||
+        previewSnapshot.__preview_target_key ||
+        previewSnapshot.__preview_load_requested_target_key ||
+        previewSnapshot.__active_attached_preview_target ||
+        ''
+      );
+      const attachedPreviewWasSelected = !!(
+        beforeActiveAttachedId ||
+        /^attached\|/i.test(previewTargetBeforeAuthoritativeEmpty)
+      );
+      const clearAttachedPreviewAfterAuthoritativeRemoval = () => {
+        const currentTarget = trimStr(pane.__preview_target_key || pane.__preview_load_requested_target_key || pane.__active_attached_preview_target || '');
+        if (currentTarget && /^queue\|/i.test(currentTarget)) return;
+        if (!attachedPreviewWasSelected && currentTarget && !/^attached\|/i.test(currentTarget)) return;
+        pane.__preview_target_key = '';
+        pane.__preview_signed_url = '';
+        pane.__preview_signed_url_error = '';
+        pane.__preview_load_requested_target_key = '';
+        pane.__preview_attached_request_key = '';
+        pane.__active_attached_preview_target = '';
+      };
       pane.attached_rows = [];
       pane.attached_all_rows = [];
       pane.active_attached_item = null;
       pane.active_attached_id = null;
       pane.__attached_manual_override = false;
+      pane.__evidence_loaded = true;
+      pane.__attached_loaded = true;
+      clearEmbeddedEvidenceLayerDegraded();
+      clearPendingAttachedState();
       if (!queueOverrideForCurrentRow && !hasValidQueuePreviewSelection()) {
         pane.__queue_manual_override = false;
         pane.__queue_manual_override_identity = '';
+        pane.__queue_manual_override_scope = '';
         pane.active_tab = queueRows.length ? 'queue' : (explicitAttachedAction ? 'attached' : (pane.active_tab || 'queue'));
         pane.active_queue_id = queueRows.length ? (pane.active_queue_id || null) : null;
         pane.active_queue_item = queueRows.length ? (pane.active_queue_item || null) : null;
+        clearAttachedPreviewAfterAuthoritativeRemoval();
       } else if (queueOverrideForCurrentRow || hasValidQueuePreviewSelection()) {
         restoreEmbeddedPreviewSnapshot(previewSnapshot);
         pane.active_tab = 'queue';
+        pane.__queue_manual_override = true;
+        pane.__queue_manual_override_identity = '';
+        pane.__queue_manual_override_scope = queueScopeForBulkAuthoriseEvidence;
+        if (attachedPreviewWasSelected && !hasValidQueuePreviewSelection()) clearAttachedPreviewAfterAuthoritativeRemoval();
       }
       pane.all_rows = queueRows;
       st.evidence_pane_state = pane;
@@ -152153,6 +157697,13 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
     pane.active_attached_item = activeAttached ? { ...deep(activeAttached) } : null;
     pane.active_attached_id = nextActiveAttachedId || null;
     pane.__bulk_authorise_evidence_identity = activeIdentity;
+    pane.__evidence_loaded = true;
+    pane.__attached_loaded = true;
+    clearEmbeddedEvidenceLayerDegraded();
+    clearPendingAttachedState();
+    const nextAttachedPreviewRequestKey = (nextActiveAttachedId && nextActiveAttachedStorageKey)
+      ? `attached|${nextActiveAttachedId}|${nextActiveAttachedStorageKey.replace(/^\/+/, '')}`
+      : '';
 
     if (queueOverrideForCurrentRow || (hasValidQueuePreviewSelection() && !explicitAttachedAction)) {
       restoreEmbeddedPreviewSnapshot(previewSnapshot);
@@ -152161,6 +157712,9 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
       pane.active_attached_item = activeAttached ? { ...deep(activeAttached) } : pane.active_attached_item;
       pane.active_attached_id = nextActiveAttachedId || pane.active_attached_id || null;
       pane.active_tab = 'queue';
+      pane.__queue_manual_override = true;
+      pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = queueScopeForBulkAuthoriseEvidence;
     } else {
       pane.active_tab = 'attached';
       pane.__attached_manual_override = true;
@@ -152173,13 +157727,35 @@ async function wireBulkAuthoriseEmbeddedEvidence(state) {
         pane.__preview_signed_url = beforePreviewSignedUrl;
         pane.__preview_load_requested_target_key = beforePreviewLoadRequestedTargetKey;
         pane.__active_attached_preview_target = beforeActiveAttachedPreviewTarget;
+        if (
+          nextAttachedPreviewRequestKey &&
+          trimStr(pane.active_tab || '').toLowerCase() === 'attached' &&
+          !trimStr(pane.__preview_load_requested_target_key || pane.__preview_target_key || pane.__active_attached_preview_target || '')
+        ) {
+          pane.__preview_load_requested_target_key = nextAttachedPreviewRequestKey;
+          pane.__preview_attached_request_key = nextAttachedPreviewRequestKey;
+          pane.__active_attached_preview_target = nextAttachedPreviewRequestKey;
+        }
       } else if (explicitAttachedAction) {
-        pane.__preview_target_key = '';
-        pane.__preview_signed_url = '';
-        pane.__preview_load_requested_target_key = '';
-        pane.__active_attached_preview_target = '';
+        if (nextAttachedPreviewRequestKey) {
+          pane.__preview_target_key = '';
+          pane.__preview_signed_url = '';
+          pane.__preview_load_requested_target_key = nextAttachedPreviewRequestKey;
+          pane.__preview_attached_request_key = nextAttachedPreviewRequestKey;
+          pane.__active_attached_preview_target = nextAttachedPreviewRequestKey;
+        } else {
+          pane.__preview_target_key = '';
+          pane.__preview_signed_url = '';
+          pane.__preview_load_requested_target_key = '';
+          pane.__active_attached_preview_target = '';
+        }
       } else {
         restoreEmbeddedPreviewSnapshot(previewSnapshot);
+        if (nextAttachedPreviewRequestKey && trimStr(pane.active_tab || '').toLowerCase() === 'attached' && !trimStr(pane.__preview_load_requested_target_key || '')) {
+          pane.__preview_load_requested_target_key = nextAttachedPreviewRequestKey;
+          pane.__preview_attached_request_key = nextAttachedPreviewRequestKey;
+          pane.__active_attached_preview_target = nextAttachedPreviewRequestKey;
+        }
       }
     }
 
@@ -152923,40 +158499,77 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     } catch {}
   };
 
-  const forceAuthoritativeActiveContext = async () => {
+  const forceAuthoritativeActiveContext = async (refreshOptions = {}) => {
     if (typeof refreshBulkAuthoriseActiveContext !== 'function' || !st.active_row) return false;
     const rowForRefresh = (st.active_row && typeof st.active_row === 'object') ? st.active_row : null;
     if (!rowForRefresh) return false;
-    try {
-      const activeRenderSignature = trimStr(st.__bulk_authorise_active_render_signature || '');
-      const activeBackendSignature = trimStr(st.__bulk_authorise_active_backend_row_signature || rowForRefresh.backend_row_signature || rowForRefresh.row_signature || '');
-      const activeRowSignature = activeRenderSignature || activeBackendSignature;
-      const accepted = await refreshBulkAuthoriseActiveContext(st, {
-        row: rowForRefresh,
-        rowSignature: activeRowSignature,
-        renderSignature: activeRenderSignature,
-        backendRowSignature: activeBackendSignature,
-        recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || ''),
-        rowChangeSeq: Number(st.__bulk_authorise_row_change_seq || 0) || 0,
-        force: true,
-        bypassCache: true,
-        invalidateCache: true,
-        authoritative: true,
-        source: actionSource + '-authoritative-refresh',
-        profile: 'active_row_visible',
-        rerender: false
-      });
-      if (accepted !== false) {
-        if (typeof syncBulkAuthoriseModalCtxToActiveRow === 'function') {
-          try { syncBulkAuthoriseModalCtxToActiveRow(st, { source: actionSource + '-authoritative-refresh', force: true }); } catch {}
-        }
-        st.__bulkAuthRightPaneRowKey = trimStr(st.active_row_key || rowForRefresh.row_key || '');
-        st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
+    const optsForRefresh = (refreshOptions && typeof refreshOptions === 'object') ? refreshOptions : {};
+    const hints = (optsForRefresh.cache_invalidation_hints && typeof optsForRefresh.cache_invalidation_hints === 'object')
+      ? optsForRefresh.cache_invalidation_hints
+      : ((optsForRefresh.cacheHints && typeof optsForRefresh.cacheHints === 'object') ? optsForRefresh.cacheHints : {});
+    const editorNeeded = !!(
+      optsForRefresh.editor === true ||
+      optsForRefresh.rowSwitched === true ||
+      optsForRefresh.row_switched === true ||
+      optsForRefresh.activeRowChanged === true ||
+      optsForRefresh.displayedDetailsChanged === true ||
+      hints.manual_changed === true ||
+      hints.invalidate_editor_context === true ||
+      hints.identity_changed === true
+    );
+    const evidenceNeeded = !!(
+      optsForRefresh.evidence === true ||
+      hints.evidence_changed === true ||
+      hints.storage_changed === true ||
+      hints.invalidate_evidence === true ||
+      hints.invalidate_preview === true
+    );
+    const activeRenderSignature = trimStr(st.__bulk_authorise_active_render_signature || '');
+    const activeBackendSignature = trimStr(st.__bulk_authorise_active_backend_row_signature || rowForRefresh.backend_row_signature || rowForRefresh.row_signature || '');
+    const activeRowSignature = activeRenderSignature || activeBackendSignature;
+    const refreshLayer = async (profile, source) => {
+      const layer = trimStr(profile || 'status_header').toLowerCase();
+      const includeEvidenceForLayer = layer === 'evidence';
+      try {
+        const accepted = await refreshBulkAuthoriseActiveContext(st, {
+          row: rowForRefresh,
+          rowSignature: activeRowSignature,
+          renderSignature: activeRenderSignature,
+          backendRowSignature: activeBackendSignature,
+          recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || ''),
+          rowChangeSeq: Number(st.__bulk_authorise_row_change_seq || 0) || 0,
+          force: true,
+          bypassCache: true,
+          invalidateCache: true,
+          authoritative: layer === 'status_header',
+          source,
+          profile: layer,
+          context_profile: layer,
+          include_evidence: includeEvidenceForLayer,
+          includeEvidence: includeEvidenceForLayer,
+          include_compare: false,
+          includeCompare: false,
+          include_import_source_rows: false,
+          includeImportSourceRows: false,
+          rerender: false
+        });
+        return accepted !== false;
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][AUTHORISE-SELECTED] layered active context refresh failed', { profile: layer, error: err });
+        return false;
       }
-      return accepted !== false;
-    } catch {
-      return false;
+    };
+    const accepted = await refreshLayer('status_header', actionSource + '-status-header-refresh');
+    if (editorNeeded) await refreshLayer('editor', actionSource + '-editor-refresh');
+    if (evidenceNeeded) await refreshLayer('evidence', actionSource + '-evidence-refresh');
+    if (accepted !== false) {
+      if (typeof syncBulkAuthoriseModalCtxToActiveRow === 'function') {
+        try { syncBulkAuthoriseModalCtxToActiveRow(st, { source: actionSource + '-layered-refresh', force: true }); } catch {}
+      }
+      st.__bulkAuthRightPaneRowKey = trimStr(st.active_row_key || rowForRefresh.row_key || '');
+      st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
     }
+    return accepted !== false;
   };
 
   let didFinalRerender = false;
@@ -153152,8 +158765,14 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
             skipDirtyGuard: true,
             rerender: false
           });
-          if (activeSet !== false && nextCandidate) {
-            await forceAuthoritativeActiveContext();
+          if (activeSet !== false && (nextCandidate || trimStr(st.active_row_key || st.active_row?.row_key || ''))) {
+            await forceAuthoritativeActiveContext({
+              cache_invalidation_hints: result?.cache_invalidation_hints || {},
+              source: actionSource + '-post-authorise',
+              editor: true,
+              rowSwitched: true,
+              displayedDetailsChanged: true
+            });
           }
         }
       } else if (!activeWasAffected && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function' && activeRowKeyBefore) {
@@ -153262,6 +158881,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     }
   }
 }
+
 
 async function handleBulkUnauthoriseSelected(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][UNAUTHORISE-SELECTED]');
@@ -153686,40 +159306,77 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     } catch {}
   };
 
-  const forceAuthoritativeActiveContext = async () => {
+  const forceAuthoritativeActiveContext = async (refreshOptions = {}) => {
     if (typeof refreshBulkAuthoriseActiveContext !== 'function' || !st.active_row) return false;
     const rowForRefresh = (st.active_row && typeof st.active_row === 'object') ? st.active_row : null;
     if (!rowForRefresh) return false;
-    try {
-      const activeRenderSignature = trimStr(st.__bulk_authorise_active_render_signature || '');
-      const activeBackendSignature = trimStr(st.__bulk_authorise_active_backend_row_signature || rowForRefresh.backend_row_signature || rowForRefresh.row_signature || '');
-      const activeRowSignature = activeRenderSignature || activeBackendSignature;
-      const accepted = await refreshBulkAuthoriseActiveContext(st, {
-        row: rowForRefresh,
-        rowSignature: activeRowSignature,
-        renderSignature: activeRenderSignature,
-        backendRowSignature: activeBackendSignature,
-        recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || ''),
-        rowChangeSeq: Number(st.__bulk_authorise_row_change_seq || 0) || 0,
-        force: true,
-        bypassCache: true,
-        invalidateCache: true,
-        authoritative: true,
-        source: actionSource + '-authoritative-refresh',
-        profile: 'active_row_visible',
-        rerender: false
-      });
-      if (accepted !== false) {
-        if (typeof syncBulkAuthoriseModalCtxToActiveRow === 'function') {
-          try { syncBulkAuthoriseModalCtxToActiveRow(st, { source: actionSource + '-authoritative-refresh', force: true }); } catch {}
-        }
-        st.__bulkAuthRightPaneRowKey = trimStr(st.active_row_key || rowForRefresh.row_key || '');
-        st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
+    const optsForRefresh = (refreshOptions && typeof refreshOptions === 'object') ? refreshOptions : {};
+    const hints = (optsForRefresh.cache_invalidation_hints && typeof optsForRefresh.cache_invalidation_hints === 'object')
+      ? optsForRefresh.cache_invalidation_hints
+      : ((optsForRefresh.cacheHints && typeof optsForRefresh.cacheHints === 'object') ? optsForRefresh.cacheHints : {});
+    const editorNeeded = !!(
+      optsForRefresh.editor === true ||
+      optsForRefresh.rowSwitched === true ||
+      optsForRefresh.row_switched === true ||
+      optsForRefresh.activeRowChanged === true ||
+      optsForRefresh.displayedDetailsChanged === true ||
+      hints.manual_changed === true ||
+      hints.invalidate_editor_context === true ||
+      hints.identity_changed === true
+    );
+    const evidenceNeeded = !!(
+      optsForRefresh.evidence === true ||
+      hints.evidence_changed === true ||
+      hints.storage_changed === true ||
+      hints.invalidate_evidence === true ||
+      hints.invalidate_preview === true
+    );
+    const activeRenderSignature = trimStr(st.__bulk_authorise_active_render_signature || '');
+    const activeBackendSignature = trimStr(st.__bulk_authorise_active_backend_row_signature || rowForRefresh.backend_row_signature || rowForRefresh.row_signature || '');
+    const activeRowSignature = activeRenderSignature || activeBackendSignature;
+    const refreshLayer = async (profile, source) => {
+      const layer = trimStr(profile || 'status_header').toLowerCase();
+      const includeEvidenceForLayer = layer === 'evidence';
+      try {
+        const accepted = await refreshBulkAuthoriseActiveContext(st, {
+          row: rowForRefresh,
+          rowSignature: activeRowSignature,
+          renderSignature: activeRenderSignature,
+          backendRowSignature: activeBackendSignature,
+          recordIdentity: trimStr(st.__bulkAuthoriseRecordIdentity || ''),
+          rowChangeSeq: Number(st.__bulk_authorise_row_change_seq || 0) || 0,
+          force: true,
+          bypassCache: true,
+          invalidateCache: true,
+          authoritative: layer === 'status_header',
+          source,
+          profile: layer,
+          context_profile: layer,
+          include_evidence: includeEvidenceForLayer,
+          includeEvidence: includeEvidenceForLayer,
+          include_compare: false,
+          includeCompare: false,
+          include_import_source_rows: false,
+          includeImportSourceRows: false,
+          rerender: false
+        });
+        return accepted !== false;
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][UNAUTHORISE-SELECTED] layered active context refresh failed', { profile: layer, error: err });
+        return false;
       }
-      return accepted !== false;
-    } catch {
-      return false;
+    };
+    const accepted = await refreshLayer('status_header', actionSource + '-status-header-refresh');
+    if (editorNeeded) await refreshLayer('editor', actionSource + '-editor-refresh');
+    if (evidenceNeeded) await refreshLayer('evidence', actionSource + '-evidence-refresh');
+    if (accepted !== false) {
+      if (typeof syncBulkAuthoriseModalCtxToActiveRow === 'function') {
+        try { syncBulkAuthoriseModalCtxToActiveRow(st, { source: actionSource + '-layered-refresh', force: true }); } catch {}
+      }
+      st.__bulkAuthRightPaneRowKey = trimStr(st.active_row_key || rowForRefresh.row_key || '');
+      st.__bulkAuthRightPaneCtx = st.active_context || st.active_ctx || null;
     }
+    return accepted !== false;
   };
 
   let didFinalRerender = false;
@@ -153897,7 +159554,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
           rerender: false
         });
         if (activeSet !== false && nextCandidate) {
-          await forceAuthoritativeActiveContext();
+          await forceAuthoritativeActiveContext({ editor: true, rowSwitched: true, cache_invalidation_hints: result?.cache_invalidation_hints || {} });
         }
       } else if (!activeWasAffected && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function' && activeRowKeyBefore) {
         await setActiveBulkAuthoriseRowFromVisibleRows(st, activeRowKeyBefore, {
@@ -154663,6 +160320,7 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
     return { ok: false, error: st.error_text };
   }
 }
+
 async function handleBulkAuthoriseRouteConversion(state, row, action) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][ROUTE-CONVERSION]');
   GC('handleBulkAuthoriseRouteConversion');
@@ -154985,26 +160643,142 @@ async function handleBulkAuthoriseRouteConversion(state, row, action) {
     );
   };
 
+  const isBulkProcessOwnerOrNext = () => {
+    try {
+      const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      const frameKind = trimStr(frame?.kind || frame?.entity || '').toUpperCase();
+      const modalKind = trimStr(window.modalCtx?.modal_kind || window.modalCtx?.modalKind || window.modalCtx?.kind || window.modalCtx?.entity || '').toUpperCase();
+      const ownerKind = trimStr(st.owner_kind || st.ownerKind || window.modalCtx?.owner_kind || window.modalCtx?.ownerKind || '').toUpperCase();
+      const nextOwnerKind = trimStr(
+        st.next_owner_kind ||
+        st.nextOwnerKind ||
+        st.__next_owner_kind ||
+        st.__nextOwnerKind ||
+        window.modalCtx?.next_owner_kind ||
+        window.modalCtx?.nextOwnerKind ||
+        window.modalCtx?.__next_owner_kind ||
+        window.modalCtx?.__nextOwnerKind ||
+        ''
+      ).toUpperCase();
+      return !!(
+        frameKind.includes('BULK-PROCESS') ||
+        frameKind.includes('BULK_PROCESS') ||
+        modalKind.includes('BULK-PROCESS') ||
+        modalKind.includes('BULK_PROCESS') ||
+        ownerKind.includes('BULK_PROCESS') ||
+        ownerKind.includes('BULK-PROCESS') ||
+        nextOwnerKind.includes('BULK_PROCESS') ||
+        nextOwnerKind.includes('BULK-PROCESS')
+      );
+    } catch {
+      return false;
+    }
+  };
+
   let activeRowKeyBeforeForContextRefresh = '';
+
+  const routeIdentityPartsSafe = () => {
+    try { return resolveRouteIdentityParts() || {}; } catch { return {}; }
+  };
 
   const refreshActiveRouteContextIfNeeded = async (hints, patches = []) => {
     const source = (hints && typeof hints === 'object' && !Array.isArray(hints)) ? hints : {};
-    if (!routePatchNeedsActiveContextRefresh(source)) return false;
+    if (isBulkProcessOwnerOrNext()) return false;
     if (typeof refreshBulkAuthoriseActiveContext !== 'function') return false;
+    const frameKindForRefresh = (() => {
+      try {
+        const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+        return String(frame?.kind || frame?.entity || window.modalCtx?.modal_kind || window.modalCtx?.modalKind || window.modalCtx?.kind || window.modalCtx?.entity || '').trim().toUpperCase();
+      } catch {
+        return '';
+      }
+    })();
+    const ownerKindForRefresh = String(st.owner_kind || st.ownerKind || window.modalCtx?.owner_kind || window.modalCtx?.ownerKind || '').trim().toUpperCase();
+    const nextOwnerKindForRefresh = String(st.next_owner_kind || st.nextOwnerKind || st.__next_owner_kind || st.__nextOwnerKind || window.modalCtx?.next_owner_kind || window.modalCtx?.nextOwnerKind || '').trim().toUpperCase();
+    if (
+      frameKindForRefresh.includes('BULK-PROCESS') ||
+      frameKindForRefresh.includes('BULK_PROCESS') ||
+      ownerKindForRefresh.includes('BULK_PROCESS') ||
+      ownerKindForRefresh.includes('BULK-PROCESS') ||
+      nextOwnerKindForRefresh.includes('BULK_PROCESS') ||
+      nextOwnerKindForRefresh.includes('BULK-PROCESS')
+    ) return false;
     const nextPatch = (Array.isArray(patches) ? patches : []).find((patch) => patch && typeof patch === 'object' && rowIdentityKey(patch)) || null;
     const nextRow = nextPatch || ((st.active_row && typeof st.active_row === 'object') ? st.active_row : srcRow);
-    await refreshBulkAuthoriseActiveContext(st, {
-      source: source.evidence_changed === true || source.storage_changed === true ? 'evidence_patch' : (source.identity_changed === true ? 'identity_patch' : 'route_patch'),
-      actionSource: `route-${act}`,
-      profile: 'active_row_visible',
-      context_profile: 'active_row_visible',
-      row: nextRow,
-      row_key: rowIdentityKey(nextRow) || st.active_row_key || activeRowKeyBeforeForContextRefresh || '',
-      cache_invalidation_hints: source,
-      forceContextRefresh: true,
-      authoritative: true
-    });
-    return true;
+    const knownHintKeys = [
+      'status_only',
+      'identity_changed',
+      'manual_changed',
+      'route_changed',
+      'evidence_changed',
+      'storage_changed',
+      'invalidate_context',
+      'invalidate_row_context',
+      'invalidate_editor_context',
+      'invalidate_evidence',
+      'invalidate_preview'
+    ];
+    const hasKnownHint = knownHintKeys.some((key) => Object.prototype.hasOwnProperty.call(source, key));
+    const editorNeeded = !!(
+      !routePatchIsStatusOnly(source) && (
+        !hasKnownHint ||
+        source.identity_changed === true ||
+        source.manual_changed === true ||
+        source.route_changed === true ||
+        source.invalidate_context === true ||
+        source.invalidate_row_context === true ||
+        source.invalidate_editor_context === true
+      )
+    );
+    const evidenceNeeded = !!(
+      source.evidence_changed === true ||
+      source.storage_changed === true ||
+      source.invalidate_evidence === true ||
+      source.invalidate_preview === true
+    );
+    const routeIdentity = routeIdentityPartsSafe();
+    const rowBackendSignature = trimStr(nextRow?.backend_row_signature || nextRow?.row_backend_signature || nextRow?.row_signature || routeIdentity.backendRowSignature || '');
+    const rowRenderSignature = trimStr(nextRow?.render_signature || routeIdentity.renderSignature || '');
+    const rowRecordIdentity = trimStr(routeIdentity.recordIdentity || st.__bulkAuthoriseRecordIdentity || '');
+    const refreshLayer = async (profile, layerSource) => {
+      if (isBulkProcessOwnerOrNext()) return false;
+      const layer = trimStr(profile || 'status_header').toLowerCase();
+      const includeEvidenceForLayer = layer === 'evidence';
+      try {
+        await refreshBulkAuthoriseActiveContext(st, {
+          source: layerSource,
+          actionSource: `route-${act}`,
+          profile: layer,
+          context_profile: layer,
+          row: nextRow,
+          row_key: rowIdentityKey(nextRow) || st.active_row_key || activeRowKeyBeforeForContextRefresh || '',
+          rowSignature: rowRenderSignature || rowBackendSignature || undefined,
+          renderSignature: rowRenderSignature || undefined,
+          backendRowSignature: rowBackendSignature || undefined,
+          recordIdentity: rowRecordIdentity || undefined,
+          cache_invalidation_hints: source,
+          forceContextRefresh: true,
+          bypassCache: true,
+          invalidateCache: true,
+          authoritative: layer === 'status_header',
+          include_evidence: includeEvidenceForLayer,
+          includeEvidence: includeEvidenceForLayer,
+          include_compare: false,
+          includeCompare: false,
+          include_import_source_rows: false,
+          includeImportSourceRows: false,
+          rerender: false
+        });
+        return true;
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][ROUTE-CONVERSION] layered active context refresh degraded', { profile: layer, error: err });
+        return false;
+      }
+    };
+    const accepted = await refreshLayer('status_header', source.identity_changed === true ? 'identity_patch' : 'route_status_patch');
+    if (editorNeeded) await refreshLayer('editor', source.identity_changed === true ? 'identity_patch' : 'route_patch');
+    if (evidenceNeeded) await refreshLayer('evidence', 'evidence_patch');
+    return accepted;
   };
 
   try {
@@ -155108,8 +160882,6 @@ async function handleBulkAuthoriseRouteConversion(state, row, action) {
 
     const rowPatches = getRowPatches(actionResult).map((patch) => ({ ...deep(patch), previous_row_key: trimStr(patch.previous_row_key || activeRowKeyBefore || '') || undefined }));
     const routeHints = collectRoutePatchHints(actionResult, rowPatches);
-    const statusOnlyRoutePatch = routePatchIsStatusOnly(routeHints);
-
     if (typeof applyBulkTimesheetRowPatches === 'function') {
       applyBulkTimesheetRowPatches(st, rowPatches, {
         mode: 'bulk_authorise',
@@ -155155,22 +160927,21 @@ async function handleBulkAuthoriseRouteConversion(state, row, action) {
       });
     }
 
-    if (!statusOnlyRoutePatch) {
-      await refreshActiveRouteContextIfNeeded(routeHints, rowPatches);
-    }
+    await refreshActiveRouteContextIfNeeded(routeHints, rowPatches);
 
     st.loading = false;
-    await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][ROUTE-CONVERSION][PATCHED]');
+    if (!isBulkProcessOwnerOrNext()) await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][ROUTE-CONVERSION][PATCHED]');
     GE();
     return { ok: true, result: actionResult, row_patches: rowPatches };
   } catch (err) {
     st.loading = false;
     st.error_text = String(err?.message || err || 'Route conversion failed.');
-    await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][ROUTE-CONVERSION][ERROR]');
+    if (!isBulkProcessOwnerOrNext()) await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][ROUTE-CONVERSION][ERROR]');
     GE();
     return { ok: false, error: st.error_text };
   }
 }
+
 
 async function handleBulkAuthoriseUnsavedChangeGuard(state, nextRowKey, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][UNSAVED-GUARD]');
@@ -156461,6 +162232,9 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
   return { ok: true };
 }
 
+
+
+
 async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][ROW-CHANGE]');
   GC('handleBulkProcessRowChange');
@@ -156875,16 +162649,17 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const prepareOpts = (prepareOptions && typeof prepareOptions === 'object') ? prepareOptions : {};
     const paneObj = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
     const activeIdentity = trimStr(prepareOpts.identity || getActiveRowIdentity());
+    const queueScope = trimStr(prepareOpts.queueScope || prepareOpts.queue_scope || 'global:QUEUED') || 'global:QUEUED';
     const requestTokenObj = prepareOpts.requestToken && typeof prepareOpts.requestToken === 'object' ? prepareOpts.requestToken : null;
     const modalToken = trimStr(prepareOpts.modalOpenToken || prepareOpts.modal_open_token || getModalOpenToken());
     const isCurrent = (typeof prepareOpts.isCurrent === 'function') ? prepareOpts.isCurrent : null;
     if (!paneObj) {
       return { active_identity: activeIdentity, queue_prepared: false, selected_preview_changed: false };
     }
-    if (!activeIdentity) {
+    if (!activeIdentity && !queueScope.toLowerCase().startsWith('global:')) {
       paneObj.__queue_loading = false;
       paneObj.__queue_last_error = '';
-      return { active_identity: activeIdentity, queue_prepared: false, selected_preview_changed: false, preserved: true };
+      return { active_identity: activeIdentity, queue_scope: queueScope, queue_prepared: false, selected_preview_changed: false, preserved: true };
     }
     if (!isModalOwnerCurrent(modalToken, activeIdentity)) {
       return { active_identity: activeIdentity, queue_prepared: false, selected_preview_changed: false, stale: true };
@@ -156905,7 +162680,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       __preview_load_requested_target_key: paneObj.__preview_load_requested_target_key,
       __active_attached_preview_target: paneObj.__active_attached_preview_target
     };
-    const queueLoadedForIdentity = !!paneObj.__queue_loaded && trimStr(paneObj.__queue_loaded_identity || '') === activeIdentity;
+    const queueLoadedForIdentity = !!paneObj.__queue_loaded && trimStr(paneObj.__queue_loaded_scope || paneObj.__queue_scope || '') === queueScope;
     const hasAttachedPreviewForActiveRow = !!(
       String(paneObj.active_tab || '').trim().toLowerCase() === 'attached' &&
       Array.isArray(paneObj.attached_rows) &&
@@ -156931,6 +162706,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         owner_kind: 'bulk_process',
         modal_open_token: modalToken,
         active_identity: activeIdentity,
+        queue_scope: queueScope,
         request_token: requestTokenObj ? requestTokenObj.id : '',
         force: !!prepareOpts.forceQueueRefresh,
         suppressWhileBusy: false
@@ -156946,7 +162722,9 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       return { active_identity: activeIdentity, queue_prepared: false, selected_preview_changed: false, stale: true };
     }
     paneObj.__queue_loaded = true;
-    paneObj.__queue_loaded_identity = activeIdentity;
+    paneObj.__queue_loaded_scope = queueScope;
+    paneObj.__queue_scope = queueScope;
+    paneObj.__queue_loaded_identity = '';
     paneObj.__queue_loading = false;
     paneObj.__queue_last_error = '';
     syncQueueSelectionFromRows(paneObj);
@@ -157004,11 +162782,13 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     pane.active_attached_id = null;
     pane.active_attached_item = null;
     pane.active_attached_pdf_page = 1;
-    pane.active_queue_id = null;
-    pane.active_queue_item = null;
-    pane.active_pdf_page = 1;
-    pane.active_zoom = 1;
-    pane.active_rotation_deg = 0;
+    if (clearOpts.clearQueueSelection === true || clearOpts.clear_queue_selection === true || clearOpts.artifactRemoved === true || clearOpts.artifact_removed === true) {
+      pane.active_queue_id = null;
+      pane.active_queue_item = null;
+      pane.active_pdf_page = 1;
+      pane.active_zoom = 1;
+      pane.active_rotation_deg = 0;
+    }
     return true;
   };
 
@@ -157058,6 +162838,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         if (activeRowForHydration) {
           evidenceHydrationAttempted = true;
           const hydratedLoad = await loadRowContext(activeRowForHydration, {
+            profile: 'evidence',
             includeEvidence: true,
             force: true,
             requestToken: requestTokenObj,
@@ -157077,11 +162858,44 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
               };
             }
             st.__suppress_dirty_marking = true;
-            st.active_row = clone(hydratedContext.row || activeRowForHydration);
+            st.active_row = clone({ ...(st.active_row || activeRowForHydration || {}), ...(hydratedContext.row || {}) });
             st.active_row_key = trimStr(st.active_row?.row_key || st.active_row_key || '') || st.active_row_key || null;
             st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
-            st.active_details = hydratedContext.details;
-            st.active_ctx = hydratedContext.ctx;
+            const previousDetails = (st.active_details && typeof st.active_details === 'object') ? clone(st.active_details) : {};
+            const previousCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? clone(st.active_ctx) : null;
+            const incomingEvidenceDetails = (hydratedContext.details && typeof hydratedContext.details === 'object') ? hydratedContext.details : {};
+            const incomingEvidenceRows = Array.isArray(incomingEvidenceDetails.evidence)
+              ? clone(incomingEvidenceDetails.evidence)
+              : (Array.isArray(hydratedContext.payload?.evidence) ? clone(hydratedContext.payload.evidence) : []);
+            st.active_details = {
+              ...previousDetails,
+              evidence: incomingEvidenceRows,
+              evidence_loaded: true,
+              evidence_meta: {
+                ...((previousDetails.evidence_meta && typeof previousDetails.evidence_meta === 'object') ? previousDetails.evidence_meta : {}),
+                ...((incomingEvidenceDetails.evidence_meta && typeof incomingEvidenceDetails.evidence_meta === 'object') ? incomingEvidenceDetails.evidence_meta : {}),
+                evidence_loaded: true
+              }
+            };
+            if (previousCtx && previousCtx.state && typeof previousCtx.state === 'object') {
+              previousCtx.state.evidence = incomingEvidenceRows;
+              previousCtx.state.evidence_loaded = true;
+              previousCtx.state.context_profile = previousCtx.state.context_profile || previousDetails.context_profile || 'editor';
+              previousCtx.state.profile = previousCtx.state.profile || previousDetails.profile || previousDetails.context_profile || 'editor';
+              st.active_ctx = previousCtx;
+            } else {
+              st.active_ctx = hydratedContext.ctx;
+            }
+            st.active_context = {
+              ...((st.active_context && typeof st.active_context === 'object') ? st.active_context : {}),
+              evidence: incomingEvidenceRows,
+              evidence_loaded: true,
+              details: {
+                ...(((st.active_context && typeof st.active_context === 'object' && st.active_context.details && typeof st.active_context.details === 'object') ? st.active_context.details : {})),
+                evidence: incomingEvidenceRows,
+                evidence_loaded: true
+              }
+            };
             st.__active_context_is_minimal = false;
             st.__suppress_dirty_marking = false;
             if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
@@ -157199,9 +163013,17 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       ? { ...row, ...payload.data_row, ...((payload.row_patch && typeof payload.row_patch === 'object') ? payload.row_patch : {}) }
       : { ...row, ...((payload.row_patch && typeof payload.row_patch === 'object') ? payload.row_patch : {}) };
     const detailsInput = (payload.details && typeof payload.details === 'object') ? deep(payload.details) : {};
-    const evidence = Array.isArray(payload.evidence)
+    const payloadProfile = trimStr(payload.context_profile || payload.profile || payload.__context_options?.context_profile || payload.__context_options?.profile || '').toLowerCase();
+    const evidenceAuthoritative = !!(
+      payload.evidence_loaded === true ||
+      payloadProfile === 'evidence' ||
+      payload.__context_options?.include_evidence === true
+    );
+    const incomingEvidence = Array.isArray(payload.evidence)
       ? deep(payload.evidence)
       : (Array.isArray(detailsInput.evidence) ? deep(detailsInput.evidence) : []);
+    const existingEvidence = Array.isArray(st.active_details?.evidence) ? deep(st.active_details.evidence) : [];
+    const evidence = evidenceAuthoritative ? incomingEvidence : existingEvidence;
     const related = ensureBulkProcessRelatedContract(
       (payload.related && typeof payload.related === 'object')
         ? deep(payload.related)
@@ -157263,6 +163085,16 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
           }
         : null,
       evidence,
+      context_profile: payloadProfile || payload.context_profile || payload.profile || 'status_header',
+      profile: payloadProfile || payload.profile || payload.context_profile || 'status_header',
+      header_loaded: payload.header_loaded === true || payloadProfile === 'status_header' || payloadProfile === 'editor' || payloadProfile === 'active_row_visible',
+      header_only: payload.header_only === true || payloadProfile === 'status_header',
+      editor_loaded: payload.editor_loaded === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible',
+      evidence_loaded: evidenceAuthoritative,
+      compare_loaded: payload.compare_loaded === true || payloadProfile === 'compare_import',
+      full_loaded: payload.full_loaded === true || payloadProfile === 'full',
+      schedule_pending: payload.schedule_pending === true || !(payload.editor_loaded === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible'),
+      schedule_authoritative: payload.schedule_authoritative === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible',
       related: deep(related),
       is_hydrated: payload.is_hydrated !== false,
       hydration_required: false,
@@ -157271,13 +163103,23 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const ctxPayload = normaliseBulkTimesheetWorkbenchCtx(deep(dataRow), rawDetails);
     if (ctxPayload && ctxPayload.state && typeof ctxPayload.state === 'object') {
       ctxPayload.state.evidence = evidence;
-      if (!evidence.length) {
+      if (evidenceAuthoritative && !evidence.length) {
         ctxPayload.state.__bulkProcessWeeklyPreviewData = null;
         ctxPayload.state.__bulkProcessDailyPreviewData = null;
         ctxPayload.state.__bulkProcessDailyFinancePreview = null;
         ctxPayload.state.__dailyFinancePreview = null;
         ctxPayload.state.__bulkProcessLivePreviewData = null;
       }
+      ctxPayload.state.context_profile = payloadProfile || payload.context_profile || payload.profile || 'status_header';
+      ctxPayload.state.profile = payloadProfile || payload.profile || payload.context_profile || 'status_header';
+      ctxPayload.state.header_loaded = rawDetails.header_loaded;
+      ctxPayload.state.header_only = rawDetails.header_only;
+      ctxPayload.state.editor_loaded = rawDetails.editor_loaded;
+      ctxPayload.state.evidence_loaded = rawDetails.evidence_loaded;
+      ctxPayload.state.compare_loaded = rawDetails.compare_loaded;
+      ctxPayload.state.full_loaded = rawDetails.full_loaded;
+      ctxPayload.state.schedule_pending = rawDetails.schedule_pending;
+      ctxPayload.state.schedule_authoritative = rawDetails.schedule_authoritative;
     }
     return { details: rawDetails, ctx: ctxPayload, related: deep(related), row: dataRow, payload: deep(payload) };
   };
@@ -157305,9 +163147,29 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
           route_display: row.route_display || null,
           manual_pdf_r2_key: row.manual_pdf_r2_key || row.primary_artifact_storage_key || null,
           evidence: [],
+          context_profile: 'status_header',
+          profile: 'status_header',
+          header_loaded: true,
+          header_only: true,
+          editor_loaded: false,
+          evidence_loaded: false,
+          compare_loaded: false,
+          full_loaded: false,
+          schedule_pending: true,
+          schedule_authoritative: false,
           related: buildFallbackRelated(row, {})
         },
         evidence: [],
+        context_profile: 'status_header',
+        profile: 'status_header',
+        header_loaded: true,
+        header_only: true,
+        editor_loaded: false,
+        evidence_loaded: false,
+        compare_loaded: false,
+        full_loaded: false,
+        schedule_pending: true,
+        schedule_authoritative: false,
         related: buildFallbackRelated(row, {}),
         is_hydrated: false,
         slim_context: true
@@ -157337,15 +163199,14 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     add('requested_timesheet_id', row.requested_timesheet_id || row.timesheet_id || '');
     add('expected_timesheet_id', row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || '');
     add('contract_week_id', row.contract_week_id || '');
-    const profile = trimStr(loadOpts.profile || loadOpts.context_profile || 'active_row_visible').toLowerCase();
+    const profile = trimStr(loadOpts.profile || loadOpts.context_profile || 'status_header').toLowerCase() || 'status_header';
     const includeEvidence = !!(
       loadOpts.includeEvidence === true ||
-      profile === 'active_row_visible' ||
       profile === 'evidence' ||
-      profile === 'full'
+      (profile === 'full' && loadOpts.includeEvidence !== false)
     );
-    qs.set('profile', profile || 'active_row_visible');
-    qs.set('context_profile', profile || 'active_row_visible');
+    qs.set('profile', profile);
+    qs.set('context_profile', profile);
     qs.set('include_evidence', includeEvidence ? 'true' : 'false');
     qs.set('include_compare', (profile === 'compare_import' || profile === 'full') ? 'true' : 'false');
     qs.set('include_import_source_rows', (profile === 'compare_import' || profile === 'full') ? 'true' : 'false');
@@ -157367,8 +163228,8 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       return makeRowContextFailurePayload('http-error', row, payload, { degraded: true, message: msg, error: msg });
     }
 
-    payload.profile = trimStr(payload.profile || payload.context_profile || profile || 'active_row_visible') || 'active_row_visible';
-    payload.context_profile = trimStr(payload.context_profile || payload.profile || profile || 'active_row_visible') || 'active_row_visible';
+    payload.profile = trimStr(payload.profile || payload.context_profile || profile || 'status_header') || 'status_header';
+    payload.context_profile = trimStr(payload.context_profile || payload.profile || profile || 'status_header') || 'status_header';
     payload.__context_options = {
       profile: payload.profile,
       context_profile: payload.context_profile,
@@ -157410,18 +163271,24 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       current_timesheet_id: trimStr(row.current_timesheet_id || row.timesheet_id || ''),
       contract_week_id: trimStr(row.contract_week_id || ''),
       row_signature: buildRowCacheSignature(row),
-      profile: trimStr(cfg.profile || cfg.context_profile || 'active_row_visible').toLowerCase() || 'active_row_visible',
-      include_evidence: cfg.includeEvidence === true
+      profile: trimStr(cfg.profile || cfg.context_profile || 'status_header').toLowerCase() || 'status_header',
+      include_evidence: cfg.includeEvidence === true,
+      include_compare: cfg.includeCompare === true,
+      include_import_source_rows: cfg.includeImportSourceRows === true,
+      modal_owner_token: trimStr(cfg.modalOpenToken || cfg.modal_open_token || getModalOpenToken())
     });
   };
 
   const contextHasRequiredOptions = (entry, cacheOptions = {}) => {
     const cfg = (cacheOptions && typeof cacheOptions === 'object') ? cacheOptions : {};
     const optionsUsed = (entry && entry.__context_options && typeof entry.__context_options === 'object') ? entry.__context_options : {};
-    const requestedProfile = trimStr(cfg.profile || cfg.context_profile || 'active_row_visible').toLowerCase() || 'active_row_visible';
+    const requestedProfile = trimStr(cfg.profile || cfg.context_profile || 'status_header').toLowerCase() || 'status_header';
     const usedProfile = trimStr(optionsUsed.profile || optionsUsed.context_profile || '').toLowerCase();
     if (requestedProfile && usedProfile && requestedProfile !== usedProfile) return false;
     if (cfg.includeEvidence === true && optionsUsed.include_evidence !== true) return false;
+    if (cfg.includeEvidence === false && optionsUsed.include_evidence === true) return false;
+    if (cfg.includeCompare === true && optionsUsed.include_compare !== true) return false;
+    if (cfg.includeImportSourceRows === true && optionsUsed.include_import_source_rows !== true) return false;
     return true;
   };
 
@@ -157432,12 +163299,11 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const modalToken = trimStr(loadOpts.modalOpenToken || loadOpts.modal_open_token || requestTokenObj?.modalOpenToken || getModalOpenToken());
     const requestIdentity = trimStr(loadOpts.identity || requestTokenObj?.rowKey || row.row_key || getIdentityPartsFromRow(row).identity || '');
     const isCurrent = (typeof loadOpts.isCurrent === 'function') ? loadOpts.isCurrent : null;
-    const profile = trimStr(loadOpts.profile || loadOpts.context_profile || 'active_row_visible').toLowerCase() || 'active_row_visible';
+    const profile = trimStr(loadOpts.profile || loadOpts.context_profile || 'status_header').toLowerCase() || 'status_header';
     const includeEvidence = !!(
       loadOpts.includeEvidence === true ||
-      profile === 'active_row_visible' ||
       profile === 'evidence' ||
-      profile === 'full'
+      (profile === 'full' && loadOpts.includeEvidence !== false)
     );
     const force = !!loadOpts.force;
     const cacheStore = getCacheStore();
@@ -157728,12 +163594,18 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       return true;
     }
 
-    const includeEvidence = !(opts.includeEvidence === false || opts.loadEvidence === false);
-    const contextProfile = trimStr(opts.profile || opts.context_profile || 'active_row_visible').toLowerCase() || 'active_row_visible';
+    const requestedContextProfile = trimStr(opts.profile || opts.context_profile || '').toLowerCase();
+    const evidenceRefreshRequested = !!(
+      opts.includeEvidence === true ||
+      opts.loadEvidence === true ||
+      requestedContextProfile === 'evidence'
+    );
+    const allowedPrimaryProfiles = new Set(['status_header', 'editor']);
+    const contextProfile = allowedPrimaryProfiles.has(requestedContextProfile) ? requestedContextProfile : 'editor';
     st.__bulk_process_row_context_hydration_identity = cacheKey;
     const loadedPromise = loadRowContext(nextRow, {
       profile: contextProfile,
-      includeEvidence,
+      includeEvidence: false,
       force: forceRefresh,
       requestToken,
       modalOpenToken: modalOpenTokenAtStart,
@@ -157755,19 +163627,43 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       return false;
     }
     if (loaded?.failed === true || isRowContextPayloadDegraded(loaded?.payload)) {
-      restorePreviousHydratedState();
-      st.error_text = trimStr(loaded?.payload?.message || loaded?.payload?.error || 'Failed to load the selected Bulk Process row.');
-      await rerenderWorkbench('row-change-degraded-context', true);
+      st.active_context = {
+        ...(loaded?.payload && typeof loaded.payload === 'object' ? deep(loaded.payload) : {}),
+        ok: false,
+        context_degraded: true,
+        soft_failure: true,
+        row: deep(st.active_row || nextRow),
+        data_row: deep(st.active_row || nextRow),
+        details: deep(st.active_details || {}),
+        is_hydrated: false,
+        hydration_required: true
+      };
+      st.__active_context_is_minimal = true;
+      st.__active_context_pending = false;
+      st.error_text = trimStr(loaded?.payload?.message || loaded?.payload?.error || 'The selected Bulk Process row is open, but its detail context could not be refreshed yet.');
+      await rerenderWorkbench('row-change-degraded-context-preserved-selection', true);
       GE();
-      return false;
+      return true;
     }
     const finalContext = buildContextPayload({ rowObj: nextRow, contextPayload: loaded.payload });
     if (!finalContext || finalContext.failed === true || isRowContextPayloadDegraded(finalContext.payload)) {
-      restorePreviousHydratedState();
-      st.error_text = trimStr(finalContext?.message || 'Failed to load the selected Bulk Process row.');
-      await rerenderWorkbench('row-change-degraded-context', true);
+      st.active_context = {
+        ...(finalContext?.payload && typeof finalContext.payload === 'object' ? deep(finalContext.payload) : {}),
+        ok: false,
+        context_degraded: true,
+        soft_failure: true,
+        row: deep(st.active_row || nextRow),
+        data_row: deep(st.active_row || nextRow),
+        details: deep(st.active_details || {}),
+        is_hydrated: false,
+        hydration_required: true
+      };
+      st.__active_context_is_minimal = true;
+      st.__active_context_pending = false;
+      st.error_text = trimStr(finalContext?.message || 'The selected Bulk Process row is open, but its detail context could not be refreshed yet.');
+      await rerenderWorkbench('row-change-degraded-final-context-preserved-selection', true);
       GE();
-      return false;
+      return true;
     }
     st.__suppress_dirty_marking = true;
     st.active_row = deep(finalContext.row || nextRow);
@@ -157790,11 +163686,16 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     st.__active_context_is_minimal = false;
     st.__suppress_dirty_marking = false;
 
-    if (includeEvidence || Array.isArray(finalContext.details?.evidence)) {
+    if (
+      evidenceRefreshRequested ||
+      finalContext.payload?.evidence_loaded === true ||
+      trimStr(finalContext.payload?.context_profile || finalContext.payload?.profile || '').toLowerCase() === 'evidence' ||
+      (Array.isArray(finalContext.details?.evidence) && finalContext.details.evidence.length > 0)
+    ) {
       await applyEvidencePaneFromContext({
         forceQueueRefresh: false,
-        prepareQueue: includeEvidence,
-        hydrateEvidence: includeEvidence,
+        prepareQueue: evidenceRefreshRequested,
+        hydrateEvidence: evidenceRefreshRequested,
         requestToken,
         modalOpenToken: modalOpenTokenAtStart,
         expectedRowKey: cacheKey,
@@ -157826,16 +163727,26 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   } catch (err) {
     st.__suppress_dirty_marking = false;
     if (isAuthFailureError(err)) markRowChangeAuthFailure(err);
-    try {
-      if (typeof restorePreviousHydratedState === 'function') restorePreviousHydratedState();
-    } catch {}
     st.__bulk_process_row_change_in_progress = false;
-    st.error_text = String(err?.message || err || 'Failed to load the selected Bulk Process row.');
+    st.active_context = {
+      ...(st.active_context && typeof st.active_context === 'object' ? deep(st.active_context) : {}),
+      ok: false,
+      context_degraded: true,
+      soft_failure: true,
+      degraded_reason: isAuthFailureError(err) ? 'AUTH_FAILED' : 'ROW_CHANGE_CONTEXT_ERROR',
+      row: deep(st.active_row || {}),
+      data_row: deep(st.active_row || {}),
+      details: deep(st.active_details || {}),
+      is_hydrated: false,
+      hydration_required: true
+    };
+    st.__active_context_is_minimal = true;
+    st.error_text = String(err?.message || err || 'The selected Bulk Process row is open, but its detail context could not be refreshed yet.');
     if (isModalOwnerCurrent(getModalOpenToken(), trimStr(st.active_row_key || ''))) {
-      await rerenderWorkbench('row-change-error', true);
+      await rerenderWorkbench('row-change-error-preserved-selection', true);
     }
     GE();
-    return false;
+    return true;
   } finally {
     if (st.__bulk_process_active_row_change_request && st.__bulk_process_active_row_change_request.id === activeRowChangeRequestToken?.id) {
       st.__bulk_process_active_row_change_request = null;
@@ -157843,8 +163754,6 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     st.__bulk_process_row_change_in_progress = false;
   }
 }
-
-
 
 
 function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, options = {}) {
@@ -244913,7 +250822,6 @@ function renderTimesheetEvidenceTab(ctx) {
   `;
 }
 
-
 async function openTimesheetEvidenceUploadDialog(file) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE][UPLOAD_DIALOG]');
   GC('openTimesheetEvidenceUploadDialog');
@@ -245263,39 +251171,279 @@ async function openTimesheetEvidenceUploadDialog(file) {
     if (canonical && !getUploadKindBlockReason(canonical)) return canonical;
     return canonicalKinds.find((kind) => !getUploadKindBlockReason(kind)) || '';
   };
-  const refreshBulkAuthoriseEvidenceAfterUploadDialog = async (resolvedTimesheetId = '') => {
+  const refreshBulkAuthoriseEvidenceAfterUploadDialog = async (resolvedTimesheetId = '', uploadResult = null) => {
     if (!isBulkAuthoriseTimesheetsUpload || !bulkAuthoriseState || typeof refreshBulkAuthoriseActiveContext !== 'function') return false;
     const activeRow = (bulkAuthoriseState.active_row && typeof bulkAuthoriseState.active_row === 'object') ? bulkAuthoriseState.active_row : null;
-    const rowSignature = String(
-      bulkAuthoriseState.__bulk_authorise_active_row_signature ||
+    const backendRowSignature = String(
+      bulkAuthoriseState.__bulk_authorise_active_backend_row_signature ||
+      activeRow?.backend_row_signature ||
+      activeRow?.row_backend_signature ||
+      activeRow?.row_signature ||
+      ''
+    ).trim();
+    const renderSignature = String(
+      bulkAuthoriseState.__bulk_authorise_active_render_signature ||
       (activeRow && typeof buildBulkAuthoriseRowSignature === 'function' ? buildBulkAuthoriseRowSignature(activeRow, bulkAuthoriseState) : '') ||
       ''
     ).trim();
+    const rowSignature = renderSignature || backendRowSignature;
     const recordIdentity = String(
       bulkAuthoriseState.__bulkAuthoriseRecordIdentity ||
       (typeof getBulkAuthoriseRecordIdentityFromState === 'function' ? getBulkAuthoriseRecordIdentityFromState(bulkAuthoriseState) : '') ||
       ''
     ).trim();
-    await refreshBulkAuthoriseActiveContext(bulkAuthoriseState, {
-      row: activeRow,
-      rowSignature,
-      recordIdentity,
-      base_only: false,
-      include_evidence: true,
-      include_compare: false,
-      include_import_source_rows: false,
-      bypassCache: true,
-      invalidateCache: true,
-      rerender: false
-    });
+    const pane = (bulkAuthoriseState.evidence_pane_state && typeof bulkAuthoriseState.evidence_pane_state === 'object')
+      ? bulkAuthoriseState.evidence_pane_state
+      : (bulkAuthoriseState.evidence_pane_state = {});
+    const deepLocal = (value) => {
+      try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+    };
+    const trimLocal = (value) => String(value == null ? '' : value).trim();
+    const previewSnapshot = {
+      active_tab: pane.active_tab,
+      active_queue_id: pane.active_queue_id,
+      active_queue_item: pane.active_queue_item && typeof pane.active_queue_item === 'object' ? deepLocal(pane.active_queue_item) : pane.active_queue_item,
+      active_attached_id: pane.active_attached_id,
+      active_attached_item: pane.active_attached_item && typeof pane.active_attached_item === 'object' ? deepLocal(pane.active_attached_item) : pane.active_attached_item,
+      __preview_target_key: pane.__preview_target_key,
+      __preview_signed_url: pane.__preview_signed_url,
+      __preview_load_requested_target_key: pane.__preview_load_requested_target_key,
+      __preview_attached_request_key: pane.__preview_attached_request_key,
+      __active_attached_preview_target: pane.__active_attached_preview_target
+    };
+    const restorePreviewSnapshot = () => {
+      pane.active_tab = previewSnapshot.active_tab || pane.active_tab;
+      pane.active_queue_id = previewSnapshot.active_queue_id || pane.active_queue_id || null;
+      pane.active_queue_item = previewSnapshot.active_queue_item && typeof previewSnapshot.active_queue_item === 'object' ? deepLocal(previewSnapshot.active_queue_item) : (previewSnapshot.active_queue_item || pane.active_queue_item || null);
+      pane.active_attached_id = previewSnapshot.active_attached_id || pane.active_attached_id || null;
+      pane.active_attached_item = previewSnapshot.active_attached_item && typeof previewSnapshot.active_attached_item === 'object' ? deepLocal(previewSnapshot.active_attached_item) : (previewSnapshot.active_attached_item || pane.active_attached_item || null);
+      pane.__preview_target_key = previewSnapshot.__preview_target_key || '';
+      pane.__preview_signed_url = previewSnapshot.__preview_signed_url || '';
+      pane.__preview_load_requested_target_key = previewSnapshot.__preview_load_requested_target_key || '';
+      pane.__preview_attached_request_key = previewSnapshot.__preview_attached_request_key || '';
+      pane.__active_attached_preview_target = previewSnapshot.__active_attached_preview_target || '';
+    };
+    const markEvidenceDegraded = (reason) => {
+      const reasonText = trimLocal(reason || 'evidence-upload-refresh-degraded') || 'evidence-upload-refresh-degraded';
+      pane.__evidence_degraded = true;
+      pane.__attached_degraded = true;
+      pane.__evidence_refresh_failed = true;
+      pane.__evidence_degraded_reason = reasonText;
+      bulkAuthoriseState.__bulk_authorise_evidence_degraded = true;
+      bulkAuthoriseState.__bulk_authorise_evidence_degraded_reason = reasonText;
+      for (const target of [bulkAuthoriseState.active_context, bulkAuthoriseState.active_ctx, bulkAuthoriseState.active_details].filter((item) => item && typeof item === 'object')) {
+        target.evidence_loaded = target.evidence_loaded === true;
+        target.evidence_authoritative = target.evidence_authoritative === true;
+        target.evidence_refresh_failed = true;
+        target.context_degraded = true;
+        target.degraded_context = true;
+        target.degraded_reason = reasonText;
+      }
+    };
+    const clearEvidenceDegraded = () => {
+      pane.__evidence_degraded = false;
+      pane.__attached_degraded = false;
+      pane.__evidence_refresh_failed = false;
+      pane.__evidence_degraded_reason = '';
+      bulkAuthoriseState.__bulk_authorise_evidence_degraded = false;
+      bulkAuthoriseState.__bulk_authorise_evidence_degraded_reason = '';
+    };
+    const clearPendingAttached = () => {
+      pane.__preview_pending_attached = false;
+      pane.__preview_pending_attached_identity = '';
+      pane.pendingAttached = false;
+      pane.__pending_attached = false;
+      pane.__pendingAttached = false;
+      pane.pendingAttachedIdentity = '';
+      pane.__pending_attached_identity = '';
+      pane.pendingAttachedRequestKey = '';
+      pane.__pending_attached_request_key = '';
+      bulkAuthoriseState.pendingAttached = false;
+      bulkAuthoriseState.__pending_attached = false;
+      bulkAuthoriseState.__bulk_authorise_pending_attached = false;
+      bulkAuthoriseState.pendingAttachedIdentity = '';
+      bulkAuthoriseState.__pending_attached_identity = '';
+    };
+    const normaliseAttachedRows = (sources = []) => {
+      const out = [];
+      const seen = new Set();
+      const add = (item) => {
+        if (!item || typeof item !== 'object') return;
+        const storageKey = trimLocal(item.storage_key || item.r2_key || item.download_storage_key || item.file_key || '').replace(/^\/+/, '');
+        const evidenceId = trimLocal(item.evidence_id || item.id || '');
+        if (!evidenceId && !storageKey) return;
+        if (item.queue_id && !evidenceId) return;
+        const dedupeKey = evidenceId ? `id:${evidenceId}` : `key:${storageKey}`;
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+        out.push({
+          ...deepLocal(item),
+          id: item.id || item.evidence_id || evidenceId || null,
+          evidence_id: item.evidence_id || item.id || evidenceId || null,
+          storage_key: storageKey || null,
+          r2_key: trimLocal(item.r2_key || item.storage_key || storageKey || '') || null,
+          display_name: trimLocal(item.display_name || item.filename || item.original_filename || '') || 'Evidence',
+          filename: trimLocal(item.filename || item.display_name || item.original_filename || '') || 'Evidence',
+          kind: trimLocal(item.kind || item.evidence_kind || item.evidenceKind || '').toUpperCase() || 'OTHER',
+          source_label: trimLocal(item.source_label || '') || 'Attached',
+          source_badge: trimLocal(item.source_badge || '') || 'Attached'
+        });
+      };
+      for (const source of sources) {
+        if (!Array.isArray(source)) continue;
+        for (const item of source) add(item);
+      }
+      return out;
+    };
+    const isDegradedResult = (result) => !!(
+      result === false ||
+      (result && typeof result === 'object' && (
+        result.ok === false ||
+        result.soft_failure === true ||
+        result.context_degraded === true ||
+        result.__bulk_authorise_context_degraded === true ||
+        result.evidence_refresh_failed === true
+      ))
+    );
+
+    let refreshResult = null;
+    try {
+      refreshResult = await refreshBulkAuthoriseActiveContext(bulkAuthoriseState, {
+        row: activeRow,
+        rowSignature,
+        backendRowSignature,
+        renderSignature,
+        recordIdentity,
+        rowChangeSeq: Number(bulkAuthoriseState.__bulk_authorise_row_change_seq || 0) || 0,
+        base_only: false,
+        profile: 'evidence',
+        context_profile: 'evidence',
+        include_evidence: true,
+        includeEvidence: true,
+        include_compare: false,
+        includeCompare: false,
+        include_import_source_rows: false,
+        includeImportSourceRows: false,
+        bypassCache: true,
+        invalidateCache: true,
+        rerender: false,
+        source: 'evidence_upload_dialog'
+      });
+    } catch (err) {
+      restorePreviewSnapshot();
+      markEvidenceDegraded(err?.message || err || 'evidence-upload-refresh-failed');
+      if (typeof installBulkProcessModalCtxPatch === 'function') {
+        try { installBulkProcessModalCtxPatch(bulkAuthoriseState); } catch {}
+      }
+      if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
+        await rerenderBulkAuthoriseWorkbench(bulkAuthoriseState, '[TS][BULK-AUTH][EVIDENCE-UPLOAD][DEGRADED]');
+      }
+      return true;
+    }
+    if (isDegradedResult(refreshResult)) {
+      restorePreviewSnapshot();
+      markEvidenceDegraded(refreshResult?.degraded_reason || refreshResult?.error || 'evidence-upload-refresh-degraded');
+      if (typeof installBulkProcessModalCtxPatch === 'function') {
+        try { installBulkProcessModalCtxPatch(bulkAuthoriseState); } catch {}
+      }
+      if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
+        await rerenderBulkAuthoriseWorkbench(bulkAuthoriseState, '[TS][BULK-AUTH][EVIDENCE-UPLOAD][DEGRADED]');
+      }
+      return true;
+    }
+    clearEvidenceDegraded();
     if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
       try { reconcileBulkProcessEvidenceStateAfterContextRefresh(bulkAuthoriseState); } catch {}
     }
-    if (bulkAuthoriseState.evidence_pane_state && typeof bulkAuthoriseState.evidence_pane_state === 'object') {
-      bulkAuthoriseState.evidence_pane_state.active_tab = 'attached';
-      bulkAuthoriseState.evidence_pane_state.__attached_manual_override = true;
-      bulkAuthoriseState.evidence_pane_state.__queue_manual_override = false;
-      bulkAuthoriseState.evidence_pane_state.__queue_manual_override_identity = '';
+    const activePane = (bulkAuthoriseState.evidence_pane_state && typeof bulkAuthoriseState.evidence_pane_state === 'object')
+      ? bulkAuthoriseState.evidence_pane_state
+      : pane;
+    const attachedRows = normaliseAttachedRows([
+      activePane.attached_rows,
+      activePane.attached_all_rows,
+      bulkAuthoriseState.active_ctx?.state?.evidence,
+      bulkAuthoriseState.active_ctx?.evidence,
+      bulkAuthoriseState.active_context?.evidence,
+      bulkAuthoriseState.active_context?.details?.evidence,
+      bulkAuthoriseState.active_details?.evidence,
+      window.modalCtx?.timesheetState?.evidence
+    ]);
+    if (attachedRows.length) {
+      const resolvedId = trimLocal(resolvedTimesheetId || '');
+      const uploadHint = (uploadResult && typeof uploadResult === 'object') ? uploadResult : {};
+      const uploadedEvidenceId = trimLocal(
+        uploadHint.evidence_id ||
+        uploadHint.id ||
+        uploadHint.evidence?.evidence_id ||
+        uploadHint.evidence?.id ||
+        uploadHint.row?.evidence_id ||
+        uploadHint.row?.id ||
+        uploadHint.data_row?.evidence_id ||
+        uploadHint.data_row?.id ||
+        uploadHint.stage?.evidence_id ||
+        uploadHint.stage?.id ||
+        ''
+      );
+      const uploadedStorageKey = trimLocal(
+        uploadHint.storage_key ||
+        uploadHint.r2_key ||
+        uploadHint.file_key ||
+        uploadHint.evidence?.storage_key ||
+        uploadHint.evidence?.r2_key ||
+        uploadHint.row?.storage_key ||
+        uploadHint.row?.r2_key ||
+        uploadHint.data_row?.storage_key ||
+        uploadHint.data_row?.r2_key ||
+        uploadHint.stage?.storage_key ||
+        uploadHint.stage?.r2_key ||
+        ''
+      ).replace(/^\/+/, '');
+      const uploadName = trimLocal(file?.name || uploadHint.display_name || uploadHint.filename || uploadHint.original_filename || '').toLowerCase();
+      const selectedRow = attachedRows.find((item) => {
+        const evidenceId = trimLocal(item?.evidence_id || item?.id || '');
+        const storageKey = trimLocal(item?.storage_key || item?.r2_key || item?.download_storage_key || item?.file_key || '').replace(/^\/+/, '');
+        return !!(
+          (uploadedEvidenceId && evidenceId && uploadedEvidenceId === evidenceId) ||
+          (uploadedStorageKey && storageKey && uploadedStorageKey === storageKey)
+        );
+      }) ||
+        attachedRows.find((item) => resolvedId && trimLocal(item.timesheet_id || item.current_timesheet_id || '') === resolvedId && trimLocal(item.filename || item.display_name || '').toLowerCase() === uploadName) ||
+        attachedRows.find((item) => uploadName && trimLocal(item.filename || item.display_name || '').toLowerCase() === uploadName) ||
+        attachedRows.find((item) => trimLocal(item.kind || '').toUpperCase() === 'TIMESHEET') ||
+        attachedRows[0];
+      const selectedId = trimLocal(selectedRow?.evidence_id || selectedRow?.id || '');
+      const selectedStorageKey = trimLocal(selectedRow?.storage_key || selectedRow?.r2_key || selectedRow?.download_storage_key || selectedRow?.file_key || '').replace(/^\/+/, '');
+      activePane.attached_rows = attachedRows.map((item) => ({ ...deepLocal(item) }));
+      activePane.attached_all_rows = attachedRows.map((item) => ({ ...deepLocal(item) }));
+      activePane.active_tab = 'attached';
+      activePane.__attached_manual_override = true;
+      activePane.__queue_manual_override = false;
+      activePane.__queue_manual_override_identity = '';
+      activePane.__queue_manual_override_scope = '';
+      activePane.active_attached_item = selectedRow ? { ...deepLocal(selectedRow) } : null;
+      activePane.active_attached_id = selectedId || null;
+      activePane.__evidence_loaded = true;
+      activePane.__attached_loaded = true;
+      clearPendingAttached();
+      if (selectedId && selectedStorageKey) {
+        const nextPreviewKey = `attached|${selectedId}|${selectedStorageKey}`;
+        const currentTarget = trimLocal(activePane.__preview_target_key || activePane.__preview_load_requested_target_key || '');
+        if (currentTarget !== nextPreviewKey) {
+          activePane.__preview_target_key = '';
+          activePane.__preview_signed_url = '';
+        }
+        activePane.__preview_load_requested_target_key = nextPreviewKey;
+        activePane.__preview_attached_request_key = nextPreviewKey;
+        activePane.__active_attached_preview_target = nextPreviewKey;
+      }
+      window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+      window.modalCtx.timesheetState = (window.modalCtx.timesheetState && typeof window.modalCtx.timesheetState === 'object') ? window.modalCtx.timesheetState : {};
+      window.modalCtx.timesheetState.evidence = attachedRows.map((item) => ({ ...deepLocal(item) }));
+    } else if (activePane && typeof activePane === 'object') {
+      activePane.active_tab = 'attached';
+      activePane.__attached_manual_override = true;
+      activePane.__queue_manual_override = false;
+      activePane.__queue_manual_override_identity = '';
     }
     if (typeof installBulkProcessModalCtxPatch === 'function') {
       try { installBulkProcessModalCtxPatch(bulkAuthoriseState); } catch {}
@@ -245511,9 +251659,9 @@ async function openTimesheetEvidenceUploadDialog(file) {
           throw new Error('Contract week context missing; cannot stage evidence.');
         }
 
-        await uploadFileToQueueAndStage(String(weekIdNow), file, kind);
+        const stageUploadResult = await uploadFileToQueueAndStage(String(weekIdNow), file, kind);
 
-        const handledBulkAuthorisePlannedRefresh = await refreshBulkAuthoriseEvidenceAfterUploadDialog('');
+        const handledBulkAuthorisePlannedRefresh = await refreshBulkAuthoriseEvidenceAfterUploadDialog('', stageUploadResult);
         if (handledBulkAuthorisePlannedRefresh) {
           if (window.__toast) window.__toast('Evidence staged');
           cleanup();
@@ -245585,7 +251733,7 @@ async function openTimesheetEvidenceUploadDialog(file) {
         }
       } catch {}
 
-      const handledBulkAuthoriseRefresh = await refreshBulkAuthoriseEvidenceAfterUploadDialog(resolvedId);
+      const handledBulkAuthoriseRefresh = await refreshBulkAuthoriseEvidenceAfterUploadDialog(resolvedId, up);
       if (handledBulkAuthoriseRefresh) {
         if (window.__toast) window.__toast('Evidence uploaded');
         cleanup();
@@ -245680,6 +251828,8 @@ async function openTimesheetEvidenceUploadDialog(file) {
 
   GE();
 }
+
+
 
 
 async function openTimesheetEvidenceReplaceDialog(file) {
