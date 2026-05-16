@@ -135923,9 +135923,14 @@ function bindBulkProcessPreviewPane(state) {
           __queue_loading: false,
           __queue_last_error: '',
           __preview_signed_url_cache: {},
+          __preview_signed_url_meta_by_cache_key: {},
+          __preview_failed_signed_url_by_target: {},
+          __preview_image_retry_by_target: {},
           __preview_presign_inflight: {},
           __preview_target_key: '',
           __preview_signed_url: '',
+          __preview_signed_url_stored_at_ms: 0,
+          __preview_signed_url_expires_at_ms: 0,
           __preview_load_requested_target_key: '',
           __preview_identity: ''
         };
@@ -136137,6 +136142,11 @@ function bindBulkProcessPreviewPane(state) {
 
   pane.__preview_presign_inflight = (pane.__preview_presign_inflight && typeof pane.__preview_presign_inflight === 'object') ? pane.__preview_presign_inflight : {};
   pane.__preview_signed_url_cache = (pane.__preview_signed_url_cache && typeof pane.__preview_signed_url_cache === 'object') ? pane.__preview_signed_url_cache : {};
+  pane.__preview_signed_url_meta_by_cache_key = (pane.__preview_signed_url_meta_by_cache_key && typeof pane.__preview_signed_url_meta_by_cache_key === 'object') ? pane.__preview_signed_url_meta_by_cache_key : {};
+  pane.__preview_failed_signed_url_by_target = (pane.__preview_failed_signed_url_by_target && typeof pane.__preview_failed_signed_url_by_target === 'object') ? pane.__preview_failed_signed_url_by_target : {};
+  pane.__preview_image_retry_by_target = (pane.__preview_image_retry_by_target && typeof pane.__preview_image_retry_by_target === 'object') ? pane.__preview_image_retry_by_target : {};
+  pane.__preview_signed_url_stored_at_ms = Number(pane.__preview_signed_url_stored_at_ms || 0) || 0;
+  pane.__preview_signed_url_expires_at_ms = Number(pane.__preview_signed_url_expires_at_ms || 0) || 0;
   pane.__preview_load_requested_target_key = trimStr(pane.__preview_load_requested_target_key || '');
   pane.__preview_identity = trimStr(pane.__preview_identity || '');
   pane.__queue_scope = getPreviewQueueScope();
@@ -136405,11 +136415,29 @@ function bindBulkProcessPreviewPane(state) {
       if (liveOwnerIdentity && liveOwnerIdentity !== trimStr(bulkAuthoriseOwnerIdentity || '')) return false;
       return Number(pane.__preview_bind_seq || 0) === bindSeq && String(pane.__preview_bind_identity || '') === String(bindIdentity || '');
     }
-    return (
+    const bindStillMatches = !!(
       Number(pane.__preview_bind_seq || 0) === bindSeq &&
-      String(pane.__preview_bind_identity || '') === String(bindIdentity || '') &&
-      String(getActiveIdentity() || '') === String(bindIdentity || '')
+      String(pane.__preview_bind_identity || '') === String(bindIdentity || '')
     );
+    if (!bindStillMatches) return false;
+    if (String(getActiveIdentity() || '') === String(bindIdentity || '')) return true;
+
+    const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (getPreviewOwnerKind() === 'bulk_process' && activeTab === 'queue') {
+      const liveSelection = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+      const liveTarget = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+      const liveRequested = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+      const liveItem = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+      const liveFileKey = resolvePreviewFileCacheKey(liveItem, liveSelection);
+      return !!(
+        liveItem &&
+        liveFileKey &&
+        isValidPreviewSelectionKey(liveSelection) &&
+        (!liveTarget || liveTarget === liveSelection) &&
+        (!liveRequested || liveRequested === liveSelection)
+      );
+    }
+    return false;
   };
 
 
@@ -136528,10 +136556,26 @@ function bindBulkProcessPreviewPane(state) {
     if (!snap) return false;
     const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
     if (!liveRoot || !root.isConnected || liveRoot !== root) return false;
+
+    const liveSelectionKeyForSnapshot = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+    const snapSelectionKey = normalisePreviewSelectionKey(snap.selectionKey || '');
+    const snapActiveTab = trimStr(snap.activeTab || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const liveActiveTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const livePreviewItemForSnapshot = resolveActiveBulkProcessPreviewItem();
+    const liveFileKeyForSnapshot = resolvePreviewFileCacheKey(livePreviewItemForSnapshot, liveSelectionKeyForSnapshot);
+    const snapFileKey = trimStr(snap.fileKey || '').replace(/^\/+/, '');
+    const isBulkProcessGlobalQueueCommit = !!(
+      trimStr(snap.ownerKind || '') === 'bulk_process' &&
+      snapActiveTab === 'queue' &&
+      liveActiveTab === 'queue' &&
+      isValidPreviewSelectionKey(snapSelectionKey) &&
+      liveSelectionKeyForSnapshot === snapSelectionKey &&
+      (!snapFileKey || liveFileKeyForSnapshot === snapFileKey)
+    );
+
     const bindSeqMatches = Number(pane.__preview_bind_seq || 0) === Number(snap.bindSeq || bindSeq);
     const allowSupersededBindForSameSelection = opts.allowSupersededBindForSameSelection === true || opts.allow_same_owner_row_selection === true || opts.allowSameOwnerRowSelection === true;
     if (!bindSeqMatches && !allowSupersededBindForSameSelection) {
-      const liveSameSelectionKey = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
       const sameOwnerRowSelection = !!(
         trimStr(snap.ownerKind || '') === trimStr(getPreviewOwnerKind() || '') &&
         (!snap.ownerToken || !getPreviewOwnerToken() || trimStr(snap.ownerToken || '') === trimStr(getPreviewOwnerToken() || '')) &&
@@ -136539,10 +136583,16 @@ function bindBulkProcessPreviewPane(state) {
         (!snap.activeIdentity || !getActiveIdentity() || trimStr(snap.activeIdentity || '') === trimStr(getActiveIdentity() || '')) &&
         (!snap.rowKey || !getPreviewActiveRowKey() || trimStr(snap.rowKey || '') === trimStr(getPreviewActiveRowKey() || '')) &&
         Number(snap.rowChangeSeq || 0) === Number(getPreviewRowChangeSeq() || 0) &&
-        (!snap.selectionKey || liveSameSelectionKey === normalisePreviewSelectionKey(snap.selectionKey || '')) &&
-        (!snap.fileKey || resolvePreviewFileCacheKey(resolveActiveBulkProcessPreviewItem(), liveSameSelectionKey) === trimStr(snap.fileKey || ''))
+        (!snapSelectionKey || liveSelectionKeyForSnapshot === snapSelectionKey) &&
+        (!snapFileKey || liveFileKeyForSnapshot === snapFileKey)
       );
-      if (!sameOwnerRowSelection) return false;
+      const sameOwnerGlobalQueueSelection = !!(
+        isBulkProcessGlobalQueueCommit &&
+        trimStr(snap.ownerKind || '') === trimStr(getPreviewOwnerKind() || '') &&
+        (!snap.ownerToken || !getPreviewOwnerToken() || trimStr(snap.ownerToken || '') === trimStr(getPreviewOwnerToken() || '')) &&
+        (!snap.ownerIdentity || !getPreviewOwnerIdentity() || trimStr(snap.ownerIdentity || '') === trimStr(getPreviewOwnerIdentity() || ''))
+      );
+      if (!sameOwnerRowSelection && !sameOwnerGlobalQueueSelection) return false;
     }
     if (snap.stateRef && snap.stateRef !== st) return false;
     const liveKind = getCurrentPreviewModalKind();
@@ -136561,32 +136611,217 @@ function bindBulkProcessPreviewPane(state) {
     if (snap.ownerToken && liveToken && trimStr(snap.ownerToken) !== trimStr(liveToken)) return false;
     const liveOwnerIdentity = getPreviewOwnerIdentity();
     if (snap.ownerIdentity && liveOwnerIdentity && trimStr(snap.ownerIdentity) !== trimStr(liveOwnerIdentity)) return false;
-    const liveIdentity = getActiveIdentity();
-    if (snap.activeIdentity && liveIdentity && trimStr(snap.activeIdentity) !== trimStr(liveIdentity)) return false;
-    const liveRowKey = getPreviewActiveRowKey();
-    if (snap.rowKey && liveRowKey && trimStr(snap.rowKey) !== trimStr(liveRowKey)) return false;
-    if (snap.rowChangeSeq !== getPreviewRowChangeSeq()) return false;
+
+    if (!isBulkProcessGlobalQueueCommit) {
+      const liveIdentity = getActiveIdentity();
+      if (snap.activeIdentity && liveIdentity && trimStr(snap.activeIdentity) !== trimStr(liveIdentity)) return false;
+      const liveRowKey = getPreviewActiveRowKey();
+      if (snap.rowKey && liveRowKey && trimStr(snap.rowKey) !== trimStr(liveRowKey)) return false;
+      if (snap.rowChangeSeq !== getPreviewRowChangeSeq()) return false;
+    }
+
     if (opts.requireTabUnchanged === true) {
-      const liveTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
-      if (snap.activeTab && liveTab !== snap.activeTab) return false;
+      if (snap.activeTab && liveActiveTab !== snapActiveTab) return false;
     }
     if (opts.requireSelectionUnchanged === true) {
-      const liveSelection = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
-      if (isValidPreviewSelectionKey(snap.selectionKey) && liveSelection !== snap.selectionKey) return false;
+      if (isValidPreviewSelectionKey(snapSelectionKey) && liveSelectionKeyForSnapshot !== snapSelectionKey) return false;
     }
     if (opts.requireFileKeyUnchanged === true) {
-      const liveState = getPreviewState();
-      const liveParts = getPreviewIdentityParts(liveState);
-      if (snap.fileKey && liveParts.previewFileCacheKey !== snap.fileKey) return false;
+      if (snapFileKey && liveFileKeyForSnapshot !== snapFileKey) return false;
     }
     return true;
+  };
+
+  const isBulkProcessQueuePreviewSnapshot = (snapshotInput = null) => {
+    const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : null;
+    if (!snap) return false;
+    const activeTab = trimStr(snap.activeTab || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const selectionKey = normalisePreviewSelectionKey(snap.selectionKey || '');
+    return !!(
+      trimStr(snap.ownerKind || '') === 'bulk_process' &&
+      (activeTab === 'queue' || selectionKey.startsWith('queue|'))
+    );
   };
 
   const getPreviewOwnerCacheKey = (fileKeyInput = '', snapshotInput = null) => {
     const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
     if (!fileKey) return '';
     const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : capturePreviewCommitSnapshot(null, { reason: 'cache-key' });
-    return [snap.ownerKind || 'preview', snap.ownerIdentity || snap.ownerToken || 'owner', snap.rowKey || snap.activeIdentity || 'row', fileKey].map((part) => trimStr(part || '').replace(/\|/g, '%7C')).join('|');
+    const isGlobalQueue = isBulkProcessQueuePreviewSnapshot(snap);
+    const selectionPart = isGlobalQueue
+      ? (normalisePreviewSelectionKey(snap.selectionKey || '') || fileKey)
+      : (snap.rowKey || snap.activeIdentity || 'row');
+    return [snap.ownerKind || 'preview', snap.ownerIdentity || snap.ownerToken || 'owner', isGlobalQueue ? `global-queue:${selectionPart}` : selectionPart, fileKey]
+      .map((part) => trimStr(part || '').replace(/\|/g, '%7C'))
+      .join('|');
+  };
+
+  const PREVIEW_SIGNED_URL_EXPIRY_GRACE_MS = 30000;
+  const PREVIEW_SIGNED_URL_MAX_UNKNOWN_AGE_MS = 55 * 60 * 1000;
+
+  const parseBulkProcessAmzDateMs = (valueInput = '') => {
+    const value = trimStr(valueInput || '');
+    const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/i.exec(value);
+    if (!m) return 0;
+    const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+    return Number.isFinite(ms) ? ms : 0;
+  };
+
+  const resolveSignedUrlExplicitExpiryMs = (signedUrlInput = '') => {
+    const signedUrl = trimStr(signedUrlInput || '');
+    if (!signedUrl) return 0;
+    try {
+      const urlObj = new URL(signedUrl, window.location?.origin || 'http://localhost');
+      const params = urlObj.searchParams;
+      const amzDate = params.get('X-Amz-Date') || params.get('x-amz-date') || '';
+      const amzExpires = Number(params.get('X-Amz-Expires') || params.get('x-amz-expires') || 0) || 0;
+      const amzDateMs = parseBulkProcessAmzDateMs(amzDate);
+      if (amzDateMs && amzExpires > 0) return amzDateMs + (amzExpires * 1000);
+
+      const expValues = [
+        params.get('exp'),
+        params.get('expires'),
+        params.get('Expires'),
+        params.get('expires_at'),
+        params.get('expiry'),
+        params.get('e')
+      ];
+      for (const raw of expValues) {
+        const num = Number(raw || 0) || 0;
+        if (!num) continue;
+        if (num > 100000000000) return num;
+        if (num > 1000000000) return num * 1000;
+      }
+    } catch {}
+    return 0;
+  };
+
+  const buildSignedUrlMetaForPreview = (signedUrlInput = '', snapshotInput = null, metaOptions = {}) => {
+    const opts = (metaOptions && typeof metaOptions === 'object') ? metaOptions : {};
+    const now = Number(opts.nowMs || Date.now()) || Date.now();
+    const explicitExpiryMs = resolveSignedUrlExplicitExpiryMs(signedUrlInput);
+    return {
+      storedAtMs: now,
+      expiresAtMs: explicitExpiryMs || 0,
+      ownerKind: trimStr(snapshotInput?.ownerKind || ''),
+      ownerToken: trimStr(snapshotInput?.ownerToken || ''),
+      ownerIdentity: trimStr(snapshotInput?.ownerIdentity || ''),
+      activeIdentity: trimStr(snapshotInput?.activeIdentity || ''),
+      rowKey: trimStr(snapshotInput?.rowKey || ''),
+      rowChangeSeq: Number(snapshotInput?.rowChangeSeq || 0) || 0,
+      activeTab: trimStr(snapshotInput?.activeTab || ''),
+      selectionKey: normalisePreviewSelectionKey(snapshotInput?.selectionKey || ''),
+      fileKey: trimStr(snapshotInput?.fileKey || '').replace(/^\/+/, ''),
+      explicitExpiry: !!explicitExpiryMs
+    };
+  };
+
+  const isSignedUrlExpiredForPreview = (signedUrlInput = '', metaInput = null) => {
+    const signedUrl = trimStr(signedUrlInput || '');
+    if (!signedUrl) return true;
+    const meta = (metaInput && typeof metaInput === 'object') ? metaInput : null;
+    const now = Date.now();
+    const explicitExpiryMs = Number(meta?.expiresAtMs || resolveSignedUrlExplicitExpiryMs(signedUrl) || 0) || 0;
+    if (explicitExpiryMs && (now + PREVIEW_SIGNED_URL_EXPIRY_GRACE_MS) >= explicitExpiryMs) return true;
+    const storedAtMs = Number(meta?.storedAtMs || 0) || 0;
+    if (!explicitExpiryMs && storedAtMs && (now - storedAtMs) >= PREVIEW_SIGNED_URL_MAX_UNKNOWN_AGE_MS) return true;
+    return false;
+  };
+
+  const getSignedUrlMetaForPreview = (fileKeyInput = '', snapshotInput = null, signedUrlInput = '') => {
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    const signedUrl = trimStr(signedUrlInput || '');
+    const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : null;
+    const ownerCacheKey = fileKey && snap ? getPreviewOwnerCacheKey(fileKey, snap) : '';
+    const candidates = [ownerCacheKey, fileKey].filter(Boolean);
+    for (const cacheKey of candidates) {
+      const meta = pane.__preview_signed_url_meta_by_cache_key?.[cacheKey];
+      if (!meta || typeof meta !== 'object') continue;
+      const cachedUrl = trimStr(pane.__preview_signed_url_cache?.[cacheKey] || '');
+      if (signedUrl && cachedUrl && cachedUrl !== signedUrl) continue;
+      return meta;
+    }
+    if (signedUrl && trimStr(pane.__preview_signed_url || '') === signedUrl) {
+      return {
+        storedAtMs: Number(pane.__preview_signed_url_stored_at_ms || 0) || 0,
+        expiresAtMs: Number(pane.__preview_signed_url_expires_at_ms || 0) || 0,
+        selectionKey: normalisePreviewSelectionKey(pane.__preview_target_key || ''),
+        fileKey
+      };
+    }
+    return null;
+  };
+
+  const isSignedUrlMarkedFailedForTarget = (selectionKeyInput = '', signedUrlInput = '') => {
+    const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || '');
+    const signedUrl = trimStr(signedUrlInput || '');
+    if (!selectionKey || !signedUrl) return false;
+    const failed = pane.__preview_failed_signed_url_by_target?.[selectionKey];
+    if (!failed) return false;
+    if (typeof failed === 'string') return failed === signedUrl;
+    return trimStr(failed.url || '') === signedUrl;
+  };
+
+  const isSignedUrlUsableForPreview = (signedUrlInput = '', fileKeyInput = '', selectionKeyInput = '', snapshotInput = null) => {
+    const signedUrl = trimStr(signedUrlInput || '');
+    if (!signedUrl) return false;
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || snapshotInput?.selectionKey || '');
+    if (selectionKey && isSignedUrlMarkedFailedForTarget(selectionKey, signedUrl)) return false;
+    const meta = getSignedUrlMetaForPreview(fileKey, snapshotInput, signedUrl);
+    return !isSignedUrlExpiredForPreview(signedUrl, meta);
+  };
+
+  const clearCachedSignedUrlForPreview = (fileKeyInput = '', snapshotInput = null, signedUrlInput = '') => {
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    const signedUrl = trimStr(signedUrlInput || '');
+    if (!fileKey && !signedUrl) return;
+    const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : capturePreviewCommitSnapshot(null, { reason: 'cache-clear' });
+    const cacheKeys = [fileKey, fileKey ? getPreviewOwnerCacheKey(fileKey, snap) : ''].filter(Boolean);
+    cacheKeys.forEach((cacheKey) => {
+      const cachedUrl = trimStr(pane.__preview_signed_url_cache?.[cacheKey] || '');
+      if (signedUrl && cachedUrl && cachedUrl !== signedUrl) return;
+      try { delete pane.__preview_signed_url_cache[cacheKey]; } catch {}
+      try { delete pane.__preview_signed_url_meta_by_cache_key[cacheKey]; } catch {}
+      try { delete pane.__preview_signed_url_context_by_cache_key[cacheKey]; } catch {}
+      try { delete pane.__preview_signed_url_owner_by_cache_key[cacheKey]; } catch {}
+    });
+  };
+
+  const invalidateSignedUrlForPreviewTarget = (selectionKeyInput = '', fileKeyInput = '', signedUrlInput = '', reason = 'signed-url-invalid', invalidateOptions = {}) => {
+    const opts = (invalidateOptions && typeof invalidateOptions === 'object') ? invalidateOptions : {};
+    const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || '');
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    const signedUrl = trimStr(signedUrlInput || pane.__preview_signed_url || '');
+    if (!selectionKey || isBlankPreviewSelectionKey(selectionKey)) return false;
+    const liveSelectionKey = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+    const liveTargetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+    const liveRequestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+    if (liveSelectionKey && liveSelectionKey !== selectionKey) return false;
+    if (liveTargetKey && liveTargetKey !== selectionKey) return false;
+    if (liveRequestedKey && liveRequestedKey !== selectionKey) return false;
+
+    const snapshot = opts.snapshot && typeof opts.snapshot === 'object'
+      ? opts.snapshot
+      : capturePreviewCommitSnapshot(getPreviewState(), { reason: `invalidate-${reason}` });
+    clearCachedSignedUrlForPreview(fileKey || snapshot.fileKey, snapshot, signedUrl);
+    if (signedUrl) {
+      pane.__preview_failed_signed_url_by_target[selectionKey] = {
+        url: signedUrl,
+        reason: trimStr(reason || 'signed-url-invalid'),
+        atMs: Date.now()
+      };
+    }
+    if (!signedUrl || trimStr(pane.__preview_signed_url || '') === signedUrl) {
+      pane.__preview_signed_url = '';
+      pane.__preview_signed_url_stored_at_ms = 0;
+      pane.__preview_signed_url_expires_at_ms = 0;
+    }
+    pane.__preview_target_key = selectionKey;
+    pane.__preview_load_requested_target_key = selectionKey;
+    pane.__preview_loading = true;
+    pane.__preview_error = trimStr(reason || 'signed-url-invalid');
+    return true;
   };
 
   const getCachedSignedUrlForPreview = (fileKeyInput = '', snapshotInput = null) => {
@@ -136594,11 +136829,20 @@ function bindBulkProcessPreviewPane(state) {
     if (!fileKey) return '';
     const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : null;
     const ownerCacheKey = getPreviewOwnerCacheKey(fileKey, snap);
+    const selectionKey = normalisePreviewSelectionKey(snap?.selectionKey || getCurrentPreviewSelectionKey());
     const ownerCached = ownerCacheKey ? trimStr(pane.__preview_signed_url_cache?.[ownerCacheKey] || '') : '';
-    if (ownerCached) return ownerCached;
+    if (ownerCached) {
+      if (isSignedUrlUsableForPreview(ownerCached, fileKey, selectionKey, snap)) return ownerCached;
+      clearCachedSignedUrlForPreview(fileKey, snap, ownerCached);
+      return '';
+    }
 
     const legacyCached = trimStr(pane.__preview_signed_url_cache?.[fileKey] || '');
     if (!legacyCached || !snap) return '';
+    if (!isSignedUrlUsableForPreview(legacyCached, fileKey, selectionKey, snap)) {
+      clearCachedSignedUrlForPreview(fileKey, snap, legacyCached);
+      return '';
+    }
 
     const context = (pane.__preview_signed_url_context_by_cache_key && typeof pane.__preview_signed_url_context_by_cache_key === 'object')
       ? pane.__preview_signed_url_context_by_cache_key[fileKey]
@@ -136611,13 +136855,15 @@ function bindBulkProcessPreviewPane(state) {
       return !left || !right || left === right;
     };
 
+    const isGlobalQueue = isBulkProcessQueuePreviewSnapshot(snap);
     if (!sameOrBlank(context.ownerKind, snap.ownerKind)) return '';
     if (!sameOrBlank(context.ownerToken, snap.ownerToken)) return '';
     if (!sameOrBlank(context.ownerIdentity, snap.ownerIdentity)) return '';
-    if (!sameOrBlank(context.activeIdentity, snap.activeIdentity)) return '';
-    if (!sameOrBlank(context.rowKey, snap.rowKey)) return '';
-    if (Number(context.rowChangeSeq || 0) && Number(snap.rowChangeSeq || 0) && Number(context.rowChangeSeq || 0) !== Number(snap.rowChangeSeq || 0)) return '';
+    if (!sameOrBlank(context.activeIdentity, snap.activeIdentity) && !isGlobalQueue) return '';
+    if (!sameOrBlank(context.rowKey, snap.rowKey) && !isGlobalQueue) return '';
+    if (!isGlobalQueue && Number(context.rowChangeSeq || 0) && Number(snap.rowChangeSeq || 0) && Number(context.rowChangeSeq || 0) !== Number(snap.rowChangeSeq || 0)) return '';
     if (!sameOrBlank(context.fileKey, fileKey)) return '';
+    if (isGlobalQueue && context.selectionKey && snap.selectionKey && normalisePreviewSelectionKey(context.selectionKey) !== normalisePreviewSelectionKey(snap.selectionKey)) return '';
 
     return legacyCached;
   };
@@ -136628,6 +136874,7 @@ function bindBulkProcessPreviewPane(state) {
     const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : capturePreviewCommitSnapshot(null, { reason: 'cache-store' });
     if (!fileKey || !signedUrl) return '';
     const ownerCacheKey = getPreviewOwnerCacheKey(fileKey, snap);
+    const meta = buildSignedUrlMetaForPreview(signedUrl, snap);
     const cacheContext = {
       ownerKind: trimStr(snap?.ownerKind || ''),
       ownerToken: trimStr(snap?.ownerToken || ''),
@@ -136635,15 +136882,20 @@ function bindBulkProcessPreviewPane(state) {
       activeIdentity: trimStr(snap?.activeIdentity || ''),
       rowKey: trimStr(snap?.rowKey || ''),
       rowChangeSeq: Number(snap?.rowChangeSeq || 0) || 0,
-      selectionKey: trimStr(snap?.selectionKey || ''),
-      fileKey
+      activeTab: trimStr(snap?.activeTab || ''),
+      selectionKey: normalisePreviewSelectionKey(snap?.selectionKey || ''),
+      fileKey,
+      storedAtMs: meta.storedAtMs,
+      expiresAtMs: meta.expiresAtMs
     };
     if (ownerCacheKey) {
       pane.__preview_signed_url_cache[ownerCacheKey] = signedUrl;
       pane.__preview_signed_url_context_by_cache_key[ownerCacheKey] = { ...cacheContext };
+      pane.__preview_signed_url_meta_by_cache_key[ownerCacheKey] = { ...meta, fileKey, selectionKey: cacheContext.selectionKey };
     }
     pane.__preview_signed_url_cache[fileKey] = signedUrl;
     pane.__preview_signed_url_context_by_cache_key[fileKey] = { ...cacheContext };
+    pane.__preview_signed_url_meta_by_cache_key[fileKey] = { ...meta, fileKey, selectionKey: cacheContext.selectionKey };
     if (snap?.ownerIdentity) {
       pane.__preview_signed_url_owner_by_cache_key[fileKey] = trimStr(snap.ownerIdentity || '');
       if (ownerCacheKey) pane.__preview_signed_url_owner_by_cache_key[ownerCacheKey] = trimStr(snap.ownerIdentity || '');
@@ -136725,9 +136977,13 @@ function bindBulkProcessPreviewPane(state) {
     if (!fileKey) return reject('missing-file-key');
 
     setCachedSignedUrlForPreview(fileKey, signedUrl, commitSnapshot);
+    const committedMeta = getSignedUrlMetaForPreview(fileKey, commitSnapshot, signedUrl) || buildSignedUrlMetaForPreview(signedUrl, commitSnapshot);
     pane.__preview_target_key = selectionKey;
     pane.__preview_load_requested_target_key = selectionKey;
     pane.__preview_signed_url = signedUrl;
+    pane.__preview_signed_url_stored_at_ms = Number(committedMeta?.storedAtMs || Date.now()) || Date.now();
+    pane.__preview_signed_url_expires_at_ms = Number(committedMeta?.expiresAtMs || 0) || 0;
+    try { delete pane.__preview_failed_signed_url_by_target[selectionKey]; } catch {}
     pane.__preview_last_committed_at = new Date().toISOString();
     pane.__preview_last_committed_selection_key = selectionKey;
     pane.__preview_last_committed_file_key = fileKey;
@@ -137009,6 +137265,8 @@ function bindBulkProcessPreviewPane(state) {
     if (!previewItem) return false;
     const previewSelectionKey = normalisePreviewSelectionKey(parts.previewSelectionKey || getSelectionSignature(parts.activeTab, previewItem));
     if (isBlankPreviewSelectionKey(previewSelectionKey)) return false;
+    const previewFileCacheKey = resolvePreviewFileCacheKey(previewItem, previewSelectionKey);
+    if (!previewFileCacheKey) return false;
     const sharedCommitSnapshot = capturePreviewCommitSnapshot(previewState, { reason });
     if (!isPreviewCommitSnapshotCurrent(sharedCommitSnapshot, {
       requireSelectionUnchanged: true,
@@ -137023,6 +137281,12 @@ function bindBulkProcessPreviewPane(state) {
       (!liveTargetKey && liveRequestedKey === previewSelectionKey)
     );
     if (!signedUrl || !previewSelectionKey || !targetOrRequestedMatches) return false;
+    if (!isSignedUrlUsableForPreview(signedUrl, previewFileCacheKey, previewSelectionKey, sharedCommitSnapshot)) {
+      invalidateSignedUrlForPreviewTarget(previewSelectionKey, previewFileCacheKey, signedUrl, 'signed-url-stale-live-loading-commit', {
+        snapshot: sharedCommitSnapshot
+      });
+      return false;
+    }
     if (liveRequestedKey && liveRequestedKey !== previewSelectionKey) return false;
     if (!liveTargetKey && liveRequestedKey === previewSelectionKey) pane.__preview_target_key = previewSelectionKey;
     clearBulkAuthorisePendingAttachedForPreviewCommit(previewSelectionKey);
@@ -137064,7 +137328,6 @@ function bindBulkProcessPreviewPane(state) {
       fallbackLinkExists: !!fallbackLink
     });
 
-    const previewFileCacheKey = resolvePreviewFileCacheKey(previewItem, previewSelectionKey);
     const previewType = getBulkProcessPreviewTypeParts(previewItem, previewFileCacheKey);
     const isPdf = previewType.isPdf;
     const isImage = previewType.isImage;
@@ -137286,9 +137549,30 @@ function bindBulkProcessPreviewPane(state) {
     }
     pane.__preview_target_key = '';
     pane.__preview_signed_url = '';
+    pane.__preview_signed_url_stored_at_ms = 0;
+    pane.__preview_signed_url_expires_at_ms = 0;
     if (clearOpts.clearRequested !== false) pane.__preview_load_requested_target_key = '';
-    if (clearOpts.clearCache === true && authorisedClear) pane.__preview_signed_url_cache = {};
+    if (clearOpts.clearCache === true && authorisedClear) {
+      pane.__preview_signed_url_cache = {};
+      pane.__preview_signed_url_meta_by_cache_key = {};
+      pane.__preview_failed_signed_url_by_target = {};
+      pane.__preview_image_retry_by_target = {};
+    }
     return true;
+  };
+
+  const shouldPreserveCurrentQueuePreviewForRowIdentityChange = () => {
+    const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (activeTab !== 'queue') return false;
+    const liveSelection = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+    if (!isValidPreviewSelectionKey(liveSelection)) return false;
+    const liveTarget = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+    const liveRequested = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+    if (liveTarget && liveTarget !== liveSelection) return false;
+    if (liveRequested && liveRequested !== liveSelection) return false;
+    const item = (pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    const fileKey = resolvePreviewFileCacheKey(item, liveSelection);
+    return !!(item && fileKey && liveSelection.endsWith(`|${fileKey}`));
   };
 
   const ensurePreviewIdentityState = () => {
@@ -137298,6 +137582,10 @@ function bindBulkProcessPreviewPane(state) {
       return previousIdentity;
     }
     if (previousIdentity && previousIdentity !== liveIdentity) {
+      if (shouldPreserveCurrentQueuePreviewForRowIdentityChange()) {
+        pane.__preview_identity = liveIdentity;
+        return liveIdentity;
+      }
       clearPreviewRequestState({
         clearRequested: true,
         clearCache: false,
@@ -138599,6 +138887,117 @@ function bindBulkProcessPreviewPane(state) {
     }
   };
 
+  const getImageRetryKeyForPreview = (selectionKeyInput = '', fileKeyInput = '') => {
+    const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || '');
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    return `${selectionKey}|${fileKey}`;
+  };
+
+  const bindImagePreviewLoadGuards = (img, signedUrlInput = '', previewFileCacheKeyInput = '', previewSelectionKeyInput = '', previewRenderKeyInput = '') => {
+    if (!img) return;
+    const signedUrl = trimStr(signedUrlInput || '');
+    const previewFileCacheKey = trimStr(previewFileCacheKeyInput || '').replace(/^\/+/, '');
+    const previewSelectionKey = normalisePreviewSelectionKey(previewSelectionKeyInput || '');
+    const previewRenderKey = trimStr(previewRenderKeyInput || '');
+    if (!signedUrl || !previewFileCacheKey || !previewSelectionKey) return;
+
+    img.setAttribute('data-bp-preview-signed-url', signedUrl);
+    img.setAttribute('data-bp-preview-load-guard-key', previewRenderKey || `${previewSelectionKey}|${signedUrl}`);
+
+    const retryKey = getImageRetryKeyForPreview(previewSelectionKey, previewFileCacheKey);
+    const stillCurrentImageTarget = () => {
+      if (!img.isConnected || !root.contains(img)) return false;
+      const liveImg = q('#bulkProcessImagePreviewEl');
+      if (liveImg && liveImg !== img) return false;
+      const liveSelection = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
+      const liveTarget = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+      const liveRequested = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+      const liveItem = resolveActiveBulkProcessPreviewItem();
+      const liveFileKey = resolvePreviewFileCacheKey(liveItem, liveSelection);
+      const liveSignedUrl = trimStr(pane.__preview_signed_url || '');
+      const imgSelection = normalisePreviewSelectionKey(img.getAttribute('data-bp-preview-selection-key') || previewSelectionKey);
+      const imgFileKey = trimStr(img.getAttribute('data-bp-preview-file-key') || previewFileCacheKey).replace(/^\/+/, '');
+      return !!(
+        liveSelection === previewSelectionKey &&
+        imgSelection === previewSelectionKey &&
+        (!liveTarget || liveTarget === previewSelectionKey) &&
+        (!liveRequested || liveRequested === previewSelectionKey) &&
+        liveFileKey === previewFileCacheKey &&
+        imgFileKey === previewFileCacheKey &&
+        (!liveSignedUrl || liveSignedUrl === signedUrl)
+      );
+    };
+
+    const clearSuccessfulLoadState = () => {
+      if (!stillCurrentImageTarget()) return;
+      const width = Number(img.naturalWidth || 0) || 0;
+      const height = Number(img.naturalHeight || 0) || 0;
+      if (width <= 0 && height <= 0) return;
+      try { delete pane.__preview_image_retry_by_target[retryKey]; } catch {}
+      const failed = pane.__preview_failed_signed_url_by_target?.[previewSelectionKey];
+      const failedUrl = typeof failed === 'string' ? failed : trimStr(failed?.url || '');
+      if (!failedUrl || failedUrl === signedUrl) {
+        try { delete pane.__preview_failed_signed_url_by_target[previewSelectionKey]; } catch {}
+      }
+      pane.__preview_error = '';
+    };
+
+    const recoverFailedImageLoad = (reason = 'image-load-failed') => {
+      if (!stillCurrentImageTarget()) return;
+      const attempts = Number(pane.__preview_image_retry_by_target?.[retryKey] || 0) || 0;
+      if (attempts >= 1) {
+        pane.__preview_error = trimStr(reason || 'image-load-failed');
+        const stageNow = q('#bulkProcessPreviewStage');
+        if (stageNow && stageNow.contains(img)) {
+          stageNow.innerHTML = `<span class="mini" style="opacity:.75;">${enc('Preview image failed to load. Select the image again to retry.')}</span>`;
+        }
+        logPreviewCommitEvent(captureBulkAuthorisePreviewSnapshot(getPreviewState()), {
+          event: 'image-load-retry-skipped',
+          reason,
+          selectionKey: previewSelectionKey,
+          fileKey: previewFileCacheKey,
+          retryAttempts: attempts
+        });
+        return;
+      }
+
+      pane.__preview_image_retry_by_target[retryKey] = attempts + 1;
+      const snapshot = capturePreviewCommitSnapshot(getPreviewState(), { reason: `image-load-failed-${reason}` });
+      const invalidated = invalidateSignedUrlForPreviewTarget(previewSelectionKey, previewFileCacheKey, signedUrl, reason, { snapshot });
+      if (!invalidated) return;
+      const stageNow = q('#bulkProcessPreviewStage');
+      if (stageNow && stageNow.contains(img)) {
+        stageNow.innerHTML = `<span class="mini" style="opacity:.75;">${enc('Preview is loading…')}</span>`;
+      }
+      logPreviewCommitEvent(captureBulkAuthorisePreviewSnapshot(getPreviewState()), {
+        event: 'image-load-retry-presign',
+        reason,
+        selectionKey: previewSelectionKey,
+        fileKey: previewFileCacheKey,
+        retryAttempts: attempts + 1
+      });
+      Promise.resolve().then(async () => {
+        if (!isActiveBind()) return;
+        await renderStage();
+      }).catch((e) => warnPreview('[IMAGE-LOAD-RECOVERY]', e));
+    };
+
+    img.onload = clearSuccessfulLoadState;
+    img.onerror = () => recoverFailedImageLoad('image-onerror');
+
+    window.setTimeout(() => {
+      try {
+        if (!stillCurrentImageTarget()) return;
+        const complete = img.complete === true;
+        const width = Number(img.naturalWidth || 0) || 0;
+        const height = Number(img.naturalHeight || 0) || 0;
+        if (complete && width <= 0 && height <= 0) recoverFailedImageLoad('image-complete-zero-dimensions');
+      } catch (e) {
+        warnPreview('[IMAGE-LOAD-CHECK]', e);
+      }
+    }, 80);
+  };
+
   const renderImageStage = (stage, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
     const existingWrap = q('#bulkProcessImagePreviewWrap');
     const existingImg = q('#bulkProcessImagePreviewEl');
@@ -138614,6 +139013,7 @@ function bindBulkProcessPreviewPane(state) {
       existingImg.setAttribute('data-bp-preview-render-key', previewRenderKey);
       existingImg.style.transform = `scale(${zoom}) rotate(${rotationDeg}deg)`;
       existingImg.style.transformOrigin = 'center center';
+      bindImagePreviewLoadGuards(existingImg, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
       return;
     }
 
@@ -138650,6 +139050,7 @@ function bindBulkProcessPreviewPane(state) {
         />
       </div>
     `;
+    bindImagePreviewLoadGuards(q('#bulkProcessImagePreviewEl'), signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
   };
 
   const renderPdfStage = (stage, previewUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
@@ -138920,8 +139321,22 @@ function bindBulkProcessPreviewPane(state) {
     const liveSignedUrl = trimStr(pane.__preview_signed_url || '');
     const busySnapshot = capturePreviewCommitSnapshot(previewState, { reason: 'busy-cache-check' });
     const cachedBusySignedUrl = getCachedSignedUrlForPreview(previewFileCacheKey, busySnapshot);
-    const hasLiveSignedForSelection = !!(
+    const liveSignedUrlUsable = !!(
       liveSignedUrl &&
+      isSignedUrlUsableForPreview(liveSignedUrl, previewFileCacheKey, previewSelectionKey, busySnapshot)
+    );
+    if (
+      liveSignedUrl &&
+      liveTargetSelectionKey === previewSelectionKey &&
+      (!liveRequestedSelectionKey || liveRequestedSelectionKey === previewSelectionKey) &&
+      !liveSignedUrlUsable
+    ) {
+      invalidateSignedUrlForPreviewTarget(previewSelectionKey, previewFileCacheKey, liveSignedUrl, 'signed-url-stale-before-render', {
+        snapshot: busySnapshot
+      });
+    }
+    const hasLiveSignedForSelection = !!(
+      liveSignedUrlUsable &&
       liveTargetSelectionKey === previewSelectionKey &&
       liveRequestedSelectionKey === previewSelectionKey
     );
@@ -138969,12 +139384,29 @@ function bindBulkProcessPreviewPane(state) {
     const cachedSignedUrl = getCachedSignedUrlForPreview(previewFileCacheKey, renderSnapshot);
     const prerenderLiveTargetSelectionKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
     let prerenderLiveRequestedSelectionKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
-    const liveSignedUrlForRender = trimStr(pane.__preview_signed_url || '');
+    let liveSignedUrlForRender = trimStr(pane.__preview_signed_url || '');
+    let liveSignedUrlForRenderUsable = !!(
+      liveSignedUrlForRender &&
+      isSignedUrlUsableForPreview(liveSignedUrlForRender, previewFileCacheKey, previewSelectionKey, renderSnapshot)
+    );
+    if (
+      liveSignedUrlForRender &&
+      prerenderLiveTargetSelectionKey === previewSelectionKey &&
+      (!prerenderLiveRequestedSelectionKey || prerenderLiveRequestedSelectionKey === previewSelectionKey) &&
+      !liveSignedUrlForRenderUsable
+    ) {
+      invalidateSignedUrlForPreviewTarget(previewSelectionKey, previewFileCacheKey, liveSignedUrlForRender, 'signed-url-stale-before-render', {
+        snapshot: renderSnapshot
+      });
+      liveSignedUrlForRender = '';
+      liveSignedUrlForRenderUsable = false;
+    }
     if (!prerenderLiveRequestedSelectionKey && liveSignedUrlForRender && prerenderLiveTargetSelectionKey === previewSelectionKey) {
       prerenderLiveRequestedSelectionKey = previewSelectionKey;
       pane.__preview_load_requested_target_key = previewSelectionKey;
     }
     const targetMatchesLiveSigned = !!(
+      liveSignedUrlForRenderUsable &&
       liveSignedUrlForRender &&
       prerenderLiveTargetSelectionKey === previewSelectionKey &&
       (!prerenderLiveRequestedSelectionKey || prerenderLiveRequestedSelectionKey === previewSelectionKey)
@@ -139112,11 +139544,17 @@ function bindBulkProcessPreviewPane(state) {
         }
       }
 
+      const liveQueueSelectionStillCurrent = !!(
+        previewSelectionKey.startsWith('queue|') &&
+        liveSelectionKey === previewSelectionKey &&
+        liveFileKey === previewFileCacheKey &&
+        trimStr(livePreviewState.activeTab || '').toLowerCase() !== 'attached'
+      );
       if (
         !signedUrl ||
         isBusy() ||
         !livePreviewItem ||
-        liveIdentity !== currentIdentity ||
+        (liveIdentity !== currentIdentity && !liveQueueSelectionStillCurrent) ||
         liveFileKey !== previewFileCacheKey ||
         liveSelectionKey !== previewSelectionKey
       ) {
