@@ -128806,7 +128806,6 @@ function ensureBulkProcessRelatedContract(relatedObj, rowObj, detailsObj) {
 }
 
 
-
 async function openBulkProcessWorkbench(seed = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][OPEN]');
   GC('openBulkProcessWorkbench');
@@ -130244,8 +130243,19 @@ async function openBulkProcessWorkbench(seed = {}) {
     }
 
     const activeSignatureAtStart = trimStr(row.row_signature || state.active_row?.row_signature || '');
+    const previousActiveContextBeforeLoad = (state.active_context && typeof state.active_context === 'object') ? deep(state.active_context) : null;
+    const previousActiveDetailsBeforeLoad = (state.active_details && typeof state.active_details === 'object') ? deep(state.active_details) : null;
+    const previousActiveCtxBeforeLoad = (state.active_ctx && typeof state.active_ctx === 'object') ? deep(state.active_ctx) : null;
+    const previousActiveContextProfileBeforeLoad = trimStr(state.active_context_profile || previousActiveContextBeforeLoad?.profile || previousActiveContextBeforeLoad?.context_profile || previousActiveCtxBeforeLoad?.profile || previousActiveCtxBeforeLoad?.context_profile || previousActiveDetailsBeforeLoad?.profile || previousActiveDetailsBeforeLoad?.context_profile || '');
     state.__active_context_pending = true;
-    state.active_context_profile = 'loading';
+    if (requestedProfile === 'evidence') {
+      const preservedProfile = previousActiveContextProfileBeforeLoad && previousActiveContextProfileBeforeLoad !== 'loading' && previousActiveContextProfileBeforeLoad !== 'evidence'
+        ? previousActiveContextProfileBeforeLoad
+        : 'status_header';
+      state.active_context_profile = preservedProfile;
+    } else {
+      state.active_context_profile = 'loading';
+    }
     const contextPayload = await fetchBulkProcessRowContextPayload(row, {
       profile: requestedProfile,
       context_profile: requestedProfile,
@@ -130315,11 +130325,25 @@ async function openBulkProcessWorkbench(seed = {}) {
       payloadProfile === 'evidence' ||
       contextPayload.__context_options?.include_evidence === true
     );
-    const previousEvidenceRows = Array.isArray(state.active_details?.evidence) ? deep(state.active_details.evidence) : [];
+    const previousEvidenceRows = Array.isArray(state.active_details?.evidence)
+      ? deep(state.active_details.evidence)
+      : (Array.isArray(state.active_context?.evidence)
+          ? deep(state.active_context.evidence)
+          : (Array.isArray(state.active_context?.details?.evidence)
+              ? deep(state.active_context.details.evidence)
+              : (Array.isArray(state.active_ctx?.state?.evidence) ? deep(state.active_ctx.state.evidence) : [])));
+    const previousEvidenceLoaded = !!(
+      state.active_details?.evidence_loaded === true ||
+      state.active_context?.evidence_loaded === true ||
+      state.active_context?.details?.evidence_loaded === true ||
+      state.active_ctx?.evidence_loaded === true ||
+      state.active_ctx?.state?.evidence_loaded === true
+    );
     const incomingEvidenceRows = Array.isArray(contextPayload.evidence)
       ? deep(contextPayload.evidence)
       : (Array.isArray(details.evidence) ? deep(details.evidence) : []);
     const layerEvidenceRows = evidenceAuthoritative ? incomingEvidenceRows : previousEvidenceRows;
+    const nextEvidenceLoaded = evidenceAuthoritative || previousEvidenceLoaded;
     const rawDetails = {
       ...deep((state.active_details && typeof state.active_details === 'object') ? state.active_details : {}),
       ...deep(details || {}),
@@ -130330,12 +130354,21 @@ async function openBulkProcessWorkbench(seed = {}) {
       header_loaded: contextPayload.header_loaded === true || payloadProfile === 'status_header' || payloadProfile === 'editor' || payloadProfile === 'active_row_visible',
       header_only: contextPayload.header_only === true || payloadProfile === 'status_header',
       editor_loaded: contextPayload.editor_loaded === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible',
-      evidence_loaded: evidenceAuthoritative,
+      evidence_loaded: nextEvidenceLoaded,
       compare_loaded: contextPayload.compare_loaded === true || payloadProfile === 'compare_import',
       full_loaded: contextPayload.full_loaded === true || payloadProfile === 'full',
       schedule_pending: contextPayload.schedule_pending === true || !(contextPayload.editor_loaded === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible'),
       schedule_authoritative: contextPayload.schedule_authoritative === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible',
-      loaded_layers: Array.isArray(contextPayload.loaded_layers) ? deep(contextPayload.loaded_layers) : (payloadProfile === 'evidence' ? ['evidence'] : (payloadProfile === 'status_header' ? ['header'] : ['header', 'editor'])),
+      loaded_layers: (() => {
+        const baseLayers = Array.isArray(contextPayload.loaded_layers)
+          ? deep(contextPayload.loaded_layers)
+          : (payloadProfile === 'evidence' ? ['evidence'] : (payloadProfile === 'status_header' ? ['header'] : ['header', 'editor']));
+        const layers = baseLayers.map((value) => trimStr(value).toLowerCase()).filter(Boolean);
+        if (!layers.includes('header') && payloadProfile !== 'evidence') layers.unshift('header');
+        if ((payloadProfile === 'editor' || payloadProfile === 'active_row_visible' || contextPayload.editor_loaded === true) && !layers.includes('editor')) layers.push('editor');
+        if (nextEvidenceLoaded && !layers.includes('evidence')) layers.push('evidence');
+        return Array.from(new Set(layers));
+      })(),
       is_hydrated: true,
       hydration_required: false,
       slim_context: contextPayload.slim_context !== false
@@ -130374,10 +130407,191 @@ async function openBulkProcessWorkbench(seed = {}) {
       return false;
     }
 
+    if (payloadProfile === 'evidence') {
+      const baseContext = (state.active_context && typeof state.active_context === 'object')
+        ? deep(state.active_context)
+        : (previousActiveContextBeforeLoad ? deep(previousActiveContextBeforeLoad) : null);
+      const baseDetails = (state.active_details && typeof state.active_details === 'object')
+        ? deep(state.active_details)
+        : (previousActiveDetailsBeforeLoad ? deep(previousActiveDetailsBeforeLoad) : {});
+      const baseCtx = (state.active_ctx && typeof state.active_ctx === 'object')
+        ? deep(state.active_ctx)
+        : (previousActiveCtxBeforeLoad ? deep(previousActiveCtxBeforeLoad) : null);
+      const rowForEvidenceMerge = (state.active_row && typeof state.active_row === 'object')
+        ? deep(state.active_row)
+        : deep(dataRow || row || {});
+      const baseProfileRaw = trimStr(
+        previousActiveContextProfileBeforeLoad ||
+        state.active_context_profile ||
+        baseContext?.profile ||
+        baseContext?.context_profile ||
+        baseCtx?.profile ||
+        baseCtx?.context_profile ||
+        baseDetails?.profile ||
+        baseDetails?.context_profile ||
+        ''
+      ).toLowerCase();
+      const editorLayerLoaded = !!(
+        baseDetails?.editor_loaded === true ||
+        baseContext?.editor_loaded === true ||
+        baseContext?.details?.editor_loaded === true ||
+        baseContext?.state?.editor_loaded === true ||
+        baseCtx?.editor_loaded === true ||
+        baseCtx?.details?.editor_loaded === true ||
+        baseCtx?.state?.editor_loaded === true ||
+        baseProfileRaw === 'editor' ||
+        baseProfileRaw === 'active_row_visible' ||
+        baseProfileRaw === 'full'
+      );
+      const preservedProfile = editorLayerLoaded
+        ? ((baseProfileRaw === 'full' || baseProfileRaw === 'active_row_visible' || baseProfileRaw === 'editor') ? baseProfileRaw : 'editor')
+        : (baseProfileRaw && baseProfileRaw !== 'loading' && baseProfileRaw !== 'evidence' ? baseProfileRaw : 'status_header');
+      const existingLayers = [
+        ...(Array.isArray(baseDetails?.loaded_layers) ? baseDetails.loaded_layers : []),
+        ...(Array.isArray(baseContext?.loaded_layers) ? baseContext.loaded_layers : []),
+        ...(Array.isArray(baseCtx?.state?.loaded_layers) ? baseCtx.state.loaded_layers : [])
+      ].map((value) => trimStr(value).toLowerCase()).filter(Boolean);
+      if (!existingLayers.includes('header')) existingLayers.unshift('header');
+      if (editorLayerLoaded && !existingLayers.includes('editor')) existingLayers.push('editor');
+      if (!existingLayers.includes('evidence')) existingLayers.push('evidence');
+      const mergedLayers = Array.from(new Set(existingLayers));
+      const mergedRelated = ensureBulkProcessRelatedContract(
+        (baseDetails.related && typeof baseDetails.related === 'object')
+          ? deep(baseDetails.related)
+          : ((baseContext?.related && typeof baseContext.related === 'object')
+              ? deep(baseContext.related)
+              : ((baseCtx?.related && typeof baseCtx.related === 'object') ? deep(baseCtx.related) : deep(related || buildFallbackRelated(rowForEvidenceMerge, baseDetails)))),
+        rowForEvidenceMerge,
+        baseDetails
+      );
+      const mergedDetails = {
+        ...baseDetails,
+        current_timesheet_id: baseDetails.current_timesheet_id || contextPayload.current_timesheet_id || details.current_timesheet_id || rowForEvidenceMerge.current_timesheet_id || rowForEvidenceMerge.timesheet_id || null,
+        requested_timesheet_id: baseDetails.requested_timesheet_id || contextPayload.requested_timesheet_id || details.requested_timesheet_id || rowForEvidenceMerge.requested_timesheet_id || rowForEvidenceMerge.timesheet_id || null,
+        expected_timesheet_id: baseDetails.expected_timesheet_id || contextPayload.expected_timesheet_id || details.expected_timesheet_id || rowForEvidenceMerge.expected_timesheet_id || rowForEvidenceMerge.current_timesheet_id || rowForEvidenceMerge.timesheet_id || null,
+        contract_week_id: baseDetails.contract_week_id || contextPayload.contract_week_id || details.contract_week_id || rowForEvidenceMerge.contract_week_id || null,
+        evidence: layerEvidenceRows,
+        evidence_loaded: true,
+        evidence_authoritative: true,
+        include_evidence: true,
+        evidence_context_profile: 'evidence',
+        context_profile: preservedProfile,
+        profile: preservedProfile,
+        header_loaded: true,
+        header_only: editorLayerLoaded ? false : baseDetails.header_only !== false,
+        editor_loaded: editorLayerLoaded,
+        schedule_pending: editorLayerLoaded ? false : (baseDetails.schedule_pending !== false),
+        schedule_authoritative: editorLayerLoaded
+          ? (baseDetails.schedule_authoritative !== false || baseContext?.schedule_authoritative === true || baseCtx?.state?.schedule_authoritative === true)
+          : (baseDetails.schedule_authoritative === true),
+        loaded_layers: mergedLayers,
+        is_hydrated: editorLayerLoaded || baseDetails.is_hydrated === true || baseContext?.is_hydrated === true || baseCtx?.is_hydrated === true,
+        hydration_required: editorLayerLoaded ? false : (baseDetails.hydration_required !== false && baseContext?.hydration_required !== false),
+        slim_context: baseDetails.slim_context !== false,
+        related: deep(mergedRelated)
+      };
+      let mergedCtx = baseCtx && typeof baseCtx === 'object'
+        ? baseCtx
+        : normaliseBulkTimesheetWorkbenchCtx(deep(rowForEvidenceMerge), mergedDetails);
+      if (!mergedCtx || typeof mergedCtx !== 'object') mergedCtx = {};
+      mergedCtx.row = deep(rowForEvidenceMerge);
+      mergedCtx.data_row = deep(rowForEvidenceMerge);
+      mergedCtx.details = deep(mergedDetails);
+      mergedCtx.related = deep(mergedRelated);
+      mergedCtx.evidence = deep(layerEvidenceRows);
+      mergedCtx.evidence_loaded = true;
+      mergedCtx.evidence_authoritative = true;
+      mergedCtx.profile = preservedProfile;
+      mergedCtx.context_profile = preservedProfile;
+      mergedCtx.header_loaded = true;
+      mergedCtx.header_only = mergedDetails.header_only;
+      mergedCtx.editor_loaded = editorLayerLoaded;
+      mergedCtx.schedule_pending = mergedDetails.schedule_pending;
+      mergedCtx.schedule_authoritative = mergedDetails.schedule_authoritative;
+      mergedCtx.loaded_layers = mergedLayers;
+      mergedCtx.is_hydrated = mergedDetails.is_hydrated;
+      mergedCtx.hydration_required = mergedDetails.hydration_required;
+      mergedCtx.context_stale = editorLayerLoaded ? false : mergedCtx.context_stale === true;
+      mergedCtx.__context_options = {
+        ...((mergedCtx.__context_options && typeof mergedCtx.__context_options === 'object') ? mergedCtx.__context_options : {}),
+        profile: preservedProfile,
+        context_profile: preservedProfile,
+        include_evidence: mergedCtx.__context_options?.include_evidence === true,
+        evidence_profile: 'evidence',
+        evidence_include_evidence: true
+      };
+      mergedCtx.state = (mergedCtx.state && typeof mergedCtx.state === 'object') ? mergedCtx.state : {};
+      mergedCtx.state.evidence = deep(layerEvidenceRows);
+      mergedCtx.state.evidence_loaded = true;
+      mergedCtx.state.evidence_authoritative = true;
+      mergedCtx.state.context_profile = preservedProfile;
+      mergedCtx.state.profile = preservedProfile;
+      mergedCtx.state.header_loaded = true;
+      mergedCtx.state.header_only = mergedDetails.header_only;
+      mergedCtx.state.editor_loaded = editorLayerLoaded;
+      mergedCtx.state.schedule_pending = mergedDetails.schedule_pending;
+      mergedCtx.state.schedule_authoritative = mergedDetails.schedule_authoritative;
+      mergedCtx.state.loaded_layers = mergedLayers;
+
+      const mergedContext = {
+        ...((baseContext && typeof baseContext === 'object') ? baseContext : {}),
+        ok: true,
+        context_type: 'bulk_process',
+        context_kind: 'bulk_process_row_context',
+        owner_kind: 'bulk_process',
+        modal_kind: 'bulk-process-workbench',
+        owner_identity: bulkProcessOwnerIdentity,
+        modal_open_token: modalOpenTokenAtStart,
+        active_hydration_token: activeHydrationTokenAtStart,
+        row: deep(rowForEvidenceMerge),
+        data_row: deep(rowForEvidenceMerge),
+        details: deep(mergedDetails),
+        related: deep(mergedRelated),
+        evidence: deep(layerEvidenceRows),
+        evidence_loaded: true,
+        evidence_authoritative: true,
+        include_evidence: true,
+        evidence_context_profile: 'evidence',
+        row_key: trimStr(rowForEvidenceMerge.row_key || state.active_row_key || ''),
+        row_signature: trimStr(rowForEvidenceMerge.row_signature || baseContext?.row_signature || ''),
+        profile: preservedProfile,
+        context_profile: preservedProfile,
+        header_loaded: true,
+        header_only: mergedDetails.header_only,
+        editor_loaded: editorLayerLoaded,
+        schedule_pending: mergedDetails.schedule_pending,
+        schedule_authoritative: mergedDetails.schedule_authoritative,
+        loaded_layers: mergedLayers,
+        is_hydrated: mergedDetails.is_hydrated,
+        hydration_required: mergedDetails.hydration_required,
+        context_stale: editorLayerLoaded ? false : baseContext?.context_stale === true,
+        __context_options: {
+          ...((baseContext?.__context_options && typeof baseContext.__context_options === 'object') ? baseContext.__context_options : {}),
+          profile: preservedProfile,
+          context_profile: preservedProfile,
+          include_evidence: baseContext?.__context_options?.include_evidence === true,
+          evidence_profile: 'evidence',
+          evidence_context_profile: 'evidence',
+          evidence_include_evidence: true
+        }
+      };
+
+      state.active_details = mergedDetails;
+      state.active_ctx = mergedCtx;
+      state.active_context = mergedContext;
+      state.active_row = deep(rowForEvidenceMerge);
+      state.active_row_key = trimStr(rowForEvidenceMerge.row_key || state.active_row_key || '') || state.active_row_key || null;
+      state.active_context_profile = preservedProfile;
+      state.__active_context_is_minimal = editorLayerLoaded ? false : state.__active_context_is_minimal === true;
+      state.__active_context_pending = false;
+      state.__bulk_process_active_context_visibility_pending = editorLayerLoaded ? false : state.__bulk_process_active_context_visibility_pending;
+      return true;
+    }
+
     state.active_context = {
       ...deep(contextPayload || {}),
       evidence: layerEvidenceRows,
-      evidence_loaded: evidenceAuthoritative,
+      evidence_loaded: nextEvidenceLoaded,
       ok: true,
       context_type: 'bulk_process',
       context_kind: 'bulk_process_row_context',
@@ -131290,11 +131504,24 @@ async function openBulkProcessWorkbench(seed = {}) {
     const activeSignature = trimStr(state.active_row?.row_signature || '');
     const contextSignature = trimStr(state.active_context?.row_signature || state.active_ctx?.row_signature || state.active_context?.data_row?.row_signature || '');
     const contextProfile = trimStr(state.active_context_profile || state.active_context?.profile || state.active_context?.context_profile || state.active_ctx?.profile || state.active_ctx?.context_profile || '').toLowerCase();
+    const contextEvidenceLoaded = !!(
+      state.active_context?.evidence_loaded === true ||
+      state.active_context?.details?.evidence_loaded === true ||
+      state.active_ctx?.evidence_loaded === true ||
+      state.active_ctx?.state?.evidence_loaded === true ||
+      state.active_details?.evidence_loaded === true
+    );
+    const contextProfileSatisfiesRequest = !!(
+      contextProfile === 'full' ||
+      contextProfile === requestedProfile ||
+      (requestedProfile === 'editor' && contextProfile === 'active_row_visible') ||
+      (requestedProfile === 'evidence' && contextEvidenceLoaded)
+    );
     const contextReady = !!(
       state.__active_context_is_minimal !== true &&
       state.active_context &&
       state.active_ctx &&
-      (contextProfile === 'full' || contextProfile === requestedProfile || (requestedProfile === 'editor' && contextProfile === 'active_row_visible')) &&
+      contextProfileSatisfiesRequest &&
       state.active_context.hydration_required !== true &&
       state.active_context.context_stale !== true &&
       !isBulkProcessRowContextPayloadDegraded(state.active_context) &&
@@ -135664,7 +135891,6 @@ function bindBulkProcessManualEditor(state) {
   }
 }
 
-
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -137418,39 +137644,129 @@ function bindBulkProcessPreviewPane(state) {
           : ((st.active_details && st.active_details.related) ? deep(st.active_details.related) : buildFallbackRelated(mergedRow, detailsPayload)));
 
     const existingDetails = (st.active_details && typeof st.active_details === 'object') ? deep(st.active_details) : {};
+    const existingContext = (st.active_context && typeof st.active_context === 'object') ? deep(st.active_context) : {};
+    const existingCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? deep(st.active_ctx) : null;
+    const existingProfileRaw = trimStr(
+      st.active_context_profile ||
+      existingContext.profile ||
+      existingContext.context_profile ||
+      existingCtx?.profile ||
+      existingCtx?.context_profile ||
+      existingDetails.profile ||
+      existingDetails.context_profile ||
+      ''
+    ).toLowerCase();
+    const editorLayerLoaded = !!(
+      existingDetails.editor_loaded === true ||
+      existingContext.editor_loaded === true ||
+      existingContext.details?.editor_loaded === true ||
+      existingContext.state?.editor_loaded === true ||
+      existingCtx?.editor_loaded === true ||
+      existingCtx?.details?.editor_loaded === true ||
+      existingCtx?.state?.editor_loaded === true ||
+      existingProfileRaw === 'editor' ||
+      existingProfileRaw === 'active_row_visible' ||
+      existingProfileRaw === 'full'
+    );
+    const preservedProfile = editorLayerLoaded
+      ? ((existingProfileRaw === 'full' || existingProfileRaw === 'active_row_visible' || existingProfileRaw === 'editor') ? existingProfileRaw : 'editor')
+      : (existingProfileRaw && existingProfileRaw !== 'loading' && existingProfileRaw !== 'evidence' ? existingProfileRaw : 'status_header');
+    const loadedLayers = Array.from(new Set([
+      ...(Array.isArray(existingDetails.loaded_layers) ? existingDetails.loaded_layers : []),
+      ...(Array.isArray(existingContext.loaded_layers) ? existingContext.loaded_layers : []),
+      ...(Array.isArray(existingCtx?.state?.loaded_layers) ? existingCtx.state.loaded_layers : []),
+      'header',
+      ...(editorLayerLoaded ? ['editor'] : []),
+      'evidence'
+    ].map((value) => trimStr(value).toLowerCase()).filter(Boolean)));
+    const mergedRelated = ensureBulkProcessRelatedContract(
+      (existingDetails.related && typeof existingDetails.related === 'object')
+        ? deep(existingDetails.related)
+        : ((existingContext.related && typeof existingContext.related === 'object') ? deep(existingContext.related) : related),
+      mergedRow,
+      existingDetails
+    );
     st.active_details = {
       ...existingDetails,
-      ...detailsPayload,
-      current_timesheet_id: contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || existingDetails.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-      requested_timesheet_id: contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || existingDetails.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
-      expected_timesheet_id: contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || existingDetails.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-      contract_week_id: contextPayload.contract_week_id || detailsPayload.contract_week_id || existingDetails.contract_week_id || mergedRow.contract_week_id || null,
+      current_timesheet_id: existingDetails.current_timesheet_id || contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
+      requested_timesheet_id: existingDetails.requested_timesheet_id || contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
+      expected_timesheet_id: existingDetails.expected_timesheet_id || contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
+      contract_week_id: existingDetails.contract_week_id || contextPayload.contract_week_id || detailsPayload.contract_week_id || mergedRow.contract_week_id || null,
       evidence: evidenceRows,
       evidence_loaded: true,
-      context_profile: 'evidence',
-      profile: 'evidence',
-      related: ensureBulkProcessRelatedContract(related, mergedRow, { ...existingDetails, ...detailsPayload })
+      evidence_authoritative: true,
+      include_evidence: true,
+      evidence_context_profile: 'evidence',
+      context_profile: preservedProfile,
+      profile: preservedProfile,
+      header_loaded: true,
+      header_only: editorLayerLoaded ? false : existingDetails.header_only !== false,
+      editor_loaded: editorLayerLoaded,
+      schedule_pending: editorLayerLoaded ? false : (existingDetails.schedule_pending !== false),
+      schedule_authoritative: editorLayerLoaded ? (existingDetails.schedule_authoritative !== false || existingContext.schedule_authoritative === true || existingCtx?.state?.schedule_authoritative === true) : existingDetails.schedule_authoritative === true,
+      loaded_layers: loadedLayers,
+      related: mergedRelated
     };
     st.active_context = {
-      ...((st.active_context && typeof st.active_context === 'object') ? deep(st.active_context) : {}),
-      ...((contextPayload && typeof contextPayload === 'object') ? deep(contextPayload) : {}),
+      ...existingContext,
       row: deep(st.active_row || mergedRow),
       data_row: deep(st.active_row || mergedRow),
       details: {
-        ...(((st.active_context && typeof st.active_context === 'object' && st.active_context.details && typeof st.active_context.details === 'object') ? deep(st.active_context.details) : {})),
-        ...deep(detailsPayload || {}),
+        ...((existingContext.details && typeof existingContext.details === 'object') ? deep(existingContext.details) : {}),
         evidence: evidenceRows,
-        evidence_loaded: true
+        evidence_loaded: true,
+        evidence_authoritative: true,
+        context_profile: preservedProfile,
+        profile: preservedProfile,
+        loaded_layers: loadedLayers
       },
       evidence: evidenceRows,
       evidence_loaded: true,
-      context_profile: 'evidence',
-      profile: 'evidence'
+      evidence_authoritative: true,
+      include_evidence: true,
+      evidence_context_profile: 'evidence',
+      context_profile: preservedProfile,
+      profile: preservedProfile,
+      header_loaded: true,
+      header_only: st.active_details.header_only,
+      editor_loaded: editorLayerLoaded,
+      schedule_pending: st.active_details.schedule_pending,
+      schedule_authoritative: st.active_details.schedule_authoritative,
+      loaded_layers: loadedLayers,
+      hydration_required: editorLayerLoaded ? false : existingContext.hydration_required === true,
+      is_hydrated: editorLayerLoaded || existingContext.is_hydrated === true || existingCtx?.is_hydrated === true
     };
-    st.active_ctx = normaliseBulkTimesheetWorkbenchCtx(
+    st.active_ctx = existingCtx || normaliseBulkTimesheetWorkbenchCtx(
       deep(st.active_row || mergedRow),
       st.active_details
     );
+    if (st.active_ctx && typeof st.active_ctx === 'object') {
+      st.active_ctx.row = deep(st.active_row || mergedRow);
+      st.active_ctx.data_row = deep(st.active_row || mergedRow);
+      st.active_ctx.details = deep(st.active_details);
+      st.active_ctx.related = deep(mergedRelated);
+      st.active_ctx.evidence = deep(evidenceRows);
+      st.active_ctx.evidence_loaded = true;
+      st.active_ctx.evidence_authoritative = true;
+      st.active_ctx.profile = preservedProfile;
+      st.active_ctx.context_profile = preservedProfile;
+      st.active_ctx.editor_loaded = editorLayerLoaded;
+      st.active_ctx.schedule_pending = st.active_details.schedule_pending;
+      st.active_ctx.schedule_authoritative = st.active_details.schedule_authoritative;
+      st.active_ctx.loaded_layers = loadedLayers;
+      st.active_ctx.state = (st.active_ctx.state && typeof st.active_ctx.state === 'object') ? st.active_ctx.state : {};
+      st.active_ctx.state.evidence = deep(evidenceRows);
+      st.active_ctx.state.evidence_loaded = true;
+      st.active_ctx.state.evidence_authoritative = true;
+      st.active_ctx.state.context_profile = preservedProfile;
+      st.active_ctx.state.profile = preservedProfile;
+      st.active_ctx.state.editor_loaded = editorLayerLoaded;
+      st.active_ctx.state.schedule_pending = st.active_details.schedule_pending;
+      st.active_ctx.state.schedule_authoritative = st.active_details.schedule_authoritative;
+      st.active_ctx.state.loaded_layers = loadedLayers;
+    }
+    st.active_context_profile = preservedProfile;
+    st.__active_context_is_minimal = editorLayerLoaded ? false : st.__active_context_is_minimal === true;
 
     const refreshedRowKey = trimStr(st?.active_row?.row_key || activeRowKey || '');
     if (refreshedRowKey && st.__row_context_cache && typeof st.__row_context_cache === 'object') {
@@ -139107,8 +139423,6 @@ function bindBulkProcessPreviewPane(state) {
     warnPreview('bind failed', e);
   });
 }
-
-
 
 
 function renderBulkProcessDockedEvidenceViewer(state) {
@@ -142741,7 +143055,6 @@ function ensureBulkAuthoriseManualDraftState(state) {
   return controller;
 }
 
-
 function bindBulkProcessEvidencePane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -143792,43 +144105,130 @@ function bindBulkProcessEvidencePane(state) {
         : (Array.isArray(detailsPayload.evidence) ? deep(detailsPayload.evidence) : []);
       if (localItem) evidenceRows = mergeEvidenceRows(evidenceRows, localItem);
 
-      const existingDetails = (st.active_details && typeof st.active_details === 'object') ? st.active_details : {};
-      const related = (detailsPayload.related && typeof detailsPayload.related === 'object')
-        ? deep(detailsPayload.related)
-        : ((contextPayload.related && typeof contextPayload.related === 'object')
-            ? deep(contextPayload.related)
-            : ((existingDetails.related && typeof existingDetails.related === 'object') ? deep(existingDetails.related) : {}));
+      const existingDetails = (st.active_details && typeof st.active_details === 'object') ? deep(st.active_details) : {};
+      const existingContext = (st.active_context && typeof st.active_context === 'object') ? deep(st.active_context) : {};
+      const existingCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? deep(st.active_ctx) : null;
+      const existingProfileRaw = trimStr(
+        st.active_context_profile ||
+        existingContext.profile ||
+        existingContext.context_profile ||
+        existingCtx?.profile ||
+        existingCtx?.context_profile ||
+        existingDetails.profile ||
+        existingDetails.context_profile ||
+        ''
+      ).toLowerCase();
+      const editorLayerLoaded = !!(
+        existingDetails.editor_loaded === true ||
+        existingContext.editor_loaded === true ||
+        existingContext.details?.editor_loaded === true ||
+        existingContext.state?.editor_loaded === true ||
+        existingCtx?.editor_loaded === true ||
+        existingCtx?.details?.editor_loaded === true ||
+        existingCtx?.state?.editor_loaded === true ||
+        existingProfileRaw === 'editor' ||
+        existingProfileRaw === 'active_row_visible' ||
+        existingProfileRaw === 'full'
+      );
+      const preservedProfile = editorLayerLoaded
+        ? ((existingProfileRaw === 'full' || existingProfileRaw === 'active_row_visible' || existingProfileRaw === 'editor') ? existingProfileRaw : 'editor')
+        : (existingProfileRaw && existingProfileRaw !== 'loading' && existingProfileRaw !== 'evidence' ? existingProfileRaw : 'status_header');
+      const loadedLayers = Array.from(new Set([
+        ...(Array.isArray(existingDetails.loaded_layers) ? existingDetails.loaded_layers : []),
+        ...(Array.isArray(existingContext.loaded_layers) ? existingContext.loaded_layers : []),
+        ...(Array.isArray(existingCtx?.state?.loaded_layers) ? existingCtx.state.loaded_layers : []),
+        'header',
+        ...(editorLayerLoaded ? ['editor'] : []),
+        'evidence'
+      ].map((value) => trimStr(value).toLowerCase()).filter(Boolean)));
+      const related = ensureBulkProcessRelatedContract(
+        (existingDetails.related && typeof existingDetails.related === 'object')
+          ? deep(existingDetails.related)
+          : ((contextPayload.related && typeof contextPayload.related === 'object')
+              ? deep(contextPayload.related)
+              : ((detailsPayload.related && typeof detailsPayload.related === 'object') ? deep(detailsPayload.related) : {})),
+        mergedRow,
+        existingDetails
+      );
 
       st.active_details = {
-        ...((existingDetails && typeof existingDetails === 'object') ? deep(existingDetails) : {}),
-        ...detailsPayload,
-        current_timesheet_id: contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || existingDetails.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-        requested_timesheet_id: contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || existingDetails.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
-        expected_timesheet_id: contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || existingDetails.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
-        contract_week_id: contextPayload.contract_week_id || detailsPayload.contract_week_id || existingDetails.contract_week_id || mergedRow.contract_week_id || null,
+        ...existingDetails,
+        current_timesheet_id: existingDetails.current_timesheet_id || contextPayload.current_timesheet_id || detailsPayload.current_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
+        requested_timesheet_id: existingDetails.requested_timesheet_id || contextPayload.requested_timesheet_id || detailsPayload.requested_timesheet_id || mergedRow.requested_timesheet_id || mergedRow.timesheet_id || null,
+        expected_timesheet_id: existingDetails.expected_timesheet_id || contextPayload.expected_timesheet_id || detailsPayload.expected_timesheet_id || mergedRow.expected_timesheet_id || mergedRow.current_timesheet_id || mergedRow.timesheet_id || null,
+        contract_week_id: existingDetails.contract_week_id || contextPayload.contract_week_id || detailsPayload.contract_week_id || mergedRow.contract_week_id || null,
         evidence: evidenceRows,
         evidence_loaded: true,
-        context_profile: 'evidence',
-        profile: 'evidence',
+        evidence_authoritative: true,
+        include_evidence: true,
+        evidence_context_profile: 'evidence',
+        context_profile: preservedProfile,
+        profile: preservedProfile,
+        header_loaded: true,
+        header_only: editorLayerLoaded ? false : existingDetails.header_only !== false,
+        editor_loaded: editorLayerLoaded,
+        schedule_pending: editorLayerLoaded ? false : (existingDetails.schedule_pending !== false),
+        schedule_authoritative: editorLayerLoaded ? (existingDetails.schedule_authoritative !== false || existingContext.schedule_authoritative === true || existingCtx?.state?.schedule_authoritative === true) : existingDetails.schedule_authoritative === true,
+        loaded_layers: loadedLayers,
         related
       };
       st.active_context = {
-        ...((st.active_context && typeof st.active_context === 'object') ? deep(st.active_context) : {}),
-        ...((contextPayload && typeof contextPayload === 'object') ? deep(contextPayload) : {}),
+        ...existingContext,
         row: deep(st.active_row || mergedRow),
         data_row: deep(st.active_row || mergedRow),
         details: {
-          ...(((st.active_context && typeof st.active_context === 'object' && st.active_context.details && typeof st.active_context.details === 'object') ? deep(st.active_context.details) : {})),
-          ...deep(detailsPayload || {}),
+          ...((existingContext.details && typeof existingContext.details === 'object') ? deep(existingContext.details) : {}),
           evidence: evidenceRows,
-          evidence_loaded: true
+          evidence_loaded: true,
+          evidence_authoritative: true,
+          context_profile: preservedProfile,
+          profile: preservedProfile,
+          loaded_layers: loadedLayers
         },
         evidence: evidenceRows,
         evidence_loaded: true,
-        context_profile: 'evidence',
-        profile: 'evidence'
+        evidence_authoritative: true,
+        include_evidence: true,
+        evidence_context_profile: 'evidence',
+        context_profile: preservedProfile,
+        profile: preservedProfile,
+        header_loaded: true,
+        header_only: st.active_details.header_only,
+        editor_loaded: editorLayerLoaded,
+        schedule_pending: st.active_details.schedule_pending,
+        schedule_authoritative: st.active_details.schedule_authoritative,
+        loaded_layers: loadedLayers,
+        hydration_required: editorLayerLoaded ? false : existingContext.hydration_required === true,
+        is_hydrated: editorLayerLoaded || existingContext.is_hydrated === true || existingCtx?.is_hydrated === true
       };
-      st.active_ctx = normaliseBulkTimesheetWorkbenchCtx(deep(st.active_row || mergedRow), st.active_details);
+      st.active_ctx = existingCtx || normaliseBulkTimesheetWorkbenchCtx(deep(st.active_row || mergedRow), st.active_details);
+      if (st.active_ctx && typeof st.active_ctx === 'object') {
+        st.active_ctx.row = deep(st.active_row || mergedRow);
+        st.active_ctx.data_row = deep(st.active_row || mergedRow);
+        st.active_ctx.details = deep(st.active_details);
+        st.active_ctx.related = deep(related);
+        st.active_ctx.evidence = deep(evidenceRows);
+        st.active_ctx.evidence_loaded = true;
+        st.active_ctx.evidence_authoritative = true;
+        st.active_ctx.profile = preservedProfile;
+        st.active_ctx.context_profile = preservedProfile;
+        st.active_ctx.editor_loaded = editorLayerLoaded;
+        st.active_ctx.schedule_pending = st.active_details.schedule_pending;
+        st.active_ctx.schedule_authoritative = st.active_details.schedule_authoritative;
+        st.active_ctx.loaded_layers = loadedLayers;
+        st.active_ctx.state = (st.active_ctx.state && typeof st.active_ctx.state === 'object') ? st.active_ctx.state : {};
+        st.active_ctx.state.evidence = deep(evidenceRows);
+        st.active_ctx.state.evidence_loaded = true;
+        st.active_ctx.state.evidence_authoritative = true;
+        st.active_ctx.state.context_profile = preservedProfile;
+        st.active_ctx.state.profile = preservedProfile;
+        st.active_ctx.state.editor_loaded = editorLayerLoaded;
+        st.active_ctx.state.schedule_pending = st.active_details.schedule_pending;
+        st.active_ctx.state.schedule_authoritative = st.active_details.schedule_authoritative;
+        st.active_ctx.state.loaded_layers = loadedLayers;
+      }
+      st.active_context_profile = preservedProfile;
+      st.__active_context_is_minimal = editorLayerLoaded ? false : st.__active_context_is_minimal === true;
       if (localItem) upsertLocalStagedContractWeekEvidence(localItem);
 
       const refreshedRowKey = trimStr(st?.active_row?.row_key || activeRowKey || '');
@@ -144685,7 +145085,6 @@ function bindBulkProcessEvidencePane(state) {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
-
 
 
 function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionState) {
