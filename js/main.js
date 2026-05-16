@@ -136008,7 +136008,6 @@ function bindBulkProcessManualEditor(state) {
     }
   }
 }
-
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -136750,6 +136749,60 @@ function bindBulkProcessPreviewPane(state) {
     return true;
   };
 
+
+  const isCurrentBulkAuthorisePreviewTarget = (selectionKeyInput = '', fileKeyInput = '', snapshotInput = null, targetOptions = {}) => {
+    const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || '');
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : null;
+    const opts = (targetOptions && typeof targetOptions === 'object') ? targetOptions : {};
+    if (!selectionKey || isBlankPreviewSelectionKey(selectionKey) || !fileKey) return false;
+    if (!(bulkAuthoriseSurfaceAtBind || isCurrentBulkAuthorisePreviewSurface() || isBulkAuthoriseTimesheetsPreview())) return false;
+    if (!isCurrentBulkAuthorisePreviewSurface()) return false;
+    const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
+    if (!liveRoot || !root.isConnected || liveRoot !== root) return false;
+    const liveBulkAuthState = window.modalCtx?.bulkAuthoriseState || window.modalCtx?.bulk_authorise_state || null;
+    if (liveBulkAuthState && liveBulkAuthState !== st) return false;
+    const liveKind = getCurrentPreviewModalKind();
+    if (liveKind === 'bulk-process-workbench' || /bulk[-_]?process/i.test(liveKind)) return false;
+
+    const liveState = getPreviewState();
+    const liveActiveTab = trimStr(liveState.activeTab || pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const selectionTab = trimStr(selectionKey.split('|')[0] || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (liveActiveTab !== selectionTab) return false;
+
+    const liveItem = (liveState.previewItem && typeof liveState.previewItem === 'object') ? liveState.previewItem : null;
+    const liveFileKey = resolvePreviewFileCacheKey(liveItem, selectionKey);
+    if (!liveItem || !liveFileKey || liveFileKey !== fileKey) return false;
+    const liveTargetId = trimStr(liveItem?.id || liveItem?.evidence_id || liveItem?.queue_id || liveFileKey);
+    const liveSelectionKey = buildPreviewSelectionKey(liveActiveTab, liveTargetId, liveFileKey);
+    if (liveSelectionKey !== selectionKey) return false;
+
+    const requestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+    const targetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+    if (requestedKey && requestedKey !== selectionKey && targetKey !== selectionKey) return false;
+    if (targetKey && targetKey !== selectionKey && requestedKey !== selectionKey) return false;
+
+    const liveOwnerToken = getPreviewOwnerToken();
+    if (snap?.ownerToken && liveOwnerToken && trimStr(snap.ownerToken || '') !== trimStr(liveOwnerToken || '')) return false;
+    const liveOwnerIdentity = getPreviewOwnerIdentity();
+    if (snap?.ownerIdentity && liveOwnerIdentity && trimStr(snap.ownerIdentity || '') !== trimStr(liveOwnerIdentity || '')) return false;
+    const snapOwnerKind = trimStr(snap?.ownerKind || '').toLowerCase();
+    if (snapOwnerKind && snapOwnerKind !== 'bulk_authorise') return false;
+
+    const liveRowKey = getPreviewActiveRowKey();
+    if (snap?.rowKey && liveRowKey && trimStr(snap.rowKey || '') !== trimStr(liveRowKey || '')) return false;
+    if (snap?.activeIdentity && getActiveIdentity() && trimStr(snap.activeIdentity || '') !== trimStr(getActiveIdentity() || '')) return false;
+    const snapSelectionKey = normalisePreviewSelectionKey(snap?.selectionKey || '');
+    if (snapSelectionKey && snapSelectionKey !== selectionKey) return false;
+    const snapFileKey = trimStr(snap?.fileKey || '').replace(/^\/+/, '');
+    if (snapFileKey && snapFileKey !== fileKey) return false;
+    const snapActiveTab = trimStr(snap?.activeTab || '').toLowerCase() === 'attached' ? 'attached' : (trimStr(snap?.activeTab || '') ? 'queue' : '');
+    if (snapActiveTab && snapActiveTab !== selectionTab) return false;
+
+    if (opts.requireRequested === true && requestedKey !== selectionKey && targetKey !== selectionKey) return false;
+    return true;
+  };
+
   const isBulkProcessQueuePreviewSnapshot = (snapshotInput = null) => {
     const snap = (snapshotInput && typeof snapshotInput === 'object') ? snapshotInput : null;
     if (!snap) return false;
@@ -137080,19 +137133,15 @@ function bindBulkProcessPreviewPane(state) {
       requireFileKeyUnchanged: true,
       allowSupersededBindForSameSelection: opts.allowSupersededBindForSameSelection === true || opts.allowSameOwnerRowSelection === true
     });
-    const allowBulkAuthoriseAttachedLiveCommit = !!(
+    const commitSnapshotFileKey = trimStr(commitSnapshot?.fileKey || liveFileKey || '').replace(/^\/+/, '');
+    const allowBulkAuthoriseCurrentTargetCommit = !!(
       !snapshotCurrentForCommit &&
-      selectionKey.startsWith('attached|') &&
-      (bulkAuthoriseSurfaceAtBind || isCurrentBulkAuthorisePreviewSurface() || isBulkAuthoriseTimesheetsPreview()) &&
-      trimStr(livePreviewState.activeTab || pane.active_tab || '').toLowerCase() === 'attached' &&
-      liveSelectionKey === selectionKey &&
-      (!liveFileKey || !commitSnapshot?.fileKey || liveFileKey === trimStr(commitSnapshot.fileKey || '').replace(/^\/+/, '')) &&
-      (
-        !normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '') ||
-        normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '') === selectionKey
-      )
+      isCurrentBulkAuthorisePreviewTarget(selectionKey, commitSnapshotFileKey, commitSnapshot, {
+        reason: 'atomic-current-target-commit',
+        requireRequested: true
+      })
     );
-    if (!snapshotCurrentForCommit && !allowBulkAuthoriseAttachedLiveCommit) {
+    if (!snapshotCurrentForCommit && !allowBulkAuthoriseCurrentTargetCommit) {
       return reject('snapshot-not-current', { snapshotReason: trimStr(commitSnapshot?.reason || '') });
     }
 
@@ -137742,11 +137791,18 @@ function bindBulkProcessPreviewPane(state) {
     const opts = (presignOptions && typeof presignOptions === 'object') ? presignOptions : {};
     const cleanKey = trimStr(key || '').replace(/^\/+/, '');
     const snapshot = opts.snapshot && typeof opts.snapshot === 'object' ? opts.snapshot : capturePreviewCommitSnapshot(opts.previewState || null, { reason: 'presign-download' });
-    if (!isPreviewCommitSnapshotCurrent(snapshot, {
+    const presignSnapshotCurrentBeforeRequest = isPreviewCommitSnapshotCurrent(snapshot, {
       requireSelectionUnchanged: true,
       requireFileKeyUnchanged: true,
       allowSupersededBindForSameSelection: opts.allowSupersededBindForSameSelection === true || opts.allowSameOwnerRowSelection === true
-    })) {
+    });
+    const presignSnapshotStillCurrentTargetBeforeRequest = !presignSnapshotCurrentBeforeRequest && isCurrentBulkAuthorisePreviewTarget(
+      snapshot?.selectionKey || '',
+      snapshot?.fileKey || cleanKey,
+      snapshot,
+      { reason: 'presign-before-request', requireRequested: false }
+    );
+    if (!presignSnapshotCurrentBeforeRequest && !presignSnapshotStillCurrentTargetBeforeRequest) {
       return '';
     }
     if (window.__LOG_MODAL === true) {
@@ -137786,11 +137842,18 @@ function bindBulkProcessPreviewPane(state) {
     const json = text ? JSON.parse(text) : {};
     const url = json.url || json.signed_url || json.download_url || null;
     if (!url) throw new Error('No URL returned from presign-download');
-    if (!isPreviewCommitSnapshotCurrent(snapshot, {
+    const presignSnapshotCurrentAfterResponse = isPreviewCommitSnapshotCurrent(snapshot, {
       requireSelectionUnchanged: true,
       requireFileKeyUnchanged: true,
       allowSupersededBindForSameSelection: opts.allowSupersededBindForSameSelection === true || opts.allowSameOwnerRowSelection === true
-    })) {
+    });
+    const presignSnapshotStillCurrentTargetAfterResponse = !presignSnapshotCurrentAfterResponse && isCurrentBulkAuthorisePreviewTarget(
+      snapshot?.selectionKey || '',
+      snapshot?.fileKey || cleanKey,
+      snapshot,
+      { reason: 'presign-after-response', requireRequested: true }
+    );
+    if (!presignSnapshotCurrentAfterResponse && !presignSnapshotStillCurrentTargetAfterResponse) {
       return '';
     }
     return String(url);
@@ -139615,11 +139678,19 @@ function bindBulkProcessPreviewPane(state) {
 
       try {
         signedUrl = await presignRecord.promise;
-        if (!isPreviewCommitSnapshotCurrent(presignRecord.snapshot || capturePreviewCommitSnapshot(previewState, { reason: 'presign-after-await' }), {
+        const presignAfterAwaitSnapshot = presignRecord.snapshot || capturePreviewCommitSnapshot(previewState, { reason: 'presign-after-await' });
+        const presignAfterAwaitCurrent = isPreviewCommitSnapshotCurrent(presignAfterAwaitSnapshot, {
           requireSelectionUnchanged: true,
           requireFileKeyUnchanged: true,
           allowSupersededBindForSameSelection: true
-        })) {
+        });
+        const presignAfterAwaitStillCurrentTarget = !presignAfterAwaitCurrent && isCurrentBulkAuthorisePreviewTarget(
+          previewSelectionKey,
+          presignAfterAwaitSnapshot?.fileKey || previewFileCacheKey,
+          presignAfterAwaitSnapshot,
+          { reason: 'presign-after-await-current-target', requireRequested: true }
+        );
+        if (!presignAfterAwaitCurrent && !presignAfterAwaitStillCurrentTarget) {
           return;
         }
       } catch (e) {
@@ -139650,16 +139721,29 @@ function bindBulkProcessPreviewPane(state) {
       );
       if (signedUrl) {
         const sharedPresignSnapshot = presignRecord.snapshot || capturePreviewCommitSnapshot(previewState, { reason: 'presign-commit' });
-        if (!isPreviewCommitSnapshotCurrent(sharedPresignSnapshot, {
+        const sharedPresignSnapshotCurrent = isPreviewCommitSnapshotCurrent(sharedPresignSnapshot, {
           requireSelectionUnchanged: true,
           requireFileKeyUnchanged: true,
           allowSupersededBindForSameSelection: true
-        })) return;
+        });
+        const sharedPresignSnapshotCurrentTarget = !sharedPresignSnapshotCurrent && isCurrentBulkAuthorisePreviewTarget(
+          previewSelectionKey,
+          sharedPresignSnapshot?.fileKey || previewFileCacheKey,
+          sharedPresignSnapshot,
+          { reason: 'presign-current-target-commit', requireRequested: true }
+        );
+        if (!sharedPresignSnapshotCurrent && !sharedPresignSnapshotCurrentTarget) return;
         const stalePresign = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'presign');
-        if (stalePresign.stale) return;
+        const stalePresignStillCurrentTarget = stalePresign.stale && isCurrentBulkAuthorisePreviewTarget(
+          previewSelectionKey,
+          sharedPresignSnapshot?.fileKey || previewFileCacheKey,
+          sharedPresignSnapshot,
+          { reason: 'presign-stale-but-current-target', requireRequested: true }
+        );
+        if (stalePresign.stale && !stalePresignStillCurrentTarget) return;
         const atomicCommitted = commitSignedPreviewAtomically(previewState, previewSelectionKey, signedUrl, {
           snapshot: sharedPresignSnapshot,
-          reason: 'presign-commit',
+          reason: stalePresignStillCurrentTarget ? 'presign-current-target-commit' : 'presign-commit',
           allowSupersededBindForSameSelection: true
         });
         if (!atomicCommitted) return;
@@ -139708,9 +139792,16 @@ function bindBulkProcessPreviewPane(state) {
             );
             if (latestFileKey === previewFileCacheKey && latestSelectionKey === previewSelectionKey) {
               const staleDeferredRecovery = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'recovery');
-              if (staleDeferredRecovery.stale) return;
               const deferredSnapshot = capturePreviewCommitSnapshot(latestPreview, { reason: 'presign-deferred-recovery' });
-              if (!isPreviewCommitSnapshotCurrent(deferredSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true })) return;
+              const deferredStillCurrentTarget = staleDeferredRecovery.stale && isCurrentBulkAuthorisePreviewTarget(
+                previewSelectionKey,
+                latestFileKey,
+                deferredSnapshot,
+                { reason: 'presign-deferred-current-target', requireRequested: true }
+              );
+              if (staleDeferredRecovery.stale && !deferredStillCurrentTarget) return;
+              const deferredSnapshotCurrent = isPreviewCommitSnapshotCurrent(deferredSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true });
+              if (!deferredSnapshotCurrent && !deferredStillCurrentTarget) return;
               commitSignedPreviewAtomically(latestPreview, previewSelectionKey, signedUrl, {
                 snapshot: deferredSnapshot,
                 reason: 'presign-deferred-selection-match',
@@ -139740,7 +139831,14 @@ function bindBulkProcessPreviewPane(state) {
       });
       if (hasStaleLoadingDomForLivePreview(previewState)) {
         if (commitLiveSignedUrlIfCurrentStageStillLoading(previewState, 'presign-complete')) return;
-        if (checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'recovery').stale) return;
+        const recoveryStale = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'recovery');
+        const recoveryStillCurrentTarget = recoveryStale.stale && isCurrentBulkAuthorisePreviewTarget(
+          previewSelectionKey,
+          previewFileCacheKey,
+          capturePreviewCommitSnapshot(previewState, { reason: 'presign-complete-current-target-recovery' }),
+          { reason: 'presign-complete-current-target-recovery', requireRequested: true }
+        );
+        if (recoveryStale.stale && !recoveryStillCurrentTarget) return;
         const recovered = await tryImmediateSameSelectionRenderRecovery(previewSelectionKey, 'presign-complete');
         if (recovered) return;
       }
@@ -139750,10 +139848,18 @@ function bindBulkProcessPreviewPane(state) {
     const stageHasRenderablePreview = !!(q('#bulkProcessImagePreviewEl') || q('#bulkProcessPdfPreviewFrame') || stage.querySelector('a[href]'));
     if (signedUrl && !stageHasRenderablePreview && stageText.includes('preview is loading')) {
       if (commitLiveSignedUrlIfCurrentStageStillLoading(previewState, 'loading-text-recovery')) return;
-      if (checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'recovery').stale) return;
+      const loadingRecoveryStale = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'recovery');
+      const loadingRecoverySnapshot = capturePreviewCommitSnapshot(previewState, { reason: 'loading-text-current-target-recovery' });
+      const loadingRecoveryStillCurrentTarget = loadingRecoveryStale.stale && isCurrentBulkAuthorisePreviewTarget(
+        previewSelectionKey,
+        previewFileCacheKey,
+        loadingRecoverySnapshot,
+        { reason: 'loading-text-current-target-recovery', requireRequested: true }
+      );
+      if (loadingRecoveryStale.stale && !loadingRecoveryStillCurrentTarget) return;
       commitSignedPreviewAtomically(previewState, previewSelectionKey, signedUrl, {
         snapshot: capturePreviewCommitSnapshot(previewState, { reason: 'loading-text-recovery' }),
-        reason: 'loading-text-recovery',
+        reason: loadingRecoveryStillCurrentTarget ? 'loading-text-current-target-recovery' : 'loading-text-recovery',
         allowSupersededBindForSameSelection: true
       });
       const recovered = await tryImmediateSameSelectionRenderRecovery(previewSelectionKey, 'loading-text-recovery');
@@ -139774,7 +139880,13 @@ function bindBulkProcessPreviewPane(state) {
       });
     }
     const staleDomCommit = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'dom');
-    if (staleDomCommit.stale) {
+    const staleDomStillCurrentTarget = staleDomCommit.stale && isCurrentBulkAuthorisePreviewTarget(
+      previewSelectionKey,
+      previewFileCacheKey,
+      capturePreviewCommitSnapshot(previewState, { reason: 'dom-current-target-commit' }),
+      { reason: 'dom-current-target-commit', requireRequested: true }
+    );
+    if (staleDomCommit.stale && !staleDomStillCurrentTarget) {
       if (signedUrl) {
         logPreviewCommitEvent(bulkAuthSnapshot, {
           event: 'signed-url-prerender-commit',
@@ -139996,6 +140108,8 @@ function bindBulkProcessPreviewPane(state) {
     warnPreview('bind failed', e);
   });
 }
+
+
 
 
 function renderBulkProcessDockedEvidenceViewer(state) {
