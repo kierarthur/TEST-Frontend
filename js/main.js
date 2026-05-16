@@ -132581,7 +132581,6 @@ async function openBulkProcessWorkbench(seed = {}) {
   GE();
 }
 
-
 function renderBulkProcessPreviewPane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -132616,6 +132615,21 @@ function renderBulkProcessPreviewPane(state) {
         };
 
   const pane = st.evidence_pane_state;
+  const renderIsBulkAuthoriseContext = !!(
+    st === window.modalCtx?.bulkAuthoriseState ||
+    window.modalCtx?.bulkAuthoriseState === st ||
+    st.bulk_authorise_mode === true
+  );
+  if (!renderIsBulkAuthoriseContext && typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
+    if (pane.__bulk_process_render_preview_reconcile_guard !== true) {
+      try {
+        pane.__bulk_process_render_preview_reconcile_guard = true;
+        reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
+      } catch {} finally {
+        try { delete pane.__bulk_process_render_preview_reconcile_guard; } catch { pane.__bulk_process_render_preview_reconcile_guard = false; }
+      }
+    }
+  }
   pane.pdf_page_by_target =
     (pane.pdf_page_by_target && typeof pane.pdf_page_by_target === 'object' && !Array.isArray(pane.pdf_page_by_target))
       ? pane.pdf_page_by_target
@@ -133087,7 +133101,6 @@ function renderBulkProcessPreviewPane(state) {
     </div>
   `);
 }
-
 
 
 
@@ -141735,6 +141748,8 @@ function renderBulkProcessSelectedSummaryStrip(state) {
 
 
 
+
+
 function renderBulkProcessEvidencePane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -141766,14 +141781,25 @@ function renderBulkProcessEvidencePane(state) {
         };
 
   const pane = st.evidence_pane_state;
-  const activeTab = String(pane.active_tab || 'queue').trim().toLowerCase() === 'attached' ? 'attached' : 'queue';
-  const trimStr = (v) => String(v == null ? '' : v).trim();
-  const upper = (v) => trimStr(v).toUpperCase();
-  const isBulkAuthoriseContext = !!(
+  const renderIsBulkAuthoriseContext = !!(
     st === window.modalCtx?.bulkAuthoriseState ||
     window.modalCtx?.bulkAuthoriseState === st ||
     st.bulk_authorise_mode === true
   );
+  if (!renderIsBulkAuthoriseContext && typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
+    if (pane.__bulk_process_render_evidence_reconcile_guard !== true) {
+      try {
+        pane.__bulk_process_render_evidence_reconcile_guard = true;
+        reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
+      } catch {} finally {
+        try { delete pane.__bulk_process_render_evidence_reconcile_guard; } catch { pane.__bulk_process_render_evidence_reconcile_guard = false; }
+      }
+    }
+  }
+  const activeTab = String(pane.active_tab || 'queue').trim().toLowerCase() === 'attached' ? 'attached' : 'queue';
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const upper = (v) => trimStr(v).toUpperCase();
+  const isBulkAuthoriseContext = renderIsBulkAuthoriseContext;
   const bulkAuthoriseTimesheetsContext = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
     ? resolveBulkAuthoriseTimesheetsEvidenceContext(st)
     : { isBulkAuthoriseTimesheets: false };
@@ -141987,6 +142013,9 @@ function renderBulkProcessEvidencePane(state) {
     `background:${isActive ? 'rgba(52,211,153,.2)' : 'transparent'};` +
     `box-shadow:${isActive ? '0 0 0 1px rgba(52,211,153,.45) inset, 0 0 8px rgba(52,211,153,.35)' : 'none'};` +
     `color:${isActive ? '#b7f7d7' : 'inherit'};font-weight:${isActive ? '700' : '600'};`;
+  const sourceBtnClass = (isActive) => `btn${isActive ? ' active is-active selected' : ''}`;
+  const sourceBtnStateAttrs = (isActive) =>
+    `aria-pressed="${isActive ? 'true' : 'false'}" aria-selected="${isActive ? 'true' : 'false'}" data-active="${isActive ? 'true' : 'false'}" data-state="${isActive ? 'active' : 'inactive'}"`;
 
   return htmlWrap(`
     <div class="card" id="bulkProcessEvidencePaneRoot" style="padding:6px 7px;overflow:visible;">
@@ -141996,9 +142025,9 @@ function renderBulkProcessEvidencePane(state) {
           <button type="button" class="btn btn-outline" id="bpQueueNextBtn" ${queueLoadedForScope && !queueLoading && activeQueueItem ? '' : 'disabled'}>Next</button>
           <span class="mini" style="opacity:.85;">Images in Queue - ${enc(queueCountLabel)}</span>
         </div>
-        <div style="display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;">
-          <button type="button" class="btn" style="${sourceBtnStyle(activeTab === 'queue')}" id="bulkProcessEvidenceTabQueue">QUEUE</button>
-          <button type="button" class="btn" style="${sourceBtnStyle(activeTab === 'attached')}" id="bulkProcessEvidenceTabAttached">ATTACHED</button>
+        <div role="tablist" aria-label="Evidence source" style="display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;">
+          <button type="button" role="tab" class="${sourceBtnClass(activeTab === 'queue')}" style="${sourceBtnStyle(activeTab === 'queue')}" id="bulkProcessEvidenceTabQueue" ${sourceBtnStateAttrs(activeTab === 'queue')}>QUEUE</button>
+          <button type="button" role="tab" class="${sourceBtnClass(activeTab === 'attached')}" style="${sourceBtnStyle(activeTab === 'attached')}" id="bulkProcessEvidenceTabAttached" ${sourceBtnStateAttrs(activeTab === 'attached')}>ATTACHED</button>
         </div>
         <div style="display:flex;gap:5px;align-items:center;justify-content:flex-end;flex-wrap:wrap;">
           <select id="bpQueueKindSelect" class="input" style="max-width:160px;" ${(queueLoadedForScope && !queueLoading && activeQueueItem && !noUploadKindsAvailable) ? '' : 'disabled'}>
@@ -142017,11 +142046,6 @@ function renderBulkProcessEvidencePane(state) {
     </div>
   `);
 }
-
-
-
-
-
 
 
 
@@ -146576,24 +146600,19 @@ function hasBulkProcessAttachedEvidence(items) {
 }
 
 
-
-
 function resolveBulkProcessPreviewSourceMode(currentModeRaw, hasAttachedEvidence) {
-  const currentMode = String(currentModeRaw || '').trim().toLowerCase() === 'attached' ? 'attached' : 'queue';
-
   if (hasAttachedEvidence && typeof hasAttachedEvidence === 'object') {
-    const hasAny = !!hasAttachedEvidence.has_any;
     const hasTimesheet = !!hasAttachedEvidence.has_timesheet;
-    const manualOverride = !!hasAttachedEvidence.manual_override;
-    const queueOverride = !!hasAttachedEvidence.queue_override;
 
-    if (queueOverride) return 'queue';
-    if (manualOverride && hasAny) return 'attached';
+    // Bulk Process preview mode is driven by the selected row's timesheet artifact only.
+    // Generic evidence metadata/manual tab overrides must not keep the pane on the wrong source.
     return hasTimesheet ? 'attached' : 'queue';
   }
 
   return hasAttachedEvidence ? 'attached' : 'queue';
 }
+
+
 
 function resolveBulkAuthoriseTimesheetsEvidenceContext(state, options = {}) {
   const trimStr = (v) => String(v == null ? '' : v).trim();
@@ -148846,7 +148865,6 @@ function captureBulkProcessUiSnapshot(state) {
 }
 
 
-
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const st = (state && typeof state === 'object') ? state : {};
   st.evidence_pane_state =
@@ -148876,6 +148894,222 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       } catch {}
     }
     return {};
+  };
+
+
+  const safeStorageKey = (value) => {
+    const raw = trimStr(value || '');
+    if (!raw) return '';
+    const lower = raw.toLowerCase();
+    if (lower === 'null' || lower === 'undefined' || lower === 'none' || lower === '[object object]') return '';
+    return raw.replace(/^\/+/, '');
+  };
+
+  const inferFilenameFromStorageKey = (storageKey) => {
+    const clean = safeStorageKey(storageKey).split('?')[0].split('#')[0];
+    const parts = clean.split('/').filter(Boolean);
+    return trimStr(parts[parts.length - 1] || '') || 'Timesheet';
+  };
+
+  const inferPreviewPartsFromStorageKey = (storageKey, mimeInput = '') => {
+    const key = safeStorageKey(storageKey);
+    const filename = inferFilenameFromStorageKey(key) || 'Timesheet';
+    const nameForExt = trimStr(filename || key || '').split('?')[0].split('#')[0];
+    const ext = trimStr(nameForExt.includes('.') ? nameForExt.split('.').pop() : '').toLowerCase();
+    const explicitMime = trimStr(mimeInput || '').toLowerCase();
+    const imageMimeByExt = {
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      webp: 'image/webp',
+      gif: 'image/gif',
+      bmp: 'image/bmp',
+      svg: 'image/svg+xml',
+      tif: 'image/tiff',
+      tiff: 'image/tiff',
+      heic: 'image/heic',
+      heif: 'image/heif',
+      avif: 'image/avif'
+    };
+    const isPdf = explicitMime === 'application/pdf' || ext === 'pdf' || /\.pdf(?:$|[?#])/i.test(key);
+    const isImage = explicitMime.startsWith('image/') || !!imageMimeByExt[ext] || /\.(jpe?g|png|webp|gif|bmp|svg|tiff?|heic|heif|avif)(?:$|[?#])/i.test(key);
+    const mimeType = explicitMime || (isPdf ? 'application/pdf' : (isImage ? (imageMimeByExt[ext] || 'image/*') : ''));
+    return {
+      filename,
+      mime_type: mimeType || null,
+      preview_mode: isPdf ? 'PDF' : (isImage ? 'IMAGE' : null)
+    };
+  };
+
+  const selectedRowIdentityParts = () => {
+    const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
+    const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+    const activeCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
+    const activeDetails = (st.active_details && typeof st.active_details === 'object') ? st.active_details : {};
+    const rowKey = trimStr(
+      st.active_row_key ||
+      activeRow.row_key ||
+      activeContext.row_key ||
+      activeContext.row?.row_key ||
+      activeContext.data_row?.row_key ||
+      activeCtx.row_key ||
+      activeCtx.row?.row_key ||
+      activeCtx.data_row?.row_key ||
+      activeCtx.state?.row_key ||
+      ''
+    );
+    const timesheetId = trimStr(
+      activeRow.timesheet_id ||
+      activeRow.current_timesheet_id ||
+      activeRow.requested_timesheet_id ||
+      activeContext.timesheet_id ||
+      activeContext.current_timesheet_id ||
+      activeContext.details?.current_timesheet_id ||
+      activeContext.details?.timesheet?.timesheet_id ||
+      activeCtx.timesheet_id ||
+      activeCtx.current_timesheet_id ||
+      activeCtx.details?.current_timesheet_id ||
+      activeCtx.details?.timesheet?.timesheet_id ||
+      activeCtx.state?.timesheet_id ||
+      activeCtx.state?.current_timesheet_id ||
+      activeDetails.timesheet_id ||
+      activeDetails.current_timesheet_id ||
+      activeDetails.requested_timesheet_id ||
+      activeDetails.timesheet?.timesheet_id ||
+      ''
+    );
+    const contractWeekId = trimStr(
+      activeRow.contract_week_id ||
+      activeContext.contract_week_id ||
+      activeContext.details?.contract_week_id ||
+      activeContext.details?.contract_week?.id ||
+      activeCtx.contract_week_id ||
+      activeCtx.details?.contract_week_id ||
+      activeCtx.details?.contract_week?.id ||
+      activeCtx.state?.contract_week_id ||
+      activeDetails.contract_week_id ||
+      activeDetails.contract_week?.id ||
+      ''
+    );
+    const resolvedRowKey = rowKey || (timesheetId ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : ''));
+    return { rowKey: resolvedRowKey, timesheetId, contractWeekId };
+  };
+
+  const readSelectedRowTimesheetArtifactKey = () => {
+    const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
+    const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+    const activeCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
+    const activeDetails = (st.active_details && typeof st.active_details === 'object') ? st.active_details : {};
+
+    const rowLikeObjects = [
+      activeRow,
+      activeContext.row,
+      activeContext.data_row,
+      activeCtx.row,
+      activeCtx.data_row,
+      activeCtx.state?.row,
+      activeCtx.state?.data_row
+    ];
+    const detailsLikeObjects = [
+      activeDetails,
+      activeContext.details,
+      activeCtx.details,
+      activeCtx.state,
+      activeContext,
+      activeCtx
+    ];
+    const candidates = [];
+    const addValue = (value) => {
+      const key = safeStorageKey(value);
+      if (key) candidates.push(key);
+    };
+    const addArtifactObject = (artifact) => {
+      if (!artifact || typeof artifact !== 'object') return;
+      addValue(artifact.storage_key);
+      addValue(artifact.r2_key);
+      addValue(artifact.file_key);
+      addValue(artifact.download_storage_key);
+      addValue(artifact.storageKey);
+      addValue(artifact.r2Key);
+      addValue(artifact.fileKey);
+      addValue(artifact.downloadStorageKey);
+    };
+
+    for (const obj of rowLikeObjects) {
+      if (!obj || typeof obj !== 'object') continue;
+      addValue(obj.primary_artifact_storage_key);
+      addValue(obj.manual_pdf_r2_key);
+      addValue(obj.uploaded_pdf_r2_key);
+      addValue(obj.primaryArtifactStorageKey);
+      addValue(obj.manualPdfR2Key);
+      addValue(obj.uploadedPdfR2Key);
+      addArtifactObject(obj.primary_artifact);
+      addArtifactObject(obj.primaryArtifact);
+    }
+
+    for (const obj of detailsLikeObjects) {
+      if (!obj || typeof obj !== 'object') continue;
+      addValue(obj.primary_artifact_storage_key);
+      addValue(obj.manual_pdf_r2_key);
+      addValue(obj.uploaded_pdf_r2_key);
+      addValue(obj.primaryArtifactStorageKey);
+      addValue(obj.manualPdfR2Key);
+      addValue(obj.uploadedPdfR2Key);
+      addArtifactObject(obj.primary_artifact);
+      addArtifactObject(obj.primaryArtifact);
+      const ts = (obj.timesheet && typeof obj.timesheet === 'object') ? obj.timesheet : {};
+      addValue(ts.primary_artifact_storage_key);
+      addValue(ts.manual_pdf_r2_key);
+      addValue(ts.uploaded_pdf_r2_key);
+      addValue(ts.primaryArtifactStorageKey);
+      addValue(ts.manualPdfR2Key);
+      addValue(ts.uploadedPdfR2Key);
+      addArtifactObject(ts.primary_artifact);
+      addArtifactObject(ts.primaryArtifact);
+      const cw = (obj.contract_week && typeof obj.contract_week === 'object') ? obj.contract_week : {};
+      addValue(cw.primary_artifact_storage_key);
+      addValue(cw.manual_pdf_r2_key);
+      addValue(cw.uploaded_pdf_r2_key);
+      addValue(cw.primaryArtifactStorageKey);
+      addValue(cw.manualPdfR2Key);
+      addValue(cw.uploadedPdfR2Key);
+      addArtifactObject(cw.primary_artifact);
+      addArtifactObject(cw.primaryArtifact);
+    }
+
+    return candidates[0] || '';
+  };
+
+  const buildSyntheticSelectedRowAttachedItem = (storageKeyInput) => {
+    const storageKey = safeStorageKey(storageKeyInput);
+    if (!storageKey) return null;
+    const identity = selectedRowIdentityParts();
+    const rowKey = trimStr(identity.rowKey || st.active_row_key || st.active_row?.row_key || 'row');
+    const preview = inferPreviewPartsFromStorageKey(storageKey);
+    const filename = trimStr(preview.filename || '') || 'Timesheet';
+    return {
+      id: `synthetic-attached:${rowKey || 'row'}:${storageKey}`,
+      evidence_id: null,
+      queue_id: null,
+      kind: 'TIMESHEET',
+      staged_kind: 'TIMESHEET',
+      display_name: filename,
+      filename,
+      original_filename: filename,
+      storage_key: storageKey,
+      r2_key: storageKey,
+      file_key: storageKey,
+      download_storage_key: storageKey,
+      preview_mode: preview.preview_mode,
+      mime_type: preview.mime_type,
+      row_key: rowKey || null,
+      timesheet_id: identity.timesheetId || null,
+      contract_week_id: identity.contractWeekId || null,
+      source_label: 'Attached',
+      source_badge: 'Attached',
+      is_synthetic_attached_fallback: true,
+      __synthetic_attached_fallback: true
+    };
   };
 
   const frame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
@@ -148946,7 +149180,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     const activeItem = mode === 'attached'
       ? ((paneObj.active_attached_item && typeof paneObj.active_attached_item === 'object') ? paneObj.active_attached_item : null)
       : ((paneObj.active_queue_item && typeof paneObj.active_queue_item === 'object') ? paneObj.active_queue_item : null);
-    const fileKey = trimStr(activeItem?.storage_key || activeItem?.r2_key || '');
+    const fileKey = safeStorageKey(activeItem?.storage_key || activeItem?.r2_key || activeItem?.file_key || activeItem?.download_storage_key || '');
     const itemId = mode === 'attached' ? attachedId : queueId;
     return {
       mode,
@@ -149088,6 +149322,16 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     const activeContractWeekId = getActiveContractWeekId();
     const activeTimesheetId = getActiveTimesheetId();
+    const activeRowKeyForEvidence = trimStr(
+      st.active_row_key ||
+      st.active_row?.row_key ||
+      st.active_ctx?.row?.row_key ||
+      st.active_ctx?.data_row?.row_key ||
+      st.active_context?.row?.row_key ||
+      st.active_context?.data_row?.row_key ||
+      st.active_ctx?.state?.row_key ||
+      ''
+    );
 
     const getItemMetaObject = (item) => {
       const candidates = [item?.meta_json, item?.metaJson, item?.meta, item?.queue_meta, item?.queueMeta, item?.source_context, item?.sourceContext];
@@ -149128,6 +149372,23 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       );
     };
 
+    const getItemRowKey = (item) => {
+      const meta = getItemMetaObject(item);
+      return trimStr(
+        item?.row_key ||
+        item?.rowKey ||
+        item?.bulk_process_row_key ||
+        item?.bulkProcessRowKey ||
+        item?.timesheet_row_key ||
+        item?.timesheetRowKey ||
+        meta.row_key ||
+        meta.rowKey ||
+        meta.bulk_process_row_key ||
+        meta.timesheet_row_key ||
+        ''
+      );
+    };
+
     const isSyntheticAttachedFallback = (item, evidenceId) => {
       const explicitEvidenceId = trimStr(item?.evidence_id || item?.evidenceId || '');
       const itemId = trimStr(evidenceId || item?.id || '');
@@ -149144,6 +149405,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
       const itemContractWeekId = getItemContractWeekId(item);
       const itemTimesheetId = getItemTimesheetId(item);
+      const itemRowKey = getItemRowKey(item);
       const itemMeta = getItemMetaObject(item);
       const itemSourceLabel = upper(item.source_label || item.source_badge || item.source || itemMeta.source_label || itemMeta.source_badge || itemMeta.source || '');
       const stagedContext = !!(
@@ -149168,12 +149430,12 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
         itemContractWeekId === activeContractWeekId
       );
 
+      if (itemRowKey && activeRowKeyForEvidence && itemRowKey !== activeRowKeyForEvidence) return;
       if (itemTimesheetId && activeTimesheetId && itemTimesheetId !== activeTimesheetId) return;
       if (itemContractWeekId && activeContractWeekId && itemContractWeekId !== activeContractWeekId) return;
       if (!isBulkAuthoriseTimesheets && !sourceIsCurrentContext && !stagedContextMatchesActiveContractWeek) {
-        const sourceIsExistingPaneEvidence = sourceScope === 'pane_attached_rows' || sourceScope === 'pane_attached_all_rows' || sourceScope === 'modal_timesheet_state';
         const hasExplicitActiveScopeMatch = !!(
-          sourceIsExistingPaneEvidence ||
+          (activeRowKeyForEvidence && itemRowKey && itemRowKey === activeRowKeyForEvidence) ||
           (activeTimesheetId && itemTimesheetId && itemTimesheetId === activeTimesheetId) ||
           (activeContractWeekId && itemContractWeekId && itemContractWeekId === activeContractWeekId)
         );
@@ -149195,7 +149457,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
         (stagedContextMatchesActiveContractWeek ? item.id : '') ||
         ''
       );
-      const storageKey = trimStr(item.storage_key || item.r2_key || item.download_storage_key || itemMeta.storage_key || itemMeta.r2_key || itemMeta.file_key || '');
+      const storageKey = safeStorageKey(item.storage_key || item.r2_key || item.file_key || item.download_storage_key || item.storageKey || item.r2Key || item.fileKey || item.downloadStorageKey || itemMeta.storage_key || itemMeta.r2_key || itemMeta.file_key || itemMeta.download_storage_key || '');
       if (!evidenceId && !queueId && !storageKey) return;
 
       const synthetic = isSyntheticAttachedFallback(item, evidenceId);
@@ -149216,19 +149478,22 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       }
 
       const kind = upper(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || '') || 'OTHER';
-      const normalizedId = item.id || item.evidence_id || evidenceId || queueId || null;
+      const normalizedId = item.id || item.evidence_id || evidenceId || queueId || storageKey || null;
       const normalized = {
         ...deep(item),
         id: normalizedId,
         evidence_id: stagedContextMatchesActiveContractWeek ? (item.evidence_id || null) : (item.evidence_id || item.id || evidenceId || null),
         queue_id: queueId || item.queue_id || null,
+        row_key: itemRowKey || activeRowKeyForEvidence || item.row_key || null,
         contract_week_id: itemContractWeekId || activeContractWeekId || item.contract_week_id || null,
         is_staged_context: stagedContextMatchesActiveContractWeek ? true : item.is_staged_context,
         kind,
         display_name: trimStr(item.display_name || item.filename || item.original_filename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
         filename: trimStr(item.filename || item.display_name || item.original_filename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
         storage_key: storageKey || null,
-        r2_key: trimStr(item.r2_key || item.storage_key || storageKey || '') || null,
+        r2_key: safeStorageKey(item.r2_key || item.storage_key || storageKey || '') || null,
+        file_key: safeStorageKey(item.file_key || item.storage_key || item.r2_key || storageKey || '') || null,
+        download_storage_key: safeStorageKey(item.download_storage_key || item.storage_key || item.r2_key || storageKey || '') || null,
         mime_type: trimStr(item.mime_type || item.mimeType || item.content_type || item.contentType || '') || null,
         preview_mode: trimStr(item.preview_mode || item.previewMode || '') || null,
         source_label: trimStr(item.source_label || '') || (stagedContextMatchesActiveContractWeek ? 'Staged' : 'Attached'),
@@ -149275,12 +149540,42 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   const previousSelection = getSelectionIdentity(pane);
   const collectedAttachedRows = collectAttachedRows();
-  const attachedAllRows = Array.isArray(collectedAttachedRows?.rows) ? collectedAttachedRows.rows : [];
-  const syntheticAttachedFallbackRows = Array.isArray(collectedAttachedRows?.syntheticRows) ? collectedAttachedRows.syntheticRows : [];
+  let attachedAllRows = Array.isArray(collectedAttachedRows?.rows) ? collectedAttachedRows.rows : [];
+  let syntheticAttachedFallbackRows = Array.isArray(collectedAttachedRows?.syntheticRows) ? collectedAttachedRows.syntheticRows : [];
+  const selectedRowArtifactKey = safeStorageKey(readSelectedRowTimesheetArtifactKey());
+  const selectedRowSyntheticAttachedItem = selectedRowArtifactKey ? buildSyntheticSelectedRowAttachedItem(selectedRowArtifactKey) : null;
+  const getItemStorageKey = (item) => safeStorageKey(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || '');
+  if (selectedRowSyntheticAttachedItem) {
+    const selectedKeyLower = selectedRowArtifactKey.toLowerCase();
+    const matchingHydratedIndex = attachedAllRows.findIndex((item) => (
+      upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET' &&
+      getItemStorageKey(item).toLowerCase() === selectedKeyLower
+    ));
+    if (matchingHydratedIndex >= 0) {
+      const matching = attachedAllRows[matchingHydratedIndex];
+      attachedAllRows = [
+        {
+          ...selectedRowSyntheticAttachedItem,
+          ...(deep(matching) || {}),
+          kind: 'TIMESHEET',
+          staged_kind: matching.staged_kind || 'TIMESHEET',
+          storage_key: getItemStorageKey(matching) || selectedRowArtifactKey,
+          r2_key: safeStorageKey(matching.r2_key || matching.storage_key || selectedRowArtifactKey) || selectedRowArtifactKey,
+          file_key: safeStorageKey(matching.file_key || matching.storage_key || matching.r2_key || selectedRowArtifactKey) || selectedRowArtifactKey,
+          download_storage_key: safeStorageKey(matching.download_storage_key || matching.storage_key || matching.r2_key || selectedRowArtifactKey) || selectedRowArtifactKey
+        },
+        ...attachedAllRows.slice(0, matchingHydratedIndex),
+        ...attachedAllRows.slice(matchingHydratedIndex + 1)
+      ];
+    } else {
+      attachedAllRows = [selectedRowSyntheticAttachedItem, ...attachedAllRows];
+      syntheticAttachedFallbackRows = [selectedRowSyntheticAttachedItem, ...syntheticAttachedFallbackRows];
+    }
+  }
   const hasSyntheticAttachedFallback = syntheticAttachedFallbackRows.length > 0;
   const timesheetRows = attachedAllRows.filter((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET');
 
-  if (evidenceContextAuthoritative || attachedAllRows.length > 0) {
+  if (evidenceContextAuthoritative || attachedAllRows.length > 0 || !selectedRowArtifactKey) {
     pane.attached_all_rows = attachedAllRows.map((item) => ({ ...(deep(item) || {}) }));
     pane.attached_rows = attachedAllRows.map((item) => ({ ...(deep(item) || {}) }));
   }
@@ -149332,22 +149627,21 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       pane.__requires_evidence_hydration = false;
     }
   } else {
-    if (hasTimesheetEvidence && !queueOverride) {
+    if (hasTimesheetEvidence) {
       resolvedSource = 'attached';
       pane.__requires_evidence_hydration = false;
-    } else if (hasAnyAttachedEvidence && manualOverride && !queueOverride) {
-      resolvedSource = 'attached';
-      pane.__requires_evidence_hydration = false;
-    } else if (hasAnyAttachedEvidence && !queueOverride) {
-      resolvedSource = 'attached';
-      pane.__requires_evidence_hydration = false;
-    } else if (!queueOverride && !evidenceContextAuthoritative && (metadataExpectsEvidence || requestedSource === 'attached')) {
-      pane.__attached_manual_override = false;
-      pane.__requires_evidence_hydration = true;
-      pane.__synthetic_attached_fallback_suppressed = hasSyntheticAttachedFallback;
-    } else if (!hasAnyAttachedEvidence && evidenceContextAuthoritative) {
+      pane.__attached_manual_override = true;
+      pane.__queue_manual_override = false;
+      pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = '';
+    } else {
       resolvedSource = 'queue';
       pane.__requires_evidence_hydration = false;
+      pane.__synthetic_attached_fallback_suppressed = hasSyntheticAttachedFallback;
+      pane.__attached_manual_override = false;
+      pane.__queue_manual_override = false;
+      pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = '';
     }
   }
 
@@ -149367,16 +149661,33 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     ''
   );
 
-  let activeAttached = currentAttachedId && attachedById.has(currentAttachedId)
+  const findPreferredTimesheetAttached = () => {
+    if (!timesheetRows.length) return null;
+    const selectedKeyLower = selectedRowArtifactKey.toLowerCase();
+    if (selectedKeyLower) {
+      const bySelectedStorage = timesheetRows.find((item) => getItemStorageKey(item).toLowerCase() === selectedKeyLower);
+      if (bySelectedStorage) return { ...(bySelectedStorage || {}) };
+    }
+    return timesheetRows[0] ? { ...(timesheetRows[0] || {}) } : null;
+  };
+
+  let activeAttached = (pane.active_tab === 'attached' || isBulkAuthoriseTimesheets || hasTimesheetEvidence) && currentAttachedId && attachedById.has(currentAttachedId)
     ? { ...(attachedById.get(currentAttachedId) || {}) }
     : null;
 
-  if (!activeAttached && (pane.active_tab === 'attached' || isBulkAuthoriseTimesheets)) {
+  if (!isBulkAuthoriseTimesheets && activeAttached && hasTimesheetEvidence && upper(activeAttached?.kind || activeAttached?.staged_kind || '') !== 'TIMESHEET') {
+    activeAttached = null;
+  }
+  if (!isBulkAuthoriseTimesheets && selectedRowArtifactKey && activeAttached && getItemStorageKey(activeAttached).toLowerCase() !== selectedRowArtifactKey.toLowerCase()) {
+    activeAttached = null;
+  }
+
+  if (!activeAttached && (pane.active_tab === 'attached' || isBulkAuthoriseTimesheets || hasTimesheetEvidence)) {
     if (hasTimesheetEvidence) {
-      activeAttached = timesheetRows[0] ? { ...(timesheetRows[0] || {}) } : null;
-    } else if (manualOverride && hasAnyAttachedEvidence) {
+      activeAttached = findPreferredTimesheetAttached();
+    } else if (isBulkAuthoriseTimesheets && manualOverride && hasAnyAttachedEvidence) {
       activeAttached = attachedAllRows[0] ? { ...(attachedAllRows[0] || {}) } : null;
-    } else if (hasAnyAttachedEvidence) {
+    } else if (isBulkAuthoriseTimesheets && hasAnyAttachedEvidence) {
       activeAttached = attachedAllRows[0] ? { ...(attachedAllRows[0] || {}) } : null;
     }
   }
@@ -149439,7 +149750,8 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const nextSelection = getSelectionIdentity(pane);
   const nextSelectionBlank = nextSelection.key === 'queue||' || nextSelection.key === 'attached||' || /^\w+\|\|$/.test(nextSelection.key) || !String(nextSelection.key || '').replace(/\|/g, '');
   const previousSelectionValid = !!previousSelection.key && previousSelection.key !== 'queue||' && previousSelection.key !== 'attached||' && !/^\w+\|\|$/.test(previousSelection.key);
-  const validToBlankSelection = !!(previousSelectionValid && nextSelectionBlank && activeIdentityAtStart === activeIdentity);
+  const suppressRestoreToPreviousSelection = !!(!isBulkAuthoriseTimesheets && (!hasTimesheetEvidence || pane.active_tab === 'queue'));
+  const validToBlankSelection = !!(previousSelectionValid && nextSelectionBlank && activeIdentityAtStart === activeIdentity && !suppressRestoreToPreviousSelection);
   const selectedPreviewChanged = previousSelection.key !== nextSelection.key && !validToBlankSelection;
   const ownerIdentity = getBulkAuthoriseOwnerIdentity();
   const previousPreviewIdentity = trimStr(pane.__preview_identity || '');
@@ -149500,6 +149812,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     resolved_source: pane.active_tab,
     has_any_attached: hasAnyAttachedEvidence,
     has_timesheet_attached: hasTimesheetEvidence,
+    selected_row_artifact_key: selectedRowArtifactKey || null,
     active_attached_id: trimStr(pane.active_attached_id || '') || null,
     active_queue_id: trimStr(pane.active_queue_id || '') || null,
     selected_preview_changed: selectedPreviewChanged,
@@ -149511,7 +149824,6 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     non_authoritative_context_ignored: false
   };
 }
-
 
 
 
