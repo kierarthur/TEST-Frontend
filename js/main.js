@@ -50744,8 +50744,28 @@ const retryBlockedFundsPipeline = async () => {
               batchId: id,
               mode: resolvedMode,
               st,
-              deepClone: deep,
-                  onSuccess: async ({ responsePayload, postCancelRefresh, postCancelResetOptions, previewResetOptions, currentWorkbenchSessionId }) => {
+                       deepClone: deep,
+                  onSuccess: async ({
+                responsePayload,
+                postCancelRefresh,
+                postCancelResetOptions,
+                previewResetOptions,
+                currentWorkbenchSessionId,
+                previewResetAlreadyApplied,
+                postCancelPreviewResetAlreadyApplied,
+                skipFollowUpPreviewReset
+              }) => {
+              const ownerAppliedPreviewReset = !!(
+                previewResetAlreadyApplied === true ||
+                postCancelPreviewResetAlreadyApplied === true ||
+                skipFollowUpPreviewReset === true ||
+                responsePayload?.previewResetAlreadyApplied === true ||
+                responsePayload?.postCancelPreviewResetAlreadyApplied === true ||
+                responsePayload?.skipFollowUpPreviewReset === true ||
+                responsePayload?.preview_reset_already_applied === true ||
+                responsePayload?.post_cancel_preview_reset_already_applied === true ||
+                responsePayload?.skip_follow_up_preview_reset === true
+              );
               const postCancelRefreshObj = (postCancelRefresh && typeof postCancelRefresh === 'object' && !Array.isArray(postCancelRefresh))
                 ? postCancelRefresh
                 : {};
@@ -50824,53 +50844,54 @@ const retryBlockedFundsPipeline = async () => {
                   });
                 }
               } catch {}
-
-              try {
-                if (typeof resetPayPreviewAndDecisions === 'function') {
-                  await resetPayPreviewAndDecisions(postCancelResetOptionsForPreview);
-                } else {
-                  const pd = String(st?.pay?.draftWizard?.pay_date || '').trim();
-                  if (pd && typeof bankingPayPreview === 'function') {
-                    await bankingPayPreview({
-                      pay_date: pd,
-                      mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
-                      hard_session_reload: true,
-                      force_new_session: true,
-                      discard_source_session: true,
-                      ignore_replacement_session: true,
-                      preview_reopen_required: true,
-                      source_session_id: postCancelResetOptionsForPreview.source_session_id || null,
-                      obsolete_session_ids: Array.isArray(postCancelResetOptionsForPreview.obsolete_session_ids) ? postCancelResetOptionsForPreview.obsolete_session_ids : [],
-                      dirty_candidate_ids: Array.isArray(postCancelResetOptionsForPreview.dirty_candidate_ids) ? postCancelResetOptionsForPreview.dirty_candidate_ids : [],
-                      pending_candidate_ids: Array.isArray(postCancelResetOptionsForPreview.pending_candidate_ids) ? postCancelResetOptionsForPreview.pending_candidate_ids : [],
-                      refresh_job_ids: Array.isArray(postCancelResetOptionsForPreview.refresh_job_ids) ? postCancelResetOptionsForPreview.refresh_job_ids : [],
-                      source_snapshot_run_id: postCancelResetOptionsForPreview.source_snapshot_run_id || null,
-                      source_session_version: postCancelResetOptionsForPreview.source_session_version ?? null,
-                      source_session_signature: postCancelResetOptionsForPreview.source_session_signature || null,
-                      mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS'
-                    });
-                  }
-                }
-              } catch (previewRefreshError) {
+              if (!ownerAppliedPreviewReset) {
                 try {
-                  const friendly = await reportChildFriendlyError(previewRefreshError, 'BANKING_PAY_PREVIEW_FAILED', {
-                    action: 'POST_DRAFT_CANCEL_PREVIEW_REFRESH',
-                    userInitiated: false,
-                    silent: true,
-                    scope: null,
-                    payload: postCancelResetOptionsForPreview,
-                    backendPayload: previewRefreshError?.backendPayload || previewRefreshError?.payload || previewRefreshError?.json || postCancelResetOptionsForPreview,
-                    technicalError: previewRefreshError
-                  });
-                  const friendlyMessage = String(friendly?.user_message || friendly?.message || postCancelPreviewRefreshMessage).trim();
-                  const safeMessage = /no\s+payment\s+batch\s+has\s+been\s+created/i.test(friendlyMessage)
-                    ? postCancelPreviewRefreshMessage
-                    : (friendlyMessage || postCancelPreviewRefreshMessage);
-                  child.error = safeMessage;
-                  try { toast(safeMessage); } catch {}
-                } catch {
-                  child.error = postCancelPreviewRefreshMessage;
-                  try { toast(postCancelPreviewRefreshMessage); } catch {}
+                  if (typeof resetPayPreviewAndDecisions === 'function') {
+                    await resetPayPreviewAndDecisions(postCancelResetOptionsForPreview);
+                  } else {
+                    const pd = String(st?.pay?.draftWizard?.pay_date || '').trim();
+                    if (pd && typeof bankingPayPreview === 'function') {
+                      await bankingPayPreview({
+                        pay_date: pd,
+                        mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+                        hard_session_reload: true,
+                        force_new_session: true,
+                        discard_source_session: true,
+                        ignore_replacement_session: true,
+                        preview_reopen_required: true,
+                        source_session_id: postCancelResetOptionsForPreview.source_session_id || null,
+                        obsolete_session_ids: Array.isArray(postCancelResetOptionsForPreview.obsolete_session_ids) ? postCancelResetOptionsForPreview.obsolete_session_ids : [],
+                        dirty_candidate_ids: Array.isArray(postCancelResetOptionsForPreview.dirty_candidate_ids) ? postCancelResetOptionsForPreview.dirty_candidate_ids : [],
+                        pending_candidate_ids: Array.isArray(postCancelResetOptionsForPreview.pending_candidate_ids) ? postCancelResetOptionsForPreview.pending_candidate_ids : [],
+                        refresh_job_ids: Array.isArray(postCancelResetOptionsForPreview.refresh_job_ids) ? postCancelResetOptionsForPreview.refresh_job_ids : [],
+                        source_snapshot_run_id: postCancelResetOptionsForPreview.source_snapshot_run_id || null,
+                        source_session_version: postCancelResetOptionsForPreview.source_session_version ?? null,
+                        source_session_signature: postCancelResetOptionsForPreview.source_session_signature || null,
+                        mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS'
+                      });
+                    }
+                  }
+                } catch (previewRefreshError) {
+                  try {
+                    const friendly = await reportChildFriendlyError(previewRefreshError, 'BANKING_PAY_PREVIEW_FAILED', {
+                      action: 'POST_DRAFT_CANCEL_PREVIEW_REFRESH',
+                      userInitiated: false,
+                      silent: true,
+                      scope: null,
+                      payload: postCancelResetOptionsForPreview,
+                      backendPayload: previewRefreshError?.backendPayload || previewRefreshError?.payload || previewRefreshError?.json || postCancelResetOptionsForPreview,
+                      technicalError: previewRefreshError
+                    });
+                    const friendlyMessage = String(friendly?.user_message || friendly?.message || postCancelPreviewRefreshMessage).trim();
+                    const safeMessage = /no\s+payment\s+batch\s+has\s+been\s+created/i.test(friendlyMessage)
+                      ? postCancelPreviewRefreshMessage
+                      : (friendlyMessage || postCancelPreviewRefreshMessage);
+                    child.error = safeMessage;
+                    try { toast(safeMessage); } catch {}
+                  } catch {
+                    child.error = postCancelPreviewRefreshMessage;
+                    try { toast(postCancelPreviewRefreshMessage); } catch {}
+                  }
                 }
               }
 
@@ -62104,7 +62125,27 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           mode,
           st,
           deepClone: deep,
-               onSuccess: async ({ responsePayload, postCancelRefresh, postCancelResetOptions, previewResetOptions, currentWorkbenchSessionId }) => {
+                    onSuccess: async ({
+            responsePayload,
+            postCancelRefresh,
+            postCancelResetOptions,
+            previewResetOptions,
+            currentWorkbenchSessionId,
+            previewResetAlreadyApplied,
+            postCancelPreviewResetAlreadyApplied,
+            skipFollowUpPreviewReset
+          }) => {
+          const ownerAppliedPreviewReset = !!(
+            previewResetAlreadyApplied === true ||
+            postCancelPreviewResetAlreadyApplied === true ||
+            skipFollowUpPreviewReset === true ||
+            responsePayload?.previewResetAlreadyApplied === true ||
+            responsePayload?.postCancelPreviewResetAlreadyApplied === true ||
+            responsePayload?.skipFollowUpPreviewReset === true ||
+            responsePayload?.preview_reset_already_applied === true ||
+            responsePayload?.post_cancel_preview_reset_already_applied === true ||
+            responsePayload?.skip_follow_up_preview_reset === true
+          );
           const postCancelRefreshObj = (postCancelRefresh && typeof postCancelRefresh === 'object' && !Array.isArray(postCancelRefresh))
             ? postCancelRefresh
             : {};
@@ -62176,6 +62217,11 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
               });
             }
           } catch {}
+
+          if (ownerAppliedPreviewReset) {
+            await safeRerender(null);
+            return;
+          }
 
           try {
             if (typeof resetPayPreviewAndDecisions === 'function') {
