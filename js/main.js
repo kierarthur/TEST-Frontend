@@ -25316,6 +25316,7 @@ async function bankingPayPreview(pay_date) {
   const ORDINARY_BANKING_CUTOFF_SENTINEL = '9999-12-31';
   const previewMode = trimStr(options.mode || options.previewMode || options.preview_mode || '').toUpperCase();
   const sourceSessionId = trimStr(options.source_session_id || options.sourceSessionId || '');
+  const sourceSessionAlreadyDiscarded = options.source_session_already_discarded === true || options.sourceSessionAlreadyDiscarded === true;
   const sourceSnapshotRunId = trimStr(options.source_snapshot_run_id || options.sourceSnapshotRunId || '');
   const sourceSessionSignature = trimStr(options.source_session_signature || options.sourceSessionSignature || '');
   let obsoleteSessionIds = Array.from(new Set([
@@ -25353,7 +25354,8 @@ async function bankingPayPreview(pay_date) {
   const hasPreviewReopenWithSourceSession = previewReopenRequiredOption && !!sourceSessionId;
   const requiresPostMutationRebase = hasCreateSuccessEvidence || hasCancelSuccessEvidence || hasPreviewReopenWithSourceSession || hasDirtyCandidatesWithBatchMutation;
   const forceNewSession = options.force_new_session === true || options.forceNewSession === true || previewMode === 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN' || previewMode === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN' || requiresPostMutationRebase;
-  const discardSourceSession = options.discard_source_session === true || options.discardSourceSession === true || forceNewSession || requiresPostMutationRebase;
+  const discardSourceSessionRequested = options.discard_source_session === true || options.discardSourceSession === true || forceNewSession || requiresPostMutationRebase;
+  const discardSourceSession = sourceSessionAlreadyDiscarded ? false : discardSourceSessionRequested;
   const ignoreReplacementSession = options.ignore_replacement_session === true || options.ignoreReplacementSession === true || forceNewSession || requiresPostMutationRebase;
   const mutationContext = hasCreateSuccessEvidence
     ? 'CREATE_DRAFT_SUCCESS'
@@ -25830,9 +25832,10 @@ async function bankingPayPreview(pay_date) {
     session_signature: sessionSignatureHint,
     filters_json: openFiltersJson
   };
-  if (forceNewSession || discardSourceSession) {
+  if (forceNewSession || discardSourceSessionRequested) {
     openPayload.force_new_session = true;
     openPayload.discard_source_session = discardSourceSession === true;
+    openPayload.source_session_already_discarded = sourceSessionAlreadyDiscarded === true;
     openPayload.source_session_id = sourceSessionId || existingWorkbenchSessionId || null;
     openPayload.obsolete_session_ids = [...obsoleteSessionIds];
     openPayload.mutation_context = mutationContext || (isPostDraftCreateRefresh ? 'CREATE_DRAFT_SUCCESS' : (isPostDraftCancelRefresh ? 'CANCEL_DELETE_DRAFT_SUCCESS' : null));
@@ -26138,6 +26141,179 @@ async function bankingPayPreview(pay_date) {
     'WORKBENCH_SESSION_INVALID',
     'OBSOLETE_SESSION_REUSED'
   ]);
+  const postMutationNonFatalPreviewCodes = new Set([
+    ...staleSessionFailureCodes,
+    'BATCH_STALE',
+    'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+    'PENDING_REFRESH',
+    'PREVIEW_REFRESH_PENDING',
+    'REFRESHING_CANDIDATES',
+    'SNAPSHOT_REFRESH_PENDING',
+    'WORKBENCH_REFRESH_PENDING',
+    'PROGRESS_ONLY',
+    'BOOTSTRAP_ONLY'
+  ]);
+  const postMutationNonFatalPreviewHttpStatuses = new Set([404, 409, 410, 423, 425, 500, 502, 503, 504]);
+  const extractPostMutationPreviewHttpStatus = (value) => {
+    const candidates = [
+      value?.status,
+      value?.http_status,
+      value?.httpStatus,
+      value?.status_code,
+      value?.statusCode,
+      value?.payload?.status,
+      value?.payload?.http_status,
+      value?.payload?.httpStatus,
+      value?.payload?.status_code,
+      value?.payload?.statusCode,
+      value?.json?.status,
+      value?.json?.http_status,
+      value?.json?.httpStatus,
+      value?.json?.status_code,
+      value?.json?.statusCode,
+      value?.backendPayload?.status,
+      value?.backendPayload?.http_status,
+      value?.backendPayload?.httpStatus,
+      value?.backendPayload?.status_code,
+      value?.backendPayload?.statusCode,
+      value?.response?.status
+    ];
+    for (const candidate of candidates) {
+      const n = Number(candidate);
+      if (Number.isFinite(n)) return Math.trunc(n);
+    }
+    return 0;
+  };
+  const stringifyPostMutationPreviewError = (value) => {
+    try {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+      if (value instanceof Error) {
+        return [
+          value.name,
+          value.message,
+          value.code,
+          value.error_code,
+          value.status,
+          value.status_code,
+          value.http_status,
+          value.payload ? JSON.stringify(value.payload) : '',
+          value.json ? JSON.stringify(value.json) : '',
+          value.backendPayload ? JSON.stringify(value.backendPayload) : ''
+        ].filter(Boolean).join('\n');
+      }
+      return JSON.stringify(value);
+    } catch {
+      try { return String(value || ''); } catch { return ''; }
+    }
+  };
+  const looksFatalPostMutationPreviewError = (value) => {
+    const text = [
+      stringifyPostMutationPreviewError(value),
+      stringifyPostMutationPreviewError(value?.payload),
+      stringifyPostMutationPreviewError(value?.json),
+      stringifyPostMutationPreviewError(value?.backendPayload),
+      stringifyPostMutationPreviewError(value?.response),
+      stringifyPostMutationPreviewError(value?.message),
+      stringifyPostMutationPreviewError(value?.technical_message || value?.technicalMessage)
+    ].join('\n').toUpperCase();
+    if (!text) return false;
+    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
+    if (text.includes('RLS') || text.includes('ROW LEVEL SECURITY') || text.includes('POLICY')) return true;
+    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
+    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
+    if (text.includes('SQLSTATE') || text.includes('SQL STATE') || text.includes('POSTGRES') || text.includes('SUPABASE') || text.includes('POSTGREST')) return true;
+    if (text.includes('INVALID INPUT SYNTAX') || text.includes('AMBIGUOUS') || text.includes('CONSTRAINT') || text.includes('VIOLATES')) return true;
+    if (/\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|INDEX)\b[^\n]*\b(DOES NOT EXIST|NOT FOUND|IS AMBIGUOUS)\b/.test(text)) return true;
+    return false;
+  };
+  const isNonFatalPostMutationPreviewError = (errorValue) => {
+    if (!isPostMutationRefresh) return false;
+    if (looksFatalPostMutationPreviewError(errorValue)) return false;
+    const status = extractPostMutationPreviewHttpStatus(errorValue);
+    if (postMutationNonFatalPreviewHttpStatuses.has(status)) return true;
+    const code = normalisePreviewRebaseCode(
+      errorValue?.error_code ||
+      errorValue?.errorCode ||
+      errorValue?.code ||
+      errorValue?.payload?.error_code ||
+      errorValue?.payload?.errorCode ||
+      errorValue?.payload?.code ||
+      errorValue?.json?.error_code ||
+      errorValue?.json?.errorCode ||
+      errorValue?.json?.code ||
+      errorValue?.backendPayload?.error_code ||
+      errorValue?.backendPayload?.errorCode ||
+      errorValue?.backendPayload?.code ||
+      ''
+    );
+    if (code && postMutationNonFatalPreviewCodes.has(code)) return true;
+    const text = stringifyPostMutationPreviewError(errorValue).toUpperCase();
+    return !!(
+      text.includes('REFRESHING_CANDIDATES') ||
+      text.includes('SNAPSHOT_REFRESH_PENDING') ||
+      text.includes('WORKBENCH_REFRESH_PENDING') ||
+      text.includes('PENDING_REFRESH') ||
+      text.includes('PREVIEW_REFRESH_PENDING') ||
+      text.includes('PROGRESS_ONLY') ||
+      text.includes('BOOTSTRAP_ONLY') ||
+      text.includes('REBASE_REQUIRED') ||
+      text.includes('REQUIRES_NEW_SESSION') ||
+      text.includes('BATCH_STALE') ||
+      text.includes('PAY_BATCH_VALIDATE_FRESHNESS_FAILED')
+    );
+  };
+  const makePostMutationPendingPreviewPayload = (errorValue, fallbackCode = 'PENDING_REFRESH') => {
+    const failure = detectPreviewFailureEnvelope(errorValue);
+    const status = extractPostMutationPreviewHttpStatus(errorValue) || extractPostMutationPreviewHttpStatus(failure);
+    const code = normalisePreviewRebaseCode(
+      failure?.error_code ||
+      failure?.code ||
+      errorValue?.error_code ||
+      errorValue?.errorCode ||
+      errorValue?.code ||
+      errorValue?.payload?.error_code ||
+      errorValue?.payload?.errorCode ||
+      errorValue?.payload?.code ||
+      errorValue?.json?.error_code ||
+      errorValue?.json?.errorCode ||
+      errorValue?.json?.code ||
+      fallbackCode
+    ) || fallbackCode;
+    const message = trimStr(
+      failure?.message ||
+      failure?.user_message ||
+      failure?.error ||
+      errorValue?.user_message ||
+      errorValue?.message ||
+      errorValue?.error ||
+      ''
+    ) || 'Payment preview replacement is still refreshing.';
+    return {
+      ok: true,
+      ready: false,
+      ready_flag: false,
+      pending_refresh: true,
+      refresh_pending: true,
+      preview_refresh_pending: true,
+      progress_only: true,
+      status: code,
+      phase: code,
+      error_code: code,
+      code,
+      http_status: status || null,
+      message,
+      session_id: getCurrentWorkbenchSessionId() || replacementSessionId || null,
+      source_session_id: sourceSessionId || null,
+      obsolete_session_ids: [...obsoleteSessionIds],
+      mutation_context: mutationContext || null,
+      post_mutation_context: mutationContext || null,
+      raw_error: (() => {
+        try { return deep(errorValue) || null; } catch { return null; }
+      })()
+    };
+  };
   const normalisePreviewRebaseCode = (value) => normalizePreviewFailureCode(value);
   const isRebaseRequiredPayload = (payload) => {
     const obj = isPlainObject(payload) ? payload : {};
@@ -26183,6 +26359,7 @@ async function bankingPayPreview(pay_date) {
     message
   });
   const discardSourceSessionIfPossible = async () => {
+    if (sourceSessionAlreadyDiscarded) return;
     const discardId = sourceSessionId || existingWorkbenchSessionId || '';
     if (!discardId || typeof bankingPayWorkbenchSessionDiscard !== 'function') return;
     try {
@@ -26201,26 +26378,79 @@ async function bankingPayPreview(pay_date) {
   };
   const openFreshWorkbenchSession = async ({ allowRetry = true } = {}) => {
     if (discardSourceSession) await discardSourceSessionIfPossible();
-    let openedSessionPayload = await bankingPayWorkbenchSessionOpen(openPayload);
+    let openedSessionPayload;
+    try {
+      openedSessionPayload = await bankingPayWorkbenchSessionOpen(openPayload);
+    } catch (openErr) {
+      if (isNonFatalPostMutationPreviewError(openErr)) {
+        const pendingPayload = makePostMutationPendingPreviewPayload(openErr, 'PENDING_REFRESH');
+        applyDeferredPreviewStateFromPayload(pendingPayload);
+        return pendingPayload;
+      }
+      throw openErr;
+    }
     let openedFailure = detectPreviewFailureEnvelope(openedSessionPayload);
-    if (openedFailure && staleSessionFailureCodes.has(normalisePreviewRebaseCode(openedFailure.error_code || openedFailure.code || ''))) {
-      if (allowRetry && (sourceSessionId || existingWorkbenchSessionId)) {
+    const openedFailureCode = normalisePreviewRebaseCode(openedFailure?.error_code || openedFailure?.code || '');
+    if (openedFailure && staleSessionFailureCodes.has(openedFailureCode)) {
+      if (allowRetry && !isPostMutationRefresh && (sourceSessionId || existingWorkbenchSessionId)) {
         await discardSourceSessionIfPossible();
-        openedSessionPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: true });
+        try {
+          openedSessionPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: discardSourceSession === true, source_session_already_discarded: sourceSessionAlreadyDiscarded === true });
+        } catch (retryOpenErr) {
+          if (isNonFatalPostMutationPreviewError(retryOpenErr)) {
+            const pendingPayload = makePostMutationPendingPreviewPayload(retryOpenErr, 'PENDING_REFRESH');
+            applyDeferredPreviewStateFromPayload(pendingPayload);
+            return pendingPayload;
+          }
+          throw retryOpenErr;
+        }
         openedFailure = detectPreviewFailureEnvelope(openedSessionPayload);
       }
     }
-    if (openedFailure) throwPreviewFailureEnvelope(openedFailure, 'BANKING_PAY_PREVIEW_FAILED');
+    if (openedFailure) {
+      const failureCode = normalisePreviewRebaseCode(openedFailure.error_code || openedFailure.code || openedFailureCode || '');
+      if (isPostMutationRefresh && postMutationNonFatalPreviewCodes.has(failureCode)) {
+        const pendingRebasePayload = {
+          ...makeRebaseRequiredPayload(failureCode || 'REBASE_REQUIRED', trimStr(openedFailure.message || openedFailure.user_message || openedFailure.error || 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.')),
+          pending_refresh: true,
+          preview_refresh_pending: true,
+          progress_only: true
+        };
+        applyDeferredPreviewStateFromPayload(pendingRebasePayload);
+        return pendingRebasePayload;
+      }
+      throwPreviewFailureEnvelope(openedFailure, 'BANKING_PAY_PREVIEW_FAILED');
+    }
     if (isRebaseRequiredPayload(openedSessionPayload) || isReturnedSessionObsolete(openedSessionPayload)) {
-      if (allowRetry && (sourceSessionId || existingWorkbenchSessionId)) {
+      if (allowRetry && !isPostMutationRefresh && (sourceSessionId || existingWorkbenchSessionId)) {
         await discardSourceSessionIfPossible();
-        const retriedPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: true });
+        let retriedPayload;
+        try {
+          retriedPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: discardSourceSession === true, source_session_already_discarded: sourceSessionAlreadyDiscarded === true });
+        } catch (retryRebaseErr) {
+          if (isNonFatalPostMutationPreviewError(retryRebaseErr)) {
+            const pendingPayload = makePostMutationPendingPreviewPayload(retryRebaseErr, 'PENDING_REFRESH');
+            applyDeferredPreviewStateFromPayload(pendingPayload);
+            return pendingPayload;
+          }
+          throw retryRebaseErr;
+        }
         const retriedFailure = detectPreviewFailureEnvelope(retriedPayload);
         if (retriedFailure) throwPreviewFailureEnvelope(retriedFailure, 'BANKING_PAY_PREVIEW_FAILED');
         if (isRebaseRequiredPayload(retriedPayload) || isReturnedSessionObsolete(retriedPayload)) {
           throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
         }
         return retriedPayload;
+      }
+      if (isPostMutationRefresh) {
+        const pendingRebasePayload = {
+          ...makeRebaseRequiredPayload('REBASE_REQUIRED'),
+          pending_refresh: true,
+          preview_refresh_pending: true,
+          progress_only: true
+        };
+        applyDeferredPreviewStateFromPayload(pendingRebasePayload);
+        return pendingRebasePayload;
       }
       throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
     }
@@ -26437,7 +26667,7 @@ async function bankingPayPreview(pay_date) {
           hidden_preview_lines: []
         }
       },
-      progress: cloneJson(progressObj) || progressObj
+      progress: deep(progressObj) || progressObj
     };
     wiz.preview.loading = false;
     wiz.preview.error = '';
@@ -26906,6 +27136,240 @@ async function bankingPayPreview(pay_date) {
   };
   const previewApplyLoaded = (applyResult) => previewApplyLoadedStatuses.has(previewApplyStatus(applyResult));
 
+  const isPostMutationPreviewPayloadPending = (payload) => {
+    if (!isPostMutationRefresh) return false;
+    const obj = isPlainObject(payload) ? payload : {};
+    const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
+    const statusText = trimStr(
+      obj.status ||
+      obj.state ||
+      obj.phase ||
+      obj.outcome ||
+      obj.refresh_outcome ||
+      obj.preview_refresh_outcome ||
+      obj.error_code ||
+      obj.code ||
+      progressObj.status ||
+      progressObj.state ||
+      progressObj.phase ||
+      progressObj.outcome ||
+      progressObj.error_code ||
+      progressObj.code ||
+      ''
+    ).toUpperCase();
+    const hasPendingArrays = [
+      obj.pending_candidate_ids,
+      obj.pendingCandidateIds,
+      obj.dirty_candidate_ids,
+      obj.dirtyCandidateIds,
+      obj.refresh_job_ids,
+      obj.refreshJobIds,
+      obj.pending_candidate_jobs,
+      obj.pendingCandidateJobs,
+      progressObj.pending_candidate_ids,
+      progressObj.pendingCandidateIds,
+      progressObj.dirty_candidate_ids,
+      progressObj.dirtyCandidateIds,
+      progressObj.refresh_job_ids,
+      progressObj.refreshJobIds,
+      progressObj.pending_candidate_jobs,
+      progressObj.pendingCandidateJobs
+    ].some((arr) => Array.isArray(arr) && arr.length > 0);
+    return !!(
+      isRebaseRequiredPayload(obj) ||
+      isReturnedSessionObsolete(obj) ||
+      obj.ready === false ||
+      obj.ready_flag === false ||
+      progressObj.ready === false ||
+      progressObj.ready_flag === false ||
+      obj.pending_refresh === true ||
+      obj.refresh_pending === true ||
+      obj.preview_refresh_pending === true ||
+      obj.create_draft_refresh_pending === true ||
+      obj.preview_reopen_required === true ||
+      obj.progress_only === true ||
+      obj.progressOnly === true ||
+      obj.bootstrap_only === true ||
+      obj.bootstrapOnly === true ||
+      obj.preview_bootstrap === true ||
+      progressObj.pending_refresh === true ||
+      progressObj.refresh_pending === true ||
+      progressObj.preview_refresh_pending === true ||
+      progressObj.create_draft_refresh_pending === true ||
+      progressObj.preview_reopen_required === true ||
+      progressObj.progress_only === true ||
+      progressObj.progressOnly === true ||
+      progressObj.bootstrap_only === true ||
+      progressObj.bootstrapOnly === true ||
+      progressObj.preview_bootstrap === true ||
+      hasPendingArrays ||
+      [
+        'REFRESHING_CANDIDATES',
+        'SNAPSHOT_REFRESH_PENDING',
+        'WORKBENCH_REFRESH_PENDING',
+        'PENDING_REFRESH',
+        'PREVIEW_REFRESH_PENDING',
+        'REBASE_REQUIRED',
+        'REQUIRES_NEW_SESSION',
+        'PROGRESS_ONLY',
+        'BOOTSTRAP_ONLY',
+        'BATCH_STALE',
+        'PAY_BATCH_VALIDATE_FRESHNESS_FAILED'
+      ].includes(statusText)
+    );
+  };
+
+  const delayPostMutationPoll = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const applyPostMutationPreviewPayloadIfSettled = (payload) => {
+    const obj = isPlainObject(payload) ? payload : {};
+    if (!isPostMutationRefresh || !obj) return { settled: false, didFullPreviewLoad: false, payload: null, status: 'ignored' };
+    if (isReadyEmptyPayload(obj)) {
+      return { settled: true, didFullPreviewLoad: true, payload: applyReadyEmptyPreviewState(obj), status: 'ready_empty' };
+    }
+    if (isRebaseRequiredPayload(obj) || isReturnedSessionObsolete(obj)) {
+      applyDeferredPreviewStateFromPayload(obj);
+      return { settled: false, didFullPreviewLoad: false, payload: obj, status: 'rebase_required' };
+    }
+    if (payloadHasFullPreviewData(obj)) {
+      const applyResult = applyFullWorkbenchPreviewPayload(obj);
+      return {
+        settled: previewApplyLoaded(applyResult),
+        didFullPreviewLoad: previewApplyLoaded(applyResult),
+        payload: applyResult && typeof applyResult === 'object' && applyResult.payload ? applyResult.payload : obj,
+        status: previewApplyStatus(applyResult) || 'full_preview'
+      };
+    }
+    applyDeferredPreviewStateFromPayload(obj);
+    return { settled: false, didFullPreviewLoad: false, payload: obj, status: 'pending' };
+  };
+
+  const pollPostMutationWorkbenchSessionUntilSettled = async (initialPayload = null) => {
+    if (!isPostMutationRefresh) return { didFullPreviewLoad: false, payload: initialPayload || null, status: 'not_post_mutation' };
+    const maxAttemptsRaw = Number(options.post_mutation_poll_attempts || options.postMutationPollAttempts || 4);
+    const maxAttempts = Number.isFinite(maxAttemptsRaw) ? Math.max(1, Math.min(8, Math.trunc(maxAttemptsRaw))) : 4;
+    const delayMsRaw = Number(options.post_mutation_poll_delay_ms || options.postMutationPollDelayMs || 300);
+    const delayMs = Number.isFinite(delayMsRaw) ? Math.max(0, Math.min(2000, Math.trunc(delayMsRaw))) : 300;
+    let lastPayload = isPlainObject(initialPayload) ? initialPayload : null;
+    let lastStatus = 'pending';
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (!isLatestRequest()) return { didFullPreviewLoad: false, payload: lastPayload, status: 'aborted' };
+
+      if (lastPayload) {
+        const applyAttempt = applyPostMutationPreviewPayloadIfSettled(lastPayload);
+        lastStatus = applyAttempt.status || lastStatus;
+        if (applyAttempt.didFullPreviewLoad) {
+          return { didFullPreviewLoad: true, payload: applyAttempt.payload || lastPayload, status: lastStatus };
+        }
+      }
+
+      const ctx = lastPayload ? extractWorkbenchContextFromPayload(lastPayload) : {};
+      const pollSessionId = trimStr(ctx.session_id || getCurrentWorkbenchSessionId() || replacementSessionId || '');
+      if (!pollSessionId || isObsoleteSessionId(pollSessionId)) {
+        applyDeferredPreviewStateFromPayload(makeRebaseRequiredPayload('REBASE_REQUIRED'));
+        return { didFullPreviewLoad: false, payload: lastPayload, status: 'rebase_required' };
+      }
+
+      let progressPayload = null;
+      if (typeof bankingPayWorkbenchSessionGetProgress === 'function') {
+        try {
+          progressPayload = await bankingPayWorkbenchSessionGetProgress(pollSessionId, {
+            obsolete_session_ids: [...obsoleteSessionIds],
+            source_session_id: sourceSessionId || null,
+            mutation_context: mutationContext || null,
+            force_new_session: forceNewSession,
+            post_mutation_context: mutationContext || null
+          });
+        } catch (progressErr) {
+          const progressErrText = [
+            trimStr(progressErr?.message || ''),
+            trimStr(progressErr?.user_message || ''),
+            trimStr(progressErr?.error || ''),
+            trimStr(progressErr?.code || progressErr?.error_code || ''),
+            trimStr(progressErr?.payload?.code || progressErr?.payload?.error_code || ''),
+            trimStr(progressErr?.json?.code || progressErr?.json?.error_code || '')
+          ].join('\n').toUpperCase();
+          const progressErrFatal = !!(
+            progressErrText.includes('UNAUTHORIZED') ||
+            progressErrText.includes('UNAUTHORISED') ||
+            progressErrText.includes('FORBIDDEN') ||
+            progressErrText.includes('PERMISSION') ||
+            progressErrText.includes('ROW LEVEL SECURITY') ||
+            progressErrText.includes('SQLSTATE') ||
+            progressErrText.includes('POSTGRES') ||
+            progressErrText.includes('SUPABASE') ||
+            progressErrText.includes('POSTGREST') ||
+            progressErrText.includes('INVALID INPUT SYNTAX') ||
+            /\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|INDEX)\b[^\n]*\b(DOES NOT EXIST|NOT FOUND|IS AMBIGUOUS)\b/.test(progressErrText)
+          );
+          if (progressErrFatal) throw progressErr;
+          progressPayload = {
+            ok: true,
+            pending_refresh: true,
+            status: 'PENDING_REFRESH',
+            error: progressErr,
+            session_id: pollSessionId,
+            mutation_context: mutationContext || null
+          };
+        }
+      }
+
+      if (progressPayload) {
+        const progressFailure = detectPreviewFailureEnvelope(progressPayload);
+        if (progressFailure && !isPostMutationPreviewPayloadPending(progressFailure) && !isRebaseRequiredPayload(progressFailure)) {
+          throwPreviewFailureEnvelope(progressFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        }
+        if (isPlainObject(progressPayload.progress)) syncProgressIntoState(progressPayload.progress);
+        else if (isPlainObject(progressPayload)) syncProgressIntoState(progressPayload);
+        const progressApply = applyPostMutationPreviewPayloadIfSettled(progressPayload);
+        lastPayload = progressApply.payload || progressPayload;
+        lastStatus = progressApply.status || lastStatus;
+        if (progressApply.didFullPreviewLoad) {
+          return { didFullPreviewLoad: true, payload: lastPayload, status: lastStatus };
+        }
+      }
+
+      const shouldFetchFull = !progressPayload || !isPostMutationPreviewPayloadPending(progressPayload) || attempt === maxAttempts - 1;
+      if (shouldFetchFull && typeof bankingPayWorkbenchSessionGet === 'function') {
+        let fullPayload;
+        try {
+          fullPayload = await bankingPayWorkbenchSessionGet(pollSessionId, {
+            obsolete_session_ids: [...obsoleteSessionIds],
+            source_session_id: sourceSessionId || null,
+            force_new_session: forceNewSession,
+            mutation_context: mutationContext || null,
+            post_mutation_context: mutationContext || null
+          });
+        } catch (fullErr) {
+          if (isNonFatalPostMutationPreviewError(fullErr)) {
+            fullPayload = makePostMutationPendingPreviewPayload(fullErr, 'PENDING_REFRESH');
+          } else {
+            throw fullErr;
+          }
+        }
+        const fullFailure = detectPreviewFailureEnvelope(fullPayload);
+        if (fullFailure && !isPostMutationPreviewPayloadPending(fullFailure) && !isRebaseRequiredPayload(fullFailure)) {
+          throwPreviewFailureEnvelope(fullFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        }
+        lastPayload = fullPayload;
+        const fullApply = applyPostMutationPreviewPayloadIfSettled(fullPayload);
+        lastPayload = fullApply.payload || fullPayload;
+        lastStatus = fullApply.status || lastStatus;
+        if (fullApply.didFullPreviewLoad) {
+          return { didFullPreviewLoad: true, payload: lastPayload, status: lastStatus };
+        }
+      }
+
+      wiz.preview.loading = true;
+      wiz.preview.error = '';
+      wiz.preview.failure = null;
+      if (attempt < maxAttempts - 1 && delayMs > 0) await delayPostMutationPoll(delayMs);
+    }
+
+    return { didFullPreviewLoad: false, payload: lastPayload, status: lastStatus || 'pending' };
+  };
+
   const maybeAutoSettlePendingCandidates = async () => {
     if (candidateScopedRefresh) return;
     if (typeof pollPayWorkbenchCandidateUntilSettled !== 'function') return;
@@ -26992,7 +27456,11 @@ async function bankingPayPreview(pay_date) {
       }
       const replacementSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (replacementSessionPayloadFailure) {
-        throwPreviewFailureEnvelope(replacementSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        if (isPostMutationRefresh && (isPostMutationPreviewPayloadPending(replacementSessionPayloadFailure) || isRebaseRequiredPayload(replacementSessionPayloadFailure))) {
+          applyDeferredPreviewStateFromPayload(replacementSessionPayloadFailure);
+        } else {
+          throwPreviewFailureEnvelope(replacementSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        }
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
@@ -27004,7 +27472,11 @@ async function bankingPayPreview(pay_date) {
       responsePayload = await openFreshWorkbenchSession();
       const openedSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (openedSessionPayloadFailure) {
-        throwPreviewFailureEnvelope(openedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        if (isPostMutationRefresh && (isPostMutationPreviewPayloadPending(openedSessionPayloadFailure) || isRebaseRequiredPayload(openedSessionPayloadFailure))) {
+          applyDeferredPreviewStateFromPayload(openedSessionPayloadFailure);
+        } else {
+          throwPreviewFailureEnvelope(openedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        }
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
@@ -27024,7 +27496,11 @@ async function bankingPayPreview(pay_date) {
       }
       const existingSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (existingSessionPayloadFailure) {
-        throwPreviewFailureEnvelope(existingSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        if (isPostMutationRefresh && (isPostMutationPreviewPayloadPending(existingSessionPayloadFailure) || isRebaseRequiredPayload(existingSessionPayloadFailure))) {
+          applyDeferredPreviewStateFromPayload(existingSessionPayloadFailure);
+        } else {
+          throwPreviewFailureEnvelope(existingSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        }
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
@@ -27035,7 +27511,11 @@ async function bankingPayPreview(pay_date) {
       responsePayload = await openFreshWorkbenchSession();
       const fallbackOpenedSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
       if (fallbackOpenedSessionPayloadFailure) {
-        throwPreviewFailureEnvelope(fallbackOpenedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        if (isPostMutationRefresh && (isPostMutationPreviewPayloadPending(fallbackOpenedSessionPayloadFailure) || isRebaseRequiredPayload(fallbackOpenedSessionPayloadFailure))) {
+          applyDeferredPreviewStateFromPayload(fallbackOpenedSessionPayloadFailure);
+        } else {
+          throwPreviewFailureEnvelope(fallbackOpenedSessionPayloadFailure, 'BANKING_PAY_PREVIEW_FAILED');
+        }
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
@@ -27048,6 +27528,16 @@ async function bankingPayPreview(pay_date) {
 
     if (useReplacementSessionBootstrap) {
       applyReplacementPendingState(false);
+    }
+
+    if (isPostMutationRefresh && !didFullPreviewLoad) {
+      const postMutationPollOutcome = await pollPostMutationWorkbenchSessionUntilSettled(responsePayload);
+      if (postMutationPollOutcome && postMutationPollOutcome.didFullPreviewLoad === true) {
+        didFullPreviewLoad = true;
+      }
+      if (postMutationPollOutcome && isPlainObject(postMutationPollOutcome.payload)) {
+        responsePayload = postMutationPollOutcome.payload;
+      }
     }
 
     const replacementPendingWork = !!(
@@ -27110,6 +27600,20 @@ async function bankingPayPreview(pay_date) {
       return null;
     }
 
+    if (isNonFatalPostMutationPreviewError(e)) {
+      const pendingPayload = makePostMutationPendingPreviewPayload(e, 'PENDING_REFRESH');
+      applyDeferredPreviewStateFromPayload(pendingPayload);
+      wiz.preview.loading = true;
+      wiz.preview.error = '';
+      wiz.preview.failure = null;
+      try {
+        if (typeof bankingRerender === 'function') {
+          await bankingRerender(null);
+        }
+      } catch {}
+      return deep(wiz.preview.data);
+    }
+
     await applyFailure(e);
     wiz.preview.loading = false;
 
@@ -27133,7 +27637,6 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
-
 
 
 function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, options = {}) {
@@ -27275,7 +27778,6 @@ function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, opti
     st.selected_row_keys = [st.active_row_key, ...st.selected_row_keys].filter(Boolean);
   }
 }
-
 
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
@@ -27587,6 +28089,179 @@ async function bankingPayCreateDraft(input = {}) {
   };
 
 
+
+  const classifyPostCreateRefreshApplyOutcome = (value) => {
+    const queue = [value];
+    const seenObjects = new WeakSet();
+    const seenStrings = new Set();
+    const pendingCodes = new Set([
+      'REFRESHING_CANDIDATES',
+      'SNAPSHOT_REFRESH_PENDING',
+      'WORKBENCH_REFRESH_PENDING',
+      'PENDING_REFRESH',
+      'PREVIEW_REFRESH_PENDING',
+      'BANKING_PAY_PREVIEW_REFRESH_PENDING',
+      'BANKING_PAY_PREVIEW_REBASE_REQUIRED',
+      'REBASE_REQUIRED',
+      'WORKBENCH_REBASE_REQUIRED',
+      'REQUIRES_NEW_SESSION',
+      'REPLACEMENT_SESSION_PENDING',
+      'REPLACEMENT_SESSION_OPENING',
+      'PROGRESS_ONLY',
+      'BOOTSTRAP_ONLY'
+    ]);
+    const transientStatuses = new Set(['404', '409', '410', '423', '425', '500', '502', '503', '504']);
+    const enqueue = (candidate) => {
+      if (candidate === null || candidate === undefined) return;
+      if (typeof candidate === 'string') {
+        const text = trimStr(candidate);
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (isPlainObject(candidate) || candidate instanceof Error || Array.isArray(candidate)) queue.push(candidate);
+    };
+
+    let matched = false;
+    let outcome = 'pending';
+    let reason = '';
+
+    while (queue.length) {
+      const node = queue.shift();
+      if (node === null || node === undefined) continue;
+
+      if (typeof node === 'string') {
+        const text = trimStr(node);
+        const upper = text.toUpperCase();
+        try {
+          const parsed = JSON.parse(text);
+          if (isPlainObject(parsed) || Array.isArray(parsed)) enqueue(parsed);
+        } catch {}
+        if (
+          upper.includes('REFRESHING_CANDIDATES') ||
+          upper.includes('SNAPSHOT_REFRESH_PENDING') ||
+          upper.includes('WORKBENCH_REFRESH_PENDING') ||
+          upper.includes('PENDING_REFRESH') ||
+          upper.includes('PREVIEW_REFRESH_PENDING') ||
+          upper.includes('REFRESHING PAYMENT PREVIEW') ||
+          upper.includes('REBASE_REQUIRED') ||
+          upper.includes('REQUIRES_NEW_SESSION') ||
+          upper.includes('REPLACEMENT SESSION') ||
+          upper.includes('PROGRESS_ONLY') ||
+          upper.includes('BOOTSTRAP_ONLY')
+        ) {
+          matched = true;
+          reason = reason || text;
+          if (upper.includes('REBASE_REQUIRED') || upper.includes('REQUIRES_NEW_SESSION')) outcome = 'rebase_required';
+        }
+        continue;
+      }
+
+      if (node instanceof Error) {
+        enqueue({
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          status: node.status,
+          status_code: node.status_code,
+          http_status: node.http_status,
+          payload: node.payload,
+          json: node.json,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          cause: node.cause
+        });
+        continue;
+      }
+
+      if (Array.isArray(node)) {
+        for (const item of node) enqueue(item);
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+      if (seenObjects.has(node)) continue;
+      seenObjects.add(node);
+
+      const code = upperTrim(
+        node.error_code ||
+        node.errorCode ||
+        node.code ||
+        node.status_code ||
+        node.statusCode ||
+        node.status ||
+        node.state ||
+        node.phase ||
+        node.outcome ||
+        node.refresh_outcome ||
+        node.preview_refresh_outcome ||
+        ''
+      );
+      const message = trimStr(node.message || node.user_message || node.error || node.reason || node.status_text || '');
+      const messageUpper = upperTrim(message);
+      const hasPendingArrays = [
+        node.pending_candidate_ids,
+        node.pendingCandidateIds,
+        node.dirty_candidate_ids,
+        node.dirtyCandidateIds,
+        node.refresh_job_ids,
+        node.refreshJobIds,
+        node.dirty_refresh_job_ids,
+        node.dirtyRefreshJobIds,
+        node.pending_candidate_jobs,
+        node.pendingCandidateJobs
+      ].some((arr) => Array.isArray(arr) && arr.length > 0);
+      const hasPendingFlag = node.ready === false ||
+        node.ready_flag === false ||
+        node.pending_refresh === true ||
+        node.refresh_pending === true ||
+        node.preview_refresh_pending === true ||
+        node.create_draft_refresh_pending === true ||
+        node.preview_reopen_required === true ||
+        node.rebase_required === true ||
+        node.requires_new_session === true ||
+        node.progress_only === true ||
+        node.progressOnly === true ||
+        node.bootstrap_only === true ||
+        node.bootstrapOnly === true ||
+        node.replacement_session_pending === true ||
+        node.replacementSessionPending === true ||
+        node.opening_replacement_session === true ||
+        node.openingReplacementSession === true ||
+        hasPendingArrays;
+
+      if (hasPendingFlag || pendingCodes.has(code) || pendingCodes.has(messageUpper)) {
+        matched = true;
+        reason = reason || code || message || 'POST_CREATE_REFRESH_PENDING';
+        if (node.rebase_required === true || node.requires_new_session === true || code.includes('REBASE') || code.includes('REQUIRES_NEW_SESSION') || messageUpper.includes('REBASE')) {
+          outcome = 'rebase_required';
+        }
+      }
+
+      if (code && transientStatuses.has(code) && (node.post_mutation_context || node.mutation_context || node.action || node.source_session_id || node.created_pay_batch_ids || node.pending_candidate_ids)) {
+        matched = true;
+        reason = reason || `TRANSIENT_${code}`;
+      }
+
+      for (const key of [
+        'payload', 'json', 'backendPayload', 'body', 'details', 'detail', 'cause', 'error',
+        'result', 'result_json', 'final_result', 'raw_payload', 'post_create_refresh', 'postCreateRefresh',
+        'session', 'progress', 'preview', 'workbench', 'friendly_error', 'friendlyError'
+      ]) {
+        if (Object.prototype.hasOwnProperty.call(node, key)) enqueue(node[key]);
+      }
+      if (Array.isArray(node.errors)) enqueue(node.errors);
+    }
+
+    return {
+      matched,
+      outcome,
+      reason: reason || null
+    };
+  };
+
+
   const clearPostCreatePreviewState = async (details = {}) => {
     const detail = isPlainObject(details) ? details : {};
     const blankComponentStateCache = {
@@ -27639,7 +28314,12 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.preview.data = null;
       wiz.preview.loading = true;
       wiz.preview.error = '';
+      wiz.preview.preview_error = '';
       wiz.preview.failure = null;
+      wiz.preview.friendlyError = null;
+      wiz.preview.preview_refresh_failed = false;
+      wiz.preview.post_create_preview_refresh_failed = false;
+      wiz.preview.__post_mutation_preview_refresh_failed = false;
       wiz.preview.readiness = null;
       wiz.preview.candidateDebtInfo = {};
       wiz.preview.componentStateCache = blankComponentStateCache;
@@ -27685,6 +28365,14 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.workbench.summary = {};
       wiz.workbench.create_draft_refresh_pending = true;
       wiz.workbench.preview_reopen_required = true;
+      wiz.workbench.created_pay_batch_ids = [...createdPayBatchIds];
+      wiz.workbench.source_workbench_session_id = sourceSessionId || null;
+      wiz.workbench.obsolete_workbench_session_ids = obsoleteSessionIds;
+      wiz.workbench.refresh_job_ids = [...refreshJobIds];
+      wiz.workbench.post_mutation_context = 'CREATE_DRAFT_SUCCESS';
+      wiz.workbench.preview_refresh_failed = false;
+      wiz.workbench.post_create_preview_refresh_failed = false;
+      wiz.workbench.__post_mutation_preview_refresh_failed = false;
       wiz.workbench.__source_session_id_discarded = sourceSessionId || null;
       wiz.workbench.__source_snapshot_run_id_discarded = sourceSnapshotRunId || null;
       wiz.workbench.__source_session_signature_discarded = sourceSessionSignature || null;
@@ -27713,6 +28401,11 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.decisions.pending_candidate_ids = [...pendingCandidateIds];
       wiz.decisions.dirty_candidate_ids = Array.from(new Set([...dirtyCandidateIds, ...pendingCandidateIds]));
       wiz.decisions.pending_candidate_jobs = pendingJobs;
+      wiz.decisions.created_pay_batch_ids = [...createdPayBatchIds];
+      wiz.decisions.source_workbench_session_id = sourceSessionId || null;
+      wiz.decisions.obsolete_workbench_session_ids = obsoleteSessionIds;
+      wiz.decisions.refresh_job_ids = [...refreshJobIds];
+      wiz.decisions.post_mutation_context = 'CREATE_DRAFT_SUCCESS';
       wiz.decisions.pending_candidate_rows = [];
       wiz.decisions.failed_candidate_rows = [];
       wiz.decisions.case_resolution_states = [];
@@ -27741,6 +28434,8 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
       wiz.local_selected_preview_row_ids_dirty = false;
       wiz.lastPreviewFailure = null;
+      wiz.createDraftError = '';
+      wiz.createDraftFriendlyError = null;
     } catch {}
 
     try {
@@ -29229,42 +29924,102 @@ async function bankingPayCreateDraft(input = {}) {
       postCreateRefreshApplyError = applyErr;
       if (terminalCreatedPayBatchIds.length <= 0) throw applyErr;
 
-      const refreshFriendly = (typeof bankingNormalizeApiError === 'function')
-        ? bankingNormalizeApiError(applyErr, applyErr?.payload || applyErr?.json || null, {
-            action: 'POST_DRAFT_CREATE_PREVIEW_REFRESH',
-            fallbackCode: 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
-            fallbackTitle: 'Payment preview could not be refreshed',
-            fallbackMessage: 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.',
-            userInitiated: createDraftUserInitiated,
-            silent: true,
-            background: true,
-            showModal: false,
-            created_pay_batch_ids: [...terminalCreatedPayBatchIds],
-            source_session_id: sourceWorkbenchSessionId
-          })
-        : null;
+      const nonFatalRefreshApply = classifyPostCreateRefreshApplyOutcome(applyErr);
+      if (nonFatalRefreshApply.matched) {
+        appliedResult = {
+          ...(isPlainObject(terminalOperation?.result) ? terminalOperation.result : (isPlainObject(terminalOperation?.final_result) ? terminalOperation.final_result : (isPlainObject(terminalOperation) ? terminalOperation : {}))),
+          ok: true,
+          create_draft_operation_result: true,
+          pay_batch_ids: [...terminalCreatedPayBatchIds],
+          created_pay_batch_ids: [...terminalCreatedPayBatchIds],
+          selected_pay_batch_id: terminalCreatedPayBatchIds[0] || null,
+          preview_refresh_failed: false,
+          preview_refresh_pending: true,
+          preview_refresh_outcome: nonFatalRefreshApply.outcome || 'pending',
+          preview_refresh_warning: {
+            code: nonFatalRefreshApply.outcome === 'rebase_required' ? 'BANKING_PAY_PREVIEW_REBASE_REQUIRED' : 'BANKING_PAY_PREVIEW_REFRESH_PENDING',
+            title: 'Refreshing payment preview',
+            message: nonFatalRefreshApply.outcome === 'rebase_required'
+              ? 'Payment draft was created. CloudTMS is reopening the payment preview so drafted rows are removed.'
+              : 'Payment draft created. Refreshing payment preview…'
+          }
+        };
 
-      appliedResult = {
-        ...(isPlainObject(terminalOperation?.result) ? terminalOperation.result : (isPlainObject(terminalOperation?.final_result) ? terminalOperation.final_result : (isPlainObject(terminalOperation) ? terminalOperation : {}))),
-        ok: true,
-        create_draft_operation_result: true,
-        pay_batch_ids: [...terminalCreatedPayBatchIds],
-        created_pay_batch_ids: [...terminalCreatedPayBatchIds],
-        selected_pay_batch_id: terminalCreatedPayBatchIds[0] || null,
-        preview_refresh_failed: true,
-        preview_refresh_warning: {
-          code: trimStr(refreshFriendly?.error_code || refreshFriendly?.code || 'BANKING_PAY_PREVIEW_REFRESH_FAILED') || 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
-          title: trimStr(refreshFriendly?.title || refreshFriendly?.friendly_error?.title || 'Payment preview could not be refreshed') || 'Payment preview could not be refreshed',
-          message: trimStr(refreshFriendly?.user_message || refreshFriendly?.message || refreshFriendly?.friendly_error?.message || 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.') || 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.'
-        }
-      };
+        try {
+          wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
+          wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
+          wiz.decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {};
+          wiz.preview.loading = true;
+          wiz.preview.error = '';
+          wiz.preview.failure = null;
+          wiz.preview.friendlyError = null;
+          wiz.preview.__post_create_refresh_pending = true;
+          wiz.preview.status_text = 'Payment draft created. Refreshing payment preview…';
+          wiz.preview.message = 'Payment draft created. Refreshing payment preview…';
+          wiz.workbench.create_draft_refresh_pending = true;
+          wiz.workbench.preview_reopen_required = true;
+          wiz.workbench.preview_refresh_failed = false;
+          wiz.workbench.post_create_preview_refresh_failed = false;
+          wiz.workbench.__post_mutation_preview_refresh_failed = false;
+          wiz.workbench.selected_preview_row_ids = [];
+          wiz.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+          wiz.workbench.server_selected_preview_row_ids = [];
+          wiz.workbench.server_selected_preview_row_ids_provided = false;
+          wiz.decisions.selected_preview_row_ids = [];
+          wiz.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+          wiz.decisions.server_selected_preview_row_ids = [];
+          wiz.decisions.server_selected_preview_row_ids_provided = false;
+          wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
+          wiz.local_selected_preview_row_ids_dirty = false;
+          wiz.createDraftError = '';
+          wiz.createDraftFriendlyError = null;
+        } catch {}
 
-      logTroubleshoot('warn', 'POST_CREATE_PREVIEW_REFRESH_FAILED_AFTER_BATCH_CREATED', {
-        operation_id: operationIdForPostCreate || null,
-        source_session_id: sourceWorkbenchSessionId || null,
-        created_pay_batch_ids: terminalCreatedPayBatchIds,
-        message: trimStr(applyErr?.message || applyErr?.user_message || applyErr?.error || applyErr) || null
-      });
+        logTroubleshoot('info', 'POST_CREATE_PREVIEW_REFRESH_PENDING_AFTER_BATCH_CREATED', {
+          operation_id: operationIdForPostCreate || null,
+          source_session_id: sourceWorkbenchSessionId || null,
+          created_pay_batch_ids: terminalCreatedPayBatchIds,
+          outcome: nonFatalRefreshApply.outcome || 'pending',
+          reason: nonFatalRefreshApply.reason || null
+        });
+      } else {
+        const refreshFriendly = (typeof bankingNormalizeApiError === 'function')
+          ? bankingNormalizeApiError(applyErr, applyErr?.payload || applyErr?.json || null, {
+              action: 'POST_DRAFT_CREATE_PREVIEW_REFRESH',
+              fallbackCode: 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+              fallbackTitle: 'Payment preview could not be refreshed',
+              fallbackMessage: 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.',
+              userInitiated: createDraftUserInitiated,
+              silent: true,
+              background: true,
+              showModal: false,
+              created_pay_batch_ids: [...terminalCreatedPayBatchIds],
+              source_session_id: sourceWorkbenchSessionId
+            })
+          : null;
+
+        appliedResult = {
+          ...(isPlainObject(terminalOperation?.result) ? terminalOperation.result : (isPlainObject(terminalOperation?.final_result) ? terminalOperation.final_result : (isPlainObject(terminalOperation) ? terminalOperation : {}))),
+          ok: true,
+          create_draft_operation_result: true,
+          pay_batch_ids: [...terminalCreatedPayBatchIds],
+          created_pay_batch_ids: [...terminalCreatedPayBatchIds],
+          selected_pay_batch_id: terminalCreatedPayBatchIds[0] || null,
+          preview_refresh_failed: true,
+          preview_refresh_warning: {
+            code: trimStr(refreshFriendly?.error_code || refreshFriendly?.code || 'BANKING_PAY_PREVIEW_REFRESH_FAILED') || 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+            title: trimStr(refreshFriendly?.title || refreshFriendly?.friendly_error?.title || 'Payment preview could not be refreshed') || 'Payment preview could not be refreshed',
+            message: trimStr(refreshFriendly?.user_message || refreshFriendly?.message || refreshFriendly?.friendly_error?.message || 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.') || 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.'
+          }
+        };
+
+        logTroubleshoot('warn', 'POST_CREATE_PREVIEW_REFRESH_FAILED_AFTER_BATCH_CREATED', {
+          operation_id: operationIdForPostCreate || null,
+          source_session_id: sourceWorkbenchSessionId || null,
+          created_pay_batch_ids: terminalCreatedPayBatchIds,
+          message: trimStr(applyErr?.message || applyErr?.user_message || applyErr?.error || applyErr) || null
+        });
+      }
     }
 
     const finalResult = (appliedResult && typeof appliedResult === 'object')
@@ -29322,7 +30077,6 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
-
 
 async function openPayDraftSkippedTimesheetsModal(exclusions) {
   const enc = (typeof escapeHtml === 'function')
@@ -38333,7 +39087,6 @@ function deriveBankingAttentionStateFromBatchList(input) {
   };
 }
 
-
 function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   const argumentCount = arguments.length;
   const isPlainObject = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -39880,6 +40633,142 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   };
   const isPostCancelPreviewRefresh = isPostCancelPreviewRefreshError();
   const isPostCreatePreviewRefresh = !isPostCancelPreviewRefresh && isPostCreatePreviewRefreshError();
+  const isPostMutationPreviewRefresh = isPostCancelPreviewRefresh || isPostCreatePreviewRefresh;
+  const isNonFatalPostMutationPreviewState = () => {
+    if (!isPostMutationPreviewRefresh) return { matched: false };
+    const fatalText = rawUpper;
+    const fatal = !!(
+      fatalText.includes('UNAUTHORIZED') ||
+      fatalText.includes('UNAUTHORISED') ||
+      fatalText.includes('FORBIDDEN') ||
+      fatalText.includes('PERMISSION') ||
+      fatalText.includes('ROW LEVEL SECURITY') ||
+      fatalText.includes(' RLS ') ||
+      fatalText.includes('INTEGRITY') ||
+      fatalText.includes('DATA_CORRUPTION') ||
+      fatalText.includes('CORRUPTION') ||
+      fatalText.includes('MALFORMED') ||
+      fatalText.includes('INVALID_JSON') ||
+      fatalText.includes('ASSERT_INTEGRITY') ||
+      fatalText.includes('INVALID INPUT SYNTAX') ||
+      /\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|POLICY|INDEX)\b[^\n]*\b(DOES NOT EXIST|NOT FOUND|IS AMBIGUOUS)\b/.test(fatalText)
+    );
+    if (fatal) return { matched: false };
+
+    const statusCandidates = [];
+    for (const payload of payloads) {
+      if (!isPlainObject(payload)) continue;
+      statusCandidates.push(payload.status, payload.http_status, payload.httpStatus, payload.status_code, payload.statusCode);
+    }
+    statusCandidates.push(contextInput.status, contextInput.http_status, contextInput.status_code);
+    const hasTransientStatus = statusCandidates.some((value) => {
+      const n = Number(value);
+      return Number.isFinite(n) && [404, 409, 410, 423, 425, 500, 502, 503, 504].includes(Math.trunc(n));
+    });
+
+    const pendingCodeSet = new Set([
+      'PENDING_REFRESH',
+      'PREVIEW_REFRESH_PENDING',
+      'BANKING_PAY_PREVIEW_REFRESH_PENDING',
+      'REFRESHING_CANDIDATES',
+      'SNAPSHOT_REFRESH_PENDING',
+      'WORKBENCH_REFRESH_PENDING',
+      'REBASE_REQUIRED',
+      'REQUIRES_NEW_SESSION',
+      'WORKBENCH_REBASE_REQUIRED',
+      'PROGRESS_ONLY',
+      'BOOTSTRAP_ONLY',
+      'STALE_SESSION',
+      'OBSOLETE_SESSION',
+      'WORKBENCH_SESSION_NOT_FOUND',
+      'WORKBENCH_SESSION_INVALID'
+    ]);
+    const hasPendingStructuredCode = canonicalStructuredCodes.some((code) => pendingCodeSet.has(code)) || pendingCodeSet.has(errorCode);
+    const hasPendingPayloadFlag = payloads.some((payload) => {
+      if (!isPlainObject(payload)) return false;
+      const pendingArrays = [
+        payload.pending_candidate_ids,
+        payload.pendingCandidateIds,
+        payload.dirty_candidate_ids,
+        payload.dirtyCandidateIds,
+        payload.refresh_job_ids,
+        payload.refreshJobIds,
+        payload.pending_candidate_jobs,
+        payload.pendingCandidateJobs
+      ].some((arr) => Array.isArray(arr) && arr.length > 0);
+      return !!(
+        payload.pending_refresh === true ||
+        payload.refresh_pending === true ||
+        payload.preview_refresh_pending === true ||
+        payload.rebase_required === true ||
+        payload.requires_new_session === true ||
+        payload.ready === false ||
+        payload.ready_flag === false ||
+        payload.progress_only === true ||
+        payload.progressOnly === true ||
+        payload.bootstrap_only === true ||
+        payload.bootstrapOnly === true ||
+        pendingArrays
+      );
+    });
+    const hasPendingText = !!(
+      rawUpper.includes('REFRESHING_CANDIDATES') ||
+      rawUpper.includes('SNAPSHOT_REFRESH_PENDING') ||
+      rawUpper.includes('WORKBENCH_REFRESH_PENDING') ||
+      rawUpper.includes('PENDING_REFRESH') ||
+      rawUpper.includes('PREVIEW_REFRESH_PENDING') ||
+      rawUpper.includes('REFRESHING PAYMENT PREVIEW') ||
+      rawUpper.includes('REBASE_REQUIRED') ||
+      rawUpper.includes('REQUIRES_NEW_SESSION') ||
+      rawUpper.includes('PROGRESS_ONLY') ||
+      rawUpper.includes('BOOTSTRAP_ONLY')
+    );
+    if (!(hasTransientStatus || hasPendingStructuredCode || hasPendingPayloadFlag || hasPendingText)) return { matched: false };
+    const rebase = hasPendingStructuredCode && (canonicalStructuredCodes.includes('REBASE_REQUIRED') || canonicalStructuredCodes.includes('REQUIRES_NEW_SESSION') || canonicalStructuredCodes.includes('STALE_SESSION') || canonicalStructuredCodes.includes('OBSOLETE_SESSION')) || rawUpper.includes('REBASE_REQUIRED') || rawUpper.includes('REQUIRES_NEW_SESSION');
+    return { matched: true, outcome: rebase ? 'rebase_required' : 'pending' };
+  };
+  const nonFatalPostMutationPreviewState = isNonFatalPostMutationPreviewState();
+  if (nonFatalPostMutationPreviewState.matched) {
+    const code = nonFatalPostMutationPreviewState.outcome === 'rebase_required' ? 'BANKING_PAY_PREVIEW_REBASE_REQUIRED' : 'BANKING_PAY_PREVIEW_REFRESH_PENDING';
+    const message = isPostCancelPreviewRefresh
+      ? 'Draft was cancelled. CloudTMS is refreshing the payment preview.'
+      : 'Payment draft created. Refreshing payment preview…';
+    return {
+      ok: true,
+      error_code: code,
+      code,
+      title: 'Refreshing payment preview',
+      message,
+      error: '',
+      user_message: message,
+      confirm_label: 'OK',
+      user_action: 'WAIT_FOR_PREVIEW_REFRESH',
+      severity: 'info',
+      show_modal: false,
+      showModal: false,
+      http_status: 202,
+      status_code: 202,
+      nonfatal: true,
+      pending_refresh: true,
+      post_mutation_pending: true,
+      rebase_required: nonFatalPostMutationPreviewState.outcome === 'rebase_required',
+      preview_refresh_outcome: nonFatalPostMutationPreviewState.outcome,
+      friendly_error: {
+        code,
+        error_code: code,
+        title: 'Refreshing payment preview',
+        message,
+        confirm_label: 'OK',
+        user_action: 'WAIT_FOR_PREVIEW_REFRESH',
+        severity: 'info',
+        show_modal: false
+      },
+      raw_code: normaliseCode((error && error.code) || (isPlainObject(error) ? error.error_code || error.errorCode || error.code : '') || ''),
+      raw_message: safeTrim((error && error.message) || (isPlainObject(error) ? error.message || error.error || error.detail || error.details : '') || rawText || ''),
+      technical_message: safeTrim(rawText || (error && error.stack) || ''),
+      payload: payloads[0] || (isPlainObject(payloadInput) ? payloadInput : null)
+    };
+  }
   const postCancelPreviewRefreshCopy = {
     title: 'Payment preview could not be refreshed',
     message: 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.',
@@ -57158,6 +58047,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
   };
 
   const explicitSourceSessionId = trimStr(options.source_session_id || options.sourceSessionId || '');
+  const sourceSessionAlreadyDiscarded = options.source_session_already_discarded === true || options.sourceSessionAlreadyDiscarded === true;
   const sessionIdBeforeReset = trimStr(
     options.session_id ||
     options.sessionId ||
@@ -57535,7 +58425,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       if (retryablePostMutationFailure) {
         wiz.preview.loading = true;
         wiz.preview.error = '';
-        wiz.preview.friendlyError = friendly;
+        wiz.preview.friendlyError = null;
         wiz.preview.failure = null;
         wiz.preview.data = null;
         wiz.preview.readiness = null;
@@ -57658,8 +58548,12 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       const workbenchState = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
       const sessionId = readPreviewResetSessionId();
       const hasPreviewData = isPlainObject(previewState.data);
+      const previewData = hasPreviewData ? previewState.data : {};
+      const previewPayload = isPlainObject(previewData.preview) ? previewData.preview : {};
+      const hasReadyEmpty = previewState.ready_empty === true || previewData.ready_empty === true || previewData.readyEmpty === true || previewPayload.ready_empty === true || previewPayload.readyEmpty === true;
       const hasError = !!trimStr(previewState.error || previewState.failure?.error?.message || previewState.friendlyError?.message || previewState.friendlyError?.user_message || '');
       if (hasError) return 'error';
+      if (hasReadyEmpty) return 'ready_empty';
       if (isPostMutationDiscardAndReopen && sessionId && isPreviewResetSessionObsolete(sessionId)) return 'rebase_required';
       if (
         previewState.loading === true ||
@@ -57983,7 +58877,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     return buildPreviewResetOutcome();
   }
 
-  if (isPostMutationDiscardAndReopen && sessionIdBeforeReset && typeof bankingPayWorkbenchSessionDiscard === 'function') {
+  if (isPostMutationDiscardAndReopen && !sourceSessionAlreadyDiscarded && sessionIdBeforeReset && typeof bankingPayWorkbenchSessionDiscard === 'function') {
     try {
       await bankingPayWorkbenchSessionDiscard(sessionIdBeforeReset, {
         reason: mutationContext || mode,
@@ -58051,6 +58945,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         preview_reopen_required: mode === 'POST_ACTION_REOPEN' || isPostMutationDiscardAndReopen,
         force_new_session: isPostMutationDiscardAndReopen || options.force_new_session === true || options.forceNewSession === true,
         discard_source_session: isPostMutationDiscardAndReopen || options.discard_source_session === true || options.discardSourceSession === true,
+        source_session_already_discarded: isPostMutationDiscardAndReopen ? true : sourceSessionAlreadyDiscarded,
         ignore_replacement_session: isPostMutationDiscardAndReopen || options.ignore_replacement_session === true || options.ignoreReplacementSession === true,
         source_session_id: explicitSourceSessionId || sessionIdBeforeReset || null,
         source_snapshot_run_id: trimStr(options.source_snapshot_run_id || options.sourceSnapshotRunId || ''),
@@ -80373,7 +81268,6 @@ function computePayWorkbenchSessionSignature(input = null) {
 
   return stableStringify(signaturePayload);
 }
-
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -80607,6 +81501,154 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     (canonicalSessionSignature && previousSessionSignature && canonicalSessionSignature !== previousSessionSignature)
   );
   const progressObj = isPlainObject(responseObj.progress) ? responseObj.progress : {};
+  const responseMutationContext = trimStr(responseObj.post_mutation_context || responseObj.mutation_context || responseObj.action || '').toUpperCase();
+  const isPostMutationPreviewPayload = !!(
+    responseMutationContext === 'CREATE_DRAFT_SUCCESS' ||
+    responseMutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' ||
+    responseMutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' ||
+    responseMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' ||
+    responseObj.pending_refresh === true ||
+    responseObj.preview_refresh_pending === true ||
+    responseObj.refresh_pending === true ||
+    responseObj.rebase_required === true ||
+    responseObj.requires_new_session === true ||
+    Array.isArray(responseObj.obsolete_session_ids) ||
+    responseObj.source_session_id
+  );
+  const previewPayloadHasRows = !!(
+    isPlainObject(responseObj.preview) && (
+      asArray(responseObj.preview.paye_candidates).length > 0 ||
+      asArray(responseObj.preview.non_paye_payees).length > 0 ||
+      asArray(responseObj.preview.canonical_preview_lines).length > 0 ||
+      asArray(responseObj.preview.preview_rows).length > 0 ||
+      asArray(responseObj.preview.rows).length > 0
+    )
+  );
+  const responseReadyEmpty = responseObj.ready_empty === true || responseObj.readyEmpty === true || progressObj.ready_empty === true || progressObj.readyEmpty === true;
+  const responsePendingRefresh = !!(
+    responseObj.pending_refresh === true ||
+    responseObj.refresh_pending === true ||
+    responseObj.preview_refresh_pending === true ||
+    responseObj.rebase_required === true ||
+    responseObj.requires_new_session === true ||
+    responseObj.progress_only === true ||
+    responseObj.progressOnly === true ||
+    responseObj.bootstrap_only === true ||
+    responseObj.bootstrapOnly === true ||
+    responseObj.preview_bootstrap === true ||
+    responseObj.ready === false ||
+    responseObj.ready_flag === false ||
+    progressObj.pending_refresh === true ||
+    progressObj.refresh_pending === true ||
+    progressObj.preview_refresh_pending === true ||
+    progressObj.progress_only === true ||
+    progressObj.bootstrap_only === true ||
+    progressObj.preview_bootstrap === true ||
+    progressObj.ready === false ||
+    progressObj.ready_flag === false ||
+    Array.isArray(responseObj.pending_candidate_ids) && responseObj.pending_candidate_ids.length > 0 ||
+    Array.isArray(responseObj.refresh_job_ids) && responseObj.refresh_job_ids.length > 0
+  );
+
+  if (isPostMutationPreviewPayload && (responseReadyEmpty || (responsePendingRefresh && !previewPayloadHasRows))) {
+    const pendingIds = normalizeStringArray(responseObj.pending_candidate_ids || progressObj.pending_candidate_ids || []);
+    const dirtyIds = normalizeStringArray(responseObj.dirty_candidate_ids || progressObj.dirty_candidate_ids || pendingIds);
+    const refreshIds = normalizeStringArray(responseObj.refresh_job_ids || progressObj.refresh_job_ids || []);
+    const statusMessage = trimStr(responseObj.status_text || responseObj.message || progressObj.status_text || progressObj.message || (responseReadyEmpty ? 'Payment preview is ready.' : 'Payment draft updated. Refreshing payment preview…'));
+    const pendingEnvelope = {
+      ...(cloneJson(responseObj) || {}),
+      ok: responseObj.ok !== false,
+      ready: responseReadyEmpty,
+      ready_flag: responseReadyEmpty,
+      ready_empty: responseReadyEmpty,
+      pending_refresh: !responseReadyEmpty,
+      refresh_pending: !responseReadyEmpty,
+      preview_refresh_pending: !responseReadyEmpty,
+      progress_only: !responseReadyEmpty,
+      session_id: sessionId || responseObj.session_id || null,
+      snapshot_run_id: snapshotRunId || responseObj.snapshot_run_id || null,
+      session_version: sessionVersionRaw,
+      session_signature: canonicalSessionSignature || responseObj.session_signature || null,
+      pay_date: canonicalPayDate || null,
+      week_ending_cutoff_date: canonicalWeekEndingCutoffDate || null,
+      post_mutation_context: responseMutationContext || null,
+      mutation_context: responseMutationContext || null,
+      pending_candidate_ids: pendingIds,
+      dirty_candidate_ids: dirtyIds,
+      refresh_job_ids: refreshIds,
+      preview: {
+        ok: true,
+        ready: responseReadyEmpty,
+        ready_empty: responseReadyEmpty,
+        paye_candidates: [],
+        non_paye_payees: [],
+        canonical_preview_lines: [],
+        preview_rows: [],
+        rows: [],
+        componentStateCache: blankComponentStateCache()
+      },
+      progress: cloneJson(progressObj) || progressObj
+    };
+
+    wiz.preview.data = responseReadyEmpty ? pendingEnvelope : null;
+    wiz.preview.loading = !responseReadyEmpty;
+    wiz.preview.error = '';
+    wiz.preview.friendlyError = null;
+    wiz.preview.failure = null;
+    wiz.preview.readiness = null;
+    wiz.preview.summary = null;
+    wiz.preview.candidateDebtInfo = {};
+    wiz.preview.componentStateCache = blankComponentStateCache();
+    wiz.preview.status_text = statusMessage;
+    wiz.lastPreviewFailure = null;
+
+    wiz.decisions.selected_preview_row_ids = [];
+    wiz.decisions.server_selected_preview_row_ids = [];
+    wiz.decisions.server_selected_preview_row_ids_provided = true;
+    wiz.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wiz.local_selected_preview_row_ids_dirty = false;
+    wiz.decisions.pending_candidate_ids = pendingIds;
+    wiz.decisions.dirty_candidate_ids = dirtyIds;
+    wiz.decisions.pending_candidate_jobs = [];
+    wiz.decisions.create_draft_refresh_pending = !responseReadyEmpty;
+    wiz.decisions.pay_context_dirty = !responseReadyEmpty;
+    wiz.decisions.canonical_preview_lines = [];
+    wiz.decisions.preview_rows = [];
+    wiz.decisions.ready_preview_lines = [];
+    wiz.decisions.draftable_now = [];
+    wiz.decisions.ready_to_pay_now = [];
+    wiz.decisions.blocked_now = [];
+    wiz.decisions.blocked_for_pay_now = [];
+
+    wiz.workbench.session_id = responseReadyEmpty ? (sessionId || null) : null;
+    wiz.workbench.snapshot_run_id = responseReadyEmpty ? (snapshotRunId || null) : null;
+    wiz.workbench.session_version = responseReadyEmpty ? sessionVersionRaw : null;
+    wiz.workbench.session_signature = responseReadyEmpty ? (canonicalSessionSignature || '') : '';
+    wiz.workbench.selected_preview_row_ids = [];
+    wiz.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+    wiz.workbench.server_selected_preview_row_ids = [];
+    wiz.workbench.server_selected_preview_row_ids_provided = true;
+    wiz.workbench.pending_candidate_ids = responseReadyEmpty ? [] : pendingIds;
+    wiz.workbench.dirty_candidate_ids = responseReadyEmpty ? [] : dirtyIds;
+    wiz.workbench.pending_candidate_rows = [];
+    wiz.workbench.failed_candidate_rows = [];
+    wiz.workbench.pending_candidate_jobs = [];
+    wiz.workbench.canonical_preview_lines = [];
+    wiz.workbench.preview_rows = [];
+    wiz.workbench.ready_preview_lines = [];
+    wiz.workbench.payees = [];
+    wiz.workbench.summary = {};
+    wiz.workbench.create_draft_refresh_pending = !responseReadyEmpty;
+    wiz.workbench.preview_reopen_required = !responseReadyEmpty;
+    wiz.workbench.__post_mutation_preview_refresh_failed = false;
+    wiz.workbench.post_create_preview_refresh_failed = false;
+    wiz.workbench.post_cancel_preview_refresh_failed = false;
+    wiz.workbench.__post_create_refresh_pending = false;
+    wiz.workbench.__post_cancel_refresh_pending = false;
+
+    return pendingEnvelope;
+  }
   const progressRows = Array.isArray(progressObj.candidate_status_rows)
     ? progressObj.candidate_status_rows
     : (Array.isArray(progressObj.candidate_statuses) ? progressObj.candidate_statuses : []);
@@ -80745,7 +81787,9 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.preview.data = normalizedEnvelope;
   wiz.preview.loading = hasPendingWorkbenchRefresh;
   wiz.preview.error = '';
+  wiz.preview.friendlyError = null;
   wiz.preview.failure = null;
+  wiz.lastPreviewFailure = null;
   wiz.preview.readiness = normalizedEnvelope.readiness;
   wiz.preview.summary = isPlainObject(previewObj.summary) ? cloneJson(previewObj.summary) : null;
   wiz.preview.context_signature = trimStr(canonicalSessionSignature || wiz.preview.context_signature || computePayWorkbenchSessionSignature());
@@ -80793,6 +81837,9 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.decisions.pending_candidate_jobs = cloneJson(pendingCandidateJobs) || [];
   wiz.decisions.dirty_candidate_ids = Array.from(new Set([...pendingCandidateIds, ...failedCandidateIds]));
   wiz.decisions.create_draft_refresh_pending = hasPendingWorkbenchRefresh;
+  wiz.decisions.post_create_preview_refresh_failed = false;
+  wiz.decisions.post_cancel_preview_refresh_failed = false;
+  wiz.decisions.__post_mutation_preview_refresh_failed = false;
   wiz.decisions.pay_context_dirty = hasPendingWorkbenchRefresh;
   wiz.decisions.dirty_reason = '';
   wiz.decisions.modal_valid = true;
@@ -80826,6 +81873,12 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.server_selected_preview_row_ids = serverSelectedPreviewRowIdsProvided ? (cloneJson(serverSelectedPreviewRowIds) || []) : [];
   wiz.workbench.selected_preview_row_mode = selectionState.selected_preview_row_mode;
   wiz.workbench.create_draft_refresh_pending = hasPendingWorkbenchRefresh;
+  wiz.workbench.preview_reopen_required = hasPendingWorkbenchRefresh;
+  wiz.workbench.__post_mutation_preview_refresh_failed = false;
+  wiz.workbench.post_create_preview_refresh_failed = false;
+  wiz.workbench.post_cancel_preview_refresh_failed = false;
+  wiz.workbench.__post_create_refresh_pending = false;
+  wiz.workbench.__post_cancel_refresh_pending = false;
   wiz.workbench.case_resolution_states = cloneJson(caseResolutionStates) || [];
   wiz.workbench.canonical_preview_lines = cloneJson(canonicalPreviewLines) || [];
   wiz.workbench.payees = cloneJson(payees) || [];
@@ -80834,6 +81887,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
 
   return normalizedEnvelope;
 }
+
 
 function mergePayWorkbenchCandidatePreviewIntoState(candidateResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -83574,7 +84628,6 @@ function bankingBuildEnrichedFriendlyError(originalError, friendly, fallbackMess
   return err;
 }
 
-
 async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -83667,6 +84720,7 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
   };
   const sharedPostMutationContext = readSharedWorkbenchPostMutationContext();
   const sourceSessionId = trimStr(options?.source_session_id || options?.sourceSessionId || sharedPostMutationContext.source_session_id || '');
+  const replacementSessionId = trimStr(options?.replacement_session_id || options?.replacementSessionId || sharedPostMutationContext.session_id || ((sessionIdText && sessionIdText !== sourceSessionId) ? sessionIdText : '') || '');
   const obsoleteSessionIds = Array.from(new Set([
     ...(Array.isArray(options?.obsolete_session_ids) ? options.obsolete_session_ids : []),
     ...(Array.isArray(options?.obsoleteSessionIds) ? options.obsoleteSessionIds : []),
@@ -83752,14 +84806,24 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
     code,
     rebase_required: true,
     requires_new_session: true,
+    pending_refresh: true,
+    refresh_pending: true,
+    preview_refresh_pending: true,
     session_id: sessionIdText,
+    replacement_session_id: replacementSessionId || null,
     source_session_id: sourceSessionId || null,
     obsolete_session_ids: [...obsoleteSessionIds],
     mutation_context: mutationContext || null,
+    post_mutation_context: mutationContext || null,
+    dirty_candidate_ids: [...dirtyCandidateIds],
+    pending_candidate_ids: [...dirtyCandidateIds],
+    refresh_job_ids: [...refreshJobIds],
     ready: false,
     ready_flag: false,
+    ready_empty: false,
     deferred: true,
     progress_only: true,
+    bootstrap_only: false,
     message
   });
   const isRebaseRequiredPayload = (payload) => {
@@ -83811,6 +84875,7 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
       return {
         ok: true,
         session_id: sessionIdText,
+        replacement_session_id: replacementSessionId || null,
         snapshot_run_id: trimStr(progress.snapshot_run_id || ''),
         session_version: progress.session_version ?? null,
         session_signature: trimStr(progress.session_signature || ''),
@@ -83818,10 +84883,16 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
         ready_flag: true,
         ready_empty: true,
         deferred: false,
+        pending_refresh: false,
+        refresh_pending: false,
+        preview_refresh_pending: false,
         progress_only: true,
         mutation_context: mutationContext || null,
+        post_mutation_context: mutationContext || null,
         source_session_id: sourceSessionId || null,
         obsolete_session_ids: [...obsoleteSessionIds],
+        dirty_candidate_ids: [...dirtyCandidateIds],
+        refresh_job_ids: [...refreshJobIds],
         progress,
         candidate_counts: {
           total: 0,
@@ -83837,16 +84908,24 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
     }
 
     if (progress && progress.ready_empty !== true && progressIndicatesPendingOrProgressOnly(progress)) {
-      const progressReady = progress.ready_flag === true || progress.ready === true;
+      const progressReady = isPostMutationContext ? false : (progress.ready_flag === true || progress.ready === true);
       return {
         ok: true,
         session_id: sessionIdText,
+        replacement_session_id: replacementSessionId || null,
         mutation_context: mutationContext || null,
+        post_mutation_context: mutationContext || null,
         source_session_id: sourceSessionId || null,
         obsolete_session_ids: [...obsoleteSessionIds],
+        dirty_candidate_ids: [...dirtyCandidateIds],
+        refresh_job_ids: [...refreshJobIds],
         progress_only: true,
+        pending_refresh: true,
+        refresh_pending: true,
+        preview_refresh_pending: true,
         ready: progressReady,
         ready_flag: progressReady,
+        ready_empty: false,
         deferred: !progressReady,
         progress,
         candidate_counts: {
@@ -83890,15 +84969,22 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
     const bootstrapOnly = payloadObj.bootstrap_only === true || payloadObj.preview_bootstrap === true || payloadObj.large_preview === true || previewObj.bootstrap_only === true;
 
     if (bootstrapOnly) {
+      const bootstrapPending = isPostMutationContext;
       return {
         ok: true,
         ...(cloneJson(payloadObj) || {}),
         session_id: trimStr(payloadObj.session_id || previewObj.session_id || sessionIdText),
+        replacement_session_id: replacementSessionId || null,
         snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || progress?.snapshot_run_id || ''),
         session_version: payloadObj.session_version ?? previewObj.session_version ?? progress?.session_version ?? null,
         session_signature: trimStr(payloadObj.session_signature || previewObj.session_signature || progress?.session_signature || ''),
-        ready: true,
-        ready_flag: true,
+        ready: bootstrapPending ? false : true,
+        ready_flag: bootstrapPending ? false : true,
+        ready_empty: false,
+        pending_refresh: bootstrapPending,
+        refresh_pending: bootstrapPending,
+        preview_refresh_pending: bootstrapPending,
+        progress_only: true,
         bootstrap_only: true,
         preview_bootstrap: true,
         large_preview: payloadObj.large_preview === true || previewObj.large_preview === true,
@@ -83907,8 +84993,12 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
         recommended_page_size: Number.isFinite(Number(payloadObj.recommended_page_size || previewObj.recommended_page_size)) ? Math.max(1, Math.min(250, Math.trunc(Number(payloadObj.recommended_page_size || previewObj.recommended_page_size)))) : null,
         preview: null,
         mutation_context: mutationContext || null,
+        post_mutation_context: mutationContext || null,
         source_session_id: sourceSessionId || null,
-        obsolete_session_ids: [...obsoleteSessionIds]
+        obsolete_session_ids: [...obsoleteSessionIds],
+        dirty_candidate_ids: [...dirtyCandidateIds],
+        pending_candidate_ids: [...dirtyCandidateIds],
+        refresh_job_ids: [...refreshJobIds]
       };
     }
 
@@ -83922,10 +85012,17 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
       session_signature: trimStr(payloadObj.session_signature || previewObj.session_signature || progress?.session_signature || ''),
       ready: true,
       ready_flag: true,
+      pending_refresh: false,
+      refresh_pending: false,
+      preview_refresh_pending: false,
       progress: progress || null,
       mutation_context: mutationContext || null,
+      post_mutation_context: mutationContext || null,
+      replacement_session_id: replacementSessionId || null,
       source_session_id: sourceSessionId || null,
       obsolete_session_ids: [...obsoleteSessionIds],
+      dirty_candidate_ids: [...dirtyCandidateIds],
+      refresh_job_ids: [...refreshJobIds],
       pending_candidate_ids: Array.isArray(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) ? cloneJson(payloadObj.pending_candidate_ids ?? previewObj.pending_candidate_ids) || [] : [],
       failed_candidate_ids: Array.isArray(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) ? cloneJson(payloadObj.failed_candidate_ids ?? previewObj.failed_candidate_ids) || [] : [],
       server_selected_preview_row_ids: Array.isArray(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) ? cloneJson(payloadObj.server_selected_preview_row_ids ?? previewObj.server_selected_preview_row_ids) || [] : []
@@ -84262,7 +85359,6 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, op
 }
 
 
-
 async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -84344,7 +85440,13 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     const explicitReadyFlag = src.ready_flag === true || src.ready === true || payloadObj.ready_flag === true || payloadObj.ready === true;
     const explicitReadyEmptyFlag = src.ready_empty === true || src.readyEmpty === true || payloadObj.ready_empty === true || payloadObj.readyEmpty === true;
     const explicitNotReadyFlag = src.ready_flag === false || src.ready === false || payloadObj.ready_flag === false || payloadObj.ready === false;
-    const readyFlag = explicitReadyFlag || explicitReadyEmptyFlag || (!explicitNotReadyFlag && total > 0 && pending <= 0 && failed <= 0 && !hasActivePendingJobEvidence);
+    const rawPhaseCode = normaliseProgressCode(src.phase || src.current_phase || src.status_phase || src.status || payloadObj.phase || payloadObj.current_phase || payloadObj.status || '');
+    const progressOnlyFlag = src.progress_only === true || payloadObj.progress_only === true || src.bootstrap_only === true || payloadObj.bootstrap_only === true || src.preview_bootstrap === true || payloadObj.preview_bootstrap === true;
+    const explicitPendingFlag = src.pending_refresh === true || payloadObj.pending_refresh === true || src.refresh_pending === true || payloadObj.refresh_pending === true || src.preview_refresh_pending === true || payloadObj.preview_refresh_pending === true || src.ready === false || src.ready_flag === false || payloadObj.ready === false || payloadObj.ready_flag === false;
+    const phasePending = ['REFRESHING_CANDIDATES', 'SNAPSHOT_REFRESH_PENDING', 'WORKBENCH_REFRESH_PENDING', 'SNAPSHOT_REBUILD_PENDING', 'WORKBENCH_JOBS_RUNNING', 'PENDING_REFRESH', 'PREVIEW_REFRESH_PENDING', 'PROGRESS_ONLY', 'BOOTSTRAP_ONLY'].includes(rawPhaseCode);
+    const pendingRefresh = !!(explicitPendingFlag || progressOnlyFlag || phasePending || pendingCandidateIds.length > 0 || pendingJobIds.length > 0 || hasActivePendingJobEvidence || (isPostMutationContext && dirtyCandidateIds.length > 0 && !explicitReadyFlag && !explicitReadyEmptyFlag));
+    const readyFlag = explicitReadyEmptyFlag || (!pendingRefresh && (explicitReadyFlag || (!explicitNotReadyFlag && total > 0 && pending <= 0 && failed <= 0 && !hasActivePendingJobEvidence)));
+    const readyEmptyFlag = explicitReadyEmptyFlag || (!isPostMutationContext && !pendingRefresh && !!readyFlag && total <= 0);
     const phase = trimStr(src.phase || src.current_phase || src.status_phase || payloadObj.phase || payloadObj.current_phase || (readyFlag ? 'READY' : 'REFRESHING'));
     const statusText = trimStr(src.status_text || src.statusText || src.message || payloadObj.status_text || payloadObj.message || (readyFlag ? 'Preview ready' : 'Preparing payment preview candidates.'));
     return {
@@ -84361,7 +85463,19 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       failed_candidates: failed,
       ready_flag: !!readyFlag,
       ready: !!readyFlag,
-      ready_empty: explicitReadyEmptyFlag || (!!readyFlag && total <= 0),
+      ready_empty: readyEmptyFlag,
+      pending_refresh: pendingRefresh,
+      refresh_pending: pendingRefresh,
+      preview_refresh_pending: pendingRefresh,
+      deferred: pendingRefresh && !readyFlag,
+      progress_only: pendingRefresh || progressOnlyFlag,
+      bootstrap_only: src.bootstrap_only === true || payloadObj.bootstrap_only === true || src.preview_bootstrap === true || payloadObj.preview_bootstrap === true,
+      mutation_context: mutationContext || null,
+      post_mutation_context: mutationContext || null,
+      source_session_id: sourceSessionId || null,
+      obsolete_session_ids: [...obsoleteSessionIds],
+      dirty_candidate_ids: [...dirtyCandidateIds],
+      refresh_job_ids: [...refreshJobIds],
       phase,
       status_text: statusText,
       candidate_status_rows: candidateStatusRows,
@@ -84531,22 +85645,27 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     rebase_required: true,
     requires_new_session: true,
     pending_refresh: true,
+    refresh_pending: true,
+    preview_refresh_pending: true,
     fatal: false,
     session_id: sessionIdText,
     source_session_id: sourceSessionId || null,
     obsolete_session_ids: [...obsoleteSessionIds],
     mutation_context: mutationContext || null,
+    post_mutation_context: mutationContext || null,
+    dirty_candidate_ids: [...dirtyCandidateIds],
+    pending_candidate_ids: [...dirtyCandidateIds],
+    refresh_job_ids: [...refreshJobIds],
     ready: false,
     ready_flag: false,
     ready_empty: false,
     deferred: true,
     progress_only: true,
-    total_candidates: 0,
+    total_candidates: dirtyCandidateIds.length,
     completed_candidates: 0,
     ready_candidates: 0,
-    pending_candidates: 0,
+    pending_candidates: dirtyCandidateIds.length,
     failed_candidates: 0,
-    pending_candidate_ids: [],
     failed_candidate_ids: [],
     candidate_status_rows: [],
     candidate_statuses: [],
@@ -84637,6 +85756,7 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     throw error;
   }
 }
+
 
 
 async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload = {}) {
@@ -124414,7 +125534,239 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
     }
   } catch {}
 
+
+  const isPostCreatePendingOrRebaseOutcome = (value) => {
+    const queue = [value];
+    const seenObjects = new WeakSet();
+    const seenStrings = new Set();
+    const pendingCodes = new Set([
+      'REFRESHING_CANDIDATES',
+      'SNAPSHOT_REFRESH_PENDING',
+      'WORKBENCH_REFRESH_PENDING',
+      'PENDING_REFRESH',
+      'PREVIEW_REFRESH_PENDING',
+      'BANKING_PAY_PREVIEW_REFRESH_PENDING',
+      'BANKING_PAY_PREVIEW_REBASE_REQUIRED',
+      'REBASE_REQUIRED',
+      'WORKBENCH_REBASE_REQUIRED',
+      'REQUIRES_NEW_SESSION',
+      'REPLACEMENT_SESSION_PENDING',
+      'REPLACEMENT_SESSION_OPENING',
+      'PROGRESS_ONLY',
+      'BOOTSTRAP_ONLY'
+    ]);
+    const transientStatuses = new Set(['404', '409', '410', '423', '425', '500', '502', '503', '504']);
+    const push = (candidate) => {
+      if (candidate === null || candidate === undefined) return;
+      if (typeof candidate === 'string') {
+        const s = trimStr(candidate);
+        if (!s || seenStrings.has(s)) return;
+        seenStrings.add(s);
+        queue.push(s);
+        return;
+      }
+      if (isPlainObject(candidate) || candidate instanceof Error || Array.isArray(candidate)) queue.push(candidate);
+    };
+
+    let matched = false;
+    let outcome = 'pending';
+    let reason = '';
+
+    while (queue.length) {
+      const node = queue.shift();
+      if (node === null || node === undefined) continue;
+
+      if (typeof node === 'string') {
+        const text = trimStr(node);
+        const upper = text.toUpperCase();
+        if (!text) continue;
+        try {
+          const parsed = JSON.parse(text);
+          if (isPlainObject(parsed) || Array.isArray(parsed)) push(parsed);
+        } catch {}
+        if (
+          upper.includes('REFRESHING_CANDIDATES') ||
+          upper.includes('SNAPSHOT_REFRESH_PENDING') ||
+          upper.includes('WORKBENCH_REFRESH_PENDING') ||
+          upper.includes('PENDING_REFRESH') ||
+          upper.includes('PREVIEW_REFRESH_PENDING') ||
+          upper.includes('REFRESHING PAYMENT PREVIEW') ||
+          upper.includes('REBASE_REQUIRED') ||
+          upper.includes('REQUIRES_NEW_SESSION') ||
+          upper.includes('REPLACEMENT SESSION') ||
+          upper.includes('PROGRESS_ONLY') ||
+          upper.includes('BOOTSTRAP_ONLY')
+        ) {
+          matched = true;
+          reason = reason || text;
+          if (upper.includes('REBASE_REQUIRED') || upper.includes('REQUIRES_NEW_SESSION')) outcome = 'rebase_required';
+        }
+        continue;
+      }
+
+      if (node instanceof Error) {
+        push({
+          message: node.message,
+          code: node.code,
+          error_code: node.error_code,
+          status: node.status,
+          status_code: node.status_code,
+          http_status: node.http_status,
+          payload: node.payload,
+          json: node.json,
+          backendPayload: node.backendPayload,
+          details: node.details,
+          cause: node.cause
+        });
+        continue;
+      }
+
+      if (Array.isArray(node)) {
+        for (const item of node) push(item);
+        continue;
+      }
+
+      if (!isPlainObject(node)) continue;
+      if (seenObjects.has(node)) continue;
+      seenObjects.add(node);
+
+      const code = trimStr(
+        node.error_code ||
+        node.errorCode ||
+        node.code ||
+        node.status_code ||
+        node.statusCode ||
+        node.status ||
+        node.state ||
+        node.phase ||
+        node.outcome ||
+        node.refresh_outcome ||
+        node.preview_refresh_outcome ||
+        ''
+      ).toUpperCase();
+      const message = trimStr(node.message || node.user_message || node.error || node.reason || node.status_text || '');
+      const messageUpper = message.toUpperCase();
+
+      const hasPendingArrays = [
+        node.pending_candidate_ids,
+        node.pendingCandidateIds,
+        node.dirty_candidate_ids,
+        node.dirtyCandidateIds,
+        node.refresh_job_ids,
+        node.refreshJobIds,
+        node.dirty_refresh_job_ids,
+        node.dirtyRefreshJobIds,
+        node.pending_candidate_jobs,
+        node.pendingCandidateJobs
+      ].some((arr) => Array.isArray(arr) && arr.length > 0);
+
+      const hasPendingFlag = node.ready === false ||
+        node.ready_flag === false ||
+        node.pending_refresh === true ||
+        node.refresh_pending === true ||
+        node.preview_refresh_pending === true ||
+        node.create_draft_refresh_pending === true ||
+        node.preview_reopen_required === true ||
+        node.rebase_required === true ||
+        node.requires_new_session === true ||
+        node.progress_only === true ||
+        node.progressOnly === true ||
+        node.bootstrap_only === true ||
+        node.bootstrapOnly === true ||
+        node.replacement_session_pending === true ||
+        node.replacementSessionPending === true ||
+        node.opening_replacement_session === true ||
+        node.openingReplacementSession === true ||
+        hasPendingArrays;
+
+      if (hasPendingFlag || pendingCodes.has(code) || pendingCodes.has(messageUpper)) {
+        matched = true;
+        reason = reason || code || message || 'POST_CREATE_PENDING';
+        if (node.rebase_required === true || node.requires_new_session === true || code.includes('REBASE') || code.includes('REQUIRES_NEW_SESSION') || messageUpper.includes('REBASE')) {
+          outcome = 'rebase_required';
+        }
+      }
+
+      if (code && transientStatuses.has(code) && (node.post_mutation_context || node.mutation_context || node.action || node.source_session_id || node.created_pay_batch_ids || node.pending_candidate_ids)) {
+        matched = true;
+        reason = reason || `TRANSIENT_${code}`;
+      }
+
+      for (const key of [
+        'payload', 'json', 'backendPayload', 'body', 'details', 'detail', 'cause', 'error',
+        'result', 'result_json', 'final_result', 'raw_payload', 'post_create_refresh', 'postCreateRefresh',
+        'session', 'progress', 'preview', 'workbench', 'friendly_error', 'friendlyError'
+      ]) {
+        if (Object.prototype.hasOwnProperty.call(node, key)) push(node[key]);
+      }
+      if (Array.isArray(node.errors)) push(node.errors);
+    }
+
+    return {
+      matched,
+      outcome,
+      reason: reason || null
+    };
+  };
+
+  const setPostCreatePreviewRefreshPending = (outcome = 'pending', details = {}) => {
+    const finalOutcome = outcome === 'rebase_required' ? 'rebase_required' : 'pending';
+    const warning = {
+      code: finalOutcome === 'rebase_required' ? 'BANKING_PAY_PREVIEW_REBASE_REQUIRED' : 'BANKING_PAY_PREVIEW_REFRESH_PENDING',
+      title: 'Refreshing payment preview',
+      message: finalOutcome === 'rebase_required'
+        ? 'Payment draft was created. CloudTMS is reopening the payment preview so drafted rows are removed.'
+        : 'Payment draft created. Refreshing payment preview…'
+    };
+    normalisedResult.preview_refresh_failed = false;
+    normalisedResult.preview_refresh_pending = true;
+    normalisedResult.preview_refresh_outcome = finalOutcome;
+    normalisedResult.preview_refresh_warning = warning;
+    try {
+      const mc = (typeof window !== 'undefined' && window && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      const payState = (mc && String(mc.entity || '') === 'banking' && mc.banking && mc.banking.pay && typeof mc.banking.pay === 'object') ? mc.banking.pay : null;
+      const wizard = payState && payState.draftWizard && typeof payState.draftWizard === 'object' ? payState.draftWizard : null;
+      if (wizard) {
+        wizard.preview = (wizard.preview && typeof wizard.preview === 'object') ? wizard.preview : {};
+        wizard.workbench = (wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
+        wizard.decisions = (wizard.decisions && typeof wizard.decisions === 'object') ? wizard.decisions : {};
+        wizard.preview.loading = true;
+        wizard.preview.error = '';
+        wizard.preview.failure = null;
+        wizard.preview.friendlyError = null;
+        wizard.preview.__post_create_refresh_pending = true;
+        wizard.preview.status_text = warning.message;
+        wizard.preview.message = warning.message;
+        wizard.workbench.create_draft_refresh_pending = true;
+        wizard.workbench.preview_reopen_required = true;
+        wizard.workbench.__post_mutation_context = 'CREATE_DRAFT_SUCCESS';
+        wizard.workbench.__post_mutation_preview_refresh_failed = false;
+        wizard.workbench.post_create_preview_refresh_failed = false;
+        wizard.workbench.selected_preview_row_ids = [];
+        wizard.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+        wizard.workbench.server_selected_preview_row_ids = [];
+        wizard.workbench.server_selected_preview_row_ids_provided = false;
+        wizard.decisions.selected_preview_row_ids = [];
+        wizard.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+        wizard.decisions.server_selected_preview_row_ids = [];
+        wizard.decisions.server_selected_preview_row_ids_provided = false;
+        wizard.selected_preview_row_mode = 'EXPLICIT_NONE';
+        wizard.local_selected_preview_row_ids_dirty = false;
+        wizard.lastPreviewFailure = null;
+      }
+    } catch {}
+    return {
+      ...warning,
+      outcome: finalOutcome,
+      details: isPlainObject(details) ? details : {}
+    };
+  };
+
   const markPostCreatePreviewRefreshFailure = (errorValue) => {
+    const nonFatalRefreshState = isPostCreatePendingOrRebaseOutcome(errorValue);
+    if (nonFatalRefreshState.matched) {
+      return setPostCreatePreviewRefreshPending(nonFatalRefreshState.outcome, { source: 'markPostCreatePreviewRefreshFailure', reason: nonFatalRefreshState.reason });
+    }
     const fallbackMessage = 'Payment draft was created, but the payment preview could not be refreshed. Refresh Banking and try again.';
     const backendPayload = isPlainObject(errorValue?.payload)
       ? errorValue.payload
@@ -124664,7 +126016,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
         )
       );
       const stalePreviewData = hasPreviewData && requiresFreshNonObsoleteSession && !hasFreshPreviewData;
-      const error = trimStr(
+      const rawError = trimStr(
         previewState.error ||
         previewState.preview_error ||
         previewState.failure?.error?.message ||
@@ -124673,6 +126025,19 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
         previewState.friendlyError?.message ||
         ''
       );
+      const errorPendingClassification = rawError
+        ? isPostCreatePendingOrRebaseOutcome({
+            message: rawError,
+            friendlyError: previewState.friendlyError,
+            failure: previewState.failure,
+            action: 'POST_DRAFT_CREATE_PREVIEW_REFRESH',
+            mutation_context: 'CREATE_DRAFT_SUCCESS',
+            pending_candidate_ids: workbenchState.pending_candidate_ids || decisionsState.pending_candidate_ids || [],
+            dirty_candidate_ids: workbenchState.dirty_candidate_ids || decisionsState.dirty_candidate_ids || [],
+            pending_candidate_jobs: workbenchState.pending_candidate_jobs || decisionsState.pending_candidate_jobs || []
+          })
+        : { matched: false, outcome: 'pending', reason: null };
+      const error = rawError && !errorPendingClassification.matched ? rawError : '';
       const loading = previewState.loading === true;
       const pendingCandidateIds = Array.from(new Set([
         ...(Array.isArray(workbenchState.pending_candidate_ids) ? workbenchState.pending_candidate_ids : []),
@@ -124700,7 +126065,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
           previewState.__post_create_refresh_pending === true
         )
       );
-      const refreshPending = !!(stalePreviewData || loading || hasPendingCandidates || reopenFlagIsPending || (!hasFreshPreviewData && !readyEmpty && optionARequired));
+      const refreshPending = !!(stalePreviewData || loading || hasPendingCandidates || reopenFlagIsPending || errorPendingClassification.matched || (!hasFreshPreviewData && !readyEmpty && optionARequired));
       const outcome = error
         ? 'error'
         : readyEmpty
@@ -124730,7 +126095,9 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
         pending_candidate_ids: pendingCandidateIds,
         dirty_candidate_ids: dirtyCandidateIds,
         pending_candidate_jobs: pendingCandidateJobs,
-        outcome
+        outcome,
+        nonfatal_error_as_pending: errorPendingClassification.matched,
+        nonfatal_error_pending_outcome: errorPendingClassification.matched ? errorPendingClassification.outcome : null
       };
     } catch {
       return {
@@ -124786,6 +126153,55 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
     };
   };
 
+
+  const pollPostCreateReplacementPreview = async (resetOutcome = null) => {
+    if (typeof bankingPayPreview !== 'function') return null;
+    const beforeState = readPostCreatePreviewRefreshState();
+    if (beforeState.hasFreshPreviewData || beforeState.readyEmpty) return null;
+    try {
+      return await bankingPayPreview({
+        action: 'POST_DRAFT_CREATE_PREVIEW_REFRESH',
+        mode: 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN',
+        reason: 'CREATE_DRAFT_SUCCESS',
+        mutation_context: 'CREATE_DRAFT_SUCCESS',
+        post_mutation_context: 'CREATE_DRAFT_SUCCESS',
+        source_session_id: sourceSessionIdForOptionA || null,
+        source_snapshot_run_id: sourceSnapshotRunIdForOptionA || null,
+        source_session_version: sourceSessionVersionForOptionA ?? null,
+        source_session_signature: sourceSessionSignatureForOptionA || null,
+        source_session_already_discarded: true,
+        obsolete_session_ids: sourceSessionIdForOptionA ? [sourceSessionIdForOptionA] : [],
+        dirty_candidate_ids: [...dirtyCandidateIds],
+        pending_candidate_ids: [...pendingCandidateIds],
+        refresh_job_ids: [...refreshJobIds],
+        created_pay_batch_ids: [...createdPayBatchIds],
+        selected_pay_batch_id: selectedBatchId || null,
+        selected_preview_row_ids: [...selectedPreviewRowIdsForOptionA],
+        operation_id: operationIdForOptionA || normalisedResult.operation_id || null,
+        preview_reopen_required: true,
+        poll_until_settled: true,
+        bounded_post_mutation_poll: true,
+        userInitiated: false,
+        silent: true,
+        background: true,
+        showModal: false,
+        reset_outcome: resetOutcome || null
+      });
+    } catch (pollErr) {
+      const pending = isPostCreatePendingOrRebaseOutcome(pollErr);
+      if (pending.matched) {
+        setPostCreatePreviewRefreshPending(pending.outcome, { source: 'pollPostCreateReplacementPreview', reason: pending.reason });
+        return { ok: true, pending_refresh: true, outcome: pending.outcome, error: pollErr };
+      }
+      const currentState = readPostCreatePreviewRefreshState();
+      if (!currentState.error && !currentState.hasFreshPreviewData && !currentState.readyEmpty) {
+        setPostCreatePreviewRefreshPending(currentState.outcome === 'rebase_required' ? 'rebase_required' : 'pending', { source: 'pollPostCreateReplacementPreview', reason: 'POLL_NOT_SETTLED' });
+        return { ok: true, pending_refresh: true, outcome: currentState.outcome || 'pending', error: pollErr };
+      }
+      throw pollErr;
+    }
+  };
+
   try {
     const resetRequired = optionARequired || !!(replacementSessionId || replacementSessionSignature || replacementSnapshotRunId || dirtyCandidateIds.length > 0 || pendingCandidateIds.length > 0 || refreshJobIds.length > 0);
     if (resetRequired) {
@@ -124832,31 +126248,20 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
           !postResetState.readyEmpty &&
           (postResetState.outcome === 'rebase_required' || postResetState.outcome === 'pending' || postCreateResetOutcomeText === 'rebase_required' || postCreateResetOutcomeText === 'pending')
         ) {
-          try {
-            postCreateResetOutcome = await resetPayPreviewAndDecisions({
-              ...postCreateResetOptions,
-              bounded_follow_up: true,
-              post_create_follow_up: true
-            });
-            postResetState = readPostCreatePreviewRefreshState();
-            postCreateResetOutcomeText = trimStr(
-              postCreateResetOutcome?.outcome ||
-              postCreateResetOutcome?.status ||
-              postCreateResetOutcome?.refresh_outcome ||
-              postCreateResetOutcome?.preview_refresh_outcome ||
-              postResetState.outcome ||
-              ''
-            ).toLowerCase();
-          } catch (followUpErr) {
-            if (!postResetState.error) {
-              postResetState = {
-                ...postResetState,
-                refreshPending: true,
-                outcome: postResetState.outcome || 'pending',
-                follow_up_error: followUpErr
-              };
-            }
-          }
+          const pollOutcome = await pollPostCreateReplacementPreview(postCreateResetOutcome);
+          postResetState = readPostCreatePreviewRefreshState();
+          postCreateResetOutcomeText = trimStr(
+            pollOutcome?.outcome ||
+            pollOutcome?.status ||
+            pollOutcome?.refresh_outcome ||
+            pollOutcome?.preview_refresh_outcome ||
+            postCreateResetOutcome?.outcome ||
+            postCreateResetOutcome?.status ||
+            postCreateResetOutcome?.refresh_outcome ||
+            postCreateResetOutcome?.preview_refresh_outcome ||
+            postResetState.outcome ||
+            ''
+          ).toLowerCase();
         }
 
         normalisedResult.preview_refresh_outcome = postResetState.outcome || postCreateResetOutcomeText || null;
@@ -124947,7 +126352,12 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
     }
   } catch (resetErr) {
     if (optionARequired) {
-      markPostCreatePreviewRefreshFailure(resetErr);
+      const nonFatalReset = isPostCreatePendingOrRebaseOutcome(resetErr);
+      if (nonFatalReset.matched) {
+        setPostCreatePreviewRefreshPending(nonFatalReset.outcome, { source: 'resetPayPreviewAndDecisions', reason: nonFatalReset.reason });
+      } else {
+        markPostCreatePreviewRefreshFailure(resetErr);
+      }
     }
   }
 
@@ -136008,6 +137418,14 @@ function bindBulkProcessManualEditor(state) {
     }
   }
 }
+
+
+
+
+
+
+
+
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -136284,6 +137702,12 @@ function bindBulkProcessPreviewPane(state) {
     const ownerKind = upper(st.owner_kind || st.ownerKind || window.modalCtx?.owner_kind || window.modalCtx?.ownerKind || '');
     const explicitBulkProcess = frameKind.includes('BULK-PROCESS') || frameKind.includes('BULK_PROCESS') || modalKind.includes('BULK-PROCESS') || modalKind.includes('BULK_PROCESS') || ownerKind.includes('BULK_PROCESS') || ownerKind.includes('BULK-PROCESS');
     if (explicitBulkProcess) return false;
+    const bulkAuthoriseStateLive = !!(
+      window.modalCtx?.bulkAuthoriseState === st ||
+      window.modalCtx?.bulk_authorise_state === st ||
+      trimStr(st.__bulk_authorise_preview_owner_identity || st.__bulkAuthorisePreviewOwnerIdentity || st.__bulk_authorise_preview_row_key || st.__bulkAuthorisePreviewRowKey || st.__bulkAuthoriseRecordIdentity || window.modalCtx?.__bulkAuthoriseRecordIdentity || '')
+    );
+    const sharedPreviewRoot = document.getElementById('bulkProcessPreviewPaneRoot');
     return !!(
       frameKind.includes('BULK-AUTHORISE') ||
       frameKind.includes('BULK_AUTHORISE') ||
@@ -136296,7 +137720,9 @@ function bindBulkProcessPreviewPane(state) {
       ownerKind.includes('BULK_AUTHORISE') ||
       ownerKind.includes('BULK-AUTHORISE') ||
       ownerKind.includes('BULK_AUTH') ||
-      ownerKind.includes('BULK-AUTH')
+      ownerKind.includes('BULK-AUTH') ||
+      document.getElementById('bulkAuthorisePreviewPaneRoot') ||
+      (sharedPreviewRoot && bulkAuthoriseStateLive)
     );
   };
   const resolveBulkAuthorisePreviewOwnerIdentity = () => {
@@ -136305,7 +137731,24 @@ function bindBulkProcessPreviewPane(state) {
     const bulkAuthContext = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
       ? resolveBulkAuthoriseTimesheetsEvidenceContext(st, { frame })
       : { isBulkAuthoriseTimesheets: false };
-    if (!bulkAuthContext?.isBulkAuthoriseTimesheets) return '';
+    if (!bulkAuthContext?.isBulkAuthoriseTimesheets) {
+      const previewOwnerIdentity = trimStr(
+        st.__bulkAuthorisePreviewOwnerIdentity ||
+        st.__bulk_authorise_preview_owner_identity ||
+        window.modalCtx?.__bulkAuthorisePreviewOwnerIdentity ||
+        window.modalCtx?.__bulk_authorise_preview_owner_identity ||
+        st.__bulkAuthoriseRecordIdentity ||
+        window.modalCtx?.__bulkAuthoriseRecordIdentity ||
+        ''
+      );
+      if (previewOwnerIdentity) return previewOwnerIdentity;
+      const activeRowKeyFallback = trimStr(st.active_row_key || st.active_row?.row_key || '');
+      if (activeRowKeyFallback) {
+        if (/^(timesheet:|contract_week:|row:)/i.test(activeRowKeyFallback)) return activeRowKeyFallback;
+        return `row:${activeRowKeyFallback}`;
+      }
+      return '';
+    }
     if (typeof getBulkAuthoriseEvidenceActiveIdentity === 'function') {
       const identity = trimStr(getBulkAuthoriseEvidenceActiveIdentity(st, { frame }) || '');
       if (identity) return identity;
@@ -137141,7 +138584,15 @@ function bindBulkProcessPreviewPane(state) {
         requireRequested: true
       })
     );
-    if (!snapshotCurrentForCommit && !allowBulkAuthoriseCurrentTargetCommit) {
+    const allowBulkAuthoriseLiveTargetCommit = !!(
+      !snapshotCurrentForCommit &&
+      isBulkAuthoriseLivePreviewTargetStillCurrent(previewState, selectionKey, commitSnapshotFileKey, {
+        reason: 'atomic-live-target-commit',
+        snapshot: commitSnapshot,
+        requireRequested: true
+      })
+    );
+    if (!snapshotCurrentForCommit && !allowBulkAuthoriseCurrentTargetCommit && !allowBulkAuthoriseLiveTargetCommit) {
       return reject('snapshot-not-current', { snapshotReason: trimStr(commitSnapshot?.reason || '') });
     }
 
@@ -137156,7 +138607,7 @@ function bindBulkProcessPreviewPane(state) {
     if (!liveRequestedMatches && liveTargetKey !== selectionKey) return reject('live-requested-mismatch', { liveTargetKey, liveRequestedKey });
 
     const previewItem = (previewState.previewItem && typeof previewState.previewItem === 'object') ? previewState.previewItem : livePreviewState.previewItem;
-    const fileKey = resolvePreviewFileCacheKey(previewItem, selectionKey);
+    const fileKey = resolvePreviewFileCacheKey(previewItem, selectionKey) || commitSnapshotFileKey || resolvePreviewFileCacheKey(livePreviewState.previewItem, selectionKey);
     if (!fileKey) return reject('missing-file-key');
 
     setCachedSignedUrlForPreview(fileKey, signedUrl, commitSnapshot);
@@ -137787,6 +139238,71 @@ function bindBulkProcessPreviewPane(state) {
     pane.__preview_load_requested_target_key = key || '__AUTO__';
   };
 
+  const isBulkAuthoriseLivePreviewTargetStillCurrent = (previewStateInput = null, selectionKeyInput = '', fileKeyInput = '', liveTargetOptions = {}) => {
+    const opts = (liveTargetOptions && typeof liveTargetOptions === 'object') ? liveTargetOptions : {};
+    const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || '');
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    if (!selectionKey || isBlankPreviewSelectionKey(selectionKey) || !fileKey) return false;
+    if (!(bulkAuthoriseSurfaceAtBind || isCurrentBulkAuthorisePreviewSurface() || isBulkAuthoriseTimesheetsPreview() || getPreviewOwnerKind() === 'bulk_authorise')) return false;
+    if (!isCurrentBulkAuthorisePreviewSurface()) return false;
+    const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
+    if (!liveRoot || !root.isConnected || liveRoot !== root) return false;
+    const liveBulkAuthState = window.modalCtx?.bulkAuthoriseState || window.modalCtx?.bulk_authorise_state || null;
+    if (liveBulkAuthState && liveBulkAuthState !== st) return false;
+    const liveKind = getCurrentPreviewModalKind();
+    if (liveKind === 'bulk-process-workbench' || /bulk[-_]?process/i.test(liveKind)) return false;
+
+    const selectionTab = trimStr(selectionKey.split('|')[0] || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const liveState = getPreviewState();
+    const liveActiveTab = trimStr(liveState.activeTab || pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (liveActiveTab !== selectionTab) return false;
+
+    const liveItem = (liveState.previewItem && typeof liveState.previewItem === 'object') ? liveState.previewItem : null;
+    if (!liveItem) return false;
+    const liveFileKey = resolvePreviewFileCacheKey(liveItem, selectionKey);
+    if (!liveFileKey || liveFileKey !== fileKey) return false;
+    const liveTargetId = trimStr(liveItem?.id || liveItem?.evidence_id || liveItem?.queue_id || liveFileKey);
+    const liveSelectionKey = buildPreviewSelectionKey(liveActiveTab, liveTargetId, liveFileKey);
+    if (liveSelectionKey !== selectionKey) return false;
+
+    const requestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+    const targetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+    if (requestedKey && requestedKey !== selectionKey && targetKey !== selectionKey) return false;
+    if (targetKey && targetKey !== selectionKey && requestedKey !== selectionKey) return false;
+    if (opts.requireRequested === true && requestedKey !== selectionKey && targetKey !== selectionKey) return false;
+
+    const liveIdForTab = trimStr(liveItem?.id || liveItem?.evidence_id || liveItem?.queue_id || '');
+    if (selectionTab === 'attached') {
+      const liveAttachedId = trimStr(pane.active_attached_id || pane.active_attached_item?.id || pane.active_attached_item?.evidence_id || pane.active_attached_item?.queue_id || '');
+      if (liveAttachedId && liveIdForTab && liveAttachedId !== liveIdForTab) return false;
+    } else {
+      const liveQueueId = trimStr(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id || '');
+      if (liveQueueId && liveIdForTab && liveQueueId !== liveIdForTab) return false;
+    }
+
+    const snap = (opts.snapshot && typeof opts.snapshot === 'object') ? opts.snapshot : null;
+    if (snap?.stateRef && snap.stateRef !== st) return false;
+    const snapOwnerKind = trimStr(snap?.ownerKind || '').toLowerCase();
+    if (snapOwnerKind && snapOwnerKind !== 'bulk_authorise') return false;
+    const liveOwnerToken = getPreviewOwnerToken();
+    if (snap?.ownerToken && liveOwnerToken && trimStr(snap.ownerToken || '') !== trimStr(liveOwnerToken || '')) return false;
+    const liveOwnerIdentity = getPreviewOwnerIdentity();
+    if (snap?.ownerIdentity && liveOwnerIdentity && trimStr(snap.ownerIdentity || '') !== trimStr(liveOwnerIdentity || '')) return false;
+    const snapSelectionKey = normalisePreviewSelectionKey(snap?.selectionKey || '');
+    if (snapSelectionKey && snapSelectionKey !== selectionKey) return false;
+    const snapFileKey = trimStr(snap?.fileKey || '').replace(/^\/+/, '');
+    if (snapFileKey && snapFileKey !== fileKey) return false;
+    const snapActiveTab = trimStr(snap?.activeTab || '').toLowerCase() === 'attached' ? 'attached' : (trimStr(snap?.activeTab || '') ? 'queue' : '');
+    if (snapActiveTab && snapActiveTab !== selectionTab) return false;
+    const liveRowKey = getPreviewActiveRowKey();
+    if (snap?.rowKey && liveRowKey && trimStr(snap.rowKey || '') !== trimStr(liveRowKey || '')) return false;
+    const liveActiveIdentity = getActiveIdentity();
+    if (snap?.activeIdentity && liveActiveIdentity && trimStr(snap.activeIdentity || '') !== trimStr(liveActiveIdentity || '')) return false;
+    const liveRowChangeSeq = getPreviewRowChangeSeq();
+    if (snap?.rowChangeSeq && liveRowChangeSeq && Number(snap.rowChangeSeq || 0) !== Number(liveRowChangeSeq || 0)) return false;
+    return true;
+  };
+
   const presignDownload = async (key, signal, presignOptions = {}) => {
     const opts = (presignOptions && typeof presignOptions === 'object') ? presignOptions : {};
     const cleanKey = trimStr(key || '').replace(/^\/+/, '');
@@ -137802,7 +139318,13 @@ function bindBulkProcessPreviewPane(state) {
       snapshot,
       { reason: 'presign-before-request', requireRequested: false }
     );
-    if (!presignSnapshotCurrentBeforeRequest && !presignSnapshotStillCurrentTargetBeforeRequest) {
+    const presignLiveBulkAuthoriseTargetBeforeRequest = !presignSnapshotCurrentBeforeRequest && isBulkAuthoriseLivePreviewTargetStillCurrent(
+      opts.previewState || null,
+      snapshot?.selectionKey || '',
+      snapshot?.fileKey || cleanKey,
+      { reason: 'presign-before-request-live-target', snapshot, requireRequested: false }
+    );
+    if (!presignSnapshotCurrentBeforeRequest && !presignSnapshotStillCurrentTargetBeforeRequest && !presignLiveBulkAuthoriseTargetBeforeRequest) {
       return '';
     }
     if (window.__LOG_MODAL === true) {
@@ -137853,7 +139375,13 @@ function bindBulkProcessPreviewPane(state) {
       snapshot,
       { reason: 'presign-after-response', requireRequested: true }
     );
-    if (!presignSnapshotCurrentAfterResponse && !presignSnapshotStillCurrentTargetAfterResponse) {
+    const presignLiveBulkAuthoriseTargetAfterResponse = !presignSnapshotCurrentAfterResponse && isBulkAuthoriseLivePreviewTargetStillCurrent(
+      opts.previewState || null,
+      snapshot?.selectionKey || '',
+      snapshot?.fileKey || cleanKey,
+      { reason: 'presign-after-response-live-target', snapshot, requireRequested: true }
+    );
+    if (!presignSnapshotCurrentAfterResponse && !presignSnapshotStillCurrentTargetAfterResponse && !presignLiveBulkAuthoriseTargetAfterResponse) {
       return '';
     }
     return String(url);
@@ -139690,7 +141218,13 @@ function bindBulkProcessPreviewPane(state) {
           presignAfterAwaitSnapshot,
           { reason: 'presign-after-await-current-target', requireRequested: true }
         );
-        if (!presignAfterAwaitCurrent && !presignAfterAwaitStillCurrentTarget) {
+        const presignAfterAwaitLiveBulkAuthoriseTarget = !presignAfterAwaitCurrent && isBulkAuthoriseLivePreviewTargetStillCurrent(
+          previewState,
+          previewSelectionKey,
+          presignAfterAwaitSnapshot?.fileKey || previewFileCacheKey,
+          { reason: 'presign-after-await-live-target', snapshot: presignAfterAwaitSnapshot, requireRequested: true }
+        );
+        if (!presignAfterAwaitCurrent && !presignAfterAwaitStillCurrentTarget && !presignAfterAwaitLiveBulkAuthoriseTarget) {
           return;
         }
       } catch (e) {
@@ -139732,7 +141266,13 @@ function bindBulkProcessPreviewPane(state) {
           sharedPresignSnapshot,
           { reason: 'presign-current-target-commit', requireRequested: true }
         );
-        if (!sharedPresignSnapshotCurrent && !sharedPresignSnapshotCurrentTarget) return;
+        const sharedPresignLiveBulkAuthoriseTarget = !sharedPresignSnapshotCurrent && isBulkAuthoriseLivePreviewTargetStillCurrent(
+          previewState,
+          previewSelectionKey,
+          sharedPresignSnapshot?.fileKey || previewFileCacheKey,
+          { reason: 'presign-live-target-commit', snapshot: sharedPresignSnapshot, requireRequested: true }
+        );
+        if (!sharedPresignSnapshotCurrent && !sharedPresignSnapshotCurrentTarget && !sharedPresignLiveBulkAuthoriseTarget) return;
         const stalePresign = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'presign');
         const stalePresignStillCurrentTarget = stalePresign.stale && isCurrentBulkAuthorisePreviewTarget(
           previewSelectionKey,
@@ -139740,7 +141280,13 @@ function bindBulkProcessPreviewPane(state) {
           sharedPresignSnapshot,
           { reason: 'presign-stale-but-current-target', requireRequested: true }
         );
-        if (stalePresign.stale && !stalePresignStillCurrentTarget) return;
+        const stalePresignLiveBulkAuthoriseTarget = stalePresign.stale && isBulkAuthoriseLivePreviewTargetStillCurrent(
+          previewState,
+          previewSelectionKey,
+          sharedPresignSnapshot?.fileKey || previewFileCacheKey,
+          { reason: 'presign-stale-live-target', snapshot: sharedPresignSnapshot, requireRequested: true }
+        );
+        if (stalePresign.stale && !stalePresignStillCurrentTarget && !stalePresignLiveBulkAuthoriseTarget) return;
         const atomicCommitted = commitSignedPreviewAtomically(previewState, previewSelectionKey, signedUrl, {
           snapshot: sharedPresignSnapshot,
           reason: stalePresignStillCurrentTarget ? 'presign-current-target-commit' : 'presign-commit',
@@ -139799,9 +141345,15 @@ function bindBulkProcessPreviewPane(state) {
                 deferredSnapshot,
                 { reason: 'presign-deferred-current-target', requireRequested: true }
               );
-              if (staleDeferredRecovery.stale && !deferredStillCurrentTarget) return;
+              const deferredLiveBulkAuthoriseTarget = isBulkAuthoriseLivePreviewTargetStillCurrent(
+                latestPreview,
+                previewSelectionKey,
+                latestFileKey,
+                { reason: 'presign-deferred-live-target', snapshot: deferredSnapshot, requireRequested: true }
+              );
+              if (staleDeferredRecovery.stale && !deferredStillCurrentTarget && !deferredLiveBulkAuthoriseTarget) return;
               const deferredSnapshotCurrent = isPreviewCommitSnapshotCurrent(deferredSnapshot, { requireSelectionUnchanged: true, requireFileKeyUnchanged: true });
-              if (!deferredSnapshotCurrent && !deferredStillCurrentTarget) return;
+              if (!deferredSnapshotCurrent && !deferredStillCurrentTarget && !deferredLiveBulkAuthoriseTarget) return;
               commitSignedPreviewAtomically(latestPreview, previewSelectionKey, signedUrl, {
                 snapshot: deferredSnapshot,
                 reason: 'presign-deferred-selection-match',
@@ -139880,13 +141432,20 @@ function bindBulkProcessPreviewPane(state) {
       });
     }
     const staleDomCommit = checkBulkAuthorisePreviewStale(bulkAuthSnapshot, 'dom');
+    const staleDomSnapshot = capturePreviewCommitSnapshot(previewState, { reason: 'dom-current-target-commit' });
     const staleDomStillCurrentTarget = staleDomCommit.stale && isCurrentBulkAuthorisePreviewTarget(
       previewSelectionKey,
       previewFileCacheKey,
-      capturePreviewCommitSnapshot(previewState, { reason: 'dom-current-target-commit' }),
+      staleDomSnapshot,
       { reason: 'dom-current-target-commit', requireRequested: true }
     );
-    if (staleDomCommit.stale && !staleDomStillCurrentTarget) {
+    const staleDomLiveBulkAuthoriseTarget = staleDomCommit.stale && isBulkAuthoriseLivePreviewTargetStillCurrent(
+      previewState,
+      previewSelectionKey,
+      previewFileCacheKey,
+      { reason: 'dom-live-target-commit', snapshot: staleDomSnapshot, requireRequested: true }
+    );
+    if (staleDomCommit.stale && !staleDomStillCurrentTarget && !staleDomLiveBulkAuthoriseTarget) {
       if (signedUrl) {
         logPreviewCommitEvent(bulkAuthSnapshot, {
           event: 'signed-url-prerender-commit',
@@ -140108,9 +141667,6 @@ function bindBulkProcessPreviewPane(state) {
     warnPreview('bind failed', e);
   });
 }
-
-
-
 
 function renderBulkProcessDockedEvidenceViewer(state) {
   const st = (state && typeof state === 'object') ? state : {};
