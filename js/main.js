@@ -84932,7 +84932,8 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
         pending_refresh: false,
         refresh_pending: false,
         preview_refresh_pending: false,
-        progress_only: true,
+        progress_only: false,
+        bootstrap_only: false,
         mutation_context: mutationContext || null,
         post_mutation_context: mutationContext || null,
         source_session_id: sourceSessionId || null,
@@ -85048,19 +85049,36 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
       };
     }
 
+    const fullPreviewObj = cloneJson(previewObj) || previewObj;
+    if (isPlainObject(fullPreviewObj)) {
+      fullPreviewObj.ready = true;
+      fullPreviewObj.ready_flag = true;
+      fullPreviewObj.ready_empty = payloadObj.ready_empty === true || previewObj.ready_empty === true;
+      fullPreviewObj.deferred = false;
+      fullPreviewObj.pending_refresh = false;
+      fullPreviewObj.refresh_pending = false;
+      fullPreviewObj.preview_refresh_pending = false;
+      fullPreviewObj.progress_only = false;
+      fullPreviewObj.bootstrap_only = false;
+    }
+
     return {
       ok: true,
       ...(cloneJson(payloadObj) || {}),
-      preview: cloneJson(previewObj) || previewObj,
+      preview: fullPreviewObj,
       session_id: trimStr(payloadObj.session_id || previewObj.session_id || sessionIdText),
       snapshot_run_id: trimStr(payloadObj.snapshot_run_id || previewObj.snapshot_run_id || progress?.snapshot_run_id || ''),
       session_version: payloadObj.session_version ?? previewObj.session_version ?? progress?.session_version ?? null,
       session_signature: trimStr(payloadObj.session_signature || previewObj.session_signature || progress?.session_signature || ''),
       ready: true,
       ready_flag: true,
+      ready_empty: payloadObj.ready_empty === true || previewObj.ready_empty === true,
+      deferred: false,
       pending_refresh: false,
       refresh_pending: false,
       preview_refresh_pending: false,
+      progress_only: false,
+      bootstrap_only: false,
       progress: progress || null,
       mutation_context: mutationContext || null,
       post_mutation_context: mutationContext || null,
@@ -85090,6 +85108,7 @@ async function bankingPayWorkbenchSessionGet(sessionId, options = {}) {
     throw error;
   }
 }
+
 
 
 
@@ -140366,9 +140385,202 @@ function bindBulkProcessPreviewPane(state) {
       if (window.__LOG_MODAL !== true) return;
       console.log('[TS][BULK-AUTH][PREVIEW]', payload);
     };
+    const isBulkAuthoriseRemoveContext = () => {
+      const owner = trimStr(resolveBulkAuthorisePreviewOwnerIdentity() || '');
+      if (owner) return true;
+      const ctx = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
+        ? resolveBulkAuthoriseTimesheetsEvidenceContext(st)
+        : null;
+      return !!ctx?.isBulkAuthoriseTimesheets;
+    };
+    const isSyntheticEvidenceId = (value) => /^synthetic-attached:/i.test(trimStr(value || ''));
+    const isSyntheticAttachedItem = (itemInput) => {
+      const itemObj = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+      const id = trimStr(itemObj.id || '');
+      const evidenceId = trimStr(itemObj.evidence_id || '');
+      const queueId = trimStr(itemObj.queue_id || '');
+      return !!(
+        isSyntheticEvidenceId(id) ||
+        isSyntheticEvidenceId(evidenceId) ||
+        isSyntheticEvidenceId(queueId) ||
+        itemObj.is_synthetic_attached_fallback === true ||
+        itemObj.__synthetic_attached_fallback === true ||
+        itemObj.is_primary_artifact_fallback === true ||
+        itemObj.__primary_artifact_fallback === true ||
+        (isSyntheticEvidenceId(id || queueId) && !evidenceId)
+      );
+    };
+    const storageKeyOf = (itemInput) => trimStr(itemInput?.storage_key || itemInput?.r2_key || itemInput?.file_key || itemInput?.download_storage_key || itemInput?.preview_storage_key || '').replace(/^\/+/, '');
+    const evidenceIdOf = (itemInput) => trimStr(itemInput?.evidence_id || itemInput?.id || itemInput?.queue_id || '');
+    const kindOf = (itemInput) => upper(itemInput?.kind || itemInput?.staged_kind || '');
+    const timesheetIdOf = (itemInput) => trimStr(itemInput?.timesheet_id || itemInput?.current_timesheet_id || itemInput?.requested_timesheet_id || itemInput?.expected_timesheet_id || '');
+    const rowKeyOfEvidence = (itemInput) => trimStr(itemInput?.row_key || itemInput?.data_row?.row_key || itemInput?.row?.row_key || '');
+    const collectAttachedEvidenceCandidates = () => {
+      const out = [];
+      const seen = new Set();
+      const addList = (list) => {
+        if (!Array.isArray(list)) return;
+        for (const raw of list) {
+          if (!raw || typeof raw !== 'object') continue;
+          const item = raw;
+          const dedupeKey = [evidenceIdOf(item), storageKeyOf(item), kindOf(item), timesheetIdOf(item), rowKeyOfEvidence(item)].join('|');
+          if (seen.has(dedupeKey)) continue;
+          seen.add(dedupeKey);
+          out.push(item);
+        }
+      };
+      addList(pane.attached_rows);
+      addList(pane.attached_all_rows);
+      addList(st.active_details?.evidence);
+      addList(st.active_context?.evidence);
+      addList(st.active_context?.details?.evidence);
+      addList(st.active_ctx?.evidence);
+      addList(st.active_ctx?.details?.evidence);
+      addList(st.active_ctx?.state?.evidence);
+      addList(window.modalCtx?.timesheetState?.evidence);
+      return out;
+    };
+    const findRealEvidenceForSynthetic = (syntheticItem) => {
+      const syntheticStorageKey = storageKeyOf(syntheticItem).toLowerCase();
+      const activeTimesheetId = trimStr(
+        st.active_row?.timesheet_id ||
+        st.active_row?.current_timesheet_id ||
+        st.active_row?.requested_timesheet_id ||
+        st.active_details?.current_timesheet_id ||
+        st.active_details?.timesheet?.timesheet_id ||
+        ''
+      );
+      const activeRowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
+      const syntheticKind = kindOf(syntheticItem) || 'TIMESHEET';
+      const candidates = collectAttachedEvidenceCandidates();
+      return candidates.find((item) => {
+        if (!item || typeof item !== 'object') return false;
+        const realEvidenceId = evidenceIdOf(item);
+        if (!realEvidenceId || isSyntheticEvidenceId(realEvidenceId) || isSyntheticAttachedItem(item)) return false;
+        const itemStorageKey = storageKeyOf(item).toLowerCase();
+        if (syntheticStorageKey && itemStorageKey && itemStorageKey !== syntheticStorageKey) return false;
+        if (syntheticStorageKey && !itemStorageKey) return false;
+        const itemKind = kindOf(item) || syntheticKind;
+        if (syntheticKind && itemKind && itemKind !== syntheticKind) return false;
+        const itemTimesheetId = timesheetIdOf(item);
+        if (activeTimesheetId && itemTimesheetId && itemTimesheetId !== activeTimesheetId) return false;
+        const itemRowKey = rowKeyOfEvidence(item);
+        if (activeRowKey && itemRowKey && itemRowKey !== activeRowKey) return false;
+        return true;
+      }) || null;
+    };
+    const upsertRealEvidenceIntoList = (list, syntheticItem, realItem) => {
+      const rows = Array.isArray(list) ? list.slice() : [];
+      const syntheticId = evidenceIdOf(syntheticItem);
+      const syntheticStorageKey = storageKeyOf(syntheticItem).toLowerCase();
+      const realEvidenceId = evidenceIdOf(realItem);
+      const realStorageKey = storageKeyOf(realItem).toLowerCase();
+      let replaced = false;
+      const next = [];
+      for (const row of rows) {
+        const rowId = evidenceIdOf(row);
+        const rowStorageKey = storageKeyOf(row).toLowerCase();
+        const isSyntheticMatch = !!(
+          isSyntheticAttachedItem(row) && (
+            (syntheticId && rowId === syntheticId) ||
+            (syntheticStorageKey && rowStorageKey === syntheticStorageKey)
+          )
+        );
+        const isRealDuplicate = !!(
+          !isSyntheticAttachedItem(row) && (
+            (realEvidenceId && rowId === realEvidenceId) ||
+            (realStorageKey && rowStorageKey === realStorageKey)
+          )
+        );
+        if (isSyntheticMatch) {
+          if (!replaced) {
+            next.push({ ...(deep(realItem) || {}) });
+            replaced = true;
+          }
+          continue;
+        }
+        if (isRealDuplicate && replaced) continue;
+        next.push(row);
+      }
+      if (!replaced) next.unshift({ ...(deep(realItem) || {}) });
+      return next;
+    };
+    const replaceSyntheticAttachedItemWithReal = (syntheticItem, realItem) => {
+      const normalisedReal = {
+        ...(deep(realItem) || {}),
+        id: trimStr(realItem?.id || realItem?.evidence_id || '') || trimStr(realItem?.evidence_id || realItem?.id || ''),
+        evidence_id: trimStr(realItem?.evidence_id || realItem?.id || '') || null,
+        is_synthetic_attached_fallback: false,
+        __synthetic_attached_fallback: false,
+        is_primary_artifact_fallback: false,
+        __primary_artifact_fallback: false
+      };
+      pane.attached_rows = upsertRealEvidenceIntoList(pane.attached_rows, syntheticItem, normalisedReal);
+      pane.attached_all_rows = upsertRealEvidenceIntoList(pane.attached_all_rows, syntheticItem, normalisedReal);
+      pane.active_attached_item = { ...(deep(normalisedReal) || {}) };
+      pane.active_attached_id = trimStr(normalisedReal.evidence_id || normalisedReal.id || normalisedReal.queue_id || '') || null;
+      const upsertDetailsEvidence = (target) => {
+        if (!target || typeof target !== 'object') return;
+        target.evidence = upsertRealEvidenceIntoList(target.evidence, syntheticItem, normalisedReal);
+        target.evidence_loaded = true;
+        target.evidence_authoritative = true;
+      };
+      upsertDetailsEvidence(st.active_details);
+      upsertDetailsEvidence(st.active_context);
+      upsertDetailsEvidence(st.active_context?.details);
+      upsertDetailsEvidence(st.active_ctx);
+      upsertDetailsEvidence(st.active_ctx?.details);
+      if (st.active_ctx?.state && typeof st.active_ctx.state === 'object') upsertDetailsEvidence(st.active_ctx.state);
+      if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
+        reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
+      } else {
+        syncAttachedRows();
+      }
+      return pane.active_attached_item || normalisedReal;
+    };
+    const showAttachedEvidenceStillRefreshing = async (reason = 'preview-attached-remove-synthetic-refresh-pending') => {
+      const message = 'Attached evidence is still refreshing. Refresh the row and try again.';
+      st.error_text = message;
+      pane.__last_nonfatal_warning = message;
+      if (typeof window.__toast === 'function') window.__toast(message);
+      await rerenderWorkbench(reason);
+    };
+    const resolveAttachedItemForMutation = async (itemInput) => {
+      if (isBulkAuthoriseRemoveContext()) return itemInput;
+      const itemObj = (itemInput && typeof itemInput === 'object') ? itemInput : null;
+      if (!itemObj) return null;
+      const currentEvidenceId = evidenceIdOf(itemObj);
+      if (!isSyntheticAttachedItem(itemObj) && currentEvidenceId && !isSyntheticEvidenceId(currentEvidenceId)) return itemObj;
+      const pendingPromise = st.__bulk_process_post_attach_rebase_promise;
+      if (pendingPromise && typeof pendingPromise.then === 'function') {
+        try { await pendingPromise; } catch {}
+      }
+      try {
+        if (typeof st.__bulk_process_refresh_attached_context === 'function') {
+          await st.__bulk_process_refresh_attached_context({ reason: 'resolve-synthetic-attached-before-mutation' });
+        } else {
+          await refreshAttachedContext({ reason: 'resolve-synthetic-attached-before-mutation' });
+        }
+      } catch (refreshErr) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PREVIEW] synthetic attached refresh failed before mutation', refreshErr);
+      }
+      syncActiveRowEvidencePresence();
+      if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
+        reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
+      } else {
+        syncAttachedRows();
+      }
+      const realItem = findRealEvidenceForSynthetic(itemObj);
+      if (!realItem) return null;
+      const replaced = replaceSyntheticAttachedItemWithReal(itemObj, realItem);
+      const resolvedEvidenceId = evidenceIdOf(replaced);
+      return (resolvedEvidenceId && !isSyntheticEvidenceId(resolvedEvidenceId)) ? replaced : null;
+    };
     const buildCapturedRemoveTarget = (itemInput) => {
       const itemObj = (itemInput && typeof itemInput === 'object') ? itemInput : {};
-      const evidenceId = trimStr(itemObj.id || itemObj.evidence_id || itemObj.queue_id || '');
+      const evidenceId = isBulkAuthoriseRemoveContext()
+        ? trimStr(itemObj.id || itemObj.evidence_id || itemObj.queue_id || '')
+        : trimStr(itemObj.evidence_id || itemObj.id || itemObj.queue_id || '');
       const ownerIdentity = trimStr(resolveBulkAuthorisePreviewOwnerIdentity() || getActiveIdentity() || '');
       const rowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
       const timesheetId = trimStr(
@@ -140427,7 +140639,14 @@ function bindBulkProcessPreviewPane(state) {
       const liveActiveAttachedId = trimStr(pane.active_attached_id || pane.active_attached_item?.id || pane.active_attached_item?.evidence_id || pane.active_attached_item?.queue_id || '');
       const isBulkAuth = !!trimStr(resolveBulkAuthorisePreviewOwnerIdentity() || '');
       const rowsLive = Array.isArray(pane.attached_rows) ? pane.attached_rows : [];
-      const targetPresent = rowsLive.some((x) => trimStr(x?.id || x?.evidence_id || x?.queue_id || '') === trimStr(capturedTarget?.evidenceId || ''));
+      const targetEvidenceId = trimStr(capturedTarget?.evidenceId || '');
+      const targetPresent = rowsLive.some((x) => {
+        if (isBulkAuth) return trimStr(x?.id || x?.evidence_id || x?.queue_id || '') === targetEvidenceId;
+        return [x?.evidence_id, x?.id, x?.queue_id]
+          .map((value) => trimStr(value || ''))
+          .filter(Boolean)
+          .some((value) => value === targetEvidenceId);
+      });
       let reason = 'not-stale';
       if (isBulkAuth) {
         if (trimStr(capturedTarget?.ownerIdentity || '') !== liveOwnerIdentity) reason = 'owner-changed';
@@ -140448,7 +140667,16 @@ function bindBulkProcessPreviewPane(state) {
     const rows = Array.isArray(pane.attached_rows) ? pane.attached_rows : [];
     const item = rows.find((x) => trimStr(x?.id || x?.evidence_id || x?.queue_id || '') === id) || null;
     if (!item) return;
-    const capturedTarget = buildCapturedRemoveTarget(item);
+    const resolvedItem = await resolveAttachedItemForMutation(item);
+    if (!resolvedItem) {
+      await showAttachedEvidenceStillRefreshing();
+      return;
+    }
+    const capturedTarget = buildCapturedRemoveTarget(resolvedItem);
+    if (!capturedTarget.evidenceId || isSyntheticEvidenceId(capturedTarget.evidenceId)) {
+      await showAttachedEvidenceStillRefreshing();
+      return;
+    }
     logRemoveEvent({
       event: 'remove-confirm-opened',
       ownerIdentity: capturedTarget.ownerIdentity,
@@ -147299,6 +147527,16 @@ function bindBulkProcessEvidencePane(state) {
     }
   };
 
+  if (!isBulkAuthoriseContext) {
+    st.__bulk_process_refresh_attached_context = async (refreshOptions = {}) => {
+      const opts = (refreshOptions && typeof refreshOptions === 'object') ? refreshOptions : {};
+      return refreshAttachedContext({
+        ...opts,
+        reason: trimStr(opts.reason || opts.source || 'bulk-process-attached-context-refresh') || 'bulk-process-attached-context-refresh'
+      });
+    };
+  }
+
   const collectAuthoritativeAttachedEvidenceRows = () => {
     const activeCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
     const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
@@ -147852,7 +148090,7 @@ function bindBulkProcessEvidencePane(state) {
 
     const signatureBefore = capturePaneSignature();
     const suppressInitialDefaultCorrection = !!(isPreviewPresignPending() || hasValidQueuePreviewSelection());
-    const reconcileResult = suppressInitialDefaultCorrection
+    let reconcileResult = suppressInitialDefaultCorrection
       ? {
           active_identity: getActiveIdentity(),
           resolved_source: trimStr(pane.active_tab || '').toLowerCase() === 'attached' ? 'attached' : 'queue',
@@ -147862,6 +148100,40 @@ function bindBulkProcessEvidencePane(state) {
       : reconcileEvidenceState();
     let shouldRerenderAfterQueueCountLoad = false;
     if (!isActiveBind()) return;
+
+    if (
+      !isBulkAuthoriseContext &&
+      !suppressInitialDefaultCorrection &&
+      reconcileResult?.requires_evidence_hydration === true &&
+      trimStr(pane.active_tab || '').toLowerCase() === 'attached'
+    ) {
+      const hydrationPromise = refreshAttachedContext({
+        softRefresh: true,
+        reason: 'initial-synthetic-attached-hydration'
+      });
+      st.__bulk_process_post_attach_rebase_pending = true;
+      st.__bulk_process_post_attach_rebase_promise = hydrationPromise;
+      try {
+        const hydrationResult = await hydrationPromise;
+        if (!isActiveBind()) return;
+        if (hydrationResult?.ok === false || hydrationResult?.evidence_refresh_failed === true || hydrationResult?.soft_failure === true) {
+          pane.__last_nonfatal_warning = trimStr(hydrationResult?.message || hydrationResult?.error || 'Attached evidence is still refreshing. Refresh the row and try again.');
+          st.warning_text = pane.__last_nonfatal_warning;
+        } else {
+          syncActiveRowEvidencePresence();
+          reconcileResult = reconcileEvidenceState();
+          shouldRerenderAfterQueueCountLoad = true;
+        }
+      } catch (err) {
+        pane.__last_nonfatal_warning = trimStr(err?.message || err || 'Attached evidence is still refreshing. Refresh the row and try again.');
+        st.warning_text = pane.__last_nonfatal_warning;
+      } finally {
+        if (st.__bulk_process_post_attach_rebase_promise === hydrationPromise) {
+          st.__bulk_process_post_attach_rebase_promise = null;
+          st.__bulk_process_post_attach_rebase_pending = false;
+        }
+      }
+    }
 
     if (!suppressInitialDefaultCorrection && String(reconcileResult?.resolved_source || '').trim().toLowerCase() === 'queue') {
       const bulkAuthContext = (typeof resolveBulkAuthoriseTimesheetsEvidenceContext === 'function')
@@ -147993,12 +148265,52 @@ function bindBulkProcessEvidencePane(state) {
             throw new Error('Timesheet evidence is already attached to this row.');
           }
           let localStagedItem = null;
+          let postAttachRebasePromise = null;
+          let postAttachRebaseResult = null;
           if (tsId) {
             await attachQueueItemToTimesheetEvidence(String(queueItem.id), {
               timesheet_id: String(tsId),
               expected_timesheet_id: String(expectedTsId || tsId),
               kind
             });
+            if (!isBulkAuthoriseContext) {
+              pane.active_tab = 'attached';
+              pane.__attached_manual_override = true;
+              pane.__queue_manual_override = false;
+              pane.__queue_manual_override_identity = '';
+              pane.__queue_manual_override_scope = '';
+              pane.__requires_evidence_hydration = true;
+              const attachedStorageKey = trimStr(queueItem.storage_key || queueItem.r2_key || queueItem.file_key || queueItem.download_storage_key || '');
+              postAttachRebasePromise = refreshAttachedContext({
+                softRefresh: true,
+                afterAttach: true,
+                attachSucceeded: true,
+                attachedQueueId: queueItem.id,
+                attachedKind: kind,
+                attachedStorageKey,
+                queueItem,
+                reason: 'post-attach-timesheet-evidence'
+              });
+              st.__bulk_process_post_attach_rebase_pending = true;
+              st.__bulk_process_post_attach_rebase_promise = postAttachRebasePromise;
+              try {
+                postAttachRebaseResult = await postAttachRebasePromise;
+              } catch (refreshErr) {
+                postAttachRebaseResult = {
+                  ok: false,
+                  soft_failure: true,
+                  evidence_refresh_failed: true,
+                  message: trimStr(refreshErr?.message || refreshErr || 'Attached evidence is still refreshing. Refresh the row and try again.')
+                };
+                pane.__last_nonfatal_warning = postAttachRebaseResult.message;
+                st.warning_text = postAttachRebaseResult.message;
+              } finally {
+                if (st.__bulk_process_post_attach_rebase_promise === postAttachRebasePromise) {
+                  st.__bulk_process_post_attach_rebase_promise = null;
+                  st.__bulk_process_post_attach_rebase_pending = false;
+                }
+              }
+            }
           } else {
             const stageResult = await stageQueueItemToContractWeek(String(queueItem.id), {
               contract_week_id: String(weekId),
@@ -148052,10 +148364,24 @@ function bindBulkProcessEvidencePane(state) {
                 await rerenderWorkbench('evidence-stage-complete');
               }
             } else {
-              await refreshAttachedContext();
-              syncActiveRowEvidencePresence();
-              reconcileEvidenceState();
-              await rerenderWorkbench('evidence-attach-complete');
+              if (postAttachRebasePromise) {
+                syncActiveRowEvidencePresence();
+                reconcileEvidenceState();
+                if (postAttachRebaseResult?.ok === false || postAttachRebaseResult?.evidence_refresh_failed === true || postAttachRebaseResult?.soft_failure === true) {
+                  const warning = trimStr(postAttachRebaseResult?.message || postAttachRebaseResult?.error || 'Attached evidence is still refreshing. Refresh the row and try again.');
+                  pane.__last_nonfatal_warning = warning;
+                  st.warning_text = warning;
+                  if (typeof window.__toast === 'function') window.__toast(warning);
+                  await rerenderWorkbench('evidence-attach-soft-refresh-failed');
+                } else {
+                  await rerenderWorkbench('evidence-attach-complete');
+                }
+              } else {
+                await refreshAttachedContext();
+                syncActiveRowEvidencePresence();
+                reconcileEvidenceState();
+                await rerenderWorkbench('evidence-attach-complete');
+              }
             }
           }
           if (typeof window.__toast === 'function') window.__toast('Queue file attached');
@@ -151432,8 +151758,6 @@ function captureBulkProcessUiSnapshot(state) {
 
 
 
-
-
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const st = (state && typeof state === 'object') ? state : {};
   st.evidence_pane_state =
@@ -151961,6 +152285,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     const isSyntheticAttachedFallback = (item, evidenceId) => {
       const explicitEvidenceId = trimStr(item?.evidence_id || item?.evidenceId || '');
       const itemId = trimStr(evidenceId || item?.id || '');
+      if (/^synthetic-attached:/i.test(itemId)) return true;
       if (/^(timesheet|contract_week|row):/i.test(itemId)) return true;
       if (boolish(item?.is_synthetic_attached_fallback) || boolish(item?.__synthetic_attached_fallback)) return true;
       if (boolish(item?.is_primary_artifact_fallback) || boolish(item?.__primary_artifact_fallback)) return true;
@@ -152037,11 +152362,18 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
         if (seenSyntheticKeys.has(stagedDedupKey)) return;
         seenSyntheticKeys.add(stagedDedupKey);
       } else if (synthetic) {
+        if (storageKey && seenStorageKeys.has(storageKey)) return;
         if (seenSyntheticKeys.has(syntheticKey)) return;
         seenSyntheticKeys.add(syntheticKey);
       } else {
         if (evidenceId && seenEvidenceIds.has(evidenceId)) return;
         if (!evidenceId && storageKey && seenStorageKeys.has(storageKey)) return;
+        if (storageKey) {
+          for (let i = syntheticRows.length - 1; i >= 0; i -= 1) {
+            const syntheticStorageKey = safeStorageKey(syntheticRows[i]?.storage_key || syntheticRows[i]?.r2_key || syntheticRows[i]?.file_key || syntheticRows[i]?.download_storage_key || '');
+            if (syntheticStorageKey && syntheticStorageKey === storageKey) syntheticRows.splice(i, 1);
+          }
+        }
         if (evidenceId) seenEvidenceIds.add(evidenceId);
         if (storageKey) seenStorageKeys.add(storageKey);
       }
@@ -152126,12 +152458,16 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
         {
           ...selectedRowSyntheticAttachedItem,
           ...(deep(matching) || {}),
+          id: matching.id || matching.evidence_id || selectedRowSyntheticAttachedItem.id,
+          evidence_id: matching.evidence_id || matching.id || null,
           kind: 'TIMESHEET',
           staged_kind: matching.staged_kind || 'TIMESHEET',
           storage_key: getItemStorageKey(matching) || selectedRowArtifactKey,
           r2_key: safeStorageKey(matching.r2_key || matching.storage_key || selectedRowArtifactKey) || selectedRowArtifactKey,
           file_key: safeStorageKey(matching.file_key || matching.storage_key || matching.r2_key || selectedRowArtifactKey) || selectedRowArtifactKey,
-          download_storage_key: safeStorageKey(matching.download_storage_key || matching.storage_key || matching.r2_key || selectedRowArtifactKey) || selectedRowArtifactKey
+          download_storage_key: safeStorageKey(matching.download_storage_key || matching.storage_key || matching.r2_key || selectedRowArtifactKey) || selectedRowArtifactKey,
+          is_synthetic_attached_fallback: false,
+          __synthetic_attached_fallback: false
         },
         ...attachedAllRows.slice(0, matchingHydratedIndex),
         ...attachedAllRows.slice(matchingHydratedIndex + 1)
@@ -152141,8 +152477,20 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       syntheticAttachedFallbackRows = [selectedRowSyntheticAttachedItem, ...syntheticAttachedFallbackRows];
     }
   }
+  const isSyntheticAttachedPaneItem = (item) => {
+    const itemId = trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
+    return !!(
+      /^synthetic-attached:/i.test(itemId) ||
+      boolish(item?.is_synthetic_attached_fallback) ||
+      boolish(item?.__synthetic_attached_fallback) ||
+      boolish(item?.is_primary_artifact_fallback) ||
+      boolish(item?.__primary_artifact_fallback)
+    );
+  };
   const hasSyntheticAttachedFallback = syntheticAttachedFallbackRows.length > 0;
   const timesheetRows = attachedAllRows.filter((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET');
+  const realTimesheetRows = timesheetRows.filter((item) => !isSyntheticAttachedPaneItem(item));
+  const hasSyntheticTimesheetFallback = syntheticAttachedFallbackRows.some((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET');
 
   if (evidenceContextAuthoritative || attachedAllRows.length > 0 || !selectedRowArtifactKey) {
     pane.attached_all_rows = attachedAllRows.map((item) => ({ ...(deep(item) || {}) }));
@@ -152152,7 +152500,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const hasAnyAttachedEvidence = (typeof hasBulkProcessAttachedEvidence === 'function')
     ? hasBulkProcessAttachedEvidence(attachedAllRows)
     : attachedAllRows.length > 0;
-  const hasTimesheetEvidence = timesheetRows.length > 0;
+  const hasTimesheetEvidence = isBulkAuthoriseTimesheets ? timesheetRows.length > 0 : realTimesheetRows.length > 0;
   const manualOverride = !!pane.__attached_manual_override;
   const activeIdentity = getActiveIdentity();
   const queueScope = trimStr(pane.__queue_loaded_scope || pane.__queue_scope || 'global:QUEUED') || 'global:QUEUED';
@@ -152198,6 +152546,15 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     if (hasTimesheetEvidence) {
       resolvedSource = 'attached';
       pane.__requires_evidence_hydration = false;
+      pane.__synthetic_attached_fallback_suppressed = false;
+      pane.__attached_manual_override = true;
+      pane.__queue_manual_override = false;
+      pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = '';
+    } else if (hasSyntheticTimesheetFallback) {
+      resolvedSource = 'attached';
+      pane.__requires_evidence_hydration = true;
+      pane.__synthetic_attached_fallback_suppressed = false;
       pane.__attached_manual_override = true;
       pane.__queue_manual_override = false;
       pane.__queue_manual_override_identity = '';
@@ -152262,7 +152619,11 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   if (activeAttached) {
     pane.active_attached_item = activeAttached;
-    pane.active_attached_id = trimStr(activeAttached.id || activeAttached.evidence_id || activeAttached.queue_id || '') || null;
+    pane.active_attached_id = trimStr(
+      isBulkAuthoriseTimesheets
+        ? (activeAttached.id || activeAttached.evidence_id || activeAttached.queue_id || '')
+        : (activeAttached.evidence_id || activeAttached.id || activeAttached.queue_id || '')
+    ) || null;
     if (isBulkAuthoriseTimesheets) {
       pane.pendingAttached = false;
       pane.__pending_attached = false;
@@ -153854,6 +154215,10 @@ async function handleBulkProcessSave(state) {
   }
 }
 
+
+
+
+
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -154319,6 +154684,182 @@ async function handleBulkProcessProcess(state) {
     }
     return window.confirm('This row has no attached or staged evidence yet. Continue anyway?');
   };
+  const isSyntheticEvidenceId = (value) => /^synthetic-attached:/i.test(trimStr(value || ''));
+  const evidenceStorageKeyOf = (item) => trimStr(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || item?.preview_storage_key || '').replace(/^\/+/, '');
+  const evidenceIdOf = (item) => trimStr(item?.evidence_id || item?.id || item?.queue_id || '');
+  const evidenceKindOf = (item) => upper(item?.kind || item?.staged_kind || '');
+  const isSyntheticAttachedEvidenceItem = (item) => {
+    if (!item || typeof item !== 'object') return false;
+    const id = trimStr(item.id || '');
+    const evidenceId = trimStr(item.evidence_id || '');
+    const queueId = trimStr(item.queue_id || '');
+    return !!(
+      isSyntheticEvidenceId(id) ||
+      isSyntheticEvidenceId(evidenceId) ||
+      isSyntheticEvidenceId(queueId) ||
+      item.is_synthetic_attached_fallback === true ||
+      item.__synthetic_attached_fallback === true ||
+      item.is_primary_artifact_fallback === true ||
+      item.__primary_artifact_fallback === true ||
+      (isSyntheticEvidenceId(id || queueId) && !evidenceId)
+    );
+  };
+  const collectCurrentEvidenceRowsForProcess = () => {
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    const out = [];
+    const seen = new Set();
+    const addList = (list) => {
+      if (!Array.isArray(list)) return;
+      for (const item of list) {
+        if (!item || typeof item !== 'object') continue;
+        const key = [evidenceIdOf(item), evidenceStorageKeyOf(item), evidenceKindOf(item)].join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+      }
+    };
+    addList(pane?.attached_rows);
+    addList(pane?.attached_all_rows);
+    addList(st.active_details?.evidence);
+    addList(st.active_context?.evidence);
+    addList(st.active_context?.details?.evidence);
+    addList(st.active_ctx?.evidence);
+    addList(st.active_ctx?.details?.evidence);
+    addList(st.active_ctx?.state?.evidence);
+    return out;
+  };
+  const findRealEvidenceForSyntheticProcessItem = (syntheticItem, activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const syntheticStorageKey = evidenceStorageKeyOf(syntheticItem).toLowerCase();
+    const syntheticKind = evidenceKindOf(syntheticItem) || 'TIMESHEET';
+    const activeTimesheetId = trimStr(active.timesheetId || active.row?.timesheet_id || active.row?.current_timesheet_id || active.details?.current_timesheet_id || '');
+    const activeRowKey = trimStr(st.active_row_key || active.row?.row_key || '');
+    return collectCurrentEvidenceRowsForProcess().find((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const realEvidenceId = evidenceIdOf(item);
+      if (!realEvidenceId || isSyntheticEvidenceId(realEvidenceId) || isSyntheticAttachedEvidenceItem(item)) return false;
+      const storageKey = evidenceStorageKeyOf(item).toLowerCase();
+      if (syntheticStorageKey && storageKey && storageKey !== syntheticStorageKey) return false;
+      if (syntheticStorageKey && !storageKey) return false;
+      const kind = evidenceKindOf(item) || syntheticKind;
+      if (syntheticKind && kind && kind !== syntheticKind) return false;
+      const itemTimesheetId = trimStr(item.timesheet_id || item.current_timesheet_id || item.expected_timesheet_id || '');
+      if (activeTimesheetId && itemTimesheetId && itemTimesheetId !== activeTimesheetId) return false;
+      const itemRowKey = trimStr(item.row_key || item.data_row?.row_key || item.row?.row_key || '');
+      if (activeRowKey && itemRowKey && itemRowKey !== activeRowKey) return false;
+      return true;
+    }) || null;
+  };
+  const needsPostAttachEvidenceRebaseBeforeProcess = (activeInput = null) => {
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    if (!pane) return false;
+    if (st.__bulk_process_post_attach_rebase_pending === true || (st.__bulk_process_post_attach_rebase_promise && typeof st.__bulk_process_post_attach_rebase_promise.then === 'function')) return true;
+    if (pane.__attached_refresh_loading === true) return true;
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const evidenceRows = collectCurrentEvidenceRowsForProcess();
+    const syntheticRows = evidenceRows.filter(isSyntheticAttachedEvidenceItem);
+    const selectedSynthetic = isSyntheticAttachedEvidenceItem(pane.active_attached_item)
+      ? pane.active_attached_item
+      : syntheticRows[0];
+    if (selectedSynthetic) return !findRealEvidenceForSyntheticProcessItem(selectedSynthetic, active);
+    if (pane.__requires_evidence_hydration === true && trimStr(pane.active_tab || '').toLowerCase() === 'attached') {
+      const artifactKey = trimStr(
+        active.row?.primary_artifact_storage_key ||
+        active.row?.manual_pdf_r2_key ||
+        active.details?.manual_pdf_r2_key ||
+        active.details?.timesheet?.manual_pdf_r2_key ||
+        ''
+      ).replace(/^\/+/, '').toLowerCase();
+      if (!artifactKey) return false;
+      const hasRealArtifactEvidence = evidenceRows.some((item) => {
+        if (!item || typeof item !== 'object' || isSyntheticAttachedEvidenceItem(item)) return false;
+        const evidenceId = evidenceIdOf(item);
+        if (!evidenceId || isSyntheticEvidenceId(evidenceId)) return false;
+        const storageKey = evidenceStorageKeyOf(item).toLowerCase();
+        if (!storageKey || storageKey !== artifactKey) return false;
+        const kind = evidenceKindOf(item) || 'TIMESHEET';
+        return kind === 'TIMESHEET';
+      });
+      return !hasRealArtifactEvidence;
+    }
+    return false;
+  };
+  const refreshActiveEvidenceContextBeforeProcess = async (rowKey, reason) => {
+    const key = trimStr(rowKey || rowKeyOf(st.active_row || {}) || rowKeyOf(readActive().row) || '');
+    if (st.__bulk_process_post_attach_rebase_promise && typeof st.__bulk_process_post_attach_rebase_promise.then === 'function') {
+      try { await st.__bulk_process_post_attach_rebase_promise; } catch {}
+    }
+    if (typeof st.__bulk_process_refresh_attached_context === 'function') {
+      await st.__bulk_process_refresh_attached_context({ reason: reason || 'before-process-post-attach-rebase' });
+      return;
+    }
+    if (typeof handleBulkProcessRowChange !== 'function') {
+      throw new Error('Bulk Process row context refresh is not available after evidence attach. Refresh the row and try again.');
+    }
+    if (!key) {
+      throw new Error('Bulk Process row context cannot be refreshed after evidence attach because the active row key is missing. Refresh the row and try again.');
+    }
+    await handleBulkProcessRowChange(st, key, {
+      source: reason || 'before-process-post-attach-rebase',
+      expectedRowKey: key,
+      profile: 'evidence',
+      context_profile: 'evidence',
+      includeEvidence: true,
+      include_evidence: true,
+      loadEvidence: true,
+      includeCompare: false,
+      include_compare: false,
+      includeImportSourceRows: false,
+      include_import_source_rows: false,
+      forceContextRefresh: true,
+      skipDatasetRefresh: true,
+      preserveEvidencePane: true,
+      preserveActiveContext: true,
+      suppressAdjacentPrefetch: true,
+      rerender: false,
+      skipDirtyGuard: true,
+      force: true
+    });
+  };
+  const awaitPostAttachEvidenceRebaseBeforeProcess = async (activeInput = null) => {
+    let active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    if (!needsPostAttachEvidenceRebaseBeforeProcess(active)) return active;
+    const preservedStateCtx = pickObject(active.stateCtx || {});
+    const rowKey = rowKeyOf(active.row);
+    await refreshActiveEvidenceContextBeforeProcess(rowKey, 'before-process-post-attach-rebase');
+    if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
+      reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
+    }
+    if (preservedStateCtx && typeof preservedStateCtx === 'object' && Object.keys(preservedStateCtx).length) {
+      st.active_ctx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
+      const freshStateCtx = (st.active_ctx.state && typeof st.active_ctx.state === 'object') ? st.active_ctx.state : {};
+      const preservedWithoutEvidence = { ...deep(preservedStateCtx) };
+      delete preservedWithoutEvidence.evidence;
+      delete preservedWithoutEvidence.evidence_loaded;
+      delete preservedWithoutEvidence.evidence_authoritative;
+      delete preservedWithoutEvidence.include_evidence;
+      delete preservedWithoutEvidence.context_profile;
+      delete preservedWithoutEvidence.profile;
+      st.active_ctx.state = {
+        ...freshStateCtx,
+        ...preservedWithoutEvidence,
+        evidence: Array.isArray(freshStateCtx.evidence) ? deep(freshStateCtx.evidence) : freshStateCtx.evidence,
+        evidence_loaded: freshStateCtx.evidence_loaded === true,
+        evidence_authoritative: freshStateCtx.evidence_authoritative === true,
+        include_evidence: freshStateCtx.include_evidence === true,
+        context_profile: freshStateCtx.context_profile || 'evidence',
+        profile: freshStateCtx.profile || 'evidence'
+      };
+    }
+    active = readActive();
+    if (needsPostAttachEvidenceRebaseBeforeProcess(active)) {
+      throw new Error('Attached evidence is still refreshing. Refresh the row and try again.');
+    }
+    if (typeof resetBulkProcessDirtyBaseline === 'function') {
+      try { resetBulkProcessDirtyBaseline(st, 'process-post-attach-rebase'); } catch {}
+    }
+    return active;
+  };
 
   const parseSavedJsonForZeroHourAdjustment = (value) => {
     if (value == null) return null;
@@ -154533,6 +155074,11 @@ async function handleBulkProcessProcess(state) {
     st.__bulk_process_save_in_flight = false;
     st.error_text = '';
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][START]');
+
+    active = await awaitPostAttachEvidenceRebaseBeforeProcess(active);
+    activeTimesheetId = active.timesheetId;
+    activeContractWeekId = active.contractWeekId;
+    expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
 
     const preservedStateCtxBeforeEvidenceMutation = pickObject(active.stateCtx || {});
     const evidenceMutated = await maybeAttachOrStageQueueItem({ timesheetId: activeTimesheetId, contractWeekId: activeContractWeekId, expectedTimesheetId });
@@ -154772,6 +155318,11 @@ async function handleBulkProcessProcess(state) {
     return { ok: false, error: st.error_text };
   }
 }
+
+
+
+
+
 
 async function processDailyManualTimesheet(timesheetId, payload = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][PROCESS-DAILY-WRAPPER]');
