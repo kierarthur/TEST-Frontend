@@ -137488,10 +137488,6 @@ function bindBulkProcessManualEditor(state) {
   }
 }
 
-
-
-
-
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -137999,6 +137995,89 @@ function bindBulkProcessPreviewPane(state) {
     console.log('[TS][BULK-PROCESS][PREVIEW]', body);
   };
 
+
+  const getLiveBulkAuthorisePreviewSurface = () => {
+    const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot') || document.getElementById('bulkAuthorisePreviewPaneRoot');
+    const liveStage = liveRoot
+      ? (liveRoot.querySelector('#bulkProcessPreviewStage') || document.getElementById('bulkProcessPreviewStage'))
+      : document.getElementById('bulkProcessPreviewStage');
+    const rootConnected = !!(liveRoot && liveRoot.isConnected);
+    const stageConnected = !!(liveStage && liveStage.isConnected);
+    const rootContainsStage = !!(liveRoot && liveStage && liveRoot.contains(liveStage));
+    return {
+      root: liveRoot || null,
+      stage: liveStage || null,
+      ok: !!(rootConnected && stageConnected && rootContainsStage),
+      rootConnected,
+      stageConnected,
+      rootContainsStage,
+      rootWasReplaced: !!(liveRoot && root && liveRoot !== root)
+    };
+  };
+
+  const getLiveBulkAuthoriseStateRef = () => {
+    const liveState = window.modalCtx?.bulkAuthoriseState || window.modalCtx?.bulk_authorise_state || null;
+    return (liveState && typeof liveState === 'object') ? liveState : st;
+  };
+
+  const getBulkAuthorisePaneFromStateRef = (stateRefInput = null) => {
+    const stateRef = (stateRefInput && typeof stateRefInput === 'object') ? stateRefInput : getLiveBulkAuthoriseStateRef();
+    const livePane = stateRef?.evidence_pane_state;
+    return (livePane && typeof livePane === 'object') ? livePane : pane;
+  };
+
+  const mirrorBulkAuthoriseCommittedPreviewState = (selectionKeyInput = '', signedUrlInput = '', fileKeyInput = '', commitSnapshotInput = null, committedMetaInput = null) => {
+    const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || '');
+    const signedUrl = trimStr(signedUrlInput || '');
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    const liveStateRef = getLiveBulkAuthoriseStateRef();
+    const livePane = getBulkAuthorisePaneFromStateRef(liveStateRef);
+    if (!livePane || livePane === pane || !selectionKey || !signedUrl) return;
+    const meta = (committedMetaInput && typeof committedMetaInput === 'object') ? committedMetaInput : buildSignedUrlMetaForPreview(signedUrl, commitSnapshotInput);
+    livePane.__preview_signed_url_cache = (livePane.__preview_signed_url_cache && typeof livePane.__preview_signed_url_cache === 'object') ? livePane.__preview_signed_url_cache : {};
+    livePane.__preview_signed_url_meta_by_cache_key = (livePane.__preview_signed_url_meta_by_cache_key && typeof livePane.__preview_signed_url_meta_by_cache_key === 'object') ? livePane.__preview_signed_url_meta_by_cache_key : {};
+    livePane.__preview_signed_url_context_by_cache_key = (livePane.__preview_signed_url_context_by_cache_key && typeof livePane.__preview_signed_url_context_by_cache_key === 'object') ? livePane.__preview_signed_url_context_by_cache_key : {};
+    livePane.__preview_signed_url_owner_by_cache_key = (livePane.__preview_signed_url_owner_by_cache_key && typeof livePane.__preview_signed_url_owner_by_cache_key === 'object') ? livePane.__preview_signed_url_owner_by_cache_key : {};
+    livePane.__preview_failed_signed_url_by_target = (livePane.__preview_failed_signed_url_by_target && typeof livePane.__preview_failed_signed_url_by_target === 'object') ? livePane.__preview_failed_signed_url_by_target : {};
+    livePane.__preview_image_retry_by_target = (livePane.__preview_image_retry_by_target && typeof livePane.__preview_image_retry_by_target === 'object') ? livePane.__preview_image_retry_by_target : {};
+
+    const cacheContext = {
+      ownerKind: 'bulk_authorise',
+      ownerToken: trimStr(commitSnapshotInput?.ownerToken || ''),
+      ownerIdentity: trimStr(commitSnapshotInput?.ownerIdentity || ''),
+      activeIdentity: trimStr(commitSnapshotInput?.activeIdentity || ''),
+      rowKey: trimStr(commitSnapshotInput?.rowKey || ''),
+      rowChangeSeq: Number(commitSnapshotInput?.rowChangeSeq || 0) || 0,
+      activeTab: trimStr(commitSnapshotInput?.activeTab || ''),
+      selectionKey,
+      fileKey,
+      storedAtMs: Number(meta?.storedAtMs || Date.now()) || Date.now(),
+      expiresAtMs: Number(meta?.expiresAtMs || 0) || 0
+    };
+    livePane.__preview_signed_url_cache[selectionKey] = signedUrl;
+    if (fileKey) livePane.__preview_signed_url_cache[fileKey] = signedUrl;
+    livePane.__preview_signed_url_meta_by_cache_key[selectionKey] = { ...meta, fileKey, selectionKey };
+    if (fileKey) livePane.__preview_signed_url_meta_by_cache_key[fileKey] = { ...meta, fileKey, selectionKey };
+    livePane.__preview_signed_url_context_by_cache_key[selectionKey] = { ...cacheContext };
+    if (fileKey) livePane.__preview_signed_url_context_by_cache_key[fileKey] = { ...cacheContext };
+    if (commitSnapshotInput?.ownerIdentity) {
+      livePane.__preview_signed_url_owner_by_cache_key[selectionKey] = trimStr(commitSnapshotInput.ownerIdentity || '');
+      if (fileKey) livePane.__preview_signed_url_owner_by_cache_key[fileKey] = trimStr(commitSnapshotInput.ownerIdentity || '');
+    }
+    livePane.__preview_target_key = selectionKey;
+    livePane.__preview_load_requested_target_key = selectionKey;
+    livePane.__preview_signed_url = signedUrl;
+    livePane.__preview_signed_url_stored_at_ms = Number(meta?.storedAtMs || Date.now()) || Date.now();
+    livePane.__preview_signed_url_expires_at_ms = Number(meta?.expiresAtMs || 0) || 0;
+    livePane.__preview_last_committed_at = new Date().toISOString();
+    livePane.__preview_last_committed_selection_key = selectionKey;
+    livePane.__preview_last_committed_file_key = fileKey;
+    livePane.__preview_loading = false;
+    livePane.__preview_error = '';
+    try { delete livePane.__preview_failed_signed_url_by_target[selectionKey]; } catch {}
+    try { delete livePane.__preview_image_retry_by_target[getImageRetryKeyForPreview(selectionKey, fileKey)]; } catch {}
+  };
+
   const bulkAuthoriseSurfaceAtBind = isCurrentBulkAuthorisePreviewSurface();
   const bulkAuthoriseOwnerIdentity = resolveBulkAuthorisePreviewOwnerIdentity();
   const isBulkAuthorisePreviewContext = !!trimStr(bulkAuthoriseOwnerIdentity || '');
@@ -138181,7 +138260,13 @@ function bindBulkProcessPreviewPane(state) {
     const opts = (options && typeof options === 'object') ? options : {};
     if (!snap) return false;
     const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
-    if (!liveRoot || !root.isConnected || liveRoot !== root) return false;
+    const isBulkAuthoriseSnapshot = trimStr(snap.ownerKind || '').toLowerCase() === 'bulk_authorise' || opts.bulkAuthoriseCommit === true || opts.allowBulkAuthoriseReplacedDom === true;
+    if (isBulkAuthoriseSnapshot) {
+      const liveSurface = getLiveBulkAuthorisePreviewSurface();
+      if (!liveSurface.ok) return false;
+    } else if (!liveRoot || !root.isConnected || liveRoot !== root) {
+      return false;
+    }
 
     const liveSelectionKeyForSnapshot = normalisePreviewSelectionKey(getCurrentPreviewSelectionKey());
     const snapSelectionKey = normalisePreviewSelectionKey(snap.selectionKey || '');
@@ -138220,7 +138305,7 @@ function bindBulkProcessPreviewPane(state) {
       );
       if (!sameOwnerRowSelection && !sameOwnerGlobalQueueSelection) return false;
     }
-    if (snap.stateRef && snap.stateRef !== st) return false;
+    if (snap.stateRef && snap.stateRef !== st && trimStr(snap.ownerKind || '').toLowerCase() !== 'bulk_authorise') return false;
     const liveKind = getCurrentPreviewModalKind();
     if (snap.ownerKind === 'bulk_process') {
       if (liveKind && liveKind !== 'bulk-process-workbench' && !/bulk[-_]?process/i.test(liveKind)) return false;
@@ -138230,7 +138315,7 @@ function bindBulkProcessPreviewPane(state) {
     } else if (snap.ownerKind === 'bulk_authorise') {
       if (liveKind === 'bulk-process-workbench' || /bulk[-_]?process/i.test(liveKind)) return false;
       const liveBulkAuthState = window.modalCtx?.bulkAuthoriseState || window.modalCtx?.bulk_authorise_state || null;
-      if (liveBulkAuthState && liveBulkAuthState !== st) return false;
+      if (liveBulkAuthState && liveBulkAuthState !== st && !getLiveBulkAuthorisePreviewSurface().ok) return false;
       if (!isCurrentBulkAuthorisePreviewSurface()) return false;
     }
     const liveToken = getPreviewOwnerToken();
@@ -138267,8 +138352,8 @@ function bindBulkProcessPreviewPane(state) {
     if (!selectionKey || isBlankPreviewSelectionKey(selectionKey) || !fileKey) return false;
     if (!(bulkAuthoriseSurfaceAtBind || isCurrentBulkAuthorisePreviewSurface() || isBulkAuthoriseTimesheetsPreview())) return false;
     if (!isCurrentBulkAuthorisePreviewSurface()) return false;
-    const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
-    if (!liveRoot || !root.isConnected || liveRoot !== root) return false;
+    const liveSurface = getLiveBulkAuthorisePreviewSurface();
+    if (!liveSurface.ok) return false;
     const liveBulkAuthState = window.modalCtx?.bulkAuthoriseState || window.modalCtx?.bulk_authorise_state || null;
     if (liveBulkAuthState && liveBulkAuthState !== st) return false;
     const liveKind = getCurrentPreviewModalKind();
@@ -138308,7 +138393,7 @@ function bindBulkProcessPreviewPane(state) {
     const snapActiveTab = trimStr(snap?.activeTab || '').toLowerCase() === 'attached' ? 'attached' : (trimStr(snap?.activeTab || '') ? 'queue' : '');
     if (snapActiveTab && snapActiveTab !== selectionTab) return false;
 
-    if (opts.requireRequested === true && requestedKey !== selectionKey && targetKey !== selectionKey) return false;
+    if (opts.requireRequested === true && requestedKey !== selectionKey && targetKey !== selectionKey && liveSelectionKey !== selectionKey) return false;
     return true;
   };
 
@@ -139311,8 +139396,8 @@ function bindBulkProcessPreviewPane(state) {
     if (!selectionKey || isBlankPreviewSelectionKey(selectionKey) || !fileKey) return false;
     if (!(bulkAuthoriseSurfaceAtBind || isCurrentBulkAuthorisePreviewSurface() || isBulkAuthoriseTimesheetsPreview() || getPreviewOwnerKind() === 'bulk_authorise')) return false;
     if (!isCurrentBulkAuthorisePreviewSurface()) return false;
-    const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
-    if (!liveRoot || !root.isConnected || liveRoot !== root) return false;
+    const liveSurface = getLiveBulkAuthorisePreviewSurface();
+    if (!liveSurface.ok) return false;
     const liveBulkAuthState = window.modalCtx?.bulkAuthoriseState || window.modalCtx?.bulk_authorise_state || null;
     if (liveBulkAuthState && liveBulkAuthState !== st) return false;
     const liveKind = getCurrentPreviewModalKind();
@@ -139335,7 +139420,7 @@ function bindBulkProcessPreviewPane(state) {
     const targetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
     if (requestedKey && requestedKey !== selectionKey && targetKey !== selectionKey) return false;
     if (targetKey && targetKey !== selectionKey && requestedKey !== selectionKey) return false;
-    if (opts.requireRequested === true && requestedKey !== selectionKey && targetKey !== selectionKey) return false;
+    if (opts.requireRequested === true && requestedKey !== selectionKey && targetKey !== selectionKey && liveSelectionKey !== selectionKey) return false;
 
     const liveIdForTab = trimStr(liveItem?.id || liveItem?.evidence_id || liveItem?.queue_id || '');
     if (selectionTab === 'attached') {
@@ -139392,8 +139477,11 @@ function bindBulkProcessPreviewPane(state) {
     const selectionTab = trimStr(selectionParts[0] || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
     const selectionTargetId = trimStr(selectionParts[1] || '');
     const expectedFileKey = trimStr(selectionParts.slice(2).join('|') || fileKey || responseKey || '').replace(/^\/+/, '');
-    const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
+    const liveSurface = getLiveBulkAuthorisePreviewSurface();
     const liveBulkAuthState = window.modalCtx?.bulkAuthoriseState || window.modalCtx?.bulk_authorise_state || null;
+    const liveStateRef = getLiveBulkAuthoriseStateRef();
+    const livePaneRef = getBulkAuthorisePaneFromStateRef(liveStateRef);
+    const stateRefMismatch = !!(liveBulkAuthState && liveBulkAuthState !== st);
     const liveKind = getCurrentPreviewModalKind();
     const reject = (reason, extra = {}) => ({
       ok: false,
@@ -139418,15 +139506,31 @@ function bindBulkProcessPreviewPane(state) {
     if (!expectedFileKey) return reject('missing-file-key');
     if (!(bulkAuthoriseSurfaceAtBind || isCurrentBulkAuthorisePreviewSurface() || isBulkAuthoriseTimesheetsPreview() || getPreviewOwnerKind() === 'bulk_authorise')) return reject('not-bulk-authorise-context');
     if (!isCurrentBulkAuthorisePreviewSurface()) return reject('modal-owner-changed');
-    if (!liveRoot || !root.isConnected || liveRoot !== root) return reject('dom-root-missing-or-replaced', { liveRootExists: !!liveRoot, rootConnected: !!root.isConnected });
-    if (liveBulkAuthState && liveBulkAuthState !== st) return reject('bulk-authorise-state-mismatch');
+    if (!liveSurface.ok) return reject('dom-root-missing-or-replaced', {
+      liveRootExists: !!liveSurface.root,
+      liveStageExists: !!liveSurface.stage,
+      liveRootConnected: liveSurface.rootConnected,
+      liveStageConnected: liveSurface.stageConnected,
+      liveRootContainsStage: liveSurface.rootContainsStage,
+      rootWasReplaced: liveSurface.rootWasReplaced,
+      capturedRootConnected: !!root.isConnected
+    });
     if (liveKind === 'bulk-process-workbench' || /bulk[-_]?process/i.test(liveKind)) return reject('bulk-process-modal-active', { liveKind });
     if (selectionTab !== 'attached' && selectionTab !== 'queue') return reject('unsupported-tab');
     if (selectionTab === 'queue' && opts.requireExplicitQueue !== false && !getBulkAuthoriseQueueOverrideIsCurrent()) return reject('queue-not-explicit-user-selection');
 
-    const liveState = getPreviewState();
+    const liveStateFromLivePane = (() => {
+      const p = (livePaneRef && typeof livePaneRef === 'object') ? livePaneRef : pane;
+      const activeTab = trimStr(p.active_tab || pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+      const previewItem = activeTab === 'attached'
+        ? ((p.active_attached_item && typeof p.active_attached_item === 'object') ? p.active_attached_item : null)
+        : ((p.active_queue_item && typeof p.active_queue_item === 'object') ? p.active_queue_item : null);
+      return { activeTab, previewItem };
+    })();
+    const fallbackLiveState = getPreviewState();
+    const liveState = (stateRefMismatch && liveStateFromLivePane.previewItem) ? liveStateFromLivePane : fallbackLiveState;
     const liveActiveTab = trimStr(liveState.activeTab || pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
-    if (liveActiveTab !== selectionTab) return reject('active-tab-mismatch', { liveActiveTab });
+    if (liveActiveTab !== selectionTab) return reject('active-tab-mismatch', { liveActiveTab, stateRefMismatch });
     const liveItem = (liveState.previewItem && typeof liveState.previewItem === 'object') ? liveState.previewItem : null;
     if (!liveItem) return reject('live-item-missing');
     const liveFileKey = resolvePreviewFileCacheKey(liveItem, selectionKey);
@@ -139476,7 +139580,11 @@ function bindBulkProcessPreviewPane(state) {
       liveOwnerIdentity,
       liveOwnerTokenPresent: !!liveOwnerToken,
       liveRowKey,
-      liveActiveIdentity
+      liveActiveIdentity,
+      liveStateRef,
+      livePaneRef,
+      stateRefMismatch,
+      liveSurface
     };
   };
 
@@ -141092,6 +141200,120 @@ function bindBulkProcessPreviewPane(state) {
     `;
   };
 
+
+  const renderBulkAuthoriseLiveImageStage = (stage, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
+    if (!stage) return;
+    const existingWrap = stage.querySelector('#bulkProcessImagePreviewWrap');
+    const existingImg = stage.querySelector('#bulkProcessImagePreviewEl');
+    const existingFileKey = trimStr(existingImg?.getAttribute('data-bp-preview-file-key') || existingWrap?.getAttribute('data-bp-preview-file-key') || '');
+    const existingSrc = trimStr(existingImg?.getAttribute('src') || '');
+
+    if (existingWrap && existingImg && existingFileKey === previewFileCacheKey && existingSrc === signedUrl) {
+      existingWrap.setAttribute('data-bp-preview-file-key', previewFileCacheKey);
+      existingWrap.setAttribute('data-bp-preview-selection-key', previewSelectionKey);
+      existingWrap.setAttribute('data-bp-preview-render-key', previewRenderKey);
+      existingImg.setAttribute('data-bp-preview-file-key', previewFileCacheKey);
+      existingImg.setAttribute('data-bp-preview-selection-key', previewSelectionKey);
+      existingImg.setAttribute('data-bp-preview-render-key', previewRenderKey);
+      existingImg.style.transform = `scale(${zoom}) rotate(${rotationDeg}deg)`;
+      existingImg.style.transformOrigin = 'center center';
+      bindImagePreviewLoadGuards(existingImg, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
+      return;
+    }
+
+    stage.innerHTML = `
+      <div
+        id="bulkProcessImagePreviewWrap"
+        data-bp-preview-file-key="${enc(previewFileCacheKey)}"
+        data-bp-preview-selection-key="${enc(previewSelectionKey)}"
+        data-bp-preview-render-key="${enc(previewRenderKey)}"
+        style="
+          width:100%;
+          min-height:460px;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          overflow:auto;
+          border-radius:8px;
+          background:var(--panel,#0f1115);
+        "
+      >
+        <img
+          id="bulkProcessImagePreviewEl"
+          data-bp-preview-file-key="${enc(previewFileCacheKey)}"
+          data-bp-preview-selection-key="${enc(previewSelectionKey)}"
+          data-bp-preview-render-key="${enc(previewRenderKey)}"
+          src="${enc(signedUrl)}"
+          alt="Bulk Process preview"
+          style="
+            max-width:100%;
+            max-height:640px;
+            transform:scale(${zoom}) rotate(${rotationDeg}deg);
+            transform-origin:center center;
+          "
+        />
+      </div>
+    `;
+    bindImagePreviewLoadGuards(stage.querySelector('#bulkProcessImagePreviewEl'), signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey);
+  };
+
+  const renderBulkAuthoriseLivePdfStage = (stage, previewUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg) => {
+    if (!stage) return;
+    const existingWrap = stage.querySelector('#bulkProcessPdfPreviewWrap');
+    const existingFrame = stage.querySelector('#bulkProcessPdfPreviewFrame');
+    const existingFileKey = trimStr(existingFrame?.getAttribute('data-bp-preview-file-key') || existingWrap?.getAttribute('data-bp-preview-file-key') || '');
+    const existingSrc = trimStr(existingFrame?.getAttribute('src') || '');
+
+    if (existingWrap && existingFrame && existingFileKey === previewFileCacheKey) {
+      existingWrap.setAttribute('data-bp-preview-file-key', previewFileCacheKey);
+      existingWrap.setAttribute('data-bp-preview-selection-key', previewSelectionKey);
+      existingWrap.setAttribute('data-bp-preview-render-key', previewRenderKey);
+      existingFrame.setAttribute('data-bp-preview-file-key', previewFileCacheKey);
+      existingFrame.setAttribute('data-bp-preview-selection-key', previewSelectionKey);
+      existingFrame.setAttribute('data-bp-preview-render-key', previewRenderKey);
+      if (existingSrc !== previewUrl) existingFrame.setAttribute('src', previewUrl);
+      existingFrame.style.transform = `scale(${zoom}) rotate(${rotationDeg}deg)`;
+      existingFrame.style.transformOrigin = 'center center';
+      return;
+    }
+
+    stage.innerHTML = `
+      <div
+        id="bulkProcessPdfPreviewWrap"
+        data-bp-preview-file-key="${enc(previewFileCacheKey)}"
+        data-bp-preview-selection-key="${enc(previewSelectionKey)}"
+        data-bp-preview-render-key="${enc(previewRenderKey)}"
+        style="
+          width:100%;
+          min-height:460px;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          overflow:auto;
+          border-radius:8px;
+          background:#fff;
+        "
+      >
+        <iframe
+          id="bulkProcessPdfPreviewFrame"
+          data-bp-preview-file-key="${enc(previewFileCacheKey)}"
+          data-bp-preview-selection-key="${enc(previewSelectionKey)}"
+          data-bp-preview-render-key="${enc(previewRenderKey)}"
+          src="${enc(previewUrl)}"
+          title="Bulk Process PDF preview"
+          style="
+            width:100%;
+            min-height:620px;
+            border:0;
+            background:#fff;
+            transform:scale(${zoom}) rotate(${rotationDeg}deg);
+            transform-origin:center center;
+          "
+        ></iframe>
+      </div>
+    `;
+  };
+
   const commitAndRenderBulkAuthoriseLivePresignResult = async (commitContext = {}) => {
     const ctx = (commitContext && typeof commitContext === 'object') ? commitContext : {};
     const signedUrl = trimStr(ctx.signedUrl || ctx.signed_url || ctx.url || '');
@@ -141100,7 +141322,6 @@ function bindBulkProcessPreviewPane(state) {
     const responseKey = trimStr(ctx.responseKey || ctx.response_key || fileKeyInput || '').replace(/^\/+/, '');
     const snapshot = (ctx.snapshot && typeof ctx.snapshot === 'object') ? ctx.snapshot : capturePreviewCommitSnapshot(ctx.previewState || null, { reason: ctx.reason || 'bulk-authorise-live-presign-commit' });
     const phase = trimStr(ctx.reason || 'bulk-authorise-live-presign-commit') || 'bulk-authorise-live-presign-commit';
-    const stage = ctx.stage || q('#bulkProcessPreviewStage');
 
     const reject = (reason, extra = {}) => {
       logBulkAuthorisePresignTargetRejection(snapshot, {
@@ -141123,7 +141344,18 @@ function bindBulkProcessPreviewPane(state) {
       requireExplicitQueue: true
     });
     if (!targetStatus.ok) return reject(targetStatus.reason, targetStatus);
-    if (!stage || !stage.isConnected || !root.contains(stage)) return reject('dom-stage-missing', { stageExists: !!stage, rootContainsStage: !!(stage && root.contains(stage)) });
+    const liveSurfaceForCommit = getLiveBulkAuthorisePreviewSurface();
+    const stage = liveSurfaceForCommit.stage;
+    if (!liveSurfaceForCommit.ok || !stage) return reject('dom-stage-missing', {
+      stageExists: !!stage,
+      liveRootExists: !!liveSurfaceForCommit.root,
+      liveStageExists: !!liveSurfaceForCommit.stage,
+      liveRootConnected: liveSurfaceForCommit.rootConnected,
+      liveStageConnected: liveSurfaceForCommit.stageConnected,
+      liveRootContainsStage: liveSurfaceForCommit.rootContainsStage,
+      rootWasReplaced: liveSurfaceForCommit.rootWasReplaced,
+      capturedRootConnected: !!root.isConnected
+    });
 
     try {
       const livePreviewState = targetStatus.livePreviewState || getPreviewState();
@@ -141188,6 +141420,7 @@ function bindBulkProcessPreviewPane(state) {
       pane.__preview_loading = false;
       pane.__preview_error = '';
       clearBulkAuthorisePendingAttachedForPreviewCommit(selectionKey);
+      mirrorBulkAuthoriseCommittedPreviewState(selectionKey, signedUrl, liveFileKey, commitSnapshot, committedMeta);
 
       const previewType = getBulkProcessPreviewTypeParts(livePreviewItem, liveFileKey);
       const isPdf = !!previewType.isPdf;
@@ -141205,9 +141438,9 @@ function bindBulkProcessPreviewPane(state) {
 
       renderToolbar(livePreviewState, livePreviewItem, selectionKey, previewRenderKey, signedUrl, isPdf, pageCount, activePage, rotationDeg, zoom);
       if (isPdf) {
-        renderPdfStage(stage, `${signedUrl}#page=${activePage}&zoom=page-width`, signedUrl, liveFileKey, selectionKey, previewRenderKey, zoom, rotationDeg);
+        renderBulkAuthoriseLivePdfStage(stage, `${signedUrl}#page=${activePage}&zoom=page-width`, signedUrl, liveFileKey, selectionKey, previewRenderKey, zoom, rotationDeg);
       } else if (isImage) {
-        renderImageStage(stage, signedUrl, liveFileKey, selectionKey, previewRenderKey, zoom, rotationDeg);
+        renderBulkAuthoriseLiveImageStage(stage, signedUrl, liveFileKey, selectionKey, previewRenderKey, zoom, rotationDeg);
       } else {
         stage.innerHTML = `
           <div style="min-height:320px;display:flex;align-items:center;justify-content:center;">
@@ -141231,8 +141464,8 @@ function bindBulkProcessPreviewPane(state) {
         cacheKeyWritten,
         selectionCacheWritten: true,
         renderedType: isPdf ? 'pdf' : (isImage ? 'image' : 'fallback'),
-        imageElExists: !!q('#bulkProcessImagePreviewEl'),
-        pdfFrameExists: !!q('#bulkProcessPdfPreviewFrame'),
+        imageElExists: !!stage.querySelector('#bulkProcessImagePreviewEl'),
+        pdfFrameExists: !!stage.querySelector('#bulkProcessPdfPreviewFrame'),
         fallbackLinkExists: !!stage.querySelector('a[href]')
       });
       logPreviewCommitEvent(commitSnapshot, {
@@ -141244,8 +141477,8 @@ function bindBulkProcessPreviewPane(state) {
         requestedKey: selectionKey,
         signedUrlPresent: true,
         renderedType: isPdf ? 'pdf' : (isImage ? 'image' : 'fallback'),
-        imageElExists: !!q('#bulkProcessImagePreviewEl'),
-        pdfFrameExists: !!q('#bulkProcessPdfPreviewFrame'),
+        imageElExists: !!stage.querySelector('#bulkProcessImagePreviewEl'),
+        pdfFrameExists: !!stage.querySelector('#bulkProcessPdfPreviewFrame'),
         fallbackLinkExists: !!stage.querySelector('a[href]'),
         stale: false
       });
@@ -141260,8 +141493,8 @@ function bindBulkProcessPreviewPane(state) {
           targetKey: selectionKey,
           renderedType: isPdf ? 'pdf' : (isImage ? 'image' : 'fallback'),
           stageExists: !!stage,
-          imageElExists: !!q('#bulkProcessImagePreviewEl'),
-          pdfFrameExists: !!q('#bulkProcessPdfPreviewFrame'),
+          imageElExists: !!stage.querySelector('#bulkProcessImagePreviewEl'),
+          pdfFrameExists: !!stage.querySelector('#bulkProcessPdfPreviewFrame'),
           fallbackLinkExists: !!stage.querySelector('a[href]')
         });
       }
@@ -142201,6 +142434,9 @@ function bindBulkProcessPreviewPane(state) {
     warnPreview('bind failed', e);
   });
 }
+
+
+
 
 
 
