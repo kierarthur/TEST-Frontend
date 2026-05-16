@@ -3596,6 +3596,10 @@ async function apiPostJson(path, body, options = {}) {
     return code;
   };
   const failureCodes = new Set([
+    'EXECUTE_PAYMENT_INVALID_REQUEST', 'EXECUTE_PAYMENT_INVALID_MODE', 'EXECUTE_PAYMENT_INVALID_PAYMENT_DATE',
+    'EXECUTE_PAYMENT_INVALID_SCHEDULE', 'EXECUTE_PAYMENT_SCHEDULE_TIME_REQUIRED', 'EXECUTE_PAYMENT_WARNING_HOURS_INVALID',
+    'PAYMENT_OPERATION_START_INVALID_INPUT', 'PAYMENT_EXECUTE_OPERATION_CONFIG_FAILED', 'PAYMENT_EXECUTE_OPERATION_START_FAILED',
+    'AUTHORISED_TRANSFER_NOT_PROVIDER_SUBMIT_READY', 'PROVIDER_SUBMIT_NO_ELIGIBLE_TRANSFERS', 'PAYMENT_RETRY_BLOCKED_FUNDS_CLEANUP_NOT_SAFE',
     'BATCH_STALE', 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
     'NO_AUTHORISATION_READY_TRANSFERS', 'NO_PENDING_TRANSFERS', 'TRANSFER_SCOPE_RETRY_BLOCKER_DETECTED',
     'TRANSFER_SCOPE_GROUP_HELD_BY_ACTIVE_OR_UNSAFE_OPERATION', 'EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE',
@@ -3780,6 +3784,8 @@ async function apiPostJson(path, body, options = {}) {
 
   return (parsed != null) ? parsed : {};
 }
+
+
 
 
 
@@ -26195,17 +26201,17 @@ async function bankingPayPreview(pay_date) {
   };
   const openFreshWorkbenchSession = async ({ allowRetry = true } = {}) => {
     if (discardSourceSession) await discardSourceSessionIfPossible();
-    let openedPayload = await bankingPayWorkbenchSessionOpen(openPayload);
-    let openedFailure = detectPreviewFailureEnvelope(openedPayload);
+    let openedSessionPayload = await bankingPayWorkbenchSessionOpen(openPayload);
+    let openedFailure = detectPreviewFailureEnvelope(openedSessionPayload);
     if (openedFailure && staleSessionFailureCodes.has(normalisePreviewRebaseCode(openedFailure.error_code || openedFailure.code || ''))) {
       if (allowRetry && (sourceSessionId || existingWorkbenchSessionId)) {
         await discardSourceSessionIfPossible();
-        openedPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: true });
-        openedFailure = detectPreviewFailureEnvelope(openedPayload);
+        openedSessionPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: true });
+        openedFailure = detectPreviewFailureEnvelope(openedSessionPayload);
       }
     }
     if (openedFailure) throwPreviewFailureEnvelope(openedFailure, 'BANKING_PAY_PREVIEW_FAILED');
-    if (isRebaseRequiredPayload(openedPayload) || isReturnedSessionObsolete(openedPayload)) {
+    if (isRebaseRequiredPayload(openedSessionPayload) || isReturnedSessionObsolete(openedSessionPayload)) {
       if (allowRetry && (sourceSessionId || existingWorkbenchSessionId)) {
         await discardSourceSessionIfPossible();
         const retriedPayload = await bankingPayWorkbenchSessionOpen({ ...openPayload, force_new_session: true, discard_source_session: true });
@@ -26218,7 +26224,7 @@ async function bankingPayPreview(pay_date) {
       }
       throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
     }
-    return openedPayload;
+    return openedSessionPayload;
   };
 
   const syncProgressIntoState = (progress) => {
@@ -26463,16 +26469,35 @@ async function bankingPayPreview(pay_date) {
     const obj = isPlainObject(payload) ? payload : {};
     const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
     if (isPlainObject(obj.progress)) syncProgressIntoState(obj.progress);
+
+    const rebaseOrObsolete = !!(
+      isPostMutationRefresh &&
+      (isRebaseRequiredPayload(obj) || isReturnedSessionObsolete(obj))
+    );
+    if (rebaseOrObsolete) {
+      const statusText = trimStr(progressObj.status_text || obj.status_text || obj.message || 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.');
+      clearPreviewRowsForDeferredPostMutation(statusText);
+      wiz.workbench.create_draft_refresh_pending = true;
+      wiz.workbench.preview_reopen_required = true;
+      wiz.workbench.__post_mutation_preview_refresh_failed = false;
+      if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = true;
+      wiz.preview.loading = true;
+      wiz.preview.error = '';
+      wiz.preview.failure = null;
+      wiz.preview.status_text = statusText;
+      return true;
+    }
+
     const readyEmptyFlag = isReadyEmptyPayload(obj);
     const readyFlag = readyEmptyFlag || obj.ready === true || obj.ready_flag === true || progressObj.ready === true || progressObj.ready_flag === true;
     const bootstrapOnly = obj.bootstrap_only === true || obj.preview_bootstrap === true || progressObj.bootstrap_only === true || progressObj.preview_bootstrap === true;
     const readyWithoutFullPreview = isPostMutationRefresh && readyFlag && !readyEmptyFlag && !payloadHasFullPreviewData(obj);
-    const activePending = readyEmptyFlag ? false : (bootstrapOnly || readyWithoutFullPreview || (!readyFlag && hasActiveWorkbenchPendingWork()));
+    const activePending = readyEmptyFlag ? false : (bootstrapOnly || readyWithoutFullPreview || (!readyFlag && (isPostMutationRefresh || hasActiveWorkbenchPendingWork())));
     wiz.workbench.create_draft_refresh_pending = activePending;
     wiz.workbench.preview_reopen_required = activePending && isPostMutationRefresh;
     if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = activePending;
     wiz.preview.loading = activePending;
-    if (activePending) {
+    if (activePending || (isPostMutationRefresh && !payloadHasFullPreviewData(obj))) {
       clearPreviewRowsForDeferredPostMutation(trimStr(progressObj.status_text || obj.status_text || 'Preparing payment preview candidates.'));
       wiz.preview.error = '';
       wiz.preview.failure = null;
@@ -26808,14 +26833,37 @@ async function bankingPayPreview(pay_date) {
   const applyFullWorkbenchPreviewPayload = (payload) => {
     const ctx = validateWorkbenchPayloadContext(payload);
     if (isPostMutationRefresh && isReturnedWorkbenchContextObsolete(ctx)) {
-      throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
+      applyDeferredPreviewStateFromPayload({
+        ...makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'),
+        session_id: ctx.session_id || null,
+        snapshot_run_id: ctx.snapshot_run_id || null,
+        session_signature: ctx.session_signature || null,
+        session_version: ctx.session_version ?? null
+      });
+      return {
+        status: 'obsolete_rejected',
+        payload: null
+      };
     }
     if (isPostMutationRefresh && isReadyEmptyPayload(payload)) {
-      return applyReadyEmptyPreviewState(payload);
+      return {
+        status: 'applied_ready_empty',
+        payload: applyReadyEmptyPreviewState(payload)
+      };
     }
-    if (isPostMutationRefresh && (!payloadHasFullPreviewData(payload) || isRebaseRequiredPayload(payload))) {
+    if (isPostMutationRefresh && isRebaseRequiredPayload(payload)) {
       applyDeferredPreviewStateFromPayload(payload);
-      return null;
+      return {
+        status: 'rebase_required',
+        payload: null
+      };
+    }
+    if (isPostMutationRefresh && !payloadHasFullPreviewData(payload)) {
+      applyDeferredPreviewStateFromPayload(payload);
+      return {
+        status: 'deferred',
+        payload: null
+      };
     }
     if (isPostMutationRefresh) {
       wiz.preview.data = null;
@@ -26844,8 +26892,19 @@ async function bankingPayPreview(pay_date) {
     const appliedEnvelope = applyPayWorkbenchPreviewToState(payload, stLocal);
     stampAppliedWorkbenchContext(appliedEnvelope || payload);
     reconcileSelectedRowsAfterFreshPreview(appliedEnvelope || payload);
-    return appliedEnvelope;
+    return {
+      status: 'applied_full',
+      payload: appliedEnvelope || payload
+    };
   };
+
+  const previewApplyLoadedStatuses = new Set(['applied_full', 'applied_ready_empty']);
+  const previewApplyStatus = (applyResult) => {
+    if (typeof applyResult === 'string') return applyResult;
+    if (applyResult && typeof applyResult === 'object') return trimStr(applyResult.status || applyResult.outcome || '');
+    return '';
+  };
+  const previewApplyLoaded = (applyResult) => previewApplyLoadedStatuses.has(previewApplyStatus(applyResult));
 
   const maybeAutoSettlePendingCandidates = async () => {
     if (candidateScopedRefresh) return;
@@ -26937,10 +26996,10 @@ async function bankingPayPreview(pay_date) {
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
-      applyFullWorkbenchPreviewPayload(responsePayload);
+      const applyResult = applyFullWorkbenchPreviewPayload(responsePayload);
       applyDeferredPreviewStateFromPayload(responsePayload);
       applyReplacementPendingState(false);
-      didFullPreviewLoad = true;
+      didFullPreviewLoad = previewApplyLoaded(applyResult);
     } else if (willOpenNewWorkbenchSession) {
       responsePayload = await openFreshWorkbenchSession();
       const openedSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
@@ -26949,9 +27008,9 @@ async function bankingPayPreview(pay_date) {
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
-      applyFullWorkbenchPreviewPayload(responsePayload);
+      const applyResult = applyFullWorkbenchPreviewPayload(responsePayload);
       applyDeferredPreviewStateFromPayload(responsePayload);
-      didFullPreviewLoad = true;
+      didFullPreviewLoad = previewApplyLoaded(applyResult);
     } else if ((softRefresh || trimStr(wiz.workbench.session_id)) && !isObsoleteSessionId(wiz.workbench.session_id)) {
       responsePayload = await bankingPayWorkbenchSessionGet(wiz.workbench.session_id, {
         obsolete_session_ids: [...obsoleteSessionIds],
@@ -26969,9 +27028,9 @@ async function bankingPayPreview(pay_date) {
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
-      applyFullWorkbenchPreviewPayload(responsePayload);
+      const applyResult = applyFullWorkbenchPreviewPayload(responsePayload);
       applyDeferredPreviewStateFromPayload(responsePayload);
-      didFullPreviewLoad = true;
+      didFullPreviewLoad = previewApplyLoaded(applyResult);
     } else {
       responsePayload = await openFreshWorkbenchSession();
       const fallbackOpenedSessionPayloadFailure = detectPreviewFailureEnvelope(responsePayload);
@@ -26980,9 +27039,9 @@ async function bankingPayPreview(pay_date) {
       }
       if (!isLatestRequest()) return deep(wiz.preview.data);
       if (isPlainObject(responsePayload?.progress)) syncProgressIntoState(responsePayload.progress);
-      applyFullWorkbenchPreviewPayload(responsePayload);
+      const applyResult = applyFullWorkbenchPreviewPayload(responsePayload);
       applyDeferredPreviewStateFromPayload(responsePayload);
-      didFullPreviewLoad = true;
+      didFullPreviewLoad = previewApplyLoaded(applyResult);
     }
 
     if (!isLatestRequest()) return deep(wiz.preview.data);
@@ -27025,7 +27084,11 @@ async function bankingPayPreview(pay_date) {
       return deep(wiz.preview.data);
     }
 
-    wiz.preview.loading = hasActiveWorkbenchPendingWork();
+    const postMutationRebaseStillRequired = !!(
+      isPostMutationRefresh &&
+      (wiz.workbench.preview_reopen_required === true || wiz.workbench.create_draft_refresh_pending === true)
+    );
+    wiz.preview.loading = hasActiveWorkbenchPendingWork() || postMutationRebaseStillRequired;
     wiz.preview.error = '';
     wiz.preview.failure = null;
 
@@ -27059,14 +27122,17 @@ async function bankingPayPreview(pay_date) {
     return null;
   } finally {
     if (isLatestRequest()) {
-      wiz.preview.loading = hasActiveWorkbenchPendingWork();
+      const postMutationRebaseStillRequired = !!(
+        isPostMutationRefresh &&
+        (wiz.workbench.preview_reopen_required === true || wiz.workbench.create_draft_refresh_pending === true)
+      );
+      wiz.preview.loading = hasActiveWorkbenchPendingWork() || postMutationRebaseStillRequired;
     }
     if (trimStr(wiz?.workbench?.__preview_refresh_request_token || '') === requestToken) {
       wiz.workbench.__preview_refresh_request_token = '';
     }
   }
 }
-
 
 
 
@@ -27209,7 +27275,6 @@ function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, opti
     st.selected_row_keys = [st.active_row_key, ...st.selected_row_keys].filter(Boolean);
   }
 }
-
 
 
 async function bankingPayCreateDraft(input = {}) {
@@ -27591,6 +27656,8 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.preview.__post_create_refresh_started_at_utc = nowIso;
       wiz.preview.__post_create_source_session_id = sourceSessionId || null;
       wiz.preview.__post_create_created_pay_batch_ids = [...createdPayBatchIds];
+      wiz.preview.status_text = 'Payment draft created. Refreshing payment preview…';
+      wiz.preview.message = 'Payment draft created. Refreshing payment preview…';
 
 
       wiz.workbench.session_id = null;
@@ -27600,7 +27667,7 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.workbench.server_selected_preview_row_ids = [];
       wiz.workbench.server_selected_preview_row_ids_provided = false;
       wiz.workbench.selected_preview_row_ids = [];
-      wiz.workbench.selected_preview_row_mode = 'IMPLICIT_ALL';
+      wiz.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
       wiz.workbench.pending_candidate_ids = [...pendingCandidateIds];
       wiz.workbench.dirty_candidate_ids = Array.from(new Set([...dirtyCandidateIds, ...pendingCandidateIds]));
       wiz.workbench.failed_candidate_ids = [];
@@ -27642,6 +27709,7 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.decisions.server_selected_preview_row_ids = [];
       wiz.decisions.server_selected_preview_row_ids_provided = false;
       wiz.decisions.selected_preview_row_ids = [];
+      wiz.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
       wiz.decisions.pending_candidate_ids = [...pendingCandidateIds];
       wiz.decisions.dirty_candidate_ids = Array.from(new Set([...dirtyCandidateIds, ...pendingCandidateIds]));
       wiz.decisions.pending_candidate_jobs = pendingJobs;
@@ -27670,7 +27738,7 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.decisions.modal_valid = false;
       wiz.decisions.active_modal_epoch = null;
 
-      wiz.selected_preview_row_mode = 'IMPLICIT_ALL';
+      wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
       wiz.local_selected_preview_row_ids_dirty = false;
       wiz.lastPreviewFailure = null;
     } catch {}
@@ -38266,7 +38334,6 @@ function deriveBankingAttentionStateFromBatchList(input) {
 }
 
 
-
 function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   const argumentCount = arguments.length;
   const isPlainObject = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -38542,6 +38609,18 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   const rawUpper = rawText.toUpperCase();
 
   const knownErrorCodes = [
+    'EXECUTE_PAYMENT_INVALID_REQUEST',
+    'EXECUTE_PAYMENT_INVALID_MODE',
+    'EXECUTE_PAYMENT_INVALID_PAYMENT_DATE',
+    'EXECUTE_PAYMENT_INVALID_SCHEDULE',
+    'EXECUTE_PAYMENT_SCHEDULE_TIME_REQUIRED',
+    'EXECUTE_PAYMENT_WARNING_HOURS_INVALID',
+    'PAYMENT_OPERATION_START_INVALID_INPUT',
+    'PAYMENT_EXECUTE_OPERATION_CONFIG_FAILED',
+    'PAYMENT_EXECUTE_OPERATION_START_FAILED',
+    'AUTHORISED_TRANSFER_NOT_PROVIDER_SUBMIT_READY',
+    'PROVIDER_SUBMIT_NO_ELIGIBLE_TRANSFERS',
+    'PAYMENT_RETRY_BLOCKED_FUNDS_CLEANUP_NOT_SAFE',
     'BATCH_STALE',
     'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
     'BLOCKED_FUNDS',
@@ -38657,6 +38736,12 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     if (code === 'PAY_EXECUTE_OPERATION_CLEANUP_FAILED_LOCAL_ARTIFACTS') return 'PAYMENT_EXECUTE_CLEANUP_FAILED';
     if (code === 'BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED' || code === 'PROVIDER_SUBMISSION_EVIDENCE_REQUIRED') return 'EXECUTION_RETRY_BLOCKED_BY_PROVIDER_EVIDENCE';
     if (code === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (code === 'PAYMENT_OPERATION_START_INVALID_INPUT') return 'PAYMENT_OPERATION_START_INVALID_INPUT';
+    if (code === 'PAYMENT_EXECUTE_OPERATION_CONFIG_FAILED') return 'PAYMENT_EXECUTE_OPERATION_CONFIG_FAILED';
+    if (code === 'PAYMENT_EXECUTE_OPERATION_START_FAILED') return 'PAYMENT_EXECUTE_OPERATION_START_FAILED';
+    if (code === 'AUTHORISED_TRANSFER_NOT_PROVIDER_SUBMIT_READY') return 'AUTHORISED_TRANSFER_NOT_PROVIDER_SUBMIT_READY';
+    if (code === 'PROVIDER_SUBMIT_NO_ELIGIBLE_TRANSFERS') return 'PROVIDER_SUBMIT_NO_ELIGIBLE_TRANSFERS';
+    if (code === 'PAYMENT_RETRY_BLOCKED_FUNDS_CLEANUP_NOT_SAFE') return 'PAYMENT_RETRY_BLOCKED_FUNDS_CLEANUP_NOT_SAFE';
     if (code === 'PAY_EXECUTE_BANK_FAILED') return 'BANKING_EXECUTE_PAYMENT_FAILED';
     if (code === 'STANDARD_BANK_FUNDING_ACCOUNT_REQUIRED') return 'FUNDING_ACCOUNT_MISSING';
     if (code === 'CSV_UPLOADED_CONFIRMED_MUST_BE_TRUE' || code === 'CSV_UPLOADED_CONFIRMATION_MISSING') return 'CSV_UPLOADED_CONFIRMATION_REQUIRED';
@@ -38741,6 +38826,18 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
     if (rawUpper.includes('PAYMENT_EXECUTE_CLEANUP_FAILED') || rawUpper.includes('PAY_EXECUTE_OPERATION_CLEANUP_FAILED_LOCAL_ARTIFACTS')) return 'PAYMENT_EXECUTE_CLEANUP_FAILED';
     if (rawUpper.includes('NO_SAFE_LOCAL_CLEANUP_AVAILABLE')) return 'NO_SAFE_LOCAL_CLEANUP_AVAILABLE';
     if (rawUpper.includes('AUTH_REQUEST_HELD_BY_PREVIOUS_OPERATION')) return 'AUTH_REQUEST_HELD_BY_PREVIOUS_OPERATION';
+    if (rawUpper.includes('EXECUTE_PAYMENT_INVALID_REQUEST')) return 'EXECUTE_PAYMENT_INVALID_REQUEST';
+    if (rawUpper.includes('EXECUTE_PAYMENT_INVALID_MODE')) return 'EXECUTE_PAYMENT_INVALID_MODE';
+    if (rawUpper.includes('EXECUTE_PAYMENT_INVALID_PAYMENT_DATE')) return 'EXECUTE_PAYMENT_INVALID_PAYMENT_DATE';
+    if (rawUpper.includes('EXECUTE_PAYMENT_INVALID_SCHEDULE')) return 'EXECUTE_PAYMENT_INVALID_SCHEDULE';
+    if (rawUpper.includes('EXECUTE_PAYMENT_SCHEDULE_TIME_REQUIRED')) return 'EXECUTE_PAYMENT_SCHEDULE_TIME_REQUIRED';
+    if (rawUpper.includes('EXECUTE_PAYMENT_WARNING_HOURS_INVALID')) return 'EXECUTE_PAYMENT_WARNING_HOURS_INVALID';
+    if (rawUpper.includes('PAYMENT_OPERATION_START_INVALID_INPUT')) return 'PAYMENT_OPERATION_START_INVALID_INPUT';
+    if (rawUpper.includes('PAYMENT_EXECUTE_OPERATION_CONFIG_FAILED')) return 'PAYMENT_EXECUTE_OPERATION_CONFIG_FAILED';
+    if (rawUpper.includes('PAYMENT_EXECUTE_OPERATION_START_FAILED')) return 'PAYMENT_EXECUTE_OPERATION_START_FAILED';
+    if (rawUpper.includes('AUTHORISED_TRANSFER_NOT_PROVIDER_SUBMIT_READY')) return 'AUTHORISED_TRANSFER_NOT_PROVIDER_SUBMIT_READY';
+    if (rawUpper.includes('PROVIDER_SUBMIT_NO_ELIGIBLE_TRANSFERS')) return 'PROVIDER_SUBMIT_NO_ELIGIBLE_TRANSFERS';
+    if (rawUpper.includes('PAYMENT_RETRY_BLOCKED_FUNDS_CLEANUP_NOT_SAFE')) return 'PAYMENT_RETRY_BLOCKED_FUNDS_CLEANUP_NOT_SAFE';
 
     if (rawUpper.includes('23505') && rawUpper.includes('UQ_BANKING_ALERT_ACK_USER_FINGERPRINT_SCOPE')) return 'ACKNOWLEDGEMENT_ALREADY_EXISTS';
     if (rawUpper.includes('DUPLICATE KEY') && rawUpper.includes('UQ_BANKING_ALERT_ACK_USER_FINGERPRINT_SCOPE')) return 'ACKNOWLEDGEMENT_ALREADY_EXISTS';
@@ -38799,6 +38896,18 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   });
 
   const priorityBusinessCodes = [
+    'EXECUTE_PAYMENT_INVALID_REQUEST',
+    'EXECUTE_PAYMENT_INVALID_MODE',
+    'EXECUTE_PAYMENT_INVALID_PAYMENT_DATE',
+    'EXECUTE_PAYMENT_INVALID_SCHEDULE',
+    'EXECUTE_PAYMENT_SCHEDULE_TIME_REQUIRED',
+    'EXECUTE_PAYMENT_WARNING_HOURS_INVALID',
+    'PAYMENT_OPERATION_START_INVALID_INPUT',
+    'PAYMENT_EXECUTE_OPERATION_CONFIG_FAILED',
+    'PAYMENT_EXECUTE_OPERATION_START_FAILED',
+    'AUTHORISED_TRANSFER_NOT_PROVIDER_SUBMIT_READY',
+    'PROVIDER_SUBMIT_NO_ELIGIBLE_TRANSFERS',
+    'PAYMENT_RETRY_BLOCKED_FUNDS_CLEANUP_NOT_SAFE',
     'BATCH_STALE',
     'NO_AUTHORISATION_READY_TRANSFERS',
     'TRANSFER_SCOPE_RETRY_BLOCKER_DETECTED',
@@ -38881,6 +38990,162 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   }
 
   const templates = {
+    EXECUTE_PAYMENT_INVALID_REQUEST: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Payment execution could not be started',
+      message: 'CloudTMS could not start the payment execution operation. No bank submission was attempted. Refresh the batch and try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      execute_payment_operation_started: false,
+      submitted_to_bank: false,
+      provider_submission_attempted: false
+    },
+    EXECUTE_PAYMENT_INVALID_MODE: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Payment execution could not be started',
+      message: 'CloudTMS could not start the payment execution operation because the requested execution mode is invalid. No bank submission was attempted. Refresh the batch and try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      execute_payment_operation_started: false,
+      submitted_to_bank: false,
+      provider_submission_attempted: false
+    },
+    EXECUTE_PAYMENT_INVALID_PAYMENT_DATE: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Payment execution could not be started',
+      message: 'CloudTMS could not start the payment execution operation because the payment date is invalid. No bank submission was attempted. Refresh the batch and try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      execute_payment_operation_started: false,
+      submitted_to_bank: false,
+      provider_submission_attempted: false
+    },
+    EXECUTE_PAYMENT_INVALID_SCHEDULE: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Payment execution could not be started',
+      message: 'CloudTMS could not start the payment execution operation because the payment schedule is invalid. No bank submission was attempted. Refresh the batch and try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      execute_payment_operation_started: false,
+      submitted_to_bank: false,
+      provider_submission_attempted: false
+    },
+    EXECUTE_PAYMENT_SCHEDULE_TIME_REQUIRED: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Payment execution could not be started',
+      message: 'CloudTMS could not start the payment execution operation because a scheduled payment time is required. No bank submission was attempted. Refresh the batch and try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      execute_payment_operation_started: false,
+      submitted_to_bank: false,
+      provider_submission_attempted: false
+    },
+    EXECUTE_PAYMENT_WARNING_HOURS_INVALID: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Payment execution could not be started',
+      message: 'CloudTMS could not start the payment execution operation because the warning-hours payload is invalid. No bank submission was attempted. Refresh the batch and try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      execute_payment_operation_started: false,
+      submitted_to_bank: false,
+      provider_submission_attempted: false
+    },
+    PAYMENT_OPERATION_START_INVALID_INPUT: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Payment execution could not be started',
+      message: 'CloudTMS could not start the payment execution operation. No bank submission was attempted. Refresh the batch and try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      execute_payment_operation_started: false,
+      submitted_to_bank: false,
+      provider_submission_attempted: false
+    },
+    PAYMENT_EXECUTE_OPERATION_CONFIG_FAILED: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Payment execution could not be started',
+      message: 'CloudTMS could not start the payment execution operation. No bank submission was attempted. Refresh the batch and try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      execute_payment_operation_started: false,
+      submitted_to_bank: false,
+      provider_submission_attempted: false
+    },
+    PAYMENT_EXECUTE_OPERATION_START_FAILED: {
+      ok: false,
+      http_status: 400,
+      severity: 'warning',
+      title: 'Payment execution could not be started',
+      message: 'CloudTMS could not start the payment execution operation. No bank submission was attempted. Refresh the batch and try again.',
+      user_action: 'REFRESH_BATCH',
+      confirm_label: 'OK',
+      show_modal: true,
+      operation_created: false,
+      execute_payment_operation_started: false,
+      submitted_to_bank: false,
+      provider_submission_attempted: false
+    },
+    AUTHORISED_TRANSFER_NOT_PROVIDER_SUBMIT_READY: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment authorised but not submitted',
+      message: 'The payment was authorised, but CloudTMS could not find a bank transfer that was safe to submit. Refresh the batch and retry if CloudTMS says retry is safe; otherwise review the transfer.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    PROVIDER_SUBMIT_NO_ELIGIBLE_TRANSFERS: {
+      ok: false,
+      http_status: 409,
+      severity: 'warning',
+      title: 'Payment authorised but not submitted',
+      message: 'The payment was authorised, but CloudTMS could not find a bank transfer that was safe to submit. Refresh the batch and retry if CloudTMS says retry is safe; otherwise review the transfer.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
+    PAYMENT_RETRY_BLOCKED_FUNDS_CLEANUP_NOT_SAFE: {
+      ok: false,
+      http_status: 409,
+      severity: 'critical',
+      title: 'Payment retry needs review',
+      message: 'The blocked-funds retry needs review because CloudTMS could not confirm that its local execution artefacts are safe to clean.',
+      user_action: 'REVIEW_PAYMENT_ISSUES',
+      confirm_label: 'OK',
+      show_modal: true
+    },
     BATCH_STALE: {
       ok: false,
       http_status: 409,
@@ -39748,6 +40013,88 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   if (batchId) result.batch_id = batchId;
   if (safeContextAction) result.action = safeContextAction;
   if (safeScope) result.scope = safeScope;
+
+  for (const safeFlagKey of [
+    'operation_created',
+    'execute_payment_operation_started',
+    'submitted_to_bank',
+    'provider_submission_attempted',
+    'safe_retry_available',
+    'retry_blocked',
+    'review_required',
+    'cleanup_retry_safe'
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(template, safeFlagKey) && typeof template[safeFlagKey] === 'boolean') result[safeFlagKey] = template[safeFlagKey];
+    if (Object.prototype.hasOwnProperty.call(contextInput, safeFlagKey) && typeof contextInput[safeFlagKey] === 'boolean') result[safeFlagKey] = contextInput[safeFlagKey];
+    for (const payload of payloads) {
+      if (isPlainObject(payload) && Object.prototype.hasOwnProperty.call(payload, safeFlagKey) && typeof payload[safeFlagKey] === 'boolean') result[safeFlagKey] = payload[safeFlagKey];
+    }
+  }
+
+  const diagnosticStage = (() => {
+    const candidates = [contextInput.diagnostic_stage, contextInput.diagnosticStage, contextInput.stage];
+    for (const payload of payloads) {
+      if (isPlainObject(payload)) candidates.push(payload.diagnostic_stage, payload.diagnosticStage, payload.stage);
+    }
+    for (const value of candidates) {
+      const text = safeTrim(value).toUpperCase();
+      if (text && text.length <= 80 && /^[A-Z0-9_:-]+$/.test(text) && !looksTechnicalUserText(text)) return text;
+    }
+    return '';
+  })();
+  if (diagnosticStage) result.diagnostic_stage = diagnosticStage;
+
+  if (result.operation_created === false || result.provider_submission_attempted === false) {
+    result.submitted_to_bank = false;
+    if (errorCode === 'BANKING_EXECUTE_PAYMENT_FAILED') {
+      result.error_code = 'PAYMENT_EXECUTE_OPERATION_START_FAILED';
+      result.code = 'PAYMENT_EXECUTE_OPERATION_START_FAILED';
+      result.title = 'Payment execution could not be started';
+      result.message = 'CloudTMS could not start the payment execution operation. No bank submission was attempted. Refresh the batch and try again.';
+      result.error = result.message;
+      result.user_message = result.message;
+      result.user_action = 'REFRESH_BATCH';
+      result.severity = 'warning';
+      result.http_status = 400;
+      result.status_code = 400;
+      result.friendly_error = {
+        code: result.code,
+        title: result.title,
+        message: result.message,
+        error_code: result.error_code,
+        confirm_label: result.confirm_label || 'OK',
+        user_action: result.user_action,
+        severity: result.severity,
+        show_modal: result.show_modal
+      };
+    }
+  }
+
+  const updateResultMessage = (nextMessage) => {
+    const cleanMessage = safeTrim(nextMessage);
+    if (!cleanMessage) return;
+    result.message = cleanMessage;
+    result.error = cleanMessage;
+    result.user_message = cleanMessage;
+    if (result.friendly_error && typeof result.friendly_error === 'object') {
+      result.friendly_error.message = cleanMessage;
+    }
+  };
+
+  if (result.provider_submission_attempted === false && !/no\s+bank\s+submission\s+was\s+attempted/i.test(result.message || '')) {
+    const noAttemptMessage = `${safeTrim(result.message)} No bank submission was attempted.`.trim();
+    updateResultMessage(noAttemptMessage);
+  }
+
+  if (result.retry_blocked === true || result.review_required === true) {
+    result.user_action = 'REVIEW_PAYMENT_ISSUES';
+    if (result.friendly_error && typeof result.friendly_error === 'object') {
+      result.friendly_error.user_action = 'REVIEW_PAYMENT_ISSUES';
+    }
+    if (/try\s+again/i.test(result.message || '') && !/(review|reconcile)/i.test(result.message || '')) {
+      updateResultMessage('This Banking payment needs review before retry. Review Payment Issues before trying again.');
+    }
+  }
 
   if (template.blocked_funds === true || errorCode === 'BLOCKED_FUNDS') {
     result.blocked_funds = true;
@@ -44828,7 +45175,6 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
 }
 
 
-
 async function bankingPayBatchExecutePayment(payBatchId, payload) {
   const id = String(payBatchId || '').trim();
   if (!id) throw new Error('bankingPayBatchExecutePayment: payBatchId is required');
@@ -44858,6 +45204,83 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
       msg.includes('verification failed') ||
       msg.includes('forbidden')
     );
+  };
+
+
+  const preOperationBusinessCodes = new Set([
+    'EXECUTE_PAYMENT_INVALID_REQUEST',
+    'EXECUTE_PAYMENT_INVALID_MODE',
+    'EXECUTE_PAYMENT_INVALID_PAYMENT_DATE',
+    'EXECUTE_PAYMENT_INVALID_SCHEDULE',
+    'EXECUTE_PAYMENT_SCHEDULE_TIME_REQUIRED',
+    'EXECUTE_PAYMENT_WARNING_HOURS_INVALID',
+    'PAYMENT_OPERATION_START_INVALID_INPUT',
+    'PAYMENT_EXECUTE_OPERATION_CONFIG_FAILED',
+    'PAYMENT_EXECUTE_OPERATION_START_FAILED'
+  ]);
+
+  const normaliseBusinessCode = (value) => String(value == null ? '' : value).trim().toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+
+  const readBusinessCode = (value) => {
+    const obj = isPlainObject(value) ? value : {};
+    return normaliseBusinessCode(obj.error_code || obj.errorCode || obj.code || '');
+  };
+
+  const copySafeExecutionMetadata = (target, ...sources) => {
+    const safeKeys = [
+      'code',
+      'error_code',
+      'operation_created',
+      'execute_payment_operation_started',
+      'submitted_to_bank',
+      'provider_submission_attempted',
+      'diagnostic_stage',
+      'pay_batch_id',
+      'review_required',
+      'retry_blocked',
+      'safe_retry_available'
+    ];
+    const safeAliases = {
+      errorCode: 'error_code',
+      operationCreated: 'operation_created',
+      executePaymentOperationStarted: 'execute_payment_operation_started',
+      submittedToBank: 'submitted_to_bank',
+      providerSubmissionAttempted: 'provider_submission_attempted',
+      diagnosticStage: 'diagnostic_stage',
+      payBatchId: 'pay_batch_id',
+      reviewRequired: 'review_required',
+      retryBlocked: 'retry_blocked',
+      safeRetryAvailable: 'safe_retry_available'
+    };
+    for (const source of sources) {
+      if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+      for (const key of safeKeys) {
+        if (Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined) target[key] = source[key];
+      }
+      for (const [aliasKey, targetKey] of Object.entries(safeAliases)) {
+        if (
+          Object.prototype.hasOwnProperty.call(source, aliasKey) &&
+          source[aliasKey] !== undefined &&
+          !Object.prototype.hasOwnProperty.call(target, targetKey)
+        ) {
+          target[targetKey] = source[aliasKey];
+        }
+      }
+    }
+    if (!target.code && target.error_code) target.code = target.error_code;
+    if (!target.error_code && target.code) target.error_code = target.code;
+  };
+
+  const isPreOperationStartFailurePayload = (value) => {
+    if (!isPlainObject(value)) return false;
+    const code = readBusinessCode(value);
+    if (preOperationBusinessCodes.has(code)) return true;
+    if (value.operation_created === false) return true;
+    if (value.execute_payment_operation_started === false) return true;
+    if (value.provider_submission_attempted === false && !String(value.operation_id || value.id || '').trim()) return true;
+    return false;
   };
 
   const makeFriendlyError = (errorValue, backendPayload = null, context = {}) => {
@@ -44898,7 +45321,16 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
     err.json = friendly;
     err.body = (() => { try { return JSON.stringify(friendly); } catch { return message; } })();
     err.error_code = friendly.error_code || friendly.code || context.fallbackCode || 'BANKING_EXECUTE_PAYMENT_FAILED';
+    err.code = err.error_code;
     err.friendly = true;
+    err.backendPayload = backendPayload || friendly;
+    copySafeExecutionMetadata(
+      err,
+      friendly,
+      isPlainObject(backendPayload) ? backendPayload : null,
+      isPlainObject(errorValue) ? errorValue : null,
+      isPlainObject(context) ? context : null
+    );
     return err;
   };
 
@@ -44942,32 +45374,34 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
     operationPayload = await postOperationStart();
   } catch (e) {
     const st = Number(e?.status || 0);
-    const parsed = (e && e.json && typeof e.json === 'object') ? e.json : null;
+    const parsed = (e && e.json && typeof e.json === 'object')
+      ? e.json
+      : (e && e.payload && typeof e.payload === 'object')
+        ? e.payload
+        : (e && e.backendPayload && typeof e.backendPayload === 'object')
+          ? e.backendPayload
+          : null;
     const txt = String(e?.body || e?.message || '').trim();
     const authFailure = classifyAuthFailure(st, parsed, txt);
-    const friendlyError = makeFriendlyError(e, parsed, { fallbackCode: authFailure ? 'PAYMENT_REAUTH_REQUIRED' : 'BANKING_EXECUTE_PAYMENT_FAILED' });
+    const fallbackCode = authFailure
+      ? 'PAYMENT_REAUTH_REQUIRED'
+      : (preOperationBusinessCodes.has(readBusinessCode(parsed)) ? readBusinessCode(parsed) : 'BANKING_EXECUTE_PAYMENT_FAILED');
+    const friendlyError = makeFriendlyError(e, parsed, { fallbackCode });
     if (authFailure) {
       try { friendlyError.is_auth_failure = true; } catch {}
     }
     throw friendlyError;
   }
 
-  const looksLikeOperation = !!(
-    operationPayload &&
-    typeof operationPayload === 'object' &&
-    (
-      operationPayload.operation_id ||
-      operationPayload.id ||
-      operationPayload.operation_type ||
-      operationPayload.operationType ||
-      operationPayload.phase ||
-      operationPayload.status ||
-      operationPayload.terminal === true
-    )
-  );
+  const operationId = String(operationPayload?.operation_id || operationPayload?.id || '').trim();
+  const operationPayloadCode = readBusinessCode(operationPayload);
+  const operationStarted = !!operationId && operationPayload?.operation_created !== false && operationPayload?.execute_payment_operation_started !== false;
 
-  if (!looksLikeOperation) {
-    throw makeFriendlyError(operationPayload, operationPayload, { fallbackCode: 'BANKING_EXECUTE_PAYMENT_FAILED' });
+  if (!operationStarted || isPreOperationStartFailurePayload(operationPayload)) {
+    const fallbackCode = preOperationBusinessCodes.has(operationPayloadCode)
+      ? operationPayloadCode
+      : 'PAYMENT_EXECUTE_OPERATION_START_FAILED';
+    throw makeFriendlyError(operationPayload, operationPayload, { fallbackCode });
   }
 
   if (typeof runBankingPayOperationWithProgress !== 'function') {
@@ -44996,7 +45430,6 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
 
   return finalResult;
 }
-
 
 
 
@@ -48273,6 +48706,95 @@ const executePaymentPipeline = async () => {
   } catch (e) {
     child.actionsBusy.executing = false;
     await rerenderChild();
+
+    const normaliseExecuteErrorCode = (value) => String(value == null ? '' : value).trim().toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    const extractExecuteErrorPayload = (err) => {
+      const candidates = [
+        err,
+        err?.json,
+        err?.payload,
+        err?.backendPayload,
+        err?.friendly_error,
+        err?.friendlyError
+      ];
+      for (const candidate of candidates) {
+        if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) return candidate;
+      }
+      return {};
+    };
+    const errorPayload = extractExecuteErrorPayload(e);
+    const friendlyCode = normaliseExecuteErrorCode(
+      errorPayload.error_code ||
+      errorPayload.errorCode ||
+      errorPayload.code ||
+      e?.error_code ||
+      e?.code ||
+      ''
+    );
+    const preOperationCodes = new Set([
+      'PAYMENT_EXECUTE_OPERATION_START_FAILED',
+      'PAYMENT_EXECUTE_OPERATION_CONFIG_FAILED',
+      'PAYMENT_OPERATION_START_INVALID_INPUT'
+    ]);
+    const preOperationFailure = !!(
+      errorPayload.operation_created === false ||
+      errorPayload.execute_payment_operation_started === false ||
+      errorPayload.provider_submission_attempted === false ||
+      e?.operation_created === false ||
+      e?.execute_payment_operation_started === false ||
+      e?.provider_submission_attempted === false ||
+      friendlyCode.startsWith('EXECUTE_PAYMENT_INVALID_') ||
+      preOperationCodes.has(friendlyCode)
+    );
+
+    if (preOperationFailure) {
+      const fallbackMessage = 'Payment execution could not be started. No bank submission was attempted.';
+      let friendly = null;
+      try {
+        if (typeof bankingNormalizeApiError === 'function') {
+          friendly = bankingNormalizeApiError(e, errorPayload, {
+            action: 'EXECUTE_PAYMENT',
+            userInitiated: true,
+            silent: false,
+            scope: deriveScopeForBatch(child.data),
+            fallbackCode: friendlyCode || 'PAYMENT_EXECUTE_OPERATION_START_FAILED',
+            operation_created: false,
+            execute_payment_operation_started: false,
+            submitted_to_bank: false,
+            provider_submission_attempted: false
+          });
+        }
+      } catch {}
+      const title = String(friendly?.title || friendly?.friendly_error?.title || 'Payment execution could not be started').trim() || 'Payment execution could not be started';
+      const message = String(
+        friendly?.user_message ||
+        friendly?.message ||
+        friendly?.friendly_error?.message ||
+        errorPayload.user_message ||
+        errorPayload.message ||
+        fallbackMessage
+      ).trim() || fallbackMessage;
+      const finalMessage = /no\s+bank\s+submission\s+was\s+attempted/i.test(message)
+        ? message
+        : `${message} No bank submission was attempted.`;
+
+      child.error = finalMessage;
+      try {
+        if (typeof showChildFriendlyNotice === 'function') {
+          await showChildFriendlyNotice({
+            title,
+            message: finalMessage,
+            confirmLabel: 'OK',
+            kind: 'import-summary-banking-execute-not-started',
+            confirmClass: 'btn btn-primary'
+          });
+        } else if (typeof window.__toast === 'function') {
+          window.__toast(finalMessage);
+        }
+      } catch {}
+      return;
+    }
+
     await reportChildFriendlyError(e, 'BANKING_EXECUTE_PAYMENT_FAILED', {
       action: 'EXECUTE_PAYMENT',
       userInitiated: true,
@@ -48281,7 +48803,6 @@ const executePaymentPipeline = async () => {
     });
 
     try {
-      const friendlyCode = String(e?.json?.error_code || e?.json?.code || e?.error_code || '').trim().toUpperCase();
       if (friendlyCode === 'BATCH_STALE') {
         child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
         child.ui.activeTabKey = child.ui.activeTabKey || 'overview';
@@ -48292,7 +48813,6 @@ const executePaymentPipeline = async () => {
     await rerenderChild();
   }
 };
-
 
 const retryBlockedFundsPipeline = async () => {
   if (child.actionsBusy.retryingBlockedFunds) return;
@@ -56940,31 +57460,121 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     };
   };
 
+  const previewResetNonFatalPostMutationStatuses = new Set([404, 409, 410, 423, 425, 500, 502, 503, 504]);
+  const extractPreviewResetHttpStatus = (value) => {
+    const candidates = [
+      value?.status,
+      value?.http_status,
+      value?.httpStatus,
+      value?.status_code,
+      value?.statusCode,
+      value?.payload?.status,
+      value?.payload?.http_status,
+      value?.payload?.status_code,
+      value?.json?.status,
+      value?.json?.http_status,
+      value?.json?.status_code,
+      value?.backendPayload?.status,
+      value?.backendPayload?.http_status,
+      value?.backendPayload?.status_code,
+      value?.response?.status
+    ];
+    for (const candidate of candidates) {
+      const n = Number(candidate);
+      if (Number.isFinite(n)) return Math.trunc(n);
+    }
+    return 0;
+  };
+  const looksFatalPreviewResetFailure = (value) => {
+    const text = [
+      stringifyPreviewResetErrorValue(value),
+      stringifyPreviewResetErrorValue(value?.payload),
+      stringifyPreviewResetErrorValue(value?.json),
+      stringifyPreviewResetErrorValue(value?.backendPayload),
+      stringifyPreviewResetErrorValue(value?.response),
+      stringifyPreviewResetErrorValue(value?.message),
+      stringifyPreviewResetErrorValue(value?.technical_message || value?.technicalMessage)
+    ].join('\n').toUpperCase();
+    if (!text) return false;
+    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
+    if (text.includes('RLS') || text.includes('ROW LEVEL SECURITY') || text.includes('POLICY')) return true;
+    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
+    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
+    if (text.includes('SQLSTATE') || text.includes('SQL STATE') || text.includes('POSTGRES') || text.includes('SUPABASE') || text.includes('POSTGREST')) return true;
+    if (text.includes('INVALID INPUT SYNTAX') || text.includes('AMBIGUOUS') || text.includes('CONSTRAINT') || text.includes('VIOLATES')) return true;
+    if (/\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|INDEX)\b[^\n]*\b(DOES NOT EXIST|NOT FOUND|IS AMBIGUOUS)\b/.test(text)) return true;
+    return false;
+  };
+  const isRetryablePostMutationPreviewResetFailure = (errorValue, friendly = null) => {
+    if (!isPostMutationDiscardAndReopen) return false;
+    if (looksFatalPreviewResetFailure(errorValue) || looksFatalPreviewResetFailure(friendly)) return false;
+    const status = extractPreviewResetHttpStatus(errorValue) || extractPreviewResetHttpStatus(friendly);
+    if (previewResetNonFatalPostMutationStatuses.has(status)) return true;
+    const code = normalizePreviewResetErrorCode(
+      errorValue?.error_code ||
+      errorValue?.code ||
+      errorValue?.payload?.error_code ||
+      errorValue?.payload?.code ||
+      errorValue?.json?.error_code ||
+      errorValue?.json?.code ||
+      friendly?.error_code ||
+      friendly?.code ||
+      ''
+    );
+    return ['BATCH_STALE', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID', 'STALE_SESSION', 'OBSOLETE_SESSION'].includes(code);
+  };
+
   const setPreviewResetFriendlyError = (errorValue, fallbackCode = 'BANKING_PAY_PREVIEW_FAILED', context = {}) => {
     const friendly = normalisePreviewResetFriendlyError(errorValue, fallbackCode, context);
     const message = trimStr(friendly.user_message || friendly.message || friendly.error || 'CloudTMS could not calculate the payment preview. Refresh Banking and try again.');
     const code = trimStr(friendly.error_code || friendly.code || fallbackCode) || fallbackCode;
+    const retryablePostMutationFailure = isRetryablePostMutationPreviewResetFailure(errorValue, friendly);
     try {
       wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
-      wiz.preview.loading = false;
-      wiz.preview.error = message;
-      wiz.preview.friendlyError = friendly;
-      wiz.preview.failure = {
-        preview_unavailable: context && context.previewUnavailable === true,
-        can_retry: true,
-        error: {
-          code,
-          message
-        }
-      };
       wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
-      if (isPostMutationDiscardAndReopen) {
-        wiz.workbench.create_draft_refresh_pending = false;
+      if (retryablePostMutationFailure) {
+        wiz.preview.loading = true;
+        wiz.preview.error = '';
+        wiz.preview.friendlyError = friendly;
+        wiz.preview.failure = null;
+        wiz.preview.data = null;
+        wiz.preview.readiness = null;
+        wiz.preview.candidateDebtInfo = {};
+        wiz.preview.componentStateCache = blankComponentStateCache();
+        wiz.preview.pageData = null;
+        wiz.preview.page_data = null;
+        wiz.preview.pages = {};
+        wiz.preview.pageCache = {};
+        wiz.preview.page_cache = {};
+        wiz.preview.previewPageCache = {};
+        wiz.preview.preview_page_cache = {};
+        wiz.preview.status_text = postMutationRefreshingMessage;
+        wiz.preview.preview_source = 'post_mutation_rebase';
+        wiz.workbench.create_draft_refresh_pending = true;
         wiz.workbench.preview_reopen_required = true;
-        wiz.workbench.__post_mutation_preview_refresh_failed = true;
-        wiz.workbench.__post_mutation_preview_refresh_failed_at_utc = new Date().toISOString();
+        wiz.workbench.__post_mutation_preview_refresh_failed = false;
         wiz.workbench.__post_mutation_preview_refresh_error_code = code;
         wiz.workbench.__post_mutation_preview_refresh_error_message = message;
+      } else {
+        wiz.preview.loading = false;
+        wiz.preview.error = message;
+        wiz.preview.friendlyError = friendly;
+        wiz.preview.failure = {
+          preview_unavailable: context && context.previewUnavailable === true,
+          can_retry: true,
+          error: {
+            code,
+            message
+          }
+        };
+        if (isPostMutationDiscardAndReopen) {
+          wiz.workbench.create_draft_refresh_pending = false;
+          wiz.workbench.preview_reopen_required = true;
+          wiz.workbench.__post_mutation_preview_refresh_failed = true;
+          wiz.workbench.__post_mutation_preview_refresh_failed_at_utc = new Date().toISOString();
+          wiz.workbench.__post_mutation_preview_refresh_error_code = code;
+          wiz.workbench.__post_mutation_preview_refresh_error_message = message;
+        }
       }
     } catch {}
     return friendly;
@@ -57339,8 +57949,18 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
   decisions.modal_valid = false;
   decisions.active_modal_epoch = null;
   if (!preserveLocalSelection) {
-    wiz.selected_preview_row_mode = 'IMPLICIT_ALL';
+    const resetSelectionMode = isPostMutationDiscardAndReopen ? 'EXPLICIT_NONE' : 'IMPLICIT_ALL';
+    wiz.selected_preview_row_mode = resetSelectionMode;
     wiz.local_selected_preview_row_ids_dirty = false;
+    decisions.selected_preview_row_mode = resetSelectionMode;
+    wiz.workbench.selected_preview_row_ids = [];
+    wiz.workbench.selected_preview_row_mode = resetSelectionMode;
+    if (isPostMutationDiscardAndReopen) {
+      decisions.server_selected_preview_row_ids = [];
+      decisions.server_selected_preview_row_ids_provided = true;
+      wiz.workbench.server_selected_preview_row_ids = [];
+      wiz.workbench.server_selected_preview_row_ids_provided = true;
+    }
   }
   wiz.createDraftBusy = false;
   wiz.createDraftError = '';
@@ -83641,6 +84261,8 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, op
   }
 }
 
+
+
 async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -83898,12 +84520,18 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     const id = trimStr(value);
     return !!id && obsoleteSessionIds.includes(id);
   };
-  const makeRebaseRequiredProgress = (code = 'REBASE_REQUIRED', message = 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.') => ({
+  const isPostCancelProgressContext = hasCancelSuccessEvidence || mutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' || rawMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' || rawMutationContext === 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN';
+  const postMutationRebaseStatusText = isPostCancelProgressContext
+    ? 'Draft was cancelled. Refreshing payment preview.'
+    : 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.';
+  const makeRebaseRequiredProgress = (code = 'REBASE_REQUIRED', message = postMutationRebaseStatusText) => ({
     ok: false,
     error_code: code,
     code,
     rebase_required: true,
     requires_new_session: true,
+    pending_refresh: true,
+    fatal: false,
     session_id: sessionIdText,
     source_session_id: sourceSessionId || null,
     obsolete_session_ids: [...obsoleteSessionIds],
@@ -83912,6 +84540,7 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     ready_flag: false,
     ready_empty: false,
     deferred: true,
+    progress_only: true,
     total_candidates: 0,
     completed_candidates: 0,
     ready_candidates: 0,
@@ -83930,6 +84559,30 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
   });
 
   const isPostMutationContext = !!(mutationContext || forceNewSession || discardSourceSession || obsoleteSessionIds.length > 0 || previewReopenRequired || hasDirtyCandidatesWithBatchMutation);
+  const isGenericRetryablePostMutationProgressFailure = (value, codeLike = '') => {
+    if (!isPostMutationContext) return false;
+    if (looksFatalProgressFailure(value)) return false;
+    const code = normaliseProgressCode(
+      codeLike ||
+      value?.error_code ||
+      value?.errorCode ||
+      value?.code ||
+      value?.payload?.error_code ||
+      value?.payload?.code ||
+      value?.json?.error_code ||
+      value?.json?.code ||
+      ''
+    );
+    if (staleCodes.has(code)) return true;
+    if (['BANKING_ACTION_FAILED', 'BANKING_PAY_PREVIEW_FAILED', 'BANKING_PAY_PREVIEW_SESSION_BACKED_FAILED', 'BANKING_PAY_PREVIEW_REFRESH_FAILED'].includes(code)) return true;
+    const text = serialiseProgressErrorPayload(value).toUpperCase();
+    if (!text) return false;
+    if (/PREVIEW\s+COULD\s+NOT\s+BE\s+LOADED/.test(text)) return true;
+    if (/PAYMENT\s+PREVIEW\s+COULD\s+NOT\s+BE\s+LOADED/.test(text)) return true;
+    if (/PAYMENT\s+PREVIEW\s+COULD\s+NOT\s+BE\s+REFRESHED/.test(text)) return true;
+    if (/CLOUDTMS\s+COULD\s+NOT\s+CALCULATE\s+THE\s+PAYMENT\s+PREVIEW/.test(text)) return true;
+    return false;
+  };
 
   if (isObsoleteSessionId(sessionIdText)) {
     return makeRebaseRequiredProgress('OBSOLETE_SESSION');
@@ -83947,6 +84600,7 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       const code = normaliseProgressCode(json?.error_code || json?.code || '');
       if (
         staleCodes.has(code) ||
+        isGenericRetryablePostMutationProgressFailure(json, code) ||
         (isPostMutationContext && shouldTreatProgressStatusAsRebase(res.status) && !looksFatalProgressFailure(json))
       ) {
         return makeRebaseRequiredProgress(code || 'REBASE_REQUIRED', trimStr(json?.message || json?.error || '') || undefined);
@@ -83955,7 +84609,7 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     }
     if (isPlainObject(json) && json.ok === false) {
       const code = normaliseProgressCode(json.error_code || json.code || '');
-      if (staleCodes.has(code) || json.rebase_required === true || json.requires_new_session === true) {
+      if (staleCodes.has(code) || json.rebase_required === true || json.requires_new_session === true || isGenericRetryablePostMutationProgressFailure(json, code)) {
         return makeRebaseRequiredProgress(code || 'REBASE_REQUIRED', trimStr(json.message || json.error || '') || undefined);
       }
     }
@@ -83969,6 +84623,7 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     const errorCode = normaliseProgressCode(error?.error_code || error?.code || error?.payload?.error_code || error?.json?.error_code || '');
     if (
       staleCodes.has(errorCode) ||
+      isGenericRetryablePostMutationProgressFailure(error, errorCode) ||
       (isPostMutationContext && shouldTreatProgressStatusAsRebase(error?.status || 0) && !looksFatalProgressFailure(error?.payload || error?.json || error))
     ) {
       return makeRebaseRequiredProgress(errorCode || 'REBASE_REQUIRED', trimStr(error?.user_message || error?.message || '') || undefined);
@@ -83982,7 +84637,6 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     throw error;
   }
 }
-
 
 
 async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload = {}) {
@@ -115675,7 +116329,7 @@ async function runBankingPayBatchCancelFlow({
         wizard.workbench.session_version = null;
         wizard.workbench.session_signature = '';
         wizard.workbench.server_selected_preview_row_ids = [];
-        wizard.workbench.server_selected_preview_row_ids_provided = false;
+        wizard.workbench.server_selected_preview_row_ids_provided = true;
         wizard.workbench.selected_preview_row_ids = [];
         wizard.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
         wizard.workbench.canonical_preview_lines = [];
@@ -115693,7 +116347,7 @@ async function runBankingPayBatchCancelFlow({
         wizard.workbench.__post_mutation_context = 'CANCEL_DELETE_DRAFT_SUCCESS';
         wizard.decisions.selected_preview_row_ids = [];
         wizard.decisions.server_selected_preview_row_ids = [];
-        wizard.decisions.server_selected_preview_row_ids_provided = false;
+        wizard.decisions.server_selected_preview_row_ids_provided = true;
         wizard.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
         wizard.decisions.canonical_preview_lines = [];
         wizard.decisions.preview_rows = [];
@@ -115703,6 +116357,16 @@ async function runBankingPayBatchCancelFlow({
         wizard.selected_preview_row_mode = 'EXPLICIT_NONE';
         wizard.local_selected_preview_row_ids_dirty = false;
       } catch {}
+    };
+
+    const isPostCancelPendingOrRebaseOutcome = (value) => {
+      const obj = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+      const code = String(obj.error_code || obj.code || obj.reason_code || obj.reason || '').trim().toUpperCase();
+      const outcome = String(obj.outcome || obj.refresh_outcome || obj.status || obj.phase || '').trim().toLowerCase();
+      if (obj.rebase_required === true || obj.requires_new_session === true || obj.pending_refresh === true || obj.deferred === true) return true;
+      if (outcome === 'pending' || outcome === 'rebase_required' || outcome === 'refreshing') return true;
+      if (['REBASE_REQUIRED', 'OBSOLETE_SESSION', 'STALE_SESSION', 'WORKBENCH_SESSION_NOT_FOUND', 'WORKBENCH_SESSION_INVALID', 'WORKBENCH_SESSION_NOT_OPEN', 'WORKBENCH_SESSION_DISCARDED'].includes(code)) return true;
+      return false;
     };
 
     const applyPostCancelPreviewWarning = (warningInput) => {
@@ -115782,28 +116446,47 @@ async function runBankingPayBatchCancelFlow({
         });
       }
     } catch (previewResetError) {
-      const normalisedWarning = (typeof bankingNormalizeApiError === 'function')
-        ? bankingNormalizeApiError(previewResetError, previewResetError?.payload || previewResetError?.json || null, {
-            action: 'POST_DRAFT_CANCEL_PREVIEW_REFRESH',
-            mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
-            cancelled_pay_batch_id: id,
-            pay_batch_id: id,
-            postCancelResetOptions,
-            post_cancel_reset_options: postCancelResetOptions,
-            fallbackCode: 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
-            fallbackTitle: 'Payment preview could not be refreshed',
-            fallbackMessage: 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.',
-            silent: true,
-            background: true,
-            showModal: false
-          })
-        : previewResetError;
-      postCancelPreviewResetWarning = applyPostCancelPreviewWarning(normalisedWarning);
+      if (isPostCancelPendingOrRebaseOutcome(previewResetError) || isPostCancelPendingOrRebaseOutcome(previewResetError?.payload) || isPostCancelPendingOrRebaseOutcome(previewResetError?.json)) {
+        postCancelPreviewResetOutcome = {
+          ok: false,
+          outcome: 'rebase_required',
+          refresh_outcome: 'rebase_required',
+          status: 'rebase_required',
+          pending_refresh: true,
+          rebase_required: true,
+          requires_new_session: true,
+          mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+          source_session_id: sourceSessionId,
+          obsolete_session_ids: canonicalObsoleteSessionIds,
+          status_text: 'Draft was cancelled. Refreshing payment preview…'
+        };
+        postCancelPreviewResetWarning = null;
+      } else {
+        const normalisedWarning = (typeof bankingNormalizeApiError === 'function')
+          ? bankingNormalizeApiError(previewResetError, previewResetError?.payload || previewResetError?.json || null, {
+              action: 'POST_DRAFT_CANCEL_PREVIEW_REFRESH',
+              mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+              cancelled_pay_batch_id: id,
+              pay_batch_id: id,
+              postCancelResetOptions,
+              post_cancel_reset_options: postCancelResetOptions,
+              fallbackCode: 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
+              fallbackTitle: 'Payment preview could not be refreshed',
+              fallbackMessage: 'Draft was cancelled, but the payment preview could not be refreshed. Refresh Banking and try again.',
+              silent: true,
+              background: true,
+              showModal: false
+            })
+          : previewResetError;
+        postCancelPreviewResetWarning = isPostCancelPendingOrRebaseOutcome(normalisedWarning) ? null : applyPostCancelPreviewWarning(normalisedWarning);
+      }
     }
 
     if (postCancelPreviewResetOutcome && typeof postCancelPreviewResetOutcome === 'object') {
       const outcomeText = String(postCancelPreviewResetOutcome.outcome || postCancelPreviewResetOutcome.refresh_outcome || postCancelPreviewResetOutcome.status || '').trim().toLowerCase();
-      if (outcomeText === 'error') {
+      if (outcomeText === 'pending' || outcomeText === 'rebase_required' || isPostCancelPendingOrRebaseOutcome(postCancelPreviewResetOutcome)) {
+        postCancelPreviewResetWarning = null;
+      } else if (outcomeText === 'error') {
         postCancelPreviewResetWarning = applyPostCancelPreviewWarning(postCancelPreviewResetOutcome.preview_refresh_warning || postCancelPreviewResetOutcome.friendly_error || postCancelPreviewResetOutcome);
       }
     }
@@ -115811,13 +116494,33 @@ async function runBankingPayBatchCancelFlow({
     responsePayload.post_cancel_preview_reset_outcome = postCancelPreviewResetOutcome;
     responsePayload.post_cancel_preview_reset_warning = postCancelPreviewResetWarning;
     responsePayload.preview_reset_applied = true;
+    responsePayload.preview_reset_already_applied = true;
+    responsePayload.post_cancel_preview_reset_already_applied = true;
+    responsePayload.skip_follow_up_preview_reset = true;
+    responsePayload.post_cancel_reset_options_consumed = postCancelResetOptions;
+    responsePayload.preview_reset_options_consumed = postCancelResetOptions;
+    responsePayload.post_cancel_reset_options = null;
+    responsePayload.preview_reset_options = null;
 
     if (typeof onSuccess === 'function') {
-      await onSuccess({ id, responsePayload, postCancelRefresh, postCancelResetOptions, previewResetOptions: postCancelResetOptions, postCancelPreviewResetOutcome, postCancelPreviewResetWarning, currentWorkbenchSessionId });
+      await onSuccess({
+        id,
+        responsePayload,
+        postCancelRefresh,
+        postCancelResetOptions: null,
+        previewResetOptions: null,
+        postCancelPreviewResetOutcome,
+        postCancelPreviewResetWarning,
+        currentWorkbenchSessionId,
+        previewResetAlreadyApplied: true,
+        postCancelPreviewResetAlreadyApplied: true,
+        skipFollowUpPreviewReset: true
+      });
     }
     return true;
   }
 }
+
 
 
 function isBulkAuthoriseEditableDirty(state) {
@@ -123698,9 +124401,12 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
         wizard.decisions.selected_preview_row_ids = [];
         wizard.decisions.server_selected_preview_row_ids = [];
         wizard.decisions.server_selected_preview_row_ids_provided = false;
+        wizard.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
         wizard.decisions.ready_to_pay_now = [];
         wizard.decisions.draftable_now = [];
-        wizard.selected_preview_row_mode = 'IMPLICIT_ALL';
+        wizard.workbench.selected_preview_row_ids = [];
+        wizard.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+        wizard.selected_preview_row_mode = 'EXPLICIT_NONE';
         wizard.local_selected_preview_row_ids_dirty = false;
       }
     } catch {}
@@ -123784,6 +124490,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
           refreshPending: true,
           hasPreviewData: false,
           hasFreshPreviewData: false,
+          readyEmpty: false,
           stalePreviewData: false,
           previewSessionIsObsolete: false,
           outcome: 'pending'
@@ -123837,6 +124544,20 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
         !requiresFreshNonObsoleteSession ||
         (!!previewSessionId && !previewSessionMatchesSource && !previewSessionIsObsolete)
       );
+      const rawReadyEmpty = !!(
+        previewState.ready_empty === true ||
+        previewData?.ready_empty === true ||
+        previewData?.readyEmpty === true ||
+        previewPayload.ready_empty === true ||
+        previewPayload.readyEmpty === true
+      );
+      const readyEmpty = !!(
+        rawReadyEmpty &&
+        (
+          !requiresFreshNonObsoleteSession ||
+          (!!previewSessionId && !previewSessionMatchesSource && !previewSessionIsObsolete)
+        )
+      );
       const stalePreviewData = hasPreviewData && requiresFreshNonObsoleteSession && !hasFreshPreviewData;
       const error = trimStr(
         previewState.error ||
@@ -123874,16 +124595,18 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
           previewState.__post_create_refresh_pending === true
         )
       );
-      const refreshPending = !!(stalePreviewData || loading || hasPendingCandidates || reopenFlagIsPending || (!hasFreshPreviewData && optionARequired));
+      const refreshPending = !!(stalePreviewData || loading || hasPendingCandidates || reopenFlagIsPending || (!hasFreshPreviewData && !readyEmpty && optionARequired));
       const outcome = error
         ? 'error'
-        : stalePreviewData
-          ? 'rebase_required'
-          : refreshPending
-            ? 'pending'
-            : hasFreshPreviewData
-              ? 'ready'
-              : 'pending';
+        : readyEmpty
+          ? 'ready_empty'
+          : stalePreviewData
+            ? 'rebase_required'
+            : refreshPending
+              ? 'pending'
+              : hasFreshPreviewData
+                ? 'ready'
+                : 'pending';
 
       return {
         wizard,
@@ -123896,6 +124619,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
         refreshPending,
         hasPreviewData,
         hasFreshPreviewData,
+        readyEmpty,
         stalePreviewData,
         previewSessionIsObsolete: previewSessionIsObsolete || previewSessionMatchesSource,
         pending_candidate_ids: pendingCandidateIds,
@@ -123913,6 +124637,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
         refreshPending: true,
         hasPreviewData: false,
         hasFreshPreviewData: false,
+        readyEmpty: false,
         stalePreviewData: false,
         previewSessionIsObsolete: false,
         outcome: 'pending'
@@ -123963,7 +124688,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
         throw new Error('Payment draft was created, but the payment preview reset helper is not available. Refresh Banking and try again.');
       }
       if (optionARequired) {
-        const postCreateResetOutcome = await resetPayPreviewAndDecisions({
+        const postCreateResetOptions = {
           mode: 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN',
           reason: 'CREATE_DRAFT_SUCCESS',
           mutation_context: 'CREATE_DRAFT_SUCCESS',
@@ -123983,9 +124708,11 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
           selected_pay_batch_id: selectedBatchId || null,
           selected_preview_row_ids: [...selectedPreviewRowIdsForOptionA],
           operation_id: operationIdForOptionA || normalisedResult.operation_id || null
-        });
-        const postResetState = readPostCreatePreviewRefreshState();
-        const postCreateResetOutcomeText = trimStr(
+        };
+
+        let postCreateResetOutcome = await resetPayPreviewAndDecisions(postCreateResetOptions);
+        let postResetState = readPostCreatePreviewRefreshState();
+        let postCreateResetOutcomeText = trimStr(
           postCreateResetOutcome?.outcome ||
           postCreateResetOutcome?.status ||
           postCreateResetOutcome?.refresh_outcome ||
@@ -123993,6 +124720,40 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
           postResetState.outcome ||
           ''
         ).toLowerCase();
+
+        if (
+          !postResetState.error &&
+          !postResetState.hasFreshPreviewData &&
+          !postResetState.readyEmpty &&
+          (postResetState.outcome === 'rebase_required' || postResetState.outcome === 'pending' || postCreateResetOutcomeText === 'rebase_required' || postCreateResetOutcomeText === 'pending')
+        ) {
+          try {
+            postCreateResetOutcome = await resetPayPreviewAndDecisions({
+              ...postCreateResetOptions,
+              bounded_follow_up: true,
+              post_create_follow_up: true
+            });
+            postResetState = readPostCreatePreviewRefreshState();
+            postCreateResetOutcomeText = trimStr(
+              postCreateResetOutcome?.outcome ||
+              postCreateResetOutcome?.status ||
+              postCreateResetOutcome?.refresh_outcome ||
+              postCreateResetOutcome?.preview_refresh_outcome ||
+              postResetState.outcome ||
+              ''
+            ).toLowerCase();
+          } catch (followUpErr) {
+            if (!postResetState.error) {
+              postResetState = {
+                ...postResetState,
+                refreshPending: true,
+                outcome: postResetState.outcome || 'pending',
+                follow_up_error: followUpErr
+              };
+            }
+          }
+        }
+
         normalisedResult.preview_refresh_outcome = postResetState.outcome || postCreateResetOutcomeText || null;
         if (postResetState.error) {
           markPostCreatePreviewRefreshFailure({
@@ -124001,6 +124762,29 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
             code: 'BANKING_PAY_PREVIEW_REFRESH_FAILED',
             message: postResetState.error
           });
+        } else if (postResetState.readyEmpty || (postResetState.outcome === 'ready_empty' && postResetState.hasFreshPreviewData)) {
+          normalisedResult.preview_refresh_failed = false;
+          normalisedResult.preview_refresh_pending = false;
+          normalisedResult.preview_refresh_outcome = 'ready_empty';
+          normalisedResult.preview_refresh_warning = null;
+          try {
+            const state = readPostCreatePreviewRefreshState();
+            const wizard = state.wizard;
+            if (wizard) {
+              wizard.decisions = (wizard.decisions && typeof wizard.decisions === 'object') ? wizard.decisions : {};
+              wizard.workbench = (wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
+              wizard.decisions.selected_preview_row_ids = [];
+              wizard.decisions.server_selected_preview_row_ids = [];
+              wizard.decisions.server_selected_preview_row_ids_provided = true;
+              wizard.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+              wizard.workbench.selected_preview_row_ids = [];
+              wizard.workbench.server_selected_preview_row_ids = [];
+              wizard.workbench.server_selected_preview_row_ids_provided = true;
+              wizard.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
+              wizard.selected_preview_row_mode = 'EXPLICIT_NONE';
+              wizard.local_selected_preview_row_ids_dirty = false;
+            }
+          } catch {}
         } else if (postResetState.outcome === 'rebase_required' || postCreateResetOutcomeText === 'rebase_required') {
           normalisedResult.preview_refresh_failed = false;
           normalisedResult.preview_refresh_pending = true;
@@ -124084,6 +124868,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
 
   return normalisedResult;
 }
+
 
 
 
