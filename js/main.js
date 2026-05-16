@@ -111501,18 +111501,49 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
   const validateOwnerContext = () => {
     if (!ownerState) return true;
     const liveOwner = resolveLiveOwnerState();
-    if (liveOwner && liveOwner !== ownerState) return false;
+    if (liveOwner && liveOwner !== ownerState) {
+      // Bulk Authorise Queue is a global modal-scope list, not row-scoped.
+      // The owner state object can be replaced during row-click reconciliation, so do not
+      // discard a valid Bulk Authorise global queue response merely because the object
+      // reference changed. Still protect against genuinely stale modal/owner results.
+      const isBulkAuthoriseGlobalQueue = !!(
+        isGlobalQueueScope &&
+        (ownerKind === 'bulk_authorise' || ownerState === bulkAuthoriseState)
+      );
+      if (!isBulkAuthoriseGlobalQueue) return false;
+      const liveOwnerToken = trimQueueStr(
+        liveOwner.__bulk_process_modal_open_token ||
+        liveOwner.__bulkProcessModalOpenToken ||
+        liveOwner.__bulk_authorise_modal_open_token ||
+        liveOwner.__bulkAuthoriseModalOpenToken ||
+        window.modalCtx?.__bulk_process_modal_open_token ||
+        window.modalCtx?.__bulkProcessModalOpenToken ||
+        window.modalCtx?.__bulk_authorise_modal_open_token ||
+        window.modalCtx?.__bulkAuthoriseModalOpenToken ||
+        ''
+      );
+      if (modalOpenToken && liveOwnerToken && liveOwnerToken !== modalOpenToken) return false;
+      const liveOwnerIdentity = trimQueueStr(
+        liveOwner.__bulk_process_owner_identity ||
+        liveOwner.__bulkProcessOwnerIdentity ||
+        liveOwner.__bulk_authorise_owner_identity ||
+        liveOwner.__bulkAuthoriseOwnerIdentity ||
+        ''
+      );
+      if (ownerIdentity && liveOwnerIdentity && liveOwnerIdentity !== ownerIdentity) return false;
+    }
     const currentKind = trimQueueStr(window.modalCtx?.modal_kind || window.modalCtx?.kind || '').toLowerCase();
     const currentEntity = trimQueueStr(window.modalCtx?.entity || '').toLowerCase();
     if ((ownerKind === 'bulk_process' || ownerState === bulkProcessState) && currentKind && currentKind !== 'bulk-process-workbench') return false;
     if ((ownerKind === 'bulk_process' || ownerState === bulkProcessState) && currentEntity && currentEntity !== 'bulk-process') return false;
     if ((ownerKind === 'bulk_authorise' || ownerState === bulkAuthoriseState) && currentKind === 'bulk-process-workbench') return false;
     if (modalOpenToken) {
+      const tokenOwner = resolveLiveOwnerState() || ownerState;
       const liveToken = trimQueueStr(
-        ownerState.__bulk_process_modal_open_token ||
-        ownerState.__bulkProcessModalOpenToken ||
-        ownerState.__bulk_authorise_modal_open_token ||
-        ownerState.__bulkAuthoriseModalOpenToken ||
+        tokenOwner?.__bulk_process_modal_open_token ||
+        tokenOwner?.__bulkProcessModalOpenToken ||
+        tokenOwner?.__bulk_authorise_modal_open_token ||
+        tokenOwner?.__bulkAuthoriseModalOpenToken ||
         window.modalCtx?.__bulk_process_modal_open_token ||
         window.modalCtx?.__bulkProcessModalOpenToken ||
         window.modalCtx?.__bulk_authorise_modal_open_token ||
@@ -111727,6 +111758,32 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
       });
   };
 
+  const mirrorGlobalQueueStateToLiveOwnerPane = () => {
+    if (!isOwnerQueueRefresh || !isGlobalQueueScope || !(ownerKind === 'bulk_authorise' || ownerState === bulkAuthoriseState)) return;
+    const liveOwner = resolveLiveOwnerState();
+    const livePane = (liveOwner?.evidence_pane_state && typeof liveOwner.evidence_pane_state === 'object')
+      ? liveOwner.evidence_pane_state
+      : null;
+    if (!livePane || livePane === st) return;
+
+    const queueRows = Array.isArray(st.queue_rows) ? st.queue_rows.map((item) => ({ ...(item || {}) })) : [];
+    livePane.queue_rows = queueRows;
+    livePane.all_rows = queueRows;
+    livePane.active_queue_id = st.active_queue_id || null;
+    livePane.active_queue_item = st.active_queue_item ? JSON.parse(JSON.stringify(st.active_queue_item)) : null;
+    livePane.active_pdf_page = st.active_pdf_page;
+    livePane.active_zoom = st.active_zoom;
+    livePane.active_rotation_deg = st.active_rotation_deg;
+    livePane.__queue_loaded = st.__queue_loaded === true;
+    livePane.__queue_loaded_scope = st.__queue_loaded_scope || queueScope;
+    livePane.__queue_scope = st.__queue_scope || queueScope;
+    livePane.__queue_loaded_identity = '';
+    livePane.__queue_loading = false;
+    livePane.__queue_loading_scope = '';
+    livePane.__queue_last_error = st.__queue_last_error || '';
+    livePane.__queue_refresh_last_result = st.__queue_refresh_last_result || '';
+  };
+
   const chooseNextRelativeItem = (rows) => {
     if (!progressionContext || !Array.isArray(progressionContext.queue_id_order) || !progressionContext.queue_id_order.length) {
       return null;
@@ -111838,6 +111895,7 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
         st.__queue_loading = false;
         st.__queue_last_error = '';
       }
+      mirrorGlobalQueueStateToLiveOwnerPane();
       L('UNCHANGED RESULT', {
         queue_count: normalizedRows.length,
         active_queue_id: previousActiveId || null,
@@ -111883,6 +111941,7 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
       st.__queue_stale_preserved_identity = '';
       st.__queue_stale_preserved_active_queue_id = '';
     }
+    mirrorGlobalQueueStateToLiveOwnerPane();
     L('RESULT', {
       queue_count: normalizedRows.length,
       active_queue_id: st.active_queue_id || null,
@@ -111922,6 +111981,8 @@ async function refreshTimesheetImportsQueue(state, opts = {}) {
     }
   }
 }
+
+
 
 async function wireTimesheetImportsViewer(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][IMPORTS][VIEWER]');
@@ -119475,7 +119536,6 @@ function syncBulkAuthoriseModalCtxToActiveRow(state, options = {}) {
   return true;
 }
 
-
 function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
   const st = (state && typeof state === 'object')
     ? state
@@ -119589,6 +119649,47 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
     if (!selectionKey || selectionKey === 'attached||') return null;
     return { item: deep(item), selectionKey };
   };
+  const nextRowExplicitlyHasNoAttachedEvidenceForReset = () => {
+    const row = (opts.nextRow && typeof opts.nextRow === 'object')
+      ? opts.nextRow
+      : ((opts.next_row && typeof opts.next_row === 'object') ? opts.next_row : ((st.active_row && typeof st.active_row === 'object') ? st.active_row : {}));
+    if (!row || typeof row !== 'object') return false;
+    const hasOwn = (key) => Object.prototype.hasOwnProperty.call(row, key);
+    const hasAttachedKey = !!pickFirst(
+      row.manual_pdf_r2_key,
+      row.uploaded_pdf_r2_key,
+      row.primary_artifact_storage_key,
+      row.manualPdfR2Key,
+      row.uploadedPdfR2Key,
+      row.primaryArtifactStorageKey,
+      row.primary_artifact?.storage_key,
+      row.primaryArtifact?.storageKey
+    );
+    if (hasAttachedKey) return false;
+    const countKeys = ['evidence_count', 'attached_evidence_count', 'timesheet_evidence_count', 'evidenceCount', 'attachedEvidenceCount'];
+    const hasExplicitCount = countKeys.some((key) => hasOwn(key));
+    const maxCount = countKeys.reduce((max, key) => {
+      const value = Number(row[key]);
+      return Number.isFinite(value) ? Math.max(max, value) : max;
+    }, 0);
+    const hasAnyEvidenceKeys = ['has_any_evidence', 'hasAnyEvidence', 'has_attached_evidence', 'hasAttachedEvidence'];
+    const hasExplicitHasAnyEvidence = hasAnyEvidenceKeys.some((key) => hasOwn(key));
+    const boolishRowValue = (value) => {
+      if (value === true) return true;
+      if (value === false || value == null) return false;
+      const clean = trimStr(value).toLowerCase();
+      return clean === 'true' || clean === '1' || clean === 'yes' || clean === 'y' || clean === 'on';
+    };
+    const anyEvidenceFlag = hasAnyEvidenceKeys.some((key) => boolishRowValue(row[key]));
+    const badgeRows = Array.isArray(row.evidence_badges) ? row.evidence_badges : [];
+    const badgeSaysEvidence = badgeRows.some((badge) => {
+      if (!badge || typeof badge !== 'object') return false;
+      if (badge.present === true || badge.has_evidence === true || badge.hasEvidence === true) return true;
+      const count = Number(badge.count ?? badge.evidence_count ?? badge.evidenceCount ?? 0);
+      return Number.isFinite(count) && count > 0;
+    });
+    return !!((hasExplicitCount || hasExplicitHasAnyEvidence) && maxCount <= 0 && !anyEvidenceFlag && !badgeSaysEvidence);
+  };
   const previousIdentity = trimStr(opts.previousIdentity || opts.previous_record_identity || '');
   const nextIdentity = trimStr(opts.nextIdentity || opts.next_record_identity || '');
   const previousRowKey = trimStr(opts.previousRowKey || opts.previous_row_key || '');
@@ -119654,14 +119755,14 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
   const previousQueueItemForReset = previousQueueIdForReset
     ? (previousQueueRowsForReset.find((item) => trimStr(item?.id || item?.queue_id || '') === previousQueueIdForReset) || null)
     : null;
-  const userExplicitQueueForReset = !!(
-    trimStr(pane.active_tab || '').toLowerCase() === 'queue' &&
-    (pane.__queue_manual_override === true || opts.preserveQueueActive === true || opts.preserveQueue === true)
-  );
-  const keepQueueSelectionForReset = !!(userExplicitQueueForReset && previousQueueItemForReset);
+  // Bulk Authorise row clicks must always reset the middle pane to ATTACHED.
+  // A previous user-selected Queue tab is deliberately row-local and must not persist
+  // when another Bulk Authorise row is selected. Preserve the loaded global queue rows,
+  // but clear the active Queue display/override for this row.
+  const keepQueueSelectionForReset = false;
 
-  pane.active_tab = keepQueueSelectionForReset ? 'queue' : 'attached';
-  pane.__attached_manual_override = !keepQueueSelectionForReset;
+  pane.active_tab = 'attached';
+  pane.__attached_manual_override = true;
   pane.__queue_scope = queueScopeForReset;
   pane.__queue_loaded_identity = '';
   pane.__queue_manual_override = keepQueueSelectionForReset;
@@ -119710,11 +119811,11 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
   const seededAttachedPreview = resolveSeedAttachedPreviewForReset();
   if (seededAttachedPreview && seededAttachedPreview.selectionKey) {
     const seededItem = seededAttachedPreview.item;
-    pane.active_tab = keepQueueSelectionForReset ? 'queue' : 'attached';
-    pane.__attached_manual_override = !keepQueueSelectionForReset;
-    pane.__queue_manual_override = keepQueueSelectionForReset;
+    pane.active_tab = 'attached';
+    pane.__attached_manual_override = true;
+    pane.__queue_manual_override = false;
     pane.__queue_manual_override_identity = '';
-    pane.__queue_manual_override_scope = keepQueueSelectionForReset ? queueScopeForReset : '';
+    pane.__queue_manual_override_scope = '';
     pane.active_attached_item = seededItem ? deep(seededItem) : null;
     pane.active_attached_id = pickFirst(seededItem?.id, seededItem?.evidence_id, seededItem?.queue_id) || null;
     pane.__preview_load_requested_target_key = seededAttachedPreview.selectionKey;
@@ -119735,26 +119836,34 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
     st.pendingAttachedIdentity = '';
     st.__pending_attached_identity = '';
   } else {
+    const nextRowExplicitNoAttached = nextRowExplicitlyHasNoAttachedEvidenceForReset();
     const pendingAttachedIdentity = pane.__preview_identity || '';
     const pendingAttachedRequestKey = pendingAttachedIdentity ? `pending-attached:${pendingAttachedIdentity}` : 'pending-attached';
-    pane.__preview_pending_attached = true;
-    pane.__preview_pending_attached_identity = pendingAttachedIdentity;
-    pane.__preview_attached_request_key = pendingAttachedRequestKey;
-    pane.__preview_request_owner_identity = pendingAttachedIdentity;
-    pane.pendingAttached = true;
-    pane.__pending_attached = true;
-    pane.__pendingAttached = true;
-    pane.pendingAttachedIdentity = pendingAttachedIdentity;
-    pane.__pending_attached_identity = pendingAttachedIdentity;
-    pane.pendingAttachedRequestKey = pendingAttachedRequestKey;
-    pane.__pending_attached_request_key = pendingAttachedRequestKey;
-    st.pendingAttached = true;
-    st.__pending_attached = true;
-    st.__bulk_authorise_pending_attached = true;
-    st.pendingAttachedIdentity = pendingAttachedIdentity;
-    st.__pending_attached_identity = pendingAttachedIdentity;
+    pane.__preview_pending_attached = !nextRowExplicitNoAttached;
+    pane.__preview_pending_attached_identity = nextRowExplicitNoAttached ? '' : pendingAttachedIdentity;
+    pane.__preview_attached_request_key = nextRowExplicitNoAttached ? '' : pendingAttachedRequestKey;
+    pane.__preview_request_owner_identity = nextRowExplicitNoAttached ? '' : pendingAttachedIdentity;
+    pane.pendingAttached = !nextRowExplicitNoAttached;
+    pane.__pending_attached = !nextRowExplicitNoAttached;
+    pane.__pendingAttached = !nextRowExplicitNoAttached;
+    pane.pendingAttachedIdentity = nextRowExplicitNoAttached ? '' : pendingAttachedIdentity;
+    pane.__pending_attached_identity = nextRowExplicitNoAttached ? '' : pendingAttachedIdentity;
+    pane.pendingAttachedRequestKey = nextRowExplicitNoAttached ? '' : pendingAttachedRequestKey;
+    pane.__pending_attached_request_key = nextRowExplicitNoAttached ? '' : pendingAttachedRequestKey;
+    if (nextRowExplicitNoAttached) {
+      pane.__requires_evidence_hydration = false;
+      pane.__attached_loaded = true;
+      pane.__evidence_loaded = true;
+      pane.attached_rows = [];
+      pane.attached_all_rows = [];
+    }
+    st.pendingAttached = !nextRowExplicitNoAttached;
+    st.__pending_attached = !nextRowExplicitNoAttached;
+    st.__bulk_authorise_pending_attached = !nextRowExplicitNoAttached;
+    st.pendingAttachedIdentity = nextRowExplicitNoAttached ? '' : pendingAttachedIdentity;
+    st.__pending_attached_identity = nextRowExplicitNoAttached ? '' : pendingAttachedIdentity;
 
-    if (typeof refreshBulkAuthoriseActiveContext === 'function' && opts.skipEvidenceRefresh !== true && opts.skip_evidence_refresh !== true) {
+    if (!nextRowExplicitNoAttached && typeof refreshBulkAuthoriseActiveContext === 'function' && opts.skipEvidenceRefresh !== true && opts.skip_evidence_refresh !== true) {
       const requestRow = st.active_row && typeof st.active_row === 'object' ? deep(st.active_row) : null;
       const requestSeq = Number(st.__bulk_authorise_row_change_seq || 0) || 0;
       const requestRowKey = fallbackRowKey || trimStr(st.active_row_key || '');
@@ -119823,7 +119932,6 @@ function resetBulkAuthorisePreviewToAttachedForRowChange(state, options = {}) {
   }
   return true;
 }
-
 
 
 async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, options = {}) {
@@ -119901,15 +120009,10 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
     const queueScope = 'global:QUEUED';
     const existingQueueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows.map((item) => deep(item)) : [];
-    const currentQueueId = trimStr(pane.active_queue_id || pane.active_queue_item?.id || pane.active_queue_item?.queue_id || '');
-    const preservedQueueItem = currentQueueId
-      ? (existingQueueRows.find((item) => trimStr(item?.id || item?.queue_id || '') === currentQueueId) || null)
-      : null;
-    const queueWasUserSelected = !!(
-      trimStr(pane.active_tab || '').toLowerCase() === 'queue' &&
-      (pane.__queue_manual_override === true || details.preserveQueueActive === true || details.preserveQueue === true)
-    );
-    const keepQueueActive = !!(queueWasUserSelected && preservedQueueItem);
+    // Bulk Authorise Queue is user-driven only and must not remain active after a row click.
+    // Keep the global queue rows cached, but clear the row's active Queue selection/override.
+    const keepQueueActive = false;
+    const preservedQueueItem = null;
     const nextQueueRows = existingQueueRows;
 
     st.evidence_pane_state = {
@@ -119930,7 +120033,7 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       __queue_manual_override: keepQueueActive,
       __queue_manual_override_identity: '',
       __queue_manual_override_scope: keepQueueActive ? queueScope : '',
-      __attached_manual_override: false,
+      __attached_manual_override: true,
       __bulk_authorise_evidence_identity: nextIdentity || nextRowKeyForPane || '',
       pendingAttached: false,
       __pending_attached: false,
@@ -120810,6 +120913,7 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       nextRowKey,
       previousIdentity: currentIdentity,
       nextIdentity: activeRecordIdentity || nextIdentity,
+      nextRow,
       source: 'set-active-row-assigned'
     });
     clearBulkAuthoriseActivePaneBindings({
@@ -120822,6 +120926,7 @@ async function setActiveBulkAuthoriseRowFromVisibleRows(state, preferredRowKey, 
       nextRowKey,
       previousIdentity: currentIdentity,
       nextIdentity: nextIdentity,
+      nextRow,
       source: 'set-active-row-assigned',
       preserveSignedUrlCache: opts.preserveSignedUrlCache === true,
       skipEvidenceRefresh: true
@@ -136967,14 +137072,30 @@ function bindBulkProcessPreviewPane(state) {
     const commitSnapshot = (opts.snapshot && typeof opts.snapshot === 'object')
       ? opts.snapshot
       : capturePreviewCommitSnapshot(previewState, { reason: opts.reason || 'atomic-preview-commit' });
-    if (!isPreviewCommitSnapshotCurrent(commitSnapshot, {
+    const livePreviewState = getPreviewState();
+    const liveSelectionKey = normalisePreviewSelectionKey(getSelectionSignature(livePreviewState.activeTab, livePreviewState.previewItem));
+    const liveFileKey = resolvePreviewFileCacheKey(livePreviewState.previewItem, liveSelectionKey);
+    const snapshotCurrentForCommit = isPreviewCommitSnapshotCurrent(commitSnapshot, {
       requireSelectionUnchanged: true,
       requireFileKeyUnchanged: true,
       allowSupersededBindForSameSelection: opts.allowSupersededBindForSameSelection === true || opts.allowSameOwnerRowSelection === true
-    })) return reject('snapshot-not-current', { snapshotReason: trimStr(commitSnapshot?.reason || '') });
+    });
+    const allowBulkAuthoriseAttachedLiveCommit = !!(
+      !snapshotCurrentForCommit &&
+      selectionKey.startsWith('attached|') &&
+      (bulkAuthoriseSurfaceAtBind || isCurrentBulkAuthorisePreviewSurface() || isBulkAuthoriseTimesheetsPreview()) &&
+      trimStr(livePreviewState.activeTab || pane.active_tab || '').toLowerCase() === 'attached' &&
+      liveSelectionKey === selectionKey &&
+      (!liveFileKey || !commitSnapshot?.fileKey || liveFileKey === trimStr(commitSnapshot.fileKey || '').replace(/^\/+/, '')) &&
+      (
+        !normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '') ||
+        normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '') === selectionKey
+      )
+    );
+    if (!snapshotCurrentForCommit && !allowBulkAuthoriseAttachedLiveCommit) {
+      return reject('snapshot-not-current', { snapshotReason: trimStr(commitSnapshot?.reason || '') });
+    }
 
-    const livePreviewState = getPreviewState();
-    const liveSelectionKey = normalisePreviewSelectionKey(getSelectionSignature(livePreviewState.activeTab, livePreviewState.previewItem));
     const liveRequestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
     const liveTargetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
     const liveTargetMatches = !liveTargetKey || liveTargetKey === selectionKey;
@@ -136993,6 +137114,7 @@ function bindBulkProcessPreviewPane(state) {
     const committedMeta = getSignedUrlMetaForPreview(fileKey, commitSnapshot, signedUrl) || buildSignedUrlMetaForPreview(signedUrl, commitSnapshot);
     pane.__preview_target_key = selectionKey;
     pane.__preview_load_requested_target_key = selectionKey;
+    if (selectionKey.startsWith('attached|')) pane.__active_attached_preview_target = selectionKey;
     pane.__preview_signed_url = signedUrl;
     pane.__preview_signed_url_stored_at_ms = Number(committedMeta?.storedAtMs || Date.now()) || Date.now();
     pane.__preview_signed_url_expires_at_ms = Number(committedMeta?.expiresAtMs || 0) || 0;
@@ -148865,6 +148987,10 @@ function captureBulkProcessUiSnapshot(state) {
 }
 
 
+
+
+
+
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const st = (state && typeof state === 'object') ? state : {};
   st.evidence_pane_state =
@@ -149610,7 +149736,10 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   if (isBulkAuthoriseTimesheets) {
     if (queueOverrideForCurrentRow) {
       resolvedSource = 'queue';
-    } else if (hasAnyAttachedEvidence) {
+    } else {
+      // Bulk Authorise differs from Bulk Process: row changes and context reconciliation
+      // default to ATTACHED even when the selected row has no attached timesheet file.
+      // Queue is displayed only after an explicit Queue tab click.
       resolvedSource = 'attached';
       pane.active_tab = 'attached';
       pane.__queue_manual_override = false;
@@ -149619,12 +149748,8 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       pane.__attached_manual_override = true;
       pane.active_queue_id = null;
       pane.active_queue_item = null;
-      pane.__requires_evidence_hydration = false;
-    } else if (!evidenceContextAuthoritative && (metadataExpectsEvidence || requestedSource === 'attached')) {
-      pane.__attached_manual_override = false;
-      pane.__requires_evidence_hydration = true;
-    } else {
-      pane.__requires_evidence_hydration = false;
+      pane.__requires_evidence_hydration = !hasAnyAttachedEvidence && !evidenceContextAuthoritative && (metadataExpectsEvidence || requestedSource === 'attached');
+      if (hasAnyAttachedEvidence) pane.__requires_evidence_hydration = false;
     }
   } else {
     if (hasTimesheetEvidence) {
@@ -149824,9 +149949,6 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     non_authoritative_context_ignored: false
   };
 }
-
-
-
 
 
 
