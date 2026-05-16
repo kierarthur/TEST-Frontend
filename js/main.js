@@ -132930,7 +132930,52 @@ function classifyBulkProcessEditability(ctxInput) {
   };
 
   const sheetScope = upper(details.sheet_scope || row.sheet_scope || ts.sheet_scope || '');
-  const rawSummaryStage = upper(row.summary_stage || row.processing_status || tsfin.processing_status || '');
+  const rawSummaryStage = (() => {
+    const terminalStages = new Set(['UNPROCESSED', 'PROCESSED', 'AUTHORISED', 'AUTHORIZED', 'INVOICED', 'PAID', 'LOCKED']);
+    const statusToStage = new Map([
+      ['RECEIVED', 'UNPROCESSED'],
+      ['SUBMITTED', 'UNPROCESSED'],
+      ['PENDING', 'UNPROCESSED'],
+      ['PENDING_REVIEW', 'UNPROCESSED'],
+      ['DRAFT', 'UNPROCESSED'],
+      ['NEW', 'UNPROCESSED'],
+      ['OPEN', 'UNPROCESSED'],
+      ['READY', 'UNPROCESSED']
+    ]);
+    const readStage = (...values) => {
+      for (const value of values) {
+        const raw = upper(value);
+        if (!raw) continue;
+        if (terminalStages.has(raw)) return raw;
+        if (statusToStage.has(raw)) return statusToStage.get(raw);
+      }
+      for (const value of values) {
+        const raw = upper(value);
+        if (raw) return raw;
+      }
+      return '';
+    };
+    return readStage(
+      ctx.tools_stage,
+      details.tools_stage,
+      row.tools_stage,
+      ctx.bulk_process_bucket,
+      details.bulk_process_bucket,
+      row.bulk_process_bucket,
+      ctx.summary_stage,
+      details.summary_stage,
+      row.summary_stage,
+      ctx.processing_status,
+      details.processing_status,
+      row.processing_status,
+      tsfin.processing_status,
+      ctx.status,
+      details.status,
+      row.status,
+      ts.status,
+      cw.status
+    );
+  })();
   const routeFamily = upper(ctx.route_family || row.route_family || actionFlags.route_family || '');
   const routeSubfamily = upper(ctx.route_subfamily || row.route_subfamily || actionFlags.route_subfamily || '');
   const underlyingChannelFamily = upper(ctx.underlying_channel_family || row.underlying_channel_family || actionFlags.underlying_channel_family || '');
@@ -133323,6 +133368,8 @@ function classifyBulkProcessEditability(ctxInput) {
     canAddAdditionalManual
   };
 }
+
+
 
 
 
@@ -140750,7 +140797,6 @@ async function returnTimesheetEvidenceToQueue(timesheetId, evidenceId, payload) 
   return json;
 }
 
-
 function renderBulkProcessSelectedSummaryStrip(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -140779,8 +140825,75 @@ function renderBulkProcessSelectedSummaryStrip(state) {
   }
 
   const trimStr = (v) => String(v == null ? '' : v).trim();
-  const candidateText = trimStr(row.candidate_name || row.candidate_display_name || row.occupant_key_norm || '—') || '—';
-  const clientText = trimStr(row.client_name || row.client_display_name || '—') || '—';
+  const upper = (v) => trimStr(v).toUpperCase();
+  const activeRowKey = trimStr(st.active_row_key || row.row_key || '');
+  const contextRowKey = (contextLike) => {
+    const ctx = (contextLike && typeof contextLike === 'object') ? contextLike : {};
+    return trimStr(
+      ctx.row_key ||
+      ctx.data_row?.row_key ||
+      ctx.row?.row_key ||
+      ctx.details?.row_key ||
+      ctx.state?.row_key ||
+      ''
+    );
+  };
+  const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : null;
+  const activeCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : null;
+  const activeContextKey = contextRowKey(activeContext);
+  const activeCtxKey = contextRowKey(activeCtx);
+  const activeContextMatches = !!activeContext && (!activeRowKey || !activeContextKey || activeContextKey === activeRowKey);
+  const activeCtxMatches = !!activeCtx && (!activeRowKey || !activeCtxKey || activeCtxKey === activeRowKey);
+  const editorLoadingForActiveRow = !!(
+    activeRowKey &&
+    (
+      trimStr(st.__bulk_process_editor_loading_for_row_key || '') === activeRowKey ||
+      (st.__active_context_pending === true && trimStr(st.__bulk_process_row_context_hydration_identity || '') === activeRowKey)
+    )
+  );
+  const editorLoadedForActiveRow = !!(
+    activeCtxMatches &&
+    (
+      activeCtx?.editor_loaded === true ||
+      activeCtx?.details?.editor_loaded === true ||
+      activeCtx?.state?.editor_loaded === true ||
+      activeCtx?.context_profile === 'editor' ||
+      activeCtx?.profile === 'editor'
+    )
+  ) || !!(
+    activeContextMatches &&
+    (
+      activeContext?.editor_loaded === true ||
+      activeContext?.details?.editor_loaded === true ||
+      activeContext?.state?.editor_loaded === true ||
+      activeContext?.context_profile === 'editor' ||
+      activeContext?.profile === 'editor'
+    )
+  );
+  const contextDetails = activeContextMatches && activeContext?.details && typeof activeContext.details === 'object' ? activeContext.details : {};
+  const ctxDetails = activeCtxMatches && activeCtx?.details && typeof activeCtx.details === 'object' ? activeCtx.details : {};
+  const ctxRow = activeCtxMatches && activeCtx?.row && typeof activeCtx.row === 'object' ? activeCtx.row : {};
+  const ctxState = activeCtxMatches && activeCtx?.state && typeof activeCtx.state === 'object' ? activeCtx.state : {};
+
+  const candidateText = trimStr(
+    contextDetails.candidate_name ||
+    ctxRow.candidate_name ||
+    row.candidate_name ||
+    row.candidate_display_name ||
+    row.occupant_key_norm ||
+    activeContext?.related?.candidate?.display_name ||
+    activeCtx?.related?.candidate?.display_name ||
+    '—'
+  ) || '—';
+  const clientText = trimStr(
+    contextDetails.client_name ||
+    ctxRow.client_name ||
+    row.client_name ||
+    row.client_display_name ||
+    activeContext?.related?.client?.name ||
+    activeCtx?.related?.client?.name ||
+    '—'
+  ) || '—';
   const formatBulkDate = (raw) => {
     const v = trimStr(raw || '');
     const ymd = v.slice(0, 10);
@@ -140788,9 +140901,55 @@ function renderBulkProcessSelectedSummaryStrip(state) {
     const [y, m, d] = ymd.split('-');
     return `${d}-${m}-${y}`;
   };
-  const dateText = formatBulkDate(row.week_ending_date || row.work_date || row.date || row.contract_week_ending_date || '');
-  const stateText = trimStr(row.summary_stage || row.processing_status || row.processing_status_display || '—') || '—';
+  const effectivePeriod = upper(contextDetails.sheet_scope || contextDetails.period_type || ctxDetails.sheet_scope || ctxDetails.period_type || row.sheet_scope || row.period_type || '');
+  const dateSource = effectivePeriod === 'DAILY'
+    ? (contextDetails.work_date || contextDetails.timesheet?.work_date || ctxDetails.work_date || ctxRow.work_date || row.work_date || row.date || row.week_ending_date || row.contract_week_ending_date || '')
+    : (contextDetails.week_ending_date || contextDetails.contract_week?.week_ending_date || ctxDetails.week_ending_date || ctxRow.week_ending_date || row.week_ending_date || row.contract_week_ending_date || row.work_date || row.date || '');
+  const dateText = formatBulkDate(dateSource);
+  const resolveStage = (...values) => {
+    const terminal = new Set(['UNPROCESSED', 'PROCESSED', 'AUTHORISED', 'AUTHORIZED', 'INVOICED', 'PAID']);
+    const unprocessedStatuses = new Set(['RECEIVED', 'SUBMITTED', 'PENDING', 'PENDING_REVIEW', 'DRAFT', 'AWAITING_EVIDENCE', 'AWAITING_REVIEW']);
+    for (const value of values) {
+      const stage = upper(value);
+      if (!stage) continue;
+      if (terminal.has(stage)) return stage === 'AUTHORIZED' ? 'AUTHORISED' : stage;
+      if (unprocessedStatuses.has(stage)) return 'UNPROCESSED';
+    }
+    return '';
+  };
+  const resolvedStage = resolveStage(
+    contextDetails.tools_stage,
+    activeContext?.tools_stage,
+    ctxDetails.tools_stage,
+    ctxRow.tools_stage,
+    ctxState.tools_stage,
+    row.tools_stage,
+    contextDetails.summary_stage,
+    activeContext?.summary_stage,
+    ctxDetails.summary_stage,
+    ctxRow.summary_stage,
+    row.summary_stage,
+    contextDetails.bulk_process_bucket,
+    activeContext?.bulk_process_bucket,
+    ctxRow.bulk_process_bucket,
+    row.bulk_process_bucket,
+    contextDetails.processing_status,
+    activeContext?.processing_status,
+    ctxDetails.processing_status,
+    ctxRow.processing_status,
+    row.processing_status,
+    contextDetails.status,
+    activeContext?.status,
+    ctxDetails.status,
+    ctxRow.status,
+    row.status
+  );
+  const stateText = (editorLoadingForActiveRow && !editorLoadedForActiveRow)
+    ? 'Loading…'
+    : (resolvedStage || trimStr(row.processing_status_display || '—') || '—');
   const jobTitleText = [
+    contextDetails.job_title,
+    ctxRow.job_title,
     row.job_title,
     row.job_title_norm,
     row.actual_job_title,
@@ -140799,7 +140958,7 @@ function renderBulkProcessSelectedSummaryStrip(state) {
     row.role_name
   ].map((v) => trimStr(v)).find(Boolean) || '';
 
-  const bandText = trimStr(row.band || row.candidate_band || '');
+  const bandText = trimStr(contextDetails.band || ctxRow.band || row.band || row.candidate_band || '');
 
   return htmlWrap(`
     <div class="card" style="padding:6px 8px;">
@@ -140819,6 +140978,8 @@ function renderBulkProcessSelectedSummaryStrip(state) {
     </div>
   `);
 }
+
+
 
 
 
@@ -145077,10 +145238,51 @@ function renderBulkProcessManualEditor(state) {
     `);
   }
 
-  const activeContextOptions = (activeCtx.__context_options && typeof activeCtx.__context_options === 'object') ? activeCtx.__context_options : {};
+  const activeRowKey = trimStr(st.active_row_key || activeRow.row_key || activeRow.key || '');
+  const resolveContextRowKey = (value) => {
+    if (!value || typeof value !== 'object') return '';
+    return trimStr(
+      value.row_key ||
+      value.key ||
+      value.data_row?.row_key ||
+      value.dataRow?.row_key ||
+      value.row?.row_key ||
+      value.details?.row_key ||
+      value.details?.data_row?.row_key ||
+      value.state?.row_key ||
+      value.state?.data_row?.row_key ||
+      ''
+    );
+  };
+  const activeCtxRowKey = resolveContextRowKey(activeCtx);
+  const activeCtxMatchesRow = !!(!activeRowKey || !activeCtxRowKey || activeCtxRowKey === activeRowKey);
+  const activeContextRaw = (st.active_context && typeof st.active_context === 'object') ? st.active_context : null;
+  const activeContextRowKey = resolveContextRowKey(activeContextRaw);
+  const activeContextMatchesRow = !!(activeContextRaw && (!activeRowKey || !activeContextRowKey || activeContextRowKey === activeRowKey));
+  const activeDetailsRaw = (st.active_details && typeof st.active_details === 'object') ? st.active_details : null;
+  const activeDetailsRowKey = resolveContextRowKey(activeDetailsRaw);
+  const activeDetailsMatchesRow = !!(activeDetailsRaw && (!activeRowKey || !activeDetailsRowKey || activeDetailsRowKey === activeRowKey));
+
+  if (!activeCtxMatchesRow) {
+    return htmlWrap(`
+      <div class="card" id="bulkProcessManualEditorRoot">
+        <div class="row">
+          <label>Manual editor</label>
+          <div class="controls">
+            <span class="mini">Loading selected row details…</span>
+          </div>
+        </div>
+      </div>
+    `);
+  }
+
+  const activeContextForAuthority = activeContextMatchesRow ? activeContextRaw : {};
+  const activeContextOptions = (activeCtx.__context_options && typeof activeCtx.__context_options === 'object')
+    ? activeCtx.__context_options
+    : ((activeContextForAuthority.__context_options && typeof activeContextForAuthority.__context_options === 'object') ? activeContextForAuthority.__context_options : {});
   const activeDetailsForAuthority = (activeCtx.details && typeof activeCtx.details === 'object')
     ? activeCtx.details
-    : ((st.active_details && typeof st.active_details === 'object') ? st.active_details : {});
+    : (activeDetailsMatchesRow ? activeDetailsRaw : {});
   const activeStateForAuthority = (activeCtx.state && typeof activeCtx.state === 'object') ? activeCtx.state : {};
   const activeContextProfile = trimStr(
     activeContextOptions.context_profile ||
@@ -145092,19 +145294,19 @@ function renderBulkProcessManualEditor(state) {
     activeDetailsForAuthority.profile ||
     activeStateForAuthority.context_profile ||
     activeStateForAuthority.profile ||
-    st.active_context?.context_profile ||
-    st.active_context?.profile ||
-    st.active_context?.details?.context_profile ||
-    st.active_context?.details?.profile ||
+    activeContextForAuthority.context_profile ||
+    activeContextForAuthority.profile ||
+    activeContextForAuthority.details?.context_profile ||
+    activeContextForAuthority.details?.profile ||
     ''
   ).toLowerCase();
   const editorLayerLoaded = !!(
     activeCtx.editor_loaded === true ||
     activeDetailsForAuthority.editor_loaded === true ||
     activeStateForAuthority.editor_loaded === true ||
-    st.active_context?.editor_loaded === true ||
-    st.active_context?.details?.editor_loaded === true ||
-    st.active_context?.state?.editor_loaded === true ||
+    activeContextForAuthority.editor_loaded === true ||
+    activeContextForAuthority.details?.editor_loaded === true ||
+    activeContextForAuthority.state?.editor_loaded === true ||
     activeContextProfile === 'editor'
   );
   const scheduleLayerAuthoritative = !!(
@@ -145112,10 +145314,10 @@ function renderBulkProcessManualEditor(state) {
     activeDetailsForAuthority.schedule_authoritative === true ||
     activeStateForAuthority.schedule_authoritative === true ||
     activeStateForAuthority.__scheduleAuthoritative === true ||
-    st.active_context?.schedule_authoritative === true ||
-    st.active_context?.details?.schedule_authoritative === true ||
-    st.active_context?.state?.schedule_authoritative === true ||
-    st.active_context?.state?.__scheduleAuthoritative === true
+    activeContextForAuthority.schedule_authoritative === true ||
+    activeContextForAuthority.details?.schedule_authoritative === true ||
+    activeContextForAuthority.state?.schedule_authoritative === true ||
+    activeContextForAuthority.state?.__scheduleAuthoritative === true
   );
   const editorContextDegraded = !!(
     activeCtx.context_stale === true ||
@@ -145123,12 +145325,20 @@ function renderBulkProcessManualEditor(state) {
     activeCtx.degraded_context === true ||
     activeDetailsForAuthority.context_degraded === true ||
     activeDetailsForAuthority.degraded_context === true ||
-    st.active_context?.context_degraded === true ||
-    st.active_context?.degraded_context === true ||
-    st.active_context?.soft_failure === true ||
-    st.active_context?.ok === false
+    activeContextForAuthority.context_degraded === true ||
+    activeContextForAuthority.degraded_context === true ||
+    activeContextForAuthority.soft_failure === true ||
+    activeContextForAuthority.ok === false
+  );
+  const editorLoadingForActiveRow = !!(
+    activeRowKey &&
+    (
+      trimStr(st.__bulk_process_editor_loading_for_row_key || '') === activeRowKey ||
+      (st.__active_context_pending === true && !editorLayerLoaded)
+    )
   );
   const hydratedEnoughForVisibleEditor = !!(
+    !editorLoadingForActiveRow &&
     !editorContextDegraded &&
     (
       activeContextProfile === 'editor' ||
@@ -145484,6 +145694,9 @@ function renderBulkProcessManualEditor(state) {
     </div>
   `);
 }
+
+
+
 
 function getBulkProcessRouteKindFromRow(rowLike, detailsLike) {
   const trimStr = (v) => String(v == null ? '' : v).trim();
@@ -163020,6 +163233,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
 
 
 
+
 async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][ROW-CHANGE]');
   GC('handleBulkProcessRowChange');
@@ -163794,11 +164008,108 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         message: trimStr(payload.message || payload.error || 'Bulk Process row context was not authoritative.')
       };
     }
-    const dataRow = (payload.data_row && typeof payload.data_row === 'object')
-      ? { ...row, ...payload.data_row, ...((payload.row_patch && typeof payload.row_patch === 'object') ? payload.row_patch : {}) }
-      : { ...row, ...((payload.row_patch && typeof payload.row_patch === 'object') ? payload.row_patch : {}) };
+    const payloadDataRow = (payload.data_row && typeof payload.data_row === 'object') ? deep(payload.data_row) : {};
+    const payloadRow = (payload.row && typeof payload.row === 'object') ? deep(payload.row) : {};
+    const rowPatch = (payload.row_patch && typeof payload.row_patch === 'object') ? deep(payload.row_patch) : {};
     const detailsInput = (payload.details && typeof payload.details === 'object') ? deep(payload.details) : {};
+    const copyTopLevelRowData = (src) => {
+      const out = {};
+      const rowFields = [
+        'row_key', 'new_row_key', 'stable_row_id', 'timesheet_id', 'current_timesheet_id',
+        'requested_timesheet_id', 'expected_timesheet_id', 'contract_week_id', 'contract_id',
+        'booking_id', 'timesheet_version', 'row_signature', 'updated_at', 'is_current',
+        'candidate_id', 'candidate_name', 'candidate_display_name', 'candidate_first_name',
+        'candidate_surname', 'occupant_key_norm', 'client_id', 'client_name',
+        'client_display_name', 'hospital_name', 'site_name', 'ward_name', 'booking_ref',
+        'external_ref', 'week_ending_date', 'contract_week_ending_date', 'work_date',
+        'date', 'shift_date', 'period_type', 'timesheet_type_sort_key', 'sheet_scope',
+        'timesheet_scope', 'submission_mode', 'submission_mode_snapshot', 'status',
+        'tools_stage', 'summary_stage', 'processing_status', 'processing_status_display',
+        'bulk_process_bucket', 'route_type', 'route_display', 'route_family',
+        'route_subfamily', 'underlying_channel_family', 'total_hours', 'total_pay_ex_vat',
+        'total_charge_ex_vat', 'margin_ex_vat', 'net_delta_ex_vat', 'locked_by_invoice_id',
+        'paid_at_utc', 'invoice_segments_locked', 'invoice_segment_stage', 'invoice_is_paid',
+        'ready_to_pay', 'authorised_at_server', 'authorised_at_utc', 'is_authorised',
+        'review_only', 'can_save', 'can_process', 'can_unprocess', 'can_edit_timesheet_data',
+        'can_manage_evidence', 'can_add_additional_manual', 'is_qr', 'qr_status',
+        'is_import_authoritative', 'compare_block_required', 'has_timesheet',
+        'is_contract_week_only', 'has_any_evidence', 'evidence_badges',
+        'primary_artifact_id', 'primary_artifact_kind', 'primary_artifact_display_name',
+        'primary_artifact_storage_key', 'primary_artifact_preview_mode', 'manual_pdf_r2_key',
+        'uploaded_pdf_r2_key', 'generated_pdf_at_utc', 'manual_pdf_rotation_degrees'
+      ];
+      if (!src || typeof src !== 'object') return out;
+      for (const field of rowFields) {
+        if (Object.prototype.hasOwnProperty.call(src, field)) out[field] = deep(src[field]);
+      }
+      return out;
+    };
+    const topLevelRowData = copyTopLevelRowData(payload);
+    const dataRow = { ...row, ...payloadRow, ...payloadDataRow, ...topLevelRowData, ...rowPatch };
+    const resolveBulkProcessContextStage = (...sources) => {
+      const terminal = new Set(['UNPROCESSED', 'PROCESSED', 'AUTHORISED', 'AUTHORIZED', 'INVOICED', 'PAID']);
+      const unprocessedStatuses = new Set(['RECEIVED', 'SUBMITTED', 'PENDING', 'PENDING_REVIEW', 'DRAFT', 'AWAITING_EVIDENCE', 'AWAITING_REVIEW']);
+      const readStage = (value) => {
+        const stage = upper(value);
+        if (!stage) return '';
+        if (terminal.has(stage)) return stage === 'AUTHORIZED' ? 'AUTHORISED' : stage;
+        if (unprocessedStatuses.has(stage)) return 'UNPROCESSED';
+        return '';
+      };
+      for (const source of sources) {
+        if (!source || typeof source !== 'object') continue;
+        const directStage = readStage(source.tools_stage || source.summary_stage || source.bulk_process_bucket || source.processing_status_display || source.processing_status);
+        if (directStage) return directStage;
+        const statusStage = readStage(source.status || source.timesheet_status || source.row_status);
+        if (statusStage) return statusStage;
+      }
+      return '';
+    };
+    const canonicalToolsStage = resolveBulkProcessContextStage(topLevelRowData, payloadDataRow, payloadRow, rowPatch, detailsInput, dataRow);
+    if (canonicalToolsStage) {
+      dataRow.tools_stage = canonicalToolsStage;
+      dataRow.summary_stage = canonicalToolsStage;
+      dataRow.bulk_process_bucket = canonicalToolsStage === 'PROCESSED' ? 'PROCESSED' : (canonicalToolsStage === 'UNPROCESSED' ? 'UNPROCESSED' : (dataRow.bulk_process_bucket || canonicalToolsStage));
+      if (canonicalToolsStage === 'PROCESSED' || canonicalToolsStage === 'UNPROCESSED') {
+        dataRow.processing_status = canonicalToolsStage;
+        dataRow.processing_status_display = canonicalToolsStage === 'PROCESSED' ? 'Processed' : 'Unprocessed';
+      }
+    }
+    const explicitTsfinSource = (detailsInput.tsfin && typeof detailsInput.tsfin === 'object') ? detailsInput.tsfin : null;
+    const payloadFinanceSources = [explicitTsfinSource, detailsInput, topLevelRowData, payloadDataRow, payloadRow, rowPatch]
+      .filter((entry) => entry && typeof entry === 'object');
+    const hasPayloadFinanceField = (field) => payloadFinanceSources.some((entry) => Object.prototype.hasOwnProperty.call(entry, field));
+    const readPayloadFinanceField = (field) => {
+      for (const entry of payloadFinanceSources) {
+        if (Object.prototype.hasOwnProperty.call(entry, field)) return entry[field];
+      }
+      return null;
+    };
     const payloadProfile = trimStr(payload.context_profile || payload.profile || payload.__context_options?.context_profile || payload.__context_options?.profile || '').toLowerCase();
+    const hasOwn = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+    const detailsTimesheetInput = (detailsInput.timesheet && typeof detailsInput.timesheet === 'object') ? detailsInput.timesheet : {};
+    const hasAuthoritativeSchedulePayload = !!(
+      payload.schedule_authoritative === true ||
+      detailsInput.schedule_authoritative === true ||
+      hasOwn(detailsInput, 'actual_schedule_json') ||
+      hasOwn(detailsTimesheetInput, 'actual_schedule_json') ||
+      hasOwn(payload, 'actual_schedule_json') ||
+      hasOwn(payloadDataRow, 'actual_schedule_json') ||
+      hasOwn(payloadRow, 'actual_schedule_json') ||
+      hasOwn(rowPatch, 'actual_schedule_json') ||
+      hasOwn(detailsInput, 'segments') ||
+      hasOwn(detailsInput, 'shifts') ||
+      hasOwn(detailsInput, 'worked_start_iso') ||
+      hasOwn(detailsInput, 'worked_end_iso') ||
+      hasOwn(detailsInput, 'break_start_iso') ||
+      hasOwn(detailsInput, 'break_end_iso') ||
+      hasOwn(detailsInput, 'break_minutes') ||
+      hasOwn(detailsTimesheetInput, 'worked_start_iso') ||
+      hasOwn(detailsTimesheetInput, 'worked_end_iso') ||
+      hasOwn(detailsTimesheetInput, 'break_start_iso') ||
+      hasOwn(detailsTimesheetInput, 'break_end_iso') ||
+      hasOwn(detailsTimesheetInput, 'break_minutes')
+    );
     const evidenceAuthoritative = !!(
       payload.evidence_loaded === true ||
       payloadProfile === 'evidence' ||
@@ -163822,11 +164133,16 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       ...(detailsInput && typeof detailsInput === 'object' ? detailsInput : {}),
       current_timesheet_id: timesheetId,
       contract_week_id: contractWeekId,
-      sheet_scope: detailsInput.sheet_scope ?? dataRow.sheet_scope ?? null,
-      qr_status: detailsInput.qr_status ?? dataRow.qr_status ?? null,
-      summary_stage: detailsInput.summary_stage ?? dataRow.summary_stage ?? dataRow.processing_status ?? null,
-      route_type: detailsInput.route_type ?? dataRow.route_type ?? null,
-      route_display: detailsInput.route_display ?? dataRow.route_display ?? null,
+      sheet_scope: detailsInput.sheet_scope ?? payload.sheet_scope ?? payload.period_type ?? dataRow.sheet_scope ?? dataRow.period_type ?? null,
+      period_type: detailsInput.period_type ?? payload.period_type ?? dataRow.period_type ?? dataRow.sheet_scope ?? null,
+      status: detailsInput.status ?? payload.status ?? dataRow.status ?? null,
+      tools_stage: canonicalToolsStage || detailsInput.tools_stage || payload.tools_stage || dataRow.tools_stage || dataRow.bulk_process_bucket || null,
+      processing_status: canonicalToolsStage || detailsInput.processing_status || dataRow.processing_status || null,
+      qr_status: detailsInput.qr_status ?? payload.qr_status ?? dataRow.qr_status ?? null,
+      summary_stage: canonicalToolsStage || detailsInput.summary_stage || dataRow.summary_stage || dataRow.processing_status || null,
+      bulk_process_bucket: dataRow.bulk_process_bucket || canonicalToolsStage || null,
+      route_type: detailsInput.route_type ?? payload.route_type ?? dataRow.route_type ?? null,
+      route_display: detailsInput.route_display ?? payload.route_display ?? dataRow.route_display ?? null,
       ready_to_pay: Object.prototype.hasOwnProperty.call(detailsInput, 'ready_to_pay') ? detailsInput.ready_to_pay : ((typeof dataRow.ready_to_pay === 'boolean') ? dataRow.ready_to_pay : null),
       manual_pdf_r2_key: detailsInput.manual_pdf_r2_key ?? detailsInput.contract_week?.uploaded_pdf_r2_key ?? dataRow.manual_pdf_r2_key ?? dataRow.primary_artifact_storage_key ?? null,
       contract_week: contractWeekId
@@ -163842,9 +164158,11 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         ? {
             ...((detailsInput.timesheet && typeof detailsInput.timesheet === 'object') ? detailsInput.timesheet : {}),
             timesheet_id: timesheetId,
-            submission_mode: detailsInput.timesheet?.submission_mode || dataRow.submission_mode || null,
-            sheet_scope: detailsInput.timesheet?.sheet_scope || detailsInput.sheet_scope || dataRow.sheet_scope || null,
-            week_ending_date: detailsInput.timesheet?.week_ending_date || dataRow.week_ending_date || dataRow.contract_week_ending_date || null,
+            submission_mode: detailsInput.timesheet?.submission_mode || detailsInput.submission_mode || payload.submission_mode || dataRow.submission_mode || null,
+            sheet_scope: detailsInput.timesheet?.sheet_scope || detailsInput.sheet_scope || payload.sheet_scope || payload.period_type || dataRow.sheet_scope || dataRow.period_type || null,
+            work_date: detailsInput.timesheet?.work_date || detailsInput.work_date || payload.work_date || dataRow.work_date || dataRow.date || null,
+            week_ending_date: detailsInput.timesheet?.week_ending_date || payload.week_ending_date || dataRow.week_ending_date || dataRow.contract_week_ending_date || null,
+            status: detailsInput.timesheet?.status || detailsInput.status || payload.status || dataRow.status || null,
             reference_number: detailsInput.timesheet?.reference_number ?? detailsInput.reference_number ?? dataRow.reference_number ?? null,
             worked_start_iso: detailsInput.timesheet?.worked_start_iso ?? detailsInput.worked_start_iso ?? dataRow.worked_start_iso ?? null,
             worked_end_iso: detailsInput.timesheet?.worked_end_iso ?? detailsInput.worked_end_iso ?? dataRow.worked_end_iso ?? null,
@@ -163859,14 +164177,14 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         : null,
       tsfin: timesheetId
         ? {
-            ...((detailsInput.tsfin && typeof detailsInput.tsfin === 'object') ? detailsInput.tsfin : {}),
-            processing_status: detailsInput.tsfin?.processing_status ?? detailsInput.processing_status ?? dataRow.processing_status ?? null,
-            total_hours: detailsInput.tsfin?.total_hours ?? detailsInput.total_hours ?? dataRow.total_hours ?? null,
-            total_pay_ex_vat: detailsInput.tsfin?.total_pay_ex_vat ?? dataRow.total_pay_ex_vat ?? null,
-            total_charge_ex_vat: detailsInput.tsfin?.total_charge_ex_vat ?? dataRow.total_charge_ex_vat ?? null,
-            margin_ex_vat: detailsInput.tsfin?.margin_ex_vat ?? dataRow.margin_ex_vat ?? null,
-            locked_by_invoice_id: detailsInput.tsfin?.locked_by_invoice_id ?? dataRow.locked_by_invoice_id ?? null,
-            paid_at_utc: detailsInput.tsfin?.paid_at_utc ?? dataRow.paid_at_utc ?? null
+            ...((explicitTsfinSource && typeof explicitTsfinSource === 'object') ? explicitTsfinSource : {}),
+            processing_status: explicitTsfinSource?.processing_status ?? canonicalToolsStage ?? detailsInput.processing_status ?? (hasPayloadFinanceField('processing_status') ? readPayloadFinanceField('processing_status') : null),
+            total_hours: explicitTsfinSource?.total_hours ?? detailsInput.total_hours ?? (hasPayloadFinanceField('total_hours') ? readPayloadFinanceField('total_hours') : null),
+            total_pay_ex_vat: explicitTsfinSource?.total_pay_ex_vat ?? (hasPayloadFinanceField('total_pay_ex_vat') ? readPayloadFinanceField('total_pay_ex_vat') : null),
+            total_charge_ex_vat: explicitTsfinSource?.total_charge_ex_vat ?? (hasPayloadFinanceField('total_charge_ex_vat') ? readPayloadFinanceField('total_charge_ex_vat') : null),
+            margin_ex_vat: explicitTsfinSource?.margin_ex_vat ?? (hasPayloadFinanceField('margin_ex_vat') ? readPayloadFinanceField('margin_ex_vat') : null),
+            locked_by_invoice_id: explicitTsfinSource?.locked_by_invoice_id ?? (hasPayloadFinanceField('locked_by_invoice_id') ? readPayloadFinanceField('locked_by_invoice_id') : null),
+            paid_at_utc: explicitTsfinSource?.paid_at_utc ?? (hasPayloadFinanceField('paid_at_utc') ? readPayloadFinanceField('paid_at_utc') : null)
           }
         : null,
       evidence,
@@ -163879,7 +164197,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       compare_loaded: payload.compare_loaded === true || payloadProfile === 'compare_import',
       full_loaded: payload.full_loaded === true || payloadProfile === 'full',
       schedule_pending: payload.schedule_pending === true || !(payload.editor_loaded === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible'),
-      schedule_authoritative: payload.schedule_authoritative === true || payloadProfile === 'editor' || payloadProfile === 'active_row_visible',
+      schedule_authoritative: hasAuthoritativeSchedulePayload,
       related: deep(related),
       is_hydrated: payload.is_hydrated !== false,
       hydration_required: false,
@@ -164355,6 +164673,43 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const minimalContext = buildMinimalContextFromRow(nextRow);
     st.active_details = minimalContext.details;
     st.active_ctx = minimalContext.ctx;
+    st.active_context = {
+      ok: true,
+      context_type: 'bulk_process',
+      context_kind: 'bulk_process_row_context',
+      owner_kind: 'bulk_process',
+      modal_kind: 'bulk-process-workbench',
+      row_key: cacheKey || trimStr(nextRow.row_key || '') || null,
+      row: deep(nextRow),
+      data_row: deep(nextRow),
+      details: deep(minimalContext.details || {}),
+      related: deep(minimalContext.related || {}),
+      profile: 'status_header',
+      context_profile: 'status_header',
+      header_loaded: true,
+      header_only: true,
+      editor_loaded: false,
+      evidence_loaded: false,
+      compare_loaded: false,
+      full_loaded: false,
+      schedule_pending: true,
+      schedule_authoritative: false,
+      loaded_layers: ['header'],
+      is_hydrated: false,
+      hydration_required: true,
+      context_stale: false,
+      __context_options: {
+        profile: 'status_header',
+        context_profile: 'status_header',
+        include_evidence: false,
+        include_compare: false,
+        include_import_source_rows: false
+      }
+    };
+    st.active_context_profile = 'status_header';
+    st.__active_context_pending = true;
+    st.__bulk_process_editor_loading_for_row_key = cacheKey || trimStr(nextRow.row_key || '') || null;
+    st.__bulk_process_editor_loaded_for_row_key = '';
     st.__active_context_is_minimal = true;
     const nextRouteKind = getBulkProcessRouteKindFromRow(st.active_row, st.active_details);
     const nextIdentity = getBulkProcessRecordIdentityFromState(st);
@@ -164366,6 +164721,8 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     await rerenderWorkbench('row-change-dto-first', true);
 
     if (deferContextRefreshAfterPatch) {
+      st.__active_context_pending = false;
+      if (trimStr(st.__bulk_process_editor_loading_for_row_key || '') === cacheKey) st.__bulk_process_editor_loading_for_row_key = '';
       resetBulkProcessDirtyBaseline(st, 'row-change-patch-minimal', {
         source: 'handleBulkProcessRowChange',
         dirty_source: 'row/context hydrate',
@@ -164425,6 +164782,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       };
       st.__active_context_is_minimal = true;
       st.__active_context_pending = false;
+      if (trimStr(st.__bulk_process_editor_loading_for_row_key || '') === cacheKey) st.__bulk_process_editor_loading_for_row_key = '';
       st.error_text = trimStr(loaded?.payload?.message || loaded?.payload?.error || 'The selected Bulk Process row is open, but its detail context could not be refreshed yet.');
       await rerenderWorkbench('row-change-degraded-context-preserved-selection', true);
       GE();
@@ -164445,10 +164803,19 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       };
       st.__active_context_is_minimal = true;
       st.__active_context_pending = false;
+      if (trimStr(st.__bulk_process_editor_loading_for_row_key || '') === cacheKey) st.__bulk_process_editor_loading_for_row_key = '';
       st.error_text = trimStr(finalContext?.message || 'The selected Bulk Process row is open, but its detail context could not be refreshed yet.');
       await rerenderWorkbench('row-change-degraded-final-context-preserved-selection', true);
       GE();
       return true;
+    }
+    const finalContextRowKey = trimStr(finalContext.row?.row_key || finalContext.payload?.row_key || finalContext.payload?.data_row?.row_key || finalContext.payload?.row?.row_key || '');
+    if ((cacheKey && finalContextRowKey && finalContextRowKey !== cacheKey) || isStaleRequest()) {
+      st.__active_context_pending = false;
+      if (trimStr(st.__bulk_process_editor_loading_for_row_key || '') === cacheKey) st.__bulk_process_editor_loading_for_row_key = '';
+      st.__bulk_process_refresh_warning = 'Bulk Process row context belonged to a different row and was ignored.';
+      GE();
+      return false;
     }
     st.__suppress_dirty_marking = true;
     st.active_row = deep(finalContext.row || nextRow);
@@ -164456,19 +164823,62 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
     st.active_details = finalContext.details;
     st.active_ctx = finalContext.ctx;
+    const finalScheduleAuthoritative = !!(
+      finalContext.details?.schedule_authoritative === true ||
+      finalContext.ctx?.state?.schedule_authoritative === true ||
+      finalContext.payload?.schedule_authoritative === true
+    );
+    const finalLoadedLayers = (() => {
+      const base = Array.isArray(finalContext.details?.loaded_layers)
+        ? deep(finalContext.details.loaded_layers)
+        : (Array.isArray(finalContext.ctx?.state?.loaded_layers) ? deep(finalContext.ctx.state.loaded_layers) : ['header']);
+      const layers = base.map((value) => trimStr(value).toLowerCase()).filter(Boolean);
+      if (contextProfile === 'editor') layers.push('editor');
+      if (finalContext.details?.evidence_loaded === true || finalContext.payload?.evidence_loaded === true) layers.push('evidence');
+      if (finalContext.details?.compare_loaded === true || finalContext.payload?.compare_loaded === true) layers.push('compare_import');
+      if (finalContext.details?.full_loaded === true || finalContext.payload?.full_loaded === true) layers.push('full');
+      if (!layers.includes('header')) layers.unshift('header');
+      return Array.from(new Set(layers));
+    })();
     st.active_context = {
       ...deep(finalContext.payload || {}),
       ok: true,
+      context_type: 'bulk_process',
+      context_kind: 'bulk_process_row_context',
+      owner_kind: 'bulk_process',
+      modal_kind: 'bulk-process-workbench',
+      row_key: trimStr(st.active_row?.row_key || cacheKey || finalContextRowKey || '') || null,
       row: deep(finalContext.row || nextRow),
       data_row: deep(finalContext.row || nextRow),
       details: deep(finalContext.details || {}),
       related: deep(finalContext.related || {}),
+      profile: trimStr(finalContext.payload?.profile || finalContext.payload?.context_profile || contextProfile) || contextProfile,
+      context_profile: trimStr(finalContext.payload?.context_profile || finalContext.payload?.profile || contextProfile) || contextProfile,
+      header_loaded: true,
+      header_only: finalContext.details?.header_only === true,
+      editor_loaded: finalContext.details?.editor_loaded === true || contextProfile === 'editor',
+      evidence_loaded: finalContext.details?.evidence_loaded === true || finalContext.payload?.evidence_loaded === true,
+      compare_loaded: finalContext.details?.compare_loaded === true || finalContext.payload?.compare_loaded === true,
+      full_loaded: finalContext.details?.full_loaded === true || finalContext.payload?.full_loaded === true,
+      schedule_pending: finalContext.details?.schedule_pending === true ? true : false,
+      schedule_authoritative: finalScheduleAuthoritative,
+      loaded_layers: finalLoadedLayers,
       is_hydrated: true,
       hydration_required: false,
-      context_stale: false
+      context_stale: false,
+      __context_options: {
+        profile: trimStr(finalContext.payload?.profile || finalContext.payload?.context_profile || contextProfile) || contextProfile,
+        context_profile: trimStr(finalContext.payload?.context_profile || finalContext.payload?.profile || contextProfile) || contextProfile,
+        include_evidence: finalContext.details?.evidence_loaded === true || finalContext.payload?.evidence_loaded === true,
+        include_compare: finalContext.details?.compare_loaded === true || finalContext.payload?.compare_loaded === true,
+        include_import_source_rows: finalContext.details?.compare_loaded === true || finalContext.payload?.compare_loaded === true
+      }
     };
     st.active_context_profile = trimStr(st.active_context.profile || st.active_context.context_profile || contextProfile) || contextProfile;
     st.__active_context_is_minimal = false;
+    st.__active_context_pending = false;
+    if (trimStr(st.__bulk_process_editor_loading_for_row_key || '') === cacheKey) st.__bulk_process_editor_loading_for_row_key = '';
+    st.__bulk_process_editor_loaded_for_row_key = st.active_row_key || cacheKey || null;
     st.__suppress_dirty_marking = false;
 
     if (
@@ -164539,6 +164949,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     st.__bulk_process_row_change_in_progress = false;
   }
 }
+
 
 
 function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, options = {}) {
@@ -180521,6 +180932,7 @@ const handleSelectedFieldInsertPointerDown = (ev) => {
 }
 
 
+
 function renderBulkProcessActionRow(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -180543,6 +180955,54 @@ function renderBulkProcessActionRow(state) {
           <label>Actions</label>
           <div class="controls">
             <span class="mini">Select a row to enable actions.</span>
+          </div>
+        </div>
+      </div>
+    `);
+  }
+
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const resolveContextRowKey = (value) => {
+    if (!value || typeof value !== 'object') return '';
+    return trimStr(
+      value.row_key ||
+      value.key ||
+      value.data_row?.row_key ||
+      value.dataRow?.row_key ||
+      value.row?.row_key ||
+      value.details?.row_key ||
+      value.details?.data_row?.row_key ||
+      value.state?.row_key ||
+      value.state?.data_row?.row_key ||
+      ''
+    );
+  };
+  const activeRowKey = trimStr(st.active_row_key || activeRow.row_key || activeRow.key || '');
+  const activeCtxRowKey = resolveContextRowKey(activeCtx);
+  const activeCtxMatchesRow = !!(!activeRowKey || !activeCtxRowKey || activeCtxRowKey === activeRowKey);
+  const editorLoadedForActiveRow = !!(
+    activeCtx.editor_loaded === true ||
+    activeCtx.context_profile === 'editor' ||
+    activeCtx.profile === 'editor' ||
+    activeCtx.details?.editor_loaded === true ||
+    activeCtx.state?.editor_loaded === true ||
+    trimStr(st.__bulk_process_editor_loaded_for_row_key || '') === activeRowKey
+  );
+  const editorLoadingForActiveRow = !!(
+    activeRowKey &&
+    (
+      trimStr(st.__bulk_process_editor_loading_for_row_key || '') === activeRowKey ||
+      (st.__active_context_pending === true && !editorLoadedForActiveRow)
+    )
+  );
+
+  if (!activeCtxMatchesRow || editorLoadingForActiveRow) {
+    return htmlWrap(`
+      <div class="card" id="bulkProcessActionRowRoot" style="padding:6px 8px;">
+        <div class="row">
+          <label>Actions</label>
+          <div class="controls">
+            <span class="mini">Loading selected row details…</span>
           </div>
         </div>
       </div>
@@ -180734,7 +181194,6 @@ function renderBulkProcessActionRow(state) {
     </div>
   `);
 }
-
 
 function renderMailshotPreviewStep() {
   const state = (window.modalCtx && window.modalCtx.mailshotWizard && typeof window.modalCtx.mailshotWizard === 'object')
