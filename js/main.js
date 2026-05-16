@@ -137508,7 +137508,6 @@ function bindBulkProcessManualEditor(state) {
 }
 
 
-
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -140237,6 +140236,134 @@ function bindBulkProcessPreviewPane(state) {
     };
   };
 
+  const isBulkProcessLiveAttachedPreviewTargetStillCurrent = (previewStateInput = null, selectionKeyInput = '', fileKeyInput = '', liveTargetOptions = {}) => {
+    const opts = (liveTargetOptions && typeof liveTargetOptions === 'object') ? liveTargetOptions : {};
+    const selectionKey = normalisePreviewSelectionKey(selectionKeyInput || '');
+    const fileKey = trimStr(fileKeyInput || '').replace(/^\/+/, '');
+    if (!selectionKey || isBlankPreviewSelectionKey(selectionKey) || !fileKey) return false;
+    if (isCurrentBulkAuthorisePreviewSurface()) return false;
+    if (trimStr(getPreviewOwnerKind() || '').toLowerCase() === 'bulk_authorise') return false;
+    if (trimStr(getPreviewOwnerKind() || '').toLowerCase() !== 'bulk_process') return false;
+
+    const liveRoot = document.getElementById('bulkProcessPreviewPaneRoot');
+    if (!liveRoot || liveRoot !== root || !root.isConnected) return false;
+
+    const selectionParts = selectionKey.split('|');
+    const selectionTab = trimStr(selectionParts[0] || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (selectionTab !== 'attached') return false;
+    const selectedEvidenceId = trimStr(selectionParts[1] || '');
+    const selectedFileKey = trimStr(selectionParts.slice(2).join('|') || fileKey || '').replace(/^\/+/, '');
+    const isSyntheticAttachedPreviewId = (value) => /^synthetic-attached:/i.test(trimStr(value || ''));
+    if (!selectedEvidenceId || isSyntheticAttachedPreviewId(selectedEvidenceId) || !selectedFileKey || selectedFileKey !== fileKey) return false;
+
+    const liveStateFromPane = getPreviewState();
+    const inputState = (previewStateInput && typeof previewStateInput === 'object') ? previewStateInput : {};
+    const liveActiveTab = trimStr(liveStateFromPane.activeTab || inputState.activeTab || pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (liveActiveTab !== 'attached') return false;
+
+    const liveAttachedItem =
+      (liveStateFromPane.attachedItem && typeof liveStateFromPane.attachedItem === 'object')
+        ? liveStateFromPane.attachedItem
+        : ((pane.active_attached_item && typeof pane.active_attached_item === 'object')
+            ? pane.active_attached_item
+            : ((inputState.attachedItem && typeof inputState.attachedItem === 'object') ? inputState.attachedItem : null));
+    if (!liveAttachedItem) return false;
+
+    const liveAttachedId = trimStr(
+      pane.active_attached_id ||
+      liveAttachedItem.evidence_id ||
+      liveAttachedItem.id ||
+      liveAttachedItem.queue_id ||
+      ''
+    );
+    if (!liveAttachedId || isSyntheticAttachedPreviewId(liveAttachedId) || liveAttachedId !== selectedEvidenceId) return false;
+
+    const liveFileKey = trimStr(
+      liveAttachedItem.storage_key ||
+      liveAttachedItem.r2_key ||
+      liveAttachedItem.file_key ||
+      liveAttachedItem.download_storage_key ||
+      liveAttachedItem.preview_storage_key ||
+      ''
+    ).replace(/^\/+/, '');
+    if (!liveFileKey || liveFileKey !== fileKey || liveFileKey !== selectedFileKey) return false;
+
+    const liveSelectionKey = normalisePreviewSelectionKey(buildPreviewSelectionKey('attached', liveAttachedId, liveFileKey));
+    const liveStateSelectionKey = normalisePreviewSelectionKey(liveStateFromPane.selectionKey || inputState.selectionKey || '');
+    if (liveSelectionKey !== selectionKey || (liveStateSelectionKey && liveStateSelectionKey !== selectionKey)) return false;
+
+    const snap = (opts.snapshot && typeof opts.snapshot === 'object') ? opts.snapshot : null;
+    if (snap?.stateRef && snap.stateRef !== st) return false;
+    const snapOwnerKind = trimStr(snap?.ownerKind || '').toLowerCase();
+    if (snapOwnerKind && snapOwnerKind !== 'bulk_process') return false;
+    const snapSelectionKey = normalisePreviewSelectionKey(snap?.selectionKey || '');
+    if (snapSelectionKey && snapSelectionKey !== selectionKey) return false;
+    const snapFileKey = trimStr(snap?.fileKey || '').replace(/^\/+/, '');
+    if (snapFileKey && snapFileKey !== fileKey) return false;
+    const snapActiveTab = trimStr(snap?.activeTab || '').toLowerCase() === 'attached' ? 'attached' : (trimStr(snap?.activeTab || '') ? 'queue' : '');
+    if (snapActiveTab && snapActiveTab !== 'attached') return false;
+
+    const collectTimesheetIds = (...sources) => {
+      const ids = new Set();
+      const addId = (value) => {
+        const id = trimStr(value || '');
+        if (id) ids.add(id);
+      };
+      const addIdentity = (value) => {
+        const raw = trimStr(value || '');
+        const match = raw.match(/^timesheet:(.+)$/i);
+        if (match) addId(match[1]);
+      };
+      const visit = (value) => {
+        if (!value) return;
+        if (typeof value === 'string') {
+          addIdentity(value);
+          return;
+        }
+        if (typeof value !== 'object') return;
+        addId(value.timesheet_id);
+        addId(value.current_timesheet_id);
+        addId(value.requested_timesheet_id);
+        addId(value.expected_timesheet_id);
+        addIdentity(value.row_key);
+        addIdentity(value.activeIdentity);
+        addIdentity(value.active_identity);
+        addIdentity(value.rowKey);
+        if (value.timesheet && typeof value.timesheet === 'object') visit(value.timesheet);
+        if (value.row && typeof value.row === 'object') visit(value.row);
+        if (value.data_row && typeof value.data_row === 'object') visit(value.data_row);
+        if (value.details && typeof value.details === 'object') visit(value.details);
+      };
+      sources.forEach(visit);
+      return Array.from(ids);
+    };
+
+    const liveIdentity = trimStr(opts.liveIdentity || getActiveIdentity() || '');
+    const snapshotIdentity = trimStr(opts.currentIdentity || snap?.activeIdentity || '');
+    const liveRowKey = trimStr(getPreviewActiveRowKey() || '');
+    const snapshotRowKey = trimStr(snap?.rowKey || '');
+    const identityStillMatches = !!(
+      (snapshotIdentity && liveIdentity && snapshotIdentity === liveIdentity) ||
+      (snapshotRowKey && liveRowKey && snapshotRowKey === liveRowKey)
+    );
+    if (identityStillMatches) return true;
+
+    const expectedTimesheetIds = collectTimesheetIds(snapshotIdentity, snapshotRowKey, opts.currentIdentity, snap);
+    const liveTimesheetIds = collectTimesheetIds(
+      liveIdentity,
+      liveRowKey,
+      st.active_row,
+      st.active_ctx?.row,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_details,
+      window.modalCtx?.data,
+      window.modalCtx?.timesheetDetails,
+      window.modalCtx?.timesheetState
+    );
+    return expectedTimesheetIds.some((id) => liveTimesheetIds.includes(id));
+  };
+
   const getNoPreviewCopy = (previewState) => {
     const stateObj = (previewState && typeof previewState === 'object') ? previewState : {};
     const activeTab = trimStr(stateObj.activeTab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
@@ -142353,13 +142480,27 @@ function bindBulkProcessPreviewPane(state) {
         liveFileKey === previewFileCacheKey &&
         trimStr(livePreviewState.activeTab || '').toLowerCase() !== 'attached'
       );
+      const liveAttachedSelectionStillCurrentAfterRebase = !!(
+        getPreviewOwnerKind() === 'bulk_process' &&
+        !isCurrentBulkAuthorisePreviewSurface() &&
+        isBulkProcessLiveAttachedPreviewTargetStillCurrent(
+          livePreviewState,
+          previewSelectionKey,
+          previewFileCacheKey,
+          {
+            snapshot: presignRecord.snapshot || null,
+            currentIdentity,
+            liveIdentity
+          }
+        )
+      );
       if (
         !signedUrl ||
         isBusy() ||
-        !livePreviewItem ||
-        (liveIdentity !== currentIdentity && !liveQueueSelectionStillCurrent) ||
-        liveFileKey !== previewFileCacheKey ||
-        liveSelectionKey !== previewSelectionKey
+        (!livePreviewItem && !liveAttachedSelectionStillCurrentAfterRebase) ||
+        (liveIdentity !== currentIdentity && !liveQueueSelectionStillCurrent && !liveAttachedSelectionStillCurrentAfterRebase) ||
+        (liveFileKey !== previewFileCacheKey && !liveAttachedSelectionStillCurrentAfterRebase) ||
+        (liveSelectionKey !== previewSelectionKey && !liveAttachedSelectionStillCurrentAfterRebase)
       ) {
         stage.innerHTML = `<span class="mini" style="opacity:.75;">${enc('Preview changed before the download URL was ready. Select the preview item again if needed.')}</span>`;
         renderToolbar(livePreviewState, livePreviewItem || previewItem, liveSelectionKey || previewSelectionKey, previewRenderKey, '', isPdf, pageCount, activePage, rotationDeg, zoom);
@@ -142401,6 +142542,40 @@ function bindBulkProcessPreviewPane(state) {
               await renderStage();
             }
           }).catch(() => {});
+        }
+        return;
+      }
+      if (liveAttachedSelectionStillCurrentAfterRebase) {
+        const liveAttachedCommitPreviewState = getPreviewState();
+        const liveAttachedCommitPreviewItem = liveAttachedCommitPreviewState.previewItem || livePreviewItem;
+        const liveAttachedCommitSnapshot = capturePreviewCommitSnapshot(liveAttachedCommitPreviewState, { reason: 'bulk-process-attached-presign-live-target-after-rebase' });
+        setCachedSignedUrlForPreview(previewFileCacheKey, signedUrl, liveAttachedCommitSnapshot);
+        const committedMeta = getSignedUrlMetaForPreview(previewFileCacheKey, liveAttachedCommitSnapshot, signedUrl) || buildSignedUrlMetaForPreview(signedUrl, liveAttachedCommitSnapshot);
+        pane.__preview_target_key = previewSelectionKey;
+        pane.__preview_load_requested_target_key = previewSelectionKey;
+        pane.__active_attached_preview_target = previewSelectionKey;
+        pane.__preview_signed_url = signedUrl;
+        pane.__preview_signed_url_stored_at_ms = Number(committedMeta?.storedAtMs || Date.now()) || Date.now();
+        pane.__preview_signed_url_expires_at_ms = Number(committedMeta?.expiresAtMs || 0) || 0;
+        pane.__preview_last_committed_at = new Date().toISOString();
+        pane.__preview_last_committed_selection_key = previewSelectionKey;
+        pane.__preview_last_committed_file_key = previewFileCacheKey;
+        pane.__preview_loading = false;
+        pane.__preview_error = '';
+        try { delete pane.__preview_failed_signed_url_by_target[previewSelectionKey]; } catch {}
+        try { delete pane.__preview_image_retry_by_target[getImageRetryKeyForPreview(previewSelectionKey, previewFileCacheKey)]; } catch {}
+        renderToolbar(liveAttachedCommitPreviewState, liveAttachedCommitPreviewItem, previewSelectionKey, previewRenderKey, signedUrl, isPdf, pageCount, activePage, rotationDeg, zoom);
+        if (isPdf) {
+          const resolvedPreviewUrl = `${signedUrl}#page=${activePage}&zoom=page-width`;
+          renderPdfStage(stage, resolvedPreviewUrl, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg);
+        } else if (isImage) {
+          renderImageStage(stage, signedUrl, previewFileCacheKey, previewSelectionKey, previewRenderKey, zoom, rotationDeg);
+        } else {
+          stage.innerHTML = `
+            <div style="min-height:320px;display:flex;align-items:center;justify-content:center;">
+              <a class="btn btn-outline" href="${enc(signedUrl)}" target="_blank" rel="noopener">Open file</a>
+            </div>
+          `;
         }
         return;
       }
@@ -154421,8 +154596,6 @@ async function handleBulkProcessSave(state) {
 
 
 
-
-
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -155110,6 +155283,332 @@ async function handleBulkProcessProcess(state) {
     return active;
   };
 
+  const firstNonBlankProcessValue = (...values) => {
+    for (const value of values) {
+      const text = trimStr(value || '');
+      if (text) return text;
+    }
+    return '';
+  };
+  const resolveProcessRowSignatureFrom = (...sources) => {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      const direct = firstNonBlankProcessValue(
+        source.row_signature,
+        source.rowSignature,
+        source.expected_row_signature,
+        source.expectedRowSignature,
+        source.activeBackendRowSignature,
+        source.activeRowSignature,
+        source.backend_row_signature,
+        source.current_row_signature
+      );
+      if (direct) return direct;
+      if (source.row && typeof source.row === 'object') {
+        const rowSignature = resolveProcessRowSignatureFrom(source.row);
+        if (rowSignature) return rowSignature;
+      }
+      if (source.data_row && typeof source.data_row === 'object') {
+        const dataRowSignature = resolveProcessRowSignatureFrom(source.data_row);
+        if (dataRowSignature) return dataRowSignature;
+      }
+      if (source.timesheet && typeof source.timesheet === 'object') {
+        const timesheetSignature = resolveProcessRowSignatureFrom(source.timesheet);
+        if (timesheetSignature) return timesheetSignature;
+      }
+      if (source.details && typeof source.details === 'object') {
+        const detailsSignature = resolveProcessRowSignatureFrom(source.details);
+        if (detailsSignature) return detailsSignature;
+      }
+    }
+    return '';
+  };
+  const resolveProcessCurrentVersionFrom = (...sources) => {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      const candidates = [
+        source.current_version,
+        source.current_timesheet_version,
+        source.timesheet_version,
+        source.version,
+        source.baseline_version,
+        source.baseline_current_version
+      ];
+      for (const value of candidates) {
+        if (value !== undefined && value !== null && trimStr(value || '') !== '') return value;
+      }
+      if (source.row && typeof source.row === 'object') {
+        const rowVersion = resolveProcessCurrentVersionFrom(source.row);
+        if (rowVersion !== undefined && rowVersion !== null && trimStr(rowVersion || '') !== '') return rowVersion;
+      }
+      if (source.data_row && typeof source.data_row === 'object') {
+        const dataRowVersion = resolveProcessCurrentVersionFrom(source.data_row);
+        if (dataRowVersion !== undefined && dataRowVersion !== null && trimStr(dataRowVersion || '') !== '') return dataRowVersion;
+      }
+      if (source.timesheet && typeof source.timesheet === 'object') {
+        const timesheetVersion = resolveProcessCurrentVersionFrom(source.timesheet);
+        if (timesheetVersion !== undefined && timesheetVersion !== null && trimStr(timesheetVersion || '') !== '') return timesheetVersion;
+      }
+      if (source.details && typeof source.details === 'object') {
+        const detailsVersion = resolveProcessCurrentVersionFrom(source.details);
+        if (detailsVersion !== undefined && detailsVersion !== null && trimStr(detailsVersion || '') !== '') return detailsVersion;
+      }
+    }
+    return null;
+  };
+  const resolveActiveProcessTimesheetIdentity = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const row = (active.row && typeof active.row === 'object') ? active.row : {};
+    const details = (active.details && typeof active.details === 'object') ? active.details : {};
+    const timesheet = (active.timesheet && typeof active.timesheet === 'object') ? active.timesheet : {};
+    const rowKey = trimStr(
+      row.row_key ||
+      st.active_row_key ||
+      st.active_row?.row_key ||
+      window.modalCtx?.data?.row_key ||
+      ''
+    );
+    const timesheetId = trimStr(
+      active.timesheetId ||
+      row.timesheet_id ||
+      row.current_timesheet_id ||
+      row.requested_timesheet_id ||
+      details.current_timesheet_id ||
+      details.timesheet?.timesheet_id ||
+      timesheet.timesheet_id ||
+      window.modalCtx?.data?.timesheet_id ||
+      window.modalCtx?.data?.current_timesheet_id ||
+      ''
+    );
+    const currentTimesheetId = trimStr(
+      row.current_timesheet_id ||
+      row.timesheet_id ||
+      details.current_timesheet_id ||
+      details.timesheet?.timesheet_id ||
+      timesheet.timesheet_id ||
+      timesheetId ||
+      ''
+    );
+    const requestedTimesheetId = trimStr(
+      row.requested_timesheet_id ||
+      row.timesheet_id ||
+      details.requested_timesheet_id ||
+      currentTimesheetId ||
+      timesheetId ||
+      ''
+    );
+    const expectedTimesheetId = trimStr(
+      row.expected_timesheet_id ||
+      details.expected_timesheet_id ||
+      details.current_timesheet_id ||
+      currentTimesheetId ||
+      timesheetId ||
+      ''
+    );
+    const resolvedRowKey = rowKey || (currentTimesheetId ? `timesheet:${currentTimesheetId}` : (timesheetId ? `timesheet:${timesheetId}` : ''));
+    return {
+      rowKey: resolvedRowKey,
+      timesheetId: timesheetId || currentTimesheetId || requestedTimesheetId || expectedTimesheetId || '',
+      currentTimesheetId,
+      requestedTimesheetId,
+      expectedTimesheetId
+    };
+  };
+  const collectFreshestProcessBaselineSignature = () => resolveProcessRowSignatureFrom(
+    window.modalCtx?.data,
+    window.modalCtx?.timesheetDetails,
+    window.modalCtx?.timesheetState,
+    st.active_context?.data_row,
+    st.active_context?.row,
+    st.active_context
+  );
+  const collectActiveProcessBaselineSignature = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    return resolveProcessRowSignatureFrom(
+      active.row,
+      active.ctx?.row,
+      st.active_row,
+      st.active_ctx?.row,
+      st.active_context?.row,
+      st.active_context?.data_row
+    );
+  };
+  const hasPostAttachProcessEditorRebaseMarker = (activeInput = null, markerOptions = {}) => {
+    const opts = (markerOptions && typeof markerOptions === 'object') ? markerOptions : {};
+    if (opts.evidenceMutated === true) return true;
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    const markerStorageKey = trimStr(
+      st.__bulk_process_post_attach_rebase_storage_key ||
+      pane?.__bulk_process_post_attach_rebase_storage_key ||
+      ''
+    ).replace(/^\/+/, '').toLowerCase();
+    if (!markerStorageKey) return false;
+    const activeAttachedStorageKey = evidenceStorageKeyOf(pane?.active_attached_item || {}).toLowerCase();
+    const rowHasEvidence = !!(
+      active.row?.has_any_evidence === true ||
+      Number(active.row?.attached_evidence_count || 0) > 0 ||
+      collectCurrentEvidenceRowsForProcess().some((item) => {
+        if (!item || typeof item !== 'object' || isSyntheticAttachedEvidenceItem(item)) return false;
+        const storageKey = evidenceStorageKeyOf(item).toLowerCase();
+        return !!storageKey && storageKey === markerStorageKey;
+      })
+    );
+    if (!rowHasEvidence && (!activeAttachedStorageKey || activeAttachedStorageKey !== markerStorageKey)) return false;
+    return trimStr(st.__bulk_process_process_editor_rebased_storage_key || '').toLowerCase() !== markerStorageKey;
+  };
+  const patchProcessBaselineContainersFromActive = (activeInput = null, patchOptions = {}) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const row = (active.row && typeof active.row === 'object') ? active.row : ((st.active_row && typeof st.active_row === 'object') ? st.active_row : {});
+    const details = (active.details && typeof active.details === 'object') ? active.details : ((st.active_details && typeof st.active_details === 'object') ? st.active_details : {});
+    const ctx = (active.ctx && typeof active.ctx === 'object') ? active.ctx : ((st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {});
+    const stateCtx = (ctx.state && typeof ctx.state === 'object') ? ctx.state : {};
+    const identity = resolveActiveProcessTimesheetIdentity(active);
+    const rowSignature = resolveProcessRowSignatureFrom(row, ctx.row, st.active_row, st.active_context?.row, st.active_context?.data_row, window.modalCtx?.data, window.modalCtx?.timesheetDetails, window.modalCtx?.timesheetState);
+    const currentVersion = resolveProcessCurrentVersionFrom(row, ctx.row, details, details.timesheet, window.modalCtx?.data, window.modalCtx?.timesheetDetails);
+    const patchTarget = (target) => {
+      if (!target || typeof target !== 'object') return;
+      if (identity.rowKey) target.row_key = identity.rowKey;
+      if (identity.timesheetId) target.timesheet_id = identity.timesheetId;
+      if (identity.currentTimesheetId) target.current_timesheet_id = identity.currentTimesheetId;
+      if (identity.requestedTimesheetId) target.requested_timesheet_id = identity.requestedTimesheetId;
+      if (identity.expectedTimesheetId) target.expected_timesheet_id = identity.expectedTimesheetId;
+      if (rowSignature) {
+        target.row_signature = rowSignature;
+        target.expected_row_signature = rowSignature;
+        target.backend_row_signature = rowSignature;
+        target.activeBackendRowSignature = rowSignature;
+        target.activeRowSignature = rowSignature;
+      }
+      if (currentVersion !== undefined && currentVersion !== null && trimStr(currentVersion || '') !== '') {
+        target.current_version = currentVersion;
+        target.current_timesheet_version = currentVersion;
+        target.timesheet_version = currentVersion;
+      }
+    };
+
+    st.active_row = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
+    patchTarget(st.active_row);
+    if (row && typeof row === 'object') Object.assign(st.active_row, { ...st.active_row, ...deep(row) });
+    patchTarget(st.active_row);
+    st.active_row_key = identity.rowKey || st.active_row_key || rowKeyOf(st.active_row) || '';
+
+    st.active_ctx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : (ctx && typeof ctx === 'object' ? ctx : {});
+    st.active_ctx.row = (st.active_ctx.row && typeof st.active_ctx.row === 'object') ? st.active_ctx.row : {};
+    Object.assign(st.active_ctx.row, deep(st.active_row));
+    patchTarget(st.active_ctx);
+    patchTarget(st.active_ctx.row);
+    st.active_ctx.data_row = (st.active_ctx.data_row && typeof st.active_ctx.data_row === 'object') ? st.active_ctx.data_row : {};
+    Object.assign(st.active_ctx.data_row, deep(st.active_row));
+    patchTarget(st.active_ctx.data_row);
+    st.active_ctx.state = (st.active_ctx.state && typeof st.active_ctx.state === 'object') ? st.active_ctx.state : stateCtx;
+    patchTarget(st.active_ctx.state);
+
+    st.active_details = (st.active_details && typeof st.active_details === 'object') ? st.active_details : {};
+    if (details && typeof details === 'object') Object.assign(st.active_details, deep(details));
+    patchTarget(st.active_details);
+    st.active_details.timesheet = (st.active_details.timesheet && typeof st.active_details.timesheet === 'object') ? st.active_details.timesheet : {};
+    patchTarget(st.active_details.timesheet);
+
+    st.active_context = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+    patchTarget(st.active_context);
+    st.active_context.row = (st.active_context.row && typeof st.active_context.row === 'object') ? st.active_context.row : {};
+    Object.assign(st.active_context.row, deep(st.active_row));
+    patchTarget(st.active_context.row);
+    st.active_context.data_row = (st.active_context.data_row && typeof st.active_context.data_row === 'object') ? st.active_context.data_row : {};
+    Object.assign(st.active_context.data_row, deep(st.active_row));
+    patchTarget(st.active_context.data_row);
+    st.active_context.details = (st.active_context.details && typeof st.active_context.details === 'object') ? st.active_context.details : st.active_details;
+    patchTarget(st.active_context.details);
+    st.active_context.profile = st.active_context.profile || 'editor';
+    st.active_context.context_profile = st.active_context.context_profile || 'editor';
+    st.active_context.editor_loaded = true;
+    st.active_context.header_loaded = true;
+    st.active_context.context_stale = false;
+
+    if (window.modalCtx && (window.modalCtx.bulkProcessState === st || trimStr(window.modalCtx.entity || '').toLowerCase() === 'bulk-process')) {
+      window.modalCtx.data = (window.modalCtx.data && typeof window.modalCtx.data === 'object') ? window.modalCtx.data : {};
+      patchTarget(window.modalCtx.data);
+      window.modalCtx.timesheetDetails = (window.modalCtx.timesheetDetails && typeof window.modalCtx.timesheetDetails === 'object') ? window.modalCtx.timesheetDetails : {};
+      patchTarget(window.modalCtx.timesheetDetails);
+      window.modalCtx.timesheetDetails.timesheet = (window.modalCtx.timesheetDetails.timesheet && typeof window.modalCtx.timesheetDetails.timesheet === 'object') ? window.modalCtx.timesheetDetails.timesheet : {};
+      patchTarget(window.modalCtx.timesheetDetails.timesheet);
+      window.modalCtx.timesheetState = (window.modalCtx.timesheetState && typeof window.modalCtx.timesheetState === 'object') ? window.modalCtx.timesheetState : (st.active_ctx.state || {});
+      patchTarget(window.modalCtx.timesheetState);
+      window.modalCtx.__bulkProcessRecordIdentity = identity.rowKey || window.modalCtx.__bulkProcessRecordIdentity || '';
+      if (window.modalCtx.formState && typeof window.modalCtx.formState === 'object') {
+        window.modalCtx.formState.__forId = identity.rowKey || window.modalCtx.formState.__forId || '';
+      }
+    }
+
+    const markerStorageKey = trimStr(st.__bulk_process_post_attach_rebase_storage_key || st.evidence_pane_state?.__bulk_process_post_attach_rebase_storage_key || '').replace(/^\/+/, '');
+    if (markerStorageKey) st.__bulk_process_process_editor_rebased_storage_key = markerStorageKey;
+    st.__bulk_process_process_editor_rebased_at = new Date().toISOString();
+    st.__bulk_process_process_editor_rebased_reason = trimStr(patchOptions.reason || 'process-editor-baseline-rebase') || 'process-editor-baseline-rebase';
+    return readActive();
+  };
+  const awaitProcessEditorBaselineRebaseBeforeSubmit = async (activeInput = null, rebaseOptions = {}) => {
+    let active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    if (!active.isDaily || active.submissionMode !== 'MANUAL') return active;
+    const activeSignature = collectActiveProcessBaselineSignature(active);
+    const freshestSignature = collectFreshestProcessBaselineSignature();
+    const signatureMismatch = !!(freshestSignature && (!activeSignature || activeSignature !== freshestSignature));
+    const postAttachMarker = hasPostAttachProcessEditorRebaseMarker(active, rebaseOptions);
+    if (!signatureMismatch && !postAttachMarker) return active;
+
+    if (typeof handleBulkProcessRowChange !== 'function') {
+      throw new Error('Bulk Process editor/status baseline refresh is not available after evidence attach. Refresh the row and try again.');
+    }
+    const identity = resolveActiveProcessTimesheetIdentity(active);
+    if (!identity.rowKey) {
+      throw new Error('Bulk Process row context cannot be refreshed before processing because the active timesheet row key is missing. Refresh the row and try again.');
+    }
+
+    await handleBulkProcessRowChange(st, identity.rowKey, {
+      source: signatureMismatch ? 'bulk-process-process-stale-editor-baseline-rebase' : 'bulk-process-process-post-attach-editor-baseline-rebase',
+      expectedRowKey: identity.rowKey,
+      row_key: identity.rowKey,
+      timesheet_id: identity.timesheetId || identity.currentTimesheetId || null,
+      current_timesheet_id: identity.currentTimesheetId || identity.timesheetId || null,
+      requested_timesheet_id: identity.requestedTimesheetId || identity.timesheetId || null,
+      expected_timesheet_id: identity.expectedTimesheetId || identity.currentTimesheetId || identity.timesheetId || null,
+      profile: 'editor',
+      context_profile: 'editor',
+      includeEvidence: false,
+      include_evidence: false,
+      loadEvidence: false,
+      includeCompare: false,
+      include_compare: false,
+      includeImportSourceRows: false,
+      include_import_source_rows: false,
+      forceContextRefresh: true,
+      skipDatasetRefresh: true,
+      preserveEvidencePane: true,
+      preserveActiveContext: false,
+      suppressAdjacentPrefetch: true,
+      rerender: false,
+      skipDirtyGuard: true,
+      force: true
+    });
+
+    if (typeof installBulkProcessModalCtxPatch === 'function') {
+      try { installBulkProcessModalCtxPatch(st, { source_context: 'bulk_process' }); } catch {}
+    }
+    active = patchProcessBaselineContainersFromActive(readActive(), { reason: signatureMismatch ? 'stale-signature' : 'post-attach' });
+    if (typeof resetBulkProcessDirtyBaseline === 'function') {
+      try {
+        resetBulkProcessDirtyBaseline(st, 'process-editor-baseline-rebase', {
+          source: 'handleBulkProcessProcess',
+          dirty_source: 'process editor/status baseline rebase',
+          note: 'one-shot editor/status baseline refreshed before Bulk Process submit',
+          active_signature: activeSignature || null,
+          freshest_signature: freshestSignature || null
+        });
+      } catch {}
+    }
+    return active;
+  };
+
   const parseSavedJsonForZeroHourAdjustment = (value) => {
     if (value == null) return null;
     if (Array.isArray(value) || (value && typeof value === 'object')) return deep(value);
@@ -155354,6 +155853,10 @@ async function handleBulkProcessProcess(state) {
 
     let processResult = null;
     if (active.isDaily && active.submissionMode === 'MANUAL' && activeTimesheetId) {
+      active = await awaitProcessEditorBaselineRebaseBeforeSubmit(active, { evidenceMutated });
+      activeTimesheetId = active.timesheetId;
+      activeContractWeekId = active.contractWeekId;
+      expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
       const activeRowSignature = trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '');
       processResult = await processDailyManualTimesheet(String(activeTimesheetId), {
         expected_timesheet_id: expectedTimesheetId || activeTimesheetId,
@@ -155567,6 +156070,8 @@ async function handleBulkProcessProcess(state) {
     return { ok: false, error: st.error_text };
   }
 }
+
+
 
 
 
