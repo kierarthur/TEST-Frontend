@@ -25270,6 +25270,8 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
   return { filename, rowCount: exportRows.length };
 }
 
+
+
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -27206,11 +27208,19 @@ async function bankingPayPreview(pay_date) {
       const isReadyToPay = presentationSection
         ? presentationSection === 'READY_TO_PAY'
         : (readinessState ? readinessState === 'READY_TO_PAY' : false);
+      const hasDraftableSignal = Object.prototype.hasOwnProperty.call(row, 'draftable') ||
+        Object.prototype.hasOwnProperty.call(row, 'is_draftable') ||
+        Object.prototype.hasOwnProperty.call(row, 'isDraftable');
+      const hasReadyForDraftSignal = Object.prototype.hasOwnProperty.call(row, 'is_ready_for_draft') ||
+        Object.prototype.hasOwnProperty.call(row, 'isReadyForDraft') ||
+        Object.prototype.hasOwnProperty.call(row, 'ready_for_draft') ||
+        Object.prototype.hasOwnProperty.call(row, 'readyForDraft');
       const draftable = row.draftable === true || row.is_draftable === true || row.isDraftable === true;
       const readyForDraft = row.is_ready_for_draft === true || row.isReadyForDraft === true || row.ready_for_draft === true || row.readyForDraft === true;
 
       if (!isReadyToPay) return;
-      if (!(draftable && readyForDraft)) return;
+      if (hasDraftableSignal && !draftable) return;
+      if (hasReadyForDraftSignal && !readyForDraft) return;
 
       seen.add(rowId);
       out.push(rowId);
@@ -27256,28 +27266,33 @@ async function bankingPayPreview(pay_date) {
     const envelope = isPlainObject(payload) ? payload : {};
     const previewPayload = isPlainObject(envelope.preview) ? envelope.preview : envelope;
     const freshDraftableRowIds = collectFreshDraftablePreviewRowIds(previewPayload);
+    const freshFullPreviewHasRows = payloadHasFullPreviewData(envelope);
+    const reconciledSelectedIds = freshFullPreviewHasRows ? [...freshDraftableRowIds] : [];
+    const nextSelectionMode = freshFullPreviewHasRows ? 'IMPLICIT_ALL' : 'EXPLICIT_NONE';
+    const serverSelectedPreviewRowIdsProvided = freshFullPreviewHasRows ? false : true;
 
     try {
       wiz.decisions = (typeof normalizePayWizardDecisionState === 'function')
         ? normalizePayWizardDecisionState(wiz.decisions)
         : ((wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {});
-      wiz.decisions.selected_preview_row_ids = [];
+      wiz.decisions.selected_preview_row_ids = [...reconciledSelectedIds];
       wiz.decisions.server_selected_preview_row_ids = [];
-      wiz.decisions.server_selected_preview_row_ids_provided = true;
-      wiz.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+      wiz.decisions.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
+      wiz.decisions.selected_preview_row_mode = nextSelectionMode;
       wiz.workbench.server_selected_preview_row_ids = [];
-      wiz.workbench.server_selected_preview_row_ids_provided = true;
-      wiz.workbench.selected_preview_row_ids = [];
-      wiz.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
-      wiz.selected_preview_row_mode = 'EXPLICIT_NONE';
+      wiz.workbench.server_selected_preview_row_ids_provided = serverSelectedPreviewRowIdsProvided;
+      wiz.workbench.selected_preview_row_ids = [...reconciledSelectedIds];
+      wiz.workbench.selected_preview_row_mode = nextSelectionMode;
+      wiz.selected_preview_row_mode = nextSelectionMode;
       wiz.local_selected_preview_row_ids_dirty = false;
     } catch {}
 
     return {
       original_selected_preview_row_ids: originalSelectedIds,
+      discarded_selected_preview_row_ids: originalSelectedIds,
       fresh_draftable_preview_row_ids: freshDraftableRowIds,
-      reconciled_selected_preview_row_ids: [],
-      selected_preview_row_mode: 'EXPLICIT_NONE'
+      reconciled_selected_preview_row_ids: reconciledSelectedIds,
+      selected_preview_row_mode: nextSelectionMode
     };
   };
 
@@ -27877,10 +27892,6 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
-
-
-
-
 
 
 
@@ -82017,20 +82028,34 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   );
   const progressObj = isPlainObject(responseObj.progress) ? responseObj.progress : {};
   const responseMutationContext = trimStr(responseObj.post_mutation_context || responseObj.mutation_context || responseObj.action || '').toUpperCase();
-  const isPostMutationPreviewPayload = !!(
+  const previewPayloadHasRows = payloadHasPreviewRows(previewObj, responseObj);
+  const explicitPostMutationPreviewContext = !!(
     responseMutationContext === 'CREATE_DRAFT_SUCCESS' ||
     responseMutationContext === 'CANCEL_DELETE_DRAFT_SUCCESS' ||
     responseMutationContext === 'POST_DRAFT_CREATE_PREVIEW_REFRESH' ||
-    responseMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH' ||
-    responseObj.pending_refresh === true ||
-    responseObj.preview_refresh_pending === true ||
-    responseObj.refresh_pending === true ||
-    responseObj.rebase_required === true ||
-    responseObj.requires_new_session === true ||
-    Array.isArray(responseObj.obsolete_session_ids) ||
-    responseObj.source_session_id
+    responseMutationContext === 'POST_DRAFT_CANCEL_PREVIEW_REFRESH'
   );
-  const previewPayloadHasRows = payloadHasPreviewRows(previewObj, responseObj);
+  const rowlessPostMutationRefreshShape = !!(
+    !previewPayloadHasRows && (
+      responseObj.pending_refresh === true ||
+      responseObj.preview_refresh_pending === true ||
+      responseObj.refresh_pending === true ||
+      responseObj.rebase_required === true ||
+      responseObj.requires_new_session === true ||
+      responseObj.progress_only === true ||
+      responseObj.progressOnly === true ||
+      responseObj.bootstrap_only === true ||
+      responseObj.bootstrapOnly === true ||
+      responseObj.preview_bootstrap === true ||
+      responseObj.ready_empty === true ||
+      responseObj.readyEmpty === true ||
+      Array.isArray(responseObj.pending_candidate_ids) && responseObj.pending_candidate_ids.length > 0 ||
+      Array.isArray(responseObj.refresh_job_ids) && responseObj.refresh_job_ids.length > 0 ||
+      Array.isArray(responseObj.obsolete_session_ids) && responseObj.obsolete_session_ids.length > 0 ||
+      !!trimStr(responseObj.source_session_id || responseObj.sourceSessionId || '')
+    )
+  );
+  const isPostMutationPreviewPayload = explicitPostMutationPreviewContext || rowlessPostMutationRefreshShape;
   const normalizeFullPreviewPayloadFlags = (target) => {
     if (!isPlainObject(target)) return;
     target.ready = true;
@@ -82266,13 +82291,40 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const payees = derivePayeesForWorkbench(previewObj, responseObj);
   const previewSummary = isPlainObject(previewObj.summary) ? previewObj.summary : (isPlainObject(responseObj.summary) ? responseObj.summary : {});
   const previewRowUniverse = collectPreviewRowIds(previewObj, responseObj);
-  const postMutationSelectionForcedExplicitNone = isPostMutationPreviewPayload === true;
-  const effectiveServerSelectedPreviewRowIds = postMutationSelectionForcedExplicitNone ? [] : serverSelectedPreviewRowIds;
-  const effectiveServerSelectedPreviewRowIdsProvided = postMutationSelectionForcedExplicitNone ? true : serverSelectedPreviewRowIdsProvided;
-  const localSelectionDirty = postMutationSelectionForcedExplicitNone ? false : ((activeSessionChanged || effectiveServerSelectedPreviewRowIdsProvided) ? false : (wiz.local_selected_preview_row_ids_dirty === true));
-  const localSelectedPreviewRowIds = (postMutationSelectionForcedExplicitNone || activeSessionChanged) ? [] : normalizeStringArray(wiz.decisions.selected_preview_row_ids);
+  const rowBearingReplacementSessionContext = !!(
+    previewPayloadHasRows && (
+      Array.isArray(responseObj.obsolete_session_ids) && responseObj.obsolete_session_ids.length > 0 ||
+      Array.isArray(responseObj.obsoleteSessionIds) && responseObj.obsoleteSessionIds.length > 0 ||
+      !!trimStr(responseObj.source_session_id || responseObj.sourceSessionId || responseObj.session?.source_session_id || responseObj.session?.sourceSessionId || '')
+    )
+  );
+  const postMutationFullPreviewWithRows = previewPayloadHasRows && (explicitPostMutationPreviewContext || rowBearingReplacementSessionContext);
+  const postMutationSelectionForcedExplicitNone = isPostMutationPreviewPayload === true && !previewPayloadHasRows;
+  const effectiveServerSelectedPreviewRowIds = (postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows) ? [] : serverSelectedPreviewRowIds;
+  const effectiveServerSelectedPreviewRowIdsProvided = postMutationSelectionForcedExplicitNone ? true : (postMutationFullPreviewWithRows ? false : serverSelectedPreviewRowIdsProvided);
+  const rawLocalSelectionMode = trimStr(wiz.selected_preview_row_mode || '').toUpperCase();
+  const localSelectionDirty = (postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows)
+    ? false
+    : ((activeSessionChanged || effectiveServerSelectedPreviewRowIdsProvided) ? false : (wiz.local_selected_preview_row_ids_dirty === true));
+  const shouldDefaultFullPreviewSelection = !!(
+    previewPayloadHasRows &&
+    !postMutationSelectionForcedExplicitNone &&
+    !effectiveServerSelectedPreviewRowIdsProvided &&
+    !localSelectionDirty &&
+    (
+      activeSessionChanged ||
+      postMutationFullPreviewWithRows ||
+      !rawLocalSelectionMode ||
+      rawLocalSelectionMode === 'EXPLICIT_NONE'
+    )
+  );
+  const localSelectedPreviewRowIds = (postMutationSelectionForcedExplicitNone || postMutationFullPreviewWithRows || activeSessionChanged || shouldDefaultFullPreviewSelection)
+    ? []
+    : normalizeStringArray(wiz.decisions.selected_preview_row_ids);
   const localSelectionMode = normalizeSelectedPreviewRowMode(
-    postMutationSelectionForcedExplicitNone ? 'EXPLICIT_NONE' : (activeSessionChanged ? 'IMPLICIT_ALL' : (wiz.selected_preview_row_mode || 'IMPLICIT_ALL')),
+    postMutationSelectionForcedExplicitNone
+      ? 'EXPLICIT_NONE'
+      : ((postMutationFullPreviewWithRows || activeSessionChanged || shouldDefaultFullPreviewSelection) ? 'IMPLICIT_ALL' : (wiz.selected_preview_row_mode || 'IMPLICIT_ALL')),
     previewRowUniverse,
     localSelectedPreviewRowIds
   );
@@ -82283,7 +82335,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     selectionState = effectiveServerSelectedPreviewRowIds.length > 0
       ? reconcileSelectedPreviewSelection(effectiveServerSelectedPreviewRowIds, previewRowUniverse, 'EXPLICIT_SUBSET')
       : { selected_preview_row_ids: [], selected_preview_row_mode: 'EXPLICIT_NONE' };
-  } else if (activeSessionChanged) {
+  } else if (postMutationFullPreviewWithRows || activeSessionChanged || shouldDefaultFullPreviewSelection) {
     selectionState = reconcileSelectedPreviewSelection([], previewRowUniverse, 'IMPLICIT_ALL');
   } else {
     selectionState = reconcileSelectedPreviewSelection(
@@ -125758,6 +125810,7 @@ async function bankingPayApplyExecutePaymentResult(finalOperationResult, options
   return normalisedResult;
 }
 
+
 async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -126720,21 +126773,24 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
 
     const previewEnvelope = isPlainObject(state.previewData) ? state.previewData : {};
     const previewPayload = isPlainObject(previewEnvelope.preview) ? previewEnvelope.preview : previewEnvelope;
-    const freshDraftableRowIds = (state.hasFreshPreviewData || state.readyEmpty) ? collectFreshDraftablePreviewRowIds(previewPayload) : [];
+    const freshDraftableRowIds = (state.hasFreshPreviewData && !state.readyEmpty && !state.stalePreviewData) ? collectFreshDraftablePreviewRowIds(previewPayload) : [];
     const originalSelectedIds = Array.from(new Set(selectedPreviewRowIdsForOptionA.map((value) => trimStr(value)).filter(Boolean)));
+    const nextSelectedIds = freshDraftableRowIds.length > 0 ? [...freshDraftableRowIds] : [];
+    const nextSelectionMode = freshDraftableRowIds.length > 0 ? 'IMPLICIT_ALL' : 'EXPLICIT_NONE';
+    const serverSelectionProvided = freshDraftableRowIds.length > 0 ? false : true;
 
     try {
       wizard.decisions = (wizard.decisions && typeof wizard.decisions === 'object') ? wizard.decisions : {};
       wizard.workbench = (wizard.workbench && typeof wizard.workbench === 'object') ? wizard.workbench : {};
-      wizard.decisions.selected_preview_row_ids = [];
+      wizard.decisions.selected_preview_row_ids = [...nextSelectedIds];
       wizard.decisions.server_selected_preview_row_ids = [];
-      wizard.decisions.server_selected_preview_row_ids_provided = true;
-      wizard.decisions.selected_preview_row_mode = 'EXPLICIT_NONE';
+      wizard.decisions.server_selected_preview_row_ids_provided = serverSelectionProvided;
+      wizard.decisions.selected_preview_row_mode = nextSelectionMode;
       wizard.workbench.server_selected_preview_row_ids = [];
-      wizard.workbench.server_selected_preview_row_ids_provided = true;
-      wizard.workbench.selected_preview_row_ids = [];
-      wizard.workbench.selected_preview_row_mode = 'EXPLICIT_NONE';
-      wizard.selected_preview_row_mode = 'EXPLICIT_NONE';
+      wizard.workbench.server_selected_preview_row_ids_provided = serverSelectionProvided;
+      wizard.workbench.selected_preview_row_ids = [...nextSelectedIds];
+      wizard.workbench.selected_preview_row_mode = nextSelectionMode;
+      wizard.selected_preview_row_mode = nextSelectionMode;
       wizard.local_selected_preview_row_ids_dirty = false;
     } catch {}
 
@@ -126742,8 +126798,8 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
       original_selected_preview_row_ids: originalSelectedIds,
       discarded_selected_preview_row_ids: originalSelectedIds,
       fresh_draftable_preview_row_ids: freshDraftableRowIds,
-      reconciled_selected_preview_row_ids: [],
-      selected_preview_row_mode: 'EXPLICIT_NONE'
+      reconciled_selected_preview_row_ids: nextSelectedIds,
+      selected_preview_row_mode: nextSelectionMode
     };
   };
 
@@ -140330,7 +140386,16 @@ function bindBulkProcessPreviewPane(state) {
     const currentTimesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || st.active_details?.current_timesheet_id || st.active_details?.timesheet?.timesheet_id || '');
     const requestedTimesheetId = trimStr(row.requested_timesheet_id || row.timesheet_id || currentTimesheetId || '');
     const expectedTimesheetId = trimStr(row.expected_timesheet_id || row.current_timesheet_id || row.timesheet_id || currentTimesheetId || '');
-    const contractWeekId = trimStr(row.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
+    const rawContractWeekId = trimStr(row.contract_week_id || st.active_details?.contract_week_id || st.active_details?.contract_week?.id || '');
+    const rowKeyIsTimesheet = /^timesheet:/i.test(rowKey || '');
+    const rowKeyIsContractWeek = /^contract_week:/i.test(rowKey || '');
+    const timesheetIdentityForContext = trimStr(currentTimesheetId || requestedTimesheetId || expectedTimesheetId || '');
+    const contractWeekId = (() => {
+      if (!rawContractWeekId) return '';
+      if (rowKeyIsTimesheet) return '';
+      if (!rowKeyIsContractWeek && timesheetIdentityForContext && rawContractWeekId === timesheetIdentityForContext) return '';
+      return rawContractWeekId;
+    })();
     const snapshot = opts.snapshot && typeof opts.snapshot === 'object' ? opts.snapshot : capturePreviewCommitSnapshot(null, { reason: 'preview-row-context' });
 
     const buildDegraded = (reason, payload = {}, extra = {}) => ({
@@ -140738,8 +140803,133 @@ function bindBulkProcessPreviewPane(state) {
     return buildPreviewSelectionKey(normalizedMode, itemId, fileKey);
   };
 
+  const getBulkProcessAttachedPreviewItemRowKey = (itemInput = null) => {
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+    const explicitRowKey = trimStr(item.row_key || item.data_row?.row_key || item.row?.row_key || '');
+    if (explicitRowKey) return explicitRowKey;
+    const timesheetId = trimStr(item.timesheet_id || item.current_timesheet_id || item.requested_timesheet_id || item.expected_timesheet_id || '');
+    if (timesheetId) return `timesheet:${timesheetId}`;
+    const contractWeekId = trimStr(item.contract_week_id || item.current_contract_week_id || item.expected_contract_week_id || '');
+    if (contractWeekId) return `contract_week:${contractWeekId}`;
+    return '';
+  };
+
+  const isBulkProcessAttachedPreviewRowCompatibleWithActiveRow = (itemInput = null) => {
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : null;
+    if (!item) return false;
+    const activeRowKey = trimStr(getPreviewActiveRowKey() || getActiveIdentity() || st.active_row_key || st.active_row?.row_key || '');
+    const itemRowKey = getBulkProcessAttachedPreviewItemRowKey(item);
+    if (activeRowKey && itemRowKey) return activeRowKey === itemRowKey;
+
+    const activeTimesheetId = trimStr(
+      st.active_row?.timesheet_id ||
+      st.active_row?.current_timesheet_id ||
+      st.active_row?.requested_timesheet_id ||
+      st.active_ctx?.row?.timesheet_id ||
+      st.active_ctx?.row?.current_timesheet_id ||
+      st.active_context?.row?.timesheet_id ||
+      st.active_context?.row?.current_timesheet_id ||
+      st.active_context?.data_row?.timesheet_id ||
+      st.active_context?.data_row?.current_timesheet_id ||
+      window.modalCtx?.data?.timesheet_id ||
+      window.modalCtx?.data?.current_timesheet_id ||
+      ''
+    );
+    const itemTimesheetId = trimStr(item.timesheet_id || item.current_timesheet_id || item.requested_timesheet_id || item.expected_timesheet_id || '');
+    if (activeTimesheetId && itemTimesheetId) return activeTimesheetId === itemTimesheetId;
+
+    const activeContractWeekId = trimStr(
+      st.active_row?.contract_week_id ||
+      st.active_ctx?.row?.contract_week_id ||
+      st.active_context?.row?.contract_week_id ||
+      st.active_context?.data_row?.contract_week_id ||
+      window.modalCtx?.data?.contract_week_id ||
+      ''
+    );
+    const itemContractWeekId = trimStr(item.contract_week_id || item.current_contract_week_id || item.expected_contract_week_id || '');
+    if (activeContractWeekId && itemContractWeekId) return activeContractWeekId === itemContractWeekId;
+
+    return !itemRowKey && !itemTimesheetId && !itemContractWeekId;
+  };
+
+  const ensureBulkProcessAttachedPreviewSelection = (attachedRowsInput = null) => {
+    if (trimStr(getPreviewOwnerKind() || '').toLowerCase() !== 'bulk_process') return false;
+    if (bulkAuthoriseSurfaceAtBind || trimStr(bulkAuthoriseOwnerIdentity || '') || isCurrentBulkAuthorisePreviewSurface()) return false;
+    const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    if (activeTab !== 'attached') return false;
+
+    const attachedRowsAll = Array.isArray(attachedRowsInput)
+      ? attachedRowsInput
+      : (Array.isArray(pane.attached_rows) ? pane.attached_rows : []);
+    if (!attachedRowsAll.length) return false;
+
+    const compatibleRows = attachedRowsAll.filter(isBulkProcessAttachedPreviewRowCompatibleWithActiveRow);
+    const anyIdentityScopedRows = attachedRowsAll.some((item) => !!getBulkProcessAttachedPreviewItemRowKey(item));
+    const attachedRows = compatibleRows.length ? compatibleRows : (anyIdentityScopedRows ? [] : attachedRowsAll);
+    if (!attachedRows.length) {
+      pane.active_attached_id = null;
+      pane.active_attached_item = null;
+      return false;
+    }
+
+    const currentAttachedItem = (pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null;
+    const currentAttachedId = trimStr(pane.active_attached_id || currentAttachedItem?.id || currentAttachedItem?.evidence_id || currentAttachedItem?.queue_id || '');
+    const currentAttachedFileKey = resolvePreviewFileCacheKey(currentAttachedItem);
+    const idOf = (item) => trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
+    const fileKeyOf = (item) => resolvePreviewFileCacheKey(item);
+
+    let selected = currentAttachedId
+      ? (attachedRows.find((item) => idOf(item) === currentAttachedId) || null)
+      : null;
+    if (!selected && currentAttachedFileKey) {
+      selected = attachedRows.find((item) => fileKeyOf(item) === currentAttachedFileKey) || null;
+    }
+    if (!selected) {
+      selected = attachedRows.find((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET') || attachedRows[0] || null;
+    }
+    if (!selected || typeof selected !== 'object') return false;
+
+    const selectedId = idOf(selected);
+    const selectedFileKey = fileKeyOf(selected);
+    if (!selectedId || !selectedFileKey) return false;
+
+    const selectedSelectionKey = buildPreviewSelectionKey('attached', selectedId, selectedFileKey);
+    const currentSelectionKey = currentAttachedItem ? buildPreviewSelectionKey('attached', currentAttachedId, currentAttachedFileKey) : '';
+    const changed = !!(
+      !currentAttachedItem ||
+      !currentAttachedId ||
+      currentAttachedId !== selectedId ||
+      currentAttachedFileKey !== selectedFileKey ||
+      currentSelectionKey !== selectedSelectionKey
+    );
+    if (!changed) return false;
+
+    pane.active_tab = 'attached';
+    pane.__attached_manual_override = true;
+    pane.__queue_manual_override = false;
+    pane.active_queue_id = null;
+    pane.active_queue_item = null;
+    pane.active_attached_id = selectedId;
+    pane.active_attached_item = { ...(deep(selected) || {}) };
+    pane.active_attached_pdf_page = 1;
+
+    const liveTargetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+    const liveRequestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+    if ((liveTargetKey && liveTargetKey !== selectedSelectionKey) || (liveRequestedKey && liveRequestedKey !== selectedSelectionKey)) {
+      clearPreviewRequestState({
+        clearRequested: true,
+        abort: true,
+        reason: 'bulk-process-attached-auto-selected',
+        userSelectionChanged: true
+      });
+    }
+    markPreviewLoadRequested(selectedSelectionKey);
+    return true;
+  };
+
   const getPreviewState = () => {
     const attachedRows = syncAttachedRows();
+    ensureBulkProcessAttachedPreviewSelection(attachedRows);
     const queueItem = syncQueueItem();
     const activeTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
     const attachedItem = (pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null;
@@ -155114,6 +155304,7 @@ async function handleBulkProcessSave(state) {
 
 
 
+
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -155739,9 +155930,34 @@ async function handleBulkProcessProcess(state) {
     if (!key) {
       throw new Error('Bulk Process row context cannot be refreshed after evidence attach because the active row key is missing. Refresh the row and try again.');
     }
+    const refreshTimesheetId = trimStr(
+      activeForRefresh.timesheetId ||
+      activeForRefresh.row?.timesheet_id ||
+      activeForRefresh.row?.current_timesheet_id ||
+      activeForRefresh.row?.requested_timesheet_id ||
+      activeForRefresh.details?.current_timesheet_id ||
+      activeForRefresh.details?.requested_timesheet_id ||
+      activeForRefresh.details?.timesheet?.timesheet_id ||
+      st.active_row?.timesheet_id ||
+      st.active_row?.current_timesheet_id ||
+      ''
+    );
+    const refreshExpectedTimesheetId = trimStr(
+      activeForRefresh.expectedTimesheetId ||
+      activeForRefresh.row?.expected_timesheet_id ||
+      activeForRefresh.details?.expected_timesheet_id ||
+      refreshTimesheetId ||
+      ''
+    );
     await handleBulkProcessRowChange(st, key, {
       source: reason || 'before-process-post-attach-rebase',
       expectedRowKey: key,
+      row_key: key,
+      timesheet_id: refreshTimesheetId || null,
+      current_timesheet_id: refreshTimesheetId || null,
+      requested_timesheet_id: refreshTimesheetId || null,
+      expected_timesheet_id: refreshExpectedTimesheetId || refreshTimesheetId || null,
+      contract_week_id: '',
       profile: 'evidence',
       context_profile: 'evidence',
       includeEvidence: true,
@@ -155923,16 +156139,57 @@ async function handleBulkProcessProcess(state) {
       timesheetId ||
       ''
     );
-    const resolvedRowKey = rowKey || (currentTimesheetId ? `timesheet:${currentTimesheetId}` : (timesheetId ? `timesheet:${timesheetId}` : ''));
+    const rawContractWeekId = trimStr(
+      active.contractWeekId ||
+      row.contract_week_id ||
+      details.contract_week_id ||
+      details.contract_week?.id ||
+      window.modalCtx?.data?.contract_week_id ||
+      ''
+    );
+    const isTimesheetIdentity = !!(/^timesheet:/i.test(rowKey || '') || timesheetId || currentTimesheetId || requestedTimesheetId || expectedTimesheetId);
+    const contractWeekId = isTimesheetIdentity ? '' : rawContractWeekId;
+    const resolvedRowKey = rowKey || (currentTimesheetId ? `timesheet:${currentTimesheetId}` : (timesheetId ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : '')));
     return {
       rowKey: resolvedRowKey,
       timesheetId: timesheetId || currentTimesheetId || requestedTimesheetId || expectedTimesheetId || '',
       currentTimesheetId,
       requestedTimesheetId,
-      expectedTimesheetId
+      expectedTimesheetId,
+      contractWeekId
     };
   };
-  const collectFreshestProcessBaselineSignature = () => resolveProcessRowSignatureFrom(
+  const PROCESS_EXTERNAL_CHANGE_ERROR = 'Timesheet changed after it was loaded. Refresh the row and try again.';
+
+  const getAllowedProcessStatusHeaderSignatureForIdentity = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const identity = resolveActiveProcessTimesheetIdentity(active);
+    const storedSignature = trimStr(st.__bulk_process_allowed_process_row_signature || '');
+    if (!storedSignature) return '';
+    const storedRowKey = trimStr(st.__bulk_process_allowed_process_row_key || '');
+    const storedTimesheetId = trimStr(st.__bulk_process_allowed_process_timesheet_id || '');
+    const activeRowKey = trimStr(identity.rowKey || '');
+    const activeTimesheetId = trimStr(identity.timesheetId || identity.currentTimesheetId || identity.requestedTimesheetId || identity.expectedTimesheetId || '');
+    if (storedRowKey && activeRowKey && storedRowKey !== activeRowKey) return '';
+    if (storedTimesheetId && activeTimesheetId && storedTimesheetId !== activeTimesheetId) return '';
+    return storedSignature;
+  };
+
+  const collectActiveProcessLocalBaselineSignature = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    return resolveProcessRowSignatureFrom(
+      active.row,
+      active.ctx?.row,
+      st.active_row,
+      st.active_ctx?.row,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      window.modalCtx?.data
+    );
+  };
+
+  const collectFreshestProcessBaselineSignature = (activeInput = null) => resolveProcessRowSignatureFrom(
+    { row_signature: getAllowedProcessStatusHeaderSignatureForIdentity(activeInput) },
     window.modalCtx?.data,
     window.modalCtx?.timesheetDetails,
     window.modalCtx?.timesheetState,
@@ -155940,9 +156197,12 @@ async function handleBulkProcessProcess(state) {
     st.active_context?.row,
     st.active_context
   );
+
   const collectActiveProcessBaselineSignature = (activeInput = null) => {
     const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     return resolveProcessRowSignatureFrom(
+      { row_signature: getAllowedProcessStatusHeaderSignatureForIdentity(active) },
+      collectActiveProcessLocalBaselineSignature(active) ? { row_signature: collectActiveProcessLocalBaselineSignature(active) } : null,
       active.row,
       active.ctx?.row,
       st.active_row,
@@ -155951,6 +156211,236 @@ async function handleBulkProcessProcess(state) {
       st.active_context?.data_row
     );
   };
+  const fetchFreshProcessStatusHeaderBaseline = async (activeInput = null, fetchReason = 'process-status-header-baseline') => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const identity = resolveActiveProcessTimesheetIdentity(active);
+    const timesheetId = trimStr(identity.timesheetId || identity.currentTimesheetId || identity.requestedTimesheetId || identity.expectedTimesheetId || '');
+    const rowKey = trimStr(identity.rowKey || (timesheetId ? `timesheet:${timesheetId}` : '') || '');
+    if (!rowKey || (!timesheetId && !/^timesheet:/i.test(rowKey))) return null;
+
+    const qs = new URLSearchParams();
+    const add = (key, value) => {
+      const clean = trimStr(value || '');
+      if (clean) qs.set(key, clean);
+    };
+    add('row_key', rowKey);
+    add('timesheet_id', timesheetId);
+    add('current_timesheet_id', identity.currentTimesheetId || timesheetId);
+    add('requested_timesheet_id', identity.requestedTimesheetId || timesheetId);
+    add('expected_timesheet_id', identity.expectedTimesheetId || identity.currentTimesheetId || timesheetId);
+    qs.set('profile', 'status_header');
+    qs.set('context_profile', 'status_header');
+    qs.set('include_evidence', 'false');
+    qs.set('include_compare', 'false');
+    qs.set('include_import_source_rows', 'false');
+
+    const res = await authFetch(API(`/api/timesheets/bulk-process-row-context?${qs.toString()}`));
+    const text = await res.text().catch(() => '');
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
+    const json = (payload && typeof payload === 'object') ? payload : {};
+    if (!res.ok || json.ok === false || json.soft_failure === true) {
+      const message = trimStr(json.message || json.error || text || `Bulk Process status/header refresh failed (${res.status})`);
+      throw new Error(message || 'Bulk Process status/header refresh failed. Refresh the row and try again.');
+    }
+
+    const baselineRow = {
+      ...pickObject(json.data_row || json.row || {}),
+      ...pickObject(json.row_patch || {})
+    };
+    const rowSignature = resolveProcessRowSignatureFrom(json, baselineRow, json.data_row, json.row, json.row_patch, json.details);
+    const currentVersion = resolveProcessCurrentVersionFrom(json, baselineRow, json.data_row, json.row, json.details, json.details?.timesheet);
+    return {
+      payload: json,
+      baselineRow,
+      rowSignature,
+      currentVersion,
+      identity: { ...identity, rowKey, timesheetId },
+      reason: trimStr(fetchReason || 'process-status-header-baseline') || 'process-status-header-baseline',
+      url: `/api/timesheets/bulk-process-row-context?${qs.toString()}`
+    };
+  };
+  const processStatusHeaderIdentityMatchesActive = (baselineInput = null, activeInput = null) => {
+    const baseline = (baselineInput && typeof baselineInput === 'object') ? baselineInput : null;
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    if (!baseline) return false;
+    const activeIdentity = resolveActiveProcessTimesheetIdentity(active);
+    const baselineIdentity = baseline.identity || {};
+    const baselineRow = (baseline.baselineRow && typeof baseline.baselineRow === 'object') ? baseline.baselineRow : {};
+    const activeRowKey = trimStr(activeIdentity.rowKey || '');
+    const baselineRowKey = trimStr(baselineIdentity.rowKey || baselineRow.row_key || '');
+    if (activeRowKey && baselineRowKey && activeRowKey !== baselineRowKey) return false;
+    const activeTimesheetId = trimStr(activeIdentity.timesheetId || activeIdentity.currentTimesheetId || activeIdentity.requestedTimesheetId || activeIdentity.expectedTimesheetId || '');
+    const baselineTimesheetId = trimStr(
+      baselineIdentity.timesheetId ||
+      baselineIdentity.currentTimesheetId ||
+      baselineIdentity.requestedTimesheetId ||
+      baselineIdentity.expectedTimesheetId ||
+      baselineRow.timesheet_id ||
+      baselineRow.current_timesheet_id ||
+      baselineRow.requested_timesheet_id ||
+      baselineRow.expected_timesheet_id ||
+      ''
+    );
+    if (activeTimesheetId && baselineTimesheetId && activeTimesheetId !== baselineTimesheetId) return false;
+    return !!(activeRowKey || activeTimesheetId || baselineRowKey || baselineTimesheetId);
+  };
+
+  const shouldIgnoreProcessBaselineCompareField = (fieldInput = '') => {
+    const field = trimStr(fieldInput || '');
+    const lower = field.toLowerCase();
+    if (!field || lower.startsWith('__')) return true;
+    if (lower.includes('signature')) return true;
+    if (lower.includes('version')) return true;
+    if (lower.endsWith('_at') || lower.endsWith('_utc') || lower === 'created_at' || lower === 'updated_at') return true;
+    if (lower.includes('evidence')) return true;
+    if (lower.includes('artifact')) return true;
+    if (lower.includes('preview')) return true;
+    if (lower === 'manual_pdf_r2_key' || lower === 'uploaded_pdf_r2_key' || lower === 'qr_r2_key') return true;
+    if (lower === 'action_flags' || lower === 'row_patch' || lower === 'filters') return true;
+    if (lower === 'summary_stage' || lower === 'tools_stage' || lower === 'bulk_process_bucket') return true;
+    return false;
+  };
+
+  const normaliseProcessBaselineCompareValue = (value) => {
+    if (value == null) return '';
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
+    if (typeof value === 'string') {
+      const text = trimStr(value);
+      if (/^-?\d+(?:\.\d+)?$/.test(text)) {
+        const n = Number(text);
+        if (Number.isFinite(n)) return String(n);
+      }
+      return text;
+    }
+    return '';
+  };
+
+  const collectProcessBaselineComparableScalars = (rowInput = null) => {
+    const row = (rowInput && typeof rowInput === 'object') ? rowInput : {};
+    const out = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (shouldIgnoreProcessBaselineCompareField(key)) continue;
+      if (value == null || Array.isArray(value) || typeof value === 'object') continue;
+      const normalised = normaliseProcessBaselineCompareValue(value);
+      if (normalised === '') continue;
+      out[key] = normalised;
+    }
+    return out;
+  };
+
+  const buildActiveProcessBaselineCompareRow = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    return {
+      ...pickObject(window.modalCtx?.data || {}),
+      ...pickObject(st.active_context?.data_row || {}),
+      ...pickObject(st.active_context?.row || {}),
+      ...pickObject(st.active_ctx?.data_row || {}),
+      ...pickObject(st.active_ctx?.row || {}),
+      ...pickObject(st.active_row || {}),
+      ...pickObject(active.row || {})
+    };
+  };
+
+  const validateFreshProcessStatusHeaderBaselineSafeToAdopt = (baselineInput = null, activeInput = null, validateOptions = {}) => {
+    const opts = (validateOptions && typeof validateOptions === 'object') ? validateOptions : {};
+    const baseline = (baselineInput && typeof baselineInput === 'object') ? baselineInput : null;
+    if (!baseline) throw new Error('Bulk Process status/header baseline was not available. Refresh the row and try again.');
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    if (!processStatusHeaderIdentityMatchesActive(baseline, active)) {
+      throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
+    }
+    if (opts.skipScalarCompatibility === true) return true;
+
+    const activeComparable = collectProcessBaselineComparableScalars(buildActiveProcessBaselineCompareRow(active));
+    const freshComparable = collectProcessBaselineComparableScalars(baseline.baselineRow || {});
+    const diffs = [];
+    for (const [key, freshValue] of Object.entries(freshComparable)) {
+      if (!Object.prototype.hasOwnProperty.call(activeComparable, key)) continue;
+      const activeValue = activeComparable[key];
+      if (activeValue !== freshValue) {
+        diffs.push({ key, activeValue, freshValue });
+      }
+    }
+    if (diffs.length) {
+      if (window.__LOG_MODAL === true) {
+        console.warn('[TS][BULK-PROCESS][PROCESS] refusing status/header signature adoption because non-evidence row fields changed', {
+          reason: trimStr(opts.reason || ''),
+          diffs: diffs.slice(0, 12),
+          diff_count: diffs.length,
+          row_key: trimStr(baseline.identity?.rowKey || baseline.baselineRow?.row_key || '') || null,
+          timesheet_id: trimStr(baseline.identity?.timesheetId || baseline.baselineRow?.timesheet_id || baseline.baselineRow?.current_timesheet_id || '') || null
+        });
+      }
+      throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
+    }
+    return true;
+  };
+
+  const rememberAllowedProcessStatusHeaderBaseline = (baselineInput = null, rememberReason = 'controlled-process-mutation') => {
+    const baseline = (baselineInput && typeof baselineInput === 'object') ? baselineInput : null;
+    const signature = trimStr(baseline?.rowSignature || '');
+    if (!baseline || !signature) return '';
+    const identity = baseline.identity || {};
+    const row = baseline.baselineRow || {};
+    st.__bulk_process_allowed_process_row_signature = signature;
+    st.__bulk_process_allowed_process_row_key = trimStr(identity.rowKey || row.row_key || '');
+    st.__bulk_process_allowed_process_timesheet_id = trimStr(identity.timesheetId || identity.currentTimesheetId || row.timesheet_id || row.current_timesheet_id || '');
+    st.__bulk_process_allowed_process_reason = trimStr(rememberReason || 'controlled-process-mutation') || 'controlled-process-mutation';
+    st.__bulk_process_allowed_process_at = new Date().toISOString();
+    return signature;
+  };
+
+  const refreshControlledProcessStatusHeaderBaselineAfterMutation = async (activeInput = null, refreshReason = 'controlled-process-mutation', refreshOptions = {}) => {
+    const opts = (refreshOptions && typeof refreshOptions === 'object') ? refreshOptions : {};
+    let active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    if (!active.isDaily || active.submissionMode !== 'MANUAL') return active;
+    const baseline = await fetchFreshProcessStatusHeaderBaseline(active, refreshReason);
+    if (!baseline?.rowSignature) {
+      throw new Error('Bulk Process status/header baseline did not include a row signature. Refresh the row and try again.');
+    }
+    validateFreshProcessStatusHeaderBaselineSafeToAdopt(baseline, active, {
+      reason: refreshReason,
+      skipScalarCompatibility: opts.skipScalarCompatibility === true
+    });
+    rememberAllowedProcessStatusHeaderBaseline(baseline, refreshReason);
+    active = patchProcessBaselineContainersFromActive(readActive(), {
+      reason: refreshReason,
+      rowSignature: baseline.rowSignature,
+      current_version: baseline.currentVersion,
+      baselineRow: baseline.baselineRow,
+      statusHeaderPayload: baseline.payload
+    });
+    if (typeof resetBulkProcessDirtyBaseline === 'function') {
+      try {
+        resetBulkProcessDirtyBaseline(st, 'process-controlled-status-header-baseline', {
+          source: 'handleBulkProcessProcess',
+          dirty_source: refreshReason,
+          note: 'controlled save/evidence mutation baseline confirmed before process',
+          status_header_signature: baseline.rowSignature || null
+        });
+      } catch {}
+    }
+    return active;
+  };
+
+  const assertNoExternalProcessBaselineChangeBeforeControlledMutation = async (activeInput = null, assertReason = 'before-controlled-process-mutation') => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    if (!active.isDaily || active.submissionMode !== 'MANUAL') return null;
+    const baseline = await fetchFreshProcessStatusHeaderBaseline(active, assertReason);
+    if (!baseline?.rowSignature) return baseline;
+    validateFreshProcessStatusHeaderBaselineSafeToAdopt(baseline, active, { reason: assertReason });
+    const activeSignature = trimStr(collectActiveProcessLocalBaselineSignature(active) || '');
+    const allowedSignature = trimStr(getAllowedProcessStatusHeaderSignatureForIdentity(active) || '');
+    const baselineSignature = trimStr(baseline.rowSignature || '');
+    if (baselineSignature && activeSignature && baselineSignature !== activeSignature) {
+      if (allowedSignature && baselineSignature === allowedSignature) return baseline;
+      throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
+    }
+    return baseline;
+  };
+
   const hasPostAttachProcessEditorRebaseMarker = (activeInput = null, markerOptions = {}) => {
     const opts = (markerOptions && typeof markerOptions === 'object') ? markerOptions : {};
     if (opts.evidenceMutated === true) return true;
@@ -155982,8 +156472,21 @@ async function handleBulkProcessProcess(state) {
     const ctx = (active.ctx && typeof active.ctx === 'object') ? active.ctx : ((st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {});
     const stateCtx = (ctx.state && typeof ctx.state === 'object') ? ctx.state : {};
     const identity = resolveActiveProcessTimesheetIdentity(active);
-    const rowSignature = resolveProcessRowSignatureFrom(row, ctx.row, st.active_row, st.active_context?.row, st.active_context?.data_row, window.modalCtx?.data, window.modalCtx?.timesheetDetails, window.modalCtx?.timesheetState);
-    const currentVersion = resolveProcessCurrentVersionFrom(row, ctx.row, details, details.timesheet, window.modalCtx?.data, window.modalCtx?.timesheetDetails);
+    const opts = (patchOptions && typeof patchOptions === 'object') ? patchOptions : {};
+    const baselineRow = pickObject(opts.baselineRow || opts.statusHeaderRow || opts.status_header_row || {});
+    const explicitRowSignature = firstNonBlankProcessValue(
+      opts.rowSignature,
+      opts.row_signature,
+      opts.expectedRowSignature,
+      opts.expected_row_signature,
+      opts.backend_row_signature,
+      opts.current_row_signature
+    );
+    const explicitCurrentVersion = resolveProcessCurrentVersionFrom(opts, baselineRow, opts.statusHeaderRow, opts.status_header_row, opts.statusHeaderPayload, opts.status_header_payload);
+    const rowSignature = explicitRowSignature || resolveProcessRowSignatureFrom(baselineRow, row, ctx.row, st.active_row, st.active_context?.row, st.active_context?.data_row, window.modalCtx?.data, window.modalCtx?.timesheetDetails, window.modalCtx?.timesheetState);
+    const currentVersion = (explicitCurrentVersion !== undefined && explicitCurrentVersion !== null && trimStr(explicitCurrentVersion || '') !== '')
+      ? explicitCurrentVersion
+      : resolveProcessCurrentVersionFrom(row, ctx.row, details, details.timesheet, window.modalCtx?.data, window.modalCtx?.timesheetDetails);
     const patchTarget = (target) => {
       if (!target || typeof target !== 'object') return;
       if (identity.rowKey) target.row_key = identity.rowKey;
@@ -155991,6 +156494,10 @@ async function handleBulkProcessProcess(state) {
       if (identity.currentTimesheetId) target.current_timesheet_id = identity.currentTimesheetId;
       if (identity.requestedTimesheetId) target.requested_timesheet_id = identity.requestedTimesheetId;
       if (identity.expectedTimesheetId) target.expected_timesheet_id = identity.expectedTimesheetId;
+      if (identity.timesheetId || /^timesheet:/i.test(trimStr(identity.rowKey || ''))) {
+        target.contract_week_id = null;
+        if (target.contract_week && typeof target.contract_week === 'object') target.contract_week.id = null;
+      }
       if (rowSignature) {
         target.row_signature = rowSignature;
         target.expected_row_signature = rowSignature;
@@ -156008,6 +156515,7 @@ async function handleBulkProcessProcess(state) {
     st.active_row = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
     patchTarget(st.active_row);
     if (row && typeof row === 'object') Object.assign(st.active_row, { ...st.active_row, ...deep(row) });
+    if (baselineRow && typeof baselineRow === 'object' && Object.keys(baselineRow).length) Object.assign(st.active_row, { ...st.active_row, ...deep(baselineRow) });
     patchTarget(st.active_row);
     st.active_row_key = identity.rowKey || st.active_row_key || rowKeyOf(st.active_row) || '';
 
@@ -156047,6 +156555,8 @@ async function handleBulkProcessProcess(state) {
     if (window.modalCtx && (window.modalCtx.bulkProcessState === st || trimStr(window.modalCtx.entity || '').toLowerCase() === 'bulk-process')) {
       window.modalCtx.data = (window.modalCtx.data && typeof window.modalCtx.data === 'object') ? window.modalCtx.data : {};
       patchTarget(window.modalCtx.data);
+      if (baselineRow && typeof baselineRow === 'object' && Object.keys(baselineRow).length) Object.assign(window.modalCtx.data, { ...window.modalCtx.data, ...deep(baselineRow) });
+      patchTarget(window.modalCtx.data);
       window.modalCtx.timesheetDetails = (window.modalCtx.timesheetDetails && typeof window.modalCtx.timesheetDetails === 'object') ? window.modalCtx.timesheetDetails : {};
       patchTarget(window.modalCtx.timesheetDetails);
       window.modalCtx.timesheetDetails.timesheet = (window.modalCtx.timesheetDetails.timesheet && typeof window.modalCtx.timesheetDetails.timesheet === 'object') ? window.modalCtx.timesheetDetails.timesheet : {};
@@ -156059,6 +156569,10 @@ async function handleBulkProcessProcess(state) {
       }
     }
 
+    if (rowSignature) {
+      st.__bulk_process_process_status_header_row_signature = rowSignature;
+      st.__bulk_process_fresh_process_row_signature = rowSignature;
+    }
     const markerStorageKey = trimStr(st.__bulk_process_post_attach_rebase_storage_key || st.evidence_pane_state?.__bulk_process_post_attach_rebase_storage_key || '').replace(/^\/+/, '');
     if (markerStorageKey) st.__bulk_process_process_editor_rebased_storage_key = markerStorageKey;
     st.__bulk_process_process_editor_rebased_at = new Date().toISOString();
@@ -156066,61 +156580,108 @@ async function handleBulkProcessProcess(state) {
     return readActive();
   };
   const awaitProcessEditorBaselineRebaseBeforeSubmit = async (activeInput = null, rebaseOptions = {}) => {
+    const opts = (rebaseOptions && typeof rebaseOptions === 'object') ? rebaseOptions : {};
     let active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     if (!active.isDaily || active.submissionMode !== 'MANUAL') return active;
-    const activeSignature = collectActiveProcessBaselineSignature(active);
-    const freshestSignature = collectFreshestProcessBaselineSignature();
-    const signatureMismatch = !!(freshestSignature && (!activeSignature || activeSignature !== freshestSignature));
-    const postAttachMarker = hasPostAttachProcessEditorRebaseMarker(active, rebaseOptions);
-    if (!signatureMismatch && !postAttachMarker) return active;
 
-    if (typeof handleBulkProcessRowChange !== 'function') {
-      throw new Error('Bulk Process editor/status baseline refresh is not available after evidence attach. Refresh the row and try again.');
-    }
-    const identity = resolveActiveProcessTimesheetIdentity(active);
+    const localActiveSignature = trimStr(collectActiveProcessLocalBaselineSignature(active) || '');
+    const allowedSignature = trimStr(getAllowedProcessStatusHeaderSignatureForIdentity(active) || '');
+    const activeSignature = trimStr(allowedSignature || localActiveSignature || collectActiveProcessBaselineSignature(active) || '');
+    const postAttachMarker = hasPostAttachProcessEditorRebaseMarker(active, opts);
+    const controlledMutationInThisFlow = !!(opts.saveMutated === true || opts.evidenceMutated === true);
+    const statusHeaderBaseline = await fetchFreshProcessStatusHeaderBaseline(
+      active,
+      postAttachMarker ? 'post-attach-process-status-header-baseline' : 'process-status-header-baseline'
+    );
+    const statusHeaderSignature = trimStr(statusHeaderBaseline?.rowSignature || '');
+    const freshestSignature = statusHeaderSignature || collectFreshestProcessBaselineSignature(active);
+    const signatureMismatch = !!(freshestSignature && (!activeSignature || activeSignature !== freshestSignature));
+    const identity = statusHeaderBaseline?.identity || resolveActiveProcessTimesheetIdentity(active);
     if (!identity.rowKey) {
       throw new Error('Bulk Process row context cannot be refreshed before processing because the active timesheet row key is missing. Refresh the row and try again.');
     }
+    if (statusHeaderBaseline && !processStatusHeaderIdentityMatchesActive(statusHeaderBaseline, active)) {
+      throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
+    }
 
-    await handleBulkProcessRowChange(st, identity.rowKey, {
-      source: signatureMismatch ? 'bulk-process-process-stale-editor-baseline-rebase' : 'bulk-process-process-post-attach-editor-baseline-rebase',
-      expectedRowKey: identity.rowKey,
-      row_key: identity.rowKey,
-      timesheet_id: identity.timesheetId || identity.currentTimesheetId || null,
-      current_timesheet_id: identity.currentTimesheetId || identity.timesheetId || null,
-      requested_timesheet_id: identity.requestedTimesheetId || identity.timesheetId || null,
-      expected_timesheet_id: identity.expectedTimesheetId || identity.currentTimesheetId || identity.timesheetId || null,
-      profile: 'editor',
-      context_profile: 'editor',
-      includeEvidence: false,
-      include_evidence: false,
-      loadEvidence: false,
-      includeCompare: false,
-      include_compare: false,
-      includeImportSourceRows: false,
-      include_import_source_rows: false,
-      forceContextRefresh: true,
-      skipDatasetRefresh: true,
-      preserveEvidencePane: true,
-      preserveActiveContext: false,
-      suppressAdjacentPrefetch: true,
-      rerender: false,
-      skipDirtyGuard: true,
-      force: true
-    });
+    if (signatureMismatch) {
+      if (allowedSignature) {
+        if (freshestSignature !== allowedSignature) {
+          throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
+        }
+      } else if (controlledMutationInThisFlow) {
+        throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
+      } else if (postAttachMarker) {
+        validateFreshProcessStatusHeaderBaselineSafeToAdopt(statusHeaderBaseline, active, {
+          reason: 'post-attach-process-status-header-baseline'
+        });
+        rememberAllowedProcessStatusHeaderBaseline(statusHeaderBaseline, 'post-attach-process-status-header-baseline');
+      } else {
+        throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
+      }
+    }
+
+    if (postAttachMarker && typeof handleBulkProcessRowChange === 'function') {
+      await handleBulkProcessRowChange(st, identity.rowKey, {
+        source: signatureMismatch ? 'bulk-process-process-stale-editor-baseline-rebase' : 'bulk-process-process-post-attach-editor-baseline-rebase',
+        expectedRowKey: identity.rowKey,
+        row_key: identity.rowKey,
+        timesheet_id: identity.timesheetId || identity.currentTimesheetId || null,
+        current_timesheet_id: identity.currentTimesheetId || identity.timesheetId || null,
+        requested_timesheet_id: identity.requestedTimesheetId || identity.timesheetId || null,
+        expected_timesheet_id: identity.expectedTimesheetId || identity.currentTimesheetId || identity.timesheetId || null,
+        contract_week_id: '',
+        profile: 'editor',
+        context_profile: 'editor',
+        includeEvidence: false,
+        include_evidence: false,
+        loadEvidence: false,
+        includeCompare: false,
+        include_compare: false,
+        includeImportSourceRows: false,
+        include_import_source_rows: false,
+        forceContextRefresh: true,
+        skipDatasetRefresh: true,
+        preserveEvidencePane: true,
+        preserveActiveContext: false,
+        suppressAdjacentPrefetch: true,
+        rerender: false,
+        skipDirtyGuard: true,
+        force: true
+      });
+    } else if (postAttachMarker && typeof handleBulkProcessRowChange !== 'function' && !statusHeaderSignature) {
+      throw new Error('Bulk Process editor/status baseline refresh is not available after evidence attach. Refresh the row and try again.');
+    }
 
     if (typeof installBulkProcessModalCtxPatch === 'function') {
       try { installBulkProcessModalCtxPatch(st, { source_context: 'bulk_process' }); } catch {}
     }
-    active = patchProcessBaselineContainersFromActive(readActive(), { reason: signatureMismatch ? 'stale-signature' : 'post-attach' });
+
+    const finalSignature = freshestSignature || activeSignature;
+    const patchReason = signatureMismatch ? 'status-header-controlled-signature' : (postAttachMarker ? 'post-attach-status-header' : 'status-header-baseline');
+    active = patchProcessBaselineContainersFromActive(readActive(), {
+      reason: patchReason,
+      rowSignature: finalSignature,
+      current_version: statusHeaderBaseline?.currentVersion,
+      baselineRow: statusHeaderBaseline?.baselineRow,
+      statusHeaderPayload: statusHeaderBaseline?.payload
+    });
+    if (finalSignature) rememberAllowedProcessStatusHeaderBaseline(statusHeaderBaseline, patchReason);
+
     if (typeof resetBulkProcessDirtyBaseline === 'function') {
       try {
-        resetBulkProcessDirtyBaseline(st, 'process-editor-baseline-rebase', {
+        resetBulkProcessDirtyBaseline(st, 'process-status-header-baseline-rebase', {
           source: 'handleBulkProcessProcess',
-          dirty_source: 'process editor/status baseline rebase',
-          note: 'one-shot editor/status baseline refreshed before Bulk Process submit',
+          dirty_source: 'process status/header baseline rebase',
+          note: 'one-shot status/header baseline checked before Bulk Process submit; latest signature is adopted only for controlled same-row mutations',
           active_signature: activeSignature || null,
-          freshest_signature: freshestSignature || null
+          local_active_signature: localActiveSignature || null,
+          allowed_signature: allowedSignature || null,
+          freshest_signature: freshestSignature || null,
+          status_header_signature: statusHeaderSignature || null,
+          post_attach_marker: postAttachMarker === true,
+          save_mutated: opts.saveMutated === true,
+          evidence_mutated: opts.evidenceMutated === true
         });
       } catch {}
     }
@@ -156261,6 +156822,7 @@ async function handleBulkProcessProcess(state) {
     }
 
     const dirtyBeforeProcess = (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty;
+    let controlledSaveMutation = false;
     if (dirtyBeforeProcess) {
       const saveResult = await handleBulkProcessSave(st);
       if (!saveResult || saveResult.ok !== true) {
@@ -156272,6 +156834,7 @@ async function handleBulkProcessProcess(state) {
           evidenceRequired: saveResult?.evidenceRequired === true
         };
       }
+      controlledSaveMutation = true;
 
       const afterSaveRowKey = rowKeyOf(st.active_row || {});
       if (!afterSaveRowKey) {
@@ -156316,8 +156879,13 @@ async function handleBulkProcessProcess(state) {
         };
       }
 
+      let activeForPostSaveProcessGate = readActive();
+      activeForPostSaveProcessGate = await refreshControlledProcessStatusHeaderBaselineAfterMutation(
+        activeForPostSaveProcessGate,
+        'bulk-process-process-after-save-status-header',
+        { skipScalarCompatibility: false }
+      );
       editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
-      const activeForPostSaveProcessGate = readActive();
       if (!editability.canProcess && !isZeroHourExpenseOnlyAdditionalManualAdjustment(activeForPostSaveProcessGate)) {
         const reason = trimStr(editability.processDisabledReason || editability.disabledReason || '') || 'This row cannot be processed.';
         return { ok: false, error: reason };
@@ -156346,10 +156914,27 @@ async function handleBulkProcessProcess(state) {
     activeContractWeekId = active.contractWeekId;
     expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
 
+    const paneBeforeProcessEvidenceMutation = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    const willAttachOrStageQueueItem = !!(
+      paneBeforeProcessEvidenceMutation &&
+      trimStr(paneBeforeProcessEvidenceMutation.active_tab || 'queue').toLowerCase() === 'queue' &&
+      paneBeforeProcessEvidenceMutation.active_queue_item &&
+      typeof paneBeforeProcessEvidenceMutation.active_queue_item === 'object' &&
+      trimStr(paneBeforeProcessEvidenceMutation.active_queue_item.id || paneBeforeProcessEvidenceMutation.active_queue_item.queue_id || '')
+    );
+    if (willAttachOrStageQueueItem) {
+      await assertNoExternalProcessBaselineChangeBeforeControlledMutation(active, 'before-process-queue-evidence-attach');
+    }
+
     const preservedStateCtxBeforeEvidenceMutation = pickObject(active.stateCtx || {});
     const evidenceMutated = await maybeAttachOrStageQueueItem({ timesheetId: activeTimesheetId, contractWeekId: activeContractWeekId, expectedTimesheetId });
     if (evidenceMutated) {
       active = await refreshActiveAfterEvidenceMutation(previousRowKey, preservedStateCtxBeforeEvidenceMutation, 'bulk-process-process-evidence-mutated');
+      active = await refreshControlledProcessStatusHeaderBaselineAfterMutation(
+        active,
+        'bulk-process-process-after-evidence-status-header',
+        { skipScalarCompatibility: false }
+      );
       activeTimesheetId = active.timesheetId;
       activeContractWeekId = active.contractWeekId;
       expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
@@ -156371,11 +156956,11 @@ async function handleBulkProcessProcess(state) {
 
     let processResult = null;
     if (active.isDaily && active.submissionMode === 'MANUAL' && activeTimesheetId) {
-      active = await awaitProcessEditorBaselineRebaseBeforeSubmit(active, { evidenceMutated });
+      active = await awaitProcessEditorBaselineRebaseBeforeSubmit(active, { evidenceMutated, saveMutated: controlledSaveMutation });
       activeTimesheetId = active.timesheetId;
       activeContractWeekId = active.contractWeekId;
       expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
-      const activeRowSignature = trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '');
+      const activeRowSignature = trimStr(collectActiveProcessBaselineSignature(active) || st.__bulk_process_process_status_header_row_signature || st.__bulk_process_fresh_process_row_signature || active.row?.row_signature || active.ctx?.row?.row_signature || '');
       processResult = await processDailyManualTimesheet(String(activeTimesheetId), {
         expected_timesheet_id: expectedTimesheetId || activeTimesheetId,
         expected_row_signature: activeRowSignature || null,
@@ -156588,7 +157173,6 @@ async function handleBulkProcessProcess(state) {
     return { ok: false, error: st.error_text };
   }
 }
-
 
 
 
