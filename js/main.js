@@ -25272,7 +25272,6 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
 
 
 
-
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -27773,6 +27772,181 @@ async function bankingPayPreview(pay_date) {
     return { didFullPreviewLoad: false, payload: lastPayload, status: lastStatus || 'pending' };
   };
 
+
+  const schedulePostMutationPreviewResumePoll = (reason = 'POST_MUTATION_PREVIEW_RESUME', seedPayload = null) => {
+    if (!isPostMutationRefresh) return false;
+    if (typeof window === 'undefined' || typeof window.setTimeout !== 'function') return false;
+
+    const seedCtx = isPlainObject(seedPayload) ? extractWorkbenchContextFromPayload(seedPayload) : {};
+    const resumeSessionId = trimStr(seedCtx.session_id || getCurrentWorkbenchSessionId() || replacementSessionId || '');
+    if (!resumeSessionId || isObsoleteSessionId(resumeSessionId)) return false;
+
+    const existingResumeToken = trimStr(wiz.workbench.__post_mutation_resume_poll_token || '');
+    const existingResumeSessionId = trimStr(wiz.workbench.__post_mutation_resume_poll_session_id || '');
+    if (existingResumeToken && existingResumeSessionId === resumeSessionId) return true;
+
+    const resumeToken = `banking-pay-post-mutation-resume:${resumeSessionId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const resumeAttemptsRaw = Number(options.post_mutation_resume_poll_attempts || options.postMutationResumePollAttempts || 90);
+    const resumeAttempts = Number.isFinite(resumeAttemptsRaw) ? Math.max(1, Math.min(180, Math.trunc(resumeAttemptsRaw))) : 90;
+    const resumeDelayRaw = Number(options.post_mutation_resume_poll_delay_ms || options.postMutationResumePollDelayMs || 1000);
+    const resumeDelayMs = Number.isFinite(resumeDelayRaw) ? Math.max(250, Math.min(5000, Math.trunc(resumeDelayRaw))) : 1000;
+
+    wiz.workbench.__post_mutation_resume_poll_token = resumeToken;
+    wiz.workbench.__post_mutation_resume_poll_session_id = resumeSessionId;
+    wiz.workbench.__post_mutation_resume_poll_reason = trimStr(reason) || 'POST_MUTATION_PREVIEW_RESUME';
+    wiz.workbench.__post_mutation_resume_poll_started_at = new Date().toISOString();
+    wiz.workbench.__post_mutation_resume_poll_attempt = 0;
+    wiz.workbench.create_draft_refresh_pending = true;
+    wiz.workbench.preview_reopen_required = true;
+    wiz.workbench.__post_mutation_preview_refresh_failed = false;
+    wiz.preview.loading = true;
+    wiz.preview.error = '';
+    wiz.preview.failure = null;
+    if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = true;
+
+    let lastPayload = isPlainObject(seedPayload) ? seedPayload : null;
+    let consecutiveErrors = 0;
+
+    const clearResumeToken = () => {
+      if (trimStr(wiz?.workbench?.__post_mutation_resume_poll_token || '') === resumeToken) {
+        wiz.workbench.__post_mutation_resume_poll_token = '';
+        wiz.workbench.__post_mutation_resume_poll_session_id = '';
+      }
+    };
+
+    const shouldAbortResumePoll = () => !!(
+      String(window?.modalCtx?.entity || '') !== 'banking' ||
+      !isLatestRequest() ||
+      trimStr(wiz?.workbench?.__post_mutation_resume_poll_token || '') !== resumeToken ||
+      !isSameWorkbenchSession(resumeSessionId) ||
+      isObsoleteSessionId(resumeSessionId)
+    );
+
+    const markStillPending = async (statusText = '') => {
+      if (shouldAbortResumePoll()) return;
+      wiz.preview.loading = true;
+      wiz.preview.error = '';
+      wiz.preview.failure = null;
+      wiz.workbench.create_draft_refresh_pending = true;
+      wiz.workbench.preview_reopen_required = true;
+      wiz.workbench.__post_mutation_preview_refresh_failed = false;
+      if (trimStr(statusText)) wiz.preview.status_text = trimStr(statusText);
+      if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = true;
+      await rerenderQuietly();
+    };
+
+    const finishApplied = async () => {
+      clearResumeToken();
+      if (!isLatestRequest() || !isSameWorkbenchSession(resumeSessionId)) return;
+      wiz.preview.loading = false;
+      wiz.preview.error = '';
+      wiz.preview.failure = null;
+      wiz.workbench.create_draft_refresh_pending = false;
+      wiz.workbench.preview_reopen_required = false;
+      wiz.workbench.__post_mutation_preview_refresh_failed = false;
+      if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = false;
+      await rerenderQuietly();
+    };
+
+    const tryApplySettledPayload = async (payload) => {
+      if (!isPlainObject(payload) || shouldAbortResumePoll()) return false;
+      stampPendingReplacementWorkbenchContext(payload);
+      const applyAttempt = applyPostMutationPreviewPayloadIfSettled(payload);
+      lastPayload = applyAttempt.payload || payload;
+      if (applyAttempt.didFullPreviewLoad) {
+        await finishApplied();
+        return true;
+      }
+      return false;
+    };
+
+    const runResumeAttempt = async (attemptIndex = 0) => {
+      if (shouldAbortResumePoll()) {
+        clearResumeToken();
+        return;
+      }
+      wiz.workbench.__post_mutation_resume_poll_attempt = attemptIndex + 1;
+      try {
+        if (await tryApplySettledPayload(lastPayload)) return;
+
+        let progressPayload = null;
+        if (typeof bankingPayWorkbenchSessionGetProgress === 'function') {
+          progressPayload = await bankingPayWorkbenchSessionGetProgress(resumeSessionId, {
+            obsolete_session_ids: [...obsoleteSessionIds],
+            source_session_id: sourceSessionId || null,
+            mutation_context: mutationContext || null,
+            force_new_session: forceNewSession,
+            post_mutation_context: mutationContext || null,
+            source: 'bankingPayPreview.postMutationResumePoll'
+          });
+          consecutiveErrors = 0;
+          if (isPlainObject(progressPayload?.progress)) syncProgressIntoState(progressPayload.progress);
+          else if (isPlainObject(progressPayload)) syncProgressIntoState(progressPayload);
+          if (await tryApplySettledPayload(progressPayload)) return;
+        }
+
+        const progressReadyRowless = !!(
+          progressPayload &&
+          (workbenchProgressLooksReady(progressPayload) || workbenchProgressLooksReady(progressPayload?.progress)) &&
+          !payloadHasFullPreviewData(progressPayload) &&
+          !isReadyEmptyPayload(progressPayload)
+        );
+        const shouldFetchFull = !progressPayload || progressReadyRowless || !isPostMutationPreviewPayloadPending(progressPayload) || attemptIndex === resumeAttempts - 1;
+        if (shouldFetchFull && typeof bankingPayWorkbenchSessionGet === 'function') {
+          let fullPayload;
+          try {
+            fullPayload = await bankingPayWorkbenchSessionGet(resumeSessionId, {
+              obsolete_session_ids: [...obsoleteSessionIds],
+              source_session_id: sourceSessionId || null,
+              force_new_session: forceNewSession,
+              mutation_context: mutationContext || null,
+              post_mutation_context: mutationContext || null,
+              source: 'bankingPayPreview.postMutationResumePoll'
+            });
+            consecutiveErrors = 0;
+          } catch (fullErr) {
+            if (isNonFatalPostMutationPreviewError(fullErr)) {
+              fullPayload = makePostMutationPendingPreviewPayload(fullErr, 'PENDING_REFRESH');
+            } else {
+              throw fullErr;
+            }
+          }
+          lastPayload = fullPayload;
+          if (await tryApplySettledPayload(fullPayload)) return;
+        }
+
+        if (attemptIndex >= resumeAttempts - 1) {
+          clearResumeToken();
+          await markStillPending('Payment preview is still refreshing.');
+          return;
+        }
+
+        await markStillPending(trimStr(progressPayload?.status_text || progressPayload?.message || 'Preparing payment preview candidates.'));
+        window.setTimeout(() => { runResumeAttempt(attemptIndex + 1); }, resumeDelayMs);
+      } catch (resumeErr) {
+        consecutiveErrors += 1;
+        if (!isNonFatalPostMutationPreviewError(resumeErr) || consecutiveErrors >= 3 || attemptIndex >= resumeAttempts - 1) {
+          clearResumeToken();
+          try {
+            await applyFailure(resumeErr);
+          } catch {}
+          wiz.preview.loading = false;
+          wiz.workbench.create_draft_refresh_pending = false;
+          wiz.workbench.preview_reopen_required = false;
+          wiz.workbench.__post_mutation_preview_refresh_failed = true;
+          if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = false;
+          await rerenderQuietly();
+          return;
+        }
+        await markStillPending('Payment preview replacement is still refreshing.');
+        window.setTimeout(() => { runResumeAttempt(attemptIndex + 1); }, resumeDelayMs);
+      }
+    };
+
+    window.setTimeout(() => { runResumeAttempt(0); }, resumeDelayMs);
+    return true;
+  };
+
   const maybeAutoSettlePendingCandidates = async () => {
     if (candidateScopedRefresh) return;
     if (typeof pollPayWorkbenchCandidateUntilSettled !== 'function') return;
@@ -27943,6 +28117,9 @@ async function bankingPayPreview(pay_date) {
       if (postMutationPollOutcome && isPlainObject(postMutationPollOutcome.payload)) {
         responsePayload = postMutationPollOutcome.payload;
       }
+      if (!didFullPreviewLoad) {
+        schedulePostMutationPreviewResumePoll('POST_MUTATION_INITIAL_POLL_UNSETTLED', responsePayload);
+      }
     }
 
     const activePendingWorkbenchWork = hasActiveWorkbenchPendingWork();
@@ -28006,6 +28183,7 @@ async function bankingPayPreview(pay_date) {
     if (isNonFatalPostMutationPreviewError(e)) {
       const pendingPayload = makePostMutationPendingPreviewPayload(e, 'PENDING_REFRESH');
       applyDeferredPreviewStateFromPayload(pendingPayload);
+      schedulePostMutationPreviewResumePoll('POST_MUTATION_NON_FATAL_PREVIEW_ERROR', pendingPayload);
       wiz.preview.loading = true;
       wiz.preview.error = '';
       wiz.preview.failure = null;
@@ -141759,6 +141937,270 @@ function bindBulkProcessPreviewPane(state) {
         live: { ownerIdentity: liveOwnerIdentity, rowKey: liveRowKey, rowChangeSeq: liveRowChangeSeq, activeAttachedId: liveActiveAttachedId }
       };
     };
+    const normaliseRemovedEvidenceTarget = (capturedTargetInput = {}) => {
+      const target = (capturedTargetInput && typeof capturedTargetInput === 'object') ? capturedTargetInput : {};
+      const ids = Array.from(new Set([
+        trimStr(target.evidenceId || ''),
+        trimStr(target.evidenceItemId || ''),
+        trimStr(target.evidenceEvidenceId || ''),
+        trimStr(target.evidenceQueueId || '')
+      ].filter(Boolean)));
+      const storageKey = trimStr(target.storageKey || '').replace(/^\/+/, '');
+      const kind = upper(target.kind || '');
+      return {
+        ...target,
+        evidenceId: trimStr(target.evidenceId || ''),
+        ids,
+        storageKey,
+        storageKeyLower: storageKey.toLowerCase(),
+        kind,
+        rowKey: trimStr(target.rowKey || ''),
+        timesheetId: trimStr(target.timesheetId || ''),
+        contractWeekId: trimStr(target.contractWeekId || '')
+      };
+    };
+    const removedEvidenceTargetMatchesItem = (itemInput, targetInput) => {
+      const item = (itemInput && typeof itemInput === 'object') ? itemInput : null;
+      const target = normaliseRemovedEvidenceTarget(targetInput);
+      if (!item || (!target.ids.length && !target.storageKeyLower)) return false;
+      const itemIds = [
+        trimStr(item.id || ''),
+        trimStr(item.evidence_id || ''),
+        trimStr(item.queue_id || ''),
+        trimStr(item.manual_timesheet_queue_id || ''),
+        trimStr(item.manual_queue_id || '')
+      ].filter(Boolean);
+      if (target.ids.length && itemIds.some((value) => target.ids.includes(value))) return true;
+      const itemStorageKey = storageKeyOf(item).toLowerCase();
+      return !!(target.storageKeyLower && itemStorageKey && itemStorageKey === target.storageKeyLower);
+    };
+    const filterRemovedEvidenceTargetFromList = (listInput, targetInput) => {
+      const rowsInput = Array.isArray(listInput) ? listInput : [];
+      const next = [];
+      let removed = false;
+      for (const row of rowsInput) {
+        if (removedEvidenceTargetMatchesItem(row, targetInput)) {
+          removed = true;
+          continue;
+        }
+        next.push(row);
+      }
+      return { rows: next, removed };
+    };
+    const pruneRemovedEvidenceTargetFromObject = (targetObject, targetInput) => {
+      if (!targetObject || typeof targetObject !== 'object') return false;
+      let changed = false;
+      if (Array.isArray(targetObject.evidence)) {
+        const filtered = filterRemovedEvidenceTargetFromList(targetObject.evidence, targetInput);
+        if (filtered.removed) {
+          targetObject.evidence = filtered.rows;
+          targetObject.evidence_loaded = true;
+          targetObject.evidence_authoritative = true;
+          changed = true;
+        }
+      }
+      if (targetObject.details && typeof targetObject.details === 'object' && Array.isArray(targetObject.details.evidence)) {
+        const filtered = filterRemovedEvidenceTargetFromList(targetObject.details.evidence, targetInput);
+        if (filtered.removed) {
+          targetObject.details.evidence = filtered.rows;
+          targetObject.details.evidence_loaded = true;
+          targetObject.details.evidence_authoritative = true;
+          changed = true;
+        }
+      }
+      if (targetObject.state && typeof targetObject.state === 'object' && Array.isArray(targetObject.state.evidence)) {
+        const filtered = filterRemovedEvidenceTargetFromList(targetObject.state.evidence, targetInput);
+        if (filtered.removed) {
+          targetObject.state.evidence = filtered.rows;
+          targetObject.state.evidence_loaded = true;
+          targetObject.state.evidence_authoritative = true;
+          changed = true;
+        }
+      }
+      return changed;
+    };
+    const rememberBulkProcessRemovedEvidenceTarget = (targetInput) => {
+      const target = normaliseRemovedEvidenceTarget(targetInput);
+      const tombstone = {
+        evidence_id: target.evidenceId || null,
+        ids: target.ids.slice(),
+        storage_key: target.storageKey || null,
+        kind: target.kind || null,
+        row_key: target.rowKey || null,
+        timesheet_id: target.timesheetId || null,
+        contract_week_id: target.contractWeekId || null,
+        removed_at_ms: Date.now(),
+        removed_at_utc: new Date().toISOString()
+      };
+      const upsertTombstone = (owner) => {
+        if (!owner || typeof owner !== 'object') return;
+        const rows = Array.isArray(owner.__removed_attached_evidence_tombstones)
+          ? owner.__removed_attached_evidence_tombstones.slice()
+          : [];
+        const matchesTombstone = (existing) => {
+          const existingIds = Array.isArray(existing?.ids) ? existing.ids.map(trimStr).filter(Boolean) : [];
+          const existingStorage = trimStr(existing?.storage_key || '').replace(/^\/+/, '').toLowerCase();
+          return !!(
+            (target.ids.length && existingIds.some((value) => target.ids.includes(value))) ||
+            (target.storageKeyLower && existingStorage && existingStorage === target.storageKeyLower)
+          );
+        };
+        const nextRows = rows.filter((existing) => !matchesTombstone(existing)).slice(-24);
+        nextRows.push(tombstone);
+        owner.__removed_attached_evidence_tombstones = nextRows;
+      };
+      upsertTombstone(pane);
+      upsertTombstone(st);
+      return target;
+    };
+    const applyRemovedEvidenceTargetToBulkProcessState = (targetInput, applyOptions = {}) => {
+      const opts = (applyOptions && typeof applyOptions === 'object') ? applyOptions : {};
+      const target = normaliseRemovedEvidenceTarget(targetInput);
+      if (isBulkAuthoriseRemoveContext()) return { skipped: true, reason: 'bulk-authorise-context', activeSelectionRemoved: false, listChanged: false };
+      if (!target.ids.length && !target.storageKeyLower) return { skipped: true, reason: 'missing-target', activeSelectionRemoved: false, listChanged: false };
+
+      rememberBulkProcessRemovedEvidenceTarget(target);
+
+      const activeBeforeItem = (pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null;
+      const activeBeforeId = trimStr(pane.active_attached_id || activeBeforeItem?.id || activeBeforeItem?.evidence_id || activeBeforeItem?.queue_id || '');
+      const activeBeforeSelection = normalisePreviewSelectionKey(
+        activeBeforeItem
+          ? buildPreviewSelectionKey('attached', activeBeforeId, storageKeyOf(activeBeforeItem))
+          : getCurrentPreviewSelectionKey()
+      );
+      const targetSelection = target.storageKey
+        ? buildPreviewSelectionKey('attached', target.evidenceId || target.ids[0] || '', target.storageKey)
+        : '';
+
+      const activeSelectionRemoved = !!(
+        removedEvidenceTargetMatchesItem(activeBeforeItem, target) ||
+        (activeBeforeId && target.ids.includes(activeBeforeId)) ||
+        (targetSelection && activeBeforeSelection === targetSelection) ||
+        (target.evidenceId && normalisePreviewSelectionKey(pane.__preview_target_key || '').includes(`|${target.evidenceId}|`)) ||
+        (target.evidenceId && normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '').includes(`|${target.evidenceId}|`)) ||
+        (target.storageKeyLower && normalisePreviewSelectionKey(pane.__preview_target_key || '').toLowerCase().endsWith(`|${target.storageKeyLower}`)) ||
+        (target.storageKeyLower && normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '').toLowerCase().endsWith(`|${target.storageKeyLower}`))
+      );
+
+      const filteredAttachedRows = filterRemovedEvidenceTargetFromList(pane.attached_rows, target);
+      const filteredAttachedAllRows = filterRemovedEvidenceTargetFromList(pane.attached_all_rows, target);
+      pane.attached_rows = filteredAttachedRows.rows;
+      pane.attached_all_rows = filteredAttachedAllRows.rows.length || !filteredAttachedRows.rows.length
+        ? filteredAttachedAllRows.rows
+        : filteredAttachedRows.rows.slice();
+
+      const containers = [
+        st.active_details,
+        st.active_context,
+        st.active_context?.details,
+        st.active_ctx,
+        st.active_ctx?.details,
+        st.active_ctx?.state,
+        window.modalCtx?.timesheetState,
+        window.modalCtx?.timesheetDetails,
+        window.modalCtx?.data
+      ];
+      let contextChanged = false;
+      for (const container of containers) {
+        if (pruneRemovedEvidenceTargetFromObject(container, target)) contextChanged = true;
+      }
+
+      if (target.storageKey) {
+        clearCachedSignedUrlForPreview(target.storageKey, capturePreviewCommitSnapshot(null, { reason: 'selected-evidence-removed-cache-clear' }), '');
+      }
+      const clearSelectionKeys = Array.from(new Set([
+        targetSelection,
+        ...(target.ids || []).map((idValue) => target.storageKey ? buildPreviewSelectionKey('attached', idValue, target.storageKey) : '')
+      ].map(normalisePreviewSelectionKey).filter(Boolean)));
+      for (const selectionKey of clearSelectionKeys) {
+        try { delete pane.__preview_signed_url_cache[selectionKey]; } catch {}
+        try { delete pane.__preview_signed_url_meta_by_cache_key[selectionKey]; } catch {}
+        try { delete pane.__preview_signed_url_context_by_cache_key[selectionKey]; } catch {}
+        try { delete pane.__preview_signed_url_owner_by_cache_key[selectionKey]; } catch {}
+        try { delete pane.__preview_failed_signed_url_by_target[selectionKey]; } catch {}
+        try { delete pane.__preview_image_retry_by_target[getImageRetryKeyForPreview(selectionKey, target.storageKey)]; } catch {}
+      }
+
+      if (activeSelectionRemoved) {
+        pane.active_attached_id = null;
+        pane.active_attached_item = null;
+        pane.active_attached_pdf_page = 1;
+        pane.__active_attached_preview_target = '';
+        pane.__preview_target_key = '';
+        pane.__preview_signed_url = '';
+        pane.__preview_signed_url_stored_at_ms = 0;
+        pane.__preview_signed_url_expires_at_ms = 0;
+        pane.__preview_load_requested_target_key = '';
+        pane.__preview_same_selection_recovery_key = '';
+        pane.__preview_signed_retry_key = '';
+        pane.__preview_signed_retry_count = 0;
+        if (pane.__preview_signed_retry_timer) {
+          try { window.clearTimeout(pane.__preview_signed_retry_timer); } catch {}
+          pane.__preview_signed_retry_timer = null;
+        }
+        if (pane.__preview_recovery_timer) {
+          try { window.clearTimeout(pane.__preview_recovery_timer); } catch {}
+          pane.__preview_recovery_timer = null;
+        }
+        pane.__preview_recovery_key = '';
+        pane.__preview_recovery_attempt = 0;
+        if (typeof pane.__abortPreviewPresignRequests === 'function') {
+          try {
+            pane.__abortPreviewPresignRequests('selected-evidence-removed', {
+              force: true,
+              artifactRemoved: true,
+              userSelectionChanged: true
+            });
+          } catch {}
+        }
+        if (st.dockedEvidenceViewer?.open && (
+          (target.ids.length && target.ids.includes(trimStr(st.dockedEvidenceViewer.evidence_id || ''))) ||
+          (target.storageKeyLower && trimStr(st.dockedEvidenceViewer.storage_key || '').replace(/^\/+/, '').toLowerCase() === target.storageKeyLower)
+        )) {
+          closeBulkProcessDockedEvidenceViewer();
+        }
+      }
+
+      const remainingRows = Array.isArray(pane.attached_rows) ? pane.attached_rows : [];
+      if (activeSelectionRemoved) {
+        const nextAttached = remainingRows.find((row) => upper(row?.kind || row?.staged_kind || '') === 'TIMESHEET') || remainingRows[0] || null;
+        if (nextAttached) {
+          const nextId = evidenceIdOf(nextAttached);
+          const nextFileKey = storageKeyOf(nextAttached);
+          pane.active_tab = 'attached';
+          pane.__attached_manual_override = true;
+          pane.__queue_manual_override = false;
+          pane.active_queue_id = null;
+          pane.active_queue_item = null;
+          pane.active_attached_id = nextId || null;
+          pane.active_attached_item = { ...(deep(nextAttached) || {}) };
+          pane.active_attached_pdf_page = 1;
+          if (nextId && nextFileKey) markPreviewLoadRequested(buildPreviewSelectionKey('attached', nextId, nextFileKey));
+        } else {
+          pane.active_attached_id = null;
+          pane.active_attached_item = null;
+          pane.active_attached_pdf_page = 1;
+          pane.__attached_manual_override = false;
+          pane.__active_attached_preview_target = '';
+          clearPreviewRequestState({
+            clearRequested: true,
+            abort: true,
+            reason: 'selected-evidence-removed',
+            artifactRemoved: true,
+            force: true
+          });
+        }
+      }
+
+      syncActiveRowEvidencePresence();
+      return {
+        skipped: false,
+        reason: trimStr(opts.reason || 'removed-evidence-local-prune') || 'removed-evidence-local-prune',
+        activeSelectionRemoved,
+        listChanged: !!(filteredAttachedRows.removed || filteredAttachedAllRows.removed || contextChanged),
+        remainingAttachedCount: Array.isArray(pane.attached_rows) ? pane.attached_rows.length : 0
+      };
+    };
     const id = trimStr(attachedId || '');
     if (!id) return;
     const rows = Array.isArray(pane.attached_rows) ? pane.attached_rows : [];
@@ -141884,6 +142326,20 @@ function bindBulkProcessPreviewPane(state) {
       pane.__queue_loading = false;
       pane.__queue_loading_scope = '';
       pane.__queue_last_error = '';
+      const immediateLocalRemoveResult = applyRemovedEvidenceTargetToBulkProcessState(capturedTarget, {
+        reason: `post-${action}-local-prune-before-refresh`
+      });
+      if (window.__LOG_MODAL === true && !immediateLocalRemoveResult.skipped) {
+        console.log('[TS][BULK-PROCESS][PREVIEW]', {
+          event: 'remove-local-state-pruned',
+          phase: 'before-refresh',
+          action,
+          evidenceId: capturedTarget.evidenceId,
+          storageKey: capturedTarget.storageKey || null,
+          activeSelectionRemoved: immediateLocalRemoveResult.activeSelectionRemoved,
+          remainingAttachedCount: immediateLocalRemoveResult.remainingAttachedCount
+        });
+      }
       const postMutationStaleCheck = checkCapturedRemoveTargetStale(capturedTarget);
       const activeRowStillMatches = !postMutationStaleCheck.stale || postMutationStaleCheck.reason === 'target-missing';
       if (activeRowStillMatches) {
@@ -141926,6 +142382,21 @@ function bindBulkProcessPreviewPane(state) {
         reconcileBulkProcessEvidenceStateAfterContextRefresh(st);
       } else {
         syncAttachedRows();
+      }
+      const postRefreshLocalRemoveResult = applyRemovedEvidenceTargetToBulkProcessState(capturedTarget, {
+        reason: `post-${action}-local-prune-after-refresh`
+      });
+      syncActiveRowEvidencePresence();
+      if (window.__LOG_MODAL === true && !postRefreshLocalRemoveResult.skipped) {
+        console.log('[TS][BULK-PROCESS][PREVIEW]', {
+          event: 'remove-local-state-pruned',
+          phase: 'after-refresh',
+          action,
+          evidenceId: capturedTarget.evidenceId,
+          storageKey: capturedTarget.storageKey || null,
+          activeSelectionRemoved: postRefreshLocalRemoveResult.activeSelectionRemoved,
+          remainingAttachedCount: postRefreshLocalRemoveResult.remainingAttachedCount
+        });
       }
       if (typeof window.__toast === 'function') {
         window.__toast(confirmRes?.confirmed === true ? 'Evidence deleted' : 'Evidence returned to queue');
@@ -143807,6 +144278,7 @@ function bindBulkProcessPreviewPane(state) {
     warnPreview('bind failed', e);
   });
 }
+
 
 
 
@@ -153038,6 +153510,7 @@ function captureBulkProcessUiSnapshot(state) {
 }
 
 
+
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const st = (state && typeof state === 'object') ? state : {};
   st.evidence_pane_state =
@@ -153091,6 +153564,315 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     if (lower === 'null' || lower === 'undefined' || lower === 'none' || lower === '[object object]') return '';
     return raw.replace(/^\/+/, '');
   };
+
+  const REMOVED_EVIDENCE_TOMBSTONE_MAX_AGE_MS = 10 * 60 * 1000;
+
+  const getRemovalMetaObject = (item) => {
+    if (!item || typeof item !== 'object') return {};
+    const candidates = [
+      item.meta_json,
+      item.metaJson,
+      item.meta,
+      item.queue_meta,
+      item.queueMeta,
+      item.source_context,
+      item.sourceContext
+    ];
+    for (const candidate of candidates) {
+      const parsed = parseObjectMaybeJson(candidate);
+      if (parsed && typeof parsed === 'object' && Object.keys(parsed).length) return parsed;
+    }
+    return {};
+  };
+
+  const evidenceIdsForRemovalMatch = (item) => {
+    if (!item || typeof item !== 'object') return [];
+    const meta = getRemovalMetaObject(item);
+    return Array.from(new Set([
+      item.id,
+      item.evidence_id,
+      item.evidenceId,
+      item.queue_id,
+      item.queueId,
+      item.manual_timesheet_queue_id,
+      item.manualTimesheetQueueId,
+      item.manual_queue_id,
+      item.manualQueueId,
+      meta.id,
+      meta.evidence_id,
+      meta.evidenceId,
+      meta.queue_id,
+      meta.queueId,
+      meta.manual_timesheet_queue_id,
+      meta.manualTimesheetQueueId,
+      meta.manual_queue_id,
+      meta.manualQueueId
+    ].map((value) => trimStr(value || '')).filter(Boolean)));
+  };
+
+  const storageKeyForRemovalMatch = (item) => {
+    if (!item || typeof item !== 'object') return '';
+    const meta = getRemovalMetaObject(item);
+    return safeStorageKey(
+      item.storage_key ||
+      item.storageKey ||
+      item.r2_key ||
+      item.r2Key ||
+      item.file_key ||
+      item.fileKey ||
+      item.download_storage_key ||
+      item.downloadStorageKey ||
+      item.preview_storage_key ||
+      item.previewStorageKey ||
+      meta.storage_key ||
+      meta.storageKey ||
+      meta.r2_key ||
+      meta.r2Key ||
+      meta.file_key ||
+      meta.fileKey ||
+      meta.download_storage_key ||
+      meta.downloadStorageKey ||
+      meta.preview_storage_key ||
+      meta.previewStorageKey ||
+      ''
+    );
+  };
+
+  const rowKeyForRemovalMatch = (item) => {
+    if (!item || typeof item !== 'object') return '';
+    const meta = getRemovalMetaObject(item);
+    return trimStr(
+      item.row_key ||
+      item.rowKey ||
+      item.bulk_process_row_key ||
+      item.bulkProcessRowKey ||
+      item.timesheet_row_key ||
+      item.timesheetRowKey ||
+      meta.row_key ||
+      meta.rowKey ||
+      meta.bulk_process_row_key ||
+      meta.bulkProcessRowKey ||
+      meta.timesheet_row_key ||
+      meta.timesheetRowKey ||
+      ''
+    );
+  };
+
+  const timesheetIdForRemovalMatch = (item) => {
+    if (!item || typeof item !== 'object') return '';
+    const meta = getRemovalMetaObject(item);
+    return trimStr(
+      item.timesheet_id ||
+      item.timesheetId ||
+      item.current_timesheet_id ||
+      item.currentTimesheetId ||
+      item.requested_timesheet_id ||
+      item.requestedTimesheetId ||
+      item.expected_timesheet_id ||
+      item.expectedTimesheetId ||
+      item.timesheet?.timesheet_id ||
+      meta.timesheet_id ||
+      meta.timesheetId ||
+      meta.current_timesheet_id ||
+      meta.currentTimesheetId ||
+      meta.requested_timesheet_id ||
+      meta.requestedTimesheetId ||
+      meta.expected_timesheet_id ||
+      meta.expectedTimesheetId ||
+      ''
+    );
+  };
+
+  const contractWeekIdForRemovalMatch = (item) => {
+    if (!item || typeof item !== 'object') return '';
+    const meta = getRemovalMetaObject(item);
+    return trimStr(
+      item.contract_week_id ||
+      item.contractWeekId ||
+      item.current_contract_week_id ||
+      item.currentContractWeekId ||
+      item.expected_contract_week_id ||
+      item.expectedContractWeekId ||
+      item.contract_week?.id ||
+      meta.contract_week_id ||
+      meta.contractWeekId ||
+      meta.current_contract_week_id ||
+      meta.currentContractWeekId ||
+      meta.expected_contract_week_id ||
+      meta.expectedContractWeekId ||
+      meta.week_id ||
+      meta.weekId ||
+      ''
+    );
+  };
+
+  const normaliseRemovedEvidenceTombstone = (rawInput) => {
+    const raw = (rawInput && typeof rawInput === 'object') ? rawInput : {};
+    const ids = Array.from(new Set([
+      raw.evidence_id,
+      raw.evidenceId,
+      raw.id,
+      raw.queue_id,
+      raw.queueId,
+      raw.manual_timesheet_queue_id,
+      raw.manualTimesheetQueueId,
+      ...(Array.isArray(raw.ids) ? raw.ids : [])
+    ].map((value) => trimStr(value || '')).filter(Boolean)));
+    const storageKey = safeStorageKey(
+      raw.storage_key ||
+      raw.storageKey ||
+      raw.r2_key ||
+      raw.r2Key ||
+      raw.file_key ||
+      raw.fileKey ||
+      raw.download_storage_key ||
+      raw.downloadStorageKey ||
+      ''
+    );
+    const removedAtMs = Number(raw.removed_at_ms || raw.removedAtMs || 0) || 0;
+    return {
+      ids,
+      storage_key: storageKey,
+      storage_key_lower: storageKey.toLowerCase(),
+      kind: upper(raw.kind || raw.evidence_kind || raw.staged_kind || ''),
+      row_key: trimStr(raw.row_key || raw.rowKey || ''),
+      timesheet_id: trimStr(raw.timesheet_id || raw.timesheetId || ''),
+      contract_week_id: trimStr(raw.contract_week_id || raw.contractWeekId || ''),
+      removed_at_ms: removedAtMs,
+      removed_at_utc: trimStr(raw.removed_at_utc || raw.removedAtUtc || '')
+    };
+  };
+
+  const collectActiveRemovedEvidenceTombstones = () => {
+    const nowMs = Date.now();
+    const rawRows = [
+      ...(Array.isArray(pane.__removed_attached_evidence_tombstones) ? pane.__removed_attached_evidence_tombstones : []),
+      ...(Array.isArray(st.__removed_attached_evidence_tombstones) ? st.__removed_attached_evidence_tombstones : [])
+    ];
+    const seen = new Set();
+    const rows = [];
+    for (const raw of rawRows) {
+      const normalised = normaliseRemovedEvidenceTombstone(raw);
+      if (!normalised.ids.length && !normalised.storage_key_lower) continue;
+      if (normalised.removed_at_ms && nowMs - normalised.removed_at_ms > REMOVED_EVIDENCE_TOMBSTONE_MAX_AGE_MS) continue;
+      const dedupeKey = [
+        normalised.ids.join(','),
+        normalised.storage_key_lower,
+        normalised.row_key,
+        normalised.timesheet_id,
+        normalised.contract_week_id
+      ].join('|');
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      rows.push(normalised);
+    }
+
+    if (rawRows.length) {
+      const persistRows = rows.map((row) => ({
+        evidence_id: row.ids[0] || null,
+        ids: row.ids.slice(),
+        storage_key: row.storage_key || null,
+        kind: row.kind || null,
+        row_key: row.row_key || null,
+        timesheet_id: row.timesheet_id || null,
+        contract_week_id: row.contract_week_id || null,
+        removed_at_ms: row.removed_at_ms || nowMs,
+        removed_at_utc: row.removed_at_utc || new Date(row.removed_at_ms || nowMs).toISOString()
+      }));
+      pane.__removed_attached_evidence_tombstones = persistRows.slice();
+      st.__removed_attached_evidence_tombstones = persistRows.slice();
+    }
+
+    return rows;
+  };
+
+  const removedTombstoneMatchesItem = (item, tombstone) => {
+    if (!item || typeof item !== 'object' || !tombstone) return false;
+    const itemIds = evidenceIdsForRemovalMatch(item);
+    const itemStorageKey = storageKeyForRemovalMatch(item).toLowerCase();
+
+    const idMatches = !!(tombstone.ids.length && itemIds.some((value) => tombstone.ids.includes(value)));
+    const storageMatches = !!(tombstone.storage_key_lower && itemStorageKey && itemStorageKey === tombstone.storage_key_lower);
+    if (!idMatches && !storageMatches) return false;
+
+    const itemRowKey = rowKeyForRemovalMatch(item);
+    const itemTimesheetId = timesheetIdForRemovalMatch(item);
+    const itemContractWeekId = contractWeekIdForRemovalMatch(item);
+
+    if (tombstone.row_key && itemRowKey && itemRowKey !== tombstone.row_key) return false;
+    if (tombstone.timesheet_id && itemTimesheetId && itemTimesheetId !== tombstone.timesheet_id) return false;
+    if (tombstone.contract_week_id && itemContractWeekId && itemContractWeekId !== tombstone.contract_week_id) return false;
+
+    return true;
+  };
+
+  const removedTombstonesMatchItem = (item, tombstonesInput = []) => {
+    const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
+    return tombstones.some((tombstone) => removedTombstoneMatchesItem(item, tombstone));
+  };
+
+  const removedTombstonesMatchStorageKey = (storageKeyInput = '', tombstonesInput = []) => {
+    const key = safeStorageKey(storageKeyInput).toLowerCase();
+    if (!key) return false;
+    const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
+    return tombstones.some((tombstone) => tombstone.storage_key_lower && tombstone.storage_key_lower === key);
+  };
+
+  const removedTombstonesMatchSelection = (selectionInput, tombstonesInput = []) => {
+    const selection = (selectionInput && typeof selectionInput === 'object') ? selectionInput : {};
+    const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
+    const itemLike = {
+      id: selection.attached_id || selection.queue_id || '',
+      evidence_id: selection.attached_id || '',
+      queue_id: selection.queue_id || '',
+      storage_key: selection.file_key || ''
+    };
+    return removedTombstonesMatchItem(itemLike, tombstones);
+  };
+
+  const filterRemovedTombstonesFromRows = (rowsInput, tombstonesInput = []) => {
+    const rows = Array.isArray(rowsInput) ? rowsInput : [];
+    const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
+    if (!tombstones.length || !rows.length) return { rows: rows.slice(), removed: false };
+    const next = [];
+    let removed = false;
+    for (const row of rows) {
+      if (removedTombstonesMatchItem(row, tombstones)) {
+        removed = true;
+        continue;
+      }
+      next.push(row);
+    }
+    return { rows: next, removed };
+  };
+
+  const pruneRemovedTombstonesFromContainer = (container, tombstonesInput = []) => {
+    if (!container || typeof container !== 'object') return false;
+    const tombstones = Array.isArray(tombstonesInput) ? tombstonesInput : [];
+    if (!tombstones.length) return false;
+    let changed = false;
+
+    if (Array.isArray(container.evidence)) {
+      const filtered = filterRemovedTombstonesFromRows(container.evidence, tombstones);
+      if (filtered.removed) {
+        container.evidence = filtered.rows;
+        container.evidence_loaded = true;
+        container.evidence_authoritative = true;
+        changed = true;
+      }
+    }
+
+    if (container.details && typeof container.details === 'object') {
+      if (pruneRemovedTombstonesFromContainer(container.details, tombstones)) changed = true;
+    }
+
+    if (container.state && typeof container.state === 'object') {
+      if (pruneRemovedTombstonesFromContainer(container.state, tombstones)) changed = true;
+    }
+
+    return changed;
+  };
+
 
   const inferFilenameFromStorageKey = (storageKey) => {
     const clean = safeStorageKey(storageKey).split('?')[0].split('#')[0];
@@ -153305,6 +154087,30 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     : { isBulkAuthoriseTimesheets: false };
   const isBulkAuthoriseTimesheets = !!bulkAuthContext.isBulkAuthoriseTimesheets;
 
+  const activeRemovedEvidenceTombstones = isBulkAuthoriseTimesheets ? [] : collectActiveRemovedEvidenceTombstones();
+  const removalTombstonesActive = activeRemovedEvidenceTombstones.length > 0;
+  let removedEvidencePrunedFromContext = false;
+  if (removalTombstonesActive) {
+    const containersToPrune = [
+      pane,
+      st.active_details,
+      st.active_context,
+      st.active_context?.details,
+      st.active_ctx,
+      st.active_ctx?.details,
+      st.active_ctx?.state,
+      window.modalCtx?.timesheetState,
+      window.modalCtx?.timesheetDetails,
+      window.modalCtx?.data
+    ];
+    for (const container of containersToPrune) {
+      if (pruneRemovedTombstonesFromContainer(container, activeRemovedEvidenceTombstones)) {
+        removedEvidencePrunedFromContext = true;
+      }
+    }
+  }
+
+
   const getBulkAuthoriseOwnerIdentity = () => {
     if (!isBulkAuthoriseTimesheets) return '';
     if (typeof getBulkAuthoriseEvidenceActiveIdentity === 'function') {
@@ -153393,6 +154199,15 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     __preview_signed_url_cache: (pane.__preview_signed_url_cache && typeof pane.__preview_signed_url_cache === 'object') ? deep(pane.__preview_signed_url_cache) : pane.__preview_signed_url_cache
   };
   const activeIdentityAtStart = getActiveIdentity();
+  let selectedArtifactRemoved = !!(
+    !isBulkAuthoriseTimesheets &&
+    activeRemovedEvidenceTombstones.length &&
+    (
+      removedTombstonesMatchSelection(previewSelectionAtStart, activeRemovedEvidenceTombstones) ||
+      removedTombstonesMatchItem(previewStateAtStart.active_attached_item, activeRemovedEvidenceTombstones) ||
+      removedTombstonesMatchItem(previewStateAtStart.active_queue_item, activeRemovedEvidenceTombstones)
+    )
+  );
   const activeContextProfile = trimStr(st.active_context?.profile || st.active_context?.context_profile || st.active_details?.profile || st.active_details?.context_profile || st.active_ctx?.profile || st.active_ctx?.context_profile || st.active_ctx?.state?.profile || st.active_ctx?.state?.context_profile || '').toLowerCase();
   const evidenceContextAuthoritative = !!(
     st.active_context?.evidence_loaded === true ||
@@ -153648,6 +154463,18 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       const storageKey = safeStorageKey(item.storage_key || item.r2_key || item.file_key || item.download_storage_key || item.storageKey || item.r2Key || item.fileKey || item.downloadStorageKey || itemMeta.storage_key || itemMeta.r2_key || itemMeta.file_key || itemMeta.download_storage_key || '');
       if (!evidenceId && !queueId && !storageKey) return;
 
+      if (!isBulkAuthoriseTimesheets && removedTombstonesMatchItem({
+        ...item,
+        evidence_id: evidenceId || item.evidence_id || null,
+        queue_id: queueId || item.queue_id || null,
+        storage_key: storageKey || item.storage_key || item.r2_key || item.file_key || null,
+        row_key: itemRowKey || item.row_key || null,
+        timesheet_id: itemTimesheetId || item.timesheet_id || null,
+        contract_week_id: itemContractWeekId || item.contract_week_id || null
+      }, activeRemovedEvidenceTombstones)) {
+        return;
+      }
+
       const synthetic = isSyntheticAttachedFallback(item, evidenceId);
       const rawKind = upper(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || '') || 'OTHER';
       if (!isBulkAuthoriseTimesheets && synthetic && rawKind === 'TIMESHEET' && !activeTimesheetId && !stagedContextMatchesActiveContractWeek) return;
@@ -153739,7 +154566,17 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const collectedAttachedRows = collectAttachedRows();
   let attachedAllRows = Array.isArray(collectedAttachedRows?.rows) ? collectedAttachedRows.rows : [];
   let syntheticAttachedFallbackRows = Array.isArray(collectedAttachedRows?.syntheticRows) ? collectedAttachedRows.syntheticRows : [];
-  const selectedRowArtifactKey = safeStorageKey(readSelectedRowTimesheetArtifactKey());
+  if (!isBulkAuthoriseTimesheets && activeRemovedEvidenceTombstones.length) {
+    const filteredAttachedAll = filterRemovedTombstonesFromRows(attachedAllRows, activeRemovedEvidenceTombstones);
+    const filteredSyntheticFallback = filterRemovedTombstonesFromRows(syntheticAttachedFallbackRows, activeRemovedEvidenceTombstones);
+    attachedAllRows = filteredAttachedAll.rows;
+    syntheticAttachedFallbackRows = filteredSyntheticFallback.rows;
+    removedEvidencePrunedFromContext = removedEvidencePrunedFromContext || filteredAttachedAll.removed || filteredSyntheticFallback.removed;
+  }
+  const selectedRowArtifactKeyRaw = safeStorageKey(readSelectedRowTimesheetArtifactKey());
+  const selectedRowArtifactKey = (!isBulkAuthoriseTimesheets && removedTombstonesMatchStorageKey(selectedRowArtifactKeyRaw, activeRemovedEvidenceTombstones))
+    ? ''
+    : selectedRowArtifactKeyRaw;
   const selectedRowIdentity = selectedRowIdentityParts();
   const selectedRowHasTimesheetIdentity = !!(
     trimStr(selectedRowIdentity.timesheetId || '') ||
@@ -153782,6 +154619,14 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       syntheticAttachedFallbackRows = [selectedRowSyntheticAttachedItem, ...syntheticAttachedFallbackRows];
     }
   }
+  if (!isBulkAuthoriseTimesheets && activeRemovedEvidenceTombstones.length) {
+    const filteredAttachedAllAfterSynthetic = filterRemovedTombstonesFromRows(attachedAllRows, activeRemovedEvidenceTombstones);
+    const filteredSyntheticAfterSynthetic = filterRemovedTombstonesFromRows(syntheticAttachedFallbackRows, activeRemovedEvidenceTombstones);
+    attachedAllRows = filteredAttachedAllAfterSynthetic.rows;
+    syntheticAttachedFallbackRows = filteredSyntheticAfterSynthetic.rows;
+    removedEvidencePrunedFromContext = removedEvidencePrunedFromContext || filteredAttachedAllAfterSynthetic.removed || filteredSyntheticAfterSynthetic.removed;
+  }
+
   const isSyntheticAttachedPaneItem = (item) => {
     const itemId = trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
     return !!(
@@ -153985,8 +154830,8 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const nextSelectionBlank = nextSelection.key === 'queue||' || nextSelection.key === 'attached||' || /^\w+\|\|$/.test(nextSelection.key) || !String(nextSelection.key || '').replace(/\|/g, '');
   const previousSelectionValid = !!previousSelection.key && previousSelection.key !== 'queue||' && previousSelection.key !== 'attached||' && !/^\w+\|\|$/.test(previousSelection.key);
   const suppressRestoreToPreviousSelection = !!(!isBulkAuthoriseTimesheets && (!hasTimesheetEvidence || pane.active_tab === 'queue'));
-  const validToBlankSelection = !!(previousSelectionValid && nextSelectionBlank && activeIdentityAtStart === activeIdentity && !suppressRestoreToPreviousSelection);
-  const selectedPreviewChanged = previousSelection.key !== nextSelection.key && !validToBlankSelection;
+  const validToBlankSelection = !!(previousSelectionValid && nextSelectionBlank && activeIdentityAtStart === activeIdentity && !suppressRestoreToPreviousSelection && !selectedArtifactRemoved);
+  const selectedPreviewChanged = selectedArtifactRemoved || (previousSelection.key !== nextSelection.key && !validToBlankSelection);
   const ownerIdentity = getBulkAuthoriseOwnerIdentity();
   const previousPreviewIdentity = trimStr(pane.__preview_identity || '');
   if (isBulkAuthoriseTimesheets && previousPreviewIdentity && ownerIdentity && previousPreviewIdentity !== ownerIdentity) {
@@ -154007,6 +154852,40 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
         clearedAttachedSelection: hadAttachedSelection,
         clearedPreviewTarget: hadPreviewTarget
       });
+    }
+  }
+
+  if (selectedArtifactRemoved) {
+    pane.active_attached_id = null;
+    pane.active_attached_item = null;
+    pane.active_attached_pdf_page = 1;
+    pane.__preview_target_key = '';
+    pane.__preview_signed_url = '';
+    pane.__preview_signed_url_stored_at_ms = 0;
+    pane.__preview_signed_url_expires_at_ms = 0;
+    pane.__preview_load_requested_target_key = '';
+    pane.__active_attached_preview_target = '';
+    pane.__preview_same_selection_recovery_key = '';
+    pane.__preview_signed_retry_key = '';
+    pane.__preview_signed_retry_count = 0;
+    if (pane.__preview_signed_retry_timer) {
+      try { window.clearTimeout(pane.__preview_signed_retry_timer); } catch {}
+      pane.__preview_signed_retry_timer = null;
+    }
+    if (pane.__preview_recovery_timer) {
+      try { window.clearTimeout(pane.__preview_recovery_timer); } catch {}
+      pane.__preview_recovery_timer = null;
+    }
+    pane.__preview_recovery_key = '';
+    pane.__preview_recovery_attempt = 0;
+    if (typeof pane.__abortPreviewPresignRequests === 'function') {
+      try {
+        pane.__abortPreviewPresignRequests('selected-evidence-removed', {
+          force: true,
+          artifactRemoved: true,
+          userSelectionChanged: true
+        });
+      } catch {}
     }
   }
 
@@ -154054,7 +154933,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     preserved_existing_preview: preservedExistingPreview,
     real_selected_artifact_changed: selectedPreviewChanged,
     active_row_changed: activeIdentityAtStart !== activeIdentity,
-    selected_artifact_removed: false,
+    selected_artifact_removed: selectedArtifactRemoved,
     non_authoritative_context_ignored: false
   };
 }
