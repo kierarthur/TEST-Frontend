@@ -84489,8 +84489,6 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
 
 
 
-
-
 function classifyTimesheetEditDomains(ctxInput) {
   const ctx = (ctxInput && typeof ctxInput === 'object') ? ctxInput : {};
   const toUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -84866,6 +84864,20 @@ function classifyTimesheetEditDomains(ctxInput) {
     anyBool('client_no_timesheet_required', 'no_timesheet_required', 'contract_no_timesheet_required') ||
     routeText.includes('NO_TIMESHEET_REQUIRED')
   );
+  const noTimesheetAuthoritativeRoute = !!(
+    noTimesheetRequired ||
+    basisU === 'NHSP' ||
+    basisU === 'HEALTHROSTER_SELF_BILL' ||
+    basisU === 'NHSP_ADJUSTMENT' ||
+    basisU === 'HEALTHROSTER_ADJUSTMENT' ||
+    weeklySourceU === 'NHSP' ||
+    weeklySourceU === 'HEALTHROSTER' ||
+    weeklySourceU === 'HEALTHROSTER_DAILY' ||
+    routeText.includes('NHSP') ||
+    routeText.includes('HEALTHROSTER') ||
+    routeText.includes('NO_TIMESHEET_REQUIRED') ||
+    (routeText.includes('IMPORT_AUTHORITATIVE') && anyBool('is_import_authoritative', 'import_authoritative'))
+  );
   const actualSourceSuggestsProtectedImport = !!(
     basisU === 'NHSP' ||
     basisU === 'HEALTHROSTER_SELF_BILL' ||
@@ -84883,6 +84895,7 @@ function classifyTimesheetEditDomains(ctxInput) {
   const isOriginalImportAuthoritative = !!(!isAdditionalManualRoute && (sourceSuggestsProtectedImport || sourceSuggestsAdjustmentImport));
   const isNoTimesheetRequiredOriginal = !!(noTimesheetRequired && !isAdditionalManualRoute);
   const protectedOriginal = !!(isOriginalImportAuthoritative || isNoTimesheetRequiredOriginal);
+  const isAuthoritativeNoTimesheetRequiredRow = !!(noTimesheetAuthoritativeRoute && (noTimesheetRequired || isAdditionalManualRoute || sourceSuggestsProtectedImport || clientNhspLineage));
 
   const hasRealTimesheet = anyValue('timesheet_id', 'current_timesheet_id');
   const contractWeekIdValue = (() => {
@@ -84938,6 +84951,9 @@ function classifyTimesheetEditDomains(ctxInput) {
   } else if (isPaid) {
     hoursScheduleDisabledReason = 'This timesheet is paid, so hours cannot be amended directly.';
     reasonCodes.push('HOURS_PAID');
+  } else if (isAuthoritativeNoTimesheetRequiredRow) {
+    hoursScheduleDisabledReason = 'This timesheet type does not support hours entry.';
+    reasonCodes.push('HOURS_NO_TIMESHEET_REQUIRED');
   } else if (protectedOriginal) {
     hoursScheduleDisabledReason = 'This row is import/source authoritative and cannot have hours amended directly.';
     reasonCodes.push('HOURS_IMPORT_PROTECTED');
@@ -85054,6 +85070,22 @@ function classifyTimesheetEditDomains(ctxInput) {
     ? backendAddAdditional === true
     : inferredAddAdditionalEligible;
 
+  const timesheetEvidenceDisabledReason = isAuthoritativeNoTimesheetRequiredRow
+    ? 'No timesheet image can be attached to this record.'
+    : (protectedOriginal ? 'Timesheet evidence is view-only for this source row.' : null);
+  const canAttachTimesheetEvidence = !!(
+    !timesheetEvidenceDisabledReason &&
+    isParentTimesheetContext &&
+    (hasRealTimesheet || hasContractWeekAnchor) &&
+    !isAuthorised &&
+    !isPaid &&
+    !isInvoiceLocked &&
+    !isSegmentInvoiceLocked &&
+    !isCancelled &&
+    !isReviewOnly
+  );
+  const canAttachExpenseEvidence = !!(canEditExpenses && expenseEvidenceStorageTarget);
+
   return {
     canEditHoursSchedule,
     canEditTimesheetData: canEditHoursSchedule,
@@ -85075,9 +85107,13 @@ function classifyTimesheetEditDomains(ctxInput) {
     supportsUnprocessedExpenseDraft,
     expenseEvidenceStorageTarget,
     requiresAdditionalManualForExpenses,
+    canAttachTimesheetEvidence,
+    timesheetEvidenceReadOnly: !canAttachTimesheetEvidence,
+    timesheetEvidenceDisabledReason,
+    canAttachExpenseEvidence,
     canManageExpenseEvidence: !!(canEditExpenses && expenseEvidenceStorageTarget),
-    expenseEvidenceReadOnly: !(canEditExpenses && expenseEvidenceStorageTarget),
-    expenseEvidenceDisabledReason: expensesDisabledReason,
+    expenseEvidenceReadOnly: !canAttachExpenseEvidence,
+    expenseEvidenceDisabledReason: canAttachExpenseEvidence ? null : expensesDisabledReason,
     canAddAdditionalManual,
     addAdditionalManualReason: canAddAdditionalManual ? null : (isSegmentOnlyContext ? 'Create additional manual at parent timesheet level.' : 'Additional manual timesheet is not available for this row.'),
     isParentTimesheetContext,
@@ -85088,6 +85124,7 @@ function classifyTimesheetEditDomains(ctxInput) {
     isAdditionalManualRoute,
     isOriginalImportAuthoritative,
     isNoTimesheetRequiredOriginal,
+    isAuthoritativeNoTimesheetRequiredRow,
     isAuthorised,
     isInvoiceLocked,
     isSegmentInvoiceLocked,
@@ -146154,10 +146191,6 @@ function renderBulkProcessSelectedSummaryStrip(state) {
 
 
 
-
-
-
-
 function renderBulkProcessEvidencePane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -146364,6 +146397,27 @@ function renderBulkProcessEvidencePane(state) {
   const attachedRows = collectAttachedRowsForRender();
 
   const allKinds = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
+  const evidenceDomainPolicy = (() => {
+    if (typeof classifyTimesheetEditDomains !== 'function') return null;
+    try {
+      return classifyTimesheetEditDomains({
+        row: activeRow,
+        details: activeDetails,
+        timesheet: activeDetails?.timesheet || activeContext?.timesheet || {},
+        tsfin: activeDetails?.tsfin || activeContext?.tsfin || {},
+        contract_week: activeDetails?.contract_week || activeContext?.contract_week || {},
+        state: activeCtx?.state || activeContext?.state || {},
+        ctx: activeCtx,
+        active_ctx: activeCtx,
+        active_context: activeContext,
+        action_flags: activeDetails?.action_flags || activeContext?.action_flags || {}
+      });
+    } catch {
+      return null;
+    }
+  })();
+  const canAttachTimesheetEvidence = !(evidenceDomainPolicy && evidenceDomainPolicy.canAttachTimesheetEvidence === false);
+  const timesheetEvidenceDisabledReason = trimStr(evidenceDomainPolicy?.timesheetEvidenceDisabledReason || (canAttachTimesheetEvidence ? '' : 'No timesheet image can be attached to this record.'));
   const badgeArray = Array.isArray(activeRow?.evidence_badges)
     ? activeRow.evidence_badges
     : (Array.isArray(activeContext?.evidence_meta?.evidence_badges) ? activeContext.evidence_meta.evidence_badges : []);
@@ -146376,7 +146430,7 @@ function renderBulkProcessEvidencePane(state) {
     return Number.isFinite(count) && count > 0;
   });
   const hasTimesheetAttached = attachedRows.some((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET') || badgeHasTimesheet;
-  const blockedKinds = new Set(hasTimesheetAttached ? ['TIMESHEET'] : []);
+  const blockedKinds = new Set((hasTimesheetAttached || !canAttachTimesheetEvidence) ? ['TIMESHEET'] : []);
   const kinds = allKinds.filter((kind) => !blockedKinds.has(kind));
   const queueLooksTimesheet = (() => {
     const text = String(
@@ -146442,7 +146496,9 @@ function renderBulkProcessEvidencePane(state) {
             ${allKinds.map((kind) => {
               const disabled = blockedKinds.has(kind);
               const label = kind.charAt(0) + kind.slice(1).toLowerCase();
-              const reason = disabled && kind === 'TIMESHEET' ? 'Timesheet evidence already attached' : '';
+              const reason = disabled && kind === 'TIMESHEET'
+                ? (hasTimesheetAttached ? 'Timesheet evidence already attached' : (timesheetEvidenceDisabledReason || 'Timesheet evidence is not allowed for this row.'))
+                : '';
               return `<option value="${kind}" ${effectiveKind === kind ? 'selected' : ''} ${disabled ? 'disabled' : ''} ${reason ? `title="${enc(reason)}"` : ''}>${enc(label)}${reason ? ` — ${enc(reason)}` : ''}</option>`;
             }).join('')}
           </select>
@@ -147985,6 +148041,40 @@ function bindBulkProcessEvidencePane(state) {
   const deep = (v) => { try { return JSON.parse(JSON.stringify(v)); } catch { return v; } };
   const upper = (v) => String(v == null ? '' : v).trim().toUpperCase();
   const trimStr = (v) => String(v == null ? '' : v).trim();
+
+  const getActiveEvidenceDomainPolicy = () => {
+    if (typeof classifyTimesheetEditDomains !== 'function') return null;
+    const activeRow = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
+    const activeCtx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
+    const activeContext = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
+    const activeDetails = (st.active_details && typeof st.active_details === 'object') ? st.active_details : {};
+    try {
+      return classifyTimesheetEditDomains({
+        row: activeRow,
+        details: activeDetails,
+        timesheet: activeDetails?.timesheet || activeContext?.timesheet || {},
+        tsfin: activeDetails?.tsfin || activeContext?.tsfin || {},
+        contract_week: activeDetails?.contract_week || activeContext?.contract_week || {},
+        state: activeCtx?.state || activeContext?.state || {},
+        ctx: activeCtx,
+        active_ctx: activeCtx,
+        active_context: activeContext,
+        action_flags: activeDetails?.action_flags || activeContext?.action_flags || {}
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const canAttachTimesheetEvidenceForActiveRow = () => {
+    const policy = getActiveEvidenceDomainPolicy();
+    return !(policy && policy.canAttachTimesheetEvidence === false);
+  };
+
+  const timesheetEvidenceBlockedReasonForActiveRow = () => {
+    const policy = getActiveEvidenceDomainPolicy();
+    return trimStr(policy?.timesheetEvidenceDisabledReason || 'No timesheet image can be attached to this record.');
+  };
 
   const normaliseEvidenceKind = (value) => {
     const u = upper(value || '');
@@ -149544,7 +149634,8 @@ function bindBulkProcessEvidencePane(state) {
 
   const getAllowedAttachKinds = () => {
     const hasTimesheetAttached = hasAuthoritativeEvidenceKind('TIMESHEET');
-    return hasTimesheetAttached ? allKinds.filter((kind) => kind !== 'TIMESHEET') : allKinds.slice();
+    const canAttachTimesheet = canAttachTimesheetEvidenceForActiveRow();
+    return (hasTimesheetAttached || !canAttachTimesheet) ? allKinds.filter((kind) => kind !== 'TIMESHEET') : allKinds.slice();
   };
 
   const getAttachKind = () => {
@@ -149969,6 +150060,12 @@ function bindBulkProcessEvidencePane(state) {
         const expectedTsId = details.current_timesheet_id || details?.timesheet?.timesheet_id || tsId;
         const selectedKindAtClick = upper(q('#bpQueueKindSelect')?.value || pane.pending_attach_kind || '');
         patchBulkAuthoriseModalEvidenceState();
+        if (selectedKindAtClick === 'TIMESHEET' && !canAttachTimesheetEvidenceForActiveRow()) {
+          st.error_text = timesheetEvidenceBlockedReasonForActiveRow();
+          if (typeof window.__toast === 'function') window.__toast('Timesheet evidence is not allowed for this row');
+          await rerenderWorkbench('evidence-attach-timesheet-kind-blocked');
+          return;
+        }
         if (selectedKindAtClick === 'TIMESHEET' && hasAuthoritativeEvidenceKind('TIMESHEET')) {
           st.error_text = 'Timesheet evidence is already attached to this row.';
           if (typeof window.__toast === 'function') window.__toast('Timesheet evidence is already attached');
@@ -149986,6 +150083,12 @@ function bindBulkProcessEvidencePane(state) {
           await rerenderWorkbench('evidence-attach-missing-context');
           return;
         }
+        if (kind === 'TIMESHEET' && !canAttachTimesheetEvidenceForActiveRow()) {
+          st.error_text = timesheetEvidenceBlockedReasonForActiveRow();
+          if (typeof window.__toast === 'function') window.__toast('Timesheet evidence is not allowed for this row');
+          await rerenderWorkbench('evidence-attach-timesheet-kind-blocked');
+          return;
+        }
         if (kind === 'TIMESHEET' && hasAuthoritativeEvidenceKind('TIMESHEET')) {
           st.error_text = 'Timesheet evidence is already attached to this row.';
           if (typeof window.__toast === 'function') window.__toast('Timesheet evidence is already attached');
@@ -149998,6 +150101,9 @@ function bindBulkProcessEvidencePane(state) {
           await withExistingModalLoadingSpinner(st, 'Attaching evidence', async () => {
           patchBulkAuthoriseModalEvidenceState();
           const selectedKindAtCommit = upper(q('#bpQueueKindSelect')?.value || pane.pending_attach_kind || kind || '');
+          if ((selectedKindAtCommit === 'TIMESHEET' || kind === 'TIMESHEET') && !canAttachTimesheetEvidenceForActiveRow()) {
+            throw new Error(timesheetEvidenceBlockedReasonForActiveRow());
+          }
           if ((selectedKindAtCommit === 'TIMESHEET' || kind === 'TIMESHEET') && hasAuthoritativeEvidenceKind('TIMESHEET')) {
             throw new Error('Timesheet evidence is already attached to this row.');
           }
@@ -150191,6 +150297,8 @@ function bindBulkProcessEvidencePane(state) {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
+
+
 
 
 
@@ -150714,7 +150822,6 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
   `;
 }
 
-
 function renderBulkProcessManualEditor(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -150877,6 +150984,36 @@ function renderBulkProcessManualEditor(state) {
 
   const ts = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : {};
   const tsfin = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
+
+  const editDomains = (typeof classifyTimesheetEditDomains === 'function')
+    ? classifyTimesheetEditDomains({
+        row,
+        details,
+        timesheet: ts,
+        tsfin,
+        contract_week: details.contract_week || {},
+        state: stateCtx,
+        ctx,
+        active_ctx: ctx,
+        active_context: activeContextRaw || {},
+        related,
+        action_flags: details.action_flags || {}
+      })
+    : null;
+
+  if (editDomains && editDomains.isAuthoritativeNoTimesheetRequiredRow === true) {
+    return htmlWrap(`
+      <div class="card" id="bulkProcessManualEditorRoot" style="padding:6px 7px;min-width:0;">
+        <div class="row">
+          <label>Manual editor</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:3px;align-items:flex-start;">
+            <span class="mini">This timesheet is not eligible to have hours entered.</span>
+            <span class="mini">No timesheet image can be attached to this record.</span>
+          </div>
+        </div>
+      </div>
+    `);
+  }
 
   const editability = classifyBulkProcessEditability(ctx);
   const sheetScope = editability.sheetScope;
@@ -156816,6 +156953,15 @@ async function handleBulkProcessProcess(state) {
       expected_timesheet_id: trimStr(active?.expectedTimesheetId || '') || null
     });
     if (!queueItem?.id) return false;
+    if (active?.suppressTimesheetAutoAttach === true) {
+      sigLog('QUEUE-ATTACH-SKIP', {
+        reason: trimStr(active?.suppressReason || '') || 'timesheet-auto-attach-blocked',
+        queue_id: queueId || null,
+        timesheet_id: trimStr(active?.timesheetId || '') || null,
+        contract_week_id: trimStr(active?.contractWeekId || '') || null
+      });
+      return false;
+    }
     if (active.timesheetId && typeof attachQueueItemToTimesheetEvidence === 'function') {
       sigLog('QUEUE-ATTACH-START', {
         mode: 'timesheet',
@@ -156988,6 +157134,191 @@ async function handleBulkProcessProcess(state) {
     }
     return window.confirm('This row has no attached or staged evidence yet. Continue anyway?');
   };
+  const parseJsonForProcessProtection = (value) => {
+    if (value == null) return null;
+    if (Array.isArray(value) || (value && typeof value === 'object')) return value;
+    if (typeof value !== 'string') return null;
+    const raw = value.trim();
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  };
+
+  const numberForProcessProtection = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const parseTimeMinutesForProcessProtection = (value) => {
+    const raw = trimStr(value || '');
+    if (!raw) return null;
+    const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+    if (!match) return null;
+    const hh = Number(match[1]);
+    const mm = Number(match[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm) || hh < 0 || hh > 47 || mm < 0 || mm > 59) return null;
+    return (hh * 60) + mm;
+  };
+
+  const scheduleEntryWorkedMinutesForProcessProtection = (entry) => {
+    if (!entry || typeof entry !== 'object') return 0;
+    const positiveMinuteKeys = ['worked_minutes', 'paid_minutes', 'duration_minutes', 'total_minutes', 'minutes'];
+    for (const key of positiveMinuteKeys) {
+      const n = numberForProcessProtection(entry[key]);
+      if (n > 0) return n;
+    }
+    const positiveHourKeys = ['worked_hours', 'paid_hours', 'total_hours', 'hours'];
+    for (const key of positiveHourKeys) {
+      const n = numberForProcessProtection(entry[key]);
+      if (n > 0) return n * 60;
+    }
+    const start = parseTimeMinutesForProcessProtection(entry.start || entry.start_time || entry.actual_start || entry.shift_start || entry.from);
+    const end = parseTimeMinutesForProcessProtection(entry.end || entry.end_time || entry.actual_end || entry.shift_end || entry.to);
+    if (start != null && end != null) {
+      let duration = end - start;
+      if (duration < 0) duration += 24 * 60;
+      const breakMins = numberForProcessProtection(entry.break_minutes || entry.break_mins || entry.unpaid_break_minutes || 0);
+      const breakHours = numberForProcessProtection(entry.break_hours || entry.unpaid_break_hours || 0) * 60;
+      return Math.max(0, duration - breakMins - breakHours);
+    }
+    return 0;
+  };
+
+  const scheduleLikeHasWorkedHoursForProcessProtection = (value) => {
+    const parsed = parseJsonForProcessProtection(value);
+    if (!parsed) return false;
+    const seen = new Set();
+    const scan = (node) => {
+      if (!node || typeof node !== 'object') return false;
+      if (seen.has(node)) return false;
+      seen.add(node);
+      if (Array.isArray(node)) return node.some((item) => scan(item));
+      if (scheduleEntryWorkedMinutesForProcessProtection(node) > 0) return true;
+      return Object.values(node).some((item) => scan(item));
+    };
+    return scan(parsed);
+  };
+
+  const getBulkProcessDomainPolicyForActive = (active) => {
+    if (typeof classifyTimesheetEditDomains !== 'function') return null;
+    try {
+      return classifyTimesheetEditDomains({
+        row: active?.row || {},
+        details: active?.details || {},
+        timesheet: active?.timesheet || active?.details?.timesheet || {},
+        tsfin: active?.tsfin || active?.details?.tsfin || {},
+        contract_week: active?.contractWeek || active?.details?.contract_week || {},
+        state: active?.stateCtx || {},
+        ctx: active?.ctx || st.active_ctx || {},
+        active_ctx: active?.ctx || st.active_ctx || {},
+        active_context: st.active_context || {},
+        related: active?.related || active?.details?.related || {},
+        action_flags: active?.details?.action_flags || {}
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const isAuthoritativeNoTimesheetRequiredProcessRow = (active) => {
+    const policy = getBulkProcessDomainPolicyForActive(active);
+    if (policy?.isAuthoritativeNoTimesheetRequiredRow === true) return true;
+    const row = active?.row || {};
+    const details = active?.details || {};
+    const contractWeek = active?.contractWeek || details.contract_week || {};
+    const tsfin = active?.tsfin || details.tsfin || {};
+    const tokens = [
+      row.route_type, details.route_type, row.route_family, details.route_family, row.route_subfamily, details.route_subfamily,
+      row.underlying_channel_family, details.underlying_channel_family, row.weekly_timesheet_source, details.weekly_timesheet_source,
+      contractWeek.weekly_timesheet_source, contractWeek.submission_mode_snapshot, row.submission_mode, active?.submissionMode,
+      row.basis, tsfin.basis, details.basis, row.source, details.source, row.source_system, details.source_system
+    ].map((value) => upper(value)).filter(Boolean).join('|');
+    const boolish = (...values) => values.some((value) => value === true || value === 1 || upper(value) === 'TRUE' || upper(value) === 'YES' || upper(value) === 'Y' || upper(value) === '1');
+    return !!(
+      boolish(row.client_no_timesheet_required, row.no_timesheet_required, row.contract_no_timesheet_required, details.client_no_timesheet_required, details.no_timesheet_required, details.contract_no_timesheet_required, contractWeek.no_timesheet_required) ||
+      tokens.includes('NO_TIMESHEET_REQUIRED') ||
+      tokens.includes('NHSP') ||
+      tokens.includes('HEALTHROSTER')
+    );
+  };
+
+  const activeHasEnteredWorkedHoursForProcess = (active) => {
+    const stateCtx = (active?.stateCtx && typeof active.stateCtx === 'object') ? active.stateCtx : {};
+    const draftCandidates = [];
+    const persistedCandidates = [];
+    const pushCandidate = (bucket, label, value) => {
+      if (value == null) return;
+      bucket.push({ label, value });
+    };
+    const hasDraftScheduleField = (key) => Object.prototype.hasOwnProperty.call(stateCtx, key);
+    if (hasDraftScheduleField('schedule')) pushCandidate(draftCandidates, 'state.schedule', stateCtx.schedule);
+    if (hasDraftScheduleField('weeklyLinesByDate')) pushCandidate(draftCandidates, 'state.weeklyLinesByDate', stateCtx.weeklyLinesByDate);
+    if (hasDraftScheduleField('dailyLines')) pushCandidate(draftCandidates, 'state.dailyLines', stateCtx.dailyLines);
+    if (hasDraftScheduleField('actual_schedule_json')) pushCandidate(draftCandidates, 'state.actual_schedule_json', stateCtx.actual_schedule_json);
+    if (draftCandidates.length > 0) {
+      return draftCandidates.some((candidate) => scheduleLikeHasWorkedHoursForProcessProtection(candidate.value));
+    }
+    pushCandidate(persistedCandidates, 'timesheet.actual_schedule_json', active?.timesheet?.actual_schedule_json);
+    pushCandidate(persistedCandidates, 'details.timesheet.actual_schedule_json', active?.details?.timesheet?.actual_schedule_json);
+    pushCandidate(persistedCandidates, 'row.actual_schedule_json', active?.row?.actual_schedule_json);
+    pushCandidate(persistedCandidates, 'contract_week.planned_schedule_json', active?.contractWeek?.planned_schedule_json);
+    pushCandidate(persistedCandidates, 'details.contract_week.planned_schedule_json', active?.details?.contract_week?.planned_schedule_json);
+    pushCandidate(persistedCandidates, 'row.planned_schedule_json', active?.row?.planned_schedule_json);
+    if (persistedCandidates.some((candidate) => scheduleLikeHasWorkedHoursForProcessProtection(candidate.value))) return true;
+    if (persistedCandidates.length === 0) {
+      const fallbackHours = numberForProcessProtection(active?.row?.total_hours || active?.timesheet?.total_hours || active?.tsfin?.total_hours || active?.details?.tsfin?.total_hours || 0);
+      return fallbackHours > 0;
+    }
+    return false;
+  };
+
+  const getBulkProcessTimesheetImageProtection = (active) => {
+    const isAuthoritativeNoTimesheetRequired = isAuthoritativeNoTimesheetRequiredProcessRow(active);
+    const hasWorkedHours = activeHasEnteredWorkedHoursForProcess(active);
+    const isBlankNoHoursSchedule = !!(!isAuthoritativeNoTimesheetRequired && (active?.isWeekly || active?.isDaily) && !hasWorkedHours);
+    if (isAuthoritativeNoTimesheetRequired) {
+      return {
+        requiresConfirm: true,
+        suppressTimesheetAutoAttach: true,
+        isAuthoritativeNoTimesheetRequired: true,
+        isBlankNoHoursSchedule: false,
+        reason: 'authoritative-no-timesheet-required',
+        message: 'No timesheet image will be attached to this record as Timesheets are not required for this timesheet type.'
+      };
+    }
+    if (isBlankNoHoursSchedule) {
+      return {
+        requiresConfirm: true,
+        suppressTimesheetAutoAttach: true,
+        isAuthoritativeNoTimesheetRequired: false,
+        isBlankNoHoursSchedule: true,
+        reason: 'blank-schedule-no-worked-hours',
+        message: 'No Timesheet Image will be attached to this record as no hours have been entered for the timesheet.'
+      };
+    }
+    return {
+      requiresConfirm: false,
+      suppressTimesheetAutoAttach: false,
+      isAuthoritativeNoTimesheetRequired: false,
+      isBlankNoHoursSchedule: false,
+      reason: '',
+      message: ''
+    };
+  };
+
+  const confirmBulkProcessNoTimesheetImage = async (message) => {
+    if (typeof openUiConfirmModal === 'function') {
+      const res = await openUiConfirmModal({
+        title: 'Process without Timesheet image?',
+        message,
+        confirm_label: 'Confirm',
+        cancel_label: 'Cancel',
+        confirm_class: 'btn'
+      });
+      return !!(res && res.confirmed);
+    }
+    return window.confirm(message);
+  };
+
   const isSyntheticEvidenceId = (value) => /^synthetic-attached:/i.test(trimStr(value || ''));
   const evidenceStorageKeyOf = (item) => trimStr(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || item?.preview_storage_key || '').replace(/^\/+/, '');
   const evidenceIdOf = (item) => trimStr(item?.evidence_id || item?.id || item?.queue_id || '');
@@ -158233,6 +158564,15 @@ async function handleBulkProcessProcess(state) {
       return { ok: false, error: reason };
     }
 
+    let processTimesheetImageProtection = getBulkProcessTimesheetImageProtection(activeForInitialProcessGate);
+    if (processTimesheetImageProtection.requiresConfirm) {
+      const confirmed = await confirmBulkProcessNoTimesheetImage(processTimesheetImageProtection.message);
+      if (!confirmed) {
+        GE();
+        return { ok: false, cancelled: true, message: 'Process cancelled.' };
+      }
+    }
+
     const dirtyBeforeProcess = (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty;
     let controlledSaveMutation = false;
     if (dirtyBeforeProcess) {
@@ -158311,6 +158651,7 @@ async function handleBulkProcessProcess(state) {
         const reason = trimStr(editability.processDisabledReason || editability.disabledReason || '') || 'This row cannot be processed.';
         return { ok: false, error: reason };
       }
+      processTimesheetImageProtection = getBulkProcessTimesheetImageProtection(activeForPostSaveProcessGate);
     }
 
     let active = readActive();
@@ -158339,21 +158680,30 @@ async function handleBulkProcessProcess(state) {
     activeTimesheetId = active.timesheetId;
     activeContractWeekId = active.contractWeekId;
     expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
+    processTimesheetImageProtection = getBulkProcessTimesheetImageProtection(active);
 
+    const suppressTimesheetAutoAttachForProcess = processTimesheetImageProtection.suppressTimesheetAutoAttach === true;
     const paneBeforeProcessEvidenceMutation = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
-    const willAttachOrStageQueueItem = !!(
+    const selectedQueueBeforeProcess = !!(
       paneBeforeProcessEvidenceMutation &&
       trimStr(paneBeforeProcessEvidenceMutation.active_tab || 'queue').toLowerCase() === 'queue' &&
       paneBeforeProcessEvidenceMutation.active_queue_item &&
       typeof paneBeforeProcessEvidenceMutation.active_queue_item === 'object' &&
       trimStr(paneBeforeProcessEvidenceMutation.active_queue_item.id || paneBeforeProcessEvidenceMutation.active_queue_item.queue_id || '')
     );
+    const willAttachOrStageQueueItem = !!(selectedQueueBeforeProcess && !suppressTimesheetAutoAttachForProcess);
+    if (selectedQueueBeforeProcess && suppressTimesheetAutoAttachForProcess) {
+      sigLog('QUEUE-ATTACH-SKIP', {
+        reason: processTimesheetImageProtection.reason || 'timesheet-auto-attach-blocked',
+        queue_id: trimStr(paneBeforeProcessEvidenceMutation.active_queue_item.id || paneBeforeProcessEvidenceMutation.active_queue_item.queue_id || '') || null
+      });
+    }
     if (willAttachOrStageQueueItem) {
       await assertNoExternalProcessBaselineChangeBeforeControlledMutation(active, 'before-process-queue-evidence-attach');
     }
 
     const preservedStateCtxBeforeEvidenceMutation = pickObject(active.stateCtx || {});
-    const evidenceMutated = await maybeAttachOrStageQueueItem({ timesheetId: activeTimesheetId, contractWeekId: activeContractWeekId, expectedTimesheetId });
+    const evidenceMutated = await maybeAttachOrStageQueueItem({ timesheetId: activeTimesheetId, contractWeekId: activeContractWeekId, expectedTimesheetId, suppressTimesheetAutoAttach: suppressTimesheetAutoAttachForProcess, suppressReason: processTimesheetImageProtection.reason });
     sigLog('AFTER-EVIDENCE-MUTATION-CALL', {
       evidence_mutated: evidenceMutated === true,
       active_signature: trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '') || null
@@ -158419,7 +158769,13 @@ async function handleBulkProcessProcess(state) {
         row_signature: activeRowSignature || null,
         bulk_process: true,
         return_bulk_patch: true,
-        context: 'bulk_process'
+        context: 'bulk_process',
+        ...(processTimesheetImageProtection.suppressTimesheetAutoAttach === true ? {
+          suppress_timesheet_evidence_materialisation: true,
+          suppressTimesheetEvidenceMaterialisation: true,
+          no_timesheet_image_required: processTimesheetImageProtection.isAuthoritativeNoTimesheetRequired === true,
+          no_hours_timesheet_image_suppressed: processTimesheetImageProtection.isBlankNoHoursSchedule === true
+        } : {})
       });
     } else if (active.isWeekly && activeContractWeekId) {
       const stateCtx = active.stateCtx || {};
@@ -158522,10 +158878,14 @@ async function handleBulkProcessProcess(state) {
         hoursAreZeroForAdjustment &&
         (hasExpenseDraftForAdjustment || hasAdditionalUnitsForAdjustment)
       );
-      if ((!Array.isArray(savedScheduleForProcessInfo.schedule) || savedScheduleForProcessInfo.schedule.length === 0) && !allowEmptyScheduleForAdditionalManualAdjustment) {
+      const weeklyProcessProtection = getBulkProcessTimesheetImageProtection(active);
+      const allowEmptyScheduleForProtectedNoTimesheet = weeklyProcessProtection.isAuthoritativeNoTimesheetRequired === true;
+      const allowEmptyScheduleForNoHours = weeklyProcessProtection.isBlankNoHoursSchedule === true || !activeHasEnteredWorkedHoursForProcess(active);
+      const shouldKeepScheduleEmptyForProcess = !!(allowEmptyScheduleForAdditionalManualAdjustment || allowEmptyScheduleForProtectedNoTimesheet || allowEmptyScheduleForNoHours);
+      if ((!Array.isArray(savedScheduleForProcessInfo.schedule) || savedScheduleForProcessInfo.schedule.length === 0) && !shouldKeepScheduleEmptyForProcess) {
         throw new Error('Weekly Bulk Process cannot continue because no saved authoritative schedule was available after save. Refresh the row, check the saved schedule, then try again.');
       }
-      const savedScheduleForProcess = allowEmptyScheduleForAdditionalManualAdjustment
+      const savedScheduleForProcess = shouldKeepScheduleEmptyForProcess
         ? []
         : savedScheduleForProcessInfo.schedule;
       const readSavedUnitsObject = (value) => {
@@ -158545,7 +158905,15 @@ async function handleBulkProcessProcess(state) {
         additional_units_per_day,
         bulk_process: true,
         return_bulk_patch: true,
-        context: 'bulk_process'
+        context: 'bulk_process',
+        ...(weeklyProcessProtection.suppressTimesheetAutoAttach === true || shouldKeepScheduleEmptyForProcess ? {
+          suppress_timesheet_evidence_materialisation: true,
+          suppressTimesheetEvidenceMaterialisation: true,
+          no_timesheet_image_required: weeklyProcessProtection.isAuthoritativeNoTimesheetRequired === true,
+          no_hours_timesheet_image_suppressed: weeklyProcessProtection.isBlankNoHoursSchedule === true || allowEmptyScheduleForNoHours === true,
+          keep_additional_manual_adjustment_schedule_empty: true,
+          suppress_standard_schedule_fallback: true
+        } : {})
       }, {
         bulkProcessOwnsTransition: true,
         suppressModalAdoption: true,
@@ -158630,7 +158998,6 @@ async function handleBulkProcessProcess(state) {
     return { ok: false, error: st.error_text };
   }
 }
-
 
 
 
