@@ -22914,26 +22914,105 @@ function attachBankingNavAlertPopoverHandlers() {
         || summary.banking_alert_summary_deferred === true
       );
   };
+  const getHeartbeat = () => {
+    if (window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object') return window.__changesHeartbeat;
+    if (window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') return window.__changeHeartbeat;
+    return null;
+  };
+  const detailHashField = (hb, field) => String((hb && Object.prototype.hasOwnProperty.call(hb, field)) ? (hb[field] || '') : '').trim();
+  const getAttentionHash = (state) => {
+    const src = (state && typeof state === 'object') ? state : {};
+    const summary = (src.alertSummary && typeof src.alertSummary === 'object' && !Array.isArray(src.alertSummary))
+      ? src.alertSummary
+      : ((src.banking_alert_summary && typeof src.banking_alert_summary === 'object' && !Array.isArray(src.banking_alert_summary)) ? src.banking_alert_summary : {});
+    const hb = getHeartbeat();
+    return String(
+      src.banking_alert_hash
+      || src.banking_alert_summary_signature
+      || summary.banking_alert_hash
+      || summary.banking_alert_summary_signature
+      || window.__bankingAlertHash
+      || window.__bankingAlertSummarySignature
+      || hb?.bankingAlertHash
+      || hb?.bankingAlertSignature
+      || ''
+    ).trim();
+  };
+  const clearDetailMarkersForHash = (hb, hash) => {
+    const h = String(hash || '').trim();
+    if (!hb || !h) return;
+    [
+      '_bankingAlertSummaryDetailRequestedHash',
+      '_bankingAlertSummaryDetailPendingHash',
+      '_bankingAlertSummaryDetailInFlightHash',
+      '_bankingAlertSummaryDetailSettledDeferredHash',
+      '_bankingAlertSummaryDetailLoadedHash',
+      '_bankingAlertSummaryDetailForceRefreshHash'
+    ].forEach((field) => {
+      try { if (detailHashField(hb, field) === h) hb[field] = ''; } catch {}
+    });
+    if (!detailHashField(hb, '_bankingAlertSummaryDetailPendingHash')) hb._bankingAlertSummaryDetailPending = false;
+    if (!detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash')) hb._bankingAlertSummaryDetailInFlight = false;
+  };
+  const syncDetailHash = (state) => {
+    const hb = getHeartbeat();
+    const hash = getAttentionHash(state);
+    if (!hb || !hash) return hash;
+    const previousHash = String(hb._bankingAlertSummaryDetailCurrentHash || hb.bankingAlertHash || hb.bankingAlertSignature || window.__bankingAlertHash || window.__bankingAlertSummarySignature || '').trim();
+    if (previousHash && previousHash !== hash) clearDetailMarkersForHash(hb, previousHash);
+    hb._bankingAlertSummaryDetailCurrentHash = hash;
+    hb.bankingAlertHash = hash;
+    hb.bankingAlertSignature = hash;
+    window.__bankingAlertHash = hash;
+    window.__bankingAlertSummarySignature = hash;
+    return hash;
+  };
+  const canRequestDeferredDetailForHash = (hb, hash, reason = '') => {
+    const h = String(hash || '').trim();
+    if (!hb || !h) return false;
+    const force = /force|manual|user|explicit/i.test(String(reason || '')) || detailHashField(hb, '_bankingAlertSummaryDetailForceRefreshHash') === h;
+    const inFlight = detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash') === h
+      || (hb._bankingAlertSummaryDetailInFlight === true && !detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash') && detailHashField(hb, '_bankingAlertSummaryDetailRequestedHash') === h);
+    if (inFlight) return false;
+    if (!force && detailHashField(hb, '_bankingAlertSummaryDetailLoadedHash') === h) return false;
+    if (!force && detailHashField(hb, '_bankingAlertSummaryDetailSettledDeferredHash') === h) return false;
+    const pending = hb._bankingAlertSummaryDetailPending === true && (
+      detailHashField(hb, '_bankingAlertSummaryDetailPendingHash') === h
+      || (!detailHashField(hb, '_bankingAlertSummaryDetailPendingHash') && detailHashField(hb, '_bankingAlertSummaryDetailRequestedHash') === h)
+    );
+    if (!force && pending) return false;
+    if (!force && detailHashField(hb, '_bankingAlertSummaryDetailRequestedHash') === h) return false;
+    return true;
+  };
   const requestDeferredAlertDetailRefresh = (state, reason = 'banking-alert-popover-detail') => {
     try {
       if (!attentionNeedsDeferredDetail(state)) return false;
-      const hb = (window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object')
-        ? window.__changesHeartbeat
-        : ((window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') ? window.__changeHeartbeat : null);
+      const hb = getHeartbeat();
       if (!hb) return false;
-      const now = Date.now();
-      const lastRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
+      const hash = syncDetailHash(state);
+      if (!hash || !canRequestDeferredDetailForHash(hb, hash, reason)) return false;
+      if (typeof hb.requestBankingAlertSummaryDetailRefresh === 'function') {
+        return hb.requestBankingAlertSummaryDetailRefresh(reason || 'banking-alert-popover-detail') === true;
+      }
       hb._bankingAlertSummaryDeferred = true;
       hb._bankingAlertSummaryDetailPending = true;
-      if (now - lastRequestedAt < 3000) return true;
+      hb._bankingAlertSummaryDetailPendingHash = hash;
       if (hb._pingInFlight === true) {
         hb._pendingPingReason = String(reason || 'banking-alert-popover-detail');
         return true;
       }
+      const now = Date.now();
+      const lastRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
+      const lastPingAt = Number(hb._lastPingAtMs || 0) || 0;
+      const delayMs = Math.max(
+        0,
+        lastRequestedAt ? 3000 - (now - lastRequestedAt) : 0,
+        lastPingAt ? 3000 - (now - lastPingAt) : 0
+      );
       if (typeof hb.pingOnce === 'function') {
         setTimeout(() => {
           try { hb.pingOnce && hb.pingOnce(reason || 'banking-alert-popover-detail'); } catch {}
-        }, 0);
+        }, delayMs);
         return true;
       }
     } catch {}
@@ -23091,7 +23170,9 @@ function attachBankingNavAlertPopoverHandlers() {
       if (oldLeft) next.style.left = oldLeft;
       if (oldRight) next.style.right = oldRight;
     }
-    requestDeferredAlertDetailRefresh(attentionState, 'banking-alert-popover-refresh');
+    if (attentionNeedsDeferredDetail(attentionState)) {
+      requestDeferredAlertDetailRefresh(attentionState, 'banking-alert-popover-refresh');
+    }
   };
   const openRelatedBatch = async (batchId, alertKind) => {
     const id = String(batchId || '').trim();
@@ -23287,7 +23368,6 @@ function attachBankingNavAlertPopoverHandlers() {
 }
 
 
-
 function applyAlertSummaryToState(responsePayload) {
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const deepClone = (value) => {
@@ -23320,6 +23400,184 @@ function applyAlertSummaryToState(responsePayload) {
       }
     } catch {}
     return map;
+  };
+
+  const getHeartbeat = () => {
+    if (typeof window === 'undefined') return null;
+    if (window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object') return window.__changesHeartbeat;
+    if (window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') return window.__changeHeartbeat;
+    return null;
+  };
+  const detailHashField = (hb, field) => String((hb && Object.prototype.hasOwnProperty.call(hb, field)) ? (hb[field] || '') : '').trim();
+  const resolveDetailHash = (candidate = '') => {
+    const hb = getHeartbeat();
+    return toText(
+      candidate
+      || hb?.bankingAlertHash
+      || hb?.bankingAlertSignature
+      || (typeof window !== 'undefined' ? (window.__bankingAlertHash || window.__bankingAlertSummarySignature || '') : '')
+      || ''
+    );
+  };
+  const clearDetailMarkersForHash = (hb, hash) => {
+    const h = toText(hash);
+    if (!hb || !h) return;
+    [
+      '_bankingAlertSummaryDetailRequestedHash',
+      '_bankingAlertSummaryDetailPendingHash',
+      '_bankingAlertSummaryDetailInFlightHash',
+      '_bankingAlertSummaryDetailSettledDeferredHash',
+      '_bankingAlertSummaryDetailLoadedHash',
+      '_bankingAlertSummaryDetailForceRefreshHash'
+    ].forEach((field) => {
+      try { if (detailHashField(hb, field) === h) hb[field] = ''; } catch {}
+    });
+    if (detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash') === h || !detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash')) {
+      hb._bankingAlertSummaryDetailInFlight = false;
+    }
+    if (detailHashField(hb, '_bankingAlertSummaryDetailPendingHash') === h || !detailHashField(hb, '_bankingAlertSummaryDetailPendingHash')) {
+      hb._bankingAlertSummaryDetailPending = false;
+    }
+  };
+  const currentAckMutationAtMs = () => {
+    const hb = getHeartbeat();
+    return Math.max(
+      Number((typeof window !== 'undefined' && window.__bankingLastAlertAckMutationAtMs) || 0) || 0,
+      Number(hb?._lastBankingAckMutationAtMs || 0) || 0
+    );
+  };
+  const syncDetailHashState = (candidateHash = '') => {
+    const hb = getHeartbeat();
+    const hash = resolveDetailHash(candidateHash);
+    if (!hb) return hash;
+    const previousHash = toText(
+      hb._bankingAlertSummaryDetailCurrentHash
+      || hb.bankingAlertHash
+      || hb.bankingAlertSignature
+      || (typeof window !== 'undefined' ? (window.__bankingAlertHash || window.__bankingAlertSummarySignature || '') : '')
+      || ''
+    );
+    if (hash && previousHash && previousHash !== hash) {
+      clearDetailMarkersForHash(hb, previousHash);
+      hb._bankingAlertSummaryDeferred = false;
+      hb._bankingAlertSummaryDetailPending = false;
+      hb._bankingAlertSummaryDetailInFlight = false;
+    }
+    const ackAt = currentAckMutationAtMs();
+    const ackSeenAt = Number(hb._bankingAlertSummaryDetailAckStateAtMs || 0) || 0;
+    if (ackAt > ackSeenAt) {
+      hb._bankingAlertSummaryDetailAckStateAtMs = ackAt;
+      if (hash) {
+        clearDetailMarkersForHash(hb, hash);
+        hb._bankingAlertSummaryDeferred = false;
+        hb._bankingAlertSummaryDetailPending = false;
+        hb._bankingAlertSummaryDetailInFlight = false;
+      }
+    }
+    if (hash) {
+      hb._bankingAlertSummaryDetailCurrentHash = hash;
+      hb.bankingAlertHash = hash;
+      hb.bankingAlertSignature = hash;
+    }
+    return hash;
+  };
+  const isDetailInFlightForHash = (hash) => {
+    const hb = getHeartbeat();
+    const h = toText(hash);
+    return !!(hb && h && (
+      detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash') === h
+      || (hb._bankingAlertSummaryDetailInFlight === true && !detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash') && detailHashField(hb, '_bankingAlertSummaryDetailRequestedHash') === h)
+    ));
+  };
+  const isDetailPendingForHash = (hash) => {
+    const hb = getHeartbeat();
+    const h = toText(hash);
+    return !!(hb && h && hb._bankingAlertSummaryDetailPending === true && (
+      detailHashField(hb, '_bankingAlertSummaryDetailPendingHash') === h
+      || detailHashField(hb, '_bankingAlertSummaryDetailForceRefreshHash') === h
+      || (!detailHashField(hb, '_bankingAlertSummaryDetailPendingHash') && detailHashField(hb, '_bankingAlertSummaryDetailRequestedHash') === h)
+    ));
+  };
+  const isDetailSettledDeferredForHash = (hash) => {
+    const hb = getHeartbeat();
+    const h = toText(hash);
+    return !!(hb && h && detailHashField(hb, '_bankingAlertSummaryDetailSettledDeferredHash') === h);
+  };
+  const isDetailSettledLoadedForHash = (hash) => {
+    const hb = getHeartbeat();
+    const h = toText(hash);
+    return !!(hb && h && detailHashField(hb, '_bankingAlertSummaryDetailLoadedHash') === h);
+  };
+  const markDetailSettledDeferred = (hash) => {
+    const hb = getHeartbeat();
+    const h = toText(hash);
+    if (!hb || !h) return;
+    hb._bankingAlertSummaryDetailSettledDeferredHash = h;
+    if (detailHashField(hb, '_bankingAlertSummaryDetailLoadedHash') === h) hb._bankingAlertSummaryDetailLoadedHash = '';
+    if (detailHashField(hb, '_bankingAlertSummaryDetailRequestedHash') === h) hb._bankingAlertSummaryDetailRequestedHash = '';
+    if (detailHashField(hb, '_bankingAlertSummaryDetailPendingHash') === h) hb._bankingAlertSummaryDetailPendingHash = '';
+    if (detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash') === h) hb._bankingAlertSummaryDetailInFlightHash = '';
+    if (detailHashField(hb, '_bankingAlertSummaryDetailForceRefreshHash') === h) hb._bankingAlertSummaryDetailForceRefreshHash = '';
+    hb._bankingAlertSummaryDeferred = true;
+    hb._bankingAlertSummaryDetailPending = false;
+    hb._bankingAlertSummaryDetailInFlight = false;
+  };
+  const markDetailSettledLoaded = (hash) => {
+    const hb = getHeartbeat();
+    const h = toText(hash);
+    if (!hb || !h) return;
+    hb._bankingAlertSummaryDetailLoadedHash = h;
+    if (detailHashField(hb, '_bankingAlertSummaryDetailSettledDeferredHash') === h) hb._bankingAlertSummaryDetailSettledDeferredHash = '';
+    if (detailHashField(hb, '_bankingAlertSummaryDetailRequestedHash') === h) hb._bankingAlertSummaryDetailRequestedHash = '';
+    if (detailHashField(hb, '_bankingAlertSummaryDetailPendingHash') === h) hb._bankingAlertSummaryDetailPendingHash = '';
+    if (detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash') === h) hb._bankingAlertSummaryDetailInFlightHash = '';
+    if (detailHashField(hb, '_bankingAlertSummaryDetailForceRefreshHash') === h) hb._bankingAlertSummaryDetailForceRefreshHash = '';
+    hb._bankingAlertSummaryDeferred = false;
+    hb._bankingAlertSummaryDetailPending = false;
+    hb._bankingAlertSummaryDetailInFlight = false;
+  };
+  const wasRequestedDetailResponseForHash = (hash) => {
+    const hb = getHeartbeat();
+    const h = toText(hash);
+    if (!hb || !h) return false;
+    return detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash') === h
+      || (hb._bankingAlertSummaryDetailInFlight === true && detailHashField(hb, '_bankingAlertSummaryDetailRequestedHash') === h)
+      || responsePayload?.banking_alert_detail_refresh === true
+      || responsePayload?.banking_alert_detail_refreshed === true;
+  };
+  const canQueueDetailRefreshForHash = (hash, options = {}) => {
+    const hb = getHeartbeat();
+    const h = toText(hash);
+    const force = options.force === true;
+    if (!hb || !h) return false;
+    if (isDetailInFlightForHash(h)) return false;
+    if (!force && isDetailSettledLoadedForHash(h)) return false;
+    if (!force && isDetailSettledDeferredForHash(h)) return false;
+    if (!force && isDetailPendingForHash(h)) return false;
+    return true;
+  };
+  const queueDetailRefreshForHash = (hash, reason = 'banking-alert-detail-deferred', options = {}) => {
+    const hb = getHeartbeat();
+    const h = syncDetailHashState(hash);
+    if (!hb || !h || !canQueueDetailRefreshForHash(h, options)) return false;
+    if (typeof hb.requestBankingAlertSummaryDetailRefresh === 'function') {
+      return hb.requestBankingAlertSummaryDetailRefresh(reason || 'banking-alert-detail-deferred') === true;
+    }
+    hb._bankingAlertSummaryDeferred = true;
+    hb._bankingAlertSummaryDetailPending = true;
+    hb._bankingAlertSummaryDetailPendingHash = h;
+    if (options.force === true) hb._bankingAlertSummaryDetailForceRefreshHash = h;
+    const now = Date.now();
+    const lastRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
+    const delayMs = Math.max(0, 3000 - (now - lastRequestedAt));
+    if (!hb._pingInFlight && typeof hb.pingOnce === 'function') {
+      setTimeout(() => {
+        try { hb.pingOnce && hb.pingOnce(reason || 'banking-alert-detail-deferred'); } catch {}
+      }, delayMs);
+    } else if (hb._pingInFlight === true) {
+      hb._pendingPingReason = String(reason || 'banking-alert-detail-deferred');
+    }
+    return true;
   };
 
   const payload = isPlainObject(responsePayload) ? responsePayload : {};
@@ -23408,6 +23666,16 @@ function applyAlertSummaryToState(responsePayload) {
       ?? 'critical';
     const highestLabel = deferredCount > 0 && highestLabelRaw ? String(highestLabelRaw) : null;
     const highestSeverity = deferredCount > 0 && highestSeverityRaw ? String(highestSeverityRaw) : null;
+    const detailHash = alertHash ? syncDetailHashState(alertHash) : '';
+    const wasRequestedDetailResponse = wasRequestedDetailResponseForHash(detailHash);
+    if (wasRequestedDetailResponse) markDetailSettledDeferred(detailHash);
+    const queuedDetailRefresh = !wasRequestedDetailResponse && queueDetailRefreshForHash(detailHash, 'banking-alert-detail-deferred');
+    const detailsSettledDeferred = isDetailSettledDeferredForHash(detailHash);
+    const detailsSettledLoaded = isDetailSettledLoadedForHash(detailHash);
+    const detailsLoading = deferredCount > 0
+      && detailsSettledDeferred !== true
+      && detailsSettledLoaded !== true
+      && (isDetailInFlightForHash(detailHash) === true || isDetailPendingForHash(detailHash) === true || queuedDetailRefresh === true);
     const summaryToStore = {
       ...(summary ? deepClone(summary) : {}),
       ok: true,
@@ -23423,7 +23691,11 @@ function applyAlertSummaryToState(responsePayload) {
       banking_alert_summary_signature: alertHash,
       banking_alert_summary_deferred: true,
       detailsDeferred: true,
-      detailsLoading: true
+      detailsLoading,
+      detailsSettledDeferred,
+      detailsSettledLoaded,
+      banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
+      banking_alert_summary_detail_settled_loaded: detailsSettledLoaded
     };
 
     if (typeof window !== 'undefined') {
@@ -23434,21 +23706,17 @@ function applyAlertSummaryToState(responsePayload) {
         }
         window.__bankingAlertSummary = deepClone(summaryToStore) || summaryToStore;
         window.__bankingAlertCount = deferredCount;
-        const hb = (window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object')
-          ? window.__changesHeartbeat
-          : ((window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') ? window.__changeHeartbeat : null);
+        const hb = getHeartbeat();
         if (hb) {
-          if (alertHash) {
-            hb.bankingAlertHash = alertHash;
-            hb.bankingAlertSignature = alertHash;
+          if (detailHash) {
+            hb.bankingAlertHash = detailHash;
+            hb.bankingAlertSignature = detailHash;
+            hb._bankingAlertSummaryDetailCurrentHash = detailHash;
           }
           hb._bankingAlertSummaryDeferred = true;
-          hb._bankingAlertSummaryDetailPending = true;
-          const lastRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
-          if (!hb._pingInFlight && typeof hb.pingOnce === 'function' && Date.now() - lastRequestedAt > 3000) {
-            setTimeout(() => {
-              try { hb.pingOnce && hb.pingOnce('banking-alert-detail-deferred'); } catch {}
-            }, 0);
+          if (detailsSettledDeferred === true || detailsSettledLoaded === true) {
+            hb._bankingAlertSummaryDetailPending = false;
+            hb._bankingAlertSummaryDetailInFlight = false;
           }
         }
       } catch {}
@@ -23489,7 +23757,11 @@ function applyAlertSummaryToState(responsePayload) {
       banking_alert_summary_signature: alertHash,
       banking_alert_summary_deferred: true,
       detailsDeferred: true,
-      detailsLoading: true,
+      detailsLoading,
+      detailsSettledDeferred,
+      detailsSettledLoaded,
+      banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
+      banking_alert_summary_detail_settled_loaded: detailsSettledLoaded,
       title: deferredCount > 0
         ? String(highestLabel || 'Banking action needed')
         : 'No current unacknowledged Banking alerts',
@@ -23497,17 +23769,24 @@ function applyAlertSummaryToState(responsePayload) {
       forceReapply: hadOpenPopover
     };
 
+    let bankingNavAttentionStateChanged = true;
     try {
+      const stateVersionBefore = (typeof window !== 'undefined') ? Number(window.__bankingNavAlertStateVersion || 0) : 0;
       if (typeof updateBankingNavAttentionState === 'function') {
         updateBankingNavAttentionState(attentionState);
+        const stateVersionAfter = (typeof window !== 'undefined') ? Number(window.__bankingNavAlertStateVersion || 0) : stateVersionBefore;
+        bankingNavAttentionStateChanged = stateVersionAfter !== stateVersionBefore;
       } else if (typeof window !== 'undefined') {
         window.__bankingNavAttentionState = attentionState;
+        bankingNavAttentionStateChanged = true;
       }
     } catch {
       try { if (typeof window !== 'undefined') window.__bankingNavAttentionState = attentionState; } catch {}
+      bankingNavAttentionStateChanged = true;
     }
 
     try {
+      if (!bankingNavAttentionStateChanged) return attentionState;
       const popover = document.querySelector('.banking-nav-alert-popover[data-banking-nav-alert-popover="1"]');
       if (popover && typeof renderBankingNavAlertPopover === 'function') {
         const trigger = document.querySelector('[data-banking-nav-alert-trigger="1"]');
@@ -23560,6 +23839,21 @@ function applyAlertSummaryToState(responsePayload) {
     ?? null;
   const highestLabel = count > 0 && highestLabelRaw ? String(highestLabelRaw) : null;
   const highestSeverity = count > 0 && highestSeverityRaw ? String(highestSeverityRaw) : null;
+  const detailHash = alertHash ? syncDetailHashState(alertHash) : '';
+  if (count > 0 && alerts.length > 0) markDetailSettledLoaded(detailHash);
+  if (count === 0) {
+    try {
+      const hb = getHeartbeat();
+      if (hb) {
+        clearDetailMarkersForHash(hb, detailHash || resolveDetailHash(alertHash));
+        hb._bankingAlertSummaryDeferred = false;
+        hb._bankingAlertSummaryDetailPending = false;
+        hb._bankingAlertSummaryDetailInFlight = false;
+      }
+    } catch {}
+  }
+  const detailsSettledDeferred = count > 0 && isDetailSettledDeferredForHash(detailHash);
+  const detailsSettledLoaded = count > 0 && (alerts.length > 0 || isDetailSettledLoadedForHash(detailHash));
   const summaryToStore = summary
     ? {
         ...deepClone(summary),
@@ -23575,7 +23869,11 @@ function applyAlertSummaryToState(responsePayload) {
         banking_alert_summary_signature: alertHash,
         banking_alert_summary_deferred: false,
         detailsDeferred: false,
-        detailsLoading: false
+        detailsLoading: false,
+        detailsSettledDeferred,
+        detailsSettledLoaded,
+        banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
+        banking_alert_summary_detail_settled_loaded: detailsSettledLoaded
       }
     : {
         ok: true,
@@ -23591,19 +23889,22 @@ function applyAlertSummaryToState(responsePayload) {
         banking_alert_summary_signature: alertHash,
         banking_alert_summary_deferred: false,
         detailsDeferred: false,
-        detailsLoading: false
+        detailsLoading: false,
+        detailsSettledDeferred,
+        detailsSettledLoaded,
+        banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
+        banking_alert_summary_detail_settled_loaded: detailsSettledLoaded
       };
 
   if (typeof window !== 'undefined' && alertHash) {
     try {
       window.__bankingAlertHash = alertHash;
       window.__bankingAlertSummarySignature = alertHash;
-      const hb = (window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object')
-        ? window.__changesHeartbeat
-        : ((window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') ? window.__changeHeartbeat : null);
+      const hb = getHeartbeat();
       if (hb) {
-        hb.bankingAlertHash = alertHash;
-        hb.bankingAlertSignature = alertHash;
+        hb.bankingAlertHash = detailHash || alertHash;
+        hb.bankingAlertSignature = detailHash || alertHash;
+        if (detailHash) hb._bankingAlertSummaryDetailCurrentHash = detailHash;
       }
     } catch {}
   }
@@ -23648,6 +23949,10 @@ function applyAlertSummaryToState(responsePayload) {
     banking_alert_summary_deferred: false,
     detailsDeferred: false,
     detailsLoading: false,
+    detailsSettledDeferred,
+    detailsSettledLoaded,
+    banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
+    banking_alert_summary_detail_settled_loaded: detailsSettledLoaded,
     title: count > 0
       ? String(highestLabel || 'Banking action needed')
       : 'No current unacknowledged Banking alerts',
@@ -23655,17 +23960,24 @@ function applyAlertSummaryToState(responsePayload) {
     forceReapply: hadOpenPopover
   };
 
+  let bankingNavAttentionStateChanged = true;
   try {
+    const stateVersionBefore = (typeof window !== 'undefined') ? Number(window.__bankingNavAlertStateVersion || 0) : 0;
     if (typeof updateBankingNavAttentionState === 'function') {
       updateBankingNavAttentionState(attentionState);
+      const stateVersionAfter = (typeof window !== 'undefined') ? Number(window.__bankingNavAlertStateVersion || 0) : stateVersionBefore;
+      bankingNavAttentionStateChanged = stateVersionAfter !== stateVersionBefore;
     } else if (typeof window !== 'undefined') {
       window.__bankingNavAttentionState = attentionState;
+      bankingNavAttentionStateChanged = true;
     }
   } catch {
     try { if (typeof window !== 'undefined') window.__bankingNavAttentionState = attentionState; } catch {}
+    bankingNavAttentionStateChanged = true;
   }
 
   try {
+    if (!bankingNavAttentionStateChanged) return attentionState;
     const popover = document.querySelector('.banking-nav-alert-popover[data-banking-nav-alert-popover="1"]');
     if (popover && typeof renderBankingNavAlertPopover === 'function') {
       const trigger = document.querySelector('[data-banking-nav-alert-trigger="1"]');
@@ -41582,8 +41894,6 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 }
 
 
-
-
 function updateBankingNavAttentionState(attentionState) {
   const navRoot = (typeof byId === 'function' ? byId('nav') : document.getElementById('nav')) || document;
   const state = (attentionState && typeof attentionState === 'object') ? attentionState : {};
@@ -41622,8 +41932,31 @@ function updateBankingNavAttentionState(attentionState) {
   );
 
   const activeAlerts = count > 0 ? activeAlertsRaw : [];
+  const alertHash = String(
+    state.banking_alert_hash
+    || state.banking_alert_summary_signature
+    || sourceSummary.banking_alert_hash
+    || sourceSummary.banking_alert_summary_signature
+    || (typeof window !== 'undefined' ? (window.__bankingAlertHash || window.__bankingAlertSummarySignature || '') : '')
+    || ''
+  ).trim();
+  const hb = (typeof window !== 'undefined' && window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object')
+    ? window.__changesHeartbeat
+    : ((typeof window !== 'undefined' && window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') ? window.__changeHeartbeat : null);
+  const detailHashField = (field) => String((hb && Object.prototype.hasOwnProperty.call(hb, field)) ? (hb[field] || '') : '').trim();
   const hasAlertRows = count > 0 && activeAlerts.length > 0;
   const inferredDetailsDeferred = count > 0 && !hasAlertRows;
+  const detailsSettledDeferred = count > 0 && !!alertHash && detailHashField('_bankingAlertSummaryDetailSettledDeferredHash') === alertHash;
+  const detailsSettledLoaded = count > 0 && !!alertHash && (hasAlertRows || detailHashField('_bankingAlertSummaryDetailLoadedHash') === alertHash);
+  const detailsInFlightForHash = count > 0 && !!alertHash && !!hb && (
+    detailHashField('_bankingAlertSummaryDetailInFlightHash') === alertHash
+    || (hb._bankingAlertSummaryDetailInFlight === true && !detailHashField('_bankingAlertSummaryDetailInFlightHash') && detailHashField('_bankingAlertSummaryDetailRequestedHash') === alertHash)
+  );
+  const detailsPendingForHash = count > 0 && !!alertHash && !!hb && hb._bankingAlertSummaryDetailPending === true && (
+    detailHashField('_bankingAlertSummaryDetailPendingHash') === alertHash
+    || detailHashField('_bankingAlertSummaryDetailForceRefreshHash') === alertHash
+    || (!detailHashField('_bankingAlertSummaryDetailPendingHash') && detailHashField('_bankingAlertSummaryDetailRequestedHash') === alertHash)
+  );
   const requiresAttention = count > 0;
   const badgeText = count > 0 ? String(count) : '!';
   const highestLabelRaw = state.highestPriorityLabel
@@ -41651,13 +41984,16 @@ function updateBankingNavAttentionState(attentionState) {
     || sourceSummary.details_deferred === true
     || sourceSummary.banking_alert_summary_deferred === true
   );
-  const detailsLoading = count > 0 && (
+  const explicitDetailsLoading = count > 0 && (
     state.detailsLoading === true
     || state.details_loading === true
     || sourceSummary.detailsLoading === true
     || sourceSummary.details_loading === true
-    || detailsDeferred === true
   );
+  const detailsLoading = count > 0
+    && detailsSettledDeferred !== true
+    && detailsSettledLoaded !== true
+    && (detailsInFlightForHash === true || detailsPendingForHash === true || explicitDetailsLoading === true);
   const summaryIncluded = count > 0 && (
     state.summaryIncluded === true
     || state.summary_included === true
@@ -41678,9 +42014,15 @@ function updateBankingNavAttentionState(attentionState) {
     banking_highest_alert_label: highestLabel,
     highest_severity: highestSeverity,
     banking_highest_alert_severity: highestSeverity,
+    banking_alert_hash: alertHash,
+    banking_alert_summary_signature: alertHash,
     banking_alert_summary_deferred: detailsDeferred,
     detailsDeferred,
     detailsLoading,
+    detailsSettledDeferred,
+    detailsSettledLoaded,
+    banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
+    banking_alert_summary_detail_settled_loaded: detailsSettledLoaded,
     banking_alert_summary_included: summaryIncluded,
     summaryIncluded
   };
@@ -41702,15 +42044,20 @@ function updateBankingNavAttentionState(attentionState) {
     banking_highest_alert_severity: highestSeverity,
     alertSummary: normalisedSummary,
     banking_alert_summary: normalisedSummary,
-    banking_alert_hash: String(state.banking_alert_hash || sourceSummary.banking_alert_hash || sourceSummary.banking_alert_summary_signature || '').trim(),
+    banking_alert_hash: alertHash,
+    banking_alert_summary_signature: alertHash,
     banking_alert_summary_deferred: detailsDeferred,
     detailsDeferred,
     detailsLoading,
+    detailsSettledDeferred,
+    detailsSettledLoaded,
+    banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
+    banking_alert_summary_detail_settled_loaded: detailsSettledLoaded,
     banking_alert_summary_included: summaryIncluded,
     summaryIncluded
   };
 
-  const forceReapply = state.force === true || state.forceReapply === true || state.reconcile === true || state.force_reapply === true;
+  const forceReapplyRequested = state.force === true || state.forceReapply === true || state.reconcile === true || state.force_reapply === true;
   const makeStableKey = (candidateState) => {
     const candidate = (candidateState && typeof candidateState === 'object') ? candidateState : {};
     const candidateSummary = (candidate.alertSummary && typeof candidate.alertSummary === 'object' && !Array.isArray(candidate.alertSummary))
@@ -41737,13 +42084,28 @@ function updateBankingNavAttentionState(attentionState) {
       || candidateSummary.details_deferred === true
       || candidateSummary.banking_alert_summary_deferred === true
     );
-    const candidateDetailsLoading = candidateCount > 0 && (
+    const candidateAlertHash = String(candidate.banking_alert_hash || candidate.banking_alert_summary_signature || candidateSummary.banking_alert_hash || candidateSummary.banking_alert_summary_signature || '').trim();
+    const candidateSettledDeferred = candidateCount > 0 && !!candidateAlertHash && detailHashField('_bankingAlertSummaryDetailSettledDeferredHash') === candidateAlertHash;
+    const candidateSettledLoaded = candidateCount > 0 && !!candidateAlertHash && (candidateHasAlertRows || detailHashField('_bankingAlertSummaryDetailLoadedHash') === candidateAlertHash);
+    const candidateInFlightForHash = candidateCount > 0 && !!candidateAlertHash && !!hb && (
+      detailHashField('_bankingAlertSummaryDetailInFlightHash') === candidateAlertHash
+      || (hb._bankingAlertSummaryDetailInFlight === true && !detailHashField('_bankingAlertSummaryDetailInFlightHash') && detailHashField('_bankingAlertSummaryDetailRequestedHash') === candidateAlertHash)
+    );
+    const candidatePendingForHash = candidateCount > 0 && !!candidateAlertHash && !!hb && hb._bankingAlertSummaryDetailPending === true && (
+      detailHashField('_bankingAlertSummaryDetailPendingHash') === candidateAlertHash
+      || detailHashField('_bankingAlertSummaryDetailForceRefreshHash') === candidateAlertHash
+      || (!detailHashField('_bankingAlertSummaryDetailPendingHash') && detailHashField('_bankingAlertSummaryDetailRequestedHash') === candidateAlertHash)
+    );
+    const candidateExplicitDetailsLoading = candidateCount > 0 && (
       candidate.detailsLoading === true
       || candidate.details_loading === true
       || candidateSummary.detailsLoading === true
       || candidateSummary.details_loading === true
-      || candidateDetailsDeferred === true
     );
+    const candidateDetailsLoading = candidateCount > 0
+      && candidateSettledDeferred !== true
+      && candidateSettledLoaded !== true
+      && (candidateInFlightForHash === true || candidatePendingForHash === true || candidateExplicitDetailsLoading === true);
     const candidateSummaryIncluded = candidateCount > 0 && (
       candidate.summaryIncluded === true
       || candidate.summary_included === true
@@ -41757,15 +42119,18 @@ function updateBankingNavAttentionState(attentionState) {
       count: candidateCount,
       highestLabel: String(candidate.highestPriorityLabel ?? candidate.banking_highest_alert_label ?? candidate.highest_label ?? candidateSummary.highest_label ?? candidateSummary.banking_highest_alert_label ?? '').trim(),
       highestSeverity: String(candidate.highestSeverity ?? candidate.banking_highest_alert_severity ?? candidate.highest_severity ?? candidateSummary.highest_severity ?? candidateSummary.banking_highest_alert_severity ?? '').trim().toLowerCase(),
-      hash: String(candidate.banking_alert_hash || candidateSummary.banking_alert_hash || candidateSummary.banking_alert_summary_signature || '').trim(),
+      hash: candidateAlertHash,
       detailsDeferred: candidateDetailsDeferred === true,
       detailsLoading: candidateDetailsLoading === true,
+      detailsSettledDeferred: candidateSettledDeferred === true,
+      detailsSettledLoaded: candidateSettledLoaded === true,
       summaryIncluded: candidateSummaryIncluded === true,
       fingerprints
     });
   };
   const nextStateKey = makeStableKey(nextState);
   const previousStateKey = String(window.__bankingNavAttentionStateKey || (window.__bankingNavAttentionState ? makeStableKey(window.__bankingNavAttentionState) : '') || '');
+  const forceReapply = forceReapplyRequested === true && !(keepPopoverOpen && previousStateKey && nextStateKey === previousStateKey);
   if (!forceReapply && previousStateKey && nextStateKey === previousStateKey) return window.__bankingNavAttentionState || nextState;
 
   window.__bankingNavAttentionStateKey = nextStateKey;
@@ -42026,6 +42391,7 @@ function updateBankingNavAttentionState(attentionState) {
 
   return nextState;
 }
+
 
 
 
@@ -156944,19 +157310,32 @@ async function handleBulkProcessProcess(state) {
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
     const queueItem = (pane && String(pane.active_tab || 'queue') === 'queue' && pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
     const queueId = trimStr(queueItem?.id || queueItem?.queue_id || '');
+    const queueKind = queueId ? (evidenceKindOf(queueItem) || 'TIMESHEET') : '';
     sigLog('QUEUE-ATTACH-CHECK', {
       has_queue_item: !!queueId,
       queue_id: queueId || null,
+      queue_kind: queueKind || null,
       active_tab: trimStr(pane?.active_tab || ''),
       target_timesheet_id: trimStr(active?.timesheetId || '') || null,
       target_contract_week_id: trimStr(active?.contractWeekId || '') || null,
       expected_timesheet_id: trimStr(active?.expectedTimesheetId || '') || null
     });
     if (!queueItem?.id) return false;
+    if (queueKind && queueKind !== 'TIMESHEET') {
+      sigLog('QUEUE-ATTACH-SKIP', {
+        reason: 'non-timesheet-queue-evidence-must-be-attached-before-processing',
+        queue_id: queueId || null,
+        queue_kind: queueKind || null,
+        timesheet_id: trimStr(active?.timesheetId || '') || null,
+        contract_week_id: trimStr(active?.contractWeekId || '') || null
+      });
+      return false;
+    }
     if (active?.suppressTimesheetAutoAttach === true) {
       sigLog('QUEUE-ATTACH-SKIP', {
         reason: trimStr(active?.suppressReason || '') || 'timesheet-auto-attach-blocked',
         queue_id: queueId || null,
+        queue_kind: queueKind || null,
         timesheet_id: trimStr(active?.timesheetId || '') || null,
         contract_week_id: trimStr(active?.contractWeekId || '') || null
       });
@@ -156966,17 +157345,19 @@ async function handleBulkProcessProcess(state) {
       sigLog('QUEUE-ATTACH-START', {
         mode: 'timesheet',
         queue_id: String(queueItem.id),
+        queue_kind: queueKind || 'TIMESHEET',
         timesheet_id: String(active.timesheetId),
         expected_timesheet_id: trimStr(active.expectedTimesheetId || active.timesheetId || '') || null
       });
       await attachQueueItemToTimesheetEvidence(String(queueItem.id), {
         timesheet_id: String(active.timesheetId),
         expected_timesheet_id: active.expectedTimesheetId || active.timesheetId,
-        kind: 'TIMESHEET'
+        kind: queueKind || 'TIMESHEET'
       });
       sigLog('QUEUE-ATTACH-DONE', {
         mode: 'timesheet',
         queue_id: String(queueItem.id),
+        queue_kind: queueKind || 'TIMESHEET',
         timesheet_id: String(active.timesheetId),
         expected_timesheet_id: trimStr(active.expectedTimesheetId || active.timesheetId || '') || null
       });
@@ -156986,15 +157367,17 @@ async function handleBulkProcessProcess(state) {
       sigLog('QUEUE-ATTACH-START', {
         mode: 'contract_week',
         queue_id: String(queueItem.id),
+        queue_kind: queueKind || 'TIMESHEET',
         contract_week_id: String(active.contractWeekId)
       });
       await stageQueueItemToContractWeek(String(queueItem.id), {
         contract_week_id: String(active.contractWeekId),
-        kind: 'TIMESHEET'
+        kind: queueKind || 'TIMESHEET'
       });
       sigLog('QUEUE-ATTACH-DONE', {
         mode: 'contract_week',
         queue_id: String(queueItem.id),
+        queue_kind: queueKind || 'TIMESHEET',
         contract_week_id: String(active.contractWeekId)
       });
       return true;
@@ -157002,6 +157385,7 @@ async function handleBulkProcessProcess(state) {
     sigLog('QUEUE-ATTACH-SKIP', {
       reason: 'no-target-or-helper',
       queue_id: queueId || null,
+      queue_kind: queueKind || null,
       timesheet_id: trimStr(active?.timesheetId || '') || null,
       contract_week_id: trimStr(active?.contractWeekId || '') || null
     });
@@ -157121,7 +157505,10 @@ async function handleBulkProcessProcess(state) {
     const evidenceRows = Array.isArray(active.details?.evidence) ? active.details.evidence : [];
     if (evidenceRows.length) return true;
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
-    if (pane?.active_queue_item?.id) return true;
+    const queueItem = (pane?.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    const queueId = trimStr(queueItem?.id || queueItem?.queue_id || '');
+    const queueKind = queueId ? (evidenceKindOf(queueItem) || 'TIMESHEET') : '';
+    if (queueId && queueKind === 'TIMESHEET') return true;
     if (typeof openUiConfirmModal === 'function') {
       const res = await openUiConfirmModal({
         title: 'Process without evidence?',
@@ -157317,6 +157704,82 @@ async function handleBulkProcessProcess(state) {
       return !!(res && res.confirmed);
     }
     return window.confirm(message);
+  };
+
+  const hasPositiveNumberForWeeklyBulkProcessSchedule = (value) => {
+    if (value == null || value === '') return false;
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0;
+  };
+
+  const hasBreakWindowForWeeklyBulkProcessSchedule = (value) => {
+    if (value == null) return false;
+    if (Array.isArray(value)) {
+      return value.some((item) => hasBreakWindowForWeeklyBulkProcessSchedule(item));
+    }
+    if (typeof value === 'object') {
+      return Object.values(value).some((item) => {
+        if (item && typeof item === 'object') return hasBreakWindowForWeeklyBulkProcessSchedule(item);
+        return hasValue(item) || hasPositiveNumberForWeeklyBulkProcessSchedule(item);
+      });
+    }
+    return hasValue(value) || hasPositiveNumberForWeeklyBulkProcessSchedule(value);
+  };
+
+  const isPureBlankNonWorkingWeeklyBulkProcessScheduleRow = (row) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return false;
+    const startValue = firstNonBlankProcessValue(row.start, row.start_time, row.actual_start, row.shift_start, row.from, row.start_utc, row.startUtc);
+    const endValue = firstNonBlankProcessValue(row.end, row.end_time, row.actual_end, row.shift_end, row.to, row.end_utc, row.endUtc);
+    if (startValue || endValue) return false;
+
+    const expectedPositive = !!(
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.expected_minutes) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.expected_mins) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.planned_minutes)
+    );
+    if (expectedPositive) return false;
+
+    const workedPositive = !!(
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.worked_minutes) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.paid_minutes) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.duration_minutes) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.total_minutes) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.minutes) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.actual_minutes) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.worked_hours) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.paid_hours) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.total_hours) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.hours)
+    );
+    if (workedPositive) return false;
+
+    const breakPositive = !!(
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.break_minutes) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.break_mins) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.unpaid_break_minutes) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.break_hours) ||
+      hasPositiveNumberForWeeklyBulkProcessSchedule(row.unpaid_break_hours)
+    );
+    if (breakPositive) return false;
+
+    const hasBreakWindow = !!(
+      hasBreakWindowForWeeklyBulkProcessSchedule(row.breaks) ||
+      hasBreakWindowForWeeklyBulkProcessSchedule(row.break_windows) ||
+      hasBreakWindowForWeeklyBulkProcessSchedule(row.break_start) ||
+      hasBreakWindowForWeeklyBulkProcessSchedule(row.break_end) ||
+      hasBreakWindowForWeeklyBulkProcessSchedule(row.break_start_time) ||
+      hasBreakWindowForWeeklyBulkProcessSchedule(row.break_end_time)
+    );
+    if (hasBreakWindow) return false;
+
+    return scheduleEntryWorkedMinutesForProcessProtection(row) <= 0;
+  };
+
+  const normaliseWeeklyBulkProcessActualScheduleForProcess = (schedule) => {
+    if (!Array.isArray(schedule)) return schedule;
+    return schedule
+      .filter((row) => !isPureBlankNonWorkingWeeklyBulkProcessScheduleRow(row))
+      .map((row) => deep(row));
   };
 
   const isSyntheticEvidenceId = (value) => /^synthetic-attached:/i.test(trimStr(value || ''));
@@ -158684,18 +159147,48 @@ async function handleBulkProcessProcess(state) {
 
     const suppressTimesheetAutoAttachForProcess = processTimesheetImageProtection.suppressTimesheetAutoAttach === true;
     const paneBeforeProcessEvidenceMutation = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
-    const selectedQueueBeforeProcess = !!(
+    const selectedQueueItemBeforeProcess = (
       paneBeforeProcessEvidenceMutation &&
       trimStr(paneBeforeProcessEvidenceMutation.active_tab || 'queue').toLowerCase() === 'queue' &&
       paneBeforeProcessEvidenceMutation.active_queue_item &&
-      typeof paneBeforeProcessEvidenceMutation.active_queue_item === 'object' &&
-      trimStr(paneBeforeProcessEvidenceMutation.active_queue_item.id || paneBeforeProcessEvidenceMutation.active_queue_item.queue_id || '')
+      typeof paneBeforeProcessEvidenceMutation.active_queue_item === 'object'
+    ) ? deep(paneBeforeProcessEvidenceMutation.active_queue_item) : null;
+    const selectedQueueBeforeProcessQueueId = trimStr(selectedQueueItemBeforeProcess?.id || selectedQueueItemBeforeProcess?.queue_id || '');
+    const selectedQueueBeforeProcessKind = selectedQueueBeforeProcessQueueId ? (evidenceKindOf(selectedQueueItemBeforeProcess) || 'TIMESHEET') : '';
+    const selectedQueueBeforeProcess = !!selectedQueueBeforeProcessQueueId;
+    const selectedQueueTimesheetBeforeProcess = !!(selectedQueueBeforeProcess && selectedQueueBeforeProcessKind === 'TIMESHEET');
+    const deferQueueTimesheetAttachUntilWeeklyProcessSuccess = !!(
+      selectedQueueTimesheetBeforeProcess &&
+      !suppressTimesheetAutoAttachForProcess &&
+      active.isWeekly === true &&
+      !!activeContractWeekId
     );
-    const willAttachOrStageQueueItem = !!(selectedQueueBeforeProcess && !suppressTimesheetAutoAttachForProcess);
-    if (selectedQueueBeforeProcess && suppressTimesheetAutoAttachForProcess) {
+    const deferredWeeklyQueueTimesheetItem = deferQueueTimesheetAttachUntilWeeklyProcessSuccess ? deep(selectedQueueItemBeforeProcess) : null;
+    const willAttachOrStageQueueItem = !!(
+      selectedQueueTimesheetBeforeProcess &&
+      !suppressTimesheetAutoAttachForProcess &&
+      !deferQueueTimesheetAttachUntilWeeklyProcessSuccess
+    );
+    if (selectedQueueBeforeProcess && !selectedQueueTimesheetBeforeProcess) {
+      sigLog('QUEUE-ATTACH-SKIP', {
+        reason: 'non-timesheet-queue-evidence-must-be-attached-before-processing',
+        queue_id: selectedQueueBeforeProcessQueueId || null,
+        queue_kind: selectedQueueBeforeProcessKind || null
+      });
+    }
+    if (selectedQueueTimesheetBeforeProcess && suppressTimesheetAutoAttachForProcess) {
       sigLog('QUEUE-ATTACH-SKIP', {
         reason: processTimesheetImageProtection.reason || 'timesheet-auto-attach-blocked',
-        queue_id: trimStr(paneBeforeProcessEvidenceMutation.active_queue_item.id || paneBeforeProcessEvidenceMutation.active_queue_item.queue_id || '') || null
+        queue_id: selectedQueueBeforeProcessQueueId || null,
+        queue_kind: selectedQueueBeforeProcessKind || null
+      });
+    }
+    if (deferQueueTimesheetAttachUntilWeeklyProcessSuccess) {
+      sigLog('QUEUE-ATTACH-DEFER', {
+        reason: 'weekly-process-must-succeed-before-timesheet-image-attach',
+        queue_id: selectedQueueBeforeProcessQueueId || null,
+        queue_kind: selectedQueueBeforeProcessKind || null,
+        contract_week_id: trimStr(activeContractWeekId || '') || null
       });
     }
     if (willAttachOrStageQueueItem) {
@@ -158703,9 +159196,13 @@ async function handleBulkProcessProcess(state) {
     }
 
     const preservedStateCtxBeforeEvidenceMutation = pickObject(active.stateCtx || {});
-    const evidenceMutated = await maybeAttachOrStageQueueItem({ timesheetId: activeTimesheetId, contractWeekId: activeContractWeekId, expectedTimesheetId, suppressTimesheetAutoAttach: suppressTimesheetAutoAttachForProcess, suppressReason: processTimesheetImageProtection.reason });
+    let evidenceMutated = false;
+    if (willAttachOrStageQueueItem) {
+      evidenceMutated = await maybeAttachOrStageQueueItem({ timesheetId: activeTimesheetId, contractWeekId: activeContractWeekId, expectedTimesheetId, suppressTimesheetAutoAttach: suppressTimesheetAutoAttachForProcess, suppressReason: processTimesheetImageProtection.reason });
+    }
     sigLog('AFTER-EVIDENCE-MUTATION-CALL', {
       evidence_mutated: evidenceMutated === true,
+      deferred_weekly_queue_timesheet_attach: deferQueueTimesheetAttachUntilWeeklyProcessSuccess === true,
       active_signature: trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '') || null
     });
     if (evidenceMutated) {
@@ -158887,7 +159384,16 @@ async function handleBulkProcessProcess(state) {
       }
       const savedScheduleForProcess = shouldKeepScheduleEmptyForProcess
         ? []
-        : savedScheduleForProcessInfo.schedule;
+        : normaliseWeeklyBulkProcessActualScheduleForProcess(savedScheduleForProcessInfo.schedule);
+      sigLog('WEEKLY-SCHEDULE-NORMALISED', {
+        source: savedScheduleForProcessInfo.source || null,
+        input_rows: Array.isArray(savedScheduleForProcessInfo.schedule) ? savedScheduleForProcessInfo.schedule.length : 0,
+        output_rows: Array.isArray(savedScheduleForProcess) ? savedScheduleForProcess.length : 0,
+        removed_blank_non_working_rows: Array.isArray(savedScheduleForProcessInfo.schedule) && Array.isArray(savedScheduleForProcess)
+          ? Math.max(0, savedScheduleForProcessInfo.schedule.length - savedScheduleForProcess.length)
+          : 0,
+        kept_empty_schedule_for_process: shouldKeepScheduleEmptyForProcess === true
+      });
       const readSavedUnitsObject = (value) => {
         const parsed = parseSavedJson(value);
         return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
@@ -158925,6 +159431,57 @@ async function handleBulkProcessProcess(state) {
       });
       if (!hasRequiredBulkProcessPatchShape(processResult)) {
         throw new Error('Weekly Bulk Process did not return the required row_patch/data_row response. Processing is disabled until contract_week_manual_upsert_bulk_process_atomic is deployed and returning the bulk patch contract.');
+      }
+      if (deferQueueTimesheetAttachUntilWeeklyProcessSuccess) {
+        const deferredQueueId = trimStr(deferredWeeklyQueueTimesheetItem?.id || deferredWeeklyQueueTimesheetItem?.queue_id || '');
+        const processedTimesheetId = trimStr(
+          processResult?.current_timesheet_id ||
+          processResult?.timesheet_id ||
+          processResult?.timesheet?.timesheet_id ||
+          processResult?.data_row?.current_timesheet_id ||
+          processResult?.data_row?.timesheet_id ||
+          processResult?.row_patch?.current_timesheet_id ||
+          processResult?.row_patch?.timesheet_id ||
+          processResult?.row?.current_timesheet_id ||
+          processResult?.row?.timesheet_id ||
+          ''
+        );
+        const processedExpectedTimesheetId = trimStr(
+          processResult?.expected_timesheet_id ||
+          processResult?.data_row?.expected_timesheet_id ||
+          processResult?.row_patch?.expected_timesheet_id ||
+          processResult?.row?.expected_timesheet_id ||
+          processedTimesheetId ||
+          ''
+        );
+        if (!deferredQueueId) {
+          throw new Error('Weekly Bulk Process completed, but the selected Queue Timesheet image could not be identified for attachment. Refresh the row and attach the image again.');
+        }
+        if (!processedTimesheetId) {
+          throw new Error('Weekly Bulk Process completed, but no linked timesheet id was returned for the selected Queue Timesheet image. Refresh the row and attach the image again.');
+        }
+        if (typeof attachQueueItemToTimesheetEvidence !== 'function') {
+          throw new Error('Weekly Bulk Process completed, but Queue Timesheet image attachment is not available. Refresh the row and attach the image again.');
+        }
+        sigLog('QUEUE-ATTACH-AFTER-WEEKLY-PROCESS-START', {
+          queue_id: deferredQueueId,
+          queue_kind: selectedQueueBeforeProcessKind || 'TIMESHEET',
+          timesheet_id: processedTimesheetId,
+          expected_timesheet_id: processedExpectedTimesheetId || processedTimesheetId || null,
+          contract_week_id: trimStr(activeContractWeekId || '') || null
+        });
+        await attachQueueItemToTimesheetEvidence(String(deferredQueueId), {
+          timesheet_id: String(processedTimesheetId),
+          expected_timesheet_id: processedExpectedTimesheetId || processedTimesheetId,
+          kind: selectedQueueBeforeProcessKind || 'TIMESHEET'
+        });
+        evidenceMutated = true;
+        sigLog('QUEUE-ATTACH-AFTER-WEEKLY-PROCESS-DONE', {
+          queue_id: deferredQueueId,
+          queue_kind: selectedQueueBeforeProcessKind || 'TIMESHEET',
+          timesheet_id: processedTimesheetId,
+          expected_timesheet_id: processedExpectedTimesheetId || processedTimesheetId || null
+        });
       }
     } else {
       throw new Error('Active row is not a processable daily or weekly manual Bulk Process row.');
@@ -158998,7 +159555,6 @@ async function handleBulkProcessProcess(state) {
     return { ok: false, error: st.error_text };
   }
 }
-
 
 
 
@@ -262599,6 +263155,130 @@ async function manualUpsertContractWeek(weekId, payload, opts = {}) {
     const s = String(value).trim().toLowerCase();
     return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
   };
+  const hasPositiveNumberForBulkProcessScheduleLocal = (value) => {
+    if (value == null || value === '') return false;
+    if (Array.isArray(value)) return value.some((item) => hasPositiveNumberForBulkProcessScheduleLocal(item));
+    if (typeof value === 'object') return Object.values(value).some((item) => hasPositiveNumberForBulkProcessScheduleLocal(item));
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0;
+  };
+  const firstNonBlankBulkProcessScheduleValueLocal = (...values) => {
+    for (const value of values) {
+      const text = trimStrLocal(value);
+      if (text) return text;
+    }
+    return '';
+  };
+  const hasBreakWindowForBulkProcessScheduleLocal = (value) => {
+    if (value == null) return false;
+    if (Array.isArray(value)) return value.some((item) => hasBreakWindowForBulkProcessScheduleLocal(item));
+    if (typeof value === 'object') {
+      return Object.values(value).some((item) => {
+        if (item && typeof item === 'object') return hasBreakWindowForBulkProcessScheduleLocal(item);
+        return trimStrLocal(item) !== '' || hasPositiveNumberForBulkProcessScheduleLocal(item);
+      });
+    }
+    return trimStrLocal(value) !== '' || hasPositiveNumberForBulkProcessScheduleLocal(value);
+  };
+  const parseTimeMinutesForBulkProcessScheduleLocal = (value) => {
+    const raw = trimStrLocal(value);
+    if (!raw) return null;
+    const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+    if (!match) return null;
+    const hh = Number(match[1]);
+    const mm = Number(match[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm) || hh < 0 || hh > 47 || mm < 0 || mm > 59) return null;
+    return (hh * 60) + mm;
+  };
+  const workedMinutesForBulkProcessScheduleRowLocal = (entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return 0;
+    const positiveMinuteKeys = ['worked_minutes', 'paid_minutes', 'duration_minutes', 'total_minutes', 'minutes', 'actual_minutes'];
+    for (const key of positiveMinuteKeys) {
+      const n = Number(entry[key]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    const positiveHourKeys = ['worked_hours', 'paid_hours', 'total_hours', 'hours', 'actual_hours'];
+    for (const key of positiveHourKeys) {
+      const n = Number(entry[key]);
+      if (Number.isFinite(n) && n > 0) return n * 60;
+      if (entry[key] && typeof entry[key] === 'object' && hasPositiveNumberForBulkProcessScheduleLocal(entry[key])) return 1;
+    }
+    const start = parseTimeMinutesForBulkProcessScheduleLocal(entry.start || entry.start_time || entry.actual_start || entry.shift_start || entry.worked_start || entry.from);
+    const end = parseTimeMinutesForBulkProcessScheduleLocal(entry.end || entry.end_time || entry.actual_end || entry.shift_end || entry.worked_end || entry.to);
+    if (start != null && end != null) {
+      let duration = end - start;
+      if (duration < 0) duration += 24 * 60;
+      const breakMins = Number(entry.break_minutes ?? entry.break_mins ?? entry.unpaid_break_minutes ?? 0);
+      const breakHours = Number(entry.break_hours ?? entry.unpaid_break_hours ?? 0) * 60;
+      return Math.max(0, duration - (Number.isFinite(breakMins) ? breakMins : 0) - (Number.isFinite(breakHours) ? breakHours : 0));
+    }
+    return 0;
+  };
+  const isPureBlankNonWorkingBulkProcessScheduleRowLocal = (entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+    const startValue = firstNonBlankBulkProcessScheduleValueLocal(
+      entry.start,
+      entry.start_time,
+      entry.actual_start,
+      entry.shift_start,
+      entry.worked_start,
+      entry.from,
+      entry.start_utc,
+      entry.startUtc
+    );
+    const endValue = firstNonBlankBulkProcessScheduleValueLocal(
+      entry.end,
+      entry.end_time,
+      entry.actual_end,
+      entry.shift_end,
+      entry.worked_end,
+      entry.to,
+      entry.end_utc,
+      entry.endUtc
+    );
+    if (startValue || endValue) return false;
+    if (
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.expected_minutes) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.expected_mins) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.planned_minutes) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.expected_hours) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.worked_minutes) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.paid_minutes) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.duration_minutes) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.total_minutes) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.minutes) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.actual_minutes) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.worked_hours) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.paid_hours) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.total_hours) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.hours) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.actual_hours) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.break_minutes) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.break_mins) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.unpaid_break_minutes) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.break_hours) ||
+      hasPositiveNumberForBulkProcessScheduleLocal(entry.unpaid_break_hours)
+    ) return false;
+    if (
+      hasBreakWindowForBulkProcessScheduleLocal(entry.breaks) ||
+      hasBreakWindowForBulkProcessScheduleLocal(entry.break_windows) ||
+      hasBreakWindowForBulkProcessScheduleLocal(entry.break_start) ||
+      hasBreakWindowForBulkProcessScheduleLocal(entry.break_end) ||
+      hasBreakWindowForBulkProcessScheduleLocal(entry.break_start_time) ||
+      hasBreakWindowForBulkProcessScheduleLocal(entry.break_end_time) ||
+      hasBreakWindowForBulkProcessScheduleLocal(entry.breakStart) ||
+      hasBreakWindowForBulkProcessScheduleLocal(entry.breakEnd)
+    ) return false;
+    return workedMinutesForBulkProcessScheduleRowLocal(entry) <= 0;
+  };
+  const normaliseBulkProcessActualScheduleForManualUpsertLocal = (schedule) => {
+    if (!Array.isArray(schedule)) return schedule;
+    return schedule
+      .filter((entry) => !isPureBlankNonWorkingBulkProcessScheduleRowLocal(entry))
+      .map((entry) => {
+        try { return JSON.parse(JSON.stringify(entry)); } catch { return entry; }
+      });
+  };
   const hasMeaningfulScheduleRowsLocal = (value) => {
     const parsed = normaliseScheduleField(value);
     if (!Array.isArray(parsed)) return false;
@@ -262760,6 +263440,19 @@ async function manualUpsertContractWeek(weekId, payload, opts = {}) {
 
   if (Object.prototype.hasOwnProperty.call(safePayload, 'actual_schedule_json')) {
     safePayload.actual_schedule_json = normaliseScheduleField(safePayload.actual_schedule_json);
+    if (bulkProcessOwnsTransition && Array.isArray(safePayload.actual_schedule_json)) {
+      const beforeBulkProcessScheduleRows = safePayload.actual_schedule_json.length;
+      safePayload.actual_schedule_json = normaliseBulkProcessActualScheduleForManualUpsertLocal(safePayload.actual_schedule_json);
+      const afterBulkProcessScheduleRows = Array.isArray(safePayload.actual_schedule_json) ? safePayload.actual_schedule_json.length : beforeBulkProcessScheduleRows;
+      if (beforeBulkProcessScheduleRows !== afterBulkProcessScheduleRows) {
+        L('BULK_PROCESS_ACTUAL_SCHEDULE_NORMALISED', {
+          weekId,
+          input_rows: beforeBulkProcessScheduleRows,
+          output_rows: afterBulkProcessScheduleRows,
+          removed_blank_non_working_rows: Math.max(0, beforeBulkProcessScheduleRows - afterBulkProcessScheduleRows)
+        });
+      }
+    }
   }
 
   if (hasKeepEmptyAdditionalManualMarker) {
@@ -262906,6 +263599,7 @@ async function manualUpsertContractWeek(weekId, payload, opts = {}) {
   GE();
   return json;
 }
+
 
 
 function formatCloudTmsLondonDate(value) {
@@ -266351,6 +267045,20 @@ async function bootstrapApp(){
       hb._bankingAlertSummaryDetailPending = hb._bankingAlertSummaryDetailPending === true ? true : false;
       hb._bankingAlertSummaryDetailInFlight = hb._bankingAlertSummaryDetailInFlight === true ? true : false;
       hb._bankingAlertSummaryDetailRequestedAtMs = Number.isFinite(Number(hb._bankingAlertSummaryDetailRequestedAtMs)) ? Math.max(0, Number(hb._bankingAlertSummaryDetailRequestedAtMs)) : 0;
+      hb._bankingAlertSummaryDetailCurrentHash = String(hb._bankingAlertSummaryDetailCurrentHash || hb.bankingAlertHash || '').trim();
+      hb._bankingAlertSummaryDetailRequestedHash = String(hb._bankingAlertSummaryDetailRequestedHash || '').trim();
+      hb._bankingAlertSummaryDetailPendingHash = String(hb._bankingAlertSummaryDetailPendingHash || '').trim();
+      hb._bankingAlertSummaryDetailInFlightHash = String(hb._bankingAlertSummaryDetailInFlightHash || '').trim();
+      hb._bankingAlertSummaryDetailSettledDeferredHash = String(hb._bankingAlertSummaryDetailSettledDeferredHash || '').trim();
+      hb._bankingAlertSummaryDetailLoadedHash = String(hb._bankingAlertSummaryDetailLoadedHash || '').trim();
+      hb._bankingAlertSummaryDetailForceRefreshHash = String(hb._bankingAlertSummaryDetailForceRefreshHash || '').trim();
+      hb._bankingAlertSummaryDetailAckStateAtMs = Number.isFinite(Number(hb._bankingAlertSummaryDetailAckStateAtMs)) ? Math.max(0, Number(hb._bankingAlertSummaryDetailAckStateAtMs)) : 0;
+      if (hb._bankingAlertSummaryDetailPending === true && !hb._bankingAlertSummaryDetailPendingHash && hb.bankingAlertHash) {
+        hb._bankingAlertSummaryDetailPendingHash = hb.bankingAlertHash;
+      }
+      if (hb._bankingAlertSummaryDetailInFlight === true && !hb._bankingAlertSummaryDetailInFlightHash && hb.bankingAlertHash) {
+        hb._bankingAlertSummaryDetailInFlightHash = hb.bankingAlertHash;
+      }
 
       const stop = () => {
         try { if (hb._timer) clearInterval(hb._timer); } catch {}
@@ -266407,11 +267115,191 @@ async function bootstrapApp(){
           banking_alert_summary_signature: String(hash || '').trim()
         });
 
+        const normalizeBankingAlertHash = (value) => String(value == null ? '' : value).trim();
+        const bankingDetailHashField = (field) => normalizeBankingAlertHash(hb[field] || '');
+        const getCurrentBankingAlertHash = (candidate = '') => normalizeBankingAlertHash(
+          candidate
+          || hb.bankingAlertHash
+          || hb.bankingAlertSignature
+          || window.__bankingAlertHash
+          || window.__bankingAlertSummarySignature
+          || window.__bankingAlertSummary?.banking_alert_hash
+          || window.__bankingAlertSummary?.banking_alert_summary_signature
+          || ''
+        );
+        const currentBankingAlertAckMutationAtMs = () => Math.max(
+          Number(window.__bankingLastAlertAckMutationAtMs || 0) || 0,
+          Number(hb._lastBankingAckMutationAtMs || 0) || 0
+        );
+        const clearBankingAlertDetailStateForHash = (hash, options = {}) => {
+          const h = normalizeBankingAlertHash(hash);
+          if (!h) return;
+          [
+            '_bankingAlertSummaryDetailRequestedHash',
+            '_bankingAlertSummaryDetailPendingHash',
+            '_bankingAlertSummaryDetailInFlightHash',
+            '_bankingAlertSummaryDetailSettledDeferredHash',
+            '_bankingAlertSummaryDetailLoadedHash',
+            '_bankingAlertSummaryDetailForceRefreshHash'
+          ].forEach((field) => {
+            try { if (bankingDetailHashField(field) === h) hb[field] = ''; } catch {}
+          });
+          if (options.keepDeferred !== true) hb._bankingAlertSummaryDeferred = false;
+          if (!bankingDetailHashField('_bankingAlertSummaryDetailPendingHash')) hb._bankingAlertSummaryDetailPending = false;
+          if (!bankingDetailHashField('_bankingAlertSummaryDetailInFlightHash')) hb._bankingAlertSummaryDetailInFlight = false;
+        };
+        const syncBankingAlertDetailHashState = (candidate = '') => {
+          const hash = getCurrentBankingAlertHash(candidate);
+          const previousHash = normalizeBankingAlertHash(hb._bankingAlertSummaryDetailCurrentHash || hb.bankingAlertHash || hb.bankingAlertSignature || window.__bankingAlertHash || window.__bankingAlertSummarySignature || '');
+          if (hash && previousHash && previousHash !== hash) {
+            clearBankingAlertDetailStateForHash(previousHash);
+            hb._bankingAlertSummaryDetailPending = false;
+            hb._bankingAlertSummaryDetailInFlight = false;
+          }
+          const ackAt = currentBankingAlertAckMutationAtMs();
+          const ackSeenAt = Number(hb._bankingAlertSummaryDetailAckStateAtMs || 0) || 0;
+          if (ackAt > ackSeenAt) {
+            hb._bankingAlertSummaryDetailAckStateAtMs = ackAt;
+            if (hash) {
+              clearBankingAlertDetailStateForHash(hash);
+              hb._bankingAlertSummaryDetailPending = false;
+              hb._bankingAlertSummaryDetailInFlight = false;
+            }
+          }
+          if (hash) {
+            hb._bankingAlertSummaryDetailCurrentHash = hash;
+            hb.bankingAlertHash = hash;
+            hb.bankingAlertSignature = hash;
+            window.__bankingAlertHash = hash;
+            window.__bankingAlertSummarySignature = hash;
+          }
+          return hash;
+        };
+        const isExplicitBankingAlertDetailRefreshReason = (reason = '') => /force|manual|user|explicit/i.test(String(reason || ''));
+        const isBankingAlertDetailInFlightForHash = (hash) => {
+          const h = normalizeBankingAlertHash(hash);
+          return !!(h && (
+            bankingDetailHashField('_bankingAlertSummaryDetailInFlightHash') === h
+            || (hb._bankingAlertSummaryDetailInFlight === true && !bankingDetailHashField('_bankingAlertSummaryDetailInFlightHash') && bankingDetailHashField('_bankingAlertSummaryDetailRequestedHash') === h)
+          ));
+        };
+        const isBankingAlertDetailPendingForHash = (hash) => {
+          const h = normalizeBankingAlertHash(hash);
+          return !!(h && hb._bankingAlertSummaryDetailPending === true && (
+            bankingDetailHashField('_bankingAlertSummaryDetailPendingHash') === h
+            || bankingDetailHashField('_bankingAlertSummaryDetailForceRefreshHash') === h
+            || (!bankingDetailHashField('_bankingAlertSummaryDetailPendingHash') && bankingDetailHashField('_bankingAlertSummaryDetailRequestedHash') === h)
+          ));
+        };
+        const isBankingAlertDetailSettledDeferredForHash = (hash) => {
+          const h = normalizeBankingAlertHash(hash);
+          return !!(h && bankingDetailHashField('_bankingAlertSummaryDetailSettledDeferredHash') === h);
+        };
+        const isBankingAlertDetailSettledLoadedForHash = (hash) => {
+          const h = normalizeBankingAlertHash(hash);
+          return !!(h && bankingDetailHashField('_bankingAlertSummaryDetailLoadedHash') === h);
+        };
+        const hasBankingAlertDetailRequestAlreadyBeenSentForHash = (hash) => {
+          const h = normalizeBankingAlertHash(hash);
+          return !!(h && bankingDetailHashField('_bankingAlertSummaryDetailRequestedHash') === h);
+        };
+        const shouldAllowBankingAlertDetailRequest = (hash, reason = '') => {
+          const h = syncBankingAlertDetailHashState(hash);
+          if (!h) return false;
+          const force = isExplicitBankingAlertDetailRefreshReason(reason) || bankingDetailHashField('_bankingAlertSummaryDetailForceRefreshHash') === h;
+          if (isBankingAlertDetailInFlightForHash(h)) return false;
+          if (!force && isBankingAlertDetailSettledLoadedForHash(h)) return false;
+          if (!force && isBankingAlertDetailSettledDeferredForHash(h)) return false;
+          if (!force && isBankingAlertDetailPendingForHash(h)) return false;
+          if (!force && hasBankingAlertDetailRequestAlreadyBeenSentForHash(h)) return false;
+          return true;
+        };
+        const markBankingAlertDetailQueued = (hash, reason = 'banking-alert-detail') => {
+          const h = syncBankingAlertDetailHashState(hash);
+          if (!shouldAllowBankingAlertDetailRequest(h, reason)) return false;
+          const force = isExplicitBankingAlertDetailRefreshReason(reason);
+          if (force) {
+            if (bankingDetailHashField('_bankingAlertSummaryDetailSettledDeferredHash') === h) hb._bankingAlertSummaryDetailSettledDeferredHash = '';
+            if (bankingDetailHashField('_bankingAlertSummaryDetailLoadedHash') === h) hb._bankingAlertSummaryDetailLoadedHash = '';
+            hb._bankingAlertSummaryDetailForceRefreshHash = h;
+          }
+          hb._bankingAlertSummaryDeferred = true;
+          hb._bankingAlertSummaryDetailPending = true;
+          hb._bankingAlertSummaryDetailPendingHash = h;
+          return true;
+        };
+        const markBankingAlertDetailRequestInFlight = (hash, nowMs = Date.now()) => {
+          const h = syncBankingAlertDetailHashState(hash);
+          if (!h) return '';
+          hb._bankingAlertSummaryDeferred = true;
+          hb._bankingAlertSummaryDetailPending = false;
+          if (bankingDetailHashField('_bankingAlertSummaryDetailPendingHash') === h) hb._bankingAlertSummaryDetailPendingHash = '';
+          hb._bankingAlertSummaryDetailInFlight = true;
+          hb._bankingAlertSummaryDetailInFlightHash = h;
+          hb._bankingAlertSummaryDetailRequestedHash = h;
+          hb._bankingAlertSummaryDetailRequestedAtMs = nowMs;
+          if (bankingDetailHashField('_bankingAlertSummaryDetailForceRefreshHash') === h) hb._bankingAlertSummaryDetailForceRefreshHash = '';
+          return h;
+        };
+        const clearBankingAlertDetailInFlightForHash = (hash) => {
+          const h = normalizeBankingAlertHash(hash);
+          if (!h) return;
+          if (bankingDetailHashField('_bankingAlertSummaryDetailInFlightHash') === h) hb._bankingAlertSummaryDetailInFlightHash = '';
+          if (!bankingDetailHashField('_bankingAlertSummaryDetailInFlightHash')) hb._bankingAlertSummaryDetailInFlight = false;
+        };
+        const markBankingAlertDetailSettledDeferred = (hash) => {
+          const h = syncBankingAlertDetailHashState(hash);
+          if (!h) return;
+          hb._bankingAlertSummaryDetailSettledDeferredHash = h;
+          if (bankingDetailHashField('_bankingAlertSummaryDetailLoadedHash') === h) hb._bankingAlertSummaryDetailLoadedHash = '';
+          if (bankingDetailHashField('_bankingAlertSummaryDetailRequestedHash') === h) hb._bankingAlertSummaryDetailRequestedHash = '';
+          if (bankingDetailHashField('_bankingAlertSummaryDetailPendingHash') === h) hb._bankingAlertSummaryDetailPendingHash = '';
+          if (bankingDetailHashField('_bankingAlertSummaryDetailInFlightHash') === h) hb._bankingAlertSummaryDetailInFlightHash = '';
+          if (bankingDetailHashField('_bankingAlertSummaryDetailForceRefreshHash') === h) hb._bankingAlertSummaryDetailForceRefreshHash = '';
+          hb._bankingAlertSummaryDeferred = true;
+          hb._bankingAlertSummaryDetailPending = false;
+          hb._bankingAlertSummaryDetailInFlight = false;
+        };
+        const markBankingAlertDetailSettledLoaded = (hash) => {
+          const h = syncBankingAlertDetailHashState(hash);
+          if (!h) return;
+          hb._bankingAlertSummaryDetailLoadedHash = h;
+          if (bankingDetailHashField('_bankingAlertSummaryDetailSettledDeferredHash') === h) hb._bankingAlertSummaryDetailSettledDeferredHash = '';
+          if (bankingDetailHashField('_bankingAlertSummaryDetailRequestedHash') === h) hb._bankingAlertSummaryDetailRequestedHash = '';
+          if (bankingDetailHashField('_bankingAlertSummaryDetailPendingHash') === h) hb._bankingAlertSummaryDetailPendingHash = '';
+          if (bankingDetailHashField('_bankingAlertSummaryDetailInFlightHash') === h) hb._bankingAlertSummaryDetailInFlightHash = '';
+          if (bankingDetailHashField('_bankingAlertSummaryDetailForceRefreshHash') === h) hb._bankingAlertSummaryDetailForceRefreshHash = '';
+          hb._bankingAlertSummaryDeferred = false;
+          hb._bankingAlertSummaryDetailPending = false;
+          hb._bankingAlertSummaryDetailInFlight = false;
+        };
+        const markBankingAlertDetailRetryableFailure = (hash) => {
+          const h = syncBankingAlertDetailHashState(hash);
+          if (!h) return;
+          clearBankingAlertDetailInFlightForHash(h);
+          if (isBankingAlertDetailSettledDeferredForHash(h) || isBankingAlertDetailSettledLoadedForHash(h)) return;
+          hb._bankingAlertSummaryDeferred = true;
+          hb._bankingAlertSummaryDetailPending = true;
+          hb._bankingAlertSummaryDetailPendingHash = h;
+        };
+        const getBankingAlertDetailLoadingForHash = (hash) => {
+          const h = normalizeBankingAlertHash(hash);
+          return !!(h
+            && !isBankingAlertDetailSettledDeferredForHash(h)
+            && !isBankingAlertDetailSettledLoadedForHash(h)
+            && (isBankingAlertDetailInFlightForHash(h) || isBankingAlertDetailPendingForHash(h)));
+        };
+
         const applyBankingAlertSummaryPayload = (summary, hash = '', options = {}) => {
           const safeSummary = (summary && typeof summary === 'object' && !Array.isArray(summary)) ? summary : buildEmptyBankingAlertSummary(hash);
-          const alerts = Array.isArray(safeSummary.alerts) ? safeSummary.alerts : [];
-          const count = toNonNegativeCount(safeSummary.unacknowledged_count ?? safeSummary.banking_unacknowledged_alert_count, alerts.length);
-          const detailsDeferred = count > 0 && (
+          const summaryAlerts = Array.isArray(safeSummary.alerts)
+            ? safeSummary.alerts
+            : (Array.isArray(safeSummary.banking_alerts) ? safeSummary.banking_alerts : []);
+          const count = toNonNegativeCount(safeSummary.unacknowledged_count ?? safeSummary.banking_unacknowledged_alert_count, summaryAlerts.length);
+          const suppliedHash = normalizeBankingAlertHash(hash || safeSummary.banking_alert_hash || safeSummary.banking_alert_summary_signature || '');
+          const currentHash = suppliedHash ? syncBankingAlertDetailHashState(suppliedHash) : '';
+          const hasRealAlertRows = count > 0 && summaryAlerts.length > 0;
+          const responseHasDeferredDetails = count > 0 && !hasRealAlertRows && (
             options.detailsDeferred === true ||
             options.details_deferred === true ||
             safeSummary.banking_alert_summary_deferred === true ||
@@ -266419,24 +267307,53 @@ async function bootstrapApp(){
             safeSummary.details_deferred === true ||
             safeSummary.detailsLoading === true ||
             safeSummary.details_loading === true ||
-            alerts.length < 1
+            summaryAlerts.length < 1
           );
+          const detailsDeferred = responseHasDeferredDetails === true;
+          const responseIsRequestedDetail = options.detailRefreshRequested === true || (currentHash && isBankingAlertDetailInFlightForHash(currentHash));
+
+          if (count === 0) {
+            clearBankingAlertDetailStateForHash(currentHash || getCurrentBankingAlertHash(hash));
+            hb._bankingAlertSummaryDeferred = false;
+            hb._bankingAlertSummaryDetailPending = false;
+            hb._bankingAlertSummaryDetailInFlight = false;
+          } else if (hasRealAlertRows) {
+            markBankingAlertDetailSettledLoaded(currentHash);
+          } else if (detailsDeferred && responseIsRequestedDetail) {
+            markBankingAlertDetailSettledDeferred(currentHash);
+          } else if (detailsDeferred) {
+            hb._bankingAlertSummaryDeferred = true;
+            if (options.queueDetailRefresh === true) {
+              markBankingAlertDetailQueued(currentHash, options.detailReason || 'banking-alert-summary-deferred');
+            } else if (isBankingAlertDetailSettledDeferredForHash(currentHash) || isBankingAlertDetailSettledLoadedForHash(currentHash)) {
+              hb._bankingAlertSummaryDetailPending = false;
+              hb._bankingAlertSummaryDetailInFlight = false;
+            }
+          }
+
+          const detailsSettledDeferred = count > 0 && isBankingAlertDetailSettledDeferredForHash(currentHash);
+          const detailsSettledLoaded = count > 0 && (hasRealAlertRows || isBankingAlertDetailSettledLoadedForHash(currentHash));
+          const detailsLoading = detailsDeferred === true && getBankingAlertDetailLoadingForHash(currentHash);
 
           const normalizedSummary = {
             ...safeSummary,
-            alerts: count > 0 && !detailsDeferred ? alerts : [],
-            banking_alerts: count > 0 && !detailsDeferred ? alerts : [],
+            alerts: count > 0 && !detailsDeferred ? summaryAlerts : [],
+            banking_alerts: count > 0 && !detailsDeferred ? summaryAlerts : [],
             unacknowledged_count: count,
             banking_unacknowledged_alert_count: count,
             highest_label: count > 0 ? (safeSummary.highest_label ?? safeSummary.banking_highest_alert_label ?? options.highestLabel ?? options.banking_highest_alert_label ?? null) : null,
             banking_highest_alert_label: count > 0 ? (safeSummary.banking_highest_alert_label ?? safeSummary.highest_label ?? options.banking_highest_alert_label ?? options.highestLabel ?? null) : null,
             highest_severity: count > 0 ? (safeSummary.highest_severity ?? safeSummary.banking_highest_alert_severity ?? options.highestSeverity ?? options.banking_highest_alert_severity ?? null) : null,
             banking_highest_alert_severity: count > 0 ? (safeSummary.banking_highest_alert_severity ?? safeSummary.highest_severity ?? options.banking_highest_alert_severity ?? options.highestSeverity ?? null) : null,
-            banking_alert_hash: String(hash || safeSummary.banking_alert_hash || safeSummary.banking_alert_summary_signature || '').trim(),
-            banking_alert_summary_signature: String(hash || safeSummary.banking_alert_summary_signature || safeSummary.banking_alert_hash || '').trim(),
+            banking_alert_hash: currentHash,
+            banking_alert_summary_signature: currentHash,
             banking_alert_summary_deferred: detailsDeferred,
             detailsDeferred,
-            detailsLoading: detailsDeferred
+            detailsLoading,
+            detailsSettledDeferred,
+            detailsSettledLoaded,
+            banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
+            banking_alert_summary_detail_settled_loaded: detailsSettledLoaded
           };
 
           const alertPayload = {
@@ -266452,6 +267369,7 @@ async function bootstrapApp(){
             banking_highest_alert_severity: normalizedSummary.banking_highest_alert_severity,
             banking_alert_summary_deferred: detailsDeferred,
             banking_alert_summary_included: !detailsDeferred,
+            banking_alert_detail_refreshed: responseIsRequestedDetail === true,
             banking_alert_response_started_before_ack: options.responseStartedBeforeAck === true
           };
 
@@ -266475,16 +267393,12 @@ async function bootstrapApp(){
               banking_alert_summary_signature: normalizedSummary.banking_alert_summary_signature,
               banking_alert_summary_deferred: detailsDeferred,
               detailsDeferred,
-              detailsLoading: detailsDeferred
+              detailsLoading,
+              detailsSettledDeferred,
+              detailsSettledLoaded,
+              banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
+              banking_alert_summary_detail_settled_loaded: detailsSettledLoaded
             });
-          }
-
-          if (detailsDeferred) {
-            hb._bankingAlertSummaryDeferred = true;
-            hb._bankingAlertSummaryDetailPending = true;
-          } else {
-            hb._bankingAlertSummaryDeferred = false;
-            hb._bankingAlertSummaryDetailPending = false;
           }
 
           return true;
@@ -266492,17 +267406,24 @@ async function bootstrapApp(){
 
         const queueBankingAlertSummaryDetailRefresh = (reason = 'banking-alert-detail') => {
           try {
-            hb._bankingAlertSummaryDeferred = true;
-            hb._bankingAlertSummaryDetailPending = true;
+            const currentHash = syncBankingAlertDetailHashState(getCurrentBankingAlertHash());
+            if (!currentHash) return false;
+            if (!shouldAllowBankingAlertDetailRequest(currentHash, reason)) return false;
+            if (!markBankingAlertDetailQueued(currentHash, reason)) return false;
             if (hb._pingInFlight === true) {
               hb._pendingPingReason = String(reason || 'banking-alert-detail');
               return true;
             }
             const now = Date.now();
             const lastRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
-            if (now - lastRequestedAt < 3000) return true;
+            const lastPingAt = Number(hb._lastPingAtMs || 0) || 0;
+            const delayMs = Math.max(
+              0,
+              lastRequestedAt ? 3000 - (now - lastRequestedAt) : 0,
+              lastPingAt ? 3000 - (now - lastPingAt) : 0
+            );
             if (typeof hb.pingOnce === 'function') {
-              setTimeout(() => { try { hb.pingOnce && hb.pingOnce(reason || 'banking-alert-detail'); } catch {} }, 0);
+              setTimeout(() => { try { hb.pingOnce && hb.pingOnce(reason || 'banking-alert-detail'); } catch {} }, delayMs);
               return true;
             }
           } catch {}
@@ -266526,14 +267447,23 @@ async function bootstrapApp(){
           }
 
           const now = Date.now();
-          // throttle: never more than once per 1s even if focus + interval collide, except that
-          // deferred Banking alert detail requests are rescheduled so the popover can recover rows promptly.
+          // throttle: never more than once per 1s even if focus + interval collide.
+          // Banking detail refreshes keep the 3s detail throttle and are guarded per alert hash.
           const msSinceLastPing = now - (hb._lastPingAtMs || 0);
           if (msSinceLastPing < 1000) {
             if (/popover|detail|deferred/i.test(String(reason || ''))) {
-              hb._pendingPingReason = String(reason || 'banking-alert-detail');
-              const delayMs = Math.max(50, 1000 - msSinceLastPing);
-              setTimeout(() => { try { hb.pingOnce && hb.pingOnce(hb._pendingPingReason || 'banking-alert-detail'); } catch {} }, delayMs);
+              const currentHash = syncBankingAlertDetailHashState(getCurrentBankingAlertHash());
+              if (currentHash && isBankingAlertDetailPendingForHash(currentHash) && !isBankingAlertDetailSettledDeferredForHash(currentHash) && !isBankingAlertDetailSettledLoadedForHash(currentHash)) {
+                hb._pendingPingReason = String(reason || 'banking-alert-detail');
+                const lastDetailRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
+                const delayMs = Math.max(
+                  50,
+                  1000 - msSinceLastPing,
+                  lastDetailRequestedAt ? 3000 - (now - lastDetailRequestedAt) : 0,
+                  hb._lastPingAtMs ? 3000 - (now - hb._lastPingAtMs) : 0
+                );
+                setTimeout(() => { try { hb.pingOnce && hb.pingOnce(hb._pendingPingReason || 'banking-alert-detail'); } catch {} }, delayMs);
+              }
             }
             return;
           }
@@ -266547,28 +267477,27 @@ async function bootstrapApp(){
           let res = null;
           let json = null;
           let requestedBankingAlertDetailRefresh = false;
+          let requestedBankingAlertDetailRefreshHash = '';
 
           try {
+            const payloadHash = syncBankingAlertDetailHashState(getCurrentBankingAlertHash());
             const payload = {
               last_seen: hb.lastSeenSeqs || {},
-              banking_alert_hash: String(
-                hb.bankingAlertHash ||
-                window.__bankingAlertHash ||
-                hb.bankingAlertSignature ||
-                window.__bankingAlertSummarySignature ||
-                ''
-              ).trim()
+              banking_alert_hash: payloadHash
             };
-            const detailRefreshPending = hb._bankingAlertSummaryDetailPending === true || hb._bankingAlertSummaryDeferred === true;
+            const forceDetailRefresh = isExplicitBankingAlertDetailRefreshReason(reason) || (payloadHash && bankingDetailHashField('_bankingAlertSummaryDetailForceRefreshHash') === payloadHash);
+            const detailRefreshPending = !!payloadHash && (isBankingAlertDetailPendingForHash(payloadHash) || forceDetailRefresh === true);
             const lastDetailRequestedAt = Number(hb._bankingAlertSummaryDetailRequestedAtMs || 0) || 0;
-            const allowDetailRefresh = detailRefreshPending && !hb._bankingAlertSummaryDetailInFlight && (now - lastDetailRequestedAt >= 3000 || /popover|detail|deferred/i.test(String(reason || '')));
+            const allowDetailRefresh = !!payloadHash
+              && detailRefreshPending === true
+              && !isBankingAlertDetailInFlightForHash(payloadHash)
+              && (forceDetailRefresh === true || (!isBankingAlertDetailSettledDeferredForHash(payloadHash) && !isBankingAlertDetailSettledLoadedForHash(payloadHash)))
+              && (forceDetailRefresh === true || now - lastDetailRequestedAt >= 3000);
             if (allowDetailRefresh) {
               payload.banking_alert_summary_needed = true;
               payload.banking_alert_detail_refresh = true;
               requestedBankingAlertDetailRefresh = true;
-              hb._bankingAlertSummaryDetailPending = false;
-              hb._bankingAlertSummaryDetailInFlight = true;
-              hb._bankingAlertSummaryDetailRequestedAtMs = now;
+              requestedBankingAlertDetailRefreshHash = markBankingAlertDetailRequestInFlight(payloadHash, now);
             }
             res = await doFetch(API('/api/changes/ping'), {
               method: 'POST',
@@ -266577,19 +267506,25 @@ async function bootstrapApp(){
             });
           } catch (e) {
             // ✅ If auth is gone, stop heartbeat immediately (no retry loop)
+            let stoppedForAuth = false;
             try {
               const msg = String(e?.message || e || '');
               if (/unauthor/i.test(msg)) {
+                stoppedForAuth = true;
                 hb._disabled = true;
                 try { if (hb._timer) clearInterval(hb._timer); } catch {}
                 hb._timer = null;
                 hb._started = false;
               }
             } catch {}
+            if (!stoppedForAuth && requestedBankingAlertDetailRefresh && requestedBankingAlertDetailRefreshHash) {
+              markBankingAlertDetailRetryableFailure(requestedBankingAlertDetailRefreshHash);
+            } else if (stoppedForAuth && requestedBankingAlertDetailRefreshHash) {
+              clearBankingAlertDetailInFlightForHash(requestedBankingAlertDetailRefreshHash);
+            }
             return;
           } finally {
             hb._pingInFlight = false;
-            if (requestedBankingAlertDetailRefresh) hb._bankingAlertSummaryDetailInFlight = false;
           }
 
           if (!res || !res.ok) {
@@ -266612,34 +267547,41 @@ async function bootstrapApp(){
                 hb._timer = null;
               }
             } catch {}
-            if (requestedBankingAlertDetailRefresh) hb._bankingAlertSummaryDetailPending = true;
+            if (requestedBankingAlertDetailRefresh && requestedBankingAlertDetailRefreshHash) {
+              if (res && (res.status === 404 || res.status === 405 || res.status === 501)) {
+                clearBankingAlertDetailInFlightForHash(requestedBankingAlertDetailRefreshHash);
+              } else {
+                markBankingAlertDetailRetryableFailure(requestedBankingAlertDetailRefreshHash);
+              }
+            }
             return;
           }
 
           try { json = await res.json().catch(()=> null); } catch { json = null; }
           if (!json || typeof json !== 'object') {
-            if (requestedBankingAlertDetailRefresh) hb._bankingAlertSummaryDetailPending = true;
+            if (requestedBankingAlertDetailRefresh && requestedBankingAlertDetailRefreshHash) {
+              markBankingAlertDetailRetryableFailure(requestedBankingAlertDetailRefreshHash);
+            }
             return;
           }
 
-          if (requestSeq < Math.max(0, Math.trunc(Number(hb._latestAppliedPingSeq || 0)))) return;
+          if (requestSeq < Math.max(0, Math.trunc(Number(hb._latestAppliedPingSeq || 0)))) {
+            if (requestedBankingAlertDetailRefresh && requestedBankingAlertDetailRefreshHash) clearBankingAlertDetailInFlightForHash(requestedBankingAlertDetailRefreshHash);
+            return;
+          }
 
           const applyBankingAlertSummaryFromPing = () => {
             try {
-              const nextHash = String(
+              const previousHash = getCurrentBankingAlertHash();
+              const nextHashRaw = normalizeBankingAlertHash(
                 json.banking_alert_hash ||
                 json.bankingAlertHash ||
                 json.banking_alert_summary_signature ||
                 json.banking_alert_signature ||
                 ''
-              ).trim();
-              const previousHash = String(
-                hb.bankingAlertHash ||
-                window.__bankingAlertHash ||
-                hb.bankingAlertSignature ||
-                window.__bankingAlertSummarySignature ||
-                ''
-              ).trim();
+              );
+              const nextHash = normalizeBankingAlertHash(nextHashRaw);
+              const currentHash = nextHash ? syncBankingAlertDetailHashState(nextHash) : '';
               const count = toNonNegativeCount(
                 json.banking_unacknowledged_alert_count ??
                 json.unacknowledged_count,
@@ -266648,72 +267590,97 @@ async function bootstrapApp(){
               const summary = (json.banking_alert_summary && typeof json.banking_alert_summary === 'object' && !Array.isArray(json.banking_alert_summary))
                 ? json.banking_alert_summary
                 : null;
-              const changed = json.banking_alert_summary_changed === true;
+              const changed = json.banking_alert_summary_changed === true || (!!currentHash && !!previousHash && currentHash !== previousHash);
               const latestAckAtMs = Math.max(
                 Number(window.__bankingLastAlertAckMutationAtMs || 0) || 0,
                 Number(hb._lastBankingAckMutationAtMs || 0) || 0
               );
               const positiveResponseStartedBeforeAck = count > 0 && latestAckAtMs > 0 && requestStartedAtMs < latestAckAtMs;
+              const responseIsRequestedDetailForHash = !!(
+                requestedBankingAlertDetailRefresh
+                && requestedBankingAlertDetailRefreshHash
+                && currentHash
+                && requestedBankingAlertDetailRefreshHash === currentHash
+              );
 
               const commitBankingAlertHash = () => {
-                if (!nextHash) return;
-                hb.bankingAlertHash = nextHash;
-                hb.bankingAlertSignature = nextHash;
-                window.__bankingAlertHash = nextHash;
-                window.__bankingAlertSummarySignature = nextHash;
+                if (!currentHash) return;
+                hb.bankingAlertHash = currentHash;
+                hb.bankingAlertSignature = currentHash;
+                hb._bankingAlertSummaryDetailCurrentHash = currentHash;
+                window.__bankingAlertHash = currentHash;
+                window.__bankingAlertSummarySignature = currentHash;
               };
 
               if (count === 0) {
                 commitBankingAlertHash();
+                clearBankingAlertDetailStateForHash(currentHash || previousHash);
                 hb._bankingAlertSummaryDeferred = false;
                 hb._bankingAlertSummaryDetailPending = false;
+                hb._bankingAlertSummaryDetailInFlight = false;
                 const currentState = (window.__bankingNavAttentionState && typeof window.__bankingNavAttentionState === 'object') ? window.__bankingNavAttentionState : {};
                 const currentCount = toNonNegativeCount(
                   currentState.count ?? currentState.unacknowledgedCount ?? currentState.banking_unacknowledged_alert_count,
                   0
                 );
-                if (summary || changed || currentCount > 0 || previousHash !== nextHash || json.banking_alert_summary_deferred === false) {
-                  applyBankingAlertSummaryPayload(summary || buildEmptyBankingAlertSummary(nextHash), nextHash);
+                if (summary || changed || currentCount > 0 || previousHash !== currentHash || json.banking_alert_summary_deferred === false) {
+                  applyBankingAlertSummaryPayload(summary || buildEmptyBankingAlertSummary(currentHash), currentHash, {
+                    detailRefreshRequested: responseIsRequestedDetailForHash
+                  });
                   return true;
                 }
                 return false;
               }
 
-              if (positiveResponseStartedBeforeAck && !summary) return false;
+              if (positiveResponseStartedBeforeAck && !summary) {
+                if (requestedBankingAlertDetailRefreshHash) clearBankingAlertDetailInFlightForHash(requestedBankingAlertDetailRefreshHash);
+                return false;
+              }
 
               if (summary) {
-                const summaryAlerts = Array.isArray(summary.alerts) ? summary.alerts : [];
+                const summaryAlerts = Array.isArray(summary.alerts)
+                  ? summary.alerts
+                  : (Array.isArray(summary.banking_alerts) ? summary.banking_alerts : []);
                 commitBankingAlertHash();
                 if (count > 0 && summaryAlerts.length < 1) {
+                  if (responseIsRequestedDetailForHash) markBankingAlertDetailSettledDeferred(currentHash);
                   applyBankingAlertSummaryPayload({
                     ...summary,
+                    alerts: [],
+                    banking_alerts: [],
                     unacknowledged_count: count,
                     banking_unacknowledged_alert_count: count,
                     highest_label: summary.highest_label ?? summary.banking_highest_alert_label ?? json.banking_highest_alert_label ?? null,
                     banking_highest_alert_label: summary.banking_highest_alert_label ?? summary.highest_label ?? json.banking_highest_alert_label ?? null,
                     highest_severity: summary.highest_severity ?? summary.banking_highest_alert_severity ?? json.banking_highest_alert_severity ?? null,
                     banking_highest_alert_severity: summary.banking_highest_alert_severity ?? summary.highest_severity ?? json.banking_highest_alert_severity ?? null,
+                    banking_alert_hash: currentHash,
+                    banking_alert_summary_signature: currentHash,
                     banking_alert_summary_deferred: true,
                     detailsDeferred: true,
-                    detailsLoading: true
-                  }, nextHash, {
+                    detailsLoading: getBankingAlertDetailLoadingForHash(currentHash)
+                  }, currentHash, {
                     detailsDeferred: true,
+                    detailRefreshRequested: responseIsRequestedDetailForHash,
                     responseStartedBeforeAck: positiveResponseStartedBeforeAck,
                     highestLabel: json.banking_highest_alert_label,
                     highestSeverity: json.banking_highest_alert_severity
                   });
-                  queueBankingAlertSummaryDetailRefresh('banking-alert-summary-empty');
+                  if (!responseIsRequestedDetailForHash && shouldAllowBankingAlertDetailRequest(currentHash, 'banking-alert-summary-empty')) {
+                    queueBankingAlertSummaryDetailRefresh('banking-alert-summary-empty');
+                  }
                   return true;
                 }
-                applyBankingAlertSummaryPayload(summary, nextHash, {
+                markBankingAlertDetailSettledLoaded(currentHash);
+                applyBankingAlertSummaryPayload(summary, currentHash, {
+                  detailRefreshRequested: responseIsRequestedDetailForHash,
                   responseStartedBeforeAck: positiveResponseStartedBeforeAck
                 });
-                hb._bankingAlertSummaryDeferred = false;
-                hb._bankingAlertSummaryDetailPending = false;
                 return true;
               }
 
               commitBankingAlertHash();
+              if (responseIsRequestedDetailForHash) markBankingAlertDetailSettledDeferred(currentHash);
               const scalarSummary = {
                 ok: true,
                 alerts: [],
@@ -266724,23 +267691,25 @@ async function bootstrapApp(){
                 banking_highest_alert_label: json.banking_highest_alert_label ?? json.highest_label ?? null,
                 highest_severity: json.banking_highest_alert_severity ?? json.highest_severity ?? null,
                 banking_highest_alert_severity: json.banking_highest_alert_severity ?? json.highest_severity ?? null,
-                banking_alert_hash: nextHash,
-                banking_alert_summary_signature: nextHash,
+                banking_alert_hash: currentHash,
+                banking_alert_summary_signature: currentHash,
                 banking_alert_summary_deferred: true,
                 detailsDeferred: true,
-                detailsLoading: true
+                detailsLoading: getBankingAlertDetailLoadingForHash(currentHash)
               };
-              applyBankingAlertSummaryPayload(scalarSummary, nextHash, {
+              applyBankingAlertSummaryPayload(scalarSummary, currentHash, {
                 detailsDeferred: true,
+                detailRefreshRequested: responseIsRequestedDetailForHash,
                 responseStartedBeforeAck: positiveResponseStartedBeforeAck,
                 highestLabel: json.banking_highest_alert_label,
                 highestSeverity: json.banking_highest_alert_severity
               });
-              if (!requestedBankingAlertDetailRefresh || json.banking_alert_summary_deferred === true || changed || !nextHash || nextHash !== previousHash) {
+              if (!responseIsRequestedDetailForHash && shouldAllowBankingAlertDetailRequest(currentHash, 'banking-alert-summary-deferred')) {
                 queueBankingAlertSummaryDetailRefresh('banking-alert-summary-deferred');
               }
               return true;
             } catch {
+              if (requestedBankingAlertDetailRefreshHash) clearBankingAlertDetailInFlightForHash(requestedBankingAlertDetailRefreshHash);
               return false;
             }
           };
@@ -266853,6 +267822,7 @@ async function bootstrapApp(){
   renderTools();
   await renderAll();
 }
+
 
 
 
