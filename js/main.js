@@ -131759,7 +131759,6 @@ function ensureBulkProcessRelatedContract(relatedObj, rowObj, detailsObj) {
   };
 }
 
-
 async function openBulkProcessWorkbench(seed = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][OPEN]');
   GC('openBulkProcessWorkbench');
@@ -132364,6 +132363,230 @@ async function openBulkProcessWorkbench(seed = {}) {
       map.set(key, row);
     }
     return map;
+  };
+
+  const bulkProcessUpper = (value) => trimStr(value).toUpperCase();
+
+  const getBulkProcessEvidenceFileKeyOpen = (itemLike = {}) => {
+    const item = (itemLike && typeof itemLike === 'object') ? itemLike : {};
+    return trimStr(
+      item.storage_key ||
+      item.storageKey ||
+      item.file_key ||
+      item.fileKey ||
+      item.download_storage_key ||
+      item.downloadStorageKey ||
+      item.preview_storage_key ||
+      item.previewStorageKey ||
+      item.r2_key ||
+      item.r2Key ||
+      item.meta_json?.storage_key ||
+      item.meta_json?.file_key ||
+      item.meta_json?.download_storage_key ||
+      item.meta_json?.r2_key ||
+      ''
+    ).replace(/^\/+/, '');
+  };
+
+  const getBulkProcessEvidenceIdOpen = (itemLike = {}) => {
+    const item = (itemLike && typeof itemLike === 'object') ? itemLike : {};
+    return trimStr(
+      item.id ||
+      item.evidence_id ||
+      item.evidenceId ||
+      item.queue_id ||
+      item.queueId ||
+      item.manual_timesheet_queue_id ||
+      item.manualTimesheetQueueId ||
+      getBulkProcessEvidenceFileKeyOpen(item) ||
+      ''
+    );
+  };
+
+  const normaliseBulkProcessEvidenceKindOpen = (value) => {
+    const kind = bulkProcessUpper(value || '');
+    if (kind === 'TS') return 'TIMESHEET';
+    if (kind === 'MILES' || kind === 'MILE') return 'MILEAGE';
+    if (kind === 'ACCOM') return 'ACCOMMODATION';
+    if (kind === 'EXPENSE' || kind === 'EXPENSES') return 'TRAVEL';
+    return kind;
+  };
+
+  const normaliseBulkProcessEvidenceRowsOpen = (...sources) => {
+    const rows = [];
+    const seen = new Set();
+    const addOne = (candidate) => {
+      if (!candidate || typeof candidate !== 'object') return;
+      const fileKey = getBulkProcessEvidenceFileKeyOpen(candidate);
+      const id = getBulkProcessEvidenceIdOpen(candidate);
+      if (!id && !fileKey) return;
+      const kind = normaliseBulkProcessEvidenceKindOpen(candidate.kind || candidate.evidence_kind || candidate.evidenceKind || candidate.staged_kind || candidate.stagedKind || '') || 'OTHER';
+      const key = `${id}|${fileKey}|${kind}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const displayName = trimStr(candidate.display_name || candidate.displayName || candidate.filename || candidate.original_filename || candidate.originalFilename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence');
+      rows.push({
+        ...(deep(candidate) || {}),
+        id: id || fileKey || null,
+        evidence_id: trimStr(candidate.evidence_id || candidate.evidenceId || '') || null,
+        queue_id: trimStr(candidate.queue_id || candidate.queueId || candidate.manual_timesheet_queue_id || candidate.manualTimesheetQueueId || '') || null,
+        kind,
+        staged_kind: candidate.staged_kind || candidate.stagedKind || (candidate.is_staged_context === true ? kind : candidate.staged_kind),
+        display_name: displayName,
+        filename: trimStr(candidate.filename || candidate.display_name || candidate.original_filename || '') || displayName,
+        original_filename: trimStr(candidate.original_filename || candidate.originalFilename || candidate.filename || candidate.display_name || '') || displayName,
+        storage_key: fileKey || null,
+        file_key: fileKey || null,
+        download_storage_key: fileKey || null,
+        r2_key: fileKey || null
+      });
+    };
+    for (const source of sources) {
+      if (!Array.isArray(source)) continue;
+      for (const item of source) addOne(item);
+    }
+    return rows;
+  };
+
+  const buildBulkProcessEvidenceAuthorityPatchOpen = (rowsInput = []) => {
+    const evidenceRows = normaliseBulkProcessEvidenceRowsOpen(rowsInput);
+    const kinds = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
+    const countsByKind = new Map();
+    for (const item of evidenceRows) {
+      const kind = normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || '');
+      if (!kind) continue;
+      countsByKind.set(kind, (Number(countsByKind.get(kind) || 0) || 0) + 1);
+    }
+    const evidenceBadges = kinds.map((kind) => {
+      const count = Number(countsByKind.get(kind) || 0) || 0;
+      return { kind, has_evidence: count > 0, present: count > 0, count };
+    });
+    const primaryEvidence = evidenceRows.find((item) => normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || '') === 'TIMESHEET') || evidenceRows[0] || null;
+    const primaryStorageKey = primaryEvidence ? getBulkProcessEvidenceFileKeyOpen(primaryEvidence) : '';
+    const primaryId = primaryEvidence ? getBulkProcessEvidenceIdOpen(primaryEvidence) : '';
+    return {
+      evidenceRows,
+      hasAnyEvidence: evidenceRows.length > 0,
+      attachedEvidenceCount: evidenceRows.length,
+      evidenceBadges,
+      primaryEvidence,
+      primaryArtifactId: primaryId || null,
+      primaryArtifactKind: primaryEvidence ? (normaliseBulkProcessEvidenceKindOpen(primaryEvidence.kind || primaryEvidence.staged_kind || '') || null) : null,
+      primaryArtifactStorageKey: primaryStorageKey || null,
+      primaryArtifactPreviewMode: primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || null) : null
+    };
+  };
+
+  const applyBulkProcessEvidenceAuthorityPatchOpen = (target, patch) => {
+    if (!target || typeof target !== 'object' || !patch || typeof patch !== 'object') return target;
+    const evidenceRows = Array.isArray(patch.evidenceRows) ? patch.evidenceRows.map((item) => deep(item)) : [];
+    const evidenceLoaded = patch.evidenceLoaded === true || patch.hasAnyEvidence === true || target.evidence_loaded === true;
+    target.evidence = evidenceRows;
+    target.evidence_loaded = evidenceLoaded;
+    target.evidence_authoritative = evidenceLoaded;
+    target.include_evidence = evidenceLoaded;
+    target.has_any_evidence = !!patch.hasAnyEvidence;
+    target.has_attached_evidence = !!patch.hasAnyEvidence;
+    target.attached_evidence_count = Number(patch.attachedEvidenceCount || 0) || 0;
+    target.evidence_badges = Array.isArray(patch.evidenceBadges) ? patch.evidenceBadges.map((badge) => ({ ...badge })) : [];
+    target.evidence_meta = {
+      ...((target.evidence_meta && typeof target.evidence_meta === 'object') ? target.evidence_meta : {}),
+      evidence_loaded: evidenceLoaded,
+      evidence_authoritative: evidenceLoaded,
+      has_any_evidence: !!patch.hasAnyEvidence,
+      attached_evidence_count: Number(patch.attachedEvidenceCount || 0) || 0,
+      evidence_badges: Array.isArray(patch.evidenceBadges) ? patch.evidenceBadges.map((badge) => ({ ...badge })) : []
+    };
+    target.artifact_hints = {
+      ...((target.artifact_hints && typeof target.artifact_hints === 'object') ? target.artifact_hints : {}),
+      has_any_evidence: !!patch.hasAnyEvidence,
+      attached_evidence_count: Number(patch.attachedEvidenceCount || 0) || 0,
+      primary_artifact_id: patch.primaryArtifactId || null,
+      primary_artifact_kind: patch.primaryArtifactKind || null,
+      primary_artifact_storage_key: patch.primaryArtifactStorageKey || null,
+      primary_artifact_preview_mode: patch.primaryArtifactPreviewMode || null,
+      primary_artifact: patch.primaryEvidence ? deep(patch.primaryEvidence) : null,
+      evidence_badges: Array.isArray(patch.evidenceBadges) ? patch.evidenceBadges.map((badge) => ({ ...badge })) : []
+    };
+    target.primary_artifact = patch.primaryEvidence ? deep(patch.primaryEvidence) : null;
+    target.primary_artifact_id = patch.primaryArtifactId || null;
+    target.primary_artifact_kind = patch.primaryArtifactKind || null;
+    target.primary_artifact_storage_key = patch.primaryArtifactStorageKey || null;
+    target.primary_artifact_preview_mode = patch.primaryArtifactPreviewMode || null;
+    return target;
+  };
+
+  const rowHasBulkProcessNoTimesheetAuthoritySignal = (rowLike = {}) => {
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const flags = (row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
+    const routeText = bulkProcessUpper([row.route_type, row.route_display, row.basis, row.tsfin_basis, flags.route_type, flags.route_display, flags.basis].filter(Boolean).join(' '));
+    return !!(
+      boolishOpen(row.__bulkProcessExplicitNoTimesheet) ||
+      boolishOpen(row.__bulk_process_explicit_no_timesheet) ||
+      boolishOpen(flags.__bulkProcessExplicitNoTimesheet) ||
+      boolishOpen(row.no_timesheet_required) ||
+      boolishOpen(row.client_no_timesheet_required) ||
+      boolishOpen(row.no_timesheet_image_required) ||
+      boolishOpen(row.timesheet_not_required) ||
+      boolishOpen(flags.no_timesheet_required) ||
+      boolishOpen(flags.no_timesheet_image_required) ||
+      boolishOpen(row.client_is_nhsp) ||
+      boolishOpen(flags.client_is_nhsp) ||
+      routeText.includes('NHSP') ||
+      routeText.includes('HEALTHROSTER') ||
+      routeText.includes('NO TIMESHEET') ||
+      routeText.includes('NO_TIMESHEET')
+    );
+  };
+
+  const mergeBulkProcessRowAuthoritySignals = (baseRowLike, incomingRowLike) => {
+    const base = (baseRowLike && typeof baseRowLike === 'object') ? baseRowLike : {};
+    const incoming = (incomingRowLike && typeof incomingRowLike === 'object') ? incomingRowLike : {};
+    const out = { ...(deep(incoming) || {}) };
+    if (!rowHasBulkProcessNoTimesheetAuthoritySignal(base)) return out;
+
+    const preserveIfBaseHasValue = (key) => {
+      if (hasOpenValue(base[key]) && (!hasOpenValue(out[key]) || bulkProcessUpper(out[key]) === 'WEEKLY_MANUAL_ADJUSTMENT' || bulkProcessUpper(out[key]) === 'MANUAL')) out[key] = deep(base[key]);
+    };
+    ['route_type', 'route_display', 'basis', 'tsfin_basis', 'submission_mode', 'submission_mode_snapshot'].forEach(preserveIfBaseHasValue);
+    if (boolishOpen(base.client_is_nhsp) && !boolishOpen(out.client_is_nhsp)) out.client_is_nhsp = true;
+    if (boolishOpen(base.client_is_healthroster) && !boolishOpen(out.client_is_healthroster)) out.client_is_healthroster = true;
+    ['__bulkProcessExplicitNoTimesheet', '__bulk_process_explicit_no_timesheet', 'no_timesheet_required', 'client_no_timesheet_required', 'no_timesheet_image_required', 'timesheet_not_required', 'suppress_standard_schedule_fallback', 'keep_additional_manual_adjustment_schedule_empty', '__suppressStandardScheduleFallback', '__keepAdditionalManualAdjustmentScheduleEmpty', 'manual_additional_route', 'additional_manual_route'].forEach((key) => {
+      if (base[key] === true && out[key] !== true) out[key] = true;
+    });
+    if (Array.isArray(base.planned_schedule_json) && base.planned_schedule_json.length === 0 && (out.keep_additional_manual_adjustment_schedule_empty === true || out.__keepAdditionalManualAdjustmentScheduleEmpty === true)) out.planned_schedule_json = [];
+    if (Array.isArray(base.actual_schedule_json) && base.actual_schedule_json.length === 0 && (out.keep_additional_manual_adjustment_schedule_empty === true || out.__keepAdditionalManualAdjustmentScheduleEmpty === true)) out.actual_schedule_json = [];
+    if ((out.keep_additional_manual_adjustment_schedule_empty === true || out.__keepAdditionalManualAdjustmentScheduleEmpty === true) && toNumberOpen(base.total_hours) === 0) out.total_hours = 0;
+    const baseFlags = (base.action_flags && typeof base.action_flags === 'object') ? base.action_flags : {};
+    const outFlags = (out.action_flags && typeof out.action_flags === 'object') ? out.action_flags : {};
+    out.action_flags = { ...outFlags };
+    ['route_type', 'route_display', 'basis', 'expense_storage_target', 'expense_evidence_storage_target'].forEach((key) => {
+      if (hasOpenValue(baseFlags[key]) && (!hasOpenValue(out.action_flags[key]) || bulkProcessUpper(out.action_flags[key]) === 'WEEKLY_MANUAL_ADJUSTMENT')) out.action_flags[key] = deep(baseFlags[key]);
+    });
+    ['client_is_nhsp', 'client_is_healthroster', '__bulkProcessExplicitNoTimesheet', 'no_timesheet_required', 'no_timesheet_image_required', 'suppress_standard_schedule_fallback', 'keep_additional_manual_adjustment_schedule_empty', 'manual_additional_route', 'additional_manual_route', 'supportsUnprocessedExpenseDraft', 'supports_unprocessed_expense_draft'].forEach((key) => {
+      if (baseFlags[key] === true && out.action_flags[key] !== true) out.action_flags[key] = true;
+    });
+    return out;
+  };
+
+  const patchBulkProcessRowCollectionsForActiveEvidenceOpen = (rowKey, patch) => {
+    const activeKey = trimStr(rowKey || '');
+    if (!activeKey || !patch || typeof patch !== 'object') return;
+    const patchRow = (row) => {
+      if (!row || typeof row !== 'object') return row;
+      if (trimStr(row.row_key || '') !== activeKey) return row;
+      return applyBulkProcessEvidenceAuthorityPatchOpen({ ...(deep(row) || {}) }, patch);
+    };
+    if (state.active_row && typeof state.active_row === 'object') state.active_row = patchRow(state.active_row);
+    const patchCollection = (obj, key) => {
+      if (obj && typeof obj === 'object' && Array.isArray(obj[key])) obj[key] = obj[key].map(patchRow);
+    };
+    const ds = (state.dataset && typeof state.dataset === 'object') ? state.dataset : null;
+    if (ds) {
+      ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(ds, key));
+      if (ds.sections && typeof ds.sections === 'object') Object.keys(ds.sections).forEach((key) => patchCollection(ds.sections, key));
+    }
+    ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(state, key));
   };
 
   const BULK_PROCESS_MODAL_KIND = 'bulk-process-workbench';
@@ -133261,7 +133484,7 @@ async function openBulkProcessWorkbench(seed = {}) {
     }
 
     const resolvedProfile = trimStr(contextPayload.profile || contextPayload.context_profile || requestedProfile) || requestedProfile;
-    const dataRow = dataRowCandidate;
+    const dataRow = mergeBulkProcessRowAuthoritySignals(row, dataRowCandidate);
     const details = (contextPayload.details && typeof contextPayload.details === 'object')
       ? contextPayload.details
       : {};
@@ -133279,13 +133502,17 @@ async function openBulkProcessWorkbench(seed = {}) {
       payloadProfile === 'evidence' ||
       contextPayload.__context_options?.include_evidence === true
     );
-    const previousEvidenceRows = Array.isArray(state.active_details?.evidence)
-      ? deep(state.active_details.evidence)
-      : (Array.isArray(state.active_context?.evidence)
-          ? deep(state.active_context.evidence)
-          : (Array.isArray(state.active_context?.details?.evidence)
-              ? deep(state.active_context.details.evidence)
-              : (Array.isArray(state.active_ctx?.state?.evidence) ? deep(state.active_ctx.state.evidence) : [])));
+    const previousEvidenceRows = normaliseBulkProcessEvidenceRowsOpen(
+      state.active_details?.evidence,
+      state.active_context?.evidence,
+      state.active_context?.details?.evidence,
+      state.active_ctx?.evidence,
+      state.active_ctx?.details?.evidence,
+      state.active_ctx?.state?.evidence,
+      state.evidence_pane_state?.attached_rows,
+      state.evidence_pane_state?.attached_all_rows,
+      window.modalCtx?.timesheetState?.evidence
+    );
     const previousEvidenceLoaded = !!(
       state.active_details?.evidence_loaded === true ||
       state.active_context?.evidence_loaded === true ||
@@ -133293,11 +133520,13 @@ async function openBulkProcessWorkbench(seed = {}) {
       state.active_ctx?.evidence_loaded === true ||
       state.active_ctx?.state?.evidence_loaded === true
     );
-    const incomingEvidenceRows = Array.isArray(contextPayload.evidence)
-      ? deep(contextPayload.evidence)
-      : (Array.isArray(details.evidence) ? deep(details.evidence) : []);
+    const incomingEvidenceRows = normaliseBulkProcessEvidenceRowsOpen(contextPayload.evidence, details.evidence);
     const layerEvidenceRows = evidenceAuthoritative ? incomingEvidenceRows : previousEvidenceRows;
     const nextEvidenceLoaded = evidenceAuthoritative || previousEvidenceLoaded;
+    const evidenceAuthorityPatch = {
+      ...buildBulkProcessEvidenceAuthorityPatchOpen(layerEvidenceRows),
+      evidenceLoaded: nextEvidenceLoaded
+    };
     const rawDetails = {
       ...deep((state.active_details && typeof state.active_details === 'object') ? state.active_details : {}),
       ...deep(details || {}),
@@ -133328,6 +133557,9 @@ async function openBulkProcessWorkbench(seed = {}) {
       slim_context: contextPayload.slim_context !== false
     };
 
+    applyBulkProcessEvidenceAuthorityPatchOpen(rawDetails, evidenceAuthorityPatch);
+    applyBulkProcessEvidenceAuthorityPatchOpen(dataRow, evidenceAuthorityPatch);
+
     const ctx = normaliseBulkTimesheetWorkbenchCtx(deep(dataRow), rawDetails);
     if (ctx && typeof ctx === 'object') {
       ctx.profile = resolvedProfile;
@@ -133340,6 +133572,7 @@ async function openBulkProcessWorkbench(seed = {}) {
         context_profile: resolvedProfile,
         include_evidence: evidenceAuthoritative
       };
+      applyBulkProcessEvidenceAuthorityPatchOpen(ctx, evidenceAuthorityPatch);
       if (ctx.state && typeof ctx.state === 'object') {
         ctx.state.evidence = layerEvidenceRows;
         ctx.state.context_profile = rawDetails.context_profile;
@@ -133353,6 +133586,7 @@ async function openBulkProcessWorkbench(seed = {}) {
         ctx.state.schedule_pending = rawDetails.schedule_pending;
         ctx.state.schedule_authoritative = rawDetails.schedule_authoritative;
         ctx.state.loaded_layers = rawDetails.loaded_layers;
+        applyBulkProcessEvidenceAuthorityPatchOpen(ctx.state, evidenceAuthorityPatch);
       }
     }
 
@@ -133371,9 +133605,10 @@ async function openBulkProcessWorkbench(seed = {}) {
       const baseCtx = (state.active_ctx && typeof state.active_ctx === 'object')
         ? deep(state.active_ctx)
         : (previousActiveCtxBeforeLoad ? deep(previousActiveCtxBeforeLoad) : null);
-      const rowForEvidenceMerge = (state.active_row && typeof state.active_row === 'object')
-        ? deep(state.active_row)
-        : deep(dataRow || row || {});
+      const rowForEvidenceMerge = mergeBulkProcessRowAuthoritySignals(
+        (state.active_row && typeof state.active_row === 'object') ? state.active_row : (row || {}),
+        dataRow || row || {}
+      );
       const baseProfileRaw = trimStr(
         previousActiveContextProfileBeforeLoad ||
         state.active_context_profile ||
@@ -133444,6 +133679,8 @@ async function openBulkProcessWorkbench(seed = {}) {
         slim_context: baseDetails.slim_context !== false,
         related: deep(mergedRelated)
       };
+      applyBulkProcessEvidenceAuthorityPatchOpen(mergedDetails, evidenceAuthorityPatch);
+      applyBulkProcessEvidenceAuthorityPatchOpen(rowForEvidenceMerge, evidenceAuthorityPatch);
       let mergedCtx = baseCtx && typeof baseCtx === 'object'
         ? baseCtx
         : normaliseBulkTimesheetWorkbenchCtx(deep(rowForEvidenceMerge), mergedDetails);
@@ -133455,6 +133692,7 @@ async function openBulkProcessWorkbench(seed = {}) {
       mergedCtx.evidence = deep(layerEvidenceRows);
       mergedCtx.evidence_loaded = true;
       mergedCtx.evidence_authoritative = true;
+      applyBulkProcessEvidenceAuthorityPatchOpen(mergedCtx, evidenceAuthorityPatch);
       mergedCtx.profile = preservedProfile;
       mergedCtx.context_profile = preservedProfile;
       mergedCtx.header_loaded = true;
@@ -133486,6 +133724,7 @@ async function openBulkProcessWorkbench(seed = {}) {
       mergedCtx.state.schedule_pending = mergedDetails.schedule_pending;
       mergedCtx.state.schedule_authoritative = mergedDetails.schedule_authoritative;
       mergedCtx.state.loaded_layers = mergedLayers;
+      applyBulkProcessEvidenceAuthorityPatchOpen(mergedCtx.state, evidenceAuthorityPatch);
 
       const mergedContext = {
         ...((baseContext && typeof baseContext === 'object') ? baseContext : {}),
@@ -133529,12 +133768,17 @@ async function openBulkProcessWorkbench(seed = {}) {
           evidence_include_evidence: true
         }
       };
+      applyBulkProcessEvidenceAuthorityPatchOpen(mergedContext, evidenceAuthorityPatch);
+      applyBulkProcessEvidenceAuthorityPatchOpen(mergedContext.details, evidenceAuthorityPatch);
+      applyBulkProcessEvidenceAuthorityPatchOpen(mergedContext.row, evidenceAuthorityPatch);
+      applyBulkProcessEvidenceAuthorityPatchOpen(mergedContext.data_row, evidenceAuthorityPatch);
 
       state.active_details = mergedDetails;
       state.active_ctx = mergedCtx;
       state.active_context = mergedContext;
       state.active_row = deep(rowForEvidenceMerge);
       state.active_row_key = trimStr(rowForEvidenceMerge.row_key || state.active_row_key || '') || state.active_row_key || null;
+      patchBulkProcessRowCollectionsForActiveEvidenceOpen(state.active_row_key, evidenceAuthorityPatch);
       state.active_context_profile = preservedProfile;
       state.__active_context_is_minimal = editorLayerLoaded ? false : state.__active_context_is_minimal === true;
       state.__active_context_pending = false;
@@ -133573,11 +133817,16 @@ async function openBulkProcessWorkbench(seed = {}) {
         include_import_source_rows: rawDetails.compare_loaded === true
       }
     };
+    applyBulkProcessEvidenceAuthorityPatchOpen(state.active_context, evidenceAuthorityPatch);
+    applyBulkProcessEvidenceAuthorityPatchOpen(state.active_context.details, evidenceAuthorityPatch);
+    applyBulkProcessEvidenceAuthorityPatchOpen(state.active_context.row, evidenceAuthorityPatch);
+    applyBulkProcessEvidenceAuthorityPatchOpen(state.active_context.data_row, evidenceAuthorityPatch);
     state.active_context_profile = resolvedProfile;
     state.active_details = rawDetails;
     state.active_ctx = ctx;
     state.active_row = deep(dataRow || row);
     state.active_row_key = trimStr(state.active_row?.row_key || state.active_row_key || '');
+    patchBulkProcessRowCollectionsForActiveEvidenceOpen(state.active_row_key, evidenceAuthorityPatch);
     state.__active_context_is_minimal = false;
     state.__active_context_pending = false;
     state.__bulk_process_active_context_visibility_pending = false;
@@ -133902,8 +134151,8 @@ async function openBulkProcessWorkbench(seed = {}) {
       nextKey === previousActiveRowKey
     );
     state.active_row = activeIdentityUnchanged && previous.active_row
-      ? { ...deep(previous.active_row), ...deep(nextActiveRow), row_key: nextKey }
-      : deep(nextActiveRow);
+      ? mergeBulkProcessRowAuthoritySignals(previous.active_row, { ...deep(previous.active_row), ...deep(nextActiveRow), row_key: nextKey })
+      : mergeBulkProcessRowAuthoritySignals(previous.active_row || seedPrimaryRowPatch || {}, nextActiveRow);
     state.active_row_key = nextKey || null;
     if (nextKey && trimStr(state.__bulk_process_active_hydration_identity || '') !== nextKey) {
       rotateActiveHydrationTokenForIdentity(nextKey);
@@ -134049,8 +134298,8 @@ async function openBulkProcessWorkbench(seed = {}) {
     const item = (mode === 'attached')
       ? ((pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null)
       : ((pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null);
-    const itemId = trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
-    const fileKey = trimStr(item?.storage_key || item?.r2_key || '');
+    const itemId = getBulkProcessEvidenceIdOpen(item);
+    const fileKey = getBulkProcessEvidenceFileKeyOpen(item);
     return `${mode}|${itemId}|${fileKey}`;
   };
 
@@ -138882,6 +139131,7 @@ function bindBulkProcessManualEditor(state) {
 }
 
 
+
 function bindBulkProcessPreviewPane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -139006,8 +139256,29 @@ function bindBulkProcessPreviewPane(state) {
   };
   const normaliseBulkProcessDockedKind = (item) => getBulkProcessPreviewTypeParts(item, resolveActiveBulkProcessPreviewFileKey(item)).type;
   const resolveActiveBulkProcessPreviewItem = () => ((pane.active_tab === 'attached' ? pane.active_attached_item : pane.active_queue_item) || pane.active_attached_item || pane.active_queue_item || null);
-  const resolveActiveBulkProcessPreviewFileKey = (item) => trimStr(item?.storage_key || item?.r2_key || item?.file_key || '').replace(/^\/+/, '');
-  const resolveActiveBulkProcessPreviewEvidenceId = (item) => trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
+  const resolveActiveBulkProcessPreviewFileKey = (item) => trimStr(
+    item?.storage_key ||
+    item?.storageKey ||
+    item?.file_key ||
+    item?.fileKey ||
+    item?.download_storage_key ||
+    item?.downloadStorageKey ||
+    item?.preview_storage_key ||
+    item?.previewStorageKey ||
+    item?.r2_key ||
+    item?.r2Key ||
+    ''
+  ).replace(/^\/+/, '');
+  const resolveActiveBulkProcessPreviewEvidenceId = (item) => trimStr(
+    item?.id ||
+    item?.evidence_id ||
+    item?.evidenceId ||
+    item?.queue_id ||
+    item?.queueId ||
+    item?.manual_timesheet_queue_id ||
+    item?.manualTimesheetQueueId ||
+    ''
+  );
   const resolveBulkProcessDockedSignedUrl = (previewItem) => {
     const item = (previewItem && typeof previewItem === 'object') ? previewItem : null;
     if (!item) return '';
@@ -139094,7 +139365,19 @@ function bindBulkProcessPreviewPane(state) {
   };
   const resolvePreviewFileCacheKey = (previewItem, fallbackSelectionKey = '') => {
     const item = (previewItem && typeof previewItem === 'object') ? previewItem : {};
-    const direct = trimStr(item.storage_key || item.r2_key || item.file_key || '');
+    const direct = trimStr(
+      item.storage_key ||
+      item.storageKey ||
+      item.file_key ||
+      item.fileKey ||
+      item.download_storage_key ||
+      item.downloadStorageKey ||
+      item.preview_storage_key ||
+      item.previewStorageKey ||
+      item.r2_key ||
+      item.r2Key ||
+      ''
+    );
     if (direct) return direct.replace(/^\/+/, '');
     const selectionKey = trimStr(fallbackSelectionKey || '');
     if (!selectionKey) return '';
@@ -139594,8 +139877,18 @@ function bindBulkProcessPreviewPane(state) {
     const item = tab === 'attached'
       ? ((pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null)
       : ((pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null);
-    const itemId = trimStr((tab === 'attached' ? pane.active_attached_id : pane.active_queue_id) || item?.id || item?.evidence_id || item?.queue_id || '');
-    const fileKey = trimStr(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || '').replace(/^\/+/, '');
+    const itemId = trimStr(
+      (tab === 'attached' ? pane.active_attached_id : pane.active_queue_id) ||
+      item?.id ||
+      item?.evidence_id ||
+      item?.evidenceId ||
+      item?.queue_id ||
+      item?.queueId ||
+      item?.manual_timesheet_queue_id ||
+      item?.manualTimesheetQueueId ||
+      ''
+    );
+    const fileKey = resolvePreviewFileCacheKey(item).replace(/^\/+/, '');
     return buildPreviewSelectionKey(tab, itemId, fileKey);
   };
 
@@ -141569,36 +141862,188 @@ function bindBulkProcessPreviewPane(state) {
   };
 
   const syncActiveRowEvidencePresence = () => {
-    const activeRowKey = trimStr(st?.active_row?.row_key || '');
+    const activeRowKey = trimStr(st?.active_row?.row_key || st?.active_row_key || '');
     if (!activeRowKey) return;
-    const evidenceRows = Array.isArray(st?.active_details?.evidence) ? st.active_details.evidence : [];
+
+    const sourceRows = [
+      ...(Array.isArray(st?.active_details?.evidence) ? st.active_details.evidence : []),
+      ...(Array.isArray(st?.active_context?.evidence) ? st.active_context.evidence : []),
+      ...(Array.isArray(st?.active_context?.details?.evidence) ? st.active_context.details.evidence : []),
+      ...(Array.isArray(st?.active_ctx?.evidence) ? st.active_ctx.evidence : []),
+      ...(Array.isArray(st?.active_ctx?.details?.evidence) ? st.active_ctx.details.evidence : []),
+      ...(Array.isArray(st?.active_ctx?.state?.evidence) ? st.active_ctx.state.evidence : []),
+      ...(Array.isArray(pane.attached_rows) ? pane.attached_rows : []),
+      ...(Array.isArray(pane.attached_all_rows) ? pane.attached_all_rows : [])
+    ];
+
+    const evidenceRows = [];
+    const seen = new Set();
+    for (const item of sourceRows) {
+      if (!item || typeof item !== 'object') continue;
+      const fileKey = resolvePreviewFileCacheKey(item);
+      const id = trimStr(
+        item.id ||
+        item.evidence_id ||
+        item.evidenceId ||
+        item.queue_id ||
+        item.queueId ||
+        item.manual_timesheet_queue_id ||
+        item.manualTimesheetQueueId ||
+        fileKey ||
+        ''
+      );
+      const key = `${id}|${fileKey}`;
+      if (!id && !fileKey) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      evidenceRows.push({
+        ...(deep(item) || {}),
+        id: id || item.id || null,
+        storage_key: fileKey || item.storage_key || null,
+        file_key: fileKey || item.file_key || item.storage_key || null,
+        download_storage_key: fileKey || item.download_storage_key || item.storage_key || null,
+        r2_key: fileKey || item.r2_key || item.storage_key || null
+      });
+    }
+
     const hasByKind = new Map();
     for (const item of evidenceRows) {
       const kind = upper(item?.kind || item?.staged_kind || '');
       if (!kind) continue;
-      hasByKind.set(kind, true);
+      hasByKind.set(kind, (Number(hasByKind.get(kind) || 0) || 0) + 1);
     }
     const badges = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER']
-      .map((kind) => ({ kind, has_evidence: !!hasByKind.get(kind) }));
+      .map((kind) => ({
+        kind,
+        has_evidence: Number(hasByKind.get(kind) || 0) > 0,
+        present: Number(hasByKind.get(kind) || 0) > 0,
+        count: Number(hasByKind.get(kind) || 0) || 0
+      }));
+    const hasAnyEvidence = evidenceRows.length > 0;
+    const primaryEvidence = evidenceRows.find((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET') || evidenceRows[0] || null;
+    const primaryStorageKey = primaryEvidence ? resolvePreviewFileCacheKey(primaryEvidence) : '';
+    const primaryId = primaryEvidence ? trimStr(primaryEvidence.id || primaryEvidence.evidence_id || primaryEvidence.queue_id || primaryStorageKey || '') : '';
+    const primaryKind = primaryEvidence ? upper(primaryEvidence.kind || primaryEvidence.staged_kind || '') : '';
+    const primaryPreviewMode = primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || getBulkProcessPreviewTypeParts(primaryEvidence, primaryStorageKey).type || 'FILE') : null;
+
+    const evidenceMetaPatch = {
+      evidence_loaded: true,
+      evidence_authoritative: true,
+      include_evidence: true,
+      has_any_evidence: hasAnyEvidence,
+      has_attached_evidence: hasAnyEvidence,
+      attached_evidence_count: evidenceRows.length,
+      evidence_badges: badges.map((badge) => ({ ...badge })),
+      primary_artifact_id: primaryId || null,
+      primary_artifact_kind: primaryKind || null,
+      primary_artifact_storage_key: primaryStorageKey || null,
+      primary_artifact_preview_mode: primaryPreviewMode || null,
+      primary_artifact: primaryEvidence ? { ...(deep(primaryEvidence) || {}) } : null
+    };
+
+    const patchEvidenceContainer = (obj) => {
+      if (!obj || typeof obj !== 'object') return;
+      obj.evidence = evidenceRows.map((item) => ({ ...(deep(item) || {}) }));
+      obj.evidence_loaded = true;
+      obj.evidence_authoritative = true;
+      obj.include_evidence = true;
+      obj.has_any_evidence = hasAnyEvidence;
+      obj.has_attached_evidence = hasAnyEvidence;
+      obj.attached_evidence_count = evidenceRows.length;
+      obj.evidence_badges = badges.map((badge) => ({ ...badge }));
+      obj.evidence_meta = {
+        ...((obj.evidence_meta && typeof obj.evidence_meta === 'object') ? obj.evidence_meta : {}),
+        ...evidenceMetaPatch,
+        evidence_badges: badges.map((badge) => ({ ...badge }))
+      };
+      obj.artifact_hints = {
+        ...((obj.artifact_hints && typeof obj.artifact_hints === 'object') ? obj.artifact_hints : {}),
+        has_any_evidence: hasAnyEvidence,
+        attached_evidence_count: evidenceRows.length,
+        primary_artifact_id: primaryId || null,
+        primary_artifact_kind: primaryKind || null,
+        primary_artifact_storage_key: primaryStorageKey || null,
+        primary_artifact_preview_mode: primaryPreviewMode || null,
+        primary_artifact: primaryEvidence ? { ...(deep(primaryEvidence) || {}) } : null,
+        evidence_badges: badges.map((badge) => ({ ...badge }))
+      };
+      if (primaryEvidence) {
+        obj.primary_artifact = { ...(deep(primaryEvidence) || {}) };
+        obj.primary_artifact_id = primaryId || null;
+        obj.primary_artifact_kind = primaryKind || null;
+        obj.primary_artifact_storage_key = primaryStorageKey || null;
+        obj.primary_artifact_preview_mode = primaryPreviewMode || null;
+      }
+    };
+
     const patchRow = (row) => {
       const rowKey = trimStr(row?.row_key || '');
       if (!rowKey || rowKey !== activeRowKey) return row;
       return {
         ...(row || {}),
+        has_any_evidence: hasAnyEvidence,
+        has_attached_evidence: hasAnyEvidence,
+        attached_evidence_count: evidenceRows.length,
         evidence_badges: badges.map((badge) => ({ ...badge })),
-        has_any_evidence: badges.some((badge) => !!badge.has_evidence)
+        evidence_meta: {
+          ...((row?.evidence_meta && typeof row.evidence_meta === 'object') ? row.evidence_meta : {}),
+          ...evidenceMetaPatch,
+          evidence_badges: badges.map((badge) => ({ ...badge }))
+        },
+        artifact_hints: {
+          ...((row?.artifact_hints && typeof row.artifact_hints === 'object') ? row.artifact_hints : {}),
+          has_any_evidence: hasAnyEvidence,
+          attached_evidence_count: evidenceRows.length,
+          primary_artifact_id: primaryId || row?.primary_artifact_id || null,
+          primary_artifact_kind: primaryKind || row?.primary_artifact_kind || null,
+          primary_artifact_storage_key: primaryStorageKey || row?.primary_artifact_storage_key || null,
+          primary_artifact_preview_mode: primaryPreviewMode || row?.primary_artifact_preview_mode || null,
+          primary_artifact: primaryEvidence ? { ...(deep(primaryEvidence) || {}) } : (row?.artifact_hints?.primary_artifact || null),
+          evidence_badges: badges.map((badge) => ({ ...badge }))
+        },
+        primary_artifact_id: primaryId || row?.primary_artifact_id || null,
+        primary_artifact_kind: primaryKind || row?.primary_artifact_kind || null,
+        primary_artifact_storage_key: primaryStorageKey || row?.primary_artifact_storage_key || null,
+        primary_artifact_preview_mode: primaryPreviewMode || row?.primary_artifact_preview_mode || null
       };
     };
+
+    pane.attached_rows = evidenceRows.map((item) => ({ ...(deep(item) || {}) }));
+    pane.attached_all_rows = evidenceRows.map((item) => ({ ...(deep(item) || {}) }));
+    patchEvidenceContainer(st.active_details);
+    patchEvidenceContainer(st.active_context);
+    patchEvidenceContainer(st.active_context?.details);
+    patchEvidenceContainer(st.active_ctx);
+    patchEvidenceContainer(st.active_ctx?.details);
+    if (st.active_ctx?.state && typeof st.active_ctx.state === 'object') patchEvidenceContainer(st.active_ctx.state);
+    window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+    window.modalCtx.timesheetState = (window.modalCtx.timesheetState && typeof window.modalCtx.timesheetState === 'object') ? window.modalCtx.timesheetState : {};
+    patchEvidenceContainer(window.modalCtx.timesheetState);
+
     if (st.active_row && typeof st.active_row === 'object') st.active_row = patchRow(st.active_row);
+    const patchCollection = (obj, key) => {
+      if (obj && typeof obj === 'object' && Array.isArray(obj[key])) obj[key] = obj[key].map(patchRow);
+    };
     const ds = (st.dataset && typeof st.dataset === 'object') ? st.dataset : null;
-    if (!ds) return;
-    if (Array.isArray(ds.unprocessed_rows)) ds.unprocessed_rows = ds.unprocessed_rows.map(patchRow);
-    if (Array.isArray(ds.processed_rows)) ds.processed_rows = ds.processed_rows.map(patchRow);
+    if (ds) {
+      ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(ds, key));
+      if (ds.sections && typeof ds.sections === 'object') Object.keys(ds.sections).forEach((sectionKey) => patchCollection(ds.sections, sectionKey));
+    }
+    ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(st, key));
   };
 
   const getSelectionSignature = (mode, item) => {
     const normalizedMode = trimStr(mode || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
-    const itemId = trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
+    const itemId = trimStr(
+      item?.id ||
+      item?.evidence_id ||
+      item?.evidenceId ||
+      item?.queue_id ||
+      item?.queueId ||
+      item?.manual_timesheet_queue_id ||
+      item?.manualTimesheetQueueId ||
+      ''
+    );
     const fileKey = resolvePreviewFileCacheKey(item);
     return buildPreviewSelectionKey(normalizedMode, itemId, fileKey);
   };
@@ -141609,7 +142054,17 @@ function bindBulkProcessPreviewPane(state) {
     if (explicitRowKey) return explicitRowKey;
     const timesheetId = trimStr(item.timesheet_id || item.current_timesheet_id || item.requested_timesheet_id || item.expected_timesheet_id || '');
     if (timesheetId) return `timesheet:${timesheetId}`;
-    const contractWeekId = trimStr(item.contract_week_id || item.current_contract_week_id || item.expected_contract_week_id || '');
+    const contractWeekId = trimStr(
+      item.contract_week_id ||
+      item.contractWeekId ||
+      item.current_contract_week_id ||
+      item.currentContractWeekId ||
+      item.expected_contract_week_id ||
+      item.expectedContractWeekId ||
+      item.meta_json?.contract_week_id ||
+      item.meta_json?.contractWeekId ||
+      ''
+    );
     if (contractWeekId) return `contract_week:${contractWeekId}`;
     return '';
   };
@@ -141640,10 +142095,17 @@ function bindBulkProcessPreviewPane(state) {
 
     const activeContractWeekId = trimStr(
       st.active_row?.contract_week_id ||
+      st.active_row?.contractWeekId ||
+      st.active_details?.contract_week_id ||
+      st.active_details?.contract_week?.id ||
       st.active_ctx?.row?.contract_week_id ||
+      st.active_ctx?.row?.contractWeekId ||
       st.active_context?.row?.contract_week_id ||
+      st.active_context?.row?.contractWeekId ||
       st.active_context?.data_row?.contract_week_id ||
+      st.active_context?.data_row?.contractWeekId ||
       window.modalCtx?.data?.contract_week_id ||
+      window.modalCtx?.data?.contractWeekId ||
       ''
     );
     const itemContractWeekId = trimStr(item.contract_week_id || item.current_contract_week_id || item.expected_contract_week_id || '');
@@ -141675,7 +142137,17 @@ function bindBulkProcessPreviewPane(state) {
     const currentAttachedItem = (pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null;
     const currentAttachedId = trimStr(pane.active_attached_id || currentAttachedItem?.id || currentAttachedItem?.evidence_id || currentAttachedItem?.queue_id || '');
     const currentAttachedFileKey = resolvePreviewFileCacheKey(currentAttachedItem);
-    const idOf = (item) => trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
+    const idOf = (item) => trimStr(
+      item?.id ||
+      item?.evidence_id ||
+      item?.evidenceId ||
+      item?.queue_id ||
+      item?.queueId ||
+      item?.manual_timesheet_queue_id ||
+      item?.manualTimesheetQueueId ||
+      resolvePreviewFileCacheKey(item) ||
+      ''
+    );
     const fileKeyOf = (item) => resolvePreviewFileCacheKey(item);
 
     let selected = currentAttachedId
@@ -141702,7 +142174,30 @@ function bindBulkProcessPreviewPane(state) {
       currentAttachedFileKey !== selectedFileKey ||
       currentSelectionKey !== selectedSelectionKey
     );
-    if (!changed) return false;
+    if (!changed) {
+      const liveTargetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+      const liveRequestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
+      if (liveTargetKey !== selectedSelectionKey || liveRequestedKey !== selectedSelectionKey) {
+        pane.active_tab = 'attached';
+        pane.__attached_manual_override = true;
+        pane.__queue_manual_override = false;
+        pane.active_queue_id = null;
+        pane.active_queue_item = null;
+        markPreviewLoadRequested(selectedSelectionKey);
+        pane.__active_attached_preview_target = selectedSelectionKey;
+        if (liveTargetKey && liveTargetKey !== selectedSelectionKey) {
+          clearPreviewRequestState({
+            clearRequested: true,
+            abort: true,
+            reason: 'bulk-process-attached-selection-retargeted',
+            userSelectionChanged: true
+          });
+          markPreviewLoadRequested(selectedSelectionKey);
+        }
+        return true;
+      }
+      return false;
+    }
 
     pane.active_tab = 'attached';
     pane.__attached_manual_override = true;
@@ -141724,6 +142219,7 @@ function bindBulkProcessPreviewPane(state) {
       });
     }
     markPreviewLoadRequested(selectedSelectionKey);
+    pane.__active_attached_preview_target = selectedSelectionKey;
     return true;
   };
 
@@ -141933,7 +142429,18 @@ function bindBulkProcessPreviewPane(state) {
     strip.style.display = 'flex';
 
     const cards = attachedRows.map((item) => {
-      const itemId = trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
+      const fileKey = resolvePreviewFileCacheKey(item);
+      const itemId = trimStr(
+        item?.id ||
+        item?.evidence_id ||
+        item?.evidenceId ||
+        item?.queue_id ||
+        item?.queueId ||
+        item?.manual_timesheet_queue_id ||
+        item?.manualTimesheetQueueId ||
+        fileKey ||
+        ''
+      );
       const isActive = !!itemId && itemId === activeAttachedId;
       const fileName = trimStr(item?.filename || item?.display_name || item?.original_filename || 'Evidence') || 'Evidence';
       const kind = trimStr(item?.kind || item?.staged_kind || '');
@@ -141941,7 +142448,6 @@ function bindBulkProcessPreviewPane(state) {
       const pageCount = (pageCountRaw != null && Number.isFinite(Number(pageCountRaw)) && Number(pageCountRaw) > 0)
         ? Math.floor(Number(pageCountRaw))
         : null;
-      const fileKey = resolvePreviewFileCacheKey(item);
       const previewType = getBulkProcessPreviewTypeParts(item, fileKey);
       const sourceLabel = trimStr(item?.source_label || item?.source_badge || '');
       const icon = (() => {
@@ -142000,18 +142506,55 @@ function bindBulkProcessPreviewPane(state) {
         if (ev.target && ev.target.closest('[data-bp-preview-attached-remove="1"]')) return;
         const attachedId = trimStr(btn.getAttribute('data-attached-id') || '');
         if (!attachedId) return;
+        const attachedRows = Array.isArray(pane.attached_rows) ? pane.attached_rows : [];
+        const activeItem = attachedRows.find((row) => {
+          const rowId = trimStr(
+            row?.id ||
+            row?.evidence_id ||
+            row?.evidenceId ||
+            row?.queue_id ||
+            row?.queueId ||
+            row?.manual_timesheet_queue_id ||
+            row?.manualTimesheetQueueId ||
+            resolvePreviewFileCacheKey(row) ||
+            ''
+          );
+          return rowId === attachedId;
+        }) || null;
+        if (!activeItem) return;
+        const selectionKey = getSelectionSignature('attached', activeItem);
+        const liveTargetKey = normalisePreviewSelectionKey(pane.__preview_target_key || '');
+        const liveRequestedKey = normalisePreviewSelectionKey(pane.__preview_load_requested_target_key || '');
         const sameAttached = trimStr(pane.active_attached_id || '') === attachedId;
         const alreadyAttachedMode = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached';
-        if (sameAttached && alreadyAttachedMode) return;
+        const alreadyTargeted = !!(
+          sameAttached &&
+          alreadyAttachedMode &&
+          selectionKey &&
+          liveTargetKey === selectionKey &&
+          (!liveRequestedKey || liveRequestedKey === selectionKey)
+        );
+        if (alreadyTargeted) return;
         pane.active_tab = 'attached';
         pane.__attached_manual_override = true;
         pane.__queue_manual_override = false;
+        pane.active_queue_id = null;
+        pane.active_queue_item = null;
         pane.active_attached_id = attachedId;
-        const attachedRows = Array.isArray(pane.attached_rows) ? pane.attached_rows : [];
-        const activeItem = attachedRows.find((row) => trimStr(row?.id || row?.evidence_id || row?.queue_id || '') === attachedId) || null;
-        pane.active_attached_item = activeItem ? { ...deep(activeItem) } : null;
+        pane.active_attached_item = { ...deep(activeItem) };
         pane.active_attached_pdf_page = 1;
-        markPreviewLoadRequested(getSelectionSignature('attached', activeItem));
+        if (selectionKey) {
+          if (liveTargetKey && liveTargetKey !== selectionKey) {
+            clearPreviewRequestState({
+              clearRequested: true,
+              abort: true,
+              reason: 'preview-attached-thumb-selected',
+              userSelectionChanged: true
+            });
+          }
+          pane.__active_attached_preview_target = selectionKey;
+          markPreviewLoadRequested(selectionKey);
+        }
         await rerenderWorkbench('preview-attached-thumb');
       });
     });
@@ -148347,6 +148890,10 @@ function ensureBulkAuthoriseManualDraftState(state) {
   return controller;
 }
 
+
+
+
+
 function bindBulkProcessEvidencePane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -148607,25 +149154,243 @@ function bindBulkProcessEvidencePane(state) {
     return list;
   };
 
+
+  const getAttachedEvidenceId = (item) => {
+    if (!item || typeof item !== 'object') return '';
+    return pickFirst(item.evidence_id, item.id, item.queue_id, item.queueId, item.storage_key, item.r2_key, item.file_key, item.download_storage_key);
+  };
+
+  const getAttachedEvidenceFileKey = (item) => {
+    if (!item || typeof item !== 'object') return '';
+    return pickFirst(item.storage_key, item.file_key, item.download_storage_key, item.r2_key, item.storageKey, item.fileKey, item.downloadStorageKey, item.r2Key);
+  };
+
+  const buildAttachedPreviewSelectionKey = (item) => {
+    const targetId = getAttachedEvidenceId(item);
+    const fileKey = getAttachedEvidenceFileKey(item);
+    return (targetId || fileKey) ? `attached|${targetId}|${fileKey}` : '';
+  };
+
+  const normaliseAttachedEvidenceRow = (itemLike = {}, fallback = {}) => {
+    const raw = (itemLike && typeof itemLike === 'object') ? itemLike : {};
+    const fb = (fallback && typeof fallback === 'object') ? fallback : {};
+    const staged = normaliseStagedContractWeekEvidenceItem(raw, fb);
+    if (staged) return staged;
+
+    const kind = normaliseEvidenceKind(raw.kind || raw.evidence_kind || raw.evidenceKind || fb.kind || fb.evidence_kind || fb.evidenceKind || 'OTHER') || 'OTHER';
+    if (!allKinds.includes(kind)) return null;
+
+    const evidenceId = pickFirst(raw.evidence_id, raw.evidenceId, raw.id, fb.evidence_id, fb.evidenceId, fb.id);
+    const queueId = pickFirst(raw.queue_id, raw.queueId, fb.queue_id, fb.queueId);
+    const storageKey = pickFirst(
+      raw.storage_key,
+      raw.file_key,
+      raw.download_storage_key,
+      raw.r2_key,
+      raw.storageKey,
+      raw.fileKey,
+      raw.downloadStorageKey,
+      raw.r2Key,
+      fb.storage_key,
+      fb.file_key,
+      fb.download_storage_key,
+      fb.r2_key,
+      fb.storageKey,
+      fb.fileKey,
+      fb.downloadStorageKey,
+      fb.r2Key
+    );
+    const id = evidenceId || queueId || storageKey;
+    if (!id && !storageKey) return null;
+
+    const filename = pickFirst(
+      raw.display_name,
+      raw.displayName,
+      raw.filename,
+      raw.original_filename,
+      raw.originalFilename,
+      fb.display_name,
+      fb.displayName,
+      fb.filename,
+      fb.original_filename,
+      fb.originalFilename
+    ) || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence');
+    const mimeType = pickFirst(raw.mime_type, raw.mimeType, raw.content_type, raw.contentType, fb.mime_type, fb.mimeType, fb.content_type, fb.contentType);
+    const previewMode = deriveEvidencePreviewMode({ ...fb, ...raw, mime_type: mimeType, storage_key: storageKey, r2_key: storageKey, filename });
+
+    return {
+      ...deep(fb),
+      ...deep(raw),
+      id,
+      evidence_id: raw.evidence_id || raw.evidenceId || evidenceId || null,
+      queue_id: queueId || raw.queue_id || raw.queueId || null,
+      kind,
+      display_name: filename,
+      filename,
+      original_filename: pickFirst(raw.original_filename, raw.originalFilename, fb.original_filename, fb.originalFilename, filename) || filename,
+      storage_key: storageKey || null,
+      r2_key: pickFirst(raw.r2_key, raw.r2Key, storageKey) || null,
+      file_key: pickFirst(raw.file_key, raw.fileKey, storageKey) || null,
+      download_storage_key: pickFirst(raw.download_storage_key, raw.downloadStorageKey, storageKey) || null,
+      mime_type: mimeType || null,
+      content_type: pickFirst(raw.content_type, raw.contentType, mimeType) || null,
+      preview_mode: previewMode,
+      preview_kind: previewMode,
+      source_label: trimStr(raw.source_label || raw.sourceLabel || fb.source_label || '') || 'Attached',
+      source_badge: trimStr(raw.source_badge || raw.sourceBadge || fb.source_badge || '') || 'Attached'
+    };
+  };
+
+  const normaliseAttachedEvidenceRows = (rows = []) => {
+    const out = [];
+    const seen = new Set();
+    for (const row of (Array.isArray(rows) ? rows : [])) {
+      const item = normaliseAttachedEvidenceRow(row);
+      if (!item) continue;
+      const key = getEvidenceIdentityKey(item) || buildAttachedPreviewSelectionKey(item);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      out.push(item);
+    }
+    return out;
+  };
+
+  const buildEvidenceAuthorityPatch = (rows = []) => {
+    const evidenceRows = normaliseAttachedEvidenceRows(rows);
+    const hasByKind = new Map();
+    for (const item of evidenceRows) {
+      const kind = normaliseEvidenceKind(item?.kind || item?.staged_kind || '');
+      if (kind) hasByKind.set(kind, true);
+    }
+    const evidenceBadges = allKinds.map((kind) => ({
+      kind,
+      has_evidence: !!hasByKind.get(kind),
+      present: !!hasByKind.get(kind),
+      count: hasByKind.get(kind) ? evidenceRows.filter((item) => normaliseEvidenceKind(item?.kind || item?.staged_kind || '') === kind).length : 0
+    }));
+    const hasAnyEvidence = evidenceRows.length > 0;
+    const primaryEvidence = evidenceRows.find((item) => normaliseEvidenceKind(item?.kind || item?.staged_kind || '') === 'TIMESHEET') || evidenceRows[0] || null;
+    const primaryStorageKey = primaryEvidence ? getAttachedEvidenceFileKey(primaryEvidence) : '';
+    return {
+      evidenceRows,
+      evidenceBadges,
+      hasAnyEvidence,
+      attachedEvidenceCount: evidenceRows.length,
+      primaryEvidence,
+      primaryArtifactId: primaryEvidence ? (getAttachedEvidenceId(primaryEvidence) || null) : null,
+      primaryArtifactKind: primaryEvidence ? (normaliseEvidenceKind(primaryEvidence.kind || primaryEvidence.staged_kind || '') || null) : null,
+      primaryArtifactStorageKey: primaryStorageKey || null,
+      primaryArtifactPreviewMode: primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || deriveEvidencePreviewMode(primaryEvidence)) : null
+    };
+  };
+
+  const applyEvidenceAuthorityPatchToObject = (obj, patch) => {
+    if (!obj || typeof obj !== 'object' || !patch || typeof patch !== 'object') return obj;
+    obj.evidence = patch.evidenceRows.map((item) => ({ ...deep(item) }));
+    obj.evidence_loaded = true;
+    obj.evidence_authoritative = true;
+    obj.include_evidence = true;
+    obj.has_any_evidence = patch.hasAnyEvidence;
+    obj.has_attached_evidence = patch.hasAnyEvidence;
+    obj.attached_evidence_count = patch.attachedEvidenceCount;
+    obj.evidence_badges = patch.evidenceBadges.map((badge) => ({ ...badge }));
+    obj.primary_artifact_id = patch.primaryArtifactId;
+    obj.primary_artifact_kind = patch.primaryArtifactKind;
+    obj.primary_artifact_storage_key = patch.primaryArtifactStorageKey;
+    obj.primary_artifact_preview_mode = patch.primaryArtifactPreviewMode;
+    obj.primary_artifact = patch.primaryEvidence ? { ...deep(patch.primaryEvidence) } : null;
+    obj.evidence_meta = {
+      ...((obj.evidence_meta && typeof obj.evidence_meta === 'object') ? obj.evidence_meta : {}),
+      evidence_loaded: true,
+      has_any_evidence: patch.hasAnyEvidence,
+      attached_evidence_count: patch.attachedEvidenceCount,
+      evidence_badges: patch.evidenceBadges.map((badge) => ({ ...badge }))
+    };
+    obj.artifact_hints = {
+      ...((obj.artifact_hints && typeof obj.artifact_hints === 'object') ? obj.artifact_hints : {}),
+      has_any_evidence: patch.hasAnyEvidence,
+      attached_evidence_count: patch.attachedEvidenceCount,
+      primary_artifact_storage_key: patch.primaryArtifactStorageKey,
+      primary_artifact_display_name: patch.primaryEvidence ? (patch.primaryEvidence.display_name || patch.primaryEvidence.filename || null) : null,
+      primary_artifact_preview_mode: patch.primaryArtifactPreviewMode,
+      primary_artifact: patch.primaryEvidence ? { ...deep(patch.primaryEvidence) } : null,
+      evidence_badges: patch.evidenceBadges.map((badge) => ({ ...badge }))
+    };
+    obj.action_flags = {
+      ...((obj.action_flags && typeof obj.action_flags === 'object') ? obj.action_flags : {}),
+      has_any_evidence: patch.hasAnyEvidence,
+      attached_evidence_count: patch.attachedEvidenceCount,
+      evidence_badges: patch.evidenceBadges.map((badge) => ({ ...badge }))
+    };
+    return obj;
+  };
+
+  const selectAttachedEvidenceItem = (itemLike = null, selectOptions = {}) => {
+    const opts = (selectOptions && typeof selectOptions === 'object') ? selectOptions : {};
+    const candidate = normaliseAttachedEvidenceRow(itemLike || {});
+    const fallbackRows = normaliseAttachedEvidenceRows([
+      ...(Array.isArray(pane.attached_rows) ? pane.attached_rows : []),
+      ...(Array.isArray(pane.attached_all_rows) ? pane.attached_all_rows : [])
+    ]);
+    let item = candidate;
+    if (!item && opts.allowFirst !== false) item = fallbackRows[0] || null;
+    if (!item) {
+      if (opts.forceAttached === true) {
+        pane.active_tab = 'attached';
+        pane.active_attached_id = null;
+        pane.active_attached_item = null;
+        pane.active_attached_pdf_page = 1;
+        pane.__attached_manual_override = true;
+        pane.__queue_manual_override = false;
+        pane.__queue_manual_override_identity = '';
+        pane.__queue_manual_override_scope = '';
+      }
+      return null;
+    }
+
+    pane.attached_rows = mergeEvidenceRows(pane.attached_rows, item);
+    pane.attached_all_rows = mergeEvidenceRows(pane.attached_all_rows, item);
+    const attachedRows = normaliseAttachedEvidenceRows(pane.attached_rows);
+    const selectedId = getAttachedEvidenceId(item);
+    const selected = attachedRows.find((row) => getAttachedEvidenceId(row) === selectedId) || item;
+    const targetId = getAttachedEvidenceId(selected);
+    const fileKey = getAttachedEvidenceFileKey(selected);
+    const selectionKey = buildAttachedPreviewSelectionKey(selected);
+
+    pane.active_tab = 'attached';
+    pane.active_attached_id = targetId || null;
+    pane.active_attached_item = { ...deep(selected) };
+    pane.active_attached_pdf_page = Number(pane.active_attached_pdf_page || 1) || 1;
+    pane.__attached_manual_override = true;
+    pane.__queue_manual_override = false;
+    pane.__queue_manual_override_identity = '';
+    pane.__queue_manual_override_scope = '';
+    if (opts.clearQueue !== false) {
+      pane.active_queue_id = null;
+      pane.active_queue_item = null;
+    }
+    if (selectionKey) {
+      const previousTarget = trimStr(pane.__preview_target_key || '');
+      pane.__preview_target_key = selectionKey;
+      pane.__preview_load_requested_target_key = selectionKey;
+      pane.__active_attached_preview_target = selectionKey;
+      if (previousTarget !== selectionKey || !trimStr(pane.__preview_signed_url || '')) pane.__preview_signed_url = '';
+    } else {
+      pane.__preview_target_key = '';
+      pane.__preview_load_requested_target_key = '';
+      pane.__active_attached_preview_target = '';
+      pane.__preview_signed_url = '';
+    }
+    return { ...deep(selected), id: targetId || selected.id || null, storage_key: fileKey || selected.storage_key || null };
+  };
+
   const upsertLocalStagedContractWeekEvidence = (itemLike, fallback = {}) => {
     const item = normaliseStagedContractWeekEvidenceItem(itemLike, fallback);
     if (!item) return null;
     const scope = resolveActiveContractWeekEvidenceScope();
     if (!scope.isContractWeekOnly || item.contract_week_id !== scope.contractWeekId) return null;
 
-    pane.attached_rows = mergeEvidenceRows(pane.attached_rows, item);
-    pane.attached_all_rows = mergeEvidenceRows(pane.attached_all_rows, item);
-    pane.active_attached_id = trimStr(item.id || item.queue_id || '') || null;
-    pane.active_attached_item = { ...deep(item) };
-    pane.active_tab = 'attached';
-    pane.__attached_manual_override = true;
-    pane.__queue_manual_override = false;
-    pane.__queue_manual_override_identity = '';
-    pane.active_queue_id = null;
-    pane.active_queue_item = null;
-    pane.__preview_target_key = `attached|${trimStr(item.id || item.queue_id || item.storage_key || '')}`;
-    pane.__preview_signed_url = '';
-    pane.__preview_load_requested_target_key = '';
+    selectAttachedEvidenceItem(item, { forceAttached: true, clearQueue: true });
 
     const ensureEvidenceOnObject = (obj, path = 'evidence') => {
       if (!obj || typeof obj !== 'object') return;
@@ -148855,14 +149620,12 @@ function bindBulkProcessEvidencePane(state) {
     const item = tab === 'attached'
       ? ((pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null)
       : ((pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null);
-    const itemId = trimStr(
-      (tab === 'attached' ? pane.active_attached_id : pane.active_queue_id) ||
-      item?.id ||
-      item?.evidence_id ||
-      item?.queue_id ||
-      ''
-    );
-    const fileKey = trimStr(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || '');
+    const itemId = tab === 'attached'
+      ? (getAttachedEvidenceId(item) || trimStr(pane.active_attached_id || ''))
+      : trimStr((pane.active_queue_id || item?.id || item?.queue_id || '') || '');
+    const fileKey = tab === 'attached'
+      ? getAttachedEvidenceFileKey(item)
+      : trimStr(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || '');
     return `${tab}|${itemId}|${fileKey}`;
   };
 
@@ -149510,6 +150273,17 @@ function bindBulkProcessEvidencePane(state) {
         ? deep(contextPayload.evidence)
         : (Array.isArray(detailsPayload.evidence) ? deep(detailsPayload.evidence) : []);
       if (localItem) evidenceRows = mergeEvidenceRows(evidenceRows, localItem);
+      evidenceRows = normaliseAttachedEvidenceRows(evidenceRows);
+      const evidenceAuthorityPatch = buildEvidenceAuthorityPatch(evidenceRows);
+      pane.attached_rows = evidenceAuthorityPatch.evidenceRows.map((item) => ({ ...deep(item) }));
+      pane.attached_all_rows = evidenceAuthorityPatch.evidenceRows.map((item) => ({ ...deep(item) }));
+      if (pane.__attached_manual_override === true || trimStr(pane.active_tab || '').toLowerCase() === 'attached') {
+        const wantedAttachedId = trimStr(pane.active_attached_id || pane.active_attached_item?.id || pane.active_attached_item?.evidence_id || pane.active_attached_item?.queue_id || '');
+        const wantedAttached = wantedAttachedId
+          ? evidenceAuthorityPatch.evidenceRows.find((item) => getAttachedEvidenceId(item) === wantedAttachedId) || null
+          : null;
+        selectAttachedEvidenceItem(wantedAttached || evidenceAuthorityPatch.evidenceRows[0] || null, { forceAttached: true, clearQueue: true });
+      }
 
       const existingDetails = (st.active_details && typeof st.active_details === 'object') ? deep(st.active_details) : {};
       const existingContext = (st.active_context && typeof st.active_context === 'object') ? deep(st.active_context) : {};
@@ -149566,6 +150340,32 @@ function bindBulkProcessEvidencePane(state) {
         evidence: evidenceRows,
         evidence_loaded: true,
         evidence_authoritative: true,
+        has_any_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+        has_attached_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+        attached_evidence_count: evidenceAuthorityPatch.attachedEvidenceCount,
+        evidence_badges: evidenceAuthorityPatch.evidenceBadges.map((badge) => ({ ...badge })),
+        evidence_meta: {
+          ...((existingDetails.evidence_meta && typeof existingDetails.evidence_meta === 'object') ? existingDetails.evidence_meta : {}),
+          evidence_loaded: true,
+          has_any_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+          attached_evidence_count: evidenceAuthorityPatch.attachedEvidenceCount,
+          evidence_badges: evidenceAuthorityPatch.evidenceBadges.map((badge) => ({ ...badge }))
+        },
+        artifact_hints: {
+          ...((existingDetails.artifact_hints && typeof existingDetails.artifact_hints === 'object') ? existingDetails.artifact_hints : {}),
+          has_any_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+          attached_evidence_count: evidenceAuthorityPatch.attachedEvidenceCount,
+          primary_artifact_storage_key: evidenceAuthorityPatch.primaryArtifactStorageKey,
+          primary_artifact_display_name: evidenceAuthorityPatch.primaryEvidence ? (evidenceAuthorityPatch.primaryEvidence.display_name || evidenceAuthorityPatch.primaryEvidence.filename || null) : null,
+          primary_artifact_preview_mode: evidenceAuthorityPatch.primaryArtifactPreviewMode,
+          primary_artifact: evidenceAuthorityPatch.primaryEvidence ? { ...deep(evidenceAuthorityPatch.primaryEvidence) } : null,
+          evidence_badges: evidenceAuthorityPatch.evidenceBadges.map((badge) => ({ ...badge }))
+        },
+        primary_artifact: evidenceAuthorityPatch.primaryEvidence ? { ...deep(evidenceAuthorityPatch.primaryEvidence) } : null,
+        primary_artifact_id: evidenceAuthorityPatch.primaryArtifactId,
+        primary_artifact_kind: evidenceAuthorityPatch.primaryArtifactKind,
+        primary_artifact_storage_key: evidenceAuthorityPatch.primaryArtifactStorageKey,
+        primary_artifact_preview_mode: evidenceAuthorityPatch.primaryArtifactPreviewMode,
         include_evidence: true,
         evidence_context_profile: 'evidence',
         context_profile: preservedProfile,
@@ -149587,6 +150387,32 @@ function bindBulkProcessEvidencePane(state) {
           evidence: evidenceRows,
           evidence_loaded: true,
           evidence_authoritative: true,
+          has_any_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+          has_attached_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+          attached_evidence_count: evidenceAuthorityPatch.attachedEvidenceCount,
+          evidence_badges: evidenceAuthorityPatch.evidenceBadges.map((badge) => ({ ...badge })),
+          evidence_meta: {
+            ...((existingContext.details?.evidence_meta && typeof existingContext.details.evidence_meta === 'object') ? existingContext.details.evidence_meta : {}),
+            evidence_loaded: true,
+            has_any_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+            attached_evidence_count: evidenceAuthorityPatch.attachedEvidenceCount,
+            evidence_badges: evidenceAuthorityPatch.evidenceBadges.map((badge) => ({ ...badge }))
+          },
+          artifact_hints: {
+            ...((existingContext.details?.artifact_hints && typeof existingContext.details.artifact_hints === 'object') ? existingContext.details.artifact_hints : {}),
+            has_any_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+            attached_evidence_count: evidenceAuthorityPatch.attachedEvidenceCount,
+            primary_artifact_storage_key: evidenceAuthorityPatch.primaryArtifactStorageKey,
+            primary_artifact_display_name: evidenceAuthorityPatch.primaryEvidence ? (evidenceAuthorityPatch.primaryEvidence.display_name || evidenceAuthorityPatch.primaryEvidence.filename || null) : null,
+            primary_artifact_preview_mode: evidenceAuthorityPatch.primaryArtifactPreviewMode,
+            primary_artifact: evidenceAuthorityPatch.primaryEvidence ? { ...deep(evidenceAuthorityPatch.primaryEvidence) } : null,
+            evidence_badges: evidenceAuthorityPatch.evidenceBadges.map((badge) => ({ ...badge }))
+          },
+          primary_artifact: evidenceAuthorityPatch.primaryEvidence ? { ...deep(evidenceAuthorityPatch.primaryEvidence) } : null,
+          primary_artifact_id: evidenceAuthorityPatch.primaryArtifactId,
+          primary_artifact_kind: evidenceAuthorityPatch.primaryArtifactKind,
+          primary_artifact_storage_key: evidenceAuthorityPatch.primaryArtifactStorageKey,
+          primary_artifact_preview_mode: evidenceAuthorityPatch.primaryArtifactPreviewMode,
           context_profile: preservedProfile,
           profile: preservedProfile,
           loaded_layers: loadedLayers
@@ -149594,6 +150420,32 @@ function bindBulkProcessEvidencePane(state) {
         evidence: evidenceRows,
         evidence_loaded: true,
         evidence_authoritative: true,
+        has_any_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+        has_attached_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+        attached_evidence_count: evidenceAuthorityPatch.attachedEvidenceCount,
+        evidence_badges: evidenceAuthorityPatch.evidenceBadges.map((badge) => ({ ...badge })),
+        evidence_meta: {
+          ...((existingContext.evidence_meta && typeof existingContext.evidence_meta === 'object') ? existingContext.evidence_meta : {}),
+          evidence_loaded: true,
+          has_any_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+          attached_evidence_count: evidenceAuthorityPatch.attachedEvidenceCount,
+          evidence_badges: evidenceAuthorityPatch.evidenceBadges.map((badge) => ({ ...badge }))
+        },
+        artifact_hints: {
+          ...((existingContext.artifact_hints && typeof existingContext.artifact_hints === 'object') ? existingContext.artifact_hints : {}),
+          has_any_evidence: evidenceAuthorityPatch.hasAnyEvidence,
+          attached_evidence_count: evidenceAuthorityPatch.attachedEvidenceCount,
+          primary_artifact_storage_key: evidenceAuthorityPatch.primaryArtifactStorageKey,
+          primary_artifact_display_name: evidenceAuthorityPatch.primaryEvidence ? (evidenceAuthorityPatch.primaryEvidence.display_name || evidenceAuthorityPatch.primaryEvidence.filename || null) : null,
+          primary_artifact_preview_mode: evidenceAuthorityPatch.primaryArtifactPreviewMode,
+          primary_artifact: evidenceAuthorityPatch.primaryEvidence ? { ...deep(evidenceAuthorityPatch.primaryEvidence) } : null,
+          evidence_badges: evidenceAuthorityPatch.evidenceBadges.map((badge) => ({ ...badge }))
+        },
+        primary_artifact: evidenceAuthorityPatch.primaryEvidence ? { ...deep(evidenceAuthorityPatch.primaryEvidence) } : null,
+        primary_artifact_id: evidenceAuthorityPatch.primaryArtifactId,
+        primary_artifact_kind: evidenceAuthorityPatch.primaryArtifactKind,
+        primary_artifact_storage_key: evidenceAuthorityPatch.primaryArtifactStorageKey,
+        primary_artifact_preview_mode: evidenceAuthorityPatch.primaryArtifactPreviewMode,
         include_evidence: true,
         evidence_context_profile: 'evidence',
         context_profile: preservedProfile,
@@ -149616,6 +150468,7 @@ function bindBulkProcessEvidencePane(state) {
         st.active_ctx.evidence = deep(evidenceRows);
         st.active_ctx.evidence_loaded = true;
         st.active_ctx.evidence_authoritative = true;
+        applyEvidenceAuthorityPatchToObject(st.active_ctx, evidenceAuthorityPatch);
         st.active_ctx.profile = preservedProfile;
         st.active_ctx.context_profile = preservedProfile;
         st.active_ctx.editor_loaded = editorLayerLoaded;
@@ -149626,6 +150479,7 @@ function bindBulkProcessEvidencePane(state) {
         st.active_ctx.state.evidence = deep(evidenceRows);
         st.active_ctx.state.evidence_loaded = true;
         st.active_ctx.state.evidence_authoritative = true;
+        applyEvidenceAuthorityPatchToObject(st.active_ctx.state, evidenceAuthorityPatch);
         st.active_ctx.state.context_profile = preservedProfile;
         st.active_ctx.state.profile = preservedProfile;
         st.active_ctx.state.editor_loaded = editorLayerLoaded;
@@ -149636,6 +150490,15 @@ function bindBulkProcessEvidencePane(state) {
       st.active_context_profile = preservedProfile;
       st.__active_context_is_minimal = editorLayerLoaded ? false : st.__active_context_is_minimal === true;
       if (localItem) upsertLocalStagedContractWeekEvidence(localItem);
+      applyEvidenceAuthorityPatchToObject(st.active_row, evidenceAuthorityPatch);
+      applyEvidenceAuthorityPatchToObject(st.active_details, evidenceAuthorityPatch);
+      applyEvidenceAuthorityPatchToObject(st.active_context, evidenceAuthorityPatch);
+      if (st.active_context?.details) applyEvidenceAuthorityPatchToObject(st.active_context.details, evidenceAuthorityPatch);
+      if (st.active_context?.row) applyEvidenceAuthorityPatchToObject(st.active_context.row, evidenceAuthorityPatch);
+      if (st.active_context?.data_row) applyEvidenceAuthorityPatchToObject(st.active_context.data_row, evidenceAuthorityPatch);
+      window.modalCtx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+      window.modalCtx.timesheetState = (window.modalCtx.timesheetState && typeof window.modalCtx.timesheetState === 'object') ? window.modalCtx.timesheetState : {};
+      applyEvidenceAuthorityPatchToObject(window.modalCtx.timesheetState, evidenceAuthorityPatch);
       if (!isBulkAuthoriseContext) {
         clearBulkProcessPostAttachHydrationFlags();
         pane.__requires_evidence_hydration = false;
@@ -149877,11 +150740,10 @@ function bindBulkProcessEvidencePane(state) {
         ? attachedRows.find((item) => trimStr(item.id || item.evidence_id || '') === currentAttachedId) || null
         : null;
       if (!activeAttached) activeAttached = attachedRows.find((item) => upper(item.kind) === 'TIMESHEET') || attachedRows[0] || null;
+      activeAttached = normaliseAttachedEvidenceRow(activeAttached) || activeAttached;
       st.evidence_pane_state.active_attached_item = activeAttached ? { ...deep(activeAttached) } : null;
-      st.evidence_pane_state.active_attached_id = activeAttached ? (trimStr(activeAttached.evidence_id || activeAttached.id || activeAttached.queue_id || '') || null) : null;
-      const activeFileKey = trimStr(activeAttached?.storage_key || activeAttached?.r2_key || activeAttached?.file_key || activeAttached?.download_storage_key || '');
-      const activeTargetId = trimStr(st.evidence_pane_state.active_attached_id || activeAttached?.id || activeAttached?.evidence_id || activeAttached?.queue_id || '');
-      const attachedSelectionKey = activeAttached ? `attached|${activeTargetId}|${activeFileKey}` : '';
+      st.evidence_pane_state.active_attached_id = activeAttached ? (getAttachedEvidenceId(activeAttached) || null) : null;
+      const attachedSelectionKey = activeAttached ? buildAttachedPreviewSelectionKey(activeAttached) : '';
       st.evidence_pane_state.active_tab = 'attached';
       st.evidence_pane_state.__attached_manual_override = true;
       st.evidence_pane_state.pendingAttached = false;
@@ -150067,6 +150929,13 @@ function bindBulkProcessEvidencePane(state) {
         pane.__queue_manual_override_identity = '';
         pane.__queue_manual_override_scope = '';
         pane.active_tab = 'attached';
+        syncActiveRowEvidencePresence();
+        const rowsBeforeRefresh = getAuthoritativeAttachedRows();
+        const wantedAttachedId = trimStr(pane.active_attached_id || pane.active_attached_item?.id || pane.active_attached_item?.evidence_id || pane.active_attached_item?.queue_id || '');
+        const selectedBeforeRefresh = wantedAttachedId
+          ? rowsBeforeRefresh.find((item) => getAttachedEvidenceId(item) === wantedAttachedId) || null
+          : null;
+        selectAttachedEvidenceItem(selectedBeforeRefresh || rowsBeforeRefresh[0] || null, { forceAttached: true, clearQueue: true });
         const reconcileBeforeRefresh = reconcileEvidenceState();
         if (isBulkAuthoriseContext && reconcileBeforeRefresh?.requires_evidence_hydration === true) {
           try {
@@ -150081,7 +150950,13 @@ function bindBulkProcessEvidencePane(state) {
           clearBulkProcessPostAttachHydrationFlags();
           pane.__requires_evidence_hydration = false;
         }
+        syncActiveRowEvidencePresence();
         reconcileEvidenceState();
+        const rowsAfterRefresh = getAuthoritativeAttachedRows();
+        const selectedAfterRefresh = wantedAttachedId
+          ? rowsAfterRefresh.find((item) => getAttachedEvidenceId(item) === wantedAttachedId) || null
+          : null;
+        selectAttachedEvidenceItem(selectedAfterRefresh || rowsAfterRefresh[0] || null, { forceAttached: true, clearQueue: true });
         const afterSignature = capturePaneSignature();
         if (beforeSignature !== afterSignature) {
           await rerenderWorkbench(`evidence-attached-tab${reason ? `-${reason}` : ''}`);
@@ -150388,6 +151263,36 @@ function bindBulkProcessEvidencePane(state) {
         pane.pending_attach_kind = upper(kindSelect.value || '');
       });
     }
+
+
+    root.querySelectorAll('[data-bp-preview-attached-thumb]').forEach((thumb) => {
+      if (!thumb || thumb.dataset.boundBulkProcessAttachedSelect === '1') return;
+      thumb.dataset.boundBulkProcessAttachedSelect = '1';
+      thumb.addEventListener('click', async (event) => {
+        if (event?.target?.closest && event.target.closest('[data-bp-preview-attached-remove]')) return;
+        if (!isActiveBind()) return;
+        const attachedId = trimStr(thumb.dataset.attachedId || thumb.dataset.evidenceId || thumb.dataset.queueId || '');
+        const rows = getAuthoritativeAttachedRows();
+        const selected = attachedId
+          ? rows.find((item) => getAttachedEvidenceId(item) === attachedId || trimStr(item.id || '') === attachedId || trimStr(item.evidence_id || '') === attachedId || trimStr(item.queue_id || '') === attachedId) || null
+          : null;
+        if (!selected && attachedId) {
+          const fallbackRows = normaliseAttachedEvidenceRows([...(Array.isArray(pane.attached_rows) ? pane.attached_rows : []), ...(Array.isArray(pane.attached_all_rows) ? pane.attached_all_rows : [])]);
+          const fallbackSelected = fallbackRows.find((item) => getAttachedEvidenceId(item) === attachedId || trimStr(item.id || '') === attachedId || trimStr(item.evidence_id || '') === attachedId || trimStr(item.queue_id || '') === attachedId) || null;
+          if (fallbackSelected) selectAttachedEvidenceItem(fallbackSelected, { forceAttached: true, clearQueue: true });
+        } else {
+          selectAttachedEvidenceItem(selected || rows[0] || null, { forceAttached: true, clearQueue: true });
+        }
+        syncActiveRowEvidencePresence();
+        reconcileEvidenceState();
+        const finalRows = getAuthoritativeAttachedRows();
+        const finalSelected = attachedId
+          ? finalRows.find((item) => getAttachedEvidenceId(item) === attachedId || trimStr(item.id || '') === attachedId || trimStr(item.evidence_id || '') === attachedId || trimStr(item.queue_id || '') === attachedId) || null
+          : null;
+        if (finalSelected) selectAttachedEvidenceItem(finalSelected, { forceAttached: true, clearQueue: true });
+        await rerenderWorkbench('evidence-attached-thumb-select');
+      });
+    });
 
     const attachBtn = q('#bpQueueAttachBtn');
     if (attachBtn && attachBtn.dataset.bound !== '1') {
