@@ -155329,6 +155329,40 @@ async function handleBulkProcessProcess(state) {
   const hasValue = (value) => trimStr(value) !== '';
   const upper = (value) => trimStr(value).toUpperCase();
   const pickObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? deep(value) : {};
+  const processSigSnapshot = () => {
+    const active = (() => { try { return readActive(); } catch { return {}; } })();
+    const row = (active.row && typeof active.row === 'object') ? active.row : ((st.active_row && typeof st.active_row === 'object') ? st.active_row : {});
+    const ctxRow = (st.active_ctx?.row && typeof st.active_ctx.row === 'object') ? st.active_ctx.row : {};
+    const activeContextRow = (st.active_context?.row && typeof st.active_context.row === 'object') ? st.active_context.row : {};
+    const dataRow = (window.modalCtx?.data && typeof window.modalCtx.data === 'object') ? window.modalCtx.data : {};
+    return {
+      row_key: trimStr(row.row_key || st.active_row_key || dataRow.row_key || ''),
+      timesheet_id: trimStr(row.timesheet_id || row.current_timesheet_id || dataRow.timesheet_id || dataRow.current_timesheet_id || ''),
+      contract_week_id: trimStr(row.contract_week_id || dataRow.contract_week_id || ''),
+      active_row_signature: trimStr(st.active_row?.row_signature || ''),
+      active_ctx_row_signature: trimStr(ctxRow.row_signature || ''),
+      active_context_row_signature: trimStr(activeContextRow.row_signature || ''),
+      modal_data_row_signature: trimStr(dataRow.row_signature || ''),
+      stored_process_status_header_signature: trimStr(st.__bulk_process_process_status_header_row_signature || ''),
+      stored_fresh_process_signature: trimStr(st.__bulk_process_fresh_process_row_signature || ''),
+      allowed_process_signature: trimStr(st.__bulk_process_allowed_process_row_signature || ''),
+      allowed_process_reason: trimStr(st.__bulk_process_allowed_process_reason || '')
+    };
+  };
+  const sigLog = (phase, payload = {}) => {
+    if (window.__LOG_MODAL !== true) return;
+    console.log(`[TS][BULK-PROCESS][PROCESS][SIG][${phase}]`, {
+      ...((payload && typeof payload === 'object') ? payload : { payload }),
+      snapshot: processSigSnapshot()
+    });
+  };
+  const sigWarn = (phase, payload = {}) => {
+    if (window.__LOG_MODAL !== true) return;
+    console.warn(`[TS][BULK-PROCESS][PROCESS][SIG][${phase}]`, {
+      ...((payload && typeof payload === 'object') ? payload : { payload }),
+      snapshot: processSigSnapshot()
+    });
+  };
   const rowKeyOf = (row) => {
     const rowKey = trimStr(row?.row_key || '');
     if (rowKey) return rowKey;
@@ -155674,34 +155708,92 @@ async function handleBulkProcessProcess(state) {
   const maybeAttachOrStageQueueItem = async (active) => {
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
     const queueItem = (pane && String(pane.active_tab || 'queue') === 'queue' && pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    const queueId = trimStr(queueItem?.id || queueItem?.queue_id || '');
+    sigLog('QUEUE-ATTACH-CHECK', {
+      has_queue_item: !!queueId,
+      queue_id: queueId || null,
+      active_tab: trimStr(pane?.active_tab || ''),
+      target_timesheet_id: trimStr(active?.timesheetId || '') || null,
+      target_contract_week_id: trimStr(active?.contractWeekId || '') || null,
+      expected_timesheet_id: trimStr(active?.expectedTimesheetId || '') || null
+    });
     if (!queueItem?.id) return false;
     if (active.timesheetId && typeof attachQueueItemToTimesheetEvidence === 'function') {
+      sigLog('QUEUE-ATTACH-START', {
+        mode: 'timesheet',
+        queue_id: String(queueItem.id),
+        timesheet_id: String(active.timesheetId),
+        expected_timesheet_id: trimStr(active.expectedTimesheetId || active.timesheetId || '') || null
+      });
       await attachQueueItemToTimesheetEvidence(String(queueItem.id), {
         timesheet_id: String(active.timesheetId),
         expected_timesheet_id: active.expectedTimesheetId || active.timesheetId,
         kind: 'TIMESHEET'
       });
+      sigLog('QUEUE-ATTACH-DONE', {
+        mode: 'timesheet',
+        queue_id: String(queueItem.id),
+        timesheet_id: String(active.timesheetId),
+        expected_timesheet_id: trimStr(active.expectedTimesheetId || active.timesheetId || '') || null
+      });
       return true;
     }
     if (active.contractWeekId && typeof stageQueueItemToContractWeek === 'function') {
+      sigLog('QUEUE-ATTACH-START', {
+        mode: 'contract_week',
+        queue_id: String(queueItem.id),
+        contract_week_id: String(active.contractWeekId)
+      });
       await stageQueueItemToContractWeek(String(queueItem.id), {
         contract_week_id: String(active.contractWeekId),
         kind: 'TIMESHEET'
       });
+      sigLog('QUEUE-ATTACH-DONE', {
+        mode: 'contract_week',
+        queue_id: String(queueItem.id),
+        contract_week_id: String(active.contractWeekId)
+      });
       return true;
     }
+    sigLog('QUEUE-ATTACH-SKIP', {
+      reason: 'no-target-or-helper',
+      queue_id: queueId || null,
+      timesheet_id: trimStr(active?.timesheetId || '') || null,
+      contract_week_id: trimStr(active?.contractWeekId || '') || null
+    });
     return false;
   };
   const refreshActiveAfterEvidenceMutation = async (rowKey, preservedStateCtx, reason) => {
     if (typeof handleBulkProcessRowChange !== 'function') {
       throw new Error('Bulk Process row context refresh is not available after evidence staging. Please reopen the row and try again.');
     }
-    const key = trimStr(rowKey || rowKeyOf(st.active_row) || rowKeyOf(readActive().row) || '');
+    const activeBeforeRefresh = readActive();
+    const key = trimStr(rowKey || rowKeyOf(st.active_row) || rowKeyOf(activeBeforeRefresh.row) || '');
     if (!key) {
       throw new Error('Bulk Process row context cannot be refreshed after evidence staging because the active row key is missing.');
     }
+    const identityForRefresh = resolveActiveProcessTimesheetIdentity(activeBeforeRefresh);
+    const identityIsTimesheet = !!(identityForRefresh.timesheetId || /^timesheet:/i.test(trimStr(identityForRefresh.rowKey || key || '')));
+    const refreshOptionsBase = {
+      expectedRowKey: key,
+      row_key: key,
+      timesheet_id: identityForRefresh.timesheetId || identityForRefresh.currentTimesheetId || null,
+      current_timesheet_id: identityForRefresh.currentTimesheetId || identityForRefresh.timesheetId || null,
+      requested_timesheet_id: identityForRefresh.requestedTimesheetId || identityForRefresh.timesheetId || null,
+      expected_timesheet_id: identityForRefresh.expectedTimesheetId || identityForRefresh.currentTimesheetId || identityForRefresh.timesheetId || null,
+      contract_week_id: identityIsTimesheet ? '' : (identityForRefresh.contractWeekId || null)
+    };
+    sigLog('AFTER-EVIDENCE-REFRESH-START', {
+      reason: trimStr(reason || '') || null,
+      row_key: key,
+      timesheet_id: refreshOptionsBase.timesheet_id || null,
+      expected_timesheet_id: refreshOptionsBase.expected_timesheet_id || null,
+      contract_week_id: refreshOptionsBase.contract_week_id || null,
+      before_signature: trimStr(activeBeforeRefresh.row?.row_signature || activeBeforeRefresh.ctx?.row?.row_signature || st.active_row?.row_signature || '') || null
+    });
     try {
       await handleBulkProcessRowChange(st, key, {
+        ...refreshOptionsBase,
         source: (reason || 'bulk-process-process-evidence-mutated') + '-status-header',
         profile: 'status_header',
         context_profile: 'status_header',
@@ -155719,7 +155811,14 @@ async function handleBulkProcessProcess(state) {
         suppressAdjacentPrefetch: true,
         rerender: false
       });
+      sigLog('AFTER-EVIDENCE-STATUS-HEADER-REFRESH-DONE', {
+        reason: trimStr(reason || '') || null,
+        row_key: key,
+        active_signature_after_status_header: trimStr(st.active_row?.row_signature || st.active_ctx?.row?.row_signature || '') || null,
+        stored_status_header_signature: trimStr(st.__bulk_process_process_status_header_row_signature || '') || null
+      });
       await handleBulkProcessRowChange(st, key, {
+        ...refreshOptionsBase,
         source: (reason || 'bulk-process-process-evidence-mutated') + '-evidence',
         profile: 'evidence',
         context_profile: 'evidence',
@@ -155737,8 +155836,19 @@ async function handleBulkProcessProcess(state) {
         suppressAdjacentPrefetch: true,
         rerender: false
       });
+      sigLog('AFTER-EVIDENCE-EVIDENCE-REFRESH-DONE', {
+        reason: trimStr(reason || '') || null,
+        row_key: key,
+        active_signature_after_evidence: trimStr(st.active_row?.row_signature || st.active_ctx?.row?.row_signature || '') || null,
+        stored_status_header_signature: trimStr(st.__bulk_process_process_status_header_row_signature || '') || null
+      });
     } catch (err) {
       if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] layered evidence refresh after evidence mutation degraded', err);
+      sigWarn('AFTER-EVIDENCE-REFRESH-DEGRADED', {
+        reason: trimStr(reason || '') || null,
+        row_key: key,
+        message: String(err?.message || err || '')
+      });
     }
     if (preservedStateCtx && typeof preservedStateCtx === 'object' && Object.keys(preservedStateCtx).length) {
       st.active_ctx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
@@ -155748,6 +155858,16 @@ async function handleBulkProcessProcess(state) {
     const refreshedSignature = trimStr(refreshed.row?.row_signature || refreshed.ctx?.row?.row_signature || st.active_row?.row_signature || st.active_ctx?.row?.row_signature || '');
     if (!refreshed.row || !rowKeyOf(refreshed.row) || !refreshedSignature) {
       if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] evidence mutation refresh did not produce a fresh signature; preserving current active row');
+      sigWarn('AFTER-EVIDENCE-REFRESH-NO-SIGNATURE', {
+        reason: trimStr(reason || '') || null,
+        row_key: key
+      });
+    } else {
+      sigLog('AFTER-EVIDENCE-REFRESH-END', {
+        reason: trimStr(reason || '') || null,
+        row_key: rowKeyOf(refreshed.row),
+        refreshed_signature: refreshedSignature
+      });
     }
     return refreshed;
   };
@@ -155915,14 +156035,15 @@ async function handleBulkProcessProcess(state) {
     const key = trimStr(rowKey || rowKeyOf(st.active_row || {}) || rowKeyOf(activeForRefresh.row) || '');
     if (!hasActiveTimesheetIdentityForPostAttachProcessRebase(activeForRefresh)) {
       clearPostAttachProcessRebaseFlags();
+      sigLog('POST-ATTACH-EVIDENCE-REFRESH-SKIP', {
+        reason: trimStr(reason || '') || null,
+        skip_reason: 'no-active-timesheet-identity',
+        row_key: key || null
+      });
       return;
     }
     if (st.__bulk_process_post_attach_rebase_promise && typeof st.__bulk_process_post_attach_rebase_promise.then === 'function') {
       try { await st.__bulk_process_post_attach_rebase_promise; } catch {}
-    }
-    if (typeof st.__bulk_process_refresh_attached_context === 'function') {
-      await st.__bulk_process_refresh_attached_context({ reason: reason || 'before-process-post-attach-rebase' });
-      return;
     }
     if (typeof handleBulkProcessRowChange !== 'function') {
       throw new Error('Bulk Process row context refresh is not available after evidence attach. Refresh the row and try again.');
@@ -155949,6 +156070,14 @@ async function handleBulkProcessProcess(state) {
       refreshTimesheetId ||
       ''
     );
+    sigLog('POST-ATTACH-EVIDENCE-REFRESH-START', {
+      reason: trimStr(reason || '') || null,
+      row_key: key,
+      timesheet_id: refreshTimesheetId || null,
+      expected_timesheet_id: refreshExpectedTimesheetId || refreshTimesheetId || null,
+      contract_week_id: '',
+      note: 'contract_week_id must remain blank for timesheet rows'
+    });
     await handleBulkProcessRowChange(st, key, {
       source: reason || 'before-process-post-attach-rebase',
       expectedRowKey: key,
@@ -155975,6 +156104,14 @@ async function handleBulkProcessProcess(state) {
       rerender: false,
       skipDirtyGuard: true,
       force: true
+    });
+    sigLog('POST-ATTACH-EVIDENCE-REFRESH-DONE', {
+      reason: trimStr(reason || '') || null,
+      row_key: key,
+      timesheet_id: refreshTimesheetId || null,
+      expected_timesheet_id: refreshExpectedTimesheetId || refreshTimesheetId || null,
+      contract_week_id: '',
+      active_signature_after_evidence_refresh: trimStr(st.active_row?.row_signature || st.active_ctx?.row?.row_signature || '') || null
     });
   };
   const awaitPostAttachEvidenceRebaseBeforeProcess = async (activeInput = null) => {
@@ -156009,8 +156146,22 @@ async function handleBulkProcessProcess(state) {
     }
     active = readActive();
     if (needsPostAttachEvidenceRebaseBeforeProcess(active)) {
+      sigWarn('POST-ATTACH-REBASE-STILL-PENDING', {
+        row_key: rowKeyOf(active.row) || rowKey || null
+      });
       throw new Error('Attached evidence is still refreshing. Refresh the row and try again.');
     }
+    active = await refreshControlledProcessStatusHeaderBaselineAfterMutation(
+      active,
+      'bulk-process-process-after-post-attach-rebase-status-header',
+      { skipScalarCompatibility: false }
+    );
+    st.__bulk_process_post_attach_rebase_status_header_adopted = true;
+    st.__bulk_process_post_attach_rebase_status_header_adopted_at = new Date().toISOString();
+    sigLog('POST-ATTACH-REBASE-STATUS-HEADER-ADOPTED', {
+      row_key: rowKeyOf(active.row) || rowKey || null,
+      adopted_signature: trimStr(st.__bulk_process_process_status_header_row_signature || st.__bulk_process_fresh_process_row_signature || '') || null
+    });
     if (typeof resetBulkProcessDirtyBaseline === 'function') {
       try { resetBulkProcessDirtyBaseline(st, 'process-post-attach-rebase'); } catch {}
     }
@@ -156216,7 +156367,15 @@ async function handleBulkProcessProcess(state) {
     const identity = resolveActiveProcessTimesheetIdentity(active);
     const timesheetId = trimStr(identity.timesheetId || identity.currentTimesheetId || identity.requestedTimesheetId || identity.expectedTimesheetId || '');
     const rowKey = trimStr(identity.rowKey || (timesheetId ? `timesheet:${timesheetId}` : '') || '');
-    if (!rowKey || (!timesheetId && !/^timesheet:/i.test(rowKey))) return null;
+    if (!rowKey || (!timesheetId && !/^timesheet:/i.test(rowKey))) {
+      sigLog('STATUS-HEADER-SKIP', {
+        reason: trimStr(fetchReason || '') || null,
+        skip_reason: 'missing-timesheet-identity',
+        row_key: rowKey || null,
+        timesheet_id: timesheetId || null
+      });
+      return null;
+    }
 
     const qs = new URLSearchParams();
     const add = (key, value) => {
@@ -156234,6 +156393,15 @@ async function handleBulkProcessProcess(state) {
     qs.set('include_compare', 'false');
     qs.set('include_import_source_rows', 'false');
 
+    sigLog('STATUS-HEADER-REQUEST', {
+      reason: trimStr(fetchReason || '') || null,
+      row_key: rowKey,
+      timesheet_id: timesheetId || null,
+      current_timesheet_id: trimStr(identity.currentTimesheetId || timesheetId || '') || null,
+      requested_timesheet_id: trimStr(identity.requestedTimesheetId || timesheetId || '') || null,
+      expected_timesheet_id: trimStr(identity.expectedTimesheetId || identity.currentTimesheetId || timesheetId || '') || null,
+      contract_week_id: null
+    });
     const res = await authFetch(API(`/api/timesheets/bulk-process-row-context?${qs.toString()}`));
     const text = await res.text().catch(() => '');
     let payload = null;
@@ -156250,6 +156418,22 @@ async function handleBulkProcessProcess(state) {
     };
     const rowSignature = resolveProcessRowSignatureFrom(json, baselineRow, json.data_row, json.row, json.row_patch, json.details);
     const currentVersion = resolveProcessCurrentVersionFrom(json, baselineRow, json.data_row, json.row, json.details, json.details?.timesheet);
+    const returnedRowKey = trimStr(baselineRow.row_key || json.row_key || json.row?.row_key || json.data_row?.row_key || '');
+    const returnedTimesheetId = trimStr(baselineRow.timesheet_id || baselineRow.current_timesheet_id || json.timesheet_id || json.current_timesheet_id || json.row?.timesheet_id || json.data_row?.timesheet_id || '');
+    const identityMatched = !!(
+      (!returnedRowKey || returnedRowKey === rowKey) &&
+      (!returnedTimesheetId || !timesheetId || returnedTimesheetId === timesheetId)
+    );
+    sigLog('STATUS-HEADER-RESPONSE', {
+      reason: trimStr(fetchReason || '') || null,
+      requested_row_key: rowKey,
+      requested_timesheet_id: timesheetId || null,
+      returned_row_key: returnedRowKey || null,
+      returned_timesheet_id: returnedTimesheetId || null,
+      status_header_signature: rowSignature || null,
+      current_version: currentVersion ?? null,
+      identity_matched: identityMatched
+    });
     return {
       payload: json,
       baselineRow,
@@ -156364,6 +156548,13 @@ async function handleBulkProcessProcess(state) {
       }
     }
     if (diffs.length) {
+      sigWarn('ADOPT-REFUSE-SCALAR-DIFF', {
+        reason: trimStr(opts.reason || '') || null,
+        diffs: diffs.slice(0, 12),
+        diff_count: diffs.length,
+        row_key: trimStr(baseline.identity?.rowKey || baseline.baselineRow?.row_key || '') || null,
+        timesheet_id: trimStr(baseline.identity?.timesheetId || baseline.baselineRow?.timesheet_id || baseline.baselineRow?.current_timesheet_id || '') || null
+      });
       if (window.__LOG_MODAL === true) {
         console.warn('[TS][BULK-PROCESS][PROCESS] refusing status/header signature adoption because non-evidence row fields changed', {
           reason: trimStr(opts.reason || ''),
@@ -156375,6 +156566,13 @@ async function handleBulkProcessProcess(state) {
       }
       throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
     }
+    sigLog('ADOPT-SAFE', {
+      reason: trimStr(opts.reason || '') || null,
+      row_key: trimStr(baseline.identity?.rowKey || baseline.baselineRow?.row_key || '') || null,
+      timesheet_id: trimStr(baseline.identity?.timesheetId || baseline.baselineRow?.timesheet_id || baseline.baselineRow?.current_timesheet_id || '') || null,
+      status_header_signature: trimStr(baseline.rowSignature || '') || null,
+      skipped_scalar_compatibility: opts.skipScalarCompatibility === true
+    });
     return true;
   };
 
@@ -156389,6 +156587,12 @@ async function handleBulkProcessProcess(state) {
     st.__bulk_process_allowed_process_timesheet_id = trimStr(identity.timesheetId || identity.currentTimesheetId || row.timesheet_id || row.current_timesheet_id || '');
     st.__bulk_process_allowed_process_reason = trimStr(rememberReason || 'controlled-process-mutation') || 'controlled-process-mutation';
     st.__bulk_process_allowed_process_at = new Date().toISOString();
+    sigLog('ALLOW-SIGNATURE', {
+      reason: trimStr(rememberReason || '') || null,
+      allowed_signature: signature,
+      row_key: st.__bulk_process_allowed_process_row_key || null,
+      timesheet_id: st.__bulk_process_allowed_process_timesheet_id || null
+    });
     return signature;
   };
 
@@ -156396,6 +156600,10 @@ async function handleBulkProcessProcess(state) {
     const opts = (refreshOptions && typeof refreshOptions === 'object') ? refreshOptions : {};
     let active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     if (!active.isDaily || active.submissionMode !== 'MANUAL') return active;
+    sigLog('CONTROLLED-STATUS-HEADER-REFRESH-START', {
+      reason: trimStr(refreshReason || '') || null,
+      skip_scalar_compatibility: opts.skipScalarCompatibility === true
+    });
     const baseline = await fetchFreshProcessStatusHeaderBaseline(active, refreshReason);
     if (!baseline?.rowSignature) {
       throw new Error('Bulk Process status/header baseline did not include a row signature. Refresh the row and try again.');
@@ -156405,6 +156613,12 @@ async function handleBulkProcessProcess(state) {
       skipScalarCompatibility: opts.skipScalarCompatibility === true
     });
     rememberAllowedProcessStatusHeaderBaseline(baseline, refreshReason);
+    sigLog('CONTROLLED-STATUS-HEADER-ADOPT', {
+      reason: trimStr(refreshReason || '') || null,
+      adopted_signature: baseline.rowSignature || null,
+      row_key: trimStr(baseline.identity?.rowKey || baseline.baselineRow?.row_key || '') || null,
+      timesheet_id: trimStr(baseline.identity?.timesheetId || baseline.baselineRow?.timesheet_id || baseline.baselineRow?.current_timesheet_id || '') || null
+    });
     active = patchProcessBaselineContainersFromActive(readActive(), {
       reason: refreshReason,
       rowSignature: baseline.rowSignature,
@@ -156428,6 +156642,10 @@ async function handleBulkProcessProcess(state) {
   const assertNoExternalProcessBaselineChangeBeforeControlledMutation = async (activeInput = null, assertReason = 'before-controlled-process-mutation') => {
     const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     if (!active.isDaily || active.submissionMode !== 'MANUAL') return null;
+    sigLog('EXTERNAL-CHECK-BEFORE-CONTROLLED-MUTATION', {
+      reason: trimStr(assertReason || '') || null,
+      active_signature: trimStr(collectActiveProcessLocalBaselineSignature(active) || '') || null
+    });
     const baseline = await fetchFreshProcessStatusHeaderBaseline(active, assertReason);
     if (!baseline?.rowSignature) return baseline;
     validateFreshProcessStatusHeaderBaselineSafeToAdopt(baseline, active, { reason: assertReason });
@@ -156436,8 +156654,20 @@ async function handleBulkProcessProcess(state) {
     const baselineSignature = trimStr(baseline.rowSignature || '');
     if (baselineSignature && activeSignature && baselineSignature !== activeSignature) {
       if (allowedSignature && baselineSignature === allowedSignature) return baseline;
+      sigWarn('EXTERNAL-CHECK-FAILED-BEFORE-CONTROLLED-MUTATION', {
+        reason: trimStr(assertReason || '') || null,
+        active_signature: activeSignature || null,
+        baseline_signature: baselineSignature || null,
+        allowed_signature: allowedSignature || null
+      });
       throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
     }
+    sigLog('EXTERNAL-CHECK-PASSED-BEFORE-CONTROLLED-MUTATION', {
+      reason: trimStr(assertReason || '') || null,
+      active_signature: activeSignature || null,
+      baseline_signature: baselineSignature || null,
+      allowed_signature: allowedSignature || null
+    });
     return baseline;
   };
 
@@ -156487,6 +156717,13 @@ async function handleBulkProcessProcess(state) {
     const currentVersion = (explicitCurrentVersion !== undefined && explicitCurrentVersion !== null && trimStr(explicitCurrentVersion || '') !== '')
       ? explicitCurrentVersion
       : resolveProcessCurrentVersionFrom(row, ctx.row, details, details.timesheet, window.modalCtx?.data, window.modalCtx?.timesheetDetails);
+    const beforePatchSignatureSnapshot = processSigSnapshot();
+    sigLog('PATCH-BASELINE-START', {
+      reason: trimStr(opts.reason || 'process-editor-baseline-rebase') || 'process-editor-baseline-rebase',
+      adopting_signature: rowSignature || null,
+      adopting_current_version: currentVersion ?? null,
+      before: beforePatchSignatureSnapshot
+    });
     const patchTarget = (target) => {
       if (!target || typeof target !== 'object') return;
       if (identity.rowKey) target.row_key = identity.rowKey;
@@ -156577,6 +156814,17 @@ async function handleBulkProcessProcess(state) {
     if (markerStorageKey) st.__bulk_process_process_editor_rebased_storage_key = markerStorageKey;
     st.__bulk_process_process_editor_rebased_at = new Date().toISOString();
     st.__bulk_process_process_editor_rebased_reason = trimStr(patchOptions.reason || 'process-editor-baseline-rebase') || 'process-editor-baseline-rebase';
+    sigLog('PATCH-BASELINE-END', {
+      reason: st.__bulk_process_process_editor_rebased_reason,
+      adopted_signature: rowSignature || null,
+      after: processSigSnapshot(),
+      active_row_signature: trimStr(st.active_row?.row_signature || '') || null,
+      active_ctx_row_signature: trimStr(st.active_ctx?.row?.row_signature || '') || null,
+      active_context_row_signature: trimStr(st.active_context?.row?.row_signature || '') || null,
+      modal_data_row_signature: trimStr(window.modalCtx?.data?.row_signature || '') || null,
+      stored_process_status_header_signature: trimStr(st.__bulk_process_process_status_header_row_signature || '') || null,
+      stored_fresh_process_signature: trimStr(st.__bulk_process_fresh_process_row_signature || '') || null
+    });
     return readActive();
   };
   const awaitProcessEditorBaselineRebaseBeforeSubmit = async (activeInput = null, rebaseOptions = {}) => {
@@ -156588,7 +156836,17 @@ async function handleBulkProcessProcess(state) {
     const allowedSignature = trimStr(getAllowedProcessStatusHeaderSignatureForIdentity(active) || '');
     const activeSignature = trimStr(allowedSignature || localActiveSignature || collectActiveProcessBaselineSignature(active) || '');
     const postAttachMarker = hasPostAttachProcessEditorRebaseMarker(active, opts);
-    const controlledMutationInThisFlow = !!(opts.saveMutated === true || opts.evidenceMutated === true);
+    const controlledMutationInThisFlow = !!(opts.saveMutated === true || opts.evidenceMutated === true || st.__bulk_process_post_attach_rebase_status_header_adopted === true);
+    sigLog('BEFORE-SUBMIT-REBASE-START', {
+      local_active_signature: localActiveSignature || null,
+      allowed_signature: allowedSignature || null,
+      active_signature: activeSignature || null,
+      post_attach_marker: postAttachMarker === true,
+      controlled_mutation_in_this_flow: controlledMutationInThisFlow,
+      save_mutated: opts.saveMutated === true,
+      evidence_mutated: opts.evidenceMutated === true,
+      post_attach_rebase_adopted: st.__bulk_process_post_attach_rebase_status_header_adopted === true
+    });
     const statusHeaderBaseline = await fetchFreshProcessStatusHeaderBaseline(
       active,
       postAttachMarker ? 'post-attach-process-status-header-baseline' : 'process-status-header-baseline'
@@ -156596,6 +156854,16 @@ async function handleBulkProcessProcess(state) {
     const statusHeaderSignature = trimStr(statusHeaderBaseline?.rowSignature || '');
     const freshestSignature = statusHeaderSignature || collectFreshestProcessBaselineSignature(active);
     const signatureMismatch = !!(freshestSignature && (!activeSignature || activeSignature !== freshestSignature));
+    sigLog('BEFORE-SUBMIT-STATUS-HEADER-CHECK', {
+      active_signature: activeSignature || null,
+      local_active_signature: localActiveSignature || null,
+      allowed_signature: allowedSignature || null,
+      status_header_signature: statusHeaderSignature || null,
+      freshest_signature: freshestSignature || null,
+      signature_mismatch: signatureMismatch,
+      post_attach_marker: postAttachMarker === true,
+      controlled_mutation_in_this_flow: controlledMutationInThisFlow
+    });
     const identity = statusHeaderBaseline?.identity || resolveActiveProcessTimesheetIdentity(active);
     if (!identity.rowKey) {
       throw new Error('Bulk Process row context cannot be refreshed before processing because the active timesheet row key is missing. Refresh the row and try again.');
@@ -156607,18 +156875,52 @@ async function handleBulkProcessProcess(state) {
     if (signatureMismatch) {
       if (allowedSignature) {
         if (freshestSignature !== allowedSignature) {
+          sigWarn('BEFORE-SUBMIT-REFUSE', {
+            reason: 'freshest-signature-differs-from-allowed-controlled-baseline',
+            active_signature: activeSignature || null,
+            allowed_signature: allowedSignature || null,
+            freshest_signature: freshestSignature || null,
+            status_header_signature: statusHeaderSignature || null
+          });
           throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
         }
+        sigLog('BEFORE-SUBMIT-ALLOW', {
+          reason: 'freshest-signature-matches-allowed-controlled-baseline',
+          allowed_signature: allowedSignature || null,
+          freshest_signature: freshestSignature || null
+        });
       } else if (controlledMutationInThisFlow) {
+        sigWarn('BEFORE-SUBMIT-REFUSE', {
+          reason: 'controlled-mutation-without-allowed-baseline',
+          active_signature: activeSignature || null,
+          freshest_signature: freshestSignature || null,
+          status_header_signature: statusHeaderSignature || null
+        });
         throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
       } else if (postAttachMarker) {
         validateFreshProcessStatusHeaderBaselineSafeToAdopt(statusHeaderBaseline, active, {
           reason: 'post-attach-process-status-header-baseline'
         });
         rememberAllowedProcessStatusHeaderBaseline(statusHeaderBaseline, 'post-attach-process-status-header-baseline');
+        sigLog('BEFORE-SUBMIT-ALLOW', {
+          reason: 'post-attach-marker-scalar-compatible',
+          status_header_signature: statusHeaderSignature || null
+        });
       } else {
+        sigWarn('BEFORE-SUBMIT-REFUSE', {
+          reason: 'unexplained-signature-change',
+          active_signature: activeSignature || null,
+          freshest_signature: freshestSignature || null,
+          status_header_signature: statusHeaderSignature || null
+        });
         throw new Error(PROCESS_EXTERNAL_CHANGE_ERROR);
       }
+    } else {
+      sigLog('BEFORE-SUBMIT-ALLOW', {
+        reason: 'no-signature-mismatch',
+        active_signature: activeSignature || null,
+        freshest_signature: freshestSignature || null
+      });
     }
 
     if (postAttachMarker && typeof handleBulkProcessRowChange === 'function') {
@@ -156667,6 +156969,12 @@ async function handleBulkProcessProcess(state) {
       statusHeaderPayload: statusHeaderBaseline?.payload
     });
     if (finalSignature) rememberAllowedProcessStatusHeaderBaseline(statusHeaderBaseline, patchReason);
+    sigLog('BEFORE-SUBMIT-REBASE-END', {
+      patch_reason: patchReason,
+      final_signature: finalSignature || null,
+      status_header_signature: statusHeaderSignature || null,
+      active_signature_after_patch: trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '') || null
+    });
 
     if (typeof resetBulkProcessDirtyBaseline === 'function') {
       try {
@@ -156813,6 +157121,12 @@ async function handleBulkProcessProcess(state) {
   };
 
   try {
+    sigLog('START', {
+      dirty: (typeof isBulkProcessEditableDirty === 'function') ? isBulkProcessEditableDirty(st) : !!st.dirty,
+      loading: !!st.loading,
+      saving: !!st.saving,
+      processing: !!st.processing
+    });
     let editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
     let activeForInitialProcessGate = readActive();
     if (!editability.canProcess && !isZeroHourExpenseOnlyAdditionalManualAdjustment(activeForInitialProcessGate)) {
@@ -156835,6 +157149,11 @@ async function handleBulkProcessProcess(state) {
         };
       }
       controlledSaveMutation = true;
+      sigLog('AFTER-SAVE', {
+        save_ok: true,
+        save_result_signature: trimStr(saveResult?.row_signature || saveResult?.row?.row_signature || saveResult?.data_row?.row_signature || saveResult?.row_patch?.row_signature || '') || null,
+        active_signature_after_save: trimStr(st.active_row?.row_signature || st.active_ctx?.row?.row_signature || '') || null
+      });
 
       const afterSaveRowKey = rowKeyOf(st.active_row || {});
       if (!afterSaveRowKey) {
@@ -156885,6 +157204,10 @@ async function handleBulkProcessProcess(state) {
         'bulk-process-process-after-save-status-header',
         { skipScalarCompatibility: false }
       );
+      sigLog('AFTER-SAVE-STATUS-HEADER-BASELINE', {
+        controlled_save_mutation: controlledSaveMutation,
+        adopted_signature: trimStr(st.__bulk_process_process_status_header_row_signature || st.__bulk_process_fresh_process_row_signature || '') || null
+      });
       editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
       if (!editability.canProcess && !isZeroHourExpenseOnlyAdditionalManualAdjustment(activeForPostSaveProcessGate)) {
         const reason = trimStr(editability.processDisabledReason || editability.disabledReason || '') || 'This row cannot be processed.';
@@ -156910,6 +157233,11 @@ async function handleBulkProcessProcess(state) {
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][START]');
 
     active = await awaitPostAttachEvidenceRebaseBeforeProcess(active);
+    sigLog('AFTER-POST-ATTACH-REBASE', {
+      active_signature: trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '') || null,
+      adopted_signature: trimStr(st.__bulk_process_process_status_header_row_signature || st.__bulk_process_fresh_process_row_signature || '') || null,
+      post_attach_rebase_status_header_adopted: st.__bulk_process_post_attach_rebase_status_header_adopted === true
+    });
     activeTimesheetId = active.timesheetId;
     activeContractWeekId = active.contractWeekId;
     expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
@@ -156928,6 +157256,10 @@ async function handleBulkProcessProcess(state) {
 
     const preservedStateCtxBeforeEvidenceMutation = pickObject(active.stateCtx || {});
     const evidenceMutated = await maybeAttachOrStageQueueItem({ timesheetId: activeTimesheetId, contractWeekId: activeContractWeekId, expectedTimesheetId });
+    sigLog('AFTER-EVIDENCE-MUTATION-CALL', {
+      evidence_mutated: evidenceMutated === true,
+      active_signature: trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '') || null
+    });
     if (evidenceMutated) {
       active = await refreshActiveAfterEvidenceMutation(previousRowKey, preservedStateCtxBeforeEvidenceMutation, 'bulk-process-process-evidence-mutated');
       active = await refreshControlledProcessStatusHeaderBaselineAfterMutation(
@@ -156938,6 +157270,11 @@ async function handleBulkProcessProcess(state) {
       activeTimesheetId = active.timesheetId;
       activeContractWeekId = active.contractWeekId;
       expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
+      sigLog('AFTER-EVIDENCE-MUTATION-STATUS-HEADER-BASELINE', {
+        evidence_mutated: true,
+        adopted_signature: trimStr(st.__bulk_process_process_status_header_row_signature || st.__bulk_process_fresh_process_row_signature || '') || null,
+        active_signature: trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '') || null
+      });
     }
 
     const evidenceOk = await confirmNoEvidence(active);
@@ -156961,6 +157298,23 @@ async function handleBulkProcessProcess(state) {
       activeContractWeekId = active.contractWeekId;
       expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
       const activeRowSignature = trimStr(collectActiveProcessBaselineSignature(active) || st.__bulk_process_process_status_header_row_signature || st.__bulk_process_fresh_process_row_signature || active.row?.row_signature || active.ctx?.row?.row_signature || '');
+      sigLog('BEFORE-SUBMIT', {
+        timesheet_id: String(activeTimesheetId),
+        expected_timesheet_id: expectedTimesheetId || activeTimesheetId || null,
+        submitted_signature: activeRowSignature || null,
+        active_row_signature: trimStr(st.active_row?.row_signature || '') || null,
+        active_ctx_row_signature: trimStr(st.active_ctx?.row?.row_signature || '') || null,
+        active_context_row_signature: trimStr(st.active_context?.row?.row_signature || '') || null,
+        modal_data_row_signature: trimStr(window.modalCtx?.data?.row_signature || '') || null,
+        stored_status_header_signature: trimStr(st.__bulk_process_process_status_header_row_signature || '') || null,
+        stored_fresh_signature: trimStr(st.__bulk_process_fresh_process_row_signature || '') || null,
+        allowed_signature: trimStr(st.__bulk_process_allowed_process_row_signature || '') || null,
+        evidence_mutated: evidenceMutated === true,
+        save_mutated: controlledSaveMutation === true
+      });
+      st.__bulk_process_last_submitted_process_signature = activeRowSignature || '';
+      st.__bulk_process_last_submitted_process_timesheet_id = String(activeTimesheetId);
+      st.__bulk_process_last_submitted_process_at = new Date().toISOString();
       processResult = await processDailyManualTimesheet(String(activeTimesheetId), {
         expected_timesheet_id: expectedTimesheetId || activeTimesheetId,
         expected_row_signature: activeRowSignature || null,
@@ -157160,6 +157514,11 @@ async function handleBulkProcessProcess(state) {
     GE();
     return { ok: true, result: processResult, row_patch: processResult?.row_patch || patchedRow, data_row: processResult?.data_row || patchedRow };
   } catch (err) {
+    sigWarn('ERROR', {
+      message: String(err?.message || err || 'Failed to process Bulk Process row.'),
+      submitted_signature: trimStr(st.__bulk_process_last_submitted_process_signature || '') || null,
+      backend_current_signature: trimStr(err?.current_row_signature || err?.currentRowSignature || err?.details?.current_row_signature || err?.payload?.current_row_signature || '') || null
+    });
     st.processing = false;
     st.process_in_flight = false;
     st.__bulk_process_process_in_flight = false;
@@ -157173,6 +157532,7 @@ async function handleBulkProcessProcess(state) {
     return { ok: false, error: st.error_text };
   }
 }
+
 
 
 
