@@ -125811,6 +125811,8 @@ async function bankingPayApplyExecutePaymentResult(finalOperationResult, options
 }
 
 
+
+
 async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -126857,9 +126859,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
   try {
     const resetRequired = optionARequired || !!(replacementSessionId || replacementSessionSignature || replacementSnapshotRunId || dirtyCandidateIds.length > 0 || pendingCandidateIds.length > 0 || refreshJobIds.length > 0);
     if (resetRequired) {
-      if (typeof resetPayPreviewAndDecisions !== 'function') {
-        throw new Error('Payment draft was created, but the payment preview reset helper is not available. Refresh Banking and try again.');
-      }
+      const hasResetPayPreviewAndDecisionsHelper = typeof resetPayPreviewAndDecisions === 'function';
       if (optionARequired) {
         const postCreateResetOptions = {
           mode: 'POST_DRAFT_CREATE_DISCARD_AND_REOPEN',
@@ -126885,7 +126885,22 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
           operation_id: operationIdForOptionA || normalisedResult.operation_id || null
         };
 
-        let postCreateResetOutcome = await resetPayPreviewAndDecisions(postCreateResetOptions);
+        let postCreateResetOutcome = null;
+        if (hasResetPayPreviewAndDecisionsHelper) {
+          postCreateResetOutcome = await resetPayPreviewAndDecisions(postCreateResetOptions);
+        } else if (typeof bankingPayPreview === 'function') {
+          setPostCreatePreviewRefreshPending('pending', {
+            source: 'bankingPayApplyCreateDraftResult',
+            reason: 'RESET_HELPER_UNAVAILABLE_FALLBACK_TO_BANKING_PAY_PREVIEW'
+          });
+          postCreateResetOutcome = await pollPostCreateReplacementPreview({
+            outcome: 'pending',
+            status: 'RESET_HELPER_UNAVAILABLE_FALLBACK_TO_BANKING_PAY_PREVIEW',
+            reset_helper_available: false
+          });
+        } else {
+          throw new Error('Payment draft was created, but the payment preview reset helper and Banking Pay preview helper are not available. Refresh Banking and try again.');
+        }
         let postResetState = readPostCreatePreviewRefreshState();
         let postCreateResetOutcomeText = trimStr(
           postCreateResetOutcome?.outcome ||
@@ -126974,21 +126989,55 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
         }
       } else {
         const sourceSessionId = trimStr(opts.session_id || opts.sessionId || result.source_session_id || postCreateRefresh.source_session_id || postCreateRefresh.sourceSessionId || '');
-        await resetPayPreviewAndDecisions({
-          mode: 'POST_ACTION_REOPEN',
-          reason: 'CREATE_DRAFT_SUCCESS',
-          source_session_id: sourceSessionId || null,
-          replacement_session_id: replacementSessionId || null,
-          replacement_session_signature: replacementSessionSignature || null,
-          replacement_snapshot_run_id: replacementSnapshotRunId || null,
-          replacement_session_version: replacementSessionVersion ?? null,
-          dirty_candidate_ids: [...dirtyCandidateIds],
-          pending_candidate_ids: [...pendingCandidateIds],
-          refresh_job_ids: [...refreshJobIds],
-          preview_reopen_required: true,
-          created_pay_batch_ids: [...createdPayBatchIds],
-          selected_pay_batch_id: selectedBatchId || null
-        });
+        if (hasResetPayPreviewAndDecisionsHelper) {
+          await resetPayPreviewAndDecisions({
+            mode: 'POST_ACTION_REOPEN',
+            reason: 'CREATE_DRAFT_SUCCESS',
+            source_session_id: sourceSessionId || null,
+            replacement_session_id: replacementSessionId || null,
+            replacement_session_signature: replacementSessionSignature || null,
+            replacement_snapshot_run_id: replacementSnapshotRunId || null,
+            replacement_session_version: replacementSessionVersion ?? null,
+            dirty_candidate_ids: [...dirtyCandidateIds],
+            pending_candidate_ids: [...pendingCandidateIds],
+            refresh_job_ids: [...refreshJobIds],
+            preview_reopen_required: true,
+            created_pay_batch_ids: [...createdPayBatchIds],
+            selected_pay_batch_id: selectedBatchId || null
+          });
+        } else if (typeof bankingPayPreview === 'function') {
+          await bankingPayPreview({
+            action: 'POST_DRAFT_CREATE_PREVIEW_REFRESH',
+            mode: 'POST_ACTION_REOPEN',
+            reason: 'CREATE_DRAFT_SUCCESS',
+            mutation_context: 'CREATE_DRAFT_SUCCESS',
+            post_mutation_context: 'CREATE_DRAFT_SUCCESS',
+            source_session_id: sourceSessionId || null,
+            source_session_already_discarded: true,
+            replacement_session_id: replacementSessionId || null,
+            replacement_session_signature: replacementSessionSignature || null,
+            replacement_snapshot_run_id: replacementSnapshotRunId || null,
+            replacement_session_version: replacementSessionVersion ?? null,
+            dirty_candidate_ids: [...dirtyCandidateIds],
+            pending_candidate_ids: [...pendingCandidateIds],
+            refresh_job_ids: [...refreshJobIds],
+            preview_reopen_required: true,
+            created_pay_batch_ids: [...createdPayBatchIds],
+            selected_pay_batch_id: selectedBatchId || null,
+            selected_preview_row_ids: [],
+            original_selected_preview_row_ids: [...selectedPreviewRowIdsForOptionA],
+            discarded_selected_preview_row_ids: [...selectedPreviewRowIdsForOptionA],
+            operation_id: operationIdForOptionA || normalisedResult.operation_id || null,
+            poll_until_settled: true,
+            bounded_post_mutation_poll: true,
+            userInitiated: false,
+            silent: true,
+            background: true,
+            showModal: false
+          });
+        } else {
+          throw new Error('Payment draft was created, but the payment preview reset helper and Banking Pay preview helper are not available. Refresh Banking and try again.');
+        }
       }
     }
   } catch (resetErr) {
