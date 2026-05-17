@@ -25272,6 +25272,7 @@ function exportBankingPaymentIssueReviewList(statusPayloadOrRows, options = {}) 
 
 
 
+
 async function bankingPayPreview(pay_date) {
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -26456,6 +26457,9 @@ async function bankingPayPreview(pay_date) {
       }
       throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
     }
+    if (isPostMutationRefresh && !payloadHasFullPreviewData(openedSessionPayload) && !isReadyEmptyPayload(openedSessionPayload) && !isRebaseRequiredPayload(openedSessionPayload) && !isReturnedSessionObsolete(openedSessionPayload)) {
+      stampPendingReplacementWorkbenchContext(openedSessionPayload);
+    }
     return openedSessionPayload;
   };
 
@@ -26947,7 +26951,9 @@ async function bankingPayPreview(pay_date) {
       return false;
     }
 
+    stampPendingReplacementWorkbenchContext(obj);
     if (isPlainObject(obj.progress)) syncProgressIntoState(obj.progress);
+    else if (isPlainObject(obj)) syncProgressIntoState(obj);
 
     const rebaseOrObsolete = !!(
       isPostMutationRefresh &&
@@ -27084,6 +27090,44 @@ async function bankingPayPreview(pay_date) {
         ''
       )
     };
+  };
+
+  const stampPendingReplacementWorkbenchContext = (payload) => {
+    if (!isPostMutationRefresh) return null;
+    const ctx = extractWorkbenchContextFromPayload(payload);
+    if (!ctx.session_id) return null;
+    if (isReturnedWorkbenchContextObsolete(ctx)) return null;
+
+    const stableSessionSignature = ctx.session_signature || sessionSignatureHint || computedSessionSignature || suppliedSessionSignature || '';
+    const stablePayDate = ctx.pay_date || effectivePayDate;
+    const stableCutoffDate = ctx.week_ending_cutoff_date || weekEndingCutoffDate;
+
+    wiz.workbench.session_id = ctx.session_id;
+    if (ctx.snapshot_run_id) wiz.workbench.snapshot_run_id = ctx.snapshot_run_id;
+    if (ctx.session_version !== null && ctx.session_version !== undefined) wiz.workbench.session_version = ctx.session_version;
+    wiz.workbench.session_signature = stableSessionSignature;
+    wiz.workbench.pay_date = stablePayDate;
+    wiz.workbench.week_ending_cutoff_date = stableCutoffDate;
+    wiz.workbench.week_ending_cutoff = stableCutoffDate;
+    wiz.workbench.create_draft_refresh_pending = true;
+    wiz.workbench.preview_reopen_required = true;
+    wiz.workbench.__post_mutation_preview_refresh_failed = false;
+    wiz.workbench.__active_progress_session_id = ctx.session_id;
+    wiz.workbench.__active_workbench_session_id = ctx.session_id;
+
+    wiz.decisions = (typeof normalizePayWizardDecisionState === 'function')
+      ? normalizePayWizardDecisionState(wiz.decisions)
+      : ((wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {});
+    wiz.decisions.session_id = ctx.session_id;
+    if (ctx.snapshot_run_id) wiz.decisions.snapshot_run_id = ctx.snapshot_run_id;
+    if (ctx.session_version !== null && ctx.session_version !== undefined) wiz.decisions.session_version = ctx.session_version;
+    wiz.decisions.session_signature = stableSessionSignature;
+    wiz.decisions.pay_date = stablePayDate;
+    wiz.decisions.week_ending_cutoff_date = stableCutoffDate;
+    wiz.decisions.week_ending_cutoff = stableCutoffDate;
+    wiz.decisions.create_draft_refresh_pending = true;
+
+    return ctx;
   };
 
   const validateWorkbenchPayloadContext = (payload) => {
@@ -27327,6 +27371,7 @@ async function bankingPayPreview(pay_date) {
       };
     }
     if (isPostMutationRefresh && !hasFullPreviewData) {
+      stampPendingReplacementWorkbenchContext(payloadForApply);
       applyDeferredPreviewStateFromPayload(payloadForApply);
       return {
         status: 'deferred',
@@ -27511,6 +27556,7 @@ async function bankingPayPreview(pay_date) {
       if (!isLatestRequest()) return { didFullPreviewLoad: false, payload: lastPayload, status: 'aborted' };
 
       if (lastPayload) {
+        stampPendingReplacementWorkbenchContext(lastPayload);
         const applyAttempt = applyPostMutationPreviewPayloadIfSettled(lastPayload);
         lastStatus = applyAttempt.status || lastStatus;
         if (applyAttempt.didFullPreviewLoad) {
@@ -27892,7 +27938,6 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
-
 
 
 
@@ -125843,7 +125888,6 @@ async function bankingPayApplyExecutePaymentResult(finalOperationResult, options
 
 
 
-
 async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -126948,13 +126992,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
           !postResetState.readyEmpty &&
           (postResetState.outcome === 'rebase_required' || postResetState.outcome === 'pending' || postCreateResetOutcomeText === 'rebase_required' || postCreateResetOutcomeText === 'pending')
         ) {
-          const pollOutcome = await pollPostCreateReplacementPreview(postCreateResetOutcome);
-          postResetState = readPostCreatePreviewRefreshState();
           postCreateResetOutcomeText = trimStr(
-            pollOutcome?.outcome ||
-            pollOutcome?.status ||
-            pollOutcome?.refresh_outcome ||
-            pollOutcome?.preview_refresh_outcome ||
             postCreateResetOutcome?.outcome ||
             postCreateResetOutcome?.status ||
             postCreateResetOutcome?.refresh_outcome ||
@@ -127104,6 +127142,7 @@ async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, optio
 
   return normalisedResult;
 }
+
 
 
 async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, options = {}) {
