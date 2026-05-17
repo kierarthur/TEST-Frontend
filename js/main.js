@@ -157618,7 +157618,6 @@ async function handleBulkProcessProcess(state) {
 
 
 
-
 async function processDailyManualTimesheet(timesheetId, payload = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][PROCESS-DAILY-WRAPPER]');
   GC('processDailyManualTimesheet');
@@ -157723,6 +157722,99 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       status_transition: pickObject(src.status_transition || { from: previousStatus, to: newStatus })
     };
   };
+  const sigDebugEnabled = () => window.__LOG_MODAL === true;
+  const extractWrapperSignature = (...sources) => {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      const direct = trimStr(
+        source.expected_row_signature ||
+        source.expectedRowSignature ||
+        source.row_signature ||
+        source.rowSignature ||
+        source.current_row_signature ||
+        source.currentRowSignature ||
+        source.backend_row_signature ||
+        source.backendRowSignature ||
+        source.active_row_signature ||
+        source.activeRowSignature ||
+        source.submitted_signature ||
+        ''
+      );
+      if (direct) return direct;
+      if (source.row && typeof source.row === 'object') {
+        const rowSig = extractWrapperSignature(source.row);
+        if (rowSig) return rowSig;
+      }
+      if (source.data_row && typeof source.data_row === 'object') {
+        const dataRowSig = extractWrapperSignature(source.data_row);
+        if (dataRowSig) return dataRowSig;
+      }
+      if (source.row_patch && typeof source.row_patch === 'object') {
+        const rowPatchSig = extractWrapperSignature(source.row_patch);
+        if (rowPatchSig) return rowPatchSig;
+      }
+      if (source.details && typeof source.details === 'object') {
+        const detailsSig = extractWrapperSignature(source.details);
+        if (detailsSig) return detailsSig;
+      }
+      if (source.timesheet && typeof source.timesheet === 'object') {
+        const timesheetSig = extractWrapperSignature(source.timesheet);
+        if (timesheetSig) return timesheetSig;
+      }
+    }
+    return '';
+  };
+  const extractWrapperBackendCurrentSignature = (...sources) => {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      const direct = trimStr(
+        source.current_row_signature ||
+        source.currentRowSignature ||
+        source.backend_current_signature ||
+        source.backendCurrentSignature ||
+        source.actual_row_signature ||
+        source.actualRowSignature ||
+        source.server_row_signature ||
+        source.serverRowSignature ||
+        source.latest_row_signature ||
+        source.latestRowSignature ||
+        ''
+      );
+      if (direct) return direct;
+      if (source.error && typeof source.error === 'object') {
+        const errorSig = extractWrapperBackendCurrentSignature(source.error);
+        if (errorSig) return errorSig;
+      }
+      if (source.details && typeof source.details === 'object') {
+        const detailsSig = extractWrapperBackendCurrentSignature(source.details);
+        if (detailsSig) return detailsSig;
+      }
+      if (source.payload && typeof source.payload === 'object') {
+        const payloadSig = extractWrapperBackendCurrentSignature(source.payload);
+        if (payloadSig) return payloadSig;
+      }
+    }
+    return '';
+  };
+  const parseWrapperJsonMaybe = (value) => {
+    if (!value) return null;
+    if (typeof value === 'object') return value;
+    if (typeof value !== 'string') return null;
+    try {
+      const parsed = JSON.parse(value);
+      return (parsed && typeof parsed === 'object') ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const sigLog = (stage, payload = {}) => {
+    if (!sigDebugEnabled()) return;
+    console.log(`[TS][PROCESS-DAILY-WRAPPER][SIG][${stage}]`, payload);
+  };
+  const sigWarn = (stage, payload = {}) => {
+    if (!sigDebugEnabled()) return;
+    console.warn(`[TS][PROCESS-DAILY-WRAPPER][SIG][${stage}]`, payload);
+  };
 
   try {
     const id = trimStr(timesheetId);
@@ -157817,15 +157909,54 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       timesheetPatch.reference_number = src.reference_number == null ? '' : String(src.reference_number);
     }
 
-    const expectedRowSignature = trimStr(
+    const explicitExpectedRowSignature = trimStr(
       src.expected_row_signature ||
       src.expectedRowSignature ||
       src.row_signature ||
       src.rowSignature ||
-      activeBulkRow?.row_signature ||
-      bulkState?.active_row?.row_signature ||
       ''
     );
+    const fallbackExpectedRowSignature = trimStr(
+      activeBulkRow?.row_signature ||
+      bulkState?.active_row?.row_signature ||
+      mc?.data?.row_signature ||
+      ''
+    );
+    const isBulkProcessCall = !!(
+      src.bulk_process === true ||
+      trimStr(src.context || '').toLowerCase() === 'bulk_process' ||
+      trimStr(mc?.entity || mc?.modal_kind || mc?.modalKind || '').toLowerCase().includes('bulk-process')
+    );
+    if (isBulkProcessCall && !explicitExpectedRowSignature) {
+      const err = new Error('Bulk Process daily manual process was called without an explicit expected row signature.');
+      err.code = 'BULK_PROCESS_EXPECTED_ROW_SIGNATURE_MISSING';
+      err.fallback_row_signature = fallbackExpectedRowSignature || null;
+      sigWarn('MISSING-EXPLICIT-SIGNATURE', {
+        timesheet_id: id,
+        expected_timesheet_id: expectedTimesheetId || id,
+        fallback_signature: fallbackExpectedRowSignature || null,
+        active_bulk_row_signature: trimStr(activeBulkRow?.row_signature || '') || null,
+        bulk_state_active_row_signature: trimStr(bulkState?.active_row?.row_signature || '') || null,
+        modal_data_row_signature: trimStr(mc?.data?.row_signature || '') || null
+      });
+      GE();
+      throw err;
+    }
+    const expectedRowSignature = explicitExpectedRowSignature || fallbackExpectedRowSignature;
+
+    sigLog('SIGNATURE-RESOLUTION', {
+      timesheet_id: id,
+      expected_timesheet_id: expectedTimesheetId || id,
+      is_bulk_process_call: isBulkProcessCall,
+      explicit_signature: explicitExpectedRowSignature || null,
+      fallback_signature: fallbackExpectedRowSignature || null,
+      chosen_signature: expectedRowSignature || null,
+      payload_expected_row_signature: trimStr(src.expected_row_signature || src.expectedRowSignature || '') || null,
+      payload_row_signature: trimStr(src.row_signature || src.rowSignature || '') || null,
+      active_bulk_row_signature: trimStr(activeBulkRow?.row_signature || '') || null,
+      bulk_state_active_row_signature: trimStr(bulkState?.active_row?.row_signature || '') || null,
+      modal_data_row_signature: trimStr(mc?.data?.row_signature || '') || null
+    });
 
     const body = {
       ...src,
@@ -157909,17 +158040,76 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       }
     }
 
-    const route = `/api/timesheets/${encodeURIComponent(id)}/daily-manual-process`;
-    L('REQUEST', { route, timesheet_id: id, expected_timesheet_id: body.expected_timesheet_id, timesheet_patch_keys: Object.keys(timesheetPatch), tsfin_patch_keys: Object.keys(tsfinPatch) });
-
-    const res = await authFetch(API(route), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+    sigLog('BODY-BUILT', {
+      timesheet_id: id,
+      expected_timesheet_id: body.expected_timesheet_id || null,
+      expected_row_signature: body.expected_row_signature || null,
+      row_signature: body.row_signature || null,
+      body_keys: Object.keys(body),
+      timesheet_patch_keys: Object.keys(timesheetPatch),
+      tsfin_patch_keys: Object.keys(tsfinPatch),
+      proposed_tsfin_patch_keys: Object.keys(proposedTsfinPatch),
+      stripped_top_level_schedule: !Object.prototype.hasOwnProperty.call(body, 'actual_schedule_json') && Object.prototype.hasOwnProperty.call(src, 'actual_schedule_json'),
+      stripped_top_level_total_hours: !Object.prototype.hasOwnProperty.call(body, 'total_hours') && Object.prototype.hasOwnProperty.call(src, 'total_hours')
     });
+
+    const route = `/api/timesheets/${encodeURIComponent(id)}/daily-manual-process`;
+    L('REQUEST', { route, timesheet_id: id, expected_timesheet_id: body.expected_timesheet_id, expected_row_signature: body.expected_row_signature || null, row_signature: body.row_signature || null, timesheet_patch_keys: Object.keys(timesheetPatch), tsfin_patch_keys: Object.keys(tsfinPatch) });
+    sigLog('REQUEST', {
+      route,
+      timesheet_id: id,
+      expected_timesheet_id: body.expected_timesheet_id || null,
+      expected_row_signature: body.expected_row_signature || null,
+      row_signature: body.row_signature || null,
+      body_expected_matches_row_signature: !!(body.expected_row_signature && body.row_signature && body.expected_row_signature === body.row_signature),
+      timesheet_patch_keys: Object.keys(timesheetPatch),
+      tsfin_patch_keys: Object.keys(tsfinPatch)
+    });
+
+    let res = null;
+    try {
+      res = await authFetch(API(route), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    } catch (fetchErr) {
+      const errJson = parseWrapperJsonMaybe(fetchErr?.body || fetchErr?.responseText || fetchErr?.message || '') || pickObject(fetchErr?.json || fetchErr?.payload || fetchErr?.data || {});
+      fetchErr.submitted_signature = body.expected_row_signature || body.row_signature || null;
+      fetchErr.expected_row_signature = body.expected_row_signature || null;
+      fetchErr.row_signature = body.row_signature || null;
+      fetchErr.expected_timesheet_id = body.expected_timesheet_id || null;
+      fetchErr.timesheet_id = id;
+      fetchErr.backend_current_signature = extractWrapperBackendCurrentSignature(fetchErr, errJson) || null;
+      fetchErr.json = fetchErr.json || (Object.keys(errJson).length ? errJson : null);
+      sigWarn('AUTHFETCH-THREW', {
+        route,
+        timesheet_id: id,
+        expected_timesheet_id: body.expected_timesheet_id || null,
+        submitted_signature: body.expected_row_signature || body.row_signature || null,
+        backend_current_signature: fetchErr.backend_current_signature || null,
+        status: fetchErr?.status || fetchErr?.statusCode || fetchErr?.response?.status || null,
+        message: String(fetchErr?.message || fetchErr || ''),
+        json: fetchErr.json || null
+      });
+      throw fetchErr;
+    }
     const text = await res.text().catch(() => '');
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+
+    sigLog('RESPONSE', {
+      route,
+      timesheet_id: id,
+      expected_timesheet_id: body.expected_timesheet_id || null,
+      submitted_signature: body.expected_row_signature || body.row_signature || null,
+      status: res.status,
+      ok: res.ok,
+      response_signature: extractWrapperSignature(json || {}),
+      backend_current_signature: extractWrapperBackendCurrentSignature(json || {}) || null,
+      response_ok: json && typeof json === 'object' ? json.ok : null,
+      response_success: json && typeof json === 'object' ? json.success : null
+    });
 
     if (!res.ok) {
       const msg = (json && typeof json === 'object' && (json.message || json.error)) ? String(json.message || json.error) : (text || `Failed to process daily manual timesheet (${res.status})`);
@@ -157927,6 +158117,22 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       err.status = res.status;
       err.json = (json && typeof json === 'object') ? json : null;
       err.body = text;
+      err.submitted_signature = body.expected_row_signature || body.row_signature || null;
+      err.expected_row_signature = body.expected_row_signature || null;
+      err.row_signature = body.row_signature || null;
+      err.expected_timesheet_id = body.expected_timesheet_id || null;
+      err.timesheet_id = id;
+      err.backend_current_signature = extractWrapperBackendCurrentSignature(json || {}) || null;
+      sigWarn('RESPONSE-NOT-OK', {
+        route,
+        timesheet_id: id,
+        expected_timesheet_id: body.expected_timesheet_id || null,
+        submitted_signature: err.submitted_signature || null,
+        backend_current_signature: err.backend_current_signature || null,
+        status: res.status,
+        message: msg,
+        json: err.json
+      });
       GE();
       throw err;
     }
@@ -157935,6 +158141,21 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
     if (out.ok === false || out.success === false) {
       const err = new Error(String(out.message || out.error || out.error_code || 'Failed to process daily manual timesheet'));
       err.json = out;
+      err.submitted_signature = body.expected_row_signature || body.row_signature || null;
+      err.expected_row_signature = body.expected_row_signature || null;
+      err.row_signature = body.row_signature || null;
+      err.expected_timesheet_id = body.expected_timesheet_id || null;
+      err.timesheet_id = id;
+      err.backend_current_signature = extractWrapperBackendCurrentSignature(out || {}) || null;
+      sigWarn('RESPONSE-BUSINESS-FAIL', {
+        route,
+        timesheet_id: id,
+        expected_timesheet_id: body.expected_timesheet_id || null,
+        submitted_signature: err.submitted_signature || null,
+        backend_current_signature: err.backend_current_signature || null,
+        message: err.message,
+        json: out
+      });
       GE();
       throw err;
     }
@@ -157952,10 +158173,30 @@ async function processDailyManualTimesheet(timesheetId, payload = {}) {
       }
     } catch {}
 
-    L('SUCCESS', { current_timesheet_id: out.current_timesheet_id, row_patch_keys: Object.keys(out.row_patch || {}) });
+    L('SUCCESS', { current_timesheet_id: out.current_timesheet_id, submitted_signature: body.expected_row_signature || body.row_signature || null, response_signature: extractWrapperSignature(out || {}), row_patch_keys: Object.keys(out.row_patch || {}) });
+    sigLog('SUCCESS', {
+      timesheet_id: id,
+      current_timesheet_id: out.current_timesheet_id || null,
+      submitted_signature: body.expected_row_signature || body.row_signature || null,
+      response_signature: extractWrapperSignature(out || {}) || null,
+      new_status: out.new_status || out.processing_status || null,
+      row_patch_keys: Object.keys(out.row_patch || {})
+    });
     GE();
     return out;
   } catch (err) {
+    const errJson = parseWrapperJsonMaybe(err?.body || '') || pickObject(err?.json || err?.payload || err?.data || {});
+    const submittedSignature = trimStr(err?.submitted_signature || err?.expected_row_signature || err?.row_signature || '');
+    const backendCurrentSignature = trimStr(err?.backend_current_signature || extractWrapperBackendCurrentSignature(err, errJson) || '');
+    sigWarn('FAILED', {
+      message: String(err?.message || err || ''),
+      status: err?.status || err?.statusCode || err?.response?.status || null,
+      timesheet_id: trimStr(err?.timesheet_id || timesheetId || '') || null,
+      expected_timesheet_id: trimStr(err?.expected_timesheet_id || '') || null,
+      submitted_signature: submittedSignature || null,
+      backend_current_signature: backendCurrentSignature || null,
+      json: Object.keys(errJson).length ? errJson : null
+    });
     if (LOGM) console.warn('[TS][PROCESS-DAILY-WRAPPER] FAILED', err);
     GE();
     throw err;
