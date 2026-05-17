@@ -26341,6 +26341,14 @@ async function bankingPayPreview(pay_date) {
     const snapshotRunIdText = trimStr(ctx.snapshot_run_id || ctx.snapshotRunId || '');
     const sessionSignatureText = trimStr(ctx.session_signature || ctx.sessionSignature || '');
     if (sessionIdText && isObsoleteSessionId(sessionIdText)) return true;
+    if (
+      isPostMutationRefresh &&
+      sessionIdText &&
+      (!sourceSessionId || sessionIdText !== sourceSessionId) &&
+      !obsoleteSessionIds.includes(sessionIdText)
+    ) {
+      return false;
+    }
     if (sourceSnapshotRunId && snapshotRunIdText && snapshotRunIdText === sourceSnapshotRunId) return true;
     if (sourceSessionSignature && sessionSignatureText && sessionSignatureText === sourceSessionSignature) return true;
     return false;
@@ -26349,6 +26357,75 @@ async function bankingPayPreview(pay_date) {
     if (!forceNewSession && !discardSourceSession && !isPostMutationRefresh) return false;
     const ctx = extractWorkbenchContextFromPayload(payload);
     return isReturnedWorkbenchContextObsolete(ctx);
+  };
+
+  const isUsablePostMutationReplacementContext = (ctxLike) => {
+    if (!isPostMutationRefresh) return false;
+    const ctx = isPlainObject(ctxLike) ? ctxLike : {};
+    const sessionIdText = trimStr(ctx.session_id || ctx.sessionId || '');
+    if (!sessionIdText) return false;
+    if (sourceSessionId && sessionIdText === sourceSessionId) return false;
+    if (obsoleteSessionIds.includes(sessionIdText)) return false;
+    return true;
+  };
+
+  const isUsablePostMutationPendingReplacementPayload = (payload) => {
+    if (!isPostMutationRefresh) return false;
+    const obj = isPlainObject(payload) ? payload : {};
+    if (obj.ok === false || obj.preview_unavailable === true) return false;
+    const ctx = extractWorkbenchContextFromPayload(obj);
+    if (!isUsablePostMutationReplacementContext(ctx)) return false;
+    if (payloadHasFullPreviewData(obj) || isReadyEmptyPayload(obj)) return false;
+    if (isRebaseRequiredPayload(obj)) return false;
+    const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
+    const statusText = trimStr(
+      obj.status ||
+      obj.state ||
+      obj.phase ||
+      obj.outcome ||
+      obj.refresh_outcome ||
+      obj.preview_refresh_outcome ||
+      progressObj.status ||
+      progressObj.state ||
+      progressObj.phase ||
+      progressObj.outcome ||
+      ''
+    ).toUpperCase();
+    const pendingSignal = !!(
+      obj.ready === false ||
+      obj.ready_flag === false ||
+      progressObj.ready === false ||
+      progressObj.ready_flag === false ||
+      obj.pending_refresh === true ||
+      obj.refresh_pending === true ||
+      obj.preview_refresh_pending === true ||
+      obj.progress_only === true ||
+      obj.progressOnly === true ||
+      obj.deferred === true ||
+      obj.bootstrap_only === true ||
+      obj.bootstrapOnly === true ||
+      obj.preview_bootstrap === true ||
+      progressObj.pending_refresh === true ||
+      progressObj.refresh_pending === true ||
+      progressObj.preview_refresh_pending === true ||
+      progressObj.progress_only === true ||
+      progressObj.progressOnly === true ||
+      progressObj.deferred === true ||
+      progressObj.bootstrap_only === true ||
+      progressObj.bootstrapOnly === true ||
+      progressObj.preview_bootstrap === true ||
+      [
+        'REFRESHING_CANDIDATES',
+        'SNAPSHOT_REFRESH_PENDING',
+        'WORKBENCH_REFRESH_PENDING',
+        'PENDING_REFRESH',
+        'PREVIEW_REFRESH_PENDING',
+        'PROGRESS_ONLY',
+        'BOOTSTRAP_ONLY'
+      ].includes(statusText) ||
+      payloadHasActivePendingWorkbenchWork(obj)
+    );
+    return pendingSignal;
   };
   const makeRebaseRequiredPayload = (code = 'REBASE_REQUIRED', message = 'Payment details changed. CloudTMS is refreshing the Banking Pay preview.') => ({
     ok: false,
@@ -26392,6 +26469,10 @@ async function bankingPayPreview(pay_date) {
       }
       throw openErr;
     }
+    let openedPayloadUsablePostMutationReplacement = isUsablePostMutationPendingReplacementPayload(openedSessionPayload);
+    if (openedPayloadUsablePostMutationReplacement) {
+      stampPendingReplacementWorkbenchContext(openedSessionPayload);
+    }
     let openedFailure = detectPreviewFailureEnvelope(openedSessionPayload);
     const openedFailureCode = normalisePreviewRebaseCode(openedFailure?.error_code || openedFailure?.code || '');
     if (openedFailure && staleSessionFailureCodes.has(openedFailureCode)) {
@@ -26406,6 +26487,10 @@ async function bankingPayPreview(pay_date) {
             return pendingPayload;
           }
           throw retryOpenErr;
+        }
+        openedPayloadUsablePostMutationReplacement = isUsablePostMutationPendingReplacementPayload(openedSessionPayload);
+        if (openedPayloadUsablePostMutationReplacement) {
+          stampPendingReplacementWorkbenchContext(openedSessionPayload);
         }
         openedFailure = detectPreviewFailureEnvelope(openedSessionPayload);
       }
@@ -26424,7 +26509,11 @@ async function bankingPayPreview(pay_date) {
       }
       throwPreviewFailureEnvelope(openedFailure, 'BANKING_PAY_PREVIEW_FAILED');
     }
-    if (isRebaseRequiredPayload(openedSessionPayload) || isReturnedSessionObsolete(openedSessionPayload)) {
+    openedPayloadUsablePostMutationReplacement = isUsablePostMutationPendingReplacementPayload(openedSessionPayload);
+    if (openedPayloadUsablePostMutationReplacement) {
+      stampPendingReplacementWorkbenchContext(openedSessionPayload);
+    }
+    if ((isRebaseRequiredPayload(openedSessionPayload) || isReturnedSessionObsolete(openedSessionPayload)) && !openedPayloadUsablePostMutationReplacement) {
       if (allowRetry && !isPostMutationRefresh && (sourceSessionId || existingWorkbenchSessionId)) {
         await discardSourceSessionIfPossible();
         let retriedPayload;
@@ -26457,7 +26546,7 @@ async function bankingPayPreview(pay_date) {
       }
       throwPreviewFailureEnvelope(makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'), 'BANKING_PAY_PREVIEW_FAILED');
     }
-    if (isPostMutationRefresh && !payloadHasFullPreviewData(openedSessionPayload) && !isReadyEmptyPayload(openedSessionPayload) && !isRebaseRequiredPayload(openedSessionPayload) && !isReturnedSessionObsolete(openedSessionPayload)) {
+    if (openedPayloadUsablePostMutationReplacement || (isPostMutationRefresh && !payloadHasFullPreviewData(openedSessionPayload) && !isReadyEmptyPayload(openedSessionPayload) && !isRebaseRequiredPayload(openedSessionPayload) && !isReturnedSessionObsolete(openedSessionPayload))) {
       stampPendingReplacementWorkbenchContext(openedSessionPayload);
     }
     return openedSessionPayload;
@@ -27096,7 +27185,8 @@ async function bankingPayPreview(pay_date) {
     if (!isPostMutationRefresh) return null;
     const ctx = extractWorkbenchContextFromPayload(payload);
     if (!ctx.session_id) return null;
-    if (isReturnedWorkbenchContextObsolete(ctx)) return null;
+    const usablePostMutationReplacementContext = isUsablePostMutationReplacementContext(ctx);
+    if (!usablePostMutationReplacementContext && isReturnedWorkbenchContextObsolete(ctx)) return null;
 
     const stableSessionSignature = ctx.session_signature || sessionSignatureHint || computedSessionSignature || suppliedSessionSignature || '';
     const stablePayDate = ctx.pay_date || effectivePayDate;
@@ -27344,7 +27434,11 @@ async function bankingPayPreview(pay_date) {
     const hasFullPreviewData = payloadHasFullPreviewData(payload);
     const payloadForApply = hasFullPreviewData ? normalizeFullPreviewPayloadFlags(payload) : payload;
     const ctx = validateWorkbenchPayloadContext(payloadForApply);
-    if (isPostMutationRefresh && isReturnedWorkbenchContextObsolete(ctx)) {
+    const usablePostMutationReplacementPayload = isUsablePostMutationPendingReplacementPayload(payloadForApply);
+    if (usablePostMutationReplacementPayload) {
+      stampPendingReplacementWorkbenchContext(payloadForApply);
+    }
+    if (isPostMutationRefresh && isReturnedWorkbenchContextObsolete(ctx) && !usablePostMutationReplacementPayload) {
       applyDeferredPreviewStateFromPayload({
         ...makeRebaseRequiredPayload('OBSOLETE_SESSION_REUSED'),
         session_id: ctx.session_id || null,
@@ -27371,7 +27465,11 @@ async function bankingPayPreview(pay_date) {
       };
     }
     if (isPostMutationRefresh && !hasFullPreviewData) {
-      stampPendingReplacementWorkbenchContext(payloadForApply);
+      if (usablePostMutationReplacementPayload) {
+        stampPendingReplacementWorkbenchContext(payloadForApply);
+      } else {
+        stampPendingReplacementWorkbenchContext(payloadForApply);
+      }
       applyDeferredPreviewStateFromPayload(payloadForApply);
       return {
         status: 'deferred',
@@ -27523,7 +27621,11 @@ async function bankingPayPreview(pay_date) {
   const applyPostMutationPreviewPayloadIfSettled = (payload) => {
     const obj = isPlainObject(payload) ? payload : {};
     if (!isPostMutationRefresh || !obj) return { settled: false, didFullPreviewLoad: false, payload: null, status: 'ignored' };
-    if (isRebaseRequiredPayload(obj) || isReturnedSessionObsolete(obj)) {
+    const usablePostMutationReplacementPayload = isUsablePostMutationPendingReplacementPayload(obj);
+    if (usablePostMutationReplacementPayload) {
+      stampPendingReplacementWorkbenchContext(obj);
+    }
+    if ((isRebaseRequiredPayload(obj) || isReturnedSessionObsolete(obj)) && !usablePostMutationReplacementPayload) {
       applyDeferredPreviewStateFromPayload(obj);
       return { settled: false, didFullPreviewLoad: false, payload: obj, status: 'rebase_required' };
     }
@@ -27938,8 +28040,6 @@ async function bankingPayPreview(pay_date) {
     }
   }
 }
-
-
 
 
 
