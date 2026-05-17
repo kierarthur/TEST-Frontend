@@ -22571,14 +22571,22 @@ function renderBankingNavAlertPopover(attentionState) {
     const numeric = Number(value);
     return Number.isFinite(numeric) && numeric > 0 ? Math.trunc(numeric) : fallback;
   };
-  const windowSummary = (windowState.alertSummary && typeof windowState.alertSummary === 'object' && !Array.isArray(windowState.alertSummary))
-    ? windowState.alertSummary
-    : ((windowState.banking_alert_summary && typeof windowState.banking_alert_summary === 'object' && !Array.isArray(windowState.banking_alert_summary)) ? windowState.banking_alert_summary : null);
-  const windowRawAlerts = Array.isArray(windowState.alerts)
+  const summaryHasRows = (summary) => !!(summary && typeof summary === 'object' && !Array.isArray(summary) && (
+    (Array.isArray(summary.alerts) && summary.alerts.length > 0) ||
+    (Array.isArray(summary.banking_alerts) && summary.banking_alerts.length > 0)
+  ));
+  const windowAlertSummary = (windowState.alertSummary && typeof windowState.alertSummary === 'object' && !Array.isArray(windowState.alertSummary)) ? windowState.alertSummary : null;
+  const windowBankingSummary = (windowState.banking_alert_summary && typeof windowState.banking_alert_summary === 'object' && !Array.isArray(windowState.banking_alert_summary)) ? windowState.banking_alert_summary : null;
+  const windowSummary = summaryHasRows(windowAlertSummary)
+    ? windowAlertSummary
+    : (summaryHasRows(windowBankingSummary) ? windowBankingSummary : (windowAlertSummary || windowBankingSummary || null));
+  const windowRawAlerts = Array.isArray(windowState.alerts) && windowState.alerts.length
     ? windowState.alerts
-    : (Array.isArray(windowState.banking_alerts)
+    : (Array.isArray(windowState.banking_alerts) && windowState.banking_alerts.length
       ? windowState.banking_alerts
-      : (Array.isArray(windowSummary?.alerts) ? windowSummary.alerts : []));
+      : (Array.isArray(windowSummary?.alerts) && windowSummary.alerts.length
+        ? windowSummary.alerts
+        : (Array.isArray(windowSummary?.banking_alerts) ? windowSummary.banking_alerts : [])));
   const windowCount = toSafeCount(
     windowState.count
     ?? windowState.unacknowledgedCount
@@ -22663,14 +22671,18 @@ function renderBankingNavAlertPopover(attentionState) {
     )
   );
   const isActiveAlert = (alert) => !!alert && typeof alert === 'object' && alert.is_active !== false && alert.active !== false && !isAcknowledged(alert);
-  const summary = (state.alertSummary && typeof state.alertSummary === 'object' && !Array.isArray(state.alertSummary))
-    ? state.alertSummary
-    : ((state.banking_alert_summary && typeof state.banking_alert_summary === 'object' && !Array.isArray(state.banking_alert_summary)) ? state.banking_alert_summary : null);
-  const rawAlerts = Array.isArray(state.alerts)
+  const alertSummary = (state.alertSummary && typeof state.alertSummary === 'object' && !Array.isArray(state.alertSummary)) ? state.alertSummary : null;
+  const bankingSummary = (state.banking_alert_summary && typeof state.banking_alert_summary === 'object' && !Array.isArray(state.banking_alert_summary)) ? state.banking_alert_summary : null;
+  const summary = summaryHasRows(alertSummary)
+    ? alertSummary
+    : (summaryHasRows(bankingSummary) ? bankingSummary : (alertSummary || bankingSummary || null));
+  const rawAlerts = Array.isArray(state.alerts) && state.alerts.length
     ? state.alerts
-    : (Array.isArray(state.banking_alerts)
+    : (Array.isArray(state.banking_alerts) && state.banking_alerts.length
       ? state.banking_alerts
-      : (Array.isArray(summary?.alerts) ? summary.alerts : []));
+      : (Array.isArray(summary?.alerts) && summary.alerts.length
+        ? summary.alerts
+        : (Array.isArray(summary?.banking_alerts) ? summary.banking_alerts : [])));
   const countCandidate = Number(
     state.count
     ?? state.unacknowledgedCount
@@ -22682,16 +22694,26 @@ function renderBankingNavAlertPopover(attentionState) {
   );
   const totalUnacknowledged = Number.isFinite(countCandidate) ? Math.max(0, Math.trunc(countCandidate)) : rawAlerts.filter(isActiveAlert).length;
   const alerts = totalUnacknowledged > 0 ? rawAlerts.filter(isActiveAlert) : [];
-  const detailsDeferred = totalUnacknowledged > 0 && alerts.length < 1 && (
-    state.detailsDeferred === true ||
-    state.details_deferred === true ||
+  const detailsLoading = totalUnacknowledged > 0 && alerts.length < 1 && (
     state.detailsLoading === true ||
     state.details_loading === true ||
+    summary?.detailsLoading === true ||
+    summary?.details_loading === true
+  );
+  const detailsSettledDeferred = totalUnacknowledged > 0 && alerts.length < 1 && !detailsLoading && (
+    state.detailsSettledDeferred === true ||
+    state.banking_alert_summary_detail_settled_deferred === true ||
+    summary?.detailsSettledDeferred === true ||
+    summary?.banking_alert_summary_detail_settled_deferred === true
+  );
+  const detailsDeferred = totalUnacknowledged > 0 && alerts.length < 1 && (
+    detailsLoading === true ||
+    detailsSettledDeferred === true ||
+    state.detailsDeferred === true ||
+    state.details_deferred === true ||
     state.banking_alert_summary_deferred === true ||
     summary?.detailsDeferred === true ||
     summary?.details_deferred === true ||
-    summary?.detailsLoading === true ||
-    summary?.details_loading === true ||
     summary?.banking_alert_summary_deferred === true
   );
   const clearing = state.clearing === true
@@ -22798,15 +22820,17 @@ function renderBankingNavAlertPopover(attentionState) {
   const hiddenCount = detailsDeferred ? 0 : Math.max(0, totalUnacknowledged - alerts.length);
   const rowsHtml = alerts.length
     ? alerts.map(renderAlertRow).join('')
-    : (detailsDeferred
-      ? `<div class="mini" data-banking-alert-details-deferred="1" style="padding:10px 0;opacity:.9;white-space:normal;">Banking alert details are refreshing. The Banking icon is red because there ${totalUnacknowledged === 1 ? 'is' : 'are'} ${enc(String(totalUnacknowledged))} unacknowledged Banking alert${totalUnacknowledged === 1 ? '' : 's'}.</div>`
-      : `<div class="mini" style="padding:10px 0;opacity:.85;">No current unacknowledged Banking alerts.</div>`);
+    : (detailsLoading
+      ? `<div class="mini" data-banking-alert-details-deferred="1" data-banking-alert-details-loading="1" style="padding:10px 0;opacity:.9;white-space:normal;">Banking alert details are refreshing. The Banking icon is red because there ${totalUnacknowledged === 1 ? 'is' : 'are'} ${enc(String(totalUnacknowledged))} unacknowledged Banking alert${totalUnacknowledged === 1 ? '' : 's'}.</div>`
+      : (detailsDeferred
+        ? `<div class="mini" data-banking-alert-details-deferred="1" data-banking-alert-details-loading="0" data-banking-alert-details-settled-deferred="${detailsSettledDeferred ? '1' : '0'}" style="padding:10px 0;opacity:.9;white-space:normal;">Banking alert details are not available yet. The Banking icon is red because there ${totalUnacknowledged === 1 ? 'is' : 'are'} ${enc(String(totalUnacknowledged))} unacknowledged Banking alert${totalUnacknowledged === 1 ? '' : 's'}.</div>`
+        : `<div class="mini" style="padding:10px 0;opacity:.85;">No current unacknowledged Banking alerts.</div>`));
   const clearAllDisabled = totalUnacknowledged <= 0 || clearing;
   const clearAllAttrs = clearAllDisabled ? 'data-disabled="1" aria-disabled="true" disabled' : '';
   const clearAllStyle = clearAllDisabled ? ' style="opacity:.45;filter:saturate(.6) brightness(.9);"' : '';
 
   return `
-    <div class="banking-nav-alert-popover card" role="dialog" aria-label="Banking alerts" data-banking-nav-alert-popover="1" data-clearing="${clearing ? '1' : '0'}" data-banking-alert-details-deferred="${detailsDeferred ? '1' : '0'}" data-banking-alert-count="${enc(String(totalUnacknowledged))}" style="position:fixed;z-index:2147483000;width:min(420px,calc(100vw - 24px));max-height:min(70vh,620px);overflow:auto;padding:12px;box-shadow:0 14px 36px rgba(15,23,42,.18);">
+    <div class="banking-nav-alert-popover card" role="dialog" aria-label="Banking alerts" data-banking-nav-alert-popover="1" data-clearing="${clearing ? '1' : '0'}" data-banking-alert-details-deferred="${detailsDeferred ? '1' : '0'}" data-banking-alert-details-loading="${detailsLoading ? '1' : '0'}" data-banking-alert-count="${enc(String(totalUnacknowledged))}" style="position:fixed;z-index:2147483000;width:min(420px,calc(100vw - 24px));max-height:min(70vh,620px);overflow:auto;padding:12px;box-shadow:0 14px 36px rgba(15,23,42,.18);">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;">
         <div>
           <div style="font-weight:800;font-size:14px;">Banking alerts</div>
@@ -23367,7 +23391,6 @@ function attachBankingNavAlertPopoverHandlers() {
   };
 }
 
-
 function applyAlertSummaryToState(responsePayload) {
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const deepClone = (value) => {
@@ -23580,9 +23603,37 @@ function applyAlertSummaryToState(responsePayload) {
     return true;
   };
 
+  const collectAlertRows = (...sources) => {
+    const rows = [];
+    const seen = new Set();
+    const pushAlert = (alert) => {
+      if (!isPlainObject(alert)) return;
+      const fingerprint = getFingerprint(alert);
+      const key = fingerprint || `${toText(alert.entity_kind || alert.entityKind)}:${toText(alert.entity_id || alert.entityId || alert.pay_batch_id || alert.payBatchId)}:${toText(alert.alert_kind || alert.kind || alert.issue_kind || alert.title || alert.label)}:${rows.length}`;
+      if (key && seen.has(key)) return;
+      if (key) seen.add(key);
+      rows.push(alert);
+    };
+    const pushSource = (source) => {
+      if (Array.isArray(source)) {
+        source.forEach(pushAlert);
+        return;
+      }
+      if (!isPlainObject(source)) return;
+      if (Array.isArray(source.alerts)) source.alerts.forEach(pushAlert);
+      if (Array.isArray(source.banking_alerts)) source.banking_alerts.forEach(pushAlert);
+    };
+    sources.forEach(pushSource);
+    return rows;
+  };
+
   const payload = isPlainObject(responsePayload) ? responsePayload : {};
   const acknowledgement = isPlainObject(payload.acknowledge_result) ? payload.acknowledge_result : {};
+  const directIncludedSummary = payload.banking_alert_summary_included === true && isPlainObject(payload.banking_alert_summary)
+    ? payload.banking_alert_summary
+    : null;
   const summaryCandidates = [
+    directIncludedSummary,
     acknowledgement.remaining_alert_summary,
     acknowledgement.alert_summary,
     acknowledgement.remaining_alerts,
@@ -23593,11 +23644,13 @@ function applyAlertSummaryToState(responsePayload) {
     acknowledgement.banking_alert_summary
   ].filter(isPlainObject);
   const summary = summaryCandidates.length ? summaryCandidates[0] : null;
-  const summaryAlerts = Array.isArray(summary?.alerts) ? summary.alerts : null;
-  const responseAlerts = summaryAlerts
-    ?? (Array.isArray(acknowledgement.banking_alerts)
-      ? acknowledgement.banking_alerts
-      : (Array.isArray(payload.banking_alerts) ? payload.banking_alerts : []));
+  const responseAlerts = collectAlertRows(
+    summary,
+    acknowledgement.banking_alerts,
+    payload.banking_alerts,
+    payload.alerts,
+    acknowledgement.alerts
+  );
 
   const suppressionMap = purgeSuppressionMap();
   let removedSuppressedCount = 0;
@@ -23633,7 +23686,7 @@ function applyAlertSummaryToState(responsePayload) {
     ?? payload.unacknowledged_count
     ?? payload.banking_unacknowledged_alert_count
     ?? filteredAlerts.length;
-  const rawCount = toCount(countRaw, Array.isArray(responseAlerts) ? responseAlerts.length : filteredAlerts.length);
+  const rawCount = toCount(countRaw, responseAlerts.length || filteredAlerts.length);
   const usableAlertRows = filteredAlerts.filter((alert) => !!getFingerprint(alert));
   const positiveWithoutUsableAlertRows = rawCount > 0 && usableAlertRows.length < 1;
   if (positiveWithoutUsableAlertRows) {
@@ -23671,7 +23724,7 @@ function applyAlertSummaryToState(responsePayload) {
     if (wasRequestedDetailResponse) markDetailSettledDeferred(detailHash);
     const queuedDetailRefresh = !wasRequestedDetailResponse && queueDetailRefreshForHash(detailHash, 'banking-alert-detail-deferred');
     const detailsSettledDeferred = isDetailSettledDeferredForHash(detailHash);
-    const detailsSettledLoaded = isDetailSettledLoadedForHash(detailHash);
+    const detailsSettledLoaded = false;
     const detailsLoading = deferredCount > 0
       && detailsSettledDeferred !== true
       && detailsSettledLoaded !== true
@@ -23852,8 +23905,8 @@ function applyAlertSummaryToState(responsePayload) {
       }
     } catch {}
   }
-  const detailsSettledDeferred = count > 0 && isDetailSettledDeferredForHash(detailHash);
-  const detailsSettledLoaded = count > 0 && (alerts.length > 0 || isDetailSettledLoadedForHash(detailHash));
+  const detailsSettledDeferred = count > 0 && alerts.length < 1 && isDetailSettledDeferredForHash(detailHash);
+  const detailsSettledLoaded = count > 0 && alerts.length > 0;
   const summaryToStore = summary
     ? {
         ...deepClone(summary),
@@ -23873,7 +23926,9 @@ function applyAlertSummaryToState(responsePayload) {
         detailsSettledDeferred,
         detailsSettledLoaded,
         banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
-        banking_alert_summary_detail_settled_loaded: detailsSettledLoaded
+        banking_alert_summary_detail_settled_loaded: detailsSettledLoaded,
+        banking_alert_summary_included: alerts.length > 0,
+        summaryIncluded: alerts.length > 0
       }
     : {
         ok: true,
@@ -23893,7 +23948,9 @@ function applyAlertSummaryToState(responsePayload) {
         detailsSettledDeferred,
         detailsSettledLoaded,
         banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
-        banking_alert_summary_detail_settled_loaded: detailsSettledLoaded
+        banking_alert_summary_detail_settled_loaded: detailsSettledLoaded,
+        banking_alert_summary_included: alerts.length > 0,
+        summaryIncluded: alerts.length > 0
       };
 
   if (typeof window !== 'undefined' && alertHash) {
@@ -23953,6 +24010,8 @@ function applyAlertSummaryToState(responsePayload) {
     detailsSettledLoaded,
     banking_alert_summary_detail_settled_deferred: detailsSettledDeferred,
     banking_alert_summary_detail_settled_loaded: detailsSettledLoaded,
+    banking_alert_summary_included: alerts.length > 0,
+    summaryIncluded: alerts.length > 0,
     title: count > 0
       ? String(highestLabel || 'Banking action needed')
       : 'No current unacknowledged Banking alerts',
@@ -24009,7 +24068,6 @@ function applyAlertSummaryToState(responsePayload) {
 
   return attentionState;
 }
-
 
 async function bankingAcknowledgeAlerts(input = {}) {
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -41894,6 +41952,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 }
 
 
+
 function updateBankingNavAttentionState(attentionState) {
   const navRoot = (typeof byId === 'function' ? byId('nav') : document.getElementById('nav')) || document;
   const state = (attentionState && typeof attentionState === 'object') ? attentionState : {};
@@ -41907,17 +41966,23 @@ function updateBankingNavAttentionState(attentionState) {
     try { return JSON.parse(JSON.stringify(value == null ? null : value)); } catch { return value; }
   };
 
+  const hasSummaryRows = (summary) => !!(summary && typeof summary === 'object' && !Array.isArray(summary) && (
+    (Array.isArray(summary.alerts) && summary.alerts.length > 0) ||
+    (Array.isArray(summary.banking_alerts) && summary.banking_alerts.length > 0)
+  ));
   const sourceSummary = (() => {
-    if (state.alertSummary && typeof state.alertSummary === 'object' && !Array.isArray(state.alertSummary)) return state.alertSummary;
-    if (state.banking_alert_summary && typeof state.banking_alert_summary === 'object' && !Array.isArray(state.banking_alert_summary)) return state.banking_alert_summary;
-    return {};
+    const alertSummary = (state.alertSummary && typeof state.alertSummary === 'object' && !Array.isArray(state.alertSummary)) ? state.alertSummary : null;
+    const bankingSummary = (state.banking_alert_summary && typeof state.banking_alert_summary === 'object' && !Array.isArray(state.banking_alert_summary)) ? state.banking_alert_summary : null;
+    if (hasSummaryRows(alertSummary)) return alertSummary;
+    if (hasSummaryRows(bankingSummary)) return bankingSummary;
+    return alertSummary || bankingSummary || {};
   })();
 
-  const activeAlertsRaw = Array.isArray(state.alerts)
+  const activeAlertsRaw = Array.isArray(state.alerts) && state.alerts.length > 0
     ? state.alerts
-    : (Array.isArray(state.banking_alerts)
+    : (Array.isArray(state.banking_alerts) && state.banking_alerts.length > 0
       ? state.banking_alerts
-      : (Array.isArray(sourceSummary.alerts)
+      : (Array.isArray(sourceSummary.alerts) && sourceSummary.alerts.length > 0
         ? sourceSummary.alerts
         : (Array.isArray(sourceSummary.banking_alerts) ? sourceSummary.banking_alerts : [])));
 
@@ -41946,8 +42011,14 @@ function updateBankingNavAttentionState(attentionState) {
   const detailHashField = (field) => String((hb && Object.prototype.hasOwnProperty.call(hb, field)) ? (hb[field] || '') : '').trim();
   const hasAlertRows = count > 0 && activeAlerts.length > 0;
   const inferredDetailsDeferred = count > 0 && !hasAlertRows;
-  const detailsSettledDeferred = count > 0 && !!alertHash && detailHashField('_bankingAlertSummaryDetailSettledDeferredHash') === alertHash;
-  const detailsSettledLoaded = count > 0 && !!alertHash && (hasAlertRows || detailHashField('_bankingAlertSummaryDetailLoadedHash') === alertHash);
+  const detailsSettledDeferred = count > 0 && !hasAlertRows && !!alertHash && (
+    state.detailsSettledDeferred === true
+    || state.banking_alert_summary_detail_settled_deferred === true
+    || sourceSummary.detailsSettledDeferred === true
+    || sourceSummary.banking_alert_summary_detail_settled_deferred === true
+    || detailHashField('_bankingAlertSummaryDetailSettledDeferredHash') === alertHash
+  );
+  const detailsSettledLoaded = count > 0 && hasAlertRows;
   const detailsInFlightForHash = count > 0 && !!alertHash && !!hb && (
     detailHashField('_bankingAlertSummaryDetailInFlightHash') === alertHash
     || (hb._bankingAlertSummaryDetailInFlight === true && !detailHashField('_bankingAlertSummaryDetailInFlightHash') && detailHashField('_bankingAlertSummaryDetailRequestedHash') === alertHash)
@@ -41975,7 +42046,7 @@ function updateBankingNavAttentionState(attentionState) {
   const highestSeverity = count > 0 && highestSeverityRaw ? String(highestSeverityRaw) : null;
   const titleText = String(state.title || (highestLabel ? `Banking issue: ${highestLabel}` : 'Banking action needed')).trim() || 'Banking action needed';
   const keepPopoverOpen = state.keepPopoverOpen === true || state.preservePopover === true || state.keepOpen === true;
-  const detailsDeferred = count > 0 && (
+  const detailsDeferred = count > 0 && !hasAlertRows && (
     inferredDetailsDeferred === true
     || state.detailsDeferred === true
     || state.details_deferred === true
@@ -42060,14 +42131,18 @@ function updateBankingNavAttentionState(attentionState) {
   const forceReapplyRequested = state.force === true || state.forceReapply === true || state.reconcile === true || state.force_reapply === true;
   const makeStableKey = (candidateState) => {
     const candidate = (candidateState && typeof candidateState === 'object') ? candidateState : {};
-    const candidateSummary = (candidate.alertSummary && typeof candidate.alertSummary === 'object' && !Array.isArray(candidate.alertSummary))
-      ? candidate.alertSummary
-      : ((candidate.banking_alert_summary && typeof candidate.banking_alert_summary === 'object' && !Array.isArray(candidate.banking_alert_summary)) ? candidate.banking_alert_summary : {});
-    const candidateAlerts = Array.isArray(candidate.alerts)
+    const candidateAlertSummary = (candidate.alertSummary && typeof candidate.alertSummary === 'object' && !Array.isArray(candidate.alertSummary)) ? candidate.alertSummary : null;
+    const candidateBankingSummary = (candidate.banking_alert_summary && typeof candidate.banking_alert_summary === 'object' && !Array.isArray(candidate.banking_alert_summary)) ? candidate.banking_alert_summary : null;
+    const candidateSummary = hasSummaryRows(candidateAlertSummary)
+      ? candidateAlertSummary
+      : (hasSummaryRows(candidateBankingSummary) ? candidateBankingSummary : (candidateAlertSummary || candidateBankingSummary || {}));
+    const candidateAlerts = Array.isArray(candidate.alerts) && candidate.alerts.length > 0
       ? candidate.alerts
-      : (Array.isArray(candidate.banking_alerts)
+      : (Array.isArray(candidate.banking_alerts) && candidate.banking_alerts.length > 0
         ? candidate.banking_alerts
-        : (Array.isArray(candidateSummary.alerts) ? candidateSummary.alerts : []));
+        : (Array.isArray(candidateSummary.alerts) && candidateSummary.alerts.length > 0
+          ? candidateSummary.alerts
+          : (Array.isArray(candidateSummary.banking_alerts) ? candidateSummary.banking_alerts : [])));
     const fingerprints = candidateAlerts.map((alert) => {
       if (!alert || typeof alert !== 'object') return '';
       return String(alert.alert_fingerprint || alert.fingerprint || alert.banking_alert_fingerprint || '').trim();
@@ -42075,7 +42150,7 @@ function updateBankingNavAttentionState(attentionState) {
     const candidateCount = normaliseCount(candidate.count ?? candidate.unacknowledgedCount ?? candidate.unacknowledged_count ?? candidate.banking_unacknowledged_alert_count ?? candidateSummary.unacknowledged_count ?? candidateSummary.banking_unacknowledged_alert_count ?? candidateAlerts.length);
     const candidateHasAlertRows = candidateCount > 0 && candidateAlerts.length > 0;
     const candidateInferredDetailsDeferred = candidateCount > 0 && !candidateHasAlertRows;
-    const candidateDetailsDeferred = candidateCount > 0 && (
+    const candidateDetailsDeferred = candidateCount > 0 && !candidateHasAlertRows && (
       candidateInferredDetailsDeferred === true
       || candidate.detailsDeferred === true
       || candidate.details_deferred === true
@@ -42085,8 +42160,14 @@ function updateBankingNavAttentionState(attentionState) {
       || candidateSummary.banking_alert_summary_deferred === true
     );
     const candidateAlertHash = String(candidate.banking_alert_hash || candidate.banking_alert_summary_signature || candidateSummary.banking_alert_hash || candidateSummary.banking_alert_summary_signature || '').trim();
-    const candidateSettledDeferred = candidateCount > 0 && !!candidateAlertHash && detailHashField('_bankingAlertSummaryDetailSettledDeferredHash') === candidateAlertHash;
-    const candidateSettledLoaded = candidateCount > 0 && !!candidateAlertHash && (candidateHasAlertRows || detailHashField('_bankingAlertSummaryDetailLoadedHash') === candidateAlertHash);
+    const candidateSettledDeferred = candidateCount > 0 && !candidateHasAlertRows && !!candidateAlertHash && (
+      candidate.detailsSettledDeferred === true
+      || candidate.banking_alert_summary_detail_settled_deferred === true
+      || candidateSummary.detailsSettledDeferred === true
+      || candidateSummary.banking_alert_summary_detail_settled_deferred === true
+      || detailHashField('_bankingAlertSummaryDetailSettledDeferredHash') === candidateAlertHash
+    );
+    const candidateSettledLoaded = candidateCount > 0 && candidateHasAlertRows;
     const candidateInFlightForHash = candidateCount > 0 && !!candidateAlertHash && !!hb && (
       detailHashField('_bankingAlertSummaryDetailInFlightHash') === candidateAlertHash
       || (hb._bankingAlertSummaryDetailInFlight === true && !detailHashField('_bankingAlertSummaryDetailInFlightHash') && detailHashField('_bankingAlertSummaryDetailRequestedHash') === candidateAlertHash)
@@ -42125,6 +42206,7 @@ function updateBankingNavAttentionState(attentionState) {
       detailsSettledDeferred: candidateSettledDeferred === true,
       detailsSettledLoaded: candidateSettledLoaded === true,
       summaryIncluded: candidateSummaryIncluded === true,
+      alertRowsCount: candidateAlerts.length,
       fingerprints
     });
   };
@@ -42391,7 +42473,6 @@ function updateBankingNavAttentionState(attentionState) {
 
   return nextState;
 }
-
 
 
 
