@@ -168974,24 +168974,70 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
       'underlying_channel_family',
       'is_authorised',
       'locked',
-      'is_import_authoritative',
-      'can_add_additional_manual',
-      'can_edit_timesheet_data',
-      'can_bulk_unauthorise'
+      'is_import_authoritative'
     ].forEach((key) => {
       const value = readFirst([activeContext, key], [activeCtx, key]);
       if (value !== undefined) srcRow[key] = value;
     });
 
-    const editability = (typeof classifyBulkAuthoriseEditability === 'function')
-      ? classifyBulkAuthoriseEditability({ ...activeContext, row: srcRow, details: activeDetails, state: activeCtx?.state, active_ctx: activeCtx })
-      : { canAddAdditionalManual: readBool([activeContext, 'can_add_additional_manual'], [srcRow, 'can_add_additional_manual']) === true };
-
-    const backendCanAddAdditionalManual = readBool(
-      [activeContext, 'can_add_additional_manual'],
-      [activeCtx || {}, 'can_add_additional_manual'],
-      [srcRow, 'can_add_additional_manual']
+    const rowCanAddAdditionalManual = readBool(
+      [srcRow, 'can_add_additional_manual'],
+      [srcRow, 'canAddAdditionalManual'],
+      [srcRow.action_flags || {}, 'can_add_additional_manual'],
+      [srcRow.actionFlags || {}, 'can_add_additional_manual'],
+      [srcRow.actionFlags || {}, 'canAddAdditionalManual'],
+      [srcRowBase || {}, 'can_add_additional_manual'],
+      [srcRowBase?.action_flags || {}, 'can_add_additional_manual'],
+      [st.active_row || {}, 'can_add_additional_manual'],
+      [st.active_row?.action_flags || {}, 'can_add_additional_manual'],
+      [activeContext.row || {}, 'can_add_additional_manual'],
+      [activeContext.row?.action_flags || {}, 'can_add_additional_manual'],
+      [activeContext.data_row || {}, 'can_add_additional_manual'],
+      [activeContext.data_row?.action_flags || {}, 'can_add_additional_manual'],
+      [activeContext.normalised_ctx?.row || {}, 'can_add_additional_manual'],
+      [activeContext.normalised_ctx?.row?.action_flags || {}, 'can_add_additional_manual'],
+      [activeContext.normalised_ctx?.data_row || {}, 'can_add_additional_manual'],
+      [activeContext.normalised_ctx?.data_row?.action_flags || {}, 'can_add_additional_manual'],
+      [activeCtx?.row || {}, 'can_add_additional_manual'],
+      [activeCtx?.row?.action_flags || {}, 'can_add_additional_manual'],
+      [activeCtx?.data_row || {}, 'can_add_additional_manual'],
+      [activeCtx?.data_row?.action_flags || {}, 'can_add_additional_manual'],
+      [activeCtx?.normalised_ctx?.row || {}, 'can_add_additional_manual'],
+      [activeCtx?.normalised_ctx?.row?.action_flags || {}, 'can_add_additional_manual'],
+      [activeCtx?.normalised_ctx?.data_row || {}, 'can_add_additional_manual'],
+      [activeCtx?.normalised_ctx?.data_row?.action_flags || {}, 'can_add_additional_manual']
     ) === true;
+    const contextCanAddAdditionalManual = readBool(
+      [activeContext, 'can_add_additional_manual'],
+      [activeCtx || {}, 'can_add_additional_manual']
+    ) === true;
+    const backendCanAddAdditionalManual = rowCanAddAdditionalManual || contextCanAddAdditionalManual;
+    const activeContextForEditability = rowCanAddAdditionalManual
+      ? {
+        ...activeContext,
+        can_add_additional_manual: true,
+        action_flags: {
+          ...(activeContext.action_flags && typeof activeContext.action_flags === 'object' ? activeContext.action_flags : {}),
+          can_add_additional_manual: true
+        }
+      }
+      : activeContext;
+    const srcRowForEditability = rowCanAddAdditionalManual
+      ? {
+        ...srcRow,
+        can_add_additional_manual: true,
+        action_flags: {
+          ...(srcRow.action_flags && typeof srcRow.action_flags === 'object' ? srcRow.action_flags : {}),
+          can_add_additional_manual: true
+        }
+      }
+      : srcRow;
+
+    const editability = (typeof classifyBulkAuthoriseEditability === 'function')
+      ? classifyBulkAuthoriseEditability({ ...activeContextForEditability, row: srcRowForEditability, details: activeDetails, state: activeCtx?.state, active_ctx: activeCtx })
+      : { canAddAdditionalManual: backendCanAddAdditionalManual === true };
+
+    const canAddAdditionalManual = editability.canAddAdditionalManual === true || rowCanAddAdditionalManual === true;
     const sheetScope = upper(readFirst([activeDetails, 'sheet_scope'], [srcRow, 'sheet_scope'], [ts, 'sheet_scope'], [srcRow, 'period_type']) || editability.sheetScope || '');
     const timesheetId = trimStr(readFirst([activeContext, 'current_timesheet_id'], [activeContext, 'requested_timesheet_id'], [ts, 'timesheet_id'], [srcRow, 'timesheet_id'], [srcRow, 'current_timesheet_id']) || '');
     const contractWeekId = trimStr(readFirst([activeDetails, 'contract_week_id'], [cw, 'id'], [srcRow, 'contract_week_id'], [activeContext, 'contract_week_id']) || '');
@@ -169004,9 +169050,17 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
     );
     const hasValidCreationIdentity = !!((isWeekly && contractWeekId) || (isDaily && timesheetId));
 
-    if (editability.canAddAdditionalManual !== true || backendCanAddAdditionalManual !== true || !hasValidCreationIdentity || invalidOrCancelled) {
+    if (canAddAdditionalManual !== true || backendCanAddAdditionalManual !== true || !hasValidCreationIdentity || invalidOrCancelled) {
       GE();
       return { ok: false, error: 'This row cannot add an additional timesheet.' };
+    }
+
+    if (rowCanAddAdditionalManual === true) {
+      srcRow.can_add_additional_manual = true;
+      srcRow.action_flags = {
+        ...(srcRow.action_flags && typeof srcRow.action_flags === 'object' ? srcRow.action_flags : {}),
+        can_add_additional_manual: true
+      };
     }
 
     const sourceRowKey = trimStr(srcRow.row_key || srcRow.current_row_key || srcRow.source_row_key || '');
@@ -169137,6 +169191,8 @@ async function handleBulkAuthoriseAddAdditionalManual(state, row) {
     return { ok: false, error: st.error_text };
   }
 }
+
+
 
 async function handleBulkAuthoriseRouteConversion(state, row, action) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][ROUTE-CONVERSION]');
