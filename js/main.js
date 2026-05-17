@@ -118268,6 +118268,37 @@ async function runBankingPayBatchCancelFlow({
     try {
       if (typeof resetPayPreviewAndDecisions === 'function') {
         postCancelPreviewResetOutcome = await resetPayPreviewAndDecisions(postCancelResetOptions);
+      } else if (typeof bankingPayPreview === 'function') {
+        postCancelPreviewResetOutcome = await bankingPayPreview({
+          ...postCancelResetOptions,
+          action: 'POST_DRAFT_CANCEL_PREVIEW_REFRESH',
+          mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+          reason: 'CANCEL_DELETE_DRAFT_SUCCESS',
+          mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+          post_mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+          source_session_id: sourceSessionId || null,
+          source_snapshot_run_id: sourceSnapshotRunId || null,
+          source_session_version: sourceSessionVersion ?? null,
+          source_session_signature: sourceSessionSignature || null,
+          source_session_already_discarded: true,
+          obsolete_session_ids: canonicalObsoleteSessionIds,
+          dirty_candidate_ids: [...dirtiedCandidateIds],
+          pending_candidate_ids: [...dirtiedCandidateIds],
+          refresh_job_ids: [...snapshotRefreshJobIds],
+          selected_preview_row_ids: [],
+          original_selected_preview_row_ids: [],
+          discarded_selected_preview_row_ids: [],
+          cancelled_pay_batch_id: id,
+          pay_batch_id: id,
+          preview_reopen_required: true,
+          poll_until_settled: true,
+          bounded_post_mutation_poll: true,
+          userInitiated: false,
+          silent: true,
+          background: true,
+          showModal: false
+        });
+        postCancelPreviewResetWarning = null;
       } else {
         postCancelPreviewResetWarning = applyPostCancelPreviewWarning({
           error_code: 'BANKING_PAY_PREVIEW_RESET_HELPER_MISSING',
