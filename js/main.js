@@ -161048,7 +161048,6 @@ async function handleBulkProcessSave(state) {
 }
 
 
-
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -161642,10 +161641,105 @@ async function handleBulkProcessProcess(state) {
     }
     return refreshed;
   };
+  const parseProcessExpenseDraftObject = (value) => {
+    if (!value) return {};
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+      } catch {}
+    }
+    return {};
+  };
+  const collectProcessExpenseDraft = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const sources = [
+      active?.stateCtx?.expensesDraft,
+      active?.ctx?.state?.expensesDraft,
+      st.active_ctx?.state?.expensesDraft,
+      st.active_context?.state?.expensesDraft,
+      window.modalCtx?.timesheetState?.expensesDraft,
+      active?.row?.totals_json?.expenses_draft,
+      active?.details?.contract_week?.totals_json?.expenses_draft,
+      st.active_row?.totals_json?.expenses_draft,
+      st.active_details?.contract_week?.totals_json?.expenses_draft,
+      st.active_context?.row?.totals_json?.expenses_draft,
+      st.active_context?.data_row?.totals_json?.expenses_draft,
+      st.active_ctx?.row?.totals_json?.expenses_draft,
+      st.active_ctx?.data_row?.totals_json?.expenses_draft,
+      findMatchingDatasetRowForProcess(active)?.totals_json?.expenses_draft
+    ];
+    for (const source of sources) {
+      const draft = parseProcessExpenseDraftObject(source);
+      if (Object.keys(draft).length) return draft;
+    }
+    return {};
+  };
+  const getRequiredExpenseEvidenceKindsForProcess = (activeInput = null) => {
+    const draft = collectProcessExpenseDraft(activeInput);
+    const required = [];
+    const positive = (...values) => values.some((value) => {
+      const n = Number(value || 0);
+      return Number.isFinite(n) && n > 0;
+    });
+    if (positive(draft.travel_pay, draft.travel_pay_ex_vat, draft.travel_charge, draft.travel_charge_ex_vat)) required.push('TRAVEL');
+    if (positive(draft.mileage_units, draft.mileage_pay, draft.mileage_pay_ex_vat, draft.mileage_charge, draft.mileage_charge_ex_vat)) required.push('MILEAGE');
+    if (positive(draft.accommodation_pay, draft.accommodation_pay_ex_vat, draft.accommodation_charge, draft.accommodation_charge_ex_vat)) required.push('ACCOMMODATION');
+    if (positive(draft.other_pay, draft.other_pay_ex_vat, draft.other_charge, draft.other_charge_ex_vat)) required.push('OTHER');
+    return Array.from(new Set(required));
+  };
+  const showBulkProcessProcessBlockedModal = async (message, title = 'Timesheet could not be processed') => {
+    const safeMessage = trimStr(message || 'This timesheet could not be processed.');
+    const safeTitle = trimStr(title || 'Timesheet could not be processed') || 'Timesheet could not be processed';
+    if (typeof uiShowModal === 'function') {
+      const res = uiShowModal({
+        title: safeTitle,
+        message: safeMessage,
+        body: safeMessage,
+        kind: 'import-summary-ui-confirm',
+        entity: 'bulk-process',
+        mode: 'view',
+        noParentGate: true,
+        tabs: [{ key: 'main', label: 'Message', html: `<div class="muted">${safeMessage}</div>` }],
+        defaultPrimary: 'OK',
+        confirm_label: 'OK',
+        cancel_label: '',
+        hide_cancel: true
+      });
+      if (res && typeof res.then === 'function') await res;
+      return;
+    }
+    if (typeof openUiConfirmModal === 'function') {
+      await openUiConfirmModal({
+        title: safeTitle,
+        message: safeMessage,
+        confirm_label: 'OK',
+        cancel_label: '',
+        confirm_class: 'btn',
+        hide_cancel: true
+      });
+      return;
+    }
+    window.alert(safeMessage);
+  };
   const confirmNoEvidence = async (active) => {
     const reconciledActive = reconcileProcessEvidenceTruth(active, { reason: 'before-no-evidence-confirm' });
     const row = reconciledActive.row || active?.row || {};
     const authoritativeEvidenceRows = collectCurrentEvidenceRowsForProcess(reconciledActive);
+    const requiredExpenseKinds = getRequiredExpenseEvidenceKindsForProcess(reconciledActive);
+    if (requiredExpenseKinds.length) {
+      const presentKinds = new Set(authoritativeEvidenceRows.map((item) => evidenceKindOf(item)).filter(Boolean));
+      const missingExpenseKinds = requiredExpenseKinds.filter((kind) => !presentKinds.has(kind));
+      if (missingExpenseKinds.length) {
+        const message = 'This timesheet could not be processed because there is no expenses evidence attached which match the expenses entered in the Expenses sheet.';
+        st.error_text = message;
+        st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
+        st.__bulk_process_last_process_missing_expense_evidence_kinds = missingExpenseKinds;
+        await showBulkProcessProcessBlockedModal(message);
+        return false;
+      }
+    }
     if (authoritativeEvidenceRows.length > 0) return true;
     if (row.has_any_evidence === true || Number(row.attached_evidence_count || 0) > 0) return true;
     const artifactSources = collectNoTimesheetProcessAuthoritySources(reconciledActive);
@@ -161849,7 +161943,7 @@ async function handleBulkProcessProcess(state) {
     const isBlankNoHoursSchedule = !!(!isAuthoritativeNoTimesheetRequired && (active?.isWeekly || active?.isDaily) && !hasWorkedHours);
     if (isAuthoritativeNoTimesheetRequired) {
       return {
-        requiresConfirm: true,
+        requiresConfirm: false,
         suppressTimesheetAutoAttach: true,
         isAuthoritativeNoTimesheetRequired: true,
         isBlankNoHoursSchedule: false,
@@ -162356,19 +162450,96 @@ async function handleBulkProcessProcess(state) {
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
     const matchingDatasetRow = findMatchingDatasetRowForProcess(active);
     const out = [];
-    const seen = new Set();
+    const buildEvidenceAliasSetForProcess = (item) => {
+      const aliases = new Set();
+      if (!item || typeof item !== 'object') return aliases;
+      const meta = processEvidenceMetaOf(item);
+      [
+        item.id,
+        item.evidence_id,
+        item.evidenceId,
+        item.timesheet_evidence_id,
+        item.timesheetEvidenceId,
+        item.queue_id,
+        item.queueId,
+        item.manual_timesheet_queue_id,
+        item.manualTimesheetQueueId,
+        item.manual_queue_id,
+        item.manualQueueId,
+        item.manual_queue_row_id,
+        item.manualQueueRowId,
+        meta.id,
+        meta.evidence_id,
+        meta.evidenceId,
+        meta.queue_id,
+        meta.queueId,
+        meta.manual_timesheet_queue_id,
+        meta.manualTimesheetQueueId
+      ].forEach((value) => {
+        const clean = trimStr(value || '');
+        if (clean) aliases.add(`id:${clean}`);
+      });
+      const storageKey = evidenceStorageKeyOf(item);
+      if (storageKey) aliases.add(`file:${storageKey.toLowerCase()}`);
+      const kind = evidenceKindOf(item);
+      if (kind) aliases.add(`kind:${kind}`);
+      const contractWeekId = trimStr(item.contract_week_id || item.contractWeekId || meta.contract_week_id || meta.contractWeekId || '');
+      if (contractWeekId) aliases.add(`cw:${contractWeekId}`);
+      const timesheetId = trimStr(item.timesheet_id || item.timesheetId || item.current_timesheet_id || item.currentTimesheetId || meta.timesheet_id || meta.current_timesheet_id || '');
+      if (timesheetId) aliases.add(`ts:${timesheetId}`);
+      return aliases;
+    };
+    const scoreEvidenceRowForProcess = (item) => {
+      if (!item || typeof item !== 'object') return -1;
+      const storageKey = evidenceStorageKeyOf(item);
+      const kind = evidenceKindOf(item);
+      const staged = processEvidenceStagedSignal(item);
+      const fallback = isSyntheticAttachedEvidenceItem(item);
+      let score = 0;
+      if (storageKey) score += 1000;
+      if (staged) score += 200;
+      if (!fallback) score += 100;
+      if (kind && kind !== 'OTHER') score += 50;
+      if (evidenceQueueIdOf(item)) score += 25;
+      if (trimStr(item.mime_type || item.content_type || '')) score += 10;
+      if (trimStr(item.filename || item.original_filename || item.display_name || '')) score += 5;
+      return score;
+    };
+    const rowsAliasCollisionForProcess = (a, b) => {
+      if (!a || !b) return false;
+      const aStorage = evidenceStorageKeyOf(a).toLowerCase();
+      const bStorage = evidenceStorageKeyOf(b).toLowerCase();
+      if (aStorage && bStorage && aStorage === bStorage) {
+        const aFallback = isSyntheticAttachedEvidenceItem(a);
+        const bFallback = isSyntheticAttachedEvidenceItem(b);
+        const aId = evidenceIdOf(a);
+        const bId = evidenceIdOf(b);
+        return !!(
+          aFallback ||
+          bFallback ||
+          (aId && bId && aId === bId) ||
+          (aId && aId === aStorage) ||
+          (bId && bId === bStorage)
+        );
+      }
+      const aAliases = buildEvidenceAliasSetForProcess(a);
+      const bAliases = buildEvidenceAliasSetForProcess(b);
+      for (const alias of aAliases) {
+        if (alias.startsWith('kind:') || alias.startsWith('cw:') || alias.startsWith('ts:')) continue;
+        if (bAliases.has(alias)) return true;
+      }
+      return false;
+    };
     const addOne = (item, parent = {}) => {
       const normalised = normaliseProcessEvidenceRow(item, parent, active);
       if (!normalised) return;
-      const key = [
-        evidenceIdOf(normalised),
-        evidenceKindOf(normalised),
-        trimStr(normalised.contract_week_id || ''),
-        trimStr(normalised.timesheet_id || ''),
-        evidenceStorageKeyOf(normalised)
-      ].join('|');
-      if (seen.has(key)) return;
-      seen.add(key);
+      const storageKey = evidenceStorageKeyOf(normalised);
+      if (!storageKey) return;
+      const existingIndex = out.findIndex((candidate) => rowsAliasCollisionForProcess(candidate, normalised));
+      if (existingIndex >= 0) {
+        if (scoreEvidenceRowForProcess(normalised) > scoreEvidenceRowForProcess(out[existingIndex])) out[existingIndex] = normalised;
+        return;
+      }
       out.push(normalised);
     };
     const addSource = (source, parent = {}) => {
@@ -162390,12 +162561,12 @@ async function handleBulkProcessProcess(state) {
       const primary = (source.primary_artifact && typeof source.primary_artifact === 'object') ? source.primary_artifact : ((hints.primary_artifact && typeof hints.primary_artifact === 'object') ? hints.primary_artifact : null);
       const primaryStorage = evidenceStorageKeyOf(primary || source);
       const primaryId = trimStr(primary?.id || primary?.evidence_id || primary?.queue_id || source.primary_artifact_id || hints.primary_artifact_id || '');
-      if (primary || primaryStorage || primaryId) {
+      if (!addedNested && (primary || primaryStorage || primaryId)) {
         addOne({
           ...(primary || {}),
           id: primaryId || primaryStorage,
           evidence_id: primaryId || null,
-          kind: primary?.kind || primary?.evidence_kind || source.primary_artifact_kind || hints.primary_artifact_kind || 'OTHER',
+          kind: primary?.kind || primary?.evidence_kind || source.primary_artifact_kind || hints.primary_artifact_kind || '',
           storage_key: primaryStorage,
           file_key: primaryStorage,
           download_storage_key: primaryStorage,
@@ -162403,7 +162574,9 @@ async function handleBulkProcessProcess(state) {
           display_name: primary?.display_name || primary?.filename || source.primary_artifact_display_name || hints.primary_artifact_display_name || '',
           row_key: source.row_key || active.row?.row_key || st.active_row_key || null,
           contract_week_id: primary?.contract_week_id || source.contract_week_id || source.contractWeekId || active.contractWeekId || null,
-          timesheet_id: primary?.timesheet_id || source.timesheet_id || source.current_timesheet_id || active.timesheetId || null
+          timesheet_id: primary?.timesheet_id || source.timesheet_id || source.current_timesheet_id || active.timesheetId || null,
+          __primary_artifact_fallback: true,
+          is_primary_artifact_fallback: true
         }, source);
       }
       const looksLikeEvidence = !!(evidenceStorageKeyOf(source) || evidenceIdOf(source) || source.is_staged_context === true || source.kind || source.evidence_kind || source.staged_kind);
@@ -163942,7 +164115,7 @@ async function handleBulkProcessProcess(state) {
       st.__suppress_dirty_marking = false;
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][CANCELLED]');
       GE();
-      return { ok: false };
+      return { ok: false, error: st.error_text || 'Process cancelled.', message: st.error_text || 'Process cancelled.', evidenceRequired: st.__bulk_process_last_process_block_reason === 'EXPENSE_EVIDENCE_REQUIRED' };
     }
 
     const processEvidenceRowsForSubmit = collectCurrentEvidenceRowsForProcess(active);
@@ -164278,9 +164451,6 @@ async function handleBulkProcessProcess(state) {
     return { ok: false, error: st.error_text, evidenceRequired: processEvidenceRequired };
   }
 }
-
-
-
 
 
 async function processDailyManualTimesheet(timesheetId, payload = {}) {
