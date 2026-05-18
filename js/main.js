@@ -159113,6 +159113,7 @@ async function rerenderBulkProcessWorkbench(state, logPrefix) {
 }
 
 
+
 async function handleBulkProcessSave(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][SAVE]');
   GC('handleBulkProcessSave');
@@ -159408,6 +159409,120 @@ async function handleBulkProcessSave(state) {
     });
     return out;
   };
+
+  const isMeaningfulSaveDisplayValue = (value) => {
+    const raw = trimStr(value);
+    if (!raw) return false;
+    const normalised = raw.toLowerCase();
+    if (normalised === 'null' || normalised === 'undefined' || normalised === 'none' || normalised === '[object object]') return false;
+    if (raw === '-' || raw === '—' || raw === '--' || raw === '---') return false;
+    return true;
+  };
+  const readSaveDisplayPath = (source, path) => {
+    if (!source || typeof source !== 'object') return undefined;
+    const parts = String(path || '').split('.').filter(Boolean);
+    let cur = source;
+    for (const part of parts) {
+      if (!cur || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, part)) return undefined;
+      cur = cur[part];
+    }
+    return cur;
+  };
+  const firstMeaningfulSaveDisplayValue = (sourcesInput, paths) => {
+    const sources = Array.isArray(sourcesInput) ? sourcesInput : [];
+    const pathList = Array.isArray(paths) ? paths : [paths];
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      for (const path of pathList) {
+        const value = readSaveDisplayPath(source, path);
+        if (isMeaningfulSaveDisplayValue(value)) return value;
+      }
+    }
+    return undefined;
+  };
+  const saveDisplayIdentityFallbackSources = (...sources) => {
+    const out = [];
+    const add = (source) => {
+      if (!source || typeof source !== 'object') return;
+      out.push(source);
+      if (source.row && typeof source.row === 'object') out.push(source.row);
+      if (source.data_row && typeof source.data_row === 'object') out.push(source.data_row);
+      if (source.details && typeof source.details === 'object') out.push(source.details);
+      if (source.related && typeof source.related === 'object') {
+        out.push(source.related);
+        if (source.related.client && typeof source.related.client === 'object') out.push({ client_id: source.related.client.id, client_name: source.related.client.name });
+        if (source.related.candidate && typeof source.related.candidate === 'object') out.push({ candidate_id: source.related.candidate.id, candidate_name: source.related.candidate.display_name || source.related.candidate.name, candidate_display_name: source.related.candidate.display_name || source.related.candidate.name });
+        if (source.related.contract && typeof source.related.contract === 'object') out.push(source.related.contract);
+      }
+      if (source.contract && typeof source.contract === 'object') out.push(source.contract);
+      if (source.client && typeof source.client === 'object') out.push({ client_id: source.client.id, client_name: source.client.name });
+      if (source.candidate && typeof source.candidate === 'object') out.push({ candidate_id: source.candidate.id, candidate_name: source.candidate.display_name || source.candidate.name, candidate_display_name: source.candidate.display_name || source.candidate.name });
+    };
+    for (const source of sources) add(source);
+    add(st.active_row);
+    add(st.active_details);
+    add(st.active_details?.row);
+    add(st.active_details?.data_row);
+    add(st.active_context);
+    add(st.active_context?.row);
+    add(st.active_context?.data_row);
+    add(st.active_ctx);
+    add(st.active_ctx?.row);
+    add(st.active_ctx?.data_row);
+    return out;
+  };
+  const preserveBulkProcessDisplayIdentityForSave = (incomingRowLike = {}, ...fallbackSourcesInput) => {
+    const out = (incomingRowLike && typeof incomingRowLike === 'object') ? (deep(incomingRowLike) || {}) : {};
+    const sources = saveDisplayIdentityFallbackSources(out, ...fallbackSourcesInput);
+    const fallbackSourcesOnly = saveDisplayIdentityFallbackSources(...fallbackSourcesInput);
+    const preserveField = (targetField, paths = [targetField]) => {
+      if (isMeaningfulSaveDisplayValue(out[targetField])) return;
+      const value = firstMeaningfulSaveDisplayValue(sources, paths);
+      if (isMeaningfulSaveDisplayValue(value)) out[targetField] = value;
+    };
+
+    preserveField('client_id', ['client_id', 'clientId', 'related.client.id', 'client.id']);
+    preserveField('client_name', ['client_name', 'clientName', 'related.client.name', 'client.name']);
+    preserveField('candidate_id', ['candidate_id', 'candidateId', 'related.candidate.id', 'candidate.id', 'contract.candidate_id', 'related.contract.candidate_id']);
+    preserveField('candidate_name', ['candidate_name', 'candidateName', 'candidate_display_name', 'candidateDisplayName', 'worker_name', 'workerName', 'related.candidate.display_name', 'related.candidate.name', 'candidate.display_name', 'candidate.name']);
+    preserveField('candidate_display_name', ['candidate_display_name', 'candidateDisplayName', 'candidate_name', 'candidateName', 'worker_name', 'workerName', 'related.candidate.display_name', 'related.candidate.name', 'candidate.display_name', 'candidate.name']);
+    preserveField('contract_id', ['contract_id', 'contractId', 'contract.id', 'related.contract.id']);
+    preserveField('route_family', ['route_family', 'routeFamily']);
+    preserveField('route_subfamily', ['route_subfamily', 'routeSubfamily']);
+    preserveField('underlying_channel_family', ['underlying_channel_family', 'underlyingChannelFamily']);
+    preserveField('period_type', ['period_type', 'periodType']);
+    preserveField('week_ending_date', ['week_ending_date', 'weekEndingDate', 'contract_week_ending_date', 'contractWeekEndingDate']);
+    preserveField('work_date', ['work_date', 'workDate', 'date']);
+
+    const routeTypeFallback = firstMeaningfulSaveDisplayValue(fallbackSourcesOnly, ['route_type', 'routeType', 'action_flags.route_type']) || firstMeaningfulSaveDisplayValue(sources, ['route_type', 'routeType', 'action_flags.route_type']);
+    if (!isMeaningfulSaveDisplayValue(out.route_type) || (upper(out.route_type || '') === 'WEEKLY_MANUAL_ADJUSTMENT' && upper(routeTypeFallback || '') === 'WEEKLY_NHSP_ADJUSTMENT')) {
+      if (isMeaningfulSaveDisplayValue(routeTypeFallback)) out.route_type = routeTypeFallback;
+    }
+    const routeDisplayFallback = firstMeaningfulSaveDisplayValue(fallbackSourcesOnly, ['route_display', 'routeDisplay', 'action_flags.route_display']) || firstMeaningfulSaveDisplayValue(sources, ['route_display', 'routeDisplay', 'action_flags.route_display']);
+    if (!isMeaningfulSaveDisplayValue(out.route_display) || (isWeakManualRouteDisplaySave(out.route_display) && upper(routeDisplayFallback || '').includes('NHSP'))) {
+      if (isMeaningfulSaveDisplayValue(routeDisplayFallback)) out.route_display = routeDisplayFallback;
+    }
+    if (!isMeaningfulSaveDisplayValue(out.candidate_display_name) && isMeaningfulSaveDisplayValue(out.candidate_name)) out.candidate_display_name = out.candidate_name;
+    if (!isMeaningfulSaveDisplayValue(out.candidate_name) && isMeaningfulSaveDisplayValue(out.candidate_display_name)) out.candidate_name = out.candidate_display_name;
+
+    const anyTrue = (paths) => sources.some((source) => paths.some((path) => boolishSave(readSaveDisplayPath(source, path))));
+    if (anyTrue(['client_is_nhsp', 'clientIsNhsp', 'action_flags.client_is_nhsp'])) out.client_is_nhsp = true;
+    ['__bulkProcessExplicitNoTimesheet', '__bulk_process_explicit_no_timesheet', 'no_timesheet_required', 'client_no_timesheet_required', 'no_timesheet_image_required', 'timesheet_not_required', 'suppress_standard_schedule_fallback', 'keep_additional_manual_adjustment_schedule_empty', '__suppressStandardScheduleFallback', '__keepAdditionalManualAdjustmentScheduleEmpty', 'manual_additional_route', 'additional_manual_route', 'supportsUnprocessedExpenseDraft', 'supports_unprocessed_expense_draft', 'is_adjustment'].forEach((key) => {
+      if (sources.some((source) => source && typeof source === 'object' && source[key] === true)) out[key] = true;
+    });
+
+    out.action_flags = (out.action_flags && typeof out.action_flags === 'object') ? { ...out.action_flags } : {};
+    ['client_id', 'client_name', 'candidate_id', 'candidate_name', 'candidate_display_name', 'route_type', 'route_display', 'client_is_nhsp'].forEach((key) => {
+      if (key === 'client_is_nhsp') {
+        if (out.client_is_nhsp === true) out.action_flags.client_is_nhsp = true;
+        return;
+      }
+      if (!isMeaningfulSaveDisplayValue(out.action_flags[key]) && isMeaningfulSaveDisplayValue(out[key])) out.action_flags[key] = out[key];
+    });
+    if (upper(out.route_type || '') === 'WEEKLY_NHSP_ADJUSTMENT') out.action_flags.route_type = 'WEEKLY_NHSP_ADJUSTMENT';
+    if (upper(out.route_display || '').includes('NHSP')) out.action_flags.route_display = out.route_display;
+    return out;
+  };
   const getSaveRowIdentity = (rowLike = {}) => {
     const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
     const rowKey = trimStr(row.row_key || row.new_row_key || '');
@@ -159577,11 +159692,25 @@ async function handleBulkProcessSave(state) {
       ? payload.data_row
       : ((payload.row && typeof payload.row === 'object') ? payload.row : null);
     const rowPatch = (payload.row_patch && typeof payload.row_patch === 'object') ? payload.row_patch : {};
-    const mergedRow = mergeBulkProcessRowAuthoritySignalsForSave(row, {
+    const detailsPayload = (payload.details && typeof payload.details === 'object') ? deep(payload.details) : {};
+    const mergedRowRaw = mergeBulkProcessRowAuthoritySignalsForSave(row, {
       ...(row && typeof row === 'object' ? deep(row) : {}),
       ...(dataRow && typeof dataRow === 'object' ? deep(dataRow) : {}),
       ...(rowPatch && typeof rowPatch === 'object' ? deep(rowPatch) : {})
     });
+    const mergedRow = preserveBulkProcessDisplayIdentityForSave(
+      mergedRowRaw,
+      row,
+      st.active_row,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row,
+      dataRow,
+      rowPatch,
+      payload,
+      detailsPayload
+    );
     if (preservedEvidencePatchBeforeRefresh.hasAnyEvidence) applySaveEvidenceAuthorityPatch(mergedRow, preservedEvidencePatchBeforeRefresh);
     st.active_row = deep(mergedRow);
     st.active_row_key = trimStr(mergedRow.row_key || makeRowKey(mergedRow)) || st.active_row_key || null;
@@ -159591,7 +159720,6 @@ async function handleBulkProcessSave(state) {
     const previousRelated = (previousDetails.related && typeof previousDetails.related === 'object')
       ? deep(previousDetails.related)
       : ((st.active_ctx?.related && typeof st.active_ctx.related === 'object') ? deep(st.active_ctx.related) : null);
-    const detailsPayload = (payload.details && typeof payload.details === 'object') ? deep(payload.details) : {};
     const incomingEvidenceRows = normaliseSaveEvidenceRows(
       payload.evidence,
       detailsPayload.evidence,
@@ -159991,17 +160119,41 @@ async function handleBulkProcessSave(state) {
       merged.qr_status = payloadTimesheet.qr_status ?? merged.qr_status ?? null;
     }
 
-    return mergeBulkProcessRowAuthoritySignalsForSave(rowBase, merged);
+    return preserveBulkProcessDisplayIdentityForSave(
+      mergeBulkProcessRowAuthoritySignalsForSave(rowBase, merged),
+      rowBase,
+      st.active_row,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row,
+      dataRow,
+      summaryRowHint,
+      rowPatch,
+      out
+    );
   };
 
   const replaceRowInDataset = (datasetObj, patchedRow, bucketHint, previousRowKey) => {
     const ds = ensureDataset();
     const oldKey = trimStr(previousRowKey || '');
-    const nextRow = deep(patchedRow);
+    let nextRow = deep(patchedRow);
     const nextKey = trimStr(nextRow?.row_key || makeRowKey(nextRow));
     if (nextKey) nextRow.row_key = nextKey;
 
     const loc = findRowLocation(ds, oldKey || nextKey);
+    const existingRow = loc.bucket === 'UNPROCESSED' && loc.index >= 0
+      ? ds.unprocessed_rows[loc.index]
+      : (loc.bucket === 'PROCESSED' && loc.index >= 0 ? ds.processed_rows[loc.index] : null);
+    nextRow = preserveBulkProcessDisplayIdentityForSave(
+      nextRow,
+      existingRow,
+      st.active_row,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row
+    );
     const targetBucket = upper(bucketHint || nextRow?.bulk_process_bucket || loc.bucket || 'UNPROCESSED') || 'UNPROCESSED';
 
     if (loc.bucket === 'UNPROCESSED' && loc.index >= 0) ds.unprocessed_rows.splice(loc.index, 1);
@@ -160729,7 +160881,7 @@ async function handleBulkProcessSave(state) {
     const cacheHints = (saveResult?.cache_invalidation_hints && typeof saveResult.cache_invalidation_hints === 'object')
       ? saveResult.cache_invalidation_hints
       : ((saveResult?.cache_invalidation && typeof saveResult.cache_invalidation === 'object') ? saveResult.cache_invalidation : {});
-    const rowPatchList = Array.isArray(saveResult?.row_patches)
+    const rowPatchListRaw = Array.isArray(saveResult?.row_patches)
       ? saveResult.row_patches.filter((patch) => patch && typeof patch === 'object')
       : (
           saveResult?.row_patch && typeof saveResult.row_patch === 'object'
@@ -160744,11 +160896,21 @@ async function handleBulkProcessSave(state) {
                     )
               )
         );
-    if (didRunManualSave && !rowPatchList.length) {
+    if (didRunManualSave && !rowPatchListRaw.length) {
       throw new Error('Bulk Process save did not return the required row_patch/row_patches response. Saving is disabled until the save endpoint returns the bulk patch contract.');
     }
 
     const patchedRow = replaceRowInDataset(ds, buildPatchedRowFromPayload(row, saveResult, bucketHint), bucketHint, currentRowKey);
+    const rowPatchList = rowPatchListRaw.map((patch) => preserveBulkProcessDisplayIdentityForSave(
+      patch,
+      patchedRow,
+      row,
+      st.active_row,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row
+    ));
     const postSaveEvidencePatch = buildSaveEvidenceAuthorityPatch(normaliseSaveEvidenceRows(preservedEvidenceRowsBeforeSave, patchedRow.evidence, st.active_row?.evidence, st.evidence_pane_state?.attached_rows, st.evidence_pane_state?.attached_all_rows));
     if (postSaveEvidencePatch.hasAnyEvidence) applySaveEvidenceAuthorityPatch(patchedRow, postSaveEvidencePatch);
     st.dataset = ds;
@@ -160884,8 +161046,6 @@ async function handleBulkProcessSave(state) {
     return { ok: false, error: st.error_text };
   }
 }
-
-
 
 
 
