@@ -158088,6 +158088,7 @@ function captureBulkProcessUiSnapshot(state) {
   return snapshot;
 }
 
+
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const st = (state && typeof state === 'object') ? state : {};
   st.evidence_pane_state =
@@ -158572,8 +158573,29 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       const key = safeStorageKey(value);
       if (key) candidates.push(key);
     };
+    const isTimesheetArtifactKind = (...values) => {
+      const kind = upper(values.find((value) => trimStr(value || '')) || '');
+      return !kind || kind === 'TIMESHEET' || kind === 'TS';
+    };
+    const addPrimaryArtifactStorageValue = (obj) => {
+      if (!obj || typeof obj !== 'object') return;
+      const primaryArtifact = (obj.primary_artifact && typeof obj.primary_artifact === 'object') ? obj.primary_artifact : ((obj.primaryArtifact && typeof obj.primaryArtifact === 'object') ? obj.primaryArtifact : null);
+      const kindAllowed = isTimesheetArtifactKind(
+        obj.primary_artifact_kind,
+        obj.primaryArtifactKind,
+        primaryArtifact?.kind,
+        primaryArtifact?.evidence_kind,
+        primaryArtifact?.evidenceKind,
+        primaryArtifact?.staged_kind,
+        primaryArtifact?.stagedKind
+      );
+      if (!kindAllowed) return;
+      addValue(obj.primary_artifact_storage_key);
+      addValue(obj.primaryArtifactStorageKey);
+    };
     const addArtifactObject = (artifact) => {
       if (!artifact || typeof artifact !== 'object') return;
+      if (!isTimesheetArtifactKind(artifact.kind, artifact.evidence_kind, artifact.evidenceKind, artifact.staged_kind, artifact.stagedKind)) return;
       addValue(artifact.storage_key);
       addValue(artifact.r2_key);
       addValue(artifact.file_key);
@@ -158586,10 +158608,9 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     for (const obj of rowLikeObjects) {
       if (!obj || typeof obj !== 'object') continue;
-      addValue(obj.primary_artifact_storage_key);
+      addPrimaryArtifactStorageValue(obj);
       addValue(obj.manual_pdf_r2_key);
       addValue(obj.uploaded_pdf_r2_key);
-      addValue(obj.primaryArtifactStorageKey);
       addValue(obj.manualPdfR2Key);
       addValue(obj.uploadedPdfR2Key);
       addArtifactObject(obj.primary_artifact);
@@ -158598,28 +158619,25 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     for (const obj of detailsLikeObjects) {
       if (!obj || typeof obj !== 'object') continue;
-      addValue(obj.primary_artifact_storage_key);
+      addPrimaryArtifactStorageValue(obj);
       addValue(obj.manual_pdf_r2_key);
       addValue(obj.uploaded_pdf_r2_key);
-      addValue(obj.primaryArtifactStorageKey);
       addValue(obj.manualPdfR2Key);
       addValue(obj.uploadedPdfR2Key);
       addArtifactObject(obj.primary_artifact);
       addArtifactObject(obj.primaryArtifact);
       const ts = (obj.timesheet && typeof obj.timesheet === 'object') ? obj.timesheet : {};
-      addValue(ts.primary_artifact_storage_key);
+      addPrimaryArtifactStorageValue(ts);
       addValue(ts.manual_pdf_r2_key);
       addValue(ts.uploaded_pdf_r2_key);
-      addValue(ts.primaryArtifactStorageKey);
       addValue(ts.manualPdfR2Key);
       addValue(ts.uploadedPdfR2Key);
       addArtifactObject(ts.primary_artifact);
       addArtifactObject(ts.primaryArtifact);
       const cw = (obj.contract_week && typeof obj.contract_week === 'object') ? obj.contract_week : {};
-      addValue(cw.primary_artifact_storage_key);
+      addPrimaryArtifactStorageValue(cw);
       addValue(cw.manual_pdf_r2_key);
       addValue(cw.uploaded_pdf_r2_key);
-      addValue(cw.primaryArtifactStorageKey);
       addValue(cw.manualPdfR2Key);
       addValue(cw.uploadedPdfR2Key);
       addArtifactObject(cw.primary_artifact);
@@ -159341,10 +159359,21 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const getItemStorageKey = (item) => safeStorageKey(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || '');
   if (selectedRowSyntheticAttachedItem) {
     const selectedKeyLower = selectedRowArtifactKey.toLowerCase();
-    const matchingHydratedIndex = attachedAllRows.findIndex((item) => (
-      upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET' &&
-      getItemStorageKey(item).toLowerCase() === selectedKeyLower
-    ));
+    const matchingHydratedIndex = attachedAllRows.findIndex((item) => {
+      const itemId = trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
+      const itemIsFallback = !!(
+        /^synthetic-attached:/i.test(itemId) ||
+        boolish(item?.is_synthetic_attached_fallback) ||
+        boolish(item?.__synthetic_attached_fallback) ||
+        boolish(item?.is_primary_artifact_fallback) ||
+        boolish(item?.__primary_artifact_fallback)
+      );
+      return !!(
+        !itemIsFallback &&
+        upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET' &&
+        getItemStorageKey(item).toLowerCase() === selectedKeyLower
+      );
+    });
     if (matchingHydratedIndex >= 0) {
       const matching = attachedAllRows[matchingHydratedIndex];
       attachedAllRows = [
@@ -159815,6 +159844,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     non_authoritative_context_ignored: false
   };
 }
+
 
 
 
@@ -178095,7 +178125,6 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
   return { ok: true };
 }
 
-
 async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][ROW-CHANGE]');
   GC('handleBulkProcessRowChange');
@@ -180060,6 +180089,43 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       ? filterEvidenceRowsForIdentity(incomingEvidenceRows, dataRowIdentity, { allowUnknownIdentity: false, requireFileKey: true })
       : (!explicitAuthoritativeEvidenceClear ? existingEvidenceRows : []);
     const evidenceLoaded = evidenceAuthoritative || existingEvidenceRows.length > 0 || evidence.length > 0 || dataRow.evidence_loaded === true || dataRow.evidence_authoritative === true || dataRow.include_evidence === true;
+    if (evidence.length) {
+      const contextEvidencePatch = buildBulkProcessEvidenceAuthorityPatchRowChange(evidence);
+      dataRow.evidence = contextEvidencePatch.evidenceRows.map((item) => deep(item));
+      dataRow.evidence_loaded = true;
+      dataRow.evidence_authoritative = true;
+      dataRow.include_evidence = true;
+      dataRow.has_any_evidence = !!contextEvidencePatch.hasAnyEvidence;
+      dataRow.has_attached_evidence = !!contextEvidencePatch.hasAnyEvidence;
+      dataRow.attached_evidence_count = Number(contextEvidencePatch.attachedEvidenceCount || 0) || 0;
+      dataRow.evidence_badges = contextEvidencePatch.evidenceBadges.map((badge) => ({ ...badge }));
+      dataRow.evidence_meta = {
+        ...((dataRow.evidence_meta && typeof dataRow.evidence_meta === 'object') ? dataRow.evidence_meta : {}),
+        evidence_loaded: true,
+        evidence_authoritative: true,
+        include_evidence: true,
+        has_any_evidence: !!contextEvidencePatch.hasAnyEvidence,
+        has_attached_evidence: !!contextEvidencePatch.hasAnyEvidence,
+        attached_evidence_count: Number(contextEvidencePatch.attachedEvidenceCount || 0) || 0,
+        evidence_badges: contextEvidencePatch.evidenceBadges.map((badge) => ({ ...badge }))
+      };
+      dataRow.artifact_hints = {
+        ...((dataRow.artifact_hints && typeof dataRow.artifact_hints === 'object') ? dataRow.artifact_hints : {}),
+        has_any_evidence: !!contextEvidencePatch.hasAnyEvidence,
+        attached_evidence_count: Number(contextEvidencePatch.attachedEvidenceCount || 0) || 0,
+        primary_artifact_id: contextEvidencePatch.primaryArtifactId || null,
+        primary_artifact_kind: contextEvidencePatch.primaryArtifactKind || null,
+        primary_artifact_storage_key: contextEvidencePatch.primaryArtifactStorageKey || null,
+        primary_artifact_preview_mode: contextEvidencePatch.primaryArtifactPreviewMode || null,
+        primary_artifact: contextEvidencePatch.primaryEvidence ? deep(contextEvidencePatch.primaryEvidence) : null,
+        evidence_badges: contextEvidencePatch.evidenceBadges.map((badge) => ({ ...badge }))
+      };
+      dataRow.primary_artifact = contextEvidencePatch.primaryEvidence ? deep(contextEvidencePatch.primaryEvidence) : null;
+      dataRow.primary_artifact_id = contextEvidencePatch.primaryArtifactId || null;
+      dataRow.primary_artifact_kind = contextEvidencePatch.primaryArtifactKind || null;
+      dataRow.primary_artifact_storage_key = contextEvidencePatch.primaryArtifactStorageKey || null;
+      dataRow.primary_artifact_preview_mode = contextEvidencePatch.primaryArtifactPreviewMode || null;
+    }
     const related = ensureBulkProcessRelatedContract(
       (payload.related && typeof payload.related === 'object')
         ? deep(payload.related)
@@ -180781,6 +180847,117 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       st.__bulk_process_refresh_warning = 'Bulk Process row context belonged to a different row and was ignored.';
       GE();
       return false;
+    }
+    const finalContextPayloadProfile = trimStr(finalContext.payload?.context_profile || finalContext.payload?.profile || contextProfile || '').toLowerCase();
+    const finalContextIncludesEvidence = !!(
+      finalContext.payload?.evidence_loaded === true ||
+      finalContext.details?.evidence_loaded === true ||
+      finalContextPayloadProfile === 'evidence' ||
+      (Array.isArray(finalContext.details?.evidence) && finalContext.details.evidence.length > 0) ||
+      (Array.isArray(finalContext.payload?.evidence) && finalContext.payload.evidence.length > 0)
+    );
+    const finalExpenseDraftForEvidence = (() => {
+      const sources = [
+        finalContext.details?.contract_week?.totals_json?.expenses_draft,
+        finalContext.row?.contract_week_totals_json?.expenses_draft,
+        finalContext.payload?.details?.contract_week?.totals_json?.expenses_draft,
+        finalContext.payload?.contract_week_totals_json?.expenses_draft,
+        finalContext.payload?.totals_json?.expenses_draft
+      ];
+      return sources.find((source) => source && typeof source === 'object' && !Array.isArray(source)) || {};
+    })();
+    const finalExpenseEvidenceClaimed = !!(
+      Number(finalExpenseDraftForEvidence.travel_pay || 0) > 0 ||
+      Number(finalExpenseDraftForEvidence.travel_charge || 0) > 0 ||
+      Number(finalExpenseDraftForEvidence.mileage_units || 0) > 0 ||
+      Number(finalExpenseDraftForEvidence.accommodation_pay || 0) > 0 ||
+      Number(finalExpenseDraftForEvidence.accommodation_charge || 0) > 0 ||
+      Number(finalExpenseDraftForEvidence.other_pay || 0) > 0 ||
+      Number(finalExpenseDraftForEvidence.other_charge || 0) > 0
+    );
+    const paneAtFinalContext = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
+    const finalAttachedIntent = !!(
+      trimStr(paneAtFinalContext.active_tab || '').toLowerCase() === 'attached' ||
+      paneAtFinalContext.__attached_manual_override === true ||
+      trimStr(paneAtFinalContext.__preview_target_key || '').toLowerCase().startsWith('attached|') ||
+      trimStr(paneAtFinalContext.__preview_load_requested_target_key || '').toLowerCase().startsWith('attached|') ||
+      trimStr(paneAtFinalContext.__active_attached_preview_target || '').toLowerCase().startsWith('attached|')
+    );
+    const finalHasTimesheetIdentity = !!trimStr(finalContext.row?.timesheet_id || finalContext.row?.current_timesheet_id || finalContext.details?.current_timesheet_id || '');
+    const shouldHydrateEvidenceAfterNonEvidenceContext = !!(
+      !finalContextIncludesEvidence &&
+      finalHasTimesheetIdentity &&
+      finalContextPayloadProfile !== 'evidence' &&
+      (finalAttachedIntent || finalExpenseEvidenceClaimed)
+    );
+    if (shouldHydrateEvidenceAfterNonEvidenceContext) {
+      try {
+        const evidenceLoad = await loadRowContext(finalContext.row || nextRow, {
+          profile: 'evidence',
+          includeEvidence: true,
+          force: true,
+          requestToken,
+          modalOpenToken: modalOpenTokenAtStart,
+          identity: cacheKey,
+          isCurrent: () => !isStaleRequest()
+        });
+        if (!isStaleRequest() && evidenceLoad && evidenceLoad.failed !== true && !isRowContextPayloadDegraded(evidenceLoad.payload)) {
+          const evidenceContext = buildContextPayload({ rowObj: finalContext.row || nextRow, contextPayload: evidenceLoad.payload });
+          const hydratedEvidenceRows = normaliseBulkProcessEvidenceRowsRowChange(
+            evidenceContext?.details?.evidence,
+            evidenceContext?.payload?.evidence,
+            evidenceContext?.payload?.attached_evidence,
+            evidenceContext?.payload?.attachedRows,
+            evidenceContext?.row?.evidence,
+            evidenceContext?.row
+          ).filter((item) => evidenceItemMatchesIdentity(item, getIdentityPartsFromRow(finalContext.row || nextRow), { allowUnknownIdentity: false, requireFileKey: true }));
+          if (hydratedEvidenceRows.length) {
+            const evidencePatch = {
+              ...buildBulkProcessEvidenceAuthorityPatchRowChange(hydratedEvidenceRows),
+              evidenceLoaded: true
+            };
+            applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.row, evidencePatch);
+            applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.details, evidencePatch);
+            applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.ctx, evidencePatch);
+            applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.ctx?.state, evidencePatch);
+            finalContext.payload = {
+              ...(finalContext.payload && typeof finalContext.payload === 'object' ? finalContext.payload : {}),
+              evidence: hydratedEvidenceRows.map((item) => deep(item)),
+              attached_evidence: hydratedEvidenceRows.map((item) => deep(item)),
+              attachedRows: hydratedEvidenceRows.map((item) => deep(item)),
+              evidence_loaded: true,
+              has_any_evidence: true,
+              attached_evidence_count: hydratedEvidenceRows.length,
+              evidence_badges: evidencePatch.evidenceBadges.map((badge) => ({ ...badge })),
+              evidence_meta: {
+                ...((finalContext.payload?.evidence_meta && typeof finalContext.payload.evidence_meta === 'object') ? finalContext.payload.evidence_meta : {}),
+                evidence_loaded: true,
+                has_any_evidence: true,
+                attached_evidence_count: hydratedEvidenceRows.length,
+                evidence_badges: evidencePatch.evidenceBadges.map((badge) => ({ ...badge }))
+              },
+              artifact_hints: {
+                ...((finalContext.payload?.artifact_hints && typeof finalContext.payload.artifact_hints === 'object') ? finalContext.payload.artifact_hints : {}),
+                has_any_evidence: true,
+                attached_evidence_count: hydratedEvidenceRows.length,
+                primary_artifact: evidencePatch.primaryEvidence ? deep(evidencePatch.primaryEvidence) : null,
+                primary_artifact_id: evidencePatch.primaryArtifactId || null,
+                primary_artifact_kind: evidencePatch.primaryArtifactKind || null,
+                primary_artifact_storage_key: evidencePatch.primaryArtifactStorageKey || null,
+                primary_artifact_preview_mode: evidencePatch.primaryArtifactPreviewMode || null,
+                evidence_badges: evidencePatch.evidenceBadges.map((badge) => ({ ...badge }))
+              },
+              primary_artifact: evidencePatch.primaryEvidence ? deep(evidencePatch.primaryEvidence) : null,
+              primary_artifact_id: evidencePatch.primaryArtifactId || null,
+              primary_artifact_kind: evidencePatch.primaryArtifactKind || null,
+              primary_artifact_storage_key: evidencePatch.primaryArtifactStorageKey || null,
+              primary_artifact_preview_mode: evidencePatch.primaryArtifactPreviewMode || null
+            };
+          }
+        }
+      } catch (evidenceHydrationErr) {
+        L('non-authoritative editor evidence hydration failed', evidenceHydrationErr);
+      }
     }
     st.__suppress_dirty_marking = true;
     st.active_row = mergeBulkProcessRowAuthoritySignals(nextRow, finalContext.row || nextRow);
