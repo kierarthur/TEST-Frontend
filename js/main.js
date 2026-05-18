@@ -148460,6 +148460,8 @@ function renderBulkProcessSelectedSummaryStrip(state) {
   `);
 }
 
+
+
 function renderBulkProcessEvidencePane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -149008,16 +149010,19 @@ function renderBulkProcessEvidencePane(state) {
   );
 
   const attachedThumbsHtml = (() => {
-    if (activeTab !== 'attached') return '';
     const rows = (Array.isArray(attachedRows) ? attachedRows : []).filter((item) => !!getRenderEvidenceFileKey(item));
     if (!rows.length) {
+      if (activeTab !== 'attached') return '';
       return `<div id="bulkProcessAttachedThumbs" data-bp-attached-empty="1" style="margin-top:7px;padding:8px;border:1px dashed var(--line);border-radius:8px;"><span class="mini" style="opacity:.72;">No attached evidence for this row.</span></div>`;
     }
-    const selectedAttachedKey =
-      normaliseRenderAttachedSelectionKey(pane.__active_attached_preview_target || '') ||
-      normaliseRenderAttachedSelectionKey(pane.__preview_target_key || '') ||
-      buildRenderAttachedSelectionKey(pane.active_attached_item || {}) ||
-      '';
+    const selectedAttachedKey = activeTab === 'attached'
+      ? (
+          normaliseRenderAttachedSelectionKey(pane.__active_attached_preview_target || '') ||
+          normaliseRenderAttachedSelectionKey(pane.__preview_target_key || '') ||
+          buildRenderAttachedSelectionKey(pane.active_attached_item || {}) ||
+          ''
+        )
+      : '';
     return `<div id="bulkProcessAttachedThumbs" style="margin-top:7px;display:flex;gap:6px;align-items:stretch;overflow-x:auto;padding-bottom:2px;">${rows.map((item) => {
       const storageKey = getRenderEvidenceFileKey(item);
       if (!storageKey) return '';
@@ -149027,8 +149032,19 @@ function renderBulkProcessEvidencePane(state) {
       const kind = normaliseRenderKind(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || '') || 'OTHER';
       const label = trimStr(item.display_name || item.filename || item.original_filename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence');
       const selectionKey = buildRenderAttachedSelectionKey({ ...item, id: itemId, storage_key: storageKey, file_key: storageKey });
-      const isSelected = !!(selectedAttachedKey && selectionKey && selectedAttachedKey === selectionKey);
-      return `<button type="button" class="btn btn-outline${isSelected ? ' active is-active selected' : ''}" data-bp-preview-attached-thumb="1" data-bp-attached-evidence-thumb="1" data-attached-id="${enc(itemId)}" data-evidence-id="${enc(evidenceId)}" data-queue-id="${enc(queueId)}" data-storage-key="${enc(storageKey)}" data-file-key="${enc(storageKey)}" data-attached-selection-key="${enc(selectionKey)}" data-kind="${enc(kind)}" data-staged-context="${item.is_staged_context === true ? '1' : '0'}" style="min-width:148px;max-width:190px;text-align:left;display:grid;gap:3px;align-content:start;border:${isSelected ? '1px solid rgba(52,211,153,.75)' : '1px solid var(--line)'};background:${isSelected ? 'rgba(52,211,153,.16)' : 'rgba(255,255,255,.02)'};">
+      const isSelected = !!(activeTab === 'attached' && selectedAttachedKey && selectionKey && selectedAttachedKey === selectionKey);
+      const canRemoveAttached = !!(
+        item.can_delete === true ||
+        item.can_return_to_queue === true ||
+        item.is_staged_context === true ||
+        item.staged === true ||
+        String(item.status || '').trim().toUpperCase() === 'STAGED'
+      );
+      const removeControlHtml = canRemoveAttached
+        ? `<span role="button" tabindex="0" aria-label="Remove attached evidence" title="Remove attached evidence" data-bp-preview-attached-remove="1" data-attached-id="${enc(itemId)}" data-evidence-id="${enc(evidenceId)}" data-queue-id="${enc(queueId)}" data-storage-key="${enc(storageKey)}" data-file-key="${enc(storageKey)}" data-attached-selection-key="${enc(selectionKey)}" data-kind="${enc(kind)}" data-staged-context="${item.is_staged_context === true ? '1' : '0'}" style="position:absolute;top:3px;right:4px;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:999px;border:1px solid rgba(248,113,113,.65);background:rgba(127,29,29,.72);color:#fecaca;font-size:12px;font-weight:900;line-height:1;cursor:pointer;z-index:2;">✕</span>`
+        : '';
+      return `<button type="button" class="btn btn-outline${isSelected ? ' active is-active selected' : ''}" data-bp-preview-attached-thumb="1" data-bp-attached-evidence-thumb="1" data-attached-id="${enc(itemId)}" data-evidence-id="${enc(evidenceId)}" data-queue-id="${enc(queueId)}" data-storage-key="${enc(storageKey)}" data-file-key="${enc(storageKey)}" data-attached-selection-key="${enc(selectionKey)}" data-kind="${enc(kind)}" data-staged-context="${item.is_staged_context === true ? '1' : '0'}" style="position:relative;min-width:148px;max-width:190px;text-align:left;display:grid;gap:3px;align-content:start;padding-right:${canRemoveAttached ? '28px' : '10px'};border:${isSelected ? '1px solid rgba(52,211,153,.75)' : '1px solid var(--line)'};background:${isSelected ? 'rgba(52,211,153,.16)' : 'rgba(255,255,255,.02)'};">
+        ${removeControlHtml}
         <span style="font-size:11px;font-weight:800;letter-spacing:.04em;opacity:.9;">${enc(kind)}</span>
         <span class="mini" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px;">${enc(label)}</span>
       </button>`;
@@ -149076,6 +149092,7 @@ function renderBulkProcessEvidencePane(state) {
     </div>
   `);
 }
+
 
 
 
@@ -250404,7 +250421,6 @@ function computeTimesheetProcessingState(details, row) {
   return { key: 'PROCESSED', label: 'Processed' };
 }
 
-
 async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE][VIEWER]');
   GC('openTimesheetEvidenceViewerExisting');
@@ -250797,11 +250813,23 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 
     // Download key
     const downloadKeyRaw =
-      (evidenceItem.download_storage_key != null && String(evidenceItem.download_storage_key).trim())
-        ? String(evidenceItem.download_storage_key).trim()
-        : (evidenceItem.storage_key != null && String(evidenceItem.storage_key).trim())
-          ? String(evidenceItem.storage_key).trim()
-          : '';
+      (evidenceItem.storage_key != null && String(evidenceItem.storage_key).trim())
+        ? String(evidenceItem.storage_key).trim()
+        : (evidenceItem.file_key != null && String(evidenceItem.file_key).trim())
+          ? String(evidenceItem.file_key).trim()
+          : (evidenceItem.download_storage_key != null && String(evidenceItem.download_storage_key).trim())
+            ? String(evidenceItem.download_storage_key).trim()
+            : (evidenceItem.r2_key != null && String(evidenceItem.r2_key).trim())
+              ? String(evidenceItem.r2_key).trim()
+              : (evidenceItem.storageKey != null && String(evidenceItem.storageKey).trim())
+                ? String(evidenceItem.storageKey).trim()
+                : (evidenceItem.fileKey != null && String(evidenceItem.fileKey).trim())
+                  ? String(evidenceItem.fileKey).trim()
+                  : (evidenceItem.downloadStorageKey != null && String(evidenceItem.downloadStorageKey).trim())
+                    ? String(evidenceItem.downloadStorageKey).trim()
+                    : (evidenceItem.r2Key != null && String(evidenceItem.r2Key).trim())
+                      ? String(evidenceItem.r2Key).trim()
+                      : '';
 
     const downloadKey = downloadKeyRaw.replace(/^\/+/, '').trim();
 
@@ -251124,10 +251152,27 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   // ─────────────────────────────────────────────────────────────
   // Default: PDF/file preview
   // ─────────────────────────────────────────────────────────────
-  const storageKeyRaw = evidenceItem.storage_key ? String(evidenceItem.storage_key).trim() : '';
+  const storageKeyRaw =
+    (evidenceItem.storage_key != null && String(evidenceItem.storage_key).trim())
+      ? String(evidenceItem.storage_key).trim()
+      : (evidenceItem.file_key != null && String(evidenceItem.file_key).trim())
+        ? String(evidenceItem.file_key).trim()
+        : (evidenceItem.download_storage_key != null && String(evidenceItem.download_storage_key).trim())
+          ? String(evidenceItem.download_storage_key).trim()
+          : (evidenceItem.r2_key != null && String(evidenceItem.r2_key).trim())
+            ? String(evidenceItem.r2_key).trim()
+            : (evidenceItem.storageKey != null && String(evidenceItem.storageKey).trim())
+              ? String(evidenceItem.storageKey).trim()
+              : (evidenceItem.fileKey != null && String(evidenceItem.fileKey).trim())
+                ? String(evidenceItem.fileKey).trim()
+                : (evidenceItem.downloadStorageKey != null && String(evidenceItem.downloadStorageKey).trim())
+                  ? String(evidenceItem.downloadStorageKey).trim()
+                  : (evidenceItem.r2Key != null && String(evidenceItem.r2Key).trim())
+                    ? String(evidenceItem.r2Key).trim()
+                    : '';
   if (!storageKeyRaw) {
     GE();
-    throw new Error('Evidence item missing storage_key.');
+    throw new Error('Evidence item missing file key.');
   }
   const storageKey = storageKeyRaw.replace(/^\/+/, '');
 
@@ -251610,6 +251655,8 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 
   GE();
 }
+
+
 
 async function openTimesheetPaymentSnoozeModal(input = {}) {
   const enc = (typeof escapeHtml === 'function')
@@ -267351,6 +267398,24 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
     const normalised = list.map(ev => {
       const out = { ...(ev || {}) };
 
+      const evidenceFileKey = String(
+        out.storage_key ||
+        out.file_key ||
+        out.download_storage_key ||
+        out.r2_key ||
+        out.storageKey ||
+        out.fileKey ||
+        out.downloadStorageKey ||
+        out.r2Key ||
+        ''
+      ).trim();
+
+      if (evidenceFileKey) {
+        if (!out.storage_key) out.storage_key = evidenceFileKey;
+        if (!out.file_key) out.file_key = evidenceFileKey;
+        if (!out.download_storage_key) out.download_storage_key = evidenceFileKey;
+      }
+
       if (typeof out.system !== 'boolean') out.system = false;
       if (typeof out.can_delete !== 'boolean') out.can_delete = !out.system;
       if (typeof out.can_reclassify !== 'boolean') out.can_reclassify = !out.system;
@@ -267453,11 +267518,23 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
           (typeof ev.system === 'boolean') ? ev.system : String(evidenceIdStr).startsWith('SYS:');
 
         const keyRaw =
-          (ev.download_storage_key != null && String(ev.download_storage_key).trim())
-            ? String(ev.download_storage_key).trim()
-            : (ev.storage_key != null && String(ev.storage_key).trim())
-              ? String(ev.storage_key).trim()
-              : '';
+          (ev.storage_key != null && String(ev.storage_key).trim())
+            ? String(ev.storage_key).trim()
+            : (ev.file_key != null && String(ev.file_key).trim())
+              ? String(ev.file_key).trim()
+              : (ev.download_storage_key != null && String(ev.download_storage_key).trim())
+                ? String(ev.download_storage_key).trim()
+                : (ev.r2_key != null && String(ev.r2_key).trim())
+                  ? String(ev.r2_key).trim()
+                  : (ev.storageKey != null && String(ev.storageKey).trim())
+                    ? String(ev.storageKey).trim()
+                    : (ev.fileKey != null && String(ev.fileKey).trim())
+                      ? String(ev.fileKey).trim()
+                      : (ev.downloadStorageKey != null && String(ev.downloadStorageKey).trim())
+                        ? String(ev.downloadStorageKey).trim()
+                        : (ev.r2Key != null && String(ev.r2Key).trim())
+                          ? String(ev.r2Key).trim()
+                          : '';
 
         const key = keyRaw.replace(/^\/+/, '').trim();
 
@@ -267523,6 +267600,7 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
     throw err;
   }
 }
+
 
 
 
