@@ -161047,7 +161047,6 @@ async function handleBulkProcessSave(state) {
   }
 }
 
-
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -161723,6 +161722,143 @@ async function handleBulkProcessProcess(state) {
     }
     window.alert(safeMessage);
   };
+  const normaliseKindForEvidenceRequiredMessage = (value) => {
+    const raw = upper(value || '').replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!raw) return '';
+    if (raw === 'TS') return 'TIMESHEET';
+    if (raw === 'MILES' || raw === 'MILE') return 'MILEAGE';
+    if (raw === 'EXPENSE' || raw === 'EXPENSES') return 'TRAVEL';
+    if (raw === 'ACCOM') return 'ACCOMMODATION';
+    if (['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'].includes(raw)) return raw;
+    return raw;
+  };
+  const expenseEvidenceLabelForProcess = (kindInput = '') => {
+    const kind = normaliseKindForEvidenceRequiredMessage(kindInput);
+    if (kind === 'MILEAGE') return { evidenceLabel: 'mileage evidence', claimLabel: 'mileage is being claimed', shortLabel: 'mileage' };
+    if (kind === 'TRAVEL') return { evidenceLabel: 'travel evidence', claimLabel: 'travel expenses are being claimed', shortLabel: 'travel' };
+    if (kind === 'ACCOMMODATION') return { evidenceLabel: 'accommodation evidence', claimLabel: 'accommodation is being claimed', shortLabel: 'accommodation' };
+    if (kind === 'OTHER') return { evidenceLabel: 'other expenses evidence', claimLabel: 'other expenses are being claimed', shortLabel: 'other expenses' };
+    if (kind === 'TIMESHEET') return { evidenceLabel: 'timesheet evidence', claimLabel: 'a timesheet image is required', shortLabel: 'timesheet' };
+    const label = trimStr(kindInput || 'expenses').toLowerCase() || 'expenses';
+    return { evidenceLabel: `${label} evidence`, claimLabel: `${label} is being claimed`, shortLabel: label };
+  };
+  const uniqueProcessEvidenceKinds = (values = []) => {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(values) ? values : [values]).forEach((value) => {
+      const kind = normaliseKindForEvidenceRequiredMessage(value);
+      if (!kind || seen.has(kind)) return;
+      seen.add(kind);
+      out.push(kind);
+    });
+    return out;
+  };
+  const buildProcessExpenseEvidenceRequiredMessage = (missingKindsInput = []) => {
+    const missingKinds = uniqueProcessEvidenceKinds(missingKindsInput).filter((kind) => kind && kind !== 'TIMESHEET');
+    if (missingKinds.length === 1) {
+      const label = expenseEvidenceLabelForProcess(missingKinds[0]);
+      return `You have not attached ${label.evidenceLabel} and ${label.claimLabel} in this timesheet. Please attach it and try again.`;
+    }
+    if (missingKinds.length > 1) {
+      const labels = missingKinds.map((kind) => expenseEvidenceLabelForProcess(kind).shortLabel);
+      const last = labels.pop();
+      const labelText = labels.length ? `${labels.join(', ')} and ${last}` : last;
+      return `You have not attached evidence for ${labelText}, and these items are being claimed in this timesheet. Please attach the required evidence and try again.`;
+    }
+    return 'This timesheet could not be processed because there is no expenses evidence attached which match the expenses entered in the Expenses sheet.';
+  };
+  const parseProcessBackendErrorJson = (value) => {
+    if (!value) return null;
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value !== 'string') return null;
+    const raw = value.trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+    } catch {}
+    const firstBrace = raw.indexOf('{');
+    const lastBrace = raw.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const parsed = JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+      } catch {}
+    }
+    return null;
+  };
+  const collectProcessBackendEvidenceRequiredPayloads = (errInput) => {
+    const out = [];
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const enqueue = (value) => {
+      if (value == null) return;
+      if (typeof value === 'string') {
+        const raw = value.trim();
+        if (!raw || seenStrings.has(raw)) return;
+        seenStrings.add(raw);
+        const parsed = parseProcessBackendErrorJson(raw);
+        if (parsed) queue.push(parsed);
+        else out.push({ message: raw });
+        return;
+      }
+      if (typeof value === 'object') {
+        if (seenObjects.has(value)) return;
+        seenObjects.add(value);
+        queue.push(value);
+      }
+    };
+    enqueue(errInput);
+    while (queue.length) {
+      const node = queue.shift();
+      if (!node || typeof node !== 'object') continue;
+      out.push(node);
+      ['json', 'payload', 'backendPayload', 'body', 'response', 'data', 'details', 'detail', 'error', 'message', 'raw_response_text', 'rawResponseText', 'source_error', 'sourceError', 'cause'].forEach((key) => {
+        const nested = node[key];
+        if (nested == null) return;
+        if (typeof nested === 'object') enqueue(nested);
+        else if (typeof nested === 'string') enqueue(nested);
+      });
+    }
+    return out;
+  };
+  const extractProcessBackendMissingEvidenceKinds = (errInput) => {
+    const kinds = [];
+    const payloads = collectProcessBackendEvidenceRequiredPayloads(errInput);
+    for (const payload of payloads) {
+      if (!payload || typeof payload !== 'object') continue;
+      const missing = Array.isArray(payload.missing) ? payload.missing : (Array.isArray(payload.missing_evidence) ? payload.missing_evidence : (Array.isArray(payload.missingEvidence) ? payload.missingEvidence : []));
+      for (const row of missing) {
+        if (row && typeof row === 'object') {
+          kinds.push(row.required_kind || row.requiredKind || row.kind || row.evidence_kind || row.evidenceKind || row.category || row.name || '');
+        } else {
+          kinds.push(row);
+        }
+      }
+      if (!missing.length) {
+        kinds.push(payload.required_kind || payload.requiredKind || payload.kind || payload.evidence_kind || payload.evidenceKind || payload.category || '');
+      }
+    }
+    return uniqueProcessEvidenceKinds(kinds).filter((kind) => kind && kind !== 'EVIDENCE_REQUIRED');
+  };
+  const isProcessEvidenceRequiredError = (errInput) => {
+    const payloads = collectProcessBackendEvidenceRequiredPayloads(errInput);
+    return payloads.some((payload) => {
+      if (!payload || typeof payload !== 'object') return false;
+      const values = [
+        payload.error,
+        payload.code,
+        payload.error_code,
+        payload.errorCode,
+        payload.message,
+        payload.reason,
+        payload.title
+      ].map((value) => upper(value || ''));
+      if (values.some((value) => value === 'EVIDENCE_REQUIRED' || value.includes('EVIDENCE_REQUIRED'))) return true;
+      return Array.isArray(payload.missing) || Array.isArray(payload.missing_evidence) || Array.isArray(payload.missingEvidence);
+    });
+  };
   const confirmNoEvidence = async (active) => {
     const reconciledActive = reconcileProcessEvidenceTruth(active, { reason: 'before-no-evidence-confirm' });
     const row = reconciledActive.row || active?.row || {};
@@ -161732,7 +161868,7 @@ async function handleBulkProcessProcess(state) {
       const presentKinds = new Set(authoritativeEvidenceRows.map((item) => evidenceKindOf(item)).filter(Boolean));
       const missingExpenseKinds = requiredExpenseKinds.filter((kind) => !presentKinds.has(kind));
       if (missingExpenseKinds.length) {
-        const message = 'This timesheet could not be processed because there is no expenses evidence attached which match the expenses entered in the Expenses sheet.';
+        const message = buildProcessExpenseEvidenceRequiredMessage(missingExpenseKinds);
         st.error_text = message;
         st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
         st.__bulk_process_last_process_missing_expense_evidence_kinds = missingExpenseKinds;
@@ -164431,8 +164567,30 @@ async function handleBulkProcessProcess(state) {
     GE();
     return { ok: true, result: processResult, row_patch: processResult?.row_patch || patchedRow, data_row: processResult?.data_row || patchedRow };
   } catch (err) {
+    const rawProcessErrorText = String(err?.message || err || 'Failed to process Bulk Process row.');
+    const backendMissingEvidenceKinds = extractProcessBackendMissingEvidenceKinds(err);
+    const processEvidenceRequired = isProcessEvidenceRequiredError(err) || /EVIDENCE_REQUIRED/i.test(rawProcessErrorText);
+    const resolvedMissingEvidenceKinds = (() => {
+      if (backendMissingEvidenceKinds.length) return backendMissingEvidenceKinds;
+      const lastMissingKinds = Array.isArray(st.__bulk_process_last_process_missing_expense_evidence_kinds)
+        ? st.__bulk_process_last_process_missing_expense_evidence_kinds
+        : [];
+      if (lastMissingKinds.length) return uniqueProcessEvidenceKinds(lastMissingKinds);
+      if (!processEvidenceRequired) return [];
+      try {
+        return uniqueProcessEvidenceKinds(getRequiredExpenseEvidenceKindsForProcess(readActive()));
+      } catch {
+        return [];
+      }
+    })();
+    const friendlyEvidenceRequiredMessage = processEvidenceRequired
+      ? buildProcessExpenseEvidenceRequiredMessage(resolvedMissingEvidenceKinds)
+      : '';
     sigWarn('ERROR', {
-      message: String(err?.message || err || 'Failed to process Bulk Process row.'),
+      message: rawProcessErrorText,
+      friendly_message: friendlyEvidenceRequiredMessage || null,
+      missing_evidence_kinds: resolvedMissingEvidenceKinds,
+      backend_missing_evidence_kinds: backendMissingEvidenceKinds,
       submitted_signature: trimStr(st.__bulk_process_last_submitted_process_signature || '') || null,
       backend_current_signature: trimStr(err?.current_row_signature || err?.currentRowSignature || err?.details?.current_row_signature || err?.payload?.current_row_signature || '') || null
     });
@@ -164444,14 +164602,25 @@ async function handleBulkProcessProcess(state) {
     st.__bulk_process_save_in_flight = false;
     st.__suppress_dirty_marking = false;
     try { reconcileProcessEvidenceTruth(readActive(), { reason: 'process-error-preserve-evidence' }); } catch {}
-    st.error_text = String(err?.message || err || 'Failed to process Bulk Process row.');
-    const processEvidenceRequired = /EVIDENCE_REQUIRED/i.test(st.error_text);
+    st.error_text = friendlyEvidenceRequiredMessage || rawProcessErrorText;
+    if (processEvidenceRequired) {
+      st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
+      st.__bulk_process_last_process_missing_expense_evidence_kinds = resolvedMissingEvidenceKinds;
+    }
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][ERROR]');
+    if (processEvidenceRequired) {
+      await showBulkProcessProcessBlockedModal(st.error_text);
+    }
     GE();
-    return { ok: false, error: st.error_text, evidenceRequired: processEvidenceRequired };
+    return {
+      ok: false,
+      error: st.error_text,
+      message: st.error_text,
+      evidenceRequired: processEvidenceRequired,
+      missing: resolvedMissingEvidenceKinds
+    };
   }
 }
-
 
 async function processDailyManualTimesheet(timesheetId, payload = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][PROCESS-DAILY-WRAPPER]');
