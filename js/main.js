@@ -159292,6 +159292,11 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   const buildPrimaryArtifactFallbackRowsForEvidence = (matchingDatasetRow = null) => {
     const identity = selectedRowIdentityParts();
+    const hasTimesheetIdentityForPrimaryFallback = !!(
+      trimStr(identity.timesheetId || '') ||
+      /^timesheet:/i.test(trimStr(identity.rowKey || ''))
+    );
+    if (!isBulkAuthoriseTimesheets && !hasTimesheetIdentityForPrimaryFallback) return [];
     const containers = [
       st.active_row,
       st.active_context?.row,
@@ -159640,7 +159645,9 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       }
 
       const rawKind = getItemKind(item);
-      if (!isBulkAuthoriseTimesheets && isSyntheticAttachedFallback(item, item?.evidence_id || item?.id || '') && rawKind === 'TIMESHEET' && !activeTimesheetId && !stagedContextMatchesActiveContractWeek) return;
+      const itemIsSyntheticOrPrimaryFallback = isSyntheticAttachedFallback(item, item?.evidence_id || item?.id || item?.queue_id || '');
+      if (!isBulkAuthoriseTimesheets && !activeTimesheetId && activeContractWeekId && itemIsSyntheticOrPrimaryFallback && !stagedContextMatchesActiveContractWeek) return;
+      if (!isBulkAuthoriseTimesheets && itemIsSyntheticOrPrimaryFallback && rawKind === 'TIMESHEET' && !activeTimesheetId && !stagedContextMatchesActiveContractWeek) return;
       const queueId = trimStr(queueIdCandidate || (stagedContextMatchesActiveContractWeek ? item.id : '') || '');
       const evidenceId = stagedContextMatchesActiveContractWeek ? '' : trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || item.id || '');
       const normalizedId = stagedContextMatchesActiveContractWeek ? (queueId || item.id || storageKey) : (item.id || item.evidence_id || evidenceId || queueId || storageKey);
@@ -160256,7 +160263,6 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     non_authoritative_context_ignored: false
   };
 }
-
 
 
 
@@ -167089,6 +167095,7 @@ function renderBulkAuthorisePreviewPane(state) {
   `);
 }
 
+
 async function handleBulkProcessUnprocess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][UNPROCESS]');
   GC('handleBulkProcessUnprocess');
@@ -167159,6 +167166,192 @@ async function handleBulkProcessUnprocess(state) {
     const ds = ensureDataset();
     return { unprocessed: ds.unprocessed_rows.slice(), processed: ds.processed_rows.slice(), all: [...ds.unprocessed_rows, ...ds.processed_rows] };
   };
+  const safeStorageKey = (value) => {
+    const raw = trimStr(value || '');
+    if (!raw) return '';
+    const lower = raw.toLowerCase();
+    if (lower === 'null' || lower === 'undefined' || lower === 'none' || lower === '[object object]') return '';
+    return raw.replace(/^\/+/, '');
+  };
+  const readEvidenceMetaObject = (item) => {
+    if (!item || typeof item !== 'object') return {};
+    const candidates = [item.meta_json, item.metaJson, item.meta, item.queue_meta, item.queueMeta, item.source_context, item.sourceContext];
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) return candidate;
+      if (typeof candidate === 'string') {
+        try {
+          const parsed = JSON.parse(candidate);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+        } catch {}
+      }
+    }
+    return {};
+  };
+  const evidenceItemKind = (item) => {
+    const meta = readEvidenceMetaObject(item);
+    return upper(item?.kind || item?.evidence_kind || item?.evidenceKind || item?.staged_kind || item?.stagedKind || meta.kind || meta.evidence_kind || meta.evidenceKind || meta.staged_kind || meta.stagedKind || '');
+  };
+  const evidenceItemStorageKey = (item) => {
+    const meta = readEvidenceMetaObject(item);
+    return safeStorageKey(
+      item?.storage_key ||
+      item?.storageKey ||
+      item?.r2_key ||
+      item?.r2Key ||
+      item?.file_key ||
+      item?.fileKey ||
+      item?.download_storage_key ||
+      item?.downloadStorageKey ||
+      item?.preview_storage_key ||
+      item?.previewStorageKey ||
+      meta.storage_key ||
+      meta.storageKey ||
+      meta.r2_key ||
+      meta.r2Key ||
+      meta.file_key ||
+      meta.fileKey ||
+      meta.download_storage_key ||
+      meta.downloadStorageKey ||
+      meta.preview_storage_key ||
+      meta.previewStorageKey ||
+      ''
+    );
+  };
+  const evidenceItemRealIdentity = (item) => {
+    const meta = readEvidenceMetaObject(item);
+    const storageKey = evidenceItemStorageKey(item);
+    const values = [
+      item?.evidence_id,
+      item?.evidenceId,
+      item?.timesheet_evidence_id,
+      item?.timesheetEvidenceId,
+      item?.queue_id,
+      item?.queueId,
+      item?.manual_timesheet_queue_id,
+      item?.manualTimesheetQueueId,
+      item?.manual_queue_id,
+      item?.manualQueueId,
+      meta.evidence_id,
+      meta.evidenceId,
+      meta.timesheet_evidence_id,
+      meta.timesheetEvidenceId,
+      meta.queue_id,
+      meta.queueId,
+      meta.manual_timesheet_queue_id,
+      meta.manualTimesheetQueueId,
+      meta.manual_queue_id,
+      meta.manualQueueId
+    ].map((value) => trimStr(value || '')).filter(Boolean);
+    const real = values.find((value) => value && value !== storageKey && !/^synthetic-attached:/i.test(value));
+    return real || '';
+  };
+  const evidenceItemIsWeakFileFallback = (item) => {
+    if (!item || typeof item !== 'object') return false;
+    const storageKey = evidenceItemStorageKey(item);
+    const id = trimStr(item.id || item.evidence_id || item.queue_id || '');
+    const kind = evidenceItemKind(item);
+    const hasRealIdentity = !!evidenceItemRealIdentity(item);
+    const explicitFallback = item.__primary_artifact_fallback === true ||
+      item.is_primary_artifact_fallback === true ||
+      item.__synthetic_attached_fallback === true ||
+      item.is_synthetic_attached_fallback === true ||
+      /^synthetic-attached:/i.test(id);
+    const fileKeyOnlyIdentity = !!(storageKey && id && id === storageKey && !hasRealIdentity);
+    return !!(
+      explicitFallback ||
+      fileKeyOnlyIdentity ||
+      (!hasRealIdentity && storageKey && (kind === 'OTHER' || kind === 'TIMESHEET'))
+    );
+  };
+  const sanitizeUnprocessedContractWeekEvidenceState = (rowInput) => {
+    if (!rowInput || typeof rowInput !== 'object') return rowInput;
+    const row = { ...(deep(rowInput) || {}) };
+    const rowKey = rowKeyOf(row);
+    const contractWeekId = trimStr(row.contract_week_id || '');
+    const timesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || row.requested_timesheet_id || row.expected_timesheet_id || '');
+    const bucket = upper(row.bulk_process_bucket || row.summary_stage || '');
+    const isContractWeekOnly = !!(
+      /^contract_week:/i.test(rowKey) ||
+      (contractWeekId && !timesheetId && bucket !== 'PROCESSED')
+    );
+    if (!isContractWeekOnly) return row;
+
+    const filterEvidenceArray = (value) => {
+      if (!Array.isArray(value)) return [];
+      return value.filter((item) => {
+        if (!item || typeof item !== 'object') return false;
+        if (evidenceItemIsWeakFileFallback(item)) return false;
+        const itemTimesheetId = trimStr(item.timesheet_id || item.current_timesheet_id || readEvidenceMetaObject(item).timesheet_id || readEvidenceMetaObject(item).current_timesheet_id || '');
+        if (itemTimesheetId) return false;
+        return true;
+      }).map((item) => deep(item));
+    };
+
+    const filteredEvidence = filterEvidenceArray(row.evidence);
+    const filteredAttachedEvidence = filterEvidenceArray(row.attached_evidence);
+    const filteredAttachedRows = filterEvidenceArray(row.attachedRows);
+    const filteredEvidenceRows = [...filteredEvidence, ...filteredAttachedEvidence, ...filteredAttachedRows];
+
+    const primaryArtifact = (row.primary_artifact && typeof row.primary_artifact === 'object') ? row.primary_artifact : null;
+    const primaryArtifactStorageKey = safeStorageKey(primaryArtifact?.storage_key || primaryArtifact?.file_key || primaryArtifact?.r2_key || row.primary_artifact_storage_key || row.artifact_hints?.primary_artifact_storage_key || '');
+    const primaryArtifactId = trimStr(primaryArtifact?.id || primaryArtifact?.evidence_id || primaryArtifact?.queue_id || row.primary_artifact_id || '');
+    const primaryArtifactKind = upper(primaryArtifact?.kind || primaryArtifact?.evidence_kind || primaryArtifact?.staged_kind || row.primary_artifact_kind || row.artifact_hints?.primary_artifact_kind || '');
+    const primaryHasRealIdentity = !!evidenceItemRealIdentity(primaryArtifact || row);
+    const primaryIsWeakFallback = !!(
+      evidenceItemIsWeakFileFallback(primaryArtifact || row) ||
+      /^synthetic-attached:/i.test(primaryArtifactId) ||
+      (primaryArtifactStorageKey && primaryArtifactId === primaryArtifactStorageKey && !primaryHasRealIdentity) ||
+      (primaryArtifactKind === 'TIMESHEET' && !primaryHasRealIdentity)
+    );
+
+    row.timesheet_id = null;
+    row.current_timesheet_id = null;
+    row.requested_timesheet_id = null;
+    row.expected_timesheet_id = null;
+    row.has_timesheet = false;
+    row.is_contract_week_only = true;
+    row.row_key = rowKey || (contractWeekId ? `contract_week:${contractWeekId}` : row.row_key || null);
+    row.evidence = filteredEvidenceRows;
+    row.attached_evidence = filteredAttachedEvidence;
+    row.attachedRows = filteredAttachedRows;
+
+    if (primaryIsWeakFallback) {
+      row.primary_artifact = null;
+      row.primary_artifact_id = null;
+      row.primary_artifact_kind = null;
+      row.primary_artifact_storage_key = null;
+      row.primary_artifact_preview_mode = null;
+      row.primary_artifact_display_name = null;
+      if (row.artifact_hints && typeof row.artifact_hints === 'object') {
+        row.artifact_hints = { ...row.artifact_hints };
+        row.artifact_hints.primary_artifact = null;
+        row.artifact_hints.primary_artifact_id = null;
+        row.artifact_hints.primary_artifact_kind = null;
+        row.artifact_hints.primary_artifact_storage_key = null;
+        row.artifact_hints.primary_artifact_preview_mode = null;
+        row.artifact_hints.primary_artifact_display_name = null;
+      }
+    }
+
+    if (!filteredEvidenceRows.length) {
+      row.evidence_loaded = false;
+      row.evidence_authoritative = false;
+      row.include_evidence = false;
+      row.attached_evidence_count = 0;
+      if (row.evidence_meta && typeof row.evidence_meta === 'object') {
+        row.evidence_meta = {
+          ...row.evidence_meta,
+          evidence_loaded: false,
+          evidence_authoritative: false,
+          include_evidence: false,
+          attached_evidence_count: 0
+        };
+      }
+    }
+
+    return row;
+  };
   const applyCountDeltas = (countDeltas) => {
     if (!countDeltas || typeof countDeltas !== 'object') return;
     const ds = ensureDataset();
@@ -167179,7 +167372,7 @@ async function handleBulkProcessUnprocess(state) {
     const contractWeekId = trimStr(src.contract_week_id || src.contract_week?.id || merged.contract_week_id || '');
     const bucket = upper(src.bulk_process_bucket || merged.bulk_process_bucket || fallbackBucket || 'UNPROCESSED') === 'PROCESSED' ? 'PROCESSED' : 'UNPROCESSED';
     const rowKey = trimStr(src.row_key || src.new_row_key || merged.row_key || (bucket === 'UNPROCESSED' && contractWeekId ? `contract_week:${contractWeekId}` : (currentTimesheetId ? `timesheet:${currentTimesheetId}` : '')));
-    return {
+    return sanitizeUnprocessedContractWeekEvidenceState({
       ...merged,
       row_key: rowKey || null,
       timesheet_id: bucket === 'UNPROCESSED' && contractWeekId && !currentTimesheetId ? null : (currentTimesheetId || merged.timesheet_id || null),
@@ -167191,7 +167384,7 @@ async function handleBulkProcessUnprocess(state) {
       bulk_process_bucket: bucket,
       summary_stage: bucket,
       row_signature: src.row_signature || merged.row_signature || null
-    };
+    });
   };
   const removeRowFromDataset = (rowKey) => {
     const ds = ensureDataset();
@@ -167202,11 +167395,12 @@ async function handleBulkProcessUnprocess(state) {
   };
   const insertRowIntoBucket = (row, bucket) => {
     const ds = ensureDataset();
-    const key = rowKeyOf(row);
+    const cleanRow = sanitizeUnprocessedContractWeekEvidenceState(row);
+    const key = rowKeyOf(cleanRow);
     if (key) removeRowFromDataset(key);
     const target = upper(bucket) === 'PROCESSED' ? ds.processed_rows : ds.unprocessed_rows;
-    target.unshift(deep(row));
-    return row;
+    target.unshift(deep(cleanRow));
+    return cleanRow;
   };
   const applyPatch = (result, baseRow, previousRowKey, fallbackBucket) => {
     const patchSource = pickObject(result?.row_patch || result?.data_row || result?.row || result?.summary_row_hint);
@@ -167220,7 +167414,9 @@ async function handleBulkProcessUnprocess(state) {
           result,
           preserveActiveContext: false
         });
-        return rowPatch;
+        const cleanPatch = sanitizeUnprocessedContractWeekEvidenceState(rowPatch);
+        insertRowIntoBucket(cleanPatch, cleanPatch.bulk_process_bucket || fallbackBucket || 'UNPROCESSED');
+        return cleanPatch;
       } catch (err) {
         if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][UNPROCESS] shared patch helper failed; using fallback', err);
       }
@@ -167296,7 +167492,7 @@ async function handleBulkProcessUnprocess(state) {
     }
 
     const ds = ensureDataset();
-    const canonicalPatchedRow = [...ds.unprocessed_rows, ...ds.processed_rows].find((row) => rowKeyOf(row) === patchedKey) || patchedRow;
+    const canonicalPatchedRow = sanitizeUnprocessedContractWeekEvidenceState([...ds.unprocessed_rows, ...ds.processed_rows].find((row) => rowKeyOf(row) === patchedKey) || patchedRow);
     const nextContractWeekId = trimStr(canonicalPatchedRow.contract_week_id || '');
     const recordIdentity = patchedKey;
 
@@ -167551,6 +167747,7 @@ async function handleBulkProcessUnprocess(state) {
       unprocessCacheHints.staged_evidence_changed === true ||
       unprocessEvidenceIdentityLikelyChanged
     );
+    st.unprocessing = false;
     await selectNextRow(patchedRow, {
       editorChanged: unprocessEditorChanged,
       evidenceChanged: unprocessEvidenceChanged
@@ -167577,6 +167774,7 @@ async function handleBulkProcessUnprocess(state) {
     return { ok: false, error: st.error_text };
   }
 }
+
 
 
 
