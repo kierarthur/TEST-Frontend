@@ -161688,40 +161688,83 @@ async function handleBulkProcessProcess(state) {
     if (positive(draft.other_pay, draft.other_pay_ex_vat, draft.other_charge, draft.other_charge_ex_vat)) required.push('OTHER');
     return Array.from(new Set(required));
   };
+  const clearBulkProcessProcessBusyStateForBlockedModal = (reason = '') => {
+    const cleanReason = trimStr(reason || '');
+    st.processing = false;
+    st.process_in_flight = false;
+    st.__bulk_process_process_in_flight = false;
+    st.saving = false;
+    st.save_in_flight = false;
+    st.__bulk_process_save_in_flight = false;
+    st.__suppress_dirty_marking = false;
+    if (cleanReason) {
+      st.__bulk_process_last_process_busy_reset_reason = cleanReason;
+      st.__bulk_process_last_process_busy_reset_at = new Date().toISOString();
+    }
+    if (window.modalCtx && window.modalCtx.bulkProcessState === st) {
+      window.modalCtx.bulkProcessState.processing = false;
+      window.modalCtx.bulkProcessState.process_in_flight = false;
+      window.modalCtx.bulkProcessState.__bulk_process_process_in_flight = false;
+      window.modalCtx.bulkProcessState.saving = false;
+      window.modalCtx.bulkProcessState.save_in_flight = false;
+      window.modalCtx.bulkProcessState.__bulk_process_save_in_flight = false;
+      window.modalCtx.bulkProcessState.__suppress_dirty_marking = false;
+    }
+  };
+  const rerenderBulkProcessWorkbenchAfterProcessBlock = async (reason = '') => {
+    const cleanReason = trimStr(reason || 'process-blocked') || 'process-blocked';
+    clearBulkProcessProcessBusyStateForBlockedModal(cleanReason);
+    if (typeof rerenderBulkProcessWorkbench === 'function') {
+      try {
+        await rerenderBulkProcessWorkbench(st, `[TS][BULK-PROCESS][PROCESS][${cleanReason.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}]`);
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] blocked-state rerender degraded', { reason: cleanReason, error: err });
+      }
+    }
+  };
   const showBulkProcessProcessBlockedModal = async (message, title = 'Timesheet could not be processed') => {
     const safeMessage = trimStr(message || 'This timesheet could not be processed.');
     const safeTitle = trimStr(title || 'Timesheet could not be processed') || 'Timesheet could not be processed';
-    if (typeof uiShowModal === 'function') {
-      const res = uiShowModal({
-        title: safeTitle,
-        message: safeMessage,
-        body: safeMessage,
-        kind: 'import-summary-ui-confirm',
-        entity: 'bulk-process',
-        mode: 'view',
-        noParentGate: true,
-        tabs: [{ key: 'main', label: 'Message', html: `<div class="muted">${safeMessage}</div>` }],
-        defaultPrimary: 'OK',
-        confirm_label: 'OK',
-        cancel_label: '',
-        hide_cancel: true
-      });
-      if (res && typeof res.then === 'function') await res;
-      return;
+
+    st.error_text = safeMessage;
+    await rerenderBulkProcessWorkbenchAfterProcessBlock('blocked-modal-before-open');
+
+    try {
+      if (typeof uiShowModal === 'function') {
+        const res = uiShowModal({
+          title: safeTitle,
+          message: safeMessage,
+          body: safeMessage,
+          kind: 'import-summary-ui-confirm',
+          entity: 'bulk-process',
+          mode: 'view',
+          noParentGate: true,
+          tabs: [{ key: 'main', label: 'Message', html: `<div class="muted">${safeMessage}</div>` }],
+          defaultPrimary: 'OK',
+          confirm_label: 'OK',
+          cancel_label: '',
+          hide_cancel: true
+        });
+        if (res && typeof res.then === 'function') await res;
+        return;
+      }
+      if (typeof openUiConfirmModal === 'function') {
+        await openUiConfirmModal({
+          title: safeTitle,
+          message: safeMessage,
+          confirm_label: 'OK',
+          cancel_label: '',
+          confirm_class: 'btn',
+          hide_cancel: true
+        });
+        return;
+      }
+      window.alert(safeMessage);
+    } finally {
+      await rerenderBulkProcessWorkbenchAfterProcessBlock('blocked-modal-after-close');
     }
-    if (typeof openUiConfirmModal === 'function') {
-      await openUiConfirmModal({
-        title: safeTitle,
-        message: safeMessage,
-        confirm_label: 'OK',
-        cancel_label: '',
-        confirm_class: 'btn',
-        hide_cancel: true
-      });
-      return;
-    }
-    window.alert(safeMessage);
   };
+
   const normaliseKindForEvidenceRequiredMessage = (value) => {
     const raw = upper(value || '').replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
     if (!raw) return '';
@@ -164242,14 +164285,7 @@ async function handleBulkProcessProcess(state) {
     active = reconcileProcessEvidenceTruth(active, { reason: 'before-evidence-confirm' });
     const evidenceOk = await confirmNoEvidence(active);
     if (!evidenceOk) {
-      st.processing = false;
-      st.process_in_flight = false;
-      st.__bulk_process_process_in_flight = false;
-      st.saving = false;
-      st.save_in_flight = false;
-      st.__bulk_process_save_in_flight = false;
-      st.__suppress_dirty_marking = false;
-      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][CANCELLED]');
+      await rerenderBulkProcessWorkbenchAfterProcessBlock('process-cancelled-after-blocked-modal');
       GE();
       return { ok: false, error: st.error_text || 'Process cancelled.', message: st.error_text || 'Process cancelled.', evidenceRequired: st.__bulk_process_last_process_block_reason === 'EXPENSE_EVIDENCE_REQUIRED' };
     }
@@ -164621,6 +164657,7 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
+
 
 async function processDailyManualTimesheet(timesheetId, payload = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][PROCESS-DAILY-WRAPPER]');
