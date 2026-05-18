@@ -167504,13 +167504,52 @@ async function handleBulkProcessUnprocess(state) {
     }
     const unprocessCacheHints = (unprocessResult?.cache_invalidation_hints && typeof unprocessResult.cache_invalidation_hints === 'object') ? unprocessResult.cache_invalidation_hints : {};
     const unprocessEditorChanged = true;
+    const readArray = (value) => Array.isArray(value) ? value : [];
+    const hasPositiveEvidenceBadge = (container) => {
+      if (!container || typeof container !== 'object') return false;
+      const badges = Array.isArray(container.evidence_badges)
+        ? container.evidence_badges
+        : (Array.isArray(container.artifact_hints?.evidence_badges)
+          ? container.artifact_hints.evidence_badges
+          : (Array.isArray(container.evidence_meta?.evidence_badges) ? container.evidence_meta.evidence_badges : []));
+      return badges.some((badge) => {
+        if (!badge || typeof badge !== 'object') return false;
+        return badge.present === true || badge.has_evidence === true || Number(badge.count || 0) > 0;
+      });
+    };
+    const hasEvidenceSignal = (...containers) => containers.some((container) => {
+      if (!container || typeof container !== 'object') return false;
+      return container.has_any_evidence === true ||
+        container.has_attached_evidence === true ||
+        Number(container.attached_evidence_count || 0) > 0 ||
+        Number(container.evidence_count || 0) > 0 ||
+        trimStr(container.primary_artifact_storage_key || container.artifact_hints?.primary_artifact_storage_key || container.primary_artifact?.storage_key || container.primary_artifact?.file_key || container.primary_artifact?.r2_key || '') !== '' ||
+        (Array.isArray(container.evidence) && container.evidence.length > 0) ||
+        (Array.isArray(container.attached_evidence) && container.attached_evidence.length > 0) ||
+        (Array.isArray(container.attachedRows) && container.attachedRows.length > 0) ||
+        hasPositiveEvidenceBadge(container);
+    });
+    const unprocessPatchEvidenceSource = {
+      ...pickObject(unprocessResult?.data_row || unprocessResult?.row || unprocessResult?.summary_row_hint),
+      ...pickObject(unprocessResult?.row_patch || unprocessResult?.patch),
+      ...pickObject(patchedRow)
+    };
+    const unprocessFromTimesheetToContractWeek = previousRowKey.startsWith('timesheet:') && rowKeyOf(patchedRow).startsWith('contract_week:');
+    const unprocessStorageKeysMoved = readArray(unprocessCacheHints.old_storage_keys).length > 0 ||
+      readArray(unprocessCacheHints.new_storage_keys).length > 0 ||
+      readArray(unprocessCacheHints.storage_keys).length > 0;
+    const unprocessEvidenceIdentityLikelyChanged = unprocessFromTimesheetToContractWeek && (
+      unprocessStorageKeysMoved ||
+      hasEvidenceSignal(active.row, active.details, unprocessResult?.data_row, unprocessResult?.row, unprocessResult?.row_patch, unprocessPatchEvidenceSource, patchedRow)
+    );
     const unprocessEvidenceChanged = !!(
       unprocessCacheHints.evidence_changed === true ||
       unprocessCacheHints.storage_changed === true ||
       unprocessCacheHints.invalidate_evidence === true ||
       unprocessCacheHints.invalidate_preview === true ||
       unprocessCacheHints.attached_evidence_changed === true ||
-      unprocessCacheHints.staged_evidence_changed === true
+      unprocessCacheHints.staged_evidence_changed === true ||
+      unprocessEvidenceIdentityLikelyChanged
     );
     await selectNextRow(patchedRow, {
       editorChanged: unprocessEditorChanged,
