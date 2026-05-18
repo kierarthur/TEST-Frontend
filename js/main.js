@@ -158501,6 +158501,7 @@ function captureBulkProcessUiSnapshot(state) {
 }
 
 
+
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const st = (state && typeof state === 'object') ? state : {};
   st.evidence_pane_state =
@@ -159787,29 +159788,51 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
         boolish(item?.is_primary_artifact_fallback) ||
         boolish(item?.__primary_artifact_fallback)
       );
+      const itemKind = upper(item?.kind || item?.staged_kind || '');
       return !!(
         !itemIsFallback &&
-        upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET' &&
-        getItemStorageKey(item).toLowerCase() === selectedKeyLower
+        getItemStorageKey(item).toLowerCase() === selectedKeyLower &&
+        (isBulkAuthoriseTimesheets ? itemKind === 'TIMESHEET' : true)
       );
     });
     if (matchingHydratedIndex >= 0) {
       const matching = attachedAllRows[matchingHydratedIndex];
+      const matchingKind = upper(matching?.kind || matching?.staged_kind || '');
+      const matchingStorageKey = getItemStorageKey(matching) || selectedRowArtifactKey;
+      const matchingIsTimesheet = matchingKind === 'TIMESHEET' || matchingKind === 'TS';
+      const adoptedMatching = matchingIsTimesheet
+        ? {
+            ...selectedRowSyntheticAttachedItem,
+            ...(deep(matching) || {}),
+            id: matching.id || matching.evidence_id || selectedRowSyntheticAttachedItem.id,
+            evidence_id: matching.evidence_id || matching.id || null,
+            kind: 'TIMESHEET',
+            staged_kind: matching.staged_kind || 'TIMESHEET',
+            storage_key: matchingStorageKey,
+            r2_key: safeStorageKey(matching.r2_key || matching.storage_key || matchingStorageKey) || matchingStorageKey,
+            file_key: safeStorageKey(matching.file_key || matching.storage_key || matching.r2_key || matchingStorageKey) || matchingStorageKey,
+            download_storage_key: safeStorageKey(matching.download_storage_key || matching.storage_key || matching.r2_key || matchingStorageKey) || matchingStorageKey,
+            is_synthetic_attached_fallback: false,
+            __synthetic_attached_fallback: false
+          }
+        : {
+            ...(deep(matching) || {}),
+            id: matching.id || matching.evidence_id || matching.queue_id || matchingStorageKey,
+            evidence_id: matching.evidence_id || matching.evidenceId || matching.timesheet_evidence_id || matching.timesheetEvidenceId || matching.id || null,
+            queue_id: matching.queue_id || matching.queueId || matching.manual_timesheet_queue_id || matching.manualTimesheetQueueId || null,
+            kind: matchingKind || upper(matching.kind || matching.staged_kind || '') || 'OTHER',
+            staged_kind: matching.staged_kind || matching.stagedKind || matchingKind || undefined,
+            storage_key: matchingStorageKey,
+            r2_key: safeStorageKey(matching.r2_key || matching.storage_key || matchingStorageKey) || matchingStorageKey,
+            file_key: safeStorageKey(matching.file_key || matching.storage_key || matching.r2_key || matchingStorageKey) || matchingStorageKey,
+            download_storage_key: safeStorageKey(matching.download_storage_key || matching.storage_key || matching.r2_key || matchingStorageKey) || matchingStorageKey,
+            is_synthetic_attached_fallback: false,
+            __synthetic_attached_fallback: false,
+            is_primary_artifact_fallback: false,
+            __primary_artifact_fallback: false
+          };
       attachedAllRows = [
-        {
-          ...selectedRowSyntheticAttachedItem,
-          ...(deep(matching) || {}),
-          id: matching.id || matching.evidence_id || selectedRowSyntheticAttachedItem.id,
-          evidence_id: matching.evidence_id || matching.id || null,
-          kind: 'TIMESHEET',
-          staged_kind: matching.staged_kind || 'TIMESHEET',
-          storage_key: getItemStorageKey(matching) || selectedRowArtifactKey,
-          r2_key: safeStorageKey(matching.r2_key || matching.storage_key || selectedRowArtifactKey) || selectedRowArtifactKey,
-          file_key: safeStorageKey(matching.file_key || matching.storage_key || matching.r2_key || selectedRowArtifactKey) || selectedRowArtifactKey,
-          download_storage_key: safeStorageKey(matching.download_storage_key || matching.storage_key || matching.r2_key || selectedRowArtifactKey) || selectedRowArtifactKey,
-          is_synthetic_attached_fallback: false,
-          __synthetic_attached_fallback: false
-        },
+        adoptedMatching,
         ...attachedAllRows.slice(0, matchingHydratedIndex),
         ...attachedAllRows.slice(matchingHydratedIndex + 1)
       ];
@@ -159847,6 +159870,21 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   }
 
   const hasAnyAttachedEvidence = attachedAllRows.length > 0;
+  const selectedRowArtifactCoveredByRealAttachedEvidence = !!(
+    !isBulkAuthoriseTimesheets &&
+    selectedRowArtifactKey &&
+    attachedAllRows.some((item) => {
+      const itemId = trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
+      const itemIsFallback = !!(
+        /^synthetic-attached:/i.test(itemId) ||
+        boolish(item?.is_synthetic_attached_fallback) ||
+        boolish(item?.__synthetic_attached_fallback) ||
+        boolish(item?.is_primary_artifact_fallback) ||
+        boolish(item?.__primary_artifact_fallback)
+      );
+      return !itemIsFallback && getItemStorageKey(item).toLowerCase() === selectedRowArtifactKey.toLowerCase();
+    })
+  );
   const hasTimesheetEvidence = isBulkAuthoriseTimesheets ? timesheetRows.length > 0 : realTimesheetRows.length > 0;
   const manualOverride = !!pane.__attached_manual_override;
   const activeIdentity = getActiveIdentity();
@@ -159906,6 +159944,14 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       pane.__queue_manual_override_identity = '';
       pane.__queue_manual_override_scope = '';
     } else if (hasTimesheetEvidence) {
+      resolvedSource = 'attached';
+      pane.__requires_evidence_hydration = false;
+      pane.__synthetic_attached_fallback_suppressed = false;
+      pane.__attached_manual_override = true;
+      pane.__queue_manual_override = false;
+      pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = '';
+    } else if (selectedRowArtifactCoveredByRealAttachedEvidence) {
       resolvedSource = 'attached';
       pane.__requires_evidence_hydration = false;
       pane.__synthetic_attached_fallback_suppressed = false;
@@ -159996,7 +160042,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     return validTimesheetRows[0] ? { ...(validTimesheetRows[0] || {}) } : null;
   };
 
-  let activeAttached = (pane.active_tab === 'attached' || isBulkAuthoriseTimesheets || hasTimesheetEvidence || canUseAnyAttachedForExplicitBulkProcess) && currentAttachedSelectionKey && attachedBySelectionKey.has(currentAttachedSelectionKey)
+  let activeAttached = (pane.active_tab === 'attached' || isBulkAuthoriseTimesheets || hasTimesheetEvidence || selectedRowArtifactCoveredByRealAttachedEvidence || canUseAnyAttachedForExplicitBulkProcess) && currentAttachedSelectionKey && attachedBySelectionKey.has(currentAttachedSelectionKey)
     ? { ...(attachedBySelectionKey.get(currentAttachedSelectionKey) || {}) }
     : null;
 
@@ -160014,11 +160060,25 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     activeAttached = null;
   }
 
-  if (!activeAttached && (pane.active_tab === 'attached' || isBulkAuthoriseTimesheets || hasTimesheetEvidence || canUseAnyAttachedForExplicitBulkProcess)) {
+  if (!activeAttached && (pane.active_tab === 'attached' || isBulkAuthoriseTimesheets || hasTimesheetEvidence || selectedRowArtifactCoveredByRealAttachedEvidence || canUseAnyAttachedForExplicitBulkProcess)) {
     if (canUseAnyAttachedForExplicitBulkProcess) {
       activeAttached = attachedAllRows.find((item) => !!buildCanonicalAttachedSelectionKey(item)) ? { ...(attachedAllRows.find((item) => !!buildCanonicalAttachedSelectionKey(item)) || {}) } : null;
     } else if (hasTimesheetEvidence) {
       activeAttached = findPreferredTimesheetAttached();
+    } else if (selectedRowArtifactCoveredByRealAttachedEvidence) {
+      const selectedKeyLower = selectedRowArtifactKey.toLowerCase();
+      const selectedRealEvidence = attachedAllRows.find((item) => {
+        const itemId = trimStr(item?.id || item?.evidence_id || item?.queue_id || '');
+        const itemIsFallback = !!(
+          /^synthetic-attached:/i.test(itemId) ||
+          boolish(item?.is_synthetic_attached_fallback) ||
+          boolish(item?.__synthetic_attached_fallback) ||
+          boolish(item?.is_primary_artifact_fallback) ||
+          boolish(item?.__primary_artifact_fallback)
+        );
+        return !itemIsFallback && getItemStorageKey(item).toLowerCase() === selectedKeyLower && !!buildCanonicalAttachedSelectionKey(item);
+      }) || null;
+      activeAttached = selectedRealEvidence ? { ...(selectedRealEvidence || {}) } : null;
     } else if (isBulkAuthoriseTimesheets && manualOverride && hasAnyAttachedEvidence) {
       activeAttached = attachedAllRows.find((item) => !!buildCanonicalAttachedSelectionKey(item)) ? { ...(attachedAllRows.find((item) => !!buildCanonicalAttachedSelectionKey(item)) || {}) } : null;
     } else if (isBulkAuthoriseTimesheets && hasAnyAttachedEvidence) {
@@ -160084,7 +160144,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const nextSelection = getSelectionIdentity(pane);
   const nextSelectionBlank = nextSelection.key === 'queue||' || nextSelection.key === 'attached||' || /^\w+\|\|$/.test(nextSelection.key) || !String(nextSelection.key || '').replace(/\|/g, '');
   const previousSelectionValid = !!previousSelection.key && previousSelection.key !== 'queue||' && previousSelection.key !== 'attached||' && !/^\w+\|\|$/.test(previousSelection.key);
-  const suppressRestoreToPreviousSelection = !!(!isBulkAuthoriseTimesheets && (!hasTimesheetEvidence || pane.active_tab === 'queue'));
+  const suppressRestoreToPreviousSelection = !!(!isBulkAuthoriseTimesheets && ((!hasTimesheetEvidence && !selectedRowArtifactCoveredByRealAttachedEvidence) || pane.active_tab === 'queue'));
   const validToBlankSelection = !!(previousSelectionValid && nextSelectionBlank && activeIdentityAtStart === activeIdentity && !suppressRestoreToPreviousSelection && !selectedArtifactRemoved);
   const selectedPreviewChanged = selectedArtifactRemoved || (previousSelection.key !== nextSelection.key && !validToBlankSelection);
   const ownerIdentity = getBulkAuthoriseOwnerIdentity();
@@ -160263,8 +160323,6 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     non_authoritative_context_ignored: false
   };
 }
-
-
 
 async function rerenderBulkProcessWorkbench(state, logPrefix) {
   const prefix = String(logPrefix || '[TS][BULK-PROCESS]');
