@@ -162702,6 +162702,23 @@ async function handleBulkProcessProcess(state) {
       await runLayeredProcessRowRefresh('evidence', { source: 'bulk-process-process-evidence' });
     }
 
+    let processPostTransitionEvidencePatch = null;
+    if (selectionOpts.evidenceChanged === true) {
+      try {
+        const refreshedEvidenceRows = collectCurrentEvidenceRowsForProcess(readActive()).filter((item) => {
+          if (!item || typeof item !== 'object') return false;
+          if (isSyntheticAttachedEvidenceItem(item)) return false;
+          const resolvedEvidenceId = evidenceIdOf(item);
+          return !!(resolvedEvidenceId && !isSyntheticEvidenceId(resolvedEvidenceId) && evidenceStorageKeyOf(item));
+        });
+        if (refreshedEvidenceRows.length > 0) {
+          processPostTransitionEvidencePatch = buildProcessEvidenceAuthorityPatch(refreshedEvidenceRows);
+        }
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] processed-row evidence adoption degraded', err);
+      }
+    }
+
     const postRefreshRow = {
       ...pickObject(st.active_ctx?.row || {}),
       ...pickObject(st.active_context?.row || {}),
@@ -162725,6 +162742,9 @@ async function handleBulkProcessProcess(state) {
       can_process: false,
       can_unprocess: true
     };
+    if (processPostTransitionEvidencePatch?.hasAnyEvidence === true) {
+      applyProcessEvidenceAuthorityPatch(postRefreshRow, processPostTransitionEvidencePatch);
+    }
 
     const authoritativePatchTarget = (target) => {
       if (!target || typeof target !== 'object') return;
@@ -162803,6 +162823,22 @@ async function handleBulkProcessProcess(state) {
       window.modalCtx.activeRecordIdentity = recordIdentity;
       if (!window.modalCtx.formState || typeof window.modalCtx.formState !== 'object') window.modalCtx.formState = {};
       window.modalCtx.formState.__forId = recordIdentity;
+    }
+
+    if (processPostTransitionEvidencePatch?.hasAnyEvidence === true && st.evidence_pane_state && typeof st.evidence_pane_state === 'object') {
+      st.evidence_pane_state.attached_rows = processPostTransitionEvidencePatch.evidenceRows.map((item) => deep(item));
+      st.evidence_pane_state.attached_all_rows = processPostTransitionEvidencePatch.evidenceRows.map((item) => deep(item));
+      st.evidence_pane_state.__attached_loaded = true;
+      st.evidence_pane_state.__evidence_loaded = true;
+      st.evidence_pane_state.__requires_evidence_hydration = false;
+      const preferredAttached = processPostTransitionEvidencePatch.primaryEvidence || processPostTransitionEvidencePatch.evidenceRows[0] || null;
+      if (preferredAttached) {
+        st.evidence_pane_state.active_tab = 'attached';
+        st.evidence_pane_state.__attached_manual_override = true;
+        st.evidence_pane_state.__queue_manual_override = false;
+        st.evidence_pane_state.active_attached_id = evidenceIdOf(preferredAttached) || trimStr(preferredAttached.id || preferredAttached.evidence_id || preferredAttached.queue_id || '') || null;
+        st.evidence_pane_state.active_attached_item = deep(preferredAttached);
+      }
     }
 
     const previousCacheKey = trimStr(previousKey || '');
@@ -165994,12 +166030,54 @@ async function handleBulkProcessProcess(state) {
       }
     }
     const processCacheHints = (processResult?.cache_invalidation_hints && typeof processResult.cache_invalidation_hints === 'object') ? processResult.cache_invalidation_hints : {};
+    const readArray = (value) => Array.isArray(value) ? value : [];
+    const hasPositiveEvidenceBadge = (container) => {
+      if (!container || typeof container !== 'object') return false;
+      const badges = Array.isArray(container.evidence_badges)
+        ? container.evidence_badges
+        : (Array.isArray(container.artifact_hints?.evidence_badges)
+          ? container.artifact_hints.evidence_badges
+          : (Array.isArray(container.evidence_meta?.evidence_badges) ? container.evidence_meta.evidence_badges : []));
+      return badges.some((badge) => {
+        if (!badge || typeof badge !== 'object') return false;
+        return badge.present === true || badge.has_evidence === true || Number(badge.count || 0) > 0;
+      });
+    };
+    const hasEvidenceSignal = (...containers) => containers.some((container) => {
+      if (!container || typeof container !== 'object') return false;
+      return container.has_any_evidence === true ||
+        container.has_attached_evidence === true ||
+        Number(container.attached_evidence_count || 0) > 0 ||
+        Number(container.evidence_count || 0) > 0 ||
+        trimStr(container.primary_artifact_storage_key || container.artifact_hints?.primary_artifact_storage_key || container.primary_artifact?.storage_key || container.primary_artifact?.file_key || container.primary_artifact?.r2_key || '') !== '' ||
+        (Array.isArray(container.evidence) && container.evidence.length > 0) ||
+        (Array.isArray(container.attached_evidence) && container.attached_evidence.length > 0) ||
+        (Array.isArray(container.attachedRows) && container.attachedRows.length > 0) ||
+        hasPositiveEvidenceBadge(container);
+    });
+    const processPatchEvidenceSource = {
+      ...pickObject(processResult?.data_row || processResult?.row || processResult?.summary_row_hint),
+      ...pickObject(processResult?.row_patch || processResult?.patch),
+      ...pickObject(patchedRow)
+    };
+    const processFromContractWeekToTimesheet = previousRowKey.startsWith('contract_week:') && rowKeyOf(patchedRow).startsWith('timesheet:');
+    const processStorageKeysMoved = readArray(processCacheHints.old_storage_keys).length > 0 ||
+      readArray(processCacheHints.new_storage_keys).length > 0 ||
+      readArray(processCacheHints.storage_keys).length > 0;
+    const processEvidenceIdentityLikelyChanged = processFromContractWeekToTimesheet && (
+      processStorageKeysMoved ||
+      processEvidencePatchForSubmit.hasAnyEvidence === true ||
+      hasEvidenceSignal(active.row, active.details, processResult?.data_row, processResult?.row, processResult?.row_patch, processPatchEvidenceSource, patchedRow)
+    );
     const processEvidenceChanged = !!(
       evidenceMutated === true ||
       processCacheHints.evidence_changed === true ||
       processCacheHints.storage_changed === true ||
       processCacheHints.invalidate_evidence === true ||
-      processCacheHints.invalidate_preview === true
+      processCacheHints.invalidate_preview === true ||
+      processCacheHints.attached_evidence_changed === true ||
+      processCacheHints.staged_evidence_changed === true ||
+      processEvidenceIdentityLikelyChanged
     );
     await selectNextRow(previousRowKey, patchedRow, originalVisible, {
       editorChanged: true,
@@ -166078,6 +166156,8 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
+
+
 
 
 async function processDailyManualTimesheet(timesheetId, payload = {}) {
