@@ -150564,7 +150564,6 @@ function ensureBulkAuthoriseManualDraftState(state) {
   return controller;
 }
 
-
 function bindBulkProcessEvidencePane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -153213,6 +153212,335 @@ function bindBulkProcessEvidencePane(state) {
     const attachedThumbs = attachedThumbRoot
       ? Array.from(attachedThumbRoot.querySelectorAll('[data-bp-attached-evidence-thumb="1"], [data-bp-preview-attached-thumb="1"]'))
       : [];
+
+    const pruneRemovedAttachedEvidenceFromLocalState = (removeTarget = {}) => {
+      const target = (removeTarget && typeof removeTarget === 'object') ? removeTarget : {};
+      const targetSelectionKey = normaliseAttachedPreviewSelectionKey(target.selectionKey || target.attachedSelectionKey || '');
+      const targetFileKey = cleanAttachedEvidenceFileKey(target.fileKey || target.storageKey || '');
+      const targetIds = new Set([
+        trimStr(target.attachedId || ''),
+        trimStr(target.evidenceId || ''),
+        trimStr(target.queueId || '')
+      ].filter(Boolean));
+      const matchesTarget = (itemInput) => {
+        const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+        const itemSelectionKey = normaliseAttachedPreviewSelectionKey(buildAttachedPreviewSelectionKey(item) || item.__attached_selection_key || '');
+        const itemFileKey = getAttachedEvidenceFileKey(item);
+        const itemIds = [
+          trimStr(getAttachedEvidenceId(item) || ''),
+          trimStr(item.id || ''),
+          trimStr(item.evidence_id || item.evidenceId || ''),
+          trimStr(item.timesheet_evidence_id || item.timesheetEvidenceId || ''),
+          trimStr(item.queue_id || item.queueId || ''),
+          trimStr(item.manual_timesheet_queue_id || item.manualTimesheetQueueId || ''),
+          trimStr(item.manual_queue_id || item.manualQueueId || '')
+        ].filter(Boolean);
+        if (targetSelectionKey && itemSelectionKey && targetSelectionKey === itemSelectionKey) return true;
+        if (targetFileKey && itemFileKey && targetFileKey === itemFileKey) return true;
+        if (targetIds.size && itemIds.some((id) => targetIds.has(id))) return true;
+        return false;
+      };
+      const pruneRows = (rowsInput) => normaliseAttachedEvidenceRows((Array.isArray(rowsInput) ? rowsInput : []).filter((item) => !matchesTarget(item)));
+      const beforeActiveSelection = normaliseAttachedPreviewSelectionKey(
+        pane.__active_attached_preview_target ||
+        pane.__preview_target_key ||
+        buildAttachedPreviewSelectionKey(pane.active_attached_item || {}) ||
+        ''
+      );
+      const activeSelectionRemoved = !!(
+        (pane.active_attached_item && typeof pane.active_attached_item === 'object' && matchesTarget(pane.active_attached_item)) ||
+        (targetSelectionKey && beforeActiveSelection && targetSelectionKey === beforeActiveSelection)
+      );
+      pane.attached_rows = pruneRows(pane.attached_rows);
+      pane.attached_all_rows = pruneRows(pane.attached_all_rows);
+      const evidencePatch = buildEvidenceAuthorityPatch(pane.attached_rows || []);
+      const patchObject = (obj) => {
+        if (!obj || typeof obj !== 'object') return;
+        if (Array.isArray(obj.evidence)) obj.evidence = pruneRows(obj.evidence);
+        applyEvidenceAuthorityPatchToObject(obj, evidencePatch);
+      };
+      patchObject(st.active_row);
+      patchObject(st.active_details);
+      patchObject(st.active_context);
+      patchObject(st.active_context?.details);
+      patchObject(st.active_context?.row);
+      patchObject(st.active_context?.data_row);
+      patchObject(st.active_ctx);
+      patchObject(st.active_ctx?.details);
+      patchObject(st.active_ctx?.row);
+      patchObject(st.active_ctx?.data_row);
+      if (st.active_ctx?.state && typeof st.active_ctx.state === 'object') patchObject(st.active_ctx.state);
+      if (window.modalCtx?.timesheetState && typeof window.modalCtx.timesheetState === 'object') patchObject(window.modalCtx.timesheetState);
+      const patchDatasetRows = (rowsInput) => {
+        if (!Array.isArray(rowsInput)) return rowsInput;
+        const activeRowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
+        const activeScope = resolveActiveContractWeekEvidenceScope();
+        return rowsInput.map((row) => {
+          if (!row || typeof row !== 'object') return row;
+          const rowKey = trimStr(row.row_key || row.new_row_key || '');
+          const rowTsId = pickFirst(row.timesheet_id, row.current_timesheet_id, row.requested_timesheet_id, row.expected_timesheet_id);
+          const rowWeekId = pickFirst(row.contract_week_id, row.contractWeekId);
+          const sameRow = !!(
+            (activeRowKey && rowKey && rowKey === activeRowKey) ||
+            (activeScope.timesheetId && rowTsId && rowTsId === activeScope.timesheetId) ||
+            (activeScope.contractWeekId && rowWeekId && rowWeekId === activeScope.contractWeekId)
+          );
+          if (!sameRow) return row;
+          const nextRow = { ...row };
+          if (Array.isArray(nextRow.evidence)) nextRow.evidence = pruneRows(nextRow.evidence);
+          applyEvidenceAuthorityPatchToObject(nextRow, evidencePatch);
+          return nextRow;
+        });
+      };
+      const patchCollection = (obj, key) => {
+        if (obj && typeof obj === 'object' && Array.isArray(obj[key])) obj[key] = patchDatasetRows(obj[key]);
+      };
+      [
+        'unprocessed_rows',
+        'processed_rows',
+        'processed_eligible_rows',
+        'authorised_eligible_rows',
+        'visible_rows',
+        'visible_processed_eligible_rows',
+        'visible_authorised_eligible_rows',
+        'rows'
+      ].forEach((key) => {
+        patchCollection(st, key);
+        if (st.dataset && typeof st.dataset === 'object') patchCollection(st.dataset, key);
+      });
+      if (st.dataset?.sections && typeof st.dataset.sections === 'object') {
+        Object.keys(st.dataset.sections).forEach((sectionKey) => patchCollection(st.dataset.sections, sectionKey));
+      }
+      const remainingRows = normaliseAttachedEvidenceRows(pane.attached_rows || []);
+      pane.attached_rows = remainingRows.map((item) => ({ ...deep(item) }));
+      pane.attached_all_rows = normaliseAttachedEvidenceRows(pane.attached_all_rows || []).map((item) => ({ ...deep(item) }));
+      if (activeSelectionRemoved) {
+        if (trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' && remainingRows.length) {
+          selectAttachedEvidenceItem(remainingRows[0], { forceAttached: true, clearQueue: true });
+        } else {
+          pane.active_attached_id = null;
+          pane.active_attached_item = null;
+          pane.active_attached_pdf_page = 1;
+          pane.__active_attached_preview_target = '';
+          if (beforeActiveSelection && trimStr(pane.__preview_target_key || '') === beforeActiveSelection) {
+            pane.__preview_target_key = '';
+            pane.__preview_signed_url = '';
+            pane.__preview_load_requested_target_key = '';
+          }
+        }
+      }
+      syncActiveRowEvidencePresence();
+      return { activeSelectionRemoved, remainingAttachedCount: remainingRows.length };
+    };
+
+    const attachedRemoveControls = attachedThumbRoot
+      ? Array.from(attachedThumbRoot.querySelectorAll('[data-bp-preview-attached-remove="1"], [data-bp-preview-attached-remove]'))
+      : [];
+    attachedRemoveControls.forEach((removeControl) => {
+      if (!removeControl || removeControl.dataset.boundBulkProcessAttachedRemove === '1') return;
+      removeControl.dataset.boundBulkProcessAttachedRemove = '1';
+      removeControl.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+        if (!isActiveBind()) return;
+        if (st.__workbench_modal_spinner_active) return;
+
+        const clickedSelectionKey = normaliseAttachedPreviewSelectionKey(removeControl.dataset.attachedSelectionKey || removeControl.getAttribute('data-attached-selection-key') || '');
+        const clickedFileKey = cleanAttachedEvidenceFileKey(removeControl.dataset.fileKey || removeControl.dataset.storageKey || removeControl.getAttribute('data-file-key') || removeControl.getAttribute('data-storage-key') || '');
+        const clickedAttachedId = trimStr(removeControl.dataset.attachedId || removeControl.getAttribute('data-attached-id') || '');
+        const clickedEvidenceId = trimStr(removeControl.dataset.evidenceId || removeControl.getAttribute('data-evidence-id') || '');
+        const clickedQueueId = trimStr(removeControl.dataset.queueId || removeControl.getAttribute('data-queue-id') || '');
+        const clickedKind = normaliseEvidenceKind(removeControl.dataset.kind || removeControl.getAttribute('data-kind') || '');
+        if (!clickedFileKey || !(clickedSelectionKey || clickedAttachedId || clickedEvidenceId || clickedQueueId)) return;
+
+        const rows = getAuthoritativeAttachedRows();
+        const selected = rows.find((item) => buildAttachedPreviewSelectionKey(item) === clickedSelectionKey) ||
+          rows.find((item) => {
+            const itemFileKey = getAttachedEvidenceFileKey(item);
+            const itemIds = [
+              getAttachedEvidenceId(item),
+              item?.id,
+              item?.evidence_id,
+              item?.evidenceId,
+              item?.timesheet_evidence_id,
+              item?.timesheetEvidenceId,
+              item?.queue_id,
+              item?.queueId,
+              item?.manual_timesheet_queue_id,
+              item?.manualTimesheetQueueId,
+              item?.manual_queue_id,
+              item?.manualQueueId
+            ].map((value) => trimStr(value || '')).filter(Boolean);
+            const wantedIds = [clickedAttachedId, clickedEvidenceId, clickedQueueId].filter(Boolean);
+            return !!(itemFileKey && itemFileKey === clickedFileKey && (!wantedIds.length || wantedIds.some((id) => itemIds.includes(id))));
+          }) || null;
+        if (!selected) return;
+
+        const selectedFileKey = getAttachedEvidenceFileKey(selected);
+        const selectedId = getAttachedEvidenceId(selected);
+        const selectedQueueId = pickFirst(selected.queue_id, selected.queueId, selected.manual_timesheet_queue_id, selected.manualTimesheetQueueId, selected.manual_queue_id, selected.manualQueueId, clickedQueueId, selectedId);
+        const selectedEvidenceId = pickFirst(selected.evidence_id, selected.evidenceId, selected.timesheet_evidence_id, selected.timesheetEvidenceId, clickedEvidenceId, selectedId);
+        if (!selectedFileKey || selectedFileKey !== clickedFileKey) return;
+
+        const scope = resolveActiveContractWeekEvidenceScope();
+        const selectedTimesheetId = pickFirst(selected.timesheet_id, selected.timesheetId, selected.current_timesheet_id, selected.currentTimesheetId, scope.timesheetId);
+        const selectedWeekId = pickFirst(selected.contract_week_id, selected.contractWeekId, scope.contractWeekId);
+        const isStagedSelected = !!(
+          selected.is_staged_context === true ||
+          selected.staged === true ||
+          upper(selected.status || selected.queue_status || '') === 'STAGED' ||
+          pickFirst(selected.staged_kind, selected.stagedKind) ||
+          removeControl.dataset.stagedContext === '1' ||
+          (scope.isContractWeekOnly && selectedWeekId && selectedWeekId === scope.contractWeekId && !selectedTimesheetId && selectedQueueId)
+        );
+
+        const confirmRes = (typeof openUiConfirmModal === 'function')
+          ? await openUiConfirmModal({
+              title: 'Remove attached file',
+              message: 'Choose where this file should go.',
+              confirm_label: 'Permanently delete',
+              cancel_label: 'Return to timesheet queue',
+              confirm_class: 'btn btn-warn',
+              cancel_class: 'btn btn-outline'
+            })
+          : { confirmed: window.confirm('Permanently delete this attached file?'), via: 'confirm' };
+
+        if (!confirmRes || confirmRes.via === 'close' || (confirmRes.confirmed !== true && confirmRes.via !== 'cancel')) return;
+        const action = confirmRes.confirmed === true ? 'delete' : 'return-to-queue';
+        const targetForPrune = {
+          selectionKey: clickedSelectionKey || buildAttachedPreviewSelectionKey(selected),
+          attachedId: selectedId || clickedAttachedId,
+          evidenceId: selectedEvidenceId || clickedEvidenceId,
+          queueId: selectedQueueId || clickedQueueId,
+          storageKey: selectedFileKey,
+          fileKey: selectedFileKey,
+          kind: clickedKind || selected.kind || selected.staged_kind || ''
+        };
+
+        try {
+          await (typeof withExistingModalLoadingSpinner === 'function'
+            ? withExistingModalLoadingSpinner(st, 'Updating evidence', async () => {
+                if (action === 'delete') {
+                  if (isStagedSelected) {
+                    if (!selectedWeekId) throw new Error('Contract week id missing.');
+                    if (!selectedQueueId) throw new Error('Evidence id missing.');
+                    if (typeof deleteContractWeekStagedEvidence !== 'function') throw new Error('deleteContractWeekStagedEvidence is not available.');
+                    await deleteContractWeekStagedEvidence(String(selectedWeekId), String(selectedQueueId), {});
+                  } else {
+                    if (!selectedTimesheetId) throw new Error('Timesheet id missing.');
+                    if (!selectedEvidenceId) throw new Error('Evidence id missing.');
+                    if (typeof apiDeleteJson !== 'function') throw new Error('apiDeleteJson is not available.');
+                    await apiDeleteJson('/api/timesheets/' + encodeURIComponent(String(selectedTimesheetId)) + '/evidence/' + encodeURIComponent(String(selectedEvidenceId)), {
+                      expected_timesheet_id: selectedTimesheetId
+                    });
+                  }
+                } else {
+                  if (isStagedSelected) {
+                    if (!selectedWeekId) throw new Error('Contract week id missing.');
+                    if (!selectedQueueId) throw new Error('Evidence id missing.');
+                    if (typeof returnContractWeekStagedEvidenceToQueue !== 'function') throw new Error('returnContractWeekStagedEvidenceToQueue is not available.');
+                    await returnContractWeekStagedEvidenceToQueue(String(selectedWeekId), String(selectedQueueId), {});
+                  } else {
+                    if (!selectedTimesheetId) throw new Error('Timesheet id missing.');
+                    if (!selectedEvidenceId) throw new Error('Evidence id missing.');
+                    if (typeof returnTimesheetEvidenceToQueue !== 'function') throw new Error('returnTimesheetEvidenceToQueue is not available.');
+                    await returnTimesheetEvidenceToQueue(String(selectedTimesheetId), String(selectedEvidenceId), {
+                      expected_timesheet_id: selectedTimesheetId
+                    });
+                  }
+                }
+
+                if (typeof refreshTimesheetImportsQueue === 'function') {
+                  await refreshTimesheetImportsQueue(pane, {
+                    ownerState: st,
+                    suppressWhileBusy: true,
+                    force: true,
+                    queue_scope: getQueueScope(),
+                    status: getQueueScope().split(':')[1] || 'QUEUED',
+                    allowWithoutActiveIdentity: true
+                  });
+                  pane.__queue_loaded = true;
+                  pane.__queue_scope = getQueueScope();
+                  pane.__queue_loaded_scope = getQueueScope();
+                  pane.__queue_loaded_identity = '';
+                  pane.__queue_loading = false;
+                  pane.__queue_loading_scope = '';
+                  pane.__queue_last_error = '';
+                }
+
+                pruneRemovedAttachedEvidenceFromLocalState(targetForPrune);
+                if (!isStagedSelected || selectedTimesheetId) {
+                  try { await refreshAttachedContext({ softRefresh: true, reason: 'evidence-remove-refresh' }); } catch {}
+                }
+                pruneRemovedAttachedEvidenceFromLocalState(targetForPrune);
+                syncActiveRowEvidencePresence();
+                reconcileEvidenceState();
+              })
+            : (async () => {
+                if (action === 'delete') {
+                  if (isStagedSelected) {
+                    if (!selectedWeekId) throw new Error('Contract week id missing.');
+                    if (!selectedQueueId) throw new Error('Evidence id missing.');
+                    if (typeof deleteContractWeekStagedEvidence !== 'function') throw new Error('deleteContractWeekStagedEvidence is not available.');
+                    await deleteContractWeekStagedEvidence(String(selectedWeekId), String(selectedQueueId), {});
+                  } else {
+                    if (!selectedTimesheetId) throw new Error('Timesheet id missing.');
+                    if (!selectedEvidenceId) throw new Error('Evidence id missing.');
+                    if (typeof apiDeleteJson !== 'function') throw new Error('apiDeleteJson is not available.');
+                    await apiDeleteJson('/api/timesheets/' + encodeURIComponent(String(selectedTimesheetId)) + '/evidence/' + encodeURIComponent(String(selectedEvidenceId)), {
+                      expected_timesheet_id: selectedTimesheetId
+                    });
+                  }
+                } else {
+                  if (isStagedSelected) {
+                    if (!selectedWeekId) throw new Error('Contract week id missing.');
+                    if (!selectedQueueId) throw new Error('Evidence id missing.');
+                    if (typeof returnContractWeekStagedEvidenceToQueue !== 'function') throw new Error('returnContractWeekStagedEvidenceToQueue is not available.');
+                    await returnContractWeekStagedEvidenceToQueue(String(selectedWeekId), String(selectedQueueId), {});
+                  } else {
+                    if (!selectedTimesheetId) throw new Error('Timesheet id missing.');
+                    if (!selectedEvidenceId) throw new Error('Evidence id missing.');
+                    if (typeof returnTimesheetEvidenceToQueue !== 'function') throw new Error('returnTimesheetEvidenceToQueue is not available.');
+                    await returnTimesheetEvidenceToQueue(String(selectedTimesheetId), String(selectedEvidenceId), {
+                      expected_timesheet_id: selectedTimesheetId
+                    });
+                  }
+                }
+                if (typeof refreshTimesheetImportsQueue === 'function') {
+                  await refreshTimesheetImportsQueue(pane, {
+                    ownerState: st,
+                    suppressWhileBusy: true,
+                    force: true,
+                    queue_scope: getQueueScope(),
+                    status: getQueueScope().split(':')[1] || 'QUEUED',
+                    allowWithoutActiveIdentity: true
+                  });
+                  pane.__queue_loaded = true;
+                  pane.__queue_scope = getQueueScope();
+                  pane.__queue_loaded_scope = getQueueScope();
+                  pane.__queue_loaded_identity = '';
+                  pane.__queue_loading = false;
+                  pane.__queue_loading_scope = '';
+                  pane.__queue_last_error = '';
+                }
+                pruneRemovedAttachedEvidenceFromLocalState(targetForPrune);
+                if (!isStagedSelected || selectedTimesheetId) {
+                  try { await refreshAttachedContext({ softRefresh: true, reason: 'evidence-remove-refresh' }); } catch {}
+                }
+                pruneRemovedAttachedEvidenceFromLocalState(targetForPrune);
+                syncActiveRowEvidencePresence();
+                reconcileEvidenceState();
+              })());
+          if (typeof window.__toast === 'function') window.__toast(action === 'delete' ? 'Evidence deleted' : 'Evidence returned to queue');
+          await rerenderWorkbench('evidence-attached-remove');
+        } catch (e) {
+          st.error_text = String(e?.message || e || 'Failed to remove attached evidence.');
+          await rerenderWorkbench('evidence-attached-remove-error');
+        }
+      });
+    });
+
     attachedThumbs.forEach((thumb) => {
       if (!thumb || thumb.dataset.boundBulkProcessAttachedSelect === '1') return;
       thumb.dataset.boundBulkProcessAttachedSelect = '1';
@@ -153519,7 +153847,6 @@ function bindBulkProcessEvidencePane(state) {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
-
 
 
 
