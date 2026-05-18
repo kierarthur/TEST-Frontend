@@ -21054,9 +21054,18 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     out.provider_submission_status = toUpper(out.provider_submission_status || out.providerSubmissionStatus || out.outcome_code || out.outcomeCode || '');
     out.review_reason_code = toUpper(out.review_reason_code || out.reviewReasonCode || out.provider_submit_review_reason_code || out.providerSubmitReviewReasonCode || '');
     out.manual_resolution_required = readProviderBool(out.manual_resolution_required ?? out.manualResolutionRequired) === true;
+    out.manual_resolution_available = readProviderBool(out.manual_resolution_available ?? out.manualResolutionAvailable ?? out.manual_resolution_required ?? out.manualResolutionRequired) === true;
     out.safe_retry_available = readProviderBool(out.safe_retry_available ?? out.safeRetryAvailable) === true;
     out.provider_acceptance_evidence_present = readProviderBool(out.provider_acceptance_evidence_present ?? out.providerAcceptanceEvidencePresent) === true;
     out.provider_response_present = readProviderBool(out.provider_response_present ?? out.providerResponsePresent) === true;
+    out.request_id = toText(out.request_id || out.requestId || '');
+    out.idempotency_key = toText(out.idempotency_key || out.idempotencyKey || '');
+    out.rail_tx_id = toText(out.rail_tx_id || out.railTxId || '');
+    out.rail_state = toText(out.rail_state || out.railState || '');
+    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+      out.manual_resolution_required = false;
+      out.manual_resolution_available = false;
+    }
     out.stale_submit_chunk = readProviderBool(out.stale_submit_chunk ?? out.staleSubmitChunk) === true;
     out.recommended_action = toText(out.recommended_action || out.recommendedAction || '') || null;
     return out;
@@ -21065,43 +21074,110 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     const root = isObj(payload) ? payload : {};
     const rootBatch = isObj(root.batch) ? root.batch : {};
     const review = isObj(root.payment_execution_review) ? root.payment_execution_review : (isObj(root.paymentExecutionReview) ? root.paymentExecutionReview : {});
-    const issues = asArr(root.payment_issues || root.paymentIssues || root.issues);
-    const issueDiagnostic = issues.find((issue) => {
-      const obj = isObj(issue) ? issue : {};
-      const kind = toUpper(obj.issue_kind || obj.issueKind || obj.issue_type || obj.issueType || obj.kind || obj.type || '');
+    const issues = asArr(root.payment_issues || root.paymentIssues || root.issues || rootBatch.payment_issues || rootBatch.paymentIssues);
+    const providerIssues = issues.map((issue) => isObj(issue) ? issue : {}).filter((issue) => {
+      const kind = toUpper(issue.issue_kind || issue.issueKind || issue.issue_type || issue.issueType || issue.kind || issue.type || '');
       return kind === 'PAYMENT_PROVIDER_SUBMIT_REVIEW' || kind === 'PROVIDER_SUBMIT_REVIEW';
     });
-    const candidates = [
-      root.provider_submit_diagnostic,
-      root.providerSubmitDiagnostic,
-      review.provider_submit_diagnostic,
-      review.providerSubmitDiagnostic,
-      rootBatch.provider_submit_diagnostic,
-      rootBatch.providerSubmitDiagnostic,
-      isObj(issueDiagnostic) ? issueDiagnostic.provider_submit_diagnostic : null,
-      isObj(issueDiagnostic) ? issueDiagnostic.providerSubmitDiagnostic : null
-    ];
-    return normaliseProviderSubmitDiagnostic(candidates.find((candidate) => isObj(candidate) && Object.keys(candidate).length) || {});
+    const out = {};
+    const readFirst = (source, keys) => {
+      const obj = isObj(source) ? source : {};
+      for (const key of keys) {
+        const value = obj[key];
+        if (value === null || value === undefined) continue;
+        if (Array.isArray(value)) {
+          if (value.length) return value;
+          continue;
+        }
+        if (typeof value === 'object') continue;
+        if (toText(value) !== '') return value;
+        if (typeof value === 'boolean') return value;
+      }
+      return undefined;
+    };
+    const put = (key, value, mode = 'text') => {
+      if (value === null || value === undefined) return;
+      if (Array.isArray(value)) {
+        if (!value.length) return;
+        out[key] = value;
+        return;
+      }
+      if (mode === 'bool') {
+        const boolValue = readProviderBool(value);
+        if (boolValue === null) return;
+        out[key] = boolValue;
+        return;
+      }
+      const text = toText(value);
+      if (!text && typeof value !== 'boolean') return;
+      out[key] = mode === 'upper' ? toUpper(value) : text;
+    };
+    const mergeProviderSubmitSource = (source) => {
+      if (!isObj(source)) return;
+      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode']), 'upper');
+      put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode']), 'upper');
+      put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired']), 'bool');
+      put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
+      put('safe_retry_available', readFirst(source, ['safe_retry_available', 'safeRetryAvailable']), 'bool');
+      put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
+      put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
+      put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
+      put('request_id', readFirst(source, ['request_id', 'requestId']));
+      put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
+      put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
+      put('rail_state', readFirst(source, ['rail_state', 'railState']));
+      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
+      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
+      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
+      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
+      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
+      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
+      put('stale_submit_chunk', readFirst(source, ['stale_submit_chunk', 'staleSubmitChunk']), 'bool');
+    };
+    mergeProviderSubmitSource(root);
+    mergeProviderSubmitSource(rootBatch);
+    mergeProviderSubmitSource(review);
+    mergeProviderSubmitSource(root.provider_submit_diagnostic);
+    mergeProviderSubmitSource(root.providerSubmitDiagnostic);
+    mergeProviderSubmitSource(rootBatch.provider_submit_diagnostic);
+    mergeProviderSubmitSource(rootBatch.providerSubmitDiagnostic);
+    mergeProviderSubmitSource(review.provider_submit_diagnostic);
+    mergeProviderSubmitSource(review.providerSubmitDiagnostic);
+    providerIssues.forEach((issue) => {
+      mergeProviderSubmitSource(issue);
+      const issueReview = isObj(issue.payment_execution_review) ? issue.payment_execution_review : (isObj(issue.paymentExecutionReview) ? issue.paymentExecutionReview : {});
+      mergeProviderSubmitSource(issueReview);
+      mergeProviderSubmitSource(issue.provider_submit_diagnostic);
+      mergeProviderSubmitSource(issue.providerSubmitDiagnostic);
+    });
+    const normalised = normaliseProviderSubmitDiagnostic(out);
+    const hasProviderSubmitContext = !!(normalised.provider_submission_status || normalised.review_reason_code || normalised.operation_id || normalised.chunk_id || normalised.transfer_id || normalised.rail_tx_id || normalised.rail_state || normalised.request_id || normalised.idempotency_key || normalised.recommended_action);
+    if (!hasProviderSubmitContext) return {};
+    if (normalised.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+      normalised.manual_resolution_required = false;
+      normalised.manual_resolution_available = false;
+    }
+    return normalised;
   };
   const providerSubmitIssueCopy = (statusValue) => {
     const status = toUpper(statusValue);
     const map = {
       PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK: {
         headline: 'Provider submission outcome unknown',
-        summary: 'Submit chunk is stale with no provider response, transfer event, rail transaction ID, or rail state.',
-        action: 'Check Revolut/bank before retry.',
+        summary: 'Provider submission outcome unknown.',
+        action: 'Check Revolut/bank before retry. If no money moved, record manual no-payment confirmation.',
         severity: 'warning'
       },
       UNKNOWN_PROVIDER_SUBMISSION_OUTCOME: {
-        headline: 'Provider response missing',
+        headline: 'Provider request may have been sent',
         summary: 'A provider request may have been sent, but no usable response was recorded.',
-        action: 'Reconcile with provider before retry.',
+        action: 'Reconcile with Revolut/bank before retry.',
         severity: 'warning'
       },
       PROVIDER_SUBMISSION_BLOCKED_PRE_CALL: {
         headline: 'Provider was not called',
-        summary: 'Submission failed before the payment request was sent.',
-        action: 'Retry may be available after cleanup.',
+        summary: 'Provider was not called.',
+        action: 'Retry may be available after safe cleanup.',
         severity: 'info'
       },
       PROVIDER_SUBMISSION_REJECTED: {
@@ -21117,10 +21193,16 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
         severity: 'danger'
       },
       PROVIDER_SUBMISSION_MALFORMED_RESPONSE: {
-        headline: 'Provider response unusable',
+        headline: 'Provider returned an unusable response',
         summary: 'Provider returned an unusable response.',
-        action: 'Manual reconciliation is required before retry.',
+        action: 'Reconcile with Revolut/bank before retry.',
         severity: 'warning'
+      },
+      MANUAL_RESOLVED_NO_PAYMENT_MADE: {
+        headline: 'Manual no-payment confirmation recorded',
+        summary: 'Manual no-payment confirmation recorded.',
+        action: 'Batch can be retried if safe retry is available.',
+        severity: 'info'
       }
     };
     return map[status] || {
@@ -21297,32 +21379,41 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     const providerIssueCopy = providerSubmitIssueCopy(providerSubmitStatus);
     const badgeTone = providerIssueCopy.severity === 'danger' ? 'danger' : (providerIssueCopy.severity === 'info' ? 'info' : 'warning');
     const recommendedAction = providerSubmitDiagnostic.recommended_action || providerIssueCopy.action;
+    const providerSubmitResolved = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE';
     return {
       hasIssue: true,
-      requiresUserAction: true,
-      navAlert: true,
+      requiresUserAction: providerSubmitResolved ? false : true,
+      navAlert: providerSubmitResolved ? false : true,
       badgeText: providerIssueCopy.headline,
-      badgeTone,
-      severity: providerIssueCopy.severity,
+      badgeTone: providerSubmitResolved ? 'info' : badgeTone,
+      severity: providerSubmitResolved ? 'info' : providerIssueCopy.severity,
       panelTitle: 'Payment status',
       headline: providerIssueCopy.headline,
       whatHappened: providerIssueCopy.summary,
       summaryText: providerIssueCopy.summary,
       primaryActionLabel: recommendedAction,
-      statusText: 'Needs review',
+      statusText: providerSubmitResolved ? 'Resolved' : 'Needs review',
       issueKind: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
       issueKindForDisplay: 'PROVIDER_SUBMIT_REVIEW',
       backendClassification: providerSubmitStatus,
       providerSubmitDiagnostic: providerSubmitDiagnostic,
       provider_submission_status: providerSubmitStatus,
       review_reason_code: toUpper(providerSubmitDiagnostic.review_reason_code || ''),
-      manualResolutionRequired: providerSubmitDiagnostic.manual_resolution_required === true,
-      manualResolutionAvailable: providerSubmitDiagnostic.manual_resolution_required === true,
+      manualResolutionRequired: providerSubmitResolved ? false : providerSubmitDiagnostic.manual_resolution_required === true,
+      manualResolutionAvailable: providerSubmitResolved ? false : (providerSubmitDiagnostic.manual_resolution_available === true || providerSubmitDiagnostic.manual_resolution_required === true),
+      manual_resolution_required: providerSubmitResolved ? false : providerSubmitDiagnostic.manual_resolution_required === true,
+      manual_resolution_available: providerSubmitResolved ? false : (providerSubmitDiagnostic.manual_resolution_available === true || providerSubmitDiagnostic.manual_resolution_required === true),
       safeRetryAvailable: providerSubmitDiagnostic.safe_retry_available === true,
+      providerAcceptanceEvidencePresent: providerSubmitDiagnostic.provider_acceptance_evidence_present === true,
+      providerResponsePresent: providerSubmitDiagnostic.provider_response_present === true,
+      request_id: providerSubmitDiagnostic.request_id || null,
+      idempotency_key: providerSubmitDiagnostic.idempotency_key || null,
+      rail_tx_id: providerSubmitDiagnostic.rail_tx_id || null,
+      rail_state: providerSubmitDiagnostic.rail_state || null,
       recommendedAction,
       manualPaidActionAvailable: false,
       manualPaidActionMode: false,
-      hasActionableIssueRows: true,
+      hasActionableIssueRows: providerSubmitResolved ? false : true,
       hasSelectableRows: false
     };
   }
@@ -21619,9 +21710,18 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
     out.provider_submission_status = toUpper(out.provider_submission_status || out.providerSubmissionStatus || out.outcome_code || out.outcomeCode || '');
     out.review_reason_code = toUpper(out.review_reason_code || out.reviewReasonCode || out.provider_submit_review_reason_code || out.providerSubmitReviewReasonCode || '');
     out.manual_resolution_required = readProviderBool(out.manual_resolution_required ?? out.manualResolutionRequired) === true;
+    out.manual_resolution_available = readProviderBool(out.manual_resolution_available ?? out.manualResolutionAvailable ?? out.manual_resolution_required ?? out.manualResolutionRequired) === true;
     out.safe_retry_available = readProviderBool(out.safe_retry_available ?? out.safeRetryAvailable) === true;
     out.provider_acceptance_evidence_present = readProviderBool(out.provider_acceptance_evidence_present ?? out.providerAcceptanceEvidencePresent) === true;
     out.provider_response_present = readProviderBool(out.provider_response_present ?? out.providerResponsePresent) === true;
+    out.request_id = toText(out.request_id || out.requestId || '');
+    out.idempotency_key = toText(out.idempotency_key || out.idempotencyKey || '');
+    out.rail_tx_id = toText(out.rail_tx_id || out.railTxId || '');
+    out.rail_state = toText(out.rail_state || out.railState || '');
+    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+      out.manual_resolution_required = false;
+      out.manual_resolution_available = false;
+    }
     out.recommended_action = toText(out.recommended_action || out.recommendedAction || '') || null;
     return out;
   };
@@ -21629,62 +21729,133 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
     const root = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
     const rootBatch = (root.batch && typeof root.batch === 'object' && !Array.isArray(root.batch)) ? root.batch : {};
     const review = (root.payment_execution_review && typeof root.payment_execution_review === 'object' && !Array.isArray(root.payment_execution_review)) ? root.payment_execution_review : ((root.paymentExecutionReview && typeof root.paymentExecutionReview === 'object' && !Array.isArray(root.paymentExecutionReview)) ? root.paymentExecutionReview : {});
-    const issues = asArray(root.payment_issues || root.paymentIssues || root.issues);
-    const issueDiagnostic = issues.find((issue) => {
-      const obj = (issue && typeof issue === 'object' && !Array.isArray(issue)) ? issue : {};
-      const kind = toUpper(obj.issue_kind || obj.issueKind || obj.issue_type || obj.issueType || obj.kind || obj.type || '');
+    const issues = asArray(root.payment_issues || root.paymentIssues || root.issues || rootBatch.payment_issues || rootBatch.paymentIssues);
+    const providerIssues = issues.map((issue) => (issue && typeof issue === 'object' && !Array.isArray(issue)) ? issue : {}).filter((issue) => {
+      const kind = toUpper(issue.issue_kind || issue.issueKind || issue.issue_type || issue.issueType || issue.kind || issue.type || '');
       return kind === 'PAYMENT_PROVIDER_SUBMIT_REVIEW' || kind === 'PROVIDER_SUBMIT_REVIEW';
     });
-    const candidates = [
-      root.provider_submit_diagnostic,
-      root.providerSubmitDiagnostic,
-      review.provider_submit_diagnostic,
-      review.providerSubmitDiagnostic,
-      rootBatch.provider_submit_diagnostic,
-      rootBatch.providerSubmitDiagnostic,
-      issueDiagnostic && issueDiagnostic.provider_submit_diagnostic,
-      issueDiagnostic && issueDiagnostic.providerSubmitDiagnostic
-    ];
-    return normaliseProviderSubmitDiagnostic(candidates.find((candidate) => candidate && typeof candidate === 'object' && !Array.isArray(candidate) && Object.keys(candidate).length) || {});
+    const out = {};
+    const readFirst = (source, keys) => {
+      const obj = (source && typeof source === 'object' && !Array.isArray(source)) ? source : {};
+      for (const key of keys) {
+        const value = obj[key];
+        if (value === null || value === undefined) continue;
+        if (Array.isArray(value)) {
+          if (value.length) return value;
+          continue;
+        }
+        if (typeof value === 'object') continue;
+        if (toText(value) !== '') return value;
+        if (typeof value === 'boolean') return value;
+      }
+      return undefined;
+    };
+    const put = (key, value, mode = 'text') => {
+      if (value === null || value === undefined) return;
+      if (Array.isArray(value)) {
+        if (!value.length) return;
+        out[key] = value;
+        return;
+      }
+      if (mode === 'bool') {
+        const boolValue = readProviderBool(value);
+        if (boolValue === null) return;
+        out[key] = boolValue;
+        return;
+      }
+      const text = toText(value);
+      if (!text && typeof value !== 'boolean') return;
+      out[key] = mode === 'upper' ? toUpper(value) : text;
+    };
+    const mergeProviderSubmitSource = (source) => {
+      if (!source || typeof source !== 'object' || Array.isArray(source)) return;
+      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode']), 'upper');
+      put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode']), 'upper');
+      put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired']), 'bool');
+      put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
+      put('safe_retry_available', readFirst(source, ['safe_retry_available', 'safeRetryAvailable']), 'bool');
+      put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
+      put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
+      put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
+      put('request_id', readFirst(source, ['request_id', 'requestId']));
+      put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
+      put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
+      put('rail_state', readFirst(source, ['rail_state', 'railState']));
+      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
+      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
+      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
+      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
+      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
+      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
+    };
+    mergeProviderSubmitSource(root);
+    mergeProviderSubmitSource(rootBatch);
+    mergeProviderSubmitSource(review);
+    mergeProviderSubmitSource(root.provider_submit_diagnostic);
+    mergeProviderSubmitSource(root.providerSubmitDiagnostic);
+    mergeProviderSubmitSource(rootBatch.provider_submit_diagnostic);
+    mergeProviderSubmitSource(rootBatch.providerSubmitDiagnostic);
+    mergeProviderSubmitSource(review.provider_submit_diagnostic);
+    mergeProviderSubmitSource(review.providerSubmitDiagnostic);
+    providerIssues.forEach((issue) => {
+      mergeProviderSubmitSource(issue);
+      const issueReview = (issue.payment_execution_review && typeof issue.payment_execution_review === 'object' && !Array.isArray(issue.payment_execution_review)) ? issue.payment_execution_review : ((issue.paymentExecutionReview && typeof issue.paymentExecutionReview === 'object' && !Array.isArray(issue.paymentExecutionReview)) ? issue.paymentExecutionReview : {});
+      mergeProviderSubmitSource(issueReview);
+      mergeProviderSubmitSource(issue.provider_submit_diagnostic);
+      mergeProviderSubmitSource(issue.providerSubmitDiagnostic);
+    });
+    const normalised = normaliseProviderSubmitDiagnostic(out);
+    const hasProviderSubmitContext = !!(normalised.provider_submission_status || normalised.review_reason_code || normalised.operation_id || normalised.chunk_id || normalised.transfer_id || normalised.rail_tx_id || normalised.rail_state || normalised.request_id || normalised.idempotency_key || normalised.recommended_action);
+    if (!hasProviderSubmitContext) return {};
+    if (normalised.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+      normalised.manual_resolution_required = false;
+      normalised.manual_resolution_available = false;
+    }
+    return normalised;
   };
   const providerSubmitRowLabels = (statusValue) => {
     const status = toUpper(statusValue);
     const labels = {
       PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK: {
-        bankStatusLabel: 'Outcome unknown',
-        whatHappenedLabel: 'Submit chunk became stale with no provider response recorded.',
-        actionLabel: 'Manual Revolut/bank check required before retry.'
+        bankStatusLabel: 'Provider submission outcome unknown',
+        whatHappenedLabel: 'Provider submission outcome unknown',
+        actionLabel: 'Check Revolut/bank before retry. If no money moved, record manual no-payment confirmation.'
       },
       UNKNOWN_PROVIDER_SUBMISSION_OUTCOME: {
-        bankStatusLabel: 'Outcome unknown',
-        whatHappenedLabel: 'Provider request may have been sent, but no response was recorded.',
-        actionLabel: 'Check provider/bank before retry.'
-      },
-      PROVIDER_SUBMISSION_BLOCKED_PRE_CALL: {
-        bankStatusLabel: 'Not sent',
-        whatHappenedLabel: 'Provider was not called.',
-        actionLabel: 'Retry after local blocker is cleared.'
-      },
-      PROVIDER_SUBMISSION_REJECTED: {
-        bankStatusLabel: 'Rejected',
-        whatHappenedLabel: 'Provider rejected submission.',
-        actionLabel: 'Review provider error.'
-      },
-      PROVIDER_SUBMISSION_ACCEPTED: {
-        bankStatusLabel: 'Submitted',
-        whatHappenedLabel: 'Provider accepted/submitted payment.',
-        actionLabel: 'Do not retry unless reconciled.'
+        bankStatusLabel: 'Provider request may have been sent',
+        whatHappenedLabel: 'Provider request may have been sent',
+        actionLabel: 'Reconcile with Revolut/bank before retry.'
       },
       PROVIDER_SUBMISSION_MALFORMED_RESPONSE: {
-        bankStatusLabel: 'Outcome unknown',
-        whatHappenedLabel: 'Provider returned an unusable response.',
-        actionLabel: 'Manual reconciliation required before retry.'
+        bankStatusLabel: 'Provider returned an unusable response',
+        whatHappenedLabel: 'Provider returned an unusable response',
+        actionLabel: 'Reconcile with Revolut/bank before retry.'
+      },
+      PROVIDER_SUBMISSION_BLOCKED_PRE_CALL: {
+        bankStatusLabel: 'Provider was not called',
+        whatHappenedLabel: 'Provider was not called',
+        actionLabel: 'Retry may be available after safe cleanup.'
+      },
+      PROVIDER_SUBMISSION_REJECTED: {
+        bankStatusLabel: 'Provider rejected payment',
+        whatHappenedLabel: 'Provider rejected payment',
+        actionLabel: 'Review provider error and correct before retry.'
+      },
+      PROVIDER_SUBMISSION_ACCEPTED: {
+        bankStatusLabel: 'Provider acceptance evidence present',
+        whatHappenedLabel: 'Provider acceptance evidence present',
+        actionLabel: 'Do not retry unless reconciled.'
+      },
+      MANUAL_RESOLVED_NO_PAYMENT_MADE: {
+        bankStatusLabel: 'Manual no-payment confirmation recorded',
+        whatHappenedLabel: 'Manual no-payment confirmation recorded',
+        actionLabel: 'Batch can be retried if safe retry is available.'
       }
     };
     return labels[status] || {
-      bankStatusLabel: 'Needs review',
-      whatHappenedLabel: 'Provider submission needs review.',
-      actionLabel: 'Check provider/bank before retry.'
+      bankStatusLabel: 'Provider submission needs review',
+      whatHappenedLabel: 'Provider submission needs review',
+      actionLabel: 'Check Revolut/bank before retry.'
     };
   };
   const firstDiagnosticText = (diagnostic, ...keys) => {
@@ -21975,8 +22146,8 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       selectableForApply: false,
       selectableForReview: false,
       selected: false,
-      manualActionAvailable: providerSubmitDiagnostic.manual_resolution_required === true,
-      manual_action_available: providerSubmitDiagnostic.manual_resolution_required === true,
+      manualActionAvailable: providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && providerSubmitStatus !== 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitDiagnostic.provider_acceptance_evidence_present !== true && (providerSubmitDiagnostic.manual_resolution_available === true || providerSubmitDiagnostic.manual_resolution_required === true),
+      manual_action_available: providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && providerSubmitStatus !== 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitDiagnostic.provider_acceptance_evidence_present !== true && (providerSubmitDiagnostic.manual_resolution_available === true || providerSubmitDiagnostic.manual_resolution_required === true),
       blockerText: providerLabels.actionLabel,
       sortCandidateName: 'whole batch',
       sortUmbrellaName: '',
@@ -22493,36 +22664,97 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     return '';
   };
   const extractProviderSubmitDiagnosticFromIssuePanel = () => {
-    const issueObj = providerSubmitAsObject(issueState) || {};
-    const direct = providerSubmitAsObject(issueObj.providerSubmitDiagnostic) || providerSubmitAsObject(issueObj.provider_submit_diagnostic);
-    if (direct) return direct;
-
-    const review = providerSubmitAsObject(payload.payment_execution_review) || providerSubmitAsObject(payload.paymentExecutionReview) || providerSubmitAsObject(payload.batch?.payment_execution_review) || providerSubmitAsObject(payload.batch?.paymentExecutionReview);
-    const reviewDiagnostic = providerSubmitAsObject(review?.provider_submit_diagnostic) || providerSubmitAsObject(review?.providerSubmitDiagnostic);
-    if (reviewDiagnostic) return reviewDiagnostic;
-
-    const topDiagnostic = providerSubmitAsObject(payload.provider_submit_diagnostic) || providerSubmitAsObject(payload.providerSubmitDiagnostic) || providerSubmitAsObject(payload.batch?.provider_submit_diagnostic) || providerSubmitAsObject(payload.batch?.providerSubmitDiagnostic);
-    if (topDiagnostic) return topDiagnostic;
-
+    const out = {};
+    const readFirst = (source, keys) => {
+      const obj = providerSubmitAsObject(source) || {};
+      for (const key of keys) {
+        const value = obj[key];
+        if (value === null || value === undefined) continue;
+        if (Array.isArray(value)) {
+          if (value.length) return value;
+          continue;
+        }
+        if (typeof value === 'object') continue;
+        if (toText(value) !== '') return value;
+        if (typeof value === 'boolean') return value;
+      }
+      return undefined;
+    };
+    const put = (key, value, mode = 'text') => {
+      if (value === null || value === undefined) return;
+      if (Array.isArray(value)) {
+        if (!value.length) return;
+        out[key] = value;
+        return;
+      }
+      if (mode === 'bool') {
+        out[key] = providerSubmitReadBool(value);
+        return;
+      }
+      const text = toText(value);
+      if (!text && typeof value !== 'boolean') return;
+      out[key] = mode === 'upper' ? toUpper(value) : text;
+    };
+    const mergeProviderSubmitSource = (source) => {
+      if (!providerSubmitAsObject(source)) return;
+      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode']), 'upper');
+      put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode']), 'upper');
+      put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired']), 'bool');
+      put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
+      put('safe_retry_available', readFirst(source, ['safe_retry_available', 'safeRetryAvailable']), 'bool');
+      put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
+      put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
+      put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
+      put('request_id', readFirst(source, ['request_id', 'requestId']));
+      put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
+      put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
+      put('rail_state', readFirst(source, ['rail_state', 'railState']));
+      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
+      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
+      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
+      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
+      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
+      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
+    };
+    const review = providerSubmitAsObject(payload.payment_execution_review) || providerSubmitAsObject(payload.paymentExecutionReview) || providerSubmitAsObject(payload.batch?.payment_execution_review) || providerSubmitAsObject(payload.batch?.paymentExecutionReview) || {};
+    mergeProviderSubmitSource(payload);
+    mergeProviderSubmitSource(payload.batch);
+    mergeProviderSubmitSource(review);
+    mergeProviderSubmitSource(payload.provider_submit_diagnostic);
+    mergeProviderSubmitSource(payload.providerSubmitDiagnostic);
+    mergeProviderSubmitSource(payload.batch?.provider_submit_diagnostic);
+    mergeProviderSubmitSource(payload.batch?.providerSubmitDiagnostic);
+    mergeProviderSubmitSource(review.provider_submit_diagnostic);
+    mergeProviderSubmitSource(review.providerSubmitDiagnostic);
     for (const issue of providerSubmitAsArray(payload.payment_issues || payload.paymentIssues || payload.batch?.payment_issues || payload.batch?.paymentIssues)) {
       const item = providerSubmitAsObject(issue) || {};
       const kind = toUpper(item.issue_kind || item.issueKind || item.issue_type || item.issueType || item.kind || item.type || '');
-      if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW') continue;
-      const issueDiagnostic = providerSubmitAsObject(item.provider_submit_diagnostic) || providerSubmitAsObject(item.providerSubmitDiagnostic);
-      if (issueDiagnostic) return issueDiagnostic;
-      return item;
+      if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW' && kind !== 'PROVIDER_SUBMIT_REVIEW') continue;
+      mergeProviderSubmitSource(item);
+      const issueReview = providerSubmitAsObject(item.payment_execution_review) || providerSubmitAsObject(item.paymentExecutionReview) || {};
+      mergeProviderSubmitSource(issueReview);
+      mergeProviderSubmitSource(item.provider_submit_diagnostic);
+      mergeProviderSubmitSource(item.providerSubmitDiagnostic);
     }
-
     for (const row of rows) {
       const item = providerSubmitAsObject(row) || {};
       const kind = toUpper(item.issueKindForDisplay || item.issue_kind_for_display || item.issue_kind || item.issueKind || item.issue_type || item.issueType || '');
       if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW' && kind !== 'PROVIDER_SUBMIT_REVIEW') continue;
-      const rowDiagnostic = providerSubmitAsObject(item.providerSubmitDiagnostic) || providerSubmitAsObject(item.provider_submit_diagnostic);
-      if (rowDiagnostic) return rowDiagnostic;
-      return item;
+      mergeProviderSubmitSource(item);
+      mergeProviderSubmitSource(item.provider_submit_diagnostic);
+      mergeProviderSubmitSource(item.providerSubmitDiagnostic);
     }
-
-    return null;
+    mergeProviderSubmitSource(issueState);
+    mergeProviderSubmitSource(issueState.provider_submit_diagnostic);
+    mergeProviderSubmitSource(issueState.providerSubmitDiagnostic);
+    if (!Object.keys(out).length) return null;
+    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.rail_state || out.request_id || out.idempotency_key || out.recommended_action);
+    if (!hasProviderSubmitContext) return null;
+    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+      out.manual_resolution_required = false;
+      out.manual_resolution_available = false;
+    }
+    return out;
   };
   const providerSubmitDiagnostic = extractProviderSubmitDiagnosticFromIssuePanel();
   const providerSubmitStatus = toUpper(providerSubmitDiagnostic?.provider_submission_status || providerSubmitDiagnostic?.providerSubmissionStatus || providerSubmitDiagnostic?.outcome_code || providerSubmitDiagnostic?.outcomeCode || issueState.provider_submission_status || issueState.providerSubmissionStatus || '');
@@ -22541,7 +22773,8 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
     'PROVIDER_SUBMISSION_REJECTED',
     'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL',
-    'PROVIDER_SUBMISSION_ACCEPTED'
+    'PROVIDER_SUBMISSION_ACCEPTED',
+    'MANUAL_RESOLVED_NO_PAYMENT_MADE'
   ].includes(providerSubmitStatus);
   const providerSubmitAcceptanceEvidencePresent = !!(
     providerSubmitReadBool(providerSubmitDiagnostic?.provider_acceptance_evidence_present ?? providerSubmitDiagnostic?.providerAcceptanceEvidencePresent) ||
@@ -22549,7 +22782,9 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     providerSubmitFirstText(providerSubmitDiagnostic?.rail_tx_id, providerSubmitDiagnostic?.railTxId, providerSubmitDiagnostic?.provider_transaction_id, providerSubmitDiagnostic?.providerTransactionId, providerSubmitDiagnostic?.provider_reference, providerSubmitDiagnostic?.providerReference)
   );
   const providerSubmitProviderResponsePresent = providerSubmitReadBool(providerSubmitDiagnostic?.provider_response_present ?? providerSubmitDiagnostic?.providerResponsePresent ?? providerSubmitDiagnostic?.provider_response_received ?? providerSubmitDiagnostic?.providerResponseReceived);
-  const providerSubmitManualResolutionRequired = providerSubmitReadBool(providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
+  const providerSubmitManualResolutionAvailable = providerSubmitReadBool(providerSubmitDiagnostic?.manual_resolution_available ?? providerSubmitDiagnostic?.manualResolutionAvailable ?? providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
+  const providerSubmitManualResolutionRequiredRaw = providerSubmitReadBool(providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
+  const providerSubmitManualResolutionRequired = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? false : providerSubmitManualResolutionRequiredRaw;
   const providerSubmitSafeRetryAvailable = providerSubmitReadBool(providerSubmitDiagnostic?.safe_retry_available ?? providerSubmitDiagnostic?.safeRetryAvailable);
   const providerSubmitRequestSentRaw = providerSubmitDiagnostic ? (providerSubmitDiagnostic.provider_request_sent ?? providerSubmitDiagnostic.providerRequestSent) : null;
   const providerSubmitRequestSent = providerSubmitReadBool(providerSubmitRequestSentRaw);
@@ -22560,21 +22795,21 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
   const providerSubmitStatusCopy = (() => {
     if (providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK') return {
       status: 'Provider submission outcome unknown',
-      reason: 'Submit chunk stale with no provider response',
-      summary: 'Submit chunk is stale with no provider response, transfer event, rail transaction ID, or rail state.',
-      action: 'Check Revolut/bank. If no payment was made, record manual no-payment confirmation and reset for retry.'
+      reason: providerSubmitReviewReason || 'Provider submission outcome unknown',
+      summary: 'Provider submission outcome unknown.',
+      action: 'Check Revolut/bank before retry. If no money moved, record manual no-payment confirmation.'
     };
     if (providerSubmitStatus === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME') return {
-      status: 'Provider response missing',
-      reason: 'Provider request may have been sent, but no usable response was recorded',
-      summary: 'A provider request may have been sent, but no usable response was recorded.',
-      action: 'Check provider/bank before retry.'
+      status: 'Provider request may have been sent',
+      reason: 'Provider request may have been sent',
+      summary: 'Provider request may have been sent.',
+      action: 'Reconcile with Revolut/bank before retry.'
     };
     if (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE') return {
-      status: 'Provider returned unusable response',
+      status: 'Provider returned an unusable response',
       reason: 'Provider response malformed',
       summary: 'Provider returned an unusable response.',
-      action: 'Manual reconciliation is required before retry.'
+      action: 'Reconcile with Revolut/bank before retry.'
     };
     if (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED') return {
       status: 'Provider rejected payment',
@@ -22586,13 +22821,19 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
       status: 'Provider was not called',
       reason: 'Submission failed before provider submit',
       summary: 'Provider was not called. Submission failed before the payment request was sent.',
-      action: 'Retry after the local blocker is cleared.'
+      action: 'Retry may be available after safe cleanup.'
     };
     if (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED') return {
       status: 'Provider acceptance evidence present',
       reason: 'Provider accepted/submitted payment',
-      summary: 'Provider acceptance evidence exists.',
+      summary: 'Provider acceptance evidence present.',
       action: 'Do not retry unless reconciled.'
+    };
+    if (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') return {
+      status: 'Manual no-payment confirmation recorded',
+      reason: 'Manual no-payment confirmation recorded',
+      summary: 'Manual no-payment confirmation recorded.',
+      action: 'Batch can be retried if safe retry is available.'
     };
     return {
       status: 'Provider submission needs review',
@@ -22601,19 +22842,26 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
       action: 'Check Revolut/bank before retry.'
     };
   })();
+  const providerSubmitAutomaticRetryDisplay = [
+    'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
+    'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
+    'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+    'PROVIDER_SUBMISSION_ACCEPTED'
+  ].includes(providerSubmitStatus)
+    ? 'No'
+    : (providerSubmitSafeRetryAvailable ? 'Yes' : 'No');
   const providerSubmitDetailRows = providerSubmitHasIssue ? [
-    ['Status', providerSubmitStatusCopy.status],
-    ['Reason', providerSubmitStatusCopy.reason],
-    ['Provider called', providerSubmitRequestSent ? 'Yes' : (providerSubmitRequestSentKnownFalse ? 'No' : 'Unknown / not proven')],
+    ['Provider submission status', providerSubmitStatus || 'UNKNOWN'],
+    ['Review reason', providerSubmitStatusCopy.reason],
+    ['Provider called', providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL' ? 'No' : (providerSubmitRequestSent ? 'Yes' : (providerSubmitRequestSentKnownFalse ? 'No' : 'Unknown / not proven'))],
+    ['Provider response recorded', (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' || providerSubmitProviderResponsePresent) ? 'Yes' : 'No'],
     ['Provider accepted', providerSubmitAcceptanceEvidencePresent ? 'Yes' : 'No evidence'],
-    ['Provider response recorded', providerSubmitProviderResponsePresent ? 'Yes' : 'No'],
     ['Rail transaction ID', providerSubmitFirstText(providerSubmitDiagnostic?.rail_tx_id, providerSubmitDiagnostic?.railTxId) || 'None'],
     ['Rail state', providerSubmitFirstText(providerSubmitDiagnostic?.rail_state, providerSubmitDiagnostic?.railState) || 'None'],
-    ['Transfer event recorded', providerSubmitTransferEventRecorded ? 'Yes' : 'No'],
-    ['Active auth request', providerSubmitAuthPresent ? 'Present' : 'None recorded'],
-    ['Safe automatic retry', providerSubmitSafeRetryAvailable ? 'Yes' : 'No'],
+    ['Automatic retry', providerSubmitAutomaticRetryDisplay],
     ['Manual resolution required', providerSubmitManualResolutionRequired ? 'Yes' : 'No'],
-    ['Recommended action', toText(providerSubmitDiagnostic?.recommended_action || providerSubmitDiagnostic?.recommendedAction) || providerSubmitStatusCopy.action]
+    ['Local request ID', providerSubmitFirstText(providerSubmitDiagnostic?.request_id, providerSubmitDiagnostic?.requestId) || '—'],
+    ['Local idempotency key', providerSubmitFirstText(providerSubmitDiagnostic?.idempotency_key, providerSubmitDiagnostic?.idempotencyKey) || '—']
   ] : [];
   const providerSubmitSupportRows = providerSubmitHasIssue ? [
     ['pay_batch_id', providerSubmitFirstText(providerSubmitDiagnostic?.pay_batch_id, providerSubmitDiagnostic?.payBatchId, payload.pay_batch_id, payload.id, payload.batch?.id) || '—'],
@@ -22622,15 +22870,14 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     ['transfer_id', providerSubmitFirstText(providerSubmitDiagnostic?.transfer_id, providerSubmitDiagnostic?.transferId) || '—'],
     ['transfer_scope_id', providerSubmitFirstText(providerSubmitDiagnostic?.transfer_scope_id, providerSubmitDiagnostic?.transferScopeId) || '—'],
     ['auth_request_id', providerSubmitFirstText(providerSubmitDiagnostic?.auth_request_id, providerSubmitDiagnostic?.authRequestId) || '—'],
-    ['request_id (local correlation)', providerSubmitFirstText(providerSubmitDiagnostic?.request_id, providerSubmitDiagnostic?.requestId) || '—'],
-    ['idempotency_key (local correlation)', providerSubmitFirstText(providerSubmitDiagnostic?.idempotency_key, providerSubmitDiagnostic?.idempotencyKey) || '—']
+    ['Local request ID', providerSubmitFirstText(providerSubmitDiagnostic?.request_id, providerSubmitDiagnostic?.requestId) || '—'],
+    ['Local idempotency key', providerSubmitFirstText(providerSubmitDiagnostic?.idempotency_key, providerSubmitDiagnostic?.idempotencyKey) || '—']
   ] : [];
   const renderProviderSubmitDiagnosticCard = () => {
     if (!providerSubmitHasIssue) return '';
     const operationId = providerSubmitFirstText(providerSubmitDiagnostic?.operation_id, providerSubmitDiagnostic?.operationId);
     const rowKey = providerSubmitFirstText(providerSubmitDiagnostic?.chunk_id, providerSubmitDiagnostic?.chunkId, providerSubmitDiagnostic?.transfer_id, providerSubmitDiagnostic?.transferId, 'provider-submit-review');
-    const canResolveNoPayment = providerSubmitManualResolutionRequired && providerSubmitAcceptanceEvidencePresent === false;
-    const resolveDisabledAttr = canResolveNoPayment ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"';
+    const canResolveNoPayment = providerSubmitAcceptanceEvidencePresent === false && providerSubmitStatus !== 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && (providerSubmitManualResolutionAvailable || providerSubmitManualResolutionRequired);
     return `
       <section class="payment-issue-provider-submit-card card" style="padding:12px;border:1px solid #facc15;background:#fffbeb;color:#713f12;">
         <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
@@ -22646,8 +22893,10 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
                 ${providerSubmitSupportRows.map(([label, value]) => `<div class="mini"><strong>${enc(label)}</strong><br><span class="mono">${enc(value)}</span></div>`).join('')}
               </div>
             </div>
-            <div class="mini" style="opacity:.9;">Local request IDs and idempotency keys are correlation IDs only. They are not provider acceptance proof.</div>
+            <div class="mini" style="opacity:.9;">Local request IDs and idempotency keys are local correlation IDs only.
+They are not provider or bank transaction identifiers.</div>
           </div>
+          ${canResolveNoPayment ? `
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <button
               type="button"
@@ -22655,10 +22904,10 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
               data-action="banking:pay:issue:resolveProviderSubmitNoPayment"
               data-row-key="${enc(rowKey || 'provider-submit-review')}"
               data-operation-id="${enc(operationId)}"
-              ${resolveDisabledAttr}
-              title="${enc(canResolveNoPayment ? 'Record manual no-payment confirmation after checking Revolut/bank records' : 'Manual no-payment reset is unavailable while provider acceptance evidence exists or manual resolution is not required.')}"
+              title="${enc('Record manual no-payment confirmation after checking Revolut/bank records')}"
             >I checked Revolut/bank and confirm no payment was made</button>
           </div>
+          ` : ''}
         </div>
       </section>
     `;
@@ -49006,6 +49255,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     const notes = String(window.prompt('Notes for the audit record (optional):', '') || '').trim();
     return {
       provider_checked: providerChecked,
+      checked_at_utc: new Date().toISOString(),
       notes
     };
   };
@@ -51875,6 +52125,7 @@ const retryBlockedFundsPipeline = async () => {
                   checked_provider_or_bank: true,
                   confirmed_no_payment_made: true,
                   provider_checked: confirmation.provider_checked,
+                  checked_at_utc: confirmation.checked_at_utc || new Date().toISOString(),
                   notes: confirmation.notes
                 };
 
@@ -53370,20 +53621,87 @@ function renderBankingPayBatchChildModalOverview() {
 
   const extractProviderSubmitDiagnosticFromOverviewData = (dataPayload) => {
     const d = asObj(dataPayload) || {};
-    const direct = asObj(d.provider_submit_diagnostic) || asObj(d.providerSubmitDiagnostic) || asObj(d.batch?.provider_submit_diagnostic) || asObj(d.batch?.providerSubmitDiagnostic);
-    if (direct) return direct;
-    const review = asObj(d.payment_execution_review) || asObj(d.paymentExecutionReview) || asObj(d.batch?.payment_execution_review) || asObj(d.batch?.paymentExecutionReview);
-    const reviewDiagnostic = asObj(review?.provider_submit_diagnostic) || asObj(review?.providerSubmitDiagnostic);
-    if (reviewDiagnostic) return reviewDiagnostic;
+    const out = {};
+    const readFirst = (source, keys) => {
+      const obj = asObj(source) || {};
+      for (const key of keys) {
+        const value = obj[key];
+        if (value === null || value === undefined) continue;
+        if (Array.isArray(value)) {
+          if (value.length) return value;
+          continue;
+        }
+        if (typeof value === 'object') continue;
+        if (trimStr(value) !== '') return value;
+        if (typeof value === 'boolean') return value;
+      }
+      return undefined;
+    };
+    const put = (key, value, mode = 'text') => {
+      if (value === null || value === undefined) return;
+      if (Array.isArray(value)) {
+        if (!value.length) return;
+        out[key] = value;
+        return;
+      }
+      if (mode === 'bool') {
+        out[key] = readProviderSubmitBool(value);
+        return;
+      }
+      const text = trimStr(value);
+      if (!text && typeof value !== 'boolean') return;
+      out[key] = mode === 'upper' ? upperTrim(value) : text;
+    };
+    const mergeProviderSubmitSource = (source) => {
+      if (!asObj(source)) return;
+      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode']), 'upper');
+      put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode']), 'upper');
+      put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired']), 'bool');
+      put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
+      put('safe_retry_available', readFirst(source, ['safe_retry_available', 'safeRetryAvailable']), 'bool');
+      put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
+      put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
+      put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
+      put('request_id', readFirst(source, ['request_id', 'requestId']));
+      put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
+      put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
+      put('rail_state', readFirst(source, ['rail_state', 'railState']));
+      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
+      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
+      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
+      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
+      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
+      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
+    };
+    const review = asObj(d.payment_execution_review) || asObj(d.paymentExecutionReview) || asObj(d.batch?.payment_execution_review) || asObj(d.batch?.paymentExecutionReview) || {};
+    mergeProviderSubmitSource(d);
+    mergeProviderSubmitSource(d.batch);
+    mergeProviderSubmitSource(review);
+    mergeProviderSubmitSource(d.provider_submit_diagnostic);
+    mergeProviderSubmitSource(d.providerSubmitDiagnostic);
+    mergeProviderSubmitSource(d.batch?.provider_submit_diagnostic);
+    mergeProviderSubmitSource(d.batch?.providerSubmitDiagnostic);
+    mergeProviderSubmitSource(review.provider_submit_diagnostic);
+    mergeProviderSubmitSource(review.providerSubmitDiagnostic);
     for (const issue of asArr(d.payment_issues || d.paymentIssues || d.batch?.payment_issues || d.batch?.paymentIssues)) {
       const item = asObj(issue) || {};
       const kind = upperTrim(item.issue_kind || item.issueKind || item.issue_type || item.issueType || item.kind || item.type || '');
-      if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW') continue;
-      return asObj(item.provider_submit_diagnostic) || asObj(item.providerSubmitDiagnostic) || item;
+      if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW' && kind !== 'PROVIDER_SUBMIT_REVIEW') continue;
+      mergeProviderSubmitSource(item);
+      const issueReview = asObj(item.payment_execution_review) || asObj(item.paymentExecutionReview) || {};
+      mergeProviderSubmitSource(issueReview);
+      mergeProviderSubmitSource(item.provider_submit_diagnostic);
+      mergeProviderSubmitSource(item.providerSubmitDiagnostic);
     }
-    return null;
+    if (!Object.keys(out).length) return null;
+    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.rail_state || out.request_id || out.idempotency_key || out.recommended_action);
+    if (!hasProviderSubmitContext) return null;
+    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+      out.manual_resolution_required = false;
+      out.manual_resolution_available = false;
+    }
+    return out;
   };
-
   const buildProviderSubmitOverviewModel = (dataPayload) => {
     const diagnostic = extractProviderSubmitDiagnosticFromOverviewData(dataPayload);
     if (!diagnostic) return { hasIssue: false, diagnostic: null };
@@ -53400,33 +53718,38 @@ function renderBankingPayBatchChildModalOverview() {
       'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
       'PROVIDER_SUBMISSION_REJECTED',
       'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL',
-      'PROVIDER_SUBMISSION_ACCEPTED'
+      'PROVIDER_SUBMISSION_ACCEPTED',
+      'MANUAL_RESOLVED_NO_PAYMENT_MADE'
     ].includes(status);
     if (!hasIssue) return { hasIssue: false, diagnostic, status };
 
     const accepted = readProviderSubmitBool(diagnostic.provider_acceptance_evidence_present ?? diagnostic.providerAcceptanceEvidencePresent) || status === 'PROVIDER_SUBMISSION_ACCEPTED' || !!firstProviderSubmitText(diagnostic.rail_tx_id, diagnostic.railTxId, diagnostic.provider_transaction_id, diagnostic.providerTransactionId, diagnostic.provider_reference, diagnostic.providerReference);
-    let headline = 'Provider submission outcome unknown.';
-    let summary = 'Submit chunk became stale with no provider response, transfer event, rail transaction ID, or rail state.';
-    let action = 'Manual bank/provider check required before retry.';
+    let headline = 'Provider submission outcome unknown';
+    let summary = 'Provider submission outcome unknown.';
+    let action = 'Check Revolut/bank before retry. If no money moved, record manual no-payment confirmation.';
     if (status === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME') {
-      headline = 'Provider response missing.';
-      summary = 'Provider request may have been sent, but no usable response was recorded.';
-      action = 'Manual bank/provider check required before retry.';
+      headline = 'Provider request may have been sent';
+      summary = 'Provider request may have been sent.';
+      action = 'Reconcile with Revolut/bank before retry.';
     } else if (status === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE') {
-      headline = 'Provider returned an unusable response.';
-      summary = 'Provider response could not be used as acceptance/rejection evidence.';
-      action = 'Manual bank/provider reconciliation required before retry.';
+      headline = 'Provider returned an unusable response';
+      summary = 'Provider returned an unusable response.';
+      action = 'Reconcile with Revolut/bank before retry.';
     } else if (status === 'PROVIDER_SUBMISSION_REJECTED') {
-      headline = 'Provider rejected payment.';
+      headline = 'Provider rejected payment';
       summary = 'Provider rejected the payment submission.';
-      action = 'Review provider error before retry.';
+      action = 'Review provider error and correct before retry.';
     } else if (status === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL') {
-      headline = 'Provider was not called.';
-      summary = 'Submission failed before the provider payment request was sent.';
-      action = 'Retry may be available after the local blocker is cleared.';
+      headline = 'Provider was not called';
+      summary = 'Provider was not called.';
+      action = 'Retry may be available after safe cleanup.';
+    } else if (status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+      headline = 'Manual no-payment confirmation recorded';
+      summary = 'Manual no-payment confirmation recorded.';
+      action = 'Batch can be retried if safe retry is available.';
     } else if (status === 'PROVIDER_SUBMISSION_ACCEPTED' || accepted) {
-      headline = 'Provider acceptance evidence present.';
-      summary = 'Provider accepted/submitted the payment.';
+      headline = 'Provider acceptance evidence present';
+      summary = 'Provider acceptance evidence present.';
       action = 'Do not retry unless reconciled.';
     }
     return { hasIssue, diagnostic, status, headline, summary, action, accepted };
@@ -155082,21 +155405,91 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
   };
 
   const extractProviderSubmitDiagnostic = () => {
-    const direct = asObj(payload.provider_submit_diagnostic) || asObj(payload.providerSubmitDiagnostic) || asObj(payload.batch?.provider_submit_diagnostic) || asObj(payload.batch?.providerSubmitDiagnostic);
-    if (direct) return direct;
-    const review = asObj(payload.payment_execution_review) || asObj(payload.paymentExecutionReview) || asObj(payload.batch?.payment_execution_review) || asObj(payload.batch?.paymentExecutionReview);
-    const reviewDiagnostic = asObj(review?.provider_submit_diagnostic) || asObj(review?.providerSubmitDiagnostic);
-    if (reviewDiagnostic) return reviewDiagnostic;
+    const out = {};
+    const readFirst = (source, keys) => {
+      const obj = asObj(source) || {};
+      for (const key of keys) {
+        const value = obj[key];
+        if (value === null || value === undefined) continue;
+        if (Array.isArray(value)) {
+          if (value.length) return value;
+          continue;
+        }
+        if (typeof value === 'object') continue;
+        if (toText(value) !== '') return value;
+        if (typeof value === 'boolean') return value;
+      }
+      return undefined;
+    };
+    const put = (key, value, mode = 'text') => {
+      if (value === null || value === undefined) return;
+      if (Array.isArray(value)) {
+        if (!value.length) return;
+        out[key] = value;
+        return;
+      }
+      if (mode === 'bool') {
+        out[key] = readProviderSubmitBool(value);
+        return;
+      }
+      const text = toText(value);
+      if (!text && typeof value !== 'boolean') return;
+      out[key] = mode === 'upper' ? toUpper(value) : text;
+    };
+    const mergeProviderSubmitSource = (source) => {
+      if (!asObj(source)) return;
+      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode']), 'upper');
+      put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode']), 'upper');
+      put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired']), 'bool');
+      put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
+      put('safe_retry_available', readFirst(source, ['safe_retry_available', 'safeRetryAvailable']), 'bool');
+      put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
+      put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
+      put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
+      put('request_id', readFirst(source, ['request_id', 'requestId']));
+      put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
+      put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
+      put('rail_state', readFirst(source, ['rail_state', 'railState']));
+      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
+      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
+      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
+      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
+      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
+      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
+    };
+    const priorState = asObj(state.issueState) || {};
+    mergeProviderSubmitSource(priorState);
+    mergeProviderSubmitSource(priorState.provider_submit_diagnostic);
+    mergeProviderSubmitSource(priorState.providerSubmitDiagnostic);
+    const review = asObj(payload.payment_execution_review) || asObj(payload.paymentExecutionReview) || asObj(payload.batch?.payment_execution_review) || asObj(payload.batch?.paymentExecutionReview) || {};
+    mergeProviderSubmitSource(payload);
+    mergeProviderSubmitSource(payload.batch);
+    mergeProviderSubmitSource(review);
+    mergeProviderSubmitSource(payload.provider_submit_diagnostic);
+    mergeProviderSubmitSource(payload.providerSubmitDiagnostic);
+    mergeProviderSubmitSource(payload.batch?.provider_submit_diagnostic);
+    mergeProviderSubmitSource(payload.batch?.providerSubmitDiagnostic);
+    mergeProviderSubmitSource(review.provider_submit_diagnostic);
+    mergeProviderSubmitSource(review.providerSubmitDiagnostic);
     for (const issue of asArray(payload.payment_issues || payload.paymentIssues || payload.batch?.payment_issues || payload.batch?.paymentIssues)) {
       const item = asObj(issue) || {};
       const kind = toUpper(item.issue_kind || item.issueKind || item.issue_type || item.issueType || item.kind || item.type || '');
-      if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW') continue;
-      return asObj(item.provider_submit_diagnostic) || asObj(item.providerSubmitDiagnostic) || item;
+      if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW' && kind !== 'PROVIDER_SUBMIT_REVIEW') continue;
+      mergeProviderSubmitSource(item);
+      const issueReview = asObj(item.payment_execution_review) || asObj(item.paymentExecutionReview) || {};
+      mergeProviderSubmitSource(issueReview);
+      mergeProviderSubmitSource(item.provider_submit_diagnostic);
+      mergeProviderSubmitSource(item.providerSubmitDiagnostic);
     }
-    const priorState = asObj(state.issueState) || {};
-    return asObj(priorState.providerSubmitDiagnostic) || asObj(priorState.provider_submit_diagnostic) || null;
+    if (!Object.keys(out).length) return null;
+    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.rail_state || out.request_id || out.idempotency_key || out.recommended_action);
+    if (!hasProviderSubmitContext) return null;
+    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+      out.manual_resolution_required = false;
+      out.manual_resolution_available = false;
+    }
+    return out;
   };
-
   const providerSubmitDiagnostic = extractProviderSubmitDiagnostic();
   const providerSubmitStatus = toUpper(providerSubmitDiagnostic?.provider_submission_status || providerSubmitDiagnostic?.providerSubmissionStatus || providerSubmitDiagnostic?.outcome_code || providerSubmitDiagnostic?.outcomeCode || '');
   const providerSubmitHasContext = !!(
@@ -155114,7 +155507,8 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
     'PROVIDER_SUBMISSION_REJECTED',
     'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL',
-    'PROVIDER_SUBMISSION_ACCEPTED'
+    'PROVIDER_SUBMISSION_ACCEPTED',
+    'MANUAL_RESOLVED_NO_PAYMENT_MADE'
   ].includes(providerSubmitStatus);
   const providerSubmitAcceptanceEvidencePresent = !!(
     readProviderSubmitBool(providerSubmitDiagnostic?.provider_acceptance_evidence_present ?? providerSubmitDiagnostic?.providerAcceptanceEvidencePresent) ||
@@ -155123,27 +155517,35 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
   );
   const providerSubmitManualResolutionRequired = readProviderSubmitBool(providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
   const providerSubmitBootstrapSummary = (() => {
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK') return 'Provider submission outcome unknown. Manual bank/provider check required before retry.';
-    if (providerSubmitStatus === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME') return 'Provider request may have been sent, but no usable response was recorded.';
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE') return 'Provider returned an unusable response. Manual reconciliation required before retry.';
+    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK') return 'Check Revolut/bank before retry. If no money moved, record manual no-payment confirmation.';
+    if (providerSubmitStatus === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME') return 'Provider request may have been sent. Reconcile with Revolut/bank before retry.';
+    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE') return 'Provider returned an unusable response. Reconcile with Revolut/bank before retry.';
     if (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED') return 'Provider rejected the payment submission.';
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL') return 'Provider was not called. Submission failed before provider submit.';
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED') return 'Provider acceptance evidence exists. Do not retry unless reconciled.';
+    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL') return 'Provider was not called. Retry may be available after safe cleanup.';
+    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED') return 'Provider acceptance evidence present. Do not retry unless reconciled.';
+    if (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') return 'Manual no-payment confirmation recorded. Batch can be retried if safe retry is available.';
     return 'Provider submission needs review.';
   })();
+  const providerSubmitBootstrapHeadline = providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK' ? 'Provider submission outcome unknown'
+    : (providerSubmitStatus === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME' ? 'Provider request may have been sent'
+      : (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE' ? 'Provider returned an unusable response'
+        : (providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL' ? 'Provider was not called'
+          : (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' ? 'Provider rejected payment'
+            : (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' ? 'Provider acceptance evidence present'
+              : (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? 'Manual no-payment confirmation recorded' : 'Provider submission needs review'))))));
   const providerSubmitBootstrapHtml = (isBootstrap && providerSubmitHasIssue) ? `
     <div class="payment-issue-provider-submit-card card" style="padding:12px;border:1px solid #facc15;background:#fffbeb;color:#713f12;margin-bottom:10px;">
-      <div style="font-weight:800;font-size:14px;margin-bottom:6px;">${enc(providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK' ? 'Provider submission outcome unknown' : 'Provider submission needs review')}</div>
+      <div style="font-weight:800;font-size:14px;margin-bottom:6px;">${enc(providerSubmitBootstrapHeadline)}</div>
       <div class="mini" style="opacity:.92;white-space:pre-wrap;margin-bottom:8px;">${enc(providerSubmitBootstrapSummary)}</div>
-      <div class="mini" style="opacity:.9;margin-bottom:8px;">Local request IDs and idempotency keys are correlation IDs only. They are not provider acceptance proof.</div>
-      <button
+      <div class="mini" style="opacity:.9;margin-bottom:8px;">Local request IDs and idempotency keys are local correlation IDs only.
+They are not provider or bank transaction identifiers.</div>
+      ${providerSubmitAcceptanceEvidencePresent === false && providerSubmitStatus !== 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && (providerSubmitManualResolutionRequired || readProviderSubmitBool(providerSubmitDiagnostic?.manual_resolution_available ?? providerSubmitDiagnostic?.manualResolutionAvailable)) ? `<button
         type="button"
         class="btn btn-sm btn-primary"
         data-action="banking:pay:issue:resolveProviderSubmitNoPayment"
         data-row-key="${enc(firstProviderSubmitText(providerSubmitDiagnostic?.chunk_id, providerSubmitDiagnostic?.chunkId, providerSubmitDiagnostic?.transfer_id, providerSubmitDiagnostic?.transferId, 'provider-submit-review'))}"
         data-operation-id="${enc(firstProviderSubmitText(providerSubmitDiagnostic?.operation_id, providerSubmitDiagnostic?.operationId))}"
-        ${providerSubmitManualResolutionRequired && providerSubmitAcceptanceEvidencePresent === false ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'}
-      >I checked Revolut/bank and confirm no payment was made</button>
+      >I checked Revolut/bank and confirm no payment was made</button>` : ''}
     </div>
   ` : '';
 
@@ -155155,10 +155557,22 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
     issueState.provider_submit_diagnostic = providerSubmitDiagnostic;
     issueState.provider_submission_status = providerSubmitStatus;
     issueState.issueKindForDisplay = 'PROVIDER_SUBMIT_REVIEW';
-    issueState.requiresUserAction = true;
-    issueState.navAlert = true;
-    issueState.hasActionableIssueRows = true;
-    issueState.headline = providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK' ? 'Provider submission outcome unknown' : 'Provider submission needs review';
+    const providerSubmitResolved = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE';
+    issueState.requiresUserAction = providerSubmitResolved ? false : true;
+    issueState.navAlert = providerSubmitResolved ? false : true;
+    issueState.hasActionableIssueRows = providerSubmitResolved ? false : true;
+    issueState.statusText = providerSubmitResolved ? 'Resolved' : (issueState.statusText || 'Needs review');
+    issueState.manualResolutionRequired = false;
+    issueState.manualResolutionAvailable = false;
+    issueState.manual_resolution_required = false;
+    issueState.manual_resolution_available = false;
+    if (!providerSubmitResolved) {
+      issueState.manualResolutionRequired = readProviderSubmitBool(providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
+      issueState.manualResolutionAvailable = readProviderSubmitBool(providerSubmitDiagnostic?.manual_resolution_available ?? providerSubmitDiagnostic?.manualResolutionAvailable ?? providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
+      issueState.manual_resolution_required = issueState.manualResolutionRequired;
+      issueState.manual_resolution_available = issueState.manualResolutionAvailable;
+    }
+    issueState.headline = providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK' ? 'Provider submission outcome unknown' : (providerSubmitStatus === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME' ? 'Provider request may have been sent' : (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE' ? 'Provider returned an unusable response' : (providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL' ? 'Provider was not called' : (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' ? 'Provider rejected payment' : (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' ? 'Provider acceptance evidence present' : (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? 'Manual no-payment confirmation recorded' : 'Provider submission needs review'))))));
     issueState.summaryText = providerSubmitBootstrapSummary;
   }
 
