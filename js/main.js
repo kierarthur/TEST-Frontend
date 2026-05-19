@@ -21023,6 +21023,7 @@ async function bankingPayPaymentCorrectionProcess(correctionRequestId, limit = 5
   return (json && typeof json === 'object') ? json : {};
 }
 
+
 function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
   const src = (batchPayload && typeof batchPayload === 'object') ? batchPayload : {};
   const options = (opts && typeof opts === 'object') ? opts : {};
@@ -21047,6 +21048,60 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
     return null;
   };
+  const providerSubmitObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+  const providerSubmitText = (value) => String(value == null ? '' : value).trim();
+  const providerSubmitCollectEvidenceSources = (value) => {
+    const root = providerSubmitObject(value);
+    const railMeta = providerSubmitObject(root.rail_meta_json || root.railMetaJson);
+    const rawPayload = providerSubmitObject(root.raw_payload || root.rawPayload);
+    const directDiagnostic = providerSubmitObject(root.provider_submit_diagnostic || root.providerSubmitDiagnostic);
+    const railDiagnostic = providerSubmitObject(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic);
+    const rawDiagnostic = providerSubmitObject(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic);
+    const providerResponse = providerSubmitObject(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson);
+    const rawProviderResponse = providerSubmitObject(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson);
+    return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
+      .filter((obj) => obj && Object.keys(obj).length);
+  };
+  const providerSubmitLocalReferenceSet = (value) => {
+    const out = new Set();
+    const localKeys = [
+      'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
+      'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
+      'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
+      'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
+      'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
+      'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
+    ];
+    for (const obj of providerSubmitCollectEvidenceSources(value)) {
+      for (const key of localKeys) {
+        const text = providerSubmitText(obj[key]);
+        if (text) out.add(text.toLowerCase());
+      }
+    }
+    return out;
+  };
+  const providerSubmitStrictExternalEvidencePresent = (value) => {
+    const localRefs = providerSubmitLocalReferenceSet(value);
+    const externalKeys = [
+      'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
+      'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
+      'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
+      'submission_id', 'submissionId', 'rail_submission_id', 'railSubmissionId',
+      'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
+      'provider_transfer_id', 'providerTransferId', 'external_transfer_id', 'externalTransferId',
+      'external_reference', 'externalReference', 'bank_reference', 'bankReference',
+      'transaction_id', 'transactionId', 'payment_id', 'paymentId'
+    ];
+    for (const obj of providerSubmitCollectEvidenceSources(value)) {
+      for (const key of externalKeys) {
+        const text = providerSubmitText(obj[key]);
+        if (!text) continue;
+        if (localRefs.has(text.toLowerCase())) continue;
+        return true;
+      }
+    }
+    return false;
+  };
   const normaliseProviderSubmitDiagnostic = (raw) => {
     const source = isObj(raw) ? raw : {};
     if (!Object.keys(source).length) return {};
@@ -21056,8 +21111,21 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     out.manual_resolution_required = readProviderBool(out.manual_resolution_required ?? out.manualResolutionRequired) === true;
     out.manual_resolution_available = readProviderBool(out.manual_resolution_available ?? out.manualResolutionAvailable ?? out.manual_resolution_required ?? out.manualResolutionRequired) === true;
     out.safe_retry_available = readProviderBool(out.safe_retry_available ?? out.safeRetryAvailable) === true;
-    out.provider_acceptance_evidence_present = readProviderBool(out.provider_acceptance_evidence_present ?? out.providerAcceptanceEvidencePresent) === true;
+    const strictExternalEvidencePresent = providerSubmitStrictExternalEvidencePresent(out);
+    const rejectedOrUnusable = [
+      'PROVIDER_SUBMISSION_REJECTED',
+      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
+      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
+      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
+      'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
+    ].includes(out.provider_submission_status);
+    out.provider_external_evidence_present = strictExternalEvidencePresent === true;
+    out.provider_acceptance_evidence_present = out.provider_submission_status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictExternalEvidencePresent === true && rejectedOrUnusable !== true;
     out.provider_response_present = readProviderBool(out.provider_response_present ?? out.providerResponsePresent) === true;
+    out.provider_request_sent = readProviderBool(out.provider_request_sent ?? out.providerRequestSent) === true;
+    out.provider_request_sent_confirmed = readProviderBool(out.provider_request_sent_confirmed ?? out.providerRequestSentConfirmed) === true;
+    out.provider_request_dispatched_at_utc = toText(out.provider_request_dispatched_at_utc || out.providerRequestDispatchedAtUtc || out.request_sent_at_utc || out.requestSentAtUtc || '');
     out.request_id = toText(out.request_id || out.requestId || '');
     out.idempotency_key = toText(out.idempotency_key || out.idempotencyKey || '');
     out.rail_tx_id = toText(out.rail_tx_id || out.railTxId || '');
@@ -21122,10 +21190,24 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
       put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
       put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
       put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
+      put('provider_request_sent_confirmed', readFirst(source, ['provider_request_sent_confirmed', 'providerRequestSentConfirmed']), 'bool');
+      put('provider_request_dispatched_at_utc', readFirst(source, ['provider_request_dispatched_at_utc', 'providerRequestDispatchedAtUtc', 'request_sent_at_utc', 'requestSentAtUtc']));
+      put('provider_external_evidence_present', readFirst(source, ['provider_external_evidence_present', 'providerExternalEvidencePresent']), 'bool');
       put('request_id', readFirst(source, ['request_id', 'requestId']));
       put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
       put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
       put('rail_state', readFirst(source, ['rail_state', 'railState']));
+      put('provider_transaction_id', readFirst(source, ['provider_transaction_id', 'providerTransactionId']));
+      put('provider_payment_id', readFirst(source, ['provider_payment_id', 'providerPaymentId']));
+      put('provider_event_id', readFirst(source, ['provider_event_id', 'providerEventId']));
+      put('provider_reference', readFirst(source, ['provider_reference', 'providerReference']));
+      put('provider_submission_id', readFirst(source, ['provider_submission_id', 'providerSubmissionId']));
+      put('external_payment_id', readFirst(source, ['external_payment_id', 'externalPaymentId']));
+      put('revolut_payment_id', readFirst(source, ['revolut_payment_id', 'revolutPaymentId']));
+      put('external_reference', readFirst(source, ['external_reference', 'externalReference']));
+      put('bank_reference', readFirst(source, ['bank_reference', 'bankReference']));
+      put('transaction_id', readFirst(source, ['transaction_id', 'transactionId']));
+      put('payment_id', readFirst(source, ['payment_id', 'paymentId']));
       put('operation_id', readFirst(source, ['operation_id', 'operationId']));
       put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
       put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
@@ -21151,7 +21233,7 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
       mergeProviderSubmitSource(issue.providerSubmitDiagnostic);
     });
     const normalised = normaliseProviderSubmitDiagnostic(out);
-    const hasProviderSubmitContext = !!(normalised.provider_submission_status || normalised.review_reason_code || normalised.operation_id || normalised.chunk_id || normalised.transfer_id || normalised.rail_tx_id || normalised.rail_state || normalised.request_id || normalised.idempotency_key || normalised.recommended_action);
+    const hasProviderSubmitContext = !!(normalised.provider_submission_status || normalised.review_reason_code || normalised.operation_id || normalised.chunk_id || normalised.transfer_id || normalised.rail_tx_id || normalised.provider_transaction_id || normalised.provider_payment_id || normalised.provider_event_id || normalised.provider_reference || normalised.external_payment_id || normalised.revolut_payment_id || normalised.external_reference || normalised.bank_reference || normalised.transaction_id || normalised.payment_id || normalised.rail_state || normalised.request_id || normalised.idempotency_key || normalised.recommended_action);
     if (!hasProviderSubmitContext) return {};
     if (normalised.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
       normalised.manual_resolution_required = false;
@@ -21159,43 +21241,59 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     }
     return normalised;
   };
-  const providerSubmitIssueCopy = (statusValue) => {
+  const providerSubmitIssueCopy = (statusValue, strictAcceptanceEvidencePresent = false) => {
     const status = toUpper(statusValue);
+    if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictAcceptanceEvidencePresent === true) {
+      return {
+        headline: 'Provider acceptance evidence present',
+        summary: 'Provider acceptance evidence exists. Do not retry unless reconciled.',
+        action: 'Do not retry unless reconciled.',
+        severity: 'danger'
+      };
+    }
+    if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictAcceptanceEvidencePresent !== true) {
+      return {
+        headline: 'Provider response unusable',
+        summary: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
+        action: 'Reconcile with provider/bank before retry.',
+        severity: 'warning'
+      };
+    }
     const map = {
       PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK: {
         headline: 'Provider submission outcome unknown',
-        summary: 'Provider submission outcome unknown.',
-        action: 'Check Revolut/bank before retry. If no money moved, record manual no-payment confirmation.',
+        summary: 'Submit chunk is stale with no provider response, transfer event, rail transaction ID, or rail state.',
+        action: 'Check Revolut/bank before retry.',
         severity: 'warning'
       },
       UNKNOWN_PROVIDER_SUBMISSION_OUTCOME: {
-        headline: 'Provider request may have been sent',
+        headline: 'Provider response missing',
         summary: 'A provider request may have been sent, but no usable response was recorded.',
-        action: 'Reconcile with Revolut/bank before retry.',
+        action: 'Check Revolut/bank before retry.',
         severity: 'warning'
       },
       PROVIDER_SUBMISSION_BLOCKED_PRE_CALL: {
         headline: 'Provider was not called',
-        summary: 'Provider was not called.',
-        action: 'Retry may be available after safe cleanup.',
+        summary: 'Submission failed before the provider payment request was sent.',
+        action: 'Retry after local blocker is cleared.',
         severity: 'info'
       },
       PROVIDER_SUBMISSION_REJECTED: {
         headline: 'Provider rejected payment',
-        summary: 'Provider returned a rejection/failure.',
-        action: 'Review provider error and correct before retry.',
+        summary: 'Provider rejected the payment submission.',
+        action: 'Review provider error.',
         severity: 'warning'
       },
-      PROVIDER_SUBMISSION_ACCEPTED: {
-        headline: 'Provider acceptance evidence present',
-        summary: 'Provider accepted/submitted the payment.',
-        action: 'Do not retry unless reconciled.',
-        severity: 'danger'
-      },
       PROVIDER_SUBMISSION_MALFORMED_RESPONSE: {
-        headline: 'Provider returned an unusable response',
-        summary: 'Provider returned an unusable response.',
-        action: 'Reconcile with Revolut/bank before retry.',
+        headline: 'Provider response unusable',
+        summary: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
+        action: 'Reconcile with provider/bank before retry.',
+        severity: 'warning'
+      },
+      PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID: {
+        headline: 'Provider response unusable',
+        summary: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
+        action: 'Reconcile with provider/bank before retry.',
         severity: 'warning'
       },
       MANUAL_RESOLVED_NO_PAYMENT_MADE: {
@@ -21376,10 +21474,14 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
   const providerSubmitDiagnostic = extractProviderSubmitDiagnostic(src);
   if (hasObjectKeys(providerSubmitDiagnostic)) {
     const providerSubmitStatus = toUpper(providerSubmitDiagnostic.provider_submission_status || providerSubmitDiagnostic.outcome_code || '');
-    const providerIssueCopy = providerSubmitIssueCopy(providerSubmitStatus);
+    const strictProviderAcceptanceEvidencePresent = providerSubmitDiagnostic.provider_acceptance_evidence_present === true;
+    providerSubmitDiagnostic.provider_acceptance_evidence_present = strictProviderAcceptanceEvidencePresent;
+    const providerIssueCopy = providerSubmitIssueCopy(providerSubmitStatus, strictProviderAcceptanceEvidencePresent);
     const badgeTone = providerIssueCopy.severity === 'danger' ? 'danger' : (providerIssueCopy.severity === 'info' ? 'info' : 'warning');
     const recommendedAction = providerSubmitDiagnostic.recommended_action || providerIssueCopy.action;
     const providerSubmitResolved = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE';
+    const providerManualResolutionRequired = providerSubmitResolved ? false : providerSubmitDiagnostic.manual_resolution_required === true;
+    const providerManualResolutionAvailable = providerSubmitResolved ? false : (strictProviderAcceptanceEvidencePresent !== true && (providerSubmitDiagnostic.manual_resolution_available === true || providerManualResolutionRequired));
     return {
       hasIssue: true,
       requiresUserAction: providerSubmitResolved ? false : true,
@@ -21399,13 +21501,16 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
       providerSubmitDiagnostic: providerSubmitDiagnostic,
       provider_submission_status: providerSubmitStatus,
       review_reason_code: toUpper(providerSubmitDiagnostic.review_reason_code || ''),
-      manualResolutionRequired: providerSubmitResolved ? false : providerSubmitDiagnostic.manual_resolution_required === true,
-      manualResolutionAvailable: providerSubmitResolved ? false : (providerSubmitDiagnostic.manual_resolution_available === true || providerSubmitDiagnostic.manual_resolution_required === true),
-      manual_resolution_required: providerSubmitResolved ? false : providerSubmitDiagnostic.manual_resolution_required === true,
-      manual_resolution_available: providerSubmitResolved ? false : (providerSubmitDiagnostic.manual_resolution_available === true || providerSubmitDiagnostic.manual_resolution_required === true),
+      manualResolutionRequired: providerManualResolutionRequired,
+      manualResolutionAvailable: providerManualResolutionAvailable,
+      manual_resolution_required: providerManualResolutionRequired,
+      manual_resolution_available: providerManualResolutionAvailable,
       safeRetryAvailable: providerSubmitDiagnostic.safe_retry_available === true,
-      providerAcceptanceEvidencePresent: providerSubmitDiagnostic.provider_acceptance_evidence_present === true,
+      providerAcceptanceEvidencePresent: strictProviderAcceptanceEvidencePresent,
       providerResponsePresent: providerSubmitDiagnostic.provider_response_present === true,
+      providerRequestSentConfirmed: providerSubmitDiagnostic.provider_request_sent_confirmed === true,
+      providerRequestDispatchedAtUtc: providerSubmitDiagnostic.provider_request_dispatched_at_utc || null,
+      providerExternalEvidencePresent: providerSubmitDiagnostic.provider_external_evidence_present === true,
       request_id: providerSubmitDiagnostic.request_id || null,
       idempotency_key: providerSubmitDiagnostic.idempotency_key || null,
       rail_tx_id: providerSubmitDiagnostic.rail_tx_id || null,
@@ -21639,6 +21744,7 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
 }
 
 
+
 function getBankingPaymentIssueActionLabel(rowOrState) {
   const src = (rowOrState && typeof rowOrState === 'object') ? rowOrState : { state: rowOrState };
   const stateText = String(src.state || src.headline || src.badgeText || src.status || '').trim().toUpperCase();
@@ -21703,6 +21809,60 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
     if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
     return null;
   };
+  const providerSubmitObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+  const providerSubmitText = (value) => String(value == null ? '' : value).trim();
+  const providerSubmitCollectEvidenceSources = (value) => {
+    const root = providerSubmitObject(value);
+    const railMeta = providerSubmitObject(root.rail_meta_json || root.railMetaJson);
+    const rawPayload = providerSubmitObject(root.raw_payload || root.rawPayload);
+    const directDiagnostic = providerSubmitObject(root.provider_submit_diagnostic || root.providerSubmitDiagnostic);
+    const railDiagnostic = providerSubmitObject(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic);
+    const rawDiagnostic = providerSubmitObject(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic);
+    const providerResponse = providerSubmitObject(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson);
+    const rawProviderResponse = providerSubmitObject(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson);
+    return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
+      .filter((obj) => obj && Object.keys(obj).length);
+  };
+  const providerSubmitLocalReferenceSet = (value) => {
+    const out = new Set();
+    const localKeys = [
+      'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
+      'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
+      'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
+      'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
+      'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
+      'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
+    ];
+    for (const obj of providerSubmitCollectEvidenceSources(value)) {
+      for (const key of localKeys) {
+        const text = providerSubmitText(obj[key]);
+        if (text) out.add(text.toLowerCase());
+      }
+    }
+    return out;
+  };
+  const providerSubmitStrictExternalEvidencePresent = (value) => {
+    const localRefs = providerSubmitLocalReferenceSet(value);
+    const externalKeys = [
+      'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
+      'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
+      'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
+      'submission_id', 'submissionId', 'rail_submission_id', 'railSubmissionId',
+      'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
+      'provider_transfer_id', 'providerTransferId', 'external_transfer_id', 'externalTransferId',
+      'external_reference', 'externalReference', 'bank_reference', 'bankReference',
+      'transaction_id', 'transactionId', 'payment_id', 'paymentId'
+    ];
+    for (const obj of providerSubmitCollectEvidenceSources(value)) {
+      for (const key of externalKeys) {
+        const text = providerSubmitText(obj[key]);
+        if (!text) continue;
+        if (localRefs.has(text.toLowerCase())) continue;
+        return true;
+      }
+    }
+    return false;
+  };
   const normaliseProviderSubmitDiagnostic = (raw) => {
     const source = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
     if (!Object.keys(source).length) return {};
@@ -21712,7 +21872,7 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
     out.manual_resolution_required = readProviderBool(out.manual_resolution_required ?? out.manualResolutionRequired) === true;
     out.manual_resolution_available = readProviderBool(out.manual_resolution_available ?? out.manualResolutionAvailable ?? out.manual_resolution_required ?? out.manualResolutionRequired) === true;
     out.safe_retry_available = readProviderBool(out.safe_retry_available ?? out.safeRetryAvailable) === true;
-    out.provider_acceptance_evidence_present = readProviderBool(out.provider_acceptance_evidence_present ?? out.providerAcceptanceEvidencePresent) === true;
+    out.provider_acceptance_evidence_present = providerSubmitStrictExternalEvidencePresent(out);
     out.provider_response_present = readProviderBool(out.provider_response_present ?? out.providerResponsePresent) === true;
     out.request_id = toText(out.request_id || out.requestId || '');
     out.idempotency_key = toText(out.idempotency_key || out.idempotencyKey || '');
@@ -21781,6 +21941,17 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
       put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
       put('rail_state', readFirst(source, ['rail_state', 'railState']));
+      put('provider_transaction_id', readFirst(source, ['provider_transaction_id', 'providerTransactionId']));
+      put('provider_payment_id', readFirst(source, ['provider_payment_id', 'providerPaymentId']));
+      put('provider_event_id', readFirst(source, ['provider_event_id', 'providerEventId']));
+      put('provider_reference', readFirst(source, ['provider_reference', 'providerReference']));
+      put('provider_submission_id', readFirst(source, ['provider_submission_id', 'providerSubmissionId']));
+      put('external_payment_id', readFirst(source, ['external_payment_id', 'externalPaymentId']));
+      put('revolut_payment_id', readFirst(source, ['revolut_payment_id', 'revolutPaymentId']));
+      put('external_reference', readFirst(source, ['external_reference', 'externalReference']));
+      put('bank_reference', readFirst(source, ['bank_reference', 'bankReference']));
+      put('transaction_id', readFirst(source, ['transaction_id', 'transactionId']));
+      put('payment_id', readFirst(source, ['payment_id', 'paymentId']));
       put('operation_id', readFirst(source, ['operation_id', 'operationId']));
       put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
       put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
@@ -21805,7 +21976,7 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       mergeProviderSubmitSource(issue.providerSubmitDiagnostic);
     });
     const normalised = normaliseProviderSubmitDiagnostic(out);
-    const hasProviderSubmitContext = !!(normalised.provider_submission_status || normalised.review_reason_code || normalised.operation_id || normalised.chunk_id || normalised.transfer_id || normalised.rail_tx_id || normalised.rail_state || normalised.request_id || normalised.idempotency_key || normalised.recommended_action);
+    const hasProviderSubmitContext = !!(normalised.provider_submission_status || normalised.review_reason_code || normalised.operation_id || normalised.chunk_id || normalised.transfer_id || normalised.rail_tx_id || normalised.provider_transaction_id || normalised.provider_payment_id || normalised.provider_event_id || normalised.provider_reference || normalised.external_payment_id || normalised.revolut_payment_id || normalised.external_reference || normalised.bank_reference || normalised.transaction_id || normalised.payment_id || normalised.rail_state || normalised.request_id || normalised.idempotency_key || normalised.recommended_action);
     if (!hasProviderSubmitContext) return {};
     if (normalised.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
       normalised.manual_resolution_required = false;
@@ -21813,51 +21984,66 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
     }
     return normalised;
   };
-  const providerSubmitRowLabels = (statusValue) => {
+  const providerSubmitRowLabels = (statusValue, strictAcceptanceEvidencePresent = false) => {
     const status = toUpper(statusValue);
+    if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictAcceptanceEvidencePresent === true) {
+      return {
+        bankStatusLabel: 'Submitted',
+        whatHappenedLabel: 'Provider accepted/submitted payment.',
+        actionLabel: 'Do not retry unless reconciled.'
+      };
+    }
+    if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictAcceptanceEvidencePresent !== true) {
+      return {
+        bankStatusLabel: 'Outcome not proven',
+        whatHappenedLabel: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
+        actionLabel: 'Reconcile with provider/bank before retry.'
+      };
+    }
     const labels = {
       PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK: {
-        bankStatusLabel: 'Provider submission outcome unknown',
-        whatHappenedLabel: 'Provider submission outcome unknown',
-        actionLabel: 'Check Revolut/bank before retry. If no money moved, record manual no-payment confirmation.'
+        bankStatusLabel: 'Outcome unknown',
+        whatHappenedLabel: 'Submit chunk became stale with no provider response recorded.',
+        actionLabel: 'Manual Revolut/bank check required before retry.'
       },
       UNKNOWN_PROVIDER_SUBMISSION_OUTCOME: {
-        bankStatusLabel: 'Provider request may have been sent',
-        whatHappenedLabel: 'Provider request may have been sent',
-        actionLabel: 'Reconcile with Revolut/bank before retry.'
+        bankStatusLabel: 'Outcome unknown',
+        whatHappenedLabel: 'Provider request may have been sent, but no response was recorded.',
+        actionLabel: 'Check provider/bank before retry.'
       },
       PROVIDER_SUBMISSION_MALFORMED_RESPONSE: {
-        bankStatusLabel: 'Provider returned an unusable response',
-        whatHappenedLabel: 'Provider returned an unusable response',
-        actionLabel: 'Reconcile with Revolut/bank before retry.'
+        bankStatusLabel: 'Outcome not proven',
+        whatHappenedLabel: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
+        actionLabel: 'Reconcile with provider/bank before retry.'
+      },
+      PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID: {
+        bankStatusLabel: 'Outcome not proven',
+        whatHappenedLabel: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
+        actionLabel: 'Reconcile with provider/bank before retry.'
       },
       PROVIDER_SUBMISSION_BLOCKED_PRE_CALL: {
-        bankStatusLabel: 'Provider was not called',
-        whatHappenedLabel: 'Provider was not called',
-        actionLabel: 'Retry may be available after safe cleanup.'
+        bankStatusLabel: 'Not sent',
+        whatHappenedLabel: 'Provider was not called.',
+        actionLabel: 'Retry after local blocker is cleared.'
       },
       PROVIDER_SUBMISSION_REJECTED: {
-        bankStatusLabel: 'Provider rejected payment',
-        whatHappenedLabel: 'Provider rejected payment',
-        actionLabel: 'Review provider error and correct before retry.'
-      },
-      PROVIDER_SUBMISSION_ACCEPTED: {
-        bankStatusLabel: 'Provider acceptance evidence present',
-        whatHappenedLabel: 'Provider acceptance evidence present',
-        actionLabel: 'Do not retry unless reconciled.'
+        bankStatusLabel: 'Rejected',
+        whatHappenedLabel: 'Provider rejected submission.',
+        actionLabel: 'Review provider error.'
       },
       MANUAL_RESOLVED_NO_PAYMENT_MADE: {
         bankStatusLabel: 'Manual no-payment confirmation recorded',
-        whatHappenedLabel: 'Manual no-payment confirmation recorded',
+        whatHappenedLabel: 'Manual no-payment confirmation recorded.',
         actionLabel: 'Batch can be retried if safe retry is available.'
       }
     };
     return labels[status] || {
       bankStatusLabel: 'Provider submission needs review',
-      whatHappenedLabel: 'Provider submission needs review',
-      actionLabel: 'Check Revolut/bank before retry.'
+      whatHappenedLabel: 'Provider submission needs review.',
+      actionLabel: 'Check provider/bank before retry.'
     };
   };
+
   const firstDiagnosticText = (diagnostic, ...keys) => {
     for (const key of keys) {
       const value = diagnostic ? diagnostic[key] : null;
@@ -22110,7 +22296,10 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
   const providerSubmitDiagnostic = extractProviderSubmitDiagnostic(src);
   if (objectHasContent(providerSubmitDiagnostic)) {
     const providerSubmitStatus = toUpper(providerSubmitDiagnostic.provider_submission_status || providerSubmitDiagnostic.outcome_code || '');
-    const providerLabels = providerSubmitRowLabels(providerSubmitStatus);
+    const providerStrictAcceptanceEvidencePresent = providerSubmitStrictExternalEvidencePresent(providerSubmitDiagnostic);
+    providerSubmitDiagnostic.provider_acceptance_evidence_present = providerStrictAcceptanceEvidencePresent;
+    const providerLabels = providerSubmitRowLabels(providerSubmitStatus, providerStrictAcceptanceEvidencePresent);
+    const providerManualActionAvailable = providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && providerStrictAcceptanceEvidencePresent !== true && (providerSubmitDiagnostic.manual_resolution_available === true || providerSubmitDiagnostic.manual_resolution_required === true);
     const operationId = firstDiagnosticText(providerSubmitDiagnostic, 'operation_id', 'operationId');
     const chunkId = firstDiagnosticText(providerSubmitDiagnostic, 'chunk_id', 'chunkId', 'chunk_ids', 'chunkIds');
     const transferId = firstDiagnosticText(providerSubmitDiagnostic, 'transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId', 'transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds');
@@ -22146,8 +22335,8 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       selectableForApply: false,
       selectableForReview: false,
       selected: false,
-      manualActionAvailable: providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && providerSubmitStatus !== 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitDiagnostic.provider_acceptance_evidence_present !== true && (providerSubmitDiagnostic.manual_resolution_available === true || providerSubmitDiagnostic.manual_resolution_required === true),
-      manual_action_available: providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && providerSubmitStatus !== 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitDiagnostic.provider_acceptance_evidence_present !== true && (providerSubmitDiagnostic.manual_resolution_available === true || providerSubmitDiagnostic.manual_resolution_required === true),
+      manualActionAvailable: providerManualActionAvailable,
+      manual_action_available: providerManualActionAvailable,
       blockerText: providerLabels.actionLabel,
       sortCandidateName: 'whole batch',
       sortUmbrellaName: '',
@@ -22159,6 +22348,7 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       issue_type: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
       issueType: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
       providerSubmitDiagnostic: providerSubmitDiagnostic,
+      provider_acceptance_evidence_present: providerStrictAcceptanceEvidencePresent,
       provider_submission_status: providerSubmitStatus,
       operation_id: operationId || null,
       chunk_id: chunkId || null,
@@ -22663,6 +22853,58 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     }
     return '';
   };
+  const providerSubmitCollectEvidenceSources = (value) => {
+    const root = providerSubmitAsObject(value) || {};
+    const railMeta = providerSubmitAsObject(root.rail_meta_json || root.railMetaJson) || {};
+    const rawPayload = providerSubmitAsObject(root.raw_payload || root.rawPayload) || {};
+    const directDiagnostic = providerSubmitAsObject(root.provider_submit_diagnostic || root.providerSubmitDiagnostic) || {};
+    const railDiagnostic = providerSubmitAsObject(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic) || {};
+    const rawDiagnostic = providerSubmitAsObject(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic) || {};
+    const providerResponse = providerSubmitAsObject(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson) || {};
+    const rawProviderResponse = providerSubmitAsObject(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson) || {};
+    return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
+      .filter((obj) => obj && Object.keys(obj).length);
+  };
+  const providerSubmitLocalReferenceSet = (value) => {
+    const out = new Set();
+    const localKeys = [
+      'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
+      'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
+      'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
+      'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
+      'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
+      'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
+    ];
+    for (const obj of providerSubmitCollectEvidenceSources(value)) {
+      for (const key of localKeys) {
+        const text = toText(obj[key]);
+        if (text) out.add(text.toLowerCase());
+      }
+    }
+    return out;
+  };
+  const providerSubmitStrictExternalEvidencePresent = (value) => {
+    const localRefs = providerSubmitLocalReferenceSet(value);
+    const externalKeys = [
+      'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
+      'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
+      'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
+      'submission_id', 'submissionId', 'rail_submission_id', 'railSubmissionId',
+      'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
+      'provider_transfer_id', 'providerTransferId', 'external_transfer_id', 'externalTransferId',
+      'external_reference', 'externalReference', 'bank_reference', 'bankReference',
+      'transaction_id', 'transactionId', 'payment_id', 'paymentId'
+    ];
+    for (const obj of providerSubmitCollectEvidenceSources(value)) {
+      for (const key of externalKeys) {
+        const text = toText(obj[key]);
+        if (!text) continue;
+        if (localRefs.has(text.toLowerCase())) continue;
+        return true;
+      }
+    }
+    return false;
+  };
   const extractProviderSubmitDiagnosticFromIssuePanel = () => {
     const out = {};
     const readFirst = (source, keys) => {
@@ -22705,10 +22947,24 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
       put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
       put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
       put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
+      put('provider_request_sent_confirmed', readFirst(source, ['provider_request_sent_confirmed', 'providerRequestSentConfirmed']), 'bool');
+      put('provider_request_dispatched_at_utc', readFirst(source, ['provider_request_dispatched_at_utc', 'providerRequestDispatchedAtUtc', 'request_sent_at_utc', 'requestSentAtUtc']));
+      put('provider_external_evidence_present', readFirst(source, ['provider_external_evidence_present', 'providerExternalEvidencePresent']), 'bool');
       put('request_id', readFirst(source, ['request_id', 'requestId']));
       put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
       put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
       put('rail_state', readFirst(source, ['rail_state', 'railState']));
+      put('provider_transaction_id', readFirst(source, ['provider_transaction_id', 'providerTransactionId']));
+      put('provider_payment_id', readFirst(source, ['provider_payment_id', 'providerPaymentId']));
+      put('provider_event_id', readFirst(source, ['provider_event_id', 'providerEventId']));
+      put('provider_reference', readFirst(source, ['provider_reference', 'providerReference']));
+      put('provider_submission_id', readFirst(source, ['provider_submission_id', 'providerSubmissionId']));
+      put('external_payment_id', readFirst(source, ['external_payment_id', 'externalPaymentId']));
+      put('revolut_payment_id', readFirst(source, ['revolut_payment_id', 'revolutPaymentId']));
+      put('external_reference', readFirst(source, ['external_reference', 'externalReference']));
+      put('bank_reference', readFirst(source, ['bank_reference', 'bankReference']));
+      put('transaction_id', readFirst(source, ['transaction_id', 'transactionId']));
+      put('payment_id', readFirst(source, ['payment_id', 'paymentId']));
       put('operation_id', readFirst(source, ['operation_id', 'operationId']));
       put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
       put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
@@ -22748,7 +23004,7 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     mergeProviderSubmitSource(issueState.provider_submit_diagnostic);
     mergeProviderSubmitSource(issueState.providerSubmitDiagnostic);
     if (!Object.keys(out).length) return null;
-    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.rail_state || out.request_id || out.idempotency_key || out.recommended_action);
+    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.provider_transaction_id || out.provider_payment_id || out.provider_event_id || out.provider_reference || out.external_payment_id || out.revolut_payment_id || out.external_reference || out.bank_reference || out.transaction_id || out.payment_id || out.rail_state || out.request_id || out.idempotency_key || out.recommended_action);
     if (!hasProviderSubmitContext) return null;
     if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
       out.manual_resolution_required = false;
@@ -22771,22 +23027,32 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
     'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
     'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+    'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
     'PROVIDER_SUBMISSION_REJECTED',
     'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL',
     'PROVIDER_SUBMISSION_ACCEPTED',
     'MANUAL_RESOLVED_NO_PAYMENT_MADE'
   ].includes(providerSubmitStatus);
-  const providerSubmitAcceptanceEvidencePresent = !!(
-    providerSubmitReadBool(providerSubmitDiagnostic?.provider_acceptance_evidence_present ?? providerSubmitDiagnostic?.providerAcceptanceEvidencePresent) ||
-    providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' ||
-    providerSubmitFirstText(providerSubmitDiagnostic?.rail_tx_id, providerSubmitDiagnostic?.railTxId, providerSubmitDiagnostic?.provider_transaction_id, providerSubmitDiagnostic?.providerTransactionId, providerSubmitDiagnostic?.provider_reference, providerSubmitDiagnostic?.providerReference)
-  );
+  const providerSubmitExternalEvidencePresent = providerSubmitStrictExternalEvidencePresent(providerSubmitDiagnostic);
+  const providerSubmitRejectedOrUnusable = [
+    'PROVIDER_SUBMISSION_REJECTED',
+    'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
+    'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
+    'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+    'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
+    'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
+  ].includes(providerSubmitStatus);
+  const providerSubmitAcceptanceEvidencePresent = providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitExternalEvidencePresent === true && providerSubmitRejectedOrUnusable !== true;
+  if (providerSubmitDiagnostic) {
+    providerSubmitDiagnostic.provider_external_evidence_present = providerSubmitExternalEvidencePresent;
+    providerSubmitDiagnostic.provider_acceptance_evidence_present = providerSubmitAcceptanceEvidencePresent;
+  }
   const providerSubmitProviderResponsePresent = providerSubmitReadBool(providerSubmitDiagnostic?.provider_response_present ?? providerSubmitDiagnostic?.providerResponsePresent ?? providerSubmitDiagnostic?.provider_response_received ?? providerSubmitDiagnostic?.providerResponseReceived);
   const providerSubmitManualResolutionAvailable = providerSubmitReadBool(providerSubmitDiagnostic?.manual_resolution_available ?? providerSubmitDiagnostic?.manualResolutionAvailable ?? providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
   const providerSubmitManualResolutionRequiredRaw = providerSubmitReadBool(providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
   const providerSubmitManualResolutionRequired = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? false : providerSubmitManualResolutionRequiredRaw;
   const providerSubmitSafeRetryAvailable = providerSubmitReadBool(providerSubmitDiagnostic?.safe_retry_available ?? providerSubmitDiagnostic?.safeRetryAvailable);
-  const providerSubmitRequestSentRaw = providerSubmitDiagnostic ? (providerSubmitDiagnostic.provider_request_sent ?? providerSubmitDiagnostic.providerRequestSent) : null;
+  const providerSubmitRequestSentRaw = providerSubmitDiagnostic ? (providerSubmitDiagnostic.provider_request_sent_confirmed ?? providerSubmitDiagnostic.providerRequestSentConfirmed ?? providerSubmitDiagnostic.provider_request_sent ?? providerSubmitDiagnostic.providerRequestSent) : null;
   const providerSubmitRequestSent = providerSubmitReadBool(providerSubmitRequestSentRaw);
   const providerSubmitRequestSentKnownFalse = providerSubmitRequestSentRaw === false || String(providerSubmitRequestSentRaw == null ? '' : providerSubmitRequestSentRaw).trim().toLowerCase() === 'false';
   const providerSubmitTransferEventRecorded = providerSubmitReadBool(providerSubmitDiagnostic?.transfer_event_recorded ?? providerSubmitDiagnostic?.transferEventRecorded ?? providerSubmitDiagnostic?.has_transfer_events ?? providerSubmitDiagnostic?.hasTransferEvents) || Number(providerSubmitDiagnostic?.transfer_event_count ?? providerSubmitDiagnostic?.transferEventCount ?? 0) > 0;
@@ -22795,39 +23061,45 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
   const providerSubmitStatusCopy = (() => {
     if (providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK') return {
       status: 'Provider submission outcome unknown',
-      reason: providerSubmitReviewReason || 'Provider submission outcome unknown',
-      summary: 'Provider submission outcome unknown.',
-      action: 'Check Revolut/bank before retry. If no money moved, record manual no-payment confirmation.'
+      reason: providerSubmitReviewReason || 'Submit chunk stale with no provider response',
+      summary: 'Submit chunk is stale with no provider response, transfer event, rail transaction ID, or rail state.',
+      action: 'Check Revolut/bank before retry. If no payment was made, record manual no-payment confirmation.'
     };
     if (providerSubmitStatus === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME') return {
-      status: 'Provider request may have been sent',
-      reason: 'Provider request may have been sent',
-      summary: 'Provider request may have been sent.',
-      action: 'Reconcile with Revolut/bank before retry.'
+      status: 'Provider response missing',
+      reason: 'Provider request may have been sent without a usable response',
+      summary: 'A provider request may have been sent, but no usable response was recorded.',
+      action: 'Check provider/bank before retry.'
     };
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE') return {
-      status: 'Provider returned an unusable response',
-      reason: 'Provider response malformed',
-      summary: 'Provider returned an unusable response.',
-      action: 'Reconcile with Revolut/bank before retry.'
+    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE' || providerSubmitStatus === 'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID') return {
+      status: 'Provider response unusable',
+      reason: providerSubmitStatus === 'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID' ? 'Provider response present with no external ID' : 'Provider response malformed',
+      summary: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
+      action: 'Reconcile with provider/bank before retry.'
     };
     if (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED') return {
       status: 'Provider rejected payment',
       reason: 'Provider rejected submission',
-      summary: 'Provider rejected the payment submission.',
-      action: 'Review provider error before retry.'
+      summary: 'Provider rejected submission.',
+      action: 'Review provider error.'
     };
     if (providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL') return {
       status: 'Provider was not called',
       reason: 'Submission failed before provider submit',
-      summary: 'Provider was not called. Submission failed before the payment request was sent.',
-      action: 'Retry may be available after safe cleanup.'
+      summary: 'Submission failed before the provider payment request was sent.',
+      action: 'Retry after local blocker is cleared.'
     };
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED') return {
+    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitAcceptanceEvidencePresent === true) return {
       status: 'Provider acceptance evidence present',
       reason: 'Provider accepted/submitted payment',
-      summary: 'Provider acceptance evidence present.',
+      summary: 'Provider acceptance evidence exists. Do not retry unless reconciled.',
       action: 'Do not retry unless reconciled.'
+    };
+    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitAcceptanceEvidencePresent !== true) return {
+      status: 'Provider response unusable',
+      reason: 'Provider accepted status recorded with no external provider evidence',
+      summary: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
+      action: 'Reconcile with provider/bank before retry.'
     };
     if (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') return {
       status: 'Manual no-payment confirmation recorded',
@@ -22846,20 +23118,26 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
     'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
     'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+    'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
     'PROVIDER_SUBMISSION_ACCEPTED'
   ].includes(providerSubmitStatus)
     ? 'No'
     : (providerSubmitSafeRetryAvailable ? 'Yes' : 'No');
   const providerSubmitDetailRows = providerSubmitHasIssue ? [
-    ['Provider submission status', providerSubmitStatus || 'UNKNOWN'],
-    ['Review reason', providerSubmitStatusCopy.reason],
+    ['Status', providerSubmitStatusCopy.status],
+    ['Reason', providerSubmitStatusCopy.reason],
     ['Provider called', providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL' ? 'No' : (providerSubmitRequestSent ? 'Yes' : (providerSubmitRequestSentKnownFalse ? 'No' : 'Unknown / not proven'))],
     ['Provider response recorded', (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' || providerSubmitProviderResponsePresent) ? 'Yes' : 'No'],
     ['Provider accepted', providerSubmitAcceptanceEvidencePresent ? 'Yes' : 'No evidence'],
-    ['Rail transaction ID', providerSubmitFirstText(providerSubmitDiagnostic?.rail_tx_id, providerSubmitDiagnostic?.railTxId) || 'None'],
+    ['External provider evidence', providerSubmitExternalEvidencePresent ? 'Yes' : 'No'],
+    ['Request sent confirmed', providerSubmitReadBool(providerSubmitDiagnostic?.provider_request_sent_confirmed ?? providerSubmitDiagnostic?.providerRequestSentConfirmed) ? 'Yes' : 'No / unknown'],
+    ['Rail transaction ID', providerSubmitAcceptanceEvidencePresent ? (providerSubmitFirstText(providerSubmitDiagnostic?.rail_tx_id, providerSubmitDiagnostic?.railTxId) || 'None') : 'None'],
     ['Rail state', providerSubmitFirstText(providerSubmitDiagnostic?.rail_state, providerSubmitDiagnostic?.railState) || 'None'],
-    ['Automatic retry', providerSubmitAutomaticRetryDisplay],
+    ['Transfer event recorded', providerSubmitTransferEventRecorded ? 'Yes' : 'No'],
+    ['Active auth request', providerSubmitAuthPresent ? 'Present' : 'None'],
+    ['Safe automatic retry', providerSubmitAutomaticRetryDisplay],
     ['Manual resolution required', providerSubmitManualResolutionRequired ? 'Yes' : 'No'],
+    ['Recommended action', toText(providerSubmitDiagnostic?.recommended_action || providerSubmitDiagnostic?.recommendedAction || providerSubmitStatusCopy.action) || 'Check Revolut/bank before retry. If no payment was made, record manual no-payment confirmation.'],
     ['Local request ID', providerSubmitFirstText(providerSubmitDiagnostic?.request_id, providerSubmitDiagnostic?.requestId) || '—'],
     ['Local idempotency key', providerSubmitFirstText(providerSubmitDiagnostic?.idempotency_key, providerSubmitDiagnostic?.idempotencyKey) || '—']
   ] : [];
@@ -22877,7 +23155,7 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     if (!providerSubmitHasIssue) return '';
     const operationId = providerSubmitFirstText(providerSubmitDiagnostic?.operation_id, providerSubmitDiagnostic?.operationId);
     const rowKey = providerSubmitFirstText(providerSubmitDiagnostic?.chunk_id, providerSubmitDiagnostic?.chunkId, providerSubmitDiagnostic?.transfer_id, providerSubmitDiagnostic?.transferId, 'provider-submit-review');
-    const canResolveNoPayment = providerSubmitAcceptanceEvidencePresent === false && providerSubmitStatus !== 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && (providerSubmitManualResolutionAvailable || providerSubmitManualResolutionRequired);
+    const canResolveNoPayment = providerSubmitAcceptanceEvidencePresent === false && providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && providerSubmitManualResolutionRequired === true && !!operationId;
     return `
       <section class="payment-issue-provider-submit-card card" style="padding:12px;border:1px solid #facc15;background:#fffbeb;color:#713f12;">
         <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
@@ -22966,16 +23244,6 @@ They are not provider or bank transaction identifiers.</div>
               <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:blockedFunds:cancel" data-batch-id="${enc(batchId)}">Cancel/release payment</button>
             </div>
           </div>
-        </div>
-      </section>
-    `;
-  }
-
-  if (providerSubmitHasIssue && !manualPaidActionMode) {
-    return `
-      <section id="payment-issue-panel" class="payment-issue-panel payment-issue-provider-submit-mode">
-        <div style="display:flex; flex-direction:column; gap:10px;">
-          ${renderProviderSubmitDiagnosticCard()}
         </div>
       </section>
     `;
@@ -23237,7 +23505,7 @@ They are not provider or bank transaction identifiers.</div>
     `;
   }
 
-  const tableShouldRender = hasSelectableIssueRows || hasReturnedRows || hasRejectedRows || rows.some((row) => row && (isCancellableRow(row) || toUpper(row.issueKindForDisplay || '') === 'REVIEW'));
+  const tableShouldRender = providerSubmitHasIssue || hasSelectableIssueRows || hasReturnedRows || hasRejectedRows || rows.some((row) => row && (isCancellableRow(row) || toUpper(row.issueKindForDisplay || '') === 'REVIEW'));
   const issueRows = rows.filter((row) => row && !isManualPaidRow(row));
   const toolbarHtml = tableShouldRender ? `
     <div class="payment-issue-toolbar" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -23295,6 +23563,7 @@ They are not provider or bank transaction identifiers.</div>
   return `
     <section id="payment-issue-panel" class="payment-issue-panel payment-issue-status-mode">
       <div style="display:flex; flex-direction:column; gap:10px;">
+        ${providerSubmitHasIssue ? renderProviderSubmitDiagnosticCard() : ''}
         ${renderSummaryCard('Payment status', headlineText || 'Payment status', shortMessage, badgeClass)}
         ${toolbarHtml}
         ${tableShouldRender ? renderTable(issueRows) : ''}
@@ -23306,6 +23575,7 @@ They are not provider or bank transaction identifiers.</div>
     </section>
   `;
 }
+
 
 function renderBankingNavAlertPopover(attentionState) {
   const providedState = (attentionState && typeof attentionState === 'object') ? attentionState : {};
@@ -23481,15 +23751,23 @@ function renderBankingNavAlertPopover(attentionState) {
     const payload = (alert.payload_json && typeof alert.payload_json === 'object' && !Array.isArray(alert.payload_json))
       ? alert.payload_json
       : ((alert.alert_payload_json && typeof alert.alert_payload_json === 'object' && !Array.isArray(alert.alert_payload_json)) ? alert.alert_payload_json : {});
-    const kind = toUpper(alert.alert_kind || alert.kind || alert.issue_kind || alert.banking_alert_kind || payload.issue_kind);
+    const kind = toUpper(alert.alert_kind || alert.kind || alert.issue_kind || alert.banking_alert_kind || payload.issue_kind || payload.alert_kind);
     const isBlockedFunds = kind === 'BLOCKED_FUNDS';
-    const payBatchId = firstNonBlank(alert.pay_batch_id, alert.payBatchId, alert.entity_id, alert.entityId, payload.pay_batch_id);
+    const isProviderSubmitReview = kind === 'PAYMENT_PROVIDER_SUBMIT_REVIEW';
+    const severity = toUpper(alert.severity || alert.alert_severity || alert.banking_alert_severity || payload.severity || payload.alert_severity || '');
+    const severityRank = Number(alert.severity_rank ?? alert.alert_severity_rank ?? payload.severity_rank ?? payload.alert_severity_rank ?? 0);
+    const usesCriticalVisual = !!(isBlockedFunds || isProviderSubmitReview || severity === 'CRITICAL' || severityRank >= 90);
+    const payBatchId = firstNonBlank(alert.pay_batch_id, alert.payBatchId, alert.entity_id, alert.entityId, payload.pay_batch_id, payload.payBatchId);
+    const batchReference = firstNonBlank(alert.batch_reference, alert.batchReference, alert.pay_batch_reference, alert.payBatchReference, payload.batch_reference, payload.batchReference, payload.pay_batch_reference, payload.payBatchReference, shortBatchId(payBatchId));
     const fingerprint = firstNonBlank(alert.alert_fingerprint, alert.fingerprint, alert.banking_alert_fingerprint, `fallback:${kind || 'UNKNOWN'}:${payBatchId || index}`);
     const entityKind = firstNonBlank(alert.entity_kind, alert.entityKind, payBatchId ? 'pay_batch' : '');
     const title = firstNonBlank(
       alert.title,
       alert.alert_title,
+      payload.title,
+      payload.alert_title,
       isBlockedFunds ? 'Bank rejected payment — blocked funds' : '',
+      isProviderSubmitReview ? 'Provider submission outcome unknown' : '',
       alert.label,
       alert.banking_alert_label,
       alert.alert_label,
@@ -23521,14 +23799,28 @@ function renderBankingNavAlertPopover(attentionState) {
       alert.reason,
       alert.banking_alert_reason,
       alert.alert_reason,
+      payload.description,
+      payload.reason,
+      payload.banking_alert_reason,
+      payload.alert_reason,
       isBlockedFunds ? fundsLine : '',
+      isProviderSubmitReview ? 'Submit chunk became stale with no provider response, transfer event, rail transaction ID, or rail state.' : '',
       'This Banking issue needs attention.'
     );
     const actionGuidance = firstNonBlank(
+      alert.action_label,
+      alert.actionLabel,
       alert.action_guidance,
       alert.actionGuidance,
       alert.guidance,
+      payload.action_label,
+      payload.actionLabel,
+      payload.action_guidance,
+      payload.actionGuidance,
+      payload.recommended_action,
+      payload.recommendedAction,
       isBlockedFunds ? 'No bank payment was submitted. Fund the account and retry, or cancel/release the batch.' : '',
+      isProviderSubmitReview ? 'Check Revolut/bank before retry. If no payment was made, record manual no-payment confirmation.' : '',
       'Open the batch to review the issue.'
     );
     const payloadForAttr = (() => {
@@ -23539,10 +23831,11 @@ function renderBankingNavAlertPopover(attentionState) {
       <div class="banking-nav-alert-popover-row" data-alert-fingerprint="${enc(fingerprint)}" style="padding:10px 0;border-top:${index === 0 ? '0' : '1px solid var(--line,#e5e7eb)'};">
         <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
           <div style="min-width:0;flex:1;">
-            <div style="font-weight:800;color:${isBlockedFunds ? '#991b1b' : '#111827'};font-size:13px;">${enc(title)}</div>
-            ${payBatchId ? `<div class="mini" style="margin-top:2px;opacity:.86;">Pay batch <span class="mono">${enc(shortBatchId(payBatchId))}</span></div>` : ''}
+            <div style="font-weight:800;color:${usesCriticalVisual ? '#991b1b' : '#111827'};font-size:13px;">${enc(title)}</div>
+            ${batchReference ? `<div class="mini" style="margin-top:2px;opacity:.86;">Pay batch <span class="mono">${enc(batchReference)}</span></div>` : ''}
             ${description ? `<div class="mini" style="margin-top:5px;white-space:normal;">${enc(description)}</div>` : ''}
             ${fundsLine && !description.includes(fundsLine) ? `<div class="mini" style="margin-top:5px;font-weight:700;color:#991b1b;">${enc(fundsLine)}</div>` : ''}
+            ${isProviderSubmitReview && severity ? `<div class="mini" style="margin-top:4px;font-weight:700;color:#991b1b;">Severity: ${enc(severity.toLowerCase())}</div>` : ''}
             ${providerLine ? `<div class="mini" style="margin-top:4px;opacity:.86;">Provider/env: <span class="mono">${enc(providerLine)}</span></div>` : ''}
             ${formattedTimestamp ? `<div class="mini" style="margin-top:4px;opacity:.86;">Last funds checked ${enc(formattedTimestamp)}</div>` : ''}
             ${actionGuidance ? `<div class="mini" style="margin-top:6px;white-space:normal;">${enc(actionGuidance)}</div>` : ''}
@@ -24006,12 +24299,15 @@ function attachBankingNavAlertPopoverHandlers() {
 
     try {
       if (typeof openBankingPayBatchChildModal === 'function') {
+        const normalizedAlertKind = String(alertKind || '').trim().toUpperCase();
+        const opensPaymentIssues = normalizedAlertKind === 'BLOCKED_FUNDS' || normalizedAlertKind === 'PAYMENT_PROVIDER_SUBMIT_REVIEW';
         await openBankingPayBatchChildModal(id, {
-          activeTabKey: String(alertKind || '').trim().toUpperCase() === 'BLOCKED_FUNDS' ? 'payment_issues' : 'overview',
+          activeTabKey: opensPaymentIssues ? 'payment_issues' : 'overview',
           source: 'banking_nav_alert_popover',
-          focusPaymentIssuePanel: String(alertKind || '').trim().toUpperCase() === 'BLOCKED_FUNDS'
+          focusPaymentIssuePanel: opensPaymentIssues,
+          focusProviderSubmitReview: normalizedAlertKind === 'PAYMENT_PROVIDER_SUBMIT_REVIEW'
         });
-        if (String(alertKind || '').trim().toUpperCase() === 'BLOCKED_FUNDS') {
+        if (opensPaymentIssues) {
           setTimeout(() => {
             try { document.getElementById('payment-issue-panel')?.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch {}
           }, 0);
@@ -24139,6 +24435,10 @@ function attachBankingNavAlertPopoverHandlers() {
     window.__bankingNavAlertPopoverHandlersAttached = false;
   };
 }
+
+
+
+
 
 function applyAlertSummaryToState(responsePayload) {
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -47960,6 +48260,7 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
 
 
 
+
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -49209,16 +49510,158 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     return false;
   };
 
+  const providerSubmitObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+
+  const providerSubmitText = (value) => String(value == null ? '' : value).trim();
+
+  const providerSubmitCollectDiagnosticSources = (diagnostic) => {
+    const root = providerSubmitObject(diagnostic);
+    const railMeta = providerSubmitObject(root.rail_meta_json || root.railMetaJson);
+    const rawPayload = providerSubmitObject(root.raw_payload || root.rawPayload);
+    const directDiagnostic = providerSubmitObject(root.provider_submit_diagnostic || root.providerSubmitDiagnostic);
+    const railDiagnostic = providerSubmitObject(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic);
+    const rawDiagnostic = providerSubmitObject(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic);
+    const providerResponse = providerSubmitObject(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson);
+    const rawProviderResponse = providerSubmitObject(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson);
+    return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
+      .filter((obj) => obj && Object.keys(obj).length);
+  };
+
+  const providerSubmitGetFirstText = (source, keys = []) => {
+    const obj = providerSubmitObject(source);
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+      const text = providerSubmitText(obj[key]);
+      if (text) return text;
+    }
+    return '';
+  };
+
   const providerSubmitStatusFromDiagnostic = (diagnostic) => {
-    const d = (diagnostic && typeof diagnostic === 'object' && !Array.isArray(diagnostic)) ? diagnostic : {};
-    return String(d.provider_submission_status || d.providerSubmissionStatus || d.outcome_code || d.outcomeCode || '').trim().toUpperCase();
+    for (const obj of providerSubmitCollectDiagnosticSources(diagnostic)) {
+      const status = providerSubmitGetFirstText(obj, [
+        'provider_submission_status',
+        'providerSubmissionStatus',
+        'outcome_code',
+        'outcomeCode'
+      ]).toUpperCase();
+      if (status) return status;
+    }
+    return '';
+  };
+
+  const providerSubmitReviewReasonFromDiagnostic = (diagnostic) => {
+    for (const obj of providerSubmitCollectDiagnosticSources(diagnostic)) {
+      const reason = providerSubmitGetFirstText(obj, [
+        'review_reason_code',
+        'reviewReasonCode',
+        'provider_submit_review_reason_code',
+        'providerSubmitReviewReasonCode',
+        'claim_blocker_code',
+        'claimBlockerCode'
+      ]).toUpperCase();
+      if (reason) return reason;
+    }
+    return '';
+  };
+
+  const providerSubmitLocalReferenceSet = (diagnostic) => {
+    const out = new Set();
+    const localKeys = [
+      'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
+      'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
+      'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
+      'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
+      'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
+      'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
+    ];
+    for (const obj of providerSubmitCollectDiagnosticSources(diagnostic)) {
+      for (const key of localKeys) {
+        const text = providerSubmitText(obj[key]);
+        if (text) out.add(text.toLowerCase());
+      }
+    }
+    return out;
+  };
+
+  const providerSubmitExternalIdentifierPresent = (diagnostic) => {
+    const localRefs = providerSubmitLocalReferenceSet(diagnostic);
+    const externalKeys = [
+      'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
+      'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
+      'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
+      'submission_id', 'submissionId', 'rail_submission_id', 'railSubmissionId',
+      'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
+      'provider_transfer_id', 'providerTransferId', 'external_transfer_id', 'externalTransferId',
+      'external_reference', 'externalReference', 'bank_reference', 'bankReference',
+      'transaction_id', 'transactionId', 'payment_id', 'paymentId'
+    ];
+    for (const obj of providerSubmitCollectDiagnosticSources(diagnostic)) {
+      for (const key of externalKeys) {
+        const text = providerSubmitText(obj[key]);
+        if (!text) continue;
+        if (localRefs.has(text.toLowerCase())) continue;
+        return true;
+      }
+    }
+    return false;
   };
 
   const providerSubmitHasAcceptanceEvidence = (diagnostic) => {
-    const d = (diagnostic && typeof diagnostic === 'object' && !Array.isArray(diagnostic)) ? diagnostic : {};
-    return readProviderSubmitBool(d.provider_acceptance_evidence_present ?? d.providerAcceptanceEvidencePresent) === true ||
-      providerSubmitStatusFromDiagnostic(d) === 'PROVIDER_SUBMISSION_ACCEPTED' ||
-      !!String(d.rail_tx_id || d.railTxId || d.provider_transaction_id || d.providerTransactionId || '').trim();
+    return providerSubmitExternalIdentifierPresent(diagnostic);
+  };
+
+  const providerSubmitManualResolutionRequiredFrom = (...sources) => {
+    const manualStatuses = new Set([
+      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
+      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
+      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID'
+    ]);
+    const manualReasons = new Set([
+      'STALE_RUNNING_PROVIDER_SUBMIT_CHUNK',
+      'PROVIDER_REQUEST_SENT_NO_RESPONSE',
+      'PROVIDER_RESPONSE_MALFORMED',
+      'PROVIDER_RESPONSE_PRESENT_NO_EXTERNAL_ID'
+    ]);
+    for (const source of sources) {
+      for (const obj of providerSubmitCollectDiagnosticSources(source)) {
+        if (readProviderSubmitBool(obj.manual_resolution_required ?? obj.manualResolutionRequired) === true) return true;
+      }
+      if (manualStatuses.has(providerSubmitStatusFromDiagnostic(source))) return true;
+      if (manualReasons.has(providerSubmitReviewReasonFromDiagnostic(source))) return true;
+    }
+    return false;
+  };
+
+  const providerSubmitReviewIssuePresent = (...sources) => {
+    const providerIssueStatuses = new Set([
+      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
+      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
+      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
+      'PROVIDER_SUBMISSION_REJECTED',
+      'PROVIDER_SUBMISSION_ACCEPTED',
+      'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
+    ]);
+    const providerIssueKinds = new Set([
+      'PAYMENT_PROVIDER_SUBMIT_REVIEW',
+      'PROVIDER_SUBMIT_REVIEW',
+      'BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED'
+    ]);
+    for (const source of sources) {
+      for (const obj of providerSubmitCollectDiagnosticSources(source)) {
+        const issueKind = providerSubmitGetFirstText(obj, [
+          'issueKindForDisplay', 'issue_kind_for_display', 'issue_kind', 'issueKind',
+          'kind', 'type', 'alert_kind', 'alertKind', 'payment_issue_kind', 'paymentIssueKind'
+        ]).toUpperCase();
+        if (providerIssueKinds.has(issueKind)) return true;
+        if (readProviderSubmitBool(obj.provider_submit_review_issue ?? obj.providerSubmitReviewIssue) === true) return true;
+      }
+      if (providerSubmitManualResolutionRequiredFrom(source)) return true;
+      if (providerIssueStatuses.has(providerSubmitStatusFromDiagnostic(source))) return true;
+    }
+    return false;
   };
 
   const showProviderSubmitResolutionNotice = async ({ title, message, confirmClass = 'btn btn-primary' } = {}) => {
@@ -52072,7 +52515,22 @@ const retryBlockedFundsPipeline = async () => {
                     ((issueState.provider_submit_diagnostic && typeof issueState.provider_submit_diagnostic === 'object' && !Array.isArray(issueState.provider_submit_diagnostic)) ? issueState.provider_submit_diagnostic : {})))
               );
 
-              if (providerSubmitHasAcceptanceEvidence(diagnostic)) {
+              const providerSubmitResolutionContext = {
+                ...issueState,
+                ...row,
+                provider_submit_diagnostic: diagnostic
+              };
+
+              if (!providerSubmitReviewIssuePresent(providerSubmitResolutionContext, diagnostic, row, issueState)) {
+                await showProviderSubmitResolutionNotice({
+                  title: 'Provider review cannot be resolved',
+                  message: 'Provider-submit review issue is missing. Refresh the batch and try again.',
+                  confirmClass: 'btn btn-primary'
+                });
+                return;
+              }
+
+              if (providerSubmitHasAcceptanceEvidence(providerSubmitResolutionContext)) {
                 await showProviderSubmitResolutionNotice({
                   title: 'Provider acceptance evidence exists',
                   message: 'Provider acceptance evidence exists. Manual reconciliation is required before retry.',
@@ -52094,6 +52552,15 @@ const retryBlockedFundsPipeline = async () => {
                 await showProviderSubmitResolutionNotice({
                   title: 'Provider review cannot be resolved',
                   message: 'Operation ID is missing. Refresh the batch and try again.',
+                  confirmClass: 'btn btn-primary'
+                });
+                return;
+              }
+
+              if (!providerSubmitManualResolutionRequiredFrom(providerSubmitResolutionContext, diagnostic, row, issueState)) {
+                await showProviderSubmitResolutionNotice({
+                  title: 'Provider review cannot be resolved',
+                  message: 'Manual no-payment confirmation is not required for this provider-submit issue. Refresh the batch and review the latest payment state.',
                   confirmClass: 'btn btn-primary'
                 });
                 return;
@@ -53071,7 +53538,6 @@ const retryBlockedFundsPipeline = async () => {
 
 
 
-
 function openBulkTimesheetActionProgressModal(options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -53619,6 +54085,61 @@ function renderBankingPayBatchChildModalOverview() {
     return '';
   };
 
+  const providerSubmitEvidenceSources = (value) => {
+    const root = asObj(value) || {};
+    const railMeta = asObj(root.rail_meta_json || root.railMetaJson) || {};
+    const rawPayload = asObj(root.raw_payload || root.rawPayload) || {};
+    const directDiagnostic = asObj(root.provider_submit_diagnostic || root.providerSubmitDiagnostic) || {};
+    const railDiagnostic = asObj(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic) || {};
+    const rawDiagnostic = asObj(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic) || {};
+    const providerResponse = asObj(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson) || {};
+    const rawProviderResponse = asObj(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson) || {};
+    return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
+      .filter((obj) => obj && Object.keys(obj).length);
+  };
+
+  const providerSubmitLocalReferenceSet = (value) => {
+    const out = new Set();
+    const localKeys = [
+      'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
+      'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
+      'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
+      'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
+      'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
+      'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
+    ];
+    for (const obj of providerSubmitEvidenceSources(value)) {
+      for (const key of localKeys) {
+        const text = trimStr(obj[key]);
+        if (text) out.add(text.toLowerCase());
+      }
+    }
+    return out;
+  };
+
+  const providerSubmitStrictExternalEvidencePresent = (value) => {
+    const localRefs = providerSubmitLocalReferenceSet(value);
+    const externalKeys = [
+      'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
+      'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
+      'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
+      'submission_id', 'submissionId', 'rail_submission_id', 'railSubmissionId',
+      'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
+      'provider_transfer_id', 'providerTransferId', 'external_transfer_id', 'externalTransferId',
+      'external_reference', 'externalReference', 'bank_reference', 'bankReference',
+      'transaction_id', 'transactionId', 'payment_id', 'paymentId'
+    ];
+    for (const obj of providerSubmitEvidenceSources(value)) {
+      for (const key of externalKeys) {
+        const text = trimStr(obj[key]);
+        if (!text) continue;
+        if (localRefs.has(text.toLowerCase())) continue;
+        return true;
+      }
+    }
+    return false;
+  };
+
   const extractProviderSubmitDiagnosticFromOverviewData = (dataPayload) => {
     const d = asObj(dataPayload) || {};
     const out = {};
@@ -53664,8 +54185,20 @@ function renderBankingPayBatchChildModalOverview() {
       put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
       put('request_id', readFirst(source, ['request_id', 'requestId']));
       put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
+      put('local_provider_request_id', readFirst(source, ['local_provider_request_id', 'localProviderRequestId']));
       put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
       put('rail_state', readFirst(source, ['rail_state', 'railState']));
+      put('provider_transaction_id', readFirst(source, ['provider_transaction_id', 'providerTransactionId']));
+      put('provider_payment_id', readFirst(source, ['provider_payment_id', 'providerPaymentId']));
+      put('provider_event_id', readFirst(source, ['provider_event_id', 'providerEventId']));
+      put('provider_reference', readFirst(source, ['provider_reference', 'providerReference']));
+      put('provider_submission_id', readFirst(source, ['provider_submission_id', 'providerSubmissionId']));
+      put('external_payment_id', readFirst(source, ['external_payment_id', 'externalPaymentId']));
+      put('revolut_payment_id', readFirst(source, ['revolut_payment_id', 'revolutPaymentId']));
+      put('external_reference', readFirst(source, ['external_reference', 'externalReference']));
+      put('bank_reference', readFirst(source, ['bank_reference', 'bankReference']));
+      put('transaction_id', readFirst(source, ['transaction_id', 'transactionId']));
+      put('payment_id', readFirst(source, ['payment_id', 'paymentId']));
       put('operation_id', readFirst(source, ['operation_id', 'operationId']));
       put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
       put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
@@ -53694,7 +54227,7 @@ function renderBankingPayBatchChildModalOverview() {
       mergeProviderSubmitSource(item.providerSubmitDiagnostic);
     }
     if (!Object.keys(out).length) return null;
-    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.rail_state || out.request_id || out.idempotency_key || out.recommended_action);
+    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.rail_state || out.provider_transaction_id || out.provider_payment_id || out.provider_event_id || out.provider_reference || out.provider_submission_id || out.external_payment_id || out.revolut_payment_id || out.external_reference || out.bank_reference || out.transaction_id || out.payment_id || out.request_id || out.idempotency_key || out.local_provider_request_id || out.recommended_action);
     if (!hasProviderSubmitContext) return null;
     if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
       out.manual_resolution_required = false;
@@ -53716,6 +54249,7 @@ function renderBankingPayBatchChildModalOverview() {
       'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
       'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
       'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
       'PROVIDER_SUBMISSION_REJECTED',
       'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL',
       'PROVIDER_SUBMISSION_ACCEPTED',
@@ -53723,34 +54257,39 @@ function renderBankingPayBatchChildModalOverview() {
     ].includes(status);
     if (!hasIssue) return { hasIssue: false, diagnostic, status };
 
-    const accepted = readProviderSubmitBool(diagnostic.provider_acceptance_evidence_present ?? diagnostic.providerAcceptanceEvidencePresent) || status === 'PROVIDER_SUBMISSION_ACCEPTED' || !!firstProviderSubmitText(diagnostic.rail_tx_id, diagnostic.railTxId, diagnostic.provider_transaction_id, diagnostic.providerTransactionId, diagnostic.provider_reference, diagnostic.providerReference);
+    const accepted = providerSubmitStrictExternalEvidencePresent(diagnostic);
+    if (diagnostic) diagnostic.provider_acceptance_evidence_present = accepted;
     let headline = 'Provider submission outcome unknown';
-    let summary = 'Provider submission outcome unknown.';
-    let action = 'Check Revolut/bank before retry. If no money moved, record manual no-payment confirmation.';
+    let summary = 'Submit chunk became stale with no provider response, transfer event, rail transaction ID, or rail state.';
+    let action = 'Manual Revolut/bank check required before retry.';
     if (status === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME') {
-      headline = 'Provider request may have been sent';
-      summary = 'Provider request may have been sent.';
-      action = 'Reconcile with Revolut/bank before retry.';
-    } else if (status === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE') {
-      headline = 'Provider returned an unusable response';
-      summary = 'Provider returned an unusable response.';
-      action = 'Reconcile with Revolut/bank before retry.';
+      headline = 'Provider response missing';
+      summary = 'A provider request may have been sent, but no usable response was recorded.';
+      action = 'Check Revolut/bank before retry.';
+    } else if (status === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE' || status === 'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID') {
+      headline = 'Provider response unusable';
+      summary = 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.';
+      action = 'Reconcile with provider/bank before retry.';
     } else if (status === 'PROVIDER_SUBMISSION_REJECTED') {
       headline = 'Provider rejected payment';
       summary = 'Provider rejected the payment submission.';
-      action = 'Review provider error and correct before retry.';
+      action = 'Review provider error.';
     } else if (status === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL') {
       headline = 'Provider was not called';
-      summary = 'Provider was not called.';
-      action = 'Retry may be available after safe cleanup.';
+      summary = 'Submission failed before the provider payment request was sent.';
+      action = 'Retry after local blocker is cleared.';
     } else if (status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
       headline = 'Manual no-payment confirmation recorded';
       summary = 'Manual no-payment confirmation recorded.';
       action = 'Batch can be retried if safe retry is available.';
-    } else if (status === 'PROVIDER_SUBMISSION_ACCEPTED' || accepted) {
+    } else if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && accepted) {
       headline = 'Provider acceptance evidence present';
-      summary = 'Provider acceptance evidence present.';
+      summary = 'Provider acceptance evidence exists. Do not retry unless reconciled.';
       action = 'Do not retry unless reconciled.';
+    } else if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && !accepted) {
+      headline = 'Provider response unusable';
+      summary = 'Provider accepted status was recorded, but no usable external provider transaction/reference was stored.';
+      action = 'Reconcile with provider/bank before retry.';
     }
     return { hasIssue, diagnostic, status, headline, summary, action, accepted };
   };
@@ -126386,7 +126925,6 @@ function bulkAuthoriseHasProcessedExpensesValue(ctxInput) {
   return !!(hasTimesheetAnchor && (numericDetected || descriptionDetected || stagedDetected));
 }
 
-
 function normaliseBankingPayOperationProgress(operationPayload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const upperTrim = (value) => trimStr(value).toUpperCase();
@@ -126500,6 +127038,44 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
       }
       return '';
     };
+    const strictExternalEvidencePresent = (normalised) => {
+      const localRefs = new Set();
+      const addLocal = (value) => {
+        const text = trimStr(value);
+        if (text) localRefs.add(text.toLowerCase());
+      };
+      const sourceObjects = [source, normalised]
+        .filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+      const localKeys = [
+        'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
+        'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
+        'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
+        'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
+        'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
+        'reference', 'referenceId', 'local_reference', 'localReference', 'provider_request_reference', 'providerRequestReference',
+        'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
+      ];
+      const externalKeys = [
+        'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
+        'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
+        'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
+        'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
+        'external_reference', 'externalReference', 'bank_reference', 'bankReference',
+        'transaction_id', 'transactionId', 'payment_id', 'paymentId'
+      ];
+      for (const obj of sourceObjects) {
+        for (const key of localKeys) addLocal(obj[key]);
+      }
+      for (const obj of sourceObjects) {
+        for (const key of externalKeys) {
+          const text = trimStr(obj[key]);
+          if (!text) continue;
+          if (localRefs.has(text.toLowerCase())) continue;
+          return true;
+        }
+      }
+      return false;
+    };
     const out = {
       provider_submission_status: firstText(source.provider_submission_status, source.providerSubmissionStatus, source.outcome_code, source.outcomeCode),
       review_reason_code: firstText(source.review_reason_code, source.reviewReasonCode, source.provider_submit_review_reason_code, source.providerSubmitReviewReasonCode),
@@ -126510,8 +127086,11 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
       safe_retry_available: ['safe_retry_available', 'safeRetryAvailable'],
       provider_acceptance_evidence_present: ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent'],
       provider_response_present: ['provider_response_present', 'providerResponsePresent'],
+      provider_external_evidence_present: ['provider_external_evidence_present', 'providerExternalEvidencePresent'],
       stale_submit_chunk: ['stale_submit_chunk', 'staleSubmitChunk'],
+      provider_called: ['provider_called', 'providerCalled'],
       provider_request_sent: ['provider_request_sent', 'providerRequestSent'],
+      provider_request_sent_confirmed: ['provider_request_sent_confirmed', 'providerRequestSentConfirmed'],
       provider_response_received: ['provider_response_received', 'providerResponseReceived'],
       provider_submission_attempted: ['provider_submission_attempted', 'providerSubmissionAttempted'],
       provider_submission_unknown: ['provider_submission_unknown', 'providerSubmissionUnknown', 'provider_unknown', 'providerUnknown']
@@ -126525,13 +127104,33 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
         }
       }
     }
-    for (const key of ['generated_at_utc', 'provider_call_stage', 'rail_provider', 'rail_env', 'rail_tx_id', 'rail_state', 'request_id', 'idempotency_key', 'provider_error_code', 'provider_error_message_redacted']) {
+    for (const key of ['generated_at_utc', 'provider_call_stage', 'rail_provider', 'rail_env', 'rail_tx_id', 'rail_state', 'provider_transaction_id', 'provider_reference', 'provider_state', 'request_id', 'idempotency_key', 'provider_request_dispatched_at_utc', 'response_received_at_utc', 'provider_error_code', 'provider_error_message_redacted']) {
       if (trimStr(source[key])) out[key] = trimStr(source[key]);
+    }
+    const statusUpper = upperTrim(out.provider_submission_status || '');
+    const rejectedOrUnusable = [
+      'PROVIDER_SUBMISSION_REJECTED',
+      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
+      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
+      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
+      'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
+    ].includes(statusUpper);
+    const hasExternalEvidence = strictExternalEvidencePresent(out) === true;
+    out.provider_external_evidence_present = hasExternalEvidence;
+    out.provider_acceptance_evidence_present = statusUpper === 'PROVIDER_SUBMISSION_ACCEPTED' && hasExternalEvidence === true && rejectedOrUnusable !== true;
+    if (out.provider_acceptance_evidence_present !== true) out.rail_tx_id = '';
+    if (hasExternalEvidence !== true) {
+      out.provider_transaction_id = '';
+      out.provider_reference = '';
     }
     return Object.fromEntries(Object.entries(out).filter(([, value]) => value !== '' && value !== null && value !== undefined));
   };
-  const providerSubmitStatusText = (statusValue) => {
+  const providerSubmitStatusText = (statusValue, acceptanceEvidencePresent = false) => {
     const statusKey = upperTrim(statusValue);
+    if (statusKey === 'PROVIDER_SUBMISSION_ACCEPTED' && acceptanceEvidencePresent !== true) {
+      return 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.';
+    }
     const messages = {
       PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK: 'Provider submission outcome unknown — manual Revolut/bank check required.',
       UNKNOWN_PROVIDER_SUBMISSION_OUTCOME: 'Provider request may have been sent, but no usable response was recorded.',
@@ -126550,7 +127149,7 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
   const providerSubmitDiagnostic = normaliseProviderSubmitDiagnostic(extractProviderSubmitDiagnostic(src));
   const providerSubmissionStatus = upperTrim(providerSubmitDiagnostic.provider_submission_status || '');
   const providerSubmitReviewReasonCode = upperTrim(providerSubmitDiagnostic.review_reason_code || '');
-  const providerSubmitReviewText = providerSubmitStatusText(providerSubmissionStatus);
+  const providerSubmitReviewText = providerSubmitStatusText(providerSubmissionStatus, providerSubmitDiagnostic.provider_acceptance_evidence_present === true);
 
   const operationId = trimStr(src.operation_id || src.id || progress.operation_id || '');
   const operationType = upperTrim(src.operation_type || progress.operation_type || '');
@@ -126809,10 +127408,16 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     manual_resolution_required: providerSubmitDiagnostic.manual_resolution_required === true,
     safe_retry_available: providerSubmitDiagnostic.safe_retry_available === true,
     recommended_action: trimStr(providerSubmitDiagnostic.recommended_action) || null,
+    provider_called: providerSubmitDiagnostic.provider_called === true,
+    provider_request_sent: providerSubmitDiagnostic.provider_request_sent === true,
+    provider_request_sent_confirmed: providerSubmitDiagnostic.provider_request_sent_confirmed === true,
+    provider_request_dispatched_at_utc: trimStr(providerSubmitDiagnostic.provider_request_dispatched_at_utc) || null,
+    provider_response_present: providerSubmitDiagnostic.provider_response_present === true,
+    provider_external_evidence_present: providerSubmitDiagnostic.provider_external_evidence_present === true,
+    provider_acceptance_evidence_present: providerSubmitDiagnostic.provider_acceptance_evidence_present === true,
     raw_payload: src
   };
 }
-
 
 
 function openBankingPayOperationProgressModal(options = {}) {
@@ -127800,8 +128405,70 @@ async function bankingPayApplyExecutePaymentResult(finalOperationResult, options
     out.review_reason_code = upperTrim(out.review_reason_code || out.reviewReasonCode || out.provider_submit_review_reason_code || out.providerSubmitReviewReasonCode || '');
     out.manual_resolution_required = readProviderBool(out.manual_resolution_required ?? out.manualResolutionRequired) === true;
     out.safe_retry_available = readProviderBool(out.safe_retry_available ?? out.safeRetryAvailable) === true;
-    out.provider_acceptance_evidence_present = readProviderBool(out.provider_acceptance_evidence_present ?? out.providerAcceptanceEvidencePresent) === true;
+    out.provider_external_evidence_present = readProviderBool(out.provider_external_evidence_present ?? out.providerExternalEvidencePresent) === true;
     out.provider_response_present = readProviderBool(out.provider_response_present ?? out.providerResponsePresent) === true;
+    out.provider_called = readProviderBool(out.provider_called ?? out.providerCalled) === true;
+    out.provider_request_sent = readProviderBool(out.provider_request_sent ?? out.providerRequestSent) === true;
+    out.provider_request_sent_confirmed = readProviderBool(out.provider_request_sent_confirmed ?? out.providerRequestSentConfirmed) === true;
+    out.provider_request_dispatched_at_utc = trimStr(out.provider_request_dispatched_at_utc || out.providerRequestDispatchedAtUtc || out.request_sent_at_utc || out.requestSentAtUtc || '') || null;
+    out.provider_transaction_id = trimStr(out.provider_transaction_id || out.providerTransactionId || out.provider_payment_id || out.providerPaymentId || out.transaction_id || out.transactionId || '') || null;
+    out.provider_reference = trimStr(out.provider_reference || out.providerReference || out.external_reference || out.externalReference || out.bank_reference || out.bankReference || '') || null;
+    out.rail_tx_id = trimStr(out.rail_tx_id || out.railTxId || '') || null;
+    const strictExternalEvidencePresent = (() => {
+      const localRefs = new Set();
+      const addLocal = (value) => {
+        const text = trimStr(value);
+        if (text) localRefs.add(text.toLowerCase());
+      };
+      const localKeys = [
+        'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
+        'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
+        'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
+        'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
+        'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
+        'reference', 'referenceId', 'local_reference', 'localReference', 'provider_request_reference', 'providerRequestReference',
+        'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
+      ];
+      const externalKeys = [
+        'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
+        'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
+        'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
+        'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
+        'external_reference', 'externalReference', 'bank_reference', 'bankReference',
+        'transaction_id', 'transactionId', 'payment_id', 'paymentId'
+      ];
+      for (const obj of [source, out]) {
+        if (!isPlainObject(obj)) continue;
+        for (const key of localKeys) addLocal(obj[key]);
+      }
+      for (const obj of [source, out]) {
+        if (!isPlainObject(obj)) continue;
+        for (const key of externalKeys) {
+          const text = trimStr(obj[key]);
+          if (!text) continue;
+          if (localRefs.has(text.toLowerCase())) continue;
+          return true;
+        }
+      }
+      return false;
+    })();
+    const statusUpper = out.provider_submission_status;
+    const rejectedOrUnusable = [
+      'PROVIDER_SUBMISSION_REJECTED',
+      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
+      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
+      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
+      'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
+    ].includes(statusUpper);
+    const hasExternalEvidence = strictExternalEvidencePresent === true;
+    out.provider_external_evidence_present = hasExternalEvidence;
+    out.provider_acceptance_evidence_present = statusUpper === 'PROVIDER_SUBMISSION_ACCEPTED' && hasExternalEvidence === true && rejectedOrUnusable !== true;
+    if (out.provider_acceptance_evidence_present !== true) out.rail_tx_id = null;
+    if (hasExternalEvidence !== true) {
+      out.provider_transaction_id = null;
+      out.provider_reference = null;
+    }
     out.recommended_action = trimStr(out.recommended_action || out.recommendedAction || '') || null;
     return out;
   };
@@ -127813,10 +128480,26 @@ async function bankingPayApplyExecutePaymentResult(finalOperationResult, options
     target.manual_resolution_required = diagnostic.manual_resolution_required === true;
     target.safe_retry_available = diagnostic.safe_retry_available === true;
     target.recommended_action = diagnostic.recommended_action || null;
-    target.payment_provider_review_required = target.review_required === true;
-    if (target.review_required === true) {
+    target.provider_request_sent_confirmed = diagnostic.provider_request_sent_confirmed === true;
+    target.provider_request_dispatched_at_utc = diagnostic.provider_request_dispatched_at_utc || null;
+    target.provider_external_evidence_present = diagnostic.provider_external_evidence_present === true;
+    target.provider_acceptance_evidence_present = diagnostic.provider_acceptance_evidence_present === true;
+    const diagnosticStatus = upperTrim(diagnostic.provider_submission_status || '');
+    const diagnosticReviewRequired = diagnostic.manual_resolution_required === true || [
+      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
+      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
+      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
+      'PROVIDER_SUBMISSION_REJECTED',
+      'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
+    ].includes(diagnosticStatus) || (diagnosticStatus === 'PROVIDER_SUBMISSION_ACCEPTED' && diagnostic.provider_acceptance_evidence_present !== true);
+    target.payment_provider_review_required = diagnosticReviewRequired === true || target.review_required === true;
+    if (diagnosticReviewRequired === true || target.review_required === true) {
+      target.review_required = true;
       target.submitted_to_bank = diagnostic.provider_acceptance_evidence_present === true;
       target.post_execution_status = 'REVIEW_REQUIRED';
+    } else if (Object.keys(diagnostic).length) {
+      target.submitted_to_bank = target.submitted_to_bank === true && diagnostic.provider_acceptance_evidence_present === true;
     }
     return target;
   };
@@ -127944,6 +128627,7 @@ async function bankingPayApplyExecutePaymentResult(finalOperationResult, options
 
   return normalisedResult;
 }
+
 
 async function bankingPayApplyCreateDraftResult(finalDraftOperationResult, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
@@ -133964,10 +134648,6 @@ function renderBulkProcessPreviewPane(state) {
 }
 
 
-
-
-
-
 async function openBulkProcessWorkbench(seed = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][OPEN]');
   GC('openBulkProcessWorkbench');
@@ -134160,6 +134840,8 @@ async function openBulkProcessWorkbench(seed = {}) {
 
     return '';
   };
+
+  const bulkProcessUpper = (value) => trimStr(value).toUpperCase();
 
   const normaliseSeedPatchRow = (patchLike) => {
     const patch = (patchLike && typeof patchLike === 'object' && !Array.isArray(patchLike)) ? deep(patchLike) : null;
@@ -134505,7 +135187,7 @@ async function openBulkProcessWorkbench(seed = {}) {
       active_attached_id: null,
       active_attached_item: null,
       active_attached_pdf_page: 1,
-      pending_attach_kind: 'TIMESHEET',
+      pending_attach_kind: '',
       __queue_loaded: false,
       __queue_loaded_scope: 'global:QUEUED',
       __queue_scope: 'global:QUEUED',
@@ -134590,8 +135272,6 @@ async function openBulkProcessWorkbench(seed = {}) {
     }
     return map;
   };
-
-  const bulkProcessUpper = (value) => trimStr(value).toUpperCase();
 
   const getBulkProcessRowIdentityKeyOpen = (rowLike = {}) => {
     const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
@@ -134707,10 +135387,11 @@ async function openBulkProcessWorkbench(seed = {}) {
 
   const normaliseBulkProcessEvidenceKindOpen = (value) => {
     const kind = bulkProcessUpper(value || '');
+    if (!kind) return '';
     if (kind === 'TS') return 'TIMESHEET';
     if (kind === 'MILES' || kind === 'MILE') return 'MILEAGE';
     if (kind === 'ACCOM') return 'ACCOMMODATION';
-    if (kind === 'EXPENSE' || kind === 'EXPENSES') return 'TRAVEL';
+    if (kind === 'EXPENSE' || kind === 'EXPENSES') return 'EXPENSE';
     return kind;
   };
 
@@ -134741,7 +135422,7 @@ async function openBulkProcessWorkbench(seed = {}) {
         parent.primary_artifact?.kind ||
         parent.artifact_hints?.primary_artifact?.kind ||
         ''
-      ) || 'OTHER';
+      ) || 'EVIDENCE';
       const contractWeekId = trimStr(
         candidate.contract_week_id ||
         candidate.contractWeekId ||
@@ -134767,6 +135448,17 @@ async function openBulkProcessWorkbench(seed = {}) {
         parent.current_timesheet_id ||
         parent.requested_timesheet_id ||
         parent.expected_timesheet_id ||
+        ''
+      );
+      const rowKey = trimStr(
+        candidate.row_key ||
+        candidate.rowKey ||
+        candidate.owner_row_key ||
+        candidate.ownerRowKey ||
+        meta.row_key ||
+        meta.rowKey ||
+        parent.row_key ||
+        parent.rowKey ||
         ''
       );
       const queueId = trimStr(
@@ -134817,6 +135509,7 @@ async function openBulkProcessWorkbench(seed = {}) {
         r2_key: fileKey || null,
         contract_week_id: contractWeekId || null,
         timesheet_id: timesheetId || null,
+        row_key: rowKey || null,
         is_staged_context: stagedContext,
         staged: stagedContext ? true : candidate.staged,
         status: candidate.status || (stagedContext ? 'STAGED' : candidate.status)
@@ -134846,15 +135539,18 @@ async function openBulkProcessWorkbench(seed = {}) {
         addOne({
           id: primaryId || primaryStorageKey,
           evidence_id: primaryId || null,
-          kind: primaryKind || 'OTHER',
-          evidence_kind: primaryKind || 'OTHER',
+          kind: primaryKind || 'EVIDENCE',
+          evidence_kind: primaryKind || 'EVIDENCE',
           display_name: container.primary_artifact_display_name || hints.primary_artifact_display_name || '',
           storage_key: primaryStorageKey || null,
           file_key: primaryStorageKey || null,
           download_storage_key: primaryStorageKey || null,
           r2_key: primaryStorageKey || null,
           contract_week_id: container.contract_week_id || container.contractWeekId || null,
-          timesheet_id: container.timesheet_id || container.current_timesheet_id || null
+          timesheet_id: container.timesheet_id || container.current_timesheet_id || null,
+          row_key: container.row_key || null,
+          __primary_artifact_fallback: true,
+          is_primary_artifact_fallback: true
         }, container);
         return true;
       }
@@ -134919,65 +135615,585 @@ async function openBulkProcessWorkbench(seed = {}) {
       if (!addedNested && !addedPrimary && looksLikeEvidenceItem) addOne(source, parent);
     };
     for (const source of sources) addSource(source);
-    return rows;
+    const realFileKeys = new Set(rows
+      .filter((row) => row && getBulkProcessEvidenceFileKeyOpen(row) && !isBulkProcessFallbackEvidenceRowOpen(row))
+      .map((row) => getBulkProcessEvidenceFileKeyOpen(row).toLowerCase())
+      .filter(Boolean));
+    return rows.filter((row) => {
+      const fileKey = getBulkProcessEvidenceFileKeyOpen(row).toLowerCase();
+      if (!fileKey) return false;
+      if (realFileKeys.has(fileKey) && isBulkProcessFallbackEvidenceRowOpen(row)) return false;
+      return true;
+    });
   };
 
-  const buildBulkProcessEvidenceAuthorityPatchOpen = (rowsInput = []) => {
-    const evidenceRows = normaliseBulkProcessEvidenceRowsOpen(rowsInput);
-    const kinds = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
+
+  const getBulkProcessEvidenceIdentityPartsOpen = (itemLike = {}) => {
+    const item = (itemLike && typeof itemLike === 'object') ? itemLike : {};
+    const meta = (item.meta_json && typeof item.meta_json === 'object') ? item.meta_json : {};
+    const rowKey = trimStr(
+      item.row_key || item.rowKey || item.owner_row_key || item.ownerRowKey || item.__row_key ||
+      item.bulk_process_row_key || item.bulkProcessRowKey || meta.row_key || meta.rowKey ||
+      meta.owner_row_key || meta.ownerRowKey || meta.bulk_process_row_key || meta.bulkProcessRowKey || ''
+    );
+    const tsId = trimStr(
+      item.current_timesheet_id || item.currentTimesheetId || item.timesheet_id || item.timesheetId ||
+      item.requested_timesheet_id || item.requestedTimesheetId || item.expected_timesheet_id || item.expectedTimesheetId ||
+      meta.current_timesheet_id || meta.currentTimesheetId || meta.timesheet_id || meta.timesheetId ||
+      meta.requested_timesheet_id || meta.requestedTimesheetId || meta.expected_timesheet_id || meta.expectedTimesheetId || ''
+    );
+    const cwId = trimStr(
+      item.contract_week_id || item.contractWeekId || item.current_contract_week_id || item.currentContractWeekId ||
+      item.week_id || item.weekId || meta.contract_week_id || meta.contractWeekId ||
+      meta.current_contract_week_id || meta.currentContractWeekId || meta.week_id || meta.weekId || ''
+    );
+    const queueId = trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || meta.manualQueueId || '');
+    const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || meta.timesheet_evidence_id || meta.timesheetEvidenceId || '');
+    const genericId = trimStr(item.id || item.row_id || item.rowId || meta.id || '');
+    const fileKey = getBulkProcessEvidenceFileKeyOpen(item);
+    const statusUpper = bulkProcessUpper(item.status || item.queue_status || meta.status || '');
+    const staged = !!(
+      item.is_staged_context === true || boolishOpen(item.is_staged_context) || boolishOpen(item.staged) || boolishOpen(item.is_staged) ||
+      boolishOpen(meta.staged) || statusUpper === 'STAGED' || hasOpenValue(item.staged_kind) || hasOpenValue(item.stagedKind) ||
+      hasOpenValue(meta.staged_kind) || hasOpenValue(meta.stagedKind) || (!!cwId && !tsId && !!queueId)
+    );
+    return {
+      rowKey,
+      tsId,
+      cwId,
+      queueId,
+      evidenceId,
+      genericId,
+      fileKey,
+      staged,
+      identity: rowKey || (tsId ? `timesheet:${tsId}` : (cwId ? `contract_week:${cwId}` : ''))
+    };
+  };
+
+  const bulkProcessEvidenceItemMatchesIdentityOpen = (itemLike = {}, rowIdentity = {}, matchOptions = {}) => {
+    const opts = (matchOptions && typeof matchOptions === 'object') ? matchOptions : {};
+    const item = getBulkProcessEvidenceIdentityPartsOpen(itemLike);
+    const expected = (rowIdentity && typeof rowIdentity === 'object') ? rowIdentity : getBulkProcessIdentityPartsFromRow(rowIdentity || {});
+    const expKey = trimStr(expected.rowKey || expected.row_key || expected.identity || '');
+    const expTs = trimStr(expected.tsId || expected.timesheet_id || expected.current_timesheet_id || '');
+    const expCw = trimStr(expected.cwId || expected.contract_week_id || '');
+    const keyTs = /^timesheet:/i.test(expKey) ? trimStr(expKey.replace(/^timesheet:/i, '')) : '';
+    const keyCw = /^contract_week:/i.test(expKey) ? trimStr(expKey.replace(/^contract_week:/i, '')) : '';
+    const wantedTs = expTs || keyTs;
+    const wantedCw = expCw || keyCw;
+    const hasExpected = !!(expKey || wantedTs || wantedCw);
+    const hasItemIdentity = !!(item.rowKey || item.tsId || item.cwId);
+    const requireFileKey = opts.requireFileKey !== false && opts.require_file_key !== false;
+    const allowUnknown = opts.allowUnknownIdentity === true || opts.allow_unknown_identity === true;
+    if (requireFileKey && !item.fileKey) return false;
+    if (!hasExpected) return allowUnknown ? !!item.fileKey : !hasItemIdentity;
+    if (!hasItemIdentity) return allowUnknown && !!item.fileKey;
+    if (item.staged && item.cwId && !item.tsId) return !!wantedCw && item.cwId === wantedCw;
+    if (item.rowKey && expKey) {
+      if (item.rowKey === expKey) return true;
+      if (/^timesheet:/i.test(item.rowKey)) return !!wantedTs && item.rowKey === `timesheet:${wantedTs}`;
+      if (/^contract_week:/i.test(item.rowKey)) return !!wantedCw && item.rowKey === `contract_week:${wantedCw}`;
+      return false;
+    }
+    if (item.rowKey && !expKey) {
+      if (/^timesheet:/i.test(item.rowKey)) return !!wantedTs && item.rowKey === `timesheet:${wantedTs}`;
+      if (/^contract_week:/i.test(item.rowKey)) return !!wantedCw && item.rowKey === `contract_week:${wantedCw}`;
+      return false;
+    }
+    if (wantedTs) return !!item.tsId && item.tsId === wantedTs;
+    if (wantedCw) return !!item.cwId && item.cwId === wantedCw && !item.tsId;
+    return false;
+  };
+
+  const filterBulkProcessEvidenceRowsForIdentityOpen = (rows, rowIdentity = {}, filterOptions = {}) => {
+    if (!Array.isArray(rows)) return [];
+    return rows.filter((item) => bulkProcessEvidenceItemMatchesIdentityOpen(item, rowIdentity, filterOptions));
+  };
+
+  const isBulkProcessFallbackEvidenceRowOpen = (itemLike = {}) => {
+    const item = (itemLike && typeof itemLike === 'object') ? itemLike : {};
+    return !!(
+      item.__primary_artifact_fallback === true || item.is_primary_artifact_fallback === true || item.primary_fallback === true ||
+      item.__synthetic_attached_fallback === true || item.is_synthetic_attached_fallback === true ||
+      /^synthetic-attached:/i.test(trimStr(item.id || item.evidence_id || item.queue_id || item.manual_timesheet_queue_id || ''))
+    );
+  };
+
+  const hasGenuineBulkProcessEvidenceIdentityOpen = (itemLike = {}) => {
+    const item = (itemLike && typeof itemLike === 'object') ? itemLike : {};
+    const parts = getBulkProcessEvidenceIdentityPartsOpen(item);
+    if (!parts.fileKey) return false;
+    if (isBulkProcessFallbackEvidenceRowOpen(item)) return false;
+    if (parts.evidenceId || parts.queueId) return true;
+    if (parts.genericId && parts.genericId !== parts.fileKey && !/^files\//i.test(parts.genericId)) return true;
+    return !!(parts.fileKey && (parts.rowKey || parts.tsId || parts.cwId));
+  };
+
+  const evidenceBadgeKnownOrderOpen = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
+
+  const sortEvidenceKindOpen = (left, right) => {
+    const l = normaliseBulkProcessEvidenceKindOpen(left);
+    const r = normaliseBulkProcessEvidenceKindOpen(right);
+    const li = evidenceBadgeKnownOrderOpen.indexOf(l);
+    const ri = evidenceBadgeKnownOrderOpen.indexOf(r);
+    const ls = li >= 0 ? li : 1000;
+    const rs = ri >= 0 ? ri : 1000;
+    if (ls !== rs) return ls - rs;
+    return String(l).localeCompare(String(r));
+  };
+
+  const rowLooksExplicitNoTimesheetManualAdjustmentOpen = (rowLike = {}) => {
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const flags = (row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
+    const routeText = bulkProcessUpper([row.route_type, row.route_display, row.basis, row.tsfin_basis, flags.route_type, flags.route_display, flags.basis].filter(Boolean).join(' '));
+    return !!(
+      boolishOpen(row.__bulkProcessExplicitNoTimesheet) || boolishOpen(row.__bulk_process_explicit_no_timesheet) ||
+      boolishOpen(row.no_timesheet_required) || boolishOpen(row.client_no_timesheet_required) || boolishOpen(row.no_timesheet_image_required) ||
+      boolishOpen(row.timesheet_not_required) || boolishOpen(row.manual_additional_route) || boolishOpen(row.additional_manual_route) ||
+      boolishOpen(row.supportsUnprocessedExpenseDraft) || boolishOpen(row.supports_unprocessed_expense_draft) ||
+      boolishOpen(flags.__bulkProcessExplicitNoTimesheet) || boolishOpen(flags.no_timesheet_required) || boolishOpen(flags.no_timesheet_image_required) ||
+      boolishOpen(flags.manual_additional_route) || boolishOpen(flags.additional_manual_route) || boolishOpen(flags.supportsUnprocessedExpenseDraft) ||
+      boolishOpen(flags.supports_unprocessed_expense_draft) || bulkProcessUpper(row.expense_storage_target || flags.expense_storage_target || '') === 'CONTRACT_WEEK_DRAFT' ||
+      bulkProcessUpper(row.expense_evidence_storage_target || flags.expense_evidence_storage_target || '') === 'CONTRACT_WEEK_STAGED_EVIDENCE' ||
+      routeText.includes('NHSP') || routeText.includes('HEALTHROSTER') || routeText.includes('NO TIMESHEET') || routeText.includes('NO_TIMESHEET')
+    );
+  };
+
+  const collectPositiveEvidenceTruthOpen = (...sources) => {
+    const rows = normaliseBulkProcessEvidenceRowsOpen(...sources).filter((item) => hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const kinds = new Set();
+    const badges = [];
+    let attachedCount = rows.length;
+    let hasAnyEvidence = rows.length > 0;
+    const noteKind = (kind, countValue = 1) => {
+      const normalized = normaliseBulkProcessEvidenceKindOpen(kind);
+      if (!normalized) return;
+      kinds.add(normalized);
+      const n = Number(countValue);
+      const count = Number.isFinite(n) && n > 0 ? n : 1;
+      attachedCount = Math.max(attachedCount, count);
+      hasAnyEvidence = true;
+    };
+    for (const row of rows) noteKind(row.kind || row.staged_kind || row.evidence_kind || row.category || '');
+    const visit = (source) => {
+      if (!source || typeof source !== 'object') return;
+      for (const list of [source.evidence_badges, source.evidence_meta?.evidence_badges, source.artifact_hints?.evidence_badges].filter(Array.isArray)) {
+        for (const badge of list) {
+          if (!badge || typeof badge !== 'object') continue;
+          const count = Number(badge.count || badge.evidence_count || 0) || 0;
+          if (boolishOpen(badge.present) || boolishOpen(badge.has_evidence) || count > 0) {
+            const kind = normaliseBulkProcessEvidenceKindOpen(badge.kind);
+            noteKind(kind, count || 1);
+            badges.push({ ...badge, kind, present: true, has_evidence: true, count: count || 1 });
+          }
+        }
+      }
+      const directCount = Number(source.attached_evidence_count ?? source.evidence_count ?? source.evidence_meta?.attached_evidence_count ?? source.artifact_hints?.attached_evidence_count ?? 0) || 0;
+      if (directCount > 0) {
+        attachedCount = Math.max(attachedCount, directCount);
+        hasAnyEvidence = true;
+      }
+      if (boolishOpen(source.has_any_evidence) || boolishOpen(source.has_attached_evidence) || boolishOpen(source.evidence_meta?.has_any_evidence) || boolishOpen(source.artifact_hints?.has_any_evidence)) hasAnyEvidence = true;
+      const primaryStorage = getBulkProcessEvidenceFileKeyOpen({ primary_artifact_storage_key: source.primary_artifact_storage_key || source.primaryArtifactStorageKey || source.artifact_hints?.primary_artifact_storage_key || source.artifact_hints?.primaryArtifactStorageKey || '', primary_artifact: source.primary_artifact || source.artifact_hints?.primary_artifact || null });
+      if (primaryStorage) {
+        hasAnyEvidence = true;
+        attachedCount = Math.max(attachedCount, 1);
+        noteKind(source.primary_artifact_kind || source.primaryArtifactKind || source.primary_artifact?.kind || source.artifact_hints?.primary_artifact_kind || source.artifact_hints?.primary_artifact?.kind || 'EVIDENCE', 1);
+      }
+    };
+    for (const source of sources) {
+      if (Array.isArray(source)) source.forEach(visit);
+      else visit(source);
+    }
+    const dynamicBadges = Array.from(kinds).sort(sortEvidenceKindOpen).map((kind) => ({ kind, present: true, has_evidence: true, count: Math.max(1, attachedCount || 1) }));
+    return {
+      hasAnyEvidence,
+      attachedCount: attachedCount || (hasAnyEvidence ? 1 : 0),
+      evidenceRows: rows,
+      evidenceKinds: kinds,
+      evidenceBadges: badges.length ? badges : dynamicBadges
+    };
+  };
+
+  const collectEvidenceArrayValuesOpen = (fragment) => {
+    const arrays = [];
+    if (!fragment || typeof fragment !== 'object') return arrays;
+    for (const container of [fragment, fragment.details, fragment.row, fragment.data_row, fragment.row_patch]) {
+      if (!container || typeof container !== 'object') continue;
+      ['evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence'].forEach((key) => {
+        if (Array.isArray(container[key])) arrays.push(container[key]);
+      });
+    }
+    return arrays;
+  };
+
+  const evidenceArraysExplicitlyEmptyOpen = (fragment) => {
+    const arrays = collectEvidenceArrayValuesOpen(fragment);
+    return arrays.length > 0 && arrays.every((arr) => Array.isArray(arr) && arr.length === 0);
+  };
+
+  const classifyBulkProcessEvidenceAuthorityOpen = ({ rowObj = {}, contextPayload = {}, dataRowCandidate = {}, details = {} } = {}) => {
+    const row = (rowObj && typeof rowObj === 'object') ? rowObj : {};
+    const payload = (contextPayload && typeof contextPayload === 'object') ? contextPayload : {};
+    const candidate = (dataRowCandidate && typeof dataRowCandidate === 'object') ? dataRowCandidate : {};
+    const detailObj = (details && typeof details === 'object') ? details : {};
+    const identity = getBulkProcessIdentityPartsFromRow({
+      ...row,
+      ...candidate,
+      row_key: payload.row_key || payload.row?.row_key || payload.data_row?.row_key || candidate.row_key || row.row_key,
+      current_timesheet_id: payload.current_timesheet_id || payload.timesheet_id || payload.row?.current_timesheet_id || payload.row?.timesheet_id || payload.data_row?.current_timesheet_id || payload.data_row?.timesheet_id || candidate.current_timesheet_id || candidate.timesheet_id || row.current_timesheet_id || row.timesheet_id,
+      contract_week_id: payload.contract_week_id || payload.row?.contract_week_id || payload.data_row?.contract_week_id || candidate.contract_week_id || row.contract_week_id
+    });
+    const incomingIdentity = getBulkProcessIdentityPartsFromRow({
+      ...candidate,
+      row_key: payload.row_key || payload.row?.row_key || payload.data_row?.row_key || candidate.row_key || candidate.new_row_key || '',
+      current_timesheet_id: payload.current_timesheet_id || payload.timesheet_id || payload.row?.current_timesheet_id || payload.row?.timesheet_id || payload.data_row?.current_timesheet_id || payload.data_row?.timesheet_id || candidate.current_timesheet_id || candidate.timesheet_id || candidate.requested_timesheet_id || candidate.expected_timesheet_id || '',
+      contract_week_id: payload.contract_week_id || payload.row?.contract_week_id || payload.data_row?.contract_week_id || candidate.contract_week_id || candidate.contractWeekId || ''
+    });
+    const activeModalIdentity = getBulkProcessIdentityPartsFromRow({
+      ...((state.active_row && typeof state.active_row === 'object') ? state.active_row : {}),
+      row_key: state.active_row_key || state.active_row?.row_key || state.__bulk_process_active_hydration_identity || state.__bulk_process_owner_row_key || seedFocusRowKey || '',
+      current_timesheet_id: state.active_row?.current_timesheet_id || state.active_row?.timesheet_id || state.active_details?.current_timesheet_id || state.active_details?.timesheet?.timesheet_id || state.active_ctx?.state?.current_timesheet_id || state.active_ctx?.state?.timesheet_id || '',
+      contract_week_id: state.active_row?.contract_week_id || state.active_details?.contract_week_id || state.active_details?.contract_week?.id || state.active_ctx?.state?.contract_week_id || ''
+    });
+    const modalOpenIdentityRaw = trimStr(state.__bulk_process_active_hydration_identity || state.__bulk_process_owner_row_key || state.__bulkProcessOwnerRowKey || seedFocusRowKey || state.active_row_key || '');
+    const modalOpenIdentity = getBulkProcessIdentityPartsFromRow(
+      /^timesheet:/i.test(modalOpenIdentityRaw)
+        ? { row_key: modalOpenIdentityRaw, current_timesheet_id: trimStr(modalOpenIdentityRaw.replace(/^timesheet:/i, '')) }
+        : (/^contract_week:/i.test(modalOpenIdentityRaw)
+            ? { row_key: modalOpenIdentityRaw, contract_week_id: trimStr(modalOpenIdentityRaw.replace(/^contract_week:/i, '')) }
+            : { row_key: modalOpenIdentityRaw })
+    );
+    const identitiesShareExplicitValue = (leftLike = {}, rightLike = {}) => {
+      const left = (leftLike && typeof leftLike === 'object') ? leftLike : {};
+      const right = (rightLike && typeof rightLike === 'object') ? rightLike : {};
+      const leftRowKey = trimStr(left.rowKey || left.row_key || left.identity || '');
+      const rightRowKey = trimStr(right.rowKey || right.row_key || right.identity || '');
+      const leftTs = trimStr(left.tsId || left.timesheet_id || left.current_timesheet_id || '');
+      const rightTs = trimStr(right.tsId || right.timesheet_id || right.current_timesheet_id || '');
+      const leftCw = trimStr(left.cwId || left.contract_week_id || '');
+      const rightCw = trimStr(right.cwId || right.contract_week_id || '');
+      if (leftRowKey && rightRowKey && leftRowKey === rightRowKey) return true;
+      if (leftTs && rightTs && leftTs === rightTs) return true;
+      if (leftCw && rightCw && leftCw === rightCw) return true;
+      if (leftRowKey && rightTs && leftRowKey === `timesheet:${rightTs}`) return true;
+      if (rightRowKey && leftTs && rightRowKey === `timesheet:${leftTs}`) return true;
+      if (leftRowKey && rightCw && leftRowKey === `contract_week:${rightCw}`) return true;
+      if (rightRowKey && leftCw && rightRowKey === `contract_week:${leftCw}`) return true;
+      return false;
+    };
+    const identitiesStrictlyMatch = (leftLike = {}, rightLike = {}) => !!(
+      leftLike &&
+      rightLike &&
+      identitiesShareExplicitValue(leftLike, rightLike) &&
+      bulkProcessIdentityCompatible(leftLike, rightLike) &&
+      bulkProcessIdentityCompatible(rightLike, leftLike)
+    );
+    const incomingHasExplicitIdentity = !!(incomingIdentity.rowKey || incomingIdentity.tsId || incomingIdentity.cwId);
+    const hasIdentityMatch = !!(
+      incomingHasExplicitIdentity &&
+      (
+        identitiesStrictlyMatch(activeModalIdentity, incomingIdentity) ||
+        identitiesStrictlyMatch(modalOpenIdentity, incomingIdentity)
+      )
+    );
+    const datasetRow = findBulkProcessDatasetRowForIdentityOpen(identity.identity || candidate || row || '');
+    const incomingRows = filterBulkProcessEvidenceRowsForIdentityOpen(
+      normaliseBulkProcessEvidenceRowsOpen(
+        payload.evidence,
+        payload.attached_evidence,
+        payload.attachedRows,
+        payload.staged_evidence,
+        payload.contract_week_staged_evidence,
+        detailObj.evidence,
+        detailObj.attached_evidence,
+        detailObj.attachedRows,
+        detailObj.staged_evidence,
+        detailObj.contract_week_staged_evidence,
+        candidate.evidence
+      ),
+      identity,
+      { allowUnknownIdentity: false, requireFileKey: true }
+    ).filter((item) => hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const existingRows = filterBulkProcessEvidenceRowsForIdentityOpen(
+      normaliseBulkProcessEvidenceRowsOpen(
+        row.evidence,
+        row,
+        state.active_row?.evidence,
+        state.active_row,
+        state.active_details?.evidence,
+        state.active_details,
+        state.active_context?.evidence,
+        state.active_context,
+        state.active_context?.details?.evidence,
+        state.active_context?.details,
+        state.active_ctx?.state?.evidence,
+        state.active_ctx?.state,
+        state.evidence_pane_state?.attached_rows,
+        state.evidence_pane_state?.attached_all_rows,
+        datasetRow?.evidence,
+        datasetRow
+      ),
+      identity,
+      { allowUnknownIdentity: false, requireFileKey: true }
+    ).filter((item) => hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const positiveTruth = collectPositiveEvidenceTruthOpen(row, candidate, payload, detailObj, datasetRow, state.active_row, state.active_details, state.active_context, state.active_ctx?.state, state.evidence_pane_state, existingRows, incomingRows);
+    const profile = trimStr(payload.context_profile || payload.profile || payload.__context_options?.context_profile || payload.__context_options?.profile || detailObj.context_profile || detailObj.profile || '').toLowerCase();
+    const includeEvidenceValue = payload.include_evidence ?? payload.includeEvidence ?? payload.__context_options?.include_evidence ?? payload.__context_options?.includeEvidence ?? detailObj.include_evidence ?? detailObj.includeEvidence;
+    const includeEvidenceExplicitFalse = includeEvidenceValue === false || trimStr(includeEvidenceValue).toLowerCase() === 'false' || trimStr(includeEvidenceValue) === '0';
+    const includeEvidenceTrue = includeEvidenceValue === true || trimStr(includeEvidenceValue).toLowerCase() === 'true' || trimStr(includeEvidenceValue) === '1';
+    const headerLike = ['status_header', 'editor', 'list', 'active_row_visible'].includes(profile) || payload.header_only === true || payload.base_only === true;
+    const contextRequestsEvidence = !!(profile === 'evidence' || profile === 'full' || includeEvidenceTrue);
+    const rawLoadedSignal = !!(
+      payload.evidence_loaded === true ||
+      payload.evidence_authoritative === true ||
+      payload?.evidence_meta?.evidence_loaded === true ||
+      payload?.evidence_meta?.evidence_authoritative === true ||
+      payload?.artifact_hints?.evidence_loaded === true ||
+      detailObj.evidence_loaded === true ||
+      detailObj.evidence_authoritative === true ||
+      detailObj?.evidence_meta?.evidence_loaded === true ||
+      detailObj?.evidence_meta?.evidence_authoritative === true ||
+      candidate.evidence_loaded === true ||
+      candidate.evidence_authoritative === true
+    );
+    const evidenceLoadedAuthority = !!(incomingRows.length > 0 || contextRequestsEvidence || rawLoadedSignal);
+    const evidenceArraysEmpty = evidenceArraysExplicitlyEmptyOpen({
+      ...payload,
+      details: detailObj && Object.keys(detailObj).length ? detailObj : payload.details,
+      row: (payload.row && typeof payload.row === 'object') ? payload.row : candidate,
+      data_row: (payload.data_row && typeof payload.data_row === 'object') ? payload.data_row : candidate
+    });
+    const genuineSameIdentityEvidenceProfileEmpty = !!(
+      evidenceLoadedAuthority &&
+      hasIdentityMatch &&
+      profile === 'evidence' &&
+      contextRequestsEvidence &&
+      !headerLike &&
+      !includeEvidenceExplicitFalse &&
+      evidenceArraysEmpty &&
+      incomingRows.length === 0
+    );
+    const preservedMatchingRealEvidenceContradictsClear = existingRows.length > 0;
+    const preservedPositiveEvidenceTruthContradictsClear = !!(positiveTruth.hasAnyEvidence && !genuineSameIdentityEvidenceProfileEmpty);
+    const allowEvidenceClear = !!(
+      evidenceLoadedAuthority === true &&
+      hasIdentityMatch === true &&
+      genuineSameIdentityEvidenceProfileEmpty === true &&
+      evidenceArraysEmpty === true &&
+      incomingRows.length === 0 &&
+      existingRows.length === 0 &&
+      preservedMatchingRealEvidenceContradictsClear === false &&
+      preservedPositiveEvidenceTruthContradictsClear === false
+    );
+    const nonEvidenceAuthoritative = !!(!incomingRows.length && (headerLike || includeEvidenceExplicitFalse || !contextRequestsEvidence) && !(contextRequestsEvidence || rawLoadedSignal));
+    return {
+      identity,
+      incomingIdentity,
+      activeModalIdentity,
+      modalOpenIdentity,
+      evidenceLoadedAuthority,
+      evidenceExpectation: positiveTruth.hasAnyEvidence || existingRows.length > 0,
+      allowEvidenceClear,
+      nonEvidenceAuthoritative,
+      hasIncomingRealEvidenceRows: incomingRows.length > 0,
+      hasExistingMatchingEvidenceRows: existingRows.length > 0,
+      hasPreservedMatchingEvidenceRows: existingRows.length > 0,
+      hasIdentityMatch,
+      evidenceArraysExplicitlyEmpty: evidenceArraysEmpty,
+      realEvidenceRows: incomingRows,
+      existingEvidenceRows: existingRows,
+      evidenceExpectationSources: positiveTruth,
+      preservedPositiveEvidenceTruth: positiveTruth.hasAnyEvidence || existingRows.length > 0,
+      preservedMatchingRealEvidenceContradictsClear,
+      preservedPositiveEvidenceTruthContradictsClear,
+      genuineSameIdentityEvidenceProfileEmpty,
+      profile
+    };
+  };
+
+  const isAllFalseEvidenceBadgesOpen = (value) => {
+    if (!Array.isArray(value)) return false;
+    if (!value.length) return true;
+    return value.every((badge) => !badge || (boolishOpen(badge.present) !== true && boolishOpen(badge.has_evidence) !== true && (Number(badge.count || 0) || 0) <= 0));
+  };
+
+  const stripNonAuthoritativeEvidenceClearsOpen = (fragment) => {
+    if (!fragment || typeof fragment !== 'object') return fragment;
+    const out = Array.isArray(fragment) ? fragment.map((item) => deep(item)) : { ...fragment };
+    ['has_any_evidence', 'has_attached_evidence', 'attached_evidence_count', 'evidence_count', 'evidence_badges', 'evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence', 'evidence_loaded', 'evidence_authoritative', 'include_evidence', 'primary_artifact', 'primary_artifact_id', 'primary_artifact_kind', 'primary_artifact_storage_key', 'primary_artifact_preview_mode'].forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) return;
+      const value = out[key];
+      const shouldStrip = value === false || value == null || value === '' || (typeof value === 'number' && value <= 0) || (Array.isArray(value) && (value.length === 0 || (key === 'evidence_badges' && isAllFalseEvidenceBadgesOpen(value)))) || (key === 'primary_artifact' && value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) || ((key === 'evidence_loaded' || key === 'evidence_authoritative' || key === 'include_evidence') && value !== true);
+      if (shouldStrip) delete out[key];
+    });
+    ['evidence_meta', 'artifact_hints'].forEach((nestedKey) => {
+      if (out[nestedKey] && typeof out[nestedKey] === 'object' && !Array.isArray(out[nestedKey])) out[nestedKey] = stripNonAuthoritativeEvidenceClearsOpen(out[nestedKey]);
+    });
+    return out;
+  };
+
+  const buildBulkProcessEvidenceAuthorityPatchOpen = (rowsInput = [], patchOptions = {}) => {
+    const patchOpts = (patchOptions && typeof patchOptions === 'object') ? patchOptions : {};
+    const sourceRows = Array.isArray(rowsInput) ? rowsInput : [rowsInput];
+    const targetIdentity = patchOpts.rowIdentity || patchOpts.row_identity || getBulkProcessIdentityPartsFromRow(patchOpts.rowObj || patchOpts.row || state.active_row || {});
+    const allRows = normaliseBulkProcessEvidenceRowsOpen(sourceRows);
+    const identityFilteredRows = filterBulkProcessEvidenceRowsForIdentityOpen(allRows, targetIdentity, { allowUnknownIdentity: false, requireFileKey: true });
+    const realEvidenceRows = identityFilteredRows.filter((item) => hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const evidenceRows = realEvidenceRows.length ? realEvidenceRows : identityFilteredRows.filter((item) => !isBulkProcessFallbackEvidenceRowOpen(item));
     const countsByKind = new Map();
     for (const item of evidenceRows) {
-      const kind = normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || '');
+      const kind = normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || item.evidence_kind || item.evidenceKind || item.category || '');
       if (!kind) continue;
       countsByKind.set(kind, (Number(countsByKind.get(kind) || 0) || 0) + 1);
     }
-    const evidenceBadges = kinds.map((kind) => {
+    const dynamicKinds = Array.from(new Set([...evidenceBadgeKnownOrderOpen, ...Array.from(countsByKind.keys()).filter(Boolean)])).sort(sortEvidenceKindOpen);
+    const evidenceBadges = dynamicKinds.map((kind) => {
       const count = Number(countsByKind.get(kind) || 0) || 0;
       return { kind, has_evidence: count > 0, present: count > 0, count };
     });
-    const primaryEvidence = evidenceRows.find((item) => normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || '') === 'TIMESHEET') || evidenceRows[0] || null;
+    const explicitNoTimesheet = patchOpts.explicitNoTimesheet === true || patchOpts.explicit_no_timesheet === true || rowLooksExplicitNoTimesheetManualAdjustmentOpen(patchOpts.rowObj || patchOpts.row || state.active_row || {});
+    const realNonTimesheetRows = evidenceRows.filter((item) => normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || '') !== 'TIMESHEET' && hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const realTimesheetRows = evidenceRows.filter((item) => normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || '') === 'TIMESHEET' && hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const nonFallbackRows = evidenceRows.filter((item) => !isBulkProcessFallbackEvidenceRowOpen(item));
+    const primaryEvidence = explicitNoTimesheet
+      ? (realNonTimesheetRows[0] || nonFallbackRows.find((item) => normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || '') !== 'TIMESHEET') || nonFallbackRows[0] || evidenceRows[0] || null)
+      : (realTimesheetRows[0] || nonFallbackRows[0] || evidenceRows[0] || null);
     const primaryStorageKey = primaryEvidence ? getBulkProcessEvidenceFileKeyOpen(primaryEvidence) : '';
     const primaryId = primaryEvidence ? getBulkProcessEvidenceIdOpen(primaryEvidence) : '';
+    const primaryKind = primaryEvidence ? normaliseBulkProcessEvidenceKindOpen(primaryEvidence.kind || primaryEvidence.staged_kind || primaryEvidence.evidence_kind || primaryEvidence.evidenceKind || '') : '';
+    const attachedEvidenceCount = evidenceRows.length;
     return {
       evidenceRows,
-      hasAnyEvidence: evidenceRows.length > 0,
-      attachedEvidenceCount: evidenceRows.length,
+      hasAnyEvidence: attachedEvidenceCount > 0,
+      attachedEvidenceCount,
       evidenceBadges,
       primaryEvidence,
       primaryArtifactId: primaryId || null,
-      primaryArtifactKind: primaryEvidence ? (normaliseBulkProcessEvidenceKindOpen(primaryEvidence.kind || primaryEvidence.staged_kind || '') || null) : null,
+      primaryArtifactKind: primaryKind || null,
       primaryArtifactStorageKey: primaryStorageKey || null,
-      primaryArtifactPreviewMode: primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || null) : null
+      primaryArtifactPreviewMode: primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || primaryEvidence.primary_artifact_preview_mode || null) : null,
+      evidenceLoadedAuthority: patchOpts.evidenceLoadedAuthority === true || patchOpts.evidence_loaded_authority === true || attachedEvidenceCount > 0,
+      allowEvidenceClear: patchOpts.allowEvidenceClear === true || patchOpts.allowAuthoritativeClear === true || patchOpts.allow_authoritative_clear === true
     };
   };
 
   const applyBulkProcessEvidenceAuthorityPatchOpen = (target, patch) => {
     if (!target || typeof target !== 'object' || !patch || typeof patch !== 'object') return target;
+    const allowEvidenceClear = patch.allowEvidenceClear === true || patch.allowAuthoritativeClear === true || patch.allow_authoritative_clear === true;
     let evidenceRows = normaliseBulkProcessEvidenceRowsOpen(Array.isArray(patch.evidenceRows) ? patch.evidenceRows : []);
-    const existingEvidenceRows = normaliseBulkProcessEvidenceRowsOpen(target.evidence, target);
-    const preserveExistingAuthoritativeRows = !!(
-      evidenceRows.length === 0 &&
-      existingEvidenceRows.length > 0 &&
-      patch.allowAuthoritativeClear !== true &&
-      (
-        target.evidence_authoritative === true ||
-        target.evidence_loaded === true ||
-        target.include_evidence === true ||
-        target.has_any_evidence === true ||
-        target.has_attached_evidence === true ||
-        Number(target.attached_evidence_count || 0) > 0
-      )
+    const existingEvidenceRows = normaliseBulkProcessEvidenceRowsOpen(target.evidence, target).filter((item) => hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const positiveTruth = collectPositiveEvidenceTruthOpen(target, target.evidence, existingEvidenceRows);
+    const patchPositiveBadges = Array.isArray(patch.evidenceBadges)
+      ? patch.evidenceBadges.filter((badge) => badge && typeof badge === 'object' && (boolishOpen(badge.present) || boolishOpen(badge.has_evidence) || Number(badge.count || 0) > 0))
+      : [];
+    const patchExpectation = !!(
+      patch.evidenceExpectation === true ||
+      patch.hasAnyEvidence === true ||
+      Number(patch.attachedEvidenceCount || 0) > 0 ||
+      patchPositiveBadges.length > 0 ||
+      positiveTruth.hasAnyEvidence ||
+      existingEvidenceRows.length > 0
     );
-    if (preserveExistingAuthoritativeRows) evidenceRows = existingEvidenceRows;
-    const effectivePatch = buildBulkProcessEvidenceAuthorityPatchOpen(evidenceRows);
-    const evidenceLoaded = patch.evidenceLoaded === true || effectivePatch.hasAnyEvidence === true || target.evidence_loaded === true;
-    target.evidence = evidenceRows.map((item) => deep(item));
+    if (!evidenceRows.length && existingEvidenceRows.length && !allowEvidenceClear) evidenceRows = existingEvidenceRows;
+
+    if (!evidenceRows.length && !allowEvidenceClear) {
+      if (patchExpectation) {
+        const existingCount = Math.max(
+          Number(target.attached_evidence_count || 0) || 0,
+          Number(target.evidence_count || 0) || 0,
+          Number(target.evidence_meta?.attached_evidence_count || 0) || 0,
+          Number(target.artifact_hints?.attached_evidence_count || 0) || 0,
+          positiveTruth.attachedCount || 0,
+          patchPositiveBadges.reduce((sum, badge) => sum + (Number(badge.count || 0) || 0), 0)
+        );
+        const preservedBadges = Array.isArray(target.evidence_badges) && target.evidence_badges.length
+          ? target.evidence_badges.map((badge) => ({ ...badge }))
+          : (patchPositiveBadges.length ? patchPositiveBadges.map((badge) => ({ ...badge })) : positiveTruth.evidenceBadges.map((badge) => ({ ...badge })));
+        target.has_any_evidence = true;
+        target.has_attached_evidence = existingCount > 0 || target.has_attached_evidence === true;
+        if (existingCount > 0) {
+          target.attached_evidence_count = existingCount;
+          target.evidence_count = existingCount;
+        }
+        target.evidence_badges = preservedBadges;
+        target.evidence_meta = {
+          ...((target.evidence_meta && typeof target.evidence_meta === 'object') ? target.evidence_meta : {}),
+          has_any_evidence: true,
+          has_attached_evidence: existingCount > 0 || target.has_attached_evidence === true,
+          attached_evidence_count: existingCount > 0 ? existingCount : (target.evidence_meta?.attached_evidence_count || target.attached_evidence_count || 0),
+          evidence_count: existingCount > 0 ? existingCount : (target.evidence_meta?.evidence_count || target.evidence_count || 0),
+          evidence_badges: preservedBadges,
+          evidence_pending: true,
+          requires_evidence_hydration: true
+        };
+        target.artifact_hints = {
+          ...((target.artifact_hints && typeof target.artifact_hints === 'object') ? target.artifact_hints : {}),
+          has_any_evidence: true,
+          attached_evidence_count: existingCount > 0 ? existingCount : (target.artifact_hints?.attached_evidence_count || target.attached_evidence_count || 0),
+          evidence_badges: preservedBadges,
+          evidence_pending: true,
+          requires_evidence_hydration: true
+        };
+      }
+      return target;
+    }
+
+    const effectivePatch = buildBulkProcessEvidenceAuthorityPatchOpen(evidenceRows, {
+      rowObj: target,
+      evidenceLoadedAuthority: patch.evidenceLoadedAuthority === true || patch.evidenceLoaded === true || patch.evidence_loaded === true,
+      allowEvidenceClear
+    });
+    const evidenceLoaded = !!(patch.evidenceLoadedAuthority === true || patch.evidenceLoaded === true || patch.evidence_loaded === true || effectivePatch.hasAnyEvidence === true);
+
+    if (!effectivePatch.hasAnyEvidence && allowEvidenceClear) {
+      target.evidence = [];
+      target.evidence_loaded = evidenceLoaded;
+      target.evidence_authoritative = evidenceLoaded;
+      target.include_evidence = evidenceLoaded;
+      target.has_any_evidence = false;
+      target.has_attached_evidence = false;
+      target.attached_evidence_count = 0;
+      target.evidence_count = 0;
+      target.evidence_badges = effectivePatch.evidenceBadges.map((badge) => ({ ...badge, present: false, has_evidence: false, count: 0 }));
+      target.evidence_meta = {
+        ...((target.evidence_meta && typeof target.evidence_meta === 'object') ? target.evidence_meta : {}),
+        evidence_loaded: evidenceLoaded,
+        evidence_authoritative: evidenceLoaded,
+        include_evidence: evidenceLoaded,
+        has_any_evidence: false,
+        has_attached_evidence: false,
+        attached_evidence_count: 0,
+        evidence_count: 0,
+        evidence_badges: target.evidence_badges
+      };
+      target.artifact_hints = {
+        ...((target.artifact_hints && typeof target.artifact_hints === 'object') ? target.artifact_hints : {}),
+        has_any_evidence: false,
+        attached_evidence_count: 0,
+        primary_artifact_id: null,
+        primary_artifact_kind: null,
+        primary_artifact_storage_key: null,
+        primary_artifact_preview_mode: null,
+        primary_artifact: null,
+        evidence_badges: target.evidence_badges
+      };
+      target.primary_artifact = null;
+      target.primary_artifact_id = null;
+      target.primary_artifact_kind = null;
+      target.primary_artifact_storage_key = null;
+      target.primary_artifact_preview_mode = null;
+      return target;
+    }
+
+    target.evidence = effectivePatch.evidenceRows.map((item) => deep(item));
     target.evidence_loaded = evidenceLoaded;
     target.evidence_authoritative = evidenceLoaded;
     target.include_evidence = evidenceLoaded;
     target.has_any_evidence = !!effectivePatch.hasAnyEvidence;
     target.has_attached_evidence = !!effectivePatch.hasAnyEvidence;
     target.attached_evidence_count = Number(effectivePatch.attachedEvidenceCount || 0) || 0;
+    target.evidence_count = Number(effectivePatch.attachedEvidenceCount || 0) || 0;
     target.evidence_badges = effectivePatch.evidenceBadges.map((badge) => ({ ...badge }));
     target.evidence_meta = {
       ...((target.evidence_meta && typeof target.evidence_meta === 'object') ? target.evidence_meta : {}),
@@ -134987,6 +136203,7 @@ async function openBulkProcessWorkbench(seed = {}) {
       has_any_evidence: !!effectivePatch.hasAnyEvidence,
       has_attached_evidence: !!effectivePatch.hasAnyEvidence,
       attached_evidence_count: Number(effectivePatch.attachedEvidenceCount || 0) || 0,
+      evidence_count: Number(effectivePatch.attachedEvidenceCount || 0) || 0,
       evidence_badges: effectivePatch.evidenceBadges.map((badge) => ({ ...badge }))
     };
     target.artifact_hints = {
@@ -135114,11 +136331,39 @@ async function openBulkProcessWorkbench(seed = {}) {
     const activeKey = trimStr(rowKey || state.active_row_key || state.active_row?.row_key || '');
     if (!activeKey) return null;
     const sourceList = Array.isArray(evidenceSources) ? evidenceSources : [evidenceSources];
-    const evidenceRows = normaliseBulkProcessEvidenceRowsOpen(...sourceList);
-    if (!evidenceRows.length) return null;
+    const targetIdentity = getBulkProcessIdentityPartsFromRow(state.active_row || { row_key: activeKey });
+    const allEvidenceRows = normaliseBulkProcessEvidenceRowsOpen(...sourceList);
+    const identityFilteredRows = filterBulkProcessEvidenceRowsForIdentityOpen(
+      allEvidenceRows,
+      targetIdentity,
+      { allowUnknownIdentity: false, requireFileKey: true }
+    );
+    const realRows = identityFilteredRows.filter((item) => hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const evidenceRows = realRows.length ? realRows : identityFilteredRows.filter((item) => !isBulkProcessFallbackEvidenceRowOpen(item));
+    if (!evidenceRows.length) {
+      const expectationTruth = collectPositiveEvidenceTruthOpen(...sourceList, state.active_row, state.active_details, state.active_context, state.active_ctx?.state, state.evidence_pane_state);
+      if (expectationTruth.hasAnyEvidence) {
+        const expectationPatch = {
+          evidenceRows: [],
+          evidenceExpectation: true,
+          hasAnyEvidence: true,
+          attachedEvidenceCount: expectationTruth.attachedCount || 1,
+          evidenceBadges: expectationTruth.evidenceBadges.map((badge) => ({ ...badge })),
+          allowEvidenceClear: false
+        };
+        [state.active_row, state.active_details, state.active_context, state.active_context?.details, state.active_context?.row, state.active_context?.data_row, state.active_ctx, state.active_ctx?.details, state.active_ctx?.state]
+          .filter((container) => container && typeof container === 'object')
+          .forEach((container) => applyBulkProcessEvidenceAuthorityPatchOpen(container, expectationPatch));
+        const pane = (state.evidence_pane_state && typeof state.evidence_pane_state === 'object') ? state.evidence_pane_state : null;
+        if (pane) pane.__requires_evidence_hydration = true;
+      }
+      return null;
+    }
     const evidenceAuthorityPatch = {
-      ...buildBulkProcessEvidenceAuthorityPatchOpen(evidenceRows),
-      evidenceLoaded: true
+      ...buildBulkProcessEvidenceAuthorityPatchOpen(evidenceRows, { rowIdentity: targetIdentity, rowObj: state.active_row || {}, evidenceLoadedAuthority: true }),
+      evidenceLoaded: true,
+      evidenceLoadedAuthority: true,
+      allowEvidenceClear: false
     };
     const patchContainer = (obj) => {
       if (!obj || typeof obj !== 'object') return;
@@ -135154,10 +136399,26 @@ async function openBulkProcessWorkbench(seed = {}) {
       pane.attached_all_rows = evidenceRows.map((item) => deep(item));
       pane.__attached_loaded = true;
       pane.__evidence_loaded = true;
+      pane.__requires_evidence_hydration = false;
       const stillSelected = currentAttachedId
         ? evidenceRows.find((item) => getBulkProcessEvidenceIdOpen(item) === currentAttachedId || trimStr(item.id || '') === currentAttachedId) || null
         : null;
-      if (trimStr(pane.active_tab || '').toLowerCase() === 'attached') {
+      const explicitNoTimesheetActiveRow = rowLooksExplicitNoTimesheetManualAdjustmentOpen(state.active_row || {});
+      const realNonTimesheetRows = evidenceRows.filter((item) => normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || '') !== 'TIMESHEET' && hasGenuineBulkProcessEvidenceIdentityOpen(item));
+      if (explicitNoTimesheetActiveRow && realNonTimesheetRows.length) {
+        const nextAttached = stillSelected || realNonTimesheetRows[0] || null;
+        pane.active_tab = 'attached';
+        pane.__attached_manual_override = true;
+        pane.__queue_manual_override = false;
+        pane.__queue_manual_override_identity = '';
+        pane.__queue_manual_override_scope = '';
+        pane.active_attached_id = nextAttached ? getBulkProcessEvidenceIdOpen(nextAttached) : null;
+        pane.active_attached_item = nextAttached ? deep(nextAttached) : null;
+        if (nextAttached) {
+          pane.pending_attach_kind = normaliseBulkProcessEvidenceKindOpen(nextAttached.kind || nextAttached.staged_kind || '') || pane.pending_attach_kind || '';
+        }
+        if (!Number.isFinite(Number(pane.active_attached_pdf_page)) || Number(pane.active_attached_pdf_page) < 1) pane.active_attached_pdf_page = 1;
+      } else if (trimStr(pane.active_tab || '').toLowerCase() === 'attached') {
         const nextAttached = stillSelected || evidenceRows[0] || null;
         pane.active_attached_id = nextAttached ? getBulkProcessEvidenceIdOpen(nextAttached) : null;
         pane.active_attached_item = nextAttached ? deep(nextAttached) : null;
@@ -135579,16 +136840,17 @@ async function openBulkProcessWorkbench(seed = {}) {
     const row = (rowObj && typeof rowObj === 'object') ? deep(rowObj) : {};
     const related = ensureBulkProcessRelatedContract(buildFallbackRelated(row, {}), row, {});
     const matchingDatasetRow = findBulkProcessDatasetRowForIdentityOpen(row);
-    const rowEvidenceRows = normaliseBulkProcessEvidenceRowsOpen(
-      row.evidence,
-      row,
-      matchingDatasetRow?.evidence,
-      matchingDatasetRow
-    );
-    const rowEvidenceLoaded = rowEvidenceRows.length > 0 || row.evidence_loaded === true || row.evidence_authoritative === true || row.include_evidence === true;
+    const rowIdentityForMinimal = getBulkProcessIdentityPartsFromRow(row);
+    const rowEvidenceRows = filterBulkProcessEvidenceRowsForIdentityOpen(
+      normaliseBulkProcessEvidenceRowsOpen(row.evidence, row, matchingDatasetRow?.evidence, matchingDatasetRow),
+      rowIdentityForMinimal,
+      { allowUnknownIdentity: false, requireFileKey: true }
+    ).filter((item) => hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const rowEvidenceExpectation = collectPositiveEvidenceTruthOpen(row, matchingDatasetRow);
+    const rowEvidenceLoaded = rowEvidenceRows.length > 0;
     const rowEvidenceAuthorityPatch = rowEvidenceRows.length
-      ? { ...buildBulkProcessEvidenceAuthorityPatchOpen(rowEvidenceRows), evidenceLoaded: true }
-      : null;
+      ? { ...buildBulkProcessEvidenceAuthorityPatchOpen(rowEvidenceRows, { rowObj: row, evidenceLoadedAuthority: true }), evidenceLoaded: true, evidenceLoadedAuthority: true }
+      : (rowEvidenceExpectation.hasAnyEvidence ? { evidenceRows: [], evidenceExpectation: true, hasAnyEvidence: true, attachedEvidenceCount: rowEvidenceExpectation.attachedCount, evidenceBadges: rowEvidenceExpectation.evidenceBadges.map((badge) => ({ ...badge })) } : null);
 
     if (rowEvidenceAuthorityPatch) applyBulkProcessEvidenceAuthorityPatchOpen(row, rowEvidenceAuthorityPatch);
 
@@ -136064,7 +137326,7 @@ async function openBulkProcessWorkbench(seed = {}) {
     } else {
       state.active_context_profile = 'loading';
     }
-    const contextPayload = await fetchBulkProcessRowContextPayload(row, {
+    let contextPayload = await fetchBulkProcessRowContextPayload(row, {
       profile: requestedProfile,
       context_profile: requestedProfile,
       includeEvidence: opts.includeEvidence === true || opts.include_evidence === true || requestedProfile === 'evidence',
@@ -136099,7 +137361,7 @@ async function openBulkProcessWorkbench(seed = {}) {
       return false;
     }
 
-    const dataRowCandidate = (contextPayload.data_row && typeof contextPayload.data_row === 'object')
+    let dataRowCandidate = (contextPayload.data_row && typeof contextPayload.data_row === 'object')
       ? contextPayload.data_row
       : ((contextPayload.row && typeof contextPayload.row === 'object') ? contextPayload.row : row);
     const actualParts = getBulkProcessIdentityPartsFromRow({
@@ -136115,10 +137377,18 @@ async function openBulkProcessWorkbench(seed = {}) {
     }
 
     const resolvedProfile = trimStr(contextPayload.profile || contextPayload.context_profile || requestedProfile) || requestedProfile;
-    const dataRow = mergeBulkProcessRowAuthoritySignals(row, dataRowCandidate);
-    const details = (contextPayload.details && typeof contextPayload.details === 'object')
+    let dataRow = mergeBulkProcessRowAuthoritySignals(row, dataRowCandidate);
+    let details = (contextPayload.details && typeof contextPayload.details === 'object')
       ? contextPayload.details
       : {};
+    let contextAuthorityOpen = classifyBulkProcessEvidenceAuthorityOpen({ rowObj: row, contextPayload, dataRowCandidate, details });
+    if (contextAuthorityOpen.nonEvidenceAuthoritative === true) {
+      contextPayload = stripNonAuthoritativeEvidenceClearsOpen(contextPayload);
+      dataRowCandidate = stripNonAuthoritativeEvidenceClearsOpen(dataRowCandidate);
+      details = stripNonAuthoritativeEvidenceClearsOpen(details);
+      contextAuthorityOpen = classifyBulkProcessEvidenceAuthorityOpen({ rowObj: row, contextPayload, dataRowCandidate, details });
+      dataRow = mergeBulkProcessRowAuthoritySignals(row, dataRowCandidate);
+    }
     const related = ensureBulkProcessRelatedContract(
       (contextPayload.related && typeof contextPayload.related === 'object')
         ? contextPayload.related
@@ -136128,11 +137398,7 @@ async function openBulkProcessWorkbench(seed = {}) {
     );
 
     const payloadProfile = trimStr(contextPayload.context_profile || contextPayload.profile || resolvedProfile || requestedProfile || '').toLowerCase();
-    const evidenceAuthoritative = !!(
-      contextPayload.evidence_loaded === true ||
-      payloadProfile === 'evidence' ||
-      contextPayload.__context_options?.include_evidence === true
-    );
+    const evidenceAuthoritative = contextAuthorityOpen.evidenceLoadedAuthority === true;
     const matchingDatasetRowForContext = findBulkProcessDatasetRowForIdentityOpen(dataRowCandidate || row || state.active_row || state.active_row_key || '');
     const previousEvidenceRows = normaliseBulkProcessEvidenceRowsOpen(
       state.active_row?.evidence,
@@ -136160,7 +137426,7 @@ async function openBulkProcessWorkbench(seed = {}) {
       state.evidence_pane_state?.attached_rows,
       state.evidence_pane_state?.attached_all_rows,
       window.modalCtx?.timesheetState?.evidence
-    );
+    ).filter((item) => bulkProcessEvidenceItemMatchesIdentityOpen(item, getBulkProcessIdentityPartsFromRow(dataRow || row || state.active_row || {}), { allowUnknownIdentity: false, requireFileKey: true }) && hasGenuineBulkProcessEvidenceIdentityOpen(item));
     const previousEvidenceLoaded = !!(
       previousEvidenceRows.length > 0 ||
       state.active_row?.evidence_authoritative === true ||
@@ -136172,38 +137438,57 @@ async function openBulkProcessWorkbench(seed = {}) {
       state.active_ctx?.evidence_loaded === true ||
       state.active_ctx?.state?.evidence_loaded === true
     );
-    const incomingEvidenceRows = normaliseBulkProcessEvidenceRowsOpen(
-      contextPayload.evidence,
-      contextPayload,
-      details.evidence,
-      details,
-      dataRowCandidate?.evidence,
-      dataRowCandidate
-    );
-    const explicitAuthoritativeEvidenceClear = !!(
-      evidenceAuthoritative &&
-      incomingEvidenceRows.length === 0 &&
-      (
-        contextPayload.evidence_authoritative_empty === true ||
-        contextPayload.evidence_empty_authoritative === true ||
-        contextPayload.__evidence_empty_authoritative === true ||
-        contextPayload.evidence_clear_authoritative === true ||
-        contextPayload.clear_evidence === true ||
-        details.evidence_authoritative_empty === true ||
-        details.evidence_empty_authoritative === true ||
-        details.__evidence_empty_authoritative === true ||
-        details.evidence_clear_authoritative === true ||
-        details.clear_evidence === true
-      )
-    );
+    const incomingEvidenceRows = filterBulkProcessEvidenceRowsForIdentityOpen(
+      normaliseBulkProcessEvidenceRowsOpen(contextPayload.evidence, contextPayload.attached_evidence, contextPayload.attachedRows, contextPayload.staged_evidence, contextPayload.contract_week_staged_evidence, contextPayload, details.evidence, details.attached_evidence, details.attachedRows, details.staged_evidence, details.contract_week_staged_evidence, details, dataRowCandidate?.evidence, dataRowCandidate),
+      getBulkProcessIdentityPartsFromRow(dataRow || row || state.active_row || {}),
+      { allowUnknownIdentity: false, requireFileKey: true }
+    ).filter((item) => hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const explicitAuthoritativeEvidenceClear = contextAuthorityOpen.allowEvidenceClear === true;
     const layerEvidenceRows = incomingEvidenceRows.length
       ? incomingEvidenceRows
       : (previousEvidenceRows.length && !explicitAuthoritativeEvidenceClear ? previousEvidenceRows : []);
-    const nextEvidenceLoaded = evidenceAuthoritative || previousEvidenceLoaded || layerEvidenceRows.length > 0;
+    const nextEvidenceLoaded = evidenceAuthoritative || layerEvidenceRows.length > 0;
+    const evidenceExpectationOpen = collectPositiveEvidenceTruthOpen(dataRow, contextPayload, details, matchingDatasetRowForContext, state.active_row, state.active_details, state.active_context, state.evidence_pane_state);
     const evidenceAuthorityPatch = {
-      ...buildBulkProcessEvidenceAuthorityPatchOpen(layerEvidenceRows),
+      ...buildBulkProcessEvidenceAuthorityPatchOpen(layerEvidenceRows, { rowObj: dataRow, evidenceLoadedAuthority: evidenceAuthoritative || layerEvidenceRows.length > 0, allowEvidenceClear: explicitAuthoritativeEvidenceClear }),
       evidenceLoaded: nextEvidenceLoaded,
-      allowAuthoritativeClear: explicitAuthoritativeEvidenceClear
+      evidenceLoadedAuthority: evidenceAuthoritative || layerEvidenceRows.length > 0,
+      allowEvidenceClear: explicitAuthoritativeEvidenceClear,
+      allowAuthoritativeClear: explicitAuthoritativeEvidenceClear,
+      evidenceExpectation: explicitAuthoritativeEvidenceClear ? false : evidenceExpectationOpen.hasAnyEvidence
+    };
+    const authoritativeEmptyEvidenceClearOpen = !!(
+      explicitAuthoritativeEvidenceClear &&
+      contextAuthorityOpen.evidenceLoadedAuthority === true &&
+      contextAuthorityOpen.hasIdentityMatch === true &&
+      contextAuthorityOpen.evidenceArraysExplicitlyEmpty === true &&
+      contextAuthorityOpen.hasIncomingRealEvidenceRows !== true &&
+      contextAuthorityOpen.hasExistingMatchingEvidenceRows !== true &&
+      contextAuthorityOpen.preservedPositiveEvidenceTruthContradictsClear !== true &&
+      layerEvidenceRows.length === 0
+    );
+    const clearAttachedPaneAfterAuthoritativeEvidenceClearOpen = (reason = 'authoritative-evidence-clear') => {
+      if (!explicitAuthoritativeEvidenceClear) return false;
+      const pane = (state.evidence_pane_state && typeof state.evidence_pane_state === 'object') ? state.evidence_pane_state : null;
+      if (!pane) return false;
+      pane.attached_rows = [];
+      pane.attached_all_rows = [];
+      pane.active_attached_id = null;
+      pane.active_attached_item = null;
+      pane.active_attached_pdf_page = 1;
+      pane.__active_attached_preview_target = '';
+      pane.__attached_loaded = true;
+      pane.__evidence_loaded = true;
+      pane.__requires_evidence_hydration = false;
+      pane.__attached_manual_override = false;
+      if (trimStr(pane.active_tab || '').toLowerCase() === 'attached') pane.active_tab = 'queue';
+      clearLivePreviewTargetState(pane, {
+        abort: true,
+        force: true,
+        artifactRemoved: true,
+        reason
+      });
+      return true;
     };
     const rawDetails = {
       ...deep((state.active_details && typeof state.active_details === 'object') ? state.active_details : {}),
@@ -136457,11 +137742,15 @@ async function openBulkProcessWorkbench(seed = {}) {
       state.active_row = deep(rowForEvidenceMerge);
       state.active_row_key = trimStr(rowForEvidenceMerge.row_key || state.active_row_key || '') || state.active_row_key || null;
       patchBulkProcessRowCollectionsForActiveEvidenceOpen(state.active_row_key, evidenceAuthorityPatch);
-      applyBulkProcessActiveEvidenceTruthOpen(
-        state.active_row_key,
-        [layerEvidenceRows, state.active_row, state.active_context, state.active_details, state.active_ctx, matchingDatasetRowForContext],
-        { reason: 'evidence-profile-context-merge' }
-      );
+      if (authoritativeEmptyEvidenceClearOpen) {
+        clearAttachedPaneAfterAuthoritativeEvidenceClearOpen('evidence-profile-empty-clear');
+      } else {
+        applyBulkProcessActiveEvidenceTruthOpen(
+          state.active_row_key,
+          [layerEvidenceRows, state.active_row, state.active_context, state.active_details, state.active_ctx, matchingDatasetRowForContext],
+          { reason: 'evidence-profile-context-merge' }
+        );
+      }
       state.active_context_profile = preservedProfile;
       state.__active_context_is_minimal = editorLayerLoaded ? false : state.__active_context_is_minimal === true;
       state.__active_context_pending = false;
@@ -136510,14 +137799,157 @@ async function openBulkProcessWorkbench(seed = {}) {
     state.active_row = deep(dataRow || row);
     state.active_row_key = trimStr(state.active_row?.row_key || state.active_row_key || '');
     patchBulkProcessRowCollectionsForActiveEvidenceOpen(state.active_row_key, evidenceAuthorityPatch);
-    applyBulkProcessActiveEvidenceTruthOpen(
-      state.active_row_key,
-      [layerEvidenceRows, state.active_row, state.active_context, state.active_details, state.active_ctx, matchingDatasetRowForContext],
-      { reason: 'row-context-merge' }
-    );
+    if (authoritativeEmptyEvidenceClearOpen) {
+      clearAttachedPaneAfterAuthoritativeEvidenceClearOpen('row-context-empty-evidence-clear');
+    } else {
+      applyBulkProcessActiveEvidenceTruthOpen(
+        state.active_row_key,
+        [layerEvidenceRows, state.active_row, state.active_context, state.active_details, state.active_ctx, matchingDatasetRowForContext],
+        { reason: 'row-context-merge' }
+      );
+    }
     state.__active_context_is_minimal = false;
     state.__active_context_pending = false;
     state.__bulk_process_active_context_visibility_pending = false;
+    const shouldRequestTargetedEvidenceHydrationOpen = !!(
+      contextAuthorityOpen &&
+      contextAuthorityOpen.nonEvidenceAuthoritative === true &&
+      contextAuthorityOpen.evidenceExpectation === true &&
+      layerEvidenceRows.length === 0 &&
+      requestedProfile !== 'evidence' &&
+      opts.skipEvidenceHydration !== true &&
+      opts.skip_evidence_hydration !== true &&
+      (expectedTimesheetIdAtStart || expectedContractWeekIdAtStart || expectedRowKeyAtStart)
+    );
+    if (shouldRequestTargetedEvidenceHydrationOpen && state.evidence_pane_state && typeof state.evidence_pane_state === 'object') {
+      state.evidence_pane_state.__requires_evidence_hydration = true;
+    }
+    if (shouldRequestTargetedEvidenceHydrationOpen) {
+      let targetedEvidenceHydrationHandled = false;
+      try {
+        const targetedEvidencePayload = await fetchBulkProcessRowContextPayload(state.active_row || dataRow || row, {
+          profile: 'evidence',
+          context_profile: 'evidence',
+          includeEvidence: true,
+          include_evidence: true,
+          forceContextRefresh: true,
+          modalOpenToken: modalOpenTokenAtStart,
+          activeHydrationToken: activeHydrationTokenAtStart,
+          activeIdentity: activeIdentityAtStart
+        });
+        if (
+          !isBulkProcessRowContextPayloadDegraded(targetedEvidencePayload) &&
+          isBulkProcessModalOpenTokenCurrent(modalOpenTokenAtStart, { expectedRowKey: expectedRowKeyAtStart }) &&
+          isActiveHydrationTokenCurrent(activeHydrationTokenAtStart, activeIdentityAtStart) &&
+          activeIdentityAtStart === getActiveHydrationIdentity()
+        ) {
+          const targetedEvidenceDetails = (targetedEvidencePayload.details && typeof targetedEvidencePayload.details === 'object') ? targetedEvidencePayload.details : {};
+          const targetedEvidenceDataRow = (targetedEvidencePayload.data_row && typeof targetedEvidencePayload.data_row === 'object')
+            ? targetedEvidencePayload.data_row
+            : ((targetedEvidencePayload.row && typeof targetedEvidencePayload.row === 'object') ? targetedEvidencePayload.row : (state.active_row || dataRow || row || {}));
+          const targetedEvidenceAuthority = classifyBulkProcessEvidenceAuthorityOpen({
+            rowObj: state.active_row || dataRow || row || {},
+            contextPayload: targetedEvidencePayload,
+            dataRowCandidate: targetedEvidenceDataRow,
+            details: targetedEvidenceDetails
+          });
+          const targetedIdentity = getBulkProcessIdentityPartsFromRow(state.active_row || dataRow || row || {});
+          const targetedEvidenceRows = filterBulkProcessEvidenceRowsForIdentityOpen(
+            normaliseBulkProcessEvidenceRowsOpen(
+              targetedEvidencePayload.evidence,
+              targetedEvidencePayload.attached_evidence,
+              targetedEvidencePayload.attachedRows,
+              targetedEvidencePayload.staged_evidence,
+              targetedEvidencePayload.contract_week_staged_evidence,
+              targetedEvidenceDetails.evidence,
+              targetedEvidenceDetails.attached_evidence,
+              targetedEvidenceDetails.attachedRows,
+              targetedEvidenceDetails.staged_evidence,
+              targetedEvidenceDetails.contract_week_staged_evidence,
+              targetedEvidenceDataRow.evidence
+            ),
+            targetedIdentity,
+            { allowUnknownIdentity: false, requireFileKey: true }
+          ).filter((item) => hasGenuineBulkProcessEvidenceIdentityOpen(item));
+          if (
+            targetedEvidenceRows.length === 0 &&
+            targetedEvidenceAuthority.evidenceLoadedAuthority === true &&
+            targetedEvidenceAuthority.allowEvidenceClear === true &&
+            targetedEvidenceAuthority.hasIdentityMatch === true &&
+            targetedEvidenceAuthority.hasIncomingRealEvidenceRows !== true &&
+            targetedEvidenceAuthority.preservedMatchingRealEvidenceContradictsClear !== true &&
+            targetedEvidenceAuthority.preservedPositiveEvidenceTruthContradictsClear !== true
+          ) {
+            const targetedEvidenceClearPatch = {
+              ...buildBulkProcessEvidenceAuthorityPatchOpen([], {
+                rowIdentity: targetedIdentity,
+                rowObj: state.active_row || dataRow || row || {},
+                evidenceLoadedAuthority: true,
+                allowEvidenceClear: true
+              }),
+              evidenceRows: [],
+              hasAnyEvidence: false,
+              attachedEvidenceCount: 0,
+              evidenceLoaded: true,
+              evidenceLoadedAuthority: true,
+              allowEvidenceClear: true,
+              allowAuthoritativeClear: true,
+              allow_authoritative_clear: true,
+              evidenceExpectation: false
+            };
+            [
+              dataRow,
+              rawDetails,
+              ctx,
+              ctx?.state,
+              state.active_row,
+              state.active_details,
+              state.active_context,
+              state.active_context?.details,
+              state.active_context?.row,
+              state.active_context?.data_row,
+              state.active_ctx,
+              state.active_ctx?.details,
+              state.active_ctx?.state
+            ].forEach((container) => applyBulkProcessEvidenceAuthorityPatchOpen(container, targetedEvidenceClearPatch));
+            patchBulkProcessRowCollectionsForActiveEvidenceOpen(state.active_row_key, targetedEvidenceClearPatch);
+            if (state.evidence_pane_state && typeof state.evidence_pane_state === 'object') {
+              state.evidence_pane_state.attached_rows = [];
+              state.evidence_pane_state.attached_all_rows = [];
+              state.evidence_pane_state.active_attached_id = null;
+              state.evidence_pane_state.active_attached_item = null;
+              state.evidence_pane_state.active_attached_pdf_page = 1;
+              state.evidence_pane_state.__active_attached_preview_target = '';
+              state.evidence_pane_state.__attached_loaded = true;
+              state.evidence_pane_state.__evidence_loaded = true;
+              state.evidence_pane_state.__requires_evidence_hydration = false;
+              clearLivePreviewTargetState(state.evidence_pane_state, {
+                abort: true,
+                allowClear: true,
+                artifactRemoved: true,
+                reason: 'targeted-evidence-profile-empty-clear'
+              });
+            }
+            targetedEvidenceHydrationHandled = true;
+          }
+        }
+      } catch (targetedEvidenceHydrationErr) {
+        L('targeted evidence hydration empty-clear check failed', targetedEvidenceHydrationErr);
+      }
+      if (!targetedEvidenceHydrationHandled) {
+        await loadActiveRowContext({
+          minimalMode: false,
+          profile: 'evidence',
+          context_profile: 'evidence',
+          includeEvidence: true,
+          forceContextRefresh: true,
+          modalOpenToken: modalOpenTokenAtStart,
+          activeHydrationToken: activeHydrationTokenAtStart,
+          activeIdentity: activeIdentityAtStart,
+          skipEvidenceHydration: true
+        });
+      }
+    }
     if (isDirectAdditionalManualSeed && activeIdentityAtStart === getActiveHydrationIdentity()) {
       state.__bulk_process_direct_seed_hydration_complete = true;
     }
@@ -137227,37 +138659,45 @@ async function openBulkProcessWorkbench(seed = {}) {
       state.active_ctx?.profile ||
       ''
     ).toLowerCase();
-    const activeRowEvidenceRowsForPane = normaliseBulkProcessEvidenceRowsOpen(
-      state.active_row?.evidence,
-      state.active_row,
-      findBulkProcessDatasetRowForIdentityOpen(state.active_row || activeIdentity),
-      state.active_details?.evidence,
-      state.active_context?.evidence,
-      state.active_context?.details?.evidence,
-      state.active_ctx?.evidence,
-      state.active_ctx?.details?.evidence,
-      state.active_ctx?.state?.evidence,
-      pane.attached_rows,
-      pane.attached_all_rows
-    );
-    const activeRowEvidenceAuthoritative = !!(
-      activeRowEvidenceRowsForPane.length > 0 ||
-      state.active_row?.evidence_authoritative === true ||
-      state.active_row?.evidence_loaded === true ||
-      state.active_row?.include_evidence === true ||
-      state.active_row?.has_any_evidence === true ||
-      Number(state.active_row?.attached_evidence_count || 0) > 0
-    );
+    const activeRowEvidenceRowsForPane = filterBulkProcessEvidenceRowsForIdentityOpen(
+      normaliseBulkProcessEvidenceRowsOpen(
+        state.active_row?.evidence,
+        state.active_row,
+        findBulkProcessDatasetRowForIdentityOpen(state.active_row || activeIdentity),
+        state.active_details?.evidence,
+        state.active_context?.evidence,
+        state.active_context?.details?.evidence,
+        state.active_ctx?.evidence,
+        state.active_ctx?.details?.evidence,
+        state.active_ctx?.state?.evidence,
+        pane.attached_rows,
+        pane.attached_all_rows
+      ),
+      activeIdentity,
+      { allowUnknownIdentity: false, requireFileKey: true }
+    ).filter((item) => hasGenuineBulkProcessEvidenceIdentityOpen(item));
+    const evidenceExpectationForPane = collectPositiveEvidenceTruthOpen(state.active_row, state.active_details, state.active_context, state.active_ctx?.state, findBulkProcessDatasetRowForIdentityOpen(state.active_row || activeIdentity), pane);
+    const activeRowEvidenceAuthoritative = activeRowEvidenceRowsForPane.length > 0;
     const evidenceContextAuthoritative = !!(
       activeRowEvidenceAuthoritative ||
-      state.active_context?.evidence_loaded === true ||
-      state.active_details?.evidence_loaded === true ||
-      state.active_ctx?.evidence_loaded === true ||
-      activeContextProfile === 'evidence' ||
-      pane.__evidence_loaded === true ||
-      pane.__attached_loaded === true
+      (activeContextProfile === 'evidence' && (state.active_context?.evidence_loaded === true || state.active_details?.evidence_loaded === true || state.active_ctx?.evidence_loaded === true)) ||
+      (pane.__evidence_loaded === true && activeRowEvidenceRowsForPane.length > 0) ||
+      (pane.__attached_loaded === true && activeRowEvidenceRowsForPane.length > 0)
     );
     const activeContextAuthoritative = evidenceContextAuthoritative;
+    if (!activeRowEvidenceRowsForPane.length && evidenceExpectationForPane.hasAnyEvidence && !evidenceContextAuthoritative) {
+      pane.__requires_evidence_hydration = true;
+      return {
+        activeIdentity,
+        resolvedSource: trimStr(pane.active_tab || '').toLowerCase(),
+        selectedPreviewChanged: false,
+        selectionBefore,
+        selectionAfter: getPreviewSelectionSignature(pane),
+        requires_evidence_hydration: true,
+        skipped_reconcile: true,
+        evidence_pending: true
+      };
+    }
 
     if (!activeIdentity || !state.active_row || state.__bulk_process_empty_state === true) {
       const cleared = state.__bulk_process_empty_state === true
@@ -137287,6 +138727,32 @@ async function openBulkProcessWorkbench(seed = {}) {
         selectionAfter: getPreviewSelectionSignature(pane),
         skipped: true,
         stale: true
+      };
+    }
+
+    const explicitNoTimesheetPaneRow = rowLooksExplicitNoTimesheetManualAdjustmentOpen(state.active_row || {});
+    const realNonTimesheetPaneRows = explicitNoTimesheetPaneRow
+      ? activeRowEvidenceRowsForPane.filter((item) => normaliseBulkProcessEvidenceKindOpen(item.kind || item.staged_kind || item.evidence_kind || '') !== 'TIMESHEET')
+      : [];
+    if (explicitNoTimesheetPaneRow && realNonTimesheetPaneRows.length) {
+      const selected = realNonTimesheetPaneRows.find((item) => getBulkProcessEvidenceIdOpen(item) === trimStr(pane.active_attached_id || '')) || realNonTimesheetPaneRows[0];
+      pane.attached_rows = realNonTimesheetPaneRows.map((item) => deep(item));
+      pane.attached_all_rows = realNonTimesheetPaneRows.map((item) => deep(item));
+      pane.active_tab = 'attached';
+      pane.__attached_manual_override = true;
+      pane.__queue_manual_override = false;
+      pane.__requires_evidence_hydration = false;
+      pane.active_attached_id = getBulkProcessEvidenceIdOpen(selected) || null;
+      pane.active_attached_item = deep(selected);
+      if (!Number.isFinite(Number(pane.active_attached_pdf_page)) || Number(pane.active_attached_pdf_page) < 1) pane.active_attached_pdf_page = 1;
+      applyBulkProcessActiveEvidenceTruthOpen(activeIdentity, [realNonTimesheetPaneRows, state.active_row, state.active_context, state.active_details, state.active_ctx], { reason: 'open-pane-real-non-timesheet-evidence' });
+      return {
+        activeIdentity,
+        resolvedSource: 'attached',
+        selectedPreviewChanged: selectionBefore !== getPreviewSelectionSignature(pane),
+        selectionBefore,
+        selectionAfter: getPreviewSelectionSignature(pane),
+        requires_evidence_hydration: false
       };
     }
 
@@ -138537,6 +140003,9 @@ async function openBulkProcessWorkbench(seed = {}) {
 
   GE();
 }
+
+
+
 
 
 
@@ -156766,6 +158235,7 @@ function getBulkProcessRecordIdentityFromState(state) {
   return null;
 }
 
+
 function installBulkProcessModalCtxPatch(state, options = {}) {
   const deep = (v) => {
     try { return JSON.parse(JSON.stringify(v)); } catch { return v; }
@@ -156801,18 +158271,132 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
   const targetCtx = (mc && typeof mc === 'object') ? mc : {};
 
+  const readModalCtxIdentityParts = (sourceLike = {}) => {
+    const source = (sourceLike && typeof sourceLike === 'object') ? sourceLike : {};
+    const rowKey = trimStr(source.row_key || source.rowKey || source.new_row_key || source.newRowKey || source.current_row_key || source.currentRowKey || '');
+    const rowKeyTimesheetId = /^timesheet:/i.test(rowKey) ? trimStr(rowKey.replace(/^timesheet:/i, '')) : '';
+    const rowKeyContractWeekId = /^contract_week:/i.test(rowKey) ? trimStr(rowKey.replace(/^contract_week:/i, '')) : '';
+    const timesheetId = trimStr(
+      source.current_timesheet_id ||
+      source.currentTimesheetId ||
+      source.timesheet_id ||
+      source.timesheetId ||
+      source.requested_timesheet_id ||
+      source.requestedTimesheetId ||
+      source.expected_timesheet_id ||
+      source.expectedTimesheetId ||
+      source.timesheet?.timesheet_id ||
+      rowKeyTimesheetId ||
+      ''
+    );
+    const contractWeekId = trimStr(
+      source.contract_week_id ||
+      source.contractWeekId ||
+      source.current_contract_week_id ||
+      source.currentContractWeekId ||
+      source.contract_week?.id ||
+      source.week_id ||
+      source.weekId ||
+      rowKeyContractWeekId ||
+      ''
+    );
+    return {
+      rowKey,
+      timesheetId,
+      contractWeekId,
+      identity: rowKey || (timesheetId ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : ''))
+    };
+  };
+
+  const combineActiveModalCtxIdentityParts = () => {
+    const seedSources = [
+      { row_key: st.active_row_key || '' },
+      st.active_row,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_context?.details,
+      st.active_ctx?.state,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row,
+      activeCtx.state,
+      activeCtx.row,
+      activeCtx.data,
+      activeCtx.details
+    ];
+    let rowKey = '';
+    let timesheetId = '';
+    let contractWeekId = '';
+    for (const source of seedSources) {
+      if (!source || typeof source !== 'object') continue;
+      const parts = readModalCtxIdentityParts(source);
+      if (!rowKey && parts.rowKey) rowKey = parts.rowKey;
+      if (/^timesheet:/i.test(rowKey)) {
+        timesheetId = trimStr(rowKey.replace(/^timesheet:/i, '')) || timesheetId || parts.timesheetId;
+        if (!contractWeekId && parts.contractWeekId) contractWeekId = parts.contractWeekId;
+        continue;
+      }
+      if (/^contract_week:/i.test(rowKey)) {
+        contractWeekId = trimStr(rowKey.replace(/^contract_week:/i, '')) || contractWeekId || parts.contractWeekId;
+        timesheetId = '';
+        continue;
+      }
+      if (!timesheetId && parts.timesheetId && !contractWeekId) timesheetId = parts.timesheetId;
+      if (!contractWeekId && parts.contractWeekId) contractWeekId = parts.contractWeekId;
+    }
+    if (!rowKey && timesheetId) rowKey = `timesheet:${timesheetId}`;
+    if (!rowKey && contractWeekId) rowKey = `contract_week:${contractWeekId}`;
+    if (/^contract_week:/i.test(rowKey)) timesheetId = '';
+    return {
+      rowKey,
+      timesheetId,
+      contractWeekId,
+      identity: rowKey || (timesheetId ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : ''))
+    };
+  };
+
+  const activeIdentityParts = combineActiveModalCtxIdentityParts();
+  const activeIdentity = trimStr(activeIdentityParts.identity || getBulkProcessRecordIdentityFromState(st) || '');
+  const activeIdentityIsContractWeek = /^contract_week:/i.test(activeIdentity) || (!!activeIdentityParts.contractWeekId && !activeIdentityParts.timesheetId);
+
+  const dataMatchesActiveIdentity = (sourceLike = {}, optionsForMatch = {}) => {
+    const cfg = (optionsForMatch && typeof optionsForMatch === 'object') ? optionsForMatch : {};
+    const parts = readModalCtxIdentityParts(sourceLike);
+    const hasSourceIdentity = !!(parts.rowKey || parts.timesheetId || parts.contractWeekId);
+    if (!activeIdentity) return cfg.allowWhenNoActiveIdentity === true;
+    if (!hasSourceIdentity) return cfg.allowUnscoped === true;
+    if (parts.rowKey && activeIdentityParts.rowKey && parts.rowKey !== activeIdentityParts.rowKey) return false;
+    if (activeIdentityIsContractWeek && parts.timesheetId) return false;
+    if (activeIdentityParts.timesheetId && parts.timesheetId && parts.timesheetId !== activeIdentityParts.timesheetId) return false;
+    if (activeIdentityParts.contractWeekId && parts.contractWeekId && parts.contractWeekId !== activeIdentityParts.contractWeekId) return false;
+    if (/^timesheet:/i.test(activeIdentity) && !parts.timesheetId && parts.contractWeekId && !activeIdentityParts.contractWeekId) return false;
+    if (/^contract_week:/i.test(activeIdentity) && parts.timesheetId) return false;
+    if (activeIdentityParts.rowKey && parts.rowKey) return true;
+    if (activeIdentityParts.timesheetId && parts.timesheetId === activeIdentityParts.timesheetId) return true;
+    if (activeIdentityParts.contractWeekId && parts.contractWeekId === activeIdentityParts.contractWeekId && !parts.timesheetId) return true;
+    return false;
+  };
+
+  const rawPatchData = (patch.data && typeof patch.data === 'object') ? patch.data : null;
+  const rawModalData = (mc.data && typeof mc.data === 'object') ? mc.data : null;
+  const patchDataMatchesActive = rawPatchData ? dataMatchesActiveIdentity(rawPatchData, { allowWhenNoActiveIdentity: true }) : false;
+  const modalDataMatchesActive = rawModalData ? dataMatchesActiveIdentity(rawModalData, { allowWhenNoActiveIdentity: false }) : false;
+
+  const patchData = patchDataMatchesActive
+    ? rawPatchData
+    : (modalDataMatchesActive ? rawModalData : {});
+  const patchMeta = (patch.timesheetMeta && typeof patch.timesheetMeta === 'object')
+    ? patch.timesheetMeta
+    : ((mc.timesheetMeta && typeof mc.timesheetMeta === 'object') ? mc.timesheetMeta : {});
+
   const details = (activeCtx.details && typeof activeCtx.details === 'object')
     ? activeCtx.details
     : ((st.active_details && typeof st.active_details === 'object') ? st.active_details : {});
-  const ctxData = (activeCtx.data && typeof activeCtx.data === 'object') ? activeCtx.data : {};
-  const patchData = (patch.data && typeof patch.data === 'object')
-    ? patch.data
-    : ((window.modalCtx.data && typeof window.modalCtx.data === 'object') ? window.modalCtx.data : {});
-  const patchMeta = (patch.timesheetMeta && typeof patch.timesheetMeta === 'object')
-    ? patch.timesheetMeta
-    : ((window.modalCtx.timesheetMeta && typeof window.modalCtx.timesheetMeta === 'object') ? window.modalCtx.timesheetMeta : {});
+  const ctxData = (activeCtx.data && typeof activeCtx.data === 'object')
+    ? activeCtx.data
+    : ((activeCtx.state && typeof activeCtx.state === 'object') ? activeCtx.state : {});
 
   const detailsContractWeekId = trimStr(
+    activeIdentityParts.contractWeekId ||
     details.contract_week_id ||
     details.contract_week?.id ||
     ctxData.contract_week_id ||
@@ -156832,6 +158416,7 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
   const explicitNoTimesheet = !!(
     detailsContractWeekId &&
     (
+      activeIdentityIsContractWeek ||
       (detailsHasCurrentTimesheet && !trimStr(details.current_timesheet_id ?? '')) ||
       (detailsHasTimesheetObject && !details.timesheet) ||
       patchMetaPlannedWithoutTimesheet
@@ -156842,9 +158427,12 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     ? null
     : (
         trimStr(
+          activeIdentityParts.timesheetId ||
           details.current_timesheet_id ||
           details.timesheet?.timesheet_id ||
+          ctxData.current_timesheet_id ||
           ctxData.timesheet_id ||
+          patchData.current_timesheet_id ||
           patchData.timesheet_id ||
           ''
         ) || null
@@ -156852,14 +158440,103 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
 
   const canonicalContractWeekId = trimStr(
     detailsContractWeekId ||
+    activeIdentityParts.contractWeekId ||
     ctxData.contract_week_id ||
     patchData.contract_week_id ||
     ''
   ) || null;
 
-  const currentIdentity = canonicalTimesheetId
+  const currentIdentity = activeIdentity || (canonicalTimesheetId
     ? `timesheet:${canonicalTimesheetId}`
-    : (canonicalContractWeekId ? `contract_week:${canonicalContractWeekId}` : getBulkProcessRecordIdentityFromState(st));
+    : (canonicalContractWeekId ? `contract_week:${canonicalContractWeekId}` : getBulkProcessRecordIdentityFromState(st)));
+
+  const evidenceOrActionBelongsToDifferentIdentity = (sourceLike = {}) => {
+    if (!sourceLike || typeof sourceLike !== 'object' || !currentIdentity) return false;
+    const candidates = [];
+    const pushCandidate = (value) => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) candidates.push(value);
+    };
+    for (const key of ['evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence', 'attached_rows', 'attached_all_rows']) {
+      if (Array.isArray(sourceLike[key])) sourceLike[key].forEach(pushCandidate);
+    }
+    pushCandidate(sourceLike.primary_artifact);
+    pushCandidate(sourceLike.artifact_hints?.primary_artifact);
+    pushCandidate(sourceLike.action_flags);
+    return candidates.some((candidate) => {
+      const parts = readModalCtxIdentityParts(candidate);
+      if (!(parts.rowKey || parts.timesheetId || parts.contractWeekId)) return false;
+      return !dataMatchesActiveIdentity(candidate, { allowWhenNoActiveIdentity: false });
+    });
+  };
+
+  const staleModalData = !!(
+    rawModalData &&
+    currentIdentity &&
+    (
+      (trimStr(rawModalData.row_key || rawModalData.rowKey || '') && activeIdentityParts.rowKey && trimStr(rawModalData.row_key || rawModalData.rowKey || '') !== activeIdentityParts.rowKey) ||
+      (activeIdentityIsContractWeek && trimStr(rawModalData.timesheet_id || rawModalData.current_timesheet_id || rawModalData.requested_timesheet_id || rawModalData.expected_timesheet_id || '')) ||
+      (canonicalContractWeekId && trimStr(rawModalData.contract_week_id || rawModalData.contractWeekId || '') && trimStr(rawModalData.contract_week_id || rawModalData.contractWeekId || '') !== canonicalContractWeekId) ||
+      (trimStr(mc.__bulkProcessRecordIdentity || '') && trimStr(mc.__bulkProcessRecordIdentity || '') !== currentIdentity) ||
+      (!modalDataMatchesActive && !!(readModalCtxIdentityParts(rawModalData).identity)) ||
+      evidenceOrActionBelongsToDifferentIdentity(rawModalData)
+    )
+  );
+
+  const staleModalDataKeys = [
+    'timesheet_id', 'current_timesheet_id', 'requested_timesheet_id', 'expected_timesheet_id',
+    'evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence',
+    'evidence_badges', 'evidence_meta', 'artifact_hints', 'primary_artifact', 'primary_artifact_id',
+    'primary_artifact_kind', 'primary_artifact_storage_key', 'primary_artifact_preview_mode',
+    'has_any_evidence', 'has_attached_evidence', 'attached_evidence_count', 'evidence_count'
+  ];
+  const purgeStaleModalDataFields = (targetData) => {
+    if (!targetData || typeof targetData !== 'object') return;
+    for (const key of staleModalDataKeys) {
+      try { delete targetData[key]; } catch {}
+    }
+    if (targetData.action_flags && typeof targetData.action_flags === 'object') {
+      const actionFlags = { ...targetData.action_flags };
+      for (const key of [
+        'has_any_evidence', 'has_attached_evidence', 'attached_evidence_count', 'evidence_count', 'evidence_badges',
+        'primary_artifact', 'primary_artifact_id', 'primary_artifact_kind', 'primary_artifact_storage_key', 'primary_artifact_preview_mode',
+        'can_process', 'can_unprocess', 'can_save', 'can_edit_timesheet_data', 'can_manage_evidence',
+        'process_block_reason', 'can_process_reason', 'unprocess_block_reason', 'can_unprocess_reason'
+      ]) {
+        try { delete actionFlags[key]; } catch {}
+      }
+      targetData.action_flags = actionFlags;
+    }
+  };
+
+  const collectFreshActiveEvidenceFields = () => {
+    const fieldKeys = [
+      'evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence',
+      'evidence_badges', 'evidence_meta', 'artifact_hints', 'primary_artifact', 'primary_artifact_id',
+      'primary_artifact_kind', 'primary_artifact_storage_key', 'primary_artifact_preview_mode',
+      'has_any_evidence', 'has_attached_evidence', 'attached_evidence_count', 'evidence_count'
+    ];
+    const sources = [
+      st.active_row,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_context,
+      st.active_context?.details,
+      st.active_details,
+      activeCtx.state,
+      activeCtx.row,
+      activeCtx.data,
+      activeCtx.details
+    ];
+    const out = {};
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+      if (!dataMatchesActiveIdentity(source, { allowUnscoped: true, allowWhenNoActiveIdentity: true })) continue;
+      for (const key of fieldKeys) {
+        if (!Object.prototype.hasOwnProperty.call(out, key) && Object.prototype.hasOwnProperty.call(source, key)) out[key] = deep(source[key]);
+      }
+    }
+    return out;
+  };
 
   const fsExisting = (window.modalCtx.formState && typeof window.modalCtx.formState === 'object')
     ? window.modalCtx.formState
@@ -156885,6 +158562,7 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     (currentIdentity || null) !== (prevForId || null)
   );
   const noOpPatch = !!(
+    !staleModalData &&
     !forceRebase &&
     !routeKindTransition &&
     !stagedRebase &&
@@ -156893,13 +158571,13 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     !!currentIdentity &&
     prevForId === currentIdentity
   );
+  const shouldClearFormState = !!(
+    meaningfulFormIdentityChange ||
+    (!prevForId && !!currentIdentity)
+  );
   const shouldRebase = !!(
-    forceRebase ||
-    mismatched ||
-    (!prevForId && !!currentIdentity) ||
-    routeKindTransition ||
-    stagedRebase ||
-    explicitNoTimesheetTransition
+    shouldClearFormState ||
+    staleModalData
   );
 
   if (noOpPatch) {
@@ -156918,6 +158596,7 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
       explicit_no_timesheet: explicitNoTimesheet,
       canonical_timesheet_id: canonicalTimesheetId,
       canonical_contract_week_id: canonicalContractWeekId,
+      stale_modal_data: staleModalData,
       skipped_noop: true
     });
     return;
@@ -156928,7 +158607,14 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
   targetCtx.bulkProcessState = st;
   window.modalCtx = targetCtx;
 
-  if (patch.data && typeof patch.data === 'object') window.modalCtx.data = deep(patch.data);
+  if (patch.data && typeof patch.data === 'object' && patchDataMatchesActive) {
+    window.modalCtx.data = deep(patch.data);
+  } else if (modalDataMatchesActive) {
+    window.modalCtx.data = deep(rawModalData);
+  } else {
+    window.modalCtx.data = {};
+  }
+  if (staleModalData) purgeStaleModalDataFields(window.modalCtx.data);
   if (patch.timesheetDetails && typeof patch.timesheetDetails === 'object') window.modalCtx.timesheetDetails = deep(patch.timesheetDetails);
   if (patch.timesheetRelated && typeof patch.timesheetRelated === 'object') window.modalCtx.timesheetRelated = deep(patch.timesheetRelated);
   window.modalCtx.timesheetState = activeCtx.state;
@@ -156945,6 +158631,12 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
 
   window.modalCtx.data.id = canonicalTimesheetId || canonicalContractWeekId || null;
   window.modalCtx.data.timesheet_id = canonicalTimesheetId || null;
+  window.modalCtx.data.current_timesheet_id = canonicalTimesheetId || null;
+  window.modalCtx.data.contract_week_id = canonicalContractWeekId || null;
+  Object.assign(window.modalCtx.data, collectFreshActiveEvidenceFields());
+  window.modalCtx.data.id = canonicalTimesheetId || canonicalContractWeekId || null;
+  window.modalCtx.data.timesheet_id = canonicalTimesheetId || null;
+  window.modalCtx.data.current_timesheet_id = canonicalTimesheetId || null;
   window.modalCtx.data.contract_week_id = canonicalContractWeekId || null;
 
   if (explicitNoTimesheet && canonicalContractWeekId) {
@@ -156957,6 +158649,9 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
 
     window.modalCtx.data.id = canonicalContractWeekId;
     window.modalCtx.data.timesheet_id = null;
+    window.modalCtx.data.current_timesheet_id = null;
+    window.modalCtx.data.requested_timesheet_id = null;
+    window.modalCtx.data.expected_timesheet_id = null;
     window.modalCtx.data.contract_week_id = canonicalContractWeekId;
     window.modalCtx.data.submission_mode = '';
     window.modalCtx.data.submission_mode_snapshot = cwSubmissionSnapshot || window.modalCtx.data.submission_mode_snapshot || '';
@@ -157027,7 +158722,7 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     : { __forId: currentIdentity, main: {}, pay: {} };
 
   fs.__forId = currentIdentity || null;
-  if (shouldRebase) {
+  if (shouldClearFormState) {
     fs.main = {};
     fs.pay = {};
   }
@@ -157038,6 +158733,8 @@ function installBulkProcessModalCtxPatch(state, options = {}) {
     nextForId: currentIdentity,
     forceRebase,
     stagedRebased: shouldRebase,
+    stale_modal_data: staleModalData,
+    form_state_cleared: shouldClearFormState,
     explicit_no_timesheet: explicitNoTimesheet,
     canonical_timesheet_id: canonicalTimesheetId,
     canonical_contract_week_id: canonicalContractWeekId
@@ -158774,6 +160471,177 @@ function captureBulkProcessUiSnapshot(state) {
 }
 
 
+async function bankingPayProviderSubmitReviewResolve(input, maybeOptions = {}) {
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const upperTrim = (value) => trimStr(value).toUpperCase();
+  const asBool = (value) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (typeof value === 'number') return value === 1;
+    const text = trimStr(value).toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off', ''].includes(text)) return false;
+    return false;
+  };
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const providerEvidenceConflictMessage = 'Provider acceptance evidence exists. Manual reconciliation is required before retry.';
+
+  const source = isPlainObject(input)
+    ? input
+    : { ...((isPlainObject(maybeOptions) ? maybeOptions : {})), pay_batch_id: input };
+
+  const payBatchId = trimStr(
+    source.pay_batch_id ||
+    source.payBatchId ||
+    source.batch_id ||
+    source.batchId ||
+    source.id ||
+    ''
+  );
+  const operationId = trimStr(
+    source.operation_id ||
+    source.operationId ||
+    source.payment_operation_id ||
+    source.paymentOperationId ||
+    ''
+  );
+  const providerCheckedRaw = upperTrim(source.provider_checked || source.providerChecked || '');
+  const providerChecked = providerCheckedRaw === 'REVOLUT' || providerCheckedRaw === 'BANK' || providerCheckedRaw === 'BOTH'
+    ? providerCheckedRaw
+    : '';
+  const checkedAtUtc = trimStr(source.checked_at_utc || source.checkedAtUtc || source.checked_at || source.checkedAt || '') || new Date().toISOString();
+  const notes = trimStr(source.notes || source.note || '');
+
+  if (!uuidRe.test(payBatchId)) {
+    throw new Error('Valid pay_batch_id is required for provider-submit review resolution.');
+  }
+  if (!uuidRe.test(operationId)) {
+    throw new Error('Valid operation_id is required for provider-submit review resolution.');
+  }
+  if (!providerChecked) {
+    throw new Error('provider_checked must be REVOLUT, BANK, or BOTH.');
+  }
+
+  const body = {
+    operation_id: operationId,
+    resolution_action: 'CONFIRM_NO_PAYMENT_MADE_AND_RESET_FOR_RETRY',
+    checked_provider_or_bank: true,
+    confirmed_no_payment_made: true,
+    provider_checked: providerChecked,
+    checked_at_utc: checkedAtUtc
+  };
+
+  if (notes) body.notes = notes;
+
+  const endpoint = `/api/banking/pay/batch/${encodeURIComponent(payBatchId)}/provider-submit-review-resolution`;
+
+  const normaliseResponse = (raw) => {
+    const payload = isPlainObject(raw) ? raw : {};
+    const batchPayload = isPlainObject(payload.batch) ? payload.batch : (isPlainObject(payload.pay_batch) ? payload.pay_batch : null);
+    const diagnostic = isPlainObject(payload.provider_submit_diagnostic)
+      ? payload.provider_submit_diagnostic
+      : (isPlainObject(payload.providerSubmitDiagnostic)
+        ? payload.providerSubmitDiagnostic
+        : (isPlainObject(batchPayload?.provider_submit_diagnostic)
+          ? batchPayload.provider_submit_diagnostic
+          : (isPlainObject(batchPayload?.providerSubmitDiagnostic) ? batchPayload.providerSubmitDiagnostic : null)));
+
+    const message = trimStr(
+      payload.message ||
+      payload.error_message ||
+      payload.errorMessage ||
+      payload.error?.message ||
+      payload.error ||
+      ''
+    );
+
+    return {
+      ...payload,
+      ok: payload.ok !== false,
+      resolved: payload.resolved === true,
+      safe_retry_available: asBool(payload.safe_retry_available ?? payload.safeRetryAvailable),
+      manual_resolution_recorded: asBool(payload.manual_resolution_recorded ?? payload.manualResolutionRecorded),
+      provider_submit_diagnostic: diagnostic || null,
+      batch: batchPayload,
+      message: message || (payload.resolved === true ? 'Manual no-payment confirmation recorded. The batch can now be retried.' : '')
+    };
+  };
+
+  const extractErrorPayload = (err) => {
+    if (isPlainObject(err?.payload)) return err.payload;
+    if (isPlainObject(err?.body)) return err.body;
+    if (isPlainObject(err?.responseJSON)) return err.responseJSON;
+    if (isPlainObject(err?.data)) return err.data;
+    if (isPlainObject(err?.error) && !Array.isArray(err.error)) return err.error;
+    return {};
+  };
+
+  const throwNormalisedError = (err, fallbackPayload = null) => {
+    const payload = isPlainObject(fallbackPayload) ? fallbackPayload : extractErrorPayload(err);
+    const rawMessage = trimStr(
+      payload.message ||
+      payload.error_message ||
+      payload.errorMessage ||
+      payload.error?.message ||
+      payload.error ||
+      err?.message ||
+      ''
+    );
+    const reason = upperTrim(payload.reason || payload.code || payload.error_code || payload.errorCode || payload.error?.code || '');
+    const hasProviderAcceptanceConflict = reason === 'PROVIDER_ACCEPTANCE_EVIDENCE_PRESENT'
+      || rawMessage === providerEvidenceConflictMessage
+      || upperTrim(rawMessage).includes('PROVIDER ACCEPTANCE EVIDENCE EXISTS');
+    const message = hasProviderAcceptanceConflict
+      ? providerEvidenceConflictMessage
+      : (rawMessage || 'Provider-submit review resolution failed.');
+    const out = new Error(message);
+    out.code = reason || 'PROVIDER_SUBMIT_REVIEW_RESOLUTION_FAILED';
+    out.reason = reason || null;
+    out.status = payload.status || payload.status_code || payload.statusCode || err?.status || null;
+    out.payload = payload;
+    out.provider_submit_diagnostic = isPlainObject(payload.provider_submit_diagnostic)
+      ? payload.provider_submit_diagnostic
+      : (isPlainObject(payload.providerSubmitDiagnostic) ? payload.providerSubmitDiagnostic : null);
+    out.safe_retry_available = asBool(payload.safe_retry_available ?? payload.safeRetryAvailable);
+    out.manual_resolution_recorded = asBool(payload.manual_resolution_recorded ?? payload.manualResolutionRecorded);
+    throw out;
+  };
+
+  let rawResponse;
+  if (typeof apiPostJson === 'function') {
+    try {
+      rawResponse = await apiPostJson(endpoint, body);
+    } catch (err) {
+      throwNormalisedError(err);
+    }
+  } else {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const text = await response.text();
+    let parsed = null;
+    if (text) {
+      try { parsed = JSON.parse(text); } catch { parsed = { message: text }; }
+    }
+    if (!response.ok) {
+      throwNormalisedError({ status: response.status, message: response.statusText }, parsed || {});
+    }
+    rawResponse = parsed || {};
+  }
+
+  const normalised = normaliseResponse(rawResponse);
+
+  if (normalised.ok === false || normalised.resolved !== true) {
+    throwNormalisedError(null, normalised);
+  }
+
+  return normalised;
+}
+
 
 function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const st = (state && typeof state === 'object') ? state : {};
@@ -158793,6 +160661,19 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     if (value === false || value == null) return false;
     const s = trimStr(value).toLowerCase();
     return s === 'true' || s === '1' || s === 'yes' || s === 'y' || s === 'on';
+  };
+  const normaliseEvidenceKindForReconcile = (value) => {
+    const kind = upper(value || '');
+    if (!kind) return '';
+    if (kind === 'TS') return 'TIMESHEET';
+    if (kind === 'MILES' || kind === 'MILE') return 'MILEAGE';
+    if (kind === 'ACCOM') return 'ACCOMMODATION';
+    if (kind === 'EXPENSE' || kind === 'EXPENSES') return 'EXPENSE';
+    return kind;
+  };
+  const isGenericFallbackEvidenceKind = (value) => {
+    const kind = normaliseEvidenceKindForReconcile(value);
+    return !kind || kind === 'OTHER' || kind === 'EVIDENCE' || kind === 'EXPENSE';
   };
   const clearBulkProcessPostAttachRefreshFlags = () => {
     st.__bulk_process_post_attach_rebase_required = false;
@@ -159511,23 +161392,334 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   );
   const activeContextProfile = trimStr(st.active_context?.profile || st.active_context?.context_profile || st.active_details?.profile || st.active_details?.context_profile || st.active_ctx?.profile || st.active_ctx?.context_profile || st.active_ctx?.state?.profile || st.active_ctx?.state?.context_profile || '').toLowerCase();
   const activeRowEvidenceRows = Array.isArray(st.active_row?.evidence) ? st.active_row.evidence : [];
-  const evidenceContextAuthoritative = !!(
-    activeRowEvidenceRows.length > 0 ||
+
+  const normaliseBulkProcessEvidenceKindForReconcile = (value) => {
+    const kind = upper(value || '');
+    if (!kind) return '';
+    if (kind === 'TS') return 'TIMESHEET';
+    if (kind === 'MILES' || kind === 'MILE') return 'MILEAGE';
+    if (kind === 'ACCOM') return 'ACCOMMODATION';
+    if (kind === 'EXPENSE' || kind === 'EXPENSES') return 'EXPENSE';
+    return kind;
+  };
+
+  const readBooleanEvidenceFlag = (...values) => values.some((value) => boolish(value));
+
+  const readPositiveCount = (...values) => {
+    for (const value of values) {
+      const n = Number(value || 0);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return 0;
+  };
+
+  const badgeIndicatesEvidence = (badge) => {
+    if (!badge || typeof badge !== 'object') return false;
+    if (boolish(badge.present) || boolish(badge.has_evidence) || boolish(badge.hasEvidence)) return true;
+    const count = Number(badge.count ?? badge.evidence_count ?? badge.evidenceCount ?? 0);
+    return Number.isFinite(count) && count > 0;
+  };
+
+  const collectPositiveBadgesFromContainer = (container) => {
+    const source = (container && typeof container === 'object') ? container : {};
+    const badgeLists = [
+      source.evidence_badges,
+      source.evidenceBadges,
+      source.evidence_meta?.evidence_badges,
+      source.evidence_meta?.evidenceBadges,
+      source.artifact_hints?.evidence_badges,
+      source.artifact_hints?.evidenceBadges
+    ].filter(Array.isArray);
+    const badges = [];
+    for (const list of badgeLists) {
+      for (const badge of list) {
+        if (!badgeIndicatesEvidence(badge)) continue;
+        const kind = normaliseBulkProcessEvidenceKindForReconcile(badge.kind || badge.evidence_kind || badge.evidenceKind || '');
+        badges.push({
+          ...(deep(badge) || {}),
+          kind: kind || upper(badge.kind || badge.evidence_kind || badge.evidenceKind || '') || 'EVIDENCE',
+          has_evidence: true,
+          present: true,
+          count: Math.max(1, Number(badge.count ?? badge.evidence_count ?? badge.evidenceCount ?? 1) || 1)
+        });
+      }
+    }
+    return badges;
+  };
+
+  const expenseDraftIndicatesEvidenceBackedExpense = (draftLike) => {
+    const draft = (draftLike && typeof draftLike === 'object' && !Array.isArray(draftLike)) ? draftLike : {};
+    if (!Object.keys(draft).length) return false;
+    if (readBooleanEvidenceFlag(draft.has_evidence, draft.has_any_evidence, draft.evidence_required, draft.requires_evidence, draft.evidence_backed, draft.hasEvidence, draft.requiresEvidence)) return true;
+    if (Array.isArray(draft.evidence_badges) && draft.evidence_badges.some(badgeIndicatesEvidence)) return true;
+    if (Array.isArray(draft.evidence) && draft.evidence.length > 0) return true;
+    if (draft.evidence_meta && typeof draft.evidence_meta === 'object' && containerIndicatesEvidenceExpectation(draft.evidence_meta).hasEvidence) return true;
+    return false;
+  };
+
+  function containerIndicatesEvidenceExpectation(container) {
+    const source = (container && typeof container === 'object') ? container : {};
+    if (!source || !Object.keys(source).length) return { hasEvidence: false, badges: [], count: 0, sources: [] };
+    const badges = collectPositiveBadgesFromContainer(source);
+    const count = readPositiveCount(
+      source.attached_evidence_count,
+      source.evidence_count,
+      source.attachedEvidenceCount,
+      source.evidenceCount,
+      source.evidence_meta?.attached_evidence_count,
+      source.evidence_meta?.evidence_count,
+      source.artifact_hints?.attached_evidence_count,
+      source.artifact_hints?.evidence_count
+    );
+    const primaryStorage = safeStorageKey(
+      source.primary_artifact_storage_key ||
+      source.primaryArtifactStorageKey ||
+      source.artifact_hints?.primary_artifact_storage_key ||
+      source.artifact_hints?.primaryArtifactStorageKey ||
+      source.primary_artifact?.storage_key ||
+      source.primary_artifact?.file_key ||
+      source.primary_artifact?.download_storage_key ||
+      source.primary_artifact?.r2_key ||
+      source.primaryArtifact?.storage_key ||
+      source.primaryArtifact?.file_key ||
+      source.primaryArtifact?.download_storage_key ||
+      source.primaryArtifact?.r2_key ||
+      source.artifact_hints?.primary_artifact?.storage_key ||
+      source.artifact_hints?.primary_artifact?.file_key ||
+      source.artifact_hints?.primary_artifact?.download_storage_key ||
+      source.artifact_hints?.primary_artifact?.r2_key ||
+      ''
+    );
+    const expenseDrafts = [
+      source.expenses_draft,
+      source.expense_draft,
+      source.totals_json?.expenses_draft,
+      source.contract_week_totals_json?.expenses_draft,
+      source.contract_week?.totals_json?.expenses_draft,
+      source.details?.contract_week?.totals_json?.expenses_draft,
+      source.evidence_meta?.expenses_draft,
+      source.artifact_hints?.expenses_draft
+    ];
+    const expenseBacked = expenseDrafts.some(expenseDraftIndicatesEvidenceBackedExpense);
+    const sources = [];
+    if (readBooleanEvidenceFlag(source.has_any_evidence, source.has_attached_evidence, source.evidence_meta?.has_any_evidence, source.evidence_meta?.has_attached_evidence, source.artifact_hints?.has_any_evidence, source.artifact_hints?.has_attached_evidence)) sources.push('flag');
+    if (count > 0) sources.push('count');
+    if (badges.length > 0) sources.push('badge');
+    if (primaryStorage) sources.push('artifact_hint');
+    if (expenseBacked) sources.push('expense_metadata');
+    return {
+      hasEvidence: sources.length > 0,
+      badges,
+      count,
+      primaryStorage,
+      expenseBacked,
+      sources
+    };
+  }
+
+  const collectEvidenceExpectationSourcesForReconcile = (...containers) => {
+    const badgesByKind = new Map();
+    let count = 0;
+    const sources = [];
+    for (const container of containers) {
+      if (Array.isArray(container)) {
+        if (container.length > 0) {
+          count = Math.max(count, container.length);
+          sources.push('rows');
+          for (const item of container) {
+            const kind = normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.evidence_kind || item?.staged_kind || '') || 'EVIDENCE';
+            if (!badgesByKind.has(kind)) badgesByKind.set(kind, { kind, has_evidence: true, present: true, count: 0 });
+            badgesByKind.get(kind).count += 1;
+          }
+        }
+        continue;
+      }
+      const result = containerIndicatesEvidenceExpectation(container);
+      if (!result.hasEvidence) continue;
+      count = Math.max(count, result.count || 0);
+      sources.push(...result.sources);
+      for (const badge of result.badges) {
+        const kind = normaliseBulkProcessEvidenceKindForReconcile(badge.kind || '') || 'EVIDENCE';
+        if (!badgesByKind.has(kind)) badgesByKind.set(kind, { kind, has_evidence: true, present: true, count: 0 });
+        badgesByKind.get(kind).count += Math.max(1, Number(badge.count || 1) || 1);
+      }
+    }
+    const badges = Array.from(badgesByKind.values()).map((badge) => ({ ...badge, count: Math.max(1, Number(badge.count || 0) || 1) }));
+    return {
+      hasEvidence: sources.length > 0 || badges.length > 0 || count > 0,
+      count: count || (badges.length ? badges.reduce((sum, badge) => sum + (Number(badge.count || 0) || 0), 0) : 0),
+      badges,
+      sources: Array.from(new Set(sources))
+    };
+  };
+
+  const evidenceArraysExplicitlyPresentAndEmptyForReconcile = (...containers) => {
+    const keys = ['evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence'];
+    let found = false;
+    for (const container of containers) {
+      const source = (container && typeof container === 'object') ? container : null;
+      if (!source) continue;
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+        if (!Array.isArray(source[key])) return false;
+        found = true;
+        if (source[key].length > 0) return false;
+      }
+      if (source.details && typeof source.details === 'object') {
+        const nested = evidenceArraysExplicitlyPresentAndEmptyForReconcile(source.details);
+        if (nested === false && keys.some((key) => Object.prototype.hasOwnProperty.call(source.details, key))) return false;
+        if (nested === true) found = true;
+      }
+      if (source.row && typeof source.row === 'object') {
+        const nested = evidenceArraysExplicitlyPresentAndEmptyForReconcile(source.row);
+        if (nested === false && keys.some((key) => Object.prototype.hasOwnProperty.call(source.row, key))) return false;
+        if (nested === true) found = true;
+      }
+      if (source.data_row && typeof source.data_row === 'object') {
+        const nested = evidenceArraysExplicitlyPresentAndEmptyForReconcile(source.data_row);
+        if (nested === false && keys.some((key) => Object.prototype.hasOwnProperty.call(source.data_row, key))) return false;
+        if (nested === true) found = true;
+      }
+    }
+    return found;
+  };
+
+  const evidenceLoadedContextIdentityMatchesActiveForReconcile = (...containers) => {
+    const active = selectedRowIdentityParts();
+    const activeRowKey = trimStr(active.rowKey || '');
+    const activeTimesheetId = trimStr(active.timesheetId || '');
+    const activeContractWeekId = trimStr(active.contractWeekId || '');
+    let sawExplicitIdentity = false;
+
+    const readContainerIdentity = (container) => {
+      const source = (container && typeof container === 'object') ? container : {};
+      const meta = parseObjectMaybeJson(source.meta_json || source.metaJson || source.meta || source.queue_meta || source.queueMeta);
+      return {
+        rowKey: trimStr(
+          source.row_key ||
+          source.rowKey ||
+          source.bulk_process_row_key ||
+          source.bulkProcessRowKey ||
+          source.timesheet_row_key ||
+          source.timesheetRowKey ||
+          meta.row_key ||
+          meta.rowKey ||
+          meta.bulk_process_row_key ||
+          meta.bulkProcessRowKey ||
+          meta.timesheet_row_key ||
+          meta.timesheetRowKey ||
+          ''
+        ),
+        timesheetId: trimStr(
+          source.timesheet_id ||
+          source.timesheetId ||
+          source.current_timesheet_id ||
+          source.currentTimesheetId ||
+          source.requested_timesheet_id ||
+          source.requestedTimesheetId ||
+          source.expected_timesheet_id ||
+          source.expectedTimesheetId ||
+          source.timesheet?.timesheet_id ||
+          meta.timesheet_id ||
+          meta.timesheetId ||
+          meta.current_timesheet_id ||
+          meta.currentTimesheetId ||
+          meta.requested_timesheet_id ||
+          meta.requestedTimesheetId ||
+          meta.expected_timesheet_id ||
+          meta.expectedTimesheetId ||
+          ''
+        ),
+        contractWeekId: trimStr(
+          source.contract_week_id ||
+          source.contractWeekId ||
+          source.current_contract_week_id ||
+          source.currentContractWeekId ||
+          source.expected_contract_week_id ||
+          source.expectedContractWeekId ||
+          source.contract_week?.id ||
+          meta.contract_week_id ||
+          meta.contractWeekId ||
+          meta.current_contract_week_id ||
+          meta.currentContractWeekId ||
+          meta.expected_contract_week_id ||
+          meta.expectedContractWeekId ||
+          meta.week_id ||
+          meta.weekId ||
+          ''
+        )
+      };
+    };
+
+    const identityMatches = (identity) => {
+      const rowKey = trimStr(identity.rowKey || '');
+      const timesheetId = trimStr(identity.timesheetId || '');
+      const contractWeekId = trimStr(identity.contractWeekId || '');
+
+      if (!rowKey && !timesheetId && !contractWeekId) return true;
+      sawExplicitIdentity = true;
+
+      if (rowKey && activeRowKey && rowKey !== activeRowKey) return false;
+      if (/^timesheet:/i.test(rowKey) && activeRowKey && /^contract_week:/i.test(activeRowKey)) return false;
+      if (/^contract_week:/i.test(rowKey) && activeRowKey && /^timesheet:/i.test(activeRowKey)) return false;
+
+      if (timesheetId) {
+        if (activeTimesheetId && timesheetId !== activeTimesheetId) return false;
+        if (!activeTimesheetId && activeContractWeekId) return false;
+      }
+
+      if (contractWeekId && activeContractWeekId && contractWeekId !== activeContractWeekId) return false;
+
+      return true;
+    };
+
+    const walk = (container, depth = 0) => {
+      if (!container || typeof container !== 'object' || depth > 3) return true;
+      if (!identityMatches(readContainerIdentity(container))) return false;
+      for (const key of ['details', 'row', 'data_row', 'state']) {
+        if (container[key] && typeof container[key] === 'object' && !walk(container[key], depth + 1)) return false;
+      }
+      return true;
+    };
+
+    for (const container of containers) {
+      if (!walk(container)) return false;
+    }
+
+    return sawExplicitIdentity;
+  };
+
+  const includeEvidenceSignal = !!(
+    boolish(st.active_context?.include_evidence) ||
+    boolish(st.active_context?.__context_options?.include_evidence) ||
+    boolish(st.active_context?.details?.include_evidence) ||
+    boolish(st.active_details?.include_evidence) ||
+    boolish(st.active_ctx?.include_evidence) ||
+    boolish(st.active_ctx?.state?.include_evidence)
+  );
+  let evidenceLoadedAuthority = !!(
+    activeContextProfile === 'evidence' ||
+    includeEvidenceSignal ||
     st.active_row?.evidence_loaded === true ||
     st.active_row?.evidence_authoritative === true ||
     st.active_row?.include_evidence === true ||
-    st.active_row?.has_any_evidence === true ||
-    Number(st.active_row?.attached_evidence_count || 0) > 0 ||
     st.active_context?.evidence_loaded === true ||
+    st.active_context?.evidence_authoritative === true ||
     st.active_context?.details?.evidence_loaded === true ||
+    st.active_context?.details?.evidence_authoritative === true ||
     st.active_details?.evidence_loaded === true ||
+    st.active_details?.evidence_authoritative === true ||
     st.active_details?.evidence_meta?.evidence_loaded === true ||
     st.active_ctx?.evidence_loaded === true ||
+    st.active_ctx?.evidence_authoritative === true ||
     st.active_ctx?.state?.evidence_loaded === true ||
-    activeContextProfile === 'evidence' ||
-    pane.__evidence_loaded === true ||
-    pane.__attached_loaded === true
+    st.active_ctx?.state?.evidence_authoritative === true ||
+    (pane.__evidence_loaded === true && Array.isArray(pane.attached_all_rows) && pane.attached_all_rows.length > 0) ||
+    (pane.__attached_loaded === true && Array.isArray(pane.attached_rows) && pane.attached_rows.length > 0)
   );
+  let evidenceExpectation = false;
+  let allowEvidenceClear = false;
+
   const activeContextAuthoritative = !!(
     st.active_row &&
     (!st.active_context || (
@@ -159564,13 +161756,102 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     }) || null;
   };
 
+  const rowLooksExplicitNoTimesheetManualAdjustmentForEvidence = (rowLike = {}) => {
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const flags = (row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
+    const routeText = upper([
+      row.route_type,
+      row.route_display,
+      row.basis,
+      row.tsfin_basis,
+      row.route_family,
+      row.route_subfamily,
+      row.underlying_channel_family,
+      flags.route_type,
+      flags.route_display,
+      flags.basis,
+      flags.route_family,
+      flags.route_subfamily,
+      flags.underlying_channel_family
+    ].filter(Boolean).join(' '));
+    return !!(
+      boolish(row.__bulkProcessExplicitNoTimesheet) ||
+      boolish(row.__bulk_process_explicit_no_timesheet) ||
+      boolish(flags.__bulkProcessExplicitNoTimesheet) ||
+      boolish(row.no_timesheet_required) ||
+      boolish(row.client_no_timesheet_required) ||
+      boolish(row.no_timesheet_image_required) ||
+      boolish(row.timesheet_not_required) ||
+      boolish(flags.no_timesheet_required) ||
+      boolish(flags.no_timesheet_image_required) ||
+      boolish(row.manual_additional_route) ||
+      boolish(row.additional_manual_route) ||
+      boolish(flags.manual_additional_route) ||
+      boolish(flags.additional_manual_route) ||
+      boolish(row.supportsUnprocessedExpenseDraft) ||
+      boolish(row.supports_unprocessed_expense_draft) ||
+      boolish(flags.supportsUnprocessedExpenseDraft) ||
+      boolish(flags.supports_unprocessed_expense_draft) ||
+      upper(row.expense_storage_target || flags.expense_storage_target || '') === 'CONTRACT_WEEK_DRAFT' ||
+      upper(row.expense_evidence_storage_target || flags.expense_evidence_storage_target || '') === 'CONTRACT_WEEK_STAGED_EVIDENCE' ||
+      routeText.includes('NHSP') ||
+      routeText.includes('HEALTHROSTER') ||
+      routeText.includes('NO TIMESHEET') ||
+      routeText.includes('NO_TIMESHEET')
+    );
+  };
+
+  const explicitNoTimesheetBulkProcessEvidenceRow = () => {
+    if (isBulkAuthoriseTimesheets) return false;
+    const identity = selectedRowIdentityParts();
+    const hasTimesheetIdentity = !!(trimStr(identity.timesheetId || '') || /^timesheet:/i.test(trimStr(identity.rowKey || '')));
+    const hasContractWeekIdentity = !!(trimStr(identity.contractWeekId || '') || /^contract_week:/i.test(trimStr(identity.rowKey || '')));
+    return !!(
+      hasContractWeekIdentity &&
+      !hasTimesheetIdentity &&
+      (
+        rowLooksExplicitNoTimesheetManualAdjustmentForEvidence(st.active_row) ||
+        rowLooksExplicitNoTimesheetManualAdjustmentForEvidence(st.active_context?.row) ||
+        rowLooksExplicitNoTimesheetManualAdjustmentForEvidence(st.active_context?.data_row) ||
+        rowLooksExplicitNoTimesheetManualAdjustmentForEvidence(st.active_details) ||
+        rowLooksExplicitNoTimesheetManualAdjustmentForEvidence(st.active_ctx?.state)
+      )
+    );
+  };
+
+  const kindIsGenericFallbackForEvidence = (kindInput = '') => {
+    const kind = normaliseBulkProcessEvidenceKindForReconcile(kindInput);
+    return !kind || kind === 'OTHER' || kind === 'EVIDENCE' || kind === 'EXPENSE';
+  };
+
+  const identityPartsMatchActiveForEvidence = (sourceLike = {}) => {
+    const source = (sourceLike && typeof sourceLike === 'object') ? sourceLike : {};
+    const meta = parseObjectMaybeJson(source.meta_json || source.metaJson || source.meta || source.queue_meta || source.queueMeta);
+    const active = selectedRowIdentityParts();
+    const activeRowKey = trimStr(active.rowKey || '');
+    const activeTimesheetId = trimStr(active.timesheetId || '');
+    const activeContractWeekId = trimStr(active.contractWeekId || '');
+    const sourceRowKey = trimStr(source.row_key || source.rowKey || source.bulk_process_row_key || source.bulkProcessRowKey || meta.row_key || meta.rowKey || meta.bulk_process_row_key || meta.bulkProcessRowKey || '');
+    const sourceTimesheetId = trimStr(source.timesheet_id || source.timesheetId || source.current_timesheet_id || source.currentTimesheetId || meta.timesheet_id || meta.timesheetId || meta.current_timesheet_id || meta.currentTimesheetId || '');
+    const sourceContractWeekId = trimStr(source.contract_week_id || source.contractWeekId || source.current_contract_week_id || source.currentContractWeekId || meta.contract_week_id || meta.contractWeekId || meta.current_contract_week_id || meta.currentContractWeekId || meta.week_id || meta.weekId || '');
+    if (sourceRowKey && activeRowKey && sourceRowKey !== activeRowKey) return false;
+    if (sourceTimesheetId && activeTimesheetId && sourceTimesheetId !== activeTimesheetId) return false;
+    if (sourceContractWeekId && activeContractWeekId && sourceContractWeekId !== activeContractWeekId) return false;
+    if (/^contract_week:/i.test(activeRowKey) && sourceTimesheetId && !activeTimesheetId) return false;
+    if (activeContractWeekId && sourceTimesheetId && !activeTimesheetId) return false;
+    if (sourceRowKey || sourceTimesheetId || sourceContractWeekId) return true;
+    return false;
+  };
+
   const buildPrimaryArtifactFallbackRowsForEvidence = (matchingDatasetRow = null) => {
     const identity = selectedRowIdentityParts();
     const hasTimesheetIdentityForPrimaryFallback = !!(
       trimStr(identity.timesheetId || '') ||
       /^timesheet:/i.test(trimStr(identity.rowKey || ''))
     );
+    const explicitNoTimesheetRow = explicitNoTimesheetBulkProcessEvidenceRow();
     if (!isBulkAuthoriseTimesheets && !hasTimesheetIdentityForPrimaryFallback) return [];
+    if (!isBulkAuthoriseTimesheets && evidenceExpectation && explicitNoTimesheetRow) return [];
     const containers = [
       st.active_row,
       st.active_context?.row,
@@ -159583,8 +161864,10 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       matchingDatasetRow
     ];
     const rows = [];
+    const seenFallbacks = new Set();
     for (const container of containers) {
       if (!container || typeof container !== 'object') continue;
+      if (!isBulkAuthoriseTimesheets && !identityPartsMatchActiveForEvidence(container)) continue;
       const hints = (container.artifact_hints && typeof container.artifact_hints === 'object') ? container.artifact_hints : {};
       const artifact = (container.primary_artifact && typeof container.primary_artifact === 'object')
         ? container.primary_artifact
@@ -159593,15 +161876,31 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
         artifact?.storage_key || artifact?.file_key || artifact?.download_storage_key || artifact?.r2_key ||
         container.primary_artifact_storage_key || hints.primary_artifact_storage_key || ''
       );
-      const primaryId = trimStr(artifact?.id || artifact?.evidence_id || artifact?.evidenceId || artifact?.queue_id || artifact?.queueId || container.primary_artifact_id || hints.primary_artifact_id || '');
-      const kind = upper(artifact?.kind || artifact?.evidence_kind || artifact?.evidenceKind || container.primary_artifact_kind || hints.primary_artifact_kind || '');
+      const artifactQueueId = trimStr(artifact?.queue_id || artifact?.queueId || artifact?.manual_timesheet_queue_id || artifact?.manualTimesheetQueueId || '');
+      const artifactEvidenceId = trimStr(artifact?.evidence_id || artifact?.evidenceId || artifact?.timesheet_evidence_id || artifact?.timesheetEvidenceId || '');
+      const containerPrimaryId = trimStr(container.primary_artifact_id || container.primaryArtifactId || hints.primary_artifact_id || hints.primaryArtifactId || '');
+      const artifactGenericId = trimStr(artifact?.id || '');
+      const primaryId = trimStr(artifactEvidenceId || artifactQueueId || containerPrimaryId || artifactGenericId || '');
+      const kind = normaliseBulkProcessEvidenceKindForReconcile(artifact?.kind || artifact?.evidence_kind || artifact?.evidenceKind || container.primary_artifact_kind || hints.primary_artifact_kind || '');
       if (!storageKey) continue;
+      const hasRealFallbackIdentity = !!(
+        artifactEvidenceId ||
+        artifactQueueId ||
+        (containerPrimaryId && containerPrimaryId !== storageKey) ||
+        (artifactGenericId && artifactGenericId !== storageKey && !/^synthetic-attached:/i.test(artifactGenericId))
+      );
+      if (!isBulkAuthoriseTimesheets && !hasRealFallbackIdentity) continue;
+      if (!isBulkAuthoriseTimesheets && !identityPartsMatchActiveForEvidence({ ...container, ...(artifact || {}), storage_key: storageKey })) continue;
+      if (!isBulkAuthoriseTimesheets && explicitNoTimesheetRow && (kind === 'TIMESHEET' || kindIsGenericFallbackForEvidence(kind))) continue;
+      const key = `${primaryId || ''}|${storageKey.toLowerCase()}|${kind || 'EVIDENCE'}`;
+      if (seenFallbacks.has(key)) continue;
+      seenFallbacks.add(key);
       rows.push({
         ...(artifact ? deep(artifact) : {}),
         id: primaryId || storageKey,
-        evidence_id: primaryId || null,
-        queue_id: trimStr(artifact?.queue_id || '') || null,
-        kind: kind || 'OTHER',
+        evidence_id: artifactEvidenceId || null,
+        queue_id: artifactQueueId || null,
+        kind: kind || 'EVIDENCE',
         staged_kind: kind || undefined,
         display_name: trimStr(artifact?.display_name || artifact?.filename || container.primary_artifact_display_name || hints.primary_artifact_display_name || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
         filename: trimStr(artifact?.filename || artifact?.display_name || container.primary_artifact_display_name || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : 'Evidence'),
@@ -159631,14 +161930,14 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       { rows: st.active_ctx?.row?.evidence, scope: 'active_ctx_row', currentContext: true },
       { rows: st.active_ctx?.data_row?.evidence, scope: 'active_ctx_data_row', currentContext: true },
       { rows: matchingDatasetRow?.evidence, scope: 'dataset_row', currentContext: true },
-      { rows: evidenceContextAuthoritative ? st.active_ctx?.state?.evidence : null, scope: 'active_ctx_state', currentContext: true },
-      { rows: evidenceContextAuthoritative ? st.active_ctx?.evidence : null, scope: 'active_ctx', currentContext: true },
-      { rows: evidenceContextAuthoritative ? st.active_context?.evidence : null, scope: 'active_context', currentContext: true },
-      { rows: evidenceContextAuthoritative ? st.active_context?.details?.evidence : null, scope: 'active_context_details', currentContext: true },
-      { rows: evidenceContextAuthoritative ? st.active_details?.evidence : null, scope: 'active_details', currentContext: true },
+      { rows: (isBulkAuthoriseTimesheets || evidenceLoadedAuthority) ? st.active_ctx?.state?.evidence : null, scope: 'active_ctx_state', currentContext: true },
+      { rows: (isBulkAuthoriseTimesheets || evidenceLoadedAuthority) ? st.active_ctx?.evidence : null, scope: 'active_ctx', currentContext: true },
+      { rows: (isBulkAuthoriseTimesheets || evidenceLoadedAuthority) ? st.active_context?.evidence : null, scope: 'active_context', currentContext: true },
+      { rows: (isBulkAuthoriseTimesheets || evidenceLoadedAuthority) ? st.active_context?.details?.evidence : null, scope: 'active_context_details', currentContext: true },
+      { rows: (isBulkAuthoriseTimesheets || evidenceLoadedAuthority) ? st.active_details?.evidence : null, scope: 'active_details', currentContext: true },
       { rows: pane.attached_rows, scope: 'pane_attached_rows', currentContext: false },
       { rows: pane.attached_all_rows, scope: 'pane_attached_all_rows', currentContext: false },
-      { rows: evidenceContextAuthoritative ? window.modalCtx?.timesheetState?.evidence : null, scope: 'modal_timesheet_state', currentContext: false }
+      { rows: (isBulkAuthoriseTimesheets || evidenceLoadedAuthority) ? window.modalCtx?.timesheetState?.evidence : null, scope: 'modal_timesheet_state', currentContext: false }
     ];
     const rows = [];
     const syntheticRows = [];
@@ -159796,7 +162095,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       return safeStorageKey(item?.storage_key || item?.storageKey || item?.r2_key || item?.r2Key || item?.file_key || item?.fileKey || item?.download_storage_key || item?.downloadStorageKey || item?.preview_storage_key || item?.previewStorageKey || meta.storage_key || meta.storageKey || meta.r2_key || meta.r2Key || meta.file_key || meta.fileKey || meta.download_storage_key || meta.downloadStorageKey || meta.preview_storage_key || meta.previewStorageKey || '');
     };
 
-    const getItemKind = (item) => upper(item?.kind || item?.evidence_kind || item?.evidenceKind || item?.staged_kind || item?.stagedKind || getItemMetaObject(item).kind || getItemMetaObject(item).evidence_kind || 'OTHER') || 'OTHER';
+    const getItemKind = (item) => normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.evidence_kind || item?.evidenceKind || item?.staged_kind || item?.stagedKind || getItemMetaObject(item).kind || getItemMetaObject(item).evidence_kind || 'OTHER') || 'OTHER';
 
     const isSyntheticAttachedFallback = (item, evidenceId) => {
       const explicitEvidenceId = trimStr(item?.evidence_id || item?.evidenceId || '');
@@ -159849,9 +162148,17 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
     const scoreCandidate = (item) => {
       let score = 0;
+      const itemEvidenceId = trimStr(item?.evidence_id || item?.evidenceId || item?.timesheet_evidence_id || item?.timesheetEvidenceId || '');
+      const itemQueueId = trimStr(item?.queue_id || item?.queueId || item?.manual_timesheet_queue_id || item?.manualTimesheetQueueId || item?.manual_queue_id || item?.manualQueueId || '');
+      const itemTimesheetId = getItemTimesheetId(item);
+      const itemContractWeekId = getItemContractWeekId(item);
       if (getItemStorageKey(item)) score += 1000;
+      if (itemEvidenceId && activeTimesheetId && itemTimesheetId === activeTimesheetId) score += 300;
+      if (itemQueueId && activeContractWeekId && itemContractWeekId === activeContractWeekId && !itemTimesheetId) score += 260;
+      if (itemEvidenceId) score += 220;
+      if (itemQueueId) score += 180;
       if (item?.is_staged_context === true) score += 150;
-      if (isSyntheticAttachedFallback(item, item?.evidence_id || item?.id || item?.queue_id || '')) score -= 150;
+      if (isSyntheticAttachedFallback(item, item?.evidence_id || item?.id || item?.queue_id || '')) score -= 500;
       if (trimStr(item?.display_name || item?.filename || item?.original_filename || '')) score += 30;
       if (trimStr(item?.mime_type || item?.content_type || '')) score += 15;
       if (trimStr(item?.uploaded_at || item?.created_at || item?.updated_at || item?.staged_at_utc || '')) score += 8;
@@ -160008,20 +162315,31 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const evidenceMeta = (st.active_context?.evidence_meta && typeof st.active_context.evidence_meta === 'object')
     ? st.active_context.evidence_meta
     : {};
-  const badgeArray = Array.isArray(rowMeta.evidence_badges)
-    ? rowMeta.evidence_badges
-    : (Array.isArray(evidenceMeta.evidence_badges) ? evidenceMeta.evidence_badges : []);
-  const badgeSaysEvidence = badgeArray.some((badge) => {
-    if (!badge || typeof badge !== 'object') return false;
-    if (badge.present === true || badge.has_evidence === true || badge.hasEvidence === true) return true;
-    const count = Number(badge.count ?? badge.evidence_count ?? badge.evidenceCount ?? 0);
-    return Number.isFinite(count) && count > 0;
-  });
-  const metadataExpectsEvidence = !!(
-    boolish(rowMeta.has_any_evidence) ||
-    boolish(evidenceMeta.has_any_evidence) ||
-    Number(rowMeta.attached_evidence_count || evidenceMeta.attached_evidence_count || 0) > 0 ||
-    badgeSaysEvidence
+  const expectationSnapshot = collectEvidenceExpectationSourcesForReconcile(
+    rowMeta,
+    evidenceMeta,
+    st.active_row,
+    st.active_details,
+    st.active_context,
+    st.active_context?.details,
+    st.active_context?.row,
+    st.active_context?.data_row,
+    st.active_ctx,
+    st.active_ctx?.details,
+    st.active_ctx?.state,
+    pane,
+    pane.attached_rows,
+    pane.attached_all_rows
+  );
+  const metadataExpectsEvidence = !!expectationSnapshot.hasEvidence;
+  evidenceExpectation = !!metadataExpectsEvidence;
+  const bulkAuthoriseEvidenceContextAuthoritative = !!(
+    evidenceLoadedAuthority ||
+    metadataExpectsEvidence ||
+    st.active_row?.has_any_evidence === true ||
+    Number(st.active_row?.attached_evidence_count || 0) > 0 ||
+    pane.__evidence_loaded === true ||
+    pane.__attached_loaded === true
   );
 
   const previousSelection = getSelectionIdentity(pane);
@@ -160044,10 +162362,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     trimStr(selectedRowIdentity.timesheetId || '') ||
     /^timesheet:/i.test(trimStr(selectedRowIdentity.rowKey || ''))
   );
-  if (!isBulkAuthoriseTimesheets && !selectedRowHasTimesheetIdentity) {
-    clearBulkProcessPostAttachRefreshFlags();
-    pane.__requires_evidence_hydration = false;
-  }
+  const explicitNoTimesheetForEvidencePane = explicitNoTimesheetBulkProcessEvidenceRow();
   const selectedRowSyntheticAttachedItem = (selectedRowArtifactKey && (isBulkAuthoriseTimesheets || selectedRowHasTimesheetIdentity)) ? buildSyntheticSelectedRowAttachedItem(selectedRowArtifactKey) : null;
   const getItemStorageKey = (item) => safeStorageKey(item?.storage_key || item?.r2_key || item?.file_key || item?.download_storage_key || '');
   if (selectedRowSyntheticAttachedItem) {
@@ -160132,14 +162447,86 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       boolish(item?.__primary_artifact_fallback)
     );
   };
-  const hasSyntheticAttachedFallback = syntheticAttachedFallbackRows.length > 0;
-  const timesheetRows = attachedAllRows.filter((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET');
-  const realTimesheetRows = timesheetRows.filter((item) => !isSyntheticAttachedPaneItem(item));
-  const hasSyntheticTimesheetFallback = syntheticAttachedFallbackRows.some((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET');
+  const hasRealEvidenceIdentityForReconcile = (item) => {
+    if (!item || typeof item !== 'object') return false;
+    if (!getItemStorageKey(item)) return false;
+    if (isSyntheticAttachedPaneItem(item)) return false;
+    const meta = parseObjectMaybeJson(item.meta_json || item.metaJson || item.meta || item.queue_meta || item.queueMeta);
+    const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || meta.timesheet_evidence_id || meta.timesheetEvidenceId || '');
+    const queueId = trimStr(item.queue_id || item.queueId || item.manual_timesheet_queue_id || item.manualTimesheetQueueId || item.manual_queue_id || item.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || meta.manualQueueId || '');
+    const genericId = trimStr(item.id || meta.id || '');
+    const storageKey = getItemStorageKey(item);
+    if (evidenceId || queueId) return true;
+    if (genericId && genericId !== storageKey && !/^synthetic-attached:/i.test(genericId)) return true;
+    return !!(storageKey && (rowKeyForRemovalMatch(item) || timesheetIdForRemovalMatch(item) || contractWeekIdForRemovalMatch(item)));
+  };
 
-  if (evidenceContextAuthoritative || attachedAllRows.length > 0 || !selectedRowArtifactKey) {
+  let realAttachedRowsForAuthority = attachedAllRows.filter((item) => hasRealEvidenceIdentityForReconcile(item));
+  let realNonTimesheetEvidenceRowsForPane = realAttachedRowsForAuthority.filter((item) => normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.staged_kind || item?.evidence_kind || item?.evidenceKind || '') !== 'TIMESHEET');
+  if (!isBulkAuthoriseTimesheets && explicitNoTimesheetForEvidencePane && realNonTimesheetEvidenceRowsForPane.length) {
+    attachedAllRows = attachedAllRows.filter((item) => {
+      if (!isSyntheticAttachedPaneItem(item)) return true;
+      const kind = normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.staged_kind || item?.evidence_kind || item?.evidenceKind || '');
+      return !(kind === 'TIMESHEET' || kindIsGenericFallbackForEvidence(kind));
+    });
+    syntheticAttachedFallbackRows = syntheticAttachedFallbackRows.filter((item) => {
+      const kind = normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.staged_kind || item?.evidence_kind || item?.evidenceKind || '');
+      return !(kind === 'TIMESHEET' || kindIsGenericFallbackForEvidence(kind));
+    });
+    realAttachedRowsForAuthority = attachedAllRows.filter((item) => hasRealEvidenceIdentityForReconcile(item));
+    realNonTimesheetEvidenceRowsForPane = realAttachedRowsForAuthority.filter((item) => normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.staged_kind || item?.evidence_kind || item?.evidenceKind || '') !== 'TIMESHEET');
+  }
+
+  evidenceLoadedAuthority = !!(evidenceLoadedAuthority || realAttachedRowsForAuthority.length > 0);
+  evidenceExpectation = !!(evidenceExpectation || realAttachedRowsForAuthority.length > 0);
+  const evidenceArraysExplicitlyEmpty = evidenceArraysExplicitlyPresentAndEmptyForReconcile(
+    st.active_context,
+    st.active_context?.details,
+    st.active_context?.row,
+    st.active_context?.data_row,
+    st.active_details,
+    st.active_ctx,
+    st.active_ctx?.details,
+    st.active_ctx?.state
+  );
+  const evidenceLoadedContextIdentityMatchesActive = evidenceLoadedContextIdentityMatchesActiveForReconcile(
+    st.active_context,
+    st.active_context?.details,
+    st.active_context?.row,
+    st.active_context?.data_row,
+    st.active_details,
+    st.active_ctx,
+    st.active_ctx?.details,
+    st.active_ctx?.state
+  );
+  const preservedMatchingRealEvidenceSourceContradictsClear = !!(
+    realAttachedRowsForAuthority.length > 0 ||
+    attachedAllRows.some((item) => hasRealEvidenceIdentityForReconcile(item))
+  );
+  allowEvidenceClear = !!(
+    !isBulkAuthoriseTimesheets &&
+    evidenceLoadedAuthority &&
+    evidenceLoadedContextIdentityMatchesActive &&
+    evidenceArraysExplicitlyEmpty &&
+    !preservedMatchingRealEvidenceSourceContradictsClear
+  );
+
+  const hasSyntheticAttachedFallback = syntheticAttachedFallbackRows.length > 0;
+  const timesheetRows = attachedAllRows.filter((item) => normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.staged_kind || '') === 'TIMESHEET');
+  const realTimesheetRows = timesheetRows.filter((item) => hasRealEvidenceIdentityForReconcile(item));
+  const hasSyntheticTimesheetFallback = syntheticAttachedFallbackRows.some((item) => normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.staged_kind || '') === 'TIMESHEET');
+
+  if (attachedAllRows.length > 0) {
     pane.attached_all_rows = attachedAllRows.map((item) => ({ ...(deep(item) || {}) }));
     pane.attached_rows = attachedAllRows.map((item) => ({ ...(deep(item) || {}) }));
+  } else if (allowEvidenceClear) {
+    pane.attached_all_rows = [];
+    pane.attached_rows = [];
+    pane.active_attached_id = null;
+    pane.active_attached_item = null;
+    pane.__active_attached_preview_target = '';
+  } else if (evidenceExpectation) {
+    pane.__requires_evidence_hydration = true;
   }
 
   const hasAnyAttachedEvidence = attachedAllRows.length > 0;
@@ -160197,7 +162584,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       pane.__attached_manual_override = true;
       pane.active_queue_id = null;
       pane.active_queue_item = null;
-      pane.__requires_evidence_hydration = !hasAnyAttachedEvidence && !evidenceContextAuthoritative && (metadataExpectsEvidence || requestedSource === 'attached');
+      pane.__requires_evidence_hydration = !hasAnyAttachedEvidence && !bulkAuthoriseEvidenceContextAuthoritative && (metadataExpectsEvidence || requestedSource === 'attached');
       if (hasAnyAttachedEvidence) pane.__requires_evidence_hydration = false;
     }
   } else {
@@ -160208,6 +162595,14 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       pane.__attached_manual_override = false;
       pane.__queue_manual_override = true;
       pane.__queue_manual_override_scope = queueScope;
+    } else if (explicitNoTimesheetForEvidencePane && realNonTimesheetEvidenceRowsForPane.length) {
+      resolvedSource = 'attached';
+      pane.__requires_evidence_hydration = false;
+      pane.__synthetic_attached_fallback_suppressed = false;
+      pane.__attached_manual_override = true;
+      pane.__queue_manual_override = false;
+      pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = '';
     } else if (manualOverride && hasAnyAttachedEvidence) {
       resolvedSource = 'attached';
       pane.__requires_evidence_hydration = false;
@@ -160242,7 +162637,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       pane.__queue_manual_override_scope = '';
     } else {
       resolvedSource = 'queue';
-      pane.__requires_evidence_hydration = false;
+      pane.__requires_evidence_hydration = !!(evidenceExpectation && !allowEvidenceClear);
       pane.__synthetic_attached_fallback_suppressed = hasSyntheticAttachedFallback;
       pane.__attached_manual_override = false;
       pane.__queue_manual_override = false;
@@ -160287,9 +162682,10 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   const canUseAnyAttachedForExplicitBulkProcess = !!(
     !isBulkAuthoriseTimesheets &&
+    explicitNoTimesheetForEvidencePane &&
     pane.active_tab === 'attached' &&
     pane.__attached_manual_override === true &&
-    hasAnyAttachedEvidence
+    realNonTimesheetEvidenceRowsForPane.length > 0
   );
 
   const currentAttachedSelectionKey = (() => {
@@ -160326,7 +162722,11 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     if (aliasedSelectionKey && attachedBySelectionKey.has(aliasedSelectionKey)) activeAttached = { ...(attachedBySelectionKey.get(aliasedSelectionKey) || {}) };
   }
 
-  if (!isBulkAuthoriseTimesheets && !canUseAnyAttachedForExplicitBulkProcess && activeAttached && hasTimesheetEvidence && upper(activeAttached?.kind || activeAttached?.staged_kind || '') !== 'TIMESHEET') {
+  if (!isBulkAuthoriseTimesheets && canUseAnyAttachedForExplicitBulkProcess && activeAttached) {
+    const activeAttachedKind = normaliseBulkProcessEvidenceKindForReconcile(activeAttached?.kind || activeAttached?.staged_kind || activeAttached?.evidence_kind || activeAttached?.evidenceKind || '');
+    if (activeAttachedKind === 'TIMESHEET' || !hasRealEvidenceIdentityForReconcile(activeAttached)) activeAttached = null;
+  }
+  if (!isBulkAuthoriseTimesheets && !canUseAnyAttachedForExplicitBulkProcess && activeAttached && hasTimesheetEvidence && normaliseBulkProcessEvidenceKindForReconcile(activeAttached?.kind || activeAttached?.staged_kind || '') !== 'TIMESHEET') {
     activeAttached = null;
   }
   if (!isBulkAuthoriseTimesheets && !canUseAnyAttachedForExplicitBulkProcess && selectedRowArtifactKey && activeAttached && getItemStorageKey(activeAttached).toLowerCase() !== selectedRowArtifactKey.toLowerCase()) {
@@ -160335,7 +162735,12 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
 
   if (!activeAttached && (pane.active_tab === 'attached' || isBulkAuthoriseTimesheets || hasTimesheetEvidence || selectedRowArtifactCoveredByRealAttachedEvidence || canUseAnyAttachedForExplicitBulkProcess)) {
     if (canUseAnyAttachedForExplicitBulkProcess) {
-      activeAttached = attachedAllRows.find((item) => !!buildCanonicalAttachedSelectionKey(item)) ? { ...(attachedAllRows.find((item) => !!buildCanonicalAttachedSelectionKey(item)) || {}) } : null;
+      const selectedKeyLower = selectedRowArtifactKey.toLowerCase();
+      const selectedRealEvidence = selectedKeyLower
+        ? realNonTimesheetEvidenceRowsForPane.find((item) => getItemStorageKey(item).toLowerCase() === selectedKeyLower && !!buildCanonicalAttachedSelectionKey(item)) || null
+        : null;
+      const firstRealNonTimesheet = realNonTimesheetEvidenceRowsForPane.find((item) => !!buildCanonicalAttachedSelectionKey(item)) || null;
+      activeAttached = selectedRealEvidence ? { ...(selectedRealEvidence || {}) } : (firstRealNonTimesheet ? { ...(firstRealNonTimesheet || {}) } : null);
     } else if (hasTimesheetEvidence) {
       activeAttached = findPreferredTimesheetAttached();
     } else if (selectedRowArtifactCoveredByRealAttachedEvidence) {
@@ -160364,7 +162769,7 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     pane.active_attached_item = activeAttached;
     pane.active_attached_id = attachedParts.attached_id || null;
     pane.__active_attached_preview_target = attachedParts.key || '';
-    if (pane.active_tab === 'attached' && attachedParts.key && !trimStr(pane.__preview_load_requested_target_key || '')) {
+    if (pane.active_tab === 'attached' && attachedParts.key) {
       pane.__preview_load_requested_target_key = attachedParts.key;
     }
     if (isBulkAuthoriseTimesheets) {
@@ -160382,15 +162787,23 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
       st.__pending_attached_identity = '';
     }
   } else {
-    pane.active_attached_item = null;
-    pane.active_attached_id = null;
-    pane.active_attached_pdf_page = 1;
-    pane.__active_attached_preview_target = '';
-    if (!hasAnyAttachedEvidence && !isBulkAuthoriseTimesheets) {
-      pane.__attached_manual_override = false;
-      pane.__queue_manual_override = false;
-      pane.__queue_manual_override_identity = '';
-      pane.__queue_manual_override_scope = '';
+    if (!isBulkAuthoriseTimesheets && evidenceExpectation && !allowEvidenceClear && !hasAnyAttachedEvidence) {
+      pane.active_attached_item = previewStateAtStart.active_attached_item || pane.active_attached_item || null;
+      pane.active_attached_id = previewStateAtStart.active_attached_id || pane.active_attached_id || null;
+      pane.active_attached_pdf_page = Number(pane.active_attached_pdf_page || previewStateAtStart.active_attached_pdf_page || 1) || 1;
+      pane.__active_attached_preview_target = trimStr(previewStateAtStart.__active_attached_preview_target || pane.__active_attached_preview_target || '');
+      pane.__requires_evidence_hydration = true;
+    } else {
+      pane.active_attached_item = null;
+      pane.active_attached_id = null;
+      pane.active_attached_pdf_page = 1;
+      pane.__active_attached_preview_target = '';
+      if (!hasAnyAttachedEvidence && !isBulkAuthoriseTimesheets) {
+        pane.__attached_manual_override = false;
+        pane.__queue_manual_override = false;
+        pane.__queue_manual_override_identity = '';
+        pane.__queue_manual_override_scope = '';
+      }
     }
   }
 
@@ -160417,9 +162830,10 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
   const nextSelection = getSelectionIdentity(pane);
   const nextSelectionBlank = nextSelection.key === 'queue||' || nextSelection.key === 'attached||' || /^\w+\|\|$/.test(nextSelection.key) || !String(nextSelection.key || '').replace(/\|/g, '');
   const previousSelectionValid = !!previousSelection.key && previousSelection.key !== 'queue||' && previousSelection.key !== 'attached||' && !/^\w+\|\|$/.test(previousSelection.key);
-  const suppressRestoreToPreviousSelection = !!(!isBulkAuthoriseTimesheets && ((!hasTimesheetEvidence && !selectedRowArtifactCoveredByRealAttachedEvidence) || pane.active_tab === 'queue'));
+  const pendingEvidenceWithoutRows = !!(!isBulkAuthoriseTimesheets && evidenceExpectation && !allowEvidenceClear && !hasAnyAttachedEvidence);
+  const suppressRestoreToPreviousSelection = !!(!pendingEvidenceWithoutRows && !isBulkAuthoriseTimesheets && !realNonTimesheetEvidenceRowsForPane.length && ((!hasTimesheetEvidence && !selectedRowArtifactCoveredByRealAttachedEvidence) || pane.active_tab === 'queue'));
   const validToBlankSelection = !!(previousSelectionValid && nextSelectionBlank && activeIdentityAtStart === activeIdentity && !suppressRestoreToPreviousSelection && !selectedArtifactRemoved);
-  const selectedPreviewChanged = selectedArtifactRemoved || (previousSelection.key !== nextSelection.key && !validToBlankSelection);
+  const selectedPreviewChanged = selectedArtifactRemoved || (previousSelection.key !== nextSelection.key && !validToBlankSelection && !pendingEvidenceWithoutRows);
   const ownerIdentity = getBulkAuthoriseOwnerIdentity();
   const previousPreviewIdentity = trimStr(pane.__preview_identity || '');
   if (isBulkAuthoriseTimesheets && previousPreviewIdentity && ownerIdentity && previousPreviewIdentity !== ownerIdentity) {
@@ -160515,33 +162929,207 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     pane.__preview_identity = ownerIdentity;
   }
 
-  if (!isBulkAuthoriseTimesheets && attachedAllRows.length > 0) {
-    const evidenceKinds = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
+  const buildDynamicEvidenceBadgesForRows = (rowsForBadges = [], extraBadges = []) => {
+    const knownOrder = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
     const countsByKind = new Map();
-    for (const item of attachedAllRows) {
-      const kind = upper(item?.kind || item?.staged_kind || '') || 'OTHER';
+    for (const row of rowsForBadges) {
+      const kind = normaliseBulkProcessEvidenceKindForReconcile(row?.kind || row?.staged_kind || row?.evidence_kind || row?.evidenceKind || '') || 'EVIDENCE';
       countsByKind.set(kind, (Number(countsByKind.get(kind) || 0) || 0) + 1);
     }
-    const evidenceBadges = evidenceKinds.map((kind) => {
+    for (const badge of Array.isArray(extraBadges) ? extraBadges : []) {
+      if (!badgeIndicatesEvidence(badge)) continue;
+      const kind = normaliseBulkProcessEvidenceKindForReconcile(badge.kind || badge.evidence_kind || badge.evidenceKind || '') || 'EVIDENCE';
+      countsByKind.set(kind, Math.max(Number(countsByKind.get(kind) || 0) || 0, Number(badge.count || badge.evidence_count || 1) || 1));
+    }
+    const kinds = Array.from(new Set([...knownOrder, ...Array.from(countsByKind.keys()).filter(Boolean)]));
+    kinds.sort((left, right) => {
+      const li = knownOrder.indexOf(left);
+      const ri = knownOrder.indexOf(right);
+      const ls = li >= 0 ? li : 1000;
+      const rs = ri >= 0 ? ri : 1000;
+      if (ls !== rs) return ls - rs;
+      return String(left).localeCompare(String(right));
+    });
+    return kinds.map((kind) => {
       const count = Number(countsByKind.get(kind) || 0) || 0;
       return { kind, has_evidence: count > 0, present: count > 0, count };
     });
-    const primaryEvidence = attachedAllRows.find((item) => upper(item?.kind || item?.staged_kind || '') === 'TIMESHEET') || attachedAllRows[0] || null;
+  };
+
+  const evidenceDerivedDisableLooksContradicted = (flags = {}) => {
+    const f = (flags && typeof flags === 'object') ? flags : {};
+    const reasonText = upper([
+      f.process_block_reason,
+      f.can_process_reason,
+      f.block_reason,
+      f.save_block_reason,
+      f.can_save_reason,
+      f.manage_evidence_block_reason,
+      f.can_manage_evidence_reason,
+      f.disabled_reason,
+      f.reason
+    ].filter(Boolean).join(' '));
+    const hasNonEvidenceBlock = /(IMPORT|REVIEW|LOCK|AUTHORI|AUTHORIS|FROZEN|INVOICE|PAID|PROCESSED|UNPROCESSED|STATUS|INVALID|PERMISSION|IDENTITY|POLICY|ROUTE)/.test(reasonText);
+    const hasEvidenceBlock = /(EVIDENCE|ATTACHED|ATTACHMENT|ARTIFACT|DOCUMENT|REQUIRED|MISSING)/.test(reasonText);
+    const falseEvidenceSignals = !!(
+      f.has_any_evidence === false ||
+      f.has_attached_evidence === false ||
+      Number(f.attached_evidence_count || 0) === 0 ||
+      (Array.isArray(f.evidence_badges) && f.evidence_badges.every((badge) => !badgeIndicatesEvidence(badge)))
+    );
+    return !hasNonEvidenceBlock && (hasEvidenceBlock || falseEvidenceSignals || !reasonText);
+  };
+
+  const reconcileActionFlagsWithPositiveEvidenceTruth = (container) => {
+    if (!container || typeof container !== 'object' || !container.action_flags || typeof container.action_flags !== 'object') return;
+    const flags = { ...container.action_flags };
+    for (const key of [
+      'has_any_evidence',
+      'has_attached_evidence',
+      'attached_evidence_count',
+      'evidence_count',
+      'evidence_badges',
+      'primary_artifact',
+      'primary_artifact_id',
+      'primary_artifact_kind',
+      'primary_artifact_storage_key',
+      'primary_artifact_preview_mode'
+    ]) {
+      const value = flags[key];
+      if (
+        value === false ||
+        value == null ||
+        value === '' ||
+        (typeof value === 'number' && value <= 0) ||
+        (Array.isArray(value) && value.every((badge) => !badgeIndicatesEvidence(badge)))
+      ) {
+        try { delete flags[key]; } catch {}
+      }
+    }
+    if (flags.can_process === false && evidenceDerivedDisableLooksContradicted(flags)) {
+      try { delete flags.can_process; } catch {}
+      for (const key of ['process_block_reason', 'can_process_reason', 'block_reason']) {
+        if (/(EVIDENCE|ATTACHED|ATTACHMENT|ARTIFACT|DOCUMENT|REQUIRED|MISSING)/.test(upper(flags[key] || ''))) {
+          try { delete flags[key]; } catch {}
+        }
+      }
+    }
+    if (flags.can_save === false && evidenceDerivedDisableLooksContradicted(flags)) {
+      try { delete flags.can_save; } catch {}
+      for (const key of ['save_block_reason', 'can_save_reason']) {
+        if (/(EVIDENCE|ATTACHED|ATTACHMENT|ARTIFACT|DOCUMENT|REQUIRED|MISSING)/.test(upper(flags[key] || ''))) {
+          try { delete flags[key]; } catch {}
+        }
+      }
+    }
+    if (flags.can_manage_evidence === false && evidenceDerivedDisableLooksContradicted(flags)) {
+      try { delete flags.can_manage_evidence; } catch {}
+      for (const key of ['manage_evidence_block_reason', 'can_manage_evidence_reason']) {
+        if (/(EVIDENCE|ATTACHED|ATTACHMENT|ARTIFACT|DOCUMENT|REQUIRED|MISSING)/.test(upper(flags[key] || ''))) {
+          try { delete flags[key]; } catch {}
+        }
+      }
+    }
+    container.action_flags = flags;
+  };
+
+  const applyEvidencePendingTruthToContainer = (container) => {
+    if (!container || typeof container !== 'object') return;
+    const expectedCount = Math.max(0, Number(expectationSnapshot.count || container.attached_evidence_count || container.evidence_meta?.attached_evidence_count || 0) || 0);
+    const expectedBadges = Array.isArray(container.evidence_badges) && container.evidence_badges.some(badgeIndicatesEvidence)
+      ? container.evidence_badges.map((badge) => ({ ...badge }))
+      : buildDynamicEvidenceBadgesForRows([], expectationSnapshot.badges || []);
+    container.has_any_evidence = true;
+    if (expectedCount > 0) {
+      container.has_attached_evidence = true;
+      container.attached_evidence_count = expectedCount;
+      container.evidence_count = expectedCount;
+    }
+    container.evidence_badges = expectedBadges;
+    container.evidence_meta = {
+      ...((container.evidence_meta && typeof container.evidence_meta === 'object') ? container.evidence_meta : {}),
+      has_any_evidence: true,
+      has_attached_evidence: expectedCount > 0 || container.has_attached_evidence === true,
+      attached_evidence_count: expectedCount > 0 ? expectedCount : (container.evidence_meta?.attached_evidence_count || container.attached_evidence_count || 0),
+      evidence_count: expectedCount > 0 ? expectedCount : (container.evidence_meta?.evidence_count || container.evidence_count || 0),
+      evidence_badges: expectedBadges.map((badge) => ({ ...badge })),
+      evidence_pending: true,
+      requires_evidence_hydration: true
+    };
+    container.artifact_hints = {
+      ...((container.artifact_hints && typeof container.artifact_hints === 'object') ? container.artifact_hints : {}),
+      has_any_evidence: true,
+      attached_evidence_count: expectedCount > 0 ? expectedCount : (container.artifact_hints?.attached_evidence_count || container.attached_evidence_count || 0),
+      evidence_badges: expectedBadges.map((badge) => ({ ...badge })),
+      evidence_pending: true,
+      requires_evidence_hydration: true
+    };
+    reconcileActionFlagsWithPositiveEvidenceTruth(container);
+  };
+
+  const applyEvidenceClearToContainer = (container) => {
+    if (!container || typeof container !== 'object') return;
+    container.evidence = [];
+    container.evidence_loaded = true;
+    container.evidence_authoritative = true;
+    container.include_evidence = true;
+    container.has_any_evidence = false;
+    container.has_attached_evidence = false;
+    container.attached_evidence_count = 0;
+    container.evidence_count = 0;
+    container.evidence_badges = buildDynamicEvidenceBadgesForRows([]).map((badge) => ({ ...badge, present: false, has_evidence: false, count: 0 }));
+    container.primary_artifact = null;
+    container.primary_artifact_id = null;
+    container.primary_artifact_kind = null;
+    container.primary_artifact_storage_key = null;
+    container.primary_artifact_preview_mode = null;
+    container.evidence_meta = {
+      ...((container.evidence_meta && typeof container.evidence_meta === 'object') ? container.evidence_meta : {}),
+      evidence_loaded: true,
+      evidence_authoritative: true,
+      include_evidence: true,
+      has_any_evidence: false,
+      has_attached_evidence: false,
+      attached_evidence_count: 0,
+      evidence_count: 0,
+      evidence_badges: container.evidence_badges
+    };
+    container.artifact_hints = {
+      ...((container.artifact_hints && typeof container.artifact_hints === 'object') ? container.artifact_hints : {}),
+      has_any_evidence: false,
+      attached_evidence_count: 0,
+      primary_artifact_id: null,
+      primary_artifact_kind: null,
+      primary_artifact_storage_key: null,
+      primary_artifact_preview_mode: null,
+      primary_artifact: null,
+      evidence_badges: container.evidence_badges
+    };
+  };
+
+  const evidenceTruthRows = !isBulkAuthoriseTimesheets ? realAttachedRowsForAuthority : [];
+  if (!isBulkAuthoriseTimesheets && evidenceTruthRows.length > 0) {
+    const evidenceBadges = buildDynamicEvidenceBadgesForRows(evidenceTruthRows);
+    const primaryEvidence = explicitNoTimesheetForEvidencePane
+      ? (evidenceTruthRows.find((item) => normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.staged_kind || item?.evidence_kind || item?.evidenceKind || '') !== 'TIMESHEET') || evidenceTruthRows[0] || null)
+      : (evidenceTruthRows.find((item) => normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.staged_kind || item?.evidence_kind || item?.evidenceKind || '') === 'TIMESHEET') || evidenceTruthRows[0] || null);
     const primaryStorageKey = primaryEvidence ? getItemStorageKey(primaryEvidence) : '';
-    const primaryId = primaryEvidence ? trimStr(primaryEvidence.id || primaryEvidence.evidence_id || primaryEvidence.queue_id || '') : '';
+    const primaryId = primaryEvidence ? trimStr(primaryEvidence.id || primaryEvidence.evidence_id || primaryEvidence.queue_id || primaryEvidence.manual_timesheet_queue_id || '') : '';
+    const primaryKind = primaryEvidence ? normaliseBulkProcessEvidenceKindForReconcile(primaryEvidence.kind || primaryEvidence.staged_kind || primaryEvidence.evidence_kind || primaryEvidence.evidenceKind || '') : '';
     const applyEvidenceTruthToContainer = (container) => {
       if (!container || typeof container !== 'object') return;
-      container.evidence = attachedAllRows.map((item) => deep(item));
+      container.evidence = evidenceTruthRows.map((item) => deep(item));
       container.evidence_loaded = true;
       container.evidence_authoritative = true;
       container.include_evidence = true;
       container.has_any_evidence = true;
       container.has_attached_evidence = true;
-      container.attached_evidence_count = attachedAllRows.length;
+      container.attached_evidence_count = evidenceTruthRows.length;
+      container.evidence_count = evidenceTruthRows.length;
       container.evidence_badges = evidenceBadges.map((badge) => ({ ...badge }));
       container.primary_artifact = primaryEvidence ? deep(primaryEvidence) : null;
       container.primary_artifact_id = primaryId || null;
-      container.primary_artifact_kind = primaryEvidence ? (upper(primaryEvidence.kind || primaryEvidence.staged_kind || '') || null) : null;
+      container.primary_artifact_kind = primaryKind || null;
       container.primary_artifact_storage_key = primaryStorageKey || null;
       container.primary_artifact_preview_mode = primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || null) : null;
       container.evidence_meta = {
@@ -160551,20 +163139,22 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
         include_evidence: true,
         has_any_evidence: true,
         has_attached_evidence: true,
-        attached_evidence_count: attachedAllRows.length,
+        attached_evidence_count: evidenceTruthRows.length,
+        evidence_count: evidenceTruthRows.length,
         evidence_badges: evidenceBadges.map((badge) => ({ ...badge }))
       };
       container.artifact_hints = {
         ...((container.artifact_hints && typeof container.artifact_hints === 'object') ? container.artifact_hints : {}),
         has_any_evidence: true,
-        attached_evidence_count: attachedAllRows.length,
+        attached_evidence_count: evidenceTruthRows.length,
         primary_artifact_id: primaryId || null,
-        primary_artifact_kind: primaryEvidence ? (upper(primaryEvidence.kind || primaryEvidence.staged_kind || '') || null) : null,
+        primary_artifact_kind: primaryKind || null,
         primary_artifact_storage_key: primaryStorageKey || null,
         primary_artifact_preview_mode: primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || null) : null,
         primary_artifact: primaryEvidence ? deep(primaryEvidence) : null,
         evidence_badges: evidenceBadges.map((badge) => ({ ...badge }))
       };
+      reconcileActionFlagsWithPositiveEvidenceTruth(container);
     };
     applyEvidenceTruthToContainer(st.active_row);
     applyEvidenceTruthToContainer(st.active_details);
@@ -160575,6 +163165,12 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     applyEvidenceTruthToContainer(st.active_ctx);
     applyEvidenceTruthToContainer(st.active_ctx?.details);
     applyEvidenceTruthToContainer(st.active_ctx?.state);
+  } else if (!isBulkAuthoriseTimesheets && allowEvidenceClear) {
+    [st.active_row, st.active_details, st.active_context, st.active_context?.details, st.active_context?.row, st.active_context?.data_row, st.active_ctx, st.active_ctx?.details, st.active_ctx?.state]
+      .forEach(applyEvidenceClearToContainer);
+  } else if (!isBulkAuthoriseTimesheets && evidenceExpectation) {
+    [st.active_row, st.active_details, st.active_context, st.active_context?.details, st.active_context?.row, st.active_context?.data_row, st.active_ctx, st.active_ctx?.details, st.active_ctx?.state]
+      .forEach(applyEvidencePendingTruthToContainer);
   }
 
   st.evidence_pane_state = pane;
@@ -160589,13 +163185,20 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     active_queue_id: trimStr(pane.active_queue_id || '') || null,
     selected_preview_changed: selectedPreviewChanged,
     requires_evidence_hydration: pane.__requires_evidence_hydration === true,
+    evidence_loaded_authority: evidenceLoadedAuthority,
+    evidence_expectation: evidenceExpectation,
+    allow_evidence_clear: allowEvidenceClear,
     preserved_existing_preview: preservedExistingPreview,
     real_selected_artifact_changed: selectedPreviewChanged,
     active_row_changed: activeIdentityAtStart !== activeIdentity,
     selected_artifact_removed: selectedArtifactRemoved,
-    non_authoritative_context_ignored: false
+    non_authoritative_context_ignored: !evidenceLoadedAuthority && evidenceExpectation && !allowEvidenceClear
   };
 }
+
+
+
+
 
 async function rerenderBulkProcessWorkbench(state, logPrefix) {
   const prefix = String(logPrefix || '[TS][BULK-PROCESS]');
@@ -162633,6 +165236,7 @@ async function handleBulkProcessSave(state) {
   }
 }
 
+
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -163036,14 +165640,9 @@ async function handleBulkProcessProcess(state) {
     let processPostTransitionEvidencePatch = null;
     if (selectionOpts.evidenceChanged === true) {
       try {
-        const refreshedEvidenceRows = collectCurrentEvidenceRowsForProcess(readActive()).filter((item) => {
-          if (!item || typeof item !== 'object') return false;
-          if (isSyntheticAttachedEvidenceItem(item)) return false;
-          const resolvedEvidenceId = evidenceIdOf(item);
-          return !!(resolvedEvidenceId && !isSyntheticEvidenceId(resolvedEvidenceId) && evidenceStorageKeyOf(item));
-        });
+        const refreshedEvidenceRows = collectCanonicalRealEvidenceRowsForProcess(readActive());
         if (refreshedEvidenceRows.length > 0) {
-          processPostTransitionEvidencePatch = buildProcessEvidenceAuthorityPatch(refreshedEvidenceRows);
+          processPostTransitionEvidencePatch = buildProcessEvidenceAuthorityPatch(refreshedEvidenceRows, { active: readActive() });
         }
       } catch (err) {
         if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] processed-row evidence adoption degraded', err);
@@ -163426,7 +166025,319 @@ async function handleBulkProcessProcess(state) {
     if (positive(draft.mileage_units, draft.mileage_pay, draft.mileage_pay_ex_vat, draft.mileage_charge, draft.mileage_charge_ex_vat)) required.push('MILEAGE');
     if (positive(draft.accommodation_pay, draft.accommodation_pay_ex_vat, draft.accommodation_charge, draft.accommodation_charge_ex_vat)) required.push('ACCOMMODATION');
     if (positive(draft.other_pay, draft.other_pay_ex_vat, draft.other_charge, draft.other_charge_ex_vat)) required.push('OTHER');
-    return Array.from(new Set(required));
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const addRequiredKind = (value) => {
+      const kind = normaliseKindForEvidenceRequiredMessage(value);
+      if (!kind) return;
+      required.push(kind);
+    };
+    const scanRequirementValue = (value) => {
+      if (!value) return;
+      if (typeof value === 'string') {
+        const raw = trimStr(value);
+        if (!raw) return;
+        if (raw.startsWith('[') || raw.startsWith('{')) {
+          try { scanRequirementValue(JSON.parse(raw)); return; } catch {}
+        }
+        raw.split(',').map((item) => trimStr(item)).filter(Boolean).forEach(addRequiredKind);
+        return;
+      }
+      if (Array.isArray(value)) {
+        value.forEach(scanRequirementValue);
+        return;
+      }
+      if (value && typeof value === 'object') {
+        addRequiredKind(value.required_kind || value.requiredKind || value.kind || value.evidence_kind || value.evidenceKind || value.category || value.name || '');
+      }
+    };
+    const scanRequirementContainer = (source) => {
+      if (!source || typeof source !== 'object') return;
+      scanRequirementValue(source.required_evidence_kinds);
+      scanRequirementValue(source.requiredEvidenceKinds);
+      scanRequirementValue(source.evidence_required_kinds);
+      scanRequirementValue(source.evidenceRequiredKinds);
+      scanRequirementValue(source.expense_evidence_required_kinds);
+      scanRequirementValue(source.expenseEvidenceRequiredKinds);
+      scanRequirementValue(source.required_expense_evidence_kinds);
+      scanRequirementValue(source.requiredExpenseEvidenceKinds);
+      scanRequirementValue(source.missing_evidence_kinds);
+      scanRequirementValue(source.missingEvidenceKinds);
+      scanRequirementValue(source.evidence_requirements);
+      scanRequirementValue(source.evidenceRequirements);
+      if (source.evidence_meta && typeof source.evidence_meta === 'object') scanRequirementContainer(source.evidence_meta);
+      if (source.artifact_hints && typeof source.artifact_hints === 'object') scanRequirementContainer(source.artifact_hints);
+    };
+    const scanActionRequirementContainer = (flagsInput) => {
+      const flags = (flagsInput && typeof flagsInput === 'object' && !Array.isArray(flagsInput)) ? flagsInput : {};
+      scanRequirementValue(flags.required_evidence_kinds);
+      scanRequirementValue(flags.requiredEvidenceKinds);
+      scanRequirementValue(flags.evidence_required_kinds);
+      scanRequirementValue(flags.evidenceRequiredKinds);
+      scanRequirementValue(flags.expense_evidence_required_kinds);
+      scanRequirementValue(flags.expenseEvidenceRequiredKinds);
+      scanRequirementValue(flags.required_expense_evidence_kinds);
+      scanRequirementValue(flags.requiredExpenseEvidenceKinds);
+      scanRequirementValue(flags.evidence_requirements);
+      scanRequirementValue(flags.evidenceRequirements);
+    };
+    [
+      active.row,
+      active.details,
+      active.stateCtx,
+      st.active_row,
+      st.active_details,
+      st.active_context,
+      st.active_context?.details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx?.state,
+      findMatchingDatasetRowForProcess(active)
+    ].forEach((source) => {
+      scanRequirementContainer(source);
+      if (source && typeof source === 'object' && source.action_flags && typeof source.action_flags === 'object') {
+        scanActionRequirementContainer(source.action_flags);
+      }
+    });
+    return uniqueProcessEvidenceKinds(required);
+  };
+  const getPresentProcessEvidenceKindsForRows = (rowsInput = []) => {
+    const present = new Set();
+    for (const item of (Array.isArray(rowsInput) ? rowsInput : [])) {
+      const kind = normaliseKindForEvidenceRequiredMessage(evidenceKindOf(item));
+      if (kind) present.add(kind);
+    }
+    return present;
+  };
+  const getMissingRequiredProcessEvidenceKinds = (activeInput = null, rowsInput = null) => {
+    const requiredEvidenceKinds = uniqueProcessEvidenceKinds(getRequiredExpenseEvidenceKindsForProcess(activeInput));
+    const evidenceRows = Array.isArray(rowsInput) ? rowsInput : collectCanonicalRealEvidenceRowsForProcess(activeInput);
+    const presentEvidenceKinds = getPresentProcessEvidenceKindsForRows(evidenceRows);
+    return requiredEvidenceKinds.filter((kind) => !presentEvidenceKinds.has(kind));
+  };
+  const processContainerHasEvidenceExpectation = (container) => {
+    if (!container || typeof container !== 'object') return false;
+    if (container.has_any_evidence === true || container.has_attached_evidence === true) return true;
+    if (Number(container.attached_evidence_count || 0) > 0 || Number(container.evidence_count || 0) > 0) return true;
+    if (Array.isArray(container.evidence_badges) && container.evidence_badges.some((badge) => {
+      if (!badge || typeof badge !== 'object') return false;
+      return badge.present === true || badge.has_evidence === true || badge.hasEvidence === true || Number(badge.count ?? badge.evidence_count ?? badge.evidenceCount ?? 0) > 0;
+    })) return true;
+    if (container.evidence_meta && typeof container.evidence_meta === 'object' && processContainerHasEvidenceExpectation(container.evidence_meta)) return true;
+    if (container.artifact_hints && typeof container.artifact_hints === 'object' && processContainerHasEvidenceExpectation(container.artifact_hints)) return true;
+    if (evidenceStorageKeyOf(container.primary_artifact || {}) || evidenceStorageKeyOf(container.artifact_hints?.primary_artifact || {})) return true;
+    if (hasValue(container.primary_artifact_storage_key || container.primaryArtifactStorageKey || container.artifact_hints?.primary_artifact_storage_key || container.artifact_hints?.primaryArtifactStorageKey || '')) return true;
+    if (Array.isArray(container.evidence) && container.evidence.length > 0) return true;
+    if (Array.isArray(container.attached_evidence) && container.attached_evidence.length > 0) return true;
+    if (Array.isArray(container.attachedRows) && container.attachedRows.length > 0) return true;
+    return false;
+  };
+  const hasProcessEvidenceExpectation = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    if (getRequiredExpenseEvidenceKindsForProcess(active).length > 0) return true;
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    return [
+      active.row,
+      active.details,
+      active.ctx,
+      active.stateCtx,
+      st.active_row,
+      st.active_details,
+      st.active_context,
+      st.active_context?.details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx,
+      st.active_ctx?.details,
+      st.active_ctx?.state,
+      findMatchingDatasetRowForProcess(active),
+      pane,
+      window.modalCtx?.data,
+      window.modalCtx?.timesheetState,
+      window.modalCtx?.timesheetDetails
+    ].some(processContainerHasEvidenceExpectation);
+  };
+  const processRowIsImportDerivedForGating = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const sources = [
+      active.row,
+      active.details,
+      active.ctx?.row,
+      active.ctx?.data_row,
+      active.ctx?.state,
+      st.active_row,
+      st.active_details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_context?.details,
+      st.active_ctx?.state,
+      findMatchingDatasetRowForProcess(active),
+      window.modalCtx?.data
+    ].filter((source) => source && typeof source === 'object');
+    return sources.some((source) => {
+      const flags = (source.action_flags && typeof source.action_flags === 'object') ? source.action_flags : {};
+      const origin = upper(source.adjustment_origin || flags.adjustment_origin || '');
+      return !!(
+        source.is_import_authoritative === true ||
+        flags.is_import_authoritative === true ||
+        source.review_only === true ||
+        flags.review_only === true ||
+        origin.startsWith('IMPORT_') ||
+        hasValue(source.correction_id || flags.correction_id || '') ||
+        hasValue(source.correction_kind || flags.correction_kind || '') ||
+        upper(source.adjustment_source || flags.adjustment_source || '') === 'IMPORT_DERIVED' ||
+        upper(source.bulk_process_excluded_reason || flags.bulk_process_excluded_reason || '') === 'IMPORT_AUTHORITATIVE_ADJUSTED_HOURS'
+      );
+    });
+  };
+  const processRowHasNonEvidenceHardBlockForGating = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const sources = [
+      active.row,
+      active.details,
+      active.ctx?.row,
+      active.ctx?.data_row,
+      active.ctx?.state,
+      active.timesheet,
+      active.tsfin,
+      active.contractWeek,
+      st.active_row,
+      st.active_details,
+      st.active_details?.timesheet,
+      st.active_details?.tsfin,
+      st.active_details?.contract_week,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_context?.details,
+      st.active_context?.details?.timesheet,
+      st.active_context?.details?.tsfin,
+      st.active_context?.details?.contract_week,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row,
+      st.active_ctx?.details,
+      st.active_ctx?.details?.timesheet,
+      st.active_ctx?.details?.tsfin,
+      st.active_ctx?.details?.contract_week,
+      st.active_ctx?.state,
+      findMatchingDatasetRowForProcess(active),
+      window.modalCtx?.data,
+      window.modalCtx?.timesheetDetails,
+      window.modalCtx?.timesheetDetails?.timesheet,
+      window.modalCtx?.timesheetDetails?.tsfin,
+      window.modalCtx?.timesheetState
+    ].filter((source) => source && typeof source === 'object');
+    const processHardBlockTokensFromText = (value) => upper(value || '').split(/[^A-Z0-9]+/).filter(Boolean);
+    const processHardBlockTokenSetFromText = (value) => new Set(processHardBlockTokensFromText(value));
+    const tokenSetHasNonEvidenceHardBlock = (tokensInput) => {
+      const tokens = tokensInput instanceof Set ? tokensInput : new Set(Array.isArray(tokensInput) ? tokensInput : []);
+      const hasToken = (...values) => values.some((value) => tokens.has(value));
+      const paidBlocked = tokens.has('PAID') && !tokens.has('UNPAID') && !tokens.has('NOT') && !tokens.has('PENDING');
+      return !!(
+        hasToken('IMPORT', 'REVIEW', 'LOCK', 'LOCKED', 'AUTHORISED', 'AUTHORIZED', 'AUTHORISATION', 'AUTHORIZATION', 'FROZEN', 'INVOICE', 'INVOICED', 'PROCESSED', 'UNPROCESSED', 'STATUS', 'INVALID', 'PERMISSION', 'IDENTITY', 'POLICY', 'ROUTE') ||
+        paidBlocked
+      );
+    };
+    const reasonHasNonEvidenceBlock = (source) => {
+      const flags = (source?.action_flags && typeof source.action_flags === 'object') ? source.action_flags : {};
+      const reasonText = [
+        source?.process_block_reason,
+        source?.can_process_reason,
+        source?.block_reason,
+        source?.disabled_reason,
+        source?.lock_reason,
+        source?.status_reason,
+        flags.process_block_reason,
+        flags.can_process_reason,
+        flags.block_reason,
+        flags.disabled_reason,
+        flags.lock_reason,
+        flags.status_reason
+      ].filter(Boolean).join(' ');
+      return tokenSetHasNonEvidenceHardBlock(processHardBlockTokenSetFromText(reasonText));
+    };
+    return sources.some((source) => {
+      const flags = (source.action_flags && typeof source.action_flags === 'object') ? source.action_flags : {};
+      const statusText = [
+        source.processing_status,
+        source.status,
+        source.timesheet_status,
+        source.invoice_status,
+        source.payment_status,
+        source.authorisation_status,
+        source.authorization_status,
+        flags.processing_status,
+        flags.status,
+        flags.invoice_status,
+        flags.payment_status,
+        flags.authorisation_status,
+        flags.authorization_status
+      ].filter(Boolean).join(' ');
+      const statusTokens = processHardBlockTokenSetFromText(statusText);
+      return !!(
+        source.locked === true ||
+        source.is_locked === true ||
+        flags.locked === true ||
+        flags.is_locked === true ||
+        source.review_only === true ||
+        flags.review_only === true ||
+        source.is_authorised === true ||
+        source.is_authorized === true ||
+        flags.is_authorised === true ||
+        flags.is_authorized === true ||
+        hasValue(source.authorised_at_server || source.authorised_at_utc || source.authorized_at_server || source.authorized_at_utc || '') ||
+        hasValue(flags.authorised_at_server || flags.authorised_at_utc || flags.authorized_at_server || flags.authorized_at_utc || '') ||
+        source.frozen === true ||
+        source.is_frozen === true ||
+        flags.frozen === true ||
+        flags.is_frozen === true ||
+        hasValue(source.frozen_at || source.frozen_at_utc || flags.frozen_at || flags.frozen_at_utc || '') ||
+        source.paid === true ||
+        source.is_paid === true ||
+        flags.paid === true ||
+        flags.is_paid === true ||
+        hasValue(source.paid_at || source.paid_at_utc || flags.paid_at || flags.paid_at_utc || '') ||
+        source.invoiced === true ||
+        source.is_invoiced === true ||
+        flags.invoiced === true ||
+        flags.is_invoiced === true ||
+        hasValue(source.invoiced_at || source.invoiced_at_utc || source.invoice_id || source.locked_by_invoice_id || flags.invoiced_at || flags.invoiced_at_utc || flags.invoice_id || flags.locked_by_invoice_id || '') ||
+        tokenSetHasNonEvidenceHardBlock(statusTokens) ||
+        reasonHasNonEvidenceBlock(source)
+      );
+    });
+  };
+  const processEditabilityDisableLooksEvidenceDerived = (editabilityInput = {}, activeInput = null) => {
+    const edit = (editabilityInput && typeof editabilityInput === 'object') ? editabilityInput : {};
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const flags = {
+      ...pickObject(active.row?.action_flags || {}),
+      ...pickObject(active.details?.action_flags || {}),
+      ...pickObject(st.active_row?.action_flags || {}),
+      process_block_reason: edit.processDisabledReason || edit.disabledReason || edit.reason || edit.process_block_reason || '',
+      can_process_reason: edit.canProcessReason || edit.can_process_reason || '',
+      can_process: edit.canProcess === false ? false : edit.can_process
+    };
+    return processEvidenceActionDisableLooksEvidenceDerived(flags);
+  };
+  const shouldIgnoreEvidenceDerivedProcessDisable = (editabilityInput = {}, activeInput = null) => {
+    const edit = (editabilityInput && typeof editabilityInput === 'object') ? editabilityInput : {};
+    if (!(edit.canProcess === false || edit.can_process === false)) return false;
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    if (processRowIsImportDerivedForGating(active)) return false;
+    if (processRowHasNonEvidenceHardBlockForGating(active)) return false;
+    if (!processEditabilityDisableLooksEvidenceDerived(edit, active)) return false;
+    const canonicalRows = collectCanonicalRealEvidenceRowsForProcess(active);
+    const missingKinds = getMissingRequiredProcessEvidenceKinds(active, canonicalRows);
+    if (missingKinds.length) return false;
+    const requiredKinds = getRequiredExpenseEvidenceKindsForProcess(active);
+    return canonicalRows.length > 0 || requiredKinds.length > 0;
+  };
+  const buildCanonicalProcessActiveRowForSubmit = (activeInput = null, evidencePatchInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const row = deep(active.row || st.active_row || {}) || {};
+    const patch = (evidencePatchInput && typeof evidencePatchInput === 'object') ? evidencePatchInput : buildProcessEvidenceAuthorityPatch(collectCanonicalRealEvidenceRowsForProcess(active), { active });
+    if (patch.hasAnyEvidence === true) applyProcessEvidenceAuthorityPatch(row, patch);
+    if (row.action_flags && typeof row.action_flags === 'object' && patch.hasAnyEvidence === true) reconcileProcessActionFlagsWithEvidenceTruth(row, patch);
+    return row;
   };
   const clearBulkProcessProcessBusyStateForBlockedModal = (reason = '') => {
     const cleanReason = trimStr(reason || '');
@@ -163510,9 +166421,9 @@ async function handleBulkProcessProcess(state) {
     if (!raw) return '';
     if (raw === 'TS') return 'TIMESHEET';
     if (raw === 'MILES' || raw === 'MILE') return 'MILEAGE';
-    if (raw === 'EXPENSE' || raw === 'EXPENSES') return 'TRAVEL';
+    if (raw === 'EXPENSE' || raw === 'EXPENSES') return 'EXPENSE';
     if (raw === 'ACCOM') return 'ACCOMMODATION';
-    if (['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'].includes(raw)) return raw;
+    if (['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER', 'EXPENSE'].includes(raw)) return raw;
     return raw;
   };
   const expenseEvidenceLabelForProcess = (kindInput = '') => {
@@ -163521,6 +166432,7 @@ async function handleBulkProcessProcess(state) {
     if (kind === 'TRAVEL') return { evidenceLabel: 'travel evidence', claimLabel: 'travel expenses are being claimed', shortLabel: 'travel' };
     if (kind === 'ACCOMMODATION') return { evidenceLabel: 'accommodation evidence', claimLabel: 'accommodation is being claimed', shortLabel: 'accommodation' };
     if (kind === 'OTHER') return { evidenceLabel: 'other expenses evidence', claimLabel: 'other expenses are being claimed', shortLabel: 'other expenses' };
+    if (kind === 'EXPENSE') return { evidenceLabel: 'expenses evidence', claimLabel: 'expenses are being claimed', shortLabel: 'expenses' };
     if (kind === 'TIMESHEET') return { evidenceLabel: 'timesheet evidence', claimLabel: 'a timesheet image is required', shortLabel: 'timesheet' };
     const label = trimStr(kindInput || 'expenses').toLowerCase() || 'expenses';
     return { evidenceLabel: `${label} evidence`, claimLabel: `${label} is being claimed`, shortLabel: label };
@@ -163643,24 +166555,41 @@ async function handleBulkProcessProcess(state) {
     });
   };
   const confirmNoEvidence = async (active) => {
-    const reconciledActive = reconcileProcessEvidenceTruth(active, { reason: 'before-no-evidence-confirm' });
-    const row = reconciledActive.row || active?.row || {};
-    const authoritativeEvidenceRows = collectCurrentEvidenceRowsForProcess(reconciledActive);
-    const requiredExpenseKinds = getRequiredExpenseEvidenceKindsForProcess(reconciledActive);
-    if (requiredExpenseKinds.length) {
-      const presentKinds = new Set(authoritativeEvidenceRows.map((item) => evidenceKindOf(item)).filter(Boolean));
-      const missingExpenseKinds = requiredExpenseKinds.filter((kind) => !presentKinds.has(kind));
-      if (missingExpenseKinds.length) {
-        const message = buildProcessExpenseEvidenceRequiredMessage(missingExpenseKinds);
-        st.error_text = message;
-        st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
-        st.__bulk_process_last_process_missing_expense_evidence_kinds = missingExpenseKinds;
-        await showBulkProcessProcessBlockedModal(message);
-        return false;
+    let reconciledActive = reconcileProcessEvidenceTruth(active, { reason: 'before-no-evidence-confirm' });
+    let authoritativeEvidenceRows = collectCanonicalRealEvidenceRowsForProcess(reconciledActive);
+    let requiredExpenseKinds = getRequiredExpenseEvidenceKindsForProcess(reconciledActive);
+    let missingExpenseKinds = getMissingRequiredProcessEvidenceKinds(reconciledActive, authoritativeEvidenceRows);
+    const evidenceExpectation = hasProcessEvidenceExpectation(reconciledActive);
+
+    if ((missingExpenseKinds.length || (evidenceExpectation && authoritativeEvidenceRows.length === 0)) && typeof requestNarrowProcessEvidenceHydration === 'function') {
+      const hydrated = await requestNarrowProcessEvidenceHydration(reconciledActive, 'before-process-evidence-required-check');
+      if (hydrated === true) {
+        reconciledActive = reconcileProcessEvidenceTruth(readActive(), { reason: 'after-process-evidence-required-hydration' });
+        authoritativeEvidenceRows = collectCanonicalRealEvidenceRowsForProcess(reconciledActive);
+        requiredExpenseKinds = getRequiredExpenseEvidenceKindsForProcess(reconciledActive);
+        missingExpenseKinds = getMissingRequiredProcessEvidenceKinds(reconciledActive, authoritativeEvidenceRows);
       }
     }
+
+    if (requiredExpenseKinds.length && missingExpenseKinds.length) {
+      const message = buildProcessExpenseEvidenceRequiredMessage(missingExpenseKinds);
+      st.error_text = message;
+      st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
+      st.__bulk_process_last_process_missing_expense_evidence_kinds = missingExpenseKinds;
+      await showBulkProcessProcessBlockedModal(message);
+      return false;
+    }
+
     if (authoritativeEvidenceRows.length > 0) return true;
-    if (row.has_any_evidence === true || Number(row.attached_evidence_count || 0) > 0) return true;
+
+    if (hasProcessEvidenceExpectation(reconciledActive)) {
+      const message = 'Evidence is expected for this row but the evidence rows have not loaded yet. Please refresh the evidence pane and try again.';
+      st.error_text = message;
+      st.__bulk_process_last_process_block_reason = 'EVIDENCE_EXPECTED_NOT_LOADED';
+      await showBulkProcessProcessBlockedModal(message);
+      return false;
+    }
+
     const artifactSources = collectNoTimesheetProcessAuthoritySources(reconciledActive);
     if (artifactSources.some((source) => processContainerHasPrimaryArtifact(source))) return true;
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
@@ -164075,7 +167004,7 @@ async function handleBulkProcessProcess(state) {
     const raw = upper(item?.kind || item?.evidence_kind || item?.evidenceKind || item?.staged_kind || item?.stagedKind || meta.staged_kind || meta.stagedKind || meta.kind || meta.evidence_kind || '');
     if (raw === 'TS') return 'TIMESHEET';
     if (raw === 'MILES' || raw === 'MILE') return 'MILEAGE';
-    if (raw === 'EXPENSE' || raw === 'EXPENSES') return 'TRAVEL';
+    if (raw === 'EXPENSE' || raw === 'EXPENSES') return 'EXPENSE';
     if (raw === 'ACCOM') return 'ACCOMMODATION';
     return raw;
   };
@@ -164131,15 +167060,39 @@ async function handleBulkProcessProcess(state) {
       matchingDatasetRow
     ].filter((source) => source && typeof source === 'object');
   };
-  const processContainerHasPrimaryArtifact = (container) => {
+  const processContainerHasPrimaryArtifact = (container, activeInput = null) => {
     if (!container || typeof container !== 'object') return false;
     const hints = (container.artifact_hints && typeof container.artifact_hints === 'object') ? container.artifact_hints : {};
     const primary = (container.primary_artifact && typeof container.primary_artifact === 'object') ? container.primary_artifact : ((hints.primary_artifact && typeof hints.primary_artifact === 'object') ? hints.primary_artifact : null);
-    return !!(
-      evidenceStorageKeyOf(primary || {}) ||
-      evidenceStorageKeyOf(container) ||
-      hasValue(primary?.id || primary?.evidence_id || primary?.queue_id || container.primary_artifact_id || hints.primary_artifact_id || '')
+    const storageKey = evidenceStorageKeyOf(primary || container);
+    const primaryId = trimStr(primary?.id || primary?.evidence_id || primary?.evidenceId || primary?.timesheet_evidence_id || primary?.timesheetEvidenceId || primary?.queue_id || primary?.queueId || container.primary_artifact_id || container.primaryArtifactId || hints.primary_artifact_id || hints.primaryArtifactId || '');
+    if (!storageKey && !primaryId) return false;
+    const candidate = {
+      ...(primary ? deep(primary) : {}),
+      storage_key: storageKey || primary?.storage_key || container.primary_artifact_storage_key || hints.primary_artifact_storage_key || null,
+      evidence_id: primary?.evidence_id || primary?.evidenceId || primary?.timesheet_evidence_id || primary?.timesheetEvidenceId || null,
+      queue_id: primary?.queue_id || primary?.queueId || primary?.manual_timesheet_queue_id || primary?.manualTimesheetQueueId || null,
+      id: primaryId || storageKey || null,
+      row_key: primary?.row_key || container.row_key || null,
+      timesheet_id: primary?.timesheet_id || container.timesheet_id || container.current_timesheet_id || null,
+      contract_week_id: primary?.contract_week_id || container.contract_week_id || container.contractWeekId || null
+    };
+    const candidateHasExplicitIdentity = processEvidenceItemHasExplicitIdentity(candidate);
+    const candidateMatchesActive = processEvidenceItemMatchesActive(candidate, activeInput);
+    const containerMatchesActive = processEvidenceItemMatchesActive(container, activeInput);
+    const identityCompatible = candidateHasExplicitIdentity ? candidateMatchesActive : containerMatchesActive;
+    if (!identityCompatible) return false;
+    const realEvidenceId = trimStr(candidate.evidence_id || candidate.timesheet_evidence_id || candidate.timesheetEvidenceId || '');
+    const realQueueId = evidenceQueueIdOf(candidate);
+    const genericId = trimStr(candidate.id || '');
+    const hasRealIdentity = !!(
+      realEvidenceId ||
+      realQueueId ||
+      (genericId && genericId !== storageKey && !isSyntheticEvidenceId(genericId) && !/^files\//i.test(genericId))
     );
+    if (!hasRealIdentity) return false;
+    if (isSyntheticAttachedEvidenceItem(candidate)) return false;
+    return true;
   };
   const processRouteDisplayIsWeakManual = (value) => {
     const u = upper(value || '');
@@ -164259,17 +167212,27 @@ async function handleBulkProcessProcess(state) {
   };
   const isSyntheticAttachedEvidenceItem = (item) => {
     if (!item || typeof item !== 'object') return false;
-    const id = trimStr(item.id || '');
-    const evidenceId = trimStr(item.evidence_id || '');
-    const queueId = trimStr(item.queue_id || '');
+    const meta = processEvidenceMetaOf(item || {});
+    const id = trimStr(item.id || meta.id || '');
+    const storageKey = evidenceStorageKeyOf(item);
+    const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || meta.timesheet_evidence_id || meta.timesheetEvidenceId || '');
+    const queueId = evidenceQueueIdOf(item);
+    const hasRealPrimaryArtifactIdentity = !!(
+      evidenceId ||
+      queueId ||
+      (id && id !== storageKey && !isSyntheticEvidenceId(id) && !/^(timesheet|contract_week|row):/i.test(id) && !/^files\//i.test(id))
+    );
+    const primaryFallbackOnly = !!(
+      (item.is_primary_artifact_fallback === true || item.__primary_artifact_fallback === true) &&
+      !hasRealPrimaryArtifactIdentity
+    );
     return !!(
       isSyntheticEvidenceId(id) ||
       isSyntheticEvidenceId(evidenceId) ||
       isSyntheticEvidenceId(queueId) ||
       item.is_synthetic_attached_fallback === true ||
       item.__synthetic_attached_fallback === true ||
-      item.is_primary_artifact_fallback === true ||
-      item.__primary_artifact_fallback === true ||
+      primaryFallbackOnly ||
       (isSyntheticEvidenceId(id || queueId) && !evidenceId)
     );
   };
@@ -164309,19 +167272,38 @@ async function handleBulkProcessProcess(state) {
     if (tsId) return true;
     return /^timesheet:/i.test(trimStr(st.active_row_key || active.row?.row_key || st.active_row?.row_key || ''));
   };
+  const getProcessEvidenceIdentityParts = (sourceInput = {}) => {
+    const source = (sourceInput && typeof sourceInput === 'object') ? sourceInput : {};
+    const meta = processEvidenceMetaOf(source);
+    return {
+      rowKey: trimStr(source.row_key || source.rowKey || meta.row_key || meta.rowKey || ''),
+      timesheetId: trimStr(source.timesheet_id || source.timesheetId || source.current_timesheet_id || source.currentTimesheetId || source.expected_timesheet_id || source.expectedTimesheetId || meta.timesheet_id || meta.timesheetId || meta.current_timesheet_id || meta.currentTimesheetId || meta.expected_timesheet_id || meta.expectedTimesheetId || ''),
+      contractWeekId: trimStr(source.contract_week_id || source.contractWeekId || meta.contract_week_id || meta.contractWeekId || meta.week_id || meta.weekId || '')
+    };
+  };
+  const processEvidenceItemHasExplicitIdentity = (itemInput = {}) => {
+    const parts = getProcessEvidenceIdentityParts(itemInput);
+    return !!(parts.rowKey || parts.timesheetId || parts.contractWeekId);
+  };
   const processEvidenceItemMatchesActive = (itemInput = {}, activeInput = null) => {
-    const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
-    const meta = processEvidenceMetaOf(item);
     const identity = resolveProcessRecordIdentityParts(activeInput);
-    const itemRowKey = trimStr(item.row_key || item.rowKey || meta.row_key || meta.rowKey || '');
-    const itemTimesheetId = trimStr(item.timesheet_id || item.timesheetId || item.current_timesheet_id || item.currentTimesheetId || item.expected_timesheet_id || item.expectedTimesheetId || meta.timesheet_id || meta.timesheetId || meta.current_timesheet_id || meta.currentTimesheetId || '');
-    const itemContractWeekId = trimStr(item.contract_week_id || item.contractWeekId || meta.contract_week_id || meta.contractWeekId || meta.week_id || meta.weekId || '');
-    if (itemRowKey && identity.rowKey) return itemRowKey === identity.rowKey;
-    if (itemTimesheetId && identity.timesheetId) return itemTimesheetId === identity.timesheetId;
-    if (itemContractWeekId && identity.contractWeekId) return itemContractWeekId === identity.contractWeekId;
-    if (itemTimesheetId && identity.contractWeekId && !identity.timesheetId) return false;
-    if (itemContractWeekId && identity.timesheetId && !identity.contractWeekId) return false;
-    return !(itemRowKey || itemTimesheetId || itemContractWeekId);
+    const activeRowKey = trimStr(identity.rowKey || '');
+    const activeTimesheetId = trimStr(identity.timesheetId || identity.currentTimesheetId || '');
+    const activeContractWeekId = trimStr(identity.contractWeekId || '');
+    const itemParts = getProcessEvidenceIdentityParts(itemInput);
+    const itemRowKey = trimStr(itemParts.rowKey || '');
+    const itemTimesheetId = trimStr(itemParts.timesheetId || '');
+    const itemContractWeekId = trimStr(itemParts.contractWeekId || '');
+    if (itemRowKey && activeRowKey && itemRowKey !== activeRowKey) return false;
+    if (itemTimesheetId && activeTimesheetId && itemTimesheetId !== activeTimesheetId) return false;
+    if (itemContractWeekId && activeContractWeekId && itemContractWeekId !== activeContractWeekId) return false;
+    if (itemTimesheetId && activeContractWeekId && !activeTimesheetId) return false;
+    if (itemContractWeekId && activeTimesheetId && !activeContractWeekId) return false;
+    return !!(
+      (itemRowKey && activeRowKey && itemRowKey === activeRowKey) ||
+      (itemTimesheetId && activeTimesheetId && itemTimesheetId === activeTimesheetId) ||
+      (itemContractWeekId && activeContractWeekId && itemContractWeekId === activeContractWeekId)
+    );
   };
   const normaliseProcessEvidenceRow = (itemInput = {}, parentInput = {}, activeInput = null) => {
     if (!itemInput || typeof itemInput !== 'object') return null;
@@ -164332,13 +167314,21 @@ async function handleBulkProcessProcess(state) {
     const storageKey = evidenceStorageKeyOf(item);
     const id = evidenceIdOf(item);
     if (!id && !storageKey) return null;
-    if (!processEvidenceItemMatchesActive(item, activeInput) && !processEvidenceItemMatchesActive(parent, activeInput)) return null;
+    const itemHasExplicitIdentity = processEvidenceItemHasExplicitIdentity(item);
+    const itemMatchesActive = processEvidenceItemMatchesActive(item, activeInput);
+    const parentMatchesActive = processEvidenceItemMatchesActive(parent, activeInput);
+    if (itemHasExplicitIdentity) {
+      if (!itemMatchesActive) return null;
+    } else if (!parentMatchesActive) {
+      return null;
+    }
     const staged = processEvidenceStagedSignal(item);
     const queueId = evidenceQueueIdOf(item);
     const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || '');
-    const kind = evidenceKindOf(item) || evidenceKindOf(parent) || 'OTHER';
-    const contractWeekId = trimStr(item.contract_week_id || item.contractWeekId || meta.contract_week_id || meta.contractWeekId || meta.week_id || parent.contract_week_id || parent.contractWeekId || parentMeta.contract_week_id || '');
-    const timesheetId = trimStr(item.timesheet_id || item.timesheetId || item.current_timesheet_id || item.currentTimesheetId || meta.timesheet_id || meta.current_timesheet_id || parent.timesheet_id || parent.current_timesheet_id || '');
+    const kind = evidenceKindOf(item) || evidenceKindOf(parent) || 'EXPENSE';
+    const rowKey = trimStr(item.row_key || item.rowKey || meta.row_key || meta.rowKey || parent.row_key || parent.rowKey || parentMeta.row_key || parentMeta.rowKey || activeInput?.row?.row_key || st.active_row_key || '');
+    const contractWeekId = trimStr(item.contract_week_id || item.contractWeekId || meta.contract_week_id || meta.contractWeekId || meta.week_id || parent.contract_week_id || parent.contractWeekId || parentMeta.contract_week_id || parentMeta.contractWeekId || activeInput?.contractWeekId || activeInput?.contract_week_id || '');
+    const timesheetId = trimStr(item.timesheet_id || item.timesheetId || item.current_timesheet_id || item.currentTimesheetId || meta.timesheet_id || meta.current_timesheet_id || parent.timesheet_id || parent.current_timesheet_id || parent.timesheetId || parent.currentTimesheetId || activeInput?.timesheetId || activeInput?.expectedTimesheetId || '');
     const displayName = trimStr(item.display_name || item.displayName || item.filename || item.original_filename || item.originalFilename || '') || (kind === 'TIMESHEET' ? 'Timesheet evidence' : `${kind.charAt(0)}${kind.slice(1).toLowerCase()} evidence`);
     return {
       ...(deep(item) || {}),
@@ -164355,6 +167345,7 @@ async function handleBulkProcessProcess(state) {
       file_key: storageKey || null,
       download_storage_key: storageKey || null,
       r2_key: storageKey || null,
+      row_key: rowKey || null,
       contract_week_id: contractWeekId || null,
       timesheet_id: staged ? null : (timesheetId || null),
       is_staged_context: staged,
@@ -164368,6 +167359,17 @@ async function handleBulkProcessProcess(state) {
     const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
     const matchingDatasetRow = findMatchingDatasetRowForProcess(active);
+    const activeEvidenceIdentity = resolveProcessRecordIdentityParts(active);
+    const withActiveEvidenceIdentity = (parentInput = {}) => {
+      const parent = (parentInput && typeof parentInput === 'object') ? parentInput : {};
+      return {
+        ...parent,
+        row_key: trimStr(parent.row_key || parent.rowKey || '') || activeEvidenceIdentity.rowKey || active.row?.row_key || st.active_row_key || null,
+        timesheet_id: trimStr(parent.timesheet_id || parent.timesheetId || parent.current_timesheet_id || parent.currentTimesheetId || '') || activeEvidenceIdentity.timesheetId || activeEvidenceIdentity.currentTimesheetId || null,
+        current_timesheet_id: trimStr(parent.current_timesheet_id || parent.currentTimesheetId || parent.timesheet_id || parent.timesheetId || '') || activeEvidenceIdentity.currentTimesheetId || activeEvidenceIdentity.timesheetId || null,
+        contract_week_id: trimStr(parent.contract_week_id || parent.contractWeekId || '') || activeEvidenceIdentity.contractWeekId || null
+      };
+    };
     const out = [];
     const buildEvidenceAliasSetForProcess = (item) => {
       const aliases = new Set();
@@ -164415,13 +167417,18 @@ async function handleBulkProcessProcess(state) {
       const kind = evidenceKindOf(item);
       const hasQueueIdentity = !!evidenceQueueIdOf(item);
       const hasRealEvidenceIdentity = !!trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || '');
+      const hasUsableIdentity = !!(
+        hasQueueIdentity ||
+        hasRealEvidenceIdentity ||
+        (id && id !== storageKey && !isSyntheticEvidenceId(id) && !/^(timesheet|contract_week|row):/i.test(id) && !/^files\//i.test(id))
+      );
+      const primaryFallbackOnly = !!((item.__primary_artifact_fallback === true || item.is_primary_artifact_fallback === true) && !hasUsableIdentity);
       return !!(
-        item.__primary_artifact_fallback === true ||
-        item.is_primary_artifact_fallback === true ||
+        primaryFallbackOnly ||
         item.__synthetic_attached_fallback === true ||
         item.is_synthetic_attached_fallback === true ||
         isSyntheticEvidenceId(id) ||
-        (!!storageKey && id === storageKey) ||
+        (!!storageKey && id === storageKey && !hasQueueIdentity && !hasRealEvidenceIdentity) ||
         (!!storageKey && kind === 'OTHER' && !hasQueueIdentity && !hasRealEvidenceIdentity && processEvidenceStagedSignal(item) !== true)
       );
     };
@@ -164526,28 +167533,24 @@ async function handleBulkProcessProcess(state) {
       if (!addedNested && looksLikeEvidence) addOne(source, parent);
     };
     [
-      st.active_row?.evidence,
-      active.row?.evidence,
-      pane?.attached_rows,
-      pane?.attached_all_rows,
-      matchingDatasetRow?.evidence,
-      matchingDatasetRow,
-      st.active_details?.evidence,
-      st.active_details,
-      st.active_context?.evidence,
-      st.active_context?.details?.evidence,
-      st.active_context?.row?.evidence,
-      st.active_context?.data_row?.evidence,
-      st.active_context,
-      st.active_ctx?.evidence,
-      st.active_ctx?.details?.evidence,
-      st.active_ctx?.state?.evidence,
-      st.active_ctx?.row?.evidence,
-      st.active_ctx?.data_row?.evidence,
-      st.active_ctx,
-      window.modalCtx?.timesheetState?.evidence,
-      window.modalCtx?.timesheetDetails?.evidence
-    ].forEach((source) => addSource(source));
+      { source: st.active_row, parent: withActiveEvidenceIdentity(st.active_row) },
+      { source: active.row, parent: withActiveEvidenceIdentity(active.row) },
+      { source: pane?.attached_rows, parent: withActiveEvidenceIdentity(pane) },
+      { source: pane?.attached_all_rows, parent: withActiveEvidenceIdentity(pane) },
+      { source: matchingDatasetRow, parent: matchingDatasetRow },
+      { source: st.active_details, parent: withActiveEvidenceIdentity(st.active_details) },
+      { source: st.active_context, parent: withActiveEvidenceIdentity(st.active_context) },
+      { source: st.active_context?.details, parent: withActiveEvidenceIdentity(st.active_context?.details || st.active_context) },
+      { source: st.active_context?.row, parent: withActiveEvidenceIdentity(st.active_context?.row || st.active_context) },
+      { source: st.active_context?.data_row, parent: withActiveEvidenceIdentity(st.active_context?.data_row || st.active_context) },
+      { source: st.active_ctx, parent: withActiveEvidenceIdentity(st.active_ctx) },
+      { source: st.active_ctx?.details, parent: withActiveEvidenceIdentity(st.active_ctx?.details || st.active_ctx) },
+      { source: st.active_ctx?.state, parent: withActiveEvidenceIdentity(st.active_ctx?.state || st.active_ctx) },
+      { source: st.active_ctx?.row, parent: withActiveEvidenceIdentity(st.active_ctx?.row || st.active_ctx) },
+      { source: st.active_ctx?.data_row, parent: withActiveEvidenceIdentity(st.active_ctx?.data_row || st.active_ctx) },
+      { source: window.modalCtx?.timesheetState, parent: window.modalCtx?.timesheetState || window.modalCtx?.timesheetDetails || window.modalCtx?.data },
+      { source: window.modalCtx?.timesheetDetails, parent: window.modalCtx?.timesheetDetails || window.modalCtx?.data }
+    ].forEach((entry) => addSource(entry?.source, entry?.parent || {}));
 
     const canonical = [];
     for (const item of out) {
@@ -164562,31 +167565,177 @@ async function handleBulkProcessProcess(state) {
       canonical.push(item);
     }
 
-    const realStorageKeys = new Set(canonical
-      .filter((item) => !isWeakPrimaryArtifactFallbackForProcess(item) && !isSyntheticAttachedEvidenceItem(item))
-      .map((item) => evidenceStorageKeyOf(item).toLowerCase())
-      .filter(Boolean));
-
     return canonical.filter((item) => {
       const storageKey = evidenceStorageKeyOf(item).toLowerCase();
       if (!storageKey) return false;
-      if (realStorageKeys.has(storageKey) && (isWeakPrimaryArtifactFallbackForProcess(item) || isSyntheticAttachedEvidenceItem(item))) return false;
+      if (isWeakPrimaryArtifactFallbackForProcess(item) || isSyntheticAttachedEvidenceItem(item)) return false;
       return true;
     });
   };
-  const buildProcessEvidenceAuthorityPatch = (rowsInput = []) => {
-    const evidenceRows = Array.isArray(rowsInput) ? rowsInput : collectCurrentEvidenceRowsForProcess();
-    const kinds = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
+  const processEvidenceBadgeKnownOrder = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
+  const sortProcessEvidenceKindForBadge = (left, right) => {
+    const l = normaliseKindForEvidenceRequiredMessage(left);
+    const r = normaliseKindForEvidenceRequiredMessage(right);
+    const li = processEvidenceBadgeKnownOrder.indexOf(l);
+    const ri = processEvidenceBadgeKnownOrder.indexOf(r);
+    const ls = li >= 0 ? li : 1000;
+    const rs = ri >= 0 ? ri : 1000;
+    if (ls !== rs) return ls - rs;
+    return String(l).localeCompare(String(r));
+  };
+  const processBadgeIndicatesEvidence = (badge) => {
+    if (!badge || typeof badge !== 'object') return false;
+    if (badge.present === true || badge.has_evidence === true || badge.hasEvidence === true) return true;
+    const count = Number(badge.count ?? badge.evidence_count ?? badge.evidenceCount ?? 0);
+    return Number.isFinite(count) && count > 0;
+  };
+  const buildDynamicProcessEvidenceBadges = (rowsInput = [], extraBadgesInput = []) => {
     const counts = new Map();
-    for (const item of evidenceRows) {
-      const kind = evidenceKindOf(item) || 'OTHER';
-      counts.set(kind, (Number(counts.get(kind) || 0) || 0) + 1);
+    const noteKind = (kindInput, countInput = 1) => {
+      const kind = normaliseKindForEvidenceRequiredMessage(kindInput);
+      if (!kind) return;
+      const count = Math.max(1, Number(countInput || 0) || 1);
+      counts.set(kind, Math.max(Number(counts.get(kind) || 0) || 0, count));
+    };
+    for (const item of (Array.isArray(rowsInput) ? rowsInput : [])) {
+      noteKind(evidenceKindOf(item) || item?.kind || item?.evidence_kind || item?.staged_kind || '', 1);
     }
-    const evidenceBadges = kinds.map((kind) => {
+    for (const badge of (Array.isArray(extraBadgesInput) ? extraBadgesInput : [])) {
+      if (!processBadgeIndicatesEvidence(badge)) continue;
+      noteKind(badge.kind || badge.evidence_kind || badge.evidenceKind || '', badge.count ?? badge.evidence_count ?? badge.evidenceCount ?? 1);
+    }
+    const kinds = Array.from(new Set([...processEvidenceBadgeKnownOrder, ...Array.from(counts.keys()).filter(Boolean)])).sort(sortProcessEvidenceKindForBadge);
+    return kinds.map((kind) => {
       const count = Number(counts.get(kind) || 0) || 0;
       return { kind, has_evidence: count > 0, present: count > 0, count };
     });
-    const primaryEvidence = evidenceRows.find((item) => evidenceKindOf(item) === 'TIMESHEET') || evidenceRows[0] || null;
+  };
+  const processEvidenceActionDisableLooksEvidenceDerived = (flagsInput = {}) => {
+    const flags = (flagsInput && typeof flagsInput === 'object') ? flagsInput : {};
+    const reasonText = upper([
+      flags.process_block_reason,
+      flags.can_process_reason,
+      flags.block_reason,
+      flags.save_block_reason,
+      flags.can_save_reason,
+      flags.manage_evidence_block_reason,
+      flags.can_manage_evidence_reason,
+      flags.disabled_reason,
+      flags.reason
+    ].filter(Boolean).join(' '));
+    const hasNonEvidenceBlock = /(IMPORT|REVIEW|LOCK|AUTHORI|AUTHORIS|FROZEN|INVOICE|PAID|PROCESSED|UNPROCESSED|STATUS|INVALID|PERMISSION|IDENTITY|POLICY|ROUTE)/.test(reasonText);
+    const hasEvidenceBlock = /(EVIDENCE|ATTACHED|ATTACHMENT|ARTIFACT|DOCUMENT|REQUIRED|MISSING)/.test(reasonText);
+    const falseEvidenceSignals = !!(
+      flags.has_any_evidence === false ||
+      flags.has_attached_evidence === false ||
+      Number(flags.attached_evidence_count || 0) === 0 ||
+      Number(flags.evidence_count || 0) === 0 ||
+      (Array.isArray(flags.evidence_badges) && flags.evidence_badges.every((badge) => !processBadgeIndicatesEvidence(badge))) ||
+      flags.primary_artifact == null ||
+      flags.primary_artifact_id == null ||
+      flags.primary_artifact_storage_key == null
+    );
+    return !hasNonEvidenceBlock && (hasEvidenceBlock || falseEvidenceSignals || !reasonText);
+  };
+  const reconcileProcessActionFlagsWithEvidenceTruth = (container, patch) => {
+    if (!container || typeof container !== 'object' || !container.action_flags || typeof container.action_flags !== 'object') return;
+    if (!patch || patch.hasAnyEvidence !== true) return;
+    const flags = { ...container.action_flags };
+    for (const key of [
+      'has_any_evidence',
+      'has_attached_evidence',
+      'attached_evidence_count',
+      'evidence_count',
+      'evidence_badges',
+      'primary_artifact',
+      'primary_artifact_id',
+      'primary_artifact_kind',
+      'primary_artifact_storage_key',
+      'primary_artifact_preview_mode'
+    ]) {
+      const value = flags[key];
+      if (
+        value === false ||
+        value == null ||
+        value === '' ||
+        (typeof value === 'number' && value <= 0) ||
+        (Array.isArray(value) && value.every((badge) => !processBadgeIndicatesEvidence(badge)))
+      ) {
+        try { delete flags[key]; } catch {}
+      }
+    }
+    if (flags.can_process === false && processEvidenceActionDisableLooksEvidenceDerived(flags)) {
+      try { delete flags.can_process; } catch {}
+      for (const key of ['process_block_reason', 'can_process_reason', 'block_reason']) {
+        if (/(EVIDENCE|ATTACHED|ATTACHMENT|ARTIFACT|DOCUMENT|REQUIRED|MISSING)/.test(upper(flags[key] || ''))) {
+          try { delete flags[key]; } catch {}
+        }
+      }
+    }
+    if (flags.can_save === false && processEvidenceActionDisableLooksEvidenceDerived(flags)) {
+      try { delete flags.can_save; } catch {}
+      for (const key of ['save_block_reason', 'can_save_reason']) {
+        if (/(EVIDENCE|ATTACHED|ATTACHMENT|ARTIFACT|DOCUMENT|REQUIRED|MISSING)/.test(upper(flags[key] || ''))) {
+          try { delete flags[key]; } catch {}
+        }
+      }
+    }
+    if (flags.can_manage_evidence === false && processEvidenceActionDisableLooksEvidenceDerived(flags)) {
+      try { delete flags.can_manage_evidence; } catch {}
+      for (const key of ['manage_evidence_block_reason', 'can_manage_evidence_reason']) {
+        if (/(EVIDENCE|ATTACHED|ATTACHMENT|ARTIFACT|DOCUMENT|REQUIRED|MISSING)/.test(upper(flags[key] || ''))) {
+          try { delete flags[key]; } catch {}
+        }
+      }
+    }
+    container.action_flags = flags;
+  };
+  const hasRealProcessEvidenceIdentity = (itemInput = {}, activeInput = null) => {
+    const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+    const storageKey = evidenceStorageKeyOf(item);
+    if (!storageKey) return false;
+    if (isSyntheticAttachedEvidenceItem(item)) return false;
+    if (!processEvidenceItemMatchesActive(item, activeInput)) return false;
+    const meta = processEvidenceMetaOf(item);
+    const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || meta.evidence_id || meta.evidenceId || meta.timesheet_evidence_id || meta.timesheetEvidenceId || '');
+    const queueId = evidenceQueueIdOf(item);
+    const genericId = trimStr(item.id || item.row_id || item.rowId || meta.id || '');
+    if (evidenceId || queueId) return true;
+    if (genericId && genericId !== storageKey && !isSyntheticEvidenceId(genericId) && !/^(timesheet|contract_week|row):/i.test(genericId) && !/^files\//i.test(genericId)) return true;
+    const rowKey = trimStr(item.row_key || item.rowKey || meta.row_key || meta.rowKey || '');
+    const timesheetId = trimStr(item.timesheet_id || item.timesheetId || item.current_timesheet_id || item.currentTimesheetId || meta.timesheet_id || meta.timesheetId || meta.current_timesheet_id || meta.currentTimesheetId || '');
+    const contractWeekId = trimStr(item.contract_week_id || item.contractWeekId || meta.contract_week_id || meta.contractWeekId || meta.week_id || meta.weekId || '');
+    return !!(storageKey && (rowKey || timesheetId || contractWeekId));
+  };
+  const collectCanonicalRealEvidenceRowsForProcess = (activeInput = null, rowsInput = null) => {
+    const sourceRows = Array.isArray(rowsInput) ? rowsInput : collectCurrentEvidenceRowsForProcess(activeInput);
+    const canonical = [];
+    const seen = new Set();
+    for (const item of sourceRows) {
+      if (!hasRealProcessEvidenceIdentity(item, activeInput)) continue;
+      const storageKey = evidenceStorageKeyOf(item).toLowerCase();
+      const evidenceId = evidenceIdOf(item);
+      const queueId = evidenceQueueIdOf(item);
+      const kind = evidenceKindOf(item) || 'EVIDENCE';
+      const key = `${evidenceId || queueId || ''}|${storageKey}|${kind}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      canonical.push(item);
+    }
+    return canonical;
+  };
+  const buildProcessEvidenceAuthorityPatch = (rowsInput = [], patchOptions = {}) => {
+    const opts = (patchOptions && typeof patchOptions === 'object') ? patchOptions : {};
+    const activeForPatch = opts.active || opts.activeInput || readActive();
+    const rawRows = Array.isArray(rowsInput) ? rowsInput : collectCurrentEvidenceRowsForProcess(activeForPatch);
+    const evidenceRows = collectCanonicalRealEvidenceRowsForProcess(activeForPatch, rawRows);
+    const evidenceBadges = buildDynamicProcessEvidenceBadges(evidenceRows, opts.extraBadges || opts.extra_badges || []);
+    const explicitNoTimesheetRow = isAuthoritativeNoTimesheetRequiredProcessRow(activeForPatch);
+    const realNonTimesheetRows = evidenceRows.filter((item) => evidenceKindOf(item) !== 'TIMESHEET');
+    const realTimesheetRows = evidenceRows.filter((item) => evidenceKindOf(item) === 'TIMESHEET');
+    const primaryEvidence = explicitNoTimesheetRow
+      ? (realNonTimesheetRows[0] || evidenceRows[0] || null)
+      : (realTimesheetRows[0] || evidenceRows[0] || null);
     return {
       evidenceRows,
       hasAnyEvidence: evidenceRows.length > 0,
@@ -164608,6 +167757,7 @@ async function handleBulkProcessProcess(state) {
     target.has_any_evidence = true;
     target.has_attached_evidence = true;
     target.attached_evidence_count = Number(patch.attachedEvidenceCount || patch.evidenceRows.length || 0) || 0;
+    target.evidence_count = Number(patch.attachedEvidenceCount || patch.evidenceRows.length || 0) || 0;
     target.evidence_badges = patch.evidenceBadges.map((badge) => ({ ...badge }));
     target.evidence_meta = {
       ...((target.evidence_meta && typeof target.evidence_meta === 'object') ? target.evidence_meta : {}),
@@ -164617,6 +167767,7 @@ async function handleBulkProcessProcess(state) {
       has_any_evidence: true,
       has_attached_evidence: true,
       attached_evidence_count: Number(patch.attachedEvidenceCount || patch.evidenceRows.length || 0) || 0,
+      evidence_count: Number(patch.attachedEvidenceCount || patch.evidenceRows.length || 0) || 0,
       evidence_badges: patch.evidenceBadges.map((badge) => ({ ...badge }))
     };
     target.artifact_hints = {
@@ -164635,6 +167786,7 @@ async function handleBulkProcessProcess(state) {
     target.primary_artifact_kind = patch.primaryArtifactKind || null;
     target.primary_artifact_storage_key = patch.primaryArtifactStorageKey || null;
     target.primary_artifact_preview_mode = patch.primaryArtifactPreviewMode || null;
+    reconcileProcessActionFlagsWithEvidenceTruth(target, patch);
     return target;
   };
   const reconcileProcessEvidenceTruth = (activeInput = null, reconcileOptions = {}) => {
@@ -164688,7 +167840,7 @@ async function handleBulkProcessProcess(state) {
     sigLog('EVIDENCE-RECONCILED', {
       reason: trimStr(opts.reason || '') || null,
       evidence_count: patch.evidenceRows.length,
-      has_travel: patch.evidenceRows.some((item) => evidenceKindOf(item) === 'TRAVEL'),
+      evidence_kinds: Array.from(new Set(patch.evidenceRows.map((item) => evidenceKindOf(item)).filter(Boolean))),
       no_timesheet_patch: !!noTimesheetPatch,
       active_row_route_type: trimStr(st.active_row?.route_type || '') || null,
       active_row_client_is_nhsp: st.active_row?.client_is_nhsp === true,
@@ -164841,6 +167993,73 @@ async function handleBulkProcessProcess(state) {
       contract_week_id: '',
       active_signature_after_evidence_refresh: trimStr(st.active_row?.row_signature || st.active_ctx?.row?.row_signature || '') || null
     });
+  };
+  const requestNarrowProcessEvidenceHydration = async (activeInput = null, reason = 'before-process-evidence-hydration') => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    if (typeof handleBulkProcessRowChange !== 'function') return false;
+    const identity = resolveProcessRecordIdentityParts(active);
+    const key = trimStr(identity.rowKey || rowKeyOf(active.row) || st.active_row_key || '');
+    if (!key) return false;
+    const isTimesheetIdentity = !!(identity.timesheetId || identity.currentTimesheetId || /^timesheet:/i.test(key));
+    const timesheetId = trimStr(identity.timesheetId || identity.currentTimesheetId || '');
+    const contractWeekId = isTimesheetIdentity ? '' : trimStr(identity.contractWeekId || '');
+    if (!timesheetId && !contractWeekId && !key) return false;
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    if (pane) pane.__requires_evidence_hydration = true;
+    sigLog('NARROW-EVIDENCE-HYDRATION-START', {
+      reason: trimStr(reason || '') || null,
+      row_key: key,
+      timesheet_id: timesheetId || null,
+      contract_week_id: contractWeekId || null
+    });
+    try {
+      await handleBulkProcessRowChange(st, key, {
+        source: reason || 'before-process-evidence-hydration',
+        expectedRowKey: key,
+        row_key: key,
+        timesheet_id: timesheetId || null,
+        current_timesheet_id: timesheetId || null,
+        requested_timesheet_id: timesheetId || null,
+        expected_timesheet_id: trimStr(identity.expectedTimesheetId || identity.currentTimesheetId || identity.timesheetId || timesheetId || '') || null,
+        contract_week_id: contractWeekId || null,
+        profile: 'evidence',
+        context_profile: 'evidence',
+        includeEvidence: true,
+        include_evidence: true,
+        loadEvidence: true,
+        includeCompare: false,
+        include_compare: false,
+        includeImportSourceRows: false,
+        include_import_source_rows: false,
+        forceContextRefresh: true,
+        skipDatasetRefresh: true,
+        preserveEvidencePane: true,
+        preserveActiveContext: true,
+        suppressAdjacentPrefetch: true,
+        rerender: false,
+        skipDirtyGuard: true,
+        force: true
+      });
+      if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
+        try { reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch {}
+      }
+      const hydratedRows = collectCanonicalRealEvidenceRowsForProcess(readActive());
+      if (pane) pane.__requires_evidence_hydration = hydratedRows.length === 0 && hasProcessEvidenceExpectation(readActive());
+      sigLog('NARROW-EVIDENCE-HYDRATION-DONE', {
+        reason: trimStr(reason || '') || null,
+        row_key: key,
+        evidence_count: hydratedRows.length
+      });
+      return hydratedRows.length > 0;
+    } catch (err) {
+      if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] narrow evidence hydration degraded', err);
+      sigWarn('NARROW-EVIDENCE-HYDRATION-DEGRADED', {
+        reason: trimStr(reason || '') || null,
+        row_key: key,
+        message: String(err?.message || err || '')
+      });
+      return false;
+    }
   };
   const awaitPostAttachEvidenceRebaseBeforeProcess = async (activeInput = null) => {
     let active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
@@ -165868,7 +169087,7 @@ async function handleBulkProcessProcess(state) {
     });
     let activeForInitialProcessGate = reconcileProcessEvidenceTruth(readActive(), { reason: 'before-process-gating' });
     let editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
-    if (!editability.canProcess && !isZeroHourExpenseOnlyAdditionalManualAdjustment(activeForInitialProcessGate)) {
+    if (!editability.canProcess && !isZeroHourExpenseOnlyAdditionalManualAdjustment(activeForInitialProcessGate) && !shouldIgnoreEvidenceDerivedProcessDisable(editability, activeForInitialProcessGate)) {
       GE();
       const reason = trimStr(editability.processDisabledReason || editability.disabledReason || '') || 'This row cannot be processed.';
       return { ok: false, error: reason };
@@ -165957,7 +169176,7 @@ async function handleBulkProcessProcess(state) {
         adopted_signature: trimStr(st.__bulk_process_process_status_header_row_signature || st.__bulk_process_fresh_process_row_signature || '') || null
       });
       editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : { canProcess: true };
-      if (!editability.canProcess && !isZeroHourExpenseOnlyAdditionalManualAdjustment(activeForPostSaveProcessGate)) {
+      if (!editability.canProcess && !isZeroHourExpenseOnlyAdditionalManualAdjustment(activeForPostSaveProcessGate) && !shouldIgnoreEvidenceDerivedProcessDisable(editability, activeForPostSaveProcessGate)) {
         const reason = trimStr(editability.processDisabledReason || editability.disabledReason || '') || 'This row cannot be processed.';
         return { ok: false, error: reason };
       }
@@ -166078,8 +169297,40 @@ async function handleBulkProcessProcess(state) {
       return { ok: false, error: st.error_text || 'Process cancelled.', message: st.error_text || 'Process cancelled.', evidenceRequired: st.__bulk_process_last_process_block_reason === 'EXPENSE_EVIDENCE_REQUIRED' };
     }
 
-    const processEvidenceRowsForSubmit = collectCurrentEvidenceRowsForProcess(active);
-    const processEvidencePatchForSubmit = buildProcessEvidenceAuthorityPatch(processEvidenceRowsForSubmit);
+    let processEvidenceRowsForSubmit = collectCanonicalRealEvidenceRowsForProcess(active);
+    let processEvidencePatchForSubmit = buildProcessEvidenceAuthorityPatch(processEvidenceRowsForSubmit, { active });
+    let missingEvidenceKindsBeforeSubmit = getMissingRequiredProcessEvidenceKinds(active, processEvidenceRowsForSubmit);
+    if ((missingEvidenceKindsBeforeSubmit.length || (hasProcessEvidenceExpectation(active) && processEvidenceRowsForSubmit.length === 0)) && typeof requestNarrowProcessEvidenceHydration === 'function') {
+      const hydratedBeforeSubmit = await requestNarrowProcessEvidenceHydration(active, 'before-process-submit-evidence-hydration');
+      if (hydratedBeforeSubmit === true) {
+        active = reconcileProcessEvidenceTruth(readActive(), { reason: 'after-submit-evidence-hydration' });
+        activeTimesheetId = active.timesheetId;
+        activeContractWeekId = active.contractWeekId;
+        expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
+        processEvidenceRowsForSubmit = collectCanonicalRealEvidenceRowsForProcess(active);
+        processEvidencePatchForSubmit = buildProcessEvidenceAuthorityPatch(processEvidenceRowsForSubmit, { active });
+        missingEvidenceKindsBeforeSubmit = getMissingRequiredProcessEvidenceKinds(active, processEvidenceRowsForSubmit);
+      }
+    }
+    if (missingEvidenceKindsBeforeSubmit.length) {
+      const message = buildProcessExpenseEvidenceRequiredMessage(missingEvidenceKindsBeforeSubmit);
+      st.error_text = message;
+      st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
+      st.__bulk_process_last_process_missing_expense_evidence_kinds = missingEvidenceKindsBeforeSubmit;
+      await showBulkProcessProcessBlockedModal(message);
+      await rerenderBulkProcessWorkbenchAfterProcessBlock('process-blocked-missing-exact-evidence-kind');
+      GE();
+      return { ok: false, error: message, message, evidenceRequired: true, missing: missingEvidenceKindsBeforeSubmit };
+    }
+    if (hasProcessEvidenceExpectation(active) && processEvidenceRowsForSubmit.length === 0) {
+      const message = 'Evidence is expected for this row but the evidence rows have not loaded yet. Please refresh the evidence pane and try again.';
+      st.error_text = message;
+      st.__bulk_process_last_process_block_reason = 'EVIDENCE_EXPECTED_NOT_LOADED';
+      await showBulkProcessProcessBlockedModal(message);
+      await rerenderBulkProcessWorkbenchAfterProcessBlock('process-blocked-evidence-expected-not-loaded');
+      GE();
+      return { ok: false, error: message, message, evidenceRequired: true, missing: [] };
+    }
     let processResult = null;
     if (active.isDaily && active.submissionMode === 'MANUAL' && activeTimesheetId) {
       active = await awaitProcessEditorBaselineRebaseBeforeSubmit(active, { evidenceMutated, saveMutated: controlledSaveMutation });
@@ -166281,7 +169532,7 @@ async function handleBulkProcessProcess(state) {
         returnBulkPatch: true,
         expected_row_signature: activeRowSignature || null,
         row_signature: activeRowSignature || null,
-        activeRow: active.row || null
+        activeRow: buildCanonicalProcessActiveRowForSubmit(active, processEvidencePatchForSubmit)
       });
       if (!hasRequiredBulkProcessPatchShape(processResult)) {
         throw new Error('Weekly Bulk Process did not return the required row_patch/data_row response. Processing is disabled until contract_week_manual_upsert_bulk_process_atomic is deployed and returning the bulk patch contract.');
@@ -179185,6 +182436,8 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
   return { ok: true };
 }
 
+
+
 async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][ROW-CHANGE]');
   GC('handleBulkProcessRowChange');
@@ -179839,10 +183092,11 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
   const normaliseBulkProcessEvidenceKindRowChange = (value) => {
     const kind = upper(value || '');
+    if (!kind) return '';
     if (kind === 'TS') return 'TIMESHEET';
     if (kind === 'MILES' || kind === 'MILE') return 'MILEAGE';
     if (kind === 'ACCOM') return 'ACCOMMODATION';
-    if (kind === 'EXPENSE' || kind === 'EXPENSES') return 'TRAVEL';
+    if (kind === 'EXPENSE' || kind === 'EXPENSES') return 'EXPENSE';
     return kind;
   };
 
@@ -179919,7 +183173,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const candidateAliases = (item) => {
       const fileKey = getBulkProcessEvidenceFileKeyRowChange(item);
       if (!fileKey) return [];
-      const kind = normaliseBulkProcessEvidenceKindRowChange(item.kind || item.staged_kind || item.evidence_kind || item.evidenceKind || '') || 'OTHER';
+      const kind = normaliseBulkProcessEvidenceKindRowChange(item.kind || item.staged_kind || item.evidence_kind || item.evidenceKind || '') || 'EVIDENCE';
       const contractWeekId = trimStr(item.contract_week_id || item.contractWeekId || '');
       const timesheetId = trimStr(item.timesheet_id || item.timesheetId || item.current_timesheet_id || item.currentTimesheetId || '');
       const rowKey = trimStr(item.row_key || item.rowKey || '');
@@ -180001,7 +183255,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         parent.primary_artifact?.kind ||
         parent.artifact_hints?.primary_artifact?.kind ||
         ''
-      ) || 'OTHER';
+      ) || 'EVIDENCE';
       const contractWeekId = trimStr(candidate.contract_week_id || candidate.contractWeekId || meta.contract_week_id || meta.contractWeekId || meta.week_id || parentIdentity.contractWeekId || parent.contract_week_id || parent.contractWeekId || parentMeta.contract_week_id || '');
       const timesheetIdRaw = trimStr(candidate.timesheet_id || candidate.current_timesheet_id || candidate.timesheetId || candidate.currentTimesheetId || meta.timesheet_id || meta.current_timesheet_id || meta.timesheetId || meta.currentTimesheetId || parentIdentity.timesheetId || parent.timesheet_id || parent.current_timesheet_id || '');
       const rowKey = trimStr(candidate.row_key || candidate.rowKey || meta.row_key || meta.rowKey || parentIdentity.rowKey || parent.row_key || parent.rowKey || '');
@@ -180131,8 +183385,8 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       const candidate = {
         id: primaryId || primaryStorageKey,
         evidence_id: primaryId || null,
-        kind: primaryKind || 'OTHER',
-        evidence_kind: primaryKind || 'OTHER',
+        kind: primaryKind || 'EVIDENCE',
+        evidence_kind: primaryKind || 'EVIDENCE',
         display_name: container.primary_artifact_display_name || hints.primary_artifact_display_name || '',
         storage_key: primaryStorageKey,
         file_key: primaryStorageKey,
@@ -180196,49 +183450,284 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     });
   };
 
-  const buildBulkProcessEvidenceAuthorityPatchRowChange = (rowsInput = []) => {
-    const evidenceRows = normaliseBulkProcessEvidenceRowsRowChange(rowsInput);
-    const kinds = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
+  const isFallbackEvidenceRowChange = (itemLike = {}) => {
+    const item = (itemLike && typeof itemLike === 'object') ? itemLike : {};
+    return !!(
+      item.__primary_artifact_fallback === true ||
+      item.is_primary_artifact_fallback === true ||
+      item.__synthetic_attached_fallback === true ||
+      item.is_synthetic_attached_fallback === true ||
+      item.primary_fallback === true ||
+      /^synthetic-attached:/i.test(trimStr(item.id || item.evidence_id || item.queue_id || item.manual_timesheet_queue_id || ''))
+    );
+  };
+
+  const hasGenuineEvidenceIdentityRowChange = (itemLike = {}) => {
+    const item = (itemLike && typeof itemLike === 'object') ? itemLike : {};
+    const fileKey = getBulkProcessEvidenceFileKeyRowChange(item);
+    if (!fileKey) return false;
+    if (isFallbackEvidenceRowChange(item)) return false;
+    const evidenceId = getEvidenceIdFromEvidenceItemRowChange(item);
+    const queueId = getQueueIdentityFromEvidenceItemRowChange(item);
+    const meta = getEvidenceMetaObjectRowChange(item);
+    const genericId = trimStr(item.id || item.row_id || item.rowId || meta.id || '');
+    if (evidenceId || queueId) return true;
+    if (genericId && genericId !== fileKey && !/^files\//i.test(genericId)) return true;
+    const identity = getIdentityPartsFromEvidenceItem(item);
+    return !!(fileKey && (identity.rowKey || identity.timesheetId || identity.contractWeekId));
+  };
+
+  const evidenceBadgeKnownOrderRowChange = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
+
+  const sortEvidenceKindRowChange = (left, right) => {
+    const leftKind = normaliseBulkProcessEvidenceKindRowChange(left);
+    const rightKind = normaliseBulkProcessEvidenceKindRowChange(right);
+    const leftIdx = evidenceBadgeKnownOrderRowChange.indexOf(leftKind);
+    const rightIdx = evidenceBadgeKnownOrderRowChange.indexOf(rightKind);
+    const leftSort = leftIdx >= 0 ? leftIdx : 1000;
+    const rightSort = rightIdx >= 0 ? rightIdx : 1000;
+    if (leftSort !== rightSort) return leftSort - rightSort;
+    return String(leftKind).localeCompare(String(rightKind));
+  };
+
+  const rowLooksExplicitNoTimesheetManualAdjustmentRowChange = (rowLike = {}) => {
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const flags = (row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
+    return !!(
+      rowHasBulkProcessNoTimesheetAuthoritySignal(row) ||
+      boolishRowChange(row.manual_additional_route) ||
+      boolishRowChange(row.additional_manual_route) ||
+      boolishRowChange(flags.manual_additional_route) ||
+      boolishRowChange(flags.additional_manual_route) ||
+      boolishRowChange(row.supportsUnprocessedExpenseDraft) ||
+      boolishRowChange(row.supports_unprocessed_expense_draft) ||
+      boolishRowChange(flags.supportsUnprocessedExpenseDraft) ||
+      boolishRowChange(flags.supports_unprocessed_expense_draft) ||
+      upper(row.expense_storage_target || flags.expense_storage_target || '') === 'CONTRACT_WEEK_DRAFT' ||
+      upper(row.expense_evidence_storage_target || flags.expense_evidence_storage_target || '') === 'CONTRACT_WEEK_STAGED_EVIDENCE'
+    );
+  };
+
+  const collectPositiveEvidenceTruthRowChange = (...sources) => {
+    const evidenceRows = normaliseBulkProcessEvidenceRowsRowChange(...sources).filter((item) => hasGenuineEvidenceIdentityRowChange(item));
+    const evidenceKinds = new Set();
+    const evidenceBadges = [];
+    let attachedCount = evidenceRows.length;
+    let hasAnyEvidence = evidenceRows.length > 0;
+    const noteKind = (kind, countValue = 1) => {
+      const normalized = normaliseBulkProcessEvidenceKindRowChange(kind);
+      if (!normalized) return;
+      evidenceKinds.add(normalized);
+      const n = Number(countValue);
+      const count = Number.isFinite(n) && n > 0 ? n : 1;
+      attachedCount = Math.max(attachedCount, count);
+      hasAnyEvidence = true;
+    };
+    for (const item of evidenceRows) noteKind(item.kind || item.staged_kind || item.evidence_kind || item.category || '');
+    const visit = (source) => {
+      if (!source || typeof source !== 'object') return;
+      const badges = [source.evidence_badges, source.evidence_meta?.evidence_badges, source.artifact_hints?.evidence_badges].filter(Array.isArray);
+      for (const badgeList of badges) {
+        for (const badge of badgeList) {
+          if (!badge || typeof badge !== 'object') continue;
+          const count = Number(badge.count || badge.evidence_count || 0) || 0;
+          if (boolishRowChange(badge.present) || boolishRowChange(badge.has_evidence) || count > 0) {
+            noteKind(badge.kind, count || 1);
+            evidenceBadges.push({ ...badge, kind: normaliseBulkProcessEvidenceKindRowChange(badge.kind), present: true, has_evidence: true, count: count || 1 });
+          }
+        }
+      }
+      const directCount = Number(source.attached_evidence_count ?? source.evidence_count ?? source.evidence_meta?.attached_evidence_count ?? source.artifact_hints?.attached_evidence_count ?? 0) || 0;
+      if (directCount > 0) {
+        attachedCount = Math.max(attachedCount, directCount);
+        hasAnyEvidence = true;
+      }
+      if (boolishRowChange(source.has_any_evidence) || boolishRowChange(source.has_attached_evidence) || boolishRowChange(source.evidence_meta?.has_any_evidence) || boolishRowChange(source.artifact_hints?.has_any_evidence)) {
+        hasAnyEvidence = true;
+      }
+      const primaryStorage = cleanEvidenceStorageKeyRowChange(source.primary_artifact_storage_key || source.primaryArtifactStorageKey || source.artifact_hints?.primary_artifact_storage_key || source.artifact_hints?.primaryArtifactStorageKey || source.primary_artifact?.storage_key || source.primary_artifact?.file_key || source.primary_artifact?.r2_key || source.artifact_hints?.primary_artifact?.storage_key || source.artifact_hints?.primary_artifact?.file_key || source.artifact_hints?.primary_artifact?.r2_key || '');
+      if (primaryStorage) {
+        hasAnyEvidence = true;
+        attachedCount = Math.max(attachedCount, 1);
+        noteKind(source.primary_artifact_kind || source.primaryArtifactKind || source.primary_artifact?.kind || source.artifact_hints?.primary_artifact_kind || source.artifact_hints?.primary_artifact?.kind || 'EVIDENCE', 1);
+      }
+    };
+    for (const source of sources) {
+      if (Array.isArray(source)) {
+        for (const item of source) visit(item);
+      } else {
+        visit(source);
+      }
+    }
+    const dynamicBadges = Array.from(evidenceKinds).sort(sortEvidenceKindRowChange).map((kind) => ({ kind, present: true, has_evidence: true, count: Math.max(1, attachedCount || 1) }));
+    return {
+      hasAnyEvidence,
+      attachedCount: attachedCount || (hasAnyEvidence ? 1 : 0),
+      evidenceRows,
+      evidenceKinds,
+      evidenceBadges: evidenceBadges.length ? evidenceBadges : dynamicBadges
+    };
+  };
+
+  const buildBulkProcessEvidenceAuthorityPatchRowChange = (rowsInput = [], patchOptions = {}) => {
+    const patchOpts = (patchOptions && typeof patchOptions === 'object') ? patchOptions : {};
+    const sourceRows = Array.isArray(rowsInput) ? rowsInput : [rowsInput];
+    const rowIdentity = patchOpts.rowIdentity || patchOpts.row_identity || getIdentityPartsFromRow(patchOpts.rowObj || patchOpts.row || st.active_row || {});
+    const allEvidenceRows = normaliseBulkProcessEvidenceRowsRowChange(sourceRows);
+    const identityFilteredRows = filterEvidenceRowsForIdentity(allEvidenceRows, rowIdentity, { allowUnknownIdentity: false, requireFileKey: true });
+    const realEvidenceRows = identityFilteredRows.filter((item) => hasGenuineEvidenceIdentityRowChange(item));
+    const evidenceRows = realEvidenceRows.length ? realEvidenceRows : identityFilteredRows.filter((item) => !isFallbackEvidenceRowChange(item));
     const countsByKind = new Map();
     for (const item of evidenceRows) {
-      const kind = normaliseBulkProcessEvidenceKindRowChange(item.kind || item.staged_kind || '');
+      const kind = normaliseBulkProcessEvidenceKindRowChange(item.kind || item.staged_kind || item.evidence_kind || item.evidenceKind || item.category || '');
       if (!kind) continue;
       countsByKind.set(kind, (Number(countsByKind.get(kind) || 0) || 0) + 1);
     }
-    const evidenceBadges = kinds.map((kind) => {
+    const dynamicKinds = Array.from(new Set([...evidenceBadgeKnownOrderRowChange, ...Array.from(countsByKind.keys()).filter(Boolean)])).sort(sortEvidenceKindRowChange);
+    const evidenceBadges = dynamicKinds.map((kind) => {
       const count = Number(countsByKind.get(kind) || 0) || 0;
       return { kind, has_evidence: count > 0, present: count > 0, count };
     });
-    const primaryEvidence = evidenceRows.find((item) => normaliseBulkProcessEvidenceKindRowChange(item.kind || item.staged_kind || '') === 'TIMESHEET') || evidenceRows[0] || null;
+    const explicitNoTimesheet = patchOpts.explicitNoTimesheet === true || patchOpts.explicit_no_timesheet === true || rowLooksExplicitNoTimesheetManualAdjustmentRowChange(patchOpts.rowObj || patchOpts.row || st.active_row || {});
+    const realNonTimesheetRows = evidenceRows.filter((item) => normaliseBulkProcessEvidenceKindRowChange(item.kind || item.staged_kind || '') !== 'TIMESHEET' && hasGenuineEvidenceIdentityRowChange(item));
+    const realTimesheetRows = evidenceRows.filter((item) => normaliseBulkProcessEvidenceKindRowChange(item.kind || item.staged_kind || '') === 'TIMESHEET' && hasGenuineEvidenceIdentityRowChange(item));
+    const nonFallbackRows = evidenceRows.filter((item) => !isFallbackEvidenceRowChange(item));
+    const primaryEvidence = explicitNoTimesheet
+      ? (realNonTimesheetRows[0] || nonFallbackRows.find((item) => normaliseBulkProcessEvidenceKindRowChange(item.kind || item.staged_kind || '') !== 'TIMESHEET') || nonFallbackRows[0] || evidenceRows[0] || null)
+      : (realTimesheetRows[0] || nonFallbackRows[0] || evidenceRows[0] || null);
     const primaryStorageKey = primaryEvidence ? getBulkProcessEvidenceFileKeyRowChange(primaryEvidence) : '';
     const primaryId = primaryEvidence ? getBulkProcessEvidenceIdRowChange(primaryEvidence) : '';
+    const primaryKind = primaryEvidence ? normaliseBulkProcessEvidenceKindRowChange(primaryEvidence.kind || primaryEvidence.staged_kind || primaryEvidence.evidence_kind || primaryEvidence.evidenceKind || '') : '';
+    const attachedEvidenceCount = evidenceRows.length;
     return {
       evidenceRows,
-      hasAnyEvidence: evidenceRows.length > 0,
-      attachedEvidenceCount: evidenceRows.length,
+      hasAnyEvidence: attachedEvidenceCount > 0,
+      attachedEvidenceCount,
       evidenceBadges,
       primaryEvidence,
       primaryArtifactId: primaryId || null,
-      primaryArtifactKind: primaryEvidence ? (normaliseBulkProcessEvidenceKindRowChange(primaryEvidence.kind || primaryEvidence.staged_kind || '') || null) : null,
+      primaryArtifactKind: primaryKind || null,
       primaryArtifactStorageKey: primaryStorageKey || null,
-      primaryArtifactPreviewMode: primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || null) : null
+      primaryArtifactPreviewMode: primaryEvidence ? (primaryEvidence.preview_mode || primaryEvidence.preview_kind || primaryEvidence.primary_artifact_preview_mode || null) : null,
+      evidenceLoadedAuthority: patchOpts.evidenceLoadedAuthority === true || patchOpts.evidence_loaded_authority === true || attachedEvidenceCount > 0,
+      allowEvidenceClear: patchOpts.allowEvidenceClear === true || patchOpts.allowAuthoritativeClear === true || patchOpts.allow_authoritative_clear === true
     };
   };
 
   const applyBulkProcessEvidenceAuthorityPatchRowChange = (target, patch) => {
     if (!target || typeof target !== 'object' || !patch || typeof patch !== 'object') return target;
+    const allowEvidenceClear = patch.allowEvidenceClear === true || patch.allowAuthoritativeClear === true || patch.allow_authoritative_clear === true;
     let evidenceRows = normaliseBulkProcessEvidenceRowsRowChange(Array.isArray(patch.evidenceRows) ? patch.evidenceRows : []);
-    const existingEvidenceRows = normaliseBulkProcessEvidenceRowsRowChange(target.evidence, target);
-    if (!evidenceRows.length && existingEvidenceRows.length && patch.allowAuthoritativeClear !== true) evidenceRows = existingEvidenceRows;
-    const effectivePatch = buildBulkProcessEvidenceAuthorityPatchRowChange(evidenceRows);
-    const evidenceLoaded = patch.evidenceLoaded === true || effectivePatch.hasAnyEvidence === true || target.evidence_loaded === true || target.evidence_authoritative === true || target.include_evidence === true;
-    target.evidence = evidenceRows.map((item) => deep(item));
+    const existingEvidenceRows = normaliseBulkProcessEvidenceRowsRowChange(target.evidence, target).filter((item) => hasGenuineEvidenceIdentityRowChange(item));
+    const positiveTruth = collectPositiveEvidenceTruthRowChange(target, target.evidence, existingEvidenceRows);
+    const patchPositiveBadges = Array.isArray(patch.evidenceBadges)
+      ? patch.evidenceBadges.filter((badge) => badge && typeof badge === 'object' && (boolishRowChange(badge.present) || boolishRowChange(badge.has_evidence) || Number(badge.count || 0) > 0))
+      : [];
+    const patchExpectation = !!(
+      patch.evidenceExpectation === true ||
+      patch.hasAnyEvidence === true ||
+      Number(patch.attachedEvidenceCount || 0) > 0 ||
+      patchPositiveBadges.length > 0 ||
+      positiveTruth.hasAnyEvidence ||
+      existingEvidenceRows.length > 0
+    );
+    if (!evidenceRows.length && existingEvidenceRows.length && !allowEvidenceClear) evidenceRows = existingEvidenceRows;
+
+    if (!evidenceRows.length && !allowEvidenceClear) {
+      if (patchExpectation) {
+        const existingCount = Math.max(
+          Number(target.attached_evidence_count || 0) || 0,
+          Number(target.evidence_count || 0) || 0,
+          Number(target.evidence_meta?.attached_evidence_count || 0) || 0,
+          Number(target.artifact_hints?.attached_evidence_count || 0) || 0,
+          positiveTruth.attachedCount || 0,
+          patchPositiveBadges.reduce((sum, badge) => sum + (Number(badge.count || 0) || 0), 0)
+        );
+        const preservedBadges = Array.isArray(target.evidence_badges) && target.evidence_badges.length
+          ? target.evidence_badges.map((badge) => ({ ...badge }))
+          : (patchPositiveBadges.length ? patchPositiveBadges.map((badge) => ({ ...badge })) : positiveTruth.evidenceBadges.map((badge) => ({ ...badge })));
+        target.has_any_evidence = true;
+        target.has_attached_evidence = existingCount > 0 || target.has_attached_evidence === true;
+        if (existingCount > 0) {
+          target.attached_evidence_count = existingCount;
+          target.evidence_count = existingCount;
+        }
+        target.evidence_badges = preservedBadges;
+        target.evidence_meta = {
+          ...((target.evidence_meta && typeof target.evidence_meta === 'object') ? target.evidence_meta : {}),
+          has_any_evidence: true,
+          has_attached_evidence: existingCount > 0 || target.has_attached_evidence === true,
+          attached_evidence_count: existingCount > 0 ? existingCount : (target.evidence_meta?.attached_evidence_count || target.attached_evidence_count || 0),
+          evidence_count: existingCount > 0 ? existingCount : (target.evidence_meta?.evidence_count || target.evidence_count || 0),
+          evidence_badges: preservedBadges,
+          __requires_evidence_hydration: true
+        };
+        target.artifact_hints = {
+          ...((target.artifact_hints && typeof target.artifact_hints === 'object') ? target.artifact_hints : {}),
+          has_any_evidence: true,
+          attached_evidence_count: existingCount > 0 ? existingCount : (target.artifact_hints?.attached_evidence_count || target.attached_evidence_count || 0),
+          evidence_badges: preservedBadges,
+          __requires_evidence_hydration: true
+        };
+      }
+      return target;
+    }
+
+    const effectivePatch = buildBulkProcessEvidenceAuthorityPatchRowChange(evidenceRows, {
+      rowObj: target,
+      evidenceLoadedAuthority: patch.evidenceLoadedAuthority === true || patch.evidenceLoaded === true || patch.evidence_loaded === true,
+      allowEvidenceClear
+    });
+    const evidenceLoaded = !!(patch.evidenceLoadedAuthority === true || patch.evidenceLoaded === true || patch.evidence_loaded === true || effectivePatch.hasAnyEvidence === true);
+
+    if (!effectivePatch.hasAnyEvidence && allowEvidenceClear) {
+      target.evidence = [];
+      target.evidence_loaded = evidenceLoaded;
+      target.evidence_authoritative = evidenceLoaded;
+      target.include_evidence = evidenceLoaded;
+      target.has_any_evidence = false;
+      target.has_attached_evidence = false;
+      target.attached_evidence_count = 0;
+      target.evidence_count = 0;
+      target.evidence_badges = effectivePatch.evidenceBadges.map((badge) => ({ ...badge, present: false, has_evidence: false, count: 0 }));
+      target.evidence_meta = {
+        ...((target.evidence_meta && typeof target.evidence_meta === 'object') ? target.evidence_meta : {}),
+        evidence_loaded: evidenceLoaded,
+        evidence_authoritative: evidenceLoaded,
+        include_evidence: evidenceLoaded,
+        has_any_evidence: false,
+        has_attached_evidence: false,
+        attached_evidence_count: 0,
+        evidence_count: 0,
+        evidence_badges: target.evidence_badges
+      };
+      target.artifact_hints = {
+        ...((target.artifact_hints && typeof target.artifact_hints === 'object') ? target.artifact_hints : {}),
+        has_any_evidence: false,
+        attached_evidence_count: 0,
+        primary_artifact_id: null,
+        primary_artifact_kind: null,
+        primary_artifact_storage_key: null,
+        primary_artifact_preview_mode: null,
+        primary_artifact: null,
+        evidence_badges: target.evidence_badges
+      };
+      target.primary_artifact = null;
+      target.primary_artifact_id = null;
+      target.primary_artifact_kind = null;
+      target.primary_artifact_storage_key = null;
+      target.primary_artifact_preview_mode = null;
+      return target;
+    }
+
+    target.evidence = effectivePatch.evidenceRows.map((item) => deep(item));
     target.evidence_loaded = evidenceLoaded;
     target.evidence_authoritative = evidenceLoaded;
     target.include_evidence = evidenceLoaded;
     target.has_any_evidence = !!effectivePatch.hasAnyEvidence;
     target.has_attached_evidence = !!effectivePatch.hasAnyEvidence;
     target.attached_evidence_count = Number(effectivePatch.attachedEvidenceCount || 0) || 0;
+    target.evidence_count = Number(effectivePatch.attachedEvidenceCount || 0) || 0;
     target.evidence_badges = effectivePatch.evidenceBadges.map((badge) => ({ ...badge }));
     target.evidence_meta = {
       ...((target.evidence_meta && typeof target.evidence_meta === 'object') ? target.evidence_meta : {}),
@@ -180248,6 +183737,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       has_any_evidence: !!effectivePatch.hasAnyEvidence,
       has_attached_evidence: !!effectivePatch.hasAnyEvidence,
       attached_evidence_count: Number(effectivePatch.attachedEvidenceCount || 0) || 0,
+      evidence_count: Number(effectivePatch.attachedEvidenceCount || 0) || 0,
       evidence_badges: effectivePatch.evidenceBadges.map((badge) => ({ ...badge }))
     };
     target.artifact_hints = {
@@ -180402,6 +183892,68 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     }
     ['unprocessed_rows', 'processed_rows', 'processed_eligible_rows', 'authorised_eligible_rows', 'visible_rows', 'visible_processed_eligible_rows', 'visible_authorised_eligible_rows', 'rows'].forEach((key) => patchCollection(st, key));
     return evidenceAuthorityPatch;
+  };
+
+  const harmoniseBulkProcessFinalEvidenceStateRowChange = (reason = 'row-change-final-state') => {
+    const activeIdentity = getIdentityPartsFromRow(st.active_row || {});
+    const containers = [
+      st.active_row,
+      st.active_details,
+      st.active_context,
+      st.active_context?.details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx,
+      st.active_ctx?.details,
+      st.active_ctx?.state,
+      st.active_ctx?.row,
+      st.active_ctx?.data_row
+    ].filter((item) => item && typeof item === 'object');
+    const realRows = filterEvidenceRowsForIdentity(
+      normaliseBulkProcessEvidenceRowsRowChange(...containers),
+      activeIdentity,
+      { allowUnknownIdentity: false, requireFileKey: true }
+    ).filter((item) => hasGenuineEvidenceIdentityRowChange(item));
+    const hasPositiveExpectation = collectPositiveEvidenceTruthRowChange(...containers).hasAnyEvidence || realRows.length > 0;
+    const evidencePatch = realRows.length
+      ? buildBulkProcessEvidenceAuthorityPatchRowChange(realRows, { targetIdentity: activeIdentity, targetRow: st.active_row || {}, evidenceLoadedAuthority: true })
+      : null;
+    for (const container of containers) {
+      if (!container || typeof container !== 'object') continue;
+      if (evidencePatch) {
+        applyBulkProcessEvidenceAuthorityPatchRowChange(container, evidencePatch);
+      } else if (hasPositiveExpectation) {
+        if (container.has_any_evidence === false) container.has_any_evidence = true;
+        if (container.evidence_meta && typeof container.evidence_meta === 'object') {
+          if (container.evidence_meta.has_any_evidence === false) container.evidence_meta.has_any_evidence = true;
+          container.evidence_meta.evidence_pending = true;
+          container.evidence_meta.requires_evidence_hydration = true;
+        } else {
+          container.evidence_meta = { has_any_evidence: true, evidence_pending: true, requires_evidence_hydration: true };
+        }
+        if (container.artifact_hints && typeof container.artifact_hints === 'object') {
+          if (container.artifact_hints.has_any_evidence === false) container.artifact_hints.has_any_evidence = true;
+          container.artifact_hints.evidence_pending = true;
+          container.artifact_hints.requires_evidence_hydration = true;
+        }
+      }
+      if (container.action_flags && typeof container.action_flags === 'object') {
+        container.action_flags = sanitizeActionFlagsForNonEvidenceContext({
+          incomingActionFlags: container.action_flags,
+          existingActionFlags: st.active_row?.action_flags || {},
+          datasetActionFlags: findBulkProcessDatasetRowForRowChange(st.active_row_key || st.active_row || '')?.action_flags || {},
+          classifier: { nonEvidenceAuthoritative: true, preservedPositiveEvidenceTruth: hasPositiveExpectation }
+        });
+      }
+    }
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    if (pane && hasPositiveExpectation && !realRows.length) {
+      pane.__requires_evidence_hydration = true;
+    }
+    if (hasPositiveExpectation) {
+      L('evidence final-state consistency checked', { reason, row_key: activeIdentity.rowKey || activeIdentity.identity || '', real_rows: realRows.length });
+    }
+    return { real_rows: realRows.length, evidence_expectation: hasPositiveExpectation };
   };
 
   const buildRowCacheSignature = (rowLike) => {
@@ -180865,8 +184417,9 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       currentTs.timesheet_id ||
       ''
     );
-    const canUseSyntheticTimesheetAttached = !!activeTimesheetIdentityForSyntheticAttached;
-    const timesheetEvidence = canonicalEvidenceRows.find((item) => trimStr(item?.kind || item?.staged_kind || '').toUpperCase() === 'TIMESHEET' && !!getBulkProcessEvidenceFileKeyRowChange(item)) || null;
+    const activeRowExplicitNoTimesheet = rowLooksExplicitNoTimesheetManualAdjustmentRowChange(st.active_row || {}) || (!!trimStr(st.active_row?.contract_week_id || st.active_details?.contract_week_id || currentCw.id || '') && !activeTimesheetIdentityForSyntheticAttached && rowHasBulkProcessNoTimesheetAuthoritySignal(st.active_row || {}));
+    const canUseSyntheticTimesheetAttached = !!activeTimesheetIdentityForSyntheticAttached && !activeRowExplicitNoTimesheet;
+    const timesheetEvidence = canonicalEvidenceRows.find((item) => normaliseBulkProcessEvidenceKindRowChange(item?.kind || item?.staged_kind || '') === 'TIMESHEET' && !!getBulkProcessEvidenceFileKeyRowChange(item) && hasGenuineEvidenceIdentityRowChange(item)) || null;
     const attachedStorageKey = canUseSyntheticTimesheetAttached ? cleanEvidenceStorageKeyRowChange(
       timesheetEvidence?.storage_key ||
       timesheetEvidence?.r2_key ||
@@ -180911,8 +184464,27 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         is_synthetic_attached_fallback: true
       }]);
     })();
-    const effectiveTimesheetEvidence = effectiveEvidenceRows.find((item) => trimStr(item?.kind || item?.staged_kind || '').toUpperCase() === 'TIMESHEET' && !!getBulkProcessEvidenceFileKeyRowChange(item)) || null;
-    if (effectiveTimesheetEvidence) {
+    const effectiveTimesheetEvidence = effectiveEvidenceRows.find((item) => normaliseBulkProcessEvidenceKindRowChange(item?.kind || item?.staged_kind || '') === 'TIMESHEET' && !!getBulkProcessEvidenceFileKeyRowChange(item) && hasGenuineEvidenceIdentityRowChange(item)) || null;
+    const realNonTimesheetEvidenceRows = effectiveEvidenceRows.filter((item) => normaliseBulkProcessEvidenceKindRowChange(item?.kind || item?.staged_kind || '') !== 'TIMESHEET' && hasGenuineEvidenceIdentityRowChange(item));
+    if (activeRowExplicitNoTimesheet && realNonTimesheetEvidenceRows.length) {
+      const selectedNonTimesheet = realNonTimesheetEvidenceRows[0];
+      pane.attached_rows = clone(realNonTimesheetEvidenceRows);
+      pane.attached_all_rows = clone(realNonTimesheetEvidenceRows);
+      pane.active_tab = 'attached';
+      pane.__attached_manual_override = true;
+      pane.__queue_manual_override = false;
+      pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = '';
+      pane.active_attached_item = clone(selectedNonTimesheet);
+      pane.active_attached_id = getBulkProcessEvidenceIdRowChange(selectedNonTimesheet) || null;
+      const attachedKey = buildBulkProcessAttachedSelectionKeyRowChange(selectedNonTimesheet);
+      pane.__active_attached_preview_target = attachedKey;
+      pane.__preview_target_key = attachedKey;
+      pane.__preview_load_requested_target_key = attachedKey;
+      pane.__requires_evidence_hydration = false;
+      reconcileResult.resolved_source = 'attached';
+      reconcileResult.requires_evidence_hydration = false;
+    } else if (effectiveTimesheetEvidence) {
       pane.attached_rows = clone(effectiveEvidenceRows);
       pane.attached_all_rows = clone(effectiveEvidenceRows);
       pane.active_tab = 'attached';
@@ -180928,7 +184500,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     }
     const activeIdentity = trimStr(reconcileResult.active_identity || getActiveRowIdentity());
     const resolvedSource = trimStr(reconcileResult.resolved_source || pane.active_tab || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
-    if (!effectiveTimesheetEvidence && metadataRequiredEvidenceHydration && evidenceHydrationAttempted && activeIdentity) {
+    if (!effectiveTimesheetEvidence && !realNonTimesheetEvidenceRows.length && metadataRequiredEvidenceHydration && evidenceHydrationAttempted && activeIdentity && !activeRowExplicitNoTimesheet) {
       pane.attached_rows = [];
       pane.attached_all_rows = [];
       pane.active_attached_id = null;
@@ -180944,7 +184516,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         reconcileResult.requires_evidence_hydration = false;
         reconcileResult.selected_preview_changed = !!(reconcileResult.selected_preview_changed || queueResult.selected_preview_changed);
       }
-    } else if (!effectiveTimesheetEvidence && resolvedSource === 'queue' && activeIdentity && applyOpts.prepareQueue !== false) {
+    } else if (!effectiveTimesheetEvidence && !realNonTimesheetEvidenceRows.length && resolvedSource === 'queue' && activeIdentity && applyOpts.prepareQueue !== false) {
       const queueResult = await prepareQueueStateForActiveIdentity({ identity: activeIdentity, forceQueueRefresh: !!applyOpts.forceQueueRefresh, requestToken: requestTokenObj, modalOpenToken: modalToken, isCurrent: () => !stillCurrent || stillCurrent() });
       reconcileResult.selected_preview_changed = !!(reconcileResult.selected_preview_changed || queueResult.selected_preview_changed);
     } else {
@@ -180964,9 +184536,388 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     return reconcileResult;
   };
 
+
+  const evidenceArrayKeysRowChange = ['evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence'];
+
+  const collectEvidenceArrayValuesFromFragmentRowChange = (fragment) => {
+    const values = [];
+    if (!fragment || typeof fragment !== 'object') return values;
+    for (const key of evidenceArrayKeysRowChange) {
+      if (Array.isArray(fragment[key])) values.push(fragment[key]);
+    }
+    if (fragment.details && typeof fragment.details === 'object') {
+      for (const key of evidenceArrayKeysRowChange) {
+        if (Array.isArray(fragment.details[key])) values.push(fragment.details[key]);
+      }
+    }
+    if (fragment.row && typeof fragment.row === 'object') {
+      for (const key of evidenceArrayKeysRowChange) {
+        if (Array.isArray(fragment.row[key])) values.push(fragment.row[key]);
+      }
+    }
+    if (fragment.data_row && typeof fragment.data_row === 'object') {
+      for (const key of evidenceArrayKeysRowChange) {
+        if (Array.isArray(fragment.data_row[key])) values.push(fragment.data_row[key]);
+      }
+    }
+    if (fragment.row_patch && typeof fragment.row_patch === 'object') {
+      for (const key of evidenceArrayKeysRowChange) {
+        if (Array.isArray(fragment.row_patch[key])) values.push(fragment.row_patch[key]);
+      }
+    }
+    return values;
+  };
+
+  const evidenceArraysExplicitlyEmptyRowChange = (fragment) => {
+    const arrays = collectEvidenceArrayValuesFromFragmentRowChange(fragment);
+    return arrays.length > 0 && arrays.every((arr) => Array.isArray(arr) && arr.length === 0);
+  };
+
+  const getContextProfileFromPayloadRowChange = (payload = {}) => trimStr(
+    payload?.context_profile ||
+    payload?.profile ||
+    payload?.__context_options?.context_profile ||
+    payload?.__context_options?.profile ||
+    payload?.details?.context_profile ||
+    payload?.details?.profile ||
+    ''
+  ).toLowerCase();
+
+  const payloadIncludeEvidenceSignalRowChange = (payload = {}) => {
+    const candidates = [
+      payload?.include_evidence,
+      payload?.includeEvidence,
+      payload?.__context_options?.include_evidence,
+      payload?.__context_options?.includeEvidence,
+      payload?.details?.include_evidence,
+      payload?.details?.includeEvidence,
+      payload?.row?.include_evidence,
+      payload?.data_row?.include_evidence
+    ];
+    for (const candidate of candidates) {
+      if (candidate === true) return { present: true, value: true };
+      if (candidate === false) return { present: true, value: false };
+      const s = trimStr(candidate);
+      if (!s) continue;
+      const normalized = s.toLowerCase();
+      if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return { present: true, value: true };
+      if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return { present: true, value: false };
+    }
+    return { present: false, value: false };
+  };
+
+  const collectRequiredEvidenceKindsRowChange = (...sources) => {
+    const required = new Set();
+    const note = (kind) => {
+      const normalized = normaliseBulkProcessEvidenceKindRowChange(kind);
+      if (normalized) required.add(normalized);
+    };
+    const scanDraft = (draft) => {
+      if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return;
+      for (const [key, value] of Object.entries(draft)) {
+        const numericValue = Number(value || 0) || 0;
+        const keyUpper = upper(key);
+        if (numericValue <= 0) continue;
+        if (keyUpper.includes('MILEAGE') || keyUpper.includes('MILES')) note('MILEAGE');
+        else if (keyUpper.includes('ACCOMMODATION') || keyUpper.includes('ACCOM')) note('ACCOMMODATION');
+        else if (keyUpper.includes('TRAVEL')) note('TRAVEL');
+        else if (keyUpper.includes('OTHER')) note('OTHER');
+      }
+    };
+    const visit = (source) => {
+      if (!source || typeof source !== 'object') return;
+      const requirementArrays = [source.required_evidence_kinds, source.requiredEvidenceKinds, source.evidence_required_kinds, source.evidenceMeta?.required_evidence_kinds, source.evidence_meta?.required_evidence_kinds].filter(Array.isArray);
+      for (const arr of requirementArrays) for (const kind of arr) note(kind);
+      const badges = [source.required_evidence_badges, source.evidence_meta?.required_evidence_badges, source.artifact_hints?.required_evidence_badges].filter(Array.isArray);
+      for (const list of badges) for (const badge of list) if (badge && typeof badge === 'object' && (boolishRowChange(badge.required) || boolishRowChange(badge.missing) || boolishRowChange(badge.present) || Number(badge.count || 0) > 0)) note(badge.kind);
+      scanDraft(source.expenses_draft);
+      scanDraft(source.contract_week_totals_json?.expenses_draft);
+      scanDraft(source.totals_json?.expenses_draft);
+      scanDraft(source.details?.contract_week?.totals_json?.expenses_draft);
+      scanDraft(source.contract_week?.totals_json?.expenses_draft);
+    };
+    for (const source of sources) visit(source);
+    return required;
+  };
+
+  const classifyBulkProcessEvidenceAuthorityRowChange = ({ rowObj = {}, contextPayload = {}, payloadRow = {}, payloadDataRow = {}, rowPatch = {}, detailsInput = {}, topLevelRowData = {} } = {}) => {
+    const row = (rowObj && typeof rowObj === 'object') ? rowObj : {};
+    const payload = (contextPayload && typeof contextPayload === 'object') ? contextPayload : {};
+    const mergedIdentitySource = { ...row, ...payloadRow, ...payloadDataRow, ...topLevelRowData, ...rowPatch, row_key: payload.row_key || topLevelRowData.row_key || rowPatch.row_key || payloadDataRow.row_key || payloadRow.row_key || row.row_key };
+    const activeIdentity = getIdentityPartsFromRow(mergedIdentitySource);
+    const matchingDatasetRow = findBulkProcessDatasetRowForRowChange(activeIdentity.identity || mergedIdentitySource || row || '');
+    const incomingRows = normaliseBulkProcessEvidenceRowsRowChange(
+      payload.evidence,
+      payload.attached_evidence,
+      payload.attachedRows,
+      payload.staged_evidence,
+      payload.contract_week_staged_evidence,
+      detailsInput.evidence,
+      detailsInput.attached_evidence,
+      detailsInput.attachedRows,
+      detailsInput.staged_evidence,
+      detailsInput.contract_week_staged_evidence,
+      payloadRow.evidence,
+      payloadDataRow.evidence,
+      rowPatch.evidence
+    ).filter((item) => evidenceItemMatchesIdentity(item, activeIdentity, { allowUnknownIdentity: false, requireFileKey: true }) && hasGenuineEvidenceIdentityRowChange(item));
+    const modalCtxData = (window.modalCtx?.data && typeof window.modalCtx.data === 'object') ? window.modalCtx.data : null;
+    const modalCtxMatches = modalCtxData ? identitiesCompatible(activeIdentity, getIdentityPartsFromRow(modalCtxData)) : false;
+    const existingRows = normaliseBulkProcessEvidenceRowsRowChange(
+      row.evidence,
+      row,
+      st.active_row?.evidence,
+      st.active_row,
+      st.active_details?.evidence,
+      st.active_details,
+      st.active_context?.evidence,
+      st.active_context,
+      st.active_context?.details?.evidence,
+      st.active_context?.details,
+      st.active_context?.row?.evidence,
+      st.active_context?.row,
+      st.active_context?.data_row?.evidence,
+      st.active_context?.data_row,
+      st.active_ctx?.state?.evidence,
+      st.active_ctx?.state,
+      st.evidence_pane_state?.attached_rows,
+      st.evidence_pane_state?.attached_all_rows,
+      matchingDatasetRow?.evidence,
+      matchingDatasetRow,
+      modalCtxMatches ? modalCtxData?.evidence : null,
+      modalCtxMatches ? modalCtxData : null
+    ).filter((item) => evidenceItemMatchesIdentity(item, activeIdentity, { allowUnknownIdentity: false, requireFileKey: true }) && hasGenuineEvidenceIdentityRowChange(item));
+    const positiveTruth = collectPositiveEvidenceTruthRowChange(row, payloadRow, payloadDataRow, rowPatch, topLevelRowData, detailsInput, matchingDatasetRow, st.active_row, st.active_details, st.active_context, st.active_ctx?.state, st.evidence_pane_state, modalCtxMatches ? modalCtxData : null, existingRows, incomingRows);
+    const profile = getContextProfileFromPayloadRowChange(payload);
+    const includeEvidenceSignal = payloadIncludeEvidenceSignalRowChange(payload);
+    const headerLikeProfile = ['status_header', 'editor', 'list', 'active_row_visible'].includes(profile) || payload.header_only === true || payload.base_only === true;
+    const contextRequestsEvidence = !!(profile === 'evidence' || profile === 'full' || includeEvidenceSignal.value === true);
+    const rawLoadedSignal = !!(
+      payload.evidence_loaded === true ||
+      payload.evidence_authoritative === true ||
+      payload?.details?.evidence_loaded === true ||
+      payload?.details?.evidence_authoritative === true ||
+      payload?.row?.evidence_loaded === true ||
+      payload?.data_row?.evidence_loaded === true ||
+      payload?.evidence_meta?.evidence_loaded === true ||
+      payload?.artifact_hints?.evidence_loaded === true
+    );
+    const evidenceLoadedAuthority = !!(incomingRows.length > 0 || contextRequestsEvidence || rawLoadedSignal);
+    const evidenceArraysEmpty = evidenceArraysExplicitlyEmptyRowChange(payload);
+    const explicitClearMarker = !!(
+      payload.evidence_authoritative_empty === true ||
+      payload.evidence_empty_authoritative === true ||
+      payload.__evidence_empty_authoritative === true ||
+      payload.evidence_clear_authoritative === true ||
+      payload.clear_evidence === true ||
+      detailsInput.evidence_authoritative_empty === true ||
+      detailsInput.evidence_empty_authoritative === true ||
+      detailsInput.__evidence_empty_authoritative === true ||
+      detailsInput.evidence_clear_authoritative === true ||
+      detailsInput.clear_evidence === true
+    );
+    const hasIdentityMatch = identitiesCompatible(getIdentityPartsFromRow(row || {}), activeIdentity) || identitiesCompatible(getIdentityPartsFromRow(payload || {}), activeIdentity) || !!activeIdentity.identity;
+    const allowEvidenceClear = !!(
+      evidenceLoadedAuthority &&
+      hasIdentityMatch &&
+      evidenceArraysEmpty &&
+      incomingRows.length === 0 &&
+      (existingRows.length === 0 || explicitClearMarker)
+    );
+    const nonEvidenceAuthoritative = !!(
+      !incomingRows.length &&
+      (
+        headerLikeProfile ||
+        includeEvidenceSignal.value === false ||
+        !includeEvidenceSignal.present
+      ) &&
+      !(contextRequestsEvidence || rawLoadedSignal)
+    );
+    const presentEvidenceKinds = new Set(incomingRows.map((item) => normaliseBulkProcessEvidenceKindRowChange(item.kind || item.staged_kind || item.evidence_kind || '')).filter(Boolean));
+    for (const kind of positiveTruth.evidenceKinds) presentEvidenceKinds.add(kind);
+    const requiredEvidenceKinds = collectRequiredEvidenceKindsRowChange(row, payloadRow, payloadDataRow, rowPatch, topLevelRowData, detailsInput, matchingDatasetRow);
+    return {
+      evidenceLoadedAuthority,
+      evidenceExpectation: positiveTruth.hasAnyEvidence || existingRows.length > 0,
+      allowEvidenceClear,
+      nonEvidenceAuthoritative,
+      hasIncomingRealEvidenceRows: incomingRows.length > 0,
+      hasExistingMatchingEvidenceRows: existingRows.length > 0,
+      hasPreservedMatchingEvidenceRows: existingRows.length > 0,
+      hasIdentityMatch,
+      realEvidenceRows: incomingRows,
+      existingEvidenceRows: existingRows,
+      requiredEvidenceKinds,
+      presentEvidenceKinds,
+      preservedPositiveEvidenceTruth: positiveTruth.hasAnyEvidence || existingRows.length > 0,
+      evidenceExpectationSources: positiveTruth,
+      profile,
+      includeEvidenceSignal
+    };
+  };
+
+  const isAllFalseEvidenceBadgesRowChange = (value) => {
+    if (!Array.isArray(value)) return false;
+    if (!value.length) return true;
+    return value.every((badge) => !badge || (boolishRowChange(badge.present) !== true && boolishRowChange(badge.has_evidence) !== true && (Number(badge.count || 0) || 0) <= 0));
+  };
+
+  const stripNonAuthoritativeEvidenceClearsFromFragment = (fragment) => {
+    if (!fragment || typeof fragment !== 'object') return fragment;
+    const out = Array.isArray(fragment) ? fragment.map((item) => deep(item)) : { ...fragment };
+    const clearKeys = ['has_any_evidence', 'has_attached_evidence', 'attached_evidence_count', 'evidence_count', 'evidence_badges', 'evidence', 'attached_evidence', 'attachedRows', 'staged_evidence', 'contract_week_staged_evidence', 'evidence_loaded', 'evidence_authoritative', 'include_evidence', 'primary_artifact', 'primary_artifact_id', 'primary_artifact_kind', 'primary_artifact_storage_key', 'primary_artifact_preview_mode'];
+    for (const key of clearKeys) {
+      if (!Object.prototype.hasOwnProperty.call(out, key)) continue;
+      const value = out[key];
+      const shouldStrip =
+        value === false ||
+        value === null ||
+        value === undefined ||
+        value === '' ||
+        (typeof value === 'number' && value <= 0 && (key.includes('count') || key === 'attached_evidence_count')) ||
+        (Array.isArray(value) && (value.length === 0 || (key === 'evidence_badges' && isAllFalseEvidenceBadgesRowChange(value)))) ||
+        (key === 'primary_artifact' && value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) ||
+        ((key === 'evidence_loaded' || key === 'evidence_authoritative' || key === 'include_evidence') && value !== true);
+      if (shouldStrip) delete out[key];
+    }
+    for (const nestedKey of ['evidence_meta', 'artifact_hints']) {
+      if (out[nestedKey] && typeof out[nestedKey] === 'object' && !Array.isArray(out[nestedKey])) {
+        out[nestedKey] = stripNonAuthoritativeEvidenceClearsFromFragment(out[nestedKey]);
+      }
+    }
+    if (out.action_flags && typeof out.action_flags === 'object' && !Array.isArray(out.action_flags)) {
+      out.action_flags = stripNonAuthoritativeEvidenceClearsFromFragment(out.action_flags);
+    }
+    return out;
+  };
+
+  const hasNonEvidenceActionBlockRowChange = (flags = {}, rowLike = {}) => {
+    const row = (rowLike && typeof rowLike === 'object') ? rowLike : {};
+    const actionFlags = (flags && typeof flags === 'object') ? flags : {};
+    const reasonText = upper([
+      actionFlags.process_block_reason,
+      actionFlags.can_process_reason,
+      actionFlags.block_reason,
+      actionFlags.disabled_reason,
+      row.process_block_reason,
+      row.can_process_reason,
+      row.block_reason,
+      row.disabled_reason,
+      row.bulk_process_excluded_reason
+    ].filter(Boolean).join(' '));
+    if (upper(row.adjustment_source || '') === 'IMPORT_DERIVED' || upper(row.bulk_process_excluded_reason || '') === 'IMPORT_AUTHORITATIVE_ADJUSTED_HOURS') return true;
+    if (boolishRowChange(actionFlags.review_only) || boolishRowChange(row.review_only)) return true;
+    if (boolishRowChange(row.locked) || boolishRowChange(row.is_authorised) || boolishRowChange(row.authorised) || boolishRowChange(row.invoice_is_paid) || boolishRowChange(row.evidence_document_locked)) return true;
+    if (Number(row.invoice_segments_locked || 0) > 0) return true;
+    if (reasonText && !(reasonText.includes('EVIDENCE') || reasonText.includes('ATTACH') || reasonText.includes('ARTIFACT') || reasonText.includes('DOCUMENT'))) return true;
+    return false;
+  };
+
+  const sanitizeActionFlagsForNonEvidenceContext = ({ incomingActionFlags = {}, existingActionFlags = {}, datasetActionFlags = {}, classifier = {}, incomingRow = {}, existingRow = {} } = {}) => {
+    const incoming = (incomingActionFlags && typeof incomingActionFlags === 'object') ? { ...incomingActionFlags } : {};
+    const existing = (existingActionFlags && typeof existingActionFlags === 'object') ? existingActionFlags : {};
+    const dataset = (datasetActionFlags && typeof datasetActionFlags === 'object') ? datasetActionFlags : {};
+    const stripEvidenceKeys = ['has_any_evidence', 'has_attached_evidence', 'attached_evidence_count', 'evidence_count', 'evidence_badges', 'primary_artifact', 'primary_artifact_id', 'primary_artifact_kind', 'primary_artifact_storage_key', 'primary_artifact_preview_mode', 'missing_evidence', 'evidence_required_missing', 'requires_evidence'];
+    for (const key of stripEvidenceKeys) {
+      if (!Object.prototype.hasOwnProperty.call(incoming, key)) continue;
+      const value = incoming[key];
+      if (value === false || value == null || value === '' || (typeof value === 'number' && value <= 0) || (Array.isArray(value) && isAllFalseEvidenceBadgesRowChange(value))) delete incoming[key];
+    }
+    if (!classifier?.nonEvidenceAuthoritative) return incoming;
+    const positiveEvidenceTruth = !!classifier.preservedPositiveEvidenceTruth;
+    const mergedRow = { ...existingRow, ...incomingRow };
+    const nonEvidenceBlock = hasNonEvidenceActionBlockRowChange(incoming, mergedRow) || hasNonEvidenceActionBlockRowChange(existing, existingRow) || hasNonEvidenceActionBlockRowChange(dataset, incomingRow);
+    const reasonText = upper([
+      incoming.process_block_reason,
+      incoming.can_process_reason,
+      incoming.block_reason,
+      incoming.disabled_reason,
+      incoming.reason,
+      incomingRow.process_block_reason,
+      incomingRow.can_process_reason,
+      incomingRow.block_reason,
+      incomingRow.disabled_reason
+    ].filter(Boolean).join(' '));
+    const allFalseBadges = isAllFalseEvidenceBadgesRowChange(incoming.evidence_badges || incomingRow.evidence_badges || []);
+    const evidenceDerivedDisable = !!(
+      reasonText.includes('EVIDENCE') ||
+      reasonText.includes('ATTACH') ||
+      reasonText.includes('ARTIFACT') ||
+      reasonText.includes('DOCUMENT') ||
+      (incoming.can_process === false && (incoming.has_any_evidence === false || Number(incoming.attached_evidence_count || 0) === 0 || allFalseBadges)) ||
+      (incoming.can_save === false && !nonEvidenceBlock) ||
+      (incoming.can_manage_evidence === false && !nonEvidenceBlock) ||
+      (!reasonText && (incoming.can_process === false || incoming.can_save === false || incoming.can_manage_evidence === false) && !nonEvidenceBlock)
+    );
+    if (positiveEvidenceTruth && evidenceDerivedDisable && !nonEvidenceBlock) {
+      for (const flagKey of ['can_process', 'can_save', 'can_manage_evidence', 'can_edit_timesheet_data']) {
+        if (incoming[flagKey] === false) {
+          if (Object.prototype.hasOwnProperty.call(existing, flagKey)) incoming[flagKey] = existing[flagKey];
+          else if (Object.prototype.hasOwnProperty.call(dataset, flagKey)) incoming[flagKey] = dataset[flagKey];
+          else delete incoming[flagKey];
+        }
+      }
+      incoming.__bulk_process_evidence_disable_ignored = true;
+    }
+    return incoming;
+  };
+
+  const reconcileActiveContainersEvidenceTruthRowChange = (classifier = {}) => {
+    const containers = [
+      st.active_row,
+      st.active_details,
+      st.active_context,
+      st.active_context?.details,
+      st.active_context?.row,
+      st.active_context?.data_row,
+      st.active_ctx,
+      st.active_ctx?.details,
+      st.active_ctx?.state
+    ].filter((item) => item && typeof item === 'object');
+    const truth = collectPositiveEvidenceTruthRowChange(...containers, st.evidence_pane_state?.attached_rows, st.evidence_pane_state?.attached_all_rows);
+    if (!truth.hasAnyEvidence) return;
+    const count = truth.attachedCount || 1;
+    for (const container of containers) {
+      container.has_any_evidence = true;
+      if (count > 0) {
+        container.has_attached_evidence = true;
+        container.attached_evidence_count = Math.max(Number(container.attached_evidence_count || 0) || 0, count);
+        container.evidence_count = Math.max(Number(container.evidence_count || 0) || 0, count);
+      }
+      if (!Array.isArray(container.evidence_badges) || !container.evidence_badges.some((badge) => boolishRowChange(badge?.present) || boolishRowChange(badge?.has_evidence) || Number(badge?.count || 0) > 0)) {
+        container.evidence_badges = truth.evidenceBadges.map((badge) => ({ ...badge }));
+      }
+      container.evidence_meta = {
+        ...((container.evidence_meta && typeof container.evidence_meta === 'object') ? container.evidence_meta : {}),
+        has_any_evidence: true,
+        has_attached_evidence: true,
+        attached_evidence_count: Math.max(Number(container.evidence_meta?.attached_evidence_count || 0) || 0, count),
+        evidence_count: Math.max(Number(container.evidence_meta?.evidence_count || 0) || 0, count),
+        evidence_badges: Array.isArray(container.evidence_badges) ? container.evidence_badges.map((badge) => ({ ...badge })) : truth.evidenceBadges.map((badge) => ({ ...badge }))
+      };
+      container.artifact_hints = {
+        ...((container.artifact_hints && typeof container.artifact_hints === 'object') ? container.artifact_hints : {}),
+        has_any_evidence: true,
+        attached_evidence_count: Math.max(Number(container.artifact_hints?.attached_evidence_count || 0) || 0, count),
+        evidence_badges: Array.isArray(container.evidence_badges) ? container.evidence_badges.map((badge) => ({ ...badge })) : truth.evidenceBadges.map((badge) => ({ ...badge }))
+      };
+      if (container.action_flags && typeof container.action_flags === 'object') {
+        if (container.action_flags.has_any_evidence === false) delete container.action_flags.has_any_evidence;
+        if (container.action_flags.has_attached_evidence === false) delete container.action_flags.has_attached_evidence;
+        if (Number(container.action_flags.attached_evidence_count || 0) <= 0) delete container.action_flags.attached_evidence_count;
+        if (isAllFalseEvidenceBadgesRowChange(container.action_flags.evidence_badges)) delete container.action_flags.evidence_badges;
+        if (classifier?.nonEvidenceAuthoritative && classifier?.preservedPositiveEvidenceTruth && !hasNonEvidenceActionBlockRowChange(container.action_flags, container)) {
+          for (const key of ['can_process', 'can_save', 'can_manage_evidence', 'can_edit_timesheet_data']) {
+            if (container.action_flags[key] === false) delete container.action_flags[key];
+          }
+        }
+      }
+    }
+  };
+
   const buildContextPayload = ({ rowObj, contextPayload }) => {
     const row = (rowObj && typeof rowObj === 'object') ? deep(rowObj) : {};
-    const payload = (contextPayload && typeof contextPayload === 'object') ? deep(contextPayload) : {};
+    let payload = (contextPayload && typeof contextPayload === 'object') ? deep(contextPayload) : {};
     if (isRowContextPayloadDegraded(payload)) {
       return {
         failed: true,
@@ -180979,10 +184930,10 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         message: trimStr(payload.message || payload.error || 'Bulk Process row context was not authoritative.')
       };
     }
-    const payloadDataRow = (payload.data_row && typeof payload.data_row === 'object') ? deep(payload.data_row) : {};
-    const payloadRow = (payload.row && typeof payload.row === 'object') ? deep(payload.row) : {};
-    const rowPatch = (payload.row_patch && typeof payload.row_patch === 'object') ? deep(payload.row_patch) : {};
-    const detailsInput = (payload.details && typeof payload.details === 'object') ? deep(payload.details) : {};
+    let payloadDataRow = (payload.data_row && typeof payload.data_row === 'object') ? deep(payload.data_row) : {};
+    let payloadRow = (payload.row && typeof payload.row === 'object') ? deep(payload.row) : {};
+    let rowPatch = (payload.row_patch && typeof payload.row_patch === 'object') ? deep(payload.row_patch) : {};
+    let detailsInput = (payload.details && typeof payload.details === 'object') ? deep(payload.details) : {};
     const copyTopLevelRowData = (src) => {
       const out = {};
       const rowFields = [
@@ -181023,8 +184974,39 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       }
       return out;
     };
-    const topLevelRowData = copyTopLevelRowData(payload);
-    const dataRow = mergeBulkProcessRowAuthoritySignals(row, { ...row, ...payloadRow, ...payloadDataRow, ...topLevelRowData, ...rowPatch });
+    let topLevelRowData = copyTopLevelRowData(payload);
+    let contextEvidenceAuthority = classifyBulkProcessEvidenceAuthorityRowChange({ rowObj: row, contextPayload: payload, payloadRow, payloadDataRow, rowPatch, detailsInput, topLevelRowData });
+    const matchingDatasetRowBeforeMerge = findBulkProcessDatasetRowForRowChange(contextEvidenceAuthority?.targetIdentity?.identity || row || '');
+    if (contextEvidenceAuthority.nonEvidenceAuthoritative === true) {
+      payload = stripNonAuthoritativeEvidenceClearsFromFragment(payload);
+      payloadRow = stripNonAuthoritativeEvidenceClearsFromFragment(payloadRow);
+      payloadDataRow = stripNonAuthoritativeEvidenceClearsFromFragment(payloadDataRow);
+      rowPatch = stripNonAuthoritativeEvidenceClearsFromFragment(rowPatch);
+      detailsInput = stripNonAuthoritativeEvidenceClearsFromFragment(detailsInput);
+      topLevelRowData = copyTopLevelRowData(payload);
+      const existingActionFlags = (row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
+      const datasetActionFlags = (matchingDatasetRowBeforeMerge?.action_flags && typeof matchingDatasetRowBeforeMerge.action_flags === 'object') ? matchingDatasetRowBeforeMerge.action_flags : {};
+      for (const fragment of [payload, payloadRow, payloadDataRow, rowPatch, detailsInput, topLevelRowData]) {
+        if (fragment && typeof fragment === 'object' && fragment.action_flags && typeof fragment.action_flags === 'object') {
+          fragment.action_flags = sanitizeActionFlagsForNonEvidenceContext({
+            incomingActionFlags: fragment.action_flags,
+            existingActionFlags,
+            datasetActionFlags,
+            classifier: contextEvidenceAuthority,
+            incomingRow: fragment,
+            existingRow: row
+          });
+        }
+      }
+      L('blocked non-evidence-authoritative evidence clear/downgrade', {
+        profile: contextEvidenceAuthority.profile || null,
+        row_key: contextEvidenceAuthority.targetIdentity?.rowKey || contextEvidenceAuthority.targetIdentity?.identity || '',
+        evidence_expectation: contextEvidenceAuthority.evidenceExpectation === true,
+        preserved_positive_evidence_truth: contextEvidenceAuthority.preservedPositiveEvidenceTruth === true
+      });
+      contextEvidenceAuthority = classifyBulkProcessEvidenceAuthorityRowChange({ rowObj: row, contextPayload: payload, payloadRow, payloadDataRow, rowPatch, detailsInput, topLevelRowData });
+    }
+    let dataRow = mergeBulkProcessRowAuthoritySignals(row, { ...row, ...payloadRow, ...payloadDataRow, ...topLevelRowData, ...rowPatch });
     const resolveBulkProcessContextStage = (...sources) => {
       const terminal = new Set(['UNPROCESSED', 'PROCESSED', 'AUTHORISED', 'AUTHORIZED', 'INVOICED', 'PAID']);
       const unprocessedStatuses = new Set(['RECEIVED', 'SUBMITTED', 'PENDING', 'PENDING_REVIEW', 'DRAFT', 'AWAITING_EVIDENCE', 'AWAITING_REVIEW']);
@@ -181089,16 +185071,20 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       hasOwn(detailsTimesheetInput, 'break_end_iso') ||
       hasOwn(detailsTimesheetInput, 'break_minutes')
     );
-    const evidenceAuthoritative = !!(
-      payload.evidence_loaded === true ||
-      payloadProfile === 'evidence' ||
-      payload.__context_options?.include_evidence === true
-    );
     const dataRowIdentity = getIdentityPartsFromRow(dataRow);
-    const matchingDatasetRowForContext = findBulkProcessDatasetRowForRowChange(dataRowIdentity.identity || dataRow || row || '');
+    const matchingDatasetRowForContext = matchingDatasetRowBeforeMerge || findBulkProcessDatasetRowForRowChange(dataRowIdentity.identity || dataRow || row || '');
+    contextEvidenceAuthority = classifyBulkProcessEvidenceAuthorityRowChange({ rowObj: row, contextPayload: payload, payloadRow, payloadDataRow, rowPatch, detailsInput, topLevelRowData });
     const incomingEvidenceRows = normaliseBulkProcessEvidenceRowsRowChange(
       payload.evidence,
+      payload.attached_evidence,
+      payload.attachedRows,
+      payload.staged_evidence,
+      payload.contract_week_staged_evidence,
       detailsInput.evidence,
+      detailsInput.attached_evidence,
+      detailsInput.attachedRows,
+      detailsInput.staged_evidence,
+      detailsInput.contract_week_staged_evidence,
       payloadDataRow.evidence,
       payloadRow.evidence,
       rowPatch.evidence
@@ -181128,63 +185114,23 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       st.active_ctx?.state,
       st.evidence_pane_state?.attached_rows,
       st.evidence_pane_state?.attached_all_rows
-    ).filter((item) => evidenceItemMatchesIdentity(item, dataRowIdentity, { allowUnknownIdentity: false, requireFileKey: true }));
-    const explicitAuthoritativeEvidenceClear = !!(
-      evidenceAuthoritative &&
-      incomingEvidenceRows.length === 0 &&
-      (
-        payload.evidence_authoritative_empty === true ||
-        payload.evidence_empty_authoritative === true ||
-        payload.__evidence_empty_authoritative === true ||
-        payload.evidence_clear_authoritative === true ||
-        payload.clear_evidence === true ||
-        detailsInput.evidence_authoritative_empty === true ||
-        detailsInput.evidence_empty_authoritative === true ||
-        detailsInput.__evidence_empty_authoritative === true ||
-        detailsInput.evidence_clear_authoritative === true ||
-        detailsInput.clear_evidence === true
-      )
-    );
-    const evidence = incomingEvidenceRows.length
-      ? filterEvidenceRowsForIdentity(incomingEvidenceRows, dataRowIdentity, { allowUnknownIdentity: false, requireFileKey: true })
+    ).filter((item) => evidenceItemMatchesIdentity(item, dataRowIdentity, { allowUnknownIdentity: false, requireFileKey: true }) && hasGenuineEvidenceIdentityRowChange(item));
+    const incomingMatchingEvidenceRows = filterEvidenceRowsForIdentity(incomingEvidenceRows, dataRowIdentity, { allowUnknownIdentity: false, requireFileKey: true })
+      .filter((item) => hasGenuineEvidenceIdentityRowChange(item));
+    const evidenceAuthoritative = contextEvidenceAuthority.evidenceLoadedAuthority === true;
+    const explicitAuthoritativeEvidenceClear = contextEvidenceAuthority.allowEvidenceClear === true;
+    const evidence = incomingMatchingEvidenceRows.length
+      ? incomingMatchingEvidenceRows
       : (!explicitAuthoritativeEvidenceClear ? existingEvidenceRows : []);
-    const evidenceLoaded = evidenceAuthoritative || existingEvidenceRows.length > 0 || evidence.length > 0 || dataRow.evidence_loaded === true || dataRow.evidence_authoritative === true || dataRow.include_evidence === true;
-    if (evidence.length) {
-      const contextEvidencePatch = buildBulkProcessEvidenceAuthorityPatchRowChange(evidence);
-      dataRow.evidence = contextEvidencePatch.evidenceRows.map((item) => deep(item));
-      dataRow.evidence_loaded = true;
-      dataRow.evidence_authoritative = true;
-      dataRow.include_evidence = true;
-      dataRow.has_any_evidence = !!contextEvidencePatch.hasAnyEvidence;
-      dataRow.has_attached_evidence = !!contextEvidencePatch.hasAnyEvidence;
-      dataRow.attached_evidence_count = Number(contextEvidencePatch.attachedEvidenceCount || 0) || 0;
-      dataRow.evidence_badges = contextEvidencePatch.evidenceBadges.map((badge) => ({ ...badge }));
-      dataRow.evidence_meta = {
-        ...((dataRow.evidence_meta && typeof dataRow.evidence_meta === 'object') ? dataRow.evidence_meta : {}),
-        evidence_loaded: true,
-        evidence_authoritative: true,
-        include_evidence: true,
-        has_any_evidence: !!contextEvidencePatch.hasAnyEvidence,
-        has_attached_evidence: !!contextEvidencePatch.hasAnyEvidence,
-        attached_evidence_count: Number(contextEvidencePatch.attachedEvidenceCount || 0) || 0,
-        evidence_badges: contextEvidencePatch.evidenceBadges.map((badge) => ({ ...badge }))
-      };
-      dataRow.artifact_hints = {
-        ...((dataRow.artifact_hints && typeof dataRow.artifact_hints === 'object') ? dataRow.artifact_hints : {}),
-        has_any_evidence: !!contextEvidencePatch.hasAnyEvidence,
-        attached_evidence_count: Number(contextEvidencePatch.attachedEvidenceCount || 0) || 0,
-        primary_artifact_id: contextEvidencePatch.primaryArtifactId || null,
-        primary_artifact_kind: contextEvidencePatch.primaryArtifactKind || null,
-        primary_artifact_storage_key: contextEvidencePatch.primaryArtifactStorageKey || null,
-        primary_artifact_preview_mode: contextEvidencePatch.primaryArtifactPreviewMode || null,
-        primary_artifact: contextEvidencePatch.primaryEvidence ? deep(contextEvidencePatch.primaryEvidence) : null,
-        evidence_badges: contextEvidencePatch.evidenceBadges.map((badge) => ({ ...badge }))
-      };
-      dataRow.primary_artifact = contextEvidencePatch.primaryEvidence ? deep(contextEvidencePatch.primaryEvidence) : null;
-      dataRow.primary_artifact_id = contextEvidencePatch.primaryArtifactId || null;
-      dataRow.primary_artifact_kind = contextEvidencePatch.primaryArtifactKind || null;
-      dataRow.primary_artifact_storage_key = contextEvidencePatch.primaryArtifactStorageKey || null;
-      dataRow.primary_artifact_preview_mode = contextEvidencePatch.primaryArtifactPreviewMode || null;
+    const evidenceLoaded = !!(evidenceAuthoritative || evidence.length > 0);
+    if (evidence.length || explicitAuthoritativeEvidenceClear || contextEvidenceAuthority.evidenceExpectation === true) {
+      const contextEvidencePatch = buildBulkProcessEvidenceAuthorityPatchRowChange(evidence, {
+        rowObj: dataRow,
+        evidenceLoadedAuthority: evidenceLoaded,
+        allowEvidenceClear: explicitAuthoritativeEvidenceClear,
+        evidenceExpectation: contextEvidenceAuthority.evidenceExpectation === true
+      });
+      applyBulkProcessEvidenceAuthorityPatchRowChange(dataRow, contextEvidencePatch);
     }
     const related = ensureBulkProcessRelatedContract(
       (payload.related && typeof payload.related === 'object')
@@ -181272,7 +185218,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     const ctxPayload = normaliseBulkTimesheetWorkbenchCtx(deep(dataRow), rawDetails);
     if (ctxPayload && ctxPayload.state && typeof ctxPayload.state === 'object') {
       ctxPayload.state.evidence = evidence;
-      if (evidenceAuthoritative && !evidence.length) {
+      if (explicitAuthoritativeEvidenceClear && !evidence.length) {
         ctxPayload.state.__bulkProcessWeeklyPreviewData = null;
         ctxPayload.state.__bulkProcessDailyPreviewData = null;
         ctxPayload.state.__bulkProcessDailyFinancePreview = null;
@@ -181290,7 +185236,39 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       ctxPayload.state.schedule_pending = rawDetails.schedule_pending;
       ctxPayload.state.schedule_authoritative = rawDetails.schedule_authoritative;
     }
-    return { details: rawDetails, ctx: ctxPayload, related: deep(related), row: dataRow, payload: deep(payload) };
+    const safePayloadForReturn = {
+      ...deep(payload),
+      row: deep(dataRow),
+      data_row: deep(dataRow),
+      row_patch: (payload.row_patch && typeof payload.row_patch === 'object') ? { ...deep(payload.row_patch), ...deep(dataRow) } : deep(dataRow),
+      details: deep(rawDetails),
+      action_flags: deep(dataRow.action_flags || {}),
+      has_any_evidence: dataRow.has_any_evidence,
+      has_attached_evidence: dataRow.has_attached_evidence,
+      attached_evidence_count: dataRow.attached_evidence_count,
+      evidence_count: dataRow.evidence_count,
+      evidence_badges: deep(dataRow.evidence_badges || []),
+      evidence: Array.isArray(dataRow.evidence) ? deep(dataRow.evidence) : undefined,
+      evidence_loaded: dataRow.evidence_loaded === true,
+      evidence_authoritative: dataRow.evidence_authoritative === true,
+      include_evidence: dataRow.include_evidence === true,
+      evidence_meta: deep(dataRow.evidence_meta || {}),
+      artifact_hints: deep(dataRow.artifact_hints || {}),
+      primary_artifact: dataRow.primary_artifact ? deep(dataRow.primary_artifact) : null,
+      primary_artifact_id: dataRow.primary_artifact_id || null,
+      primary_artifact_kind: dataRow.primary_artifact_kind || null,
+      primary_artifact_storage_key: dataRow.primary_artifact_storage_key || null,
+      primary_artifact_preview_mode: dataRow.primary_artifact_preview_mode || null,
+      __bulk_process_evidence_authority: {
+        evidenceLoadedAuthority: contextEvidenceAuthority.evidenceLoadedAuthority === true,
+        evidenceExpectation: contextEvidenceAuthority.evidenceExpectation === true,
+        allowEvidenceClear: contextEvidenceAuthority.allowEvidenceClear === true,
+        nonEvidenceAuthoritative: contextEvidenceAuthority.nonEvidenceAuthoritative === true,
+        hasIncomingRealEvidenceRows: contextEvidenceAuthority.hasIncomingRealEvidenceRows === true,
+        hasPreservedMatchingEvidenceRows: contextEvidenceAuthority.hasPreservedMatchingEvidenceRows === true
+      }
+    };
+    return { details: rawDetails, ctx: ctxPayload, related: deep(related), row: dataRow, payload: safePayloadForReturn };
   };
 
   const buildMinimalContextFromRow = (rowObj) => {
@@ -181909,12 +185887,22 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       return false;
     }
     const finalContextPayloadProfile = trimStr(finalContext.payload?.context_profile || finalContext.payload?.profile || contextProfile || '').toLowerCase();
+    const finalAuthority = (finalContext.payload?.__bulk_process_evidence_authority && typeof finalContext.payload.__bulk_process_evidence_authority === 'object')
+      ? finalContext.payload.__bulk_process_evidence_authority
+      : classifyBulkProcessEvidenceAuthorityRowChange({ rowObj: finalContext.row || nextRow, contextPayload: finalContext.payload || {}, payloadRow: finalContext.payload?.row || finalContext.row || {}, payloadDataRow: finalContext.payload?.data_row || finalContext.row || {}, rowPatch: finalContext.payload?.row_patch || {}, detailsInput: finalContext.details || finalContext.payload?.details || {} });
+    const finalRealEvidenceRows = normaliseBulkProcessEvidenceRowsRowChange(
+      finalContext.details?.evidence,
+      finalContext.payload?.evidence,
+      finalContext.payload?.attached_evidence,
+      finalContext.payload?.attachedRows,
+      finalContext.payload?.staged_evidence,
+      finalContext.payload?.contract_week_staged_evidence,
+      finalContext.row?.evidence,
+      finalContext.row
+    ).filter((item) => evidenceItemMatchesIdentity(item, getIdentityPartsFromRow(finalContext.row || nextRow), { allowUnknownIdentity: false, requireFileKey: true }) && hasGenuineEvidenceIdentityRowChange(item));
     const finalContextIncludesEvidence = !!(
-      finalContext.payload?.evidence_loaded === true ||
-      finalContext.details?.evidence_loaded === true ||
-      finalContextPayloadProfile === 'evidence' ||
-      (Array.isArray(finalContext.details?.evidence) && finalContext.details.evidence.length > 0) ||
-      (Array.isArray(finalContext.payload?.evidence) && finalContext.payload.evidence.length > 0)
+      finalRealEvidenceRows.length > 0 ||
+      (finalAuthority.evidenceLoadedAuthority === true && (finalContext.payload?.evidence_loaded === true || finalContext.details?.evidence_loaded === true) && finalContextPayloadProfile === 'evidence')
     );
     const finalExpenseDraftForEvidence = (() => {
       const sources = [
@@ -181927,13 +185915,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       return sources.find((source) => source && typeof source === 'object' && !Array.isArray(source)) || {};
     })();
     const finalExpenseEvidenceClaimed = !!(
-      Number(finalExpenseDraftForEvidence.travel_pay || 0) > 0 ||
-      Number(finalExpenseDraftForEvidence.travel_charge || 0) > 0 ||
-      Number(finalExpenseDraftForEvidence.mileage_units || 0) > 0 ||
-      Number(finalExpenseDraftForEvidence.accommodation_pay || 0) > 0 ||
-      Number(finalExpenseDraftForEvidence.accommodation_charge || 0) > 0 ||
-      Number(finalExpenseDraftForEvidence.other_pay || 0) > 0 ||
-      Number(finalExpenseDraftForEvidence.other_charge || 0) > 0
+      Object.entries(finalExpenseDraftForEvidence || {}).some(([key, value]) => /pay|charge|units|amount|total|cost/i.test(key) && Number(value || 0) > 0)
     );
     const paneAtFinalContext = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : {};
     const finalAttachedIntent = !!(
@@ -181944,11 +185926,19 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       trimStr(paneAtFinalContext.__active_attached_preview_target || '').toLowerCase().startsWith('attached|')
     );
     const finalHasTimesheetIdentity = !!trimStr(finalContext.row?.timesheet_id || finalContext.row?.current_timesheet_id || finalContext.details?.current_timesheet_id || '');
+    const finalHasContractWeekIdentity = !!trimStr(finalContext.row?.contract_week_id || finalContext.details?.contract_week_id || finalContext.details?.contract_week?.id || '');
+    const finalEvidenceExpectation = !!(
+      finalAuthority.evidenceExpectation === true ||
+      collectPositiveEvidenceTruthRowChange(finalContext.row || {}, finalContext.details || {}, finalContext.payload || {}).hasAnyEvidence ||
+      finalAttachedIntent ||
+      finalExpenseEvidenceClaimed
+    );
     const shouldHydrateEvidenceAfterNonEvidenceContext = !!(
       !finalContextIncludesEvidence &&
-      finalHasTimesheetIdentity &&
       finalContextPayloadProfile !== 'evidence' &&
-      (finalAttachedIntent || finalExpenseEvidenceClaimed)
+      finalAuthority.allowEvidenceClear !== true &&
+      (finalHasTimesheetIdentity || finalHasContractWeekIdentity) &&
+      finalEvidenceExpectation
     );
     if (shouldHydrateEvidenceAfterNonEvidenceContext) {
       try {
@@ -181968,13 +185958,23 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
             evidenceContext?.payload?.evidence,
             evidenceContext?.payload?.attached_evidence,
             evidenceContext?.payload?.attachedRows,
+            evidenceContext?.payload?.staged_evidence,
+            evidenceContext?.payload?.contract_week_staged_evidence,
             evidenceContext?.row?.evidence,
             evidenceContext?.row
-          ).filter((item) => evidenceItemMatchesIdentity(item, getIdentityPartsFromRow(finalContext.row || nextRow), { allowUnknownIdentity: false, requireFileKey: true }));
+          ).filter((item) => evidenceItemMatchesIdentity(item, getIdentityPartsFromRow(finalContext.row || nextRow), { allowUnknownIdentity: false, requireFileKey: true }) && hasGenuineEvidenceIdentityRowChange(item));
+          const evidenceHydrationAuthority = classifyBulkProcessEvidenceAuthorityRowChange({
+            rowObj: finalContext.row || nextRow,
+            contextPayload: evidenceContext?.payload || evidenceLoad.payload || {},
+            payloadRow: evidenceContext?.payload?.row || evidenceContext?.row || {},
+            payloadDataRow: evidenceContext?.payload?.data_row || evidenceContext?.row || {},
+            rowPatch: evidenceContext?.payload?.row_patch || {},
+            detailsInput: evidenceContext?.details || evidenceContext?.payload?.details || {}
+          });
           if (hydratedEvidenceRows.length) {
             const evidencePatch = {
-              ...buildBulkProcessEvidenceAuthorityPatchRowChange(hydratedEvidenceRows),
-              evidenceLoaded: true
+              ...buildBulkProcessEvidenceAuthorityPatchRowChange(hydratedEvidenceRows, { targetRow: finalContext.row || nextRow, evidenceLoadedAuthority: true }),
+              evidenceLoadedAuthority: true
             };
             applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.row, evidencePatch);
             applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.details, evidencePatch);
@@ -181986,20 +185986,29 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
               attached_evidence: hydratedEvidenceRows.map((item) => deep(item)),
               attachedRows: hydratedEvidenceRows.map((item) => deep(item)),
               evidence_loaded: true,
+              evidence_authoritative: true,
+              include_evidence: true,
               has_any_evidence: true,
+              has_attached_evidence: true,
               attached_evidence_count: hydratedEvidenceRows.length,
+              evidence_count: hydratedEvidenceRows.length,
               evidence_badges: evidencePatch.evidenceBadges.map((badge) => ({ ...badge })),
               evidence_meta: {
                 ...((finalContext.payload?.evidence_meta && typeof finalContext.payload.evidence_meta === 'object') ? finalContext.payload.evidence_meta : {}),
                 evidence_loaded: true,
+                evidence_authoritative: true,
+                include_evidence: true,
                 has_any_evidence: true,
+                has_attached_evidence: true,
                 attached_evidence_count: hydratedEvidenceRows.length,
+                evidence_count: hydratedEvidenceRows.length,
                 evidence_badges: evidencePatch.evidenceBadges.map((badge) => ({ ...badge }))
               },
               artifact_hints: {
                 ...((finalContext.payload?.artifact_hints && typeof finalContext.payload.artifact_hints === 'object') ? finalContext.payload.artifact_hints : {}),
                 has_any_evidence: true,
                 attached_evidence_count: hydratedEvidenceRows.length,
+                evidence_count: hydratedEvidenceRows.length,
                 primary_artifact: evidencePatch.primaryEvidence ? deep(evidencePatch.primaryEvidence) : null,
                 primary_artifact_id: evidencePatch.primaryArtifactId || null,
                 primary_artifact_kind: evidencePatch.primaryArtifactKind || null,
@@ -182011,7 +186020,65 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
               primary_artifact_id: evidencePatch.primaryArtifactId || null,
               primary_artifact_kind: evidencePatch.primaryArtifactKind || null,
               primary_artifact_storage_key: evidencePatch.primaryArtifactStorageKey || null,
-              primary_artifact_preview_mode: evidencePatch.primaryArtifactPreviewMode || null
+              primary_artifact_preview_mode: evidencePatch.primaryArtifactPreviewMode || null,
+              __bulk_process_evidence_authority: {
+                evidenceLoadedAuthority: true,
+                evidenceExpectation: true,
+                allowEvidenceClear: false,
+                nonEvidenceAuthoritative: false,
+                hasIncomingRealEvidenceRows: true,
+                hasPreservedMatchingEvidenceRows: true
+              }
+            };
+                    } else if (
+            evidenceHydrationAuthority.evidenceLoadedAuthority === true &&
+            evidenceHydrationAuthority.allowEvidenceClear === true &&
+            evidenceHydrationAuthority.hasIncomingRealEvidenceRows !== true &&
+            evidenceHydrationAuthority.hasPreservedMatchingEvidenceRows !== true
+          ) {
+            const evidenceClearPatch = {
+              ...buildBulkProcessEvidenceAuthorityPatchRowChange([], { rowObj: finalContext.row || nextRow, evidenceLoadedAuthority: true, allowEvidenceClear: true }),
+              evidenceRows: [],
+              hasAnyEvidence: false,
+              attachedEvidenceCount: 0,
+              evidenceLoadedAuthority: true,
+              allowEvidenceClear: true,
+              allowAuthoritativeClear: true,
+              allow_authoritative_clear: true
+            };
+            applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.row, evidenceClearPatch);
+            applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.details, evidenceClearPatch);
+            applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.ctx, evidenceClearPatch);
+            applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.ctx?.state, evidenceClearPatch);
+            finalContext.payload = (finalContext.payload && typeof finalContext.payload === 'object') ? finalContext.payload : {};
+            applyBulkProcessEvidenceAuthorityPatchRowChange(finalContext.payload, evidenceClearPatch);
+            finalContext.payload = {
+              ...finalContext.payload,
+              evidence: [],
+              attached_evidence: [],
+              attachedRows: [],
+              staged_evidence: [],
+              contract_week_staged_evidence: [],
+              evidence_loaded: true,
+              evidence_authoritative: true,
+              include_evidence: true,
+              has_any_evidence: false,
+              has_attached_evidence: false,
+              attached_evidence_count: 0,
+              evidence_count: 0,
+              primary_artifact: null,
+              primary_artifact_id: null,
+              primary_artifact_kind: null,
+              primary_artifact_storage_key: null,
+              primary_artifact_preview_mode: null,
+              __bulk_process_evidence_authority: {
+                evidenceLoadedAuthority: true,
+                evidenceExpectation: false,
+                allowEvidenceClear: true,
+                nonEvidenceAuthoritative: false,
+                hasIncomingRealEvidenceRows: false,
+                hasPreservedMatchingEvidenceRows: false
+              }
             };
           }
         }
@@ -182019,6 +186086,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         L('non-authoritative editor evidence hydration failed', evidenceHydrationErr);
       }
     }
+
     st.__suppress_dirty_marking = true;
     st.active_row = mergeBulkProcessRowAuthoritySignals(nextRow, finalContext.row || nextRow);
     st.active_row_key = trimStr(st.active_row?.row_key || cacheKey || '') || cacheKey || null;
@@ -182081,6 +186149,8 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       [finalContext.details?.evidence, finalContext.details, finalContext.payload?.evidence, finalContext.payload, st.active_row?.evidence, st.active_row, nextRow?.evidence, nextRow, st.active_context, st.active_ctx, findBulkProcessDatasetRowForRowChange(st.active_row_key || cacheKey || '')],
       { reason: 'row-change-final-preserve-active-evidence' }
     );
+    reconcileActiveContainersEvidenceTruthRowChange(finalAuthority || {});
+    harmoniseBulkProcessFinalEvidenceStateRowChange('row-change-final-containers');
     st.active_context_profile = trimStr(st.active_context.profile || st.active_context.context_profile || contextProfile) || contextProfile;
     st.__active_context_is_minimal = false;
     st.__active_context_pending = false;
@@ -182158,6 +186228,8 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     st.__bulk_process_row_change_in_progress = false;
   }
 }
+
+
 
 
 function reconcileBulkProcessStateAfterAction(state, nextDataset, snapshot, options = {}) {
@@ -276234,3 +280306,5 @@ if (loadSession()) {
   const hasResetToken = u.searchParams.get('k') || u.searchParams.get('token');
   if (!hasResetToken) openLogin();
 }
+
+
