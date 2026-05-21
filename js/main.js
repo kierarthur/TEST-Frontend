@@ -174775,6 +174775,7 @@ function renderBulkAuthorisePreviewPane(state) {
 }
 
 
+
 async function handleBulkProcessUnprocess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][UNPROCESS]');
   GC('handleBulkProcessUnprocess');
@@ -175143,6 +175144,31 @@ async function handleBulkProcessUnprocess(state) {
       }
     }
   };
+  const clearStaleProcessSignatureGuardAfterUnprocess = (reason = 'unprocess-success', row = {}) => {
+    const adoptedRowKey = rowKeyOf(row);
+    if (!adoptedRowKey) return false;
+    const previousAllowedSignature = trimStr(st.__bulk_process_allowed_process_row_signature || '');
+    st.__bulk_process_allowed_process_row_signature = '';
+    st.__bulk_process_allowed_process_row_key = '';
+    st.__bulk_process_allowed_process_timesheet_id = '';
+    st.__bulk_process_allowed_process_reason = '';
+    st.__bulk_process_allowed_process_at = '';
+    st.__bulk_process_process_status_header_row_signature = '';
+    st.__bulk_process_fresh_process_row_signature = '';
+    st.__bulk_process_last_submitted_process_signature = '';
+    st.__bulk_process_last_submitted_process_timesheet_id = '';
+    st.__bulk_process_post_attach_rebase_status_header_adopted = false;
+    st.__bulk_process_post_attach_rebase_storage_key = '';
+    st.__bulk_process_process_editor_rebased_storage_key = '';
+    st.__bulk_process_process_editor_rebased_reason = '';
+    L('cleared stale process signature guard after unprocess', {
+      reason,
+      row_key: adoptedRowKey,
+      row_signature: trimStr(row?.row_signature || ''),
+      previous_allowed_signature: previousAllowedSignature
+    });
+    return true;
+  };
   const selectNextRow = async (patchedRow, selectionOptions = {}) => {
     const patchedKey = rowKeyOf(patchedRow);
     if (!patchedKey) {
@@ -175431,6 +175457,7 @@ async function handleBulkProcessUnprocess(state) {
       editorChanged: unprocessEditorChanged,
       evidenceChanged: unprocessEvidenceChanged
     });
+    clearStaleProcessSignatureGuardAfterUnprocess('unprocess-success', patchedRow);
     if (typeof resetBulkProcessDirtyBaseline === 'function') {
       resetBulkProcessDirtyBaseline(st, 'unprocess-success', {
         source: 'handleBulkProcessUnprocess',
@@ -175453,7 +175480,6 @@ async function handleBulkProcessUnprocess(state) {
     return { ok: false, error: st.error_text };
   }
 }
-
 
 
 
