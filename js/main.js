@@ -186454,7 +186454,6 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
 }
 
 
-
 async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][ROW-CHANGE]');
   GC('handleBulkProcessRowChange');
@@ -189743,6 +189742,11 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     st.active_row = mergeBulkProcessRowAuthoritySignals(nextRow, deep(nextRow));
     st.active_row_key = cacheKey || null;
     st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
+    if (st.active_row_key) {
+      st.__bulk_process_empty_state = false;
+      st.__bulk_process_empty_state_identity = '';
+      L('clearing empty-state after real row adoption', { row_key: st.active_row_key, stage: 'initial-adoption' });
+    }
     if (identityChangingAtSelection || storageKeyChanged) {
       clearEvidenceContextStoresForRowChange({ targetIdentity: getIdentityPartsFromRow(nextRow), rowKey: cacheKey });
       clearPreviewAndAttachedState({ clearPreview: !suppressPreviewRefresh, identityChanged: true });
@@ -190108,6 +190112,11 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     st.active_row = mergeBulkProcessRowAuthoritySignals(nextRow, finalContext.row || nextRow);
     st.active_row_key = trimStr(st.active_row?.row_key || cacheKey || '') || cacheKey || null;
     st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
+    if (st.active_row_key) {
+      st.__bulk_process_empty_state = false;
+      st.__bulk_process_empty_state_identity = '';
+      L('clearing empty-state after real row adoption', { row_key: st.active_row_key, stage: 'final-context-adoption' });
+    }
     st.active_details = finalContext.details;
     st.active_ctx = finalContext.ctx;
     const finalScheduleAuthoritative = !!(
