@@ -169066,6 +169066,7 @@ async function handleBulkProcessSave(state) {
 
 
 
+
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -170288,6 +170289,111 @@ async function handleBulkProcessProcess(state) {
         if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] blocked-state rerender degraded', { reason: cleanReason, error: err });
       }
     }
+  };
+  const mirrorBulkProcessProcessCompletionBusyFlags = (reason = '') => {
+    const cleanReason = trimStr(reason || 'process-complete') || 'process-complete';
+    st.processing = false;
+    st.process_in_flight = false;
+    st.__bulk_process_process_in_flight = false;
+    st.saving = false;
+    st.save_in_flight = false;
+    st.__bulk_process_save_in_flight = false;
+    st.__suppress_dirty_marking = false;
+    st.__bulk_process_last_process_busy_reset_reason = cleanReason;
+    st.__bulk_process_last_process_busy_reset_at = new Date().toISOString();
+    if (window.modalCtx && window.modalCtx.bulkProcessState === st) {
+      window.modalCtx.bulkProcessState.processing = false;
+      window.modalCtx.bulkProcessState.process_in_flight = false;
+      window.modalCtx.bulkProcessState.__bulk_process_process_in_flight = false;
+      window.modalCtx.bulkProcessState.saving = false;
+      window.modalCtx.bulkProcessState.save_in_flight = false;
+      window.modalCtx.bulkProcessState.__bulk_process_save_in_flight = false;
+      window.modalCtx.bulkProcessState.__suppress_dirty_marking = false;
+    }
+  };
+  const activeBulkProcessProcessRowCanProcessNow = () => {
+    if (!st || !st.active_row || !st.active_ctx) return false;
+    if (st.loading || st.saving || st.processing || st.unprocessing || st.process_in_flight || st.save_in_flight || st.__bulk_process_process_in_flight || st.__bulk_process_save_in_flight) return false;
+    try {
+      const editability = (typeof classifyBulkProcessEditability === 'function') ? classifyBulkProcessEditability(st.active_ctx || {}) : null;
+      if (editability && typeof editability === 'object' && Object.prototype.hasOwnProperty.call(editability, 'canProcess')) {
+        return editability.canProcess === true;
+      }
+    } catch {}
+    const row = (st.active_row && typeof st.active_row === 'object') ? st.active_row : {};
+    const flags = (row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
+    const bucket = upper(row.bulk_process_bucket || row.summary_stage || row.processing_status || '');
+    return !!(
+      (row.can_process === true || flags.can_process === true) &&
+      row.review_only !== true &&
+      flags.review_only !== true &&
+      bucket !== 'PROCESSED'
+    );
+  };
+  const repairStaleBulkProcessActionRowProcessButtonIfNeeded = (expectedRowKey = '', reason = '') => {
+    const expectedKey = trimStr(expectedRowKey || '');
+    const liveKey = trimStr(rowKeyOf(st.active_row || {}) || st.active_row_key || '');
+    if (expectedKey && liveKey && expectedKey !== liveKey) return false;
+    if (!liveKey) return false;
+    if (!activeBulkProcessProcessRowCanProcessNow()) return false;
+    const btn = document.getElementById('bulkProcessActionRowProcessBtn');
+    if (!btn) return false;
+    const text = trimStr(btn.textContent || '');
+    const stale = !!(
+      /processing/i.test(text) ||
+      btn.disabled === true ||
+      btn.hasAttribute('disabled') ||
+      btn.getAttribute('aria-disabled') === 'true' ||
+      btn.getAttribute('aria-busy') === 'true' ||
+      btn.getAttribute('data-disabled') === '1' ||
+      btn.classList.contains('disabled') ||
+      btn.classList.contains('is-disabled') ||
+      btn.classList.contains('btn-disabled')
+    );
+    if (!stale) return false;
+
+    btn.textContent = 'Process';
+    btn.disabled = false;
+    btn.removeAttribute('disabled');
+    btn.removeAttribute('aria-disabled');
+    btn.removeAttribute('aria-busy');
+    btn.removeAttribute('data-disabled');
+    btn.classList.remove('disabled', 'is-disabled', 'btn-disabled');
+    btn.style.opacity = '';
+    btn.style.filter = '';
+    btn.style.cursor = '';
+    btn.style.pointerEvents = '';
+    sigLog('ACTION-BUTTON-STALE-DOM-REPAIRED', {
+      reason: trimStr(reason || '') || null,
+      row_key: liveKey,
+      previous_text: text || null
+    });
+    return true;
+  };
+  const scheduleBulkProcessProcessCompletionButtonSafetyCheck = (expectedRowKey = '', reason = '') => {
+    const expectedKey = trimStr(expectedRowKey || '');
+    const cleanReason = trimStr(reason || 'process-complete') || 'process-complete';
+    const run = () => {
+      try { repairStaleBulkProcessActionRowProcessButtonIfNeeded(expectedKey, cleanReason); } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] completion button safety check failed', err);
+      }
+    };
+    try { window.requestAnimationFrame(run); } catch { setTimeout(run, 0); }
+  };
+  const renderBulkProcessProcessCompletionState = async (reason = '') => {
+    const cleanReason = trimStr(reason || 'process-complete') || 'process-complete';
+    const activeKeyForCompletion = trimStr(rowKeyOf(st.active_row || {}) || st.active_row_key || '');
+    mirrorBulkProcessProcessCompletionBusyFlags(cleanReason);
+    try {
+      if (typeof st.__rerenderWorkbench === 'function') {
+        await st.__rerenderWorkbench({ reason: cleanReason, logPrefix: `[TS][BULK-PROCESS][PROCESS][${cleanReason.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}]`, force: true });
+      } else if (typeof rerenderBulkProcessWorkbench === 'function') {
+        await rerenderBulkProcessWorkbench(st, `[TS][BULK-PROCESS][PROCESS][${cleanReason.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}]`);
+      }
+    } catch (err) {
+      if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] forced completion render degraded', { reason: cleanReason, error: err });
+    }
+    scheduleBulkProcessProcessCompletionButtonSafetyCheck(activeKeyForCompletion, cleanReason);
   };
   const showBulkProcessProcessBlockedModal = async (message, title = 'Timesheet could not be processed') => {
     const safeMessage = trimStr(message || 'This timesheet could not be processed.');
@@ -173589,14 +173695,7 @@ async function handleBulkProcessProcess(state) {
       });
     }
 
-    st.processing = false;
-    st.process_in_flight = false;
-    st.__bulk_process_process_in_flight = false;
-    st.saving = false;
-    st.save_in_flight = false;
-    st.__bulk_process_save_in_flight = false;
-    st.__suppress_dirty_marking = false;
-    await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][PROCESS][PATCHED]');
+    await renderBulkProcessProcessCompletionState('process-success-patched');
     GE();
     return { ok: true, result: processResult, row_patch: processResult?.row_patch || patchedRow, data_row: processResult?.data_row || patchedRow };
   } catch (err) {
@@ -173654,6 +173753,7 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
+
 
 
 
