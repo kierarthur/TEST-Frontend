@@ -169064,6 +169064,8 @@ async function handleBulkProcessSave(state) {
 }
 
 
+
+
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -169305,42 +169307,225 @@ async function handleBulkProcessProcess(state) {
     };
     try { window.requestAnimationFrame(() => { void run(); }); } catch { setTimeout(() => { void run(); }, 0); }
   };
-  const selectNextRow = async (previousKey, patchedRow, originalVisible, selectionOptions = {}) => {
-    const patchedKey = rowKeyOf(patchedRow);
-    if (!patchedKey) {
-      st.active_row = null;
-      st.active_row_key = '';
-      st.selected_row_keys = [];
-      st.active_details = null;
-      st.active_ctx = null;
-      st.__active_context_is_minimal = false;
-      return;
+  const buildProcessHydrationToken = (identity = '') => {
+    const cleanIdentity = trimStr(identity || '');
+    if (!cleanIdentity) return '';
+    return `${cleanIdentity}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  };
+  const setProcessActiveHydrationIdentity = (identity = '') => {
+    const cleanIdentity = trimStr(identity || '');
+    const token = cleanIdentity ? buildProcessHydrationToken(cleanIdentity) : '';
+    st.__bulk_process_active_hydration_identity = cleanIdentity;
+    st.__bulkProcessActiveHydrationIdentity = cleanIdentity;
+    st.__bulk_process_active_hydration_token = token;
+    st.__bulkProcessActiveHydrationToken = token;
+    return token;
+  };
+  const clearProcessPreviewTargetState = (target, reason = '') => {
+    if (!target || typeof target !== 'object') return;
+    const cleanReason = trimStr(reason || 'bulk-process-process-clear-active') || 'bulk-process-process-clear-active';
+    [
+      'active_preview_id',
+      'active_preview_key',
+      'active_preview_item',
+      'active_preview_row',
+      'active_preview_url',
+      'active_preview_signed_url',
+      'activePreviewId',
+      'activePreviewKey',
+      'activePreviewItem',
+      'activePreviewRow',
+      'activePreviewUrl',
+      'activePreviewSignedUrl',
+      'preview_item',
+      'preview_row',
+      'preview_url',
+      'preview_signed_url',
+      'preview_storage_key',
+      'previewStorageKey',
+      'signed_url',
+      'signedUrl',
+      'download_url',
+      'downloadUrl',
+      'live_preview_url',
+      'livePreviewUrl',
+      '__live_preview_target_key',
+      '__live_preview_target_identity',
+      '__live_preview_target_storage_key',
+      '__live_preview_signed_url',
+      '__preview_target_key',
+      '__preview_target_identity',
+      '__preview_target_storage_key',
+      '__preview_signed_url',
+      '__preview_signed_url_for',
+      '__preview_request_key',
+      '__preview_request_identity',
+      '__preview_request_storage_key'
+    ].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(target, key)) target[key] = null;
+    });
+    target.__preview_loading = false;
+    target.__preview_in_flight = false;
+    target.__preview_error = '';
+    target.__preview_cleared_reason = cleanReason;
+    target.__preview_cleared_at = new Date().toISOString();
+  };
+  const clearProcessEvidencePaneActiveSelection = (reason = '', options = {}) => {
+    const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
+    if (!pane) return;
+    const opts = (options && typeof options === 'object') ? options : {};
+    const clearRows = opts.clearRows === true;
+    pane.active_queue_id = null;
+    pane.active_queue_item = null;
+    pane.active_attached_id = null;
+    pane.active_attached_item = null;
+    pane.__queue_manual_override = false;
+    pane.__attached_manual_override = false;
+    pane.__active_row_key = '';
+    pane.__active_identity = '';
+    pane.__evidence_owner_identity = '';
+    pane.__requires_evidence_hydration = false;
+    pane.__attached_refresh_loading = false;
+    pane.__attached_loading = false;
+    pane.__queue_loading = false;
+    if (clearRows) {
+      pane.queue_rows = [];
+      pane.attached_rows = [];
+      pane.attached_all_rows = [];
+      pane.__queue_loaded = false;
+      pane.__attached_loaded = false;
+      pane.__evidence_loaded = false;
+      pane.__queue_loaded_identity = '';
+      pane.__attached_loaded_identity = '';
+    }
+    clearProcessPreviewTargetState(pane, reason || 'bulk-process-process-clear-evidence-pane');
+  };
+  const clearProcessActiveSelectionAfterProcess = (previousKey = '', patchedKey = '', reason = '') => {
+    const cleanReason = trimStr(reason || 'process-no-unprocessed-rows') || 'process-no-unprocessed-rows';
+    const previousCacheKey = trimStr(previousKey || patchedKey || '');
+
+    st.active_row = null;
+    st.active_row_key = '';
+    st.activeRowKey = '';
+    st.selected_row_keys = [];
+    st.active_details = null;
+    st.active_context = null;
+    st.active_context_profile = '';
+    st.active_ctx = null;
+    st.activeTimesheetId = null;
+    st.activeContractWeekId = null;
+    st.activeRecordIdentity = '';
+    st.__bulkProcessRecordIdentity = '';
+    st.__active_context_is_minimal = false;
+    st.__bulk_process_active_context_visibility_pending = false;
+    st.__bulk_process_empty_state = true;
+    st.__bulk_process_empty_state_identity = '';
+    st.__dirty_baseline_row_key = null;
+    st.__dirty_baseline_state = null;
+    st.dirty = false;
+    setProcessActiveHydrationIdentity('');
+    clearProcessEvidencePaneActiveSelection(cleanReason, { clearRows: true });
+    clearProcessPreviewTargetState(st, cleanReason);
+
+    if (previousCacheKey && st.__bulk_process_row_context_cache && typeof st.__bulk_process_row_context_cache === 'object') {
+      for (const key of Object.keys(st.__bulk_process_row_context_cache)) {
+        if (key.includes(previousCacheKey) || key.includes(`"row_key":"${previousCacheKey}"`)) {
+          delete st.__bulk_process_row_context_cache[key];
+        }
+      }
     }
 
-    const ds = ensureDataset();
-    const canonicalPatchedRow = [...ds.processed_rows, ...ds.unprocessed_rows].find((row) => rowKeyOf(row) === patchedKey) || patchedRow;
-    const nextTimesheetId = trimStr(canonicalPatchedRow.current_timesheet_id || canonicalPatchedRow.timesheet_id || canonicalPatchedRow.requested_timesheet_id || '');
-    const nextContractWeekId = trimStr(canonicalPatchedRow.contract_week_id || '');
-    const recordIdentity = patchedKey;
+    if (st.formState && typeof st.formState === 'object') {
+      st.formState.__forId = '';
+    }
 
-    st.__bulk_process_mutation_seq = (Number(st.__bulk_process_mutation_seq || 0) || 0) + 1;
-    const mutationSeq = Number(st.__bulk_process_mutation_seq || 0) || 0;
-    st.active_row = deep(canonicalPatchedRow);
-    st.active_row_key = patchedKey;
-    st.selected_row_keys = [patchedKey];
-    st.active_details = {
+    if (window.modalCtx && window.modalCtx.bulkProcessState === st) {
+      window.modalCtx.data = {};
+      window.modalCtx.timesheetDetails = null;
+      window.modalCtx.activeRecordIdentity = '';
+      window.modalCtx.__bulkProcessRecordIdentity = '';
+      window.modalCtx.activeTimesheetId = null;
+      window.modalCtx.activeContractWeekId = null;
+      if (!window.modalCtx.formState || typeof window.modalCtx.formState !== 'object') window.modalCtx.formState = {};
+      window.modalCtx.formState.__forId = '';
+      clearProcessPreviewTargetState(window.modalCtx, cleanReason);
+    }
+
+    sigLog('SELECT-NEXT-CLEARED', {
+      reason: cleanReason,
+      previous_row_key: trimStr(previousKey || '') || null,
+      patched_row_key: trimStr(patchedKey || '') || null
+    });
+  };
+  const findNextUnprocessedProcessRow = (previousKey, patchedKey, originalVisible) => {
+    const processedKeys = new Set([trimStr(previousKey || ''), trimStr(patchedKey || '')].filter(Boolean));
+    const originalUnprocessed = Array.isArray(originalVisible?.unprocessed) ? originalVisible.unprocessed : [];
+    let originalIndex = -1;
+    for (const key of processedKeys) {
+      const idx = originalUnprocessed.findIndex((row) => rowKeyOf(row) === key);
+      if (idx >= 0) {
+        originalIndex = idx;
+        break;
+      }
+    }
+
+    const visibleAfterPatch = getVisibleRows();
+    let candidates = (Array.isArray(visibleAfterPatch.unprocessed) ? visibleAfterPatch.unprocessed : [])
+      .filter((row) => {
+        const key = rowKeyOf(row);
+        return !!key && !processedKeys.has(key);
+      });
+
+    if (!candidates.length) {
+      const ds = ensureDataset();
+      candidates = (Array.isArray(ds.unprocessed_rows) ? ds.unprocessed_rows : [])
+        .filter((row) => {
+          const key = rowKeyOf(row);
+          return !!key && !processedKeys.has(key);
+        });
+    }
+
+    if (!candidates.length) return { row: null, key: '', originalIndex, selectedIndex: -1 };
+    const selectedIndex = originalIndex >= 0 ? Math.min(originalIndex, candidates.length - 1) : 0;
+    const row = candidates[selectedIndex] || candidates[candidates.length - 1] || null;
+    const key = rowKeyOf(row);
+    return { row: row ? deep(row) : null, key, originalIndex, selectedIndex };
+  };
+  const adoptMinimalProcessActiveRow = (row, rowKey, reason = '') => {
+    const cleanKey = trimStr(rowKey || rowKeyOf(row) || '');
+    if (!row || !cleanKey) return false;
+    const rowCopy = deep(row);
+    const nextTimesheetId = trimStr(rowCopy.current_timesheet_id || rowCopy.timesheet_id || rowCopy.requested_timesheet_id || rowCopy.expected_timesheet_id || '');
+    const nextExpectedTimesheetId = trimStr(rowCopy.expected_timesheet_id || nextTimesheetId || '');
+    const nextContractWeekId = /^timesheet:/i.test(cleanKey) ? '' : trimStr(rowCopy.contract_week_id || '');
+    const recordIdentity = cleanKey;
+    const minimalDetails = {
       current_timesheet_id: nextTimesheetId || null,
-      requested_timesheet_id: nextTimesheetId || null,
-      expected_timesheet_id: trimStr(canonicalPatchedRow.expected_timesheet_id || nextTimesheetId || '') || null,
+      requested_timesheet_id: trimStr(rowCopy.requested_timesheet_id || nextTimesheetId || '') || null,
+      expected_timesheet_id: nextExpectedTimesheetId || null,
       contract_week_id: nextContractWeekId || null,
-      summary_stage: canonicalPatchedRow.summary_stage || canonicalPatchedRow.bulk_process_bucket || 'PROCESSED',
-      tools_stage: canonicalPatchedRow.tools_stage || canonicalPatchedRow.bulk_process_bucket || 'PROCESSED',
-      route_type: canonicalPatchedRow.route_type || null,
-      route_display: canonicalPatchedRow.route_display || null,
-      manual_pdf_r2_key: canonicalPatchedRow.manual_pdf_r2_key || canonicalPatchedRow.primary_artifact_storage_key || null,
-      timesheet: nextTimesheetId ? { timesheet_id: nextTimesheetId, submission_mode: canonicalPatchedRow.submission_mode || null, sheet_scope: canonicalPatchedRow.sheet_scope || canonicalPatchedRow.period_type || null } : null,
-      contract_week: nextContractWeekId ? { id: nextContractWeekId, week_ending_date: canonicalPatchedRow.contract_week_ending_date || canonicalPatchedRow.week_ending_date || null, submission_mode_snapshot: canonicalPatchedRow.submission_mode_snapshot || canonicalPatchedRow.submission_mode || null } : null,
-      tsfin: nextTimesheetId ? { processing_status: canonicalPatchedRow.processing_status || null, total_hours: canonicalPatchedRow.total_hours ?? null, total_pay_ex_vat: canonicalPatchedRow.total_pay_ex_vat ?? null, total_charge_ex_vat: canonicalPatchedRow.total_charge_ex_vat ?? null, margin_ex_vat: canonicalPatchedRow.margin_ex_vat ?? null } : null,
+      summary_stage: rowCopy.summary_stage || rowCopy.bulk_process_bucket || 'UNPROCESSED',
+      tools_stage: rowCopy.tools_stage || rowCopy.processing_status || rowCopy.bulk_process_bucket || 'UNPROCESSED',
+      route_type: rowCopy.route_type || null,
+      route_display: rowCopy.route_display || null,
+      manual_pdf_r2_key: rowCopy.manual_pdf_r2_key || rowCopy.primary_artifact_storage_key || null,
+      timesheet: nextTimesheetId ? {
+        timesheet_id: nextTimesheetId,
+        submission_mode: rowCopy.submission_mode || null,
+        sheet_scope: rowCopy.sheet_scope || rowCopy.period_type || null
+      } : null,
+      contract_week: nextContractWeekId ? {
+        id: nextContractWeekId,
+        week_ending_date: rowCopy.contract_week_ending_date || rowCopy.week_ending_date || null,
+        submission_mode_snapshot: rowCopy.submission_mode_snapshot || rowCopy.submission_mode || null
+      } : null,
+      tsfin: nextTimesheetId ? {
+        processing_status: rowCopy.processing_status || null,
+        total_hours: rowCopy.total_hours ?? null,
+        total_pay_ex_vat: rowCopy.total_pay_ex_vat ?? null,
+        total_charge_ex_vat: rowCopy.total_charge_ex_vat ?? null,
+        margin_ex_vat: rowCopy.margin_ex_vat ?? null
+      } : null,
       evidence: [],
       related: {},
       profile: 'status_header',
@@ -169356,10 +169541,16 @@ async function handleBulkProcessProcess(state) {
       include_evidence: false,
       loaded_layers: ['header']
     };
+
+    st.active_row = rowCopy;
+    st.active_row_key = cleanKey;
+    st.activeRowKey = cleanKey;
+    st.selected_row_keys = [cleanKey];
+    st.active_details = deep(minimalDetails);
     st.active_ctx = {
-      row: deep(canonicalPatchedRow),
-      data_row: deep(canonicalPatchedRow),
-      details: deep(st.active_details),
+      row: deep(rowCopy),
+      data_row: deep(rowCopy),
+      details: deep(minimalDetails),
       state: {},
       profile: 'status_header',
       context_profile: 'status_header',
@@ -169376,229 +169567,49 @@ async function handleBulkProcessProcess(state) {
       is_hydrated: false,
       hydration_required: true,
       context_stale: true,
-      row_key: patchedKey,
-      row_signature: trimStr(canonicalPatchedRow.row_signature || '')
+      row_key: cleanKey,
+      row_signature: trimStr(rowCopy.row_signature || '')
     };
+    st.active_context = deep(st.active_ctx);
     st.__active_context_is_minimal = true;
     st.__bulkProcessRecordIdentity = recordIdentity;
     st.activeRecordIdentity = recordIdentity;
     st.activeTimesheetId = nextTimesheetId || null;
     st.activeContractWeekId = nextContractWeekId || null;
-
-    if (/^contract_week:/i.test(trimStr(previousKey || '')) && /^timesheet:/i.test(patchedKey)) {
-      st.filters = (st.filters && typeof st.filters === 'object') ? { ...st.filters } : {};
-      st.filters.row_key = patchedKey;
-      st.filters.row_keys = [patchedKey];
-      st.filters.timesheet_id = nextTimesheetId || '';
-      st.filters.timesheet_ids = nextTimesheetId ? [nextTimesheetId] : [];
-      st.filters.contract_week_id = '';
-      st.filters.contract_week_ids = [];
-      st.filters.previous_row_key = trimStr(previousKey || '');
-
-      st.seed = (st.seed && typeof st.seed === 'object') ? { ...st.seed } : {};
-      st.seed.focus_row_key = patchedKey;
-      st.seed.focusRowKey = patchedKey;
-      st.seed.row_key = patchedKey;
-      st.seed.rowKey = patchedKey;
-      st.seed.timesheet_id = nextTimesheetId || '';
-      st.seed.timesheetId = nextTimesheetId || '';
-      st.seed.contract_week_id = '';
-      st.seed.contractWeekId = '';
-      st.__bulk_process_seed_focus_row_key = patchedKey;
-    }
+    st.__bulk_process_empty_state = false;
+    st.__bulk_process_empty_state_identity = '';
+    setProcessActiveHydrationIdentity(recordIdentity);
+    clearProcessEvidencePaneActiveSelection(reason || 'process-next-unprocessed', { clearRows: true });
+    clearProcessPreviewTargetState(st, reason || 'process-next-unprocessed');
 
     if (!st.formState || typeof st.formState !== 'object') st.formState = {};
     st.formState.__forId = recordIdentity;
-    if (window.modalCtx && window.modalCtx.bulkProcessState === st) {
-      window.modalCtx.__bulkProcessRecordIdentity = recordIdentity;
-      window.modalCtx.activeRecordIdentity = recordIdentity;
-      if (!window.modalCtx.formState || typeof window.modalCtx.formState !== 'object') window.modalCtx.formState = {};
-      window.modalCtx.formState.__forId = recordIdentity;
-    }
-
-    installBulkProcessModalCtxPatch?.(st, { forceIdentityRebase: true });
-
-    const selectionOpts = (selectionOptions && typeof selectionOptions === 'object') ? selectionOptions : {};
-    const runLayeredProcessRowRefresh = async (profile, layerOptions = {}) => {
-      if (typeof handleBulkProcessRowChange !== 'function') return false;
-      const layer = trimStr(profile || 'status_header').toLowerCase();
-      const cfg = (layerOptions && typeof layerOptions === 'object') ? layerOptions : {};
-      const includeEvidenceForLayer = layer === 'evidence';
-      try {
-        await handleBulkProcessRowChange(st, patchedKey, {
-          source: cfg.source || `bulk-process-process-${layer}`,
-          expectedRowKey: patchedKey,
-          mutationSeq,
-          datasetOnly: layer === 'status_header',
-          minimalOnly: layer === 'status_header',
-          deferContextRefreshAfterPatch: false,
-          suppressAdjacentPrefetch: true,
-          suppressPreviewRefresh: layer !== 'evidence',
-          skipDirtyGuard: true,
-          preserveActiveContext: layer !== 'status_header',
-          preserveEvidencePane: layer !== 'evidence',
-          scheduleHydration: false,
-          profile: layer,
-          context_profile: layer,
-          includeEvidence: includeEvidenceForLayer,
-          include_evidence: includeEvidenceForLayer,
-          loadEvidence: includeEvidenceForLayer,
-          includeCompare: false,
-          include_compare: false,
-          includeImportSourceRows: false,
-          include_import_source_rows: false,
-          rerender: false,
-          force: true
-        });
-        return true;
-      } catch (err) {
-        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] layered row refresh degraded', { profile: layer, rowKey: patchedKey, error: err });
-        return false;
-      }
-    };
-    await runLayeredProcessRowRefresh('status_header', { source: 'bulk-process-process-status-header' });
-    if (selectionOpts.editorChanged !== false) {
-      await runLayeredProcessRowRefresh('editor', { source: 'bulk-process-process-editor' });
-    }
-    if (selectionOpts.evidenceChanged === true) {
-      await runLayeredProcessRowRefresh('evidence', { source: 'bulk-process-process-evidence' });
-    }
-
-    let processPostTransitionEvidencePatch = null;
-    if (selectionOpts.evidenceChanged === true) {
-      try {
-        const refreshedEvidenceRows = collectCanonicalRealEvidenceRowsForProcess(readActive());
-        if (refreshedEvidenceRows.length > 0) {
-          processPostTransitionEvidencePatch = buildProcessEvidenceAuthorityPatch(refreshedEvidenceRows, { active: readActive() });
-        }
-      } catch (err) {
-        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] processed-row evidence adoption degraded', err);
-      }
-    }
-
-    const postRefreshRow = {
-      ...pickObject(st.active_ctx?.row || {}),
-      ...pickObject(st.active_context?.row || {}),
-      ...pickObject(window.modalCtx?.data || {}),
-      ...deep(canonicalPatchedRow),
-      row_key: patchedKey,
-      new_row_key: patchedKey,
-      timesheet_id: nextTimesheetId || canonicalPatchedRow.timesheet_id || canonicalPatchedRow.current_timesheet_id || null,
-      current_timesheet_id: nextTimesheetId || canonicalPatchedRow.current_timesheet_id || canonicalPatchedRow.timesheet_id || null,
-      requested_timesheet_id: nextTimesheetId || canonicalPatchedRow.requested_timesheet_id || canonicalPatchedRow.current_timesheet_id || canonicalPatchedRow.timesheet_id || null,
-      expected_timesheet_id: trimStr(canonicalPatchedRow.expected_timesheet_id || nextTimesheetId || '') || null,
-      contract_week_id: nextContractWeekId || canonicalPatchedRow.contract_week_id || null,
-      bulk_process_bucket: 'PROCESSED',
-      summary_stage: 'PROCESSED',
-      processing_status: canonicalPatchedRow.processing_status || canonicalPatchedRow.tools_stage || canonicalPatchedRow.summary_stage || 'PENDING_AUTH',
-      tools_stage: canonicalPatchedRow.tools_stage || canonicalPatchedRow.processing_status || 'PENDING_AUTH',
-      processing_status_display: canonicalPatchedRow.processing_status_display || canonicalPatchedRow.processing_status || 'Pending authorisation'
-    };
-    postRefreshRow.action_flags = {
-      ...pickObject(postRefreshRow.action_flags || {}),
-      can_process: false,
-      can_unprocess: true
-    };
-    if (processPostTransitionEvidencePatch?.hasAnyEvidence === true) {
-      applyProcessEvidenceAuthorityPatch(postRefreshRow, processPostTransitionEvidencePatch);
-    }
-
-    const authoritativePatchTarget = (target) => {
-      if (!target || typeof target !== 'object') return;
-      Object.assign(target, deep(postRefreshRow));
-      target.row_key = patchedKey;
-      target.new_row_key = patchedKey;
-      target.timesheet_id = postRefreshRow.timesheet_id || null;
-      target.current_timesheet_id = postRefreshRow.current_timesheet_id || postRefreshRow.timesheet_id || null;
-      target.requested_timesheet_id = postRefreshRow.requested_timesheet_id || postRefreshRow.current_timesheet_id || postRefreshRow.timesheet_id || null;
-      target.expected_timesheet_id = postRefreshRow.expected_timesheet_id || postRefreshRow.current_timesheet_id || postRefreshRow.timesheet_id || null;
-      target.contract_week_id = postRefreshRow.contract_week_id || null;
-      target.bulk_process_bucket = 'PROCESSED';
-      target.summary_stage = 'PROCESSED';
-      target.processing_status = postRefreshRow.processing_status || 'PENDING_AUTH';
-      target.tools_stage = postRefreshRow.tools_stage || postRefreshRow.processing_status || 'PENDING_AUTH';
-      target.processing_status_display = postRefreshRow.processing_status_display || postRefreshRow.processing_status || 'Pending authorisation';
-      target.action_flags = {
-        ...pickObject(target.action_flags || {}),
-        can_process: false,
-        can_unprocess: true
-      };
-    };
-
-    st.active_row = deep(postRefreshRow);
-    st.active_row_key = patchedKey;
-    st.selected_row_keys = [patchedKey];
-    st.active_details = (st.active_details && typeof st.active_details === 'object') ? st.active_details : {};
-    authoritativePatchTarget(st.active_details);
-    st.active_details.current_timesheet_id = postRefreshRow.current_timesheet_id || postRefreshRow.timesheet_id || null;
-    st.active_details.requested_timesheet_id = postRefreshRow.requested_timesheet_id || postRefreshRow.current_timesheet_id || postRefreshRow.timesheet_id || null;
-    st.active_details.expected_timesheet_id = postRefreshRow.expected_timesheet_id || postRefreshRow.current_timesheet_id || postRefreshRow.timesheet_id || null;
-    st.active_details.tsfin = (st.active_details.tsfin && typeof st.active_details.tsfin === 'object') ? st.active_details.tsfin : {};
-    st.active_details.tsfin.timesheet_id = postRefreshRow.timesheet_id || postRefreshRow.current_timesheet_id || null;
-    st.active_details.tsfin.processing_status = postRefreshRow.processing_status || st.active_details.tsfin.processing_status || 'PENDING_AUTH';
-    st.active_details.timesheet = (st.active_details.timesheet && typeof st.active_details.timesheet === 'object') ? st.active_details.timesheet : {};
-    st.active_details.timesheet.timesheet_id = postRefreshRow.timesheet_id || postRefreshRow.current_timesheet_id || null;
-    st.active_details.timesheet.submission_mode = postRefreshRow.submission_mode || st.active_details.timesheet.submission_mode || null;
-    st.active_details.timesheet.sheet_scope = postRefreshRow.sheet_scope || postRefreshRow.period_type || st.active_details.timesheet.sheet_scope || null;
-    st.active_details.profile = st.active_details.profile || 'editor';
-    st.active_details.context_profile = st.active_details.context_profile || 'editor';
-    st.active_details.header_loaded = true;
-    st.active_details.editor_loaded = true;
-
-    st.active_ctx = (st.active_ctx && typeof st.active_ctx === 'object') ? st.active_ctx : {};
-    st.active_ctx.row = deep(postRefreshRow);
-    st.active_ctx.data_row = deep(postRefreshRow);
-    st.active_ctx.details = deep(st.active_details);
-    st.active_ctx.row_key = patchedKey;
-    st.active_ctx.row_signature = trimStr(postRefreshRow.row_signature || '');
-    st.active_ctx.profile = st.active_ctx.profile || 'editor';
-    st.active_ctx.context_profile = st.active_ctx.context_profile || 'editor';
-    st.active_ctx.header_loaded = true;
-    st.active_ctx.editor_loaded = true;
-    st.active_ctx.context_stale = false;
-    st.active_ctx.is_hydrated = true;
-    st.active_ctx.hydration_required = false;
-
-    st.active_context = (st.active_context && typeof st.active_context === 'object') ? st.active_context : {};
-    st.active_context.row = deep(postRefreshRow);
-    st.active_context.data_row = deep(postRefreshRow);
-    st.active_context.details = deep(st.active_details);
-    st.active_context.row_key = patchedKey;
-    st.active_context.row_signature = trimStr(postRefreshRow.row_signature || '');
-    st.active_context.profile = st.active_context.profile || 'editor';
-    st.active_context.context_profile = st.active_context.context_profile || 'editor';
-    st.active_context.header_loaded = true;
-    st.active_context.editor_loaded = true;
-    st.active_context.context_stale = false;
-    st.active_context.is_hydrated = true;
-    st.active_context.hydration_required = false;
 
     if (window.modalCtx && window.modalCtx.bulkProcessState === st) {
-      window.modalCtx.data = deep(postRefreshRow);
-      window.modalCtx.timesheetDetails = deep(st.active_details);
+      window.modalCtx.data = deep(rowCopy);
+      window.modalCtx.timesheetDetails = deep(minimalDetails);
       window.modalCtx.__bulkProcessRecordIdentity = recordIdentity;
       window.modalCtx.activeRecordIdentity = recordIdentity;
+      window.modalCtx.activeTimesheetId = nextTimesheetId || null;
+      window.modalCtx.activeContractWeekId = nextContractWeekId || null;
       if (!window.modalCtx.formState || typeof window.modalCtx.formState !== 'object') window.modalCtx.formState = {};
       window.modalCtx.formState.__forId = recordIdentity;
+      clearProcessPreviewTargetState(window.modalCtx, reason || 'process-next-unprocessed');
     }
 
-    if (processPostTransitionEvidencePatch?.hasAnyEvidence === true && st.evidence_pane_state && typeof st.evidence_pane_state === 'object') {
-      st.evidence_pane_state.attached_rows = processPostTransitionEvidencePatch.evidenceRows.map((item) => deep(item));
-      st.evidence_pane_state.attached_all_rows = processPostTransitionEvidencePatch.evidenceRows.map((item) => deep(item));
-      st.evidence_pane_state.__attached_loaded = true;
-      st.evidence_pane_state.__evidence_loaded = true;
-      st.evidence_pane_state.__requires_evidence_hydration = false;
-      const preferredAttached = processPostTransitionEvidencePatch.primaryEvidence || processPostTransitionEvidencePatch.evidenceRows[0] || null;
-      if (preferredAttached) {
-        st.evidence_pane_state.active_tab = 'attached';
-        st.evidence_pane_state.__attached_manual_override = true;
-        st.evidence_pane_state.__queue_manual_override = false;
-        st.evidence_pane_state.active_attached_id = evidenceIdOf(preferredAttached) || trimStr(preferredAttached.id || preferredAttached.evidence_id || preferredAttached.queue_id || '') || null;
-        st.evidence_pane_state.active_attached_item = deep(preferredAttached);
-      }
+    if (typeof installBulkProcessModalCtxPatch === 'function') {
+      try { installBulkProcessModalCtxPatch(st, { forceIdentityRebase: true, source_context: 'bulk_process' }); } catch {}
     }
+    return true;
+  };
+  const selectNextRow = async (previousKey, patchedRow, originalVisible, selectionOptions = {}) => {
+    const patchedKey = rowKeyOf(patchedRow);
+    const nextSelection = findNextUnprocessedProcessRow(previousKey, patchedKey, originalVisible);
+    const nextRow = nextSelection.row;
+    const nextKey = trimStr(nextSelection.key || '');
+    const processedKey = trimStr(previousKey || patchedKey || '');
 
-    const previousCacheKey = trimStr(previousKey || '');
+    const previousCacheKey = trimStr(previousKey || patchedKey || '');
     if (previousCacheKey && st.__bulk_process_row_context_cache && typeof st.__bulk_process_row_context_cache === 'object') {
       for (const key of Object.keys(st.__bulk_process_row_context_cache)) {
         if (key.includes(previousCacheKey) || key.includes(`"row_key":"${previousCacheKey}"`)) {
@@ -169606,9 +169617,87 @@ async function handleBulkProcessProcess(state) {
         }
       }
     }
-    st.__bulk_process_active_hydration_identity = patchedKey;
-    st.__bulkProcessActiveHydrationIdentity = patchedKey;
-    st.__active_context_is_minimal = false;
+
+    if (!nextRow || !nextKey) {
+      clearProcessActiveSelectionAfterProcess(previousKey, patchedKey, 'process-no-unprocessed-rows');
+      return;
+    }
+
+    st.__bulk_process_mutation_seq = (Number(st.__bulk_process_mutation_seq || 0) || 0) + 1;
+    const mutationSeq = Number(st.__bulk_process_mutation_seq || 0) || 0;
+
+    adoptMinimalProcessActiveRow(nextRow, nextKey, 'process-next-unprocessed');
+    sigLog('SELECT-NEXT-UNPROCESSED', {
+      previous_row_key: trimStr(previousKey || '') || null,
+      patched_row_key: trimStr(patchedKey || '') || null,
+      selected_row_key: nextKey,
+      original_index: nextSelection.originalIndex,
+      selected_index: nextSelection.selectedIndex
+    });
+
+    if (typeof handleBulkProcessRowChange === 'function') {
+      const nextTimesheetId = trimStr(nextRow.current_timesheet_id || nextRow.timesheet_id || nextRow.requested_timesheet_id || nextRow.expected_timesheet_id || '');
+      const nextExpectedTimesheetId = trimStr(nextRow.expected_timesheet_id || nextTimesheetId || '');
+      const nextContractWeekId = /^timesheet:/i.test(nextKey) ? '' : trimStr(nextRow.contract_week_id || '');
+      const selectionOpts = (selectionOptions && typeof selectionOptions === 'object') ? selectionOptions : {};
+      try {
+        await handleBulkProcessRowChange(st, nextKey, {
+          source: 'bulk-process-process-next-unprocessed',
+          expectedRowKey: nextKey,
+          row_key: nextKey,
+          timesheet_id: nextTimesheetId || null,
+          current_timesheet_id: nextTimesheetId || null,
+          requested_timesheet_id: trimStr(nextRow.requested_timesheet_id || nextTimesheetId || '') || null,
+          expected_timesheet_id: nextExpectedTimesheetId || null,
+          contract_week_id: nextContractWeekId || null,
+          mutationSeq,
+          datasetOnly: false,
+          minimalOnly: false,
+          deferContextRefreshAfterPatch: false,
+          suppressAdjacentPrefetch: true,
+          suppressPreviewRefresh: false,
+          skipDirtyGuard: true,
+          preserveActiveContext: false,
+          preserveEvidencePane: false,
+          scheduleHydration: false,
+          profile: selectionOpts.evidenceChanged === true ? 'evidence' : 'editor',
+          context_profile: selectionOpts.evidenceChanged === true ? 'evidence' : 'editor',
+          includeEvidence: selectionOpts.evidenceChanged === true,
+          include_evidence: selectionOpts.evidenceChanged === true,
+          loadEvidence: selectionOpts.evidenceChanged === true,
+          includeCompare: false,
+          include_compare: false,
+          includeImportSourceRows: false,
+          include_import_source_rows: false,
+          rerender: false,
+          force: true
+        });
+      } catch (err) {
+        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][PROCESS] next unprocessed row refresh degraded', { rowKey: nextKey, error: err });
+      }
+    }
+
+    const liveActiveKey = trimStr(rowKeyOf(st.active_row || {}) || st.active_row_key || '');
+    if (liveActiveKey !== nextKey) {
+      sigWarn('SELECT-NEXT-RESTORE', {
+        expected_row_key: nextKey,
+        live_active_row_key: liveActiveKey || null,
+        processed_row_key: processedKey || null
+      });
+      adoptMinimalProcessActiveRow(nextRow, nextKey, 'process-next-unprocessed-restore');
+    } else {
+      st.active_row_key = nextKey;
+      st.activeRowKey = nextKey;
+      st.selected_row_keys = [nextKey];
+      setProcessActiveHydrationIdentity(nextKey);
+      if (window.modalCtx && window.modalCtx.bulkProcessState === st) {
+        window.modalCtx.__bulkProcessRecordIdentity = nextKey;
+        window.modalCtx.activeRecordIdentity = nextKey;
+        if (!window.modalCtx.formState || typeof window.modalCtx.formState !== 'object') window.modalCtx.formState = {};
+        window.modalCtx.formState.__forId = nextKey;
+      }
+    }
+
     if (typeof installBulkProcessModalCtxPatch === 'function') {
       try { installBulkProcessModalCtxPatch(st, { forceIdentityRebase: true, source_context: 'bulk_process' }); } catch {}
     }
@@ -173565,6 +173654,7 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
+
 
 
 
