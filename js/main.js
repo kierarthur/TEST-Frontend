@@ -169064,9 +169064,6 @@ async function handleBulkProcessSave(state) {
 }
 
 
-
-
-
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -173581,34 +173578,135 @@ async function handleBulkProcessProcess(state) {
           processedTimesheetId ||
           ''
         );
-        if (!deferredQueueId) {
-          throw new Error('Weekly Bulk Process completed, but the selected Queue Timesheet image could not be identified for attachment. Refresh the row and attach the image again.');
+        const processResultContainerHasTimesheetEvidence = (container) => {
+          if (!container || typeof container !== 'object') return false;
+          const primaryArtifact = (container.primary_artifact && typeof container.primary_artifact === 'object') ? container.primary_artifact : null;
+          const artifactHints = (container.artifact_hints && typeof container.artifact_hints === 'object') ? container.artifact_hints : {};
+          const hintPrimaryArtifact = (artifactHints.primary_artifact && typeof artifactHints.primary_artifact === 'object') ? artifactHints.primary_artifact : null;
+          const previewHints = (container.preview_hints && typeof container.preview_hints === 'object') ? container.preview_hints : {};
+          const evidenceHints = (container.evidence_hints && typeof container.evidence_hints === 'object') ? container.evidence_hints : {};
+          const manualPdfKey = trimStr(
+            container.manual_pdf_r2_key ||
+            container.manualPdfR2Key ||
+            container.timesheet?.manual_pdf_r2_key ||
+            container.timesheet_json?.manual_pdf_r2_key ||
+            container.details?.manual_pdf_r2_key ||
+            container.details?.timesheet?.manual_pdf_r2_key ||
+            ''
+          );
+          if (manualPdfKey) return true;
+
+          const primaryKind = upper(
+            container.primary_artifact_kind ||
+            container.primaryArtifactKind ||
+            artifactHints.primary_artifact_kind ||
+            artifactHints.primaryArtifactKind ||
+            primaryArtifact?.kind ||
+            primaryArtifact?.evidence_kind ||
+            primaryArtifact?.evidenceKind ||
+            hintPrimaryArtifact?.kind ||
+            hintPrimaryArtifact?.evidence_kind ||
+            hintPrimaryArtifact?.evidenceKind ||
+            previewHints.primary_artifact_kind ||
+            previewHints.primaryArtifactKind ||
+            ''
+          );
+          const primaryStorageKey = trimStr(
+            container.primary_artifact_storage_key ||
+            container.primaryArtifactStorageKey ||
+            artifactHints.primary_artifact_storage_key ||
+            artifactHints.primaryArtifactStorageKey ||
+            evidenceStorageKeyOf(primaryArtifact || {}) ||
+            evidenceStorageKeyOf(hintPrimaryArtifact || {}) ||
+            previewHints.primary_artifact_storage_key ||
+            previewHints.primaryArtifactStorageKey ||
+            previewHints.preview_storage_key ||
+            previewHints.previewStorageKey ||
+            ''
+          );
+          if (primaryStorageKey && primaryKind === 'TIMESHEET') return true;
+
+          const badges = [
+            ...(Array.isArray(container.evidence_badges) ? container.evidence_badges : []),
+            ...(Array.isArray(evidenceHints.evidence_badges) ? evidenceHints.evidence_badges : []),
+            ...(Array.isArray(artifactHints.evidence_badges) ? artifactHints.evidence_badges : [])
+          ];
+          if (badges.some((badge) => {
+            if (!badge || typeof badge !== 'object') return false;
+            const kind = normaliseKindForEvidenceRequiredMessage(badge.kind || badge.evidence_kind || badge.evidenceKind || '');
+            if (kind !== 'TIMESHEET') return false;
+            return badge.present === true || badge.has_evidence === true || badge.hasEvidence === true || Number(badge.count ?? badge.evidence_count ?? badge.evidenceCount ?? 0) > 0;
+          })) return true;
+
+          const evidenceRows = [
+            ...(Array.isArray(container.evidence) ? container.evidence : []),
+            ...(Array.isArray(container.attached_evidence) ? container.attached_evidence : []),
+            ...(Array.isArray(container.attachedRows) ? container.attachedRows : []),
+            ...(Array.isArray(evidenceHints.evidence) ? evidenceHints.evidence : []),
+            ...(Array.isArray(evidenceHints.attached_evidence) ? evidenceHints.attached_evidence : []),
+            ...(Array.isArray(artifactHints.evidence) ? artifactHints.evidence : [])
+          ];
+          if (evidenceRows.some((item) => {
+            if (!item || typeof item !== 'object') return false;
+            const kind = evidenceKindOf(item) || normaliseKindForEvidenceRequiredMessage(item.kind || item.evidence_kind || item.evidenceKind || '');
+            if (kind !== 'TIMESHEET') return false;
+            return !!(evidenceStorageKeyOf(item) || evidenceIdOf(item) || evidenceQueueIdOf(item));
+          })) return true;
+
+          return false;
+        };
+        const processResultAlreadyHasTimesheetEvidence = [
+          processResult,
+          processResult?.row,
+          processResult?.data_row,
+          processResult?.row_patch,
+          processResult?.timesheet,
+          processResult?.timesheet_json,
+          processResult?.details,
+          processResult?.evidence_hints,
+          processResult?.preview_hints,
+          processResult?.artifact_hints
+        ].some(processResultContainerHasTimesheetEvidence);
+
+        if (processResultAlreadyHasTimesheetEvidence) {
+          sigLog('QUEUE-ATTACH-AFTER-WEEKLY-PROCESS-SKIPPED', {
+            reason: 'timesheet_evidence_already_materialised',
+            queue_id: deferredQueueId || null,
+            queue_kind: selectedQueueBeforeProcessKind || 'TIMESHEET',
+            timesheet_id: processedTimesheetId || null,
+            expected_timesheet_id: processedExpectedTimesheetId || processedTimesheetId || null,
+            contract_week_id: trimStr(activeContractWeekId || '') || null
+          });
+        } else {
+          if (!deferredQueueId) {
+            throw new Error('Weekly Bulk Process completed, but the selected Queue Timesheet image could not be identified for attachment. Refresh the row and attach the image again.');
+          }
+          if (!processedTimesheetId) {
+            throw new Error('Weekly Bulk Process completed, but no linked timesheet id was returned for the selected Queue Timesheet image. Refresh the row and attach the image again.');
+          }
+          if (typeof attachQueueItemToTimesheetEvidence !== 'function') {
+            throw new Error('Weekly Bulk Process completed, but Queue Timesheet image attachment is not available. Refresh the row and attach the image again.');
+          }
+          sigLog('QUEUE-ATTACH-AFTER-WEEKLY-PROCESS-START', {
+            queue_id: deferredQueueId,
+            queue_kind: selectedQueueBeforeProcessKind || 'TIMESHEET',
+            timesheet_id: processedTimesheetId,
+            expected_timesheet_id: processedExpectedTimesheetId || processedTimesheetId || null,
+            contract_week_id: trimStr(activeContractWeekId || '') || null
+          });
+          await attachQueueItemToTimesheetEvidence(String(deferredQueueId), {
+            timesheet_id: String(processedTimesheetId),
+            expected_timesheet_id: processedExpectedTimesheetId || processedTimesheetId,
+            kind: selectedQueueBeforeProcessKind || 'TIMESHEET'
+          });
+          evidenceMutated = true;
+          sigLog('QUEUE-ATTACH-AFTER-WEEKLY-PROCESS-DONE', {
+            queue_id: deferredQueueId,
+            queue_kind: selectedQueueBeforeProcessKind || 'TIMESHEET',
+            timesheet_id: processedTimesheetId,
+            expected_timesheet_id: processedExpectedTimesheetId || processedTimesheetId || null
+          });
         }
-        if (!processedTimesheetId) {
-          throw new Error('Weekly Bulk Process completed, but no linked timesheet id was returned for the selected Queue Timesheet image. Refresh the row and attach the image again.');
-        }
-        if (typeof attachQueueItemToTimesheetEvidence !== 'function') {
-          throw new Error('Weekly Bulk Process completed, but Queue Timesheet image attachment is not available. Refresh the row and attach the image again.');
-        }
-        sigLog('QUEUE-ATTACH-AFTER-WEEKLY-PROCESS-START', {
-          queue_id: deferredQueueId,
-          queue_kind: selectedQueueBeforeProcessKind || 'TIMESHEET',
-          timesheet_id: processedTimesheetId,
-          expected_timesheet_id: processedExpectedTimesheetId || processedTimesheetId || null,
-          contract_week_id: trimStr(activeContractWeekId || '') || null
-        });
-        await attachQueueItemToTimesheetEvidence(String(deferredQueueId), {
-          timesheet_id: String(processedTimesheetId),
-          expected_timesheet_id: processedExpectedTimesheetId || processedTimesheetId,
-          kind: selectedQueueBeforeProcessKind || 'TIMESHEET'
-        });
-        evidenceMutated = true;
-        sigLog('QUEUE-ATTACH-AFTER-WEEKLY-PROCESS-DONE', {
-          queue_id: deferredQueueId,
-          queue_kind: selectedQueueBeforeProcessKind || 'TIMESHEET',
-          timesheet_id: processedTimesheetId,
-          expected_timesheet_id: processedExpectedTimesheetId || processedTimesheetId || null
-        });
       }
     } else {
       throw new Error('Active row is not a processable daily or weekly manual Bulk Process row.');
@@ -173753,7 +173851,6 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
-
 
 
 
