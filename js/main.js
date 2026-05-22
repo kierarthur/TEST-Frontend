@@ -188605,10 +188605,93 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     })();
     const effectiveTimesheetEvidence = effectiveEvidenceRows.find((item) => normaliseBulkProcessEvidenceKindRowChange(item?.kind || item?.staged_kind || '') === 'TIMESHEET' && !!getBulkProcessEvidenceFileKeyRowChange(item) && hasGenuineEvidenceIdentityRowChange(item)) || null;
     const realNonTimesheetEvidenceRows = effectiveEvidenceRows.filter((item) => normaliseBulkProcessEvidenceKindRowChange(item?.kind || item?.staged_kind || '') !== 'TIMESHEET' && hasGenuineEvidenceIdentityRowChange(item));
-    if (activeRowExplicitNoTimesheet && realNonTimesheetEvidenceRows.length) {
-      const selectedNonTimesheet = realNonTimesheetEvidenceRows[0];
-      pane.attached_rows = clone(realNonTimesheetEvidenceRows);
-      pane.attached_all_rows = clone(realNonTimesheetEvidenceRows);
+    const rowHasPositiveNonTimesheetEvidenceTruthForKind = (kindInput, storageKeyInput = '') => {
+      const kind = normaliseBulkProcessEvidenceKindRowChange(kindInput);
+      if (!kind || kind === 'TIMESHEET') return false;
+      const storageKey = cleanEvidenceStorageKeyRowChange(storageKeyInput || '');
+      const badgeLists = [
+        Array.isArray(st.active_row?.evidence_badges) ? st.active_row.evidence_badges : [],
+        Array.isArray(st.active_details?.evidence_badges) ? st.active_details.evidence_badges : [],
+        Array.isArray(st.active_details?.evidence_meta?.evidence_badges) ? st.active_details.evidence_meta.evidence_badges : [],
+        Array.isArray(st.active_context?.evidence_badges) ? st.active_context.evidence_badges : [],
+        Array.isArray(st.active_context?.details?.evidence_badges) ? st.active_context.details.evidence_badges : [],
+        Array.isArray(st.active_context?.details?.evidence_meta?.evidence_badges) ? st.active_context.details.evidence_meta.evidence_badges : []
+      ];
+      const badgeSaysPresent = badgeLists.some((badges) => badges.some((badge) => (
+        normaliseBulkProcessEvidenceKindRowChange(badge?.kind || badge?.staged_kind || '') === kind &&
+        (badge?.present === true || badge?.has_evidence === true || Number(badge?.count || 0) > 0)
+      )));
+      const primaryCandidates = [
+        st.active_row,
+        st.active_details,
+        st.active_context,
+        st.active_context?.row,
+        st.active_context?.data_row,
+        st.active_context?.details
+      ].filter((candidate) => candidate && typeof candidate === 'object');
+      const primarySaysPresent = primaryCandidates.some((candidate) => {
+        const primaryKind = normaliseBulkProcessEvidenceKindRowChange(candidate?.primary_artifact_kind || candidate?.primaryArtifactKind || '');
+        if (primaryKind !== kind) return false;
+        const primaryStorageKey = cleanEvidenceStorageKeyRowChange(
+          candidate?.primary_artifact_storage_key ||
+          candidate?.primaryArtifactStorageKey ||
+          candidate?.manual_pdf_r2_key ||
+          ''
+        );
+        if (!primaryStorageKey) return false;
+        return !storageKey || primaryStorageKey === storageKey;
+      });
+      return !!(badgeSaysPresent || primarySaysPresent);
+    };
+    const fallbackNonTimesheetEvidenceRows = effectiveEvidenceRows.filter((item) => {
+      const kind = normaliseBulkProcessEvidenceKindRowChange(item?.kind || item?.staged_kind || '');
+      if (!kind || kind === 'TIMESHEET') return false;
+      const fileKey = getBulkProcessEvidenceFileKeyRowChange(item);
+      if (!fileKey) return false;
+      if (!isFallbackEvidenceRowChange(item)) return false;
+      if (!rowHasPositiveNonTimesheetEvidenceTruthForKind(kind, fileKey)) return false;
+      const itemRowKey = trimStr(item?.row_key || '');
+      const itemTimesheetId = trimStr(item?.timesheet_id || item?.current_timesheet_id || '');
+      const itemContractWeekId = trimStr(item?.contract_week_id || '');
+      const activeRowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
+      const activeTimesheetId = trimStr(
+        st.active_row?.timesheet_id ||
+        st.active_row?.current_timesheet_id ||
+        st.active_details?.current_timesheet_id ||
+        ''
+      );
+      const activeContractWeekId = trimStr(
+        st.active_row?.contract_week_id ||
+        st.active_details?.contract_week_id ||
+        currentCw.id ||
+        ''
+      );
+      return !!(
+        (itemRowKey && activeRowKey && itemRowKey === activeRowKey) ||
+        (itemTimesheetId && activeTimesheetId && itemTimesheetId === activeTimesheetId) ||
+        (itemContractWeekId && activeContractWeekId && itemContractWeekId === activeContractWeekId)
+      );
+    });
+    const displayOnlyFallbackNonTimesheetEvidenceRows = (() => {
+      const byKey = new Map();
+      for (const item of fallbackNonTimesheetEvidenceRows) {
+        const kind = normaliseBulkProcessEvidenceKindRowChange(item?.kind || item?.staged_kind || '');
+        const fileKey = getBulkProcessEvidenceFileKeyRowChange(item);
+        const itemId = getBulkProcessEvidenceIdRowChange(item) || '';
+        const itemTimesheetId = trimStr(item?.timesheet_id || item?.current_timesheet_id || '');
+        const itemContractWeekId = trimStr(item?.contract_week_id || '');
+        const key = [kind, fileKey, itemId, itemTimesheetId, itemContractWeekId].join('|');
+        if (!byKey.has(key)) byKey.set(key, item);
+      }
+      return Array.from(byKey.values());
+    })();
+    const nonTimesheetEvidenceRowsForPane = realNonTimesheetEvidenceRows.length
+      ? realNonTimesheetEvidenceRows
+      : displayOnlyFallbackNonTimesheetEvidenceRows;
+    if (activeRowExplicitNoTimesheet && nonTimesheetEvidenceRowsForPane.length) {
+      const selectedNonTimesheet = nonTimesheetEvidenceRowsForPane[0];
+      pane.attached_rows = clone(nonTimesheetEvidenceRowsForPane);
+      pane.attached_all_rows = clone(nonTimesheetEvidenceRowsForPane);
       pane.active_tab = 'attached';
       pane.__attached_manual_override = true;
       pane.__queue_manual_override = false;
@@ -188623,6 +188706,27 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
       pane.__requires_evidence_hydration = false;
       reconcileResult.resolved_source = 'attached';
       reconcileResult.requires_evidence_hydration = false;
+      if (!realNonTimesheetEvidenceRows.length) reconcileResult.selected_preview_changed = true;
+    } else if (!effectiveTimesheetEvidence && !realNonTimesheetEvidenceRows.length && displayOnlyFallbackNonTimesheetEvidenceRows.length) {
+      const selectedNonTimesheet = displayOnlyFallbackNonTimesheetEvidenceRows[0];
+      pane.attached_rows = clone(displayOnlyFallbackNonTimesheetEvidenceRows);
+      pane.attached_all_rows = clone(displayOnlyFallbackNonTimesheetEvidenceRows);
+      pane.active_tab = 'attached';
+      pane.__attached_manual_override = true;
+      pane.__queue_manual_override = false;
+      pane.__queue_manual_override_identity = '';
+      pane.__queue_manual_override_scope = '';
+      pane.active_attached_item = clone(selectedNonTimesheet);
+      pane.active_attached_id = getBulkProcessEvidenceIdRowChange(selectedNonTimesheet) || null;
+      const attachedKey = buildBulkProcessAttachedSelectionKeyRowChange(selectedNonTimesheet);
+      pane.__active_attached_preview_target = attachedKey;
+      pane.__preview_target_key = attachedKey;
+      pane.__preview_load_requested_target_key = attachedKey;
+      pane.__requires_evidence_hydration = false;
+      reconcileResult.resolved_source = 'attached';
+      reconcileResult.requires_evidence_hydration = false;
+      reconcileResult.selected_preview_changed = true;
+      reconcileResult.display_only_primary_artifact_fallback_attached = true;
     } else if (effectiveTimesheetEvidence) {
       pane.attached_rows = clone(effectiveEvidenceRows);
       pane.attached_all_rows = clone(effectiveEvidenceRows);
@@ -188639,7 +188743,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
     }
     const activeIdentity = trimStr(reconcileResult.active_identity || getActiveRowIdentity());
     const resolvedSource = trimStr(reconcileResult.resolved_source || pane.active_tab || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
-    if (!effectiveTimesheetEvidence && !realNonTimesheetEvidenceRows.length && metadataRequiredEvidenceHydration && evidenceHydrationAttempted && activeIdentity && !activeRowExplicitNoTimesheet) {
+    if (!effectiveTimesheetEvidence && !nonTimesheetEvidenceRowsForPane.length && metadataRequiredEvidenceHydration && evidenceHydrationAttempted && activeIdentity && !activeRowExplicitNoTimesheet) {
       pane.attached_rows = [];
       pane.attached_all_rows = [];
       pane.active_attached_id = null;
@@ -188655,7 +188759,7 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
         reconcileResult.requires_evidence_hydration = false;
         reconcileResult.selected_preview_changed = !!(reconcileResult.selected_preview_changed || queueResult.selected_preview_changed);
       }
-    } else if (!effectiveTimesheetEvidence && !realNonTimesheetEvidenceRows.length && resolvedSource === 'queue' && activeIdentity && applyOpts.prepareQueue !== false) {
+    } else if (!effectiveTimesheetEvidence && !nonTimesheetEvidenceRowsForPane.length && resolvedSource === 'queue' && activeIdentity && applyOpts.prepareQueue !== false) {
       const queueResult = await prepareQueueStateForActiveIdentity({ identity: activeIdentity, forceQueueRefresh: !!applyOpts.forceQueueRefresh, requestToken: requestTokenObj, modalOpenToken: modalToken, isCurrent: () => !stillCurrent || stillCurrent() });
       reconcileResult.selected_preview_changed = !!(reconcileResult.selected_preview_changed || queueResult.selected_preview_changed);
     } else {
