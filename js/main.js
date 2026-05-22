@@ -188777,27 +188777,61 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
     const activeContextEvidenceMeta = (st.active_context?.evidence_meta && typeof st.active_context.evidence_meta === 'object') ? st.active_context.evidence_meta : {};
     const activeContextDetailsEvidenceMeta = (activeContextDetailsForEvidence.evidence_meta && typeof activeContextDetailsForEvidence.evidence_meta === 'object') ? activeContextDetailsForEvidence.evidence_meta : {};
     const activeContextEvidenceAuthority = (st.active_context?.__bulk_process_evidence_authority && typeof st.active_context.__bulk_process_evidence_authority === 'object') ? st.active_context.__bulk_process_evidence_authority : {};
+    const activeContextProfileForEvidence = trimStr(
+      st.active_context?.context_profile ||
+      st.active_context?.profile ||
+      activeContextDetailsForEvidence.context_profile ||
+      activeContextDetailsForEvidence.profile ||
+      activeContextEvidenceOptions.context_profile ||
+      activeContextEvidenceOptions.profile ||
+      ''
+    ).toLowerCase();
+    const activeContextExplicitlyNoEvidencePayload = !!(
+      st.active_context?.include_evidence === false ||
+      activeContextDetailsForEvidence.include_evidence === false ||
+      activeContextEvidenceOptions.include_evidence === false ||
+      activeContextEvidenceOptions.includeEvidence === false
+    );
+    const activeContextIsKnownNonEvidenceProfile = !!(
+      activeContextProfileForEvidence === 'editor' ||
+      activeContextProfileForEvidence === 'status_header' ||
+      activeContextProfileForEvidence === 'list'
+    );
+    const activeContextIsNonEvidenceRefresh = !!(
+      !evidenceAuthoritativeHydrationApplied &&
+      activeContextExplicitlyNoEvidencePayload &&
+      activeContextIsKnownNonEvidenceProfile
+    );
     const incomingContextEvidenceLoaded = !!(
-      st.active_context?.evidence_loaded === true ||
-      activeContextDetailsForEvidence.evidence_loaded === true
+      !activeContextIsNonEvidenceRefresh &&
+      (
+        st.active_context?.evidence_loaded === true ||
+        activeContextDetailsForEvidence.evidence_loaded === true
+      )
     );
     const incomingContextIncludeEvidence = !!(
-      st.active_context?.include_evidence === true ||
-      activeContextDetailsForEvidence.include_evidence === true ||
-      activeContextEvidenceOptions.include_evidence === true ||
-      activeContextEvidenceOptions.includeEvidence === true
+      !activeContextIsNonEvidenceRefresh &&
+      (
+        st.active_context?.include_evidence === true ||
+        activeContextDetailsForEvidence.include_evidence === true ||
+        activeContextEvidenceOptions.include_evidence === true ||
+        activeContextEvidenceOptions.includeEvidence === true
+      )
     );
     const incomingContextEvidenceAuthoritative = !!(
-      evidenceAuthoritativeHydrationApplied ||
-      st.active_context?.evidence_authoritative === true ||
-      activeContextDetailsForEvidence.evidence_authoritative === true ||
-      activeContextEvidenceMeta.evidence_authoritative === true ||
-      activeContextDetailsEvidenceMeta.evidence_authoritative === true ||
-      activeContextEvidenceAuthority.evidenceLoadedAuthority === true ||
-      (incomingContextIncludeEvidence && incomingContextEvidenceLoaded)
+      !activeContextIsNonEvidenceRefresh &&
+      (
+        evidenceAuthoritativeHydrationApplied ||
+        st.active_context?.evidence_authoritative === true ||
+        activeContextDetailsForEvidence.evidence_authoritative === true ||
+        activeContextEvidenceMeta.evidence_authoritative === true ||
+        activeContextDetailsEvidenceMeta.evidence_authoritative === true ||
+        activeContextEvidenceAuthority.evidenceLoadedAuthority === true ||
+        (incomingContextIncludeEvidence && incomingContextEvidenceLoaded)
+      )
     );
     const preserveAttachedPaneForNonEvidenceContext = !!(
-      !incomingContextEvidenceAuthoritative &&
+      (activeContextIsNonEvidenceRefresh || !incomingContextEvidenceAuthoritative) &&
       existingAttachedPaneRowsForPreserve.length > 0 &&
       existingAttachedPaneRowsMatchActiveIdentity
     );
@@ -188843,6 +188877,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
     st.evidence_pane_state = pane;
     return reconcileResult;
   };
+
 
 
 
