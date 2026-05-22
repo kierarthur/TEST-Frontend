@@ -188830,8 +188830,13 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
         (incomingContextIncludeEvidence && incomingContextEvidenceLoaded)
       )
     );
+    const preserveAttachedPaneFromEvidenceAuthority = !!(
+      activeContextEvidenceAuthority.nonEvidenceAuthoritative === true &&
+      activeContextEvidenceAuthority.allowEvidenceClear !== true &&
+      activeContextEvidenceAuthority.hasPreservedMatchingEvidenceRows === true
+    );
     const preserveAttachedPaneForNonEvidenceContext = !!(
-      (activeContextIsNonEvidenceRefresh || !incomingContextEvidenceAuthoritative) &&
+      (activeContextIsNonEvidenceRefresh || preserveAttachedPaneFromEvidenceAuthority || !incomingContextEvidenceAuthoritative) &&
       existingAttachedPaneRowsForPreserve.length > 0 &&
       existingAttachedPaneRowsMatchActiveIdentity
     );
@@ -188877,6 +188882,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
     st.evidence_pane_state = pane;
     return reconcileResult;
   };
+
 
 
 
