@@ -21051,8 +21051,6 @@ function getBankingPaymentIssueActionLabel(rowOrState) {
   return 'Review payment';
 }
 
-
-
 function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
   const src = (batchPayload && typeof batchPayload === 'object') ? batchPayload : {};
   const options = (opts && typeof opts === 'object') ? opts : {};
@@ -21177,6 +21175,7 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     const out = {};
     const visited = new Set();
     const queue = [];
+    let sawProviderSubmitScopedSource = false;
     const addSource = (value) => {
       if (!value) return;
       if (Array.isArray(value)) {
@@ -21312,6 +21311,7 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
         'provider_error_code', 'providerErrorCode', 'provider_error_message_redacted', 'providerErrorMessageRedacted',
         'provider_error_message', 'providerErrorMessage', 'provider_message', 'providerMessage',
         'provider_request_sent', 'providerRequestSent',
+        'provider_submission_attempted', 'providerSubmissionAttempted', 'provider_called', 'providerCalled',
         'provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived',
         'provider_http_status', 'providerHttpStatus',
         'provider_event_id', 'providerEventId', 'provider_reference', 'providerReference',
@@ -21335,6 +21335,7 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     const mergeProviderSubmitSource = (source) => {
       if (!isObj(source)) return;
       const sourceProviderScoped = sourceIsProviderScoped(source);
+      if (sourceProviderScoped) sawProviderSubmitScopedSource = true;
       put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode', 'provider_state', 'providerState']), 'upper', sourceProviderScoped);
       put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode', 'claim_blocker_code', 'claimBlockerCode']), 'upper');
       put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired', 'requires_review', 'requiresReview']), 'bool');
@@ -21393,6 +21394,7 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     const normalised = normaliseProviderSubmitDiagnostic(out);
     const railStateIsProviderIssue = ['REJECTED', 'DECLINED', 'FAILED', 'RETURNED', 'REVERTED'].includes(toUpper(normalised.rail_state));
     const hasProviderSubmitContext = !!(
+      sawProviderSubmitScopedSource ||
       normalised.provider_submission_status ||
       normalised.review_reason_code ||
       normalised.provider_request_sent === true ||
@@ -21401,24 +21403,20 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
       normalised.provider_submission_attempted === true ||
       normalised.provider_error_code ||
       normalised.provider_error_message_redacted ||
-      normalised.operation_id ||
-      normalised.chunk_id ||
-      normalised.transfer_id ||
+      normalised.provider_http_status ||
       normalised.rail_tx_id ||
       normalised.provider_transaction_id ||
       normalised.provider_payment_id ||
       normalised.provider_event_id ||
       normalised.provider_reference ||
+      normalised.provider_submission_id ||
       normalised.external_payment_id ||
       normalised.revolut_payment_id ||
       normalised.external_reference ||
       normalised.bank_reference ||
       normalised.transaction_id ||
       normalised.payment_id ||
-      (railStateIsProviderIssue ? normalised.rail_state : '') ||
-      normalised.request_id ||
-      normalised.idempotency_key ||
-      normalised.recommended_action
+      (railStateIsProviderIssue ? normalised.rail_state : '')
     );
     if (!hasProviderSubmitContext) return {};
     if (!normalised.provider_submission_status && (normalised.review_reason_code === 'PROVIDER_REJECTED_PAYMENT' || normalised.provider_error_code || normalised.provider_error_message_redacted)) {
@@ -21663,6 +21661,7 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
   const providerSubmitDiagnostic = extractProviderSubmitDiagnostic(src);
   if (hasObjectKeys(providerSubmitDiagnostic)) {
     const providerSubmitStatus = toUpper(providerSubmitDiagnostic.provider_submission_status || providerSubmitDiagnostic.outcome_code || '');
+    const reviewReasonCode = toUpper(providerSubmitDiagnostic.review_reason_code || '');
     const strictProviderAcceptanceEvidencePresent = providerSubmitDiagnostic.provider_acceptance_evidence_present === true;
     providerSubmitDiagnostic.provider_acceptance_evidence_present = strictProviderAcceptanceEvidencePresent;
     const providerIssueCopy = providerSubmitIssueCopy(providerSubmitStatus, strictProviderAcceptanceEvidencePresent);
@@ -21678,52 +21677,107 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     const autoReleased = autoReverseApplied || ['AUTO_RELEASED_FOR_NEXT_RUN', 'AUTO_RELEASED', 'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS'].includes(recoveryStatus) || ['READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS'].includes(recoveryAction);
     const manuallyReleased = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' || ['MANUALLY_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED'].includes(recoveryStatus);
     const releaseInProgress = !autoReleased && !manuallyReleased && (autoReverseRequested || ['AUTO_RELEASE_REQUESTED', 'AUTO_RELEASE_IN_PROGRESS', 'REVERSAL_IN_PROGRESS', 'RELEASE_IN_PROGRESS'].includes(recoveryStatus) || ['AUTO_RELEASE_IN_PROGRESS'].includes(recoveryAction));
-    const manualReleaseRequired = !autoReleased && !manuallyReleased && !releaseInProgress && (manualRecoverable || recoveryAction === 'MANUAL_RELEASE_REQUIRED');
-    const recoveryStatusText = autoReleased || manuallyReleased
+    const providerCommunicationConfirmed = providerSubmitDiagnostic.provider_response_present === true
+      || providerSubmitDiagnostic.provider_response_received === true
+      || !!providerErrorMessage
+      || !!toText(providerSubmitDiagnostic.provider_error_code || providerSubmitDiagnostic.providerErrorCode || '')
+      || !!toText(providerSubmitDiagnostic.provider_http_status || providerSubmitDiagnostic.providerHttpStatus || '')
+      || (providerSubmitDiagnostic.provider_request_sent === true && providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED');
+    const providerRequestSent = providerSubmitDiagnostic.provider_request_sent === true || providerSubmitDiagnostic.provider_submission_attempted === true || !!providerSubmitDiagnostic.provider_request_dispatched_at_utc;
+    const providerOrRailState = toUpper(providerSubmitDiagnostic.rail_state || providerSubmitDiagnostic.provider_state || providerSubmitDiagnostic.providerStatus || src.rail_state || src.status || src.transfer_status || '');
+    const failedRejectedTransferState = ['FAILED', 'REJECTED', 'DECLINED', 'CANCELLED', 'NO_MONEY_UNWIND', 'BANK_REJECTED_PAYMENT'].includes(providerOrRailState)
+      || statusCandidates.some((candidate) => ['FAILED', 'REJECTED', 'DECLINED', 'CANCELLED', 'NO_MONEY_UNWIND', 'BANK_REJECTED_PAYMENT'].includes(candidate));
+    const returnedOrRevertedTransferState = ['RETURNED', 'REVERTED', 'SETTLED_RETURNED', 'BANK_RETURNED_PAYMENT', 'TRUE_SETTLED_REVERSAL_REQUIRED'].includes(providerOrRailState)
+      || statusCandidates.some((candidate) => ['RETURNED', 'REVERTED', 'SETTLED_RETURNED', 'BANK_RETURNED_PAYMENT', 'TRUE_SETTLED_REVERSAL_REQUIRED'].includes(candidate));
+    const providerTransactionEvidencePresent = strictProviderAcceptanceEvidencePresent === true
+      || providerSubmitDiagnostic.provider_external_evidence_present === true
+      || !!toText(providerSubmitDiagnostic.rail_tx_id || '')
+      || !!toText(providerSubmitDiagnostic.provider_transaction_id || providerSubmitDiagnostic.providerTransactionId || '')
+      || !!toText(providerSubmitDiagnostic.provider_payment_id || providerSubmitDiagnostic.providerPaymentId || '')
+      || !!toText(providerSubmitDiagnostic.external_payment_id || providerSubmitDiagnostic.externalPaymentId || '')
+      || !!toText(providerSubmitDiagnostic.revolut_payment_id || providerSubmitDiagnostic.revolutPaymentId || '')
+      || !!toText(providerSubmitDiagnostic.external_reference || providerSubmitDiagnostic.externalReference || '')
+      || !!toText(providerSubmitDiagnostic.bank_reference || providerSubmitDiagnostic.bankReference || '')
+      || !!toText(providerSubmitDiagnostic.transaction_id || providerSubmitDiagnostic.transactionId || '')
+      || !!toText(providerSubmitDiagnostic.payment_id || providerSubmitDiagnostic.paymentId || '');
+    const confirmedProviderRejection = providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' || reviewReasonCode === 'PROVIDER_REJECTED_PAYMENT';
+    const clearNoPaymentProviderRejection = confirmedProviderRejection === true
+      && providerCommunicationConfirmed === true
+      && strictProviderAcceptanceEvidencePresent !== true
+      && providerTransactionEvidencePresent !== true
+      && (failedRejectedTransferState === true || providerOrRailState === '' || providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED')
+      && autoReleased !== true
+      && manuallyReleased !== true
+      && releaseInProgress !== true;
+    const clearReturnedOrRevertedPayment = returnedOrRevertedTransferState === true
+      && autoReleased !== true
+      && manuallyReleased !== true
+      && releaseInProgress !== true;
+    const manualReleaseRequired = !autoReleased && !manuallyReleased && !releaseInProgress && (manualRecoverable || recoveryAction === 'MANUAL_RELEASE_REQUIRED' || clearNoPaymentProviderRejection || clearReturnedOrRevertedPayment);
+    const recoveryStatusText = autoReleased
       ? 'Released'
-      : (releaseInProgress ? 'Reversal in progress' : (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? 'Resolved' : 'Needs review'));
+      : (manuallyReleased
+          ? 'Released'
+          : (releaseInProgress
+              ? 'Reversal in progress'
+              : (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE'
+                  ? 'Resolved'
+                  : (manualReleaseRequired ? 'Needs review' : 'Needs review'))));
     const recoveryActionLabel = autoReleased
       ? 'Recheck the bank details and if correct, rerun Banking to pay this. The payment is ready to be paid on next run.'
       : (releaseInProgress
           ? 'Reversal/release is being processed.'
           : (manuallyReleased
               ? 'Payment has been released for the next Banking Pay run.'
-              : (manualReleaseRequired
-                  ? 'Recheck the bank details and if correct, reverse the payment and rerun Banking to pay this.'
-                  : (providerSubmitDiagnostic.recommended_action || providerIssueCopy.action))));
+              : (clearReturnedOrRevertedPayment
+                  ? 'The bank returned this payment. Select it to reverse/release the returned payment.'
+                  : (manualReleaseRequired
+                      ? 'Recheck the bank details and if correct, reverse the payment and rerun Banking to pay this.'
+                      : (providerSubmitDiagnostic.recommended_action || providerIssueCopy.action)))));
     const recommendedAction = recoveryActionLabel;
     const providerSubmitResolved = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' || autoReleased || manuallyReleased;
     const providerManualResolutionRequired = providerSubmitResolved || releaseInProgress ? false : (manualReleaseRequired || providerSubmitDiagnostic.manual_resolution_required === true);
-    const providerManualResolutionAvailable = providerSubmitResolved || releaseInProgress ? false : (strictProviderAcceptanceEvidencePresent !== true && (manualReleaseRequired || providerSubmitDiagnostic.manual_resolution_available === true || providerManualResolutionRequired));
+    const providerManualResolutionAvailable = providerSubmitResolved || releaseInProgress ? false : (
+      strictProviderAcceptanceEvidencePresent !== true
+      && (clearReturnedOrRevertedPayment === true || providerTransactionEvidencePresent !== true)
+      && (manualReleaseRequired || clearNoPaymentProviderRejection || clearReturnedOrRevertedPayment || providerSubmitDiagnostic.manual_resolution_available === true || providerManualResolutionRequired)
+    );
+    const headline = clearReturnedOrRevertedPayment ? 'Bank returned payment' : providerIssueCopy.headline;
+    const summary = clearReturnedOrRevertedPayment ? 'The bank returned this payment.' : providerIssueCopy.summary;
     return {
       hasIssue: true,
       requiresUserAction: providerSubmitResolved || releaseInProgress ? false : true,
       navAlert: providerSubmitResolved || releaseInProgress ? false : true,
-      badgeText: providerIssueCopy.headline,
+      badgeText: headline,
       badgeTone: providerSubmitResolved ? 'info' : badgeTone,
       severity: providerSubmitResolved ? 'info' : providerIssueCopy.severity,
       panelTitle: 'Payment status',
-      headline: providerIssueCopy.headline,
-      whatHappened: providerIssueCopy.summary,
-      summaryText: providerIssueCopy.summary,
+      headline,
+      whatHappened: summary,
+      summaryText: summary,
       primaryActionLabel: recommendedAction,
       statusText: recoveryStatusText,
       issueKind: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
-      issueKindForDisplay: 'PROVIDER_SUBMIT_REVIEW',
+      issueKindForDisplay: clearReturnedOrRevertedPayment ? 'RETURNED' : 'PROVIDER_SUBMIT_REVIEW',
       backendClassification: providerSubmitStatus,
       providerSubmitDiagnostic: providerSubmitDiagnostic,
       provider_submission_status: providerSubmitStatus,
-      review_reason_code: toUpper(providerSubmitDiagnostic.review_reason_code || ''),
+      review_reason_code: reviewReasonCode,
+      clearNoPaymentProviderRejection,
+      clear_no_payment_provider_rejection: clearNoPaymentProviderRejection,
+      clearReturnedOrRevertedPayment,
+      clear_returned_or_reverted_payment: clearReturnedOrRevertedPayment,
       manualResolutionRequired: providerManualResolutionRequired,
       manualResolutionAvailable: providerManualResolutionAvailable,
       manual_resolution_required: providerManualResolutionRequired,
       manual_resolution_available: providerManualResolutionAvailable,
       safeRetryAvailable: providerSubmitDiagnostic.safe_retry_available === true,
       providerAcceptanceEvidencePresent: strictProviderAcceptanceEvidencePresent,
-      providerResponsePresent: providerSubmitDiagnostic.provider_response_present === true,
-      providerRequestSentConfirmed: providerSubmitDiagnostic.provider_request_sent_confirmed === true,
+      providerResponsePresent: providerSubmitDiagnostic.provider_response_present === true || providerSubmitDiagnostic.provider_response_received === true,
+      providerRequestSentConfirmed: providerSubmitDiagnostic.provider_request_sent_confirmed === true || providerRequestSent,
       providerRequestDispatchedAtUtc: providerSubmitDiagnostic.provider_request_dispatched_at_utc || null,
       providerExternalEvidencePresent: providerSubmitDiagnostic.provider_external_evidence_present === true,
+      providerTransactionEvidencePresent,
       request_id: providerSubmitDiagnostic.request_id || null,
       idempotency_key: providerSubmitDiagnostic.idempotency_key || null,
       rail_tx_id: providerSubmitDiagnostic.rail_tx_id || null,
@@ -21961,6 +22015,8 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     hasSelectableRows
   };
 }
+
+
 
 function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
   const src = (batchPayload && typeof batchPayload === 'object') ? batchPayload : {};
@@ -22768,24 +22824,109 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       ? `provider-submit-review:${transferId}`
       : `provider-submit-review:${operationId || chunkId || toText(src.pay_batch_id || batch.pay_batch_id || batch.id || src.id || 'batch')}`;
     const recovery = readRecoveryEnvelope(providerDiagnostic);
-    const providerRejectedNoAcceptance = providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' && providerStrictAcceptanceEvidencePresent !== true;
+    const providerResponseConfirmed = providerDiagnostic.provider_response_present === true
+      || providerDiagnostic.provider_response_received === true
+      || !!providerErrorMessage
+      || !!toText(providerDiagnostic.provider_error_code || providerDiagnostic.providerErrorCode || '')
+      || !!toText(providerDiagnostic.provider_http_status || providerDiagnostic.providerHttpStatus || '')
+      || (providerDiagnostic.provider_request_sent === true && providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED');
+    const providerRequestSent = providerDiagnostic.provider_request_sent === true || providerDiagnostic.provider_submission_attempted === true || !!toText(providerDiagnostic.provider_request_dispatched_at_utc || providerDiagnostic.request_sent_at_utc || '');
+    const providerTransactionEvidencePresent = providerStrictAcceptanceEvidencePresent === true
+      || providerDiagnostic.provider_external_evidence_present === true
+      || providerSubmitStrictExternalEvidencePresent(providerDiagnostic) === true
+      || !!toText(providerDiagnostic.rail_tx_id || '')
+      || !!toText(providerDiagnostic.provider_transaction_id || providerDiagnostic.providerTransactionId || '')
+      || !!toText(providerDiagnostic.provider_payment_id || providerDiagnostic.providerPaymentId || '')
+      || !!toText(providerDiagnostic.external_payment_id || providerDiagnostic.externalPaymentId || '')
+      || !!toText(providerDiagnostic.revolut_payment_id || providerDiagnostic.revolutPaymentId || '')
+      || !!toText(providerDiagnostic.external_reference || providerDiagnostic.externalReference || '')
+      || !!toText(providerDiagnostic.bank_reference || providerDiagnostic.bankReference || '')
+      || !!toText(providerDiagnostic.transaction_id || providerDiagnostic.transactionId || '')
+      || !!toText(providerDiagnostic.payment_id || providerDiagnostic.paymentId || '');
+    const railOrProviderState = toUpper(
+      t.rail_state ||
+      t.railState ||
+      t.normalised_state ||
+      t.normalized_state ||
+      t.status ||
+      t.transfer_status ||
+      providerDiagnostic.rail_state ||
+      providerDiagnostic.railState ||
+      providerDiagnostic.provider_state ||
+      providerDiagnostic.providerStatus ||
+      fallback.rail_state ||
+      fallback.status ||
+      ''
+    );
+    const confirmedProviderRejection = providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' || toUpper(providerDiagnostic.review_reason_code || '') === 'PROVIDER_REJECTED_PAYMENT';
+    const failedRejectedState = ['FAILED', 'REJECTED', 'DECLINED', 'CANCELLED', 'NO_MONEY_UNWIND', 'BANK_REJECTED_PAYMENT'].includes(railOrProviderState) || providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED';
+    const returnedOrRevertedState = ['RETURNED', 'REVERTED', 'SETTLED_RETURNED', 'BANK_RETURNED_PAYMENT', 'TRUE_SETTLED_REVERSAL_REQUIRED'].includes(railOrProviderState);
+    const alreadyReleased = recovery.autoReleased === true || recovery.manuallyReleased === true || providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE';
+    const releaseInProgress = recovery.releaseInProgress === true;
+    const clearProviderRejectedNoPayment = confirmedProviderRejection === true
+      && providerResponseConfirmed === true
+      && providerStrictAcceptanceEvidencePresent !== true
+      && providerTransactionEvidencePresent !== true
+      && failedRejectedState === true;
+    const clearBankRejectedNoPayment = confirmedProviderRejection !== true
+      && providerResponseConfirmed === true
+      && providerStrictAcceptanceEvidencePresent !== true
+      && providerTransactionEvidencePresent !== true
+      && failedRejectedState === true;
+    const clearReturnedOrRevertedPayment = returnedOrRevertedState === true
+      && alreadyReleased !== true
+      && releaseInProgress !== true;
+    const safeManualRecoveryAvailable = (clearProviderRejectedNoPayment || clearBankRejectedNoPayment || clearReturnedOrRevertedPayment)
+      && alreadyReleased !== true
+      && releaseInProgress !== true;
     const manualResolutionMetadataAvailable = providerDiagnostic.manual_resolution_available === true || providerDiagnostic.manualResolutionAvailable === true || providerDiagnostic.manual_resolution_required === true || providerDiagnostic.manualResolutionRequired === true;
     const recoveryForDisplay = {
       ...recovery,
-      manualReleaseRequired: recovery.manualReleaseRequired || (
-        providerRejectedNoAcceptance &&
+      autoReleased: recovery.autoReleased === true,
+      manuallyReleased: recovery.manuallyReleased === true || providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE',
+      releaseInProgress,
+      manualReleaseRequired: recovery.manualReleaseRequired || safeManualRecoveryAvailable || (
+        confirmedProviderRejection &&
+        providerStrictAcceptanceEvidencePresent !== true &&
+        providerTransactionEvidencePresent !== true &&
         recovery.autoReleased !== true &&
         recovery.manuallyReleased !== true &&
         recovery.releaseInProgress !== true &&
         manualResolutionMetadataAvailable === true
       )
     };
-    const noPaymentRecoverable = providerRejectedNoAcceptance && recoveryForDisplay.manualReleaseRequired === true;
-    const providerActionLabel = actionTextForRecovery(recoveryForDisplay, providerDiagnostic.recommended_action || providerLabels.actionLabel);
-    const providerStatusLabel = statusTextForRecovery(recoveryForDisplay, providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? 'Resolved' : 'Needs review');
+    const noPaymentRecoverable = (clearProviderRejectedNoPayment || clearBankRejectedNoPayment) && recoveryForDisplay.manualReleaseRequired === true && recoveryForDisplay.autoReleased !== true && recoveryForDisplay.manuallyReleased !== true && recoveryForDisplay.releaseInProgress !== true;
+    const returnedRecoverable = clearReturnedOrRevertedPayment && recoveryForDisplay.manualReleaseRequired === true && recoveryForDisplay.autoReleased !== true && recoveryForDisplay.manuallyReleased !== true && recoveryForDisplay.releaseInProgress !== true;
+    const safeRecoverySelectable = noPaymentRecoverable || returnedRecoverable;
+    const providerActionLabel = recoveryForDisplay.autoReleased
+      ? 'Recheck the bank details and if correct, rerun Banking to pay this. The payment is ready to be paid on next run.'
+      : (recoveryForDisplay.releaseInProgress
+          ? 'Reversal/release is being processed.'
+          : (recoveryForDisplay.manuallyReleased
+              ? 'Payment has been released for the next Banking Pay run.'
+              : (returnedRecoverable
+                  ? 'The bank returned this payment. Select it to reverse/release the returned payment.'
+                  : (noPaymentRecoverable
+                      ? 'Recheck the bank details and if correct, reverse the payment and rerun Banking to pay this.'
+                      : actionTextForRecovery(recoveryForDisplay, providerDiagnostic.recommended_action || providerLabels.actionLabel)))));
+    const providerStatusLabel = recoveryForDisplay.autoReleased
+      ? 'Released for next run — auto'
+      : (recoveryForDisplay.releaseInProgress
+          ? 'Reversal in progress'
+          : (recoveryForDisplay.manuallyReleased
+              ? 'Released for next run — manual'
+              : (returnedRecoverable
+                  ? 'Needs reversal'
+                  : statusTextForRecovery(recoveryForDisplay, providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? 'Resolved' : 'Needs review'))));
+    const displayBankStatusLabel = returnedRecoverable || clearReturnedOrRevertedPayment ? 'Returned' : providerLabels.bankStatusLabel;
+    const displayWhatHappenedLabel = returnedRecoverable || clearReturnedOrRevertedPayment ? 'Bank returned the payment.' : providerLabels.whatHappenedLabel;
     const payeeEntityKind = toUpper(t.payee_entity_kind || t.payeeEntityKind || providerDiagnostic.payee_entity_kind || providerDiagnostic.entity_kind || fallback.payee_entity_kind || fallback.entity_kind || '');
     const payeeEntityId = toText(t.payee_entity_id || t.payeeEntityId || providerDiagnostic.payee_entity_id || providerDiagnostic.entity_id || fallback.payee_entity_id || fallback.entity_id || '');
     const bankDetailsHashSnapshot = toText(t.bank_details_hash_snapshot || t.bankDetailsHashSnapshot || providerDiagnostic.bank_details_hash_snapshot || providerDiagnostic.bank_details_hash || providerDiagnostic.bankDetailsHash || fallback.bank_details_hash_snapshot || fallback.bank_details_hash || '');
+    const railProvider = toUpper(t.rail_provider || t.railProvider || providerDiagnostic.rail_provider || providerDiagnostic.railProvider || fallback.rail_provider || fallback.railProvider || 'REVOLUT') || 'REVOLUT';
+    const railEnv = toUpper(t.rail_env || t.railEnv || providerDiagnostic.rail_env || providerDiagnostic.railEnv || fallback.rail_env || fallback.railEnv || 'PROD') || 'PROD';
+    const providerPayeeId = toText(t.provider_payee_id || t.providerPayeeId || t.payee_id || t.payeeId || providerDiagnostic.provider_payee_id || providerDiagnostic.payee_id || providerDiagnostic.payeeId || fallback.provider_payee_id || fallback.payee_id || '');
+    const providerPayeeAccountId = toText(t.provider_payee_account_id || t.providerPayeeAccountId || t.payee_account_id || t.payeeAccountId || providerDiagnostic.provider_payee_account_id || providerDiagnostic.payee_account_id || providerDiagnostic.payeeAccountId || fallback.provider_payee_account_id || fallback.payee_account_id || '');
     return {
       rowKey,
       candidateName,
@@ -22806,31 +22947,42 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       financeCaseIds,
       financeComponentIds,
       reservationIds,
-      bankStatusLabel: providerLabels.bankStatusLabel,
-      whatHappenedLabel: providerLabels.whatHappenedLabel,
+      bankStatusLabel: displayBankStatusLabel,
+      whatHappenedLabel: displayWhatHappenedLabel,
       actionLabel: providerActionLabel,
       statusLabel: providerStatusLabel,
-      selectable: noPaymentRecoverable,
-      selectableForApply: noPaymentRecoverable,
-      selectableForReview: providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && !recovery.autoReleased && !recovery.manuallyReleased,
+      selectable: safeRecoverySelectable,
+      selectableForApply: safeRecoverySelectable,
+      selectableForReview: providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && !recoveryForDisplay.autoReleased && !recoveryForDisplay.manuallyReleased && !recoveryForDisplay.releaseInProgress,
       selected: false,
-      manualActionAvailable: noPaymentRecoverable,
-      manual_action_available: noPaymentRecoverable,
+      manualActionAvailable: safeRecoverySelectable,
+      manual_action_available: safeRecoverySelectable,
       blockerText: providerActionLabel,
       sortCandidateName: candidateName.toLowerCase(),
       sortUmbrellaName: umbrellaName.toLowerCase(),
       sortAmount: paymentAmount,
-      sortBankStatus: providerLabels.bankStatusLabel.toLowerCase(),
+      sortBankStatus: displayBankStatusLabel.toLowerCase(),
       backendClassification: providerSubmitStatus,
-      backendAction: noPaymentRecoverable ? 'UNWIND_FAILED_PAYMENT' : 'REVIEW_PROVIDER_SUBMIT_DIAGNOSTIC',
-      recoveryActionType: noPaymentRecoverable ? 'NO_PAYMENT_RELEASE_UNWIND' : (recoveryForDisplay.autoReleased || recoveryForDisplay.manuallyReleased ? 'ALREADY_RELEASED' : (recoveryForDisplay.releaseInProgress ? 'RELEASE_IN_PROGRESS' : 'MANUAL_REVIEW_REQUIRED')),
-      recovery_action_type: noPaymentRecoverable ? 'NO_PAYMENT_RELEASE_UNWIND' : (recoveryForDisplay.autoReleased || recoveryForDisplay.manuallyReleased ? 'ALREADY_RELEASED' : (recoveryForDisplay.releaseInProgress ? 'RELEASE_IN_PROGRESS' : 'MANUAL_REVIEW_REQUIRED')),
-      issueKindForDisplay: noPaymentRecoverable ? 'REJECTED' : 'PROVIDER_SUBMIT_REVIEW',
+      backendAction: safeRecoverySelectable ? (returnedRecoverable ? 'REVERSE_SETTLED_PAYMENT' : 'UNWIND_FAILED_PAYMENT') : 'REVIEW_PROVIDER_SUBMIT_DIAGNOSTIC',
+      recoveryActionType: safeRecoverySelectable ? (returnedRecoverable ? 'RETURNED_PAYMENT_REVERSAL' : 'NO_PAYMENT_RELEASE_UNWIND') : (recoveryForDisplay.autoReleased || recoveryForDisplay.manuallyReleased ? 'ALREADY_RELEASED' : (recoveryForDisplay.releaseInProgress ? 'RELEASE_IN_PROGRESS' : 'MANUAL_REVIEW_REQUIRED')),
+      recovery_action_type: safeRecoverySelectable ? (returnedRecoverable ? 'RETURNED_PAYMENT_REVERSAL' : 'NO_PAYMENT_RELEASE_UNWIND') : (recoveryForDisplay.autoReleased || recoveryForDisplay.manuallyReleased ? 'ALREADY_RELEASED' : (recoveryForDisplay.releaseInProgress ? 'RELEASE_IN_PROGRESS' : 'MANUAL_REVIEW_REQUIRED')),
+      issueKindForDisplay: returnedRecoverable ? 'RETURNED' : (safeRecoverySelectable ? 'REJECTED' : 'PROVIDER_SUBMIT_REVIEW'),
       issue_type: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
       issueType: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
       providerSubmitDiagnostic: providerDiagnostic,
       provider_acceptance_evidence_present: providerStrictAcceptanceEvidencePresent,
+      provider_transaction_evidence_present: providerTransactionEvidencePresent,
+      provider_response_confirmed: providerResponseConfirmed,
+      provider_request_sent: providerRequestSent,
       provider_submission_status: providerSubmitStatus,
+      clearProviderRejectedNoPayment,
+      clear_provider_rejected_no_payment: clearProviderRejectedNoPayment,
+      clearBankRejectedNoPayment,
+      clear_bank_rejected_no_payment: clearBankRejectedNoPayment,
+      clearReturnedOrRevertedPayment,
+      clear_returned_or_reverted_payment: clearReturnedOrRevertedPayment,
+      safeManualRecoveryAvailable,
+      safe_manual_recovery_available: safeManualRecoveryAvailable,
       provider_error_code: providerDiagnostic.provider_error_code || null,
       provider_error_message_redacted: providerDiagnostic.provider_error_message_redacted || null,
       provider_http_status: providerDiagnostic.provider_http_status || null,
@@ -22840,6 +22992,14 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       payee_entity_id: payeeEntityId,
       bankDetailsHashSnapshot,
       bank_details_hash_snapshot: bankDetailsHashSnapshot,
+      railProvider,
+      rail_provider: railProvider,
+      railEnv,
+      rail_env: railEnv,
+      providerPayeeId: providerPayeeId || null,
+      provider_payee_id: providerPayeeId || null,
+      providerPayeeAccountId: providerPayeeAccountId || null,
+      provider_payee_account_id: providerPayeeAccountId || null,
       recoveryStatus: recovery.status || null,
       recovery_status: recovery.status || null,
       recoveryAction: recovery.action || null,
@@ -22850,8 +23010,8 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       manually_released: recoveryForDisplay.manuallyReleased,
       releaseInProgress: recoveryForDisplay.releaseInProgress,
       release_in_progress: recoveryForDisplay.releaseInProgress,
-      manualRecoverable: noPaymentRecoverable,
-      manual_recoverable: noPaymentRecoverable,
+      manualRecoverable: safeRecoverySelectable,
+      manual_recoverable: safeRecoverySelectable,
       operation_id: operationId || null,
       chunk_id: chunkId || null,
       transfer_id: transferId || null,
@@ -49093,6 +49253,7 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
 }
 
 
+
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -54099,11 +54260,137 @@ const retryBlockedFundsPipeline = async () => {
                 if (providerSubmitHasAcceptanceEvidence({ ...row, provider_submit_diagnostic: diagnostic })) return true;
                 const bankStatus = String(row?.bankStatusLabel || row?.bank_status_label || row?.statusLabel || row?.status_label || row?.status || '').trim().toUpperCase();
                 const issueKind = String(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '').trim().toUpperCase();
-                const backendAction = String(row?.backendAction || row?.backend_action || '').trim().toUpperCase();
                 return ['PAID', 'SUCCESSFUL', 'SUBMITTED', 'ACCEPTED', 'COMMITTED', 'SETTLED'].includes(bankStatus) ||
-                  ['PAID', 'NONE', 'CLEAN_PAID', 'SETTLED_NO_CORRECTION_REQUIRED'].includes(issueKind) ||
-                  backendAction === 'REVERSE_SETTLED_PAYMENT';
+                  ['PAID', 'NONE', 'CLEAN_PAID', 'SETTLED_NO_CORRECTION_REQUIRED'].includes(issueKind);
               };
+
+              const rowLooksReturnedOrReverted = (row, diagnostic) => {
+                const context = {
+                  ...(issueState && typeof issueState === 'object' ? issueState : {}),
+                  ...(row && typeof row === 'object' ? row : {}),
+                  provider_submit_diagnostic: diagnostic
+                };
+                const stateTexts = [];
+                const pushState = (value) => {
+                  const text = String(value == null ? '' : value).trim().toUpperCase();
+                  if (text) stateTexts.push(text);
+                };
+                for (const source of [context, diagnostic, row]) {
+                  if (!source || typeof source !== 'object') continue;
+                  pushState(source.issueKindForDisplay || source.issue_kind_for_display || source.issue_kind);
+                  pushState(source.backendClassification || source.backend_classification);
+                  pushState(source.backendAction || source.backend_action);
+                  pushState(source.bankStatusLabel || source.bank_status_label);
+                  pushState(source.statusLabel || source.status_label || source.status);
+                  pushState(source.rail_state || source.railState);
+                  pushState(source.recovery_action_type || source.recoveryActionType);
+                  pushState(source.recovery_action || source.recoveryAction);
+                }
+                const returnedStates = new Set([
+                  'RETURNED',
+                  'REVERTED',
+                  'SETTLED_RETURNED',
+                  'BANK_RETURNED_PAYMENT',
+                  'TRUE_SETTLED_REVERSAL_REQUIRED',
+                  'RETURNED_PAYMENT_REVERSAL',
+                  'REVERSE_SETTLED_PAYMENT'
+                ]);
+                return stateTexts.some((value) => returnedStates.has(value));
+              };
+
+              const rowLooksAlreadyReleasedOrInProgress = (row, diagnostic) => {
+                const sources = [row, diagnostic, issueState];
+                for (const source of sources) {
+                  if (!source || typeof source !== 'object') continue;
+                  if (readProviderSubmitBool(source.autoReleased ?? source.auto_released ?? source.auto_released_for_next_run) === true) return true;
+                  if (readProviderSubmitBool(source.manuallyReleased ?? source.manually_released ?? source.manually_released_for_next_run) === true) return true;
+                  if (readProviderSubmitBool(source.releaseInProgress ?? source.release_in_progress) === true) return true;
+                  const providerStatus = providerSubmitStatusFromDiagnostic(source);
+                  if (providerStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') return true;
+                  const recoveryStatus = String(source.recovery_status || source.recoveryStatus || '').trim().toUpperCase();
+                  const recoveryAction = String(source.recovery_action || source.recoveryAction || source.recovery_action_type || source.recoveryActionType || '').trim().toUpperCase();
+                  if ([
+                    'AUTO_RELEASED_FOR_NEXT_RUN',
+                    'AUTO_RELEASED',
+                    'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS',
+                    'MANUALLY_RELEASED_FOR_NEXT_RUN',
+                    'MANUAL_RELEASED_FOR_NEXT_RUN',
+                    'MANUAL_RELEASED',
+                    'ALREADY_RELEASED',
+                    'MANUAL_RESOLVED_NO_PAYMENT_MADE'
+                  ].includes(recoveryStatus)) return true;
+                  if ([
+                    'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS',
+                    'AUTO_RELEASED_FOR_NEXT_RUN',
+                    'MANUALLY_RELEASED_FOR_NEXT_RUN',
+                    'ALREADY_RELEASED'
+                  ].includes(recoveryAction)) return true;
+                  if ([
+                    'AUTO_RELEASE_REQUESTED',
+                    'AUTO_RELEASE_IN_PROGRESS',
+                    'REVERSAL_IN_PROGRESS',
+                    'RELEASE_IN_PROGRESS'
+                  ].includes(recoveryStatus)) return true;
+                  if ([
+                    'AUTO_RELEASE_IN_PROGRESS',
+                    'REVERSAL_IN_PROGRESS',
+                    'RELEASE_IN_PROGRESS'
+                  ].includes(recoveryAction)) return true;
+                  for (const obj of providerSubmitCollectDiagnosticSources(source)) {
+                    const nestedStatus = String(obj.recovery_status || obj.recoveryStatus || '').trim().toUpperCase();
+                    const nestedAction = String(obj.recovery_action || obj.recoveryAction || obj.recovery_action_type || obj.recoveryActionType || '').trim().toUpperCase();
+                    if (readProviderSubmitBool(obj.autoReleased ?? obj.auto_released) === true) return true;
+                    if (readProviderSubmitBool(obj.manuallyReleased ?? obj.manually_released) === true) return true;
+                    if (readProviderSubmitBool(obj.releaseInProgress ?? obj.release_in_progress) === true) return true;
+                    if ([
+                      'AUTO_RELEASED_FOR_NEXT_RUN',
+                      'AUTO_RELEASED',
+                      'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS',
+                      'MANUALLY_RELEASED_FOR_NEXT_RUN',
+                      'MANUAL_RELEASED_FOR_NEXT_RUN',
+                      'MANUAL_RELEASED',
+                      'ALREADY_RELEASED',
+                      'MANUAL_RESOLVED_NO_PAYMENT_MADE'
+                    ].includes(nestedStatus)) return true;
+                    if ([
+                      'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS',
+                      'AUTO_RELEASED_FOR_NEXT_RUN',
+                      'MANUALLY_RELEASED_FOR_NEXT_RUN',
+                      'ALREADY_RELEASED',
+                      'AUTO_RELEASE_IN_PROGRESS',
+                      'REVERSAL_IN_PROGRESS',
+                      'RELEASE_IN_PROGRESS'
+                    ].includes(nestedAction)) return true;
+                  }
+                }
+                return false;
+              };
+
+              const rowHasProviderTransactionEvidence = (row, diagnostic) => {
+                return providerSubmitTransactionIdentifierPresent({ ...(row && typeof row === 'object' ? row : {}), provider_submit_diagnostic: diagnostic }) === true ||
+                  providerSubmitTransactionIdentifierPresent(diagnostic) === true ||
+                  providerSubmitTransactionIdentifierPresent(row) === true;
+              };
+
+              const invalidReturnedRows = rowsForResolution.filter((row) => rowLooksReturnedOrReverted(row, diagnosticForRow(row)));
+              if (invalidReturnedRows.length) {
+                await showProviderSubmitResolutionNotice({
+                  title: 'Use returned-payment reversal',
+                  message: 'One or more selected payments appear to have been returned or reverted after bank processing. Use the returned-payment reversal action rather than no-payment release.',
+                  confirmClass: 'btn btn-primary'
+                });
+                return;
+              }
+
+              const invalidReleasedRows = rowsForResolution.filter((row) => rowLooksAlreadyReleasedOrInProgress(row, diagnosticForRow(row)));
+              if (invalidReleasedRows.length) {
+                await showProviderSubmitResolutionNotice({
+                  title: 'Selected payment already released',
+                  message: 'One or more selected payments have already been released for the next run or have a release/reversal in progress.',
+                  confirmClass: 'btn btn-primary'
+                });
+                return;
+              }
 
               const invalidAcceptedRows = rowsForResolution.filter((row) => rowLooksAcceptedOrSuccessful(row, diagnosticForRow(row)));
               if (invalidAcceptedRows.length) {
@@ -54125,6 +54412,15 @@ const retryBlockedFundsPipeline = async () => {
                 const providerStatus = providerSubmitStatusFromDiagnostic(providerSubmitResolutionContext) || providerSubmitStatusFromDiagnostic(diagnostic) || providerSubmitStatusFromDiagnostic(row) || providerSubmitStatusFromDiagnostic(issueState);
                 const providerReviewReason = providerSubmitReviewReasonFromDiagnostic(providerSubmitResolutionContext) || providerSubmitReviewReasonFromDiagnostic(diagnostic) || providerSubmitReviewReasonFromDiagnostic(row) || providerSubmitReviewReasonFromDiagnostic(issueState);
 
+                const transferIds = uniqueTexts([
+                  collectRowValues(row, ['payBankTransferIds', 'pay_bank_transfer_ids', 'payBankTransferId', 'pay_bank_transfer_id', 'transfer_id', 'transferId']),
+                  collectRowValues(diagnostic, ['pay_bank_transfer_ids', 'payBankTransferIds', 'pay_bank_transfer_id', 'payBankTransferId', 'transfer_ids', 'transferIds', 'transfer_id', 'transferId'])
+                ]);
+                const itemIds = uniqueTexts([
+                  collectRowValues(row, ['payBatchItemIds', 'pay_batch_item_ids', 'payBatchItemId', 'pay_batch_item_id', 'item_id', 'itemId']),
+                  collectRowValues(diagnostic, ['pay_batch_item_ids', 'payBatchItemIds', 'pay_batch_item_id', 'payBatchItemId', 'item_id', 'itemId'])
+                ]);
+
                 const providerManualResolutionAvailable = (() => {
                   for (const source of [providerSubmitResolutionContext, diagnostic, row, issueState]) {
                     if (!source || typeof source !== 'object') continue;
@@ -54145,17 +54441,42 @@ const retryBlockedFundsPipeline = async () => {
                   }
                   return false;
                 })();
+
                 const providerAccepted = providerSubmitHasAcceptanceEvidence(providerSubmitResolutionContext);
-                const staleEligible = providerStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK' && providerReviewReason === 'STALE_RUNNING_PROVIDER_SUBMIT_CHUNK' && providerManualResolutionAvailable === true && providerAccepted !== true;
-                const rejectedEligible = providerStatus === 'PROVIDER_SUBMISSION_REJECTED' && providerAccepted !== true && providerManualResolutionAvailable === true;
-                const transferIds = uniqueTexts([
-                  collectRowValues(row, ['payBankTransferIds', 'pay_bank_transfer_ids', 'payBankTransferId', 'pay_bank_transfer_id', 'transfer_id', 'transferId']),
-                  collectRowValues(diagnostic, ['pay_bank_transfer_ids', 'payBankTransferIds', 'pay_bank_transfer_id', 'payBankTransferId', 'transfer_ids', 'transferIds', 'transfer_id', 'transferId'])
-                ]);
-                const itemIds = uniqueTexts([
-                  collectRowValues(row, ['payBatchItemIds', 'pay_batch_item_ids', 'payBatchItemId', 'pay_batch_item_id', 'item_id', 'itemId']),
-                  collectRowValues(diagnostic, ['pay_batch_item_ids', 'payBatchItemIds', 'pay_batch_item_id', 'payBatchItemId', 'item_id', 'itemId'])
-                ]);
+                const providerTransactionEvidencePresent = providerAccepted === true || rowHasProviderTransactionEvidence(row, diagnostic);
+                const alreadyReleasedOrInProgress = rowLooksAlreadyReleasedOrInProgress(row, diagnostic);
+                const rowSuccessfulOrAccepted = rowLooksAcceptedOrSuccessful(row, diagnostic);
+                const providerRejectedStatus = providerStatus === 'PROVIDER_SUBMISSION_REJECTED' || providerReviewReason === 'PROVIDER_REJECTED_PAYMENT';
+                const bankStatus = String(row?.bankStatusLabel || row?.bank_status_label || row?.statusLabel || row?.status_label || row?.status || '').trim().toUpperCase();
+                const issueKind = String(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '').trim().toUpperCase();
+                const backendAction = String(row?.backendAction || row?.backend_action || '').trim().toUpperCase();
+                const recoveryActionType = String(row?.recovery_action_type || row?.recoveryActionType || row?.recovery_action || row?.recoveryAction || '').trim().toUpperCase();
+                const clearProviderRejectedNoPayment = row.clearProviderRejectedNoPayment === true || row.clear_provider_rejected_no_payment === true || (
+                  providerRejectedStatus === true &&
+                  providerAccepted !== true &&
+                  providerTransactionEvidencePresent !== true &&
+                  transferIds.length > 0 &&
+                  alreadyReleasedOrInProgress !== true &&
+                  rowSuccessfulOrAccepted !== true
+                );
+                const clearBankRejectedNoPayment = row.clearBankRejectedNoPayment === true || row.clear_bank_rejected_no_payment === true || (
+                  providerRejectedStatus !== true &&
+                  providerAccepted !== true &&
+                  providerTransactionEvidencePresent !== true &&
+                  transferIds.length > 0 &&
+                  alreadyReleasedOrInProgress !== true &&
+                  rowSuccessfulOrAccepted !== true &&
+                  (
+                    backendAction === 'UNWIND_FAILED_PAYMENT' ||
+                    recoveryActionType === 'NO_PAYMENT_RELEASE_UNWIND' ||
+                    issueKind === 'REJECTED' ||
+                    bankStatus === 'REJECTED' ||
+                    bankStatus === 'NOT PAID' ||
+                    bankStatus === 'FAILED'
+                  )
+                );
+                const staleEligible = providerStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK' && providerReviewReason === 'STALE_RUNNING_PROVIDER_SUBMIT_CHUNK' && providerManualResolutionAvailable === true && providerAccepted !== true && alreadyReleasedOrInProgress !== true && rowSuccessfulOrAccepted !== true;
+                const rejectedEligible = (clearProviderRejectedNoPayment === true || clearBankRejectedNoPayment === true) && providerTransactionEvidencePresent !== true && transferIds.length > 0;
                 const operationId = String(
                   row.operation_id ||
                   row.operationId ||
@@ -54170,6 +54491,12 @@ const retryBlockedFundsPipeline = async () => {
                   providerStatus,
                   providerReviewReason,
                   providerManualResolutionAvailable,
+                  providerAccepted,
+                  providerTransactionEvidencePresent,
+                  alreadyReleasedOrInProgress,
+                  rowSuccessfulOrAccepted,
+                  clearProviderRejectedNoPayment,
+                  clearBankRejectedNoPayment,
                   staleEligible,
                   rejectedEligible,
                   transferIds,
@@ -54182,7 +54509,7 @@ const retryBlockedFundsPipeline = async () => {
               if (eligibleRows.length !== rowEligibility.length) {
                 await showProviderSubmitResolutionNotice({
                   title: 'Provider review cannot be resolved here',
-                  message: 'This action is available only for stale provider-submit reviews or confirmed provider-rejected payments where no provider acceptance evidence exists. Refresh the batch and review the latest payment state.',
+                  message: 'This action is available only for stale provider-submit reviews or confirmed provider/bank-rejected payments where no provider acceptance or transaction evidence exists. Refresh the batch and review the latest payment state.',
                   confirmClass: 'btn btn-primary'
                 });
                 return;
@@ -54190,8 +54517,8 @@ const retryBlockedFundsPipeline = async () => {
 
               const selectedPayBankTransferIds = uniqueTexts(eligibleRows.flatMap((entry) => entry.transferIds));
               const selectedPayBatchItemIds = uniqueTexts(eligibleRows.flatMap((entry) => entry.itemIds));
-              const hasProviderRejectedRows = eligibleRows.some((entry) => entry.rejectedEligible);
-              if (hasProviderRejectedRows && selectedPayBankTransferIds.length <= 0) {
+              const hasRejectedNoPaymentRows = eligibleRows.some((entry) => entry.rejectedEligible);
+              if (hasRejectedNoPaymentRows && selectedPayBankTransferIds.length <= 0) {
                 await showProviderSubmitResolutionNotice({
                   title: 'Provider review cannot be resolved',
                   message: 'The failed payment transfer ID is missing. Refresh the batch and try again.',
@@ -54243,6 +54570,51 @@ const retryBlockedFundsPipeline = async () => {
               const resolutionScope = selectedPayBankTransferIds.length > 1
                 ? 'selected_payments'
                 : (selectedPayBankTransferIds.length === 1 ? 'single_payment' : 'whole_batch');
+
+              if (resolutionScope === 'whole_batch') {
+                const allIssueRows = correctionState.rows.filter((row) => row && typeof row === 'object');
+                const selectedKeys = new Set(rowsForResolution.map((row) => String(row?.rowKey || row?.row_key || '').trim()).filter(Boolean));
+                const hasAnyId = (row, keys = []) => keys.some((key) => {
+                  const value = row ? row[key] : null;
+                  if (Array.isArray(value)) return value.some((entry) => String(entry == null ? '' : entry).trim());
+                  return String(value == null ? '' : value).trim() !== '';
+                });
+                const wholeBatchPaymentRows = allIssueRows.filter((row) => {
+                  const issueKind = String(row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || '').trim().toUpperCase();
+                  const bankStatus = String(row.bankStatusLabel || row.bank_status_label || row.statusLabel || row.status_label || row.status || '').trim().toUpperCase();
+                  if (['DRAFT_REMOVE', 'MANUAL_PAID_ACTION'].includes(issueKind)) return false;
+                  if (issueKind || bankStatus) return true;
+                  if (row.manualActionAvailable === true || row.manual_action_available === true || row.selectableForApply === true || row.selectableForReview === true) return true;
+                  if (row.providerSubmitDiagnostic || row.provider_submit_diagnostic) return true;
+                  return hasAnyId(row, [
+                    'payBankTransferIds', 'pay_bank_transfer_ids', 'payBankTransferId', 'pay_bank_transfer_id',
+                    'payBatchItemIds', 'pay_batch_item_ids', 'payBatchItemId', 'pay_batch_item_id'
+                  ]);
+                });
+                const wholeBatchUnsafeRows = wholeBatchPaymentRows.filter((row) => {
+                  const diagnostic = diagnosticForRow(row);
+                  return rowLooksAcceptedOrSuccessful(row, diagnostic) === true ||
+                    rowHasProviderTransactionEvidence(row, diagnostic) === true ||
+                    rowLooksReturnedOrReverted(row, diagnostic) === true ||
+                    rowLooksAlreadyReleasedOrInProgress(row, diagnostic) === true;
+                });
+                const wholeBatchDetailedRows = wholeBatchPaymentRows.filter((row) => hasAnyId(row, [
+                  'payBankTransferIds', 'pay_bank_transfer_ids', 'payBankTransferId', 'pay_bank_transfer_id',
+                  'payBatchItemIds', 'pay_batch_item_ids', 'payBatchItemId', 'pay_batch_item_id'
+                ]));
+                const wholeBatchUnselectedRows = wholeBatchDetailedRows.filter((row) => {
+                  const rowKeyCurrent = String(row?.rowKey || row?.row_key || '').trim();
+                  return rowKeyCurrent && !selectedKeys.has(rowKeyCurrent);
+                });
+                if (wholeBatchUnsafeRows.length > 0 || wholeBatchUnselectedRows.length > 0) {
+                  await showProviderSubmitResolutionNotice({
+                    title: 'Resolve selected payments instead',
+                    message: 'Whole-batch no-payment resolution is only available when every payment in the batch is failed/rejected/no-payment eligible and no payment has acceptance, successful, returned, released, or transaction evidence. Resolve the failed selected payments individually instead.',
+                    confirmClass: 'btn btn-primary'
+                  });
+                  return;
+                }
+              }
               const selectedProviderIssue = {
                 ...issueState,
                 ...primaryRow,
