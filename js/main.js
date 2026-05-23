@@ -39119,7 +39119,6 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
   );
 }
 
-
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -40000,6 +39999,7 @@ function renderPayNewBatchWizard() {
     if (info.isIndefinite) return '';
     const candidateId = trimStr(line?.candidate_id);
     if (!candidateId) return '';
+    if (line?.__payee_readiness_blocker === true) return '';
     const actionLabel = info.isDated ? 'Manage snooze' : 'Snooze';
     const actionName = info.isDated ? 'banking:pay:manageSnooze' : 'banking:pay:openSnooze';
     const lineType = upperTrim(line?.line_type || '');
@@ -40410,6 +40410,231 @@ function renderPayNewBatchWizard() {
     return [];
   })();
 
+  const payeeReadinessBlockerCodes = new Set([
+    'BLOCKED_BANK_DETAILS',
+    'BLOCKED_NAME_CHECK',
+    'BLOCKED_NO_PAYEE_MAP',
+    'BLOCKED_UMBRELLA_INACTIVE'
+  ]);
+  const payeeReadinessRunningStates = new Set(['QUEUED', 'RUNNING', 'PENDING', 'IN_PROGRESS']);
+  const payeeReadinessFailedStates = new Set(['FAILED', 'ERROR']);
+  const payeeRouteKeyFrom = (obj, fallback = null) => {
+    const entityKind = upperTrim(
+      obj?.payee_entity_kind ||
+      obj?.payeeEntityKind ||
+      obj?.entity_kind ||
+      obj?.entityKind ||
+      fallback?.payee_entity_kind ||
+      fallback?.payeeEntityKind ||
+      fallback?.entity_kind ||
+      fallback?.entityKind ||
+      ''
+    );
+    const entityId = trimStr(
+      obj?.payee_entity_id ||
+      obj?.payeeEntityId ||
+      obj?.entity_id ||
+      obj?.entityId ||
+      fallback?.payee_entity_id ||
+      fallback?.payeeEntityId ||
+      fallback?.entity_id ||
+      fallback?.entityId ||
+      ''
+    );
+    const bankDetailsHash = trimStr(
+      obj?.bank_details_hash ||
+      obj?.bankDetailsHash ||
+      obj?.payee_bank_hash ||
+      obj?.payeeBankHash ||
+      obj?.bank_details_hash_snapshot ||
+      obj?.bankDetailsHashSnapshot ||
+      obj?.snapshot_bank_details_hash ||
+      obj?.snapshotBankDetailsHash ||
+      fallback?.bank_details_hash ||
+      fallback?.bankDetailsHash ||
+      fallback?.payee_bank_hash ||
+      fallback?.payeeBankHash ||
+      fallback?.bank_details_hash_snapshot ||
+      fallback?.bankDetailsHashSnapshot ||
+      fallback?.snapshot_bank_details_hash ||
+      fallback?.snapshotBankDetailsHash ||
+      ''
+    );
+    if (entityKind && entityId) return `${entityKind}|${entityId}|${bankDetailsHash || 'NO_BANK_HASH'}`;
+    const candidateId = trimStr(obj?.candidate_id || obj?.candidateId || fallback?.candidate_id || fallback?.candidateId || '');
+    return candidateId ? `CANDIDATE_FALLBACK|${candidateId}` : '';
+  };
+  const collectPayeeReadinessBlockedLines = () => {
+    const out = [];
+    const seen = new Set();
+
+    const existingBlockedRouteKeys = new Set();
+    for (const line of asArray(blockedPreviewLines)) {
+      const key = payeeRouteKeyFrom(line, candidateMetaById.get(trimStr(line?.candidate_id)) || null);
+      if (key) existingBlockedRouteKeys.add(key);
+    }
+
+    const amountByCandidateId = new Map();
+    for (const line of asArray(canonicalPreviewLines)) {
+      if (!isPlainObject(line)) continue;
+      const candidateId = trimStr(line?.candidate_id);
+      if (!candidateId) continue;
+      const amount = toNum(getLineSectionAmount(line), 0);
+      if (!amount) continue;
+      amountByCandidateId.set(candidateId, Math.round(((amountByCandidateId.get(candidateId) || 0) + amount) * 100) / 100);
+    }
+
+    const sourcePayees = [
+      ...asArray(pv?.payees),
+      ...asArray(wiz.workbench?.payees),
+      ...asArray(pv?.non_paye_payees),
+      ...asArray(pv?.nonPayePayees),
+      ...asArray(pv?.paye_candidates),
+      ...asArray(pv?.payeCandidates)
+    ].filter((payee) => isPlainObject(payee));
+
+    const candidateIdsWithNonCandidatePayeeRoute = new Set();
+    for (const payee of sourcePayees) {
+      const candidateId = trimStr(payee?.candidate_id || payee?.candidateId || '');
+      if (!candidateId) continue;
+      const fallbackMeta = candidateMetaById.get(candidateId) || null;
+      const entityKind = upperTrim(
+        payee?.payee_entity_kind ||
+        payee?.payeeEntityKind ||
+        payee?.entity_kind ||
+        payee?.entityKind ||
+        fallbackMeta?.payee_entity_kind ||
+        ''
+      );
+      const entityId = trimStr(
+        payee?.payee_entity_id ||
+        payee?.payeeEntityId ||
+        payee?.entity_id ||
+        payee?.entityId ||
+        fallbackMeta?.payee_entity_id ||
+        ''
+      );
+      if (entityKind && entityKind !== 'CANDIDATE' && entityId) {
+        candidateIdsWithNonCandidatePayeeRoute.add(candidateId);
+      }
+    }
+
+    for (const payee of sourcePayees) {
+      const candidateId = trimStr(payee?.candidate_id || payee?.candidateId || '');
+      const fallbackMeta = candidateMetaById.get(candidateId) || null;
+      const sourceEntityKind = upperTrim(
+        payee?.payee_entity_kind ||
+        payee?.payeeEntityKind ||
+        payee?.entity_kind ||
+        payee?.entityKind ||
+        fallbackMeta?.payee_entity_kind ||
+        ''
+      );
+      if (sourceEntityKind === 'CANDIDATE' && candidateId && candidateIdsWithNonCandidatePayeeRoute.has(candidateId)) {
+        continue;
+      }
+      const blockers = parseBlockerCodes(payee?.blockers);
+      const payeeReadinessBlockers = blockers.filter((code) => payeeReadinessBlockerCodes.has(code));
+      const readinessStatus = upperTrim(
+        payee?.payee_readiness_status ||
+        payee?.readiness_status ||
+        payee?.payee_setup_status ||
+        payee?.payee_readiness_job_status ||
+        payee?.readiness_job_status ||
+        payee?.latest_payee_readiness_job_status ||
+        payee?.latest_job_status ||
+        ''
+      );
+      const latestJobType = upperTrim(payee?.latest_job_type || payee?.job_type || '');
+      const hasReadinessJobState = latestJobType === 'PAYEE_READINESS_ENSURE' && (
+        payeeReadinessRunningStates.has(readinessStatus) ||
+        payeeReadinessFailedStates.has(readinessStatus)
+      );
+      if (payeeReadinessBlockers.length <= 0 && !hasReadinessJobState) continue;
+
+      const key = payeeRouteKeyFrom(payee, fallbackMeta);
+      if (!key || seen.has(key) || existingBlockedRouteKeys.has(key)) continue;
+      seen.add(key);
+
+      const entityKind = upperTrim(
+        payee?.payee_entity_kind ||
+        payee?.payeeEntityKind ||
+        payee?.entity_kind ||
+        payee?.entityKind ||
+        fallbackMeta?.payee_entity_kind ||
+        ''
+      );
+      const entityId = trimStr(
+        payee?.payee_entity_id ||
+        payee?.payeeEntityId ||
+        payee?.entity_id ||
+        payee?.entityId ||
+        fallbackMeta?.payee_entity_id ||
+        ''
+      );
+      const bankDetailsHash = getExactBankTargetHash(payee, fallbackMeta);
+      const nameCheck = isPlainObject(payee?.name_check) ? payee.name_check : {};
+      const payeeMap = isPlainObject(payee?.payee_map) ? payee.payee_map : {};
+      const amountValues = [
+        payee?.section_amount_display,
+        payee?.section_amount_ex_vat,
+        payee?.amount_display,
+        payee?.amount_ex_vat,
+        payee?.safe_amount_ex,
+        payee?.safe_amount_inc_vat,
+        candidateId ? amountByCandidateId.get(candidateId) : undefined
+      ];
+      let amount = undefined;
+      for (const value of amountValues) {
+        if (value === undefined || value === null) continue;
+        if (typeof value === 'string' && !trimStr(value)) continue;
+        amount = value;
+        break;
+      }
+
+      out.push({
+        __payee_readiness_blocker: true,
+        __payee_route_key: key,
+        line_type: 'PAYEE_READINESS',
+        presentation_section: 'BLOCKED_FOR_PAY',
+        readiness_state: 'BLOCKED_FOR_PAY',
+        candidate_id: candidateId,
+        display_name: trimStr(payee?.display_name || payee?.candidate_name || payee?.payee_name || fallbackMeta?.display_name || ''),
+        tms_ref: trimStr(payee?.tms_ref || fallbackMeta?.tms_ref || ''),
+        client_name: trimStr(payee?.client_name || ''),
+        pay_channel: upperTrim(payee?.pay_channel || payee?.current_pay_method || fallbackMeta?.current_pay_method || (entityKind === 'UMBRELLA' ? 'UMBRELLA' : '')),
+        current_pay_method: upperTrim(payee?.current_pay_method || payee?.pay_channel || fallbackMeta?.current_pay_method || (entityKind === 'UMBRELLA' ? 'UMBRELLA' : '')),
+        payee_entity_kind: entityKind,
+        payee_entity_id: entityId,
+        bank_details_hash: bankDetailsHash,
+        payee_bank_hash: trimStr(payee?.payee_bank_hash || payee?.payeeBankHash || bankDetailsHash || ''),
+        bank_details_hash_snapshot: trimStr(payee?.bank_details_hash_snapshot || payee?.bankDetailsHashSnapshot || bankDetailsHash || ''),
+        snapshot_bank_details_hash: trimStr(payee?.snapshot_bank_details_hash || payee?.snapshotBankDetailsHash || bankDetailsHash || ''),
+        blockers: payeeReadinessBlockers,
+        name_check_status: upperTrim(payee?.name_check_status || nameCheck?.status || ''),
+        name_check_has_override: Object.prototype.hasOwnProperty.call(payee, 'name_check_has_override')
+          ? asBool(payee?.name_check_has_override)
+          : asBool(nameCheck?.has_override),
+        payee_map_present: Object.prototype.hasOwnProperty.call(payee, 'payee_map_present')
+          ? asBool(payee?.payee_map_present)
+          : asBool(payeeMap?.present),
+        payee_readiness_status: readinessStatus,
+        payee_readiness_job_status: upperTrim(payee?.payee_readiness_job_status || payee?.readiness_job_status || ''),
+        latest_job_type: latestJobType,
+        latest_job_status: upperTrim(payee?.latest_job_status || ''),
+        is_ready_for_draft: false,
+        section_amount_display: amount == null ? undefined : amount,
+        section_amount_ex_vat: amount == null ? undefined : amount,
+        amount_display: amount == null ? undefined : amount,
+        amount_ex_vat: amount == null ? undefined : amount
+      });
+    }
+
+    return out;
+  };
+  const payeeReadinessBlockedLines = collectPayeeReadinessBlockedLines();
+  const blockedLinesForDisplay = [...blockedPreviewLines, ...payeeReadinessBlockedLines];
+
   const groupEntriesByCandidate = (arr) => {
     const map = new Map();
     for (const entry of arr) {
@@ -40795,9 +41020,9 @@ function renderPayNewBatchWizard() {
   const casePreviewLinesEnriched = asArray(caseResolutionDisplayState?.casePreviewLinesEnriched).filter((line) => isPlainObject(line));
 
   const readyLineAmountTotal = Math.round(readyPreviewLines.reduce((acc, line) => acc + toNum(getLineSectionAmount(line), 0), 0) * 100) / 100;
-  const blockedLineAmountTotal = Math.round(blockedPreviewLines.reduce((acc, line) => acc + toNum(getLineSectionAmount(line), 0), 0) * 100) / 100;
+  const blockedLineAmountTotal = Math.round(blockedLinesForDisplay.reduce((acc, line) => acc + toNum(getLineSectionAmount(line), 0), 0) * 100) / 100;
   const readyLineCandidateIds = new Set(readyPreviewLines.map((line) => trimStr(line?.candidate_id)).filter(Boolean));
-  const blockedLineCandidateIds = new Set(blockedPreviewLines.map((line) => trimStr(line?.candidate_id)).filter(Boolean));
+  const blockedLineCandidateIds = new Set(blockedLinesForDisplay.map((line) => trimStr(line?.candidate_id)).filter(Boolean));
   const readyPayeCandidateIds = new Set(readyPreviewLines.filter((line) => upperTrim(line?.pay_channel || candidateMetaById.get(trimStr(line?.candidate_id))?.current_pay_method || '') === 'PAYE').map((line) => trimStr(line?.candidate_id)).filter(Boolean));
   const readyUmbrellaCandidateIds = new Set(readyPreviewLines.filter((line) => {
     const method = upperTrim(line?.pay_channel || candidateMetaById.get(trimStr(line?.candidate_id))?.current_pay_method || '');
@@ -41327,14 +41552,13 @@ function renderPayNewBatchWizard() {
           </div>
 
           ${renderCasesSection(casePreviewLinesEnriched, caseGroups)}
-          ${renderBlockedSection(blockedPreviewLines, [])}
+          ${renderBlockedSection(blockedLinesForDisplay, [])}
           ${hiddenWorkbenchNoteHtml}
         </div>
       </div>
     </div>
   `;
 }
-
 
 
 function deriveBankingAttentionStateFromBatchList(input) {
