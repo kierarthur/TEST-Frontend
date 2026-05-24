@@ -152017,6 +152017,40 @@ function renderBulkProcessEvidencePane(state) {
     !activeRealTimesheetId &&
     (!activeRowKey || activeRowKey === `contract_week:${activeContractWeekId}` || /^contract_week:/i.test(activeRowKey))
   );
+  const activeTimesheetRowKeyForRender = activeRealTimesheetId ? `timesheet:${trimStr(activeRealTimesheetId || '')}` : '';
+  const activeBulkProcessStageForRender = upper(
+    activeRow.section ||
+    activeRow.tools_stage ||
+    activeRow.summary_stage ||
+    activeRow.bulk_process_bucket ||
+    activeRow.effective_section ||
+    activeContext.section ||
+    activeContext.tools_stage ||
+    activeContext.summary_stage ||
+    activeContext.bulk_process_bucket ||
+    activeContext.effective_section ||
+    activeContext.row?.section ||
+    activeContext.row?.tools_stage ||
+    activeContext.row?.summary_stage ||
+    activeContext.row?.bulk_process_bucket ||
+    activeContext.row?.effective_section ||
+    activeDetails.section ||
+    activeDetails.tools_stage ||
+    activeDetails.summary_stage ||
+    activeDetails.bulk_process_bucket ||
+    activeDetails.effective_section ||
+    ''
+  );
+  const activeProcessingStageForRender = upper(activeRow.processing_status || activeRow.processing_status_display || activeContext.processing_status || activeContext.processing_status_display || activeDetails.processing_status || activeDetails.processing_status_display || '');
+  const activeIsProcessedTimesheetIdentityForRender = !!(
+    !isBulkAuthoriseContext &&
+    activeRealTimesheetId &&
+    (
+      /^timesheet:/i.test(activeRowKey) ||
+      (!!activeTimesheetRowKeyForRender && activeRowKey === activeTimesheetRowKeyForRender)
+    ) &&
+    (activeBulkProcessStageForRender === 'PROCESSED' || activeProcessingStageForRender === 'PROCESSED')
+  );
 
   const activeIdentity = getActiveIdentity();
   const queueLoading = !!pane.__queue_loading;
@@ -152297,9 +152331,18 @@ function renderBulkProcessEvidencePane(state) {
       );
 
       if (isStaged) {
-        if (!activeIsContractWeekOnly) return;
-        if (!itemContractWeekId || itemContractWeekId !== trimStr(activeContractWeekId || '')) return;
-        if (itemTimesheetId) return;
+        const stagedRowKeyMatchesProcessedTimesheet = !!(
+          activeIsProcessedTimesheetIdentityForRender &&
+          itemRowKey &&
+          (itemRowKey === activeRowKey || (!!activeTimesheetRowKeyForRender && itemRowKey === activeTimesheetRowKeyForRender)) &&
+          (!itemContractWeekId || !activeContractWeekId || itemContractWeekId === trimStr(activeContractWeekId || '')) &&
+          (!itemTimesheetId || itemTimesheetId === trimStr(activeRealTimesheetId || ''))
+        );
+        if (!stagedRowKeyMatchesProcessedTimesheet) {
+          if (!activeIsContractWeekOnly) return;
+          if (!itemContractWeekId || itemContractWeekId !== trimStr(activeContractWeekId || '')) return;
+          if (itemTimesheetId) return;
+        }
       } else {
         if (item.queue_id && !item.evidence_id && !item.__primary_artifact_fallback && sourceLabel && sourceLabel !== 'ATTACHED') return;
         if (item.system === true && sourceLabel && sourceLabel !== 'ATTACHED') return;
@@ -152575,6 +152618,7 @@ function renderBulkProcessEvidencePane(state) {
     </div>
   `);
 }
+
 
 
 
@@ -155939,6 +155983,40 @@ function bindBulkProcessEvidencePane(state) {
       )
     );
     const activeScope = resolveActiveContractWeekEvidenceScope();
+    const activeTimesheetRowKeyForAttachedEvidence = activeScope.timesheetId ? `timesheet:${trimStr(activeScope.timesheetId || '')}` : '';
+    const activeBulkProcessStageForAttachedEvidence = upper(
+      activeRow.section ||
+      activeRow.tools_stage ||
+      activeRow.summary_stage ||
+      activeRow.bulk_process_bucket ||
+      activeRow.effective_section ||
+      activeContext.section ||
+      activeContext.tools_stage ||
+      activeContext.summary_stage ||
+      activeContext.bulk_process_bucket ||
+      activeContext.effective_section ||
+      activeContext.row?.section ||
+      activeContext.row?.tools_stage ||
+      activeContext.row?.summary_stage ||
+      activeContext.row?.bulk_process_bucket ||
+      activeContext.row?.effective_section ||
+      activeDetails.section ||
+      activeDetails.tools_stage ||
+      activeDetails.summary_stage ||
+      activeDetails.bulk_process_bucket ||
+      activeDetails.effective_section ||
+      ''
+    );
+    const activeProcessingStageForAttachedEvidence = upper(activeRow.processing_status || activeRow.processing_status_display || activeContext.processing_status || activeContext.processing_status_display || activeDetails.processing_status || activeDetails.processing_status_display || '');
+    const activeIsProcessedTimesheetScopeForAttachedEvidence = !!(
+      !isBulkAuthoriseContext &&
+      activeScope.timesheetId &&
+      (
+        /^timesheet:/i.test(activeScope.rowKey || '') ||
+        (!!activeTimesheetRowKeyForAttachedEvidence && activeScope.rowKey === activeTimesheetRowKeyForAttachedEvidence)
+      ) &&
+      (activeBulkProcessStageForAttachedEvidence === 'PROCESSED' || activeProcessingStageForAttachedEvidence === 'PROCESSED')
+    );
     const buildPrimaryArtifactFallbackRows = (...containers) => {
       const rows = [];
       for (const container of containers) {
@@ -156049,7 +156127,17 @@ function bindBulkProcessEvidencePane(state) {
       );
       if (!isBulkAuthoriseContext) {
         if (looksStaged) {
-          if (!activeScope.isContractWeekOnly || !itemContractWeekId || itemContractWeekId !== activeScope.contractWeekId || itemTimesheetId) return;
+          const stagedRowKeyMatchesProcessedTimesheet = !!(
+            activeIsProcessedTimesheetScopeForAttachedEvidence &&
+            itemRowKey &&
+            (itemRowKey === activeScope.rowKey || (!!activeTimesheetRowKeyForAttachedEvidence && itemRowKey === activeTimesheetRowKeyForAttachedEvidence)) &&
+            (!itemContractWeekId || !activeScope.contractWeekId || itemContractWeekId === activeScope.contractWeekId) &&
+            (!itemTimesheetId || itemTimesheetId === activeScope.timesheetId) &&
+            getAttachedEvidenceFileKey(item)
+          );
+          if (!stagedRowKeyMatchesProcessedTimesheet) {
+            if (!activeScope.isContractWeekOnly || !itemContractWeekId || itemContractWeekId !== activeScope.contractWeekId || itemTimesheetId) return;
+          }
         } else {
           const hasIdentity = !!(itemRowKey || itemTimesheetId || itemContractWeekId);
           const matchesRowKey = !!(itemRowKey && activeScope.rowKey && itemRowKey === activeScope.rowKey);
@@ -157332,6 +157420,11 @@ function bindBulkProcessEvidencePane(state) {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
+
+
+
+
+
 
 function normaliseBankingPayOperationProgress(operationPayload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
