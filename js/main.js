@@ -55904,6 +55904,21 @@ function renderBankingPayBatchChildModalOverview() {
     }
     return null;
   };
+  const pickCount = (source, keys) => {
+    const obj = asObj(source) || {};
+    const keyList = Array.isArray(keys) ? keys : [];
+    for (const key of keyList) {
+      if (!key) continue;
+      const direct = firstFiniteNonNegativeInteger(obj[key]);
+      if (direct !== null) return direct;
+      const camelKey = String(key).replace(/_([a-z])/g, (_, ch) => String(ch || '').toUpperCase());
+      if (camelKey && camelKey !== key) {
+        const camel = firstFiniteNonNegativeInteger(obj[camelKey]);
+        if (camel !== null) return camel;
+      }
+    }
+    return 0;
+  };
   const fmtMoney = (v) => {
     const n = Number(v);
     if (!Number.isFinite(n)) return '0.00';
