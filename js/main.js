@@ -17480,19 +17480,19 @@ async function runBulkTimesheetSelectionChunks(action, items, options = {}) {
   return aggregate;
 }
 
+
 function openBankingPayCorrectionConfirmModal(options = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const src = (options && typeof options === 'object') ? options : {};
-  const correctionState = (src.correctionState && typeof src.correctionState === 'object') ? src.correctionState : {};
-  const rows = Array.isArray(src.selectedRows) ? src.selectedRows : (Array.isArray(correctionState.rows) ? correctionState.rows.filter((r) => r && r.selected === true) : []);
+
+  const src = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const correctionState = (src.correctionState && typeof src.correctionState === 'object' && !Array.isArray(src.correctionState)) ? src.correctionState : {};
+  const rows = Array.isArray(src.selectedRows) ? src.selectedRows : (Array.isArray(correctionState.rows) ? correctionState.rows.filter((row) => row && row.selected === true) : []);
   const rawPlan = (src.currentPlan && typeof src.currentPlan === 'object' && !Array.isArray(src.currentPlan))
     ? src.currentPlan
     : ((correctionState.plan && typeof correctionState.plan === 'object' && !Array.isArray(correctionState.plan)) ? correctionState.plan : null);
-  const effectivePlan = (rawPlan && rawPlan.plan && typeof rawPlan.plan === 'object' && !Array.isArray(rawPlan.plan))
-    ? rawPlan.plan
-    : rawPlan;
+  const effectivePlan = (rawPlan && rawPlan.plan && typeof rawPlan.plan === 'object' && !Array.isArray(rawPlan.plan)) ? rawPlan.plan : rawPlan;
   const selection = (src.selection && typeof src.selection === 'object' && !Array.isArray(src.selection))
     ? src.selection
     : ((correctionState.selection && typeof correctionState.selection === 'object' && !Array.isArray(correctionState.selection)) ? correctionState.selection : null);
@@ -17500,9 +17500,12 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
   const currentSignature = (typeof getBankingPaymentIssueSelectionSignature === 'function')
     ? String(getBankingPaymentIssueSelectionSignature(selection || correctionState.selection) || '').trim()
     : selectionSignature;
-  const reason = String(src.reason || correctionState.reason || '').trim();
-  const reauthToken = String(src.reauthToken || correctionState.reauthToken || '').trim();
-  const reauthPurpose = String(src.reauthPurpose || 'PAYMENT_REVERSAL').trim();
+
+  const toText = (value) => String(value == null ? '' : value).trim();
+  const toUpper = (value) => toText(value).toUpperCase();
+  const reason = toText(src.reason || correctionState.reason || '');
+  const reauthToken = toText(src.reauthToken || correctionState.reauthToken || '');
+  const reauthPurpose = toText(src.reauthPurpose || 'PAYMENT_REVERSAL') || 'PAYMENT_REVERSAL';
   correctionState.reason = reason;
   correctionState.reauthToken = reauthToken;
   const confirmState = (correctionState.confirmModalState && typeof correctionState.confirmModalState === 'object' && !Array.isArray(correctionState.confirmModalState))
@@ -17510,27 +17513,30 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
     : {};
   correctionState.confirmModalState = confirmState;
   confirmState.submitting = false;
+
   const acceptedResolutionJson = src.acceptedResolutionJson || correctionState.acceptedResolutionJson || null;
   const reviewAccepted = !!acceptedResolutionJson;
-  const mode = String(src.mode || src.actionKind || effectivePlan?.requested_action || correctionState.selection?.requested_action || '').trim().toUpperCase();
-  const issueKind = String(src.issueKind || src.issueKindForDisplay || '').trim().toUpperCase();
   const batchPayload = (src.batchPayload && typeof src.batchPayload === 'object' && !Array.isArray(src.batchPayload)) ? src.batchPayload : {};
   const batchObj = (batchPayload.batch && typeof batchPayload.batch === 'object' && !Array.isArray(batchPayload.batch)) ? batchPayload.batch : {};
-  const toText = (value) => String(value == null ? '' : value).trim();
-  const toUpper = (value) => toText(value).toUpperCase();
-  const selectedHasManualPaidRow = rows.some((row) => {
-    const kind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    const happened = toUpper(row?.whatHappenedLabel || row?.what_happened_label || row?.what_happened || '');
-    const bankStatus = toUpper(row?.bankStatusLabel || row?.bank_status_label || row?.bank_status || '');
-    return kind === 'MANUAL_PAID_ACTION' || row?.manualActionAvailable === true || row?.manual_action_available === true || (bankStatus === 'PAID' && happened === 'PAID SUCCESSFULLY');
-  });
-  const rowIsDraftOnlyRemoval = (row) => {
-    const kind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    return row?.draftOnlyRemoval === true || row?.draft_only_removal === true || kind === 'DRAFT_REMOVE';
-  };
   const batchStatus = toUpper(batchObj.status || batchPayload.status || effectivePlan?.batch_status || effectivePlan?.batchStatus || '');
+  const modeRaw = toUpper(src.mode || src.actionKind || selection?.ui_action_type || selection?.uiActionType || selection?.requested_action || selection?.requestedAction || effectivePlan?.requested_action || effectivePlan?.requestedAction || correctionState.selection?.requested_action || '');
+
+  const normaliseUiAction = (value) => {
+    const action = toUpper(value);
+    if (action === 'REVERSE_SETTLED_PAYMENT') return 'CANDIDATE_RETURNED_FUNDS';
+    if (action === 'UNWIND_FAILED_PAYMENT') return 'RELEASE_FOR_NEXT_RUN';
+    if (action === 'REVERSE_SETTLED_REVERSAL') return 'REVERSE_RETURNED';
+    if (action === 'REVIEW_BANK_EVIDENCE') return 'RESOLVE_MANUALLY';
+    if (action === 'PRE_BANK_CANCEL') return 'CANCEL_PAYMENT_ATTEMPT';
+    return action;
+  };
+
+  const rowIsDraftOnlyRemoval = (row) => {
+    const kind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || row?.displayState || row?.display_state || '');
+    return row?.draftOnlyRemoval === true || row?.draft_only_removal === true || kind === 'DRAFT_REMOVE' || kind === 'CANCEL_PAYMENT_ATTEMPT';
+  };
+  const selectedRowsAreDraftOnly = rows.length > 0 && rows.every((row) => rowIsDraftOnlyRemoval(row));
   const selectionSourceContext = toUpper(selection?.source_context || selection?.sourceContext || '');
-  const selectionRequestedAction = toUpper(selection?.requested_action || selection?.requestedAction || '');
   const planMovementKind = toUpper(
     effectivePlan?.classification ||
     effectivePlan?.movement_classification ||
@@ -17544,55 +17550,92 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
     rawPlan?.movementClassification ||
     ''
   );
-  const selectedRowsAreDraftOnly = rows.length > 0 && rows.every((row) => rowIsDraftOnlyRemoval(row));
-  const isCancel = mode === 'CANCEL' || mode === 'CANCEL_PAYMENT_ATTEMPT';
-  const isReviewOnly = mode === 'REVIEW' || mode === 'REVIEW_BANK_EVIDENCE';
-  const isManualPaidAction = mode === 'REVERSE_SETTLED_PAYMENT' && (issueKind === 'MANUAL_PAID_ACTION' || selectedHasManualPaidRow);
   const isDraftRemovalMode = !!(
     src.draftOnlyRemoval === true ||
     src.draft_only_removal === true ||
     src.confirmMode === 'DRAFT_REMOVE_FROM_BATCH' ||
     selectionSourceContext === 'DRAFT_REMOVE_FROM_BATCH' ||
-    issueKind === 'DRAFT_REMOVE' ||
-    (selectedRowsAreDraftOnly && (isCancel || selectionRequestedAction === 'CANCEL_PAYMENT_ATTEMPT')) ||
+    selectedRowsAreDraftOnly ||
     (planMovementKind === 'PRE_BANK_CANCEL' && (selectedRowsAreDraftOnly || batchStatus === 'DRAFT' || batchStatus === 'DRAFT_CREATED'))
   );
-  const primaryButtonLabel = isDraftRemovalMode
-    ? 'Remove payment from batch'
-    : (isCancel ? 'Cancel payment' : (isReviewOnly ? 'Review selected payments' : 'Make eligible again'));
-  const title = isDraftRemovalMode
-    ? (toText(src.confirmTitle) || 'Remove payment from draft batch?')
-    : (isManualPaidAction ? 'Make selected payments eligible again?' : (isReviewOnly ? 'Review selected payments' : (isCancel ? 'Cancel selected payment?' : 'Make selected payments eligible again?')));
-  const bodyText = isDraftRemovalMode
-    ? (toText(src.confirmBody) || 'The selected item will be removed from this draft batch and its reservation will be released. No payment has been sent and no bank reversal, return, rejection, or remittance will be created.')
-    : (isManualPaidAction
-      ? 'The selected payments will become eligible to be paid again in the next batch.'
-      : (issueKind === 'RETURNED'
-        ? 'The bank returned this payment. The selected amounts will become eligible to be paid again in the next batch.'
-        : (issueKind === 'REJECTED'
-          ? 'The bank rejected this payment. The selected amounts will become eligible to be paid again in the next batch.'
-          : 'The selected payments will become eligible to be paid again in the next batch.')));
+  const uiAction = isDraftRemovalMode ? 'CANCEL_PAYMENT_ATTEMPT' : (normaliseUiAction(modeRaw) || normaliseUiAction(effectivePlan?.recommended_action || effectivePlan?.recommendedAction || '') || 'RELEASE_FOR_NEXT_RUN');
 
-  const sumAmount = rows.reduce((acc, row) => acc + (Number(row?.paymentAmount || row?.amount || 0) || 0), 0);
-  const candidateSummary = Array.from(new Set(rows.map((r) => String(r?.candidateName || '').trim()).filter(Boolean))).join(', ') || '—';
-  const umbrellaSummary = Array.from(new Set(rows.map((r) => String(r?.umbrellaName || '').trim()).filter(Boolean))).join(', ') || '—';
+  const copyByAction = {
+    CANDIDATE_RETURNED_FUNDS: {
+      title: 'Candidate returned funds',
+      tabLabel: 'Candidate returned funds',
+      primary: 'Candidate returned funds',
+      body: 'Confirm the payment was sent and the recipient, payee, candidate, or umbrella returned the funds. CloudTMS will use the existing returned-funds correction route only where the backend confirms this row is safe.',
+      successStarted: 'Returned-funds correction started.',
+      successApplied: 'Returned-funds correction started.'
+    },
+    RELEASE_FOR_NEXT_RUN: {
+      title: 'Release for next run',
+      tabLabel: 'Release for next run',
+      primary: 'Release for next run',
+      body: 'Confirm no payment was made before releasing the selected failed payment for a future Banking Pay run.',
+      successStarted: 'Payment released for the next run.',
+      successApplied: 'Payment released for the next run.'
+    },
+    REVERSE_RETURNED: {
+      title: 'Reverse returned',
+      tabLabel: 'Reverse returned',
+      primary: 'Reverse returned',
+      body: 'Confirm that you want to undo the previous returned-funds correction. This action is only available where backend safety support has explicitly enabled it.',
+      successStarted: 'Returned correction reversed.',
+      successApplied: 'Returned correction reversed.'
+    },
+    CANCEL_PAYMENT_ATTEMPT: {
+      title: 'Remove payment from draft batch?',
+      tabLabel: 'Remove payment from batch',
+      primary: 'Remove payment from batch',
+      body: 'The selected item will be removed from this draft batch and its reservation will be released. No payment has been sent and no bank reversal, return, rejection, or remittance will be created.',
+      successStarted: 'Payment removal request started.',
+      successApplied: 'Payment removed from batch.'
+    },
+    RESOLVE_MANUALLY: {
+      title: 'Resolve manually',
+      tabLabel: 'Resolve manually',
+      primary: 'Resolve manually',
+      body: 'Review the selected payment status before applying any manual decision.',
+      successStarted: 'Waiting for approval.',
+      successApplied: 'Waiting for approval.'
+    }
+  };
+  const actionCopy = copyByAction[uiAction] || copyByAction.RELEASE_FOR_NEXT_RUN;
+
+  const rowNeedsBackendSupport = (row) => !!(
+    row?.requiresBackendSupport === true ||
+    row?.requires_backend_support === true ||
+    row?.futureActionPendingBackend === true ||
+    row?.future_action_pending_backend === true
+  );
+  const reverseReturnedSupported = uiAction !== 'REVERSE_RETURNED' || rows.every((row) => row && (row.reverseReturnedAvailable === true || row.reverse_returned_available === true || row.backendReverseReturnedSafe === true || row.backend_reverse_returned_safe === true));
+  const candidateReturnedFundsSupported = uiAction !== 'CANDIDATE_RETURNED_FUNDS' || rows.every((row) => row && row.candidateReturnedFundsAvailable !== false && row.candidate_returned_funds_available !== false && !rowNeedsBackendSupport(row));
+  const parkedBackendSupportMissing = (uiAction === 'REVERSE_RETURNED' && !reverseReturnedSupported) || (uiAction === 'CANDIDATE_RETURNED_FUNDS' && !candidateReturnedFundsSupported);
+
+  const formatAmount = (n) => {
+    const x = Number(n);
+    try { return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(Number.isFinite(x) ? x : 0); } catch { return `£${(Number.isFinite(x) ? x : 0).toFixed(2)}`; }
+  };
+  const sumAmount = rows.reduce((acc, row) => acc + (Number(row?.paymentAmount || row?.payment_amount || row?.amount || 0) || 0), 0);
+  const candidateSummary = Array.from(new Set(rows.map((row) => toText(row?.candidateName || row?.candidate_name || row?.candidate_display_name || row?.candidateDisplayName)).filter(Boolean))).join(', ') || '—';
+  const payeeSummary = Array.from(new Set(rows.map((row) => toText(row?.payeeUmbrellaName || row?.payee_umbrella_name || row?.umbrellaName || row?.umbrella_name || row?.payee_name || row?.payeeName)).filter(Boolean))).join(', ') || '—';
 
   const getBlockerCode = (item) => {
     if (typeof item === 'string') return toUpper(item);
     if (item && typeof item === 'object') return toUpper(item.code || item.id || item.key || item.reason || item.blocker_code);
     return '';
   };
-  const blockerHasSuggestedResolutionRequired = (arr) => (Array.isArray(arr) ? arr : []).some((item) => getBlockerCode(item) === 'SUGGESTED_RESOLUTION_REQUIRED');
   const hardBlockers = Array.isArray(effectivePlan?.hard_blockers) ? effectivePlan.hard_blockers : [];
   const blockers = Array.isArray(effectivePlan?.blockers) ? effectivePlan.blockers : [];
+  const blockerHasSuggestedResolutionRequired = (arr) => (Array.isArray(arr) ? arr : []).some((item) => getBlockerCode(item) === 'SUGGESTED_RESOLUTION_REQUIRED');
   const suggestionEnvelope = (typeof getBankingPaymentIssueFinanceSuggestion === 'function')
     ? getBankingPaymentIssueFinanceSuggestion(rawPlan || effectivePlan)
     : null;
   const suggestedResolution = (suggestionEnvelope && typeof suggestionEnvelope === 'object' && suggestionEnvelope.suggestion && typeof suggestionEnvelope.suggestion === 'object')
     ? suggestionEnvelope.suggestion
-    : ((suggestionEnvelope && typeof suggestionEnvelope === 'object' && suggestionEnvelope.suggested_resolution && typeof suggestionEnvelope.suggested_resolution === 'object')
-      ? suggestionEnvelope.suggested_resolution
-      : null);
+    : ((suggestionEnvelope && typeof suggestionEnvelope === 'object' && suggestionEnvelope.suggested_resolution && typeof suggestionEnvelope.suggested_resolution === 'object') ? suggestionEnvelope.suggested_resolution : null);
   const financeRequired = !!(
     effectivePlan &&
     isDraftRemovalMode !== true &&
@@ -17603,7 +17646,6 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
       effectivePlan.suggested_resolution_required === true ||
       effectivePlan?.suggested_resolution?.required === true ||
       effectivePlan?.suggestedResolution?.required === true ||
-      effectivePlan?.suggested_resolution_payload?.required === true ||
       blockerHasSuggestedResolutionRequired(hardBlockers) ||
       blockerHasSuggestedResolutionRequired(blockers)
     )
@@ -17614,9 +17656,10 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
     return true;
   });
   const hardBlockersExist = nonFinanceHardBlockers.length > 0;
-  const needsReview = effectivePlan?.needs_review === true || effectivePlan?.can_apply === false || hardBlockersExist;
+  const needsReview = !!(effectivePlan?.needs_review === true || effectivePlan?.can_apply === false || hardBlockersExist);
   const fullGroupRequired = effectivePlan?.full_umbrella_payment_group_required === true || effectivePlan?.fullUmbrellaPaymentGroupRequired === true;
   const fullGroupSelected = correctionState?.selectedUmbrellaGroup === true;
+
   const getRequestId = (value, stateRef) => {
     const v = (value && typeof value === 'object') ? value : {};
     const req = (v.request && typeof v.request === 'object') ? v.request : {};
@@ -17630,59 +17673,53 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
       v?.result?.request_id, v?.result?.correction_request_id,
       v?.data?.request_id, v?.data?.correction_request_id,
       v?.payload?.request_id, v?.payload?.correction_request_id,
-      stRef.request_id,
-      stRef.correctionRequestId, stRef.correction_request_id
+      stRef.request_id, stRef.correctionRequestId, stRef.correction_request_id
     ];
     if (stRef.id && stRef.id !== stRef.payBatchId && stRef.id !== stRef.pay_batch_id) candidates.push(stRef.id);
-    for (const c of candidates) {
-      const s = String(c || '').trim();
-      if (s) return s;
+    for (const candidate of candidates) {
+      const text = toText(candidate);
+      if (text) return text;
     }
     return '';
   };
+
   const requestId = getRequestId(correctionState?.request || correctionState?.progress || correctionState, correctionState);
   const request = correctionState?.request || {};
-  const awaitingApproval = String(request?.status || request?.request_status || '').toUpperCase().includes('AWAIT');
+  const awaitingApproval = toUpper(request?.status || request?.request_status || '').includes('AWAIT');
   const waitingForOtherApprover = awaitingApproval && !(request?.can_current_user_approve === true || request?.current_user_can_act === true || request?.user_can_approve === true);
-  const needsApproval = !!(effectivePlan?.requires_approval || effectivePlan?.requiresApproval);
   const canUseGoldenKey = !!(request?.can_use_golden_key || effectivePlan?.can_use_golden_key || effectivePlan?.canUseGoldenKey);
   const requiresReauth = !waitingForOtherApprover;
   const planStale = !!(selectionSignature && currentSignature && selectionSignature !== currentSignature);
+  const confirmStateSubmitting = confirmState.submitting === true;
   const disableConfirm = rows.length < 1 ||
     !effectivePlan ||
     planStale ||
     needsReview ||
+    parkedBackendSupportMissing ||
     (financeRequired && !reviewAccepted) ||
     (fullGroupRequired && !fullGroupSelected) ||
     !reason ||
     (requiresReauth && !reauthToken) ||
-    confirmState.submitting === true;
-  const getPrimaryButtonAttrs = (disabled) => {
-    if (disabled) return ' disabled data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"';
-    if (isDraftRemovalMode) return ' style="background:#15803d;border-color:#15803d;color:#fff;"';
-    return '';
-  };
-  const statusLabel = waitingForOtherApprover ? 'Waiting for approval' : (isDraftRemovalMode ? 'Ready to remove' : (isManualPaidAction ? 'Make eligible again' : (effectivePlan?.status_label || (disableConfirm ? 'Needs review' : 'Review selected payments'))));
-  const formatAmount = (n) => {
-    const x = Number(n);
-    try { return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(Number.isFinite(x) ? x : 0); } catch { return `£${(Number.isFinite(x) ? x : 0).toFixed(2)}`; }
-  };
-  const hasFiniteDisplayNumber = (value) => {
-    if (value == null || value === '') return false;
-    const n = Number(value);
-    return Number.isFinite(n);
-  };
-  const formatOptionalAmount = (value) => hasFiniteDisplayNumber(value) ? formatAmount(value) : '—';
-  const formatOptionalCount = (value) => hasFiniteDisplayNumber(value) ? String(Number(value)) : '—';
-  const planSelectionForDisplay = (effectivePlan?.selection && typeof effectivePlan.selection === 'object' && !Array.isArray(effectivePlan.selection))
-    ? effectivePlan.selection
-    : {};
-  const planAmountsForDisplay = (effectivePlan?.amounts && typeof effectivePlan.amounts === 'object' && !Array.isArray(effectivePlan.amounts))
-    ? effectivePlan.amounts
-    : {};
-  const affectedPaymentsDisplay = formatOptionalCount(planSelectionForDisplay.selected_item_count ?? planSelectionForDisplay.selectedItemCount);
-  const affectedAmountExVatDisplay = formatOptionalAmount(planAmountsForDisplay.amount_ex_vat ?? planAmountsForDisplay.amountExVat);
-  const affectedAmountIncVatDisplay = formatOptionalAmount(planAmountsForDisplay.amount_inc_vat ?? planAmountsForDisplay.amountIncVat);
+    confirmStateSubmitting;
+
+  const statusLabel = waitingForOtherApprover
+    ? 'Waiting for approval'
+    : (parkedBackendSupportMissing
+        ? 'Waiting for backend safety support'
+        : (isDraftRemovalMode ? 'Ready to remove' : (disableConfirm ? 'Needs review' : actionCopy.primary)));
+
+  const affectedPaymentsDisplay = (() => {
+    const n = Number(effectivePlan?.selection?.selected_item_count ?? effectivePlan?.selection?.selectedItemCount ?? rows.length);
+    return Number.isFinite(n) ? String(n) : String(rows.length);
+  })();
+  const affectedAmountExVatDisplay = (() => {
+    const n = Number(effectivePlan?.amounts?.amount_ex_vat ?? effectivePlan?.amounts?.amountExVat);
+    return Number.isFinite(n) ? formatAmount(n) : '—';
+  })();
+  const affectedAmountIncVatDisplay = (() => {
+    const n = Number(effectivePlan?.amounts?.amount_inc_vat ?? effectivePlan?.amounts?.amountIncVat ?? sumAmount);
+    return Number.isFinite(n) ? formatAmount(n) : formatAmount(sumAmount);
+  })();
 
   const financeCasesForDisplay = (() => {
     const sr = (suggestedResolution && typeof suggestedResolution === 'object') ? suggestedResolution : {};
@@ -17699,28 +17736,23 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
         const sourceChannel = toText(item.source_pay_channel || item.sourcePayChannel || item.source_pay_method || item.sourcePayMethod || item.current_pay_channel || item.currentPayChannel || '');
         const targetChannel = toText(item.suggested_pay_channel || item.suggestedPayChannel || item.target_pay_channel || item.targetPayChannel || item.target_pay_method || item.targetPayMethod || '');
         const effectiveDate = toText(item.effective_pay_date || item.effectivePayDate || item.effective_date || item.effectiveDate || '');
-        const scheduleMode = toText(item.schedule_input_mode || item.scheduleInputMode || item.schedule_mode || item.scheduleMode || '');
         const weeklyDue = item.weekly_due ?? item.weeklyDue ?? item.suggested_weekly_due ?? item.suggestedWeeklyDue;
-        const weeksTotal = item.weeks_total ?? item.weeksTotal ?? item.suggested_weeks_total ?? item.suggestedWeeksTotal;
-        const remaining = item.manual_total_remaining ?? item.manualTotalRemaining ?? item.remaining_amount ?? item.remainingAmount ?? item.target_remaining_balance_ex_vat ?? item.targetRemainingBalanceExVat;
         if (sourceChannel) bits.push(`Source: ${sourceChannel}`);
         if (targetChannel) bits.push(`Suggested: ${targetChannel}`);
         if (effectiveDate) bits.push(`Effective date: ${effectiveDate}`);
-        if (scheduleMode) bits.push(`Schedule: ${scheduleMode}`);
         if (weeklyDue != null && weeklyDue !== '') bits.push(`Weekly due: ${formatAmount(weeklyDue)}`);
-        if (weeksTotal != null && weeksTotal !== '') bits.push(`Weeks: ${weeksTotal}`);
-        if (remaining != null && remaining !== '') bits.push(`Remaining: ${formatAmount(remaining)}`);
         return `<div>${enc(toText(item.finance_case_id || item.financeCaseId || item.case_id || item.caseId || `Resolution ${index + 1}`))}${bits.length ? ` — ${enc(bits.join(' • '))}` : ''}</div>`;
       }).join('')}
     </div>
   ` : '';
 
   showModal(
-    title,
-    [{ key: 'main', label: isDraftRemovalMode ? 'Remove payment from batch' : (isManualPaidAction ? 'Make eligible again' : 'Review selected payments') }],
+    actionCopy.title,
+    [{ key: 'main', label: actionCopy.tabLabel }],
     () => `
       <div class="form">
-        <p>${enc(bodyText)}</p>
+        <p>${enc(actionCopy.body)}</p>
+        ${parkedBackendSupportMissing ? `<div class="card" style="padding:10px;border:1px solid #f59e0b;background:#fffbeb;color:#713f12;"><div style="font-weight:700;">Action not available yet</div><div class="mini" style="white-space:pre-wrap;">This correction route is waiting for backend safety support. No payment correction will be applied until that support is available.</div></div>` : ''}
         <div class="row">
           <label>Reason</label>
           <div class="controls">
@@ -17728,18 +17760,18 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
             ${reason ? '' : '<div class="mini">Reason is required.</div>'}
           </div>
         </div>
-        <div class="row"><label>Approval status</label><div class="controls"><span class="pill">${enc(String(statusLabel || 'Needs review'))}</span></div></div>
-        <div class="row"><label>Affected payments summary</label><div class="controls">${enc(affectedPaymentsDisplay)}</div></div>
+        <div class="row"><label>Status</label><div class="controls"><span class="pill">${enc(String(statusLabel || 'Needs review'))}</span></div></div>
+        <div class="row"><label>Affected payments</label><div class="controls">${enc(affectedPaymentsDisplay)}</div></div>
         <div class="row"><label>Affected amount excluding VAT</label><div class="controls">${enc(affectedAmountExVatDisplay)}</div></div>
         <div class="row"><label>Affected amount including VAT</label><div class="controls">${enc(affectedAmountIncVatDisplay)}</div></div>
-        <div class="row"><label>Candidate/umbrella summary</label><div class="controls"><div>${enc(candidateSummary)}</div><div class="mini">${enc(umbrellaSummary)}</div></div></div>
-        ${financeRequired ? `<div class="card payment-issue-finance-review" style="padding:10px;"><div style="font-weight:700;">Needs review</div><div class="mini">Review the suggested pay-channel resolution or enter a different value before continuing.</div>${financeReviewDetailsHtml}${reviewAccepted ? '<div class="mini" style="margin-top:6px;">Review accepted</div>' : ''}<div style="margin-top:8px;"><button type="button" data-pay-issue-local="reviewFinance">Review selected payments</button></div></div>` : ''}
+        <div class="row"><label>Candidate / payee</label><div class="controls"><div>${enc(candidateSummary)}</div><div class="mini">${enc(payeeSummary)}</div></div></div>
+        ${financeRequired ? `<div class="card payment-issue-finance-review" style="padding:10px;"><div style="font-weight:700;">Needs review</div><div class="mini">Review and accept the suggested finance resolution before continuing.</div>${financeReviewDetailsHtml}${reviewAccepted ? '<div class="mini" style="margin-top:6px;">Review accepted</div>' : ''}<div style="margin-top:8px;"><button type="button" data-pay-issue-local="reviewFinance">Review selected payments</button></div></div>` : ''}
         <div class="row"><label> </label><div class="controls"><div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button type="button" data-action="modal:close" data-pay-issue-action="cancel">Cancel</button>
           <button type="button" data-pay-issue-local="verify"${requiresReauth ? '' : ' style="display:none;"'}>${enc(correctionState.reauthToken ? 'Identity verified' : 'Verify identity')}</button>
-          ${!requestId ? `<button type="button" data-pay-issue-local="submit"${getPrimaryButtonAttrs(disableConfirm)}>${enc(primaryButtonLabel)}</button>` : ''}
-          ${(requestId && !waitingForOtherApprover) ? `<button type="button" data-pay-issue-local="approve"${getPrimaryButtonAttrs(disableConfirm)}>${enc(primaryButtonLabel)}</button>` : ''}
-          ${(requestId && canUseGoldenKey && !waitingForOtherApprover) ? `<button type="button" data-pay-issue-local="golden"${getPrimaryButtonAttrs(disableConfirm)}>Approve with golden key</button>` : ''}
+          ${!requestId ? `<button type="button" data-pay-issue-local="submit"${disableConfirm ? ' disabled data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}>${enc(actionCopy.primary)}</button>` : ''}
+          ${(requestId && !waitingForOtherApprover) ? `<button type="button" data-pay-issue-local="approve"${disableConfirm ? ' disabled data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}>${enc(actionCopy.primary)}</button>` : ''}
+          ${(requestId && canUseGoldenKey && !waitingForOtherApprover) ? `<button type="button" data-pay-issue-local="golden"${disableConfirm ? ' disabled data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}>Approve with golden key</button>` : ''}
           ${waitingForOtherApprover ? `<span class="pill">Waiting for approval</span>` : ''}
         </div></div></div>
       </div>
@@ -17753,11 +17785,12 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
   const openToken = `banking-pay-issue-confirm:${Date.now()}:${Math.random().toString(36).slice(2)}`;
   const body = document.getElementById('modalBody');
   if (!body) return;
+
   try {
-    const hPrev = body.__bankingPayIssueConfirmHandler;
-    if (hPrev) {
-      try { body.removeEventListener('click', hPrev.onClick, true); } catch {}
-      try { body.removeEventListener('input', hPrev.onInput, true); } catch {}
+    const previous = body.__bankingPayIssueConfirmHandler;
+    if (previous) {
+      try { body.removeEventListener('click', previous.onClick, true); } catch {}
+      try { body.removeEventListener('input', previous.onInput, true); } catch {}
       delete body.__bankingPayIssueConfirmHandler;
     }
   } catch {}
@@ -17769,15 +17802,13 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
     correctionState.batchId ||
     correctionState.batch_id ||
     ((typeof bankingGetState === 'function' ? bankingGetState() : null)?.pay?.selectedBatchId) ||
-    ((typeof bankingGetState === 'function' ? bankingGetState() : null)?.pay?.selected?.id) ||
-    ((typeof bankingGetState === 'function' ? bankingGetState() : null)?.pay?.selected?.batch?.id) ||
     ((typeof bankingGetState === 'function' ? bankingGetState() : null)?.pay?.child?.batchId) ||
     ((typeof bankingGetState === 'function' ? bankingGetState() : null)?.pay?.child?.batch?.id) ||
     ((typeof bankingGetState === 'function' ? bankingGetState() : null)?.pay?.child?.pay_batch_id) ||
     ''
   ).trim();
 
-  const ensurePaymentIssuesTabTarget = () => {
+  const ensureCurrentPaymentStatusTabTarget = () => {
     try {
       const st0 = (typeof bankingGetState === 'function') ? bankingGetState() : null;
       if (st0 && st0.pay && st0.pay.child && typeof st0.pay.child === 'object') {
@@ -17789,41 +17820,36 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
 
   const refreshParent = async (actionResult = null) => {
     const resolvedBatchId = resolvedBatchIdFromState();
-    ensurePaymentIssuesTabTarget();
+    ensureCurrentPaymentStatusTabTarget();
     if (typeof src.onRefreshParent === 'function') {
-      const resultPayload = (actionResult && typeof actionResult === 'object')
-        ? { ...actionResult, payBatchId: resolvedBatchId, correctionState, activeTab: 'payment_issues', activeTabKey: 'payment_issues', draftOnlyRemoval: isDraftRemovalMode }
-        : { payBatchId: resolvedBatchId, correctionState, activeTab: 'payment_issues', activeTabKey: 'payment_issues', draftOnlyRemoval: isDraftRemovalMode };
-      await src.onRefreshParent(resultPayload);
-      ensurePaymentIssuesTabTarget();
+      await src.onRefreshParent({ payBatchId: resolvedBatchId, correctionState, activeTab: 'payment_issues', activeTabKey: 'payment_issues', result: actionResult || null });
+      ensureCurrentPaymentStatusTabTarget();
       return;
     }
     if (resolvedBatchId && typeof bankingPayBatchGet === 'function') {
       const latest = await bankingPayBatchGet(resolvedBatchId);
       try {
-        const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
-        if (st && st.pay && st.pay.child && typeof st.pay.child === 'object') {
-          st.pay.child.data = latest;
-          st.pay.child.ui = (st.pay.child.ui && typeof st.pay.child.ui === 'object') ? st.pay.child.ui : {};
-          st.pay.child.ui.activeTabKey = 'payment_issues';
+        const st0 = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+        if (st0 && st0.pay && st0.pay.child && typeof st0.pay.child === 'object') {
+          st0.pay.child.data = latest;
+          st0.pay.child.ui = (st0.pay.child.ui && typeof st0.pay.child.ui === 'object') ? st0.pay.child.ui : {};
+          st0.pay.child.ui.activeTabKey = 'payment_issues';
         }
       } catch {}
     }
-    if (typeof rerenderBankingPaymentIssuePanel === 'function') {
-      rerenderBankingPaymentIssuePanel();
-      return;
-    }
-    if (typeof bankingRerender === 'function') await bankingRerender(null);
+    if (typeof rerenderBankingPaymentIssuePanel === 'function') rerenderBankingPaymentIssuePanel();
+    else if (typeof bankingRerender === 'function') await bankingRerender(null);
   };
 
   const recomputeDisabled = () => {
-    const reasonNow = String(correctionState.reason || '').trim();
-    const tokenNow = String(correctionState.reauthToken || '').trim();
+    const reasonNow = toText(correctionState.reason);
+    const tokenNow = toText(correctionState.reauthToken);
     const currentSigNow = (typeof getBankingPaymentIssueSelectionSignature === 'function')
-      ? String(getBankingPaymentIssueSelectionSignature(correctionState.selection) || '').trim()
+      ? toText(getBankingPaymentIssueSelectionSignature(correctionState.selection))
       : selectionSignature;
     return rows.length < 1 ||
       !effectivePlan ||
+      parkedBackendSupportMissing ||
       (selectionSignature && currentSigNow && selectionSignature !== currentSigNow) ||
       needsReview ||
       (financeRequired && !correctionState.acceptedResolutionJson && !reviewAccepted) ||
@@ -17850,22 +17876,12 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
       btn.setAttribute('aria-disabled', 'true');
       btn.style.opacity = '.45';
       btn.style.filter = 'saturate(0.6) brightness(0.9)';
-      if (isDraftRemovalMode) {
-        btn.style.background = '';
-        btn.style.borderColor = '';
-        btn.style.color = '';
-      }
     } else {
       btn.removeAttribute('disabled');
       btn.removeAttribute('data-disabled');
       btn.setAttribute('aria-disabled', 'false');
       btn.style.opacity = '';
       btn.style.filter = '';
-      if (isDraftRemovalMode) {
-        btn.style.background = '#15803d';
-        btn.style.borderColor = '#15803d';
-        btn.style.color = '#fff';
-      }
     }
   };
 
@@ -17873,8 +17889,8 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
     try {
       const root = document.getElementById('modalBody');
       if (!root) return;
-      const disableNow = recomputeDisabled();
-      root.querySelectorAll('[data-pay-issue-local="submit"],[data-pay-issue-local="approve"],[data-pay-issue-local="golden"]').forEach((btn) => applyPrimaryButtonState(btn, disableNow));
+      const disabledNow = recomputeDisabled();
+      root.querySelectorAll('[data-pay-issue-local="submit"],[data-pay-issue-local="approve"],[data-pay-issue-local="golden"]').forEach((btn) => applyPrimaryButtonState(btn, disabledNow));
       root.querySelectorAll('[data-pay-issue-local="verify"]').forEach((btn) => {
         if (!btn) return;
         btn.textContent = correctionState.reauthToken ? 'Identity verified' : 'Verify identity';
@@ -17890,10 +17906,9 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
   };
 
   const onInput = (ev) => {
-    const t = ev?.target;
-    if (!t) return;
-    if (String(t.id || '').trim() !== 'bankingPayIssueConfirmReason') return;
-    correctionState.reason = String(t.value || '').trim();
+    const target = ev && ev.target ? ev.target : null;
+    if (!target || toText(target.id) !== 'bankingPayIssueConfirmReason') return;
+    correctionState.reason = toText(target.value);
     updateConfirmDomState();
   };
 
@@ -17909,13 +17924,6 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
 
   const updateAttention = () => {
     try { if (typeof refreshBankingNavAttentionFromCachedRows === 'function') refreshBankingNavAttentionFromCachedRows(); } catch {}
-    try {
-      if (typeof deriveBankingAttentionStateFromBatchList === 'function' && typeof updateBankingNavAttentionState === 'function') {
-        const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
-        const rows0 = Array.isArray(st?.pay?.list?.rows) ? st.pay.list.rows : [];
-        updateBankingNavAttentionState(deriveBankingAttentionStateFromBatchList(rows0));
-      }
-    } catch {}
   };
 
   const reopenConfirmAfterFinanceReview = () => {
@@ -17935,13 +17943,23 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
     } catch {}
   };
 
+  const successMessageForStatus = (actionResult) => {
+    const statusText = toText(correctionState?.progress?.status_label || correctionState?.progress?.display_status || actionResult?.display_status || actionResult?.status || '').toLowerCase();
+    if (statusText === 'waiting') return 'Waiting for approval.';
+    if (statusText === 'processing') return 'Processing. Selected payments are being updated.';
+    if (statusText === 'needs review') return 'Needs review.';
+    if (statusText.startsWith('could not apply')) return 'Could not apply.';
+    if (statusText === 'applied' || statusText === 'auto applied') return actionCopy.successApplied;
+    return actionCopy.successStarted;
+  };
+
   const onClick = async (ev) => {
-    const t = ev?.target;
-    const btn = t && t.closest ? t.closest('[data-pay-issue-local]') : null;
+    const target = ev && ev.target ? ev.target : null;
+    const btn = target && target.closest ? target.closest('[data-pay-issue-local]') : null;
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
-    const action = String(btn.getAttribute('data-pay-issue-local') || '').trim();
+    const action = toText(btn.getAttribute('data-pay-issue-local'));
     const payBatchId = resolvedBatchIdFromState();
     const managesSubmitting = action === 'submit' || action === 'approve' || action === 'golden';
     if (managesSubmitting && confirmState.submitting === true) return;
@@ -17949,10 +17967,9 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
     try {
       if (action === 'verify') {
         const verifyResult = await openBankingPaymentIssueReauthFlow(correctionState);
-        if (typeof verifyResult === 'string' && verifyResult.trim()) {
-          correctionState.reauthToken = verifyResult.trim();
-        } else if (verifyResult && typeof verifyResult === 'object') {
-          const tokenCandidate = String(verifyResult.reauth_token || verifyResult.reauthToken || verifyResult.token || '').trim();
+        if (typeof verifyResult === 'string' && verifyResult.trim()) correctionState.reauthToken = verifyResult.trim();
+        else if (verifyResult && typeof verifyResult === 'object') {
+          const tokenCandidate = toText(verifyResult.reauth_token || verifyResult.reauthToken || verifyResult.token);
           if (tokenCandidate) correctionState.reauthToken = tokenCandidate;
         }
         if (!isCurrentConfirmFrame()) {
@@ -17985,13 +18002,14 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
         return;
       }
 
-      if (!effectivePlan) throw new Error('Review the payment issue again before continuing.');
+      if (!effectivePlan) throw new Error('Review Current Payment Status again before continuing.');
       if (recomputeDisabled()) {
+        if (parkedBackendSupportMissing) throw new Error('This correction route is waiting for backend safety support.');
         if (!correctionState.reason) throw new Error('Reason is required.');
         if (requiresReauth && !correctionState.reauthToken) throw new Error('Please verify your identity before continuing.');
         if (financeRequired && !correctionState.acceptedResolutionJson && !reviewAccepted) throw new Error('Review and accept this before continuing.');
-        if (planStale) throw new Error('Review the payment issue again before continuing.');
-        throw new Error('This payment needs review. Refresh the payment issue and try again.');
+        if (planStale) throw new Error('Review Current Payment Status again before continuing.');
+        throw new Error('This payment needs review. Refresh Current Payment Status and try again.');
       }
 
       let actionResult = null;
@@ -18009,7 +18027,7 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
         setResultState(result);
       } else if (action === 'approve' || action === 'golden') {
         const rid = getRequestId(correctionState?.request || correctionState?.progress || correctionState, correctionState);
-        if (!rid) throw new Error('Payment issue ID is required.');
+        if (!rid) throw new Error('Current Payment Status request ID is required.');
         const result = await bankingPayPaymentCorrectionAuthAction(rid, {
           action: action === 'golden' ? 'USE_GOLDEN_KEY' : 'AUTHORISE',
           note: correctionState.reason || '',
@@ -18027,30 +18045,21 @@ function openBankingPayCorrectionConfirmModal(options = {}) {
       }
 
       updateAttention();
-
       try { if (typeof closeModal === 'function') closeModal(); } catch {}
       await refreshParent(actionResult || correctionState.progress || correctionState.request || null);
-
-      const statusLabel = String(correctionState?.progress?.status_label || correctionState?.progress?.display_status || actionResult?.display_status || actionResult?.status || '').trim().toLowerCase();
-      const draftRemovalApplied = !!(isDraftRemovalMode && (actionResult?.immediate_draft_removal_processed === true || actionResult?.process_result || statusLabel === 'applied' || statusLabel === 'auto applied'));
-      let msg = draftRemovalApplied ? 'Payment removed from batch' : (isDraftRemovalMode ? 'Payment removal request started.' : 'Applied. The selected amounts are now available to be processed in the next batch.');
-      if (statusLabel === 'waiting') msg = 'Waiting for approval. This action needs another approval before it can be applied.';
-      else if (statusLabel === 'processing') msg = 'Processing. Selected payments are being updated.';
-      else if (statusLabel === 'applied') msg = draftRemovalApplied ? 'Payment removed from batch' : 'Applied. The selected amounts are now available to be processed in the next batch.';
-      else if (statusLabel === 'needs review') msg = 'Needs review';
-      else if (statusLabel.startsWith('could not apply')) msg = 'Could not apply';
-      try { if (typeof window.__toast === 'function') window.__toast(msg); } catch {}
+      try { if (typeof window.__toast === 'function') window.__toast(successMessageForStatus(actionResult)); } catch {}
     } catch (e) {
       try {
         const msg = (typeof sanitizeBankingPaymentIssueError === 'function')
           ? sanitizeBankingPaymentIssueError(e)
-          : String(e?.message || e || 'This payment needs review. Refresh the payment issue and try again.');
+          : toText(e?.message || e || 'This payment needs review. Refresh Current Payment Status and try again.');
         if (typeof window.__toast === 'function') window.__toast(msg);
       } catch {}
     } finally {
       if (managesSubmitting && isCurrentConfirmFrame()) setSubmitting(false);
     }
   };
+
   body.__bankingPayIssueConfirmHandler = { onClick, onInput, openToken };
   body.addEventListener('input', onInput, true);
   body.addEventListener('click', onClick, true);
@@ -24786,8 +24795,9 @@ function getBankingPaymentIssueFinanceSuggestion(plan) {
   };
 }
 
+
 function buildBankingPaymentIssueSelection(correctionState, explicitAction) {
-  const state = (correctionState && typeof correctionState === 'object') ? correctionState : {};
+  const state = (correctionState && typeof correctionState === 'object' && !Array.isArray(correctionState)) ? correctionState : {};
   const rows = Array.isArray(state.rows) ? state.rows : (Array.isArray(state.issueRows) ? state.issueRows : []);
   const selectedRows = rows.filter((row) => row && row.selected === true);
   if (!selectedRows.length) return null;
@@ -24795,186 +24805,321 @@ function buildBankingPaymentIssueSelection(correctionState, explicitAction) {
   const toText = (value) => String(value == null ? '' : value).trim();
   const toUpper = (value) => toText(value).toUpperCase();
   const flatten = (value) => Array.isArray(value) ? value : [value];
-  const uniq = (arr) => Array.from(new Set((Array.isArray(arr) ? arr : []).flatMap((item) => flatten(item)).map((item) => toText(item)).filter(Boolean)));
-  const allowedActions = new Set(['CANCEL_PAYMENT_ATTEMPT', 'UNWIND_FAILED_PAYMENT', 'REVERSE_SETTLED_PAYMENT', 'REVIEW_BANK_EVIDENCE']);
-  const safeError = () => ({ error: true, message: 'Select payments with the same issue type.' });
+  const uniq = (values) => Array.from(new Set((Array.isArray(values) ? values : [])
+    .flatMap((value) => flatten(value))
+    .map((value) => toText(value))
+    .filter(Boolean)));
+  const error = (message) => ({ error: true, message: toText(message) || 'Select payments with the same issue type.' });
 
-  const isManualMode = state.manualPaidActionMode === true || state.issueState?.manualPaidActionMode === true;
-  const rowIsManualPaid = (row) => {
-    const issue = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    return issue === 'MANUAL_PAID_ACTION' || (isManualMode && (row?.manualActionAvailable === true || row?.manual_action_available === true));
+  const uiActionAliases = {
+    CANDIDATE_RETURNED_FUNDS: 'CANDIDATE_RETURNED_FUNDS',
+    REVERSE_SETTLED_PAYMENT: 'CANDIDATE_RETURNED_FUNDS',
+    RELEASE_FOR_NEXT_RUN: 'RELEASE_FOR_NEXT_RUN',
+    UNWIND_FAILED_PAYMENT: 'RELEASE_FOR_NEXT_RUN',
+    REVERSE_RETURNED: 'REVERSE_RETURNED',
+    REVERSE_SETTLED_REVERSAL: 'REVERSE_RETURNED',
+    RESOLVE_MANUALLY: 'RESOLVE_MANUALLY',
+    REVIEW_BANK_EVIDENCE: 'RESOLVE_MANUALLY',
+    CANCEL_PAYMENT_ATTEMPT: 'CANCEL_PAYMENT_ATTEMPT',
+    PRE_BANK_CANCEL: 'CANCEL_PAYMENT_ATTEMPT'
+  };
+  const backendByUiAction = {
+    CANDIDATE_RETURNED_FUNDS: 'REVERSE_SETTLED_PAYMENT',
+    RELEASE_FOR_NEXT_RUN: 'UNWIND_FAILED_PAYMENT',
+    REVERSE_RETURNED: 'REVERSE_SETTLED_REVERSAL',
+    RESOLVE_MANUALLY: 'REVIEW_BANK_EVIDENCE',
+    CANCEL_PAYMENT_ATTEMPT: 'CANCEL_PAYMENT_ATTEMPT'
+  };
+  const supportedUiActions = new Set(Object.keys(backendByUiAction));
+
+  const normaliseUiAction = (value) => {
+    const raw = toUpper(value);
+    return uiActionAliases[raw] || '';
   };
 
-  const rowIsDraftOnlyRemoval = (row) => {
-    const issue = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    return row?.draftOnlyRemoval === true || row?.draft_only_removal === true || issue === 'DRAFT_REMOVE';
+  const rowActionType = (row) => normaliseUiAction(
+    row?.actionType ||
+    row?.action_type ||
+    row?.bulkActionType ||
+    row?.bulk_action_type ||
+    row?.wholeBatchEligibleActionType ||
+    row?.whole_batch_eligible_action_type ||
+    row?.backendAction ||
+    row?.backend_action ||
+    row?.requested_action ||
+    ''
+  );
+
+  const rowIds = (row, ...keys) => {
+    const values = [];
+    for (const key of keys) {
+      if (!row || !Object.prototype.hasOwnProperty.call(row, key)) continue;
+      values.push(row[key]);
+    }
+    return uniq(values);
   };
 
-  const rowHasAcceptanceEvidence = (row) => {
-    const diag = (row && typeof row === 'object') ? (row.providerSubmitDiagnostic || row.provider_submit_diagnostic || {}) : {};
-    const value = row?.provider_acceptance_evidence_present ?? row?.providerAcceptanceEvidencePresent ?? diag.provider_acceptance_evidence_present ?? diag.providerAcceptanceEvidencePresent;
-    return value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(String(value == null ? '' : value).trim().toLowerCase());
+  const rowPayBankTransferIds = (row) => rowIds(row, 'payBankTransferIds', 'pay_bank_transfer_ids', 'payBankTransferId', 'pay_bank_transfer_id', 'transferId', 'transfer_id');
+  const rowPayBatchItemIds = (row) => rowIds(row, 'payBatchItemIds', 'pay_batch_item_ids', 'payBatchItemId', 'pay_batch_item_id', 'itemId', 'item_id');
+  const rowPayBatchCandidateIds = (row) => rowIds(row, 'payBatchCandidateIds', 'pay_batch_candidate_ids', 'payBatchCandidateId', 'pay_batch_candidate_id');
+  const rowCandidateIds = (row) => rowIds(row, 'candidateIds', 'candidate_ids', 'candidateId', 'candidate_id');
+  const rowUmbrellaIds = (row) => rowIds(row, 'umbrellaIds', 'umbrella_ids', 'umbrellaId', 'umbrella_id');
+  const rowTransferGroupKeys = (row) => rowIds(row, 'transferGroupKeys', 'transfer_group_keys', 'transferGroupKey', 'transfer_group_key');
+
+  const supportDetailsOf = (row) => {
+    if (row && row.supportDetails && typeof row.supportDetails === 'object' && !Array.isArray(row.supportDetails)) return row.supportDetails;
+    if (row && row.support_details && typeof row.support_details === 'object' && !Array.isArray(row.support_details)) return row.support_details;
+    return {};
   };
+
+  const boolish = (value) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    const text = toText(value).toLowerCase();
+    return text === '1' || text === 'true' || text === 't' || text === 'yes' || text === 'y' || text === 'on';
+  };
+
+  const rowHasSentOrAcceptedEvidence = (row) => {
+    const support = supportDetailsOf(row);
+    const values = [
+      row?.displayState,
+      row?.display_state,
+      row?.statusLabel,
+      row?.status_label,
+      row?.resultLabel,
+      row?.result_label,
+      row?.bankStatusLabel,
+      row?.bank_status_label,
+      row?.bank_status,
+      row?.issueKindForDisplay,
+      row?.issue_kind_for_display,
+      row?.issue_kind,
+      row?.provider_submission_status,
+      row?.providerSubmissionStatus,
+      row?.provider_state,
+      row?.providerState,
+      row?.rail_state,
+      row?.railState,
+      row?.status,
+      support.provider_submission_status,
+      support.providerSubmissionStatus,
+      support.provider_state,
+      support.providerState,
+      support.rail_state,
+      support.railState
+    ].map((value) => toUpper(value)).filter(Boolean);
+
+    if (values.some((value) => (
+      value === 'PAYMENT_SENT' ||
+      value === 'PAYMENT_PAID' ||
+      value === 'PROVIDER_SUBMISSION_ACCEPTED' ||
+      value === 'SENT' ||
+      value === 'PAID' ||
+      value === 'ACCEPTED' ||
+      value === 'SETTLED' ||
+      value === 'COMPLETED' ||
+      value.includes('SENT') ||
+      value.includes('PAID') ||
+      value.includes('ACCEPTED')
+    ))) return true;
+
+    if (
+      boolish(row?.provider_acceptance_evidence_present) ||
+      boolish(row?.providerAcceptanceEvidencePresent) ||
+      boolish(row?.money_moved_evidence) ||
+      boolish(row?.moneyMovedEvidence) ||
+      boolish(row?.provider_transaction_evidence_present) ||
+      boolish(row?.providerTransactionEvidencePresent) ||
+      boolish(support.provider_acceptance_evidence_present) ||
+      boolish(support.providerAcceptanceEvidencePresent) ||
+      boolish(support.money_moved_evidence) ||
+      boolish(support.moneyMovedEvidence)
+    ) return true;
+
+    const transactionFields = [
+      row?.rail_tx_id,
+      row?.railTxId,
+      row?.provider_transaction_id,
+      row?.providerTransactionId,
+      row?.provider_payment_id,
+      row?.providerPaymentId,
+      row?.provider_reference,
+      row?.providerReference,
+      row?.payment_reference,
+      row?.paymentReference,
+      support.rail_tx_id,
+      support.railTxId,
+      support.provider_transaction_id,
+      support.providerTransactionId,
+      support.provider_payment_id,
+      support.providerPaymentId,
+      support.provider_reference,
+      support.providerReference,
+      support.payment_reference,
+      support.paymentReference
+    ];
+    return transactionFields.some((value) => !!toText(value));
+  };
+
   const rowAlreadyReleased = (row) => {
-    const recoveryStatus = toUpper(row?.recoveryStatus || row?.recovery_status || '');
-    const recoveryAction = toUpper(row?.recoveryAction || row?.recovery_action || '');
-    return row?.autoReleased === true || row?.auto_released === true || row?.manuallyReleased === true || row?.manually_released === true || ['AUTO_RELEASED_FOR_NEXT_RUN', 'MANUALLY_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED_FOR_NEXT_RUN', 'MANUAL_RESOLVED_NO_PAYMENT_MADE'].includes(recoveryStatus) || recoveryAction === 'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS';
-  };
-  const rowIsProviderRejectedNoPayment = (row) => {
-    const issue = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    const providerStatus = toUpper(row?.provider_submission_status || row?.providerSubmitDiagnostic?.provider_submission_status || row?.provider_submit_diagnostic?.provider_submission_status || '');
-    const backendAction = toUpper(row?.backendAction || row?.backend_action || row?.requested_action || '');
-    return (issue === 'PROVIDER_SUBMIT_REVIEW' || issue === 'REJECTED')
-      && providerStatus === 'PROVIDER_SUBMISSION_REJECTED'
-      && rowHasAcceptanceEvidence(row) !== true
-      && rowAlreadyReleased(row) !== true
-      && backendAction === 'UNWIND_FAILED_PAYMENT';
-  };
-
-  const inferCategory = (row) => {
-    const issue = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    const happened = toUpper(row?.whatHappenedLabel || row?.what_happened || row?.headline || '');
-    const bankStatus = toUpper(row?.bankStatusLabel || row?.bank_status || '');
-    const backendAction = toUpper(row?.backendAction || row?.backend_action || row?.requested_action || row?.action || '');
-
-    if (rowIsManualPaid(row)) return 'manualPaid';
-    if (rowIsDraftOnlyRemoval(row)) return 'draftRemove';
-    if (issue === 'NOT_SENT' || issue === 'PAYMENT_NOT_SENT' || happened === 'PAYMENT NOT SENT' || backendAction === 'CANCEL_PAYMENT_ATTEMPT') return 'notSent';
-    if (issue === 'RETURNED' || happened === 'BANK RETURNED PAYMENT' || bankStatus === 'RETURNED' || backendAction === 'REVERSE_SETTLED_PAYMENT') return 'returned';
-    if (rowIsProviderRejectedNoPayment(row) || issue === 'REJECTED' || happened === 'BANK REJECTED PAYMENT' || bankStatus === 'NOT PAID' || bankStatus === 'REJECTED' || backendAction === 'UNWIND_FAILED_PAYMENT') return 'rejected';
-    if (issue === 'REVIEW' || issue === 'NEEDS_REVIEW' || happened === 'NEEDS REVIEW' || happened === 'PAYMENT NEEDS REVIEW' || bankStatus === 'NEEDS REVIEW' || backendAction === 'REVIEW_BANK_EVIDENCE') return 'review';
-    return '';
+    const stateText = toUpper(row?.displayState || row?.display_state || row?.resultLabel || row?.result_label || row?.statusLabel || row?.status_label || row?.recoveryStatus || row?.recovery_status || '');
+    const actionText = toUpper(row?.recoveryAction || row?.recovery_action || '');
+    return !!(
+      row?.autoReleased === true ||
+      row?.auto_released === true ||
+      row?.manuallyReleased === true ||
+      row?.manually_released === true ||
+      row?.alreadyReleased === true ||
+      row?.already_released === true ||
+      stateText === 'BANK_REJECTED_AUTO_REVERSED' ||
+      stateText === 'BANK_REJECTED_MANUALLY_REVERSED' ||
+      stateText === 'INSUFFICIENT_FUNDS_AUTO_REVERSED' ||
+      stateText.includes('PAYMENT REVERSED') ||
+      stateText.includes('MANUALLY REVERSED') ||
+      stateText.includes('ALREADY RELEASED') ||
+      ['AUTO_RELEASED_FOR_NEXT_RUN', 'MANUALLY_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED_FOR_NEXT_RUN', 'MANUAL_RESOLVED_NO_PAYMENT_MADE'].includes(stateText) ||
+      actionText === 'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS'
+    );
   };
 
-  const actionForCategory = (category) => {
-    if (category === 'manualPaid') return 'REVERSE_SETTLED_PAYMENT';
-    if (category === 'draftRemove') return 'CANCEL_PAYMENT_ATTEMPT';
-    if (category === 'returned') return 'REVERSE_SETTLED_PAYMENT';
-    if (category === 'rejected') return 'UNWIND_FAILED_PAYMENT';
-    if (category === 'notSent') return 'CANCEL_PAYMENT_ATTEMPT';
-    if (category === 'review') return 'REVIEW_BANK_EVIDENCE';
-    return '';
+  const rowNeedsBackendSupport = (row) => !!(
+    row?.requiresBackendSupport === true ||
+    row?.requires_backend_support === true ||
+    row?.futureActionPendingBackend === true ||
+    row?.future_action_pending_backend === true
+  );
+
+  const rowSupportsReverseReturned = (row) => !!(
+    row?.reverseReturnedAvailable === true ||
+    row?.reverse_returned_available === true ||
+    row?.backendReverseReturnedSafe === true ||
+    row?.backend_reverse_returned_safe === true
+  );
+
+  const rowSupportsCandidateReturnedFunds = (row) => !(
+    row?.candidateReturnedFundsAvailable === false ||
+    row?.candidate_returned_funds_available === false ||
+    rowNeedsBackendSupport(row)
+  );
+
+  const rowHasRequiredIdentifiers = (row) => {
+    const transfers = rowPayBankTransferIds(row);
+    const items = rowPayBatchItemIds(row);
+    const candidates = rowPayBatchCandidateIds(row);
+    return transfers.length > 0 || items.length > 0 || candidates.length > 0;
   };
 
-  const categories = uniq(selectedRows.map((row) => inferCategory(row)));
-  if (categories.length !== 1) return safeError();
+  const explicitUiAction = normaliseUiAction(explicitAction);
+  if (toText(explicitAction) && !explicitUiAction) return error('Selected payment action is not supported.');
 
-  const category = categories[0];
-  const inferredAction = actionForCategory(category);
-  if (!inferredAction || !allowedActions.has(inferredAction)) return safeError();
+  const actionCandidates = selectedRows.map((row) => explicitUiAction || rowActionType(row));
+  const distinctActions = uniq(actionCandidates);
+  if (distinctActions.length !== 1) return error('Select payments with the same action type.');
 
-  let requested_action = inferredAction;
-  if (toText(explicitAction)) {
-    const explicit = toUpper(explicitAction);
-    if (!allowedActions.has(explicit)) return safeError();
-    if (explicit !== inferredAction) return safeError();
-    requested_action = explicit;
+  const uiAction = distinctActions[0];
+  if (!supportedUiActions.has(uiAction)) return error('Selected payment action is not supported.');
+  if (uiAction === 'RESOLVE_MANUALLY') return error('Choose a manual decision before applying a payment correction.');
+
+  for (const row of selectedRows) {
+    if (!row || typeof row !== 'object') return error();
+    if (!rowHasRequiredIdentifiers(row)) return error('Selected rows are missing payment identifiers. Refresh the batch and try again.');
+
+    const rowUiAction = rowActionType(row);
+    if (explicitUiAction && rowUiAction && rowUiAction !== explicitUiAction && rowUiAction !== 'RESOLVE_MANUALLY') {
+      return error('Select payments with the same action type.');
+    }
+
+    if (uiAction === 'RELEASE_FOR_NEXT_RUN') {
+      if (rowHasSentOrAcceptedEvidence(row)) return error('Sent, paid, or provider-accepted payments cannot be released as no-payment.');
+      if (rowAlreadyReleased(row)) return error('This payment has already been released for the next run.');
+    }
+
+    if (uiAction === 'CANDIDATE_RETURNED_FUNDS') {
+      if (!rowHasSentOrAcceptedEvidence(row)) return error('Candidate returned funds can only be used for sent or paid payments.');
+      if (!rowSupportsCandidateReturnedFunds(row)) return error('Candidate returned funds is waiting for backend safety support.');
+    }
+
+    if (uiAction === 'REVERSE_RETURNED') {
+      if (rowNeedsBackendSupport(row) || !rowSupportsReverseReturned(row)) return error('Reverse returned is waiting for backend safety support.');
+    }
+
+    if (uiAction === 'CANCEL_PAYMENT_ATTEMPT') {
+      const display = toUpper(row.displayState || row.display_state || row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || '');
+      if (rowHasSentOrAcceptedEvidence(row) && display !== 'DRAFT_REMOVE') return error('Only draft/pre-bank payment attempts can be removed from the batch.');
+    }
   }
 
-  const rowCanUseAction = (row) => {
-    if (category === 'manualPaid') {
-      return requested_action === 'REVERSE_SETTLED_PAYMENT'
-        && rowIsManualPaid(row)
-        && (row.selectableForApply === true || row.selectable === true);
-    }
-    if (category === 'review') {
-      return requested_action === 'REVIEW_BANK_EVIDENCE'
-        && (row?.selectableForReview === true || row?.selectable === true);
-    }
-    return row?.selectableForApply === true || row?.selectable === true;
-  };
+  const payBankTransferIds = uniq(selectedRows.flatMap((row) => rowPayBankTransferIds(row)));
+  const payBatchItemIds = uniq(selectedRows.flatMap((row) => rowPayBatchItemIds(row)));
+  const payBatchCandidateIds = uniq(selectedRows.flatMap((row) => rowPayBatchCandidateIds(row)));
+  const candidateIds = uniq(selectedRows.flatMap((row) => rowCandidateIds(row)));
+  const umbrellaIds = uniq(selectedRows.flatMap((row) => rowUmbrellaIds(row)));
+  const transferGroupKeys = uniq(selectedRows.flatMap((row) => rowTransferGroupKeys(row)));
+  const backendAction = backendByUiAction[uiAction];
 
-  if (!selectedRows.every(rowCanUseAction)) return safeError();
-
-  const transferIds = uniq(selectedRows.flatMap((row) => flatten(row.payBankTransferIds || row.pay_bank_transfer_ids || row.payBankTransferId || row.pay_bank_transfer_id || row.transferId || row.transfer_id)));
-  const itemIds = uniq(selectedRows.flatMap((row) => flatten(row.payBatchItemIds || row.pay_batch_item_ids || row.payBatchItemId || row.pay_batch_item_id || row.itemId || row.item_id)));
-  const payBatchCandidateIds = uniq(selectedRows.flatMap((row) => flatten(row.payBatchCandidateIds || row.pay_batch_candidate_ids || row.payBatchCandidateId || row.pay_batch_candidate_id)));
-  const candidateIds = uniq(selectedRows.flatMap((row) => flatten(row.candidateIds || row.candidate_ids || row.candidateId || row.candidate_id)));
-  const umbrellaIds = uniq(selectedRows.flatMap((row) => flatten(row.umbrellaIds || row.umbrella_ids || row.umbrellaId || row.umbrella_id)));
-  const transferGroupKeys = uniq(selectedRows.flatMap((row) => flatten(row.transferGroupKeys || row.transfer_group_keys || row.transferGroupKey || row.transfer_group_key)));
-  const rowActiveItemCount = (row) => {
-    const explicitCount = Number(row?.activePayBatchItemCount ?? row?.active_pay_batch_item_count);
-    if (Number.isFinite(explicitCount) && explicitCount >= 0) return Math.floor(explicitCount);
-    const rowItemIds = uniq(flatten(row?.payBatchItemIds || row?.pay_batch_item_ids || row?.payBatchItemId || row?.pay_batch_item_id || row?.itemId || row?.item_id));
-    return rowItemIds.length;
-  };
-  const selectedActiveItemCount = selectedRows.reduce((total, row) => total + rowActiveItemCount(row), 0);
-  const expectedDraftItemCount = itemIds.length || selectedActiveItemCount;
-  const draftOnlySelection = category === 'draftRemove' || (category === 'notSent' && selectedRows.every((row) => rowIsDraftOnlyRemoval(row)));
-  const actionCategory = category === 'rejected'
-    ? 'no-payment release/unwind'
-    : (category === 'returned' || category === 'manualPaid'
-        ? 'returned/settled reversal'
-        : (category === 'review' ? 'manual review required' : (category === 'draftRemove' || category === 'notSent' ? 'draft/pre-bank cancellation' : category)));
-  const wholeBatchRecoverySafe = selectedRows.length > 0 && selectedRows.every((row) => ['rejected', 'returned', 'draftRemove', 'notSent'].includes(inferCategory(row)))
-    && selectedRows.every((row) => rowHasAcceptanceEvidence(row) !== true)
-    && !selectedRows.some((row) => rowAlreadyReleased(row));
-  const draftOnlyExtras = () => {
-    if (!draftOnlySelection) return {};
-    const extras = { source_context: 'DRAFT_REMOVE_FROM_BATCH' };
-    if (expectedDraftItemCount > 0) extras.expected_item_count = expectedDraftItemCount;
-    if (itemIds.length) extras.expected_pay_batch_item_ids = itemIds;
-    return extras;
-  };
-
-  const explicitUmbrellaMeta = state.selectionScopeMode === 'umbrellaGroup'
-    || state.lastSelectionMode === 'umbrellaGroup'
-    || state.selectedUmbrellaGroup === true;
+  const explicitUmbrellaMeta = state.selectionScopeMode === 'umbrellaGroup' ||
+    state.lastSelectionMode === 'umbrellaGroup' ||
+    state.selectedUmbrellaGroup === true;
   const hasSingleUmbrella = umbrellaIds.length === 1;
   const hasExactGroupKey = transferGroupKeys.length === 1 && !!transferGroupKeys[0];
-  const hasTransferIds = transferIds.length > 0;
+  const hasTransferIds = payBankTransferIds.length > 0;
   const allowUmbrellaScope = hasSingleUmbrella && explicitUmbrellaMeta && (hasExactGroupKey || hasTransferIds);
+
+  const base = {
+    requested_action: backendAction,
+    ui_action_type: uiAction,
+    pay_bank_transfer_ids: payBankTransferIds,
+    pay_batch_item_ids: payBatchItemIds,
+    pay_batch_candidate_ids: payBatchCandidateIds,
+    candidate_ids: candidateIds,
+    selected_row_keys: uniq(selectedRows.map((row) => row?.rowKey || row?.row_key)),
+    action_category: uiAction === 'RELEASE_FOR_NEXT_RUN'
+      ? 'no-payment release/unwind'
+      : (uiAction === 'CANDIDATE_RETURNED_FUNDS'
+          ? 'returned-funds correction'
+          : (uiAction === 'REVERSE_RETURNED'
+              ? 'reverse returned correction'
+              : (uiAction === 'CANCEL_PAYMENT_ATTEMPT' ? 'draft/pre-bank cancellation' : uiAction))),
+    whole_batch_recovery_safe: uiAction === 'RELEASE_FOR_NEXT_RUN'
+      ? selectedRows.every((row) => rowHasSentOrAcceptedEvidence(row) !== true && rowAlreadyReleased(row) !== true)
+      : false
+  };
+
+  if (uiAction === 'CANCEL_PAYMENT_ATTEMPT') {
+    base.source_context = 'DRAFT_REMOVE_FROM_BATCH';
+    if (payBatchItemIds.length) base.expected_pay_batch_item_ids = payBatchItemIds;
+  }
 
   if (allowUmbrellaScope) {
     return {
+      ...base,
       scope_type: 'UMBRELLA_PAYMENT_GROUP',
       umbrella_id: umbrellaIds[0],
-      transfer_group_key: transferGroupKeys[0] || '',
-      pay_bank_transfer_ids: transferIds,
-      pay_batch_candidate_ids: payBatchCandidateIds,
-      pay_batch_item_ids: itemIds,
-      candidate_ids: candidateIds,
-      requested_action,
-      action_category: actionCategory,
-      whole_batch_recovery_safe: wholeBatchRecoverySafe,
-      ...draftOnlyExtras()
+      transfer_group_key: transferGroupKeys[0] || ''
     };
   }
 
-  if (transferIds.length) {
+  if (payBankTransferIds.length) {
     return {
+      ...base,
       scope_type: 'TRANSFER',
-      pay_bank_transfer_ids: transferIds,
-      pay_batch_candidate_ids: payBatchCandidateIds,
-      pay_batch_item_ids: itemIds,
       umbrella_id: umbrellaIds[0] || '',
-      transfer_group_key: transferGroupKeys[0] || '',
-      ...(candidateIds.length ? { candidate_ids: candidateIds } : {}),
-      requested_action,
-      action_category: actionCategory,
-      whole_batch_recovery_safe: wholeBatchRecoverySafe,
-      ...draftOnlyExtras()
+      transfer_group_key: transferGroupKeys[0] || ''
     };
   }
 
-  if (payBatchCandidateIds.length || itemIds.length) {
+  if (payBatchCandidateIds.length || payBatchItemIds.length) {
     return {
+      ...base,
       scope_type: 'CANDIDATES',
-      pay_batch_candidate_ids: payBatchCandidateIds,
-      pay_batch_item_ids: itemIds,
       umbrella_id: umbrellaIds[0] || '',
-      transfer_group_key: transferGroupKeys[0] || '',
-      ...(candidateIds.length ? { candidate_ids: candidateIds } : {}),
-      requested_action,
-      action_category: actionCategory,
-      whole_batch_recovery_safe: wholeBatchRecoverySafe,
-      ...draftOnlyExtras()
+      transfer_group_key: transferGroupKeys[0] || ''
     };
   }
 
-  if (candidateIds.length) return safeError();
-  return null;
+  return error('Selected rows are missing payment identifiers. Refresh the batch and try again.');
 }
+
 
 
 function getBankingPaymentIssueSelectionSignature(selection) {
@@ -25022,7 +25167,7 @@ function invalidateBankingPaymentIssuePlan(correctionState) {
 }
 
 function setBankingPaymentIssueRowSelection(correctionState, predicateOrRowKey, selected, opts = {}) {
-  const state = (correctionState && typeof correctionState === 'object') ? correctionState : null;
+  const state = (correctionState && typeof correctionState === 'object' && !Array.isArray(correctionState)) ? correctionState : null;
   if (!state) return null;
 
   state.rows = Array.isArray(state.rows) ? state.rows : [];
@@ -25035,40 +25180,181 @@ function setBankingPaymentIssueRowSelection(correctionState, predicateOrRowKey, 
   const toUpper = (value) => toText(value).toUpperCase();
   const flatten = (value) => Array.isArray(value) ? value : [value];
   const targetSelected = selected === true;
-  const mode = (toUpper(opts?.mode) === 'REVIEW') ? 'review' : 'apply';
-  const selectionMode = toText(opts?.selectionMode || '');
-  const manualMode = state.manualPaidActionMode === true || state.issueState?.manualPaidActionMode === true || opts?.manualPaidActionMode === true;
-  const isExplicitUmbrellaSelection = selectionMode === 'umbrellaGroup'
-    || toText(state.selectionScopeMode) === 'umbrellaGroup'
-    || toText(state.lastSelectionMode) === 'umbrellaGroup';
+  const requestedSelectionMode = toText(opts && opts.selectionMode);
+  const requestedActionFilter = toUpper(opts && (opts.actionType || opts.action_type || opts.bulkActionType || opts.bulk_action_type || ''));
 
   const getRowKey = (row) => toText(row?.rowKey || row?.row_key || row?.payBankTransferId || row?.pay_bank_transfer_id || row?.payBatchCandidateId || row?.pay_batch_candidate_id || row?.candidateId || row?.candidate_id);
   const matchFn = (typeof predicateOrRowKey === 'function')
     ? predicateOrRowKey
     : ((row) => getRowKey(row) === toText(predicateOrRowKey));
 
-  const isManualPaidRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    return issueKind === 'MANUAL_PAID_ACTION' || (manualMode && (row?.manualActionAvailable === true || row?.manual_action_available === true));
+  const normaliseUiAction = (value) => {
+    const action = toUpper(value);
+    if (action === 'REVERSE_SETTLED_PAYMENT') return 'CANDIDATE_RETURNED_FUNDS';
+    if (action === 'UNWIND_FAILED_PAYMENT') return 'RELEASE_FOR_NEXT_RUN';
+    if (action === 'REVERSE_SETTLED_REVERSAL') return 'REVERSE_RETURNED';
+    if (action === 'REVIEW_BANK_EVIDENCE') return 'RESOLVE_MANUALLY';
+    if (action === 'PRE_BANK_CANCEL') return 'CANCEL_PAYMENT_ATTEMPT';
+    return action;
   };
+
+  const supportedBulkActions = new Set(['RELEASE_FOR_NEXT_RUN', 'REVERSE_RETURNED', 'RESOLVE_MANUALLY', 'CANCEL_PAYMENT_ATTEMPT']);
+  const rowActionType = (row) => normaliseUiAction(
+    row?.bulkActionType ||
+    row?.bulk_action_type ||
+    row?.actionType ||
+    row?.action_type ||
+    row?.backendAction ||
+    row?.backend_action ||
+    ''
+  );
+
+  const addValues = (target, values) => {
+    for (const value of flatten(values)) {
+      const text = toText(value);
+      if (text) target.add(text);
+    }
+  };
+
+  const rowIds = (row, ...keys) => {
+    const out = [];
+    for (const key of keys) {
+      if (row && Object.prototype.hasOwnProperty.call(row, key)) out.push(row[key]);
+    }
+    return out.flatMap((value) => flatten(value)).map((value) => toText(value)).filter(Boolean);
+  };
+
+  const rowHasRequiredIds = (row) => {
+    return rowIds(row, 'payBankTransferIds', 'pay_bank_transfer_ids', 'payBankTransferId', 'pay_bank_transfer_id', 'transferId', 'transfer_id').length > 0 ||
+      rowIds(row, 'payBatchItemIds', 'pay_batch_item_ids', 'payBatchItemId', 'pay_batch_item_id', 'itemId', 'item_id').length > 0 ||
+      rowIds(row, 'payBatchCandidateIds', 'pay_batch_candidate_ids', 'payBatchCandidateId', 'pay_batch_candidate_id').length > 0;
+  };
+
+  const supportDetailsOf = (row) => {
+    if (row && row.supportDetails && typeof row.supportDetails === 'object' && !Array.isArray(row.supportDetails)) return row.supportDetails;
+    if (row && row.support_details && typeof row.support_details === 'object' && !Array.isArray(row.support_details)) return row.support_details;
+    return {};
+  };
+
+  const boolish = (value) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    const text = toText(value).toLowerCase();
+    return text === '1' || text === 'true' || text === 't' || text === 'yes' || text === 'y' || text === 'on';
+  };
+
+  const rowHasSentOrAcceptedEvidence = (row) => {
+    const support = supportDetailsOf(row);
+    const values = [
+      row?.displayState,
+      row?.display_state,
+      row?.statusLabel,
+      row?.status_label,
+      row?.resultLabel,
+      row?.result_label,
+      row?.bankStatusLabel,
+      row?.bank_status_label,
+      row?.provider_submission_status,
+      row?.providerSubmissionStatus,
+      row?.status,
+      support.provider_submission_status,
+      support.providerSubmissionStatus,
+      support.provider_state,
+      support.providerState
+    ].map((value) => toUpper(value)).filter(Boolean);
+    if (values.some((value) => (
+      value === 'PAYMENT_SENT' ||
+      value === 'PAYMENT_PAID' ||
+      value === 'PROVIDER_SUBMISSION_ACCEPTED' ||
+      value === 'SENT' ||
+      value === 'PAID' ||
+      value === 'ACCEPTED' ||
+      value === 'SETTLED' ||
+      value === 'COMPLETED' ||
+      value.includes('SENT') ||
+      value.includes('PAID') ||
+      value.includes('ACCEPTED')
+    ))) return true;
+    if (
+      boolish(row?.provider_acceptance_evidence_present) ||
+      boolish(row?.providerAcceptanceEvidencePresent) ||
+      boolish(row?.money_moved_evidence) ||
+      boolish(row?.moneyMovedEvidence) ||
+      boolish(support.provider_acceptance_evidence_present) ||
+      boolish(support.providerAcceptanceEvidencePresent) ||
+      boolish(support.money_moved_evidence) ||
+      boolish(support.moneyMovedEvidence)
+    ) return true;
+    return [
+      row?.rail_tx_id,
+      row?.railTxId,
+      row?.provider_transaction_id,
+      row?.providerTransactionId,
+      row?.provider_payment_id,
+      row?.providerPaymentId,
+      row?.provider_reference,
+      row?.providerReference,
+      row?.payment_reference,
+      row?.paymentReference,
+      support.rail_tx_id,
+      support.railTxId,
+      support.provider_transaction_id,
+      support.providerTransactionId,
+      support.provider_payment_id,
+      support.providerPaymentId,
+      support.provider_reference,
+      support.providerReference,
+      support.payment_reference,
+      support.paymentReference
+    ].some((value) => !!toText(value));
+  };
+
+  const rowAlreadyReleased = (row) => {
+    const text = toUpper(row?.displayState || row?.display_state || row?.resultLabel || row?.result_label || row?.statusLabel || row?.status_label || row?.recoveryStatus || row?.recovery_status || '');
+    const action = toUpper(row?.recoveryAction || row?.recovery_action || '');
+    return !!(
+      row?.autoReleased === true ||
+      row?.auto_released === true ||
+      row?.manuallyReleased === true ||
+      row?.manually_released === true ||
+      row?.alreadyReleased === true ||
+      row?.already_released === true ||
+      text === 'BANK_REJECTED_AUTO_REVERSED' ||
+      text === 'BANK_REJECTED_MANUALLY_REVERSED' ||
+      text === 'INSUFFICIENT_FUNDS_AUTO_REVERSED' ||
+      text.includes('PAYMENT REVERSED') ||
+      text.includes('MANUALLY REVERSED') ||
+      text.includes('ALREADY RELEASED') ||
+      ['AUTO_RELEASED_FOR_NEXT_RUN', 'MANUALLY_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED_FOR_NEXT_RUN', 'MANUAL_RESOLVED_NO_PAYMENT_MADE'].includes(text) ||
+      action === 'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS'
+    );
+  };
+
+  const rowNeedsBackendSupport = (row) => !!(
+    row?.requiresBackendSupport === true ||
+    row?.requires_backend_support === true ||
+    row?.futureActionPendingBackend === true ||
+    row?.future_action_pending_backend === true
+  );
 
   const isSelectable = (row) => {
     if (!row || typeof row !== 'object') return false;
+    if (row.selectable !== true) return false;
     if (row.unsafe === true || row.isUnsafe === true || row.selectionUnsafe === true) return false;
 
-    const actionText = toUpper(row.actionLabel || row.statusLabel || '');
-    const happened = toUpper(row.whatHappenedLabel || row.headline || '');
-    const issueKind = toUpper(row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || '');
+    const actionType = rowActionType(row);
+    if (!actionType || actionType === 'VIEW_DETAILS') return false;
+    if (!supportedBulkActions.has(actionType)) return false;
+    if (requestedActionFilter && normaliseUiAction(requestedActionFilter) !== actionType) return false;
+    if (!rowHasRequiredIds(row)) return false;
+    if (actionType === 'RELEASE_FOR_NEXT_RUN' && rowHasSentOrAcceptedEvidence(row)) return false;
+    if (actionType !== 'RESOLVE_MANUALLY' && rowAlreadyReleased(row)) return false;
+    if (actionType === 'REVERSE_RETURNED' && (rowNeedsBackendSupport(row) || (row.reverseReturnedAvailable !== true && row.reverse_returned_available !== true))) return false;
+    if (actionType === 'RESOLVE_MANUALLY' && row.bulkManualResolutionSupported !== true && row.bulk_manual_resolution_supported !== true) return false;
 
-    if (isManualPaidRow(row)) {
-      return manualMode && row.manualActionAvailable === true && (row.selectableForApply === true || row.selectable === true);
-    }
+    const displayState = toUpper(row.displayState || row.display_state || '');
+    if ((displayState === 'PAYMENT_SENT' || displayState === 'PAYMENT_PAID') && actionType !== 'RESOLVE_MANUALLY') return false;
 
-    if (row.selectable === false) return false;
-    if (mode === 'apply' && row.selectableForApply !== true) return false;
-    if (mode === 'review' && row.selectableForApply !== true && row.selectableForReview !== true) return false;
-    if (actionText === 'NO ACTION' || happened === 'PAID SUCCESSFULLY' || happened === 'NO ACTION' || issueKind === 'PAID') return false;
-    if (mode === 'apply' && (happened === 'PAID' || happened === 'APPLIED' || happened === 'PROCESSING' || happened === 'WAITING' || happened === 'WAITING FOR APPROVAL')) return false;
     return true;
   };
 
@@ -25096,20 +25382,9 @@ function setBankingPaymentIssueRowSelection(correctionState, predicateOrRowKey, 
     const rowKey = getRowKey(row);
     if (rowKey) state.selectedRowKeys.add(rowKey);
 
-    flatten(row.payBatchCandidateIds || row.pay_batch_candidate_ids || row.payBatchCandidateId || row.pay_batch_candidate_id)
-      .map((value) => toText(value))
-      .filter(Boolean)
-      .forEach((candidateId) => state.selectedPayBatchCandidateIds.add(candidateId));
-
-    flatten(row.payBankTransferIds || row.pay_bank_transfer_ids || row.payBankTransferId || row.pay_bank_transfer_id || row.transferId || row.transfer_id)
-      .map((value) => toText(value))
-      .filter(Boolean)
-      .forEach((transferId) => state.selectedTransferIds.add(transferId));
-
-    flatten(row.payBatchItemIds || row.pay_batch_item_ids || row.payBatchItemId || row.pay_batch_item_id || row.itemId || row.item_id)
-      .map((value) => toText(value))
-      .filter(Boolean)
-      .forEach((itemId) => state.selectedPayBatchItemIds.add(itemId));
+    addValues(state.selectedPayBatchCandidateIds, row.payBatchCandidateIds || row.pay_batch_candidate_ids || row.payBatchCandidateId || row.pay_batch_candidate_id);
+    addValues(state.selectedTransferIds, row.payBankTransferIds || row.pay_bank_transfer_ids || row.payBankTransferId || row.pay_bank_transfer_id || row.transferId || row.transfer_id);
+    addValues(state.selectedPayBatchItemIds, row.payBatchItemIds || row.pay_batch_item_ids || row.payBatchItemId || row.pay_batch_item_id || row.itemId || row.item_id);
   });
 
   if (!selectedRows.length) {
@@ -25118,7 +25393,8 @@ function setBankingPaymentIssueRowSelection(correctionState, predicateOrRowKey, 
   } else {
     const umbrellaIds = Array.from(new Set(selectedRows.map((row) => toText(row.umbrellaId || row.umbrella_id)).filter(Boolean)));
     const groupKeys = Array.from(new Set(selectedRows.map((row) => toText(row.transferGroupKey || row.transfer_group_key)).filter(Boolean)));
-    const sameGroup = umbrellaIds.length === 1 && groupKeys.length === 1;
+    const actionTypes = Array.from(new Set(selectedRows.map((row) => rowActionType(row)).filter(Boolean)));
+    const sameGroup = umbrellaIds.length === 1 && groupKeys.length === 1 && actionTypes.length === 1;
 
     if (!sameGroup) {
       state.selectedUmbrellaGroup = null;
@@ -25126,9 +25402,14 @@ function setBankingPaymentIssueRowSelection(correctionState, predicateOrRowKey, 
     } else {
       const umbrellaId = umbrellaIds[0];
       const transferGroupKey = groupKeys[0];
-      const fullGroupRows = state.rows.filter((row) => toText(row?.umbrellaId || row?.umbrella_id) === umbrellaId && toText(row?.transferGroupKey || row?.transfer_group_key) === transferGroupKey && isSelectable(row));
+      const fullGroupRows = state.rows.filter((row) => (
+        toText(row?.umbrellaId || row?.umbrella_id) === umbrellaId &&
+        toText(row?.transferGroupKey || row?.transfer_group_key) === transferGroupKey &&
+        rowActionType(row) === actionTypes[0] &&
+        isSelectable(row)
+      ));
       const fullGroupSelected = fullGroupRows.length > 0 && fullGroupRows.every((row) => row.selected === true);
-      state.selectedUmbrellaGroup = (fullGroupSelected && isExplicitUmbrellaSelection) ? true : null;
+      state.selectedUmbrellaGroup = (fullGroupSelected && requestedSelectionMode === 'umbrellaGroup') ? true : null;
       state.selectedTransferGroupKey = fullGroupSelected ? transferGroupKey : '';
     }
   }
@@ -25143,34 +25424,12 @@ function setBankingPaymentIssueRowSelection(correctionState, predicateOrRowKey, 
     state.planError = '';
     state.acceptedResolutionJson = null;
     state.acceptedResolutionSummary = null;
+    state.financeReviewState = null;
     try { if (typeof invalidateBankingPaymentIssuePlan === 'function') invalidateBankingPaymentIssuePlan(state); } catch {}
-  } else if (state.selection && typeof getBankingPaymentIssueSelectionSignature === 'function') {
-    try {
-      const existingSignature = toText(getBankingPaymentIssueSelectionSignature(state.selection));
-      const selectedSignature = JSON.stringify({
-        row_keys: Array.from(state.selectedRowKeys).sort(),
-        candidate_ids: Array.from(state.selectedPayBatchCandidateIds).sort(),
-        transfer_ids: Array.from(state.selectedTransferIds).sort(),
-        item_ids: Array.from(state.selectedPayBatchItemIds).sort(),
-        umbrella: toText(state.selectedUmbrellaGroup === true ? '1' : ''),
-        transfer_group_key: toText(state.selectedTransferGroupKey)
-      });
-      if (!existingSignature || existingSignature.indexOf(selectedSignature) === -1) {
-        state.selection = null;
-        state.plan = null;
-        state.planSelectionSignature = '';
-        state.planError = '';
-        state.acceptedResolutionJson = null;
-        state.acceptedResolutionSummary = null;
-      }
-    } catch {
-      state.selection = null;
-      state.plan = null;
-      state.planSelectionSignature = '';
-      state.planError = '';
-      state.acceptedResolutionJson = null;
-      state.acceptedResolutionSummary = null;
-    }
+  }
+
+  if (targetSelected && selectedRows.length === 0) {
+    return { error: true, message: 'No selectable payment rows are available for this action.' };
   }
 
   return selectedRows;
@@ -25253,20 +25512,17 @@ function rerenderBankingPaymentIssuePanel() {
   }
 }
 
-
-
 function selectBankingPaymentIssueRows(correctionState, mode, options = {}) {
-  const state = (correctionState && typeof correctionState === 'object') ? correctionState : null;
+  const state = (correctionState && typeof correctionState === 'object' && !Array.isArray(correctionState)) ? correctionState : null;
   if (!state) return null;
 
   const toText = (value) => String(value == null ? '' : value).trim();
   const toUpper = (value) => toText(value).toUpperCase();
-  const manualActionModes = new Set(['startManualPaidAction', 'cancelManualPaidAction']);
-  const requestedMode = String(mode || '').trim();
+  const requestedMode = toText(mode);
   state.rows = Array.isArray(state.rows) ? state.rows : [];
 
   const clearSelectionAndPlan = (lastSelectionMode) => {
-    setBankingPaymentIssueRowSelection(state, () => true, false, { mode: 'apply', manualPaidActionMode: state.manualPaidActionMode === true });
+    setBankingPaymentIssueRowSelection(state, () => true, false, { selectionMode: lastSelectionMode || '' });
     state.selectedPayBatchCandidateIds = new Set();
     state.selectedTransferIds = new Set();
     state.selectedPayBatchItemIds = new Set();
@@ -25284,113 +25540,75 @@ function selectBankingPaymentIssueRows(correctionState, mode, options = {}) {
     try { if (typeof invalidateBankingPaymentIssuePlan === 'function') invalidateBankingPaymentIssuePlan(state); } catch {}
   };
 
-  const rebuildRowsIfPossible = () => {
-    const payload = state.batchPayload || state.batch_payload || state.payload || null;
-    if (!payload || typeof buildBankingPaymentIssueRows !== 'function') return;
-    try {
-      state.rows = buildBankingPaymentIssueRows(payload, { manualPaidActionMode: state.manualPaidActionMode === true, correctionState: state });
-      state.issueRows = state.rows;
-      if (typeof normaliseBankingPaymentIssueState === 'function') {
-        state.issueState = normaliseBankingPaymentIssueState(payload, { manualPaidActionMode: state.manualPaidActionMode === true, correctionState: state });
-      }
-    } catch {}
-  };
-
-  if (manualActionModes.has(requestedMode)) {
-    const enabled = requestedMode === 'startManualPaidAction';
-    state.manualPaidActionMode = enabled;
-    state.manual_paid_action_mode = enabled;
-    state.issueState = (state.issueState && typeof state.issueState === 'object') ? state.issueState : {};
-    state.issueState.manualPaidActionMode = enabled;
-
-    if (enabled) {
-      state.issueState.headline = 'Manual action';
-      state.issueState.summaryText = 'Select paid payments to make them eligible to be paid again.';
-      state.issueState.statusText = 'Manual action';
-      state.issueState.requiresUserAction = false;
-      state.issueState.navAlert = false;
-      state.issueState.issueKindForDisplay = 'MANUAL_PAID_ACTION';
-    }
-
-    clearSelectionAndPlan(requestedMode);
-    rebuildRowsIfPossible();
-    return [];
-  }
-
   if (requestedMode === 'clearAll') {
     clearSelectionAndPlan('clearAll');
     return [];
   }
 
-  const triggerRow = (options && typeof options === 'object') ? (options.row || null) : null;
+  const normaliseUiAction = (value) => {
+    const action = toUpper(value);
+    if (action === 'REVERSE_SETTLED_PAYMENT') return 'CANDIDATE_RETURNED_FUNDS';
+    if (action === 'UNWIND_FAILED_PAYMENT') return 'RELEASE_FOR_NEXT_RUN';
+    if (action === 'REVERSE_SETTLED_REVERSAL') return 'REVERSE_RETURNED';
+    if (action === 'REVIEW_BANK_EVIDENCE') return 'RESOLVE_MANUALLY';
+    if (action === 'PRE_BANK_CANCEL') return 'CANCEL_PAYMENT_ATTEMPT';
+    return action;
+  };
+  const rowActionType = (row) => normaliseUiAction(row?.bulkActionType || row?.bulk_action_type || row?.actionType || row?.action_type || row?.backendAction || row?.backend_action || '');
+  const isVisible = (row) => row && row.hidden !== true && row.isHidden !== true;
+  const isSelectable = (row) => row && row.selectable === true && !!rowActionType(row);
+
+  const triggerRow = (options && typeof options === 'object' && !Array.isArray(options)) ? (options.row || null) : null;
   const triggerUmbrella = toText(options?.umbrellaId || options?.umbrella_id || triggerRow?.umbrellaId || triggerRow?.umbrella_id);
   const triggerGroupKey = toText(options?.transferGroupKey || options?.transfer_group_key || triggerRow?.transferGroupKey || triggerRow?.transfer_group_key);
   const triggerTransferId = toText(options?.payBankTransferId || options?.pay_bank_transfer_id || triggerRow?.payBankTransferId || triggerRow?.pay_bank_transfer_id);
+  const triggerActionType = rowActionType(triggerRow);
+
+  const modeActionType = (() => {
+    if (requestedMode === 'releaseForNextRun' || requestedMode === 'rejected' || requestedMode === 'failedRejected' || requestedMode === 'failedRejectedNeedingRelease' || requestedMode === 'failed') return 'RELEASE_FOR_NEXT_RUN';
+    if (requestedMode === 'reverseReturned' || requestedMode === 'returned' || requestedMode === 'selectReturnedNeedingReversal') return 'REVERSE_RETURNED';
+    if (requestedMode === 'checkRequired' || requestedMode === 'review') return 'RESOLVE_MANUALLY';
+    if (requestedMode === 'draftRemove' || requestedMode === 'notSent') return 'CANCEL_PAYMENT_ATTEMPT';
+    return '';
+  })();
 
   if (requestedMode === 'umbrellaGroup' && (!triggerUmbrella || (!triggerGroupKey && !triggerTransferId))) {
     return { error: true, message: 'Select an umbrella payment first.' };
   }
 
-  const manualMode = state.manualPaidActionMode === true || state.issueState?.manualPaidActionMode === true;
-  const isManualPaidRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    return issueKind === 'MANUAL_PAID_ACTION' || (manualMode && (row?.manualActionAvailable === true || row?.manual_action_available === true));
-  };
-
-  const isReturnedRow = (row) => {
-    const status = toUpper(row?.bankStatusLabel || row?.statusLabel || '');
-    const happened = toUpper(row?.whatHappenedLabel || row?.headline || '');
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || '');
-    return issueKind === 'RETURNED' || status === 'RETURNED' || happened === 'BANK RETURNED PAYMENT';
-  };
-
-  const rowHasAcceptanceEvidence = (row) => {
-    const diag = (row && typeof row === 'object') ? (row.providerSubmitDiagnostic || row.provider_submit_diagnostic || {}) : {};
-    const value = row?.provider_acceptance_evidence_present ?? row?.providerAcceptanceEvidencePresent ?? diag.provider_acceptance_evidence_present ?? diag.providerAcceptanceEvidencePresent;
-    return value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(String(value == null ? '' : value).trim().toLowerCase());
-  };
-  const rowAlreadyReleased = (row) => {
-    const recoveryStatus = toUpper(row?.recoveryStatus || row?.recovery_status || '');
-    const recoveryAction = toUpper(row?.recoveryAction || row?.recovery_action || '');
-    return row?.autoReleased === true || row?.auto_released === true || row?.manuallyReleased === true || row?.manually_released === true || ['AUTO_RELEASED_FOR_NEXT_RUN', 'MANUALLY_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED_FOR_NEXT_RUN', 'MANUAL_RESOLVED_NO_PAYMENT_MADE'].includes(recoveryStatus) || recoveryAction === 'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS';
-  };
-  const isRejectedRow = (row) => {
-    const status = toUpper(row?.bankStatusLabel || row?.statusLabel || '');
-    const happened = toUpper(row?.whatHappenedLabel || row?.headline || '');
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || '');
-    const providerStatus = toUpper(row?.provider_submission_status || row?.providerSubmitDiagnostic?.provider_submission_status || row?.provider_submit_diagnostic?.provider_submission_status || '');
-    const backendAction = toUpper(row?.backendAction || row?.backend_action || '');
-    const clearProviderRejected = providerStatus === 'PROVIDER_SUBMISSION_REJECTED' && rowHasAcceptanceEvidence(row) !== true && rowAlreadyReleased(row) !== true;
-    return issueKind === 'REJECTED' || status === 'NOT PAID' || status === 'REJECTED' || happened === 'BANK REJECTED PAYMENT' || backendAction === 'UNWIND_FAILED_PAYMENT' || clearProviderRejected;
-  };
-
-  const isCancellableRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || '');
-    const action = toUpper(row?.backendAction || row?.backend_action || '');
-    return issueKind === 'NOT_SENT' || issueKind === 'PAYMENT_NOT_SENT' || action === 'CANCEL_PAYMENT_ATTEMPT';
-  };
-
   const predicate = (row) => {
-    if (!row || typeof row !== 'object') return false;
+    if (!row || typeof row !== 'object' || !isVisible(row) || !isSelectable(row)) return false;
+    const actionType = rowActionType(row);
+
     if (requestedMode === 'allVisible') {
-      if (row.hidden === true || row.isHidden === true) return false;
-      if (manualMode) return isManualPaidRow(row) && (row.selectableForApply === true || row.selectable === true);
-      return row.selectableForApply === true && (isReturnedRow(row) || isRejectedRow(row) || isCancellableRow(row));
+      const selectableActionTypes = Array.from(new Set(state.rows.filter((candidate) => isVisible(candidate) && isSelectable(candidate)).map((candidate) => rowActionType(candidate)).filter(Boolean)));
+      if (selectableActionTypes.length !== 1) return false;
+      return actionType === selectableActionTypes[0];
     }
-    if (requestedMode === 'returned' || requestedMode === 'selectReturnedNeedingReversal') return !manualMode && row.selectableForApply === true && isReturnedRow(row) && rowAlreadyReleased(row) !== true;
-    if (requestedMode === 'rejected' || requestedMode === 'failedRejectedNeedingRelease' || requestedMode === 'failedRejected' || requestedMode === 'failed') return !manualMode && row.selectableForApply === true && isRejectedRow(row) && rowAlreadyReleased(row) !== true;
+
+    if (modeActionType) return actionType === modeActionType;
+
     if (requestedMode === 'umbrellaGroup') {
       if (toText(row.umbrellaId || row.umbrella_id) !== triggerUmbrella) return false;
+      if (triggerActionType && actionType !== triggerActionType) return false;
       if (triggerGroupKey) return toText(row.transferGroupKey || row.transfer_group_key) === triggerGroupKey;
       return toText(row.payBankTransferId || row.pay_bank_transfer_id) === triggerTransferId;
     }
+
     return false;
   };
 
+  const selectableForAll = state.rows.filter((row) => isVisible(row) && isSelectable(row));
+  if (requestedMode === 'allVisible') {
+    const actionTypes = Array.from(new Set(selectableForAll.map((row) => rowActionType(row)).filter(Boolean)));
+    if (actionTypes.length > 1) return { error: true, message: 'Use row-level actions for mixed payment statuses.' };
+  }
+
   state.lastSelectionMode = requestedMode;
   state.selectionScopeMode = requestedMode === 'umbrellaGroup' ? 'umbrellaGroup' : '';
-  setBankingPaymentIssueRowSelection(state, () => true, false, { mode: 'apply', selectionMode: state.selectionScopeMode, manualPaidActionMode: manualMode });
-  const selectedRows = setBankingPaymentIssueRowSelection(state, predicate, true, { mode: requestedMode === 'review' ? 'review' : 'apply', selectionMode: state.selectionScopeMode, manualPaidActionMode: manualMode });
+  setBankingPaymentIssueRowSelection(state, () => true, false, { selectionMode: state.selectionScopeMode });
+  const selectedRows = setBankingPaymentIssueRowSelection(state, predicate, true, { selectionMode: state.selectionScopeMode, actionType: modeActionType || (requestedMode === 'umbrellaGroup' ? triggerActionType : '') });
+  if (selectedRows && selectedRows.error) return selectedRows;
   return Array.isArray(selectedRows) ? selectedRows : null;
 }
 
@@ -46563,6 +46781,16 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
   const scope = String(opts.scope || opts.pay_channel_scope || opts.payChannelScope || '').trim().toUpperCase() || 'ALL';
   const batchData = (opts.batch && typeof opts.batch === 'object') ? opts.batch : ((opts.data && typeof opts.data === 'object') ? opts.data : null);
   const batch = (batchData && batchData.batch && typeof batchData.batch === 'object') ? batchData.batch : null;
+  const manualResolutionMode = opts.manual_resolution_mode === true || opts.manualResolutionMode === true;
+  const titleOverride = String(opts.title_override || opts.titleOverride || '').trim();
+  const confirmLabelOverride = String(opts.confirm_label_override || opts.confirmLabelOverride || '').trim();
+  const allowedExecutionModes = Array.isArray(opts.allowed_execution_modes)
+    ? opts.allowed_execution_modes.map((value) => String(value || '').trim().toUpperCase()).filter(Boolean)
+    : (Array.isArray(opts.allowedExecutionModes) ? opts.allowedExecutionModes.map((value) => String(value || '').trim().toUpperCase()).filter(Boolean) : []);
+  const modalTitle = titleOverride || (manualResolutionMode ? 'Confirm payment was made' : 'Execute payment');
+  const modalIntro = manualResolutionMode
+    ? 'Confirm the payment outcome from Current Payment Status. This does not run normal payment execution.'
+    : 'Select an execution/settlement mode and confirm the required details.';
 
   const rootId = `bankingPayExecConfirm_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
@@ -46706,6 +46934,109 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     }
   };
 
+  if (allowedExecutionModes.length > 0) {
+    for (const key of Object.keys(modeInfo)) {
+      if (!allowedExecutionModes.includes(key)) {
+        modeInfo[key].enabled = false;
+        modeInfo[key].disabledReason = 'This mode is not available from the current manual resolution flow.';
+      }
+    }
+  }
+
+  const hasProviderOrBankExecutionEvidence = () => {
+    const acceptedStatuses = new Set([
+      'PROVIDER_SUBMISSION_ACCEPTED', 'PAYMENT_SENT', 'PAYMENT_PAID', 'PAID', 'SENT',
+      'ACCEPTED', 'SUBMITTED', 'SETTLED', 'COMPLETED', 'COMMITTED', 'SUCCESS', 'SUCCESSFUL'
+    ]);
+    const hasEvidence = (value, seen = new WeakSet()) => {
+      if (value === null || value === undefined) return false;
+      if (Array.isArray(value)) return value.some((entry) => hasEvidence(entry, seen));
+      if (typeof value === 'string') {
+        const text = value.trim();
+        if (!text) return false;
+        try {
+          const parsed = JSON.parse(text);
+          return !!(parsed && typeof parsed === 'object' && hasEvidence(parsed, seen));
+        } catch {}
+        return false;
+      }
+      if (typeof value !== 'object') return false;
+      if (seen.has(value)) return false;
+      seen.add(value);
+      const statusText = String(
+        value.displayState ||
+        value.display_state ||
+        value.provider_submission_status ||
+        value.providerSubmissionStatus ||
+        value.bank_status ||
+        value.bankStatus ||
+        value.bankStatusLabel ||
+        value.bank_status_label ||
+        value.resultLabel ||
+        value.result_label ||
+        value.status ||
+        value.state ||
+        value.rail_state ||
+        value.railState ||
+        value.outcome_code ||
+        value.outcomeCode ||
+        ''
+      ).trim().toUpperCase();
+      if (acceptedStatuses.has(statusText)) return true;
+      if (statusText.includes('SENT') || statusText.includes('PAID') || statusText.includes('ACCEPTED')) return true;
+      if (value.safe_retry_available === false || value.safeRetryAvailable === false) {
+        if (value.provider_submit_diagnostic || value.providerSubmitDiagnostic || value.provider_submission_status || value.providerSubmissionStatus) return true;
+      }
+      if (value.provider_acceptance_evidence_present === true || value.providerAcceptanceEvidencePresent === true) return true;
+      if (value.provider_response_present === true || value.providerResponsePresent === true) {
+        const rejected = value.provider_rejected === true || value.providerRejected === true || String(value.provider_submission_status || value.providerSubmissionStatus || '').toUpperCase().includes('REJECTED');
+        if (!rejected) return true;
+      }
+      if (value.money_moved_evidence === true || value.moneyMovedEvidence === true || value.manual_paid_evidence === true || value.manualPaidEvidence === true) return true;
+      for (const key of [
+        'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
+        'provider_payment_id', 'providerPaymentId', 'external_payment_id', 'externalPaymentId',
+        'revolut_payment_id', 'revolutPaymentId', 'bank_reference', 'bankReference',
+        'transaction_id', 'transactionId', 'payment_id', 'paymentId', 'payment_reference', 'paymentReference',
+        'execution_commit_ref', 'executionCommitRef', 'settlement_confirmation_json', 'settlementConfirmationJson'
+      ]) {
+        if (String(value[key] == null ? '' : value[key]).trim()) return true;
+      }
+      const childKeys = [
+        'transfers', 'payment_issues', 'paymentIssues', 'issues', 'rows', 'items',
+        'bank_evidence', 'bankEvidence', 'provider_submit_diagnostic', 'providerSubmitDiagnostic',
+        'payment_execution_review', 'paymentExecutionReview', 'provider_response', 'providerResponse',
+        'rail_meta_json', 'railMetaJson', 'settlement_confirmation_json', 'settlementConfirmationJson',
+        'corrections', 'correction_items', 'correctionItems', 'events'
+      ];
+      for (const key of childKeys) {
+        if (value[key] && hasEvidence(value[key], seen)) return true;
+      }
+      return false;
+    };
+    return hasEvidence(batchData) || hasEvidence(batch) || hasEvidence(opts.provider_submit_diagnostic) || hasEvidence(opts.providerSubmitDiagnostic);
+  };
+
+  if (!manualResolutionMode && hasProviderOrBankExecutionEvidence()) {
+    const message = 'This batch already has provider, bank, settlement, or payment evidence. Normal Execute Payment is not available. Review it in Current Payment Status.';
+    try {
+      if (typeof openUiConfirmModal === 'function') {
+        await openUiConfirmModal({
+          title: 'Current Payment Status',
+          message,
+          confirm_label: 'OK',
+          hide_cancel: true,
+          kind: 'banking-pay-execute-blocked-current-payment-status'
+        });
+      } else if (typeof window.__toast === 'function') {
+        window.__toast(message);
+      }
+    } catch {
+      try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
+    }
+    return { cancelled: true, blocked: true, reason: 'execution-evidence-present', redirect_tab: 'payment_issues' };
+  }
+
   const csvGenerated = flag('csv_file_generated', false);
   const csvMatches = flag('csv_export_matches_current_transfers', false);
   const csvGeneratedAtUtc = strField('csv_file_generated_at_utc');
@@ -46832,11 +47163,11 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
       <div id="${enc(rootId)}">
         <div class="card">
           <div class="row">
-            <label>Execute payment</label>
+            <label>${enc(modalTitle)}</label>
             <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
               ${state.err ? `<div class="error" style="white-space:pre-wrap;">${enc(state.err)}</div>` : ''}
 
-              <div class="mini" style="opacity:.9;">Select an execution/settlement mode and confirm the required details.</div>
+              <div class="mini" style="opacity:.9;">${enc(modalIntro)}</div>
 
               <div class="card" style="padding:10px; display:flex; flex-direction:column; gap:10px;">
                 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
@@ -46956,7 +47287,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
               </div>
 
               <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
-                <button id="payExecConfirmBtn" type="button" class="btn btn-primary" ${dis}>${state.busy ? 'Working…' : 'Continue'}</button>
+                <button id="payExecConfirmBtn" type="button" class="btn btn-primary" ${dis}>${state.busy ? 'Working…' : (confirmLabelOverride || 'Continue')}</button>
                 <button id="payExecCancelBtn" type="button" class="btn btn-outline" ${dis}>Cancel</button>
               </div>
             </div>
@@ -46981,7 +47312,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     const onDismiss = () => { try { if (typeof detachHandlers === 'function') detachHandlers(); } catch {} finish({ cancelled: true }); };
     const renderTab = (k) => (k === 'main' ? render() : '');
 
-    showModal('Execute payment', [{ key: 'main', label: 'Confirm' }], renderTab, null, true, null, {
+    showModal(modalTitle, [{ key: 'main', label: 'Confirm' }], renderTab, null, true, null, {
       kind, noParentGate: true, showSave: false, showApply: false, stayOpenOnSave: false, onDismiss
     });
 
@@ -47244,6 +47575,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
 }
 
 
+
 async function bankingPayBatchExecutePayment(payBatchId, payload) {
   const id = String(payBatchId || '').trim();
   if (!id) throw new Error('bankingPayBatchExecutePayment: payBatchId is required');
@@ -47499,6 +47831,8 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
 
   return finalResult;
 }
+
+
 
 
 
@@ -48379,6 +48713,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       if (commitState === 'SUBMITTED_NOT_COMMITTED') return false;
       if (stx === 'COMMITTED' || stx === 'CANCELLED' || stx === 'SETTLED' || stx === 'SUBMITTED_NOT_COMMITTED') return false;
       if (!hasActivePaymentsForBatch(data)) return false;
+      if (typeof hasProviderOrBankExecutionEvidence === 'function' && hasProviderOrBankExecutionEvidence(data)) return false;
       return (
         stx === 'DRAFT' ||
         stx === 'DRAFT_CREATED' ||
@@ -48922,7 +49257,6 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
       'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
       'PROVIDER_SUBMISSION_REJECTED',
-      'PROVIDER_SUBMISSION_ACCEPTED',
       'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
     ]);
     const providerIssueKinds = new Set([
@@ -48931,7 +49265,13 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       'BANK_TRANSFER_PROVIDER_REVIEW_REQUIRED'
     ]);
     for (const source of sources) {
+      const sourceStatus = providerSubmitStatusFromDiagnostic(source);
+      const acceptedWithExternalEvidence = sourceStatus === 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitHasAcceptanceEvidence(source) === true;
+      if (acceptedWithExternalEvidence) continue;
       for (const obj of providerSubmitCollectDiagnosticSources(source)) {
+        const objStatus = providerSubmitStatusFromDiagnostic(obj);
+        const objAcceptedWithExternalEvidence = objStatus === 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitHasAcceptanceEvidence(obj) === true;
+        if (objAcceptedWithExternalEvidence) continue;
         const issueKind = providerSubmitGetFirstText(obj, [
           'issueKindForDisplay', 'issue_kind_for_display', 'issue_kind', 'issueKind',
           'kind', 'type', 'alert_kind', 'alertKind', 'payment_issue_kind', 'paymentIssueKind'
@@ -48940,14 +49280,46 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
         if (readProviderSubmitBool(obj.provider_submit_review_issue ?? obj.providerSubmitReviewIssue) === true) return true;
       }
       if (providerSubmitManualResolutionRequiredFrom(source)) return true;
-      if (providerIssueStatuses.has(providerSubmitStatusFromDiagnostic(source))) return true;
+      if (providerIssueStatuses.has(sourceStatus)) return true;
     }
     return false;
   };
 
+  const hasProviderOrBankExecutionEvidence = (data) => {
+    const d = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+    const b = deriveBatchObj(d) || {};
+    if (String(b.execution_commit_state || d.execution_commit_state || '').trim().toUpperCase() !== '' && String(b.execution_commit_state || d.execution_commit_state || '').trim().toUpperCase() !== 'NOT_SUBMITTED') return true;
+    if (String(b.execution_commit_ref || d.execution_commit_ref || '').trim()) return true;
+    if (String(b.execution_committed_at_utc || d.execution_committed_at_utc || '').trim()) return true;
+    if (b.settlement_confirmation_json || d.settlement_confirmation_json) return true;
+    if (providerSubmitHasAcceptanceEvidence(d) === true) return true;
+    if (providerSubmitTransactionIdentifierPresent(d) === true) return true;
+    for (const transfer of deriveTransfers(d)) {
+      if (providerSubmitHasAcceptanceEvidence(transfer) === true) return true;
+      if (providerSubmitTransactionIdentifierPresent(transfer) === true) return true;
+      const state = String(transfer?.status || transfer?.rail_state || transfer?.railState || transfer?.normalised_state || transfer?.normalized_state || '').trim().toUpperCase();
+      if (['SUBMITTED', 'SENT', 'ACCEPTED', 'PROCESSING', 'IN_FLIGHT', 'PENDING_SETTLEMENT', 'COMPLETED', 'SETTLED', 'PAID', 'COMMITTED', 'EXECUTED'].includes(state)) return true;
+      if (String(transfer?.completed_at_utc || transfer?.completedAtUtc || '').trim()) return true;
+      if (String(transfer?.request_id || transfer?.requestId || transfer?.payment_reference || transfer?.paymentReference || '').trim()) return true;
+    }
+    const eventSources = [d.bank_evidence, d.bankEvidence, d.payment_events, d.paymentEvents, d.transfer_events, d.transferEvents, d.provider_events, d.providerEvents, d.provider_transfer_events, d.providerTransferEvents];
+    if (eventSources.some((value) => Array.isArray(value) && value.length > 0)) return true;
+    const diagStatus = providerSubmitStatusFromDiagnostic(d);
+    const safeRetry = (() => {
+      for (const obj of providerSubmitCollectDiagnosticSources(d)) {
+        if (Object.prototype.hasOwnProperty.call(obj, 'safe_retry_available') || Object.prototype.hasOwnProperty.call(obj, 'safeRetryAvailable')) {
+          return readProviderSubmitBool(obj.safe_retry_available ?? obj.safeRetryAvailable);
+        }
+      }
+      return null;
+    })();
+    if (safeRetry === false && diagStatus && diagStatus.startsWith('PROVIDER_SUBMISSION')) return true;
+    return false;
+  };
+
   const showProviderSubmitResolutionNotice = async ({ title, message, confirmClass = 'btn btn-primary' } = {}) => {
-    const titleOut = String(title || 'Provider submission review').trim() || 'Provider submission review';
-    const msg = String(message || '').trim() || 'Provider submission review updated.';
+    const titleOut = String(title || 'Current Payment Status').trim() || 'Current Payment Status';
+    const msg = String(message || '').trim() || 'Current Payment Status updated.';
     try {
       if (typeof openUiConfirmModal === 'function') {
         await openUiConfirmModal({
@@ -49620,46 +49992,27 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
   const patchPaymentIssueRowsForManualMode = (rows, manualPaidActionMode) => {
     const list = Array.isArray(rows) ? rows : [];
-    const toText = (value) => String(value == null ? '' : value).trim();
-    const toUpper = (value) => toText(value).toUpperCase();
+    const toTextLocal = (value) => String(value == null ? '' : value).trim();
+    const toUpperLocal = (value) => toTextLocal(value).toUpperCase();
 
     for (const row of list) {
       if (!row || typeof row !== 'object') continue;
-
-      const issueKind = toUpper(row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || '');
-      const bankStatus = toUpper(row.bankStatusLabel || row.bank_status_label || row.bank_status || '');
-      const happened = toUpper(row.whatHappenedLabel || row.what_happened_label || '');
-      const status = toUpper(row.statusLabel || row.status_label || row.status || '');
-      const backendAction = toUpper(row.backendAction || row.backend_action || '');
-      const isPaidRow =
-        issueKind === 'PAID' ||
-        issueKind === 'NONE' ||
-        bankStatus === 'PAID' ||
-        status === 'PAID' ||
-        happened === 'PAID SUCCESSFULLY';
-
-      if (!isPaidRow) continue;
-      if (backendAction && backendAction !== 'REVERSE_SETTLED_PAYMENT') continue;
-
-      row.manualActionAvailable = true;
-
-      if (manualPaidActionMode === true) {
-        row.bankStatusLabel = 'Paid';
-        row.whatHappenedLabel = 'Paid successfully';
-        row.actionLabel = 'Make eligible again';
-        row.statusLabel = 'Paid';
-        row.selectable = true;
-        row.selectableForApply = true;
-        row.selectableForReview = true;
-        row.backendAction = 'REVERSE_SETTLED_PAYMENT';
-        row.issueKindForDisplay = 'MANUAL_PAID_ACTION';
-        row.blockerText = '';
-      } else {
-        if (!backendAction) row.backendAction = '';
-        if (!toText(row.actionLabel || row.action_label)) row.actionLabel = 'No action';
+      const issueKind = toUpperLocal(row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || '');
+      const displayState = toUpperLocal(row.displayState || row.display_state || '');
+      const oldAction = toUpperLocal(row.actionLabel || row.action_label || '');
+      if (issueKind === 'MANUAL_PAID_ACTION') row.issueKindForDisplay = displayState || 'PAYMENT_PAID';
+      row.manualActionAvailable = false;
+      row.manual_action_available = false;
+      if (manualPaidActionMode === true && (displayState === 'PAYMENT_SENT' || displayState === 'PAYMENT_PAID' || issueKind === 'PAID' || issueKind === 'MANUAL_PAID_ACTION')) {
+        row.actionType = row.actionType || 'CANDIDATE_RETURNED_FUNDS';
+        row.actionLabel = 'Candidate returned funds';
+      } else if (oldAction.includes('ELIGIBLE')) {
+        row.actionLabel = (typeof getBankingPaymentIssueActionLabel === 'function') ? getBankingPaymentIssueActionLabel(row) : 'View details';
+      }
+      if (issueKind === 'MANUAL_PAID_ACTION') {
         row.selectable = false;
         row.selectableForApply = false;
-        row.issueKindForDisplay = issueKind === 'PAID' ? 'PAID' : (issueKind === 'NONE' ? 'NONE' : (row.issueKindForDisplay || 'NONE'));
+        row.selectableForReview = false;
       }
     }
 
@@ -49910,7 +50263,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     const toText = (value) => String(value == null ? '' : value).trim();
     const toUpper = (value) => toText(value).toUpperCase();
 
-    if (issueState.manualPaidActionMode === true || correctionState.manualPaidActionMode === true) return true;
+    if (false) return true;
     if (issueState.requiresUserAction === true || issueState.navAlert === true || issueState.hasActionableIssueRows === true) return true;
 
     const kind = toUpper(issueState.issueKindForDisplay || issueState.issueKind || issueState.issue_kind || '');
@@ -50311,7 +50664,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       }
     }
 
-     const previousManualPaidActionMode = previous.manualPaidActionMode === true || previous.issueState?.manualPaidActionMode === true;
+     const previousManualPaidActionMode = false;
     const paymentIssuePayload = buildPaymentIssueEvidencePayload();
     const providerSubmitEvidencePresent = paymentIssuePayloadHasProviderSubmitEvidence(paymentIssuePayload);
     const loadedPaymentIssueEvidenceSectionsPresent = paymentIssuePayloadHasLoadedEvidenceSections(paymentIssuePayload);
@@ -50368,9 +50721,9 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     const nextIssueState = (nextIssueStateRaw && typeof nextIssueStateRaw === 'object') ? { ...nextIssueStateRaw } : {};
     nextIssueState.manualPaidActionMode = previousManualPaidActionMode;
     if (previousManualPaidActionMode) {
-      nextIssueState.headline = 'Manual action';
-      nextIssueState.summaryText = 'Select paid payments to make them eligible to be paid again.';
-      nextIssueState.statusText = 'Manual action';
+      nextIssueState.headline = 'Current Payment Status';
+      nextIssueState.summaryText = 'Use Current Payment Status row actions for supported payments.';
+      nextIssueState.statusText = 'Current Payment Status';
       nextIssueState.issueKindForDisplay = 'MANUAL_PAID_ACTION';
       nextIssueState.requiresUserAction = false;
       nextIssueState.navAlert = false;
@@ -51362,7 +51715,7 @@ const executePaymentPipeline = async () => {
   }
 
   if (!isExecuteAllowedByStatus(child.data)) {
-    const message = 'This payment cannot be executed in its current state. Refresh the batch and review Payment Issues before trying again.';
+    const message = 'This payment cannot be executed in its current state. Refresh the batch and review Current Payment Status before trying again.';
     child.error = message;
     try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
     await rerenderChild();
@@ -51589,7 +51942,7 @@ const executePaymentPipeline = async () => {
       child.ui.activeTabKey = 'payment_issues';
       await showChildFriendlyNotice({
         title: 'Payment status needs review',
-        message: 'The provider or bank returned a payment outcome that needs review. Review Payment Issues before retrying.',
+        message: 'The provider or bank returned a payment outcome that needs review. Review Current Payment Status before retrying.',
         confirmLabel: 'OK',
         kind: 'import-summary-banking-execute-provider-review',
         confirmClass: 'btn btn-primary'
@@ -51602,7 +51955,7 @@ const executePaymentPipeline = async () => {
       child.ui.activeTabKey = 'payment_issues';
       await showChildFriendlyNotice({
         title: 'Payment status needs review',
-        message: 'The provider or bank returned a payment outcome that needs review. Review Payment Issues before retrying.',
+        message: 'The provider or bank returned a payment outcome that needs review. Review Current Payment Status before retrying.',
         confirmLabel: 'OK',
         kind: 'import-summary-banking-execute-provider-review',
         confirmClass: 'btn btn-primary'
@@ -51721,7 +52074,7 @@ const executePaymentPipeline = async () => {
       try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
       await showChildFriendlyNotice({
         title: 'Payment status needs review',
-        message: 'The provider or bank returned a payment outcome that needs review. Review Payment Issues before retrying.',
+        message: 'The provider or bank returned a payment outcome that needs review. Review Current Payment Status before retrying.',
         confirmLabel: 'OK',
         kind: 'import-summary-banking-execute-provider-review',
         confirmClass: 'btn btn-primary'
@@ -51821,7 +52174,7 @@ const retryBlockedFundsPipeline = async () => {
   if (canRetryBlockedFunds !== true) {
     await showBlockedFundsRetryModal({
       title: 'Retry payment unavailable',
-      message: 'Blocked-funds retry is not currently safe for this batch. Refresh the batch or review the Payment Issues panel before trying again.'
+      message: 'Blocked-funds retry is not currently safe for this batch. Refresh the batch or review the Current Payment Status tab before trying again.'
     });
     return;
   }
@@ -51920,13 +52273,13 @@ const retryBlockedFundsPipeline = async () => {
     } else if (reviewRequired) {
       await showBlockedFundsRetryModal({
         title: 'Payment retry needs review',
-        message: 'The blocked-funds retry reached a review-required state. Review Payment Issues before taking any further action.',
+        message: 'The blocked-funds retry reached a review-required state. Review Current Payment Status before taking any further action.',
         detailRows: [['Status', latestStatus || retryResult?.status || 'Review required']]
       });
     } else {
       await showBlockedFundsRetryModal({
         title: 'Payment retry completed',
-        message: 'The blocked-funds retry operation has completed. Check the Payment Issues panel for the latest bank status.',
+        message: 'The blocked-funds retry operation has completed. Check the Current Payment Status tab for the latest bank status.',
         detailRows: [['Status', latestStatus || retryResult?.status || 'Completed']]
       });
     }
@@ -52148,9 +52501,9 @@ const retryBlockedFundsPipeline = async () => {
       return withPagedControls(`
         <div id="${enc(rootId)}" class="card payment-issues-tab">
           <div class="row">
-            <label>Payment Issues</label>
+            <label>Current Payment Status</label>
             <div class="controls">
-              <span class="mini">Payment Issues renderer is not available.</span>
+              <span class="mini">Current Payment Status renderer is not available.</span>
             </div>
           </div>
         </div>
@@ -52335,6 +52688,15 @@ const retryBlockedFundsPipeline = async () => {
             ''
           ).trim();
           const selectedRows = () => correctionState.rows.filter((row) => row && row.selected === true);
+          const addPaymentIssueValuesToSet = (target, values) => {
+            try {
+              const list = Array.isArray(values) ? values : [values];
+              for (const value of list) {
+                const text = String(value == null ? '' : value).trim();
+                if (text) target.add(text);
+              }
+            } catch {}
+          };
           const getCorrectionRequestId = () => String(
             correctionState?.request?.id ||
             correctionState?.request?.request_id ||
@@ -52350,7 +52712,7 @@ const retryBlockedFundsPipeline = async () => {
           ).trim();
           const showIssueError = async (result, fallbackMessage) => {
             if (!result || result.error !== true) return false;
-            const message = String(result.message || fallbackMessage || 'Payment issue needs review.').trim();
+            const message = String(result.message || fallbackMessage || 'Current Payment Status needs review.').trim();
             if (message) toast(message);
             correctionState.planError = message || '';
             await rerenderPaymentIssuesOnly();
@@ -52358,7 +52720,7 @@ const retryBlockedFundsPipeline = async () => {
           };
           const getSelectionForAction = async (requestedAction) => {
             if (typeof buildBankingPaymentIssueSelection !== 'function') {
-              toast('Payment issue selection is not available.');
+              toast('Current Payment Status selection is not available.');
               return null;
             }
             const selection = buildBankingPaymentIssueSelection(correctionState, requestedAction || undefined);
@@ -52400,60 +52762,317 @@ const retryBlockedFundsPipeline = async () => {
           };
 
           const applyManualPaidActionMode = async (enabled) => {
-            const manualEnabled = enabled === true;
-            correctionState.manualPaidActionMode = manualEnabled;
-
+            correctionState.manualPaidActionMode = false;
             try {
               if (correctionState.issueState && typeof correctionState.issueState === 'object') {
-                correctionState.issueState.manualPaidActionMode = manualEnabled;
+                correctionState.issueState.manualPaidActionMode = false;
               }
             } catch {}
-
-            try {
-              if (typeof selectBankingPaymentIssueRows === 'function') {
-                const mode = manualEnabled ? 'startManualPaidAction' : 'cancelManualPaidAction';
-                const result = selectBankingPaymentIssueRows(correctionState, mode, { manualPaidActionMode: manualEnabled });
-                if (result && result.error === true) {
-                  correctionState.planError = String(result.message || 'Payment issue needs review.');
-                  toast(correctionState.planError);
-                }
-              }
-            } catch {}
-
-            const paymentIssuePayloadForManualMode = buildPaymentIssueEvidencePayload();
-            const nextIssueStateRaw = (typeof normaliseBankingPaymentIssueState === 'function')
-              ? normaliseBankingPaymentIssueState(paymentIssuePayloadForManualMode, { manualPaidActionMode: manualEnabled, correctionState })
-              : {};
-            const nextIssueState = (nextIssueStateRaw && typeof nextIssueStateRaw === 'object') ? { ...nextIssueStateRaw } : {};
-            nextIssueState.manualPaidActionMode = manualEnabled;
-
-            if (manualEnabled) {
-              nextIssueState.headline = 'Manual action';
-              nextIssueState.summaryText = 'Select paid payments to make them eligible to be paid again.';
-              nextIssueState.statusText = 'Manual action';
-              nextIssueState.issueKindForDisplay = 'MANUAL_PAID_ACTION';
-              nextIssueState.requiresUserAction = false;
-              nextIssueState.navAlert = false;
-            }
-
-            const nextRows = (typeof buildBankingPaymentIssueRows === 'function')
-              ? buildBankingPaymentIssueRows(paymentIssuePayloadForManualMode, { manualPaidActionMode: manualEnabled, correctionState })
-              : correctionState.rows;
-
-            correctionState.rows = patchPaymentIssueRowsForManualMode(nextRows, manualEnabled);
-            nextIssueState.manualPaidActionAvailable = nextIssueState.manualPaidActionAvailable === true || correctionState.rows.some((row) => row && row.manualActionAvailable === true);
-            nextIssueState.hasSelectableRows = nextIssueState.hasSelectableRows === true || correctionState.rows.some((row) => row && (row.selectableForApply === true || row.selectableForReview === true));
-            correctionState.issueState = nextIssueState;
-            correctionState.manualPaidActionAvailable = nextIssueState.manualPaidActionAvailable === true;
-
             resetPaymentIssueLocalSelectionAndPlan(correctionState);
             child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
             child.ui.activeTabKey = 'payment_issues';
-
+            try { toast('Use Candidate returned funds from Current Payment Status for supported sent payments.'); } catch {}
             await rerenderPaymentIssuesOnly();
           };
 
+          const findPaymentIssueRowByKey = (rowKey) => {
+            const key = String(rowKey || '').trim();
+            if (!key) return null;
+            return correctionState.rows.find((row) => String(row?.rowKey || row?.row_key || '').trim() === key) || null;
+          };
+
+          const paymentIssueRowActionType = (row) => String(row?.actionType || row?.action_type || row?.bulkActionType || row?.bulk_action_type || row?.backendAction || row?.backend_action || '').trim().toUpperCase();
+
+          const paymentIssueRowNeedsBackendSupport = (row) => row?.requiresBackendSupport === true || row?.requires_backend_support === true || row?.futureActionPendingBackend === true || row?.future_action_pending_backend === true;
+
+          const showPaymentIssueRowDetails = async (row, title = 'Payment details', message = '') => {
+            const details = (row && typeof row.supportDetails === 'object' && !Array.isArray(row.supportDetails)) ? row.supportDetails : {};
+            const summary = message || String(row?.resultLabel || row?.result_label || row?.whatHappenedLabel || row?.what_happened_label || 'Review the support details for this payment row.').trim();
+            const ids = [
+              ['Transfer ID', details.transfer_id || row?.payBankTransferId || row?.pay_bank_transfer_id],
+              ['Operation ID', details.operation_id || row?.operation_id],
+              ['Chunk ID', details.chunk_id || row?.chunk_id],
+              ['Provider status', details.provider_submission_status || row?.provider_submission_status]
+            ].filter(([, value]) => String(value == null ? '' : value).trim());
+            const extra = ids.length ? `\n\n${ids.map(([label, value]) => `${label}: ${value}`).join('\n')}` : '';
+            await showProviderSubmitResolutionNotice({ title, message: `${summary}${extra}`, confirmClass: 'btn btn-primary' });
+          };
+
+          const rowHasSentOrAcceptedEvidenceForNoMoneyBlock = (row) => {
+            if (!row || typeof row !== 'object') return false;
+            const state = String(row.displayState || row.display_state || row.statusLabel || row.status_label || row.resultLabel || row.result_label || '').trim().toUpperCase();
+            if (['PAYMENT_SENT', 'PAYMENT_PAID'].includes(state) || state.includes('SENT') || state.includes('PAID')) return true;
+            if (row.provider_acceptance_evidence_present === true || row.providerAcceptanceEvidencePresent === true) return true;
+            const details = (row.supportDetails && typeof row.supportDetails === 'object' && !Array.isArray(row.supportDetails)) ? row.supportDetails : {};
+            return providerSubmitHasAcceptanceEvidence({ ...row, provider_submit_diagnostic: details.raw_provider_diagnostic || details.rawProviderDiagnostic || details }) === true || providerSubmitTransactionIdentifierPresent({ ...row, provider_submit_diagnostic: details.raw_provider_diagnostic || details.rawProviderDiagnostic || details }) === true;
+          };
+
+          const selectSinglePaymentIssueRowForAction = (row) => {
+            if (!row || typeof row !== 'object') return false;
+            resetPaymentIssueLocalSelectionAndPlan(correctionState);
+            row.selected = true;
+            const rowKey = String(row.rowKey || row.row_key || '').trim();
+            correctionState.selectedRowKeys = new Set(rowKey ? [rowKey] : []);
+            correctionState.selectedTransferIds = new Set();
+            correctionState.selectedPayBatchItemIds = new Set();
+            correctionState.selectedPayBatchCandidateIds = new Set();
+            addPaymentIssueValuesToSet(correctionState.selectedTransferIds, row.payBankTransferIds || row.pay_bank_transfer_ids || row.payBankTransferId || row.pay_bank_transfer_id);
+            addPaymentIssueValuesToSet(correctionState.selectedPayBatchItemIds, row.payBatchItemIds || row.pay_batch_item_ids || row.payBatchItemId || row.pay_batch_item_id);
+            addPaymentIssueValuesToSet(correctionState.selectedPayBatchCandidateIds, row.payBatchCandidateIds || row.pay_batch_candidate_ids || row.payBatchCandidateId || row.pay_batch_candidate_id);
+            return true;
+          };
+
+          const openPaymentIssueManualDecisionModal = async (row) => new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'banking-payment-manual-decision-overlay';
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(15,23,42,.38);display:flex;align-items:center;justify-content:center;padding:18px;';
+            const panel = document.createElement('div');
+            panel.className = 'card banking-payment-manual-decision-card';
+            panel.style.cssText = 'max-width:560px;width:min(560px,100%);padding:16px;display:flex;flex-direction:column;gap:10px;';
+            panel.innerHTML = `
+              <div style="font-weight:800;font-size:16px;">Resolve manually</div>
+              <div class="mini" style="opacity:.88;">Choose exactly what happened for this payment. CloudTMS will only continue where the selected route is safely available.</div>
+              <div style="display:flex;flex-direction:column;gap:8px;">
+                <button type="button" class="btn btn-sm btn-outline" data-choice="PAYMENT_WAS_MADE">Payment was made</button>
+                <button type="button" class="btn btn-sm btn-outline" data-choice="NO_PAYMENT_WAS_MADE">No payment was made</button>
+                <button type="button" class="btn btn-sm btn-outline" data-choice="CANDIDATE_RETURNED_FUNDS">Candidate returned funds</button>
+                <button type="button" class="btn btn-sm btn-outline" data-choice="STILL_UNSURE">Still unsure — leave for review</button>
+              </div>
+            `;
+            overlay.appendChild(panel);
+            const cleanup = (choice) => {
+              try { overlay.remove(); } catch {}
+              resolve(choice || 'STILL_UNSURE');
+            };
+            overlay.addEventListener('click', (event) => {
+              if (event.target === overlay) cleanup('STILL_UNSURE');
+              const btn = event.target && event.target.closest ? event.target.closest('[data-choice]') : null;
+              if (btn) cleanup(String(btn.getAttribute('data-choice') || 'STILL_UNSURE').trim() || 'STILL_UNSURE');
+            });
+            document.body.appendChild(overlay);
+          });
+
+          const buildWholeBatchActionModelForChild = () => {
+            const allRows = correctionState.rows.filter((row) => row && typeof row === 'object');
+            const activeRows = allRows.filter((row) => {
+              const actionType = String(row?.wholeBatchEligibleActionType || row?.bulkActionType || row?.actionType || '').trim().toUpperCase();
+              return actionType && actionType !== 'VIEW_DETAILS';
+            });
+            if (!activeRows.length) return { enabled: false, actionType: '', eligibleRows: [], excludedRows: allRows, disabledReason: 'No batch-level action is available.' };
+            const actionTypes = Array.from(new Set(activeRows.map((row) => String(row?.wholeBatchEligibleActionType || row?.bulkActionType || row?.actionType || '').trim().toUpperCase()).filter(Boolean)));
+            if (actionTypes.length !== 1) return { enabled: false, actionType: '', eligibleRows: [], excludedRows: allRows, disabledReason: 'Use row-level actions for mixed payment statuses.' };
+            const actionType = actionTypes[0];
+            const eligibleRows = activeRows.filter((row) => String(row?.wholeBatchEligibleActionType || row?.bulkActionType || row?.actionType || '').trim().toUpperCase() === actionType);
+            const excludedRows = allRows.filter((row) => !eligibleRows.includes(row));
+            if (excludedRows.length) return { enabled: false, actionType, eligibleRows, excludedRows, disabledReason: 'This batch has mixed payment statuses. Use row-level actions for eligible rows.' };
+            if (actionType === 'RELEASE_FOR_NEXT_RUN') {
+              const allSafe = eligibleRows.every((row) => row.selectable === true && String(row?.bulkActionType || row?.actionType || '').trim().toUpperCase() === 'RELEASE_FOR_NEXT_RUN' && rowHasSentOrAcceptedEvidenceForNoMoneyBlock(row) !== true);
+              return { enabled: allSafe, actionType, eligibleRows, excludedRows, disabledReason: allSafe ? '' : 'Release for next run is only available when every row is safely selectable for no-payment release.' };
+            }
+            const allBackendSafe = eligibleRows.every((row) => row.wholeBatchActionSafe === true || row.whole_batch_action_safe === true || row.backendWholeBatchSafe === true || row.backend_whole_batch_safe === true);
+            return { enabled: allBackendSafe, actionType, eligibleRows, excludedRows, disabledReason: allBackendSafe ? '' : 'This whole-batch action is waiting for backend safety support.' };
+          };
+
+
+          const openSelectedPaymentIssueCorrection = async (requestedAction, rowsForActionOverride = null) => {
+            const selection = await getSelectionForAction(requestedAction);
+            if (!selection) return false;
+            const rowsForAction = Array.isArray(rowsForActionOverride) ? rowsForActionOverride : selectedRows();
+            const draftOnlyRemoval = selectionIsDraftOnlyPaymentIssueRemoval(selection, rowsForAction);
+            const signature = (typeof getBankingPaymentIssueSelectionSignature === 'function')
+              ? getBankingPaymentIssueSelectionSignature(selection)
+              : '';
+            correctionState.planLoading = true;
+            correctionState.planError = '';
+            await rerenderPaymentIssuesOnly();
+            try {
+              correctionState.plan = await bankingPayPaymentCorrectionPlan(id, selection);
+              correctionState.planSelectionSignature = signature;
+              correctionState.selection = selection;
+              correctionState.planError = '';
+            } catch (e) {
+              correctionState.planError = (typeof sanitizeBankingPaymentIssueError === 'function')
+                ? sanitizeBankingPaymentIssueError(e, 'plan')
+                : 'Unable to review Current Payment Status.';
+              toast(correctionState.planError);
+              return false;
+            } finally {
+              correctionState.planLoading = false;
+            }
+
+            if (!draftOnlyRemoval && paymentIssueFinanceResolutionRequired(correctionState.plan, { draftOnlyRemoval }) && !correctionState.acceptedResolutionJson) {
+              correctionState.planError = 'Review the suggested pay-channel resolution before continuing.';
+              toast(correctionState.planError);
+              await rerenderPaymentIssuesOnly();
+              return false;
+            }
+
+            if (typeof openBankingPayCorrectionConfirmModal !== 'function') {
+              toast('Current Payment Status review is not available yet.');
+              await rerenderPaymentIssuesOnly();
+              return false;
+            }
+
+            await openBankingPayCorrectionConfirmModal({
+              payBatchId: id,
+              batchPayload: child.data,
+              correctionState,
+              selectedRows: rowsForAction,
+              currentPlan: correctionState.plan,
+              selection: correctionState.selection || selection,
+              selectionSignature: correctionState.planSelectionSignature || signature,
+              issueKind: correctionState.issueState?.issueKindForDisplay,
+              actionKind: requestedAction || correctionState.selection?.requested_action,
+              draftOnlyRemoval,
+              draft_only_removal: draftOnlyRemoval,
+              reason: correctionState.reason,
+              reauthToken: correctionState.reauthToken,
+              onRefreshParent: async (result) => {
+                if (result && typeof result === 'object') {
+                  try { setProgressFromResult(result); } catch {}
+                }
+                await refreshAfterPaymentIssueAction({ draftOnlyRemoval, result });
+              }
+            });
+            await rerenderPaymentIssuesOnly();
+            return true;
+          };
+
+
              try {
+            if (act === 'banking:pay:issue:viewDetails') {
+              const row = findPaymentIssueRowByKey(attr('rowKey', 'data-row-key'));
+              await showPaymentIssueRowDetails(row, 'Payment details');
+              return;
+            }
+
+            if (act === 'banking:pay:issue:candidateReturnedFunds') {
+              const row = findPaymentIssueRowByKey(attr('rowKey', 'data-row-key'));
+              if (!row) {
+                await showProviderSubmitResolutionNotice({ title: 'Candidate returned funds', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
+                return;
+              }
+              const actionType = paymentIssueRowActionType(row);
+              if (actionType !== 'CANDIDATE_RETURNED_FUNDS' && actionType !== 'REVERSE_SETTLED_PAYMENT') {
+                await showPaymentIssueRowDetails(row, 'Candidate returned funds', 'This row is not currently routable to Candidate returned funds.');
+                return;
+              }
+              if (paymentIssueRowNeedsBackendSupport(row) || row.candidateReturnedFundsAvailable === false || row.candidate_returned_funds_available === false) {
+                await showPaymentIssueRowDetails(row, 'Candidate returned funds', 'This action is waiting for backend safety support. No payment correction has been applied.');
+                return;
+              }
+              selectSinglePaymentIssueRowForAction(row);
+              await openSelectedPaymentIssueCorrection('REVERSE_SETTLED_PAYMENT', [row]);
+              return;
+            }
+
+            if (act === 'banking:pay:issue:reverseReturned') {
+              const row = findPaymentIssueRowByKey(attr('rowKey', 'data-row-key'));
+              if (!row) {
+                await showProviderSubmitResolutionNotice({ title: 'Reverse returned', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
+                return;
+              }
+              const actionType = paymentIssueRowActionType(row);
+              if (actionType !== 'REVERSE_RETURNED' && actionType !== 'REVERSE_SETTLED_REVERSAL') {
+                await showPaymentIssueRowDetails(row, 'Reverse returned', 'This row is not currently routable to Reverse returned.');
+                return;
+              }
+              if (paymentIssueRowNeedsBackendSupport(row) || row.reverseReturnedAvailable !== true && row.reverse_returned_available !== true) {
+                await showPaymentIssueRowDetails(row, 'Reverse returned', 'Reverse returned is waiting for backend safety support. No payment correction has been applied.');
+                return;
+              }
+              selectSinglePaymentIssueRowForAction(row);
+              await openSelectedPaymentIssueCorrection('REVERSE_SETTLED_REVERSAL', [row]);
+              return;
+            }
+
+            if (act === 'banking:pay:issue:releaseForNextRun') {
+              const row = findPaymentIssueRowByKey(attr('rowKey', 'data-row-key'));
+              if (!row) {
+                await showProviderSubmitResolutionNotice({ title: 'Release for next run', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
+                return;
+              }
+              if (rowHasSentOrAcceptedEvidenceForNoMoneyBlock(row)) {
+                await showProviderSubmitResolutionNotice({ title: 'Selected payment cannot be released', message: 'This payment has sent, paid, provider-accepted, or transaction evidence. It cannot be released as no-payment.', confirmClass: 'btn btn-danger' });
+                return;
+              }
+              selectSinglePaymentIssueRowForAction(row);
+              await openSelectedPaymentIssueCorrection('UNWIND_FAILED_PAYMENT', [row]);
+              return;
+            }
+
+            if (act === 'banking:pay:issue:resolveManually') {
+              const row = findPaymentIssueRowByKey(attr('rowKey', 'data-row-key'));
+              const choice = await openPaymentIssueManualDecisionModal(row);
+              if (choice === 'STILL_UNSURE') {
+                await showProviderSubmitResolutionNotice({ title: 'Left for review', message: 'No payment action was taken. The payment remains available for review in Current Payment Status.', confirmClass: 'btn btn-primary' });
+                return;
+              }
+              if (choice === 'NO_PAYMENT_WAS_MADE') {
+                if (!row || rowHasSentOrAcceptedEvidenceForNoMoneyBlock(row)) {
+                  await showProviderSubmitResolutionNotice({ title: 'No payment was made', message: 'This row cannot be released as no-payment because sent/accepted/paid evidence is present or the row could not be found.', confirmClass: 'btn btn-danger' });
+                  return;
+                }
+                selectSinglePaymentIssueRowForAction(row);
+                await openSelectedPaymentIssueCorrection('UNWIND_FAILED_PAYMENT', [row]);
+                return;
+              }
+              if (choice === 'CANDIDATE_RETURNED_FUNDS') {
+                if (!row) {
+                  await showProviderSubmitResolutionNotice({ title: 'Candidate returned funds', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
+                  return;
+                }
+                const actionType = paymentIssueRowActionType(row);
+                if (actionType !== 'CANDIDATE_RETURNED_FUNDS' && actionType !== 'REVERSE_SETTLED_PAYMENT') {
+                  await showPaymentIssueRowDetails(row, 'Candidate returned funds', 'This row is not currently routable to Candidate returned funds.');
+                  return;
+                }
+                if (paymentIssueRowNeedsBackendSupport(row) || row.candidateReturnedFundsAvailable === false || row.candidate_returned_funds_available === false) {
+                  await showPaymentIssueRowDetails(row, 'Candidate returned funds', 'This route requires returned-funds backend safety support before CloudTMS can apply a correction. No payment correction has been applied.');
+                  return;
+                }
+                selectSinglePaymentIssueRowForAction(row);
+                await openSelectedPaymentIssueCorrection('REVERSE_SETTLED_PAYMENT', [row]);
+                return;
+              }
+              if (choice === 'PAYMENT_WAS_MADE') {
+                await showPaymentIssueRowDetails(row, 'Payment was made', 'Manual payment-made confirmation is waiting for backend support. No payment correction has been applied.');
+                return;
+              }
+              return;
+            }
+
+            if (act === 'banking:pay:issue:reverseEntireBatch') {
+              const model = buildWholeBatchActionModelForChild();
+              if (!model.enabled) {
+                await showProviderSubmitResolutionNotice({ title: 'Reverse entire batch', message: model.disabledReason || 'This whole-batch action is not currently safe. Use row-level actions for eligible rows.', confirmClass: 'btn btn-primary' });
+                return;
+              }
+              if (model.actionType === 'RELEASE_FOR_NEXT_RUN') {
+                resetPaymentIssueLocalSelectionAndPlan(correctionState);
+                const nextKeys = new Set();
+                const nextTransfers = new Set();
+                const nextItems = new Set();
+                const nextCandidates = new Set();
+                for (const row of model.eligibleRows) {
+                  row.selected = true;
+                  const key = String(row.rowKey || row.row_key || '').trim();
+                  if (key) nextKeys.add(key);
+                  addPaymentIssueValuesToSet(nextTransfers, row.payBankTransferIds || row.pay_bank_transfer_ids || row.payBankTransferId || row.pay_bank_transfer_id);
+                  addPaymentIssueValuesToSet(nextItems, row.payBatchItemIds || row.pay_batch_item_ids || row.payBatchItemId || row.pay_batch_item_id);
+                  addPaymentIssueValuesToSet(nextCandidates, row.payBatchCandidateIds || row.pay_batch_candidate_ids || row.payBatchCandidateId || row.pay_batch_candidate_id);
+                }
+                correctionState.selectedRowKeys = nextKeys;
+                correctionState.selectedTransferIds = nextTransfers;
+                correctionState.selectedPayBatchItemIds = nextItems;
+                correctionState.selectedPayBatchCandidateIds = nextCandidates;
+                await openSelectedPaymentIssueCorrection('UNWIND_FAILED_PAYMENT', model.eligibleRows);
+                return;
+              }
+              await showProviderSubmitResolutionNotice({ title: 'Reverse entire batch', message: 'This whole-batch action is waiting for backend safety support. No payment correction has been applied.', confirmClass: 'btn btn-primary' });
+              return;
+            }
+
             if (act === 'banking:pay:issue:resolveProviderSubmitNoPayment') {
               if (child.actionsBusy.resolvingProviderSubmitReview) return;
               if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
@@ -52756,7 +53375,7 @@ const retryBlockedFundsPipeline = async () => {
               const eligibleRows = rowEligibility.filter((entry) => entry.staleEligible || entry.rejectedEligible);
               if (eligibleRows.length !== rowEligibility.length) {
                 await showProviderSubmitResolutionNotice({
-                  title: 'Provider review cannot be resolved here',
+                  title: 'Current Payment Status cannot be resolved here',
                   message: 'This action is available only for stale provider-submit reviews or confirmed provider/bank-rejected payments where no provider acceptance or transaction evidence exists. Refresh the batch and review the latest payment state.',
                   confirmClass: 'btn btn-primary'
                 });
@@ -52768,7 +53387,7 @@ const retryBlockedFundsPipeline = async () => {
               const hasRejectedNoPaymentRows = eligibleRows.some((entry) => entry.rejectedEligible);
               if (hasRejectedNoPaymentRows && selectedPayBankTransferIds.length <= 0) {
                 await showProviderSubmitResolutionNotice({
-                  title: 'Provider review cannot be resolved',
+                  title: 'Current Payment Status cannot be resolved',
                   message: 'The failed payment transfer ID is missing. Refresh the batch and try again.',
                   confirmClass: 'btn btn-primary'
                 });
@@ -52790,7 +53409,7 @@ const retryBlockedFundsPipeline = async () => {
 
               if (!issueOperationId) {
                 await showProviderSubmitResolutionNotice({
-                  title: 'Provider review cannot be resolved',
+                  title: 'Current Payment Status cannot be resolved',
                   message: 'Operation ID is missing. Refresh the batch and try again.',
                   confirmClass: 'btn btn-primary'
                 });
@@ -52808,8 +53427,8 @@ const retryBlockedFundsPipeline = async () => {
 
               if (typeof openBankingNoPaymentCancelConfirmationFlow !== 'function') {
                 await showProviderSubmitResolutionNotice({
-                  title: 'Payment cancellation flow unavailable',
-                  message: 'The no-payment cancellation flow is not available in this version. Refresh CloudTMS and try again.',
+                  title: 'Release for next run unavailable',
+                  message: 'The Release for next run flow is not available in this version. Refresh CloudTMS and try again.',
                   confirmClass: 'btn btn-primary'
                 });
                 return;
@@ -53066,7 +53685,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
               } catch (e) {
                 correctionState.planError = (typeof sanitizeBankingPaymentIssueError === 'function')
                   ? sanitizeBankingPaymentIssueError(e, 'plan')
-                  : 'Unable to review payment issue.';
+                  : 'Unable to review Current Payment Status.';
                 toast(correctionState.planError);
               } finally {
                 correctionState.planLoading = false;
@@ -53095,7 +53714,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
                 } catch (e) {
                   correctionState.planError = (typeof sanitizeBankingPaymentIssueError === 'function')
                     ? sanitizeBankingPaymentIssueError(e, 'plan')
-                    : 'Unable to review payment issue.';
+                    : 'Unable to review Current Payment Status.';
                   toast(correctionState.planError);
                   correctionState.planLoading = false;
                   await rerenderPaymentIssuesOnly();
@@ -53115,7 +53734,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
               }
 
               if (typeof openBankingPayCorrectionConfirmModal !== 'function') {
-                toast('Payment review is not available yet.');
+                toast('Current Payment Status review is not available yet.');
                 await rerenderPaymentIssuesOnly();
                 return;
               }
@@ -53152,7 +53771,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
             if (act === 'banking:pay:issue:processChunk') {
               const correctionRequestId = getCorrectionRequestId();
               if (!correctionRequestId) {
-                toast('Payment issue ID is required.');
+                toast('Current Payment Status request ID is required.');
                 return;
               }
               const result = await bankingPayPaymentCorrectionProcess(correctionRequestId, 50);
@@ -53167,7 +53786,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
             if (act === 'banking:pay:issue:refreshStatus') {
               const correctionRequestId = getCorrectionRequestId();
               if (!correctionRequestId) {
-                toast('Payment issue ID is required.');
+                toast('Current Payment Status request ID is required.');
                 return;
               }
               const status = await bankingPayPaymentCorrectionStatus(correctionRequestId);
@@ -53230,7 +53849,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
           } catch (e) {
             child.error = (typeof sanitizeBankingPaymentIssueError === 'function')
               ? sanitizeBankingPaymentIssueError(e, 'process')
-              : 'Payment issue action failed.';
+              : 'Current Payment Status action failed.';
             await rerenderPaymentIssuesOnly();
             return;
           }
@@ -53776,7 +54395,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
    const modalTabs = (() => {
     const out = [
       { key: 'overview', label: 'Overview' },
-      { key: 'payment_issues', label: 'Payment Issues' }
+      { key: 'payment_issues', label: 'Current Payment Status' }
     ];
 
     const kindInfo = deriveBatchKindInfo(child.data);
@@ -53833,8 +54452,6 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
   await rerenderChild();
   scheduleWire();
 }
-
-
 
 
 
@@ -54381,12 +54998,12 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
     return {
       title: 'Confirm no payment was made',
       label: 'whole batch',
-      intro: 'This payment batch has an unresolved bank/payment submission state. Before CloudTMS can cancel/release the batch, confirm that you have checked the bank account and no payment was made for the whole batch.',
+      intro: 'This payment batch has an unresolved bank/payment submission state. Before CloudTMS can release the failed payment rows, confirm that you have checked the bank account and no payment was made for the whole batch.',
       checkbox: 'I have checked the bank account and confirm no payment was made for the whole batch.',
-      successTitle: trimStr(source.successTitle || source.success_title) || 'Payment cancelled',
-      successMessage: trimStr(source.successMessage || source.success_message) || 'No payment was made. The draft batch has been cancelled.',
-      errorTitle: 'Could not cancel payment',
-      errorMessage: 'CloudTMS could not cancel this payment batch. No further changes were completed. Refresh the batch and try again.'
+      successTitle: trimStr(source.successTitle || source.success_title) || 'Payment released',
+      successMessage: trimStr(source.successMessage || source.success_message) || 'No payment was made. The failed payment rows have been released for the next Banking Pay run.',
+      errorTitle: 'Could not release payment',
+      errorMessage: 'CloudTMS could not release this payment batch. No further changes were completed. Refresh the batch and try again.'
     };
   })();
 
@@ -54463,7 +55080,7 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
   };
 
   const friendlyErrorMessage = (error, fallback) => {
-    const fb = trimStr(fallback) || 'CloudTMS could not cancel this payment batch. No further changes were completed. Refresh the batch and try again.';
+    const fb = trimStr(fallback) || 'CloudTMS could not release this payment batch. No further changes were completed. Refresh the batch and try again.';
     const payload = isObj(error?.json) ? error.json
       : (isObj(error?.payload) ? error.payload
         : (isObj(error?.backendPayload) ? error.backendPayload
@@ -54928,7 +55545,92 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
 
     for (const payload of payloads) {
       if (hasAcceptanceEvidence(payload)) {
-        return 'Whole-batch no-payment cancellation is not safe because at least one payment has successful, accepted, settled, or provider transaction evidence. Use Payment Issues to release only the failed payment rows.';
+        return 'Whole-batch no-payment cancellation is not safe because at least one payment has successful, accepted, settled, or provider transaction evidence. Use Current Payment Status to release only the failed payment rows.';
+      }
+    }
+
+    return '';
+  };
+
+  const selectedPaymentUnsafeReason = () => {
+    if (!isSelectedPaymentScope) return '';
+    const selectedPayloads = [
+      source.selectedRows,
+      source.selected_rows,
+      source.issue?.selectedRows,
+      source.issue?.selected_rows,
+      source.issue?.rows,
+      source.issue?.items
+    ].filter(Boolean);
+
+    const acceptedStatuses = new Set([
+      'PAID', 'SUCCESSFUL', 'SUCCESS', 'COMPLETED', 'SETTLED', 'COMMITTED',
+      'SUBMITTED', 'ACCEPTED', 'PROVIDER_SUBMISSION_ACCEPTED', 'PAYMENT_SENT', 'PAYMENT_PAID'
+    ]);
+
+    const hasAcceptanceEvidence = (value, seen = new WeakSet()) => {
+      if (value === null || value === undefined) return false;
+      if (Array.isArray(value)) return value.some((entry) => hasAcceptanceEvidence(entry, seen));
+      if (typeof value === 'string') {
+        const text = value.trim();
+        if (!text) return false;
+        try {
+          const parsed = JSON.parse(text);
+          return !!(parsed && typeof parsed === 'object' && hasAcceptanceEvidence(parsed, seen));
+        } catch {}
+        return false;
+      }
+      if (typeof value !== 'object') return false;
+      if (seen.has(value)) return false;
+      seen.add(value);
+
+      const statusText = String(
+        value.displayState ||
+        value.display_state ||
+        value.provider_submission_status ||
+        value.providerSubmissionStatus ||
+        value.bank_status ||
+        value.bankStatus ||
+        value.bankStatusLabel ||
+        value.bank_status_label ||
+        value.resultLabel ||
+        value.result_label ||
+        value.status ||
+        value.state ||
+        value.rail_state ||
+        value.railState ||
+        ''
+      ).trim().toUpperCase();
+
+      if (acceptedStatuses.has(statusText)) return true;
+      if (statusText.includes('SENT') || statusText.includes('PAID') || statusText.includes('ACCEPTED')) return true;
+      if (value.provider_acceptance_evidence_present === true || value.providerAcceptanceEvidencePresent === true) return true;
+      if (value.money_moved_evidence === true || value.moneyMovedEvidence === true) return true;
+      if (value.manual_paid_evidence === true || value.manualPaidEvidence === true) return true;
+
+      for (const key of [
+        'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
+        'provider_payment_id', 'providerPaymentId', 'external_payment_id', 'externalPaymentId',
+        'revolut_payment_id', 'revolutPaymentId', 'bank_reference', 'bankReference',
+        'transaction_id', 'transactionId', 'payment_id', 'paymentId', 'payment_reference', 'paymentReference'
+      ]) {
+        if (trimStr(value[key])) return true;
+      }
+
+      const childKeys = [
+        'supportDetails', 'support_details', 'provider_submit_diagnostic', 'providerSubmitDiagnostic',
+        'payment_execution_review', 'paymentExecutionReview', 'provider_response', 'providerResponse',
+        'rail_meta_json', 'railMetaJson'
+      ];
+      for (const key of childKeys) {
+        if (value[key] && hasAcceptanceEvidence(value[key], seen)) return true;
+      }
+      return false;
+    };
+
+    for (const payload of selectedPayloads) {
+      if (hasAcceptanceEvidence(payload)) {
+        return 'Selected-payment no-payment release is not safe because at least one selected row has sent, paid, provider-accepted, settlement, or transaction evidence. Use Current Payment Status to release only rows where no payment moved.';
       }
     }
 
@@ -54938,7 +55640,7 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
 
   if (!payBatchId || !operationId) {
     await showMessageModal({
-      title: 'Payment issue cannot be resolved',
+      title: 'Current Payment Status cannot be resolved',
       message: !payBatchId ? 'Payment batch ID is missing. Refresh the batch and try again.' : 'Operation ID is missing. Refresh the batch and try again.',
       kind: 'import-summary-banking-no-payment-cancel-missing-id'
     });
@@ -54948,12 +55650,24 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
 
   if (isSelectedPaymentScope && selectedPayBankTransferIds.length <= 0 && selectedPayBatchItemIds.length <= 0) {
     await showMessageModal({
-      title: 'Payment issue cannot be resolved',
-      message: 'Selected-payment recovery requires at least one selected failed payment row. Refresh Payment Issues, select the affected payment, and try again.',
+      title: 'Current Payment Status cannot be resolved',
+      message: 'Selected-payment recovery requires at least one selected failed payment row. Refresh Current Payment Status, select the affected payment, and try again.',
       kind: 'import-summary-banking-no-payment-cancel-missing-selected-payment'
     });
     try { if (typeof source.onAfterClose === 'function') await source.onAfterClose({ cancelled: true, reason: 'missing-selected-payment', resolutionScope }); } catch {}
     return { ok: false, cancelled: true, reason: 'missing-selected-payment', resolutionScope };
+  }
+
+  const unsafeSelectedPaymentReason = selectedPaymentUnsafeReason();
+  if (unsafeSelectedPaymentReason) {
+    await showMessageModal({
+      title: 'Use Current Payment Status',
+      message: unsafeSelectedPaymentReason,
+      kind: 'import-summary-banking-no-payment-selected-unsafe',
+      confirmClass: 'btn btn-primary'
+    });
+    try { if (typeof source.onAfterClose === 'function') await source.onAfterClose({ cancelled: true, reason: 'selected-payment-unsafe', resolutionScope }); } catch {}
+    return { ok: false, cancelled: true, reason: 'selected-payment-unsafe', resolutionScope };
   }
 
   const confirmation = await openConfirmationModal();
@@ -54989,7 +55703,7 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
     const unsafeWholeBatchReason = wholeBatchUnsafeReason();
     if (unsafeWholeBatchReason) {
       await showMessageModal({
-        title: 'Use Payment Issues',
+        title: 'Use Current Payment Status',
         message: unsafeWholeBatchReason,
         kind: 'import-summary-banking-no-payment-cancel-unsafe-whole-batch',
         confirmClass: 'btn btn-primary'
@@ -55093,8 +55807,8 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
 
     const cancelPayload = {
       reauth_token: reauthToken,
-      reason: 'Confirm no payment made and cancel batch',
-      cancel_reason: 'Confirm no payment made and cancel batch',
+      reason: 'Confirm no payment made and release for next run',
+      cancel_reason: 'Confirm no payment made and release for next run',
       provider_submit_review_operation_id: operationId,
       no_payment_confirmation: confirmationPayload,
       provider_submit_review_resolution: {
@@ -55143,6 +55857,7 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
     return { ok: false, error };
   }
 }
+
 
 
 
@@ -59073,6 +59788,7 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
     </div>
   `;
 }
+
 
 
 
@@ -64941,7 +65657,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         await openBatchChild(payBatchId || st.pay?.selectedBatchId || '');
       };
       if (!ctx || !correctionState) {
-        toast('Payment review is not available yet.');
+        toast('Current Payment Status is not available yet.');
         return;
       }
       const rows = Array.isArray(correctionState.rows) ? correctionState.rows : [];
@@ -64959,6 +65675,284 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         ''
       ).trim();
 
+      const getIssueRowKey = (row) => String(row?.rowKey || row?.row_key || '').trim();
+      const findIssueRowByKey = (rowKey) => {
+        const key = String(rowKey || '').trim();
+        if (!key) return null;
+        return rows.find((row) => getIssueRowKey(row) === key) || null;
+      };
+      const normaliseIssueActionType = (row) => String(
+        row?.actionType ||
+        row?.action_type ||
+        row?.bulkActionType ||
+        row?.bulk_action_type ||
+        row?.backendAction ||
+        row?.backend_action ||
+        ''
+      ).trim().toUpperCase();
+      const issueRowNeedsBackendSupport = (row) => !!(
+        row?.requiresBackendSupport === true ||
+        row?.requires_backend_support === true ||
+        row?.futureActionPendingBackend === true ||
+        row?.future_action_pending_backend === true
+      );
+      const issueRowText = (row, ...keys) => {
+        for (const key of keys) {
+          const value = row ? row[key] : '';
+          const text = String(value == null ? '' : value).trim();
+          if (text) return text;
+        }
+        return '';
+      };
+      const issueRowHasSentOrAcceptedEvidence = (row) => {
+        if (!row || typeof row !== 'object') return false;
+        const values = [
+          row.displayState,
+          row.display_state,
+          row.statusLabel,
+          row.status_label,
+          row.resultLabel,
+          row.result_label,
+          row.bankStatusLabel,
+          row.bank_status_label,
+          row.issueKindForDisplay,
+          row.issue_kind_for_display,
+          row.issue_kind,
+          row.provider_submission_status,
+          row.providerSubmissionStatus,
+          row.provider_state,
+          row.providerState,
+          row.status
+        ].map((value) => String(value == null ? '' : value).trim().toUpperCase()).filter(Boolean);
+        if (values.some((value) => (
+          value === 'PAYMENT_SENT' ||
+          value === 'PAYMENT_PAID' ||
+          value === 'PROVIDER_SUBMISSION_ACCEPTED' ||
+          value === 'SENT' ||
+          value === 'PAID' ||
+          value === 'ACCEPTED' ||
+          value === 'SETTLED' ||
+          value === 'COMPLETED' ||
+          value.includes('SENT') ||
+          value.includes('PAID') ||
+          value.includes('ACCEPTED')
+        ))) return true;
+        if (
+          row.provider_acceptance_evidence_present === true ||
+          row.providerAcceptanceEvidencePresent === true ||
+          row.money_moved_evidence === true ||
+          row.moneyMovedEvidence === true ||
+          row.provider_transaction_evidence_present === true ||
+          row.providerTransactionEvidencePresent === true
+        ) return true;
+        const support = (row.supportDetails && typeof row.supportDetails === 'object' && !Array.isArray(row.supportDetails))
+          ? row.supportDetails
+          : ((row.support_details && typeof row.support_details === 'object' && !Array.isArray(row.support_details)) ? row.support_details : {});
+        const supportStatus = String(
+          support.provider_submission_status ||
+          support.providerSubmissionStatus ||
+          support.provider_state ||
+          support.providerState ||
+          ''
+        ).trim().toUpperCase();
+        if (supportStatus === 'PROVIDER_SUBMISSION_ACCEPTED') return true;
+        const transactionFields = [
+          row.rail_tx_id,
+          row.railTxId,
+          row.provider_transaction_id,
+          row.providerTransactionId,
+          row.provider_payment_id,
+          row.providerPaymentId,
+          row.provider_reference,
+          row.providerReference,
+          row.payment_reference,
+          row.paymentReference,
+          support.rail_tx_id,
+          support.railTxId,
+          support.provider_transaction_id,
+          support.providerTransactionId,
+          support.provider_payment_id,
+          support.providerPaymentId,
+          support.provider_reference,
+          support.providerReference,
+          support.payment_reference,
+          support.paymentReference
+        ];
+        return transactionFields.some((value) => String(value == null ? '' : value).trim());
+      };
+      const showCurrentPaymentStatusNotice = async ({ title = 'Current Payment Status', message = '', confirmClass = 'btn btn-primary' } = {}) => {
+        const titleText = String(title || 'Current Payment Status').trim() || 'Current Payment Status';
+        const messageText = String(message || '').trim() || 'Current Payment Status needs review.';
+        try {
+          if (typeof openUiConfirmModal === 'function') {
+            await openUiConfirmModal({
+              title: titleText,
+              message: messageText,
+              confirm_label: 'OK',
+              hide_cancel: true,
+              confirm_class: confirmClass,
+              kind: 'banking-current-payment-status-notice'
+            });
+            return;
+          }
+        } catch {}
+        toast(messageText || titleText);
+      };
+      const showIssueRowDetails = async (row, title = 'Payment details', message = '') => {
+        const support = (row?.supportDetails && typeof row.supportDetails === 'object' && !Array.isArray(row.supportDetails))
+          ? row.supportDetails
+          : ((row?.support_details && typeof row.support_details === 'object' && !Array.isArray(row.support_details)) ? row.support_details : {});
+        const detailRows = [
+          ['Result', issueRowText(row, 'resultLabel', 'result_label', 'whatHappenedLabel', 'what_happened_label')],
+          ['Status', issueRowText(row, 'displayState', 'display_state', 'statusLabel', 'status_label')],
+          ['Transfer ID', String(support.transfer_id || support.transferId || row?.payBankTransferId || row?.pay_bank_transfer_id || '').trim()],
+          ['Operation ID', String(support.operation_id || support.operationId || row?.operation_id || row?.operationId || '').trim()],
+          ['Chunk ID', String(support.chunk_id || support.chunkId || row?.chunk_id || row?.chunkId || '').trim()]
+        ].filter(([, value]) => String(value == null ? '' : value).trim());
+        const detailText = detailRows.length
+          ? detailRows.map(([label, value]) => `${label}: ${value}`).join('\n')
+          : '';
+        const finalMessage = [
+          String(message || '').trim(),
+          detailText
+        ].filter(Boolean).join('\n\n') || 'Review the support details for this payment row.';
+        await showCurrentPaymentStatusNotice({ title, message: finalMessage, confirmClass: 'btn btn-primary' });
+      };
+      const addIssueValuesToSet = (target, values) => {
+        const list = Array.isArray(values) ? values : [values];
+        for (const value of list) {
+          const text = String(value == null ? '' : value).trim();
+          if (text) target.add(text);
+        }
+      };
+      const selectSingleIssueRowForAction = (row) => {
+        if (!row || typeof row !== 'object') return false;
+        try {
+          for (const item of rows) {
+            if (item && typeof item === 'object') item.selected = false;
+          }
+        } catch {}
+        row.selected = true;
+        correctionState.selectedRowKeys = new Set();
+        correctionState.selectedTransferIds = new Set();
+        correctionState.selectedPayBatchItemIds = new Set();
+        correctionState.selectedPayBatchCandidateIds = new Set();
+        const key = getIssueRowKey(row);
+        if (key) correctionState.selectedRowKeys.add(key);
+        addIssueValuesToSet(correctionState.selectedTransferIds, row.payBankTransferIds || row.pay_bank_transfer_ids || row.payBankTransferId || row.pay_bank_transfer_id);
+        addIssueValuesToSet(correctionState.selectedPayBatchItemIds, row.payBatchItemIds || row.pay_batch_item_ids || row.payBatchItemId || row.pay_batch_item_id);
+        addIssueValuesToSet(correctionState.selectedPayBatchCandidateIds, row.payBatchCandidateIds || row.pay_batch_candidate_ids || row.payBatchCandidateId || row.pay_batch_candidate_id);
+        correctionState.selection = null;
+        correctionState.plan = null;
+        correctionState.planSelectionSignature = '';
+        correctionState.planError = '';
+        try { if (typeof invalidateBankingPaymentIssuePlan === 'function') invalidateBankingPaymentIssuePlan(correctionState); } catch {}
+        return true;
+      };
+      const openCorrectionForSelectedIssueRows = async (requestedAction, rowsForAction = null) => {
+        const selection = buildBankingPaymentIssueSelection(correctionState, requestedAction || undefined);
+        if (selection && selection.error) {
+          correctionState.planError = String(selection.message || 'Select payments with the same issue type.');
+          toast(correctionState.planError);
+          await rerenderChild();
+          return false;
+        }
+        if (!selection) {
+          correctionState.planError = 'Select a payment first.';
+          toast(correctionState.planError);
+          await rerenderChild();
+          return false;
+        }
+        const selectedRowsForAction = Array.isArray(rowsForAction) ? rowsForAction : rows.filter((row) => row && row.selected === true);
+        const signature = (typeof getBankingPaymentIssueSelectionSignature === 'function')
+          ? getBankingPaymentIssueSelectionSignature(selection)
+          : '';
+        correctionState.planLoading = true;
+        correctionState.planError = '';
+        await rerenderChild();
+        try {
+          correctionState.plan = await bankingPayPaymentCorrectionPlan(payBatchId, selection);
+          correctionState.planSelectionSignature = signature;
+          correctionState.selection = selection;
+          correctionState.planError = '';
+        } catch (e) {
+          correctionState.planError = (typeof sanitizeBankingPaymentIssueError === 'function')
+            ? sanitizeBankingPaymentIssueError(e, 'plan')
+            : 'Unable to review Current Payment Status.';
+          toast(correctionState.planError);
+          return false;
+        } finally {
+          correctionState.planLoading = false;
+        }
+        if (typeof openBankingPayCorrectionConfirmModal !== 'function') {
+          toast('Current Payment Status review is not available yet.');
+          await rerenderChild();
+          return false;
+        }
+        await openBankingPayCorrectionConfirmModal({
+          payBatchId,
+          batchPayload,
+          correctionState,
+          selectedRows: selectedRowsForAction,
+          currentPlan: correctionState.plan,
+          selection: correctionState.selection || selection,
+          selectionSignature: correctionState.planSelectionSignature || signature,
+          issueKind: correctionState.issueState?.issueKindForDisplay,
+          actionKind: requestedAction || correctionState.selection?.requested_action,
+          reason: correctionState.reason,
+          reauthToken: correctionState.reauthToken
+        });
+        return true;
+      };
+      const openManualPaymentIssueDecision = async (row) => new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(15,23,42,.38);display:flex;align-items:center;justify-content:center;padding:18px;';
+        const panel = document.createElement('div');
+        panel.className = 'card';
+        panel.style.cssText = 'max-width:560px;width:min(560px,100%);padding:16px;display:flex;flex-direction:column;gap:10px;';
+        panel.innerHTML = `
+          <div style="font-weight:800;font-size:16px;">Resolve manually</div>
+          <div class="mini" style="opacity:.88;">Choose exactly what happened for this payment.</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <button type="button" class="btn btn-sm btn-outline" data-choice="PAYMENT_WAS_MADE">Payment was made</button>
+            <button type="button" class="btn btn-sm btn-outline" data-choice="NO_PAYMENT_WAS_MADE">No payment was made</button>
+            <button type="button" class="btn btn-sm btn-outline" data-choice="CANDIDATE_RETURNED_FUNDS">Candidate returned funds</button>
+            <button type="button" class="btn btn-sm btn-outline" data-choice="STILL_UNSURE">Still unsure — leave for review</button>
+          </div>
+        `;
+        overlay.appendChild(panel);
+        const cleanup = (choice) => {
+          try { overlay.remove(); } catch {}
+          resolve(choice || 'STILL_UNSURE');
+        };
+        overlay.addEventListener('click', (event) => {
+          if (event.target === overlay) cleanup('STILL_UNSURE');
+          const btn = event.target && event.target.closest ? event.target.closest('[data-choice]') : null;
+          if (btn) cleanup(String(btn.getAttribute('data-choice') || 'STILL_UNSURE').trim() || 'STILL_UNSURE');
+        });
+        document.body.appendChild(overlay);
+      });
+      const buildDelegatedWholeBatchActionModel = () => {
+        const allRows = rows.filter((row) => row && typeof row === 'object');
+        const actionRows = allRows.filter((row) => {
+          const actionType = String(row.wholeBatchEligibleActionType || row.whole_batch_eligible_action_type || row.bulkActionType || row.bulk_action_type || row.actionType || row.action_type || '').trim().toUpperCase();
+          return actionType && actionType !== 'VIEW_DETAILS';
+        });
+        if (!actionRows.length) return { enabled: false, actionType: '', eligibleRows: [], excludedRows: allRows, disabledReason: 'No batch-level action is available.' };
+        const actionTypes = Array.from(new Set(actionRows.map((row) => String(row.wholeBatchEligibleActionType || row.whole_batch_eligible_action_type || row.bulkActionType || row.bulk_action_type || row.actionType || row.action_type || '').trim().toUpperCase()).filter(Boolean)));
+        if (actionTypes.length !== 1) return { enabled: false, actionType: '', eligibleRows: [], excludedRows: allRows, disabledReason: 'Use row-level actions for mixed payment statuses.' };
+        const actionType = actionTypes[0];
+        const eligibleRows = actionRows.filter((row) => String(row.wholeBatchEligibleActionType || row.whole_batch_eligible_action_type || row.bulkActionType || row.bulk_action_type || row.actionType || row.action_type || '').trim().toUpperCase() === actionType);
+        const excludedRows = allRows.filter((row) => !eligibleRows.includes(row));
+        if (excludedRows.length) return { enabled: false, actionType, eligibleRows, excludedRows, disabledReason: 'This batch has mixed payment statuses. Use row-level actions for eligible rows.' };
+        if (actionType === 'RELEASE_FOR_NEXT_RUN') {
+          const allSafe = eligibleRows.every((row) => row.selectable === true && issueRowHasSentOrAcceptedEvidence(row) !== true);
+          return { enabled: allSafe, actionType, eligibleRows, excludedRows, disabledReason: allSafe ? '' : 'Release for next run is only available when every row is safely selectable for no-payment release.' };
+        }
+        const backendSafe = eligibleRows.every((row) => row.wholeBatchActionSafe === true || row.whole_batch_action_safe === true || row.backendWholeBatchSafe === true || row.backend_whole_batch_safe === true);
+        return { enabled: backendSafe, actionType, eligibleRows, excludedRows, disabledReason: backendSafe ? '' : 'This whole-batch action is waiting for backend safety support.' };
+      };
+
       const handleSelectionResultError = async (result, fallbackMessage) => {
         if (!result || result.error !== true) return false;
         const message = String(result.message || fallbackMessage || '').trim();
@@ -64968,7 +65962,125 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         return true;
       };
 
-      if (a === 'banking:pay:issue:toggleRow') {
+      if (a === 'banking:pay:issue:viewDetails') {
+        const row = findIssueRowByKey(String(ds('rowKey') || dget('data-row-key') || '').trim());
+        await showIssueRowDetails(row, 'Payment details');
+      } else if (a === 'banking:pay:issue:candidateReturnedFunds') {
+        const row = findIssueRowByKey(String(ds('rowKey') || dget('data-row-key') || '').trim());
+        if (!row) {
+          await showCurrentPaymentStatusNotice({ title: 'Candidate returned funds', message: 'Payment row could not be found. Refresh the batch and try again.' });
+          return;
+        }
+        const actionType = normaliseIssueActionType(row);
+        if (actionType !== 'CANDIDATE_RETURNED_FUNDS' && actionType !== 'REVERSE_SETTLED_PAYMENT') {
+          await showIssueRowDetails(row, 'Candidate returned funds', 'This row is not currently routable to Candidate returned funds.');
+          return;
+        }
+        if (issueRowNeedsBackendSupport(row) || row.candidateReturnedFundsAvailable === false || row.candidate_returned_funds_available === false) {
+          await showIssueRowDetails(row, 'Candidate returned funds', 'This action is waiting for backend safety support. No payment correction has been applied.');
+          return;
+        }
+        selectSingleIssueRowForAction(row);
+        await openCorrectionForSelectedIssueRows('REVERSE_SETTLED_PAYMENT', [row]);
+        return;
+      } else if (a === 'banking:pay:issue:releaseForNextRun') {
+        const row = findIssueRowByKey(String(ds('rowKey') || dget('data-row-key') || '').trim());
+        if (!row) {
+          await showCurrentPaymentStatusNotice({ title: 'Release for next run', message: 'Payment row could not be found. Refresh the batch and try again.' });
+          return;
+        }
+        if (issueRowHasSentOrAcceptedEvidence(row)) {
+          await showCurrentPaymentStatusNotice({ title: 'Selected payment cannot be released', message: 'This payment has sent, paid, provider-accepted, or transaction evidence. It cannot be released as no-payment.', confirmClass: 'btn btn-danger' });
+          return;
+        }
+        selectSingleIssueRowForAction(row);
+        await openCorrectionForSelectedIssueRows('UNWIND_FAILED_PAYMENT', [row]);
+        return;
+      } else if (a === 'banking:pay:issue:reverseReturned') {
+        const row = findIssueRowByKey(String(ds('rowKey') || dget('data-row-key') || '').trim());
+        if (!row) {
+          await showCurrentPaymentStatusNotice({ title: 'Reverse returned', message: 'Payment row could not be found. Refresh the batch and try again.' });
+          return;
+        }
+        const actionType = normaliseIssueActionType(row);
+        if (actionType !== 'REVERSE_RETURNED' && actionType !== 'REVERSE_SETTLED_REVERSAL') {
+          await showIssueRowDetails(row, 'Reverse returned', 'This row is not currently routable to Reverse returned.');
+          return;
+        }
+        if (issueRowNeedsBackendSupport(row) || (row.reverseReturnedAvailable !== true && row.reverse_returned_available !== true)) {
+          await showIssueRowDetails(row, 'Reverse returned', 'Reverse returned is waiting for backend safety support. No payment correction has been applied.');
+          return;
+        }
+        selectSingleIssueRowForAction(row);
+        await openCorrectionForSelectedIssueRows('REVERSE_SETTLED_REVERSAL', [row]);
+        return;
+      } else if (a === 'banking:pay:issue:resolveManually') {
+        const row = findIssueRowByKey(String(ds('rowKey') || dget('data-row-key') || '').trim());
+        const choice = await openManualPaymentIssueDecision(row);
+        if (choice === 'STILL_UNSURE') {
+          await showCurrentPaymentStatusNotice({ title: 'Left for review', message: 'No payment action was taken. The payment remains available for review in Current Payment Status.' });
+          return;
+        }
+        if (choice === 'PAYMENT_WAS_MADE') {
+          await showIssueRowDetails(row, 'Payment was made', 'Manual payment-made confirmation is waiting for backend support. No payment correction has been applied.');
+          return;
+        }
+        if (choice === 'NO_PAYMENT_WAS_MADE') {
+          if (!row || issueRowHasSentOrAcceptedEvidence(row)) {
+            await showCurrentPaymentStatusNotice({ title: 'No payment was made', message: 'This row cannot be released as no-payment because sent/accepted/paid evidence is present or the row could not be found.', confirmClass: 'btn btn-danger' });
+            return;
+          }
+          selectSingleIssueRowForAction(row);
+          await openCorrectionForSelectedIssueRows('UNWIND_FAILED_PAYMENT', [row]);
+          return;
+        }
+        if (choice === 'CANDIDATE_RETURNED_FUNDS') {
+          if (!row) {
+            await showCurrentPaymentStatusNotice({ title: 'Candidate returned funds', message: 'Payment row could not be found. Refresh the batch and try again.' });
+            return;
+          }
+          const actionType = normaliseIssueActionType(row);
+          if (actionType !== 'CANDIDATE_RETURNED_FUNDS' && actionType !== 'REVERSE_SETTLED_PAYMENT') {
+            await showIssueRowDetails(row, 'Candidate returned funds', 'This row is not currently routable to Candidate returned funds.');
+            return;
+          }
+          if (issueRowNeedsBackendSupport(row) || row.candidateReturnedFundsAvailable === false || row.candidate_returned_funds_available === false) {
+            await showIssueRowDetails(row, 'Candidate returned funds', 'This route requires returned-funds backend safety support before CloudTMS can apply a correction. No payment correction has been applied.');
+            return;
+          }
+          selectSingleIssueRowForAction(row);
+          await openCorrectionForSelectedIssueRows('REVERSE_SETTLED_PAYMENT', [row]);
+          return;
+        }
+        return;
+      } else if (a === 'banking:pay:issue:reverseEntireBatch') {
+        const model = buildDelegatedWholeBatchActionModel();
+        if (!model.enabled) {
+          await showCurrentPaymentStatusNotice({ title: 'Reverse entire batch', message: model.disabledReason || 'This whole-batch action is not currently safe. Use row-level actions for eligible rows.' });
+          return;
+        }
+        if (model.actionType !== 'RELEASE_FOR_NEXT_RUN') {
+          await showCurrentPaymentStatusNotice({ title: 'Reverse entire batch', message: 'This whole-batch action is waiting for backend safety support. No payment correction has been applied.' });
+          return;
+        }
+        for (const row of rows) {
+          if (row && typeof row === 'object') row.selected = false;
+        }
+        correctionState.selectedRowKeys = new Set();
+        correctionState.selectedTransferIds = new Set();
+        correctionState.selectedPayBatchItemIds = new Set();
+        correctionState.selectedPayBatchCandidateIds = new Set();
+        for (const row of model.eligibleRows) {
+          row.selected = true;
+          const key = getIssueRowKey(row);
+          if (key) correctionState.selectedRowKeys.add(key);
+          addIssueValuesToSet(correctionState.selectedTransferIds, row.payBankTransferIds || row.pay_bank_transfer_ids || row.payBankTransferId || row.pay_bank_transfer_id);
+          addIssueValuesToSet(correctionState.selectedPayBatchItemIds, row.payBatchItemIds || row.pay_batch_item_ids || row.payBatchItemId || row.pay_batch_item_id);
+          addIssueValuesToSet(correctionState.selectedPayBatchCandidateIds, row.payBatchCandidateIds || row.pay_batch_candidate_ids || row.payBatchCandidateId || row.pay_batch_candidate_id);
+        }
+        await openCorrectionForSelectedIssueRows('UNWIND_FAILED_PAYMENT', model.eligibleRows);
+        return;
+      } else if (a === 'banking:pay:issue:toggleRow') {
         const rowKey = String(ds('rowKey') || dget('data-row-key') || '').trim();
         if (!rowKey) return;
         const row = rows.find((x) => String(x?.rowKey || x?.row_key || '').trim() === rowKey);
@@ -64984,10 +66096,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         if (await handleSelectionResultError(selectionResult, 'Select an umbrella payment first.')) return;
         invalidateBankingPaymentIssuePlan(correctionState);
       } else if (a === 'banking:pay:issue:selectReturned') {
-        const selectionResult = selectBankingPaymentIssueRows(correctionState, 'returned');
+        const selectionResult = selectBankingPaymentIssueRows(correctionState, 'reverseReturned');
         if (await handleSelectionResultError(selectionResult, 'Select an umbrella payment first.')) return;
       } else if (a === 'banking:pay:issue:selectRejected') {
-        const selectionResult = selectBankingPaymentIssueRows(correctionState, 'rejected');
+        const selectionResult = selectBankingPaymentIssueRows(correctionState, 'releaseForNextRun');
         if (await handleSelectionResultError(selectionResult, 'Select an umbrella payment first.')) return;
       } else if (a === 'banking:pay:issue:selectUmbrellaGroup') {
         const rowKey = String(ds('rowKey') || dget('data-row-key') || '').trim();
@@ -65030,7 +66142,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         } catch (e) {
           correctionState.planError = (typeof sanitizeBankingPaymentIssueError === 'function')
             ? sanitizeBankingPaymentIssueError(e, 'plan')
-            : 'Unable to review payment issue.';
+            : 'Unable to review Current Payment Status.';
         } finally {
           correctionState.planLoading = false;
         }
@@ -65096,9 +66208,9 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         if (typeof refreshBankingNavAttentionFromCachedRows === 'function') refreshBankingNavAttentionFromCachedRows();
       } else if (a === 'banking:pay:issue:authAction') {
         const correctionRequestId = getCorrectionRequestId();
-        if (!correctionRequestId) { toast('Payment issue ID is required.'); return; }
+        if (!correctionRequestId) { toast('Current Payment Status request ID is required.'); return; }
         const actionName = String(ds('payIssueAction') || dget('data-pay-issue-action') || '').trim().toUpperCase();
-        const map = { REVIEWAPPROVE: 'AUTHORISE', APPROVEWITHGOLDENKEY: 'USE_GOLDEN_KEY', MAKEELIGIBLEAGAIN: 'AUTHORISE', REJECT: 'REJECT', CANCEL: 'CANCEL' };
+        const map = { REVIEWAPPROVE: 'AUTHORISE', APPROVEWITHGOLDENKEY: 'USE_GOLDEN_KEY', REJECT: 'REJECT', CANCEL: 'CANCEL' };
         const backendAction = map[actionName] || actionName;
         const payload = { action: backendAction };
         if (backendAction === 'AUTHORISE' || backendAction === 'USE_GOLDEN_KEY') {
@@ -65385,6 +66497,9 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
   return { ok: true };
 }
+
+
+
 async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -157780,7 +158895,6 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
   return finishSuccess(current);
 }
 
-
 function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionState) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -157792,709 +158906,54 @@ function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionSt
       .replace(/'/g, '&#39;');
 
   const payload = (batchPayload && typeof batchPayload === 'object' && !Array.isArray(batchPayload)) ? batchPayload : {};
-  let state = (correctionState && typeof correctionState === 'object' && !Array.isArray(correctionState)) ? correctionState : null;
-
-  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-  const child = (mc && mc.banking && mc.banking.pay && mc.banking.pay.child && typeof mc.banking.pay.child === 'object')
-    ? mc.banking.pay.child
-    : null;
-
-  if (!state) {
-    state = {};
-    try {
-      if (child) child.correction = state;
-    } catch {}
-  }
-
-  const toText = (value) => String(value == null ? '' : value).trim();
-  const toUpper = (value) => toText(value).toUpperCase();
-  const toNum = (value) => {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : 0;
-  };
-  const asArray = (value) => Array.isArray(value) ? value : [];
-  const asObj = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : null;
-  const formatAmount = (value) => {
-    const num = toNum(value);
-    try {
-      return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(num);
-    } catch {
-      return `£${num.toFixed(2)}`;
-    }
-  };
-  const rootAttr = child && toText(child.rootId) ? ` id="${enc(toText(child.rootId))}"` : '';
-
-  const isBootstrap = !!(payload.bootstrap_only === true || payload.batch?.bootstrap_only === true || child?.data?.bootstrap_only === true || child?.data?.batch?.bootstrap_only === true);
-  const sectionState = (sectionKey) => {
-    const section = child && child.sections && child.sections[sectionKey] && typeof child.sections[sectionKey] === 'object' ? child.sections[sectionKey] : {};
-    const rows = Array.isArray(section.rows) ? section.rows : (Array.isArray(section.items) ? section.items : []);
-    return {
-      ...section,
-      rows,
-      items: Array.isArray(section.items) ? section.items : rows,
-      loading: section.loading === true,
-      loaded: section.loaded === true,
-      next_cursor: section.next_cursor ?? section.nextCursor ?? null,
-      known_total_count: Number.isFinite(Number(section.known_total_count ?? section.knownTotalCount ?? section.total_count ?? section.totalCount))
-        ? Math.max(0, Math.trunc(Number(section.known_total_count ?? section.knownTotalCount ?? section.total_count ?? section.totalCount)))
-        : null,
-      error: toText(section.error)
-    };
-  };
-
-  const makeSet = (value) => {
-    try {
-      if (value instanceof Set) return new Set(Array.from(value).map((item) => toText(item)).filter(Boolean));
-      if (Array.isArray(value)) return new Set(value.map((item) => toText(item)).filter(Boolean));
-    } catch {}
-    return new Set();
-  };
-
-  const addValuesToSet = (target, value) => {
-    try {
-      const list = Array.isArray(value) ? value : [value];
-      for (const item of list) {
-        const text = toText(item);
-        if (text) target.add(text);
-      }
-    } catch {}
-  };
-
-  const rowKeyOf = (row, index) => toText(
-    row?.rowKey ||
-    row?.row_key ||
-    row?.payBankTransferId ||
-    row?.pay_bank_transfer_id ||
-    row?.payBatchCandidateId ||
-    row?.pay_batch_candidate_id ||
-    row?.candidateId ||
-    row?.candidate_id ||
-    (index != null ? `row-${index}` : '')
-  );
-
-  const previousRows = asArray(state.rows);
-  const selectedKeysBefore = makeSet(state.selectedRowKeys);
-  for (const row of previousRows) {
-    if (row && row.selected === true) {
-      const key = rowKeyOf(row);
-      if (key) selectedKeysBefore.add(key);
-    }
-  }
-
-  const manualPaidActionMode = !!(
-    state.manualPaidActionMode === true ||
-    state.issueState?.manualPaidActionMode === true ||
-    state.manual_paid_action_mode === true
-  );
-
-  const compactIssueSource = asObj(payload.payment_issue_summary) || asObj(payload.payment_correction) || asObj(payload.issue_summary) || asObj(payload.batch?.payment_issue_summary) || {};
-  const financeSection = sectionState('finance_case_groups');
-  const itemSection = sectionState('items');
-  const transferSection = sectionState('transfers');
-  const eventSection = sectionState('events');
-
-  const renderPagedSectionSummary = () => {
-    if (!isBootstrap) return '';
-    const sectionRow = (label, stateObj) => {
-      const loaded = asArray(stateObj.rows).length;
-      const known = stateObj.known_total_count;
-      const suffix = known == null ? '' : ` / ${known}`;
-      return `
-        <div class="card" style="padding:8px;">
-          <div class="mini" style="opacity:.78;">${enc(label)}</div>
-          <div class="mono">${enc(String(loaded))}${enc(suffix)}</div>
-          <div class="mini" style="opacity:.82;">${stateObj.loading ? 'Loading…' : (stateObj.loaded ? 'Loaded page data' : 'Not loaded yet')}${stateObj.error ? ` • ${enc(stateObj.error)}` : ''}</div>
-        </div>
-      `;
-    };
-    return `
-      <div class="card" style="padding:10px;margin-bottom:10px;">
-        <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Paged issue detail</div>
-        <div class="mini" style="opacity:.84;margin-bottom:8px;">Only summary data is loaded initially. Open or load the paged rows below to review detailed items, finance groups, transfers, and events.</div>
-        <div style="display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:8px;">
-          ${sectionRow('Finance case groups', financeSection)}
-          ${sectionRow('Items', itemSection)}
-          ${sectionRow('Transfers', transferSection)}
-          ${sectionRow('Events', eventSection)}
-        </div>
-      </div>
-    `;
-  };
-
-  const isPaidCleanRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    const bankStatus = toUpper(row?.bankStatusLabel || row?.bank_status_label || row?.bank_status || '');
-    const happened = toUpper(row?.whatHappenedLabel || row?.what_happened_label || row?.what_happened || '');
-    const status = toUpper(row?.statusLabel || row?.status_label || row?.status || '');
-    const backendAction = toUpper(row?.backendAction || row?.backend_action || '');
-    if (backendAction && backendAction !== 'REVERSE_SETTLED_PAYMENT') return false;
-    if (['RETURNED', 'REJECTED', 'REVIEW', 'NOT_SENT', 'DRAFT_REMOVE', 'PROCESSING', 'WAITING'].includes(issueKind)) return false;
-    return issueKind === 'PAID' || issueKind === 'NONE' || issueKind === 'CLEAN_PAID' || bankStatus === 'PAID' || status === 'PAID' || happened === 'PAID SUCCESSFULLY';
-  };
-
-  const rowHasManualIdentifiers = (row) => {
-    const values = [
-      row?.payBankTransferIds, row?.pay_bank_transfer_ids, row?.payBankTransferId, row?.pay_bank_transfer_id, row?.transferId, row?.transfer_id,
-      row?.payBatchCandidateIds, row?.pay_batch_candidate_ids, row?.payBatchCandidateId, row?.pay_batch_candidate_id,
-      row?.payBatchItemIds, row?.pay_batch_item_ids, row?.payBatchItemId, row?.pay_batch_item_id, row?.itemId, row?.item_id
-    ];
-    return values.some((value) => Array.isArray(value) ? value.some((item) => toText(item)) : !!toText(value));
-  };
-
-  const isDraftOnlyRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    return row?.draftOnlyRemoval === true || row?.draft_only_removal === true || issueKind === 'DRAFT_REMOVE';
-  };
-
-  const applyManualPaidRowMode = (rows) => {
-    const list = Array.isArray(rows) ? rows : [];
-    for (const row of list) {
-      if (!row || typeof row !== 'object') continue;
-      if (!isPaidCleanRow(row)) continue;
-      if (!rowHasManualIdentifiers(row)) continue;
-
-      row.manualActionAvailable = true;
-      row.manual_action_available = true;
-
-      if (manualPaidActionMode) {
-        row.bankStatusLabel = 'Paid';
-        row.whatHappenedLabel = 'Paid successfully';
-        row.actionLabel = 'Make eligible again';
-        row.statusLabel = 'Paid';
-        row.selectable = true;
-        row.selectableForApply = true;
-        row.selectableForReview = true;
-        row.backendAction = 'REVERSE_SETTLED_PAYMENT';
-        row.issueKindForDisplay = 'MANUAL_PAID_ACTION';
-        row.blockerText = '';
-      } else {
-        row.bankStatusLabel = row.bankStatusLabel || 'Paid';
-        row.whatHappenedLabel = row.whatHappenedLabel || 'Paid successfully';
-        row.actionLabel = 'No action';
-        row.statusLabel = row.statusLabel || 'Paid';
-        row.selectable = false;
-        row.selectableForApply = false;
-        row.selectableForReview = false;
-        if (!toText(row.backendAction || row.backend_action)) row.backendAction = '';
-        if (!toText(row.issueKindForDisplay || row.issue_kind_for_display)) row.issueKindForDisplay = 'PAID';
-      }
-    }
-    return list;
-  };
-
-  const buildIssueState = () => {
-    if (isBootstrap) {
-      return {
-        ...(asObj(state.issueState) || {}),
-        ...(compactIssueSource || {}),
-        bootstrap_only: true,
-        manualPaidActionMode,
-        requiresUserAction: compactIssueSource.requires_user_action === true || compactIssueSource.requiresUserAction === true || compactIssueSource.has_issue === true || compactIssueSource.hasIssue === true || Number(financeSection.known_total_count || 0) > 0,
-        hasActionableIssueRows: compactIssueSource.has_actionable_issue_rows === true || compactIssueSource.hasActionableIssueRows === true || Number(financeSection.known_total_count || 0) > 0,
-        hasSelectableRows: previousRows.some((row) => row && (row.selectableForApply === true || row.selectableForReview === true)),
-        headline: toText(compactIssueSource.headline || compactIssueSource.status_text || compactIssueSource.statusText || (Number(financeSection.known_total_count || 0) > 0 ? 'Needs review' : 'Payment status'))
-      };
-    }
-
-    if (typeof normaliseBankingPaymentIssueState !== 'function') return {};
-    try {
-      const next = normaliseBankingPaymentIssueState(payload, { manualPaidActionMode, correctionState: state });
-      return (next && typeof next === 'object') ? { ...next } : {};
-    } catch {
-      try {
-        const next = normaliseBankingPaymentIssueState(payload);
-        return (next && typeof next === 'object') ? { ...next } : {};
-      } catch {
-        return {};
-      }
-    }
-  };
-
-  const buildRows = () => {
-    if (isBootstrap) {
-      const rows = [];
-      const compactRows = asArray(compactIssueSource.rows || compactIssueSource.issue_rows || compactIssueSource.items);
-      if (compactRows.length) rows.push(...compactRows);
-      rows.push(...asArray(financeSection.rows));
-      rows.push(...asArray(itemSection.rows).filter((row) => row && (row.issueKindForDisplay || row.issue_kind || row.payment_issue || row.payment_issue_kind)));
-      rows.push(...asArray(transferSection.rows).filter((row) => row && (row.issueKindForDisplay || row.issue_kind || row.payment_issue || row.payment_issue_kind || toUpper(row.status) === 'FAILED')));
-      return rows;
-    }
-    if (typeof buildBankingPaymentIssueRows !== 'function') return previousRows.slice();
-    try {
-      return buildBankingPaymentIssueRows(payload, { manualPaidActionMode, correctionState: state });
-    } catch {
-      try {
-        return buildBankingPaymentIssueRows(payload);
-      } catch {
-        return previousRows.slice();
-      }
-    }
-  };
-
-  const readProviderSubmitBool = (value) => {
-    if (value === true) return true;
-    if (value === false) return false;
-    const text = String(value == null ? '' : value).trim().toLowerCase();
-    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
-    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
-    return false;
-  };
-
-  const firstProviderSubmitText = (...values) => {
-    for (const value of values) {
-      if (Array.isArray(value)) {
-        const nested = firstProviderSubmitText(...value);
-        if (nested) return nested;
-        continue;
-      }
-      const text = toText(value);
-      if (text) return text;
-    }
-    return '';
-  };
-
-  const extractProviderSubmitDiagnostic = () => {
-    const out = {};
-    const readFirst = (source, keys) => {
-      const obj = asObj(source) || {};
-      for (const key of keys) {
-        const value = obj[key];
-        if (value === null || value === undefined) continue;
-        if (Array.isArray(value)) {
-          if (value.length) return value;
-          continue;
-        }
-        if (typeof value === 'object') continue;
-        if (toText(value) !== '') return value;
-        if (typeof value === 'boolean') return value;
-      }
-      return undefined;
-    };
-    const put = (key, value, mode = 'text') => {
-      if (value === null || value === undefined) return;
-      if (Array.isArray(value)) {
-        if (!value.length) return;
-        out[key] = value;
-        return;
-      }
-      if (mode === 'bool') {
-        out[key] = readProviderSubmitBool(value);
-        return;
-      }
-      const text = toText(value);
-      if (!text && typeof value !== 'boolean') return;
-      out[key] = mode === 'upper' ? toUpper(value) : text;
-    };
-    const mergeProviderSubmitSource = (source) => {
-      if (!asObj(source)) return;
-      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode']), 'upper');
-      put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode']), 'upper');
-      put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired']), 'bool');
-      put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
-      put('safe_retry_available', readFirst(source, ['safe_retry_available', 'safeRetryAvailable']), 'bool');
-      put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
-      put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
-      put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
-      put('request_id', readFirst(source, ['request_id', 'requestId']));
-      put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
-      put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
-      put('rail_state', readFirst(source, ['rail_state', 'railState']));
-      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
-      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
-      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
-      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
-      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
-      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
-    };
-    const priorState = asObj(state.issueState) || {};
-    mergeProviderSubmitSource(priorState);
-    mergeProviderSubmitSource(priorState.provider_submit_diagnostic);
-    mergeProviderSubmitSource(priorState.providerSubmitDiagnostic);
-    const review = asObj(payload.payment_execution_review) || asObj(payload.paymentExecutionReview) || asObj(payload.batch?.payment_execution_review) || asObj(payload.batch?.paymentExecutionReview) || {};
-    mergeProviderSubmitSource(payload);
-    mergeProviderSubmitSource(payload.batch);
-    mergeProviderSubmitSource(review);
-    mergeProviderSubmitSource(payload.provider_submit_diagnostic);
-    mergeProviderSubmitSource(payload.providerSubmitDiagnostic);
-    mergeProviderSubmitSource(payload.batch?.provider_submit_diagnostic);
-    mergeProviderSubmitSource(payload.batch?.providerSubmitDiagnostic);
-    mergeProviderSubmitSource(review.provider_submit_diagnostic);
-    mergeProviderSubmitSource(review.providerSubmitDiagnostic);
-    for (const issue of asArray(payload.payment_issues || payload.paymentIssues || payload.batch?.payment_issues || payload.batch?.paymentIssues)) {
-      const item = asObj(issue) || {};
-      const kind = toUpper(item.issue_kind || item.issueKind || item.issue_type || item.issueType || item.kind || item.type || '');
-      if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW' && kind !== 'PROVIDER_SUBMIT_REVIEW') continue;
-      mergeProviderSubmitSource(item);
-      const issueReview = asObj(item.payment_execution_review) || asObj(item.paymentExecutionReview) || {};
-      mergeProviderSubmitSource(issueReview);
-      mergeProviderSubmitSource(item.provider_submit_diagnostic);
-      mergeProviderSubmitSource(item.providerSubmitDiagnostic);
-    }
-    if (!Object.keys(out).length) return null;
-    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.rail_state || out.request_id || out.idempotency_key || out.recommended_action);
-    if (!hasProviderSubmitContext) return null;
-    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
-      out.manual_resolution_required = false;
-      out.manual_resolution_available = false;
-    }
-    return out;
-  };
-  const providerSubmitDiagnostic = extractProviderSubmitDiagnostic();
-  const providerSubmitStatus = toUpper(providerSubmitDiagnostic?.provider_submission_status || providerSubmitDiagnostic?.providerSubmissionStatus || providerSubmitDiagnostic?.outcome_code || providerSubmitDiagnostic?.outcomeCode || '');
-  const providerSubmitReviewReason = toUpper(providerSubmitDiagnostic?.review_reason_code || providerSubmitDiagnostic?.reviewReasonCode || providerSubmitDiagnostic?.provider_submit_review_reason_code || providerSubmitDiagnostic?.providerSubmitReviewReasonCode || '');
-  const providerSubmitHasContext = !!(
-    providerSubmitDiagnostic &&
-    (
-      firstProviderSubmitText(providerSubmitDiagnostic.operation_id, providerSubmitDiagnostic.operationId, providerSubmitDiagnostic.chunk_id, providerSubmitDiagnostic.chunkId, providerSubmitDiagnostic.transfer_id, providerSubmitDiagnostic.transferId) ||
-      asArray(providerSubmitDiagnostic.chunk_ids || providerSubmitDiagnostic.chunkIds).length > 0 ||
-      asArray(providerSubmitDiagnostic.transfer_ids || providerSubmitDiagnostic.transferIds).length > 0 ||
-      (providerSubmitStatus && !['NO_PROVIDER_SUBMISSION_ATTEMPTED', 'CLAIMED_NOT_PROVIDER_CALLED_YET'].includes(providerSubmitStatus))
-    )
-  );
-  const providerSubmitHasIssue = providerSubmitHasContext && [
-    'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
-    'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
-    'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
-    'PROVIDER_SUBMISSION_REJECTED',
-    'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL',
-    'PROVIDER_SUBMISSION_ACCEPTED',
-    'MANUAL_RESOLVED_NO_PAYMENT_MADE'
-  ].includes(providerSubmitStatus);
-  const providerSubmitAcceptanceEvidencePresent = !!(
-    readProviderSubmitBool(providerSubmitDiagnostic?.provider_acceptance_evidence_present ?? providerSubmitDiagnostic?.providerAcceptanceEvidencePresent) ||
-    providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' ||
-    firstProviderSubmitText(providerSubmitDiagnostic?.rail_tx_id, providerSubmitDiagnostic?.railTxId, providerSubmitDiagnostic?.provider_transaction_id, providerSubmitDiagnostic?.providerTransactionId, providerSubmitDiagnostic?.provider_reference, providerSubmitDiagnostic?.providerReference)
-  );
-  const providerSubmitManualResolutionRequired = readProviderSubmitBool(providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
-  const providerSubmitBootstrapSummary = (() => {
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK') return 'Check the bank account before retry. If no payment was made, confirm no payment and cancel the draft batch.';
-    if (providerSubmitStatus === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME') return 'Provider request may have been sent. Reconcile with the bank account before retry.';
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE') return 'Provider returned an unusable response. Reconcile with the bank account before retry.';
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED') return 'Provider rejected the payment submission.';
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL') return 'Provider was not called. Retry may be available after safe cleanup.';
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED') return 'Provider acceptance evidence present. Do not retry unless reconciled.';
-    if (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') return 'Manual no-payment confirmation recorded. Batch can be retried if safe retry is available.';
-    return 'Provider submission needs review.';
-  })();
-  const providerSubmitBootstrapHeadline = providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK' ? 'Provider submission outcome unknown'
-    : (providerSubmitStatus === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME' ? 'Provider request may have been sent'
-      : (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE' ? 'Provider returned an unusable response'
-        : (providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL' ? 'Provider was not called'
-          : (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' ? 'Provider rejected payment'
-            : (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' ? 'Provider acceptance evidence present'
-              : (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? 'Manual no-payment confirmation recorded' : 'Provider submission needs review'))))));
-  const providerSubmitBootstrapHtml = (isBootstrap && providerSubmitHasIssue) ? `
-    <div class="payment-issue-provider-submit-card card" style="padding:12px;border:1px solid #facc15;background:#fffbeb;color:#713f12;margin-bottom:10px;">
-      <div style="font-weight:800;font-size:14px;margin-bottom:6px;">${enc(providerSubmitBootstrapHeadline)}</div>
-      <div class="mini" style="opacity:.92;white-space:pre-wrap;margin-bottom:8px;">${enc(providerSubmitBootstrapSummary)}</div>
-      <div class="mini" style="opacity:.9;margin-bottom:8px;">Local request IDs and idempotency keys are local correlation IDs only.
-They are not provider or bank transaction identifiers.</div>
-      ${providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK' && providerSubmitReviewReason === 'STALE_RUNNING_PROVIDER_SUBMIT_CHUNK' && providerSubmitAcceptanceEvidencePresent === false && providerSubmitStatus !== 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && readProviderSubmitBool(providerSubmitDiagnostic?.manual_resolution_available ?? providerSubmitDiagnostic?.manualResolutionAvailable) === true ? `<button
-        type="button"
-        class="btn btn-sm btn-primary"
-        data-action="banking:pay:issue:resolveProviderSubmitNoPayment"
-        data-row-key="${enc(firstProviderSubmitText(providerSubmitDiagnostic?.chunk_id, providerSubmitDiagnostic?.chunkId, providerSubmitDiagnostic?.transfer_id, providerSubmitDiagnostic?.transferId, 'provider-submit-review'))}"
-        data-operation-id="${enc(firstProviderSubmitText(providerSubmitDiagnostic?.operation_id, providerSubmitDiagnostic?.operationId))}"
-      >Confirm no payment made and cancel batch</button>` : ''}
-    </div>
-  ` : '';
-
-  const issueState = buildIssueState();
-  const rows = applyManualPaidRowMode(buildRows());
-
-  if (providerSubmitHasIssue) {
-    issueState.providerSubmitDiagnostic = providerSubmitDiagnostic;
-    issueState.provider_submit_diagnostic = providerSubmitDiagnostic;
-    issueState.provider_submission_status = providerSubmitStatus;
-    issueState.issueKindForDisplay = 'PROVIDER_SUBMIT_REVIEW';
-    const providerSubmitResolved = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE';
-    issueState.requiresUserAction = providerSubmitResolved ? false : true;
-    issueState.navAlert = providerSubmitResolved ? false : true;
-    issueState.hasActionableIssueRows = providerSubmitResolved ? false : true;
-    issueState.statusText = providerSubmitResolved ? 'Resolved' : (issueState.statusText || 'Needs review');
-    issueState.manualResolutionRequired = false;
-    issueState.manualResolutionAvailable = false;
-    issueState.manual_resolution_required = false;
-    issueState.manual_resolution_available = false;
-    if (!providerSubmitResolved) {
-      issueState.manualResolutionRequired = readProviderSubmitBool(providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
-      issueState.manualResolutionAvailable = readProviderSubmitBool(providerSubmitDiagnostic?.manual_resolution_available ?? providerSubmitDiagnostic?.manualResolutionAvailable ?? providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
-      issueState.manual_resolution_required = issueState.manualResolutionRequired;
-      issueState.manual_resolution_available = issueState.manualResolutionAvailable;
-    }
-    issueState.headline = providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK' ? 'Provider submission outcome unknown' : (providerSubmitStatus === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME' ? 'Provider request may have been sent' : (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE' ? 'Provider returned an unusable response' : (providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL' ? 'Provider was not called' : (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' ? 'Provider rejected payment' : (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' ? 'Provider acceptance evidence present' : (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? 'Manual no-payment confirmation recorded' : 'Provider submission needs review'))))));
-    issueState.summaryText = providerSubmitBootstrapSummary;
-  }
-
-  state.issueState = issueState;
-  state.issueState.manualPaidActionMode = manualPaidActionMode;
-  state.manualPaidActionMode = manualPaidActionMode;
-  state.rows = rows;
-  state.issueRows = rows;
-
-  const selectedRowKeys = new Set();
-  const selectedPayBatchCandidateIds = new Set();
-  const selectedTransferIds = new Set();
-  const selectedPayBatchItemIds = new Set();
-
-  rows.forEach((row, index) => {
-    if (!row || typeof row !== 'object') return;
-    const key = rowKeyOf(row, index);
-    const selectable = row.selectable !== false && (row.selectableForApply === true || row.selectableForReview === true || row.selectable === true);
-    const keepSelected = !!(key && selectedKeysBefore.has(key) && selectable);
-    row.selected = keepSelected;
-    if (!keepSelected) return;
-
-    selectedRowKeys.add(key);
-    addValuesToSet(selectedPayBatchCandidateIds, row.payBatchCandidateIds || row.pay_batch_candidate_ids || row.payBatchCandidateId || row.pay_batch_candidate_id);
-    addValuesToSet(selectedTransferIds, row.payBankTransferIds || row.pay_bank_transfer_ids || row.payBankTransferId || row.pay_bank_transfer_id || row.transferId || row.transfer_id);
-    addValuesToSet(selectedPayBatchItemIds, row.payBatchItemIds || row.pay_batch_item_ids || row.payBatchItemId || row.pay_batch_item_id || row.itemId || row.item_id);
-  });
-
-  state.selectedRowKeys = selectedRowKeys;
-  state.selectedPayBatchCandidateIds = selectedPayBatchCandidateIds;
-  state.selectedTransferIds = selectedTransferIds;
-  state.selectedPayBatchItemIds = selectedPayBatchItemIds;
-
-  if (selectedKeysBefore.size > 0 && selectedRowKeys.size !== selectedKeysBefore.size) {
-    state.selection = null;
-    state.plan = null;
-    state.planSelectionSignature = '';
-    state.planError = '';
-    state.acceptedResolutionJson = null;
-    state.acceptedResolutionSummary = null;
-    state.selectedUmbrellaGroup = null;
-    state.selectedTransferGroupKey = '';
-    state.selectionScopeMode = '';
-    try {
-      if (typeof invalidateBankingPaymentIssuePlan === 'function') invalidateBankingPaymentIssuePlan(state);
-    } catch {}
-  }
-
-  const issueKind = toUpper(issueState.issueKindForDisplay || issueState.issueKind || issueState.issue_kind || '');
-  const headline = toUpper(issueState.headline || issueState.statusText || issueState.summaryText || '');
-  const cleanIssueKinds = new Set(['', 'NONE', 'PAID', 'CLEAN_PAID', 'SETTLED_NO_CORRECTION_REQUIRED', 'MANUAL_PAID_ACTION']);
-  const actionIssueKinds = new Set(['RETURNED', 'REJECTED', 'REVIEW', 'NOT_SENT', 'DRAFT_REMOVE', 'PROCESSING', 'WAITING', 'APPLIED']);
-  const hasActionableIssueRows = rows.some((row) => {
-    if (!row || typeof row !== 'object') return false;
-    if (row.manualActionAvailable === true || row.manual_action_available === true) return false;
-    const rowKind = toUpper(row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || '');
-    if (rowKind === 'MANUAL_PAID_ACTION') return false;
-    return row.selectableForApply === true || row.selectableForReview === true || ['RETURNED', 'REJECTED', 'REVIEW', 'NOT_SENT', 'DRAFT_REMOVE'].includes(rowKind);
-  });
-  const hasStatusIssue = !!(
-    issueState.requiresUserAction === true ||
-    issueState.navAlert === true ||
-    issueState.hasActionableIssueRows === true ||
-    actionIssueKinds.has(issueKind) ||
-    headline === 'PROCESSING' ||
-    headline === 'WAITING FOR APPROVAL' ||
-    headline === 'APPLIED' ||
-    headline.includes('RETURNED') ||
-    headline.includes('REJECTED') ||
-    headline.includes('NEEDS REVIEW') ||
-    (issueState.hasIssue === true && !cleanIssueKinds.has(issueKind)) ||
-    hasActionableIssueRows ||
-    providerSubmitHasIssue ||
-    (isBootstrap && Number(financeSection.known_total_count || 0) > 0)
-  );
-  const manualPaidActionAvailable = rows.some((row) => row && (row.manualActionAvailable === true || row.manual_action_available === true));
-  const cleanPaidNoIssue = !manualPaidActionMode && !hasStatusIssue && (
-    issueKind === 'PAID' ||
-    issueKind === 'CLEAN_PAID' ||
-    headline === 'PAID SUCCESSFULLY' ||
-    rows.some((row) => isPaidCleanRow(row))
-  );
-
-  state.issueState.manualPaidActionAvailable = state.issueState.manualPaidActionAvailable === true || manualPaidActionAvailable;
-  state.issueState.hasActionableIssueRows = state.issueState.hasActionableIssueRows === true || hasActionableIssueRows;
-  state.issueState.hasSelectableRows = state.issueState.hasSelectableRows === true || rows.some((row) => row && (row.selectableForApply === true || row.selectableForReview === true));
-  state.manualPaidActionAvailable = manualPaidActionAvailable;
-
-  const batchObj = (payload.batch && typeof payload.batch === 'object') ? payload.batch : {};
-  const batchStatus = toUpper(batchObj.status || payload.status || '');
-  const actionableRows = rows.filter((row) => {
-    if (!row || typeof row !== 'object') return false;
-    if (row.manualActionAvailable === true || row.manual_action_available === true) return false;
-    const rowKind = toUpper(row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || '');
-    return row.selectableForApply === true || row.selectableForReview === true || row.selectable === true || ['RETURNED', 'REJECTED', 'REVIEW', 'NOT_SENT', 'DRAFT_REMOVE'].includes(rowKind);
-  });
-  const draftOnlyDisplayMode = batchStatus === 'DRAFT' && actionableRows.length > 0 && actionableRows.every((row) => isDraftOnlyRow(row));
-
-  const selectedRows = rows.filter((row) => row && row.selected === true);
-  const selectedCount = selectedRows.length;
-  const selectedAmount = selectedRows.reduce((total, row) => total + toNum(row.paymentAmount || row.amount || 0), 0);
-  const disableManualActionButtons = selectedCount <= 0;
-  const disabledAttr = disableManualActionButtons
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-
-  const compactSummaryHtml = isBootstrap ? `
-    <div class="payment-issue-summary-card card" style="padding:10px;">
-      <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Payment issue summary</div>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
-        <span class="pill ${hasStatusIssue ? 'pill-warn' : 'pill-ok'}">${enc(toText(issueState.headline || issueState.statusText || issueState.status_text || (hasStatusIssue ? 'Needs review' : 'No current issue')))}</span>
-        <span class="pill pill-info">Paged details</span>
-      </div>
-      <div class="mini" style="opacity:.86;white-space:pre-wrap;">${enc(toText(issueState.summaryText || issueState.status_text || issueState.message || compactIssueSource.message || 'Detailed payment issue rows are loaded by page when needed.'))}</div>
-    </div>
-  ` : '';
-
-  const cleanPaidHtml = cleanPaidNoIssue ? `
-    <div class="payment-issue-summary-card card" style="padding:10px;">
-      <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Payment status</div>
-      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
-        <span class="pill pill-ok">Paid successfully</span>
-      </div>
-      <div class="mini" style="opacity:.88; white-space:pre-wrap;">Paid successfully.\nThis payment was paid successfully.</div>
-    </div>
-    ${manualPaidActionAvailable ? `
-      <div class="payment-issue-manual-action-card card" style="padding:10px;">
-        <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Manual action</div>
-        <div class="mini" style="opacity:.88; margin-bottom:8px;">Use this only if you need to make a paid payment eligible to be paid again.</div>
-        <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:startManualPaidAction">Start manual action</button>
-      </div>
-    ` : ''}
-  ` : '';
-
-  const manualRowsHtml = (() => {
-    const manualRows = rows.filter((row) => row && (row.manualActionAvailable === true || row.manual_action_available === true));
-    if (!manualRows.length) return `<div class="mini" style="opacity:.85;">No paid payments are available for manual action.</div>`;
-    return `
-      <div class="payment-issue-table-wrap" style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-        <table class="payment-issue-table grid" style="min-width:980px; margin:0; table-layout:auto;">
-          <thead>
-            <tr>
-              <th style="width:54px;">Select</th>
-              <th>Candidate</th>
-              <th>Umbrella</th>
-              <th style="text-align:right; width:150px;">Payment amount</th>
-              <th style="width:130px;">Bank status</th>
-              <th>What happened</th>
-              <th style="width:170px;">Action</th>
-              <th style="width:120px;">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${manualRows.map((row, index) => {
-              const rowKey = rowKeyOf(row, index);
-              const checked = row.selected === true;
-              const amount = row.paymentAmount || row.amount || 0;
-              return `
-                <tr${checked ? ' class="payment-issue-row-selected"' : ''} data-row-key="${enc(rowKey)}">
-                  <td><input type="checkbox" data-action="banking:pay:issue:toggleRow" data-row-key="${enc(rowKey)}"${checked ? ' checked' : ''}></td>
-                  <td>${enc(toText(row.candidateName || row.candidate_name || ''))}</td>
-                  <td>${enc(toText(row.umbrellaName || row.umbrella_name || ''))}</td>
-                  <td class="mono" style="text-align:right;">${enc(formatAmount(amount))}</td>
-                  <td>${enc(toText(row.bankStatusLabel || 'Paid'))}</td>
-                  <td>${enc(toText(row.whatHappenedLabel || 'Paid successfully'))}</td>
-                  <td>${enc(toText(row.actionLabel || 'Make eligible again'))}</td>
-                  <td>${enc(toText(row.statusLabel || 'Paid'))}</td>
-                </tr>
-              `;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
-  })();
-
-  const manualPanelHtml = manualPaidActionMode ? `
-    <section id="payment-issue-panel" class="payment-issue-panel payment-issue-manual-mode">
-      <div class="payment-issue-summary-card card" style="padding:10px; margin-bottom:10px;">
-        <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Payment status</div>
-        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px;"><span class="pill pill-ok">Paid successfully</span></div>
-        <div class="mini" style="opacity:.88; white-space:pre-wrap;">This payment was paid successfully.</div>
-      </div>
-      <div class="payment-issue-manual-action-card card" style="padding:10px; margin-bottom:10px;">
-        <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Manual action</div>
-        <div class="mini" style="opacity:.88; margin-bottom:8px;">Use this only if you need to make a paid payment eligible to be paid again.</div>
-        <div class="payment-issue-toolbar" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-          <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:selectAllVisible">Select paid payments</button>
-          <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:clearAll">Clear selection</button>
-          <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:cancelManualPaidAction">Cancel manual action</button>
-        </div>
-      </div>
-      ${manualRowsHtml}
-      <div class="payment-issue-summary-card card" style="padding:10px; margin-top:10px;">
-        <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Selected payment summary</div>
-        <div class="mini" style="opacity:.88; margin-bottom:8px;">Selected payments: <span class="mono">${enc(String(selectedCount))}</span>${selectedCount ? ` • Amount: <span class="mono">${enc(formatAmount(selectedAmount))}</span>` : ''}</div>
-        <div class="payment-issue-actions" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-          <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:plan" data-requested-action="REVERSE_SETTLED_PAYMENT" ${disabledAttr}>Review selected payments</button>
-          <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:issue:openConfirm" data-requested-action="REVERSE_SETTLED_PAYMENT" ${disabledAttr}>Make selected eligible for payment again</button>
-        </div>
-        ${state.planError ? `<div class="error" style="white-space:pre-wrap; margin-top:8px;">${enc(toText(state.planError))}</div>` : ''}
-      </div>
-    </section>
-  ` : '';
-
-  let issuePanelHtml = '';
-  if (!cleanPaidNoIssue && !manualPaidActionMode) {
-    if (isBootstrap) {
-      const loadedRows = rows.length
-        ? rows.slice(0, 50).map((row, index) => {
-            const rowKind = toText(row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || row.kind || 'Issue');
-            const label = toText(row.candidateName || row.candidate_name || row.display_name || row.payee_name || row.umbrellaName || row.umbrella_name || 'Payment row');
-            const amount = row.paymentAmount ?? row.amount ?? row.amount_inc_vat ?? row.amount_ex_vat ?? null;
-            return `
-              <tr>
-                <td>${enc(label)}</td>
-                <td>${enc(rowKind)}</td>
-                <td class="mono" style="text-align:right;">${amount == null ? '—' : enc(formatAmount(amount))}</td>
-                <td>${enc(toText(row.statusLabel || row.status_label || row.status || row.actionLabel || row.action_label || 'Review'))}</td>
-              </tr>
-            `;
-          }).join('')
-        : `<tr><td colspan="4" class="mini" style="opacity:.85;">No detailed issue rows have been loaded yet.</td></tr>`;
-      issuePanelHtml = `
-        <div class="payment-issue-table-wrap" style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
-          <table class="grid" style="min-width:760px;table-layout:auto;margin:0;">
-            <thead><tr><th>Payment</th><th>Issue</th><th style="text-align:right;">Amount</th><th>Status/action</th></tr></thead>
-            <tbody>${loadedRows}</tbody>
-          </table>
-        </div>
-      `;
-    } else if (typeof renderBankingPaymentIssuePanel === 'function') {
-      try {
-        issuePanelHtml = String(renderBankingPaymentIssuePanel(payload, state) || '');
-      } catch (e) {
-        issuePanelHtml = `<div class="error" style="white-space:pre-wrap;">${enc(String(e?.message || e || 'Payment Issues could not be rendered.'))}</div>`;
-      }
-    } else {
-      issuePanelHtml = `<div class="error" style="white-space:pre-wrap;">Payment Issues renderer is not available.</div>`;
-    }
-  }
+  const state = (correctionState && typeof correctionState === 'object' && !Array.isArray(correctionState)) ? correctionState : {};
 
   try {
-    if (manualPaidActionMode && typeof renderBankingPaymentIssuePanel === 'function' && !isBootstrap) {
-      renderBankingPaymentIssuePanel(payload, state);
+    const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    const child = (mc && mc.banking && mc.banking.pay && mc.banking.pay.child && typeof mc.banking.pay.child === 'object')
+      ? mc.banking.pay.child
+      : null;
+    if (child && (!child.correction || typeof child.correction !== 'object' || Array.isArray(child.correction))) {
+      child.correction = state;
     }
   } catch {}
 
-  return `
-    <div${rootAttr} class="payment-issues-tab" data-payment-issues-tab="1">
-      <div class="card" style="padding:10px;">
-        <div style="display:flex; gap:10px; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; margin-bottom:10px;">
-          <div>
-            <div style="font-weight:700; font-size:15px;">${draftOnlyDisplayMode ? 'Draft batch changes' : 'Payment Issues'}</div>
-            <div class="mini" style="opacity:.82; margin-top:4px;">${draftOnlyDisplayMode ? 'Remove reserved draft payments before this batch is sent.' : 'Payment status and safe payment actions for this batch.'}</div>
+  if (typeof renderBankingPaymentIssuePanel === 'function') {
+    try {
+      return String(renderBankingPaymentIssuePanel(payload, state) || '');
+    } catch (error) {
+      const message = String(error && error.message ? error.message : error || 'Current Payment Status could not be rendered.').trim();
+      return `
+        <section id="payment-issue-panel" class="payment-issue-panel current-payment-status-panel">
+          <div class="card" style="padding:10px;">
+            <div style="font-weight:700;font-size:15px;margin-bottom:6px;">Current Payment Status</div>
+            <div class="error" style="white-space:pre-wrap;">${enc(message || 'Current Payment Status could not be rendered.')}</div>
+            <details style="margin-top:10px;">
+              <summary class="mini" style="cursor:pointer;opacity:.88;">Support details ▸</summary>
+              <pre class="mono mini" style="white-space:pre-wrap;overflow:auto;max-height:220px;">${enc(message)}</pre>
+            </details>
           </div>
-          ${manualPaidActionMode ? `<span class="pill pill-info">Manual action</span>` : (draftOnlyDisplayMode ? `<span class="pill pill-info">Draft only</span>` : (hasStatusIssue ? `<span class="pill pill-warn">Needs review</span>` : `<span class="pill pill-ok">Paid successfully</span>`))}
-        </div>
-        <div style="display:flex; flex-direction:column; gap:10px;">
-          ${providerSubmitBootstrapHtml}
-          ${compactSummaryHtml}
-          ${renderPagedSectionSummary()}
-          ${cleanPaidNoIssue ? cleanPaidHtml : ''}
-          ${manualPaidActionMode ? manualPanelHtml : ''}
-          ${(!cleanPaidNoIssue && !manualPaidActionMode) ? issuePanelHtml : ''}
-        </div>
+        </section>
+      `;
+    }
+  }
+
+  return `
+    <section id="payment-issue-panel" class="payment-issue-panel current-payment-status-panel">
+      <div class="card" style="padding:10px;">
+        <div style="font-weight:700;font-size:15px;margin-bottom:6px;">Current Payment Status</div>
+        <div class="mini" style="opacity:.86;white-space:pre-wrap;">Current Payment Status is not available yet. Refresh the batch and try again.</div>
+        <details style="margin-top:10px;">
+          <summary class="mini" style="cursor:pointer;opacity:.88;">Support details ▸</summary>
+          <pre class="mono mini" style="white-space:pre-wrap;overflow:auto;max-height:220px;">${enc(JSON.stringify({
+            renderer_available: false,
+            has_payload: !!payload && Object.keys(payload).length > 0
+          }, null, 2))}</pre>
+        </details>
       </div>
-    </div>
+    </section>
   `;
 }
-
 
 function renderBulkProcessManualEditor(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
