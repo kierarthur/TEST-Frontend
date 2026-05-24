@@ -21024,32 +21024,65 @@ async function bankingPayPaymentCorrectionProcess(correctionRequestId, limit = 5
 }
 
 
-
 function getBankingPaymentIssueActionLabel(rowOrState) {
   const src = (rowOrState && typeof rowOrState === 'object') ? rowOrState : { state: rowOrState };
-  const stateText = String(src.state || src.headline || src.badgeText || src.status || '').trim().toUpperCase();
-  const issueKind = String(src.issueKindForDisplay || src.issueKind || src.issue_kind_for_display || src.issue_kind || '').trim().toUpperCase();
-  const selectedRows = Array.isArray(src.selectedRows) ? src.selectedRows : [];
-  const allSelectedRowsDraftOnly = selectedRows.length > 0 && selectedRows.every((row) => {
-    const rowKind = String(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '').trim().toUpperCase();
-    return row?.draftOnlyRemoval === true || row?.draft_only_removal === true || rowKind === 'DRAFT_REMOVE';
-  });
-  const isDraftOnlyRemoval = src.draftOnlyRemoval === true || src.draft_only_removal === true || src.allDraftOnlyRemoval === true || issueKind === 'DRAFT_REMOVE' || stateText === 'DRAFT BATCH ITEM' || stateText === 'DRAFT ONLY' || allSelectedRowsDraftOnly;
-  const multipleSelected = src.multipleSelected === true || src.selectedCount > 1 || src.isMultiSelect === true;
+  const text = (value) => String(value == null ? '' : value).trim();
+  const upper = (value) => text(value).toUpperCase();
+  const truthy = (value) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    return ['true', 't', '1', 'yes', 'y', 'on'].includes(text(value).toLowerCase());
+  };
 
-  if (issueKind === 'BLOCKED_FUNDS' || stateText === 'BLOCKED FUNDS' || stateText === 'BANK REJECTED PAYMENT — BLOCKED FUNDS') return 'Retry payment / Cancel payment';
-  if (isDraftOnlyRemoval) return 'Remove payment from batch';
-  if (multipleSelected) return 'Make selected eligible for payment again';
-  if (stateText === 'PAYMENT NOT SENT') return 'Cancel payment';
-  if (stateText === 'BANK REJECTED PAYMENT' || stateText === 'REJECTED') return 'Make eligible for payment again';
-  if (stateText === 'BANK RETURNED PAYMENT' || stateText === 'RETURNED') return 'Make eligible for payment again';
-  if (stateText === 'NEEDS REVIEW') return 'Review payment';
-  if (stateText === 'PAID' || stateText === 'PAID SUCCESSFULLY' || stateText === 'ALREADY PAID') return 'No action';
-  if (stateText === 'APPLIED' || stateText === 'ALREADY APPLIED') return 'Applied';
-  if (stateText === 'WAITING FOR APPROVAL') return 'Waiting for approval';
-  if (stateText === 'PROCESSING') return 'Processing';
-  return 'Review payment';
+  const explicitAction = upper(
+    src.actionType ||
+    src.action_type ||
+    src.bulkActionType ||
+    src.bulk_action_type ||
+    src.backendAction ||
+    src.backend_action ||
+    src.requested_action ||
+    src.requestedAction ||
+    src.primaryAction ||
+    src.primary_action ||
+    ''
+  );
+  const displayState = upper(src.displayState || src.display_state || '');
+  const issueKind = upper(src.issueKindForDisplay || src.issueKind || src.issue_kind_for_display || src.issue_kind || '');
+  const stateText = upper(src.state || src.headline || src.badgeText || src.status || src.statusText || src.resultLabel || src.result_label || src.bankStatusLabel || src.bank_status_label || src.whatHappenedLabel || src.what_happened_label || '');
+
+  if (explicitAction === 'CANDIDATE_RETURNED_FUNDS' || explicitAction === 'REVERSE_SETTLED_PAYMENT') return 'Candidate returned funds';
+  if (explicitAction === 'REVERSE_RETURNED' || explicitAction === 'REVERSE_SETTLED_REVERSAL') return 'Reverse returned';
+  if (explicitAction === 'RELEASE_FOR_NEXT_RUN' || explicitAction === 'UNWIND_FAILED_PAYMENT' || explicitAction === 'NO_MONEY_UNWIND') return 'Release for next run';
+  if (explicitAction === 'RESOLVE_MANUALLY' || explicitAction === 'REVIEW_BANK_EVIDENCE' || explicitAction === 'MANUAL_RESOLUTION') return 'Resolve manually';
+  if (explicitAction === 'VIEW_DETAILS' || explicitAction === 'DETAILS' || explicitAction === 'SUPPORT_DETAILS') return 'View details';
+
+  if (truthy(src.futureActionPendingBackend) || truthy(src.requiresBackendSupport) || truthy(src.requires_backend_support)) return 'View details';
+
+  if (displayState === 'PAYMENT_SENT' || displayState === 'PAYMENT_PAID') return 'Candidate returned funds';
+  if (displayState === 'RETURNED_REVERSAL_AVAILABLE') return 'Reverse returned';
+  if (displayState === 'PAYMENT_RETURNED') return truthy(src.reverseReturnedAvailable || src.reverse_returned_available) ? 'Reverse returned' : 'View details';
+  if (displayState === 'BANK_REJECTED_NEEDS_MANUAL_RELEASE' || displayState === 'INSUFFICIENT_FUNDS_NEEDS_ACTION') return 'Release for next run';
+  if (displayState === 'PAYMENT_UNKNOWN_CHECK_REQUIRED') return 'Resolve manually';
+  if (displayState === 'BANK_REJECTED_AUTO_REVERSED' || displayState === 'BANK_REJECTED_MANUALLY_REVERSED' || displayState === 'INSUFFICIENT_FUNDS_AUTO_REVERSED') return 'View details';
+
+  if (issueKind === 'RETURNED') return truthy(src.reverseReturnedAvailable || src.reverse_returned_available) ? 'Reverse returned' : 'View details';
+  if (issueKind === 'REJECTED' || issueKind === 'BLOCKED_FUNDS') return 'Release for next run';
+  if (issueKind === 'REVIEW' || issueKind === 'PROVIDER_SUBMIT_REVIEW' || issueKind === 'PAYMENT_PROVIDER_SUBMIT_REVIEW') return 'Resolve manually';
+  if (issueKind === 'PAID' || issueKind === 'CLEAN_PAID' || issueKind === 'MANUAL_PAID_ACTION') return 'Candidate returned funds';
+
+  if (stateText.includes('INSUFFICIENT FUNDS') && (stateText.includes('REVERSED') || stateText.includes('RELEASED'))) return 'View details';
+  if (stateText.includes('INSUFFICIENT FUNDS')) return 'Release for next run';
+  if (stateText.includes('BANK REJECTED') && (stateText.includes('REVERSED') || stateText.includes('RELEASED'))) return 'View details';
+  if (stateText.includes('BANK REJECTED') || stateText === 'REJECTED') return 'Release for next run';
+  if (stateText.includes('RETURNED')) return truthy(src.reverseReturnedAvailable || src.reverse_returned_available) ? 'Reverse returned' : 'View details';
+  if (stateText.includes('CHECK REQUIRED') || stateText.includes('NEEDS REVIEW') || stateText.includes('UNKNOWN') || stateText.includes('TIMEOUT') || stateText.includes('MALFORMED')) return 'Resolve manually';
+  if (stateText.includes('PAID') || stateText.includes('SENT') || stateText.includes('ACCEPTED') || stateText.includes('SUBMITTED')) return 'Candidate returned funds';
+  if (stateText.includes('PROCESSING') || stateText.includes('WAITING') || stateText.includes('APPLIED') || stateText.includes('CANCELLED') || stateText.includes('DRAFT')) return 'View details';
+
+  return 'View details';
 }
+
 
 function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
   const src = (batchPayload && typeof batchPayload === 'object') ? batchPayload : {};
@@ -21058,16 +21091,13 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
 
   const toText = (value) => String(value == null ? '' : value).trim();
   const toUpper = (value) => toText(value).toUpperCase();
-  const isObj = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const asObj = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : null;
   const asArr = (value) => Array.isArray(value) ? value : [];
-  const num = (value) => {
+  const toNum = (value) => {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
   };
-  const sum = (...values) => values.reduce((total, value) => total + num(value), 0);
-  const hasObjectKeys = (value) => !!(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0);
-
-  const readProviderBool = (value) => {
+  const readBool = (value) => {
     if (value === true) return true;
     if (value === false) return false;
     const text = toText(value).toLowerCase();
@@ -21075,1002 +21105,31 @@ function normaliseBankingPaymentIssueState(batchPayload, opts = {}) {
     if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
     return null;
   };
-  const providerSubmitObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
-  const providerSubmitText = (value) => String(value == null ? '' : value).trim();
-  const providerSubmitCollectEvidenceSources = (value) => {
-    const root = providerSubmitObject(value);
-    const railMeta = providerSubmitObject(root.rail_meta_json || root.railMetaJson);
-    const rawPayload = providerSubmitObject(root.raw_payload || root.rawPayload);
-    const directDiagnostic = providerSubmitObject(root.provider_submit_diagnostic || root.providerSubmitDiagnostic);
-    const railDiagnostic = providerSubmitObject(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic);
-    const rawDiagnostic = providerSubmitObject(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic);
-    const providerResponse = providerSubmitObject(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson);
-    const rawProviderResponse = providerSubmitObject(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson);
-    return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
-      .filter((obj) => obj && Object.keys(obj).length);
-  };
-  const providerSubmitLocalReferenceSet = (value) => {
-    const out = new Set();
-    const localKeys = [
-      'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
-      'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
-      'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
-      'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
-      'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
-      'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
-    ];
-    for (const obj of providerSubmitCollectEvidenceSources(value)) {
-      for (const key of localKeys) {
-        const text = providerSubmitText(obj[key]);
-        if (text) out.add(text.toLowerCase());
-      }
-    }
-    return out;
-  };
-  const providerSubmitStrictExternalEvidencePresent = (value) => {
-    const localRefs = providerSubmitLocalReferenceSet(value);
-    const externalKeys = [
-      'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
-      'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
-      'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
-      'submission_id', 'submissionId', 'rail_submission_id', 'railSubmissionId',
-      'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
-      'provider_transfer_id', 'providerTransferId', 'external_transfer_id', 'externalTransferId',
-      'external_reference', 'externalReference', 'bank_reference', 'bankReference',
-      'transaction_id', 'transactionId', 'payment_id', 'paymentId'
-    ];
-    for (const obj of providerSubmitCollectEvidenceSources(value)) {
-      for (const key of externalKeys) {
-        const text = providerSubmitText(obj[key]);
-        if (!text) continue;
-        if (localRefs.has(text.toLowerCase())) continue;
-        return true;
-      }
-    }
-    return false;
-  };
-  const normaliseProviderSubmitDiagnostic = (raw) => {
-    const source = isObj(raw) ? raw : {};
-    if (!Object.keys(source).length) return {};
-    const out = { ...source };
-    out.provider_submission_status = toUpper(out.provider_submission_status || out.providerSubmissionStatus || out.outcome_code || out.outcomeCode || '');
-    out.review_reason_code = toUpper(out.review_reason_code || out.reviewReasonCode || out.provider_submit_review_reason_code || out.providerSubmitReviewReasonCode || '');
-    out.manual_resolution_required = readProviderBool(out.manual_resolution_required ?? out.manualResolutionRequired) === true;
-    out.manual_resolution_available = readProviderBool(out.manual_resolution_available ?? out.manualResolutionAvailable ?? out.manual_resolution_required ?? out.manualResolutionRequired) === true;
-    out.safe_retry_available = readProviderBool(out.safe_retry_available ?? out.safeRetryAvailable) === true;
-    const strictExternalEvidencePresent = providerSubmitStrictExternalEvidencePresent(out);
-    const rejectedOrUnusable = [
-      'PROVIDER_SUBMISSION_REJECTED',
-      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
-      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
-      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
-      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
-      'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
-    ].includes(out.provider_submission_status);
-    out.provider_external_evidence_present = strictExternalEvidencePresent === true;
-    out.provider_acceptance_evidence_present = out.provider_submission_status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictExternalEvidencePresent === true && rejectedOrUnusable !== true;
-    out.provider_response_present = readProviderBool(out.provider_response_present ?? out.providerResponsePresent ?? out.provider_response_received ?? out.providerResponseReceived) === true;
-    out.provider_response_received = readProviderBool(out.provider_response_received ?? out.providerResponseReceived ?? out.provider_response_present ?? out.providerResponsePresent) === true;
-    out.provider_request_sent = readProviderBool(out.provider_request_sent ?? out.providerRequestSent) === true;
-    out.provider_request_sent_confirmed = readProviderBool(out.provider_request_sent_confirmed ?? out.providerRequestSentConfirmed) === true;
-    out.provider_submission_attempted = readProviderBool(out.provider_submission_attempted ?? out.providerSubmissionAttempted ?? out.provider_called ?? out.providerCalled) === true || out.provider_request_sent === true || out.provider_response_present === true;
-    out.provider_request_dispatched_at_utc = toText(out.provider_request_dispatched_at_utc || out.providerRequestDispatchedAtUtc || out.request_sent_at_utc || out.requestSentAtUtc || '');
-    out.provider_error_code = toText(out.provider_error_code || out.providerErrorCode || out.error_code || out.errorCode || '');
-    out.provider_error_message_redacted = toText(out.provider_error_message_redacted || out.providerErrorMessageRedacted || out.provider_error_message || out.providerErrorMessage || out.provider_message || out.providerMessage || '');
-    out.provider_http_status = toText(out.provider_http_status || out.providerHttpStatus || out.http_status || out.httpStatus || '');
-    if (!out.provider_submission_status && (out.review_reason_code === 'PROVIDER_REJECTED_PAYMENT' || out.provider_error_code || out.provider_error_message_redacted)) out.provider_submission_status = 'PROVIDER_SUBMISSION_REJECTED';
-    out.request_id = toText(out.request_id || out.requestId || '');
-    out.idempotency_key = toText(out.idempotency_key || out.idempotencyKey || '');
-    out.rail_tx_id = toText(out.rail_tx_id || out.railTxId || '');
-    out.rail_state = toText(out.rail_state || out.railState || '');
-    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
-      out.manual_resolution_required = false;
-      out.manual_resolution_available = false;
-    }
-    out.stale_submit_chunk = readProviderBool(out.stale_submit_chunk ?? out.staleSubmitChunk) === true;
-    out.recommended_action = toText(out.recommended_action || out.recommendedAction || '') || null;
-    return out;
-  };
-  const extractProviderSubmitDiagnostic = (payload) => {
-    const out = {};
-    const visited = new Set();
-    const queue = [];
-    let sawProviderSubmitScopedSource = false;
-    const addSource = (value) => {
-      if (!value) return;
+  const firstText = (...values) => {
+    for (const value of values) {
       if (Array.isArray(value)) {
-        value.forEach(addSource);
-        return;
-      }
-      if (typeof value === 'string') {
-        const text = value.trim();
-        if (!text) return;
-        try {
-          const parsed = JSON.parse(text);
-          if (parsed && typeof parsed === 'object') addSource(parsed);
-        } catch {}
-        return;
-      }
-      if (!isObj(value) || visited.has(value)) return;
-      visited.add(value);
-      queue.push(value);
-      [
-        'batch',
-        'detail',
-        'details',
-        'operation',
-        'operation_result',
-        'operationResult',
-        'operation_error',
-        'operationError',
-        'result',
-        'result_json',
-        'resultJson',
-        'error',
-        'error_json',
-        'errorJson',
-        'progress',
-        'progress_json',
-        'progressJson',
-        'payment_execution_review',
-        'paymentExecutionReview',
-        'payment_execution_outcome_counts',
-        'paymentExecutionOutcomeCounts',
-        'provider_submission',
-        'providerSubmission',
-        'provider_submit_diagnostic',
-        'providerSubmitDiagnostic',
-        'provider_submit_claim_diagnostic',
-        'providerSubmitClaimDiagnostic',
-        'rail_meta_json',
-        'railMetaJson',
-        'raw_payload',
-        'rawPayload',
-        'provider_response',
-        'providerResponse',
-        'provider_response_json',
-        'providerResponseJson',
-        'payment_issue_summary',
-        'paymentIssueSummary',
-        'provider_issue_summary',
-        'providerIssueSummary',
-        'bank_evidence_summary',
-        'bankEvidenceSummary'
-      ].forEach((key) => addSource(value[key]));
-      [
-        'transfers',
-        'bank_evidence',
-        'bankEvidence',
-        'payment_issues',
-        'paymentIssues',
-        'issues',
-        'transfer_events',
-        'transferEvents',
-        'provider_transfer_events',
-        'providerTransferEvents',
-        'provider_events',
-        'providerEvents',
-        'chunks',
-        'provider_submit_chunks',
-        'providerSubmitChunks',
-        'submitted',
-        'errors',
-        'transfer_provider_outcomes',
-        'transferProviderOutcomes',
-        'provider_outcomes',
-        'providerOutcomes'
-      ].forEach((key) => addSource(value[key]));
-    };
-    addSource(payload);
-    addSource(options.providerSubmitDiagnostic);
-    addSource(options.provider_submit_diagnostic);
-
-    const readFirst = (source, keys) => {
-      const obj = isObj(source) ? source : {};
-      for (const key of keys) {
-        const value = obj[key];
-        if (value === null || value === undefined) continue;
-        if (Array.isArray(value)) {
-          if (value.length) return value;
-          continue;
-        }
-        if (typeof value === 'object') continue;
-        if (toText(value) !== '') return value;
-        if (typeof value === 'boolean') return value;
-      }
-      return undefined;
-    };
-    const put = (key, value, mode = 'text', overwrite = false) => {
-      if (value === null || value === undefined) return;
-      if (!overwrite && out[key] !== undefined && out[key] !== '' && !(Array.isArray(out[key]) && out[key].length === 0)) return;
-      if (Array.isArray(value)) {
-        const values = value.map((entry) => toText(entry)).filter(Boolean);
-        if (!values.length) return;
-        out[key] = values;
-        return;
-      }
-      if (mode === 'bool') {
-        const boolValue = readProviderBool(value);
-        if (boolValue === null) return;
-        out[key] = boolValue;
-        return;
+        const nested = firstText(...value);
+        if (nested) return nested;
+        continue;
       }
       const text = toText(value);
-      if (!text && typeof value !== 'boolean') return;
-      out[key] = mode === 'upper' ? toUpper(value) : text;
-    };
-    const sourceIsProviderScoped = (source) => {
-      if (!isObj(source)) return false;
-      const nestedProviderDiagnostic = providerSubmitObject(source.provider_submit_diagnostic || source.providerSubmitDiagnostic);
-      if (Object.keys(nestedProviderDiagnostic).length) return true;
-      const providerIssueKind = toUpper(source.issue_kind || source.issueKind || source.issue_type || source.issueType || source.kind || source.type);
-      if (providerIssueKind === 'PAYMENT_PROVIDER_SUBMIT_REVIEW' || providerIssueKind === 'PROVIDER_SUBMIT_REVIEW') return true;
-      const providerFieldValue = readFirst(source, [
-        'provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode',
-        'review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode',
-        'provider_error_code', 'providerErrorCode', 'provider_error_message_redacted', 'providerErrorMessageRedacted',
-        'provider_error_message', 'providerErrorMessage', 'provider_message', 'providerMessage',
-        'provider_request_sent', 'providerRequestSent',
-        'provider_submission_attempted', 'providerSubmissionAttempted', 'provider_called', 'providerCalled',
-        'provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived',
-        'provider_http_status', 'providerHttpStatus',
-        'provider_event_id', 'providerEventId', 'provider_reference', 'providerReference',
-        'provider_transaction_id', 'providerTransactionId', 'provider_payment_id', 'providerPaymentId'
-      ]);
-      if (providerFieldValue !== undefined) return true;
-      const railState = toUpper(source.rail_state || source.railState);
-      const providerState = toUpper(source.provider_state || source.providerState || source.provider_status || source.providerStatus);
-      return ['REJECTED', 'DECLINED', 'FAILED', 'RETURNED', 'REVERTED'].includes(railState) || ['REJECTED', 'DECLINED', 'FAILED', 'RETURNED', 'REVERTED'].includes(providerState);
-    };
-    const readProviderErrorMessageCandidate = (source) => {
-      const explicitProviderMessage = readFirst(source, [
-        'provider_error_message_redacted', 'providerErrorMessageRedacted',
-        'provider_error_message', 'providerErrorMessage',
-        'provider_message', 'providerMessage'
-      ]);
-      if (explicitProviderMessage !== undefined) return { value: explicitProviderMessage, explicit: true };
-      if (sourceIsProviderScoped(source)) return { value: readFirst(source, ['message']), explicit: false };
-      return { value: undefined, explicit: false };
-    };
-    const mergeProviderSubmitSource = (source) => {
-      if (!isObj(source)) return;
-      const sourceProviderScoped = sourceIsProviderScoped(source);
-      if (sourceProviderScoped) sawProviderSubmitScopedSource = true;
-      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode', 'provider_state', 'providerState']), 'upper', sourceProviderScoped);
-      put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode', 'claim_blocker_code', 'claimBlockerCode']), 'upper');
-      put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired', 'requires_review', 'requiresReview']), 'bool');
-      put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
-      put('manual_recoverable', readFirst(source, ['manual_recoverable', 'manualRecoverable']), 'bool');
-      put('recovery_status', readFirst(source, ['recovery_status', 'recoveryStatus']), 'upper');
-      put('recovery_action', readFirst(source, ['recovery_action', 'recoveryAction']), 'upper');
-      put('auto_reverse_requested', readFirst(source, ['auto_reverse_requested', 'autoReverseRequested']), 'bool');
-      put('auto_reverse_applied_count', readFirst(source, ['auto_reverse_applied_count', 'autoReverseAppliedCount']));
-      put('safe_retry_available', readFirst(source, ['safe_retry_available', 'safeRetryAvailable']), 'bool');
-      put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
-      put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived', 'response_present', 'responsePresent']), 'bool');
-      put('provider_response_received', readFirst(source, ['provider_response_received', 'providerResponseReceived', 'provider_response_present', 'providerResponsePresent', 'response_received', 'responseReceived']), 'bool');
-      put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent', 'request_sent', 'requestSent']), 'bool');
-      put('provider_request_sent_confirmed', readFirst(source, ['provider_request_sent_confirmed', 'providerRequestSentConfirmed']), 'bool');
-      put('provider_submission_attempted', readFirst(source, ['provider_submission_attempted', 'providerSubmissionAttempted', 'provider_called', 'providerCalled']), 'bool');
-      put('provider_request_dispatched_at_utc', readFirst(source, ['provider_request_dispatched_at_utc', 'providerRequestDispatchedAtUtc', 'request_sent_at_utc', 'requestSentAtUtc']));
-      put('provider_external_evidence_present', readFirst(source, ['provider_external_evidence_present', 'providerExternalEvidencePresent']), 'bool', sourceProviderScoped);
-      const providerErrorCodeValue = readFirst(source, ['provider_error_code', 'providerErrorCode', 'error_code', 'errorCode']);
-      put('provider_error_code', providerErrorCodeValue, 'text', sourceProviderScoped && providerErrorCodeValue !== undefined);
-      const providerErrorMessageCandidate = readProviderErrorMessageCandidate(source);
-      put('provider_error_message_redacted', providerErrorMessageCandidate.value, 'text', providerErrorMessageCandidate.explicit);
-      put('provider_http_status', readFirst(source, ['provider_http_status', 'providerHttpStatus', 'http_status', 'httpStatus']), 'text', sourceProviderScoped);
-      put('request_id', readFirst(source, ['request_id', 'requestId']));
-      put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
-      put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
-      put('rail_state', readFirst(source, ['rail_state', 'railState']), 'text');
-      put('provider_transaction_id', readFirst(source, ['provider_transaction_id', 'providerTransactionId']));
-      put('provider_payment_id', readFirst(source, ['provider_payment_id', 'providerPaymentId']));
-      put('provider_event_id', readFirst(source, ['provider_event_id', 'providerEventId']));
-      put('provider_reference', readFirst(source, ['provider_reference', 'providerReference']));
-      put('provider_submission_id', readFirst(source, ['provider_submission_id', 'providerSubmissionId']));
-      put('external_payment_id', readFirst(source, ['external_payment_id', 'externalPaymentId']));
-      put('revolut_payment_id', readFirst(source, ['revolut_payment_id', 'revolutPaymentId']));
-      put('external_reference', readFirst(source, ['external_reference', 'externalReference']));
-      put('bank_reference', readFirst(source, ['bank_reference', 'bankReference']));
-      put('transaction_id', readFirst(source, ['transaction_id', 'transactionId']));
-      put('payment_id', readFirst(source, ['payment_id', 'paymentId']));
-      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
-      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
-      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
-      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
-      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
-      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
-      put('stale_submit_chunk', readFirst(source, ['stale_submit_chunk', 'staleSubmitChunk']), 'bool');
-
-      const railState = toUpper(source.rail_state || source.railState);
-      const statusText = toUpper(source.provider_submission_status || source.providerSubmissionStatus || source.status || source.state);
-      const reviewReason = toUpper(source.review_reason_code || source.reviewReasonCode || source.claim_blocker_code || source.claimBlockerCode);
-      if ((!out.provider_submission_status || out.provider_submission_status === 'FAILED') && (reviewReason === 'PROVIDER_REJECTED_PAYMENT' || railState === 'REJECTED' || statusText === 'REJECTED' || statusText === 'DECLINED')) {
-        out.provider_submission_status = 'PROVIDER_SUBMISSION_REJECTED';
-      }
-    };
-
-    queue.forEach(mergeProviderSubmitSource);
-    const normalised = normaliseProviderSubmitDiagnostic(out);
-    const railStateIsProviderIssue = ['REJECTED', 'DECLINED', 'FAILED', 'RETURNED', 'REVERTED'].includes(toUpper(normalised.rail_state));
-    const hasProviderSubmitContext = !!(
-      sawProviderSubmitScopedSource ||
-      normalised.provider_submission_status ||
-      normalised.review_reason_code ||
-      normalised.provider_request_sent === true ||
-      normalised.provider_response_present === true ||
-      normalised.provider_response_received === true ||
-      normalised.provider_submission_attempted === true ||
-      normalised.provider_error_code ||
-      normalised.provider_error_message_redacted ||
-      normalised.provider_http_status ||
-      normalised.rail_tx_id ||
-      normalised.provider_transaction_id ||
-      normalised.provider_payment_id ||
-      normalised.provider_event_id ||
-      normalised.provider_reference ||
-      normalised.provider_submission_id ||
-      normalised.external_payment_id ||
-      normalised.revolut_payment_id ||
-      normalised.external_reference ||
-      normalised.bank_reference ||
-      normalised.transaction_id ||
-      normalised.payment_id ||
-      (railStateIsProviderIssue ? normalised.rail_state : '')
-    );
-    if (!hasProviderSubmitContext) return {};
-    if (!normalised.provider_submission_status && (normalised.review_reason_code === 'PROVIDER_REJECTED_PAYMENT' || normalised.provider_error_code || normalised.provider_error_message_redacted)) {
-      normalised.provider_submission_status = 'PROVIDER_SUBMISSION_REJECTED';
+      if (text) return text;
     }
-    if (normalised.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
-      normalised.manual_resolution_required = false;
-      normalised.manual_resolution_available = false;
-    }
-    return normalised;
+    return '';
   };
-  const providerSubmitIssueCopy = (statusValue, strictAcceptanceEvidencePresent = false) => {
-    const status = toUpper(statusValue);
-    if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictAcceptanceEvidencePresent === true) {
-      return {
-        headline: 'Provider acceptance evidence present',
-        summary: 'Provider acceptance evidence exists. Do not retry unless reconciled.',
-        action: 'Do not retry unless reconciled.',
-        severity: 'danger'
-      };
-    }
-    if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictAcceptanceEvidencePresent !== true) {
-      return {
-        headline: 'Provider response unusable',
-        summary: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
-        action: 'Reconcile with provider/bank before retry.',
-        severity: 'warning'
-      };
-    }
-    const map = {
-      PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK: {
-        headline: 'Provider submission outcome unknown',
-        summary: 'Submit chunk is stale with no provider response, transfer event, rail transaction ID, or rail state.',
-        action: 'Check the bank account before retry.',
-        severity: 'warning'
-      },
-      UNKNOWN_PROVIDER_SUBMISSION_OUTCOME: {
-        headline: 'Provider response missing',
-        summary: 'A provider request may have been sent, but no usable response was recorded.',
-        action: 'Check the bank account before retry.',
-        severity: 'warning'
-      },
-      PROVIDER_SUBMISSION_BLOCKED_PRE_CALL: {
-        headline: 'Provider was not called',
-        summary: 'Submission failed before the provider payment request was sent.',
-        action: 'Retry after local blocker is cleared.',
-        severity: 'info'
-      },
-      PROVIDER_SUBMISSION_REJECTED: {
-        headline: 'Bank/provider rejected payment',
-        summary: 'Provider rejected the payment submission.',
-        action: 'Fix/review payee or counterparty setup before retry.',
-        severity: 'warning'
-      },
-      PROVIDER_SUBMISSION_MALFORMED_RESPONSE: {
-        headline: 'Provider response unusable',
-        summary: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
-        action: 'Reconcile with provider/bank before retry.',
-        severity: 'warning'
-      },
-      PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID: {
-        headline: 'Provider response unusable',
-        summary: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
-        action: 'Reconcile with provider/bank before retry.',
-        severity: 'warning'
-      },
-      MANUAL_RESOLVED_NO_PAYMENT_MADE: {
-        headline: 'Manual no-payment confirmation recorded',
-        summary: 'Manual no-payment confirmation recorded.',
-        action: 'Batch can be retried if safe retry is available.',
-        severity: 'info'
-      }
-    };
-    return map[status] || {
-      headline: 'Provider submission needs review',
-      summary: 'Provider submission needs review before retry.',
-      action: 'Check the bank account before retry.',
-      severity: 'warning'
-    };
-  };
-
-  const manualPaidActionMode = !!(
-    options.manualPaidActionMode === true ||
-    correctionState?.manualPaidActionMode === true ||
-    correctionState?.issueState?.manualPaidActionMode === true ||
-    correctionState?.manual_paid_action_mode === true
-  );
-
-  const batch = isObj(src.batch) ? src.batch : {};
-  const movement = src.movement_classification;
-  const paymentCorrection = isObj(src.payment_correction) ? src.payment_correction : {};
-  const latestRequest = isObj(paymentCorrection.latest_request) ? paymentCorrection.latest_request : {};
-  const progress = isObj(src.correction_progress) ? src.correction_progress : {};
-  const evidence = asArr(src.bank_evidence);
-  const manualActions = isObj(src.manual_actions) ? src.manual_actions : {};
-  const transfers = asArr(src.transfers);
-
-  const latestEvidence = evidence.length
-    ? [...evidence].sort((a, b) => {
-      const ta = Date.parse(String(a?.received_at_utc || a?.event_time_utc || a?.created_at_utc || a?.updated_at_utc || ''));
-      const tb = Date.parse(String(b?.received_at_utc || b?.event_time_utc || b?.created_at_utc || b?.updated_at_utc || ''));
-      if (Number.isFinite(tb) && Number.isFinite(ta)) return tb - ta;
-      if (Number.isFinite(tb)) return 1;
-      if (Number.isFinite(ta)) return -1;
-      return 0;
-    })[0]
-    : null;
-
-  const latestEvidenceState = isObj(latestEvidence)
-    ? (latestEvidence.normalised_state || latestEvidence.normalized_state || latestEvidence.state || latestEvidence.event_state || '')
-    : '';
-
-  const totals = isObj(progress.totals) ? progress.totals : {};
-  const displayTotals = isObj(progress.display_totals) ? progress.display_totals : {};
-  const paymentDisplayState = toUpper(paymentCorrection.display_state);
-  const progressDisplayState = toUpper(progress.display_state);
-  const displayState = paymentDisplayState || progressDisplayState;
-  const movementClassification = isObj(movement) ? movement.classification : (typeof movement === 'string' ? movement : '');
-
-  const transferStates = transfers.flatMap((transfer) => {
-    const t = isObj(transfer) ? transfer : {};
-    return [
-      t.movement_classification,
-      t.classification,
-      t.normalised_state,
-      t.normalized_state,
-      t.rail_state,
-      t.status,
-      t.transfer_status
-    ];
-  });
-
-  const statusCandidates = [
-    paymentCorrection.display_state,
-    progress.display_state,
-    isObj(movement) ? movement.classification : '',
-    typeof movement === 'string' ? movement : '',
-    paymentCorrection.derived_state,
-    paymentCorrection.status,
-    latestRequest.status,
-    latestRequest.correction_kind,
-    progress.latest_request_status,
-    progress.status,
-    progress.state,
-    latestEvidenceState,
-    src.status,
-    src.transfer_status,
-    src.row_status,
-    batch.status,
-    ...transferStates
-  ].map(toUpper).filter(Boolean);
-
-  const backendClassification = statusCandidates[0] || '';
-
-  const map = {
-    returned: new Set(['TRUE_SETTLED_REVERSAL_REQUIRED', 'RETURNED', 'REVERTED', 'SETTLED_RETURNED', 'BANK_RETURNED_PAYMENT']),
-    rejected: new Set(['NO_MONEY_UNWIND', 'FAILED', 'DECLINED', 'REJECTED', 'BANK_REJECTED_PAYMENT']),
-    review: new Set(['AMBIGUOUS_REVIEW_REQUIRED', 'UNKNOWN', 'AUTO_CORRECTION_BLOCKED', 'ACTION_REQUIRED', 'BLOCKED', 'PARTLY_APPLIED_REVIEW_NEEDED', 'NEEDS_REVIEW']),
-    applied: new Set(['SETTLED_REVERSAL_APPLIED', 'NO_MONEY_UNWOUND', 'PRE_BANK_CANCELLED', 'APPLIED', 'AUTO_APPLIED']),
-    processing: new Set(['PROCESSING', 'AUTO_PROCESSING', 'EXPANDED', 'AUTHORISED', 'AUTHORIZED', 'IN_PROGRESS']),
-    waiting: new Set(['AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'REQUESTED', 'WAITING_FOR_APPROVAL', 'WAITING']),
-    paid: new Set(['NONE', 'SETTLED_NO_CORRECTION_REQUIRED', 'PAID', 'COMPLETED', 'SETTLED', 'COMMITTED'])
-  };
-
-  const has = (key) => statusCandidates.some((candidate) => map[key].has(candidate));
-  const hasCancelled = statusCandidates.some((candidate) => candidate === 'CANCELLED');
-  const hasBankIssueCancelledEvidence = statusCandidates.some((candidate) => ['FAILED', 'DECLINED', 'REJECTED', 'NO_MONEY_UNWIND'].includes(candidate));
-  const hasActionRequiredEvidence = statusCandidates.some((candidate) => ['ACTION_REQUIRED', 'AMBIGUOUS_REVIEW_REQUIRED', 'AUTO_CORRECTION_BLOCKED', 'PARTLY_APPLIED_REVIEW_NEEDED'].includes(candidate));
-  const cancelledMeansRejected = hasCancelled && (hasBankIssueCancelledEvidence || hasActionRequiredEvidence || toUpper(latestEvidenceState) === 'CANCELLED');
-
-  const blockedFailureCount = sum(
-    paymentCorrection.work_item_blocked_count,
-    paymentCorrection.work_item_failed_retryable_count,
-    paymentCorrection.work_item_failed_final_count,
-    paymentCorrection.blocked_count,
-    paymentCorrection.failed_count,
-    progress.work_item_blocked_count,
-    progress.work_item_failed_retryable_count,
-    progress.work_item_failed_final_count,
-    progress.blocked_request_count,
-    progress.failed_request_count,
-    progress.blocked_count,
-    progress.failed_count,
-    progress.blocked,
-    progress.failed,
-    totals.blocked_count,
-    totals.blocked,
-    totals.failed_count,
-    totals.failed,
-    totals.failed_final,
-    totals.failed_retryable,
-    displayTotals.needs_review,
-    displayTotals.could_not_apply,
-    displayTotals.blocked_count,
-    displayTotals.blocked,
-    displayTotals.failed_count,
-    displayTotals.failed
-  );
-
-  const pendingProcessingCount = sum(
-    paymentCorrection.work_item_pending_count,
-    paymentCorrection.work_item_processing_count,
-    paymentCorrection.processing_count,
-    progress.work_item_pending_count,
-    progress.work_item_processing_count,
-    progress.pending_count,
-    progress.processing_count,
-    totals.pending,
-    totals.processing,
-    displayTotals.waiting,
-    displayTotals.processing
-  );
-
-  const requiresActionSignal = paymentCorrection.requires_user_action === true || progress.requires_user_action === true;
-  const requiresActionFalse = paymentCorrection.requires_user_action === false || progress.requires_user_action === false;
-  const currentUserCanAct = !!(
-    paymentCorrection.current_user_can_act === true ||
-    paymentCorrection.user_can_approve === true ||
-    paymentCorrection.current_user_actionable_request_count > 0 ||
-    paymentCorrection.correction_current_user_actionable_request_count > 0 ||
-    progress.current_user_can_act === true ||
-    progress.user_can_approve === true ||
-    progress.current_user_actionable_request_count > 0 ||
-    latestRequest.current_user_can_act === true ||
-    latestRequest.user_can_approve === true
-  );
-
-  const manualActionsPresent = hasObjectKeys(manualActions);
-  const paymentCorrectionPresent = hasObjectKeys(paymentCorrection);
-  const progressPresent = hasObjectKeys(progress);
-  const bankEvidencePresent = evidence.length > 0;
-  const hasBackendEvidence = paymentCorrectionPresent || progressPresent || bankEvidencePresent || manualActionsPresent;
-
-  const transferPaidCount = transfers.filter((transfer) => {
-    const st = toUpper(transfer?.status || transfer?.normalised_state || transfer?.normalized_state || transfer?.rail_state || '');
-    return ['COMPLETED', 'PAID', 'SETTLED', 'COMMITTED'].includes(st);
-  }).length;
-  const batchStatus = toUpper(batch.status || src.status || '');
-  const looksPaid = has('paid') || batchStatus === 'SETTLED' || batchStatus === 'COMMITTED' || (transfers.length > 0 && transferPaidCount === transfers.length);
-  const manualPaidActionAvailable = !!(looksPaid || transferPaidCount > 0 || correctionState?.manualPaidActionAvailable === true || correctionState?.issueState?.manualPaidActionAvailable === true);
-
-  const providerSubmitDiagnostic = extractProviderSubmitDiagnostic(src);
-  if (hasObjectKeys(providerSubmitDiagnostic)) {
-    const providerSubmitStatus = toUpper(providerSubmitDiagnostic.provider_submission_status || providerSubmitDiagnostic.outcome_code || '');
-    const reviewReasonCode = toUpper(providerSubmitDiagnostic.review_reason_code || '');
-    const strictProviderAcceptanceEvidencePresent = providerSubmitDiagnostic.provider_acceptance_evidence_present === true;
-    providerSubmitDiagnostic.provider_acceptance_evidence_present = strictProviderAcceptanceEvidencePresent;
-    const providerIssueCopy = providerSubmitIssueCopy(providerSubmitStatus, strictProviderAcceptanceEvidencePresent);
-    const providerErrorMessage = toText(providerSubmitDiagnostic.provider_error_message_redacted || providerSubmitDiagnostic.providerErrorMessageRedacted || providerSubmitDiagnostic.provider_error_message || providerSubmitDiagnostic.providerErrorMessage || '');
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' && providerErrorMessage) providerIssueCopy.summary = providerErrorMessage;
-    const badgeTone = providerIssueCopy.severity === 'danger' ? 'danger' : (providerIssueCopy.severity === 'info' ? 'info' : 'warning');
-    const recoveryEnvelope = isObj(providerSubmitDiagnostic.stale_payee_map_recovery) ? providerSubmitDiagnostic.stale_payee_map_recovery : {};
-    const recoveryStatus = toUpper(providerSubmitDiagnostic.recovery_status || recoveryEnvelope.recovery_status || providerSubmitDiagnostic.recoveryStatus || recoveryEnvelope.recoveryStatus || '');
-    const recoveryAction = toUpper(providerSubmitDiagnostic.recovery_action || recoveryEnvelope.recovery_action || providerSubmitDiagnostic.recoveryAction || recoveryEnvelope.recoveryAction || '');
-    const autoReverseRequested = readProviderBool(providerSubmitDiagnostic.auto_reverse_requested ?? recoveryEnvelope.auto_reverse_requested ?? providerSubmitDiagnostic.autoReverseRequested ?? recoveryEnvelope.autoReverseRequested) === true;
-    const autoReverseApplied = num(providerSubmitDiagnostic.auto_reverse_applied_count ?? recoveryEnvelope.auto_reverse_applied_count ?? providerSubmitDiagnostic.autoReverseAppliedCount ?? recoveryEnvelope.autoReverseAppliedCount) > 0;
-    const manualRecoverable = readProviderBool(providerSubmitDiagnostic.manual_recoverable ?? recoveryEnvelope.manual_recoverable ?? providerSubmitDiagnostic.manualRecoverable ?? recoveryEnvelope.manualRecoverable) === true;
-    const autoReleased = autoReverseApplied || ['AUTO_RELEASED_FOR_NEXT_RUN', 'AUTO_RELEASED', 'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS'].includes(recoveryStatus) || ['READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS'].includes(recoveryAction);
-    const manuallyReleased = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' || ['MANUALLY_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED'].includes(recoveryStatus);
-    const releaseInProgress = !autoReleased && !manuallyReleased && (autoReverseRequested || ['AUTO_RELEASE_REQUESTED', 'AUTO_RELEASE_IN_PROGRESS', 'REVERSAL_IN_PROGRESS', 'RELEASE_IN_PROGRESS'].includes(recoveryStatus) || ['AUTO_RELEASE_IN_PROGRESS'].includes(recoveryAction));
-    const providerCommunicationConfirmed = providerSubmitDiagnostic.provider_response_present === true
-      || providerSubmitDiagnostic.provider_response_received === true
-      || !!providerErrorMessage
-      || !!toText(providerSubmitDiagnostic.provider_error_code || providerSubmitDiagnostic.providerErrorCode || '')
-      || !!toText(providerSubmitDiagnostic.provider_http_status || providerSubmitDiagnostic.providerHttpStatus || '')
-      || (providerSubmitDiagnostic.provider_request_sent === true && providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED');
-    const providerRequestSent = providerSubmitDiagnostic.provider_request_sent === true || providerSubmitDiagnostic.provider_submission_attempted === true || !!providerSubmitDiagnostic.provider_request_dispatched_at_utc;
-    const providerOrRailState = toUpper(providerSubmitDiagnostic.rail_state || providerSubmitDiagnostic.provider_state || providerSubmitDiagnostic.providerStatus || src.rail_state || src.status || src.transfer_status || '');
-    const failedRejectedTransferState = ['FAILED', 'REJECTED', 'DECLINED', 'CANCELLED', 'NO_MONEY_UNWIND', 'BANK_REJECTED_PAYMENT'].includes(providerOrRailState)
-      || statusCandidates.some((candidate) => ['FAILED', 'REJECTED', 'DECLINED', 'CANCELLED', 'NO_MONEY_UNWIND', 'BANK_REJECTED_PAYMENT'].includes(candidate));
-    const returnedOrRevertedTransferState = ['RETURNED', 'REVERTED', 'SETTLED_RETURNED', 'BANK_RETURNED_PAYMENT', 'TRUE_SETTLED_REVERSAL_REQUIRED'].includes(providerOrRailState)
-      || statusCandidates.some((candidate) => ['RETURNED', 'REVERTED', 'SETTLED_RETURNED', 'BANK_RETURNED_PAYMENT', 'TRUE_SETTLED_REVERSAL_REQUIRED'].includes(candidate));
-    const providerTransactionEvidencePresent = strictProviderAcceptanceEvidencePresent === true
-      || providerSubmitDiagnostic.provider_external_evidence_present === true
-      || !!toText(providerSubmitDiagnostic.rail_tx_id || '')
-      || !!toText(providerSubmitDiagnostic.provider_transaction_id || providerSubmitDiagnostic.providerTransactionId || '')
-      || !!toText(providerSubmitDiagnostic.provider_payment_id || providerSubmitDiagnostic.providerPaymentId || '')
-      || !!toText(providerSubmitDiagnostic.external_payment_id || providerSubmitDiagnostic.externalPaymentId || '')
-      || !!toText(providerSubmitDiagnostic.revolut_payment_id || providerSubmitDiagnostic.revolutPaymentId || '')
-      || !!toText(providerSubmitDiagnostic.external_reference || providerSubmitDiagnostic.externalReference || '')
-      || !!toText(providerSubmitDiagnostic.bank_reference || providerSubmitDiagnostic.bankReference || '')
-      || !!toText(providerSubmitDiagnostic.transaction_id || providerSubmitDiagnostic.transactionId || '')
-      || !!toText(providerSubmitDiagnostic.payment_id || providerSubmitDiagnostic.paymentId || '');
-    const confirmedProviderRejection = providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' || reviewReasonCode === 'PROVIDER_REJECTED_PAYMENT';
-    const clearNoPaymentProviderRejection = confirmedProviderRejection === true
-      && providerCommunicationConfirmed === true
-      && strictProviderAcceptanceEvidencePresent !== true
-      && providerTransactionEvidencePresent !== true
-      && (failedRejectedTransferState === true || providerOrRailState === '' || providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED')
-      && autoReleased !== true
-      && manuallyReleased !== true
-      && releaseInProgress !== true;
-    const clearReturnedOrRevertedPayment = returnedOrRevertedTransferState === true
-      && autoReleased !== true
-      && manuallyReleased !== true
-      && releaseInProgress !== true;
-    const manualReleaseRequired = !autoReleased && !manuallyReleased && !releaseInProgress && (manualRecoverable || recoveryAction === 'MANUAL_RELEASE_REQUIRED' || clearNoPaymentProviderRejection || clearReturnedOrRevertedPayment);
-    const recoveryStatusText = autoReleased
-      ? 'Released'
-      : (manuallyReleased
-          ? 'Released'
-          : (releaseInProgress
-              ? 'Reversal in progress'
-              : (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE'
-                  ? 'Resolved'
-                  : (manualReleaseRequired ? 'Needs review' : 'Needs review'))));
-    const recoveryActionLabel = autoReleased
-      ? 'Recheck the bank details and if correct, rerun Banking to pay this. The payment is ready to be paid on next run.'
-      : (releaseInProgress
-          ? 'Reversal/release is being processed.'
-          : (manuallyReleased
-              ? 'Payment has been released for the next Banking Pay run.'
-              : (clearReturnedOrRevertedPayment
-                  ? 'The bank returned this payment. Select it to reverse/release the returned payment.'
-                  : (manualReleaseRequired
-                      ? 'Recheck the bank details and if correct, reverse the payment and rerun Banking to pay this.'
-                      : (providerSubmitDiagnostic.recommended_action || providerIssueCopy.action)))));
-    const recommendedAction = recoveryActionLabel;
-    const providerSubmitResolved = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' || autoReleased || manuallyReleased;
-    const providerManualResolutionRequired = providerSubmitResolved || releaseInProgress ? false : (manualReleaseRequired || providerSubmitDiagnostic.manual_resolution_required === true);
-    const providerManualResolutionAvailable = providerSubmitResolved || releaseInProgress ? false : (
-      strictProviderAcceptanceEvidencePresent !== true
-      && (clearReturnedOrRevertedPayment === true || providerTransactionEvidencePresent !== true)
-      && (manualReleaseRequired || clearNoPaymentProviderRejection || clearReturnedOrRevertedPayment || providerSubmitDiagnostic.manual_resolution_available === true || providerManualResolutionRequired)
-    );
-    const headline = clearReturnedOrRevertedPayment ? 'Bank returned payment' : providerIssueCopy.headline;
-    const summary = clearReturnedOrRevertedPayment ? 'The bank returned this payment.' : providerIssueCopy.summary;
-    return {
-      hasIssue: true,
-      requiresUserAction: providerSubmitResolved || releaseInProgress ? false : true,
-      navAlert: providerSubmitResolved || releaseInProgress ? false : true,
-      badgeText: headline,
-      badgeTone: providerSubmitResolved ? 'info' : badgeTone,
-      severity: providerSubmitResolved ? 'info' : providerIssueCopy.severity,
-      panelTitle: 'Payment status',
-      headline,
-      whatHappened: summary,
-      summaryText: summary,
-      primaryActionLabel: recommendedAction,
-      statusText: recoveryStatusText,
-      issueKind: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
-      issueKindForDisplay: clearReturnedOrRevertedPayment ? 'RETURNED' : 'PROVIDER_SUBMIT_REVIEW',
-      backendClassification: providerSubmitStatus,
-      providerSubmitDiagnostic: providerSubmitDiagnostic,
-      provider_submission_status: providerSubmitStatus,
-      review_reason_code: reviewReasonCode,
-      clearNoPaymentProviderRejection,
-      clear_no_payment_provider_rejection: clearNoPaymentProviderRejection,
-      clearReturnedOrRevertedPayment,
-      clear_returned_or_reverted_payment: clearReturnedOrRevertedPayment,
-      manualResolutionRequired: providerManualResolutionRequired,
-      manualResolutionAvailable: providerManualResolutionAvailable,
-      manual_resolution_required: providerManualResolutionRequired,
-      manual_resolution_available: providerManualResolutionAvailable,
-      safeRetryAvailable: providerSubmitDiagnostic.safe_retry_available === true,
-      providerAcceptanceEvidencePresent: strictProviderAcceptanceEvidencePresent,
-      providerResponsePresent: providerSubmitDiagnostic.provider_response_present === true || providerSubmitDiagnostic.provider_response_received === true,
-      providerRequestSentConfirmed: providerSubmitDiagnostic.provider_request_sent_confirmed === true || providerRequestSent,
-      providerRequestDispatchedAtUtc: providerSubmitDiagnostic.provider_request_dispatched_at_utc || null,
-      providerExternalEvidencePresent: providerSubmitDiagnostic.provider_external_evidence_present === true,
-      providerTransactionEvidencePresent,
-      request_id: providerSubmitDiagnostic.request_id || null,
-      idempotency_key: providerSubmitDiagnostic.idempotency_key || null,
-      rail_tx_id: providerSubmitDiagnostic.rail_tx_id || null,
-      rail_state: providerSubmitDiagnostic.rail_state || null,
-      recommendedAction,
-      recoveryStatus,
-      recoveryAction,
-      autoReleased,
-      manuallyReleased,
-      releaseInProgress,
-      manualReleaseRequired,
-      manualPaidActionAvailable: false,
-      manualPaidActionMode: false,
-      hasActionableIssueRows: providerSubmitResolved || releaseInProgress ? false : true,
-      hasSelectableRows: providerManualResolutionAvailable === true
-    };
-  }
-
-  const bankingAlerts = Array.isArray(src.banking_alerts) ? src.banking_alerts : [];
-  const hasBlockedFundsAlert = bankingAlerts.some((alert) => toUpper(alert?.alert_kind || alert?.kind || alert?.issue_kind) === 'BLOCKED_FUNDS');
-  const blockedFundsIssue = (src.blocked_funds_payment_issue && typeof src.blocked_funds_payment_issue === 'object') ? src.blocked_funds_payment_issue : {};
-  const isBlockedFunds = batchStatus === 'BLOCKED_FUNDS' || toUpper(src.banking_alert_kind || batch.banking_alert_kind) === 'BLOCKED_FUNDS' || hasBlockedFundsAlert || toUpper(blockedFundsIssue.issue_kind || blockedFundsIssue.issueKind) === 'BLOCKED_FUNDS';
-  if (isBlockedFunds) {
-    const requiredGbp = src.blocked_funds_required_gbp ?? batch.blocked_funds_required_gbp ?? blockedFundsIssue.required_gbp ?? src.last_funds_check_json?.required_gbp ?? batch.last_funds_check_json?.required_gbp ?? null;
-    const availableGbp = src.blocked_funds_available_gbp ?? batch.blocked_funds_available_gbp ?? blockedFundsIssue.available_gbp ?? src.last_funds_check_json?.available_gbp ?? batch.last_funds_check_json?.available_gbp ?? null;
-    const provider = toText(src.blocked_funds_provider || batch.blocked_funds_provider || blockedFundsIssue.provider || src.last_funds_check_json?.rail_provider || batch.last_funds_check_json?.rail_provider || src.rail_provider_snapshot || batch.rail_provider_snapshot);
-    const env = toText(src.blocked_funds_env || batch.blocked_funds_env || blockedFundsIssue.env || src.last_funds_check_json?.rail_env || batch.last_funds_check_json?.rail_env || src.rail_env_snapshot || batch.rail_env_snapshot);
-    const fundingAccountRef = toText(src.blocked_funds_account_ref || batch.blocked_funds_account_ref || blockedFundsIssue.funding_account_ref || src.last_funds_check_json?.funding_account_ref || batch.last_funds_check_json?.funding_account_ref || src.funding_account_ref || batch.funding_account_ref);
-    const canRetryBlockedFunds = src.can_retry_blocked_funds === true || batch.can_retry_blocked_funds === true || blockedFundsIssue.can_retry_blocked_funds === true;
-    const primaryActionLabel = (typeof getBankingPaymentIssueActionLabel === 'function')
-      ? getBankingPaymentIssueActionLabel({ issueKindForDisplay: 'BLOCKED_FUNDS', state: 'BANK REJECTED PAYMENT', canRetryBlockedFunds })
-      : 'Retry payment / Cancel payment';
-    return {
-      hasIssue: true,
-      requiresUserAction: true,
-      navAlert: src.banking_alert_acknowledged_for_user === true ? false : true,
-      badgeText: 'Bank rejected payment',
-      badgeTone: 'danger',
-      panelTitle: 'Payment status',
-      headline: 'Bank rejected payment — blocked funds',
-      whatHappened: 'Blocked funds',
-      summaryText: 'CloudTMS did not submit this payment because the funding account did not have enough funds.',
-      primaryActionLabel,
-      statusText: 'Urgent action needed',
-      issueKind: 'BLOCKED_FUNDS',
-      issueKindForDisplay: 'BLOCKED_FUNDS',
-      backendClassification: 'BLOCKED_FUNDS',
-      required_gbp: requiredGbp,
-      available_gbp: availableGbp,
-      provider,
-      env,
-      funding_account_ref: fundingAccountRef,
-      last_funds_check_at_utc: src.last_funds_check_at_utc || batch.last_funds_check_at_utc || blockedFundsIssue.last_funds_check_at_utc || src.last_funds_check_json?.checked_at_utc || batch.last_funds_check_json?.checked_at_utc || null,
-      canRetryBlockedFunds,
-      can_retry_blocked_funds: canRetryBlockedFunds,
-      wholeBatchIssue: true,
-      whole_batch_issue: true,
-      manualPaidActionAvailable: false,
-      manualPaidActionMode: false,
-      hasActionableIssueRows: true,
-      hasSelectableRows: false
-    };
-  }
-
-  const existingRows = Array.isArray(correctionState?.rows) ? correctionState.rows : (Array.isArray(correctionState?.issueRows) ? correctionState.issueRows : []);
-  const isDraftOnlyRemovalRow = (row) => {
-    if (!row || typeof row !== 'object') return false;
-    const rowKind = toUpper(row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || '');
-    const backendAction = toUpper(row.backendAction || row.backend_action || row.requested_action || '');
-    return row.draftOnlyRemoval === true || row.draft_only_removal === true || rowKind === 'DRAFT_REMOVE' || (rowKind === 'NOT_SENT' && backendAction === 'CANCEL_PAYMENT_ATTEMPT' && batchStatus === 'DRAFT');
-  };
-  const actionableRows = existingRows.filter((row) => {
-    if (!row || typeof row !== 'object') return false;
-    const rowKind = toUpper(row.issueKindForDisplay || row.issue_kind_for_display || row.issue_kind || '');
-    if (rowKind === 'MANUAL_PAID_ACTION') return false;
-    if (row.manualActionAvailable === true || row.manual_action_available === true) return false;
-    return row.selectableForApply === true || row.selectableForReview === true || ['RETURNED', 'REJECTED', 'REVIEW', 'NOT_SENT', 'DRAFT_REMOVE'].includes(rowKind);
-  });
-  const hasActionableIssueRows = actionableRows.length > 0;
-  const hasDraftOnlyActionableRows = actionableRows.some((row) => isDraftOnlyRemovalRow(row));
-  const allActionableRowsAreDraftOnly = hasActionableIssueRows && actionableRows.every((row) => isDraftOnlyRemovalRow(row));
-  const hasSelectableRows = existingRows.some((row) => row && (row.selectableForApply === true || row.selectableForReview === true || row.selectable === true));
-
-  let headline = 'No action';
-  let badgeTone = 'neutral';
-  let hasIssue = false;
-  let requiresUserAction = false;
-  let navAlert = false;
-  let statusText = 'No action needed';
-  let summaryText = 'No action needed.';
-  let issueKindForDisplay = 'NONE';
-
-  const processingSignal = has('processing') || toUpper(paymentCorrection.derived_state) === 'PROCESSING' || toUpper(movementClassification) === 'AUTO_PROCESSING' || displayState === 'PROCESSING' || displayState === 'AUTO_PROCESSING';
-  const isCleanProcessing = processingSignal && blockedFailureCount <= 0 && requiresActionSignal !== true;
-
-  if (manualPaidActionMode) {
-    headline = 'Manual action';
-    badgeTone = 'info';
-    hasIssue = false;
-    requiresUserAction = false;
-    navAlert = false;
-    statusText = 'Manual action';
-    summaryText = 'Select paid payments to make them eligible to be paid again.';
-    issueKindForDisplay = 'MANUAL_PAID_ACTION';
-  } else if (displayState === 'PARTLY_APPLIED_REVIEW_NEEDED') {
-    headline = 'Partly applied — review needed';
-    badgeTone = 'warning';
-    hasIssue = true;
-    requiresUserAction = true;
-    navAlert = true;
-    statusText = 'Needs review';
-    summaryText = 'Partly applied — review needed.';
-    issueKindForDisplay = 'REVIEW';
-  } else if ((displayState === 'PROCESSING' || processingSignal) && (blockedFailureCount > 0 || requiresActionSignal === true)) {
-    headline = pendingProcessingCount > 0 ? 'Partly applied — review needed' : 'Needs review';
-    badgeTone = 'warning';
-    hasIssue = true;
-    requiresUserAction = true;
-    navAlert = true;
-    statusText = 'Needs review';
-    summaryText = 'Needs review.';
-    issueKindForDisplay = 'REVIEW';
-  } else if (has('returned')) {
-    headline = 'Bank returned payment';
-    badgeTone = 'danger';
-    hasIssue = true;
-    requiresUserAction = true;
-    navAlert = true;
-    statusText = 'Action needed';
-    summaryText = 'The bank returned this payment. Select the affected payments to make them eligible to be paid again in the next batch.';
-    issueKindForDisplay = 'RETURNED';
-  } else if (has('rejected') || cancelledMeansRejected) {
-    headline = 'Bank rejected payment';
-    badgeTone = 'danger';
-    hasIssue = true;
-    requiresUserAction = true;
-    navAlert = true;
-    statusText = 'Action needed';
-    summaryText = 'The bank rejected this payment. Select the affected payments to make them eligible to be paid again in the next batch.';
-    issueKindForDisplay = 'REJECTED';
-  } else if (batchStatus === 'DRAFT' && allActionableRowsAreDraftOnly && hasDraftOnlyActionableRows) {
-    headline = 'Draft batch item';
-    badgeTone = 'info';
-    hasIssue = true;
-    requiresUserAction = true;
-    navAlert = false;
-    statusText = 'Draft only';
-    summaryText = 'Remove selected payments from this draft batch to release their reservations.';
-    issueKindForDisplay = 'DRAFT_REMOVE';
-  } else if (has('review') || requiresActionSignal || blockedFailureCount > 0 || hasActionableIssueRows) {
-    headline = blockedFailureCount > 0 && pendingProcessingCount > 0 ? 'Partly applied — review needed' : 'Needs review';
-    badgeTone = 'warning';
-    hasIssue = true;
-    requiresUserAction = true;
-    navAlert = true;
-    statusText = 'Needs review';
-    summaryText = 'Needs review.';
-    issueKindForDisplay = 'REVIEW';
-  } else if (displayState === 'AWAITING_AUTHORISATION' || displayState === 'WAITING_FOR_APPROVAL' || has('waiting')) {
-    headline = 'Waiting for approval';
-    badgeTone = 'warning';
-    hasIssue = true;
-    requiresUserAction = currentUserCanAct;
-    navAlert = currentUserCanAct;
-    statusText = 'Waiting for approval';
-    summaryText = 'Waiting for approval. This action needs another approval before it can be applied.';
-    issueKindForDisplay = 'WAITING';
-  } else if (has('applied')) {
-    headline = 'Applied';
-    badgeTone = 'success';
-    hasIssue = false;
-    requiresUserAction = false;
-    navAlert = false;
-    statusText = 'Applied';
-    summaryText = 'Applied. The selected amounts are now available to be processed in the next batch.';
-    issueKindForDisplay = 'APPLIED';
-  } else if (isCleanProcessing || (requiresActionFalse && blockedFailureCount <= 0 && pendingProcessingCount > 0) || has('processing')) {
-    headline = 'Processing';
-    badgeTone = 'info';
-    hasIssue = true;
-    requiresUserAction = false;
-    navAlert = false;
-    statusText = 'Processing';
-    summaryText = 'Processing. Selected payments are being updated.';
-    issueKindForDisplay = 'PROCESSING';
-  } else if (looksPaid) {
-    headline = 'Paid successfully';
-    badgeTone = 'success';
-    hasIssue = false;
-    requiresUserAction = false;
-    navAlert = false;
-    statusText = 'Paid';
-    summaryText = 'This payment was paid successfully.';
-    issueKindForDisplay = 'PAID';
-  } else if (has('paid')) {
-    headline = 'Paid successfully';
-    badgeTone = 'success';
-    hasIssue = false;
-    requiresUserAction = false;
-    navAlert = false;
-    statusText = 'Paid';
-    summaryText = 'This payment was paid successfully.';
-    issueKindForDisplay = 'PAID';
-  } else if (hasCancelled) {
-    headline = 'Cancelled';
-    badgeTone = 'neutral';
-    hasIssue = false;
-    requiresUserAction = false;
-    navAlert = false;
-    statusText = 'Cancelled';
-    summaryText = 'This payment was cancelled.';
-    issueKindForDisplay = 'CANCELLED';
-  }
-
-  const primaryActionLabel = (typeof getBankingPaymentIssueActionLabel === 'function')
-    ? getBankingPaymentIssueActionLabel({ state: headline, requiresUserAction, multipleSelected: false, issueKindForDisplay, draftOnlyRemoval: issueKindForDisplay === 'DRAFT_REMOVE' })
-    : (requiresUserAction ? 'Review selected payments' : 'No action needed');
-
-  return {
-    hasIssue,
-    requiresUserAction,
-    navAlert,
-    badgeText: headline,
-    badgeTone,
-    panelTitle: 'Payment status',
-    headline,
-    summaryText,
-    primaryActionLabel,
-    statusText,
-    issueKindForDisplay,
-    backendClassification,
-    manualPaidActionAvailable,
-    manualPaidActionMode,
-    hasActionableIssueRows,
-    hasSelectableRows
-  };
-}
-
-
-
-function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
-  const src = (batchPayload && typeof batchPayload === 'object') ? batchPayload : {};
-  const options = (opts && typeof opts === 'object') ? opts : {};
-  const correctionState = (options.correctionState && typeof options.correctionState === 'object') ? options.correctionState : null;
-  const manualPaidActionMode = !!(
-    options.manualPaidActionMode === true ||
-    correctionState?.manualPaidActionMode === true ||
-    correctionState?.issueState?.manualPaidActionMode === true
-  );
-
-  const toText = (v) => String(v == null ? '' : v).trim();
-  const toUpper = (v) => toText(v).toUpperCase();
-  const asArray = (v) => Array.isArray(v) ? v : [];
-  const asNum = (v) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  };
-  const pushMap = (map, key, value) => {
-    const k = toText(key);
-    if (!k) return;
-    if (!map.has(k)) map.set(k, []);
-    map.get(k).push(value);
-  };
-  const flatten = (value) => Array.isArray(value) ? value : [value];
-  const uniq = (arr) => Array.from(new Set(asArray(arr).flatMap((x) => flatten(x)).map((x) => toText(x)).filter(Boolean)));
-  const objectHasContent = (value) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    try { return Object.keys(value).length > 0; } catch { return false; }
-  };
-
-  const readProviderBool = (value) => {
-    if (value === true) return true;
-    if (value === false) return false;
-    const text = toText(value).toLowerCase();
-    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
-    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
-    return null;
-  };
-  const providerSubmitObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
-  const providerSubmitText = (value) => String(value == null ? '' : value).trim();
-  const providerSubmitCollectEvidenceSources = (value) => {
-    const root = providerSubmitObject(value);
-    const railMeta = providerSubmitObject(root.rail_meta_json || root.railMetaJson);
-    const rawPayload = providerSubmitObject(root.raw_payload || root.rawPayload);
-    const directDiagnostic = providerSubmitObject(root.provider_submit_diagnostic || root.providerSubmitDiagnostic);
-    const railDiagnostic = providerSubmitObject(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic);
-    const rawDiagnostic = providerSubmitObject(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic);
-    const providerResponse = providerSubmitObject(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson);
-    const rawProviderResponse = providerSubmitObject(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson);
+  const evidenceSources = (value) => {
+    const root = asObj(value) || {};
+    const railMeta = asObj(root.rail_meta_json || root.railMetaJson) || {};
+    const rawPayload = asObj(root.raw_payload || root.rawPayload) || {};
+    const directDiagnostic = asObj(root.provider_submit_diagnostic || root.providerSubmitDiagnostic) || {};
+    const railDiagnostic = asObj(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic) || {};
+    const rawDiagnostic = asObj(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic) || {};
+    const providerResponse = asObj(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson) || {};
+    const rawProviderResponse = asObj(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson) || {};
     return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
       .filter((obj) => obj && Object.keys(obj).length);
   };
-  const providerSubmitLocalReferenceSet = (value) => {
+  const localReferenceSet = (value) => {
     const out = new Set();
     const localKeys = [
       'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
@@ -22080,16 +21139,16 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
       'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
     ];
-    for (const obj of providerSubmitCollectEvidenceSources(value)) {
+    for (const obj of evidenceSources(value)) {
       for (const key of localKeys) {
-        const text = providerSubmitText(obj[key]);
+        const text = toText(obj[key]);
         if (text) out.add(text.toLowerCase());
       }
     }
     return out;
   };
-  const providerSubmitStrictExternalEvidencePresent = (value) => {
-    const localRefs = providerSubmitLocalReferenceSet(value);
+  const strictExternalEvidencePresent = (value) => {
+    const localRefs = localReferenceSet(value);
     const externalKeys = [
       'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
       'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
@@ -22100,9 +21159,9 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       'external_reference', 'externalReference', 'bank_reference', 'bankReference',
       'transaction_id', 'transactionId', 'payment_id', 'paymentId'
     ];
-    for (const obj of providerSubmitCollectEvidenceSources(value)) {
+    for (const obj of evidenceSources(value)) {
       for (const key of externalKeys) {
-        const text = providerSubmitText(obj[key]);
+        const text = toText(obj[key]);
         if (!text) continue;
         if (localRefs.has(text.toLowerCase())) continue;
         return true;
@@ -22110,50 +21169,10 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
     }
     return false;
   };
-  const normaliseProviderSubmitDiagnostic = (raw) => {
-    const source = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
-    if (!Object.keys(source).length) return {};
-    const out = { ...source };
-    out.provider_submission_status = toUpper(out.provider_submission_status || out.providerSubmissionStatus || out.outcome_code || out.outcomeCode || '');
-    out.review_reason_code = toUpper(out.review_reason_code || out.reviewReasonCode || out.provider_submit_review_reason_code || out.providerSubmitReviewReasonCode || '');
-    out.manual_resolution_required = readProviderBool(out.manual_resolution_required ?? out.manualResolutionRequired) === true;
-    out.manual_resolution_available = readProviderBool(out.manual_resolution_available ?? out.manualResolutionAvailable ?? out.manual_resolution_required ?? out.manualResolutionRequired) === true;
-    out.safe_retry_available = readProviderBool(out.safe_retry_available ?? out.safeRetryAvailable) === true;
-    const strictExternalEvidencePresent = providerSubmitStrictExternalEvidencePresent(out);
-    const rejectedOrUnusable = [
-      'PROVIDER_SUBMISSION_REJECTED',
-      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
-      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
-      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
-      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
-      'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
-    ].includes(out.provider_submission_status);
-    out.provider_external_evidence_present = strictExternalEvidencePresent === true;
-    out.provider_acceptance_evidence_present = out.provider_submission_status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictExternalEvidencePresent === true && rejectedOrUnusable !== true;
-    out.provider_response_present = readProviderBool(out.provider_response_present ?? out.providerResponsePresent ?? out.provider_response_received ?? out.providerResponseReceived) === true;
-    out.provider_response_received = readProviderBool(out.provider_response_received ?? out.providerResponseReceived ?? out.provider_response_present ?? out.providerResponsePresent) === true;
-    out.provider_request_sent = readProviderBool(out.provider_request_sent ?? out.providerRequestSent) === true;
-    out.provider_submission_attempted = readProviderBool(out.provider_submission_attempted ?? out.providerSubmissionAttempted ?? out.provider_called ?? out.providerCalled) === true || out.provider_request_sent === true || out.provider_response_present === true;
-    out.provider_error_code = toText(out.provider_error_code || out.providerErrorCode || out.error_code || out.errorCode || '');
-    out.provider_error_message_redacted = toText(out.provider_error_message_redacted || out.providerErrorMessageRedacted || out.provider_error_message || out.providerErrorMessage || out.provider_message || out.providerMessage || '');
-    out.provider_http_status = toText(out.provider_http_status || out.providerHttpStatus || out.http_status || out.httpStatus || '');
-    if (!out.provider_submission_status && (out.review_reason_code === 'PROVIDER_REJECTED_PAYMENT' || out.provider_error_code || out.provider_error_message_redacted)) out.provider_submission_status = 'PROVIDER_SUBMISSION_REJECTED';
-    out.request_id = toText(out.request_id || out.requestId || '');
-    out.idempotency_key = toText(out.idempotency_key || out.idempotencyKey || '');
-    out.rail_tx_id = toText(out.rail_tx_id || out.railTxId || '');
-    out.rail_state = toText(out.rail_state || out.railState || '');
-    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
-      out.manual_resolution_required = false;
-      out.manual_resolution_available = false;
-    }
-    out.recommended_action = toText(out.recommended_action || out.recommendedAction || '') || null;
-    return out;
-  };
-  const extractProviderSubmitDiagnostic = (payload) => {
+  const extractProviderDiagnostic = (payload) => {
     const out = {};
     const visited = new Set();
     const queue = [];
-    let sawProviderSubmitScopedSource = false;
     const addSource = (value) => {
       if (!value) return;
       if (Array.isArray(value)) {
@@ -22173,66 +21192,19 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       visited.add(value);
       queue.push(value);
       [
-        'batch',
-        'detail',
-        'details',
-        'operation',
-        'operation_result',
-        'operationResult',
-        'operation_error',
-        'operationError',
-        'result',
-        'result_json',
-        'resultJson',
-        'error',
-        'error_json',
-        'errorJson',
-        'progress',
-        'progress_json',
-        'progressJson',
-        'payment_execution_review',
-        'paymentExecutionReview',
-        'provider_submission',
-        'providerSubmission',
-        'provider_submit_diagnostic',
-        'providerSubmitDiagnostic',
-        'provider_submit_claim_diagnostic',
-        'providerSubmitClaimDiagnostic',
-        'rail_meta_json',
-        'railMetaJson',
-        'raw_payload',
-        'rawPayload',
-        'provider_response',
-        'providerResponse',
-        'provider_response_json',
-        'providerResponseJson',
-        'payment_issue_summary',
-        'paymentIssueSummary',
-        'provider_issue_summary',
-        'providerIssueSummary'
+        'batch', 'detail', 'details', 'operation', 'operation_result', 'operationResult', 'operation_error', 'operationError',
+        'result', 'result_json', 'resultJson', 'error', 'error_json', 'errorJson', 'progress', 'progress_json', 'progressJson',
+        'payment_execution_review', 'paymentExecutionReview', 'provider_submission', 'providerSubmission',
+        'provider_submit_diagnostic', 'providerSubmitDiagnostic', 'provider_submit_claim_diagnostic', 'providerSubmitClaimDiagnostic',
+        'rail_meta_json', 'railMetaJson', 'raw_payload', 'rawPayload', 'provider_response', 'providerResponse',
+        'provider_response_json', 'providerResponseJson', 'payment_issue_summary', 'paymentIssueSummary',
+        'provider_issue_summary', 'providerIssueSummary'
       ].forEach((key) => addSource(value[key]));
       [
-        'transfers',
-        'bank_evidence',
-        'bankEvidence',
-        'payment_issues',
-        'paymentIssues',
-        'issues',
-        'transfer_events',
-        'transferEvents',
-        'provider_transfer_events',
-        'providerTransferEvents',
-        'provider_events',
-        'providerEvents',
-        'chunks',
-        'provider_submit_chunks',
-        'providerSubmitChunks',
-        'submitted',
-        'errors',
-        'transfer_provider_outcomes',
-        'transferProviderOutcomes',
-        'provider_outcomes',
-        'providerOutcomes'
+        'transfers', 'bank_evidence', 'bankEvidence', 'payment_issues', 'paymentIssues', 'issues',
+        'transfer_events', 'transferEvents', 'provider_transfer_events', 'providerTransferEvents', 'provider_events', 'providerEvents',
+        'chunks', 'provider_submit_chunks', 'providerSubmitChunks', 'submitted', 'errors', 'transfer_provider_outcomes',
+        'transferProviderOutcomes', 'provider_outcomes', 'providerOutcomes'
       ].forEach((key) => addSource(value[key]));
     };
     addSource(payload);
@@ -22240,7 +21212,7 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
     addSource(options.provider_submit_diagnostic);
 
     const readFirst = (source, keys) => {
-      const obj = (source && typeof source === 'object' && !Array.isArray(source)) ? source : {};
+      const obj = asObj(source) || {};
       for (const key of keys) {
         const value = obj[key];
         if (value === null || value === undefined) continue;
@@ -22259,14 +21231,12 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       if (!overwrite && out[key] !== undefined && out[key] !== '' && !(Array.isArray(out[key]) && out[key].length === 0)) return;
       if (Array.isArray(value)) {
         const values = value.map((entry) => toText(entry)).filter(Boolean);
-        if (!values.length) return;
-        out[key] = values;
+        if (values.length) out[key] = values;
         return;
       }
       if (mode === 'bool') {
-        const boolValue = readProviderBool(value);
-        if (boolValue === null) return;
-        out[key] = boolValue;
+        const boolValue = readBool(value);
+        if (boolValue !== null) out[key] = boolValue;
         return;
       }
       const text = toText(value);
@@ -22274,42 +21244,25 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       out[key] = mode === 'upper' ? toUpper(value) : text;
     };
     const sourceIsProviderScoped = (source) => {
-      if (!source || typeof source !== 'object' || Array.isArray(source)) return false;
-      const nestedProviderDiagnostic = providerSubmitObject(source.provider_submit_diagnostic || source.providerSubmitDiagnostic);
-      if (Object.keys(nestedProviderDiagnostic).length) return true;
-      const providerIssueKind = toUpper(source.issue_kind || source.issueKind || source.issue_type || source.issueType || source.kind || source.type);
-      if (providerIssueKind === 'PAYMENT_PROVIDER_SUBMIT_REVIEW' || providerIssueKind === 'PROVIDER_SUBMIT_REVIEW') return true;
-      const providerFieldValue = readFirst(source, [
-        'provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode',
-        'review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode',
-        'provider_error_code', 'providerErrorCode', 'provider_error_message_redacted', 'providerErrorMessageRedacted',
-        'provider_error_message', 'providerErrorMessage', 'provider_message', 'providerMessage',
-        'provider_request_sent', 'providerRequestSent',
-        'provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived',
-        'provider_http_status', 'providerHttpStatus',
+      const obj = asObj(source);
+      if (!obj) return false;
+      if (asObj(obj.provider_submit_diagnostic || obj.providerSubmitDiagnostic)) return true;
+      const kind = toUpper(obj.issue_kind || obj.issueKind || obj.issue_type || obj.issueType || obj.kind || obj.type);
+      if (kind === 'PAYMENT_PROVIDER_SUBMIT_REVIEW' || kind === 'PROVIDER_SUBMIT_REVIEW') return true;
+      return readFirst(obj, [
+        'provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode', 'review_reason_code', 'reviewReasonCode',
+        'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode', 'provider_error_code', 'providerErrorCode',
+        'provider_error_message_redacted', 'providerErrorMessageRedacted', 'provider_error_message', 'providerErrorMessage',
+        'provider_request_sent', 'providerRequestSent', 'provider_response_present', 'providerResponsePresent',
+        'provider_response_received', 'providerResponseReceived', 'provider_http_status', 'providerHttpStatus',
         'provider_event_id', 'providerEventId', 'provider_reference', 'providerReference',
         'provider_transaction_id', 'providerTransactionId', 'provider_payment_id', 'providerPaymentId'
-      ]);
-      if (providerFieldValue !== undefined) return true;
-      const railState = toUpper(source.rail_state || source.railState);
-      const providerState = toUpper(source.provider_state || source.providerState || source.provider_status || source.providerStatus);
-      return ['REJECTED', 'DECLINED', 'FAILED', 'RETURNED', 'REVERTED'].includes(railState) || ['REJECTED', 'DECLINED', 'FAILED', 'RETURNED', 'REVERTED'].includes(providerState);
+      ]) !== undefined;
     };
-    const readProviderErrorMessageCandidate = (source) => {
-      const explicitProviderMessage = readFirst(source, [
-        'provider_error_message_redacted', 'providerErrorMessageRedacted',
-        'provider_error_message', 'providerErrorMessage',
-        'provider_message', 'providerMessage'
-      ]);
-      if (explicitProviderMessage !== undefined) return { value: explicitProviderMessage, explicit: true };
-      if (sourceIsProviderScoped(source)) return { value: readFirst(source, ['message']), explicit: false };
-      return { value: undefined, explicit: false };
-    };
-    const mergeProviderSubmitSource = (source) => {
-      if (!source || typeof source !== 'object' || Array.isArray(source)) return;
-      const sourceProviderScoped = sourceIsProviderScoped(source);
-      if (sourceProviderScoped) sawProviderSubmitScopedSource = true;
-      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode', 'provider_state', 'providerState']), 'upper', sourceProviderScoped);
+    for (const source of queue) {
+      if (!asObj(source)) continue;
+      const providerScoped = sourceIsProviderScoped(source);
+      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode', 'provider_state', 'providerState']), 'upper', providerScoped);
       put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode', 'claim_blocker_code', 'claimBlockerCode']), 'upper');
       put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired', 'requires_review', 'requiresReview']), 'bool');
       put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
@@ -22323,12 +21276,10 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived', 'response_present', 'responsePresent']), 'bool');
       put('provider_response_received', readFirst(source, ['provider_response_received', 'providerResponseReceived', 'provider_response_present', 'providerResponsePresent', 'response_received', 'responseReceived']), 'bool');
       put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent', 'request_sent', 'requestSent']), 'bool');
-      put('provider_submission_attempted', readFirst(source, ['provider_submission_attempted', 'providerSubmissionAttempted', 'provider_called', 'providerCalled']), 'bool', sourceProviderScoped);
-      const providerErrorCodeValue = readFirst(source, ['provider_error_code', 'providerErrorCode', 'error_code', 'errorCode']);
-      put('provider_error_code', providerErrorCodeValue, 'text', sourceProviderScoped && providerErrorCodeValue !== undefined);
-      const providerErrorMessageCandidate = readProviderErrorMessageCandidate(source);
-      put('provider_error_message_redacted', providerErrorMessageCandidate.value, 'text', providerErrorMessageCandidate.explicit);
-      put('provider_http_status', readFirst(source, ['provider_http_status', 'providerHttpStatus', 'http_status', 'httpStatus']), 'text', sourceProviderScoped);
+      put('provider_submission_attempted', readFirst(source, ['provider_submission_attempted', 'providerSubmissionAttempted', 'provider_called', 'providerCalled']), 'bool', providerScoped);
+      put('provider_error_code', readFirst(source, ['provider_error_code', 'providerErrorCode', 'error_code', 'errorCode']), 'text', providerScoped);
+      put('provider_error_message_redacted', readFirst(source, ['provider_error_message_redacted', 'providerErrorMessageRedacted', 'provider_error_message', 'providerErrorMessage', 'provider_message', 'providerMessage', 'message']), 'text', providerScoped);
+      put('provider_http_status', readFirst(source, ['provider_http_status', 'providerHttpStatus', 'http_status', 'httpStatus']), 'text', providerScoped);
       put('request_id', readFirst(source, ['request_id', 'requestId']));
       put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
       put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
@@ -22350,1045 +21301,830 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
       put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
       put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
-
-      const railState = toUpper(source.rail_state || source.railState);
-      const statusText = sourceProviderScoped
-        ? toUpper(source.provider_submission_status || source.providerSubmissionStatus || source.outcome_code || source.outcomeCode || source.provider_state || source.providerState || source.provider_status || source.providerStatus || source.status || source.state)
-        : toUpper(source.provider_submission_status || source.providerSubmissionStatus || source.outcome_code || source.outcomeCode || source.provider_state || source.providerState || source.provider_status || source.providerStatus);
       const reviewReason = toUpper(source.review_reason_code || source.reviewReasonCode || source.claim_blocker_code || source.claimBlockerCode);
+      const statusText = providerScoped ? toUpper(source.provider_submission_status || source.providerSubmissionStatus || source.status || source.state) : '';
+      const railState = toUpper(source.rail_state || source.railState);
       if ((!out.provider_submission_status || out.provider_submission_status === 'FAILED') && (reviewReason === 'PROVIDER_REJECTED_PAYMENT' || railState === 'REJECTED' || statusText === 'REJECTED' || statusText === 'DECLINED')) {
         out.provider_submission_status = 'PROVIDER_SUBMISSION_REJECTED';
       }
-    };
-    queue.forEach(mergeProviderSubmitSource);
-    const normalised = normaliseProviderSubmitDiagnostic(out);
-    const railStateIsProviderIssue = ['REJECTED', 'DECLINED', 'FAILED', 'RETURNED', 'REVERTED'].includes(toUpper(normalised.rail_state));
-    const hasProviderSubmitContext = !!(
-      sawProviderSubmitScopedSource ||
-      normalised.provider_submission_status ||
-      normalised.review_reason_code ||
-      normalised.provider_request_sent === true ||
-      normalised.provider_response_present === true ||
-      normalised.provider_response_received === true ||
-      normalised.provider_submission_attempted === true ||
-      normalised.provider_error_code ||
-      normalised.provider_error_message_redacted ||
-      normalised.provider_http_status ||
-      normalised.provider_transaction_id ||
-      normalised.provider_payment_id ||
-      normalised.provider_event_id ||
-      normalised.provider_reference ||
-      normalised.external_payment_id ||
-      normalised.revolut_payment_id ||
-      normalised.external_reference ||
-      normalised.bank_reference ||
-      normalised.transaction_id ||
-      normalised.payment_id ||
-      (railStateIsProviderIssue ? normalised.rail_state : '')
-    );
-    if (!hasProviderSubmitContext) return {};
-    if (!normalised.provider_submission_status && (normalised.review_reason_code === 'PROVIDER_REJECTED_PAYMENT' || normalised.provider_error_code || normalised.provider_error_message_redacted)) {
-      normalised.provider_submission_status = 'PROVIDER_SUBMISSION_REJECTED';
     }
-    if (normalised.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
-      normalised.manual_resolution_required = false;
-      normalised.manual_resolution_available = false;
+
+    out.provider_submission_status = toUpper(out.provider_submission_status || '');
+    out.review_reason_code = toUpper(out.review_reason_code || '');
+    if (!out.provider_submission_status && (out.review_reason_code === 'PROVIDER_REJECTED_PAYMENT' || out.provider_error_code || out.provider_error_message_redacted)) out.provider_submission_status = 'PROVIDER_SUBMISSION_REJECTED';
+    out.provider_external_evidence_present = strictExternalEvidencePresent(out);
+    out.provider_acceptance_evidence_present = out.provider_submission_status === 'PROVIDER_SUBMISSION_ACCEPTED' && out.provider_external_evidence_present === true;
+    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+      out.manual_resolution_required = false;
+      out.manual_resolution_available = false;
     }
-    return normalised;
+    return Object.keys(out).some((key) => toText(out[key]) || out[key] === true || out[key] === false) ? out : {};
   };
 
-  const providerSubmitRowLabels = (statusValue, strictAcceptanceEvidencePresent = false) => {
-    const status = toUpper(statusValue);
-    if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictAcceptanceEvidencePresent === true) {
-      return {
-        bankStatusLabel: 'Submitted',
-        whatHappenedLabel: 'Provider accepted/submitted payment.',
-        actionLabel: 'Do not retry unless reconciled.'
-      };
-    }
-    if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && strictAcceptanceEvidencePresent !== true) {
-      return {
-        bankStatusLabel: 'Outcome not proven',
-        whatHappenedLabel: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
-        actionLabel: 'Reconcile with provider/bank before retry.'
-      };
-    }
-    const labels = {
-      PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK: {
-        bankStatusLabel: 'Outcome unknown',
-        whatHappenedLabel: 'Submit chunk became stale with no provider response recorded.',
-        actionLabel: 'Manual bank account check required before retry.'
-      },
-      UNKNOWN_PROVIDER_SUBMISSION_OUTCOME: {
-        bankStatusLabel: 'Outcome unknown',
-        whatHappenedLabel: 'Provider request may have been sent, but no response was recorded.',
-        actionLabel: 'Check provider/bank before retry.'
-      },
-      PROVIDER_SUBMISSION_MALFORMED_RESPONSE: {
-        bankStatusLabel: 'Outcome not proven',
-        whatHappenedLabel: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
-        actionLabel: 'Reconcile with provider/bank before retry.'
-      },
-      PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID: {
-        bankStatusLabel: 'Outcome not proven',
-        whatHappenedLabel: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
-        actionLabel: 'Reconcile with provider/bank before retry.'
-      },
-      PROVIDER_SUBMISSION_BLOCKED_PRE_CALL: {
-        bankStatusLabel: 'Not sent',
-        whatHappenedLabel: 'Provider was not called.',
-        actionLabel: 'Retry after local blocker is cleared.'
-      },
-      PROVIDER_SUBMISSION_REJECTED: {
-        bankStatusLabel: 'Rejected',
-        whatHappenedLabel: 'Provider rejected submission.',
-        actionLabel: 'Fix/review payee or counterparty setup before retry.'
-      },
-      MANUAL_RESOLVED_NO_PAYMENT_MADE: {
-        bankStatusLabel: 'Manual no-payment confirmation recorded',
-        whatHappenedLabel: 'Manual no-payment confirmation recorded.',
-        actionLabel: 'Batch can be retried if safe retry is available.'
+  const rowsForSummary = (() => {
+    try {
+      if (typeof buildBankingPaymentIssueRows === 'function') {
+        const built = buildBankingPaymentIssueRows(src, { ...options, correctionState });
+        return Array.isArray(built) ? built : [];
       }
-    };
-    return labels[status] || {
-      bankStatusLabel: 'Provider submission needs review',
-      whatHappenedLabel: 'Provider submission needs review.',
-      actionLabel: 'Check provider/bank before retry.'
-    };
-  };
+    } catch {}
+    return Array.isArray(correctionState?.rows) ? correctionState.rows : [];
+  })();
 
-  const readRecoveryEnvelope = (diagnostic) => {
-    const diag = (diagnostic && typeof diagnostic === 'object' && !Array.isArray(diagnostic)) ? diagnostic : {};
-    const nested = (diag.stale_payee_map_recovery && typeof diag.stale_payee_map_recovery === 'object' && !Array.isArray(diag.stale_payee_map_recovery)) ? diag.stale_payee_map_recovery : {};
-    const status = toUpper(diag.recovery_status || diag.recoveryStatus || nested.recovery_status || nested.recoveryStatus || '');
-    const action = toUpper(diag.recovery_action || diag.recoveryAction || nested.recovery_action || nested.recoveryAction || '');
-    const autoReverseRequested = readProviderBool(diag.auto_reverse_requested ?? diag.autoReverseRequested ?? nested.auto_reverse_requested ?? nested.autoReverseRequested) === true;
-    const autoReverseApplied = asNum(diag.auto_reverse_applied_count ?? diag.autoReverseAppliedCount ?? nested.auto_reverse_applied_count ?? nested.autoReverseAppliedCount) > 0;
-    const manualRecoverable = readProviderBool(diag.manual_recoverable ?? diag.manualRecoverable ?? nested.manual_recoverable ?? nested.manualRecoverable) === true;
-    const autoReleased = autoReverseApplied || ['AUTO_RELEASED_FOR_NEXT_RUN', 'AUTO_RELEASED', 'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS'].includes(status) || ['READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS'].includes(action);
-    const manuallyReleased = ['MANUALLY_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED', 'MANUAL_RESOLVED_NO_PAYMENT_MADE'].includes(status) || toUpper(diag.provider_submission_status || '') === 'MANUAL_RESOLVED_NO_PAYMENT_MADE';
-    const releaseInProgress = !autoReleased && !manuallyReleased && (autoReverseRequested || ['AUTO_RELEASE_REQUESTED', 'AUTO_RELEASE_IN_PROGRESS', 'REVERSAL_IN_PROGRESS', 'RELEASE_IN_PROGRESS'].includes(status) || ['AUTO_RELEASE_IN_PROGRESS'].includes(action));
-    const manualReleaseRequired = !autoReleased && !manuallyReleased && !releaseInProgress && (manualRecoverable || action === 'MANUAL_RELEASE_REQUIRED');
-    return { status, action, autoReverseRequested, autoReverseApplied, manualRecoverable, autoReleased, manuallyReleased, releaseInProgress, manualReleaseRequired };
-  };
-  const actionTextForRecovery = (recovery, fallbackAction) => {
-    if (recovery.autoReleased) return 'Recheck the bank details and if correct, rerun Banking to pay this. The payment is ready to be paid on next run.';
-    if (recovery.releaseInProgress) return 'Reversal/release is being processed.';
-    if (recovery.manuallyReleased) return 'Payment has been released for the next Banking Pay run.';
-    if (recovery.manualReleaseRequired) return 'Recheck the bank details and if correct, reverse the payment and rerun Banking to pay this.';
-    return fallbackAction || 'Check provider/bank before retry.';
-  };
-  const statusTextForRecovery = (recovery, fallbackStatus) => {
-    if (recovery.autoReleased) return 'Released for next run — auto';
-    if (recovery.releaseInProgress) return 'Reversal in progress';
-    if (recovery.manuallyReleased) return 'Released for next run — manual';
-    if (recovery.manualReleaseRequired) return 'Needs manual release';
-    return fallbackStatus || 'Needs review';
-  };
-  const providerRowRichness = (row) => {
-    const diag = (row && typeof row === 'object') ? (row.providerSubmitDiagnostic || row.provider_submit_diagnostic || {}) : {};
-    let score = 0;
-    if (toText(row?.provider_error_message_redacted || diag.provider_error_message_redacted)) score += 100;
-    if (toText(row?.provider_error_code || diag.provider_error_code)) score += 50;
-    if (toText(row?.provider_submission_status || diag.provider_submission_status)) score += 25;
-    if (row?.provider_response_present === true || diag.provider_response_present === true) score += 10;
-    if (row?.provider_request_sent === true || diag.provider_request_sent === true) score += 10;
-    if (toText(row?.chunk_id || diag.chunk_id)) score += 5;
-    if (toText(row?.auth_request_id || diag.auth_request_id)) score += 5;
-    if (toText(row?.payBankTransferId || row?.pay_bank_transfer_id || row?.transfer_id || diag.transfer_id)) score += 5;
-    return score;
-  };
+  const providerDiagnostic = extractProviderDiagnostic(src);
+  const providerStatus = toUpper(providerDiagnostic.provider_submission_status || '');
+  const providerAcceptedSent = providerStatus === 'PROVIDER_SUBMISSION_ACCEPTED' && providerDiagnostic.provider_acceptance_evidence_present === true;
+  const batch = asObj(src.batch) || {};
+  const transfers = asArr(src.transfers);
+  const batchStatus = toUpper(batch.status || src.status || '');
+  const allTransfersPaid = transfers.length > 0 && transfers.every((transfer) => ['COMPLETED', 'SETTLED', 'PAID', 'COMMITTED'].includes(toUpper(transfer?.status || transfer?.rail_state || transfer?.normalised_state || transfer?.normalized_state || '')));
 
-  const firstDiagnosticText = (diagnostic, ...keys) => {
-    for (const key of keys) {
-      const value = diagnostic ? diagnostic[key] : null;
+  const summary = { sentCount: 0, failedReturnedCount: 0, checkRequiredCount: 0, totalSentAmount: 0 };
+  const classifyRowTone = (row) => {
+    const displayState = toUpper(row?.displayState || row?.display_state || '');
+    const statusSymbol = toText(row?.statusSymbol || row?.status_symbol || '');
+    const resultLabel = toUpper(row?.resultLabel || row?.result_label || row?.whatHappenedLabel || row?.what_happened_label || row?.bankStatusLabel || row?.bank_status_label || '');
+    const statusText = `${displayState} ${statusSymbol} ${resultLabel}`;
+    if (statusSymbol === '✅' || displayState === 'PAYMENT_SENT' || displayState === 'PAYMENT_PAID' || statusText.includes('SENT') || statusText.includes('PAID')) return 'sent';
+    if (statusSymbol === '❓' || displayState === 'PAYMENT_UNKNOWN_CHECK_REQUIRED' || statusText.includes('CHECK REQUIRED') || statusText.includes('UNKNOWN') || statusText.includes('TIMEOUT') || statusText.includes('MALFORMED')) return 'check';
+    if (statusSymbol === '❌' || displayState.includes('REJECT') || displayState.includes('INSUFFICIENT') || displayState.includes('RETURN') || statusText.includes('REJECT') || statusText.includes('RETURN') || statusText.includes('INSUFFICIENT') || statusText.includes('FAILED')) return 'failed';
+    return 'check';
+  };
+  for (const row of rowsForSummary) {
+    const tone = classifyRowTone(row);
+    if (tone === 'sent') {
+      summary.sentCount += 1;
+      summary.totalSentAmount += toNum(row.paymentAmount || row.payment_amount || row.amount || 0);
+    } else if (tone === 'failed') {
+      summary.failedReturnedCount += 1;
+    } else {
+      summary.checkRequiredCount += 1;
+    }
+  }
+  if (!rowsForSummary.length && providerAcceptedSent) {
+    summary.sentCount = 1;
+    summary.totalSentAmount = toNum(src.total_amount || src.total_amount_inc_vat || src.total_pay_amount || batch.total_amount || batch.total_amount_inc_vat || batch.total_pay_amount);
+  }
+  if (summary.sentCount > 0 && summary.totalSentAmount === 0) {
+    const fallbackAmount = toNum(src.total_amount || src.total_amount_inc_vat || src.total_pay_amount || batch.total_amount || batch.total_amount_inc_vat || batch.total_pay_amount);
+    if (fallbackAmount) summary.totalSentAmount = fallbackAmount;
+  }
+
+  let displayState = 'PAYMENT_UNKNOWN_CHECK_REQUIRED';
+  let badgeText = 'Check required';
+  let badgeTone = 'warning';
+  let statusText = 'Check required';
+  let resultLabel = 'Check required';
+  let actionLabel = 'Resolve manually';
+  let actionType = 'RESOLVE_MANUALLY';
+  let hasIssue = true;
+  let requiresUserAction = true;
+  let navAlert = true;
+
+  if (rowsForSummary.length) {
+    if (summary.checkRequiredCount > 0) {
+      displayState = 'PAYMENT_UNKNOWN_CHECK_REQUIRED';
+      badgeText = 'Check required';
+      badgeTone = 'warning';
+      statusText = 'Check required';
+    } else if (summary.failedReturnedCount > 0) {
+      const failedRow = rowsForSummary.find((row) => classifyRowTone(row) === 'failed') || {};
+      displayState = toUpper(failedRow.displayState || failedRow.display_state || '') || 'BANK_REJECTED_NEEDS_MANUAL_RELEASE';
+      badgeText = failedRow.resultLabel || failedRow.result_label || failedRow.whatHappenedLabel || failedRow.what_happened_label || 'Failed / returned';
+      badgeTone = 'danger';
+      statusText = badgeText;
+      resultLabel = badgeText;
+      actionLabel = failedRow.actionLabel || failedRow.action_label || getBankingPaymentIssueActionLabel(failedRow);
+      actionType = failedRow.actionType || failedRow.action_type || 'VIEW_DETAILS';
+    } else {
+      displayState = 'PAYMENT_SENT';
+      badgeText = 'Sent';
+      badgeTone = 'success';
+      statusText = 'Sent';
+      resultLabel = 'Sent';
+      actionLabel = 'Candidate returned funds';
+      actionType = 'CANDIDATE_RETURNED_FUNDS';
+      hasIssue = false;
+      requiresUserAction = false;
+      navAlert = false;
+    }
+  } else if (providerAcceptedSent || allTransfersPaid || ['SETTLED', 'COMMITTED'].includes(batchStatus)) {
+    displayState = allTransfersPaid || ['SETTLED', 'COMMITTED'].includes(batchStatus) ? 'PAYMENT_PAID' : 'PAYMENT_SENT';
+    badgeText = displayState === 'PAYMENT_PAID' ? 'Paid' : 'Sent';
+    badgeTone = 'success';
+    statusText = badgeText;
+    resultLabel = badgeText;
+    actionLabel = 'Candidate returned funds';
+    actionType = 'CANDIDATE_RETURNED_FUNDS';
+    hasIssue = false;
+    requiresUserAction = false;
+    navAlert = false;
+  } else if (providerStatus === 'PROVIDER_SUBMISSION_REJECTED') {
+    displayState = 'BANK_REJECTED_NEEDS_MANUAL_RELEASE';
+    badgeText = 'Bank rejected';
+    badgeTone = 'danger';
+    statusText = 'Bank rejected';
+    resultLabel = 'Bank rejected';
+    actionLabel = 'Release for next run';
+    actionType = 'RELEASE_FOR_NEXT_RUN';
+  } else if (providerStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+    displayState = 'BANK_REJECTED_MANUALLY_REVERSED';
+    badgeText = 'Bank rejected — manually reversed';
+    badgeTone = 'danger';
+    statusText = 'Bank rejected — manually reversed';
+    resultLabel = 'Bank rejected — manually reversed';
+    actionLabel = 'View details';
+    actionType = 'VIEW_DETAILS';
+    hasIssue = false;
+    requiresUserAction = false;
+    navAlert = false;
+  }
+
+  return {
+    hasIssue,
+    requiresUserAction,
+    navAlert,
+    badgeText,
+    badgeTone,
+    panelTitle: 'Current Payment Status',
+    headline: badgeText,
+    summaryText: statusText,
+    primaryActionLabel: actionLabel,
+    statusText,
+    resultLabel,
+    actionLabel,
+    actionType,
+    displayState,
+    issueKindForDisplay: displayState,
+    backendClassification: providerStatus || displayState,
+    providerSubmitDiagnostic: providerDiagnostic,
+    sentCount: summary.sentCount,
+    failedReturnedCount: summary.failedReturnedCount,
+    checkRequiredCount: summary.checkRequiredCount,
+    totalSentAmount: summary.totalSentAmount,
+    manualPaidActionAvailable: false,
+    manualPaidActionMode: false,
+    hasActionableIssueRows: summary.failedReturnedCount > 0 || summary.checkRequiredCount > 0,
+    hasSelectableRows: rowsForSummary.some((row) => row && row.selectable === true),
+    correctionState
+  };
+}
+
+function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
+  const src = (batchPayload && typeof batchPayload === 'object') ? batchPayload : {};
+  const options = (opts && typeof opts === 'object') ? opts : {};
+  const correctionState = (options.correctionState && typeof options.correctionState === 'object') ? options.correctionState : null;
+
+  const toText = (value) => String(value == null ? '' : value).trim();
+  const toUpper = (value) => toText(value).toUpperCase();
+  const asObj = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : null;
+  const asArray = (value) => Array.isArray(value) ? value : [];
+  const toNum = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const readBool = (value) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    const text = toText(value).toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return null;
+  };
+  const firstText = (...values) => {
+    for (const value of values) {
       if (Array.isArray(value)) {
-        const first = value.map((entry) => toText(entry)).find(Boolean);
-        if (first) return first;
-      } else {
-        const text = toText(value);
-        if (text) return text;
+        const nested = firstText(...value);
+        if (nested) return nested;
+        continue;
       }
+      const text = toText(value);
+      if (text) return text;
     }
     return '';
   };
-
-  const isVoidedItem = (item) => {
-    const obj = (item && typeof item === 'object') ? item : {};
-    return obj.is_voided === true || obj.isVoided === true || toUpper(obj.status || obj.item_status || obj.itemStatus) === 'VOIDED';
+  const uniq = (values) => Array.from(new Set(asArray(values).flatMap((value) => Array.isArray(value) ? value : [value]).map((value) => toText(value)).filter(Boolean)));
+  const pushMap = (map, key, value) => {
+    const k = toText(key);
+    if (!k) return;
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(value);
   };
+  const evidenceSources = (value) => {
+    const root = asObj(value) || {};
+    const railMeta = asObj(root.rail_meta_json || root.railMetaJson) || {};
+    const rawPayload = asObj(root.raw_payload || root.rawPayload) || {};
+    const directDiagnostic = asObj(root.provider_submit_diagnostic || root.providerSubmitDiagnostic) || {};
+    const railDiagnostic = asObj(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic) || {};
+    const rawDiagnostic = asObj(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic) || {};
+    const providerResponse = asObj(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson) || {};
+    const rawProviderResponse = asObj(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson) || {};
+    return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
+      .filter((obj) => obj && Object.keys(obj).length);
+  };
+  const localReferenceSet = (value) => {
+    const out = new Set();
+    const localKeys = [
+      'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
+      'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
+      'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
+      'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
+      'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
+      'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
+    ];
+    for (const obj of evidenceSources(value)) {
+      for (const key of localKeys) {
+        const text = toText(obj[key]);
+        if (text) out.add(text.toLowerCase());
+      }
+    }
+    return out;
+  };
+  const strictExternalEvidencePresent = (value) => {
+    const localRefs = localReferenceSet(value);
+    const externalKeys = [
+      'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
+      'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
+      'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
+      'submission_id', 'submissionId', 'rail_submission_id', 'railSubmissionId',
+      'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
+      'provider_transfer_id', 'providerTransferId', 'external_transfer_id', 'externalTransferId',
+      'external_reference', 'externalReference', 'bank_reference', 'bankReference',
+      'transaction_id', 'transactionId', 'payment_id', 'paymentId'
+    ];
+    for (const obj of evidenceSources(value)) {
+      for (const key of externalKeys) {
+        const text = toText(obj[key]);
+        if (!text) continue;
+        if (localRefs.has(text.toLowerCase())) continue;
+        return true;
+      }
+    }
+    return false;
+  };
+  const extractProviderDiagnostic = (payload) => {
+    const out = {};
+    const visited = new Set();
+    const queue = [];
+    const addSource = (value) => {
+      if (!value) return;
+      if (Array.isArray(value)) {
+        value.forEach(addSource);
+        return;
+      }
+      if (typeof value === 'string') {
+        const text = value.trim();
+        if (!text) return;
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed && typeof parsed === 'object') addSource(parsed);
+        } catch {}
+        return;
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value) || visited.has(value)) return;
+      visited.add(value);
+      queue.push(value);
+      [
+        'batch', 'detail', 'details', 'operation', 'operation_result', 'operationResult', 'operation_error', 'operationError',
+        'result', 'result_json', 'resultJson', 'error', 'error_json', 'errorJson', 'progress', 'progress_json', 'progressJson',
+        'payment_execution_review', 'paymentExecutionReview', 'provider_submission', 'providerSubmission',
+        'provider_submit_diagnostic', 'providerSubmitDiagnostic', 'provider_submit_claim_diagnostic', 'providerSubmitClaimDiagnostic',
+        'rail_meta_json', 'railMetaJson', 'raw_payload', 'rawPayload', 'provider_response', 'providerResponse',
+        'provider_response_json', 'providerResponseJson', 'payment_issue_summary', 'paymentIssueSummary',
+        'provider_issue_summary', 'providerIssueSummary'
+      ].forEach((key) => addSource(value[key]));
+      [
+        'transfers', 'bank_evidence', 'bankEvidence', 'payment_issues', 'paymentIssues', 'issues', 'transfer_events',
+        'transferEvents', 'provider_transfer_events', 'providerTransferEvents', 'provider_events', 'providerEvents',
+        'chunks', 'provider_submit_chunks', 'providerSubmitChunks', 'submitted', 'errors', 'transfer_provider_outcomes',
+        'transferProviderOutcomes', 'provider_outcomes', 'providerOutcomes'
+      ].forEach((key) => addSource(value[key]));
+    };
+    addSource(payload);
+    addSource(options.providerSubmitDiagnostic);
+    addSource(options.provider_submit_diagnostic);
+
+    const readFirst = (source, keys) => {
+      const obj = asObj(source) || {};
+      for (const key of keys) {
+        const value = obj[key];
+        if (value === null || value === undefined) continue;
+        if (Array.isArray(value)) {
+          if (value.length) return value;
+          continue;
+        }
+        if (typeof value === 'object') continue;
+        if (toText(value) !== '') return value;
+        if (typeof value === 'boolean') return value;
+      }
+      return undefined;
+    };
+    const put = (key, value, mode = 'text', overwrite = false) => {
+      if (value === null || value === undefined) return;
+      if (!overwrite && out[key] !== undefined && out[key] !== '' && !(Array.isArray(out[key]) && out[key].length === 0)) return;
+      if (Array.isArray(value)) {
+        const values = value.map((entry) => toText(entry)).filter(Boolean);
+        if (values.length) out[key] = values;
+        return;
+      }
+      if (mode === 'bool') {
+        const boolValue = readBool(value);
+        if (boolValue !== null) out[key] = boolValue;
+        return;
+      }
+      const text = toText(value);
+      if (!text && typeof value !== 'boolean') return;
+      out[key] = mode === 'upper' ? toUpper(value) : text;
+    };
+    const sourceIsProviderScoped = (source) => {
+      const obj = asObj(source);
+      if (!obj) return false;
+      if (asObj(obj.provider_submit_diagnostic || obj.providerSubmitDiagnostic)) return true;
+      const kind = toUpper(obj.issue_kind || obj.issueKind || obj.issue_type || obj.issueType || obj.kind || obj.type);
+      if (kind === 'PAYMENT_PROVIDER_SUBMIT_REVIEW' || kind === 'PROVIDER_SUBMIT_REVIEW') return true;
+      return readFirst(obj, [
+        'provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode', 'review_reason_code', 'reviewReasonCode',
+        'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode', 'provider_error_code', 'providerErrorCode',
+        'provider_error_message_redacted', 'providerErrorMessageRedacted', 'provider_error_message', 'providerErrorMessage',
+        'provider_request_sent', 'providerRequestSent', 'provider_response_present', 'providerResponsePresent',
+        'provider_response_received', 'providerResponseReceived', 'provider_http_status', 'providerHttpStatus',
+        'provider_event_id', 'providerEventId', 'provider_reference', 'providerReference',
+        'provider_transaction_id', 'providerTransactionId', 'provider_payment_id', 'providerPaymentId'
+      ]) !== undefined;
+    };
+    for (const source of queue) {
+      if (!asObj(source)) continue;
+      const providerScoped = sourceIsProviderScoped(source);
+      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode', 'provider_state', 'providerState']), 'upper', providerScoped);
+      put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode', 'claim_blocker_code', 'claimBlockerCode']), 'upper');
+      put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired', 'requires_review', 'requiresReview']), 'bool');
+      put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
+      put('manual_recoverable', readFirst(source, ['manual_recoverable', 'manualRecoverable']), 'bool');
+      put('recovery_status', readFirst(source, ['recovery_status', 'recoveryStatus']), 'upper');
+      put('recovery_action', readFirst(source, ['recovery_action', 'recoveryAction']), 'upper');
+      put('auto_reverse_requested', readFirst(source, ['auto_reverse_requested', 'autoReverseRequested']), 'bool');
+      put('auto_reverse_applied_count', readFirst(source, ['auto_reverse_applied_count', 'autoReverseAppliedCount']));
+      put('safe_retry_available', readFirst(source, ['safe_retry_available', 'safeRetryAvailable']), 'bool');
+      put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
+      put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived', 'response_present', 'responsePresent']), 'bool');
+      put('provider_response_received', readFirst(source, ['provider_response_received', 'providerResponseReceived', 'provider_response_present', 'providerResponsePresent', 'response_received', 'responseReceived']), 'bool');
+      put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent', 'request_sent', 'requestSent']), 'bool');
+      put('provider_submission_attempted', readFirst(source, ['provider_submission_attempted', 'providerSubmissionAttempted', 'provider_called', 'providerCalled']), 'bool', providerScoped);
+      put('provider_error_code', readFirst(source, ['provider_error_code', 'providerErrorCode', 'error_code', 'errorCode']), 'text', providerScoped);
+      put('provider_error_message_redacted', readFirst(source, ['provider_error_message_redacted', 'providerErrorMessageRedacted', 'provider_error_message', 'providerErrorMessage', 'provider_message', 'providerMessage', 'message']), 'text', providerScoped);
+      put('provider_http_status', readFirst(source, ['provider_http_status', 'providerHttpStatus', 'http_status', 'httpStatus']), 'text', providerScoped);
+      put('request_id', readFirst(source, ['request_id', 'requestId']));
+      put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
+      put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
+      put('rail_state', readFirst(source, ['rail_state', 'railState']));
+      put('provider_transaction_id', readFirst(source, ['provider_transaction_id', 'providerTransactionId']));
+      put('provider_payment_id', readFirst(source, ['provider_payment_id', 'providerPaymentId']));
+      put('provider_event_id', readFirst(source, ['provider_event_id', 'providerEventId']));
+      put('provider_reference', readFirst(source, ['provider_reference', 'providerReference']));
+      put('provider_submission_id', readFirst(source, ['provider_submission_id', 'providerSubmissionId']));
+      put('external_payment_id', readFirst(source, ['external_payment_id', 'externalPaymentId']));
+      put('revolut_payment_id', readFirst(source, ['revolut_payment_id', 'revolutPaymentId']));
+      put('external_reference', readFirst(source, ['external_reference', 'externalReference']));
+      put('bank_reference', readFirst(source, ['bank_reference', 'bankReference']));
+      put('transaction_id', readFirst(source, ['transaction_id', 'transactionId']));
+      put('payment_id', readFirst(source, ['payment_id', 'paymentId']));
+      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
+      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
+      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
+      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
+      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
+      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
+      const reviewReason = toUpper(source.review_reason_code || source.reviewReasonCode || source.claim_blocker_code || source.claimBlockerCode);
+      const statusText = providerScoped ? toUpper(source.provider_submission_status || source.providerSubmissionStatus || source.status || source.state) : '';
+      const railState = toUpper(source.rail_state || source.railState);
+      if ((!out.provider_submission_status || out.provider_submission_status === 'FAILED') && (reviewReason === 'PROVIDER_REJECTED_PAYMENT' || railState === 'REJECTED' || statusText === 'REJECTED' || statusText === 'DECLINED')) {
+        out.provider_submission_status = 'PROVIDER_SUBMISSION_REJECTED';
+      }
+    }
+    out.provider_submission_status = toUpper(out.provider_submission_status || '');
+    out.review_reason_code = toUpper(out.review_reason_code || '');
+    if (!out.provider_submission_status && (out.review_reason_code === 'PROVIDER_REJECTED_PAYMENT' || out.provider_error_code || out.provider_error_message_redacted)) out.provider_submission_status = 'PROVIDER_SUBMISSION_REJECTED';
+    out.provider_external_evidence_present = strictExternalEvidencePresent(out);
+    out.provider_acceptance_evidence_present = out.provider_submission_status === 'PROVIDER_SUBMISSION_ACCEPTED' && out.provider_external_evidence_present === true;
+    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
+      out.manual_resolution_required = false;
+      out.manual_resolution_available = false;
+    }
+    return Object.keys(out).some((key) => toText(out[key]) || out[key] === true || out[key] === false) ? out : {};
+  };
+
+  const batch = asObj(src.batch) || {};
+  const batchStatus = toUpper(batch.status || src.status || '');
   const candidateRows = asArray(src.candidates);
   const transferRows = asArray(src.transfers);
   const rawItems = asArray(src.items);
-  const items = rawItems.filter((item) => !isVoidedItem(item));
-  const bankEvidence = asArray(src.bank_evidence);
-  const batch = (src.batch && typeof src.batch === 'object') ? src.batch : {};
-  const batchStatus = toUpper(batch.status || src.status || '');
-  const draftOnlyBatchStatus = batchStatus === 'DRAFT';
+  const items = rawItems.filter((item) => !(item?.is_voided === true || item?.isVoided === true || toUpper(item?.status || item?.item_status || item?.itemStatus) === 'VOIDED'));
+  const bankEvidence = asArray(src.bank_evidence || src.bankEvidence);
 
   const candidateByPayBatchCandidateId = new Map();
   const candidateByCandidateId = new Map();
   candidateRows.forEach((candidate) => {
-    const obj = (candidate && typeof candidate === 'object') ? candidate : {};
-    const payBatchCandidateId = toText(obj.pay_batch_candidate_id || obj.payBatchCandidateId || obj.id || obj.candidate_row_id || obj.candidateRowId);
-    const candidateId = toText(obj.candidate_id || obj.candidateId || obj.id);
-    if (payBatchCandidateId) candidateByPayBatchCandidateId.set(payBatchCandidateId, obj);
-    if (candidateId) candidateByCandidateId.set(candidateId, obj);
-  });
-
-  const rawItemsByTransferId = new Map();
-  const rawItemsByPayBatchCandidateId = new Map();
-  rawItems.forEach((item) => {
-    const obj = (item && typeof item === 'object') ? item : {};
-    pushMap(rawItemsByTransferId, obj.pay_bank_transfer_id || obj.payBankTransferId || obj.transfer_id || obj.transferId, obj);
-    pushMap(rawItemsByPayBatchCandidateId, obj.pay_batch_candidate_id || obj.payBatchCandidateId || obj.candidate_id || obj.candidateId, obj);
+    const c = asObj(candidate) || {};
+    const payBatchCandidateId = toText(c.pay_batch_candidate_id || c.payBatchCandidateId || c.id || c.candidate_row_id || c.candidateRowId);
+    const candidateId = toText(c.candidate_id || c.candidateId || c.id);
+    if (payBatchCandidateId) candidateByPayBatchCandidateId.set(payBatchCandidateId, c);
+    if (candidateId) candidateByCandidateId.set(candidateId, c);
   });
 
   const itemsByTransferId = new Map();
   const itemsByPayBatchCandidateId = new Map();
   items.forEach((item) => {
-    const obj = (item && typeof item === 'object') ? item : {};
-    pushMap(itemsByTransferId, obj.pay_bank_transfer_id || obj.payBankTransferId || obj.transfer_id || obj.transferId, obj);
-    pushMap(itemsByPayBatchCandidateId, obj.pay_batch_candidate_id || obj.payBatchCandidateId || obj.candidate_id || obj.candidateId, obj);
+    const it = asObj(item) || {};
+    pushMap(itemsByTransferId, it.pay_bank_transfer_id || it.payBankTransferId || it.transfer_id || it.transferId, it);
+    pushMap(itemsByPayBatchCandidateId, it.pay_batch_candidate_id || it.payBatchCandidateId || it.candidate_id || it.candidateId, it);
   });
-
   const evidenceByTransferId = new Map();
-  bankEvidence.forEach((ev) => {
-    const obj = (ev && typeof ev === 'object') ? ev : {};
-    pushMap(evidenceByTransferId, obj.pay_bank_transfer_id || obj.payBankTransferId || obj.transfer_id || obj.transferId, obj);
+  bankEvidence.forEach((evidence) => {
+    const ev = asObj(evidence) || {};
+    pushMap(evidenceByTransferId, ev.pay_bank_transfer_id || ev.payBankTransferId || ev.transfer_id || ev.transferId, ev);
   });
 
-  const pickLatestEvidence = (arr) => {
-    const list = asArray(arr);
-    if (!list.length) return null;
-    return [...list].sort((a, b) => {
-      const ta = Date.parse(String(a?.received_at_utc || a?.event_time_utc || a?.created_at_utc || a?.updated_at_utc || ''));
-      const tb = Date.parse(String(b?.received_at_utc || b?.event_time_utc || b?.created_at_utc || b?.updated_at_utc || ''));
-      if (Number.isFinite(tb) && Number.isFinite(ta)) return tb - ta;
-      if (Number.isFinite(tb)) return 1;
-      if (Number.isFinite(ta)) return -1;
-      return 0;
-    })[0];
+  const transferHasSentEvidence = (transfer, diagnostic) => {
+    const t = asObj(transfer) || {};
+    const d = asObj(diagnostic) || {};
+    const status = toUpper(t.status || t.transfer_status || t.normalised_state || t.normalized_state || t.rail_state || d.rail_state || '');
+    if (['COMPLETED', 'SETTLED', 'PAID', 'COMMITTED', 'SUBMITTED', 'ACCEPTED', 'PROCESSING', 'IN_FLIGHT', 'PENDING_SETTLEMENT'].includes(status)) return true;
+    if (strictExternalEvidencePresent(t) || strictExternalEvidencePresent(d)) return true;
+    return !!firstText(t.rail_tx_id, t.railTxId, t.provider_reference, t.providerReference, t.payment_reference, t.paymentReference, d.rail_tx_id, d.provider_reference, d.provider_transaction_id, d.provider_payment_id);
+  };
+  const transferHasCompletedEvidence = (transfer) => {
+    const t = asObj(transfer) || {};
+    const status = toUpper(t.status || t.transfer_status || t.normalised_state || t.normalized_state || t.rail_state || '');
+    return ['COMPLETED', 'SETTLED', 'PAID', 'COMMITTED'].includes(status) || !!t.completed_at_utc;
+  };
+  const transferHasRejectedEvidence = (transfer, diagnostic) => {
+    const t = asObj(transfer) || {};
+    const d = asObj(diagnostic) || {};
+    const status = toUpper(t.status || t.transfer_status || t.normalised_state || t.normalized_state || t.rail_state || d.rail_state || d.provider_submission_status || '');
+    return ['FAILED', 'REJECTED', 'DECLINED', 'CANCELLED', 'PROVIDER_SUBMISSION_REJECTED', 'NO_MONEY_UNWIND', 'BANK_REJECTED_PAYMENT'].includes(status) || !!firstText(t.failed_reason, t.failure_reason, d.provider_error_code, d.provider_error_message_redacted);
+  };
+  const transferHasReturnedEvidence = (transfer, diagnostic) => {
+    const t = asObj(transfer) || {};
+    const d = asObj(diagnostic) || {};
+    const status = toUpper(t.status || t.transfer_status || t.normalised_state || t.normalized_state || t.rail_state || d.rail_state || d.backendClassification || d.classification || '');
+    return ['RETURNED', 'REVERTED', 'SETTLED_RETURNED', 'BANK_RETURNED_PAYMENT', 'TRUE_SETTLED_REVERSAL_REQUIRED'].includes(status);
+  };
+  const isInsufficientFunds = (transfer, diagnostic) => {
+    const text = `${toUpper(transfer?.status || '')} ${toUpper(transfer?.failed_reason || '')} ${toUpper(transfer?.failure_reason || '')} ${toUpper(diagnostic?.provider_error_code || '')} ${toUpper(diagnostic?.provider_error_message_redacted || '')} ${toUpper(diagnostic?.review_reason_code || '')}`;
+    return text.includes('INSUFFICIENT') || text.includes('BLOCKED_FUNDS') || text.includes('LOW_BALANCE');
+  };
+  const recoveryEnvelope = (source) => {
+    const s = asObj(source) || {};
+    const nested = asObj(s.stale_payee_map_recovery) || {};
+    const status = toUpper(s.recovery_status || s.recoveryStatus || nested.recovery_status || nested.recoveryStatus || '');
+    const action = toUpper(s.recovery_action || s.recoveryAction || nested.recovery_action || nested.recoveryAction || '');
+    const autoReleased = readBool(s.auto_released ?? s.autoReleased) === true || readBool(s.auto_reverse_applied ?? s.autoReverseApplied) === true || toNum(s.auto_reverse_applied_count ?? s.autoReverseAppliedCount ?? nested.auto_reverse_applied_count ?? nested.autoReverseAppliedCount) > 0 || ['AUTO_RELEASED_FOR_NEXT_RUN', 'AUTO_RELEASED', 'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS'].includes(status) || action === 'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS';
+    const manuallyReleased = readBool(s.manually_released ?? s.manuallyReleased) === true || ['MANUALLY_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED', 'MANUAL_RESOLVED_NO_PAYMENT_MADE'].includes(status) || toUpper(s.provider_submission_status || '') === 'MANUAL_RESOLVED_NO_PAYMENT_MADE';
+    const releaseInProgress = ['AUTO_RELEASE_REQUESTED', 'AUTO_RELEASE_IN_PROGRESS', 'REVERSAL_IN_PROGRESS', 'RELEASE_IN_PROGRESS'].includes(status) || action === 'AUTO_RELEASE_IN_PROGRESS';
+    const reverseReturnedAvailable = readBool(s.reverse_returned_available ?? s.reverseReturnedAvailable ?? s.reverse_of_reversal_safe ?? s.reverseOfReversalSafe) === true;
+    const candidateReturnedFundsAvailable = readBool(s.candidate_returned_funds_available ?? s.candidateReturnedFundsAvailable ?? s.first_reversal_safe ?? s.firstReversalSafe) === true;
+    const noMoneyUnwindSafe = readBool(s.no_money_unwind_safe ?? s.noMoneyUnwindSafe ?? s.manual_recoverable ?? s.manualRecoverable) === true;
+    return { status, action, autoReleased, manuallyReleased, releaseInProgress, reverseReturnedAvailable, candidateReturnedFundsAvailable, noMoneyUnwindSafe };
   };
 
-  const hasSubmittedOrBankEvidence = (...values) => {
-    const disqualifyingStates = new Set([
-      'SUBMITTED', 'SENT', 'EXECUTED', 'SETTLED', 'RETURNED', 'REVERTED', 'REJECTED', 'DECLINED',
-      'FAILED', 'COMMITTED', 'COMPLETED', 'PAID', 'PROCESSING', 'SCHEDULED', 'CANCELLED',
-      'BANK_RETURNED_PAYMENT', 'BANK_REJECTED_PAYMENT', 'TRUE_SETTLED_REVERSAL_REQUIRED', 'NO_MONEY_UNWIND'
-    ]);
-    const markerKeys = [
-      'submitted_at_utc', 'submittedAtUtc', 'executed_at_utc', 'executedAtUtc', 'settled_at_utc', 'settledAtUtc',
-      'completed_at_utc', 'completedAtUtc', 'committed_at_utc', 'committedAtUtc', 'returned_at_utc', 'returnedAtUtc',
-      'rejected_at_utc', 'rejectedAtUtc', 'failed_at_utc', 'failedAtUtc', 'provider_event_id', 'providerEventId',
-      'provider_reference', 'providerReference',
-      'request_id', 'requestId', 'rail_tx_id', 'railTxId', 'payment_reference', 'paymentReference',
-      'bank_reference', 'bankReference', 'external_reference', 'externalReference'
-    ];
-    const stateKeys = [
-      'movement_classification', 'classification', 'normalised_state', 'normalized_state', 'state', 'event_state',
-      'rail_state', 'railState', 'status', 'transfer_status', 'transferStatus', 'correction_kind', 'correctionKind'
-    ];
-    for (const value of values.flatMap((entry) => asArray(entry))) {
-      const obj = (value && typeof value === 'object') ? value : {};
-      if (!value) continue;
-      if (typeof value === 'string' && disqualifyingStates.has(toUpper(value))) return true;
-      for (const key of stateKeys) {
-        const st = toUpper(obj[key]);
-        if (st && disqualifyingStates.has(st)) return true;
-      }
-      for (const key of markerKeys) {
-        if (toText(obj[key])) return true;
-      }
-      if (objectHasContent(obj.rail_meta_json || obj.railMetaJson || obj.raw_payload || obj.rawPayload || obj.provider_payload || obj.providerPayload)) return true;
-    }
-    return false;
-  };
-
-  const paidClass = (manualAvailable) => {
-    if (manualPaidActionMode && manualAvailable) {
+  const displayFor = (kind, detail = {}) => {
+    const d = asObj(detail) || {};
+    const hasBackendCandidateReturnedSupport = d.candidateReturnedFundsAvailable === true || d.completedEvidence === true || d.manualPaid === true;
+    const hasBackendReverseReturnedSupport = d.reverseReturnedAvailable === true;
+    const noMoneySafe = d.noMoneyUnwindSafe === true || d.rejectedEvidence === true || d.insufficientFunds === true;
+    if (kind === 'sent') {
       return {
-        bankStatusLabel: 'Paid',
-        whatHappenedLabel: 'Paid successfully',
-        actionLabel: 'Make eligible again',
-        selectable: true,
-        selectableForApply: true,
-        selectableForReview: true,
-        backendAction: 'REVERSE_SETTLED_PAYMENT',
-        issueKindForDisplay: 'MANUAL_PAID_ACTION',
-        manualActionAvailable: true
+        displayState: d.manualPaid ? 'PAYMENT_PAID' : 'PAYMENT_SENT',
+        statusSymbol: '✅',
+        statusTone: 'success',
+        resultLabel: d.manualPaid ? 'Paid — manually confirmed' : (d.completedEvidence ? 'Paid' : 'Sent'),
+        actionType: hasBackendCandidateReturnedSupport ? 'CANDIDATE_RETURNED_FUNDS' : 'VIEW_DETAILS',
+        actionLabel: hasBackendCandidateReturnedSupport ? 'Candidate returned funds' : 'View details',
+        backendAction: hasBackendCandidateReturnedSupport ? 'REVERSE_SETTLED_PAYMENT' : '',
+        selectable: false,
+        bulkActionType: '',
+        wholeBatchEligibleActionType: hasBackendCandidateReturnedSupport ? 'CANDIDATE_RETURNED_FUNDS' : '',
+        futureActionPendingBackend: !hasBackendCandidateReturnedSupport,
+        requiresBackendSupport: !hasBackendCandidateReturnedSupport
+      };
+    }
+    if (kind === 'returned') {
+      return {
+        displayState: hasBackendReverseReturnedSupport ? 'RETURNED_REVERSAL_AVAILABLE' : 'PAYMENT_RETURNED',
+        statusSymbol: '❌',
+        statusTone: 'danger',
+        resultLabel: 'Returned',
+        actionType: hasBackendReverseReturnedSupport ? 'REVERSE_RETURNED' : 'VIEW_DETAILS',
+        actionLabel: hasBackendReverseReturnedSupport ? 'Reverse returned' : 'View details',
+        backendAction: hasBackendReverseReturnedSupport ? 'REVERSE_SETTLED_REVERSAL' : '',
+        selectable: hasBackendReverseReturnedSupport,
+        bulkActionType: hasBackendReverseReturnedSupport ? 'REVERSE_RETURNED' : '',
+        wholeBatchEligibleActionType: hasBackendReverseReturnedSupport ? 'REVERSE_RETURNED' : '',
+        futureActionPendingBackend: !hasBackendReverseReturnedSupport,
+        requiresBackendSupport: !hasBackendReverseReturnedSupport
+      };
+    }
+    if (kind === 'alreadyReleased') {
+      const manual = d.manuallyReleased === true;
+      const insufficient = d.insufficientFunds === true;
+      return {
+        displayState: insufficient ? 'INSUFFICIENT_FUNDS_AUTO_REVERSED' : (manual ? 'BANK_REJECTED_MANUALLY_REVERSED' : 'BANK_REJECTED_AUTO_REVERSED'),
+        statusSymbol: '❌',
+        statusTone: 'danger',
+        resultLabel: insufficient ? 'Insufficient funds — payment reversed' : (manual ? 'Bank rejected — manually reversed' : 'Bank rejected — payment reversed'),
+        actionType: 'VIEW_DETAILS',
+        actionLabel: 'View details',
+        backendAction: '',
+        selectable: false,
+        bulkActionType: '',
+        wholeBatchEligibleActionType: ''
+      };
+    }
+    if (kind === 'insufficientFunds') {
+      return {
+        displayState: 'INSUFFICIENT_FUNDS_NEEDS_ACTION',
+        statusSymbol: '❌',
+        statusTone: 'danger',
+        resultLabel: 'Insufficient funds',
+        actionType: noMoneySafe ? 'RELEASE_FOR_NEXT_RUN' : 'RESOLVE_MANUALLY',
+        actionLabel: noMoneySafe ? 'Release for next run' : 'Resolve manually',
+        backendAction: noMoneySafe ? 'UNWIND_FAILED_PAYMENT' : '',
+        selectable: noMoneySafe,
+        bulkActionType: noMoneySafe ? 'RELEASE_FOR_NEXT_RUN' : '',
+        wholeBatchEligibleActionType: noMoneySafe ? 'RELEASE_FOR_NEXT_RUN' : ''
+      };
+    }
+    if (kind === 'rejected') {
+      return {
+        displayState: 'BANK_REJECTED_NEEDS_MANUAL_RELEASE',
+        statusSymbol: '❌',
+        statusTone: 'danger',
+        resultLabel: 'Bank rejected',
+        actionType: noMoneySafe ? 'RELEASE_FOR_NEXT_RUN' : 'RESOLVE_MANUALLY',
+        actionLabel: noMoneySafe ? 'Release for next run' : 'Resolve manually',
+        backendAction: noMoneySafe ? 'UNWIND_FAILED_PAYMENT' : '',
+        selectable: noMoneySafe,
+        bulkActionType: noMoneySafe ? 'RELEASE_FOR_NEXT_RUN' : '',
+        wholeBatchEligibleActionType: noMoneySafe ? 'RELEASE_FOR_NEXT_RUN' : ''
       };
     }
     return {
-      bankStatusLabel: 'Paid',
-      whatHappenedLabel: 'Paid successfully',
-      actionLabel: 'No action',
-      selectable: false,
-      selectableForApply: false,
-      selectableForReview: false,
+      displayState: 'PAYMENT_UNKNOWN_CHECK_REQUIRED',
+      statusSymbol: '❓',
+      statusTone: 'warning',
+      resultLabel: 'Check required',
+      actionType: 'RESOLVE_MANUALLY',
+      actionLabel: 'Resolve manually',
       backendAction: '',
-      issueKindForDisplay: 'PAID',
-      manualActionAvailable: manualAvailable === true
-    };
-  };
-
-  const classify = (rawState, optionsForClassify = {}) => {
-    const state = toUpper(rawState);
-    if (['TRUE_SETTLED_REVERSAL_REQUIRED', 'RETURNED', 'REVERTED', 'SETTLED_RETURNED', 'BANK_RETURNED_PAYMENT'].includes(state)) {
-      return { bankStatusLabel: 'Returned', whatHappenedLabel: 'Bank returned payment', actionLabel: 'Make eligible again', selectable: true, selectableForApply: true, selectableForReview: true, backendAction: 'REVERSE_SETTLED_PAYMENT', issueKindForDisplay: 'RETURNED', manualActionAvailable: false };
-    }
-    if (['NO_MONEY_UNWIND', 'FAILED', 'DECLINED', 'REJECTED', 'BANK_REJECTED_PAYMENT'].includes(state)) {
-      return { bankStatusLabel: 'Not paid', whatHappenedLabel: 'Bank rejected payment', actionLabel: 'Make eligible again', selectable: true, selectableForApply: true, selectableForReview: true, backendAction: 'UNWIND_FAILED_PAYMENT', issueKindForDisplay: 'REJECTED', manualActionAvailable: false };
-    }
-    if (['PAYMENT_NOT_SENT', 'NOT_SENT'].includes(state)) {
-      if (optionsForClassify.draftOnlyRemoval === true) {
-        return { bankStatusLabel: 'Draft', whatHappenedLabel: 'Draft batch item', actionLabel: 'Remove payment from batch', selectable: true, selectableForApply: true, selectableForReview: true, backendAction: 'CANCEL_PAYMENT_ATTEMPT', issueKindForDisplay: 'DRAFT_REMOVE', manualActionAvailable: false, draftOnlyRemoval: true };
-      }
-      return { bankStatusLabel: 'Not paid', whatHappenedLabel: 'Payment not sent', actionLabel: 'Cancel payment', selectable: true, selectableForApply: true, selectableForReview: true, backendAction: 'CANCEL_PAYMENT_ATTEMPT', issueKindForDisplay: 'NOT_SENT', manualActionAvailable: false };
-    }
-    if (['AMBIGUOUS_REVIEW_REQUIRED', 'UNKNOWN', 'AUTO_CORRECTION_BLOCKED', 'NEEDS_REVIEW', 'ACTION_REQUIRED', 'BLOCKED', 'PARTLY_APPLIED_REVIEW_NEEDED'].includes(state)) {
-      return { bankStatusLabel: 'Needs review', whatHappenedLabel: 'Payment needs review', actionLabel: 'Review payment', selectable: true, selectableForApply: false, selectableForReview: true, backendAction: 'REVIEW_BANK_EVIDENCE', issueKindForDisplay: 'REVIEW', manualActionAvailable: false };
-    }
-    if (['PROCESSING', 'AUTO_PROCESSING', 'EXPANDED', 'AUTHORISED', 'AUTHORIZED', 'IN_PROGRESS'].includes(state)) {
-      return { bankStatusLabel: 'Processing', whatHappenedLabel: 'Processing', actionLabel: 'Processing', selectable: false, selectableForApply: false, selectableForReview: false, backendAction: '', issueKindForDisplay: 'PROCESSING', manualActionAvailable: false };
-    }
-    if (['AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'REQUESTED', 'WAITING_FOR_APPROVAL', 'WAITING'].includes(state)) {
-      return { bankStatusLabel: 'Waiting', whatHappenedLabel: 'Waiting for approval', actionLabel: 'Waiting for approval', selectable: false, selectableForApply: false, selectableForReview: false, backendAction: '', issueKindForDisplay: 'WAITING', manualActionAvailable: false };
-    }
-    if (['SETTLED_REVERSAL_APPLIED', 'NO_MONEY_UNWOUND', 'PRE_BANK_CANCELLED', 'APPLIED', 'AUTO_APPLIED'].includes(state)) {
-      return { bankStatusLabel: 'Applied', whatHappenedLabel: 'Applied', actionLabel: 'Applied', selectable: false, selectableForApply: false, selectableForReview: false, backendAction: '', issueKindForDisplay: 'APPLIED', manualActionAvailable: false };
-    }
-    if (state === 'CANCELLED') {
-      if (optionsForClassify.bankCancelled === true) {
-        return { bankStatusLabel: 'Not paid', whatHappenedLabel: 'Bank rejected payment', actionLabel: 'Make eligible again', selectable: true, selectableForApply: true, selectableForReview: true, backendAction: 'UNWIND_FAILED_PAYMENT', issueKindForDisplay: 'REJECTED', manualActionAvailable: false };
-      }
-      return { bankStatusLabel: 'Cancelled', whatHappenedLabel: 'Payment cancelled', actionLabel: 'No action', selectable: false, selectableForApply: false, selectableForReview: false, backendAction: '', issueKindForDisplay: 'NONE', manualActionAvailable: false };
-    }
-    if (['PAID', 'COMPLETED', 'SETTLED', 'COMMITTED', 'NONE', 'SETTLED_NO_CORRECTION_REQUIRED'].includes(state)) return paidClass(true);
-    return paidClass(batchStatus === 'SETTLED' || batchStatus === 'COMMITTED');
-  };
-
-  const statusLabelForClass = (cls) => {
-    if (cls.issueKindForDisplay === 'DRAFT_REMOVE' || cls.draftOnlyRemoval === true) return 'Ready to remove';
-    if (cls.whatHappenedLabel === 'Bank returned payment' || cls.whatHappenedLabel === 'Bank rejected payment' || cls.whatHappenedLabel === 'Payment not sent') return 'Action needed';
-    if (cls.issueKindForDisplay === 'MANUAL_PAID_ACTION') return 'Paid';
-    if (cls.bankStatusLabel === 'Paid') return 'Paid';
-    if (cls.bankStatusLabel === 'Needs review') return 'Needs review';
-    if (cls.bankStatusLabel === 'Processing') return 'Processing';
-    if (cls.bankStatusLabel === 'Waiting') return 'Waiting for approval';
-    return cls.bankStatusLabel || '';
-  };
-
-  const batchProviderSubmitDiagnosticForBlockedGuard = extractProviderSubmitDiagnostic(src);
-  const hasProviderSubmitIssueBeforeBlockedFunds = objectHasContent(batchProviderSubmitDiagnosticForBlockedGuard);
-  const isBlockedFundsBatch = !hasProviderSubmitIssueBeforeBlockedFunds && (batchStatus === 'BLOCKED_FUNDS' || toUpper(src.banking_alert_kind || batch.banking_alert_kind) === 'BLOCKED_FUNDS');
-  if (isBlockedFundsBatch) {
-    const requiredGbp = src.blocked_funds_required_gbp ?? batch.blocked_funds_required_gbp ?? src.last_funds_check_json?.required_gbp ?? batch.last_funds_check_json?.required_gbp ?? null;
-    const availableGbp = src.blocked_funds_available_gbp ?? batch.blocked_funds_available_gbp ?? src.last_funds_check_json?.available_gbp ?? batch.last_funds_check_json?.available_gbp ?? null;
-    const provider = toText(src.blocked_funds_provider || batch.blocked_funds_provider || src.last_funds_check_json?.rail_provider || batch.last_funds_check_json?.rail_provider || src.rail_provider_snapshot || batch.rail_provider_snapshot);
-    const env = toText(src.blocked_funds_env || batch.blocked_funds_env || src.last_funds_check_json?.rail_env || batch.last_funds_check_json?.rail_env || src.rail_env_snapshot || batch.rail_env_snapshot);
-    const fundingAccountRef = toText(src.blocked_funds_account_ref || batch.blocked_funds_account_ref || src.last_funds_check_json?.funding_account_ref || batch.last_funds_check_json?.funding_account_ref || src.funding_account_ref || batch.funding_account_ref);
-    const canRetryBlockedFunds = src.can_retry_blocked_funds === true || batch.can_retry_blocked_funds === true;
-    const paymentAmount = items.reduce((total, item) => total + asNum(item.payment_amount ?? item.amount ?? item.amount_inc_vat ?? item.amount_ex_vat), 0);
-    const fmtGbp = (value) => {
-      const n = Number(value);
-      if (!Number.isFinite(n)) return '—';
-      try { return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(n); } catch { return `£${n.toFixed(2)}`; }
-    };
-    const requiredText = fmtGbp(requiredGbp);
-    const availableText = fmtGbp(availableGbp);
-    return [{
-      rowKey: `blocked-funds:${toText(src.pay_batch_id || batch.pay_batch_id || batch.id || src.id || 'batch')}`,
-      candidateName: candidateRows.length > 1 ? 'Whole batch' : toText(candidateRows[0]?.candidate_display_name || candidateRows[0]?.display_name || candidateRows[0]?.candidate_name || 'Whole batch'),
-      candidateTmsRef: '',
-      payBatchCandidateId: null,
-      payBatchCandidateIds: uniq(candidateRows.map((candidate) => candidate?.pay_batch_candidate_id || candidate?.payBatchCandidateId || candidate?.id)),
-      candidateId: null,
-      candidateIds: uniq(candidateRows.map((candidate) => candidate?.candidate_id || candidate?.candidateId)),
-      umbrellaName: '',
-      umbrellaId: '',
-      paymentAmount,
-      payBankTransferId: null,
-      payBankTransferIds: [],
-      transferGroupKey: '',
-      payBatchItemIds: uniq(items.map((item) => item.pay_batch_item_id || item.payBatchItemId || item.item_id || item.itemId)),
-      activePayBatchItemCount: items.length,
-      active_pay_batch_item_count: items.length,
-      financeCaseIds: uniq(items.map((item) => item.finance_case_id || item.financeCaseId)),
-      financeComponentIds: uniq(items.map((item) => item.finance_component_id || item.financeComponentId)),
-      reservationIds: uniq(items.map((item) => item.reservation_id || item.reservationId)),
-      bankStatusLabel: 'Bank rejected payment',
-      whatHappenedLabel: `Blocked funds — required ${requiredText}, available ${availableText}`,
-      actionLabel: 'Retry payment / Cancel payment',
-      statusLabel: 'Urgent action needed',
       selectable: false,
-      selectableForApply: false,
-      selectableForReview: false,
+      bulkActionType: '',
+      wholeBatchEligibleActionType: ''
+    };
+  };
+
+  const makeRow = (base, display, supportDetails = {}) => {
+    const row = {
+      rowKey: toText(base.rowKey),
+      displayState: display.displayState,
+      statusSymbol: display.statusSymbol,
+      statusTone: display.statusTone,
+      resultLabel: display.resultLabel,
+      actionLabel: display.actionLabel,
+      actionType: display.actionType,
+      availableActions: [display.actionType].filter(Boolean),
+      bulkActionType: display.bulkActionType || '',
+      selectable: display.selectable === true,
       selected: false,
+      candidateName: toText(base.candidateName || 'Unknown candidate'),
+      candidateTmsRef: toText(base.candidateTmsRef || ''),
+      payeeUmbrellaName: toText(base.payeeUmbrellaName || base.umbrellaName || base.payeeName || ''),
+      umbrellaName: toText(base.umbrellaName || base.payeeUmbrellaName || ''),
+      umbrellaId: toText(base.umbrellaId || ''),
+      paymentAmount: toNum(base.paymentAmount),
+      payBankTransferId: toText(base.payBankTransferId || ''),
+      payBankTransferIds: uniq(base.payBankTransferIds || base.payBankTransferId),
+      payBatchItemIds: uniq(base.payBatchItemIds),
+      payBatchCandidateId: toText(base.payBatchCandidateId || ''),
+      payBatchCandidateIds: uniq(base.payBatchCandidateIds || base.payBatchCandidateId),
+      candidateId: toText(base.candidateId || ''),
+      candidateIds: uniq(base.candidateIds || base.candidateId),
+      backendAction: display.backendAction || '',
+      supportDetails,
+      wholeBatchEligibleActionType: display.wholeBatchEligibleActionType || '',
+      futureActionPendingBackend: display.futureActionPendingBackend === true,
+      requiresBackendSupport: display.requiresBackendSupport === true,
+      selectableForApply: display.selectable === true,
+      selectableForReview: display.actionType === 'RESOLVE_MANUALLY',
       manualActionAvailable: false,
       manual_action_available: false,
-      blockerText: '',
-      sortCandidateName: 'whole batch',
-      sortUmbrellaName: '',
-      sortAmount: paymentAmount,
-      sortBankStatus: 'bank rejected payment',
-      backendClassification: 'BLOCKED_FUNDS',
-      backendAction: canRetryBlockedFunds ? 'RETRY_BLOCKED_FUNDS_OR_CANCEL' : 'CANCEL_PAYMENT_ATTEMPT',
-      issueKindForDisplay: 'BLOCKED_FUNDS',
-      wholeBatchIssue: true,
-      whole_batch_issue: true,
-      canRetryBlockedFunds,
-      can_retry_blocked_funds: canRetryBlockedFunds,
-      required_gbp: requiredGbp,
-      available_gbp: availableGbp,
-      provider,
-      env,
-      funding_account_ref: fundingAccountRef,
-      last_funds_check_at_utc: src.last_funds_check_at_utc || batch.last_funds_check_at_utc || src.last_funds_check_json?.checked_at_utc || batch.last_funds_check_json?.checked_at_utc || null
-    }];
-  }
+      bankStatusLabel: display.statusSymbol === '✅' ? 'Sent' : (display.statusSymbol === '❌' ? display.resultLabel : 'Check required'),
+      whatHappenedLabel: display.resultLabel,
+      statusLabel: display.resultLabel,
+      sortCandidateName: toText(base.candidateName || '').toLowerCase(),
+      sortUmbrellaName: toText(base.payeeUmbrellaName || base.umbrellaName || '').toLowerCase(),
+      sortAmount: toNum(base.paymentAmount),
+      sortBankStatus: display.resultLabel.toLowerCase(),
+      recoveryActionType: display.actionType,
+      recovery_action_type: display.actionType
+    };
+    return row;
+  };
+
+  const candidateById = (candidateId, payBatchCandidateId) => candidateByCandidateId.get(toText(candidateId)) || candidateByPayBatchCandidateId.get(toText(payBatchCandidateId)) || null;
+  const candidateDisplay = (candidate, fallback = {}) => {
+    const c = asObj(candidate) || {};
+    const f = asObj(fallback) || {};
+    return {
+      candidateName: firstText(c.candidate_display_name, c.display_name, c.candidate_name, c.name, f.candidate_display_name, f.candidate_name, f.candidateName, 'Unknown candidate'),
+      candidateTmsRef: firstText(c.candidate_tms_ref, c.tms_ref, c.candidateTmsRef, f.candidate_tms_ref, f.candidateTmsRef, ''),
+      payeeUmbrellaName: firstText(c.payee_display_name, c.payee_name, c.umbrella_display_name, c.umbrella_name, c.umbrella_company_name, f.payee_display_name, f.payee_name, f.umbrella_name, f.umbrellaName, ''),
+      umbrellaName: firstText(c.umbrella_display_name, c.umbrella_name, c.umbrella_company_name, f.umbrella_name, f.umbrellaName, ''),
+      umbrellaId: firstText(c.umbrella_id, c.umbrellaId, f.umbrella_id, f.umbrellaId, '')
+    };
+  };
 
   const rows = [];
   const providerIssueTransferIds = new Set();
 
-  const providerSubmitDiagnostic = batchProviderSubmitDiagnosticForBlockedGuard;
   const buildProviderSubmitIssueRow = (transferSource, diagnosticSource, fallback = {}) => {
-    const t = (transferSource && typeof transferSource === 'object' && !Array.isArray(transferSource)) ? transferSource : {};
-    const providerDiagnostic = normaliseProviderSubmitDiagnostic(diagnosticSource);
-    if (!objectHasContent(providerDiagnostic)) return null;
-    const providerSubmitStatus = toUpper(providerDiagnostic.provider_submission_status || providerDiagnostic.outcome_code || '');
-    const providerRejectedOrUnusableStatus = [
-      'PROVIDER_SUBMISSION_REJECTED',
-      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
-      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
-      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
-      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
-      'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
-    ].includes(providerSubmitStatus);
-    const providerStrictAcceptanceEvidencePresent = providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED'
-      && providerSubmitStrictExternalEvidencePresent(providerDiagnostic) === true
-      && providerRejectedOrUnusableStatus !== true;
-    providerDiagnostic.provider_acceptance_evidence_present = providerStrictAcceptanceEvidencePresent;
-    const providerLabels = providerSubmitRowLabels(providerSubmitStatus, providerStrictAcceptanceEvidencePresent);
-    const providerErrorMessage = toText(providerDiagnostic.provider_error_message_redacted || providerDiagnostic.providerErrorMessageRedacted || providerDiagnostic.provider_error_message || providerDiagnostic.providerErrorMessage || '');
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' && providerErrorMessage) providerLabels.whatHappenedLabel = providerErrorMessage;
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' && !providerDiagnostic.recommended_action) providerLabels.actionLabel = 'Fix/review payee or counterparty setup before retry.';
-    const operationId = firstDiagnosticText(providerDiagnostic, 'operation_id', 'operationId') || toText(fallback.operation_id || fallback.operationId || '');
-    const chunkId = firstDiagnosticText(providerDiagnostic, 'chunk_id', 'chunkId', 'chunk_ids', 'chunkIds') || toText(fallback.chunk_id || fallback.chunkId || '');
-    const diagnosticTransferId = firstDiagnosticText(providerDiagnostic, 'transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId', 'transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds');
-    const transferId = toText(t.pay_bank_transfer_id || t.payBankTransferId || t.id || t.transfer_id || t.transferId || diagnosticTransferId || fallback.transfer_id || fallback.transferId);
-    const transferScopeId = firstDiagnosticText(providerDiagnostic, 'transfer_scope_id', 'transferScopeId', 'scope_id', 'scopeId', 'transfer_scope_ids', 'transferScopeIds', 'scope_ids', 'scopeIds');
-    const authRequestId = firstDiagnosticText(providerDiagnostic, 'auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds');
-    const requestId = firstDiagnosticText(providerDiagnostic, 'request_id', 'requestId');
-    const idempotencyKey = firstDiagnosticText(providerDiagnostic, 'idempotency_key', 'idempotencyKey');
+    const transfer = asObj(transferSource) || {};
+    const diagnostic = extractProviderDiagnostic(diagnosticSource);
+    if (!Object.keys(diagnostic).length) return null;
+    const transferId = firstText(transfer.pay_bank_transfer_id, transfer.payBankTransferId, transfer.id, transfer.transfer_id, transfer.transferId, diagnostic.transfer_id, fallback.transfer_id, fallback.pay_bank_transfer_id);
     const linkedItems = transferId ? asArray(itemsByTransferId.get(transferId)) : [];
-    const itemPayBatchCandidateIds = uniq(linkedItems.map((it) => it.pay_batch_candidate_id || it.payBatchCandidateId));
-    const itemCandidateIds = uniq(linkedItems.map((it) => it.candidate_id || it.candidateId));
-    const payBatchCandidateId = toText(t.pay_batch_candidate_id || t.payBatchCandidateId || itemPayBatchCandidateIds[0] || fallback.pay_batch_candidate_id || fallback.payBatchCandidateId || '');
-    const candidateObj = candidateByPayBatchCandidateId.get(payBatchCandidateId)
-      || candidateByCandidateId.get(toText(t.candidate_id || t.candidateId || fallback.candidate_id || fallback.candidateId || ''))
-      || candidateByCandidateId.get(toText(linkedItems[0]?.candidate_id || linkedItems[0]?.candidateId || ''))
-      || null;
-    const candidateId = toText(t.candidate_id || t.candidateId || candidateObj?.candidate_id || candidateObj?.candidateId || candidateObj?.id || payBatchCandidateId || fallback.candidate_id || fallback.candidateId || '');
-    const candidateName = toText(
-      candidateObj?.candidate_display_name ||
-      candidateObj?.display_name ||
-      candidateObj?.candidate_name ||
-      candidateObj?.name ||
-      t.candidate_display_name ||
-      t.candidate_name ||
-      t.candidateName ||
-      fallback.candidateName ||
-      fallback.candidate_name ||
-      (candidateRows.length === 1 ? (candidateRows[0]?.candidate_display_name || candidateRows[0]?.display_name || candidateRows[0]?.candidate_name || candidateRows[0]?.name) : '') ||
-      'Whole batch'
-    );
-    const candidateTmsRef = toText(
-      candidateObj?.candidate_tms_ref ||
-      candidateObj?.tms_ref ||
-      candidateObj?.candidateTmsRef ||
-      t.candidate_tms_ref ||
-      t.candidateTmsRef ||
-      fallback.candidateTmsRef ||
-      fallback.candidate_tms_ref ||
-      ''
-    );
-    const umbrellaId = toText(t.umbrella_id || t.umbrellaId || candidateObj?.umbrella_id || candidateObj?.umbrellaId || fallback.umbrella_id || fallback.umbrellaId || '');
-    const umbrellaName = toText(t.umbrella_name || t.umbrellaName || candidateObj?.umbrella_name || candidateObj?.umbrellaName || candidateObj?.umbrella_display_name || fallback.umbrella_name || fallback.umbrellaName || '');
-    const payBatchItemIds = uniq((linkedItems.length ? linkedItems : [t]).map((it) => it.pay_batch_item_id || it.payBatchItemId || it.item_id || it.itemId));
-    const financeCaseIds = uniq((linkedItems.length ? linkedItems : [t]).map((it) => it.finance_case_id || it.financeCaseId));
-    const financeComponentIds = uniq((linkedItems.length ? linkedItems : [t]).map((it) => it.finance_component_id || it.financeComponentId));
-    const reservationIds = uniq((linkedItems.length ? linkedItems : [t]).map((it) => it.reservation_id || it.reservationId));
-    const paymentAmount = asNum(t.payment_amount ?? t.amount ?? fallback.paymentAmount ?? fallback.payment_amount ?? linkedItems.reduce((total, item) => total + asNum(item.payment_amount ?? item.amount ?? item.amount_inc_vat ?? item.amount_ex_vat), 0));
-    const rowKey = transferId
-      ? `provider-submit-review:${transferId}`
-      : `provider-submit-review:${operationId || chunkId || toText(src.pay_batch_id || batch.pay_batch_id || batch.id || src.id || 'batch')}`;
-    const recovery = readRecoveryEnvelope(providerDiagnostic);
-    const providerResponseConfirmed = providerDiagnostic.provider_response_present === true
-      || providerDiagnostic.provider_response_received === true
-      || !!providerErrorMessage
-      || !!toText(providerDiagnostic.provider_error_code || providerDiagnostic.providerErrorCode || '')
-      || !!toText(providerDiagnostic.provider_http_status || providerDiagnostic.providerHttpStatus || '')
-      || (providerDiagnostic.provider_request_sent === true && providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED');
-    const providerRequestSent = providerDiagnostic.provider_request_sent === true || providerDiagnostic.provider_submission_attempted === true || !!toText(providerDiagnostic.provider_request_dispatched_at_utc || providerDiagnostic.request_sent_at_utc || '');
-    const providerTransactionEvidencePresent = providerStrictAcceptanceEvidencePresent === true
-      || providerDiagnostic.provider_external_evidence_present === true
-      || providerSubmitStrictExternalEvidencePresent(providerDiagnostic) === true
-      || !!toText(providerDiagnostic.rail_tx_id || '')
-      || !!toText(providerDiagnostic.provider_transaction_id || providerDiagnostic.providerTransactionId || '')
-      || !!toText(providerDiagnostic.provider_payment_id || providerDiagnostic.providerPaymentId || '')
-      || !!toText(providerDiagnostic.external_payment_id || providerDiagnostic.externalPaymentId || '')
-      || !!toText(providerDiagnostic.revolut_payment_id || providerDiagnostic.revolutPaymentId || '')
-      || !!toText(providerDiagnostic.external_reference || providerDiagnostic.externalReference || '')
-      || !!toText(providerDiagnostic.bank_reference || providerDiagnostic.bankReference || '')
-      || !!toText(providerDiagnostic.transaction_id || providerDiagnostic.transactionId || '')
-      || !!toText(providerDiagnostic.payment_id || providerDiagnostic.paymentId || '');
-    const railOrProviderState = toUpper(
-      t.rail_state ||
-      t.railState ||
-      t.normalised_state ||
-      t.normalized_state ||
-      t.status ||
-      t.transfer_status ||
-      providerDiagnostic.rail_state ||
-      providerDiagnostic.railState ||
-      providerDiagnostic.provider_state ||
-      providerDiagnostic.providerStatus ||
-      fallback.rail_state ||
-      fallback.status ||
-      ''
-    );
-    const confirmedProviderRejection = providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' || toUpper(providerDiagnostic.review_reason_code || '') === 'PROVIDER_REJECTED_PAYMENT';
-    const failedRejectedState = ['FAILED', 'REJECTED', 'DECLINED', 'CANCELLED', 'NO_MONEY_UNWIND', 'BANK_REJECTED_PAYMENT'].includes(railOrProviderState) || providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED';
-    const returnedOrRevertedState = ['RETURNED', 'REVERTED', 'SETTLED_RETURNED', 'BANK_RETURNED_PAYMENT', 'TRUE_SETTLED_REVERSAL_REQUIRED'].includes(railOrProviderState);
-    const alreadyReleased = recovery.autoReleased === true || recovery.manuallyReleased === true || providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE';
-    const releaseInProgress = recovery.releaseInProgress === true;
-    const clearProviderRejectedNoPayment = confirmedProviderRejection === true
-      && providerResponseConfirmed === true
-      && providerStrictAcceptanceEvidencePresent !== true
-      && providerTransactionEvidencePresent !== true
-      && failedRejectedState === true;
-    const clearBankRejectedNoPayment = confirmedProviderRejection !== true
-      && providerResponseConfirmed === true
-      && providerStrictAcceptanceEvidencePresent !== true
-      && providerTransactionEvidencePresent !== true
-      && failedRejectedState === true;
-    const clearReturnedOrRevertedPayment = returnedOrRevertedState === true
-      && alreadyReleased !== true
-      && releaseInProgress !== true;
-    const safeManualRecoveryAvailable = (clearProviderRejectedNoPayment || clearBankRejectedNoPayment || clearReturnedOrRevertedPayment)
-      && alreadyReleased !== true
-      && releaseInProgress !== true;
-    const manualResolutionMetadataAvailable = providerDiagnostic.manual_resolution_available === true || providerDiagnostic.manualResolutionAvailable === true || providerDiagnostic.manual_resolution_required === true || providerDiagnostic.manualResolutionRequired === true;
-    const recoveryForDisplay = {
-      ...recovery,
-      autoReleased: recovery.autoReleased === true,
-      manuallyReleased: recovery.manuallyReleased === true || providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE',
-      releaseInProgress,
-      manualReleaseRequired: recovery.manualReleaseRequired || safeManualRecoveryAvailable || (
-        confirmedProviderRejection &&
-        providerStrictAcceptanceEvidencePresent !== true &&
-        providerTransactionEvidencePresent !== true &&
-        recovery.autoReleased !== true &&
-        recovery.manuallyReleased !== true &&
-        recovery.releaseInProgress !== true &&
-        manualResolutionMetadataAvailable === true
-      )
-    };
-    const noPaymentRecoverable = (clearProviderRejectedNoPayment || clearBankRejectedNoPayment) && recoveryForDisplay.manualReleaseRequired === true && recoveryForDisplay.autoReleased !== true && recoveryForDisplay.manuallyReleased !== true && recoveryForDisplay.releaseInProgress !== true;
-    const returnedRecoverable = clearReturnedOrRevertedPayment && recoveryForDisplay.manualReleaseRequired === true && recoveryForDisplay.autoReleased !== true && recoveryForDisplay.manuallyReleased !== true && recoveryForDisplay.releaseInProgress !== true;
-    const safeRecoverySelectable = noPaymentRecoverable || returnedRecoverable;
-    const providerActionLabel = recoveryForDisplay.autoReleased
-      ? 'Recheck the bank details and if correct, rerun Banking to pay this. The payment is ready to be paid on next run.'
-      : (recoveryForDisplay.releaseInProgress
-          ? 'Reversal/release is being processed.'
-          : (recoveryForDisplay.manuallyReleased
-              ? 'Payment has been released for the next Banking Pay run.'
-              : (returnedRecoverable
-                  ? 'The bank returned this payment. Select it to reverse/release the returned payment.'
-                  : (noPaymentRecoverable
-                      ? 'Recheck the bank details and if correct, reverse the payment and rerun Banking to pay this.'
-                      : actionTextForRecovery(recoveryForDisplay, providerDiagnostic.recommended_action || providerLabels.actionLabel)))));
-    const providerStatusLabel = recoveryForDisplay.autoReleased
-      ? 'Released for next run — auto'
-      : (recoveryForDisplay.releaseInProgress
-          ? 'Reversal in progress'
-          : (recoveryForDisplay.manuallyReleased
-              ? 'Released for next run — manual'
-              : (returnedRecoverable
-                  ? 'Needs reversal'
-                  : statusTextForRecovery(recoveryForDisplay, providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? 'Resolved' : 'Needs review'))));
-    const displayBankStatusLabel = returnedRecoverable || clearReturnedOrRevertedPayment ? 'Returned' : providerLabels.bankStatusLabel;
-    const displayWhatHappenedLabel = returnedRecoverable || clearReturnedOrRevertedPayment ? 'Bank returned the payment.' : providerLabels.whatHappenedLabel;
-    const payeeEntityKind = toUpper(t.payee_entity_kind || t.payeeEntityKind || providerDiagnostic.payee_entity_kind || providerDiagnostic.entity_kind || fallback.payee_entity_kind || fallback.entity_kind || '');
-    const payeeEntityId = toText(t.payee_entity_id || t.payeeEntityId || providerDiagnostic.payee_entity_id || providerDiagnostic.entity_id || fallback.payee_entity_id || fallback.entity_id || '');
-    const bankDetailsHashSnapshot = toText(t.bank_details_hash_snapshot || t.bankDetailsHashSnapshot || providerDiagnostic.bank_details_hash_snapshot || providerDiagnostic.bank_details_hash || providerDiagnostic.bankDetailsHash || fallback.bank_details_hash_snapshot || fallback.bank_details_hash || '');
-    const railProvider = toUpper(t.rail_provider || t.railProvider || providerDiagnostic.rail_provider || providerDiagnostic.railProvider || fallback.rail_provider || fallback.railProvider || 'REVOLUT') || 'REVOLUT';
-    const railEnv = toUpper(t.rail_env || t.railEnv || providerDiagnostic.rail_env || providerDiagnostic.railEnv || fallback.rail_env || fallback.railEnv || 'PROD') || 'PROD';
-    const providerPayeeId = toText(t.provider_payee_id || t.providerPayeeId || t.payee_id || t.payeeId || providerDiagnostic.provider_payee_id || providerDiagnostic.payee_id || providerDiagnostic.payeeId || fallback.provider_payee_id || fallback.payee_id || '');
-    const providerPayeeAccountId = toText(t.provider_payee_account_id || t.providerPayeeAccountId || t.payee_account_id || t.payeeAccountId || providerDiagnostic.provider_payee_account_id || providerDiagnostic.payee_account_id || providerDiagnostic.payeeAccountId || fallback.provider_payee_account_id || fallback.payee_account_id || '');
-    return {
-      rowKey,
-      candidateName,
-      candidateTmsRef,
-      payBatchCandidateId: payBatchCandidateId || null,
-      payBatchCandidateIds: uniq([payBatchCandidateId, ...itemPayBatchCandidateIds]),
-      candidateId: candidateId || null,
-      candidateIds: uniq([candidateId, ...itemCandidateIds]),
-      umbrellaName,
-      umbrellaId,
+    const payBatchCandidateIds = uniq([transfer.pay_batch_candidate_id, transfer.payBatchCandidateId, fallback.pay_batch_candidate_id, fallback.payBatchCandidateId, ...linkedItems.map((item) => item.pay_batch_candidate_id || item.payBatchCandidateId)]);
+    const candidateIds = uniq([transfer.candidate_id, transfer.candidateId, fallback.candidate_id, fallback.candidateId, ...linkedItems.map((item) => item.candidate_id || item.candidateId)]);
+    const candidate = candidateById(candidateIds[0], payBatchCandidateIds[0]);
+    const candidateInfo = candidateDisplay(candidate, transfer);
+    const recovery = recoveryEnvelope({ ...diagnostic, ...transfer, ...fallback });
+    const acceptedSent = diagnostic.provider_submission_status === 'PROVIDER_SUBMISSION_ACCEPTED' && diagnostic.provider_acceptance_evidence_present === true && transferHasRejectedEvidence(transfer, diagnostic) !== true;
+    const returned = transferHasReturnedEvidence(transfer, diagnostic);
+    const rejected = transferHasRejectedEvidence(transfer, diagnostic);
+    const insufficient = isInsufficientFunds(transfer, diagnostic);
+    const completed = transferHasCompletedEvidence(transfer);
+    const sent = acceptedSent || completed || transferHasSentEvidence(transfer, diagnostic);
+    const paymentAmount = toNum(transfer.payment_amount ?? transfer.amount ?? fallback.payment_amount ?? fallback.paymentAmount ?? linkedItems.reduce((total, item) => total + toNum(item.payment_amount ?? item.amount ?? item.amount_inc_vat ?? item.amount_ex_vat), 0));
+    const base = {
+      rowKey: transferId ? `provider-submit-review:${transferId}` : `provider-submit-review:${firstText(diagnostic.operation_id, diagnostic.chunk_id, src.pay_batch_id, batch.id, 'batch')}`,
+      ...candidateInfo,
       paymentAmount,
-      payBankTransferId: transferId || null,
+      payBankTransferId: transferId,
       payBankTransferIds: transferId ? [transferId] : [],
-      transferGroupKey: toText(t.transfer_group_key || t.transferGroupKey || fallback.transfer_group_key || fallback.transferGroupKey || ''),
-      payBatchItemIds,
-      activePayBatchItemCount: payBatchItemIds.length || linkedItems.length,
-      active_pay_batch_item_count: payBatchItemIds.length || linkedItems.length,
-      financeCaseIds,
-      financeComponentIds,
-      reservationIds,
-      bankStatusLabel: displayBankStatusLabel,
-      whatHappenedLabel: displayWhatHappenedLabel,
-      actionLabel: providerActionLabel,
-      statusLabel: providerStatusLabel,
-      selectable: safeRecoverySelectable,
-      selectableForApply: safeRecoverySelectable,
-      selectableForReview: providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && !recoveryForDisplay.autoReleased && !recoveryForDisplay.manuallyReleased && !recoveryForDisplay.releaseInProgress,
-      selected: false,
-      manualActionAvailable: safeRecoverySelectable,
-      manual_action_available: safeRecoverySelectable,
-      blockerText: providerActionLabel,
-      sortCandidateName: candidateName.toLowerCase(),
-      sortUmbrellaName: umbrellaName.toLowerCase(),
-      sortAmount: paymentAmount,
-      sortBankStatus: displayBankStatusLabel.toLowerCase(),
-      backendClassification: providerSubmitStatus,
-      backendAction: safeRecoverySelectable ? (returnedRecoverable ? 'REVERSE_SETTLED_PAYMENT' : 'UNWIND_FAILED_PAYMENT') : 'REVIEW_PROVIDER_SUBMIT_DIAGNOSTIC',
-      recoveryActionType: safeRecoverySelectable ? (returnedRecoverable ? 'RETURNED_PAYMENT_REVERSAL' : 'NO_PAYMENT_RELEASE_UNWIND') : (recoveryForDisplay.autoReleased || recoveryForDisplay.manuallyReleased ? 'ALREADY_RELEASED' : (recoveryForDisplay.releaseInProgress ? 'RELEASE_IN_PROGRESS' : 'MANUAL_REVIEW_REQUIRED')),
-      recovery_action_type: safeRecoverySelectable ? (returnedRecoverable ? 'RETURNED_PAYMENT_REVERSAL' : 'NO_PAYMENT_RELEASE_UNWIND') : (recoveryForDisplay.autoReleased || recoveryForDisplay.manuallyReleased ? 'ALREADY_RELEASED' : (recoveryForDisplay.releaseInProgress ? 'RELEASE_IN_PROGRESS' : 'MANUAL_REVIEW_REQUIRED')),
-      issueKindForDisplay: returnedRecoverable ? 'RETURNED' : (safeRecoverySelectable ? 'REJECTED' : 'PROVIDER_SUBMIT_REVIEW'),
-      issue_type: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
-      issueType: 'PAYMENT_PROVIDER_SUBMIT_REVIEW',
-      providerSubmitDiagnostic: providerDiagnostic,
-      provider_acceptance_evidence_present: providerStrictAcceptanceEvidencePresent,
-      provider_transaction_evidence_present: providerTransactionEvidencePresent,
-      provider_response_confirmed: providerResponseConfirmed,
-      provider_request_sent: providerRequestSent,
-      provider_submission_status: providerSubmitStatus,
-      clearProviderRejectedNoPayment,
-      clear_provider_rejected_no_payment: clearProviderRejectedNoPayment,
-      clearBankRejectedNoPayment,
-      clear_bank_rejected_no_payment: clearBankRejectedNoPayment,
-      clearReturnedOrRevertedPayment,
-      clear_returned_or_reverted_payment: clearReturnedOrRevertedPayment,
-      safeManualRecoveryAvailable,
-      safe_manual_recovery_available: safeManualRecoveryAvailable,
-      provider_error_code: providerDiagnostic.provider_error_code || null,
-      provider_error_message_redacted: providerDiagnostic.provider_error_message_redacted || null,
-      provider_http_status: providerDiagnostic.provider_http_status || null,
-      payeeEntityKind,
-      payee_entity_kind: payeeEntityKind,
-      payeeEntityId,
-      payee_entity_id: payeeEntityId,
-      bankDetailsHashSnapshot,
-      bank_details_hash_snapshot: bankDetailsHashSnapshot,
-      railProvider,
-      rail_provider: railProvider,
-      railEnv,
-      rail_env: railEnv,
-      providerPayeeId: providerPayeeId || null,
-      provider_payee_id: providerPayeeId || null,
-      providerPayeeAccountId: providerPayeeAccountId || null,
-      provider_payee_account_id: providerPayeeAccountId || null,
-      recoveryStatus: recovery.status || null,
-      recovery_status: recovery.status || null,
-      recoveryAction: recovery.action || null,
-      recovery_action: recovery.action || null,
-      autoReleased: recoveryForDisplay.autoReleased,
-      auto_released: recoveryForDisplay.autoReleased,
-      manuallyReleased: recoveryForDisplay.manuallyReleased,
-      manually_released: recoveryForDisplay.manuallyReleased,
-      releaseInProgress: recoveryForDisplay.releaseInProgress,
-      release_in_progress: recoveryForDisplay.releaseInProgress,
-      manualRecoverable: safeRecoverySelectable,
-      manual_recoverable: safeRecoverySelectable,
-      operation_id: operationId || null,
-      chunk_id: chunkId || null,
-      transfer_id: transferId || null,
-      transfer_scope_id: transferScopeId || null,
-      auth_request_id: authRequestId || null,
-      request_id: requestId || null,
-      idempotency_key: idempotencyKey || null,
-      localCorrelationIds: {
-        request_id: requestId || null,
-        idempotency_key: idempotencyKey || null
-      },
-      local_correlation_ids_are_provider_proof: false,
-      wholeBatchIssue: !transferId,
-      whole_batch_issue: !transferId
+      payBatchItemIds: uniq(linkedItems.map((item) => item.pay_batch_item_id || item.payBatchItemId || item.id)),
+      payBatchCandidateId: payBatchCandidateIds[0] || '',
+      payBatchCandidateIds,
+      candidateId: candidateIds[0] || '',
+      candidateIds
     };
-  };
-
-  const appendProviderIssueRow = (transferSource, diagnosticSource, fallback = {}) => {
-    const row = buildProviderSubmitIssueRow(transferSource, diagnosticSource, fallback);
-    if (!row) return false;
-    const key = row.payBankTransferId || row.transfer_id || row.rowKey;
-    if (row.payBankTransferId) providerIssueTransferIds.add(row.payBankTransferId);
-    const existingIndex = rows.findIndex((existing) => existing && existing.rowKey === row.rowKey);
-    if (existingIndex >= 0) {
-      if (providerRowRichness(row) > providerRowRichness(rows[existingIndex])) rows[existingIndex] = { ...rows[existingIndex], ...row };
-      return true;
-    }
-    rows.push(row);
-    return true;
-  };
-
-  const mergeUnscopedProviderDiagnosticIntoSingleExistingProviderRow = (diagnosticSource, fallback = {}) => {
-    const providerDiagnostic = normaliseProviderSubmitDiagnostic(diagnosticSource);
-    if (!objectHasContent(providerDiagnostic)) return false;
-
-    const diagnosticTransferId = firstDiagnosticText(
-      providerDiagnostic,
-      'transfer_id',
-      'transferId',
-      'pay_bank_transfer_id',
-      'payBankTransferId',
-      'transfer_ids',
-      'transferIds',
-      'pay_bank_transfer_ids',
-      'payBankTransferIds'
-    );
-    if (diagnosticTransferId) return false;
-
-    const providerRowIndexes = rows
-      .map((row, index) => ({ row, index }))
-      .filter(({ row }) => row && (
-        toText(row.rowKey || '').startsWith('provider-submit-review:') ||
-        toUpper(row.issue_type || row.issueType || row.issueKindForDisplay || '') === 'PAYMENT_PROVIDER_SUBMIT_REVIEW' ||
-        toUpper(row.issueKindForDisplay || row.issue_kind_for_display || '') === 'PROVIDER_SUBMIT_REVIEW' ||
-        toUpper(row.provider_submission_status || '') === 'PROVIDER_SUBMISSION_REJECTED'
-      ))
-      .map(({ index }) => index);
-
-    if (!providerRowIndexes.length) return false;
-
-    const diagnosticRoute = {
-      payeeEntityKind: toUpper(providerDiagnostic.payee_entity_kind || providerDiagnostic.payeeEntityKind || providerDiagnostic.entity_kind || providerDiagnostic.entityKind || fallback.payee_entity_kind || fallback.payeeEntityKind || fallback.entity_kind || fallback.entityKind || ''),
-      payeeEntityId: toText(providerDiagnostic.payee_entity_id || providerDiagnostic.payeeEntityId || providerDiagnostic.entity_id || providerDiagnostic.entityId || fallback.payee_entity_id || fallback.payeeEntityId || fallback.entity_id || fallback.entityId || ''),
-      bankDetailsHashSnapshot: toText(providerDiagnostic.bank_details_hash_snapshot || providerDiagnostic.bankDetailsHashSnapshot || providerDiagnostic.bank_details_hash || providerDiagnostic.bankDetailsHash || fallback.bank_details_hash_snapshot || fallback.bankDetailsHashSnapshot || fallback.bank_details_hash || fallback.bankDetailsHash || '')
+    const supportDetails = {
+      operation_id: firstText(diagnostic.operation_id, diagnostic.operationId),
+      chunk_id: firstText(diagnostic.chunk_id, diagnostic.chunkId),
+      transfer_id: transferId,
+      transfer_scope_id: firstText(diagnostic.transfer_scope_id, diagnostic.transferScopeId, diagnostic.scope_id, diagnostic.scopeId),
+      auth_request_id: firstText(diagnostic.auth_request_id, diagnostic.authRequestId),
+      local_request_id: firstText(diagnostic.request_id, diagnostic.requestId),
+      local_idempotency_key: firstText(diagnostic.idempotency_key, diagnostic.idempotencyKey),
+      provider_submission_status: diagnostic.provider_submission_status,
+      provider_http_status: diagnostic.provider_http_status,
+      provider_error_code: diagnostic.provider_error_code,
+      provider_error_message_redacted: diagnostic.provider_error_message_redacted,
+      rail_tx_id: diagnostic.rail_tx_id,
+      rail_state: diagnostic.rail_state,
+      raw_provider_diagnostic: diagnostic
     };
-
-    const rowRoute = (row) => ({
-      payeeEntityKind: toUpper(row?.payeeEntityKind || row?.payee_entity_kind || ''),
-      payeeEntityId: toText(row?.payeeEntityId || row?.payee_entity_id || ''),
-      bankDetailsHashSnapshot: toText(row?.bankDetailsHashSnapshot || row?.bank_details_hash_snapshot || row?.bank_details_hash || row?.bankDetailsHash || '')
-    });
-
-    const rowMatchesExactPayeeRoute = (row) => {
-      const diagHasRouteIdentity = !!(
-        (diagnosticRoute.payeeEntityKind && diagnosticRoute.payeeEntityId) ||
-        (diagnosticRoute.payeeEntityKind && diagnosticRoute.bankDetailsHashSnapshot) ||
-        (diagnosticRoute.payeeEntityId && diagnosticRoute.bankDetailsHashSnapshot)
-      );
-      if (!diagHasRouteIdentity) return false;
-      const candidate = rowRoute(row);
-      const comparisons = [
-        ['payeeEntityKind', diagnosticRoute.payeeEntityKind, candidate.payeeEntityKind],
-        ['payeeEntityId', diagnosticRoute.payeeEntityId, candidate.payeeEntityId],
-        ['bankDetailsHashSnapshot', diagnosticRoute.bankDetailsHashSnapshot, candidate.bankDetailsHashSnapshot]
-      ].filter(([, diagnosticValue]) => !!diagnosticValue);
-      if (comparisons.length < 2) return false;
-      return comparisons.every(([, diagnosticValue, rowValue]) => !!rowValue && diagnosticValue === rowValue);
-    };
-
-    const uniqueMatchingProviderRowIndex = (predicate) => {
-      const matches = providerRowIndexes.filter((index) => predicate(rows[index], index));
-      return matches.length === 1 ? matches[0] : -1;
-    };
-
-    let existingIndex = uniqueMatchingProviderRowIndex((row) => rowMatchesExactPayeeRoute(row));
-
-    if (existingIndex < 0) {
-      const diagnosticChunkId = firstDiagnosticText(providerDiagnostic, 'chunk_id', 'chunkId', 'chunk_ids', 'chunkIds');
-      if (diagnosticChunkId) {
-        existingIndex = uniqueMatchingProviderRowIndex((row) => {
-          const rowDiag = (row && typeof row === 'object') ? (row.providerSubmitDiagnostic || row.provider_submit_diagnostic || {}) : {};
-          const rowChunkId = firstDiagnosticText(rowDiag, 'chunk_id', 'chunkId', 'chunk_ids', 'chunkIds') || toText(row?.chunk_id || row?.chunkId || '');
-          return !!rowChunkId && rowChunkId === diagnosticChunkId;
-        });
-      }
-    }
-
-    if (existingIndex < 0) {
-      const diagnosticAuthRequestId = firstDiagnosticText(providerDiagnostic, 'auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds');
-      if (diagnosticAuthRequestId) {
-        existingIndex = uniqueMatchingProviderRowIndex((row) => {
-          const rowDiag = (row && typeof row === 'object') ? (row.providerSubmitDiagnostic || row.provider_submit_diagnostic || {}) : {};
-          const rowAuthRequestId = firstDiagnosticText(rowDiag, 'auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds') || toText(row?.auth_request_id || row?.authRequestId || '');
-          return !!rowAuthRequestId && rowAuthRequestId === diagnosticAuthRequestId;
-        });
-      }
-    }
-
-    if (existingIndex < 0) {
-      const diagnosticOperationId = firstDiagnosticText(providerDiagnostic, 'operation_id', 'operationId');
-      if (diagnosticOperationId) {
-        existingIndex = uniqueMatchingProviderRowIndex((row) => {
-          const rowDiag = (row && typeof row === 'object') ? (row.providerSubmitDiagnostic || row.provider_submit_diagnostic || {}) : {};
-          const rowOperationId = firstDiagnosticText(rowDiag, 'operation_id', 'operationId') || toText(row?.operation_id || row?.operationId || '');
-          return !!rowOperationId && rowOperationId === diagnosticOperationId;
-        });
-      }
-    }
-
-    if (existingIndex < 0 && providerRowIndexes.length === 1) {
-      existingIndex = providerRowIndexes[0];
-    }
-
-    if (existingIndex < 0) return false;
-
-    const existing = rows[existingIndex] || {};
-    const existingTransferId = toText(
-      existing.payBankTransferId ||
-      existing.pay_bank_transfer_id ||
-      existing.transfer_id ||
-      (Array.isArray(existing.payBankTransferIds) ? existing.payBankTransferIds[0] : '') ||
-      (Array.isArray(existing.pay_bank_transfer_ids) ? existing.pay_bank_transfer_ids[0] : '')
-    );
-    if (!existingTransferId) return false;
-
-    const transfer = transferRows.find((row) => toText(row?.pay_bank_transfer_id || row?.payBankTransferId || row?.id || row?.transfer_id || row?.transferId) === existingTransferId) || {};
-    const enrichedRow = buildProviderSubmitIssueRow(transfer, providerDiagnostic, {
-      ...fallback,
-      transfer_id: existingTransferId,
-      pay_bank_transfer_id: existingTransferId,
-      pay_batch_candidate_id: existing.payBatchCandidateId || existing.pay_batch_candidate_id || '',
-      candidate_id: existing.candidateId || existing.candidate_id || '',
-      umbrella_id: existing.umbrellaId || existing.umbrella_id || '',
-      umbrella_name: existing.umbrellaName || existing.umbrella_name || '',
-      payment_amount: existing.paymentAmount || existing.payment_amount || existing.amount || 0,
-      payee_entity_kind: existing.payeeEntityKind || existing.payee_entity_kind || diagnosticRoute.payeeEntityKind || '',
-      payee_entity_id: existing.payeeEntityId || existing.payee_entity_id || diagnosticRoute.payeeEntityId || '',
-      bank_details_hash_snapshot: existing.bankDetailsHashSnapshot || existing.bank_details_hash_snapshot || diagnosticRoute.bankDetailsHashSnapshot || ''
-    });
-
-    if (!enrichedRow) return false;
-    if (providerRowRichness(enrichedRow) > providerRowRichness(existing)) {
-      rows[existingIndex] = { ...existing, ...enrichedRow };
-    }
-    if (enrichedRow.payBankTransferId) providerIssueTransferIds.add(enrichedRow.payBankTransferId);
-    return true;
+    if (recovery.autoReleased || recovery.manuallyReleased) return makeRow(base, displayFor('alreadyReleased', { manuallyReleased: recovery.manuallyReleased, insufficientFunds: insufficient }), supportDetails);
+    if (recovery.releaseInProgress) return makeRow(base, displayFor('unknown'), { ...supportDetails, recovery_status: 'Release in progress' });
+    if (returned) return makeRow(base, displayFor('returned', { reverseReturnedAvailable: recovery.reverseReturnedAvailable }), supportDetails);
+    if (insufficient) return makeRow(base, displayFor('insufficientFunds', { noMoneyUnwindSafe: recovery.noMoneyUnwindSafe || rejected }), supportDetails);
+    if (rejected) return makeRow(base, displayFor('rejected', { noMoneyUnwindSafe: recovery.noMoneyUnwindSafe || rejected, rejectedEvidence: true }), supportDetails);
+    if (sent) return makeRow(base, displayFor('sent', { completedEvidence: completed, candidateReturnedFundsAvailable: recovery.candidateReturnedFundsAvailable || completed }), supportDetails);
+    return makeRow(base, displayFor('unknown'), supportDetails);
   };
 
   transferRows.forEach((transfer) => {
-    const t = (transfer && typeof transfer === 'object') ? transfer : {};
-    const transferDiagnostic = extractProviderSubmitDiagnostic(t);
-    if (objectHasContent(transferDiagnostic)) appendProviderIssueRow(t, transferDiagnostic);
+    const diagnostic = extractProviderDiagnostic(transfer);
+    const row = buildProviderSubmitIssueRow(transfer, diagnostic);
+    if (row) {
+      if (row.payBankTransferId) providerIssueTransferIds.add(row.payBankTransferId);
+      rows.push(row);
+    }
   });
+
   asArray(src.payment_issues || src.paymentIssues || src.issues).forEach((issue) => {
-    const diagnostic = extractProviderSubmitDiagnostic(issue);
-    if (!objectHasContent(diagnostic)) return;
-    const transferId = firstDiagnosticText(diagnostic, 'transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId', 'transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds');
-    if (!transferId && mergeUnscopedProviderDiagnosticIntoSingleExistingProviderRow(diagnostic, issue)) return;
+    const diagnostic = extractProviderDiagnostic(issue);
+    if (!Object.keys(diagnostic).length) return;
+    const transferId = firstText(diagnostic.transfer_id, diagnostic.transferId, diagnostic.pay_bank_transfer_id, diagnostic.payBankTransferId);
     const transfer = transferRows.find((row) => toText(row?.pay_bank_transfer_id || row?.payBankTransferId || row?.id || row?.transfer_id || row?.transferId) === transferId) || {};
-    appendProviderIssueRow(transfer, diagnostic, issue);
+    const row = buildProviderSubmitIssueRow(transfer, diagnostic, issue);
+    if (!row) return;
+    if (row.payBankTransferId) providerIssueTransferIds.add(row.payBankTransferId);
+    const existingIndex = rows.findIndex((existing) => existing.rowKey === row.rowKey);
+    if (existingIndex >= 0) rows[existingIndex] = { ...rows[existingIndex], ...row };
+    else rows.push(row);
   });
-  if (objectHasContent(providerSubmitDiagnostic)) {
-    const transferId = firstDiagnosticText(providerSubmitDiagnostic, 'transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId', 'transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds');
-    if (!transferId && mergeUnscopedProviderDiagnosticIntoSingleExistingProviderRow(providerSubmitDiagnostic)) {
-      // Rich batch/chunk-level diagnostic was merged into the single existing provider row.
-    } else if (!rows.length || (transferId && !providerIssueTransferIds.has(transferId))) {
+
+  const batchDiagnostic = extractProviderDiagnostic(src);
+  if (Object.keys(batchDiagnostic).length) {
+    const transferId = firstText(batchDiagnostic.transfer_id, batchDiagnostic.transferId, batchDiagnostic.pay_bank_transfer_id, batchDiagnostic.payBankTransferId);
+    if (transferId) {
       const transfer = transferRows.find((row) => toText(row?.pay_bank_transfer_id || row?.payBankTransferId || row?.id || row?.transfer_id || row?.transferId) === transferId) || {};
-      appendProviderIssueRow(transfer, providerSubmitDiagnostic);
+      if (!providerIssueTransferIds.has(transferId)) {
+        const row = buildProviderSubmitIssueRow(transfer, batchDiagnostic);
+        if (row) rows.push(row);
+      }
+    } else if (!rows.length || (candidateRows.length <= 1 && transferRows.length <= 1)) {
+      const transfer = transferRows[0] || {};
+      const row = buildProviderSubmitIssueRow(transfer, batchDiagnostic);
+      if (row) rows.push(row);
     }
   }
 
-  transferRows.forEach((transfer) => {
-    const t = (transfer && typeof transfer === 'object') ? transfer : {};
-    const transferId = toText(t.pay_bank_transfer_id || t.payBankTransferId || t.id || t.transfer_id || t.transferId);
-    if (!transferId) return;
-    if (providerIssueTransferIds.has(transferId)) return;
-
-    const rawLinkedItems = asArray(rawItemsByTransferId.get(transferId));
-    const linkedItems = asArray(itemsByTransferId.get(transferId));
-    if (rawLinkedItems.length > 0 && linkedItems.length === 0) return;
-    const linkedEvidence = asArray(evidenceByTransferId.get(transferId));
-    const itemPayBatchCandidateIds = uniq(linkedItems.map((it) => it.pay_batch_candidate_id || it.payBatchCandidateId));
-    const itemCandidateIds = uniq(linkedItems.map((it) => it.candidate_id || it.candidateId));
-    const payBatchCandidateId = toText(t.pay_batch_candidate_id || t.payBatchCandidateId || itemPayBatchCandidateIds[0] || '');
-    const candidateObj = candidateByPayBatchCandidateId.get(payBatchCandidateId)
-      || candidateByCandidateId.get(toText(t.candidate_id || t.candidateId || ''))
-      || candidateByCandidateId.get(toText(linkedItems[0]?.candidate_id || linkedItems[0]?.candidateId || ''))
-      || null;
-    const candidateId = toText(t.candidate_id || t.candidateId || candidateObj?.candidate_id || candidateObj?.candidateId || candidateObj?.id || payBatchCandidateId || '');
-    const candidateName = toText(
-      candidateObj?.candidate_display_name ||
-      candidateObj?.display_name ||
-      candidateObj?.candidate_name ||
-      candidateObj?.name ||
-      t.candidate_display_name ||
-      t.candidate_name ||
-      t.candidateName ||
-      'Unknown candidate'
-    );
-    const candidateTmsRef = toText(
-      candidateObj?.candidate_tms_ref ||
-      candidateObj?.tms_ref ||
-      candidateObj?.candidateTmsRef ||
-      t.candidate_tms_ref ||
-      t.candidateTmsRef ||
-      ''
-    );
-    const payBatchItemIds = uniq((linkedItems.length ? linkedItems : [t]).map((it) => it.pay_batch_item_id || it.payBatchItemId || it.item_id || it.itemId));
-    const allPayBatchCandidateIds = uniq([payBatchCandidateId, ...itemPayBatchCandidateIds]);
-    const allCandidateIds = uniq([candidateId, ...itemCandidateIds]);
-    const latestEvidence = pickLatestEvidence(linkedEvidence);
-    const linkedItemStatus = toText(linkedItems[0]?.normalised_state || linkedItems[0]?.normalized_state || linkedItems[0]?.status || '');
-    const backendClassification = toText(
-      t.movement_classification ||
-      t.classification ||
-      latestEvidence?.normalised_state ||
-      latestEvidence?.normalized_state ||
-      latestEvidence?.state ||
-      t.normalised_state ||
-      t.normalized_state ||
-      t.rail_state ||
-      t.status ||
-      linkedItemStatus ||
-      src.movement_classification?.classification ||
-      src.movement_classification ||
-      (batchStatus === 'SETTLED' || batchStatus === 'COMMITTED' ? 'PAID' : 'PAID')
-    );
-    const evidenceState = toUpper(latestEvidence?.normalised_state || latestEvidence?.normalized_state || latestEvidence?.state);
-    const bankCancelled = toUpper(backendClassification) === 'CANCELLED' && (
-      evidenceState === 'CANCELLED' ||
-      !!toText(latestEvidence?.provider_event_id || latestEvidence?.provider_reference || latestEvidence?.provider_key || latestEvidence?.event_source) ||
-      !!toText(t.failed_reason || t.failure_reason || latestEvidence?.failed_reason || latestEvidence?.reason) ||
-      !!toText(t.request_id || t.requestId || t.rail_tx_id || t.railTxId || t.payment_reference || t.paymentReference || t.rail_state || t.railState || t.provider_key || t.providerKey || t.provider || t.rail_provider || t.railProvider) ||
-      objectHasContent(t.rail_meta_json || t.railMetaJson || latestEvidence?.raw_payload || latestEvidence?.rawPayload) ||
-      toUpper(t.movement_classification || t.classification) === 'NO_MONEY_UNWIND'
-    );
-    const transferHasBankEvidence = hasSubmittedOrBankEvidence(t, linkedItems, linkedEvidence, latestEvidence);
-    const draftOnlyRemoval = draftOnlyBatchStatus && !transferHasBankEvidence && ['PAYMENT_NOT_SENT', 'NOT_SENT'].includes(toUpper(backendClassification));
-    const cls = classify(backendClassification, { bankCancelled, draftOnlyRemoval });
-    const financeCaseIds = uniq((linkedItems.length ? linkedItems : [t]).map((it) => it.finance_case_id || it.financeCaseId));
-    const financeComponentIds = uniq((linkedItems.length ? linkedItems : [t]).map((it) => it.finance_component_id || it.financeComponentId));
-    const reservationIds = uniq((linkedItems.length ? linkedItems : [t]).map((it) => it.reservation_id || it.reservationId));
-    const umbrellaId = toText(t.umbrella_id || t.umbrellaId || candidateObj?.umbrella_id || candidateObj?.umbrellaId || '');
-    const umbrellaName = toText(t.umbrella_name || t.umbrellaName || candidateObj?.umbrella_name || candidateObj?.umbrellaName || candidateObj?.umbrella_display_name || '');
-    const isMultiCandidateTransfer = Math.max(allPayBatchCandidateIds.length, allCandidateIds.length) > 1;
-
-    rows.push({
-      rowKey: isMultiCandidateTransfer ? `transfer:${transferId}` : `candidate-transfer:${payBatchCandidateId || candidateId || 'unknown'}:${transferId}`,
-      candidateName: isMultiCandidateTransfer ? 'Multiple candidates' : candidateName,
-      candidateTmsRef,
-      payBatchCandidateId: payBatchCandidateId || null,
-      payBatchCandidateIds: allPayBatchCandidateIds,
-      candidateId: candidateId || null,
-      candidateIds: allCandidateIds,
-      umbrellaName,
-      umbrellaId,
-      paymentAmount: asNum(t.payment_amount ?? t.amount ?? linkedItems.reduce((total, item) => total + asNum(item.payment_amount ?? item.amount ?? item.amount_inc_vat ?? item.amount_ex_vat), 0)),
+  transferRows.forEach((transfer, index) => {
+    const transferId = firstText(transfer?.pay_bank_transfer_id, transfer?.payBankTransferId, transfer?.id, transfer?.transfer_id, transfer?.transferId);
+    if (transferId && providerIssueTransferIds.has(transferId)) return;
+    if (rows.some((row) => row.payBankTransferId && row.payBankTransferId === transferId)) return;
+    const linkedItems = transferId ? asArray(itemsByTransferId.get(transferId)) : [];
+    const payBatchCandidateIds = uniq([transfer?.pay_batch_candidate_id, transfer?.payBatchCandidateId, ...linkedItems.map((item) => item.pay_batch_candidate_id || item.payBatchCandidateId)]);
+    const candidateIds = uniq([transfer?.candidate_id, transfer?.candidateId, ...linkedItems.map((item) => item.candidate_id || item.candidateId)]);
+    const candidate = candidateById(candidateIds[0], payBatchCandidateIds[0]);
+    const candidateInfo = candidateDisplay(candidate, transfer);
+    const diagnostic = extractProviderDiagnostic(transfer);
+    const recovery = recoveryEnvelope({ ...diagnostic, ...transfer });
+    const rejected = transferHasRejectedEvidence(transfer, diagnostic);
+    const returned = transferHasReturnedEvidence(transfer, diagnostic);
+    const insufficient = isInsufficientFunds(transfer, diagnostic);
+    const completed = transferHasCompletedEvidence(transfer);
+    const sent = completed || transferHasSentEvidence(transfer, diagnostic);
+    const paymentAmount = toNum(transfer?.payment_amount ?? transfer?.amount ?? linkedItems.reduce((total, item) => total + toNum(item.payment_amount ?? item.amount ?? item.amount_inc_vat ?? item.amount_ex_vat), 0));
+    const base = {
+      rowKey: transferId ? `transfer:${transferId}` : `transfer:${index}`,
+      ...candidateInfo,
+      paymentAmount,
       payBankTransferId: transferId,
-      payBankTransferIds: [transferId],
-      transferGroupKey: toText(t.transfer_group_key || t.transferGroupKey || ''),
-      payBatchItemIds,
-      activePayBatchItemCount: payBatchItemIds.length || linkedItems.length,
-      active_pay_batch_item_count: payBatchItemIds.length || linkedItems.length,
-      financeCaseIds,
-      financeComponentIds,
-      reservationIds,
-      bankStatusLabel: cls.bankStatusLabel,
-      whatHappenedLabel: cls.whatHappenedLabel,
-      actionLabel: cls.actionLabel,
-      statusLabel: statusLabelForClass(cls),
-      selectable: cls.selectable === true,
-      selectableForApply: cls.selectableForApply === true,
-      selectableForReview: cls.selectableForReview === true,
-      selected: false,
-      manualActionAvailable: cls.manualActionAvailable === true,
-      manual_action_available: cls.manualActionAvailable === true,
-      blockerText: cls.selectable ? '' : (cls.manualActionAvailable ? 'No action needed' : ''),
-      sortCandidateName: candidateName.toLowerCase(),
-      sortUmbrellaName: umbrellaName.toLowerCase(),
-      sortAmount: asNum(t.payment_amount ?? t.amount),
-      sortBankStatus: cls.bankStatusLabel.toLowerCase(),
-      backendClassification,
-      backendAction: cls.backendAction,
-      issueKindForDisplay: cls.issueKindForDisplay || 'NONE',
-      draftOnlyRemoval: cls.draftOnlyRemoval === true,
-      draft_only_removal: cls.draftOnlyRemoval === true
-    });
+      payBankTransferIds: transferId ? [transferId] : [],
+      payBatchItemIds: uniq(linkedItems.map((item) => item.pay_batch_item_id || item.payBatchItemId || item.id)),
+      payBatchCandidateId: payBatchCandidateIds[0] || '',
+      payBatchCandidateIds,
+      candidateId: candidateIds[0] || '',
+      candidateIds
+    };
+    const supportDetails = { transfer_id: transferId, raw_transfer: transfer, raw_provider_diagnostic: diagnostic };
+    if (recovery.autoReleased || recovery.manuallyReleased) rows.push(makeRow(base, displayFor('alreadyReleased', { manuallyReleased: recovery.manuallyReleased, insufficientFunds: insufficient }), supportDetails));
+    else if (returned) rows.push(makeRow(base, displayFor('returned', { reverseReturnedAvailable: recovery.reverseReturnedAvailable }), supportDetails));
+    else if (insufficient) rows.push(makeRow(base, displayFor('insufficientFunds', { noMoneyUnwindSafe: recovery.noMoneyUnwindSafe || rejected }), supportDetails));
+    else if (rejected) rows.push(makeRow(base, displayFor('rejected', { noMoneyUnwindSafe: recovery.noMoneyUnwindSafe || rejected, rejectedEvidence: true }), supportDetails));
+    else if (sent) rows.push(makeRow(base, displayFor('sent', { completedEvidence: completed, candidateReturnedFundsAvailable: recovery.candidateReturnedFundsAvailable || completed }), supportDetails));
+    else rows.push(makeRow(base, displayFor('unknown'), supportDetails));
   });
 
   if (!rows.length && candidateRows.length) {
-    const shouldCreateNotSentRows = !['SETTLED', 'COMMITTED', 'COMPLETED', 'CANCELLED'].includes(batchStatus);
-    candidateRows.forEach((candidate) => {
-      const c = (candidate && typeof candidate === 'object') ? candidate : {};
+    candidateRows.forEach((candidate, index) => {
+      const c = asObj(candidate) || {};
       const payBatchCandidateId = toText(c.pay_batch_candidate_id || c.payBatchCandidateId || c.id || c.candidate_row_id || c.candidateRowId);
       const candidateId = toText(c.candidate_id || c.candidateId || c.id);
-      const rawLinkedItems = [
-        ...asArray(rawItemsByPayBatchCandidateId.get(payBatchCandidateId)),
-        ...(candidateId && candidateId !== payBatchCandidateId ? asArray(rawItemsByPayBatchCandidateId.get(candidateId)) : [])
-      ];
       const linkedItems = [
         ...asArray(itemsByPayBatchCandidateId.get(payBatchCandidateId)),
         ...(candidateId && candidateId !== payBatchCandidateId ? asArray(itemsByPayBatchCandidateId.get(candidateId)) : [])
       ];
-      if (rawLinkedItems.length > 0 && linkedItems.length === 0) return;
-      const payBatchItemIds = uniq(linkedItems.map((it) => it.pay_batch_item_id || it.payBatchItemId || it.item_id || it.itemId));
-      const candidateHasBankEvidence = hasSubmittedOrBankEvidence(c, linkedItems);
-      const draftOnlyRemoval = shouldCreateNotSentRows && draftOnlyBatchStatus && !candidateHasBankEvidence;
-      const cls = shouldCreateNotSentRows ? classify('PAYMENT_NOT_SENT', { draftOnlyRemoval }) : paidClass(batchStatus === 'SETTLED' || batchStatus === 'COMMITTED');
-      const candidateName = toText(c.candidate_display_name || c.display_name || c.candidate_name || c.name || 'Unknown candidate');
-      const umbrellaName = toText(c.umbrella_name || c.umbrellaName || c.umbrella_display_name || '');
-      rows.push({
-        rowKey: `${shouldCreateNotSentRows ? 'draft-candidate' : 'candidate'}:${payBatchCandidateId || candidateId || rows.length}`,
-        candidateName,
-        candidateTmsRef: toText(c.candidate_tms_ref || c.tms_ref || ''),
-        payBatchCandidateId: payBatchCandidateId || null,
-        payBatchCandidateIds: uniq([payBatchCandidateId]),
-        candidateId: candidateId || null,
-        candidateIds: uniq([candidateId]),
-        umbrellaName,
-        umbrellaId: toText(c.umbrella_id || c.umbrellaId || ''),
-        paymentAmount: asNum(c.payment_amount ?? c.amount ?? c.net_bank_amount ?? linkedItems.reduce((total, item) => total + asNum(item.payment_amount ?? item.amount ?? item.amount_inc_vat ?? item.amount_ex_vat), 0)),
-        payBankTransferId: null,
+      const candidateInfo = candidateDisplay(c);
+      const paymentAmount = toNum(c.payment_amount ?? c.amount ?? c.net_bank_amount ?? linkedItems.reduce((total, item) => total + toNum(item.payment_amount ?? item.amount ?? item.amount_inc_vat ?? item.amount_ex_vat), 0));
+      const status = toUpper(c.payment_status || c.paymentStatus || c.status || batchStatus);
+      const recovery = recoveryEnvelope(c);
+      const base = {
+        rowKey: `candidate:${payBatchCandidateId || candidateId || index}`,
+        ...candidateInfo,
+        paymentAmount,
+        payBankTransferId: '',
         payBankTransferIds: [],
-        transferGroupKey: toText(c.transfer_group_key || c.transferGroupKey || ''),
-        payBatchItemIds,
-        activePayBatchItemCount: payBatchItemIds.length || linkedItems.length,
-        active_pay_batch_item_count: payBatchItemIds.length || linkedItems.length,
-        financeCaseIds: uniq(linkedItems.map((it) => it.finance_case_id || it.financeCaseId)),
-        financeComponentIds: uniq(linkedItems.map((it) => it.finance_component_id || it.financeComponentId)),
-        reservationIds: uniq(linkedItems.map((it) => it.reservation_id || it.reservationId)),
-        bankStatusLabel: cls.bankStatusLabel,
-        whatHappenedLabel: cls.whatHappenedLabel,
-        actionLabel: cls.actionLabel,
-        statusLabel: statusLabelForClass(cls),
-        selectable: cls.selectable === true,
-        selectableForApply: cls.selectableForApply === true,
-        selectableForReview: cls.selectableForReview === true,
-        selected: false,
-        manualActionAvailable: cls.manualActionAvailable === true,
-        manual_action_available: cls.manualActionAvailable === true,
-        blockerText: cls.selectable ? '' : 'No action needed',
-        sortCandidateName: candidateName.toLowerCase(),
-        sortUmbrellaName: umbrellaName.toLowerCase(),
-        sortAmount: asNum(c.payment_amount ?? c.amount),
-        sortBankStatus: cls.bankStatusLabel.toLowerCase(),
-        backendClassification: shouldCreateNotSentRows ? 'PAYMENT_NOT_SENT' : 'PAID',
-        backendAction: cls.backendAction,
-        issueKindForDisplay: cls.issueKindForDisplay || 'NONE',
-        draftOnlyRemoval: cls.draftOnlyRemoval === true,
-        draft_only_removal: cls.draftOnlyRemoval === true
-      });
+        payBatchItemIds: uniq(linkedItems.map((item) => item.pay_batch_item_id || item.payBatchItemId || item.id)),
+        payBatchCandidateId,
+        payBatchCandidateIds: uniq([payBatchCandidateId]),
+        candidateId,
+        candidateIds: uniq([candidateId])
+      };
+      const supportDetails = { raw_candidate: c };
+      if (status.includes('RETURN')) rows.push(makeRow(base, displayFor('returned', { reverseReturnedAvailable: recovery.reverseReturnedAvailable }), supportDetails));
+      else if (status.includes('REJECT') || status.includes('FAILED')) rows.push(makeRow(base, displayFor('rejected', { noMoneyUnwindSafe: recovery.noMoneyUnwindSafe }), supportDetails));
+      else if (status.includes('INSUFFICIENT') || status.includes('BLOCKED')) rows.push(makeRow(base, displayFor('insufficientFunds', { noMoneyUnwindSafe: recovery.noMoneyUnwindSafe }), supportDetails));
+      else if (['SETTLED', 'COMMITTED', 'PAID', 'COMPLETED'].includes(batchStatus) || status.includes('PAID') || status.includes('SENT')) rows.push(makeRow(base, displayFor('sent', { completedEvidence: true, candidateReturnedFundsAvailable: recovery.candidateReturnedFundsAvailable || true }), supportDetails));
+      else rows.push(makeRow(base, displayFor('unknown'), supportDetails));
     });
   }
 
+  const selectedKeys = new Set();
+  if (correctionState) {
+    if (correctionState.selectedRowKeys instanceof Set) {
+      for (const key of correctionState.selectedRowKeys) selectedKeys.add(toText(key));
+    } else if (Array.isArray(correctionState.selectedRowKeys)) {
+      correctionState.selectedRowKeys.forEach((key) => selectedKeys.add(toText(key)));
+    }
+  }
+  rows.forEach((row) => {
+    row.selected = row.selectable === true && selectedKeys.has(row.rowKey);
+  });
+
   return rows;
 }
-
 
 function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
   const payload = (batchPayload && typeof batchPayload === 'object') ? batchPayload : {};
@@ -23408,18 +22144,7 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
   };
-  const flatten = (value) => Array.isArray(value) ? value : [value];
-  const formatAmount = (value) => {
-    const num = toNum(value);
-    try { return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(num); } catch { return `£${num.toFixed(2)}`; }
-  };
-  const hasFiniteDisplayNumber = (value) => {
-    if (value == null || value === '') return false;
-    const n = Number(value);
-    return Number.isFinite(n);
-  };
-  const formatOptionalAmount = (value) => hasFiniteDisplayNumber(value) ? formatAmount(value) : '—';
-  const formatOptionalCount = (value) => hasFiniteDisplayNumber(value) ? String(Number(value)) : '—';
+  const asArray = (value) => Array.isArray(value) ? value : [];
   const makeSet = (value) => {
     try {
       if (value instanceof Set) return new Set(Array.from(value).map((item) => toText(item)).filter(Boolean));
@@ -23427,58 +22152,42 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     } catch {}
     return new Set();
   };
+  const addValuesToSet = (target, values) => {
+    const arr = Array.isArray(values) ? values : [values];
+    for (const value of arr) {
+      const text = toText(value);
+      if (text) target.add(text);
+    }
+  };
+  const formatAmount = (value) => {
+    const n = toNum(value);
+    try {
+      return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(n);
+    } catch {
+      return `£${n.toFixed(2)}`;
+    }
+  };
   const rowKeyOf = (row, index) => toText(
-    row?.rowKey ||
-    row?.row_key ||
-    row?.payBankTransferId ||
-    row?.pay_bank_transfer_id ||
-    row?.payBatchCandidateId ||
-    row?.pay_batch_candidate_id ||
-    row?.candidateId ||
-    row?.candidate_id ||
+    row?.rowKey || row?.row_key || row?.payBankTransferId || row?.pay_bank_transfer_id ||
+    row?.payBatchCandidateId || row?.pay_batch_candidate_id || row?.candidateId || row?.candidate_id ||
     (index != null ? `row-${index}` : '')
   );
-  const addValuesToSet = (target, values) => {
-    try {
-      for (const value of flatten(values)) {
-        const s = toText(value);
-        if (s) target.add(s);
-      }
-    } catch {}
-  };
 
   const previousSelectedKeys = makeSet(state.selectedRowKeys);
-  for (const row of (Array.isArray(state.rows) ? state.rows : [])) {
+  for (const row of asArray(state.rows || state.issueRows)) {
     if (row && row.selected === true) {
       const key = rowKeyOf(row);
       if (key) previousSelectedKeys.add(key);
     }
   }
 
-  const manualPaidActionMode = !!(
-    state.manualPaidActionMode === true ||
-    state.issueState?.manualPaidActionMode === true ||
-    state.manual_paid_action_mode === true
-  );
-
-  let issueState = {};
-  try {
-    issueState = (typeof normaliseBankingPaymentIssueState === 'function')
-      ? normaliseBankingPaymentIssueState(payload, { manualPaidActionMode, correctionState: state })
-      : {};
-  } catch {
-    issueState = {};
-  }
-  issueState = (issueState && typeof issueState === 'object') ? issueState : {};
-  issueState.manualPaidActionMode = manualPaidActionMode;
-
   let rows = [];
   try {
     rows = (typeof buildBankingPaymentIssueRows === 'function')
-      ? buildBankingPaymentIssueRows(payload, { manualPaidActionMode, correctionState: state })
-      : (Array.isArray(state.rows) ? state.rows.slice() : []);
+      ? buildBankingPaymentIssueRows(payload, { correctionState: state })
+      : asArray(state.rows || state.issueRows).slice();
   } catch {
-    rows = Array.isArray(state.rows) ? state.rows.slice() : [];
+    rows = asArray(state.rows || state.issueRows).slice();
   }
   rows = Array.isArray(rows) ? rows : [];
 
@@ -23490,11 +22199,10 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
   rows.forEach((row, index) => {
     if (!row || typeof row !== 'object') return;
     const key = rowKeyOf(row, index);
-    const selectable = row.selectable !== false && (row.selectableForApply === true || row.selectableForReview === true || row.selectable === true);
+    const selectable = row.selectable === true;
     const keepSelected = !!(key && previousSelectedKeys.has(key) && selectable);
     row.selected = keepSelected;
     if (!keepSelected) return;
-
     selectedRowKeys.add(key);
     addValuesToSet(selectedPayBatchCandidateIds, row.payBatchCandidateIds || row.pay_batch_candidate_ids || row.payBatchCandidateId || row.pay_batch_candidate_id);
     addValuesToSet(selectedTransferIds, row.payBankTransferIds || row.pay_bank_transfer_ids || row.payBankTransferId || row.pay_bank_transfer_id || row.transferId || row.transfer_id);
@@ -23502,8 +22210,6 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
   });
 
   state.batchPayload = payload;
-  state.issueState = issueState;
-  state.manualPaidActionMode = manualPaidActionMode;
   state.rows = rows;
   state.issueRows = rows;
   state.selectedRowKeys = selectedRowKeys;
@@ -23511,29 +22217,53 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
   state.selectedTransferIds = selectedTransferIds;
   state.selectedPayBatchItemIds = selectedPayBatchItemIds;
 
-  if (previousSelectedKeys.size > 0 && selectedRowKeys.size !== previousSelectedKeys.size) {
-    state.selection = null;
-    state.plan = null;
-    state.planSelectionSignature = '';
-    state.planError = '';
-    state.acceptedResolutionJson = null;
-    state.acceptedResolutionSummary = null;
-    state.selectedUmbrellaGroup = null;
-    state.selectedTransferGroupKey = '';
-    state.selectionScopeMode = '';
-    try { if (typeof invalidateBankingPaymentIssuePlan === 'function') invalidateBankingPaymentIssuePlan(state); } catch {}
+  let issueState = {};
+  try {
+    issueState = (typeof normaliseBankingPaymentIssueState === 'function')
+      ? normaliseBankingPaymentIssueState(payload, { correctionState: state })
+      : {};
+  } catch {
+    issueState = {};
   }
+  issueState = (issueState && typeof issueState === 'object') ? issueState : {};
+  state.issueState = issueState;
+
+  const classifyTone = (row) => {
+    const symbol = toText(row?.statusSymbol || row?.status_symbol || '');
+    const displayState = toUpper(row?.displayState || row?.display_state || '');
+    const result = toUpper(row?.resultLabel || row?.result_label || '');
+    if (symbol === '✅' || displayState === 'PAYMENT_SENT' || displayState === 'PAYMENT_PAID' || result.includes('SENT') || result.includes('PAID')) return 'sent';
+    if (symbol === '❌' || displayState.includes('REJECT') || displayState.includes('INSUFFICIENT') || displayState.includes('RETURN') || result.includes('REJECT') || result.includes('INSUFFICIENT') || result.includes('RETURN') || result.includes('FAILED')) return 'failed';
+    return 'check';
+  };
+
+  const counts = rows.reduce((acc, row) => {
+    const tone = classifyTone(row);
+    if (tone === 'sent') {
+      acc.sent += 1;
+      acc.totalSent += toNum(row.paymentAmount || row.payment_amount || row.amount || 0);
+    } else if (tone === 'failed') {
+      acc.failed += 1;
+    } else {
+      acc.check += 1;
+    }
+    return acc;
+  }, { sent: 0, failed: 0, check: 0, totalSent: 0 });
+
+  const sentCount = Number.isFinite(Number(issueState.sentCount)) ? Number(issueState.sentCount) : counts.sent;
+  const failedReturnedCount = Number.isFinite(Number(issueState.failedReturnedCount)) ? Number(issueState.failedReturnedCount) : counts.failed;
+  const checkRequiredCount = Number.isFinite(Number(issueState.checkRequiredCount)) ? Number(issueState.checkRequiredCount) : counts.check;
 
   if (state.sortKey) {
     const sortKey = toText(state.sortKey);
     const dir = toText(state.sortDir).toLowerCase() === 'desc' ? -1 : 1;
     rows.sort((a, b) => {
       const pick = (row) => {
-        if (sortKey === 'amount') return toNum(row?.sortAmount ?? row?.paymentAmount ?? row?.amount);
-        if (sortKey === 'bank_status') return toText(row?.sortBankStatus || row?.bankStatusLabel || row?.bank_status_label).toLowerCase();
-        if (sortKey === 'umbrella_name') return toText(row?.sortUmbrellaName || row?.umbrellaName || row?.umbrella_name).toLowerCase();
-        if (sortKey === 'status') return toText(row?.statusLabel || row?.status_label).toLowerCase();
-        return toText(row?.sortCandidateName || row?.candidateName || row?.candidate_name).toLowerCase();
+        if (sortKey === 'amount') return toNum(row?.sortAmount ?? row?.paymentAmount ?? row?.payment_amount ?? row?.amount);
+        if (sortKey === 'result') return toText(row?.resultLabel || row?.result_label).toLowerCase();
+        if (sortKey === 'status') return toText(row?.displayState || row?.display_state || row?.statusTone || row?.status_tone).toLowerCase();
+        if (sortKey === 'payee_umbrella' || sortKey === 'umbrella_name') return toText(row?.payeeUmbrellaName || row?.payee_umbrella_name || row?.umbrellaName || row?.umbrella_name).toLowerCase();
+        return toText(row?.candidateName || row?.candidate_name).toLowerCase();
       };
       const av = pick(a);
       const bv = pick(b);
@@ -23544,903 +22274,197 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     });
   }
 
-  const effectivePlan = (state.plan && typeof state.plan === 'object' && !Array.isArray(state.plan) && state.plan.plan && typeof state.plan.plan === 'object' && !Array.isArray(state.plan.plan))
-    ? state.plan.plan
-    : ((state.plan && typeof state.plan === 'object' && !Array.isArray(state.plan)) ? state.plan : null);
-
-  const forbiddenWarningPattern = /(no-money unwind|settled reversal|movement classification|correction kind|correction request|work item|frozen artifact|economic artifact|pre-bank|post-draft|before money moved|after money moved|return to Banking Pay|available in Banking Pay|CloudTMS will keep the original payment in history|\bunwind\b|\breverse\b|\bsettled\b|no-money|blocked|failed_retryable|failed_final)/i;
-  const normaliseWarningText = (warning) => {
-    let candidateText = '';
-    let code = '';
-    if (warning && typeof warning === 'object') {
-      candidateText = toText(warning.user_message || warning.display_message || warning.message || warning.label);
-      code = toUpper(warning.code || warning.id || warning.key || warning.reason);
-    } else if (typeof warning === 'string') {
-      candidateText = toText(warning);
-      code = toUpper(warning);
-    }
-    if (code === 'DRAFT_INTERFERENCE') return 'Another payment batch already includes this payment. Remove it from that batch first.';
-    if (code === 'AGGREGATE_TRANSFER_SUBSET_UNSAFE') return 'Select the full umbrella payment group to continue.';
-    if (code === 'MAIL_SCOPE_LEGACY_BROAD_MATCH_REQUIRES_REVIEW') return 'This payment needs review before queued notices can be updated.';
-    if (!candidateText || forbiddenWarningPattern.test(candidateText)) return 'Needs review';
-    return candidateText;
-  };
-
-  const isManualPaidRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    return issueKind === 'MANUAL_PAID_ACTION' || (manualPaidActionMode && (row?.manualActionAvailable === true || row?.manual_action_available === true));
-  };
-  const isReturnedRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || '');
-    const status = toUpper(row?.bankStatusLabel || row?.bank_status_label || row?.statusLabel || '');
-    const happened = toUpper(row?.whatHappenedLabel || row?.what_happened_label || '');
-    return issueKind === 'RETURNED' || status === 'RETURNED' || happened === 'BANK RETURNED PAYMENT';
-  };
-  const rowHasAcceptanceEvidence = (row) => {
-    const diag = (row && typeof row === 'object') ? (row.providerSubmitDiagnostic || row.provider_submit_diagnostic || {}) : {};
-    const value = row?.provider_acceptance_evidence_present ?? row?.providerAcceptanceEvidencePresent ?? diag.provider_acceptance_evidence_present ?? diag.providerAcceptanceEvidencePresent;
-    return value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(String(value == null ? '' : value).trim().toLowerCase());
-  };
-  const rowAlreadyReleased = (row) => {
-    const recoveryStatus = toUpper(row?.recoveryStatus || row?.recovery_status || '');
-    const recoveryAction = toUpper(row?.recoveryAction || row?.recovery_action || '');
-    return row?.autoReleased === true || row?.auto_released === true || row?.manuallyReleased === true || row?.manually_released === true || ['AUTO_RELEASED_FOR_NEXT_RUN', 'MANUALLY_RELEASED_FOR_NEXT_RUN', 'MANUAL_RELEASED_FOR_NEXT_RUN', 'MANUAL_RESOLVED_NO_PAYMENT_MADE'].includes(recoveryStatus) || recoveryAction === 'READY_FOR_NEXT_RUN_AFTER_PAYEE_READINESS';
-  };
-  const isRejectedRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || '');
-    const status = toUpper(row?.bankStatusLabel || row?.bank_status_label || row?.statusLabel || '');
-    const happened = toUpper(row?.whatHappenedLabel || row?.what_happened_label || '');
-    const providerStatus = toUpper(row?.provider_submission_status || row?.providerSubmitDiagnostic?.provider_submission_status || row?.provider_submit_diagnostic?.provider_submission_status || '');
-    const backendAction = toUpper(row?.backendAction || row?.backend_action || '');
-    const clearProviderRejected = providerStatus === 'PROVIDER_SUBMISSION_REJECTED' && rowHasAcceptanceEvidence(row) !== true && rowAlreadyReleased(row) !== true;
-    return issueKind === 'REJECTED' || status === 'NOT PAID' || status === 'REJECTED' || happened === 'BANK REJECTED PAYMENT' || backendAction === 'UNWIND_FAILED_PAYMENT' || clearProviderRejected;
-  };
-  const isDraftOnlyRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || row?.issue_kind || '');
-    return row?.draftOnlyRemoval === true || row?.draft_only_removal === true || issueKind === 'DRAFT_REMOVE';
-  };
-  const isCancellableRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || '');
-    const backendAction = toUpper(row?.backendAction || row?.backend_action || '');
-    return issueKind === 'DRAFT_REMOVE' || issueKind === 'NOT_SENT' || backendAction === 'CANCEL_PAYMENT_ATTEMPT';
-  };
-  const isPaidCleanRow = (row) => {
-    const issueKind = toUpper(row?.issueKindForDisplay || row?.issue_kind_for_display || '');
-    const bankStatus = toUpper(row?.bankStatusLabel || row?.bank_status_label || '');
-    const happened = toUpper(row?.whatHappenedLabel || row?.what_happened_label || '');
-    const status = toUpper(row?.statusLabel || row?.status_label || '');
-    return issueKind === 'PAID' || issueKind === 'NONE' || issueKind === 'CLEAN_PAID' || bankStatus === 'PAID' || status === 'PAID' || happened === 'PAID SUCCESSFULLY';
-  };
-
-  const manualPaidActionAvailable = rows.some((row) => row && (row.manualActionAvailable === true || row.manual_action_available === true));
-  const hasSelectableIssueRows = rows.some((row) => row && !isManualPaidRow(row) && row.selectableForApply === true && (isReturnedRow(row) || isRejectedRow(row) || isCancellableRow(row)));
-  const hasReturnedRows = rows.some((row) => row && row.selectableForApply === true && isReturnedRow(row));
-  const hasRejectedRows = rows.some((row) => row && row.selectableForApply === true && isRejectedRow(row));
   const selectedRows = rows.filter((row) => row && row.selected === true);
   const selectedCount = selectedRows.length;
-  const selectedAmount = selectedRows.reduce((total, row) => total + toNum(row.paymentAmount || row.amount || 0), 0);
-  const selectedAllDraftOnlyRemoval = selectedRows.length > 0 && selectedRows.every((row) => isDraftOnlyRow(row));
+  const selectableRows = rows.filter((row) => row && row.selectable === true);
+  const selectedAmount = selectedRows.reduce((total, row) => total + toNum(row.paymentAmount || row.payment_amount || row.amount || 0), 0);
 
-  const issueKind = toUpper(issueState.issueKindForDisplay || issueState.issueKind || issueState.issue_kind || '');
-  const headline = toUpper(issueState.headline || issueState.statusText || '');
-  const cleanIssueKinds = new Set(['', 'NONE', 'PAID', 'CLEAN_PAID', 'SETTLED_NO_CORRECTION_REQUIRED']);
-  const hasBackendEvidence = !!(
-    (payload.payment_correction && typeof payload.payment_correction === 'object' && Object.keys(payload.payment_correction).length > 0) ||
-    (payload.correction_progress && typeof payload.correction_progress === 'object' && Object.keys(payload.correction_progress).length > 0) ||
-    (payload.manual_actions && typeof payload.manual_actions === 'object' && Object.keys(payload.manual_actions).length > 0) ||
-    (Array.isArray(payload.bank_evidence) && payload.bank_evidence.length > 0)
-  );
-  const hasStatusIssue = !!(
-    issueState.requiresUserAction === true ||
-    issueState.navAlert === true ||
-    issueState.hasActionableIssueRows === true ||
-    hasSelectableIssueRows ||
-    ['RETURNED', 'REJECTED', 'REVIEW', 'NOT_SENT', 'DRAFT_REMOVE', 'WAITING', 'PROCESSING', 'APPLIED'].includes(issueKind) ||
-    headline === 'PROCESSING' ||
-    headline === 'WAITING FOR APPROVAL' ||
-    headline === 'APPLIED' ||
-    headline.includes('RETURNED') ||
-    headline.includes('REJECTED') ||
-    headline.includes('NEEDS REVIEW') ||
-    (issueState.hasIssue === true && !cleanIssueKinds.has(issueKind))
-  );
-  const cleanPaidNoIssue = !manualPaidActionMode && !hasStatusIssue && (issueKind === 'PAID' || issueKind === 'CLEAN_PAID' || headline === 'PAID SUCCESSFULLY' || rows.some((row) => isPaidCleanRow(row)));
-
-  state.issueState.manualPaidActionAvailable = state.issueState.manualPaidActionAvailable === true || manualPaidActionAvailable;
-  state.issueState.hasActionableIssueRows = state.issueState.hasActionableIssueRows === true || hasSelectableIssueRows;
-  state.issueState.hasSelectableRows = state.issueState.hasSelectableRows === true || rows.some((row) => row && (row.selectableForApply === true || row.selectableForReview === true));
-  state.manualPaidActionAvailable = manualPaidActionAvailable;
-
-  const badgeClass = (() => {
-    const tone = toUpper(issueState.badgeTone || '');
-    if (tone === 'SUCCESS') return 'pill pill-ok';
-    if (tone === 'DANGER' || tone === 'WARNING') return 'pill pill-warn';
-    if (tone === 'INFO') return 'pill pill-info';
-    return 'pill';
-  })();
-
-  const summaryByHeadline = {
-    'Bank returned payment': 'The bank returned this payment. Select the affected payments to make them eligible to be paid again in the next batch.',
-    'Bank rejected payment': 'The bank rejected this payment. Select the affected payments to make them eligible to be paid again in the next batch.',
-    'Applied': 'Applied. The selected amounts are now available to be processed in the next batch.',
-    'Processing': 'Processing. Selected payments are being updated.',
-    'Waiting for approval': 'Waiting for approval. This action needs another approval before it can be applied.',
-    'Needs review': 'Needs review.',
-    'Partly applied — review needed': 'Partly applied — review needed.',
-    'Draft batch item': 'Remove selected payments from this draft batch to release their reservations.'
-  };
-  const headlineText = toText(issueState.headline || 'Payment status');
-  const shortMessage = summaryByHeadline[headlineText] || toText(issueState.summaryText) || 'No action needed.';
-
-  const renderSummaryCard = (title, badge, message, cls = badgeClass) => `
-    <div class="payment-issue-summary-card card" style="padding:10px;">
-      <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">${enc(title)}</div>
-      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
-        <span class="${enc(cls)}">${enc(badge)}</span>
-      </div>
-      <div class="mini" style="opacity:.88; white-space:pre-wrap;">${enc(message)}</div>
-    </div>
-  `;
-
-  const providerSubmitAsObject = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : null;
-  const providerSubmitAsArray = (value) => Array.isArray(value) ? value : [];
-  const providerSubmitReadBool = (value) => {
-    if (value === true) return true;
-    if (value === false) return false;
-    const text = String(value == null ? '' : value).trim().toLowerCase();
-    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
-    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
-    return false;
-  };
-  const providerSubmitFirstText = (...values) => {
-    for (const value of values) {
-      if (Array.isArray(value)) {
-        const nested = providerSubmitFirstText(...value);
-        if (nested) return nested;
-        continue;
-      }
-      const text = toText(value);
-      if (text) return text;
+  const buildBankingWholeBatchPaymentActionModel = (tableRows, batchPayload) => {
+    const allRows = asArray(tableRows).filter((row) => row && typeof row === 'object');
+    const activeRows = allRows.filter((row) => row.actionType && row.actionType !== 'VIEW_DETAILS');
+    const wholeBatchSafetyConfirmed = (row) => (
+      row?.wholeBatchActionSafe === true ||
+      row?.whole_batch_action_safe === true ||
+      row?.wholeBatchEligibleActionSafe === true ||
+      row?.whole_batch_eligible_action_safe === true ||
+      row?.backendWholeBatchSafe === true ||
+      row?.backend_whole_batch_safe === true
+    );
+    if (!activeRows.length) {
+      return { visible: false, enabled: false, actionType: '', eligibleRows: [], excludedRows: allRows, requiresGuardedConfirmation: false, disabledReason: 'No batch-level action is available.' };
     }
-    return '';
-  };
-  const providerSubmitCollectEvidenceSources = (value) => {
-    const root = providerSubmitAsObject(value) || {};
-    const railMeta = providerSubmitAsObject(root.rail_meta_json || root.railMetaJson) || {};
-    const rawPayload = providerSubmitAsObject(root.raw_payload || root.rawPayload) || {};
-    const directDiagnostic = providerSubmitAsObject(root.provider_submit_diagnostic || root.providerSubmitDiagnostic) || {};
-    const railDiagnostic = providerSubmitAsObject(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic) || {};
-    const rawDiagnostic = providerSubmitAsObject(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic) || {};
-    const providerResponse = providerSubmitAsObject(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson) || {};
-    const rawProviderResponse = providerSubmitAsObject(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson) || {};
-    return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
-      .filter((obj) => obj && Object.keys(obj).length);
-  };
-  const providerSubmitLocalReferenceSet = (value) => {
-    const out = new Set();
-    const localKeys = [
-      'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
-      'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
-      'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
-      'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
-      'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
-      'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
-    ];
-    for (const obj of providerSubmitCollectEvidenceSources(value)) {
-      for (const key of localKeys) {
-        const text = toText(obj[key]);
-        if (text) out.add(text.toLowerCase());
-      }
+    const actionTypes = Array.from(new Set(activeRows.map((row) => toUpper(row.wholeBatchEligibleActionType || row.bulkActionType || row.actionType)).filter(Boolean)));
+    if (actionTypes.length !== 1) {
+      return { visible: true, enabled: false, actionType: '', eligibleRows: [], excludedRows: allRows, requiresGuardedConfirmation: true, disabledReason: 'Use row-level actions for mixed payment statuses.' };
     }
-    return out;
-  };
-  const providerSubmitStrictExternalEvidencePresent = (value) => {
-    const localRefs = providerSubmitLocalReferenceSet(value);
-    const externalKeys = [
-      'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
-      'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
-      'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
-      'submission_id', 'submissionId', 'rail_submission_id', 'railSubmissionId',
-      'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
-      'provider_transfer_id', 'providerTransferId', 'external_transfer_id', 'externalTransferId',
-      'external_reference', 'externalReference', 'bank_reference', 'bankReference',
-      'transaction_id', 'transactionId', 'payment_id', 'paymentId'
-    ];
-    for (const obj of providerSubmitCollectEvidenceSources(value)) {
-      for (const key of externalKeys) {
-        const text = toText(obj[key]);
-        if (!text) continue;
-        if (localRefs.has(text.toLowerCase())) continue;
-        return true;
-      }
+    const actionType = actionTypes[0];
+    const allowed = ['CANDIDATE_RETURNED_FUNDS', 'RELEASE_FOR_NEXT_RUN', 'REVERSE_RETURNED'].includes(actionType);
+    if (!allowed) {
+      return { visible: false, enabled: false, actionType, eligibleRows: [], excludedRows: allRows, requiresGuardedConfirmation: false, disabledReason: 'No batch-level action is available.' };
     }
-    return false;
-  };
-  const extractProviderSubmitDiagnosticFromIssuePanel = () => {
-    const out = {};
-    const readFirst = (source, keys) => {
-      const obj = providerSubmitAsObject(source) || {};
-      for (const key of keys) {
-        const value = obj[key];
-        if (value === null || value === undefined) continue;
-        if (Array.isArray(value)) {
-          if (value.length) return value;
-          continue;
-        }
-        if (typeof value === 'object') continue;
-        if (toText(value) !== '') return value;
-        if (typeof value === 'boolean') return value;
-      }
-      return undefined;
-    };
-    const put = (key, value, mode = 'text') => {
-      if (value === null || value === undefined) return;
-      if (Array.isArray(value)) {
-        if (!value.length) return;
-        out[key] = value;
-        return;
-      }
-      if (mode === 'bool') {
-        out[key] = providerSubmitReadBool(value);
-        return;
-      }
-      const text = toText(value);
-      if (!text && typeof value !== 'boolean') return;
-      out[key] = mode === 'upper' ? toUpper(value) : text;
-    };
-    const mergeProviderSubmitSource = (source) => {
-      if (!providerSubmitAsObject(source)) return;
-      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode']), 'upper');
-      put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode']), 'upper');
-      put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired']), 'bool');
-      put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
-      put('manual_recoverable', readFirst(source, ['manual_recoverable', 'manualRecoverable']), 'bool');
-      put('recovery_status', readFirst(source, ['recovery_status', 'recoveryStatus']), 'upper');
-      put('recovery_action', readFirst(source, ['recovery_action', 'recoveryAction']), 'upper');
-      put('auto_reverse_requested', readFirst(source, ['auto_reverse_requested', 'autoReverseRequested']), 'bool');
-      put('auto_reverse_applied_count', readFirst(source, ['auto_reverse_applied_count', 'autoReverseAppliedCount']));
-      put('safe_retry_available', readFirst(source, ['safe_retry_available', 'safeRetryAvailable']), 'bool');
-      put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
-      put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
-      put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
-      put('provider_request_sent_confirmed', readFirst(source, ['provider_request_sent_confirmed', 'providerRequestSentConfirmed']), 'bool');
-      put('provider_request_dispatched_at_utc', readFirst(source, ['provider_request_dispatched_at_utc', 'providerRequestDispatchedAtUtc', 'request_sent_at_utc', 'requestSentAtUtc']));
-      put('provider_external_evidence_present', readFirst(source, ['provider_external_evidence_present', 'providerExternalEvidencePresent']), 'bool');
-      put('provider_error_code', readFirst(source, ['provider_error_code', 'providerErrorCode', 'error_code', 'errorCode']));
-      put('provider_error_message_redacted', readFirst(source, ['provider_error_message_redacted', 'providerErrorMessageRedacted', 'provider_error_message', 'providerErrorMessage', 'provider_message', 'providerMessage']));
-      put('provider_http_status', readFirst(source, ['provider_http_status', 'providerHttpStatus', 'http_status', 'httpStatus']));
-      put('request_id', readFirst(source, ['request_id', 'requestId']));
-      put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
-      put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
-      put('rail_state', readFirst(source, ['rail_state', 'railState']));
-      put('provider_transaction_id', readFirst(source, ['provider_transaction_id', 'providerTransactionId']));
-      put('provider_payment_id', readFirst(source, ['provider_payment_id', 'providerPaymentId']));
-      put('provider_event_id', readFirst(source, ['provider_event_id', 'providerEventId']));
-      put('provider_reference', readFirst(source, ['provider_reference', 'providerReference']));
-      put('provider_submission_id', readFirst(source, ['provider_submission_id', 'providerSubmissionId']));
-      put('external_payment_id', readFirst(source, ['external_payment_id', 'externalPaymentId']));
-      put('revolut_payment_id', readFirst(source, ['revolut_payment_id', 'revolutPaymentId']));
-      put('external_reference', readFirst(source, ['external_reference', 'externalReference']));
-      put('bank_reference', readFirst(source, ['bank_reference', 'bankReference']));
-      put('transaction_id', readFirst(source, ['transaction_id', 'transactionId']));
-      put('payment_id', readFirst(source, ['payment_id', 'paymentId']));
-      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
-      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
-      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
-      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
-      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
-      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
-    };
-    const review = providerSubmitAsObject(payload.payment_execution_review) || providerSubmitAsObject(payload.paymentExecutionReview) || providerSubmitAsObject(payload.batch?.payment_execution_review) || providerSubmitAsObject(payload.batch?.paymentExecutionReview) || {};
-    mergeProviderSubmitSource(payload);
-    mergeProviderSubmitSource(payload.batch);
-    mergeProviderSubmitSource(review);
-    mergeProviderSubmitSource(payload.provider_submit_diagnostic);
-    mergeProviderSubmitSource(payload.providerSubmitDiagnostic);
-    mergeProviderSubmitSource(payload.batch?.provider_submit_diagnostic);
-    mergeProviderSubmitSource(payload.batch?.providerSubmitDiagnostic);
-    mergeProviderSubmitSource(review.provider_submit_diagnostic);
-    mergeProviderSubmitSource(review.providerSubmitDiagnostic);
-    for (const issue of providerSubmitAsArray(payload.payment_issues || payload.paymentIssues || payload.batch?.payment_issues || payload.batch?.paymentIssues)) {
-      const item = providerSubmitAsObject(issue) || {};
-      const kind = toUpper(item.issue_kind || item.issueKind || item.issue_type || item.issueType || item.kind || item.type || '');
-      if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW' && kind !== 'PROVIDER_SUBMIT_REVIEW') continue;
-      mergeProviderSubmitSource(item);
-      const issueReview = providerSubmitAsObject(item.payment_execution_review) || providerSubmitAsObject(item.paymentExecutionReview) || {};
-      mergeProviderSubmitSource(issueReview);
-      mergeProviderSubmitSource(item.provider_submit_diagnostic);
-      mergeProviderSubmitSource(item.providerSubmitDiagnostic);
+    const eligibleRows = activeRows.filter((row) => toUpper(row.wholeBatchEligibleActionType || row.bulkActionType || row.actionType) === actionType);
+    const excludedRows = allRows.filter((row) => !eligibleRows.includes(row));
+    if (excludedRows.length > 0) {
+      return { visible: true, enabled: false, actionType, eligibleRows, excludedRows, requiresGuardedConfirmation: true, disabledReason: 'This batch has mixed payment statuses. Use row-level actions for eligible rows.' };
     }
-    for (const row of rows) {
-      const item = providerSubmitAsObject(row) || {};
-      const kind = toUpper(item.issueKindForDisplay || item.issue_kind_for_display || item.issue_kind || item.issueKind || item.issue_type || item.issueType || '');
-      if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW' && kind !== 'PROVIDER_SUBMIT_REVIEW') continue;
-      mergeProviderSubmitSource(item);
-      mergeProviderSubmitSource(item.provider_submit_diagnostic);
-      mergeProviderSubmitSource(item.providerSubmitDiagnostic);
+    if (actionType === 'RELEASE_FOR_NEXT_RUN') {
+      const allReleaseRowsSafe = eligibleRows.length > 0 && eligibleRows.every((row) => row.selectable === true && toUpper(row.bulkActionType || row.actionType) === 'RELEASE_FOR_NEXT_RUN');
+      if (!allReleaseRowsSafe) {
+        return { visible: true, enabled: false, actionType, eligibleRows, excludedRows, requiresGuardedConfirmation: false, disabledReason: 'Release for next run is only available when every row is safely selectable for no-payment release.' };
+      }
+      return { visible: true, enabled: true, actionType, eligibleRows, excludedRows, requiresGuardedConfirmation: false, disabledReason: '' };
     }
-    mergeProviderSubmitSource(issueState);
-    mergeProviderSubmitSource(issueState.provider_submit_diagnostic);
-    mergeProviderSubmitSource(issueState.providerSubmitDiagnostic);
-    if (!Object.keys(out).length) return null;
-    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.provider_transaction_id || out.provider_payment_id || out.provider_event_id || out.provider_reference || out.external_payment_id || out.revolut_payment_id || out.external_reference || out.bank_reference || out.transaction_id || out.payment_id || out.rail_state || out.request_id || out.idempotency_key || out.recommended_action);
-    if (!hasProviderSubmitContext) return null;
-    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
-      out.manual_resolution_required = false;
-      out.manual_resolution_available = false;
+    if (actionType === 'CANDIDATE_RETURNED_FUNDS' || actionType === 'REVERSE_RETURNED') {
+      const allRowsBackendSupported = eligibleRows.length > 0 && eligibleRows.every((row) => row.requiresBackendSupport !== true && row.futureActionPendingBackend !== true && wholeBatchSafetyConfirmed(row));
+      if (!allRowsBackendSupported) {
+        return { visible: true, enabled: false, actionType, eligibleRows, excludedRows, requiresGuardedConfirmation: false, disabledReason: 'This whole-batch action is waiting for backend safety support.' };
+      }
+      return { visible: true, enabled: true, actionType, eligibleRows, excludedRows, requiresGuardedConfirmation: false, disabledReason: '' };
     }
-    return out;
-  };
-  const providerSubmitDiagnostic = extractProviderSubmitDiagnosticFromIssuePanel();
-  const providerSubmitStatus = toUpper(providerSubmitDiagnostic?.provider_submission_status || providerSubmitDiagnostic?.providerSubmissionStatus || providerSubmitDiagnostic?.outcome_code || providerSubmitDiagnostic?.outcomeCode || issueState.provider_submission_status || issueState.providerSubmissionStatus || '');
-  const providerSubmitHasContext = !!(
-    providerSubmitDiagnostic &&
-    (
-      providerSubmitFirstText(providerSubmitDiagnostic.operation_id, providerSubmitDiagnostic.operationId, providerSubmitDiagnostic.chunk_id, providerSubmitDiagnostic.chunkId, providerSubmitDiagnostic.transfer_id, providerSubmitDiagnostic.transferId) ||
-      providerSubmitAsArray(providerSubmitDiagnostic.chunk_ids || providerSubmitDiagnostic.chunkIds).length > 0 ||
-      providerSubmitAsArray(providerSubmitDiagnostic.transfer_ids || providerSubmitDiagnostic.transferIds).length > 0 ||
-      (providerSubmitStatus && !['NO_PROVIDER_SUBMISSION_ATTEMPTED', 'CLAIMED_NOT_PROVIDER_CALLED_YET'].includes(providerSubmitStatus))
-    )
-  );
-  const providerSubmitHasIssue = providerSubmitHasContext && [
-    'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
-    'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
-    'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
-    'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
-    'PROVIDER_SUBMISSION_REJECTED',
-    'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL',
-    'PROVIDER_SUBMISSION_ACCEPTED',
-    'MANUAL_RESOLVED_NO_PAYMENT_MADE'
-  ].includes(providerSubmitStatus);
-  const providerSubmitExternalEvidencePresent = providerSubmitStrictExternalEvidencePresent(providerSubmitDiagnostic);
-  const providerSubmitRejectedOrUnusable = [
-    'PROVIDER_SUBMISSION_REJECTED',
-    'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
-    'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
-    'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
-    'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
-    'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL'
-  ].includes(providerSubmitStatus);
-  const providerSubmitAcceptanceEvidencePresent = providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitExternalEvidencePresent === true && providerSubmitRejectedOrUnusable !== true;
-  if (providerSubmitDiagnostic) {
-    providerSubmitDiagnostic.provider_external_evidence_present = providerSubmitExternalEvidencePresent;
-    providerSubmitDiagnostic.provider_acceptance_evidence_present = providerSubmitAcceptanceEvidencePresent;
-  }
-  const providerSubmitProviderResponsePresent = providerSubmitReadBool(providerSubmitDiagnostic?.provider_response_present ?? providerSubmitDiagnostic?.providerResponsePresent ?? providerSubmitDiagnostic?.provider_response_received ?? providerSubmitDiagnostic?.providerResponseReceived);
-  const providerSubmitManualResolutionAvailable = providerSubmitReadBool(providerSubmitDiagnostic?.manual_resolution_available ?? providerSubmitDiagnostic?.manualResolutionAvailable ?? providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
-  const providerSubmitManualResolutionRequiredRaw = providerSubmitReadBool(providerSubmitDiagnostic?.manual_resolution_required ?? providerSubmitDiagnostic?.manualResolutionRequired);
-  const providerSubmitManualResolutionRequired = providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE' ? false : providerSubmitManualResolutionRequiredRaw;
-  const providerSubmitSafeRetryAvailable = providerSubmitReadBool(providerSubmitDiagnostic?.safe_retry_available ?? providerSubmitDiagnostic?.safeRetryAvailable);
-  const providerSubmitRequestSentRaw = providerSubmitDiagnostic ? (providerSubmitDiagnostic.provider_request_sent_confirmed ?? providerSubmitDiagnostic.providerRequestSentConfirmed ?? providerSubmitDiagnostic.provider_request_sent ?? providerSubmitDiagnostic.providerRequestSent) : null;
-  const providerSubmitRequestSent = providerSubmitReadBool(providerSubmitRequestSentRaw);
-  const providerSubmitRequestSentKnownFalse = providerSubmitRequestSentRaw === false || String(providerSubmitRequestSentRaw == null ? '' : providerSubmitRequestSentRaw).trim().toLowerCase() === 'false';
-  const providerSubmitTransferEventRecorded = providerSubmitReadBool(providerSubmitDiagnostic?.transfer_event_recorded ?? providerSubmitDiagnostic?.transferEventRecorded ?? providerSubmitDiagnostic?.has_transfer_events ?? providerSubmitDiagnostic?.hasTransferEvents) || Number(providerSubmitDiagnostic?.transfer_event_count ?? providerSubmitDiagnostic?.transferEventCount ?? 0) > 0;
-  const providerSubmitAuthPresent = !!providerSubmitFirstText(providerSubmitDiagnostic?.auth_request_id, providerSubmitDiagnostic?.authRequestId, providerSubmitDiagnostic?.auth_request_ids, providerSubmitDiagnostic?.authRequestIds);
-  const providerSubmitReviewReason = toUpper(providerSubmitDiagnostic?.review_reason_code || providerSubmitDiagnostic?.provider_submit_review_reason_code || providerSubmitDiagnostic?.providerSubmitReviewReasonCode || issueState.review_reason_code || issueState.reviewReasonCode || '');
-  const providerSubmitErrorMessage = toText(providerSubmitDiagnostic?.provider_error_message_redacted || providerSubmitDiagnostic?.providerErrorMessageRedacted || providerSubmitDiagnostic?.provider_error_message || providerSubmitDiagnostic?.providerErrorMessage || '');
-  const providerSubmitStatusCopy = (() => {
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK') return {
-      status: 'Provider submission outcome unknown',
-      reason: providerSubmitReviewReason || 'Submit chunk stale with no provider response',
-      summary: 'Submit chunk is stale with no provider response, transfer event, rail transaction ID, or rail state.',
-      action: 'Check the bank account before retry. If no payment was made, confirm no payment and cancel the draft batch.'
-    };
-    if (providerSubmitStatus === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME') return {
-      status: 'Provider response missing',
-      reason: 'Provider request may have been sent without a usable response',
-      summary: 'A provider request may have been sent, but no usable response was recorded.',
-      action: 'Check provider/bank before retry.'
-    };
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE' || providerSubmitStatus === 'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID') return {
-      status: 'Provider response unusable',
-      reason: providerSubmitStatus === 'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID' ? 'Provider response present with no external ID' : 'Provider response malformed',
-      summary: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
-      action: 'Reconcile with provider/bank before retry.'
-    };
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED') return {
-      status: 'Provider rejected payment',
-      reason: providerSubmitErrorMessage || 'Provider rejected submission',
-      summary: providerSubmitErrorMessage || 'Provider rejected submission.',
-      action: providerSubmitErrorMessage ? 'Fix/review payee or counterparty setup before retry.' : 'Review provider error.'
-    };
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL') return {
-      status: 'Provider was not called',
-      reason: 'Submission failed before provider submit',
-      summary: 'Submission failed before the provider payment request was sent.',
-      action: 'Retry after local blocker is cleared.'
-    };
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitAcceptanceEvidencePresent === true) return {
-      status: 'Provider acceptance evidence present',
-      reason: 'Provider accepted/submitted payment',
-      summary: 'Provider acceptance evidence exists. Do not retry unless reconciled.',
-      action: 'Do not retry unless reconciled.'
-    };
-    if (providerSubmitStatus === 'PROVIDER_SUBMISSION_ACCEPTED' && providerSubmitAcceptanceEvidencePresent !== true) return {
-      status: 'Provider response unusable',
-      reason: 'Provider accepted status recorded with no external provider evidence',
-      summary: 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.',
-      action: 'Reconcile with provider/bank before retry.'
-    };
-    if (providerSubmitStatus === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') return {
-      status: 'Manual no-payment confirmation recorded',
-      reason: 'Manual no-payment confirmation recorded',
-      summary: 'Manual no-payment confirmation recorded.',
-      action: 'Batch can be retried if safe retry is available.'
-    };
-    return {
-      status: 'Provider submission needs review',
-      reason: providerSubmitReviewReason || 'Provider submit diagnostic requires review',
-      summary: toText(providerSubmitDiagnostic?.recommended_action) || 'Provider submit diagnostic requires review.',
-      action: 'Check the bank account before retry.'
-    };
-  })();
-  const providerSubmitAutomaticRetryDisplay = [
-    'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
-    'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
-    'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
-    'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
-    'PROVIDER_SUBMISSION_ACCEPTED'
-  ].includes(providerSubmitStatus)
-    ? 'No'
-    : (providerSubmitSafeRetryAvailable ? 'Yes' : 'No');
-  const providerSubmitDetailRows = providerSubmitHasIssue ? [
-    ['Status', providerSubmitStatusCopy.status],
-    ['Reason', providerSubmitStatusCopy.reason],
-    ['Provider called', providerSubmitStatus === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL' ? 'No' : (providerSubmitRequestSent ? 'Yes' : (providerSubmitRequestSentKnownFalse ? 'No' : 'Unknown / not proven'))],
-    ['Provider response recorded', (providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED' || providerSubmitProviderResponsePresent) ? 'Yes' : 'No'],
-    ['Provider accepted', providerSubmitAcceptanceEvidencePresent ? 'Yes' : 'No evidence'],
-    ['External provider evidence', providerSubmitExternalEvidencePresent ? 'Yes' : 'No'],
-    ['Request sent confirmed', providerSubmitReadBool(providerSubmitDiagnostic?.provider_request_sent_confirmed ?? providerSubmitDiagnostic?.providerRequestSentConfirmed) ? 'Yes' : 'No / unknown'],
-    ['Rail transaction ID', providerSubmitAcceptanceEvidencePresent ? (providerSubmitFirstText(providerSubmitDiagnostic?.rail_tx_id, providerSubmitDiagnostic?.railTxId) || 'None') : 'None'],
-    ['Rail state', providerSubmitFirstText(providerSubmitDiagnostic?.rail_state, providerSubmitDiagnostic?.railState) || 'None'],
-    ['Transfer event recorded', providerSubmitTransferEventRecorded ? 'Yes' : 'No'],
-    ['Active auth request', providerSubmitAuthPresent ? 'Present' : 'None'],
-    ['Safe automatic retry', providerSubmitAutomaticRetryDisplay],
-    ['Manual resolution required', providerSubmitManualResolutionRequired ? 'Yes' : 'No'],
-    ['Recommended action', toText(providerSubmitDiagnostic?.recommended_action || providerSubmitDiagnostic?.recommendedAction || providerSubmitStatusCopy.action) || 'Check the bank account before retry. If no payment was made, confirm no payment and cancel the draft batch.'],
-    ['Local request ID', providerSubmitFirstText(providerSubmitDiagnostic?.request_id, providerSubmitDiagnostic?.requestId) || '—'],
-    ['Local idempotency key', providerSubmitFirstText(providerSubmitDiagnostic?.idempotency_key, providerSubmitDiagnostic?.idempotencyKey) || '—']
-  ] : [];
-  const providerSubmitSupportRows = providerSubmitHasIssue ? [
-    ['pay_batch_id', providerSubmitFirstText(providerSubmitDiagnostic?.pay_batch_id, providerSubmitDiagnostic?.payBatchId, payload.pay_batch_id, payload.id, payload.batch?.id) || '—'],
-    ['operation_id', providerSubmitFirstText(providerSubmitDiagnostic?.operation_id, providerSubmitDiagnostic?.operationId) || '—'],
-    ['chunk_id', providerSubmitFirstText(providerSubmitDiagnostic?.chunk_id, providerSubmitDiagnostic?.chunkId) || '—'],
-    ['transfer_id', providerSubmitFirstText(providerSubmitDiagnostic?.transfer_id, providerSubmitDiagnostic?.transferId) || '—'],
-    ['transfer_scope_id', providerSubmitFirstText(providerSubmitDiagnostic?.transfer_scope_id, providerSubmitDiagnostic?.transferScopeId) || '—'],
-    ['auth_request_id', providerSubmitFirstText(providerSubmitDiagnostic?.auth_request_id, providerSubmitDiagnostic?.authRequestId) || '—'],
-    ['Local request ID', providerSubmitFirstText(providerSubmitDiagnostic?.request_id, providerSubmitDiagnostic?.requestId) || '—'],
-    ['Local idempotency key', providerSubmitFirstText(providerSubmitDiagnostic?.idempotency_key, providerSubmitDiagnostic?.idempotencyKey) || '—']
-  ] : [];
-  const renderProviderSubmitDiagnosticCard = () => {
-    if (!providerSubmitHasIssue) return '';
-    const operationId = providerSubmitFirstText(providerSubmitDiagnostic?.operation_id, providerSubmitDiagnostic?.operationId);
-    const rowKey = providerSubmitFirstText(providerSubmitDiagnostic?.chunk_id, providerSubmitDiagnostic?.chunkId, providerSubmitDiagnostic?.transfer_id, providerSubmitDiagnostic?.transferId, 'provider-submit-review');
-    const canResolveNoPayment = (
-      (
-        providerSubmitStatus === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK' && providerSubmitReviewReason === 'STALE_RUNNING_PROVIDER_SUBMIT_CHUNK'
-      ) || providerSubmitStatus === 'PROVIDER_SUBMISSION_REJECTED'
-    ) && providerSubmitAcceptanceEvidencePresent === false && providerSubmitManualResolutionAvailable === true && providerSubmitStatus !== 'MANUAL_RESOLVED_NO_PAYMENT_MADE' && !!operationId;
-    return `
-      <section class="payment-issue-provider-submit-card card" style="padding:12px;border:1px solid #facc15;background:#fffbeb;color:#713f12;">
-        <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
-          <div style="min-width:260px;flex:1;display:flex;flex-direction:column;gap:8px;">
-            <div style="font-weight:800;font-size:14px;letter-spacing:.01em;">${enc(providerSubmitStatusCopy.status)}</div>
-            <div class="mini" style="opacity:.96;white-space:pre-wrap;">${enc(providerSubmitStatusCopy.summary)}</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;">
-              ${providerSubmitDetailRows.map(([label, value]) => `<div><strong>${enc(label)}</strong><br><span class="mono">${enc(value)}</span></div>`).join('')}
-            </div>
-            <div class="card" style="padding:8px;background:rgba(255,255,255,.55);">
-              <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:6px;">Support / debug IDs</div>
-              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;">
-                ${providerSubmitSupportRows.map(([label, value]) => `<div class="mini"><strong>${enc(label)}</strong><br><span class="mono">${enc(value)}</span></div>`).join('')}
-              </div>
-            </div>
-            <div class="mini" style="opacity:.9;">Local request IDs and idempotency keys are local correlation IDs only.
-They are not provider or bank transaction identifiers.</div>
-          </div>
-          ${canResolveNoPayment ? `
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button
-              type="button"
-              class="btn btn-sm btn-primary"
-              data-action="banking:pay:issue:resolveProviderSubmitNoPayment"
-              data-row-key="${enc(rowKey || 'provider-submit-review')}"
-              data-operation-id="${enc(operationId)}"
-              title="${enc('Confirm no payment was made after checking the bank/provider, then resolve the affected payment issue')}"
-            >Confirm no payment made and resolve</button>
-          </div>
-          ` : ''}
-        </div>
-      </section>
-    `;
+    return { visible: false, enabled: false, actionType, eligibleRows: [], excludedRows: allRows, requiresGuardedConfirmation: false, disabledReason: 'No batch-level action is available.' };
   };
 
-  const cleanPaidHtml = `
-    ${renderSummaryCard('Payment status', 'Paid successfully', 'Paid successfully.\nThis payment was paid successfully.', 'pill pill-ok')}
-    ${manualPaidActionAvailable ? `
-      <div class="payment-issue-manual-action-card card" style="padding:10px;">
-        <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Manual action</div>
-        <div class="mini" style="opacity:.88; margin-bottom:8px;">Use this only if you need to make a paid payment eligible to be paid again.</div>
-        <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:startManualPaidAction">Start manual action</button>
-      </div>
-    ` : ''}
-  `;
+  const wholeBatchModel = buildBankingWholeBatchPaymentActionModel(rows, payload);
+  const selectColumnVisible = selectableRows.length > 0;
 
-  const isBlockedFundsIssue = toUpper(issueState.issueKindForDisplay || issueState.issueKind || issueState.issue_kind || '') === 'BLOCKED_FUNDS'
-    || toUpper(payload?.status || payload?.batch?.status || '') === 'BLOCKED_FUNDS'
-    || toUpper(payload?.banking_alert_kind || payload?.batch?.banking_alert_kind || '') === 'BLOCKED_FUNDS';
-
-  if (isBlockedFundsIssue) {
-    const batch = (payload.batch && typeof payload.batch === 'object') ? payload.batch : {};
-    const requiredGbp = issueState.required_gbp ?? payload.blocked_funds_required_gbp ?? batch.blocked_funds_required_gbp ?? payload.last_funds_check_json?.required_gbp ?? batch.last_funds_check_json?.required_gbp ?? null;
-    const availableGbp = issueState.available_gbp ?? payload.blocked_funds_available_gbp ?? batch.blocked_funds_available_gbp ?? payload.last_funds_check_json?.available_gbp ?? batch.last_funds_check_json?.available_gbp ?? null;
-    const provider = toText(issueState.provider || payload.blocked_funds_provider || batch.blocked_funds_provider || payload.last_funds_check_json?.rail_provider || batch.last_funds_check_json?.rail_provider || payload.rail_provider_snapshot || batch.rail_provider_snapshot || '');
-    const railEnv = toText(issueState.env || payload.blocked_funds_env || batch.blocked_funds_env || payload.last_funds_check_json?.rail_env || batch.last_funds_check_json?.rail_env || payload.rail_env_snapshot || batch.rail_env_snapshot || '');
-    const fundingAccount = toText(issueState.funding_account_ref || payload.blocked_funds_account_ref || batch.blocked_funds_account_ref || payload.last_funds_check_json?.funding_account_ref || batch.last_funds_check_json?.funding_account_ref || payload.funding_account_ref || batch.funding_account_ref || '');
-    const lastFundsCheckedRaw = issueState.last_funds_check_at_utc || payload.last_funds_check_at_utc || batch.last_funds_check_at_utc || payload.last_funds_check_json?.checked_at_utc || batch.last_funds_check_json?.checked_at_utc || '';
-    const lastFundsChecked = (() => {
-      if (!lastFundsCheckedRaw) return 'Not recorded';
-      try {
-        if (typeof formatCloudTmsLondonDateTime === 'function') return formatCloudTmsLondonDateTime(lastFundsCheckedRaw);
-      } catch {}
-      return toText(lastFundsCheckedRaw) || 'Not recorded';
-    })();
-    const canRetry = issueState.canRetryBlockedFunds === true || issueState.can_retry_blocked_funds === true || payload.can_retry_blocked_funds === true || batch.can_retry_blocked_funds === true;
-    const batchId = toText(payload.pay_batch_id || batch.pay_batch_id || payload.id || batch.id || '');
-
-    return `
-      <section id="payment-issue-panel" class="payment-issue-panel payment-issue-blocked-funds-mode">
-        <div style="display:flex; flex-direction:column; gap:10px;">
-          <div class="payment-issue-blocked-funds-card card" style="padding:12px;border:1px solid #fecaca;background:#fef2f2;color:#7f1d1d;">
-            <div style="font-weight:800;font-size:14px;margin-bottom:6px;">BANK REJECTED PAYMENT — BLOCKED FUNDS</div>
-            <div class="mini" style="opacity:.95;margin-bottom:10px;">CloudTMS did not submit this payment because the funding account did not have enough funds.</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;margin-bottom:10px;">
-              <div><strong>Required</strong><br><span class="mono">${enc(formatOptionalAmount(requiredGbp))}</span></div>
-              <div><strong>Available</strong><br><span class="mono">${enc(formatOptionalAmount(availableGbp))}</span></div>
-              <div><strong>Provider / env</strong><br><span class="mono">${enc([provider || '—', railEnv || ''].filter(Boolean).join(' / '))}</span></div>
-              <div><strong>Funding account</strong><br><span class="mono">${enc(fundingAccount || '—')}</span></div>
-              <div><strong>Last funds checked</strong><br><span class="mono">${enc(lastFundsChecked)}</span></div>
-              <div><strong>Execution state</strong><br><span class="mono">NOT_SUBMITTED</span></div>
-            </div>
-            <div class="mini" style="font-weight:700;margin-bottom:10px;">No bank payment was submitted.</div>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-              <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:blockedFunds:retry" data-batch-id="${enc(batchId)}" ${canRetry ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'}>Retry payment</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:blockedFunds:cancel" data-batch-id="${enc(batchId)}">Cancel/release payment</button>
-            </div>
-          </div>
-        </div>
-      </section>
-    `;
-  }
-
-  const buildTableRowsHtml = (tableRows) => tableRows.map((row, index) => {
+  const actionButtonHtml = (row, index) => {
+    const actionLabel = toText(row.actionLabel || row.action_label || 'View details') || 'View details';
+    const actionType = toUpper(row.actionType || row.action_type || 'VIEW_DETAILS');
     const rowKey = rowKeyOf(row, index);
+    const actionMap = {
+      CANDIDATE_RETURNED_FUNDS: 'candidateReturnedFunds',
+      RELEASE_FOR_NEXT_RUN: 'releaseForNextRun',
+      REVERSE_RETURNED: 'reverseReturned',
+      RESOLVE_MANUALLY: 'resolveManually',
+      VIEW_DETAILS: 'viewDetails'
+    };
+    const action = actionMap[actionType] || 'viewDetails';
+    const disabledAttr = (row.requiresBackendSupport === true && (actionType === 'CANDIDATE_RETURNED_FUNDS' || actionType === 'REVERSE_RETURNED'))
+      ? ' data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(.7);"'
+      : '';
+    return `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:${enc(action)}" data-row-key="${enc(rowKey)}"${disabledAttr}>${enc(actionLabel)}</button>`;
+  };
+
+  const tableRowsHtml = rows.map((row, index) => {
+    const rowKey = rowKeyOf(row, index);
+    const selectable = row.selectable === true;
     const checked = row.selected === true;
-    const selectable = row.selectable !== false && (row.selectableForApply === true || row.selectableForReview === true || row.selectable === true);
-    const needsReview = /review/i.test(toText(row.statusLabel || row.whatHappenedLabel || row.bankStatusLabel));
-    const rowClass = [checked ? 'payment-issue-row-selected' : '', needsReview ? 'payment-issue-row-review' : ''].filter(Boolean).join(' ');
     return `
-      <tr${rowClass ? ` class="${enc(rowClass)}"` : ''} data-row-key="${enc(rowKey)}">
-        <td><input type="checkbox" data-action="banking:pay:issue:toggleRow" data-row-key="${enc(rowKey)}"${selectable ? '' : ' disabled'}${checked ? ' checked' : ''}></td>
-        <td>${enc(toText(row.candidateName || row.candidate_name || ''))}</td>
-        <td>${enc(toText(row.umbrellaName || row.umbrella_name || ''))}</td>
-        <td class="mono" style="text-align:right;">${enc(formatAmount(row.paymentAmount || row.amount || 0))}</td>
-        <td>${enc(toText(row.bankStatusLabel || row.bank_status_label || ''))}</td>
-        <td>${enc(toText(row.whatHappenedLabel || row.what_happened_label || ''))}</td>
-        <td>${enc(toText(row.actionLabel || row.action_label || 'No action'))}</td>
-        <td>${enc(toText(row.statusLabel || row.status_label || ''))}</td>
-      </tr>`;
+      <tr data-row-key="${enc(rowKey)}"${checked ? ' class="payment-issue-row-selected"' : ''}>
+        ${selectColumnVisible ? `<td style="width:54px;">${selectable ? `<input type="checkbox" data-action="banking:pay:issue:toggleRow" data-row-key="${enc(rowKey)}"${checked ? ' checked' : ''}>` : ''}</td>` : ''}
+        <td style="width:70px;font-size:18px;">${enc(row.statusSymbol || row.status_symbol || '❓')}</td>
+        <td>${enc(toText(row.candidateName || row.candidate_name || ''))}${toText(row.candidateTmsRef || row.candidate_tms_ref) ? `<div class="mini mono" style="opacity:.75;">${enc(toText(row.candidateTmsRef || row.candidate_tms_ref))}</div>` : ''}</td>
+        <td>${enc(toText(row.payeeUmbrellaName || row.payee_umbrella_name || row.umbrellaName || row.umbrella_name || ''))}</td>
+        <td class="mono" style="text-align:right;">${enc(formatAmount(row.paymentAmount || row.payment_amount || row.amount || 0))}</td>
+        <td>${enc(toText(row.resultLabel || row.result_label || row.whatHappenedLabel || row.what_happened_label || 'Check required'))}</td>
+        <td>${actionButtonHtml(row, index)}</td>
+      </tr>
+    `;
   }).join('');
 
-  const renderTable = (tableRows) => `
-    <div class="payment-issue-table-wrap" style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
-      <table class="payment-issue-table grid" style="min-width:980px; margin:0; table-layout:auto;">
-        <thead>
-          <tr>
-            <th style="width:54px;">Select</th>
-            <th><button type="button" data-action="banking:pay:issue:sort" data-sort-by="candidate_name">Candidate</button></th>
-            <th><button type="button" data-action="banking:pay:issue:sort" data-sort-by="umbrella_name">Umbrella / Payee</button></th>
-            <th style="text-align:right; width:150px;"><button type="button" data-action="banking:pay:issue:sort" data-sort-by="amount">Payment amount</button></th>
-            <th style="width:130px;"><button type="button" data-action="banking:pay:issue:sort" data-sort-by="bank_status">Bank status</button></th>
-            <th>What happened</th>
-            <th style="width:170px;">Action</th>
-            <th style="width:160px;"><button type="button" data-action="banking:pay:issue:sort" data-sort-by="status">Recovery status</button></th>
-          </tr>
-        </thead>
-        <tbody>${buildTableRowsHtml(tableRows)}</tbody>
-      </table>
-    </div>
-  `;
-
-  const rawProgress = (state.progress && typeof state.progress === 'object')
-    ? state.progress
-    : ((payload.correction_progress && typeof payload.correction_progress === 'object') ? payload.correction_progress : null);
-  const displayTotals = (rawProgress && typeof rawProgress.display_totals === 'object') ? rawProgress.display_totals : null;
-  const fallbackTotals = rawProgress && typeof rawProgress === 'object' ? rawProgress : {};
-  const progressTotals = {
-    total: toNum(displayTotals?.total ?? fallbackTotals.total ?? fallbackTotals.total_count),
-    applied: toNum(displayTotals?.applied ?? fallbackTotals.applied ?? fallbackTotals.completed),
-    waiting: toNum(displayTotals?.waiting ?? fallbackTotals.waiting ?? fallbackTotals.awaiting_authorisation),
-    processing: toNum(displayTotals?.processing ?? fallbackTotals.processing ?? fallbackTotals.in_progress),
-    needsReview: toNum(displayTotals?.needs_review ?? fallbackTotals.needs_review ?? fallbackTotals.review),
-    couldNotApply: toNum(displayTotals?.could_not_apply ?? fallbackTotals.could_not_apply ?? fallbackTotals.failed)
-  };
-  const hasNonZeroProgress = Object.values(progressTotals).some((value) => Number(value) > 0);
-  const hasRealProgress = !!(state.request || rawProgress || hasNonZeroProgress || issueKind === 'WAITING' || issueKind === 'APPLIED' || (issueKind === 'PROCESSING' && hasBackendEvidence) || issueKind === 'REVIEW');
-  const progressHeadline = (() => {
-    if (progressTotals.couldNotApply > 0 || progressTotals.needsReview > 0 || (issueState.requiresUserAction === true && issueKind === 'REVIEW')) return headlineText === 'Partly applied — review needed' ? 'Partly applied — review needed' : 'Needs review';
-    if (issueKind === 'APPLIED') return 'Applied';
-    if (issueKind === 'WAITING') return 'Waiting for approval';
-    if (issueKind === 'PROCESSING') return 'Processing';
-    return headlineText || 'Payment status';
-  })();
-  const progressMessage = (() => {
-    if (progressHeadline === 'Applied') return 'Applied. The selected amounts are now available to be processed in the next batch.';
-    if (progressHeadline === 'Processing') return 'Processing. Selected payments are being updated.';
-    if (progressHeadline === 'Waiting for approval') return 'Waiting for approval.';
-    if (progressHeadline === 'Partly applied — review needed') return 'Partly applied — review needed.';
-    if (progressHeadline === 'Needs review') return 'Needs review.';
-    return '';
-  })();
-  const progressItems = [
-    ['Total', progressTotals.total],
-    ['Applied', progressTotals.applied],
-    ['Waiting for approval', progressTotals.waiting],
-    ['Processing', progressTotals.processing],
-    ['Needs review', progressTotals.needsReview],
-    ['Could not apply', progressTotals.couldNotApply]
-  ].filter(([, value]) => Number(value) > 0);
-  const progressHtml = hasRealProgress ? `
-    <section class="payment-issue-progress payment-issue-progress-compact card" style="padding:10px;">
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:${progressItems.length ? '8px' : '0'};">
-        <span class="payment-issue-approval-chip pill ${progressHeadline === 'Applied' ? 'pill-ok' : (progressHeadline === 'Processing' ? 'pill-info' : 'pill-warn')}">${enc(progressHeadline)}</span>
-        ${progressMessage ? `<span class="mini" style="opacity:.88;">${enc(progressMessage)}</span>` : ''}
-      </div>
-      ${progressItems.length ? `<ul style="margin:0; padding-left:18px;">${progressItems.map(([label, value]) => `<li>${enc(label)}: <span class="mono">${enc(String(value))}</span></li>`).join('')}</ul>` : ''}
-    </section>
-  ` : '';
-
-  const blockerHasSuggestedResolutionRequired = (arr) => (Array.isArray(arr) ? arr : []).some((item) => {
-    if (typeof item === 'string') return item.toUpperCase() === 'SUGGESTED_RESOLUTION_REQUIRED';
-    if (item && typeof item === 'object') {
-      const code = String(item.code || item.id || item.key || '').trim().toUpperCase();
-      return code === 'SUGGESTED_RESOLUTION_REQUIRED';
-    }
-    return false;
-  });
-  const suggestedResolutionRaw = (typeof getBankingPaymentIssueFinanceSuggestion === 'function')
-    ? getBankingPaymentIssueFinanceSuggestion(effectivePlan)
-    : null;
-  const suggestedResolution = (suggestedResolutionRaw && typeof suggestedResolutionRaw === 'object' && suggestedResolutionRaw.suggestion && typeof suggestedResolutionRaw.suggestion === 'object')
-    ? suggestedResolutionRaw.suggestion
-    : suggestedResolutionRaw;
-  const suggestionRequiredFlag = !!(
-    (suggestedResolutionRaw && typeof suggestedResolutionRaw === 'object' && suggestedResolutionRaw.required === true) ||
-    (suggestedResolution && typeof suggestedResolution === 'object' && suggestedResolution.required === true)
-  );
-  const financeReviewRequired = !!(
-    !selectedAllDraftOnlyRemoval &&
-    effectivePlan &&
-    (
-      effectivePlan.finance_review_required === true ||
-      effectivePlan.financeReviewRequired === true ||
-      effectivePlan.suggested_resolution_required === true ||
-      effectivePlan?.suggested_resolution?.required === true ||
-      effectivePlan?.suggestedResolution?.required === true ||
-      effectivePlan?.suggested_resolution_payload?.required === true ||
-      suggestionRequiredFlag ||
-      blockerHasSuggestedResolutionRequired(effectivePlan.hard_blockers) ||
-      blockerHasSuggestedResolutionRequired(effectivePlan.blockers)
-    )
-  );
-  const financeSuggestionObj = (suggestedResolution && typeof suggestedResolution === 'object') ? suggestedResolution : {};
-  const financeCases = Array.isArray(financeSuggestionObj.finance_cases) ? financeSuggestionObj.finance_cases
-    : (Array.isArray(financeSuggestionObj.financeCases) ? financeSuggestionObj.financeCases
-      : (Array.isArray(financeSuggestionObj.cases) ? financeSuggestionObj.cases : []));
-  const financeCaseRows = financeCases.length ? financeCases.slice(0, 3) : (Object.keys(financeSuggestionObj).length ? [financeSuggestionObj] : []);
-  const financeReviewDetailsHtml = financeCaseRows.length ? `
-    <div class="mini" style="margin-top:8px; opacity:.9; display:flex; flex-direction:column; gap:4px;">
-      ${financeCaseRows.map((caseItem, index) => {
-        const item = (caseItem && typeof caseItem === 'object') ? caseItem : {};
-        const sourceChannel = toText(item.source_pay_channel || item.sourcePayChannel || item.current_pay_channel || item.currentPayChannel || item.source_channel || item.sourceChannel || '');
-        const targetChannel = toText(item.suggested_pay_channel || item.suggestedPayChannel || item.target_pay_channel || item.targetPayChannel || item.target_channel || item.targetChannel || '');
-        const effectiveDate = toText(item.effective_pay_date || item.effectivePayDate || item.effective_date || item.effectiveDate || '');
-        const scheduleMode = toText(item.schedule_input_mode || item.scheduleInputMode || item.schedule_mode || item.scheduleMode || '');
-        const weeklyDue = item.weekly_due ?? item.weeklyDue ?? item.suggested_weekly_due ?? item.suggestedWeeklyDue;
-        const weeksTotal = item.weeks_total ?? item.weeksTotal ?? item.suggested_weeks_total ?? item.suggestedWeeksTotal;
-        const remainingAmount = item.manual_total_remaining ?? item.manualTotalRemaining ?? item.remaining_amount ?? item.remainingAmount ?? item.total_remaining ?? item.totalRemaining;
-        const bits = [];
-        if (sourceChannel) bits.push(`Source: ${sourceChannel}`);
-        if (targetChannel) bits.push(`Suggested: ${targetChannel}`);
-        if (effectiveDate) bits.push(`Effective date: ${effectiveDate}`);
-        if (scheduleMode) bits.push(`Schedule: ${scheduleMode}`);
-        if (weeklyDue != null && weeklyDue !== '') bits.push(`Weekly due: ${formatAmount(weeklyDue)}`);
-        if (weeksTotal != null && weeksTotal !== '') bits.push(`Weeks: ${weeksTotal}`);
-        if (remainingAmount != null && remainingAmount !== '') bits.push(`Remaining: ${formatAmount(remainingAmount)}`);
-        return `<div>${enc(toText(item.finance_case_id || item.financeCaseId || item.case_id || item.caseId || `Resolution ${index + 1}`))}${bits.length ? ` — ${enc(bits.join(' • '))}` : ''}</div>`;
-      }).join('')}
-    </div>
-  ` : '';
-  const financeReviewAccepted = !!state.acceptedResolutionJson;
-  const financeConfirmDisabledAttr = financeReviewRequired && !financeReviewAccepted
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const financeReviewHtml = financeReviewRequired ? `
-    <section class="card payment-issue-finance-review" style="padding:10px;">
-      <div style="font-weight:700;">Needs review</div>
-      <div class="mini">Review the suggested pay-channel resolution or enter a different value before continuing.</div>
-      ${financeReviewDetailsHtml}
-      ${financeReviewAccepted ? '<div class="mini" style="margin-top:6px;">Review accepted</div>' : '<button type="button" style="margin-top:8px;" data-action="banking:pay:issue:reviewFinance">Review selected payments</button>'}
-    </section>
-  ` : '';
-
-  let planPreviewHtml = '';
-  if (state.plan || state.planLoading || state.planError) {
-    const planPreviewTitle = selectedAllDraftOnlyRemoval ? 'Review removal' : 'Review selected payments';
-    let body = '';
-    if (state.planLoading) body = selectedAllDraftOnlyRemoval ? '<p>Reviewing removal...</p>' : '<p>Reviewing selected payments...</p>';
-    else if (state.planError) body = `<p>${enc(toText(state.planError))}</p>`;
-    else if (effectivePlan) {
-      const planSelection = (effectivePlan.selection && typeof effectivePlan.selection === 'object' && !Array.isArray(effectivePlan.selection))
-        ? effectivePlan.selection
-        : {};
-      const planAmounts = (effectivePlan.amounts && typeof effectivePlan.amounts === 'object' && !Array.isArray(effectivePlan.amounts))
-        ? effectivePlan.amounts
-        : {};
-      const affectedCountText = formatOptionalCount(planSelection.selected_item_count ?? planSelection.selectedItemCount);
-      const affectedAmountExVatText = formatOptionalAmount(planAmounts.amount_ex_vat ?? planAmounts.amountExVat);
-      const affectedAmountIncVatText = formatOptionalAmount(planAmounts.amount_inc_vat ?? planAmounts.amountIncVat);
-      const warningSource = Array.isArray(effectivePlan.user_warnings) ? effectivePlan.user_warnings
-        : (Array.isArray(effectivePlan.warnings) ? effectivePlan.warnings
-          : (Array.isArray(effectivePlan.hard_blockers) ? effectivePlan.hard_blockers
-            : (Array.isArray(effectivePlan.blockers) ? effectivePlan.blockers : [])));
-      const warningTextList = warningSource.map((warning) => normaliseWarningText(warning)).filter(Boolean);
-      body = `
-        <p>Affected payments: ${enc(affectedCountText)}</p>
-        <p>Affected amount excluding VAT: ${enc(affectedAmountExVatText)}</p>
-        <p>Affected amount including VAT: ${enc(affectedAmountIncVatText)}</p>
-        ${warningTextList.length ? `<ul>${warningTextList.map((warning) => `<li>${enc(warning)}</li>`).join('')}</ul>` : ''}
-        ${financeReviewRequired ? '<p>Needs review</p>' : ''}
-      `;
-    }
-    planPreviewHtml = `<section class="card" style="padding:10px;"><h4 style="margin-top:0;">${enc(planPreviewTitle)}</h4>${body}</section>`;
-  }
-
-  const showProcessNextGroup = !!(rawProgress && (rawProgress.manual_chunk_required === true || rawProgress.requires_manual_chunk === true || rawProgress.has_more_chunks === true));
-  const umbrellaGroups = new Map();
-  rows.forEach((row, index) => {
-    const umbrellaId = toText(row?.umbrellaId || row?.umbrella_id);
-    const transferGroupKey = toText(row?.transferGroupKey || row?.transfer_group_key);
-    if (!umbrellaId || !transferGroupKey) return;
-    const payBankTransferId = toText(row?.payBankTransferId || row?.pay_bank_transfer_id);
+  const supportDetailsRows = rows.map((row, index) => {
+    const details = (row && typeof row.supportDetails === 'object' && !Array.isArray(row.supportDetails)) ? row.supportDetails : {};
     const rowKey = rowKeyOf(row, index);
-    const key = `${umbrellaId}::${transferGroupKey}::${payBankTransferId}`;
-    if (!umbrellaGroups.has(key)) {
-      umbrellaGroups.set(key, { umbrellaId, transferGroupKey, payBankTransferId, rowKey });
-    }
-  });
-  const umbrellaButtonsHtml = (() => {
-    const groups = Array.from(umbrellaGroups.values());
-    if (!groups.length) return '';
-    return groups.map((group) => `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:selectUmbrellaGroup" data-row-key="${enc(group.rowKey)}" data-umbrella-id="${enc(group.umbrellaId)}" data-transfer-group-key="${enc(group.transferGroupKey)}"${group.payBankTransferId ? ` data-pay-bank-transfer-id="${enc(group.payBankTransferId)}"` : ''}>Select full umbrella payment</button>`).join('');
-  })();
-
-  if (cleanPaidNoIssue) {
+    const pairs = [
+      ['row_key', rowKey],
+      ['display_state', row.displayState || row.display_state],
+      ['action_type', row.actionType || row.action_type],
+      ['backend_action', row.backendAction || row.backend_action],
+      ['pay_batch_id', payload.pay_batch_id || payload.id || payload.batch?.id],
+      ['operation_id', details.operation_id],
+      ['chunk_id', details.chunk_id],
+      ['transfer_id', details.transfer_id || row.payBankTransferId || row.pay_bank_transfer_id],
+      ['transfer_scope_id', details.transfer_scope_id],
+      ['auth_request_id', details.auth_request_id],
+      ['local_request_id', details.local_request_id || details.request_id],
+      ['local_idempotency_key', details.local_idempotency_key || details.idempotency_key],
+      ['provider_submission_status', details.provider_submission_status],
+      ['provider_http_status', details.provider_http_status],
+      ['rail_tx_id', details.rail_tx_id],
+      ['rail_state', details.rail_state]
+    ].filter(([, value]) => toText(value));
     return `
-      <section id="payment-issue-panel" class="payment-issue-panel payment-issue-clean-paid-mode">
-        <div style="display:flex; flex-direction:column; gap:10px;">
-          ${cleanPaidHtml}
+      <div class="card" style="padding:8px;">
+        <div class="mini" style="font-weight:700;margin-bottom:6px;">${enc(toText(row.candidateName || row.candidate_name || rowKey))}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;">
+          ${pairs.map(([key, value]) => `<div class="mini"><strong>${enc(key)}</strong><br><span class="mono">${enc(toText(value))}</span></div>`).join('')}
         </div>
-      </section>
+      </div>
     `;
-  }
+  }).join('');
 
-  if (manualPaidActionMode) {
-    const manualRows = rows.filter((row) => row && (row.manualActionAvailable === true || row.manual_action_available === true || isManualPaidRow(row)));
-    const disabledAttr = selectedCount <= 0 ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : '';
-    return `
-      <section id="payment-issue-panel" class="payment-issue-panel payment-issue-manual-mode">
-        <div style="display:flex; flex-direction:column; gap:10px;">
-          ${renderSummaryCard('Payment status', 'Paid successfully', 'This payment was paid successfully.', 'pill pill-ok')}
-          <div class="payment-issue-manual-action-card card" style="padding:10px;">
-            <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Manual action</div>
-            <div class="mini" style="opacity:.88; margin-bottom:8px;">Use this only if you need to make a paid payment eligible to be paid again.</div>
-            <div class="payment-issue-toolbar" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:selectAllVisible">Select paid payments</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:clearAll">Clear selection</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:cancelManualPaidAction">Cancel manual action</button>
-            </div>
-          </div>
-          ${manualRows.length ? renderTable(manualRows) : '<div class="mini" style="opacity:.85;">No paid payments are available for manual action.</div>'}
-          <div class="payment-issue-summary-card card" style="padding:10px;">
-            <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Selected payment summary</div>
-            <div class="mini" style="opacity:.88; margin-bottom:8px;">Selected payments: <span class="mono">${enc(String(selectedCount))}</span>${selectedCount ? ` • Amount: <span class="mono">${enc(formatAmount(selectedAmount))}</span>` : ''}</div>
-            <div class="payment-issue-actions" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:plan" data-requested-action="REVERSE_SETTLED_PAYMENT" ${disabledAttr}>Review selected payments</button>
-              <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:issue:openConfirm" data-requested-action="REVERSE_SETTLED_PAYMENT" ${disabledAttr || financeConfirmDisabledAttr}>Make selected eligible for payment again</button>
-            </div>
-            ${state.planError ? `<div class="error" style="white-space:pre-wrap; margin-top:8px;">${enc(toText(state.planError))}</div>` : ''}
-          </div>
-          ${planPreviewHtml}
-          ${financeReviewHtml}
-          ${progressHtml}
-        </div>
-      </section>
-    `;
-  }
-
-  const tableShouldRender = providerSubmitHasIssue || hasSelectableIssueRows || hasReturnedRows || hasRejectedRows || rows.some((row) => row && (isCancellableRow(row) || toUpper(row.issueKindForDisplay || '') === 'REVIEW'));
-  const issueRows = rows.filter((row) => row && !isManualPaidRow(row));
-  const toolbarHtml = tableShouldRender ? `
-    <div class="payment-issue-toolbar" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-      ${hasSelectableIssueRows ? '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:selectAllVisible">Select all visible</button>' : ''}
-      ${(selectedCount > 0 || hasSelectableIssueRows) ? '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:clearAll">Clear selection</button>' : ''}
-      ${hasReturnedRows ? '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:selectReturned">Select returned</button>' : ''}
-      ${hasRejectedRows ? '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:selectRejected">Select rejected</button>' : ''}
-      ${umbrellaButtonsHtml}
+  const selectionFooterHtml = selectableRows.length ? `
+    <div class="payment-issue-selection-footer card" style="padding:10px;">
+      <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Selected</div>
+      <div class="mini" style="opacity:.88;margin-bottom:8px;">Selected rows: <span class="mono">${enc(String(selectedCount))}</span>${selectedCount ? ` • Amount: <span class="mono">${enc(formatAmount(selectedAmount))}</span>` : ''}</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:selectAllVisible">Select all visible</button>
+        <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:clearAll">Clear selection</button>
+        <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:plan"${selectedCount ? '' : ' data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(.7);"'}>Review selected payments</button>
+      </div>
     </div>
   ` : '';
 
-  const selectedActionable = selectedRows.filter((row) => row?.selectableForApply === true || row?.selectableForReview === true);
-  const selectedCategories = Array.from(new Set(selectedActionable.map((row) => {
-    if (isDraftOnlyRow(row)) return 'draftRemove';
-    if (isReturnedRow(row)) return 'returned';
-    if (isRejectedRow(row)) return 'rejected';
-    if (isCancellableRow(row)) return 'notSent';
-    if (row?.selectableForReview === true) return 'review';
-    return '';
-  }).filter(Boolean)));
-  const selectedCategory = selectedCategories.length === 1 ? selectedCategories[0] : '';
-  const isProcessing = issueState.headline === 'Processing' || /processing/i.test(toText(issueState.statusText));
-  const retrySignals = `${toText(issueState.headline)} ${toText(issueState.statusText)} ${toText(rawProgress?.status)} ${toText(rawProgress?.state)} ${toText(rawProgress?.result)}`.toLowerCase();
-  const canRetry = /retry|could not apply|error/.test(retrySignals)
-    || rawProgress?.retry_supported === true
-    || rawProgress?.can_retry === true
-    || rawProgress?.allow_retry === true;
-  const selectedActionHtml = (() => {
-    let html = '';
-    if (selectedActionable.length > 0 && selectedCategory === 'draftRemove') {
-      html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:plan" data-requested-action="CANCEL_PAYMENT_ATTEMPT">Review removal</button>';
-      html += `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:issue:openConfirm" data-requested-action="CANCEL_PAYMENT_ATTEMPT" ${financeConfirmDisabledAttr}>Remove payment from batch</button>`;
-    } else if (selectedActionable.length > 0 && selectedCategory === 'review') {
-      html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:plan" data-requested-action="REVIEW_BANK_EVIDENCE">Review selected payments</button>';
-      html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:exportReviewList">Export review list</button>';
-    } else if (selectedActionable.length > 0 && selectedCategory === 'returned') {
-      const label = selectedActionable.length === 1 ? 'Reverse selected returned payment' : 'Reverse selected returned payments';
-      html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:plan" data-requested-action="REVERSE_SETTLED_PAYMENT">Review selected payments</button>';
-      html += `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:issue:openConfirm" data-requested-action="REVERSE_SETTLED_PAYMENT" ${financeConfirmDisabledAttr}>${enc(label)}</button>`;
-    } else if (selectedActionable.length > 0 && selectedCategory === 'rejected') {
-      const label = selectedActionable.length === 1 ? 'Confirm no payment made and release selected payment' : 'Confirm no payment made and release selected payments';
-      html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:plan" data-requested-action="UNWIND_FAILED_PAYMENT">Review selected payments</button>';
-      html += `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:issue:openConfirm" data-requested-action="UNWIND_FAILED_PAYMENT" ${financeConfirmDisabledAttr}>${enc(label)}</button>`;
-    } else if (selectedActionable.length > 0 && selectedCategory === 'notSent') {
-      html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:plan" data-requested-action="CANCEL_PAYMENT_ATTEMPT">Review selected payments</button>';
-      html += `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:issue:openConfirm" data-requested-action="CANCEL_PAYMENT_ATTEMPT" ${financeConfirmDisabledAttr}>Cancel payment</button>`;
-    } else if (selectedRows.length > 0) {
-      html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:plan">Review selected payments</button>';
-      if (selectedRows.some((row) => row?.selectableForReview === true)) html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:exportReviewList">Export review list</button>';
-    }
-    if (isProcessing) html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:refreshStatus">Refresh status</button>';
-    if (canRetry) html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:processChunk">Try again</button><button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:exportReviewList">Export review list</button>';
-    if (showProcessNextGroup) html += '<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:processChunk">Process next group</button>';
-    return html;
-  })();
+  const wholeBatchHtml = wholeBatchModel.visible ? `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button
+        type="button"
+        class="btn btn-sm btn-outline"
+        data-action="banking:pay:issue:reverseEntireBatch"
+        data-action-type="${enc(wholeBatchModel.actionType || '')}"
+        ${wholeBatchModel.enabled ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(.7);"'}
+        title="${enc(wholeBatchModel.enabled ? 'Open whole-batch confirmation' : (wholeBatchModel.disabledReason || 'Whole-batch action is not currently safe'))}"
+      >Reverse entire batch</button>
+      ${wholeBatchModel.enabled ? '' : `<span class="mini" style="opacity:.78;">${enc(wholeBatchModel.disabledReason || 'Whole-batch action is not currently safe.')}</span>`}
+    </div>
+  ` : '';
 
   return `
-    <section id="payment-issue-panel" class="payment-issue-panel payment-issue-status-mode">
-      <div style="display:flex; flex-direction:column; gap:10px;">
-        ${providerSubmitHasIssue ? renderProviderSubmitDiagnosticCard() : ''}
-        ${renderSummaryCard('Payment status', headlineText || 'Payment status', shortMessage, badgeClass)}
-        ${toolbarHtml}
-        ${tableShouldRender ? renderTable(issueRows) : ''}
-        ${planPreviewHtml}
-        ${financeReviewHtml}
-        ${progressHtml}
-        ${selectedActionHtml ? `<div class="payment-issue-actions" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">${selectedActionHtml}</div>` : ''}
+    <section id="payment-issue-panel" class="payment-issue-panel payment-issue-current-status-mode">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card" style="padding:10px;">
+          <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+            <div>
+              <div style="font-weight:800;font-size:15px;">Current Payment Status</div>
+              <div class="mini" style="opacity:.82;">Sent: <span class="mono">${enc(String(sentCount))}</span> • Failed / returned: <span class="mono">${enc(String(failedReturnedCount))}</span> • Check required: <span class="mono">${enc(String(checkRequiredCount))}</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="payment-issue-table-wrap" style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
+          <table class="payment-issue-table grid" style="min-width:${selectColumnVisible ? '980px' : '930px'};margin:0;table-layout:auto;">
+            <thead>
+              <tr>
+                ${selectColumnVisible ? '<th style="width:54px;">Select</th>' : ''}
+                <th style="width:70px;">Status</th>
+                <th><button type="button" data-action="banking:pay:issue:sort" data-sort-by="candidate">Candidate</button></th>
+                <th><button type="button" data-action="banking:pay:issue:sort" data-sort-by="payee_umbrella">Payee / Umbrella</button></th>
+                <th style="text-align:right;width:150px;"><button type="button" data-action="banking:pay:issue:sort" data-sort-by="amount">Amount</button></th>
+                <th><button type="button" data-action="banking:pay:issue:sort" data-sort-by="result">Result</button></th>
+                <th style="width:190px;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tableRowsHtml || `<tr><td colspan="${selectColumnVisible ? '7' : '6'}"><div class="mini" style="opacity:.85;">No payment rows were returned for this batch.</div></td></tr>`}
+            </tbody>
+          </table>
+        </div>
+
+        ${selectionFooterHtml}
+        ${wholeBatchHtml}
+
+        <details class="payment-issue-support-details card" style="padding:10px;">
+          <summary style="cursor:pointer;font-weight:700;">Support details ▸</summary>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+            ${supportDetailsRows || '<div class="mini" style="opacity:.85;">No support details were returned.</div>'}
+          </div>
+        </details>
       </div>
     </section>
   `;
 }
+
+
 
 
 function renderBankingNavAlertPopover(attentionState) {
@@ -57122,7 +55146,6 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
 
 
 
-
 function renderBankingPayBatchChildModalOverview() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -57130,8 +55153,78 @@ function renderBankingPayBatchChildModalOverview() {
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       }[c]));
 
+  const asObj = (v) => (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+  const asArr = (v) => Array.isArray(v) ? v : [];
+  const trimStr = (v) => String(v == null ? '' : v).trim();
+  const upperTrim = (v) => trimStr(v).toUpperCase();
+  const asNum = (v, dflt = 0) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : dflt;
+  };
+  const firstText = (...values) => {
+    for (const value of values) {
+      if (Array.isArray(value)) {
+        const nested = firstText(...value);
+        if (nested) return nested;
+        continue;
+      }
+      const text = trimStr(value);
+      if (text) return text;
+    }
+    return '';
+  };
+  const firstFiniteNumber = (...values) => {
+    for (const value of values) {
+      if (value === null || value === undefined || trimStr(value) === '') continue;
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  };
+  const firstFiniteNonNegativeInteger = (...values) => {
+    for (const value of values) {
+      if (value === null || value === undefined || trimStr(value) === '') continue;
+      const n = Number(value);
+      if (Number.isFinite(n) && n >= 0) return Math.trunc(n);
+    }
+    return null;
+  };
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '0.00';
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+  const fmtQty = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    return String(Math.round(n * 100) / 100);
+  };
+  const isZeroQty = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && Math.round(n * 100) / 100 === 0;
+  };
+  const readBool = (value) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    const text = trimStr(value).toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return false;
+  };
+  const parseMaybeJsonObject = (v) => {
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+    const s = trimStr(v);
+    if (!s) return null;
+    try {
+      const parsed = JSON.parse(s);
+      return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
   const fmtUtcToUk = (iso) => {
-    const raw = String(iso || '').trim();
+    const raw = trimStr(iso);
     if (!raw) return '';
     try {
       if (typeof formatCloudTmsLondonDateTime === 'function') {
@@ -57143,17 +55236,10 @@ function renderBankingPayBatchChildModalOverview() {
       const d = new Date(raw);
       if (Number.isNaN(d.getTime())) return raw;
       const date = new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Europe/London',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
+        timeZone: 'Europe/London', year: 'numeric', month: 'long', day: 'numeric'
       }).format(d);
       const time = new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Europe/London',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-        hourCycle: 'h23'
+        timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false, hourCycle: 'h23'
       }).format(d);
       return `${date} at ${time} hrs (UK time)`;
     } catch {
@@ -57162,7 +55248,7 @@ function renderBankingPayBatchChildModalOverview() {
   };
 
   const formatIsoToUkLocal = (ymd) => {
-    const s = String(ymd || '').trim();
+    const s = trimStr(ymd);
     if (!s) return '';
     try {
       if (typeof formatCloudTmsLondonDate === 'function') {
@@ -57170,7 +55256,9 @@ function renderBankingPayBatchChildModalOverview() {
         if (formatted && formatted !== 'Not recorded') return String(formatted);
       }
     } catch {}
-    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
+    try {
+      if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || '');
+    } catch {}
     const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (m) {
       try {
@@ -57184,95 +55272,34 @@ function renderBankingPayBatchChildModalOverview() {
     return s;
   };
 
-  const fmtMoney = (v) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return '0.00';
-    return (Math.round(n * 100) / 100).toFixed(2);
-  };
-
-  const fmtQty = (v) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return '';
-    const r = Math.round(n * 100) / 100;
-    return String(r);
-  };
-
-  const isZeroQty = (v) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return false;
-    return Math.round(n * 100) / 100 === 0;
-  };
-
   const bucketLabel = (bucketCode, unitName) => {
-    const bc = String(bucketCode || '').trim().toUpperCase();
-    if (bc === 'DAY') return 'Day';
-    if (bc === 'NIGHT') return 'Night';
-    if (bc === 'SAT') return 'Sat';
-    if (bc === 'SUN') return 'Sun';
-    if (bc === 'BH') return 'BH';
-    const u = String(unitName || '').trim();
-    return u || '—';
+    const code = upperTrim(bucketCode);
+    if (code === 'DAY') return 'Day';
+    if (code === 'NIGHT') return 'Night';
+    if (code === 'SAT') return 'Sat';
+    if (code === 'SUN') return 'Sun';
+    if (code === 'BH') return 'BH';
+    return trimStr(unitName) || '—';
   };
 
-  const pickAmount = (batchKind, o) => {
-    const bk = String(batchKind || '').trim().toUpperCase();
-    const ex = (o && o.amount_ex_vat != null) ? Number(o.amount_ex_vat) : NaN;
-    const inc = (o && o.amount_inc_vat != null) ? Number(o.amount_inc_vat) : NaN;
-
-    if (bk === 'PAYE') {
-      return Number.isFinite(ex) ? ex : (Number.isFinite(inc) ? inc : 0);
+  const pickAmount = (batchKind, obj) => {
+    const kind = upperTrim(batchKind);
+    const o = asObj(obj) || {};
+    const ex = Number(o.amount_ex_vat ?? o.amountExVat ?? o.amount ?? o.subtotal);
+    const inc = Number(o.amount_inc_vat ?? o.amountIncVat ?? o.payment_amount ?? o.paymentAmount);
+    if (kind === 'PAYE' || kind === 'LOANS') {
+      if (Number.isFinite(ex)) return ex;
+      if (Number.isFinite(inc)) return inc;
+      return 0;
     }
-    if (bk === 'UMBRELLA') {
-      return Number.isFinite(inc) ? inc : (Number.isFinite(ex) ? ex : 0);
-    }
-    if (bk === 'LOANS') {
-      return Number.isFinite(ex) ? ex : (Number.isFinite(inc) ? inc : 0);
+    if (kind === 'UMBRELLA') {
+      if (Number.isFinite(inc)) return inc;
+      if (Number.isFinite(ex)) return ex;
+      return 0;
     }
     if (Number.isFinite(inc)) return inc;
     if (Number.isFinite(ex)) return ex;
     return 0;
-  };
-
-  const asObj = (v) => (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
-  const asArr = (v) => Array.isArray(v) ? v : [];
-  const asNum = (v, dflt = 0) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : dflt;
-  };
-  const trimStr = (v) => String(v || '').trim();
-  const upperTrim = (v) => trimStr(v).toUpperCase();
-  const parseMaybeJsonObject = (v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) return v;
-    const s = String(v || '').trim();
-    if (!s) return null;
-    try {
-      const p = JSON.parse(s);
-      return (p && typeof p === 'object' && !Array.isArray(p)) ? p : null;
-    } catch {
-      return null;
-    }
-  };
-
-  const readProviderSubmitBool = (value) => {
-    if (value === true) return true;
-    if (value === false) return false;
-    const text = String(value == null ? '' : value).trim().toLowerCase();
-    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
-    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
-    return false;
-  };
-
-  const firstProviderSubmitText = (...values) => {
-    for (const value of values) {
-      if (Array.isArray(value)) {
-        const nested = firstProviderSubmitText(...value);
-        if (nested) return nested;
-        continue;
-      }
-      const text = trimStr(value);
-      if (text) return text;
-    }
-    return '';
   };
 
   const providerSubmitEvidenceSources = (value) => {
@@ -57282,10 +55309,18 @@ function renderBankingPayBatchChildModalOverview() {
     const directDiagnostic = asObj(root.provider_submit_diagnostic || root.providerSubmitDiagnostic) || {};
     const railDiagnostic = asObj(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic) || {};
     const rawDiagnostic = asObj(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic) || {};
-    const providerResponse = asObj(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson) || {};
-    const rawProviderResponse = asObj(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson) || {};
+    const providerResponse = asObj(
+      root.provider_response || root.providerResponse ||
+      root.provider_response_redacted || root.providerResponseRedacted ||
+      root.provider_response_json || root.providerResponseJson
+    ) || {};
+    const rawProviderResponse = asObj(
+      rawPayload.provider_response || rawPayload.providerResponse ||
+      rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted ||
+      rawPayload.provider_response_json || rawPayload.providerResponseJson
+    ) || {};
     return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
-      .filter((obj) => obj && Object.keys(obj).length);
+      .filter((obj) => obj && typeof obj === 'object' && !Array.isArray(obj) && Object.keys(obj).length);
   };
 
   const providerSubmitLocalReferenceSet = (value) => {
@@ -57351,19 +55386,18 @@ function renderBankingPayBatchChildModalOverview() {
     const put = (key, value, mode = 'text') => {
       if (value === null || value === undefined) return;
       if (Array.isArray(value)) {
-        if (!value.length) return;
-        out[key] = value;
+        if (value.length) out[key] = value;
         return;
       }
       if (mode === 'bool') {
-        out[key] = readProviderSubmitBool(value);
+        out[key] = readBool(value);
         return;
       }
       const text = trimStr(value);
       if (!text && typeof value !== 'boolean') return;
       out[key] = mode === 'upper' ? upperTrim(value) : text;
     };
-    const mergeProviderSubmitSource = (source) => {
+    const mergeSource = (source) => {
       if (!asObj(source)) return;
       put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode']), 'upper');
       put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode']), 'upper');
@@ -57373,6 +55407,8 @@ function renderBankingPayBatchChildModalOverview() {
       put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
       put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
       put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
+      put('provider_rejected', readFirst(source, ['provider_rejected', 'providerRejected', 'rejected']), 'bool');
+      put('provider_http_status', readFirst(source, ['provider_http_status', 'providerHttpStatus', 'http_status', 'httpStatus']));
       put('request_id', readFirst(source, ['request_id', 'requestId']));
       put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
       put('local_provider_request_id', readFirst(source, ['local_provider_request_id', 'localProviderRequestId']));
@@ -57389,111 +55425,107 @@ function renderBankingPayBatchChildModalOverview() {
       put('bank_reference', readFirst(source, ['bank_reference', 'bankReference']));
       put('transaction_id', readFirst(source, ['transaction_id', 'transactionId']));
       put('payment_id', readFirst(source, ['payment_id', 'paymentId']));
-      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
-      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
-      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
-      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
-      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
       put('provider_error_code', readFirst(source, ['provider_error_code', 'providerErrorCode', 'error_code', 'errorCode']));
       put('provider_error_message_redacted', readFirst(source, ['provider_error_message_redacted', 'providerErrorMessageRedacted', 'provider_error_message', 'providerErrorMessage', 'error_message', 'errorMessage']));
-      put('provider_http_status', readFirst(source, ['provider_http_status', 'providerHttpStatus', 'http_status', 'httpStatus']));
-      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
     };
+
     const review = asObj(d.payment_execution_review) || asObj(d.paymentExecutionReview) || asObj(d.batch?.payment_execution_review) || asObj(d.batch?.paymentExecutionReview) || {};
-    mergeProviderSubmitSource(d);
-    mergeProviderSubmitSource(d.batch);
-    mergeProviderSubmitSource(review);
-    mergeProviderSubmitSource(d.provider_submit_diagnostic);
-    mergeProviderSubmitSource(d.providerSubmitDiagnostic);
-    mergeProviderSubmitSource(d.batch?.provider_submit_diagnostic);
-    mergeProviderSubmitSource(d.batch?.providerSubmitDiagnostic);
-    mergeProviderSubmitSource(review.provider_submit_diagnostic);
-    mergeProviderSubmitSource(review.providerSubmitDiagnostic);
+    mergeSource(d);
+    mergeSource(d.batch);
+    mergeSource(review);
+    mergeSource(d.provider_submit_diagnostic);
+    mergeSource(d.providerSubmitDiagnostic);
+    mergeSource(d.batch?.provider_submit_diagnostic);
+    mergeSource(d.batch?.providerSubmitDiagnostic);
+    mergeSource(review.provider_submit_diagnostic);
+    mergeSource(review.providerSubmitDiagnostic);
+
     for (const issue of asArr(d.payment_issues || d.paymentIssues || d.batch?.payment_issues || d.batch?.paymentIssues)) {
       const item = asObj(issue) || {};
       const kind = upperTrim(item.issue_kind || item.issueKind || item.issue_type || item.issueType || item.kind || item.type || '');
       if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW' && kind !== 'PROVIDER_SUBMIT_REVIEW') continue;
-      mergeProviderSubmitSource(item);
-      const issueReview = asObj(item.payment_execution_review) || asObj(item.paymentExecutionReview) || {};
-      mergeProviderSubmitSource(issueReview);
-      mergeProviderSubmitSource(item.provider_submit_diagnostic);
-      mergeProviderSubmitSource(item.providerSubmitDiagnostic);
+      mergeSource(item);
+      mergeSource(item.payment_execution_review || item.paymentExecutionReview);
+      mergeSource(item.provider_submit_diagnostic || item.providerSubmitDiagnostic);
     }
+
     if (!Object.keys(out).length) return null;
-    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.rail_state || out.provider_transaction_id || out.provider_payment_id || out.provider_event_id || out.provider_reference || out.provider_submission_id || out.external_payment_id || out.revolut_payment_id || out.external_reference || out.bank_reference || out.transaction_id || out.payment_id || out.request_id || out.idempotency_key || out.local_provider_request_id || out.provider_error_code || out.provider_error_message_redacted || out.provider_http_status || out.recommended_action);
-    if (!hasProviderSubmitContext) return null;
-    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
-      out.manual_resolution_required = false;
-      out.manual_resolution_available = false;
-    }
-    return out;
+    const hasProviderSubmitContext = !!(
+      out.provider_submission_status || out.review_reason_code || out.provider_http_status || out.provider_rejected ||
+      out.rail_tx_id || out.rail_state || out.provider_transaction_id || out.provider_payment_id ||
+      out.provider_event_id || out.provider_reference || out.provider_submission_id || out.external_payment_id ||
+      out.revolut_payment_id || out.external_reference || out.bank_reference || out.transaction_id ||
+      out.payment_id || out.request_id || out.idempotency_key || out.local_provider_request_id ||
+      out.provider_error_code || out.provider_error_message_redacted
+    );
+    return hasProviderSubmitContext ? out : null;
   };
+
+  const isProviderAcceptedSent = (diagnostic) => {
+    const d = asObj(diagnostic) || {};
+    const status = upperTrim(d.provider_submission_status || d.providerSubmissionStatus || d.outcome_code || d.outcomeCode || '');
+    const httpStatus = Number(d.provider_http_status || d.providerHttpStatus || d.http_status || d.httpStatus);
+    const externalEvidence = providerSubmitStrictExternalEvidencePresent(d);
+    const acceptedStatus = ['PROVIDER_SUBMISSION_ACCEPTED', 'ACCEPTED', 'SUBMITTED', 'PROVIDER_SUBMITTED'].includes(status);
+    const providerRejected = readBool(d.provider_rejected || d.providerRejected || d.rejected);
+    return !providerRejected && externalEvidence && (acceptedStatus || httpStatus === 200 || readBool(d.provider_response_present || d.providerResponsePresent));
+  };
+
   const buildProviderSubmitOverviewModel = (dataPayload) => {
     const diagnostic = extractProviderSubmitDiagnosticFromOverviewData(dataPayload);
-    if (!diagnostic) return { hasIssue: false, diagnostic: null };
+    if (!diagnostic) return { hasIssue: false, diagnostic: null, isAcceptedSent: false };
+
     let status = upperTrim(diagnostic.provider_submission_status || diagnostic.providerSubmissionStatus || diagnostic.outcome_code || diagnostic.outcomeCode || '');
-    const providerErrorText = firstProviderSubmitText(diagnostic.provider_error_message_redacted, diagnostic.providerErrorMessageRedacted, diagnostic.provider_error_message, diagnostic.providerErrorMessage);
-    const providerErrorCode = firstProviderSubmitText(diagnostic.provider_error_code, diagnostic.providerErrorCode);
-    const providerRequestOrResponsePresent = readProviderSubmitBool(diagnostic.provider_request_sent || diagnostic.providerRequestSent) || readProviderSubmitBool(diagnostic.provider_response_present || diagnostic.providerResponsePresent || diagnostic.provider_response_received || diagnostic.providerResponseReceived);
+    const providerErrorText = firstText(diagnostic.provider_error_message_redacted, diagnostic.providerErrorMessageRedacted, diagnostic.provider_error_message, diagnostic.providerErrorMessage);
+    const providerErrorCode = firstText(diagnostic.provider_error_code, diagnostic.providerErrorCode);
+    const providerRequestOrResponsePresent = readBool(diagnostic.provider_request_sent || diagnostic.providerRequestSent) || readBool(diagnostic.provider_response_present || diagnostic.providerResponsePresent || diagnostic.provider_response_received || diagnostic.providerResponseReceived);
     if (!status && (providerErrorText || providerErrorCode) && providerRequestOrResponsePresent) status = 'PROVIDER_SUBMISSION_REJECTED';
+
+    const acceptedSent = isProviderAcceptedSent(diagnostic);
+    if (acceptedSent) {
+      return { hasIssue: false, diagnostic, status: status || 'PROVIDER_SUBMISSION_ACCEPTED', isAcceptedSent: true };
+    }
+
     const hasContext = !!(
-      firstProviderSubmitText(diagnostic.operation_id, diagnostic.operationId, diagnostic.chunk_id, diagnostic.chunkId, diagnostic.transfer_id, diagnostic.transferId) ||
-      asArr(diagnostic.chunk_ids || diagnostic.chunkIds).length > 0 ||
-      asArr(diagnostic.transfer_ids || diagnostic.transferIds).length > 0 ||
-      providerErrorText ||
-      providerErrorCode ||
-      providerRequestOrResponsePresent ||
+      providerErrorText || providerErrorCode || providerRequestOrResponsePresent ||
+      firstText(diagnostic.rail_tx_id, diagnostic.railTxId, diagnostic.provider_transaction_id, diagnostic.providerTransactionId, diagnostic.provider_reference, diagnostic.providerReference) ||
       (status && !['NO_PROVIDER_SUBMISSION_ATTEMPTED', 'CLAIMED_NOT_PROVIDER_CALLED_YET'].includes(status))
     );
-    const hasIssue = hasContext && [
+
+    const issueStatuses = [
       'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
       'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
       'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
       'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
       'PROVIDER_SUBMISSION_REJECTED',
       'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL',
-      'PROVIDER_SUBMISSION_ACCEPTED',
       'MANUAL_RESOLVED_NO_PAYMENT_MADE'
-    ].includes(status);
-    if (!hasIssue) return { hasIssue: false, diagnostic, status };
+    ];
+    const hasIssue = hasContext && issueStatuses.includes(status);
+    if (!hasIssue) return { hasIssue: false, diagnostic, status, isAcceptedSent: false };
 
-    const accepted = providerSubmitStrictExternalEvidencePresent(diagnostic);
-    if (diagnostic) diagnostic.provider_acceptance_evidence_present = accepted;
-    let headline = 'Provider submission outcome unknown';
-    let summary = 'Submit chunk became stale with no provider response, transfer event, rail transaction ID, or rail state.';
-    let action = 'Manual bank account check required before retry.';
-    if (status === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME') {
-      headline = 'Provider response missing';
-      summary = 'A provider request may have been sent, but no usable response was recorded.';
-      action = 'Check the bank account before retry.';
+    let headline = 'Check required';
+    let summary = 'Payment outcome could not be confirmed from the available provider evidence.';
+    let action = 'Open Current Payment Status to review the affected rows.';
+    if (status === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME' || status === 'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK') {
+      headline = 'Check required';
+      summary = 'Provider outcome is unclear.';
     } else if (status === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE' || status === 'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID') {
-      headline = 'Provider response unusable';
-      summary = 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.';
-      action = 'Reconcile with provider/bank before retry.';
+      headline = 'Check required';
+      summary = 'Provider response was recorded but could not be matched to a usable external reference.';
     } else if (status === 'PROVIDER_SUBMISSION_REJECTED') {
-      const providerErrorMessage = providerErrorText;
       headline = 'Bank/provider rejected payment';
-      summary = providerErrorMessage || 'Provider rejected the payment submission.';
-      if (providerErrorCode && providerErrorMessage) summary = `${providerErrorMessage} (${providerErrorCode})`;
-      action = 'Review Payment Issues to release/retry the affected payment.';
+      summary = providerErrorText || 'Provider rejected the payment submission.';
+      if (providerErrorCode && providerErrorText) summary = `${providerErrorText} (${providerErrorCode})`;
+      action = 'Open Current Payment Status to release or review the affected rows.';
     } else if (status === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL') {
-      headline = 'Provider was not called';
-      summary = 'Submission failed before the provider payment request was sent.';
-      action = 'Retry after local blocker is cleared.';
+      headline = 'Payment not sent';
+      summary = 'Submission stopped before the provider request was sent.';
     } else if (status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
-      headline = 'Manual no-payment confirmation recorded';
-      summary = 'Manual no-payment confirmation recorded.';
-      action = 'Batch can be retried if safe retry is available.';
-    } else if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && accepted) {
-      headline = 'Provider acceptance evidence present';
-      summary = 'Provider acceptance evidence exists. Do not retry unless reconciled.';
-      action = 'Do not retry unless reconciled.';
-    } else if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && !accepted) {
-      headline = 'Provider response unusable';
-      summary = 'Provider accepted status was recorded, but no usable external provider transaction/reference was stored.';
-      action = 'Reconcile with provider/bank before retry.';
+      headline = 'No payment made';
+      summary = 'Manual no-payment confirmation has been recorded.';
     }
-    return { hasIssue, diagnostic, status, headline, summary, action, accepted };
+    return { hasIssue, diagnostic, status, headline, summary, action, isAcceptedSent: false };
   };
 
   const renderProviderSubmitOverviewCard = (model) => {
@@ -57502,463 +55534,13 @@ function renderBankingPayBatchChildModalOverview() {
       <div class="card banking-pay-provider-submit-overview-banner" style="padding:12px;border:1px solid #facc15;background:#fffbeb;color:#713f12;">
         <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
           <div style="display:flex;flex-direction:column;gap:6px;min-width:260px;flex:1;">
-            <div style="font-weight:800;font-size:14px;letter-spacing:.01em;">${enc(model.headline)}</div>
-            <div class="mini" style="opacity:.96;white-space:pre-wrap;">${enc(model.summary)}
-${enc(model.action)}</div>
+            <div style="font-weight:800;font-size:14px;letter-spacing:.01em;">${enc(model.headline || 'Check required')}</div>
+            <div class="mini" style="opacity:.96;white-space:pre-wrap;">${enc(model.summary || '')}${model.action ? `\n${enc(model.action)}` : ''}</div>
           </div>
-          <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPaymentIssues">Review provider submission issue</button>
+          <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPaymentIssues">Current Payment Status</button>
         </div>
       </div>
     `;
-  };
-
-  const snapshotClassificationLabel = (raw) => {
-    const s = upperTrim(raw);
-    if (s === 'REIMBURSEMENT_GROSS_FIXED') return 'Fixed reimbursement';
-    if (s === 'TAXABLE_CHANNEL_SENSITIVE') return 'Taxable';
-    return trimStr(raw) || '—';
-  };
-
-  const snapshotResolutionModeLabel = (raw) => {
-    const s = upperTrim(raw);
-    if (s === 'SUGGESTED_EQUIVALENT_BASIS') return 'Suggested equivalent basis';
-    if (s === 'MANUAL_REPLACEMENT_RATE') return 'Manual replacement rate';
-    if (s === 'MANUAL_AMOUNT') return 'Manual amount';
-    return trimStr(raw) || '—';
-  };
-
-  const snapshotPillClass = (classification, resolutionMode) => {
-    const c = upperTrim(classification);
-    if (c === 'REIMBURSEMENT_GROSS_FIXED') return 'pill';
-    if (c === 'TAXABLE_CHANNEL_SENSITIVE' && trimStr(resolutionMode)) return 'pill pill-warn';
-    if (c === 'TAXABLE_CHANNEL_SENSITIVE') return 'pill pill-info';
-    return 'pill';
-  };
-
-  const summarizeFrozenResolutionResultAmount = (resultJson, fallbackItem) => {
-    const r = parseMaybeJsonObject(resultJson) || {};
-    const candidates = [
-      r.target_amount_inc_vat,
-      r.target_amount_ex_vat,
-      r.resolved_amount_inc_vat,
-      r.resolved_amount_ex_vat,
-      r.amount_inc_vat,
-      r.amount_ex_vat,
-      fallbackItem?.frozen_target_amount_inc_vat,
-      fallbackItem?.frozen_target_amount_ex_vat,
-      fallbackItem?.amount_inc_vat,
-      fallbackItem?.amount_ex_vat
-    ];
-    for (const x of candidates) {
-      const n = Number(x);
-      if (Number.isFinite(n)) return fmtMoney(n);
-    }
-    return '0.00';
-  };
-
-  const financeCaseStateBadgeHtml = (group) => {
-    const g = asObj(group) || {};
-    const bits = [];
-    if (g.is_mixed_case === true) bits.push(`<span class="pill pill-warn">Mixed</span>`);
-    if (asNum(g.open_reimbursement_count, 0) > 0 && asNum(g.open_taxable_count, 0) <= 0) bits.push(`<span class="pill">Fixed reimbursement</span>`);
-    if (asNum(g.open_taxable_count, 0) > 0) bits.push(`<span class="pill">Taxable converted</span>`);
-    if (asNum(g.unresolved_taxable_count, 0) > 0) bits.push(`<span class="pill pill-bad">Unresolved taxable: ${enc(String(asNum(g.unresolved_taxable_count, 0)))}</span>`);
-    if (asNum(g.stale_count, 0) > 0) bits.push(`<span class="pill pill-warn">Stale: ${enc(String(asNum(g.stale_count, 0)))}</span>`);
-    return bits.join(' ');
-  };
-
-  const actorDisplayLabel = (displayName, email, userId) => {
-    const dn = trimStr(displayName);
-    const em = trimStr(email);
-    const uid = trimStr(userId);
-    if (dn && em) return `${dn} (${em})`;
-    if (dn) return dn;
-    if (em) return em;
-    if (uid) return uid;
-    return '';
-  };
-
-   const hasDifferentDestinationMarker = (line) => {
-    return (
-      line?.different_destination_marker === true ||
-      line?.is_separate_destination_payment === true ||
-      line?.candidate_has_multiple_payment_destinations === true
-    );
-  };
-
-  const candidateHasPaymentIssue = (candidate) => {
-    const c = asObj(candidate) || {};
-    if (c.payment_issue_badge === true || c.paymentIssueBadge === true) return true;
-    if (Array.isArray(c.payment_issue_kinds) && c.payment_issue_kinds.length > 0) return true;
-    if (Array.isArray(c.paymentIssueKinds) && c.paymentIssueKinds.length > 0) return true;
-    if (asNum(c.corrected_item_count, 0) > 0 || asNum(c.correctedItemCount, 0) > 0) return true;
-    const paymentStatus = upperTrim(c.payment_status || c.paymentStatus || '');
-    return paymentStatus === 'PAYMENT_ISSUE' || paymentStatus === 'PAYMENT_ISSUE_PARTIAL';
-  };
-
-  const candidatePaymentIssueLabel = (candidate) => {
-    const c = asObj(candidate) || {};
-    const explicitLabel = trimStr(c.payment_issue_label || c.paymentIssueLabel || '');
-    if (explicitLabel) return explicitLabel;
-
-    const kinds = Array.isArray(c.payment_issue_kinds)
-      ? c.payment_issue_kinds.map((x) => upperTrim(x)).filter(Boolean)
-      : Array.isArray(c.paymentIssueKinds)
-        ? c.paymentIssueKinds.map((x) => upperTrim(x)).filter(Boolean)
-        : [];
-
-    if (asNum(c.applied_reversal_item_count, 0) > 0 || kinds.includes('SETTLED_REVERSAL')) return 'Bank returned payment';
-    if (asNum(c.applied_unwind_item_count, 0) > 0 || kinds.includes('NO_MONEY_UNWIND')) return 'Bank rejected payment';
-    if (asNum(c.applied_precancel_item_count, 0) > 0 || kinds.includes('PRE_BANK_CANCEL')) return 'Payment removed from batch';
-
-    const paymentStatus = upperTrim(c.payment_status || c.paymentStatus || '');
-    if (paymentStatus === 'PAYMENT_ISSUE_PARTIAL') return 'Partial payment issue';
-    if (paymentStatus === 'PAYMENT_ISSUE') return 'Payment issue';
-    return 'Payment issue';
-  };
-
-  const candidatePaymentIssueBadgeHtml = (candidate) => {
-    if (!candidateHasPaymentIssue(candidate)) return '';
-    const label = candidatePaymentIssueLabel(candidate);
-    return `<span class="pill pill-warn" title="${enc(label)}">PAYMENT ISSUE</span>`;
-  };
-
-  const pickCurrentEffectiveCandidateAmount = (candidate) => {
-    const c = asObj(candidate) || {};
-    const bk = String(batchKind || batchKindInfo?.normalizedKind || '').trim().toUpperCase();
-    const inc = Number(c.current_effective_amount_inc_vat ?? c.currentEffectiveAmountIncVat);
-    const ex = Number(c.current_effective_amount_ex_vat ?? c.currentEffectiveAmountExVat);
-    if (bk === 'PAYE') {
-      if (Number.isFinite(ex)) return ex;
-      if (Number.isFinite(inc)) return inc;
-      return null;
-    }
-    if (bk === 'UMBRELLA') {
-      if (Number.isFinite(inc)) return inc;
-      if (Number.isFinite(ex)) return ex;
-      return null;
-    }
-    if (bk === 'LOANS') {
-      if (Number.isFinite(ex)) return ex;
-      if (Number.isFinite(inc)) return inc;
-      return null;
-    }
-    if (Number.isFinite(inc)) return inc;
-    if (Number.isFinite(ex)) return ex;
-    return null;
-  };
-
-  const hasCurrentEffectiveCandidateAmount = (candidate) => {
-    const c = asObj(candidate) || {};
-    return Number.isFinite(Number(c.current_effective_amount_inc_vat ?? c.currentEffectiveAmountIncVat)) ||
-      Number.isFinite(Number(c.current_effective_amount_ex_vat ?? c.currentEffectiveAmountExVat));
-  };
-
-  const deriveCurrentEffectiveFinancials = (candidate, fallbackDeductions = null, fallbackRemittance = null) => {
-    const c = asObj(candidate) || {};
-    const ds = asObj(c.deductions_summary) || asObj(c.deductionsSummary) || {};
-    const rem = asObj(c.remittance_summary) || asObj(c.remittanceSummary) || {};
-    const explicitAmount = pickCurrentEffectiveCandidateAmount(c);
-    const hasExplicitAmount = explicitAmount !== null;
-    const currentItemCount = firstFiniteNonNegativeInteger(
-      c.current_effective_item_count,
-      c.currentEffectiveItemCount,
-      c.active_effective_item_count,
-      c.activeEffectiveItemCount
-    );
-    const isCurrentEffectiveZero = hasExplicitAmount && Math.round(Number(explicitAmount) * 100) / 100 === 0 && (currentItemCount === null || currentItemCount === 0);
-
-    const pickNumeric = (...values) => {
-      for (const value of values) {
-        if (value === null || value === undefined || String(value).trim?.() === '') continue;
-        const n = Number(value);
-        if (Number.isFinite(n)) return n;
-      }
-      return 0;
-    };
-
-    const baseAmount = hasExplicitAmount
-      ? explicitAmount
-      : pickNumeric(rem.baseAmount, rem.base_amount, fallbackRemittance?.baseAmount, fallbackDeductions?.grossPositive, c.gross_preview);
-    const overpaymentRecovery = pickNumeric(
-      ds.overpaymentRecovery, ds.overpayment_recovery, rem.overpaymentRecovery, rem.overpayment_recovery,
-      fallbackRemittance?.overpaymentRecovery, fallbackDeductions?.overpaymentRecovery, c.overpayment_recovery_taken
-    );
-    const loanRepayment = pickNumeric(
-      ds.loanRepayment, ds.loan_repayment, ds.paymentAdvanceRepayment, ds.payment_advance_repayment,
-      rem.loanRepayment, rem.loan_repayment, rem.paymentAdvanceRepayment, rem.payment_advance_repayment,
-      fallbackRemittance?.loanRepayment, fallbackDeductions?.loanRepayment, c.loan_repayment_taken
-    );
-    const payeNetAmount = (() => {
-      const n = Number(ds.payeNetAmount ?? ds.paye_net_amount ?? rem.payeNetAmount ?? rem.paye_net_amount ?? fallbackDeductions?.payeNetAmount ?? fallbackRemittance?.payeNetAmount ?? c.paye_net_amount);
-      return Number.isFinite(n) ? n : null;
-    })();
-    const finalPayable = hasExplicitAmount
-      ? explicitAmount
-      : (() => {
-          const n = Number(ds.finalPayable ?? ds.final_payable ?? rem.finalPaid ?? rem.final_paid ?? fallbackDeductions?.finalPayable ?? fallbackRemittance?.finalPaid ?? c.net_bank_amount);
-          return Number.isFinite(n) ? n : null;
-        })();
-
-    if (isCurrentEffectiveZero) {
-      return {
-        grossPositive: 0,
-        overpaymentRecovery: 0,
-        loanRepayment: 0,
-        finalPayable: 0,
-        finalPaid: 0,
-        payeNetAmount: (batchKindInfo?.isPayeish && !batchKindInfo?.isLoans) ? 0 : payeNetAmount,
-        awaitingNet: false,
-        hasKnownFinalPayable: true,
-        isCurrentEffectiveZero,
-        currentEffectiveItemCount: currentItemCount,
-        raw: c
-      };
-    }
-
-    return {
-      grossPositive: baseAmount,
-      overpaymentRecovery,
-      loanRepayment,
-      finalPayable,
-      finalPaid: finalPayable,
-      payeNetAmount,
-      awaitingNet: !!(ds.awaitingNet ?? ds.awaiting_net_amount ?? rem.awaitingNet ?? rem.awaiting_net_amount ?? fallbackDeductions?.awaitingNet ?? fallbackRemittance?.awaitingNet ?? c.awaiting_net_amount),
-      hasKnownFinalPayable: finalPayable !== null,
-      isCurrentEffectiveZero,
-      currentEffectiveItemCount: currentItemCount,
-      raw: c
-    };
-  };
-
-  const deriveUnitOrCategoryText = (line) => {
-    const bucket = bucketLabel(line?.bucket_code, line?.unit_name || line?.unit || '');
-    const expenseCategory =
-      trimStr(line?.expense_category) ||
-      trimStr(line?.expense_type) ||
-      trimStr(line?.category);
-
-    if (expenseCategory) return expenseCategory;
-
-    const itemType = upperTrim(line?.item_type || line?.line_kind || line?.kind || line?.normalizedKind || '');
-    if (itemType === 'TS_BUCKET') return bucket || '—';
-
-    const explicitUnit = trimStr(line?.unit_name || line?.unit || '');
-    if (explicitUnit) return explicitUnit;
-
-    return bucket || '—';
-  };
-
-  const buildDestinationSummaryForLine = (line) => {
-    const candidateDirected = line?.is_candidate_directed_oneoff_payout === true;
-    const appearsOnRemittance = line?.appears_on_umbrella_remittance === true;
-    const hasPayoutNotice = line?.generates_candidate_payment_advice === true || candidateDirected;
-    const differentDestination = hasDifferentDestinationMarker(line);
-
-    let destinationText = trimStr(line?.destination_label || line?.payout_destination || '');
-    if (!destinationText) {
-      if (candidateDirected) destinationText = 'Specified bank account';
-      else if (appearsOnRemittance) destinationText = 'Umbrella remittance';
-      else if (hasPayoutNotice) destinationText = 'Candidate payout notice';
-      else destinationText = 'Normal route';
-    }
-
-    const badges = [];
-    if (appearsOnRemittance) badges.push(`<span class="pill pill-info">Umbrella remittance</span>`);
-    if (hasPayoutNotice) badges.push(`<span class="pill pill-warn">Candidate payout notice</span>`);
-    if (differentDestination) badges.push(`<span class="pill pill-warn">Different beneficiary</span>`);
-
-    return {
-      text: destinationText || '—',
-      badges_html: badges.join(' ')
-    };
-  };
-
-  const deriveExpandedLineType = (line, unitOrCategoryText) => {
-    const itemType = upperTrim(line?.item_type || line?.line_kind || line?.kind || line?.normalizedKind || '');
-    const itemLabel = trimStr(line?.item_type_label || line?.line_kind || line?.kind || line?.normalizedKind || line?.item_type || '');
-    const paymentOrDeduction = upperTrim(line?.payment_or_deduction || '');
-    const candidateDirected = line?.is_candidate_directed_oneoff_payout === true;
-    const expenseHints = [
-      itemType,
-      upperTrim(itemLabel),
-      upperTrim(line?.expense_category || ''),
-      upperTrim(line?.expense_type || ''),
-      upperTrim(line?.category || '')
-    ];
-    const looksExpense = expenseHints.some((x) =>
-      x.includes('EXPENSE') ||
-      x.includes('MILEAGE') ||
-      x.includes('TRAVEL') ||
-      x.includes('ACCOMMODATION') ||
-      x.includes('PARKING') ||
-      x.includes('SUBSISTENCE') ||
-      x.includes('REIMBURSE')
-    );
-
-    if (candidateDirected) {
-      return {
-        text: 'Candidate payout',
-        badges_html: `<span class="pill pill-warn">Candidate payout</span>`,
-        sort_group: 4
-      };
-    }
-
-    if (itemType === 'OVERPAYMENT_RECOVERY') {
-      return {
-        text: 'Overpayment recovery',
-        badges_html: `<span class="pill pill-warn">Deduction</span>`,
-        sort_group: 3
-      };
-    }
-
-    if (itemType === 'LOAN_REPAYMENT' || itemType === 'PAYMENT_ADVANCE_REPAYMENT') {
-      return {
-        text: 'Payment Advance Repayment',
-        badges_html: `<span class="pill pill-warn">Deduction</span>`,
-        sort_group: 3
-      };
-    }
-
-    if (itemType === 'MANUAL_DEBT_RECOVERY' || (itemType === 'MANUAL_DEBT_ADJUSTMENT' && paymentOrDeduction === 'DEDUCTION')) {
-      return {
-        text: 'Manual debt',
-        badges_html: `<span class="pill pill-warn">Deduction</span>`,
-        sort_group: 4
-      };
-    }
-
-    if (itemType === 'MANUAL_CREDIT_ADJUSTMENT') {
-      return {
-        text: 'Manual credit',
-        badges_html: '',
-        sort_group: 4
-      };
-    }
-
-    if (looksExpense) {
-      return {
-        text: 'Expense',
-        badges_html: '',
-        sort_group: 2
-      };
-    }
-
-    if (itemType === 'ADDITIONAL_UNIT') {
-      return {
-        text: 'Additional unit',
-        badges_html: '',
-        sort_group: 1
-      };
-    }
-
-    if (itemType === 'TS_BUCKET' || ['DAY', 'NIGHT', 'SAT', 'SUN', 'BH'].includes(upperTrim(line?.bucket_code || ''))) {
-      return {
-        text: 'Shift',
-        badges_html: '',
-        sort_group: 1
-      };
-    }
-
-    if (unitOrCategoryText && unitOrCategoryText !== '—' && (line?.units != null || line?.rate != null)) {
-      return {
-        text: 'Additional unit',
-        badges_html: '',
-        sort_group: 1
-      };
-    }
-
-    return {
-      text: itemLabel || 'Line item',
-      badges_html: '',
-      sort_group: 4
-    };
-  };
-
-  const buildFrozenFinanceSummaryForLine = (candidate, line) => {
-    const matchedItems = findFrozenFinanceItemsForLine(candidate, line);
-    if (!matchedItems.length) {
-      return {
-        text: '—',
-        badges_html: ''
-      };
-    }
-
-    const classifications = [];
-    const directions = [];
-    const firstItem = matchedItems[0];
-
-    for (const item of matchedItems) {
-      const snapshotJson = parseMaybeJsonObject(item.frozen_component_snapshot_json) || {};
-      const classification = upperTrim(item.frozen_component_classification || snapshotJson.classification || snapshotJson.component_classification || '');
-      const sourcePayMethod = upperTrim(item.frozen_source_pay_method || snapshotJson.source_pay_method || '');
-      const targetPayMethod = upperTrim(item.frozen_target_pay_method || snapshotJson.saved_target_pay_method || snapshotJson.current_target_pay_method || '');
-
-      if (classification) classifications.push(classification);
-      if (sourcePayMethod || targetPayMethod) directions.push(`${sourcePayMethod || '—'}→${targetPayMethod || '—'}`);
-    }
-
-    const uniqueClassifications = [...new Set(classifications)];
-    const uniqueDirections = [...new Set(directions)];
-
-    const classificationSummary =
-      uniqueClassifications.length > 1
-        ? 'Mixed'
-        : snapshotClassificationLabel(uniqueClassifications[0] || '');
-
-    const badges = [];
-    if (classificationSummary === 'Mixed') {
-      badges.push(`<span class="pill pill-warn">Mixed</span>`);
-    } else if (classificationSummary === 'Taxable') {
-      badges.push(`<span class="pill pill-info">Taxable</span>`);
-    } else if (classificationSummary === 'Fixed reimbursement') {
-      badges.push(`<span class="pill">Fixed reimbursement</span>`);
-    }
-
-    if (matchedItems.length === 1) {
-      const amount = summarizeFrozenResolutionResultAmount(firstItem?.frozen_resolution_result_json, firstItem);
-      const direction = uniqueDirections.length === 1 ? uniqueDirections[0] : '';
-      const bits = [
-        classificationSummary || 'Finance',
-        direction,
-        `£${amount}`
-      ].filter(Boolean);
-
-      return {
-        text: bits.join(' · '),
-        badges_html: badges.join(' ')
-      };
-    }
-
-    const bits = [
-      classificationSummary || 'Finance',
-      `${matchedItems.length} components`
-    ].filter(Boolean);
-
-    return {
-      text: bits.join(' · '),
-      badges_html: badges.join(' ')
-    };
-  };
-
-  const pickCount = (obj, keys) => {
-    const src = asObj(obj) || {};
-    for (const key of keys) {
-      const n = Number(src[key]);
-      if (Number.isFinite(n)) return Math.trunc(n);
-    }
-    return 0;
-  };
-
-  const communicationModeLabel = (rawMode, hasRemittances, hasPayoutNotices) => {
-    const mode = upperTrim(rawMode);
-    if (mode === 'BOTH' || mode === 'REMITTANCES_AND_PAYOUT_NOTICES' || mode === 'REMITTANCE_AND_PAYOUT_NOTICE') return 'Remittances + payout notices';
-    if (mode === 'REMITTANCES_ONLY' || mode === 'REMITTANCE_ONLY') return 'Remittances only';
-    if (mode === 'PAYOUT_NOTICES_ONLY' || mode === 'PAYOUT_NOTICE_ONLY') return 'Payout notices only';
-    if (hasRemittances && hasPayoutNotices) return 'Remittances + payout notices';
-    if (hasRemittances) return 'Remittances only';
-    if (hasPayoutNotices) return 'Payout notices only';
-    return 'No communications';
   };
 
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
@@ -57981,394 +55563,42 @@ ${enc(model.action)}</div>
     `;
   }
 
-  const rootId = String(child.rootId || '').trim();
-  const id = String(child.batchId || '').trim();
-
-  const data = (child.data && typeof child.data === 'object') ? child.data : null;
-  const batch = (data && data.batch && typeof data.batch === 'object') ? data.batch : null;
-  const transfers = (data && Array.isArray(data.transfers)) ? data.transfers : [];
-  const candidates = (data && Array.isArray(data.candidates)) ? data.candidates : [];
-  const items = (data && Array.isArray(data.items)) ? data.items : [];
-  const linesRawTop = (data && Array.isArray(data.candidate_lines)) ? data.candidate_lines : [];
-  const financeCaseGroups = (data && Array.isArray(data.finance_case_groups)) ? data.finance_case_groups : [];
+  const rootId = trimStr(child.rootId);
+  const id = trimStr(child.batchId);
+  const data = asObj(child.data) || {};
+  const batch = asObj(data.batch) || {};
+  const transfers = asArr(data.transfers);
+  const candidates = asArr(data.candidates);
+  const items = asArr(data.items);
+  const linesRawTop = asArr(data.candidate_lines || data.candidateLines);
+  const correctionState = asObj(child.correction) || null;
   const providerSubmitOverviewModel = buildProviderSubmitOverviewModel(data);
   const providerSubmitOverviewHtml = renderProviderSubmitOverviewCard(providerSubmitOverviewModel);
-
-  const isBootstrapOnly = data?.bootstrap_only === true || batch?.bootstrap_only === true;
-  if (isBootstrapOnly) {
-    const b = batch || {};
-    const statusText = upperTrim(b.status || data?.status || '—') || '—';
-    const providerText = upperTrim(b.rail_provider_snapshot || b.rail_provider || data?.rail_provider_snapshot || data?.rail_provider || '');
-    const envText = upperTrim(b.rail_env_snapshot || b.rail_env || data?.rail_env_snapshot || data?.rail_env || '');
-    const payDateText = trimStr(b.pay_date || data?.pay_date || '');
-    const executionCommitStateText = upperTrim(b.execution_commit_state || data?.execution_commit_state || '');
-    const activeOperation = asObj(data?.active_operation) || asObj(data?.operation) || asObj(b.active_operation) || null;
-    const freshness = asObj(data?.freshness) || asObj(data?.freshness_result_json) || asObj(b.freshness_result_json) || data || {};
-    const availableSections = Array.isArray(data?.available_sections)
-      ? data.available_sections.map((section) => trimStr(section)).filter(Boolean)
-      : [];
-    const recommendedPageSize = asNum(data?.recommended_page_size || b.recommended_page_size || child.recommended_page_size, 100);
-    const countValue = (...values) => {
-      for (const value of values) {
-        const n = Number(value);
-        if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
-      }
-      return 0;
-    };
-    const amountValue = (...values) => {
-      for (const value of values) {
-        const n = Number(value);
-        if (Number.isFinite(n)) return n;
-      }
-      return 0;
-    };
-    const candidateCount = countValue(data?.candidate_count, data?.candidates_count, b.candidate_count, b.candidates_count);
-    const itemCount = countValue(data?.item_count, data?.items_count, b.item_count, b.items_count);
-    const breakdownCount = countValue(data?.item_breakdown_count, data?.breakdown_count, b.item_breakdown_count, b.breakdown_count);
-    const transferCount = countValue(data?.transfer_count, data?.transfers_count, b.transfer_count, b.transfers_count);
-    const remittanceCount = countValue(data?.remittance_count, data?.remittances_count, b.remittance_count, b.remittances_count);
-    const submittedTransferCount = countValue(data?.provider_submitted_transfer_count, data?.submitted_transfer_count, data?.submitted_transfers, b.provider_submitted_transfer_count, b.submitted_transfer_count);
-    const localOnlyTransferCount = countValue(data?.local_only_transfer_count, data?.local_idempotency_only_count, b.local_only_transfer_count, b.local_idempotency_only_count);
-    const pendingTransferCount = countValue(data?.pending_transfer_count, data?.pending_transfers, b.pending_transfer_count, b.pending_transfers);
-    const failedTransferCount = countValue(data?.failed_transfer_count, data?.failed_transfers, b.failed_transfer_count, b.failed_transfers);
-    const ambiguousTransferCount = countValue(data?.ambiguous_transfer_count, b.ambiguous_transfer_count);
-    const totalAmount = amountValue(data?.total_amount, data?.total_amount_inc_vat, data?.total_pay_amount, b.total_amount, b.total_amount_inc_vat, b.total_pay_amount);
-    const batchKindLabel = upperTrim(data?.batch_kind || b.batch_kind || b.batch_kind_fixed || '') || 'UNKNOWN';
-    const freshnessStatus = upperTrim(data?.freshness_validation_status || b.freshness_validation_status || freshness.freshness_validation_status || freshness.status || 'NOT_CHECKED');
-    const freshnessCheckedAt = trimStr(data?.freshness_checked_at_utc || b.freshness_checked_at_utc || freshness.freshness_checked_at_utc || '');
-    const freshnessHash = trimStr(data?.freshness_result_hash || b.freshness_result_hash || freshness.freshness_result_hash || '');
-    const scopeHash = trimStr(data?.freshness_scope_hash || b.freshness_scope_hash || freshness.freshness_scope_hash || '');
-    const opId = trimStr(activeOperation?.operation_id || activeOperation?.id || data?.active_operation_id || data?.operation_id || '');
-    const opStatus = upperTrim(activeOperation?.status || data?.active_operation_status || data?.operation_status || '');
-    const opPhase = upperTrim(activeOperation?.phase || data?.active_operation_phase || data?.operation_phase || '');
-    const sectionPillsHtml = availableSections.length
-      ? availableSections.map((section) => `<span class="pill pill-info">${enc(section.replace(/_/g, ' '))}</span>`).join(' ')
-      : `<span class="mini" style="opacity:.75;">No section list returned.</span>`;
-    const errHtml = String(child.error || '').trim()
-      ? `<div class="error" style="white-space:pre-wrap;">${enc(String(child.error || '').trim())}</div>`
-      : '';
-    const providerEnvText = [providerText || '—', envText || ''].filter(Boolean).join('/');
-
-    return `
-      <div id="${enc(rootId)}">
-        <div class="card">
-          <div class="row">
-            <label>Overview</label>
-            <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-              ${errHtml}
-              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                <span class="pill pill-info">BOOTSTRAP</span>
-                <span class="pill">${enc(statusText)}</span>
-                <span class="pill pill-info">${enc(batchKindLabel)}</span>
-                <span class="mini">${enc(providerEnvText)}</span>
-                <span class="mini">Pay date: <span class="mono">${enc(payDateText ? formatIsoToUkLocal(payDateText) : '—')}</span></span>
-                <span class="mini">Execution state: <span class="mono">${enc(executionCommitStateText || '—')}</span></span>
-                <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
-                </div>
-              </div>
-
-              ${providerSubmitOverviewHtml}
-
-              <div class="card" style="padding:10px;">
-                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Batch summary</div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Candidates</div><div class="mono">${enc(String(candidateCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Items</div><div class="mono">${enc(String(itemCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Breakdowns</div><div class="mono">${enc(String(breakdownCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Transfers</div><div class="mono">${enc(String(transferCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Remittances</div><div class="mono">${enc(String(remittanceCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Total amount</div><div class="mono">£${enc(fmtMoney(totalAmount))}</div></div>
-                </div>
-              </div>
-
-              <div class="card" style="padding:10px;">
-                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Provider / transfer state</div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;">
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Provider submitted</div><div class="mono">${enc(String(submittedTransferCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Local-only evidence</div><div class="mono">${enc(String(localOnlyTransferCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Pending</div><div class="mono">${enc(String(pendingTransferCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Failed</div><div class="mono">${enc(String(failedTransferCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Ambiguous</div><div class="mono">${enc(String(ambiguousTransferCount))}</div></div>
-                </div>
-              </div>
-
-              <div class="card" style="padding:10px;">
-                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Freshness at execution boundary</div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">
-                  <div><strong>Status</strong><br><span class="mono">${enc(freshnessStatus || 'NOT_CHECKED')}</span></div>
-                  <div><strong>Checked</strong><br><span class="mono">${enc(freshnessCheckedAt ? fmtUtcToUk(freshnessCheckedAt) : 'Not recorded')}</span></div>
-                  <div><strong>Result hash</strong><br><span class="mono">${enc(freshnessHash || '—')}</span></div>
-                  <div><strong>Scope hash</strong><br><span class="mono">${enc(scopeHash || '—')}</span></div>
-                </div>
-              </div>
-
-              <div class="card" style="padding:10px;">
-                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Active operation</div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">
-                  <div><strong>Operation ID</strong><br><span class="mono">${enc(opId || '—')}</span></div>
-                  <div><strong>Status</strong><br><span class="mono">${enc(opStatus || '—')}</span></div>
-                  <div><strong>Phase</strong><br><span class="mono">${enc(opPhase || '—')}</span></div>
-                </div>
-              </div>
-
-              <div class="card" style="padding:10px;">
-                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Lazy detail sections</div>
-                <div class="mini" style="opacity:.86;margin-bottom:8px;">This is a large batch. Details load page-by-page when you open the relevant tab. Recommended page size: <span class="mono">${enc(String(recommendedPageSize))}</span>.</div>
-                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">${sectionPillsHtml}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  const financeGroupById = new Map(
-    financeCaseGroups
-      .filter((g) => g && typeof g === 'object' && trimStr(g.finance_case_id))
-      .map((g) => [trimStr(g.finance_case_id), g])
-  );
 
   const batchKindInfo = (typeof bankingNormalizeBatchKind === 'function')
     ? bankingNormalizeBatchKind(data)
     : {
-        rawKind: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase(),
-        normalizedKind: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase(),
-        isKnown: true,
-        isLoans: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'LOANS',
-        isPaye: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'PAYE',
-        isUmbrella: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'UMBRELLA',
-        isMixed: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'MIXED',
-        isPayeish: ['PAYE', 'MIXED'].includes(String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase()),
-        isUmbrellaish: ['UMBRELLA', 'MIXED'].includes(String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase()),
-        label: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase() || 'UNKNOWN'
+        normalizedKind: upperTrim(data.batch_kind || batch.batch_kind || batch.batch_kind_fixed || 'UNKNOWN'),
+        isLoans: upperTrim(data.batch_kind || batch.batch_kind || batch.batch_kind_fixed || '') === 'LOANS',
+        isPayeish: ['PAYE', 'MIXED'].includes(upperTrim(data.batch_kind || batch.batch_kind || batch.batch_kind_fixed || '')),
+        isUmbrellaish: ['UMBRELLA', 'MIXED'].includes(upperTrim(data.batch_kind || batch.batch_kind || batch.batch_kind_fixed || '')),
+        label: upperTrim(data.batch_kind || batch.batch_kind || batch.batch_kind_fixed || 'UNKNOWN')
       };
+  const batchKind = upperTrim(batchKindInfo.normalizedKind || batchKindInfo.label || data.batch_kind || batch.batch_kind || batch.batch_kind_fixed || 'UNKNOWN');
+  const status = upperTrim(batch.status || data.status || '');
+  const provider = upperTrim(batch.rail_provider_snapshot || batch.rail_provider || data.rail_provider_snapshot || data.rail_provider || '');
+  const env = upperTrim(batch.rail_env_snapshot || batch.rail_env || data.rail_env_snapshot || data.rail_env || '');
+  const providerEnvHeader = `${batchKind || 'UNKNOWN'} · ${(provider || '—')}${env ? `/${env}` : ''}`;
+  const payDate = trimStr(batch.pay_date || data.pay_date || batch.authoritative_payment_date || data.authoritative_payment_date || '');
 
-  const batchKind = String(batchKindInfo.normalizedKind || '').trim().toUpperCase();
-  const status = String(batch?.status || '').trim().toUpperCase() || '—';
-  const provider = String(batch?.rail_provider_snapshot || batch?.rail_provider || '').trim().toUpperCase();
-  const env = String(batch?.rail_env_snapshot || '').trim().toUpperCase();
-  const payDate = String(batch?.pay_date || '').trim();
-  const authoritativePaymentDate = String(batch?.authoritative_payment_date || data?.authoritative_payment_date || '').trim();
-  const lastCheck = fmtUtcToUk(batch?.last_status_checked_at_utc || '');
+  const isBootstrapOnly = data.bootstrap_only === true || batch.bootstrap_only === true;
 
-  const isDraftLike = (status === 'DRAFT' || status === 'DRAFT_CREATED');
-  const cancelModePayload = Object.assign({}, data || {}, batch || {});
-  const batchCancelMode = bankingPayResolveBatchCancelMode(cancelModePayload);
-  const paymentIssuesRequiredForCancel = (batchCancelMode === 'PAYMENT_ISSUES_REQUIRED') || providerSubmitOverviewModel.hasIssue === true;
-  const canDeleteDraft = !paymentIssuesRequiredForCancel && (batchCancelMode === 'DRAFT_DELETE');
-  const canCancelUnpaid = !paymentIssuesRequiredForCancel && (batchCancelMode === 'CANCEL_UNPAID');
-
-  const firstFiniteNonNegativeInteger = (...values) => {
-    for (const value of values) {
-      if (value === null || value === undefined || String(value).trim?.() === '') continue;
-      const n = Number(value);
-      if (Number.isFinite(n) && n >= 0) return Math.trunc(n);
-    }
-    return null;
-  };
-
-  const firstFiniteNumber = (...values) => {
-    for (const value of values) {
-      if (value === null || value === undefined || String(value).trim?.() === '') continue;
-      const n = Number(value);
-      if (Number.isFinite(n)) return n;
-    }
-    return null;
-  };
-
-  const candidateLineEntryCount = (() => {
-    if (!data || !Array.isArray(data.candidate_lines)) return null;
-    let count = 0;
-    for (const entry of linesRawTop) {
-      if (!entry || typeof entry !== 'object') continue;
-
-      const normalizedBlock = (entry.candidate_lines_normalized && typeof entry.candidate_lines_normalized === 'object') ? entry.candidate_lines_normalized : null;
-      if (normalizedBlock) {
-        if (Array.isArray(normalizedBlock.tsLines)) count += normalizedBlock.tsLines.filter(Boolean).length;
-        if (Array.isArray(normalizedBlock.nonTsLines)) count += normalizedBlock.nonTsLines.filter(Boolean).length;
-        continue;
-      }
-
-      if (Array.isArray(entry.lines)) { count += entry.lines.filter(Boolean).length; continue; }
-      if (Array.isArray(entry.line_items)) { count += entry.line_items.filter(Boolean).length; continue; }
-      if (Array.isArray(entry.items)) { count += entry.items.filter(Boolean).length; continue; }
-      if (Array.isArray(entry.breakdown_lines)) { count += entry.breakdown_lines.filter(Boolean).length; continue; }
-
-      count += 1;
-    }
-    return count;
-  })();
-
-  const explicitActiveBatchItemCount = firstFiniteNonNegativeInteger(
-    data?.active_item_count,
-    data?.active_items,
-    data?.active_batch_item_count,
-    data?.active_batch_items,
-    data?.active_payment_item_count,
-    data?.active_pay_batch_item_count,
-    batch?.active_item_count,
-    batch?.active_items,
-    batch?.active_batch_item_count,
-    batch?.active_batch_items,
-    batch?.active_payment_item_count,
-    batch?.active_pay_batch_item_count
-  );
-  const explicitActiveBatchAmount = firstFiniteNumber(
-    data?.active_amount_inc_vat,
-    data?.active_batch_amount_inc_vat,
-    data?.active_payment_amount_inc_vat,
-    data?.active_bank_out,
-    batch?.active_amount_inc_vat,
-    batch?.active_batch_amount_inc_vat,
-    batch?.active_payment_amount_inc_vat,
-    batch?.active_bank_out
-  );
-  const activeCountFromItems = (data && Array.isArray(data.items))
-    ? items.filter((item) => item && typeof item === 'object' && item.is_voided !== true && item.voided !== true && String(item.status || '').trim().toUpperCase() !== 'VOIDED').length
-    : null;
-  const activeCountFromLines = (candidateLineEntryCount !== null) ? candidateLineEntryCount : null;
-  const activeBatchItemCountKnown = explicitActiveBatchItemCount !== null || activeCountFromItems !== null || activeCountFromLines !== null;
-  const activeBatchItemCount = explicitActiveBatchItemCount !== null
-    ? explicitActiveBatchItemCount
-    : (activeCountFromItems !== null ? activeCountFromItems : (activeCountFromLines !== null ? activeCountFromLines : 0));
-  const activeBatchAmountIncVat = explicitActiveBatchAmount !== null
-    ? explicitActiveBatchAmount
-    : (activeBatchItemCountKnown ? items.reduce((total, item) => {
-        if (!item || typeof item !== 'object') return total;
-        if (item.is_voided === true || item.voided === true || String(item.status || '').trim().toUpperCase() === 'VOIDED') return total;
-        const n = Number(item.amount_inc_vat ?? item.amount_ex_vat ?? item.amount ?? 0);
-        return Number.isFinite(n) ? total + n : total;
-      }, 0) : null);
-  const hasActivePayments = !activeBatchItemCountKnown || activeBatchItemCount > 0;
-  const emptyDraftNoActivePayments = isDraftLike && activeBatchItemCountKnown && activeBatchItemCount <= 0;
-  const emptyDraftNoActivePaymentsMessage = 'This draft batch has no active payments. Delete the draft or create a new batch.';
-
-  const pillStatus =
-    (status === 'SETTLED') ? 'pill pill-ok'
-    : (status === 'EXECUTING' || status === 'PARTIAL' || status === 'AWAITING_AUTHORISATION') ? 'pill pill-warn'
-    : (status === 'DRAFT' || status === 'READY' || status === 'WAITING_BANK_CONFIRM') ? 'pill pill-info'
-    : 'pill';
-
-  const batchKindPillClass =
-    batchKindInfo.isLoans ? 'pill pill-info'
-    : batchKindInfo.isPaye ? 'pill pill-info'
-    : batchKindInfo.isUmbrella ? 'pill pill-info'
-    : batchKindInfo.isMixed ? 'pill pill-warn'
-    : 'pill';
-
-  const pendingCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'PENDING').length;
-  const completedCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'COMPLETED').length;
-  const failedCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'FAILED').length;
-  const blockedCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'BLOCKED').length;
-
-  const hasTransferRailSubmissionEvidence = (t) => {
-    if (!t || typeof t !== 'object') return false;
-
-    const railTxId = String(t.rail_tx_id || '').trim();
-    if (railTxId) return true;
-
-    const externalStateTokens = [
-      'SUBMITTED',
-      'QUEUED',
-      'ACCEPTED',
-      'PROCESSING',
-      'IN_FLIGHT',
-      'PENDING_SETTLEMENT',
-      'PENDING_CONFIRMATION',
-      'PENDING_SUBMISSION',
-      'COMPLETED',
-      'SETTLED',
-      'COMMITTED',
-      'PAID',
-      'EXECUTED'
-    ];
-
-    const stateHasExternalSubmissionEvidence = (value) => {
-      const state = String(value || '').trim().toUpperCase();
-      if (!state) return false;
-      if (state === 'NOT_SUBMITTED' || state === 'UNSUBMITTED') return false;
-      if (externalStateTokens.includes(state)) return true;
-      if (state.includes('NOT_SUBMITTED') || state.includes('UNSUBMITTED')) return false;
-      return externalStateTokens.some((token) => {
-        if (token === 'SUBMITTED') return state === 'SUBMITTED';
-        return state.includes(token);
-      });
-    };
-
-    if (stateHasExternalSubmissionEvidence(t.rail_state)) return true;
-
-    const meta = asObj(t.rail_meta_json);
-    if (!meta) return false;
-
-    const metaExternalId = trimStr(
-      meta.provider_submission_id ||
-      meta.submission_id ||
-      meta.provider_transfer_id ||
-      meta.transfer_id ||
-      meta.external_transfer_id ||
-      meta.provider_payment_id ||
-      meta.payment_id ||
-      meta.external_payment_id ||
-      meta.transaction_id ||
-      meta.id ||
-      ''
-    );
-    if (metaExternalId) return true;
-
-    if (stateHasExternalSubmissionEvidence(meta.state || meta.status || meta.rail_state || meta.payment_state || meta.transfer_state)) return true;
-
-    const truthyMetaFlag = (value) => {
-      if (value === true) return true;
-      const s = String(value === undefined || value === null ? '' : value).trim().toLowerCase();
-      return ['true', '1', 'yes', 'y', 'on'].includes(s);
-    };
-
-    return (
-      truthyMetaFlag(meta.submitted) ||
-      truthyMetaFlag(meta.queued) ||
-      truthyMetaFlag(meta.accepted) ||
-      truthyMetaFlag(meta.processing) ||
-      truthyMetaFlag(meta.in_flight) ||
-      truthyMetaFlag(meta.pending_settlement) ||
-      truthyMetaFlag(meta.pending_confirmation) ||
-      truthyMetaFlag(meta.pending_submission) ||
-      truthyMetaFlag(meta.completed) ||
-      truthyMetaFlag(meta.committed) ||
-      truthyMetaFlag(meta.settled) ||
-      truthyMetaFlag(meta.paid)
-    );
-  };
-
-  const csvEvidence = (typeof deriveBankingPayBankCsvEvidence === 'function')
-    ? deriveBankingPayBankCsvEvidence(data)
-    : { raw: null };
-  const csvEvidenceRows = [
-    ['Generated at (UTC)', csvEvidence.generated_at_utc],
-    ['Generated by user', csvEvidence.generated_by_user_id],
-    ['Scope', csvEvidence.scope],
-    ['Filename', csvEvidence.filename],
-    ['Row count', csvEvidence.row_count],
-    ['Total amount', csvEvidence.total_amount],
-    ['Transfer hash', csvEvidence.transfer_hash],
-    ['Provider snapshot', csvEvidence.provider_snapshot],
-    ['Rail env snapshot', csvEvidence.rail_env_snapshot]
-  ].filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== '');
-
-  const expanded = (child.ui && typeof child.ui === 'object' && child.ui.expanded && typeof child.ui.expanded === 'object') ? child.ui.expanded : {};
   const getCandidateExpansionKey = (candidate) => {
     const c = asObj(candidate) || {};
-    return trimStr(
-      c.pay_batch_candidate_id ||
-      c.payBatchCandidateId ||
-      c.id ||
-      c.candidate_row_id ||
-      c.candidateRowId ||
-      c.candidate_id
-    );
+    return trimStr(c.pay_batch_candidate_id || c.payBatchCandidateId || c.id || c.candidate_row_id || c.candidateRowId || c.candidate_id);
   };
   const getLegacyCandidateExpansionKey = (candidate) => trimStr(asObj(candidate)?.candidate_id || '');
+  const expanded = asObj(child.ui?.expanded) || {};
   const isCandidateExpanded = (candidate) => {
     const canonicalKey = getCandidateExpansionKey(candidate);
     const legacyKey = getLegacyCandidateExpansionKey(candidate);
@@ -58377,688 +55607,435 @@ ${enc(model.action)}</div>
       (legacyKey && legacyKey !== canonicalKey && expanded[legacyKey])
     );
   };
-  const candidateExpansionKeys = candidates.map((c) => getCandidateExpansionKey(c)).filter(Boolean);
+  const candidateExpansionKeys = candidates.map((candidate) => getCandidateExpansionKey(candidate)).filter(Boolean);
   const allExpanded = candidateExpansionKeys.length > 0 && candidates.every((candidate) => isCandidateExpanded(candidate));
-  const showUmbrellaColumn = !!(batchKindInfo.isUmbrellaish && !batchKindInfo.isLoans);
-  const showPayeNetColumn = !!(batchKindInfo.isPayeish && !batchKindInfo.isLoans);
-  const summaryColspan = 6 + (showUmbrellaColumn ? 1 : 0) + (showPayeNetColumn ? 1 : 0);
 
-  const hasPollablePending = (() => {
-    for (const t of transfers) {
-      const stx = String(t?.status || '').trim().toUpperCase();
-      if (stx !== 'PENDING') continue;
-      if (typeof bankingPayHasPollableRailEvidence === 'function' && bankingPayHasPollableRailEvidence(t)) return true;
+  const getCandidateId = (candidate) => trimStr(asObj(candidate)?.candidate_id || asObj(candidate)?.candidateId || '');
+  const getCandidateName = (candidate) => trimStr(asObj(candidate)?.candidate_display_name || asObj(candidate)?.display_name || asObj(candidate)?.candidate_name || asObj(candidate)?.name || '') || '—';
+  const getCandidateTmsRef = (candidate) => trimStr(asObj(candidate)?.candidate_tms_ref || asObj(candidate)?.tms_ref || asObj(candidate)?.candidate_ref || '');
+  const getPayeeName = (candidate) => trimStr(
+    asObj(candidate)?.payee_display_name ||
+    asObj(candidate)?.payee_name ||
+    asObj(candidate)?.umbrella_display_name ||
+    asObj(candidate)?.umbrella_name ||
+    asObj(candidate)?.umbrella_company_name ||
+    asObj(candidate)?.candidate_display_name ||
+    asObj(candidate)?.display_name ||
+    ''
+  ) || '—';
+
+  const hasTransferRailSubmissionEvidence = (transfer) => {
+    const t = asObj(transfer) || {};
+    if (trimStr(t.rail_tx_id || t.railTxId)) return true;
+    const state = upperTrim(t.rail_state || t.railState || '');
+    if (['SUBMITTED', 'QUEUED', 'ACCEPTED', 'PROCESSING', 'IN_FLIGHT', 'PENDING_SETTLEMENT', 'COMPLETED', 'SETTLED', 'COMMITTED', 'PAID', 'EXECUTED'].some((token) => state === token || state.includes(token))) return true;
+    const meta = asObj(t.rail_meta_json || t.railMetaJson) || {};
+    if (firstText(meta.provider_submission_id, meta.submission_id, meta.provider_transfer_id, meta.external_transfer_id, meta.provider_payment_id, meta.external_payment_id, meta.transaction_id, meta.payment_id, meta.id)) return true;
+    const metaState = upperTrim(meta.state || meta.status || meta.rail_state || meta.payment_state || meta.transfer_state || '');
+    return ['SUBMITTED', 'QUEUED', 'ACCEPTED', 'PROCESSING', 'IN_FLIGHT', 'PENDING_SETTLEMENT', 'COMPLETED', 'SETTLED', 'COMMITTED', 'PAID', 'EXECUTED'].some((token) => metaState === token || metaState.includes(token));
+  };
+
+  const hasProviderOrBankExecutionEvidence = (payload) => {
+    const p = asObj(payload) || {};
+    const b = asObj(p.batch) || {};
+    const diagnostic = extractProviderSubmitDiagnosticFromOverviewData(p);
+    if (isProviderAcceptedSent(diagnostic)) return true;
+    if (providerSubmitStrictExternalEvidencePresent(diagnostic)) return true;
+    if (readBool(diagnostic?.safe_retry_available) === false && diagnostic && upperTrim(diagnostic.provider_submission_status || '').includes('PROVIDER_SUBMISSION')) return true;
+    if (upperTrim(b.execution_commit_state || p.execution_commit_state || '') === 'COMMITTED') return true;
+    if (firstText(b.execution_commit_ref, p.execution_commit_ref, b.settlement_confirmation_json, p.settlement_confirmation_json)) return true;
+    for (const t of asArr(p.transfers)) {
+      const st = upperTrim(t?.status || '');
+      if (['COMPLETED', 'SETTLED', 'PAID'].includes(st)) return true;
+      if (hasTransferRailSubmissionEvidence(t)) return true;
     }
+    if (asArr(p.bank_evidence || p.bankEvidence).length > 0) return true;
+    if (asArr(p.payment_events || p.paymentEvents || p.transfer_events || p.transferEvents).length > 0) return true;
     return false;
-  })();
+  };
 
-  const pollNote = (() => {
-    const note0 = String(child?.ui?.last_poll_note || '').trim();
-    if (note0) return note0;
-
-    const pr = (data && typeof data === 'object') ? data.poll_result : null;
-    if (pr && typeof pr === 'object' && pr.skipped === true) {
-      const reason = String(pr.reason || '').trim();
-      return reason ? `Poll skipped: ${reason}` : 'Poll skipped.';
-    }
-
-    return '';
-  })();
-
-  const isPayeNetCompleteForBatch = (() => {
-    if (!batchKindInfo.isPayeish || batchKindInfo.isLoans) return true;
-
-    const payeCandidates = candidates.filter(c => {
-      const ps = (c && typeof c === 'object') ? c.paye_state : null;
-      return ps != null && String(ps).trim() !== '';
-    });
-
-    if (!payeCandidates.length) return false;
-
-    for (const c of payeCandidates) {
-      const stx = String(c?.paye_state || '').trim().toUpperCase();
-      if (stx !== 'READY') return false;
-
-      const v = c?.paye_net_amount;
-      if (v === null || v === undefined || String(v).trim() === '') return false;
-
-      const n = Number(v);
-      if (!Number.isFinite(n)) return false;
-      if (n < 0) return false;
-    }
-
-    return true;
-  })();
-
-  const payeNetStatus = (() => {
-    if (!batchKindInfo.isPayeish || batchKindInfo.isLoans) return { required: false, complete: true, missingCount: 0, totalCount: 0 };
-
-    const payeCandidates = candidates.filter(c => {
-      const ps = (c && typeof c === 'object') ? c.paye_state : null;
-      return ps != null && String(ps).trim() !== '';
-    });
-
-    let missing = 0;
-    for (const c of payeCandidates) {
-      const stx = String(c?.paye_state || '').trim().toUpperCase();
-      if (stx !== 'READY') { missing += 1; continue; }
-
-      const v = c?.paye_net_amount;
-      if (v === null || v === undefined || String(v).trim() === '') { missing += 1; continue; }
-
-      const n = Number(v);
-      if (!Number.isFinite(n) || n < 0) { missing += 1; continue; }
-    }
-
-    return {
-      required: true,
-      complete: (payeCandidates.length > 0 && missing === 0),
-      missingCount: missing,
-      totalCount: payeCandidates.length
-    };
-  })();
-
-  const executionCommitState = String(batch?.execution_commit_state || '').trim().toUpperCase();
-  const executionCommitRef = String(batch?.execution_commit_ref || data?.execution_commit_ref || '').trim();
-  const nonBlockedTransfers = transfers.filter((t) => String(t?.status || '').trim().toUpperCase() !== 'BLOCKED');
-  const allNonBlockedTransfersCompleted = nonBlockedTransfers.length > 0 && nonBlockedTransfers.every((t) => String(t?.status || '').trim().toUpperCase() === 'COMPLETED');
-  const isPaymentExecuted = (
-    status === 'SETTLED' ||
-    executionCommitState === 'COMMITTED' ||
-    allNonBlockedTransfersCompleted
-  );
-  const displayPaymentDate = isPaymentExecuted
-    ? (authoritativePaymentDate || payDate)
-    : (payDate || authoritativePaymentDate);
-  const paymentDateLabel = isPaymentExecuted ? 'Execution date' : 'Pay date';
-  const paymentExecutedBadgeHtml = isPaymentExecuted
-    ? `<span class="pill pill-ok" title="Payment execution/settlement is complete">PAYMENT EXECUTED</span>`
-    : '';
-  const executionMetaHtml = isPaymentExecuted
-    ? `<span class="mini" style="opacity:.85;">${enc(paymentDateLabel)}: <span class="mono">${enc(displayPaymentDate ? formatIsoToUkLocal(displayPaymentDate) : '—')}</span></span>${executionCommitRef ? `<span class="mini" style="opacity:.85;">Commit ref: <span class="mono">${enc(executionCommitRef)}</span></span>` : ''}`
-    : `<span class="mini">${enc(paymentDateLabel)}: <span class="mono">${enc(displayPaymentDate ? formatIsoToUkLocal(displayPaymentDate) : '—')}</span></span>`;
-
-  const providerOrPaymentIssueEvidencePresent = providerSubmitOverviewModel.hasIssue === true || paymentIssuesRequiredForCancel === true;
-  const isBlockedFundsBatch = !providerOrPaymentIssueEvidencePresent && (status === 'BLOCKED_FUNDS' || upperTrim(data?.banking_alert_kind || batch?.banking_alert_kind || '') === 'BLOCKED_FUNDS');
-  const blockedFundsRequiredGbp = firstFiniteNumber(
-    data?.blocked_funds_required_gbp,
-    batch?.blocked_funds_required_gbp,
-    data?.blocked_funds_payment_issue?.required_gbp,
-    data?.last_funds_check_json?.required_gbp,
-    batch?.last_funds_check_json?.required_gbp
-  );
-  const blockedFundsAvailableGbp = firstFiniteNumber(
-    data?.blocked_funds_available_gbp,
-    batch?.blocked_funds_available_gbp,
-    data?.blocked_funds_payment_issue?.available_gbp,
-    data?.last_funds_check_json?.available_gbp,
-    batch?.last_funds_check_json?.available_gbp
-  );
-  const blockedFundsProvider = trimStr(
-    data?.blocked_funds_provider ||
-    batch?.blocked_funds_provider ||
-    data?.blocked_funds_payment_issue?.provider ||
-    data?.last_funds_check_json?.rail_provider ||
-    batch?.last_funds_check_json?.rail_provider ||
-    batch?.rail_provider_snapshot ||
-    batch?.rail_provider ||
-    provider
-  ).toUpperCase();
-  const blockedFundsEnv = trimStr(
-    data?.blocked_funds_env ||
-    batch?.blocked_funds_env ||
-    data?.blocked_funds_payment_issue?.env ||
-    data?.last_funds_check_json?.rail_env ||
-    batch?.last_funds_check_json?.rail_env ||
-    batch?.rail_env_snapshot ||
-    env
-  ).toUpperCase();
-  const blockedFundsAccountRef = trimStr(
-    data?.blocked_funds_account_ref ||
-    batch?.blocked_funds_account_ref ||
-    data?.blocked_funds_payment_issue?.funding_account_ref ||
-    data?.last_funds_check_json?.funding_account_ref ||
-    batch?.last_funds_check_json?.funding_account_ref ||
-    data?.funding_account_ref ||
-    batch?.funding_account_ref ||
-    ''
-  );
-  const blockedFundsLastCheckRaw = trimStr(
-    data?.last_funds_check_at_utc ||
-    batch?.last_funds_check_at_utc ||
-    data?.blocked_funds_payment_issue?.last_funds_check_at_utc ||
-    data?.last_funds_check_json?.checked_at_utc ||
-    batch?.last_funds_check_json?.checked_at_utc ||
-    data?.last_funds_check_json?.funds_check_checked_at_utc ||
-    batch?.last_funds_check_json?.funds_check_checked_at_utc ||
-    ''
-  );
-  const blockedFundsLastCheck = blockedFundsLastCheckRaw ? fmtUtcToUk(blockedFundsLastCheckRaw) : 'Not recorded';
-  const canRetryBlockedFunds = isBlockedFundsBatch && (
-    data?.can_retry_blocked_funds === true ||
-    batch?.can_retry_blocked_funds === true ||
-    data?.blocked_funds_payment_issue?.can_retry_blocked_funds === true
-  );
-  const blockedFundsRetryDisabledAttr = (!canRetryBlockedFunds || child.loading || (child.actionsBusy && (child.actionsBusy.retryingBlockedFunds || child.actionsBusy.refreshing || child.actionsBusy.polling)))
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const blockedFundsCancelDisabledAttr = (!canCancelUnpaid || child.loading || (child.actionsBusy && (child.actionsBusy.refreshing || child.actionsBusy.polling || child.actionsBusy.retryingBlockedFunds)))
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const blockedFundsProviderEnv = [blockedFundsProvider || '—', blockedFundsEnv || ''].filter(Boolean).join(' / ');
-  const statusAllowedForExecute = (
-    executionCommitState !== 'COMMITTED'
-    && executionCommitState !== 'SETTLED'
-    && executionCommitState !== 'CANCELLED'
-    && executionCommitState !== 'SUBMITTED_NOT_COMMITTED'
-    && status !== 'COMMITTED'
-    && status !== 'CANCELLED'
-    && status !== 'SETTLED'
-    && status !== 'SUBMITTED_NOT_COMMITTED'
-    && (
-      status === 'DRAFT'
-      || status === 'DRAFT_CREATED'
-      || status === 'READY'
-      || status === 'WAITING_BANK_CONFIRM'
-      || status === 'PARTIAL'
-    )
-  );
-  const canExecute =
-    statusAllowedForExecute
-    && hasActivePayments
-    && (!payeNetStatus.required || payeNetStatus.complete === true)
-    && !batchKindInfo.isLoans;
-
-  const executeDisabledReason = (() => {
-    if (batchKindInfo.isLoans) return 'Execute payment is not available from this overview for LOANS batches.';
-    if (emptyDraftNoActivePayments) return emptyDraftNoActivePaymentsMessage;
-    if (!statusAllowedForExecute) return `Execute is only allowed for retryable, not-committed statuses (DRAFT, DRAFT_CREATED, READY, WAITING_BANK_CONFIRM, PARTIAL). Current: ${status || '—'}.`;
-    if (payeNetStatus.required && !payeNetStatus.complete) {
-      const miss = Number(payeNetStatus.missingCount || 0);
-      const tot = Number(payeNetStatus.totalCount || 0);
-      return `PAYE net payments are incomplete (${miss}/${tot} missing). Click “Enter PAYE payments”, save, then execute.`;
-    }
-    return '';
-  })();
-
-  const normalizeCandidateLineEntries = (candId) => {
-    const cid = String(candId || '').trim();
-
+  const normalizeCandidateLineEntries = (candidateId) => {
+    const cid = trimStr(candidateId);
     const out = [];
-    for (const x of (Array.isArray(linesRawTop) ? linesRawTop : [])) {
-      if (!x || typeof x !== 'object') continue;
+    for (const entry of linesRawTop) {
+      if (!entry || typeof entry !== 'object') continue;
+      const entryCandidateId = trimStr(entry.candidate_id || entry.candidateId || '');
+      if (entryCandidateId && cid && entryCandidateId !== cid) continue;
 
-      const xid = String(x?.candidate_id || '').trim();
-      if (xid !== cid) continue;
-
-      const normalizedBlock = (x.candidate_lines_normalized && typeof x.candidate_lines_normalized === 'object') ? x.candidate_lines_normalized : null;
+      const normalizedBlock = asObj(entry.candidate_lines_normalized || entry.candidateLinesNormalized);
       if (normalizedBlock) {
-        const tsNorm = Array.isArray(normalizedBlock.tsLines) ? normalizedBlock.tsLines : [];
-        const nonTsNorm = Array.isArray(normalizedBlock.nonTsLines) ? normalizedBlock.nonTsLines : [];
-        for (const t of tsNorm) {
-          if (t && typeof t === 'object') out.push({ ...t, candidate_id: cid });
-        }
-        for (const n of nonTsNorm) {
-          if (n && typeof n === 'object') out.push({ ...n, candidate_id: cid });
-        }
+        for (const line of asArr(normalizedBlock.tsLines)) if (asObj(line)) out.push({ ...line, candidate_id: cid });
+        for (const line of asArr(normalizedBlock.nonTsLines)) if (asObj(line)) out.push({ ...line, candidate_id: cid });
         continue;
       }
 
-      const hasTsLines = Array.isArray(x.ts_lines);
-      const hasNonTsLines = Array.isArray(x.non_ts_lines);
-      if (hasTsLines || hasNonTsLines) {
-        for (const t of (hasTsLines ? x.ts_lines : [])) {
-          if (t && typeof t === 'object') out.push({ ...t, candidate_id: cid });
+      const arrayKeys = ['ts_lines', 'tsLines', 'non_ts_lines', 'nonTsLines', 'timesheets', 'lines', 'line_items', 'lineItems', 'items', 'breakdown_lines', 'breakdownLines'];
+      let pushed = false;
+      for (const key of arrayKeys) {
+        if (Array.isArray(entry[key])) {
+          for (const line of entry[key]) if (asObj(line)) out.push({ ...line, candidate_id: cid });
+          pushed = true;
         }
-        for (const n of (hasNonTsLines ? x.non_ts_lines : [])) {
-          if (n && typeof n === 'object') out.push({ ...n, candidate_id: cid });
-        }
-        continue;
       }
-
-      if (Array.isArray(x.timesheets)) {
-        for (const t of x.timesheets) {
-          if (t && typeof t === 'object') out.push({ ...t, candidate_id: cid });
-        }
-        continue;
-      }
-
-      out.push(x);
+      if (!pushed) out.push({ ...entry, candidate_id: cid || entryCandidateId });
     }
     return out;
   };
 
-  const allNormalizedCandidateLines = candidates.flatMap((candidate) => {
-    const cid = String(candidate?.candidate_id || '').trim();
-    return cid ? normalizeCandidateLineEntries(cid) : [];
-  });
-
-  const childComms = (child.communications && typeof child.communications === 'object') ? child.communications : {};
-  const dataComms = (data && data.communications && typeof data.communications === 'object') ? data.communications : {};
-  const commSummary = asObj(childComms.summary) || asObj(dataComms) || {};
-  const commResult = asObj(childComms.result) || {};
-  const remittanceSummary = asObj(commSummary.remittance);
-  const payoutNoticeSummary = asObj(commSummary.payout_notice);
-  const remittanceResult = asObj(commResult.remittance);
-  const payoutNoticeResult = asObj(commResult.payout_notice);
-
-  const fallbackHasRemittances = allNormalizedCandidateLines.some((line) => line?.appears_on_umbrella_remittance === true);
-  const fallbackHasPayoutNotices = allNormalizedCandidateLines.some((line) => line?.generates_candidate_payment_advice === true || line?.is_candidate_directed_oneoff_payout === true);
-
-  const remittanceTargetCount = Math.max(
-    pickCount(remittanceSummary, ['target_count', 'targets_count', 'candidate_count_targeted', 'candidate_count', 'candidate_copy_job_count', 'umbrella_remittance_job_count', 'umbrella_count_targeted', 'umbrella_count', 'item_count', 'count']),
-    fallbackHasRemittances ? allNormalizedCandidateLines.filter((line) => line?.appears_on_umbrella_remittance === true).length : 0
-  );
-
-  const payoutNoticeTargetCount = Math.max(
-    pickCount(payoutNoticeSummary, ['target_count', 'targets_count', 'candidate_count_targeted', 'candidate_count', 'item_count', 'count']),
-    fallbackHasPayoutNotices ? allNormalizedCandidateLines.filter((line) => line?.generates_candidate_payment_advice === true || line?.is_candidate_directed_oneoff_payout === true).length : 0
-  );
-
-  const remittanceQueuedCount = Math.max(
-    pickCount(remittanceResult, ['queued_count']),
-    pickCount(remittanceSummary, ['queued_count', 'candidate_count_queued'])
-  );
-  const remittanceSentCount = Math.max(
-    pickCount(remittanceResult, ['sent_count']),
-    pickCount(remittanceSummary, ['sent_count', 'candidate_count_sent'])
-  );
-  const remittanceFailedCount = Math.max(
-    pickCount(remittanceResult, ['failed_count']),
-    pickCount(remittanceSummary, ['failed_count', 'candidate_count_error'])
-  );
-  const remittanceSkippedCount = pickCount(remittanceResult, ['skipped_count']);
-
-  const payoutNoticeQueuedCount = Math.max(
-    pickCount(payoutNoticeResult, ['queued_count']),
-    pickCount(payoutNoticeSummary, ['queued_count'])
-  );
-  const payoutNoticeSentCount = Math.max(
-    pickCount(payoutNoticeResult, ['sent_count']),
-    pickCount(payoutNoticeSummary, ['sent_count'])
-  );
-  const payoutNoticeFailedCount = Math.max(
-    pickCount(payoutNoticeResult, ['failed_count']),
-    pickCount(payoutNoticeSummary, ['failed_count'])
-  );
-  const payoutNoticeSkippedCount = pickCount(payoutNoticeResult, ['skipped_count']);
-
-  const hasRemittances =
-    childComms.has_remittances === true ||
-    remittanceSummary?.contains_items === true ||
-    remittanceTargetCount > 0 ||
-    remittanceQueuedCount > 0 ||
-    remittanceSentCount > 0 ||
-    remittanceFailedCount > 0 ||
-    remittanceSkippedCount > 0 ||
-    pickCount(remittanceSummary, ['outbox_row_count']) > 0 ||
-    fallbackHasRemittances;
-
-  const hasPayoutNotices =
-    childComms.has_payout_notices === true ||
-    payoutNoticeSummary?.contains_items === true ||
-    payoutNoticeTargetCount > 0 ||
-    payoutNoticeQueuedCount > 0 ||
-    payoutNoticeSentCount > 0 ||
-    payoutNoticeFailedCount > 0 ||
-    payoutNoticeSkippedCount > 0 ||
-    pickCount(payoutNoticeSummary, ['outbox_row_count']) > 0 ||
-    fallbackHasPayoutNotices;
-
-  const hasBothCommunications = childComms.has_both === true || commSummary.contains_both === true || (hasRemittances && hasPayoutNotices);
-  const communicationsModeLabel = communicationModeLabel(
-    childComms.mode || commResult.mode || commSummary.communication_mode || '',
-    hasRemittances,
-    hasPayoutNotices
-  );
-
-  const hasCommunicationResult =
-    !!upperTrim(commResult.mode || commSummary.communication_mode || '') ||
-    remittanceQueuedCount > 0 ||
-    remittanceSentCount > 0 ||
-    remittanceFailedCount > 0 ||
-    remittanceSkippedCount > 0 ||
-    payoutNoticeQueuedCount > 0 ||
-    payoutNoticeSentCount > 0 ||
-    payoutNoticeFailedCount > 0 ||
-    payoutNoticeSkippedCount > 0;
-
-  const communicationPresenceText = hasBothCommunications
-    ? 'This batch contains both umbrella remittance items and candidate payout notices.'
-    : hasRemittances
-      ? 'This batch contains umbrella remittance items only.'
-      : hasPayoutNotices
-        ? 'This batch contains candidate payout notices only.'
-        : 'This batch currently contains no remittance or payout-notice items.';
-
-  const communicationsSummaryHtml = `
-    <div class="card" style="padding:10px; margin-bottom:10px;">
-      <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Communications</div>
-      <div class="mini" style="opacity:.9; margin-bottom:8px;">${enc(communicationPresenceText)}</div>
-      ${
-        hasPayoutNotices
-          ? `<div class="mini" style="opacity:.85; margin-bottom:8px;">${enc('Candidate-directed one-off payouts are excluded from umbrella remittance and generate candidate payout notices only.')}</div>`
-          : ''
-      }
-      <div style="display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:8px;">
-        <div class="card" style="padding:8px;">
-          <div class="mini" style="opacity:.8;">Umbrella remittance items</div>
-          <div class="mono">${enc(hasRemittances ? 'Yes' : 'No')}</div>
-          <div class="mini" style="opacity:.85;">
-            Targets: <span class="mono">${enc(String(remittanceTargetCount))}</span>
-            • Queued: <span class="mono">${enc(String(remittanceQueuedCount))}</span>
-            • Sent: <span class="mono">${enc(String(remittanceSentCount))}</span>
-          </div>
-        </div>
-        <div class="card" style="padding:8px;">
-          <div class="mini" style="opacity:.8;">Candidate payout notices</div>
-          <div class="mono">${enc(hasPayoutNotices ? 'Yes' : 'No')}</div>
-          <div class="mini" style="opacity:.85;">
-            Targets: <span class="mono">${enc(String(payoutNoticeTargetCount))}</span>
-            • Queued: <span class="mono">${enc(String(payoutNoticeQueuedCount))}</span>
-            • Sent: <span class="mono">${enc(String(payoutNoticeSentCount))}</span>
-          </div>
-        </div>
-        <div class="card" style="padding:8px;">
-          <div class="mini" style="opacity:.8;">Latest communication result</div>
-          <div class="mono">${enc(hasCommunicationResult ? communicationsModeLabel : 'Not sent yet')}</div>
-          ${
-            hasCommunicationResult
-              ? `
-                <div class="mini" style="opacity:.85;">
-                  Remittances — queued <span class="mono">${enc(String(remittanceQueuedCount))}</span>,
-                  sent <span class="mono">${enc(String(remittanceSentCount))}</span>,
-                  failed <span class="mono">${enc(String(remittanceFailedCount))}</span>,
-                  skipped <span class="mono">${enc(String(remittanceSkippedCount))}</span>
-                </div>
-                <div class="mini" style="opacity:.85;">
-                  Payout notices — queued <span class="mono">${enc(String(payoutNoticeQueuedCount))}</span>,
-                  sent <span class="mono">${enc(String(payoutNoticeSentCount))}</span>,
-                  failed <span class="mono">${enc(String(payoutNoticeFailedCount))}</span>,
-                  skipped <span class="mono">${enc(String(payoutNoticeSkippedCount))}</span>
-                </div>
-              `
-              : `<div class="mini" style="opacity:.85;">No communication run has been recorded in this modal yet.</div>`
-          }
-        </div>
-      </div>
-    </div>
-  `;
-
-  const findFrozenFinanceItemsForLine = (candidate, line) => {
-    const candidatePbcId = trimStr(candidate?.id || candidate?.pay_batch_candidate_id || '');
-    const lineTimesheetId = trimStr(line?.timesheet_id || line?.timesheet?.timesheet_id || '');
-    const lineSourceRef = trimStr(line?.source_ref || '');
-    const lineItemType = upperTrim(line?.item_type || line?.line_kind || line?.kind || line?.normalizedKind || '');
-    const lineRepaymentWeekStart = trimStr(line?.repayment_week_start || '');
-
-    const out = [];
-    for (const item of items) {
-      if (!item || typeof item !== 'object') continue;
-      const itemPbcId = trimStr(item.pay_batch_candidate_id || '');
-      if (candidatePbcId && itemPbcId !== candidatePbcId) continue;
-
-      const financeCaseId = trimStr(item.finance_case_id || '');
-      const financeComponentId = trimStr(item.finance_component_id || '');
-      const frozenClassification = upperTrim(item.frozen_component_classification || '');
-      const hasFrozenContext = !!financeCaseId || !!financeComponentId || !!frozenClassification || !!trimStr(item.frozen_resolution_mode || '');
-      if (!hasFrozenContext) continue;
-
-      const itemTimesheetId = trimStr(item.timesheet_id || '');
-      const itemSourceRef = trimStr(item.source_ref || '');
-      const itemType = upperTrim(item.item_type || '');
-      const itemRepaymentWeekStart = trimStr(item.repayment_week_start || '');
-
-      let matched = false;
-      if (lineTimesheetId) {
-        matched = !!itemTimesheetId && itemTimesheetId === lineTimesheetId;
-      } else {
-        if (lineSourceRef && itemSourceRef && lineSourceRef === itemSourceRef) matched = true;
-        if (!matched && lineItemType && itemType && lineItemType === itemType) {
-          if (!lineRepaymentWeekStart || !itemRepaymentWeekStart || lineRepaymentWeekStart === itemRepaymentWeekStart) {
-            matched = true;
-          }
-        }
-      }
-
-      if (matched) out.push(item);
-    }
-    return out;
+  const deriveUnitOrCategoryText = (line) => {
+    const l = asObj(line) || {};
+    const expenseCategory = firstText(l.expense_category, l.expense_type, l.category);
+    if (expenseCategory) return expenseCategory;
+    const itemType = upperTrim(l.item_type || l.line_kind || l.kind || l.normalizedKind || '');
+    const bucket = bucketLabel(l.bucket_code, l.unit_name || l.unit || '');
+    if (itemType === 'TS_BUCKET') return bucket || '—';
+    return firstText(l.unit_name, l.unit) || bucket || '—';
   };
 
-  const buildFrozenSnapshotHtmlForLine = (candidate, line) => {
-    const matchedItems = findFrozenFinanceItemsForLine(candidate, line);
-    if (!matchedItems.length) return '';
-
-    const entries = matchedItems.map((item) => {
-      const snapshotJson = parseMaybeJsonObject(item.frozen_component_snapshot_json) || {};
-      const classification = upperTrim(item.frozen_component_classification || snapshotJson.classification || snapshotJson.component_classification || '');
-      const sourcePayMethod = upperTrim(item.frozen_source_pay_method || snapshotJson.source_pay_method || '');
-      const targetPayMethod = upperTrim(item.frozen_target_pay_method || snapshotJson.saved_target_pay_method || snapshotJson.current_target_pay_method || '');
-      const resolutionMode = trimStr(item.frozen_resolution_mode || snapshotJson.saved_resolution_mode || snapshotJson.resolution_mode || '');
-      const resolutionResultJson = item.frozen_resolution_result_json || snapshotJson.saved_resolution_result_json || snapshotJson.resolution_result_json || null;
-      const sourceAmount = (item.frozen_source_amount != null)
-        ? Number(item.frozen_source_amount)
-        : Number(snapshotJson.source_amount);
-      const resolvedAmount = summarizeFrozenResolutionResultAmount(resolutionResultJson, item);
-      const financeCaseId = trimStr(item.finance_case_id || '');
-      const financeGroup = financeCaseId ? financeGroupById.get(financeCaseId) : null;
-      const keyType = trimStr(item.frozen_component_key_type || snapshotJson.component_key_type || '');
-      const keyValue = trimStr(item.frozen_component_key_value || snapshotJson.component_key_value || '');
-      const componentLabel = keyValue || keyType || trimStr(snapshotJson.label || snapshotJson.component_label || snapshotJson.description || 'Component');
-      const classificationLabel = snapshotClassificationLabel(classification);
-      const resolutionLabel = resolutionMode ? snapshotResolutionModeLabel(resolutionMode) : (classification === 'REIMBURSEMENT_GROSS_FIXED' ? 'Fixed reimbursement' : '—');
-      const treatmentLabel = classification === 'REIMBURSEMENT_GROSS_FIXED'
-        ? 'Fixed reimbursement — no channel conversion'
-        : (resolutionMode ? 'Taxable converted using saved draft-time resolution' : 'Taxable component');
-
-      return `
-        <div class="card" style="padding:8px; margin-top:6px;">
-          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-            <span class="${enc(snapshotPillClass(classification, resolutionMode))}">${enc(classificationLabel)}</span>
-            ${resolutionMode ? `<span class="pill pill-info">${enc(resolutionLabel)}</span>` : ''}
-            ${financeGroup ? financeCaseStateBadgeHtml(financeGroup) : ''}
-          </div>
-          <div class="mini" style="opacity:.9; margin-top:6px;">${enc(componentLabel)}</div>
-          <div class="mini" style="opacity:.85; margin-top:4px; white-space:pre-wrap;">
-            ${enc(treatmentLabel)}
-          </div>
-          <div class="mini" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:6px; opacity:.9;">
-            <span>Source: <span class="mono">${enc(sourcePayMethod || '—')}</span></span>
-            <span>Target: <span class="mono">${enc(targetPayMethod || '—')}</span></span>
-            <span>Source amount: <span class="mono">£${enc(fmtMoney(Number.isFinite(sourceAmount) ? sourceAmount : 0))}</span></span>
-            <span>Resolved amount: <span class="mono">£${enc(resolvedAmount)}</span></span>
-          </div>
-        </div>
-      `;
-    });
-
-    return `
-      <div style="margin-top:6px; display:flex; flex-direction:column; gap:6px;">
-        ${entries.join('')}
-      </div>
-    `;
+  const deriveExpandedLineType = (line, unitOrCategoryText) => {
+    const l = asObj(line) || {};
+    const itemType = upperTrim(l.item_type || l.line_kind || l.kind || l.normalizedKind || '');
+    const paymentOrDeduction = upperTrim(l.payment_or_deduction || '');
+    const itemLabel = firstText(l.item_type_label, l.line_kind, l.kind, l.normalizedKind, l.item_type);
+    const hints = [itemType, upperTrim(itemLabel), upperTrim(l.expense_category || ''), upperTrim(l.expense_type || ''), upperTrim(l.category || '')];
+    const looksExpense = hints.some((x) => ['EXPENSE', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'PARKING', 'SUBSISTENCE', 'REIMBURSE'].some((token) => x.includes(token)));
+    if (l.is_candidate_directed_oneoff_payout === true) return 'Candidate payout';
+    if (itemType === 'OVERPAYMENT_RECOVERY') return 'Overpayment recovery';
+    if (itemType === 'LOAN_REPAYMENT' || itemType === 'PAYMENT_ADVANCE_REPAYMENT') return 'Payment Advance Repayment';
+    if (itemType === 'MANUAL_DEBT_RECOVERY' || (itemType === 'MANUAL_DEBT_ADJUSTMENT' && paymentOrDeduction === 'DEDUCTION')) return 'Manual debt';
+    if (itemType === 'MANUAL_CREDIT_ADJUSTMENT') return 'Manual credit';
+    if (looksExpense) return 'Expense';
+    if (itemType === 'ADDITIONAL_UNIT') return 'Additional unit';
+    if (itemType === 'TS_BUCKET' || ['DAY', 'NIGHT', 'SAT', 'SUN', 'BH'].includes(upperTrim(l.bucket_code || ''))) return 'Shift';
+    if (unitOrCategoryText && unitOrCategoryText !== '—' && (l.units != null || l.rate != null)) return 'Additional unit';
+    return itemLabel || 'Line item';
   };
+
+  const buildDestinationSummaryForLine = (line) => {
+    const l = asObj(line) || {};
+    if (trimStr(l.destination_label || l.payout_destination)) return trimStr(l.destination_label || l.payout_destination);
+    if (l.is_candidate_directed_oneoff_payout === true) return 'Specified bank account';
+    if (l.appears_on_umbrella_remittance === true) return 'Umbrella';
+    if (l.generates_candidate_payment_advice === true) return 'Candidate';
+    return 'Normal route';
+  };
+
   const buildBreakdownRowsForCandidate = (candidate) => {
-    const candId = String(candidate?.candidate_id || '').trim();
-    const entries = normalizeCandidateLineEntries(candId);
+    const cid = getCandidateId(candidate);
+    const entries = normalizeCandidateLineEntries(cid);
     const rows = [];
 
-    for (const ln of entries) {
-      const weekEndingDate =
-        String(
-          ln?.week_ending_date ||
-          ln?.week_ending_bucket ||
-          ln?.timesheet?.week_ending_date ||
-          ''
-        ).trim();
-
-      const clientName =
-        String(
-          ln?.client_name ||
-          ln?.timesheet?.client_name ||
-          ''
-        ).trim();
-
-      if (Array.isArray(ln.breakdown_lines)) {
-        for (const bl of ln.breakdown_lines) {
-          if (!bl || typeof bl !== 'object') continue;
-
-          const mergedLine = { ...ln, ...bl };
-          const qty = (bl.units == null) ? null : Number(bl.units);
-          const hasQty = (bl.units != null) && Number.isFinite(qty);
-
-          if (hasQty && isZeroQty(qty)) continue;
-
-          const isAmountOnly = (bl.units == null) || (!Number.isFinite(qty));
-          const rate = (bl.rate == null) ? null : Number(bl.rate);
-          const hasRate = Number.isFinite(rate);
-          const amount = pickAmount(batchKind, bl);
-          const unitOrCategoryText = deriveUnitOrCategoryText(mergedLine);
-          const lineType = deriveExpandedLineType(mergedLine, unitOrCategoryText);
-          const destinationSummary = buildDestinationSummaryForLine(mergedLine);
-          const financeSummary = buildFrozenFinanceSummaryForLine(candidate, mergedLine);
-
+    for (const entry of entries) {
+      const weekEndingDate = firstText(entry.week_ending_date, entry.week_ending_bucket, entry.timesheet?.week_ending_date);
+      const clientName = firstText(entry.client_name, entry.timesheet?.client_name);
+      const breakdownLines = asArr(entry.breakdown_lines || entry.breakdownLines);
+      if (breakdownLines.length) {
+        for (const breakdown of breakdownLines) {
+          if (!asObj(breakdown)) continue;
+          const merged = { ...entry, ...breakdown };
+          const qty = Number(breakdown.units);
+          if (Number.isFinite(qty) && isZeroQty(qty)) continue;
+          const unitOrCategory = deriveUnitOrCategoryText(merged);
           rows.push({
             week_ending_date: weekEndingDate,
             client_name: clientName,
-            unit_or_category_text: unitOrCategoryText,
-            line_type_text: lineType.text,
-            line_type_badges_html: lineType.badges_html,
-            qty_text: isAmountOnly ? '' : fmtQty(qty),
-            rate_text: (isAmountOnly || !hasRate) ? '' : fmtMoney(rate),
-            amount_text: fmtMoney(amount),
-            destination_text: destinationSummary.text,
-            destination_badges_html: destinationSummary.badges_html,
-            finance_summary_text: financeSummary.text,
-            finance_badges_html: financeSummary.badges_html,
-            sort_group: Number.isFinite(Number(lineType.sort_group)) ? Number(lineType.sort_group) : 99
+            unit_or_category_text: unitOrCategory,
+            line_type_text: deriveExpandedLineType(merged, unitOrCategory),
+            qty_text: Number.isFinite(qty) ? fmtQty(qty) : '',
+            rate_text: Number.isFinite(Number(breakdown.rate)) ? fmtMoney(Number(breakdown.rate)) : '',
+            amount_text: fmtMoney(pickAmount(batchKind, breakdown)),
+            destination_text: buildDestinationSummaryForLine(merged)
           });
         }
         continue;
       }
 
-      const unitOrCategoryText = deriveUnitOrCategoryText(ln);
-      const units = (ln?.units != null) ? Number(ln.units) : NaN;
-
+      const units = Number(entry.units);
       if (Number.isFinite(units) && isZeroQty(units)) continue;
-
-      const rateVal = (ln?.rate != null) ? Number(ln.rate) : NaN;
-      const paymentAmt =
-        (ln?.payment_amount != null) ? Number(ln.payment_amount)
-        : (ln?.subtotal != null) ? Number(ln.subtotal)
-        : NaN;
-
-      const total = Number.isFinite(paymentAmt)
-        ? paymentAmt
-        : pickAmount(batchKind, ln);
-
-      const lineType = deriveExpandedLineType(ln, unitOrCategoryText);
-      const destinationSummary = buildDestinationSummaryForLine(ln);
-      const financeSummary = buildFrozenFinanceSummaryForLine(candidate, ln);
-
+      const unitOrCategory = deriveUnitOrCategoryText(entry);
+      const rate = Number(entry.rate);
+      const explicitAmount = Number(entry.payment_amount ?? entry.paymentAmount ?? entry.subtotal);
       rows.push({
         week_ending_date: weekEndingDate,
         client_name: clientName,
-        unit_or_category_text: unitOrCategoryText,
-        line_type_text: lineType.text,
-        line_type_badges_html: lineType.badges_html,
+        unit_or_category_text: unitOrCategory,
+        line_type_text: deriveExpandedLineType(entry, unitOrCategory),
         qty_text: Number.isFinite(units) ? fmtQty(units) : '',
-        rate_text: Number.isFinite(rateVal) ? fmtMoney(rateVal) : '',
-        amount_text: fmtMoney(total),
-        destination_text: destinationSummary.text,
-        destination_badges_html: destinationSummary.badges_html,
-        finance_summary_text: financeSummary.text,
-        finance_badges_html: financeSummary.badges_html,
-        sort_group: Number.isFinite(Number(lineType.sort_group)) ? Number(lineType.sort_group) : 99
+        rate_text: Number.isFinite(rate) ? fmtMoney(rate) : '',
+        amount_text: fmtMoney(Number.isFinite(explicitAmount) ? explicitAmount : pickAmount(batchKind, entry)),
+        destination_text: buildDestinationSummaryForLine(entry)
       });
     }
 
     rows.sort((a, b) => {
-      const wa = String(a.week_ending_date || '');
-      const wb = String(b.week_ending_date || '');
-      if (wa !== wb) return wb.localeCompare(wa);
-
-      const ca = String(a.client_name || '');
-      const cb = String(b.client_name || '');
-      if (ca !== cb) return ca.localeCompare(cb);
-
-      const ga = Number.isFinite(Number(a.sort_group)) ? Number(a.sort_group) : 99;
-      const gb = Number.isFinite(Number(b.sort_group)) ? Number(b.sort_group) : 99;
-      if (ga !== gb) return ga - gb;
-
-      const ua = String(a.unit_or_category_text || '');
-      const ub = String(b.unit_or_category_text || '');
-      if (ua !== ub) return ua.localeCompare(ub);
-
-      const ta = String(a.line_type_text || '');
-      const tb = String(b.line_type_text || '');
-      if (ta !== tb) return ta.localeCompare(tb);
-
-      const aa = Number(a.amount_text || 0);
-      const ab = Number(b.amount_text || 0);
-      if (Number.isFinite(aa) && Number.isFinite(ab) && aa !== ab) return ab - aa;
-
-      return 0;
+      const byWeek = trimStr(b.week_ending_date).localeCompare(trimStr(a.week_ending_date));
+      if (byWeek) return byWeek;
+      const byClient = trimStr(a.client_name).localeCompare(trimStr(b.client_name));
+      if (byClient) return byClient;
+      return trimStr(a.line_type_text).localeCompare(trimStr(b.line_type_text));
     });
-
     return rows;
   };
 
-  const allRemittanceSummaries = candidates.map((candidate) => {
-    const normalized = (candidate && typeof candidate === 'object' && candidate.remittance_summary && typeof candidate.remittance_summary === 'object')
-      ? candidate.remittance_summary
-      : ((candidate && typeof candidate === 'object' && candidate.remittanceSummary && typeof candidate.remittanceSummary === 'object')
-          ? candidate.remittanceSummary
-          : ((typeof bankingNormalizeRemittanceFinancialSummary === 'function')
-              ? bankingNormalizeRemittanceFinancialSummary(candidate)
-              : {
-                  baseAmount: Number(candidate?.gross_preview || 0),
-                  overpaymentRecovery: Number(candidate?.overpayment_recovery_taken || 0),
-                  loanRepayment: Number(candidate?.loan_repayment_taken || 0),
-                  finalPaid: (candidate?.net_bank_amount != null) ? Number(candidate.net_bank_amount) : null,
-                  payeNetAmount: (candidate?.paye_net_amount != null) ? Number(candidate.paye_net_amount) : null,
-                  awaitingNet: !!candidate?.awaiting_net_amount,
-                  payePendingAdvisory: !!candidate?.awaiting_net_amount ? 'PAYE net is still pending, so final deduction impact may change until net is entered.' : '',
-                  raw: candidate
-                }));
+  const deriveCandidateFinancials = (candidate) => {
+    const c = asObj(candidate) || {};
+    const ds = asObj(c.deductions_summary || c.deductionsSummary) || {};
+    const rem = asObj(c.remittance_summary || c.remittanceSummary) || {};
+    const gross = firstFiniteNumber(
+      c.current_effective_amount_inc_vat,
+      c.currentEffectiveAmountIncVat,
+      c.current_effective_amount_ex_vat,
+      c.currentEffectiveAmountExVat,
+      ds.grossPositive,
+      ds.gross_positive,
+      rem.baseAmount,
+      rem.base_amount,
+      c.gross_preview,
+      c.grossPreview,
+      c.amount_inc_vat,
+      c.amount_ex_vat,
+      c.amount
+    ) ?? 0;
+    const overpayment = firstFiniteNumber(
+      ds.overpaymentRecovery,
+      ds.overpayment_recovery,
+      rem.overpaymentRecovery,
+      rem.overpayment_recovery,
+      c.overpayment_recovery_taken,
+      c.overpaymentRecovery
+    ) ?? 0;
+    const loan = firstFiniteNumber(
+      ds.loanRepayment,
+      ds.loan_repayment,
+      ds.paymentAdvanceRepayment,
+      ds.payment_advance_repayment,
+      rem.loanRepayment,
+      rem.loan_repayment,
+      rem.paymentAdvanceRepayment,
+      rem.payment_advance_repayment,
+      c.loan_repayment_taken,
+      c.payment_advance_repayment
+    ) ?? 0;
+    const finalPayable = firstFiniteNumber(
+      ds.finalPayable,
+      ds.final_payable,
+      rem.finalPaid,
+      rem.final_paid,
+      c.net_bank_amount,
+      c.final_payable,
+      c.finalPayable,
+      gross
+    ) ?? 0;
+    return { gross, overpayment, loan, finalPayable };
+  };
 
-    if (hasCurrentEffectiveCandidateAmount(candidate)) {
-      const effective = deriveCurrentEffectiveFinancials(candidate, null, normalized);
-      return {
-        ...normalized,
-        baseAmount: effective.grossPositive,
-        overpaymentRecovery: effective.overpaymentRecovery,
-        loanRepayment: effective.loanRepayment,
-        finalPaid: effective.finalPaid,
-        payeNetAmount: effective.payeNetAmount,
-        awaitingNet: effective.awaitingNet,
-        raw: candidate
-      };
+  const candidateHasPaymentIssue = (candidate) => {
+    const c = asObj(candidate) || {};
+    if (c.payment_issue_badge === true || c.paymentIssueBadge === true) return true;
+    if (asArr(c.payment_issue_kinds || c.paymentIssueKinds).length) return true;
+    if (asNum(c.corrected_item_count || c.correctedItemCount, 0) > 0) return true;
+    const paymentStatus = upperTrim(c.payment_status || c.paymentStatus || '');
+    return paymentStatus === 'PAYMENT_ISSUE' || paymentStatus === 'PAYMENT_ISSUE_PARTIAL';
+  };
+
+  const candidatePaymentIssueLabel = (candidate) => {
+    const c = asObj(candidate) || {};
+    const explicit = trimStr(c.payment_issue_label || c.paymentIssueLabel);
+    if (explicit) return explicit;
+    const kinds = asArr(c.payment_issue_kinds || c.paymentIssueKinds).map((x) => upperTrim(x)).filter(Boolean);
+    if (asNum(c.applied_reversal_item_count, 0) > 0 || kinds.includes('SETTLED_REVERSAL')) return 'Returned';
+    if (asNum(c.applied_unwind_item_count, 0) > 0 || kinds.includes('NO_MONEY_UNWIND')) return 'Bank rejected — payment reversed';
+    if (asNum(c.applied_precancel_item_count, 0) > 0 || kinds.includes('PRE_BANK_CANCEL')) return 'Payment removed';
+    return candidateHasPaymentIssue(candidate) ? 'Check required' : '';
+  };
+
+  const rowFromExternalPaymentRows = () => {
+    try {
+      if (typeof buildBankingPaymentIssueRows !== 'function') return [];
+      const result = buildBankingPaymentIssueRows(data, { correctionState });
+      const rows = Array.isArray(result) ? result : asArr(result?.rows || result?.paymentRows || result?.issueRows);
+      return rows.filter((row) => row && typeof row === 'object');
+    } catch {
+      return [];
     }
+  };
 
-    return normalized;
+  const classifyExternalRow = (row) => {
+    const displayState = upperTrim(row.displayState || row.display_state || row.issueKindForDisplay || row.issue_kind_for_display || row.issueKind || row.issue_kind || row.status || '');
+    const symbol = trimStr(row.statusSymbol || row.status_symbol || row.icon || '');
+    const result = trimStr(row.resultLabel || row.result_label || row.whatHappenedLabel || row.what_happened_label || row.statusText || row.status_text || row.label || '');
+    const action = trimStr(row.actionLabel || row.action_label || '');
+    const amount = firstFiniteNumber(row.paymentAmount, row.payment_amount, row.amount, row.amount_inc_vat, row.amount_ex_vat) ?? 0;
+    const candidateId = trimStr(row.candidateId || row.candidate_id || '');
+    const statusText = `${displayState} ${symbol} ${result}`.toUpperCase();
+    if (symbol === '✅' || displayState.includes('PAYMENT_SENT') || displayState.includes('PAYMENT_PAID') || statusText.includes('SENT') || statusText.includes('PAID')) {
+      return { tone: 'sent', result: result || 'Sent', action, amount, candidateId };
+    }
+    if (symbol === '❓' || displayState.includes('UNKNOWN') || displayState.includes('CHECK') || statusText.includes('CHECK REQUIRED') || statusText.includes('UNKNOWN') || statusText.includes('TIMEOUT')) {
+      return { tone: 'check', result: result || 'Check required', action: action || 'Resolve manually', amount, candidateId };
+    }
+    if (symbol === '❌' || displayState.includes('REJECT') || displayState.includes('FAILED') || displayState.includes('INSUFFICIENT') || displayState.includes('RETURN') || statusText.includes('REJECT') || statusText.includes('FAILED') || statusText.includes('RETURN') || statusText.includes('INSUFFICIENT')) {
+      return { tone: 'failed', result: result || 'Failed / returned', action, amount, candidateId };
+    }
+    return null;
+  };
+
+  const providerDiagnostic = extractProviderSubmitDiagnosticFromOverviewData(data);
+  const providerAcceptedSent = isProviderAcceptedSent(providerDiagnostic) || providerSubmitOverviewModel.isAcceptedSent === true;
+  const providerExecutionEvidence = hasProviderOrBankExecutionEvidence(data);
+
+  const transfersForCandidate = (candidateId) => transfers.filter((transfer) => trimStr(transfer?.candidate_id || transfer?.candidateId || '') === trimStr(candidateId));
+
+  const classifyCandidateStatus = (candidate) => {
+    const candidateId = getCandidateId(candidate);
+    const candidateTransfers = transfersForCandidate(candidateId);
+    const candidateIssueLabel = candidatePaymentIssueLabel(candidate);
+    const hasIssue = candidateHasPaymentIssue(candidate);
+    const transferStatuses = candidateTransfers.map((t) => upperTrim(t?.status || '')).filter(Boolean);
+    const railStates = candidateTransfers.map((t) => upperTrim(t?.rail_state || t?.railState || '')).filter(Boolean);
+    const hasCompleted = transferStatuses.includes('COMPLETED') || railStates.some((s) => ['COMPLETED', 'SETTLED', 'PAID', 'BANK_CONFIRMED', 'MANUAL_CONFIRM'].includes(s));
+    const hasFailed = transferStatuses.includes('FAILED') || transferStatuses.includes('REJECTED') || transferStatuses.includes('DECLINED');
+    const hasBlocked = transferStatuses.includes('BLOCKED') || upperTrim(candidate?.banking_alert_kind || '').includes('BLOCKED_FUNDS');
+    const hasExternalSent = candidateTransfers.some((t) => hasTransferRailSubmissionEvidence(t));
+    const candidateProviderSent = providerAcceptedSent && (candidateTransfers.length > 0 || candidates.length === 1);
+
+    if (candidateIssueLabel) {
+      const labelUpper = upperTrim(candidateIssueLabel);
+      if (labelUpper.includes('RETURN')) return { tone: 'failed', symbol: '❌', label: 'Returned', result: 'Returned', amountTone: 'failed' };
+      if (labelUpper.includes('REJECT') || labelUpper.includes('UNWIND') || labelUpper.includes('REVERSED')) return { tone: 'failed', symbol: '❌', label: candidateIssueLabel, result: candidateIssueLabel, amountTone: 'failed' };
+      if (hasIssue) return { tone: 'check', symbol: '❓', label: 'Check required', result: 'Check required', amountTone: 'check' };
+    }
+    if (hasCompleted || candidateProviderSent || hasExternalSent) return { tone: 'sent', symbol: '✅', label: 'Sent', result: 'Sent', amountTone: 'sent' };
+    if (hasFailed) return { tone: 'failed', symbol: '❌', label: 'Bank rejected', result: 'Bank rejected', amountTone: 'failed' };
+    if (hasBlocked) return { tone: 'failed', symbol: '❌', label: 'Insufficient funds', result: 'Insufficient funds', amountTone: 'failed' };
+    if (providerSubmitOverviewModel.hasIssue === true && candidates.length === 1) return { tone: 'check', symbol: '❓', label: 'Check required', result: 'Check required', amountTone: 'check' };
+    if (providerExecutionEvidence && candidateTransfers.length > 0) return { tone: 'sent', symbol: '✅', label: 'Sent', result: 'Sent', amountTone: 'sent' };
+    return { tone: 'check', symbol: '❓', label: 'Check required', result: 'Check required', amountTone: 'check' };
+  };
+
+  const externalRows = rowFromExternalPaymentRows().map(classifyExternalRow).filter(Boolean);
+  const externalByCandidateId = new Map();
+  for (const row of externalRows) {
+    if (!row.candidateId) continue;
+    if (!externalByCandidateId.has(row.candidateId)) externalByCandidateId.set(row.candidateId, []);
+    externalByCandidateId.get(row.candidateId).push(row);
+  }
+
+  const candidateViewModels = candidates.map((candidate) => {
+    const candidateId = getCandidateId(candidate);
+    const financials = deriveCandidateFinancials(candidate);
+    const externalClassifications = externalByCandidateId.get(candidateId) || [];
+    let statusInfo = classifyCandidateStatus(candidate);
+    if (externalClassifications.length) {
+      if (externalClassifications.some((row) => row.tone === 'failed')) statusInfo = { tone: 'failed', symbol: '❌', label: externalClassifications.find((row) => row.tone === 'failed')?.result || 'Failed / returned', result: externalClassifications.find((row) => row.tone === 'failed')?.result || 'Failed / returned' };
+      else if (externalClassifications.some((row) => row.tone === 'check')) statusInfo = { tone: 'check', symbol: '❓', label: externalClassifications.find((row) => row.tone === 'check')?.result || 'Check required', result: externalClassifications.find((row) => row.tone === 'check')?.result || 'Check required' };
+      else if (externalClassifications.some((row) => row.tone === 'sent')) statusInfo = { tone: 'sent', symbol: '✅', label: externalClassifications.find((row) => row.tone === 'sent')?.result || 'Sent', result: externalClassifications.find((row) => row.tone === 'sent')?.result || 'Sent' };
+    }
+    return { candidate, candidateId, financials, statusInfo };
   });
 
-  const remittanceTotals = allRemittanceSummaries.reduce((acc, r) => {
-    const base = Number(r?.baseAmount);
-    const op = Number(r?.overpaymentRecovery);
-    const loan = Number(r?.loanRepayment);
-    const finalPaid = Number(r?.finalPaid);
-    if (Number.isFinite(base)) acc.base += base;
-    if (Number.isFinite(op)) acc.overpayment += op;
-    if (Number.isFinite(loan)) acc.loan += loan;
-    if (Number.isFinite(finalPaid)) acc.final += finalPaid;
-    return acc;
-  }, { base: 0, overpayment: 0, loan: 0, final: 0 });
-  const displayedRemittanceTotals = emptyDraftNoActivePayments
-    ? { base: 0, overpayment: 0, loan: 0, final: 0 }
-    : remittanceTotals;
+  const fallbackTotalAmount = firstFiniteNumber(
+    data.total_amount,
+    data.total_amount_inc_vat,
+    data.total_pay_amount,
+    batch.total_amount,
+    batch.total_amount_inc_vat,
+    batch.total_pay_amount,
+    data.active_amount_inc_vat,
+    batch.active_amount_inc_vat
+  );
 
-  const candidateRowsHtml = candidates.length
+  const paymentSummary = (() => {
+    const summary = { sentCount: 0, failedReturnedCount: 0, checkRequiredCount: 0, totalSentAmount: 0 };
+    const countableRows = candidateViewModels.length ? candidateViewModels : [];
+    for (const row of countableRows) {
+      if (row.statusInfo.tone === 'sent') {
+        summary.sentCount += 1;
+        summary.totalSentAmount += Number(row.financials.finalPayable) || 0;
+      } else if (row.statusInfo.tone === 'failed') {
+        summary.failedReturnedCount += 1;
+      } else {
+        summary.checkRequiredCount += 1;
+      }
+    }
+    if (!countableRows.length && providerAcceptedSent) {
+      summary.sentCount = 1;
+      summary.totalSentAmount = fallbackTotalAmount || 0;
+    }
+    if (summary.sentCount > 0 && summary.totalSentAmount === 0 && Number.isFinite(Number(fallbackTotalAmount))) {
+      summary.totalSentAmount = Number(fallbackTotalAmount);
+    }
+    return summary;
+  })();
+
+  const communicationSummarySource = asObj(child.communications?.summary) || asObj(data.communications) || {};
+  const remittanceSummary = asObj(communicationSummarySource.remittance) || {};
+  const remittanceResult = asObj(child.communications?.result?.remittance) || {};
+  const remittancesSent = readBool(
+    data.remittances_sent ?? batch.remittances_sent ?? child.communications?.remittances_sent ?? communicationSummarySource.remittances_sent
+  ) || pickCount(remittanceResult, ['sent_count', 'candidate_count_sent']) > 0 || pickCount(remittanceSummary, ['sent_count', 'candidate_count_sent']) > 0;
+
+  const canShowExecutePayment = false;
+  void canShowExecutePayment;
+
+  const errHtml = trimStr(child.error)
+    ? `<div class="error" style="white-space:pre-wrap;">${enc(trimStr(child.error))}</div>`
+    : '';
+  const busyLine = (() => {
+    const bits = [];
+    if (child.loading) bits.push('Loading…');
+    if (child.actionsBusy?.refreshing) bits.push('Refreshing…');
+    if (child.actionsBusy?.polling) bits.push('Checking bank status…');
+    if (child.actionsBusy?.exportingDetailCsv) bits.push('Exporting detailed CSV…');
+    if (child.actionsBusy?.exportingDetailPdf) bits.push('Exporting detailed PDF…');
+    return bits.length ? `<span class="mini" style="opacity:.8;">${enc(bits.join(' '))}</span>` : '';
+  })();
+
+  if (isBootstrapOnly) {
+    return `
+      <div id="${enc(rootId)}">
+        <div class="card">
+          <div class="row">
+            <label>Overview</label>
+            <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+              ${errHtml}
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <span class="mini" style="font-weight:800;">${enc(providerEnvHeader)}</span>
+                <span class="mini">Pay date: <span class="mono">${enc(payDate ? formatIsoToUkLocal(payDate) : '—')}</span></span>
+                <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
+                </div>
+              </div>
+              ${providerSubmitOverviewHtml}
+              <div class="card" style="padding:10px;">
+                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Payment status</div>
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                  <span class="mini">✅ Sent: <span class="mono">${enc(String(paymentSummary.sentCount))}</span></span>
+                  <span class="mini">❌ Failed / returned: <span class="mono">${enc(String(paymentSummary.failedReturnedCount))}</span></span>
+                  <span class="mini">❓ Check required: <span class="mono">${enc(String(paymentSummary.checkRequiredCount))}</span></span>
+                  <span class="mini">Total sent: <span class="mono">£${enc(fmtMoney(paymentSummary.totalSentAmount))}</span></span>
+                </div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh">Refresh Batch</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailCsv">Detailed CSV</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailPdf">Detailed PDF</button>
+                <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPaymentIssues">Current Payment Status</button>
+                ${busyLine}
+              </div>
+              <div class="mini" style="opacity:.88;">Remittances sent: <span class="mono">${enc(remittancesSent ? 'Yes' : 'No')}</span></div>
+              <div class="mini" style="opacity:.82;">This large batch is in bootstrap mode. Open the relevant detail tabs to load paged rows.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const candidateRowsHtml = candidateViewModels.length
     ? `
       <div style="overflow:auto; border:1px solid var(--line); border-radius:10px; max-height:min(60vh,820px);">
-        <table class="grid" style="min-width:${showUmbrellaColumn && showPayeNetColumn ? '1180px' : (showUmbrellaColumn || showPayeNetColumn ? '1040px' : '920px')}; table-layout:fixed; margin:0;">
+        <table class="grid" style="min-width:1160px; table-layout:fixed; margin:0;">
           <thead>
             <tr>
               <th style="width:56px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">
@@ -59070,558 +56047,110 @@ ${enc(model.action)}</div>
                   style="min-width:32px; padding:0 8px;"
                 >${allExpanded ? '−' : '+'}</button>
               </th>
-              <th style="position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Candidate name</th>
-              ${showUmbrellaColumn ? `<th style="position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Umbrella name</th>` : ``}
-              <th style="width:120px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Gross</th>
-              <th style="width:120px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Overpayment</th>
-              <th style="width:170px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Payment Advance Repayment</th>
-              ${showPayeNetColumn ? `<th style="width:120px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">PAYE Net</th>` : ``}
-              <th style="width:140px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Final Payable</th>
+              <th style="position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Candidate name / TMS ref</th>
+              <th style="position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Payee / Umbrella</th>
+              <th style="width:120px;text-align:right;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Gross</th>
+              <th style="width:120px;text-align:right;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Overpayment</th>
+              <th style="width:180px;text-align:right;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Payment Advance Repayment</th>
+              <th style="width:140px;text-align:right;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Final payable</th>
+              <th style="width:180px;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Status</th>
             </tr>
           </thead>
           <tbody>
-            ${
-              candidates.map((c) => {
-                const cid = String(c?.candidate_id || '').trim();
-                const name = String(c?.candidate_display_name || c?.display_name || '').trim() || '—';
-                const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
-                const umbrellaName = String(
-                  c?.umbrella_display_name ||
-                  c?.umbrella_name ||
-                  c?.umbrella_company_name ||
-                  c?.payee_display_name ||
-                  c?.payee_name ||
-                  ''
-                ).trim() || '—';
-
-                const candidateLines = normalizeCandidateLineEntries(cid);
-                const candidateHasRemittanceItems = candidateLines.some((line) => line?.appears_on_umbrella_remittance === true);
-                const candidateHasPayoutNotices = candidateLines.some((line) => line?.generates_candidate_payment_advice === true || line?.is_candidate_directed_oneoff_payout === true);
-
-                const normalizedDeductions = (c && typeof c === 'object' && c.deductionsSummary && typeof c.deductionsSummary === 'object')
-                  ? c.deductionsSummary
-                  : ((c && typeof c === 'object' && c.deductions_summary && typeof c.deductions_summary === 'object')
-                      ? c.deductions_summary
-                      : ((typeof bankingNormalizeCandidateDeductionsSummary === 'function')
-                          ? bankingNormalizeCandidateDeductionsSummary(c)
-                          : {
-                              grossPositive: Number(c?.gross_preview || 0),
-                              overpaymentRecovery: Number(c?.overpayment_recovery_taken || 0),
-                              loanRepayment: Number(c?.loan_repayment_taken || 0),
-                              finalPayable: (c?.net_bank_amount != null) ? Number(c.net_bank_amount) : null,
-                              awaitingNet: !!c?.awaiting_net_amount,
-                              payeNetAmount: (c?.paye_net_amount != null) ? Number(c.payeNetAmount ?? c.paye_net_amount) : null,
-                              pendingAdvisory: !!c?.awaiting_net_amount ? 'Final deductions will be confirmed after PAYE net is entered.' : '',
-                              hasKnownFinalPayable: c?.net_bank_amount != null,
-                              raw: c
-                            }));
-
-                const normalizedRemittance = (c && typeof c === 'object' && c.remittance_summary && typeof c.remittance_summary === 'object')
-                  ? c.remittance_summary
-                  : ((c && typeof c === 'object' && c.remittanceSummary && typeof c.remittanceSummary === 'object')
-                      ? c.remittanceSummary
-                      : ((typeof bankingNormalizeRemittanceFinancialSummary === 'function')
-                          ? bankingNormalizeRemittanceFinancialSummary(c)
-                          : {
-                              baseAmount: normalizedDeductions.grossPositive,
-                              overpaymentRecovery: normalizedDeductions.overpaymentRecovery,
-                              loanRepayment: normalizedDeductions.loanRepayment,
-                              finalPaid: normalizedDeductions.finalPayable,
-                              payeNetAmount: normalizedDeductions.payeNetAmount,
-                              awaitingNet: normalizedDeductions.awaitingNet,
-                              payePendingAdvisory: normalizedDeductions.awaitingNet ? 'PAYE net is still pending, so final deduction impact may change until net is entered.' : '',
-                              raw: c
-                            }));
-
-                const effectiveFinancials = hasCurrentEffectiveCandidateAmount(c)
-                  ? deriveCurrentEffectiveFinancials(c, normalizedDeductions, normalizedRemittance)
-                  : null;
-
-                const deductions = effectiveFinancials
-                  ? {
-                      ...normalizedDeductions,
-                      grossPositive: effectiveFinancials.grossPositive,
-                      overpaymentRecovery: effectiveFinancials.overpaymentRecovery,
-                      loanRepayment: effectiveFinancials.loanRepayment,
-                      finalPayable: effectiveFinancials.finalPayable,
-                      awaitingNet: effectiveFinancials.awaitingNet,
-                      payeNetAmount: effectiveFinancials.payeNetAmount,
-                      hasKnownFinalPayable: effectiveFinancials.finalPayable !== null,
-                      raw: c
-                    }
-                  : normalizedDeductions;
-
-                const remittance = effectiveFinancials
-                  ? {
-                      ...normalizedRemittance,
-                      baseAmount: effectiveFinancials.grossPositive,
-                      overpaymentRecovery: effectiveFinancials.overpaymentRecovery,
-                      loanRepayment: effectiveFinancials.loanRepayment,
-                      finalPaid: effectiveFinancials.finalPaid,
-                      payeNetAmount: effectiveFinancials.payeNetAmount,
-                      awaitingNet: effectiveFinancials.awaitingNet,
-                      raw: c
-                    }
-                  : normalizedRemittance;
-
-                const payeState = String(c?.paye_state || '').trim().toUpperCase();
-                const candTransfers = transfers.filter((t) => String(t?.candidate_id || '').trim() === cid);
-
-                const roll = (() => {
-                  if (!candTransfers.length) return { pill: '', sub: '' };
-                  const sts = candTransfers.map((t) => String(t?.status || '').trim().toUpperCase()).filter(Boolean);
-                  const rs = candTransfers.map((t) => String(t?.rail_state || '').trim().toUpperCase()).filter(Boolean);
-                  const hasPending = sts.includes('PENDING');
-                  const hasFailed = sts.includes('FAILED');
-                  const hasBlocked = sts.includes('BLOCKED');
-                  const allDone = sts.length > 0 && sts.every((x) => x === 'COMPLETED');
-                  const hasRailEvidence = candTransfers.some((t) => hasTransferRailSubmissionEvidence(t)) || executionCommitState === 'SUBMITTED_NOT_COMMITTED';
-                  const hasCsvEvidenceOnly = !!(csvEvidence && csvEvidence.raw) && !hasRailEvidence;
-
-                  if (allDone) {
-                    const sub = rs.includes('MANUAL_CONFIRM') ? 'CSV payment settled' : (rs.includes('BANK_CONFIRMED') ? 'Bank confirmed' : '');
-                    return { pill: `<span class="pill pill-ok">PAID</span>`, sub: sub ? `<div class="mini" style="opacity:.8;">${enc(sub)}</div>` : '' };
-                  }
-                  if (hasFailed) return { pill: `<span class="pill pill-warn">FAILED</span>`, sub: '' };
-                  if (hasBlocked) return { pill: `<span class="pill pill-warn">BLOCKED</span>`, sub: '' };
-                  if (hasPending && hasRailEvidence) return { pill: `<span class="pill pill-info">SUBMITTED</span>`, sub: `<div class="mini" style="opacity:.8;">In flight</div>` };
-                  if (hasPending && hasCsvEvidenceOnly) return { pill: `<span class="pill pill-info">CSV GENERATED</span>`, sub: `<div class="mini" style="opacity:.8;">Not settled</div>` };
-                  if (hasPending) return { pill: `<span class="pill pill-info">READY</span>`, sub: `<div class="mini" style="opacity:.8;">Awaiting execution</div>` };
-                  return { pill: `<span class="pill pill-info">IN PROGRESS</span>`, sub: '' };
-                })();
-
-                const candidateExpansionKey = getCandidateExpansionKey(c) || cid;
-                const isExpanded = isCandidateExpanded(c);
-                const rows = isExpanded ? buildBreakdownRowsForCandidate(c) : [];
-
-                const payeBadge = (batchKindInfo.isPayeish && !batchKindInfo.isLoans)
-                  ? ((payeState && payeState !== 'READY')
-                      ? `<span class="pill pill-warn">Awaiting Net amount</span>`
-                      : (payeState ? `<span class="pill pill-ok">READY</span>` : ``))
-                  : '';
-
-                const candidateCommBadgesHtml = `
-                  ${candidateHasRemittanceItems ? `<span class="pill pill-info">Umbrella remittance</span>` : ``}
-                  ${candidateHasPayoutNotices ? `<span class="pill pill-warn">Candidate payout notice</span>` : ``}
-                `;
-
-                const paymentIssueBadgeHtml = candidatePaymentIssueBadgeHtml(c);
-                const paymentIssueLabelText = candidatePaymentIssueLabel(c);
-                const noCandidateRowsMessage = paymentIssueBadgeHtml
-                  ? `No active current-payment breakdown rows remain for this candidate. ${paymentIssueLabelText ? `Status: ${paymentIssueLabelText}.` : 'This candidate has a payment issue.'}`
-                  : 'No canonical breakdown lines were returned for this candidate.';
-
-                const finalAmount = (deductions.finalPayable != null)
-                  ? `£${fmtMoney(deductions.finalPayable)}`
-                  : (deductions.awaitingNet ? 'Pending' : `£${fmtMoney(remittance.finalPaid)}`);
-                const detailHtml = isExpanded
-                  ? `
-                    <tr>
-                      <td colspan="${enc(String(summaryColspan))}" style="padding:0;">
-                        <div style="padding:10px 12px; background:rgba(0,0,0,.02); border-top:1px solid var(--line);">
-                          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-                            <div class="mini" style="font-weight:700; opacity:.9;">Line items</div>
-                            <div class="mini" style="opacity:.85;">${enc(String(rows.length))} row${rows.length === 1 ? '' : 's'}</div>
-                            ${paymentIssueBadgeHtml}
-                            ${candidateCommBadgesHtml}
-                          </div>
-                          ${
-                            rows.length
-                              ? `
-                                <div style="max-height:min(42vh,460px); overflow:auto; border:1px solid var(--line); border-radius:10px;">
-                                  <table class="grid" style="min-width:1280px; table-layout:auto; margin:0;">
-                                    <thead>
-                                      <tr>
-                                        <th style="width:130px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Week ending</th>
-                                        <th style="position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Client</th>
-                                        <th style="width:170px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Unit / category</th>
-                                        <th style="width:190px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Line type</th>
-                                        <th style="width:90px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Qty</th>
-                                        <th style="width:110px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Rate</th>
-                                        <th style="width:120px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Amount</th>
-                                        <th style="width:220px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Destination</th>
-                                        <th style="width:260px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Finance</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      ${
-                                        rows.map((rw) => {
-                                          const we = String(rw.week_ending_date || '').trim();
-                                          const cl = String(rw.client_name || '').trim();
-                                          const unitOrCategory = String(rw.unit_or_category_text || '').trim();
-                                          const lineType = String(rw.line_type_text || '').trim() || '—';
-                                          const qtyText = String(rw.qty_text || '').trim();
-                                          const rateText = String(rw.rate_text || '').trim();
-                                          const amountText = String(rw.amount_text || '').trim();
-                                          const destinationText = String(rw.destination_text || '').trim();
-                                          const financeSummaryText = String(rw.finance_summary_text || '').trim();
-
-                                          return `
-                                            <tr>
-                                              <td class="mini" style="white-space:nowrap;">${enc(we ? formatIsoToUkLocal(we) : '—')}</td>
-                                              <td class="mini">${enc(cl || '—')}</td>
-                                              <td class="mini">${enc(unitOrCategory || '—')}</td>
-                                              <td>
-                                                <div style="display:flex; flex-direction:column; gap:4px;">
-                                                  <div class="mini">${enc(lineType)}</div>
-                                                  ${rw.line_type_badges_html ? `<div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">${rw.line_type_badges_html}</div>` : ''}
-                                                </div>
-                                              </td>
-                                              <td class="mono" style="text-align:right;">${enc(qtyText || '—')}</td>
-                                              <td class="mono" style="text-align:right;">${enc(rateText ? `£${rateText}` : '—')}</td>
-                                              <td class="mono" style="text-align:right;">£${enc(amountText || '0.00')}</td>
-                                              <td>
-                                                <div style="display:flex; flex-direction:column; gap:4px;">
-                                                  <div class="mini">${enc(destinationText || '—')}</div>
-                                                  ${rw.destination_badges_html ? `<div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">${rw.destination_badges_html}</div>` : ''}
-                                                </div>
-                                              </td>
-                                              <td>
-                                                <div style="display:flex; flex-direction:column; gap:4px;">
-                                                  <div class="mini">${enc(financeSummaryText || '—')}</div>
-                                                  ${rw.finance_badges_html ? `<div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">${rw.finance_badges_html}</div>` : ''}
-                                                </div>
-                                              </td>
-                                            </tr>
-                                          `;
-                                        }).join('')
-                                      }
-                                    </tbody>
-                                  </table>
-                                </div>
-                              `
-                              : `<div class="mini" style="opacity:.85;">${enc(noCandidateRowsMessage)}</div>`
-                          }
-                        </div>
-                      </td>
-                    </tr>
-                  `
-                  : '';
-
-                return `
+            ${candidateViewModels.map((row) => {
+              const c = row.candidate;
+              const candidateId = row.candidateId;
+              const candidateName = getCandidateName(c);
+              const tmsRef = getCandidateTmsRef(c);
+              const payeeName = getPayeeName(c);
+              const expansionKey = getCandidateExpansionKey(c) || candidateId;
+              const expandedCandidate = isCandidateExpanded(c);
+              const lineRows = expandedCandidate ? buildBreakdownRowsForCandidate(c) : [];
+              const statusInfo = row.statusInfo;
+              const detailHtml = expandedCandidate
+                ? `
                   <tr>
-                    <td style="width:56px;">
-                      <button
-                        type="button"
-                        class="btn btn-sm btn-outline"
-                        data-action="banking:pay:child:toggleExpandCandidate"
-                        data-candidate-id="${enc(candidateExpansionKey)}"
-                        data-pay-batch-candidate-id="${enc(trimStr(c?.pay_batch_candidate_id || c?.payBatchCandidateId || ''))}"
-                        data-candidate-row-id="${enc(trimStr(c?.id || c?.candidate_row_id || c?.candidateRowId || ''))}"
-                        data-actual-candidate-id="${enc(cid)}"
-                        title="${isExpanded ? 'Collapse' : 'Expand'}"
-                        style="min-width:32px; padding:0 8px;"
-                      >${isExpanded ? '−' : '+'}</button>
-                    </td>
-                    <td>
-                      <div style="display:flex; flex-direction:column; gap:4px;">
-                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                          <div style="font-weight:700;">${enc(name)}</div>
-                          ${tms ? `<span class="mono">${enc(tms)}</span>` : ``}
-                          ${paymentIssueBadgeHtml}
-                          ${roll.pill}
-                          ${payeBadge}
+                    <td colspan="8" style="padding:0;">
+                      <div style="padding:10px 12px;background:rgba(0,0,0,.02);border-top:1px solid var(--line);">
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+                          <div class="mini" style="font-weight:700;opacity:.9;">Line items</div>
+                          <div class="mini" style="opacity:.85;">${enc(String(lineRows.length))} row${lineRows.length === 1 ? '' : 's'}</div>
                         </div>
-                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                          ${candidateCommBadgesHtml}
-                        </div>
-                        ${paymentIssueBadgeHtml ? `<div class="mini" style="opacity:.85;">${enc(paymentIssueLabelText)}</div>` : ``}
-                        ${roll.sub}
+                        ${lineRows.length ? `
+                          <div style="max-height:min(42vh,460px);overflow:auto;border:1px solid var(--line);border-radius:10px;">
+                            <table class="grid" style="min-width:1020px;table-layout:auto;margin:0;">
+                              <thead>
+                                <tr>
+                                  <th style="width:130px;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Week ending</th>
+                                  <th style="position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Client</th>
+                                  <th style="width:170px;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Unit/category</th>
+                                  <th style="width:170px;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Line type</th>
+                                  <th style="width:90px;text-align:right;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Qty</th>
+                                  <th style="width:110px;text-align:right;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Rate</th>
+                                  <th style="width:120px;text-align:right;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Amount</th>
+                                  <th style="width:180px;position:sticky;top:0;z-index:1;background:var(--panel,#fff);">Destination</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                ${lineRows.map((line) => `
+                                  <tr>
+                                    <td class="mini" style="white-space:nowrap;">${enc(line.week_ending_date ? formatIsoToUkLocal(line.week_ending_date) : '—')}</td>
+                                    <td class="mini">${enc(line.client_name || '—')}</td>
+                                    <td class="mini">${enc(line.unit_or_category_text || '—')}</td>
+                                    <td class="mini">${enc(line.line_type_text || '—')}</td>
+                                    <td class="mono" style="text-align:right;">${enc(line.qty_text || '—')}</td>
+                                    <td class="mono" style="text-align:right;">${enc(line.rate_text ? `£${line.rate_text}` : '—')}</td>
+                                    <td class="mono" style="text-align:right;">£${enc(line.amount_text || '0.00')}</td>
+                                    <td class="mini">${enc(line.destination_text || '—')}</td>
+                                  </tr>
+                                `).join('')}
+                              </tbody>
+                            </table>
+                          </div>
+                        ` : `<div class="mini" style="opacity:.85;">No line items were returned for this candidate.</div>`}
                       </div>
                     </td>
-                    ${showUmbrellaColumn ? `<td class="mini">${enc(umbrellaName)}</td>` : ``}
-                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(deductions.grossPositive))}</td>
-                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(deductions.overpaymentRecovery))}</td>
-                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(deductions.loanRepayment))}</td>
-                    ${showPayeNetColumn ? `<td class="mono" style="text-align:right;">${enc(deductions.payeNetAmount != null ? `£${fmtMoney(deductions.payeNetAmount)}` : '—')}</td>` : ``}
-                    <td class="mono" style="text-align:right;">${enc(finalAmount)}</td>
                   </tr>
-                  ${detailHtml}
-                `;
-              }).join('')
-            }
+                `
+                : '';
+              return `
+                <tr>
+                  <td style="width:56px;">
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-outline"
+                      data-action="banking:pay:child:toggleExpandCandidate"
+                      data-candidate-id="${enc(expansionKey)}"
+                      data-pay-batch-candidate-id="${enc(trimStr(c?.pay_batch_candidate_id || c?.payBatchCandidateId || ''))}"
+                      data-candidate-row-id="${enc(trimStr(c?.id || c?.candidate_row_id || c?.candidateRowId || ''))}"
+                      data-actual-candidate-id="${enc(candidateId)}"
+                      title="${expandedCandidate ? 'Collapse' : 'Expand'}"
+                      style="min-width:32px;padding:0 8px;"
+                    >${expandedCandidate ? '−' : '+'}</button>
+                  </td>
+                  <td>
+                    <div style="display:flex;flex-direction:column;gap:4px;">
+                      <div style="font-weight:700;">${enc(candidateName)}</div>
+                      ${tmsRef ? `<div class="mono mini">${enc(tmsRef)}</div>` : ''}
+                    </div>
+                  </td>
+                  <td class="mini">${enc(payeeName)}</td>
+                  <td class="mono" style="text-align:right;">£${enc(fmtMoney(row.financials.gross))}</td>
+                  <td class="mono" style="text-align:right;">£${enc(fmtMoney(row.financials.overpayment))}</td>
+                  <td class="mono" style="text-align:right;">£${enc(fmtMoney(row.financials.loan))}</td>
+                  <td class="mono" style="text-align:right;">£${enc(fmtMoney(row.financials.finalPayable))}</td>
+                  <td>
+                    <span class="${enc(statusInfo.tone === 'sent' ? 'pill pill-ok' : statusInfo.tone === 'failed' ? 'pill pill-warn' : 'pill pill-info')}">${enc(`${statusInfo.symbol} ${statusInfo.label}`)}</span>
+                  </td>
+                </tr>
+                ${detailHtml}
+              `;
+            }).join('')}
           </tbody>
         </table>
       </div>
     `
-    : emptyDraftNoActivePayments
-      ? `<div class="mini" style="opacity:.85;">No active candidate payments remain in this draft batch.</div>`
-      : `<div class="mini" style="opacity:.85;">No candidates found in this batch.</div>`;
-
-  const errHtml = String(child.error || '').trim()
-    ? `<div class="error" style="white-space:pre-wrap;">${enc(String(child.error || '').trim())}</div>`
-    : '';
-
-  const emptyDraftNoActivePaymentsHtml = emptyDraftNoActivePayments
-    ? `
-      <div class="card" style="padding:10px; border-color:rgba(180,120,0,.35); background:rgba(255,193,7,.08);">
-        <div style="display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;">
-          <span class="pill pill-warn">No active payments</span>
-          <div style="display:flex; flex-direction:column; gap:4px;">
-            <div class="mini" style="font-weight:700; opacity:.95;">This draft batch has no active payments.</div>
-            <div class="mini" style="opacity:.88;">Delete the draft or create a new batch. Execute Payment and bank exports are disabled for this empty draft.</div>
-          </div>
-        </div>
-      </div>
-    `
-    : '';
-
-  const blockedFundsBannerHtml = isBlockedFundsBatch
-    ? `
-      <div class="card banking-pay-blocked-funds-overview-banner" style="padding:12px;border:1px solid #fecaca;background:#fef2f2;color:#7f1d1d;">
-        <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
-          <div style="display:flex;flex-direction:column;gap:8px;min-width:260px;flex:1;">
-            <div style="font-weight:800;font-size:14px;letter-spacing:.01em;">BANK REJECTED PAYMENT — BLOCKED FUNDS</div>
-            <div class="mini" style="opacity:.96;white-space:pre-wrap;">CloudTMS did not submit this payment because the funding account did not have enough funds.</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">
-              <div><strong>Required</strong><br><span class="mono">${blockedFundsRequiredGbp !== null ? `£${enc(fmtMoney(blockedFundsRequiredGbp))}` : '—'}</span></div>
-              <div><strong>Available</strong><br><span class="mono">${blockedFundsAvailableGbp !== null ? `£${enc(fmtMoney(blockedFundsAvailableGbp))}` : '—'}</span></div>
-              <div><strong>Provider</strong><br><span class="mono">${enc(blockedFundsProviderEnv || '—')}</span></div>
-              <div><strong>Funding account</strong><br><span class="mono">${enc(blockedFundsAccountRef || '—')}</span></div>
-              <div><strong>Last funds checked</strong><br><span class="mono">${enc(blockedFundsLastCheck || 'Not recorded')}</span></div>
-              <div><strong>Execution state</strong><br><span class="mono">${enc(executionCommitState || 'NOT_SUBMITTED')}</span></div>
-              <div><strong>Bank submission</strong><br><span class="mono">No bank payment was submitted</span></div>
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:retryBlockedFunds" data-batch-id="${enc(id)}" ${blockedFundsRetryDisabledAttr} title="${enc(canRetryBlockedFunds ? 'Retry this blocked-funds payment' : 'Retry is not currently safe for this batch. Refresh or review Payment Issues.')}" >Retry payment</button>
-            <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:blockedFunds:cancel" data-batch-id="${enc(id)}" ${blockedFundsCancelDisabledAttr} title="${enc(canCancelUnpaid ? 'Cancel/release this blocked-funds batch' : 'Cancel/release is not currently available for this batch.')}" >Cancel/release payment</button>
-          </div>
-        </div>
-      </div>
-    `
-    : '';
-
-  const paymentIssuesRequiredBannerHtml = paymentIssuesRequiredForCancel
-    ? `
-      <div class="card banking-pay-payment-issues-required-banner" style="padding:12px;border:1px solid #facc15;background:#fffbeb;color:#713f12;">
-        <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
-          <div style="display:flex;flex-direction:column;gap:6px;min-width:260px;flex:1;">
-            <div style="font-weight:800;font-size:14px;letter-spacing:.01em;">Use Payment Issues to resolve failed payments</div>
-            <div class="mini" style="opacity:.96;white-space:pre-wrap;">Provider/bank payment evidence exists, so normal Delete draft / Cancel batch is blocked. Resolve the affected payment rows in Payment Issues.</div>
-          </div>
-          <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPaymentIssues">Open Payment Issues</button>
-        </div>
-      </div>
-    `
-    : '';
-
-    const busyLine = (() => {
-    const bits = [];
-    if (child.loading) bits.push('Loading…');
-    if (child.actionsBusy && child.actionsBusy.polling) bits.push('Checking bank status…');
-    if (child.actionsBusy && child.actionsBusy.executing) bits.push('Executing…');
-    if (child.actionsBusy && child.actionsBusy.retryingBlockedFunds) bits.push('Retrying payment…');
-    if (child.actionsBusy && child.actionsBusy.exportingCsv) bits.push('Exporting bank CSV…');
-    if (child.actionsBusy && child.actionsBusy.exportingDetailCsv) bits.push('Exporting detailed CSV…');
-    if (child.actionsBusy && child.actionsBusy.exportingDetailPdf) bits.push('Exporting detailed PDF…');
-    return bits.length ? `<span class="mini" style="opacity:.8;">${enc(bits.join(' '))}</span>` : '';
-  })();
-
-  const pollNoteHtml = pollNote
-    ? `<div class="mini" style="opacity:.85;">${enc(pollNote)}</div>`
-    : '';
-
-  const canPollButton = hasPollablePending;
-  const pollBtnDisabledAttr = (!canPollButton)
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-
-  const showPayeEntryBtn = (batchKindInfo.isPayeish && !batchKindInfo.isLoans);
-  const isPayeEntryDraftAllowed = (status === 'DRAFT' || status === 'DRAFT_CREATED');
-  const payeEntryDisabledAttr = (!isPayeEntryDraftAllowed)
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const payeEntryButtonTitle = isPayeEntryDraftAllowed
-    ? 'Open PAYE entry (view/edit net payments)'
-    : `PAYE entry is only available for draft batches (current status: ${status || '—'}).`;
-
-  const executeBtnDisabledAttr = (!canExecute || child.loading || (child.actionsBusy && (child.actionsBusy.executing || child.actionsBusy.refreshing || child.actionsBusy.polling)))
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-
-  const executeBtnTitle = (!canExecute)
-    ? executeDisabledReason
-    : 'Execute → Prepare → Schedule (may require re-auth for scheduling)';
-
-  const executeHelpHtml = (!canExecute && executeDisabledReason)
-    ? `<div class="mini" style="opacity:.85;">${enc(executeDisabledReason)}</div>`
-    : '';
-
-  const canRequestBankCsv = (
-    child.loading !== true
-    && !emptyDraftNoActivePayments
-    && !!(typeof bankingPayIsCsvExportAllowedByStatus === 'function' && bankingPayIsCsvExportAllowedByStatus(data))
-  );
-  const csvExportDisabledAttr = (!canRequestBankCsv)
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const csvExportButtonTitle = (() => {
-    if (emptyDraftNoActivePayments) return emptyDraftNoActivePaymentsMessage;
-    if (canRequestBankCsv) {
-      return (provider === 'REV' || provider === 'REVOLUT') ? 'Generate and download bank CSV backstop export' : 'Generate and download bank CSV';
-    }
-    return 'CSV export is unavailable for this batch status/provider/commit state.';
-  })();
-
-  const payeEntryHelpHtml = (showPayeEntryBtn && payeNetStatus.required && !payeNetStatus.complete)
-    ? `<div class="mini" style="opacity:.85;">${enc('Enter what you have now — partial saves are allowed. Execution is blocked until every PAYE candidate has a net value.')}</div>`
-    : '';
-
-  const detailExportBusy = !!(child.actionsBusy && (child.actionsBusy.exportingDetailCsv || child.actionsBusy.exportingDetailPdf));
-  const detailExportDisabledAttr = (emptyDraftNoActivePayments || detailExportBusy || child.loading || (child.actionsBusy && (child.actionsBusy.refreshing || child.actionsBusy.polling)))
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const detailExportButtonTitle = emptyDraftNoActivePayments
-    ? emptyDraftNoActivePaymentsMessage
-    : 'Download operator-readable detail export';
-  const correctionState = (child.correction && typeof child.correction === 'object') ? child.correction : null;
-  const paymentStatusSummaryHtml = (() => {
-    const issueState = (() => {
-      try {
-        if (typeof normaliseBankingPaymentIssueState === 'function') {
-          const out = normaliseBankingPaymentIssueState(data, { correctionState });
-          return (out && typeof out === 'object') ? out : {};
-        }
-      } catch {}
-      return {};
-    })();
-
-    const safeText = (value) => String(value == null ? '' : value).trim();
-    const safeUpper = (value) => safeText(value).toUpperCase();
-    const hasObjectKeys = (value) => !!(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0);
-
-    if (providerSubmitOverviewModel.hasIssue === true) return '';
-
-    const issueKind = safeUpper(issueState.issueKindForDisplay || issueState.issueKind || issueState.issue_kind || '');
-    const headlineRaw = safeText(issueState.headline || issueState.statusText || issueState.summaryText || '');
-    const headlineUpper = safeUpper(headlineRaw);
-    const backendClass = safeUpper(issueState.backendClassification || issueState.backend_classification || '');
-    const progressRaw = (data && data.correction_progress && typeof data.correction_progress === 'object') ? data.correction_progress : null;
-    const hasBankEvidence = !!(data && Array.isArray(data.bank_evidence) && data.bank_evidence.length > 0);
-    const hasProgress = hasObjectKeys(progressRaw);
-    const hasManualActions = hasObjectKeys(data && data.manual_actions);
-    const hasBackendIssueEvidence = hasObjectKeys(data && data.payment_correction) || hasBankEvidence || hasProgress || hasManualActions;
-
-    const isProcessing =
-      headlineUpper === 'PROCESSING' ||
-      issueKind === 'PROCESSING' ||
-      backendClass === 'PROCESSING' ||
-      backendClass === 'AUTO_PROCESSING' ||
-      backendClass === 'EXPANDED' ||
-      backendClass === 'AUTHORISED' ||
-      safeUpper(progressRaw?.status || progressRaw?.state || '').includes('PROCESS');
-
-    const isWaiting =
-      headlineUpper === 'WAITING FOR APPROVAL' ||
-      issueKind === 'WAITING' ||
-      backendClass === 'AWAITING_AUTHORISATION' ||
-      backendClass === 'REQUESTED' ||
-      safeUpper(progressRaw?.status || progressRaw?.state || '').includes('WAITING');
-
-    const isApplied =
-      headlineUpper === 'APPLIED' ||
-      issueKind === 'APPLIED' ||
-      backendClass === 'APPLIED' ||
-      backendClass === 'SETTLED_REVERSAL_APPLIED' ||
-      backendClass === 'NO_MONEY_UNWOUND' ||
-      backendClass === 'PRE_BANK_CANCELLED' ||
-      safeUpper(progressRaw?.status || progressRaw?.state || '').includes('APPLIED');
-
-    const isReturned =
-      headlineUpper.includes('RETURNED') ||
-      issueKind.includes('RETURN') ||
-      backendClass.includes('RETURN');
-
-    const isRejected =
-      headlineUpper.includes('REJECTED') ||
-      headlineUpper.includes('DECLINED') ||
-      issueKind.includes('REJECT') ||
-      issueKind.includes('DECLIN') ||
-      backendClass.includes('REJECT') ||
-      backendClass.includes('DECLIN');
-
-    const isReview =
-      issueState.requiresUserAction === true ||
-      issueState.navAlert === true ||
-      issueState.hasActionableIssueRows === true ||
-      headlineUpper.includes('NEEDS REVIEW') ||
-      issueKind.includes('REVIEW') ||
-      backendClass.includes('BLOCKED') ||
-      backendClass.includes('FAILED');
-
-    const isCleanIssueKind = !issueKind || ['NONE', 'PAID', 'CLEAN_PAID', 'SETTLED_NO_CORRECTION_REQUIRED', 'MANUAL_PAID_ACTION'].includes(issueKind);
-    const hasRealIssue = !!(isReturned || isRejected || isProcessing || isWaiting || isApplied || isReview || (issueState.hasIssue === true && !isCleanIssueKind) || hasBackendIssueEvidence);
-
-    let title = 'Payment status';
-    let primary = '';
-    let secondary = '';
-    let pillClass = 'pill';
-
-    if (isReturned) {
-      primary = 'Bank returned payment';
-      secondary = 'Review this payment in Payment Issues.';
-      pillClass = 'pill pill-warn';
-    } else if (isRejected) {
-      primary = 'Bank rejected payment';
-      secondary = 'Review this payment in Payment Issues.';
-      pillClass = 'pill pill-warn';
-    } else if (isWaiting) {
-      primary = 'Waiting for approval';
-      secondary = 'Review this payment in Payment Issues.';
-      pillClass = 'pill pill-info';
-    } else if (isProcessing) {
-      primary = 'Processing';
-      secondary = 'Selected payments are being updated.';
-      pillClass = 'pill pill-info';
-    } else if (isApplied) {
-      primary = 'Applied';
-      secondary = 'The selected amounts are now available to be processed in the next batch.';
-      pillClass = 'pill pill-ok';
-    } else if (isReview || hasRealIssue) {
-      primary = 'Needs review';
-      secondary = 'Review this payment in Payment Issues.';
-      pillClass = 'pill pill-warn';
-    } else if (isPaymentExecuted) {
-      primary = 'Paid successfully.';
-      secondary = 'No action needed.';
-      pillClass = 'pill pill-ok';
-    } else if (status === 'CANCELLED') {
-      primary = 'Cancelled';
-      secondary = 'No action needed.';
-      pillClass = 'pill';
-    } else if (isDraftLike || status === 'READY' || status === 'WAITING_BANK_CONFIRM' || status === 'PARTIAL') {
-      primary = 'Not paid.';
-      secondary = 'No action needed.';
-      pillClass = 'pill pill-info';
-    } else {
-      primary = 'Payment status';
-      secondary = 'No action needed.';
-      pillClass = 'pill';
-    }
-
-    return `
-      <div class="card payment-issue-summary-card" style="padding:10px; margin-bottom:10px;">
-        <div style="display:flex; gap:10px; align-items:flex-start; justify-content:space-between; flex-wrap:wrap;">
-          <div style="display:flex; flex-direction:column; gap:6px; min-width:220px;">
-            <div class="mini" style="font-weight:700; opacity:.9;">${enc(title)}</div>
-            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-              <span class="${enc(pillClass)}">${enc(primary.replace(/\.$/, ''))}</span>
-            </div>
-            <div class="mini" style="opacity:.88; white-space:pre-wrap;">${enc(primary)}${secondary ? `\n${enc(secondary)}` : ''}</div>
-          </div>
-          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-left:auto;">
-            <button
-              type="button"
-              class="btn btn-sm btn-outline"
-              data-action="banking:pay:child:openPaymentIssues"
-              title="Open Payment Issues"
-            >Open Payment Issues</button>
-          </div>
-        </div>
-      </div>
-    `;
-  })();
+    : `<div class="mini" style="opacity:.85;">No beneficiaries found in this batch.</div>`;
 
   return `
     <div id="${enc(rootId)}">
@@ -59630,207 +56159,49 @@ ${enc(model.action)}</div>
           <label>Overview</label>
           <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
             ${errHtml}
-            ${emptyDraftNoActivePaymentsHtml}
-            ${blockedFundsBannerHtml}
-            ${paymentIssuesRequiredBannerHtml}
-
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-              <span class="${enc(pillStatus)}">${enc(status)}</span>
-              ${paymentExecutedBadgeHtml}
-              ${batchKind ? `<span class="${enc(batchKindPillClass)}" title="Batch kind">${enc(batchKind)}</span>` : ``}
-              <span class="mini">${enc((provider || '—') + (env ? `/${env}` : ''))}</span>
-              ${executionMetaHtml}
-              <span class="mini">Last check: <span class="mono">${enc(lastCheck || '—')}</span></span>
-              <span class="mini" style="opacity:.8;">Transfers: <span class="mono">${enc(String(transfers.length))}</span> (PENDING ${enc(String(pendingCount))} • DONE ${enc(String(completedCount))} • FAILED ${enc(String(failedCount))} • BLOCKED ${enc(String(blockedCount))})</span>
-                    <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <span class="mini" style="font-weight:800;">${enc(providerEnvHeader)}</span>
+              <span class="mini">Pay date: <span class="mono">${enc(payDate ? formatIsoToUkLocal(payDate) : '—')}</span></span>
+              <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
-                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:poll" ${pollBtnDisabledAttr} title="${!canPollButton ? 'Nothing pollable yet (no external rail evidence on any pending transfer)' : 'Check bank status (throttled by backend)'}">Check Bank Status</button>
                 ${busyLine}
               </div>
             </div>
 
-            ${pollNoteHtml}
             ${providerSubmitOverviewHtml}
-            ${paymentStatusSummaryHtml}
-            ${communicationsSummaryHtml}
 
             <div class="card" style="padding:10px;">
-              <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Batch payment / remittance totals</div>
-              <div style="display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:8px;">
-                <div class="card" style="padding:8px;">
-                  <div class="mini" style="opacity:.8;">Base amount</div>
-                  <div class="mono">£${enc(fmtMoney(displayedRemittanceTotals.base))}</div>
-                </div>
-                <div class="card" style="padding:8px;">
-                  <div class="mini" style="opacity:.8;">Overpayment recovery</div>
-                  <div class="mono">£${enc(fmtMoney(displayedRemittanceTotals.overpayment))}</div>
-                </div>
-                <div class="card" style="padding:8px;">
-                  <div class="mini" style="opacity:.8;">Payment Advance Repayment</div>
-                  <div class="mono">£${enc(fmtMoney(displayedRemittanceTotals.loan))}</div>
-                </div>
-                <div class="card" style="padding:8px;">
-                  <div class="mini" style="opacity:.8;">Final paid</div>
-                  <div class="mono">£${enc(fmtMoney(displayedRemittanceTotals.final))}</div>
-                </div>
-              </div>
-              ${payeNetStatus.required && !payeNetStatus.complete ? `<div class="mini" style="opacity:.85; margin-top:8px;">${enc('PAYE net is incomplete, so final PAYE deduction impact may still change until every PAYE candidate has a net value.')}</div>` : ``}
-            </div>
-            <div class="card" style="padding:10px;">
-              <div class="row">
-                <label>Actions</label>
-                <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-                  <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    ${
-                      isBlockedFundsBatch
-                        ? `
-                          <button
-                            type="button"
-                            class="btn btn-sm btn-primary"
-                            data-action="banking:pay:child:retryBlockedFunds"
-                            data-batch-id="${enc(id)}"
-                            ${blockedFundsRetryDisabledAttr}
-                            title="${enc(canRetryBlockedFunds ? 'Retry this blocked-funds payment' : 'Retry is not currently safe for this batch. Refresh or review Payment Issues.')}"
-                          >Retry payment</button>
-                        `
-                        : ``
-                    }
-                    ${
-                      canDeleteDraft
-                        ? `
-                          <button
-                            type="button"
-                            class="btn btn-sm btn-outline"
-                            data-action="banking:pay:child:deleteDraft"
-                            data-batch-id="${enc(id)}"
-                            ${child.loading ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
-                            title="Delete draft batch (releases reservations)"
-                          >Delete draft</button>
-                        `
-                        : ``
-                    }
-                    ${
-                      canCancelUnpaid
-                        ? `
-                          <button
-                            type="button"
-                            class="btn btn-sm btn-outline"
-                            data-action="${enc(isBlockedFundsBatch ? 'banking:pay:blockedFunds:cancel' : 'banking:pay:child:cancelBatch')}"
-                            data-batch-id="${enc(id)}"
-                            ${child.loading ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
-                            title="${enc(isBlockedFundsBatch ? 'Cancel/release this blocked-funds batch.' : 'Open Payment Issues to review affected payments.')}"
-                          >${enc(isBlockedFundsBatch ? 'Cancel/release payment' : 'Cancel batch')}</button>
-                        `
-                        : ``
-                    }
-
-                    ${
-                      paymentIssuesRequiredForCancel
-                        ? `
-                          <button
-                            type="button"
-                            class="btn btn-sm btn-outline disabled"
-                            data-disabled="1"
-                            aria-disabled="true"
-                            style="opacity:.45;filter:saturate(0.6) brightness(0.9);"
-                            title="Use Payment Issues to resolve failed payments."
-                          >Delete/cancel blocked</button>
-                          <button
-                            type="button"
-                            class="btn btn-sm btn-primary"
-                            data-action="banking:pay:child:openPaymentIssues"
-                            title="Use Payment Issues to resolve failed payments."
-                          >Open Payment Issues</button>
-                        `
-                        : ``
-                    }
-
-                    ${
-                      showPayeEntryBtn
-                        ? `
-                          <button
-                            type="button"
-                            class="btn btn-sm btn-outline"
-                            data-action="banking:pay:child:openPayeEntry"
-                            ${payeEntryDisabledAttr}
-                            title="${enc(payeEntryButtonTitle)}"
-                          >Enter PAYE payments</button>
-                        `
-                        : ``
-                    }
-
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-primary"
-                      data-action="banking:pay:child:executePayment"
-                      ${executeBtnDisabledAttr}
-                      title="${enc(executeBtnTitle)}"
-                    >Execute Payment</button>
-
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-outline"
-                      data-action="banking:pay:child:exportDetailCsv"
-                      ${detailExportDisabledAttr}
-                      title="${enc(detailExportButtonTitle)}"
-                    >Detailed CSV</button>
-
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-outline"
-                      data-action="banking:pay:child:exportDetailPdf"
-                      ${detailExportDisabledAttr}
-                      title="${enc(detailExportButtonTitle)}"
-                    >Detailed PDF</button>
-
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-outline"
-                      data-action="banking:pay:child:generateCsv"
-                      ${csvExportDisabledAttr}
-                      title="${enc(csvExportButtonTitle)}"
-                    >Bank CSV export</button>
-
-                    ${child.csv && child.csv.generated_at_utc ? `<span class="mini" style="opacity:.85;">Generated: <span class="mono">${enc(fmtUtcToUk(child.csv.generated_at_utc))}</span></span>` : ``}
-                  </div>
-
-                  ${payeEntryHelpHtml}
-                  ${executeHelpHtml}
-
-                  <div class="card" style="padding:10px;">
-                      <div class="mini" style="opacity:.9; font-weight:700; margin-bottom:8px;">CloudTMS CSV file evidence</div>
-                      <div class="mini" style="opacity:.9; margin-bottom:6px;">Creating a CSV banking file does not settle this batch.</div>
-                      <div class="mini" style="opacity:.85; margin-bottom:8px;">After you upload/process the CSV with the bank, use Execute → CSV settlement to complete settlement through the normal authorisation process.</div>
-                      ${
-                        csvEvidenceRows.length
-                          ? `
-                            <div style="display:grid; grid-template-columns:minmax(180px,220px) 1fr; gap:6px 10px;">
-                              ${csvEvidenceRows.map(([k, v]) => `
-                                <div class="mini" style="opacity:.75;">${enc(k)}</div>
-                                <div class="mini mono">${enc(String(v))}</div>
-                              `).join('')}
-                            </div>
-                          `
-                          : `<div class="mini" style="opacity:.8;">No CSV generation evidence has been recorded yet for this batch.</div>`
-                      }
-                    </div>
-                </div>
+              <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Payment status</div>
+              <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                <span class="mini">✅ Sent: <span class="mono">${enc(String(paymentSummary.sentCount))}</span></span>
+                <span class="mini">❌ Failed / returned: <span class="mono">${enc(String(paymentSummary.failedReturnedCount))}</span></span>
+                <span class="mini">❓ Check required: <span class="mono">${enc(String(paymentSummary.checkRequiredCount))}</span></span>
+                <span class="mini">Total sent: <span class="mono">£${enc(fmtMoney(paymentSummary.totalSentAmount))}</span></span>
               </div>
             </div>
 
             <div class="card" style="padding:10px;">
-              <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Beneficiaries</div>
+              <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Actions</div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailCsv" title="Download detailed CSV">Detailed CSV</button>
+                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailPdf" title="Download detailed PDF">Detailed PDF</button>
+                <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPaymentIssues" title="Open Current Payment Status">Current Payment Status</button>
+              </div>
+            </div>
+
+            <div class="mini" style="opacity:.88;">Remittances sent: <span class="mono">${enc(remittancesSent ? 'Yes' : 'No')}</span></div>
+
+            <div class="card" style="padding:10px;">
+              <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Beneficiaries</div>
               ${candidateRowsHtml}
             </div>
-
           </div>
         </div>
       </div>
     </div>
   `;
 }
-
-
 
 
 function openBulkTimesheetActionProgressModal(options = {}) {
@@ -60227,2662 +56598,6 @@ function openBulkTimesheetActionProgressModal(options = {}) {
   return controller;
 }
 
-
-function renderBankingPayBatchChildModalOverview() {
-  const enc = (typeof escapeHtml === 'function')
-    ? escapeHtml
-    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-      }[c]));
-
-  const fmtUtcToUk = (iso) => {
-    const raw = String(iso || '').trim();
-    if (!raw) return '';
-    try {
-      if (typeof formatCloudTmsLondonDateTime === 'function') {
-        const formatted = formatCloudTmsLondonDateTime(raw);
-        return formatted && formatted !== 'Not recorded' ? formatted : raw;
-      }
-    } catch {}
-    try {
-      const d = new Date(raw);
-      if (Number.isNaN(d.getTime())) return raw;
-      const date = new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Europe/London',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      }).format(d);
-      const time = new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Europe/London',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-        hourCycle: 'h23'
-      }).format(d);
-      return `${date} at ${time} hrs (UK time)`;
-    } catch {
-      return raw;
-    }
-  };
-
-  const formatIsoToUkLocal = (ymd) => {
-    const s = String(ymd || '').trim();
-    if (!s) return '';
-    try {
-      if (typeof formatCloudTmsLondonDate === 'function') {
-        const formatted = formatCloudTmsLondonDate(s);
-        if (formatted && formatted !== 'Not recorded') return String(formatted);
-      }
-    } catch {}
-    try { if (typeof formatIsoToUk === 'function') return String(formatIsoToUk(s) || ''); } catch {}
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (m) {
-      try {
-        const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-        if (d.getFullYear() === Number(m[1]) && d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[3])) {
-          return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }).format(d);
-        }
-      } catch {}
-      return `${m[3]}/${m[2]}/${m[1]}`;
-    }
-    return s;
-  };
-
-  const fmtMoney = (v) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return '0.00';
-    return (Math.round(n * 100) / 100).toFixed(2);
-  };
-
-  const fmtQty = (v) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return '';
-    const r = Math.round(n * 100) / 100;
-    return String(r);
-  };
-
-  const isZeroQty = (v) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return false;
-    return Math.round(n * 100) / 100 === 0;
-  };
-
-  const bucketLabel = (bucketCode, unitName) => {
-    const bc = String(bucketCode || '').trim().toUpperCase();
-    if (bc === 'DAY') return 'Day';
-    if (bc === 'NIGHT') return 'Night';
-    if (bc === 'SAT') return 'Sat';
-    if (bc === 'SUN') return 'Sun';
-    if (bc === 'BH') return 'BH';
-    const u = String(unitName || '').trim();
-    return u || '—';
-  };
-
-  const pickAmount = (batchKind, o) => {
-    const bk = String(batchKind || '').trim().toUpperCase();
-    const ex = (o && o.amount_ex_vat != null) ? Number(o.amount_ex_vat) : NaN;
-    const inc = (o && o.amount_inc_vat != null) ? Number(o.amount_inc_vat) : NaN;
-
-    if (bk === 'PAYE') {
-      return Number.isFinite(ex) ? ex : (Number.isFinite(inc) ? inc : 0);
-    }
-    if (bk === 'UMBRELLA') {
-      return Number.isFinite(inc) ? inc : (Number.isFinite(ex) ? ex : 0);
-    }
-    if (bk === 'LOANS') {
-      return Number.isFinite(ex) ? ex : (Number.isFinite(inc) ? inc : 0);
-    }
-    if (Number.isFinite(inc)) return inc;
-    if (Number.isFinite(ex)) return ex;
-    return 0;
-  };
-
-  const asObj = (v) => (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
-  const asArr = (v) => Array.isArray(v) ? v : [];
-  const asNum = (v, dflt = 0) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : dflt;
-  };
-  const trimStr = (v) => String(v || '').trim();
-  const upperTrim = (v) => trimStr(v).toUpperCase();
-  const parseMaybeJsonObject = (v) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) return v;
-    const s = String(v || '').trim();
-    if (!s) return null;
-    try {
-      const p = JSON.parse(s);
-      return (p && typeof p === 'object' && !Array.isArray(p)) ? p : null;
-    } catch {
-      return null;
-    }
-  };
-
-  const readProviderSubmitBool = (value) => {
-    if (value === true) return true;
-    if (value === false) return false;
-    const text = String(value == null ? '' : value).trim().toLowerCase();
-    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
-    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
-    return false;
-  };
-
-  const firstProviderSubmitText = (...values) => {
-    for (const value of values) {
-      if (Array.isArray(value)) {
-        const nested = firstProviderSubmitText(...value);
-        if (nested) return nested;
-        continue;
-      }
-      const text = trimStr(value);
-      if (text) return text;
-    }
-    return '';
-  };
-
-  const providerSubmitEvidenceSources = (value) => {
-    const root = asObj(value) || {};
-    const railMeta = asObj(root.rail_meta_json || root.railMetaJson) || {};
-    const rawPayload = asObj(root.raw_payload || root.rawPayload) || {};
-    const directDiagnostic = asObj(root.provider_submit_diagnostic || root.providerSubmitDiagnostic) || {};
-    const railDiagnostic = asObj(railMeta.provider_submit_diagnostic || railMeta.providerSubmitDiagnostic) || {};
-    const rawDiagnostic = asObj(rawPayload.provider_submit_diagnostic || rawPayload.providerSubmitDiagnostic) || {};
-    const providerResponse = asObj(root.provider_response || root.providerResponse || root.provider_response_redacted || root.providerResponseRedacted || root.provider_response_json || root.providerResponseJson) || {};
-    const rawProviderResponse = asObj(rawPayload.provider_response || rawPayload.providerResponse || rawPayload.provider_response_redacted || rawPayload.providerResponseRedacted || rawPayload.provider_response_json || rawPayload.providerResponseJson) || {};
-    return [root, railMeta, rawPayload, directDiagnostic, railDiagnostic, rawDiagnostic, providerResponse, rawProviderResponse]
-      .filter((obj) => obj && Object.keys(obj).length);
-  };
-
-  const providerSubmitLocalReferenceSet = (value) => {
-    const out = new Set();
-    const localKeys = [
-      'id', 'operation_id', 'operationId', 'chunk_id', 'chunkId', 'transfer_id', 'transferId',
-      'pay_bank_transfer_id', 'payBankTransferId', 'transfer_scope_id', 'transferScopeId',
-      'scope_id', 'scopeId', 'auth_request_id', 'authRequestId', 'pay_batch_id', 'payBatchId',
-      'batch_id', 'batchId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
-      'local_provider_request_id', 'localProviderRequestId', 'provider_request_id', 'providerRequestId',
-      'payment_reference', 'paymentReference', 'bulk_reference', 'bulkReference', 'correlation_id', 'correlationId'
-    ];
-    for (const obj of providerSubmitEvidenceSources(value)) {
-      for (const key of localKeys) {
-        const text = trimStr(obj[key]);
-        if (text) out.add(text.toLowerCase());
-      }
-    }
-    return out;
-  };
-
-  const providerSubmitStrictExternalEvidencePresent = (value) => {
-    const localRefs = providerSubmitLocalReferenceSet(value);
-    const externalKeys = [
-      'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
-      'provider_payment_id', 'providerPaymentId', 'provider_event_id', 'providerEventId',
-      'provider_reference', 'providerReference', 'provider_submission_id', 'providerSubmissionId',
-      'submission_id', 'submissionId', 'rail_submission_id', 'railSubmissionId',
-      'external_payment_id', 'externalPaymentId', 'revolut_payment_id', 'revolutPaymentId',
-      'provider_transfer_id', 'providerTransferId', 'external_transfer_id', 'externalTransferId',
-      'external_reference', 'externalReference', 'bank_reference', 'bankReference',
-      'transaction_id', 'transactionId', 'payment_id', 'paymentId'
-    ];
-    for (const obj of providerSubmitEvidenceSources(value)) {
-      for (const key of externalKeys) {
-        const text = trimStr(obj[key]);
-        if (!text) continue;
-        if (localRefs.has(text.toLowerCase())) continue;
-        return true;
-      }
-    }
-    return false;
-  };
-
-  const extractProviderSubmitDiagnosticFromOverviewData = (dataPayload) => {
-    const d = asObj(dataPayload) || {};
-    const out = {};
-    const readFirst = (source, keys) => {
-      const obj = asObj(source) || {};
-      for (const key of keys) {
-        const value = obj[key];
-        if (value === null || value === undefined) continue;
-        if (Array.isArray(value)) {
-          if (value.length) return value;
-          continue;
-        }
-        if (typeof value === 'object') continue;
-        if (trimStr(value) !== '') return value;
-        if (typeof value === 'boolean') return value;
-      }
-      return undefined;
-    };
-    const put = (key, value, mode = 'text') => {
-      if (value === null || value === undefined) return;
-      if (Array.isArray(value)) {
-        if (!value.length) return;
-        out[key] = value;
-        return;
-      }
-      if (mode === 'bool') {
-        out[key] = readProviderSubmitBool(value);
-        return;
-      }
-      const text = trimStr(value);
-      if (!text && typeof value !== 'boolean') return;
-      out[key] = mode === 'upper' ? upperTrim(value) : text;
-    };
-    const mergeProviderSubmitSource = (source) => {
-      if (!asObj(source)) return;
-      put('provider_submission_status', readFirst(source, ['provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode']), 'upper');
-      put('review_reason_code', readFirst(source, ['review_reason_code', 'reviewReasonCode', 'provider_submit_review_reason_code', 'providerSubmitReviewReasonCode']), 'upper');
-      put('manual_resolution_required', readFirst(source, ['manual_resolution_required', 'manualResolutionRequired']), 'bool');
-      put('manual_resolution_available', readFirst(source, ['manual_resolution_available', 'manualResolutionAvailable']), 'bool');
-      put('safe_retry_available', readFirst(source, ['safe_retry_available', 'safeRetryAvailable']), 'bool');
-      put('provider_acceptance_evidence_present', readFirst(source, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent']), 'bool');
-      put('provider_response_present', readFirst(source, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived']), 'bool');
-      put('provider_request_sent', readFirst(source, ['provider_request_sent', 'providerRequestSent']), 'bool');
-      put('request_id', readFirst(source, ['request_id', 'requestId']));
-      put('idempotency_key', readFirst(source, ['idempotency_key', 'idempotencyKey']));
-      put('local_provider_request_id', readFirst(source, ['local_provider_request_id', 'localProviderRequestId']));
-      put('rail_tx_id', readFirst(source, ['rail_tx_id', 'railTxId']));
-      put('rail_state', readFirst(source, ['rail_state', 'railState']));
-      put('provider_transaction_id', readFirst(source, ['provider_transaction_id', 'providerTransactionId']));
-      put('provider_payment_id', readFirst(source, ['provider_payment_id', 'providerPaymentId']));
-      put('provider_event_id', readFirst(source, ['provider_event_id', 'providerEventId']));
-      put('provider_reference', readFirst(source, ['provider_reference', 'providerReference']));
-      put('provider_submission_id', readFirst(source, ['provider_submission_id', 'providerSubmissionId']));
-      put('external_payment_id', readFirst(source, ['external_payment_id', 'externalPaymentId']));
-      put('revolut_payment_id', readFirst(source, ['revolut_payment_id', 'revolutPaymentId']));
-      put('external_reference', readFirst(source, ['external_reference', 'externalReference']));
-      put('bank_reference', readFirst(source, ['bank_reference', 'bankReference']));
-      put('transaction_id', readFirst(source, ['transaction_id', 'transactionId']));
-      put('payment_id', readFirst(source, ['payment_id', 'paymentId']));
-      put('operation_id', readFirst(source, ['operation_id', 'operationId']));
-      put('chunk_id', readFirst(source, ['chunk_id', 'chunkId']));
-      put('transfer_id', readFirst(source, ['transfer_id', 'transferId', 'pay_bank_transfer_id', 'payBankTransferId']));
-      put('transfer_ids', readFirst(source, ['transfer_ids', 'transferIds', 'pay_bank_transfer_ids', 'payBankTransferIds']));
-      put('auth_request_id', readFirst(source, ['auth_request_id', 'authRequestId', 'auth_request_ids', 'authRequestIds']));
-      put('recommended_action', readFirst(source, ['recommended_action', 'recommendedAction']));
-    };
-    const review = asObj(d.payment_execution_review) || asObj(d.paymentExecutionReview) || asObj(d.batch?.payment_execution_review) || asObj(d.batch?.paymentExecutionReview) || {};
-    mergeProviderSubmitSource(d);
-    mergeProviderSubmitSource(d.batch);
-    mergeProviderSubmitSource(review);
-    mergeProviderSubmitSource(d.provider_submit_diagnostic);
-    mergeProviderSubmitSource(d.providerSubmitDiagnostic);
-    mergeProviderSubmitSource(d.batch?.provider_submit_diagnostic);
-    mergeProviderSubmitSource(d.batch?.providerSubmitDiagnostic);
-    mergeProviderSubmitSource(review.provider_submit_diagnostic);
-    mergeProviderSubmitSource(review.providerSubmitDiagnostic);
-    for (const issue of asArr(d.payment_issues || d.paymentIssues || d.batch?.payment_issues || d.batch?.paymentIssues)) {
-      const item = asObj(issue) || {};
-      const kind = upperTrim(item.issue_kind || item.issueKind || item.issue_type || item.issueType || item.kind || item.type || '');
-      if (kind !== 'PAYMENT_PROVIDER_SUBMIT_REVIEW' && kind !== 'PROVIDER_SUBMIT_REVIEW') continue;
-      mergeProviderSubmitSource(item);
-      const issueReview = asObj(item.payment_execution_review) || asObj(item.paymentExecutionReview) || {};
-      mergeProviderSubmitSource(issueReview);
-      mergeProviderSubmitSource(item.provider_submit_diagnostic);
-      mergeProviderSubmitSource(item.providerSubmitDiagnostic);
-    }
-    if (!Object.keys(out).length) return null;
-    const hasProviderSubmitContext = !!(out.provider_submission_status || out.review_reason_code || out.operation_id || out.chunk_id || out.transfer_id || out.rail_tx_id || out.rail_state || out.provider_transaction_id || out.provider_payment_id || out.provider_event_id || out.provider_reference || out.provider_submission_id || out.external_payment_id || out.revolut_payment_id || out.external_reference || out.bank_reference || out.transaction_id || out.payment_id || out.request_id || out.idempotency_key || out.local_provider_request_id || out.recommended_action);
-    if (!hasProviderSubmitContext) return null;
-    if (out.provider_submission_status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
-      out.manual_resolution_required = false;
-      out.manual_resolution_available = false;
-    }
-    return out;
-  };
-  const buildProviderSubmitOverviewModel = (dataPayload) => {
-    const diagnostic = extractProviderSubmitDiagnosticFromOverviewData(dataPayload);
-    if (!diagnostic) return { hasIssue: false, diagnostic: null };
-    const status = upperTrim(diagnostic.provider_submission_status || diagnostic.providerSubmissionStatus || diagnostic.outcome_code || diagnostic.outcomeCode || '');
-    const hasContext = !!(
-      firstProviderSubmitText(diagnostic.operation_id, diagnostic.operationId, diagnostic.chunk_id, diagnostic.chunkId, diagnostic.transfer_id, diagnostic.transferId) ||
-      asArr(diagnostic.chunk_ids || diagnostic.chunkIds).length > 0 ||
-      asArr(diagnostic.transfer_ids || diagnostic.transferIds).length > 0 ||
-      (status && !['NO_PROVIDER_SUBMISSION_ATTEMPTED', 'CLAIMED_NOT_PROVIDER_CALLED_YET'].includes(status))
-    );
-    const hasIssue = hasContext && [
-      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
-      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
-      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
-      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
-      'PROVIDER_SUBMISSION_REJECTED',
-      'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL',
-      'PROVIDER_SUBMISSION_ACCEPTED',
-      'MANUAL_RESOLVED_NO_PAYMENT_MADE'
-    ].includes(status);
-    if (!hasIssue) return { hasIssue: false, diagnostic, status };
-
-    const accepted = providerSubmitStrictExternalEvidencePresent(diagnostic);
-    if (diagnostic) diagnostic.provider_acceptance_evidence_present = accepted;
-    let headline = 'Provider submission outcome unknown';
-    let summary = 'Submit chunk became stale with no provider response, transfer event, rail transaction ID, or rail state.';
-    let action = 'Manual Revolut/bank check required before retry.';
-    if (status === 'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME') {
-      headline = 'Provider response missing';
-      summary = 'A provider request may have been sent, but no usable response was recorded.';
-      action = 'Check Revolut/bank before retry.';
-    } else if (status === 'PROVIDER_SUBMISSION_MALFORMED_RESPONSE' || status === 'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID') {
-      headline = 'Provider response unusable';
-      summary = 'Provider response/status was recorded, but no usable external provider transaction/reference was stored.';
-      action = 'Reconcile with provider/bank before retry.';
-    } else if (status === 'PROVIDER_SUBMISSION_REJECTED') {
-      headline = 'Provider rejected payment';
-      summary = 'Provider rejected the payment submission.';
-      action = 'Review provider error.';
-    } else if (status === 'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL') {
-      headline = 'Provider was not called';
-      summary = 'Submission failed before the provider payment request was sent.';
-      action = 'Retry after local blocker is cleared.';
-    } else if (status === 'MANUAL_RESOLVED_NO_PAYMENT_MADE') {
-      headline = 'Manual no-payment confirmation recorded';
-      summary = 'Manual no-payment confirmation recorded.';
-      action = 'Batch can be retried if safe retry is available.';
-    } else if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && accepted) {
-      headline = 'Provider acceptance evidence present';
-      summary = 'Provider acceptance evidence exists. Do not retry unless reconciled.';
-      action = 'Do not retry unless reconciled.';
-    } else if (status === 'PROVIDER_SUBMISSION_ACCEPTED' && !accepted) {
-      headline = 'Provider response unusable';
-      summary = 'Provider accepted status was recorded, but no usable external provider transaction/reference was stored.';
-      action = 'Reconcile with provider/bank before retry.';
-    }
-    return { hasIssue, diagnostic, status, headline, summary, action, accepted };
-  };
-
-  const renderProviderSubmitOverviewCard = (model) => {
-    if (!model || model.hasIssue !== true) return '';
-    return `
-      <div class="card banking-pay-provider-submit-overview-banner" style="padding:12px;border:1px solid #facc15;background:#fffbeb;color:#713f12;">
-        <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
-          <div style="display:flex;flex-direction:column;gap:6px;min-width:260px;flex:1;">
-            <div style="font-weight:800;font-size:14px;letter-spacing:.01em;">${enc(model.headline)}</div>
-            <div class="mini" style="opacity:.96;white-space:pre-wrap;">${enc(model.summary)}
-${enc(model.action)}</div>
-          </div>
-          <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPaymentIssues">Review provider submission issue</button>
-        </div>
-      </div>
-    `;
-  };
-
-  const snapshotClassificationLabel = (raw) => {
-    const s = upperTrim(raw);
-    if (s === 'REIMBURSEMENT_GROSS_FIXED') return 'Fixed reimbursement';
-    if (s === 'TAXABLE_CHANNEL_SENSITIVE') return 'Taxable';
-    return trimStr(raw) || '—';
-  };
-
-  const snapshotResolutionModeLabel = (raw) => {
-    const s = upperTrim(raw);
-    if (s === 'SUGGESTED_EQUIVALENT_BASIS') return 'Suggested equivalent basis';
-    if (s === 'MANUAL_REPLACEMENT_RATE') return 'Manual replacement rate';
-    if (s === 'MANUAL_AMOUNT') return 'Manual amount';
-    return trimStr(raw) || '—';
-  };
-
-  const snapshotPillClass = (classification, resolutionMode) => {
-    const c = upperTrim(classification);
-    if (c === 'REIMBURSEMENT_GROSS_FIXED') return 'pill';
-    if (c === 'TAXABLE_CHANNEL_SENSITIVE' && trimStr(resolutionMode)) return 'pill pill-warn';
-    if (c === 'TAXABLE_CHANNEL_SENSITIVE') return 'pill pill-info';
-    return 'pill';
-  };
-
-  const summarizeFrozenResolutionResultAmount = (resultJson, fallbackItem) => {
-    const r = parseMaybeJsonObject(resultJson) || {};
-    const candidates = [
-      r.target_amount_inc_vat,
-      r.target_amount_ex_vat,
-      r.resolved_amount_inc_vat,
-      r.resolved_amount_ex_vat,
-      r.amount_inc_vat,
-      r.amount_ex_vat,
-      fallbackItem?.frozen_target_amount_inc_vat,
-      fallbackItem?.frozen_target_amount_ex_vat,
-      fallbackItem?.amount_inc_vat,
-      fallbackItem?.amount_ex_vat
-    ];
-    for (const x of candidates) {
-      const n = Number(x);
-      if (Number.isFinite(n)) return fmtMoney(n);
-    }
-    return '0.00';
-  };
-
-  const financeCaseStateBadgeHtml = (group) => {
-    const g = asObj(group) || {};
-    const bits = [];
-    if (g.is_mixed_case === true) bits.push(`<span class="pill pill-warn">Mixed</span>`);
-    if (asNum(g.open_reimbursement_count, 0) > 0 && asNum(g.open_taxable_count, 0) <= 0) bits.push(`<span class="pill">Fixed reimbursement</span>`);
-    if (asNum(g.open_taxable_count, 0) > 0) bits.push(`<span class="pill">Taxable converted</span>`);
-    if (asNum(g.unresolved_taxable_count, 0) > 0) bits.push(`<span class="pill pill-bad">Unresolved taxable: ${enc(String(asNum(g.unresolved_taxable_count, 0)))}</span>`);
-    if (asNum(g.stale_count, 0) > 0) bits.push(`<span class="pill pill-warn">Stale: ${enc(String(asNum(g.stale_count, 0)))}</span>`);
-    return bits.join(' ');
-  };
-
-  const actorDisplayLabel = (displayName, email, userId) => {
-    const dn = trimStr(displayName);
-    const em = trimStr(email);
-    const uid = trimStr(userId);
-    if (dn && em) return `${dn} (${em})`;
-    if (dn) return dn;
-    if (em) return em;
-    if (uid) return uid;
-    return '';
-  };
-
-   const hasDifferentDestinationMarker = (line) => {
-    return (
-      line?.different_destination_marker === true ||
-      line?.is_separate_destination_payment === true ||
-      line?.candidate_has_multiple_payment_destinations === true
-    );
-  };
-
-  const candidateHasPaymentIssue = (candidate) => {
-    const c = asObj(candidate) || {};
-    if (c.payment_issue_badge === true || c.paymentIssueBadge === true) return true;
-    if (Array.isArray(c.payment_issue_kinds) && c.payment_issue_kinds.length > 0) return true;
-    if (Array.isArray(c.paymentIssueKinds) && c.paymentIssueKinds.length > 0) return true;
-    if (asNum(c.corrected_item_count, 0) > 0 || asNum(c.correctedItemCount, 0) > 0) return true;
-    const paymentStatus = upperTrim(c.payment_status || c.paymentStatus || '');
-    return paymentStatus === 'PAYMENT_ISSUE' || paymentStatus === 'PAYMENT_ISSUE_PARTIAL';
-  };
-
-  const candidatePaymentIssueLabel = (candidate) => {
-    const c = asObj(candidate) || {};
-    const explicitLabel = trimStr(c.payment_issue_label || c.paymentIssueLabel || '');
-    if (explicitLabel) return explicitLabel;
-
-    const kinds = Array.isArray(c.payment_issue_kinds)
-      ? c.payment_issue_kinds.map((x) => upperTrim(x)).filter(Boolean)
-      : Array.isArray(c.paymentIssueKinds)
-        ? c.paymentIssueKinds.map((x) => upperTrim(x)).filter(Boolean)
-        : [];
-
-    if (asNum(c.applied_reversal_item_count, 0) > 0 || kinds.includes('SETTLED_REVERSAL')) return 'Bank returned payment';
-    if (asNum(c.applied_unwind_item_count, 0) > 0 || kinds.includes('NO_MONEY_UNWIND')) return 'Bank rejected payment';
-    if (asNum(c.applied_precancel_item_count, 0) > 0 || kinds.includes('PRE_BANK_CANCEL')) return 'Payment removed from batch';
-
-    const paymentStatus = upperTrim(c.payment_status || c.paymentStatus || '');
-    if (paymentStatus === 'PAYMENT_ISSUE_PARTIAL') return 'Partial payment issue';
-    if (paymentStatus === 'PAYMENT_ISSUE') return 'Payment issue';
-    return 'Payment issue';
-  };
-
-  const candidatePaymentIssueBadgeHtml = (candidate) => {
-    if (!candidateHasPaymentIssue(candidate)) return '';
-    const label = candidatePaymentIssueLabel(candidate);
-    return `<span class="pill pill-warn" title="${enc(label)}">PAYMENT ISSUE</span>`;
-  };
-
-  const pickCurrentEffectiveCandidateAmount = (candidate) => {
-    const c = asObj(candidate) || {};
-    const bk = String(batchKind || batchKindInfo?.normalizedKind || '').trim().toUpperCase();
-    const inc = Number(c.current_effective_amount_inc_vat ?? c.currentEffectiveAmountIncVat);
-    const ex = Number(c.current_effective_amount_ex_vat ?? c.currentEffectiveAmountExVat);
-    if (bk === 'PAYE') {
-      if (Number.isFinite(ex)) return ex;
-      if (Number.isFinite(inc)) return inc;
-      return null;
-    }
-    if (bk === 'UMBRELLA') {
-      if (Number.isFinite(inc)) return inc;
-      if (Number.isFinite(ex)) return ex;
-      return null;
-    }
-    if (bk === 'LOANS') {
-      if (Number.isFinite(ex)) return ex;
-      if (Number.isFinite(inc)) return inc;
-      return null;
-    }
-    if (Number.isFinite(inc)) return inc;
-    if (Number.isFinite(ex)) return ex;
-    return null;
-  };
-
-  const hasCurrentEffectiveCandidateAmount = (candidate) => {
-    const c = asObj(candidate) || {};
-    return Number.isFinite(Number(c.current_effective_amount_inc_vat ?? c.currentEffectiveAmountIncVat)) ||
-      Number.isFinite(Number(c.current_effective_amount_ex_vat ?? c.currentEffectiveAmountExVat));
-  };
-
-  const deriveCurrentEffectiveFinancials = (candidate, fallbackDeductions = null, fallbackRemittance = null) => {
-    const c = asObj(candidate) || {};
-    const ds = asObj(c.deductions_summary) || asObj(c.deductionsSummary) || {};
-    const rem = asObj(c.remittance_summary) || asObj(c.remittanceSummary) || {};
-    const explicitAmount = pickCurrentEffectiveCandidateAmount(c);
-    const hasExplicitAmount = explicitAmount !== null;
-    const currentItemCount = firstFiniteNonNegativeInteger(
-      c.current_effective_item_count,
-      c.currentEffectiveItemCount,
-      c.active_effective_item_count,
-      c.activeEffectiveItemCount
-    );
-    const isCurrentEffectiveZero = hasExplicitAmount && Math.round(Number(explicitAmount) * 100) / 100 === 0 && (currentItemCount === null || currentItemCount === 0);
-
-    const pickNumeric = (...values) => {
-      for (const value of values) {
-        if (value === null || value === undefined || String(value).trim?.() === '') continue;
-        const n = Number(value);
-        if (Number.isFinite(n)) return n;
-      }
-      return 0;
-    };
-
-    const baseAmount = hasExplicitAmount
-      ? explicitAmount
-      : pickNumeric(rem.baseAmount, rem.base_amount, fallbackRemittance?.baseAmount, fallbackDeductions?.grossPositive, c.gross_preview);
-    const overpaymentRecovery = pickNumeric(
-      ds.overpaymentRecovery, ds.overpayment_recovery, rem.overpaymentRecovery, rem.overpayment_recovery,
-      fallbackRemittance?.overpaymentRecovery, fallbackDeductions?.overpaymentRecovery, c.overpayment_recovery_taken
-    );
-    const loanRepayment = pickNumeric(
-      ds.loanRepayment, ds.loan_repayment, ds.paymentAdvanceRepayment, ds.payment_advance_repayment,
-      rem.loanRepayment, rem.loan_repayment, rem.paymentAdvanceRepayment, rem.payment_advance_repayment,
-      fallbackRemittance?.loanRepayment, fallbackDeductions?.loanRepayment, c.loan_repayment_taken
-    );
-    const payeNetAmount = (() => {
-      const n = Number(ds.payeNetAmount ?? ds.paye_net_amount ?? rem.payeNetAmount ?? rem.paye_net_amount ?? fallbackDeductions?.payeNetAmount ?? fallbackRemittance?.payeNetAmount ?? c.paye_net_amount);
-      return Number.isFinite(n) ? n : null;
-    })();
-    const finalPayable = hasExplicitAmount
-      ? explicitAmount
-      : (() => {
-          const n = Number(ds.finalPayable ?? ds.final_payable ?? rem.finalPaid ?? rem.final_paid ?? fallbackDeductions?.finalPayable ?? fallbackRemittance?.finalPaid ?? c.net_bank_amount);
-          return Number.isFinite(n) ? n : null;
-        })();
-
-    if (isCurrentEffectiveZero) {
-      return {
-        grossPositive: 0,
-        overpaymentRecovery: 0,
-        loanRepayment: 0,
-        finalPayable: 0,
-        finalPaid: 0,
-        payeNetAmount: (batchKindInfo?.isPayeish && !batchKindInfo?.isLoans) ? 0 : payeNetAmount,
-        awaitingNet: false,
-        hasKnownFinalPayable: true,
-        isCurrentEffectiveZero,
-        currentEffectiveItemCount: currentItemCount,
-        raw: c
-      };
-    }
-
-    return {
-      grossPositive: baseAmount,
-      overpaymentRecovery,
-      loanRepayment,
-      finalPayable,
-      finalPaid: finalPayable,
-      payeNetAmount,
-      awaitingNet: !!(ds.awaitingNet ?? ds.awaiting_net_amount ?? rem.awaitingNet ?? rem.awaiting_net_amount ?? fallbackDeductions?.awaitingNet ?? fallbackRemittance?.awaitingNet ?? c.awaiting_net_amount),
-      hasKnownFinalPayable: finalPayable !== null,
-      isCurrentEffectiveZero,
-      currentEffectiveItemCount: currentItemCount,
-      raw: c
-    };
-  };
-
-  const deriveUnitOrCategoryText = (line) => {
-    const bucket = bucketLabel(line?.bucket_code, line?.unit_name || line?.unit || '');
-    const expenseCategory =
-      trimStr(line?.expense_category) ||
-      trimStr(line?.expense_type) ||
-      trimStr(line?.category);
-
-    if (expenseCategory) return expenseCategory;
-
-    const itemType = upperTrim(line?.item_type || line?.line_kind || line?.kind || line?.normalizedKind || '');
-    if (itemType === 'TS_BUCKET') return bucket || '—';
-
-    const explicitUnit = trimStr(line?.unit_name || line?.unit || '');
-    if (explicitUnit) return explicitUnit;
-
-    return bucket || '—';
-  };
-
-  const buildDestinationSummaryForLine = (line) => {
-    const candidateDirected = line?.is_candidate_directed_oneoff_payout === true;
-    const appearsOnRemittance = line?.appears_on_umbrella_remittance === true;
-    const hasPayoutNotice = line?.generates_candidate_payment_advice === true || candidateDirected;
-    const differentDestination = hasDifferentDestinationMarker(line);
-
-    let destinationText = trimStr(line?.destination_label || line?.payout_destination || '');
-    if (!destinationText) {
-      if (candidateDirected) destinationText = 'Specified bank account';
-      else if (appearsOnRemittance) destinationText = 'Umbrella remittance';
-      else if (hasPayoutNotice) destinationText = 'Candidate payout notice';
-      else destinationText = 'Normal route';
-    }
-
-    const badges = [];
-    if (appearsOnRemittance) badges.push(`<span class="pill pill-info">Umbrella remittance</span>`);
-    if (hasPayoutNotice) badges.push(`<span class="pill pill-warn">Candidate payout notice</span>`);
-    if (differentDestination) badges.push(`<span class="pill pill-warn">Different beneficiary</span>`);
-
-    return {
-      text: destinationText || '—',
-      badges_html: badges.join(' ')
-    };
-  };
-
-  const deriveExpandedLineType = (line, unitOrCategoryText) => {
-    const itemType = upperTrim(line?.item_type || line?.line_kind || line?.kind || line?.normalizedKind || '');
-    const itemLabel = trimStr(line?.item_type_label || line?.line_kind || line?.kind || line?.normalizedKind || line?.item_type || '');
-    const paymentOrDeduction = upperTrim(line?.payment_or_deduction || '');
-    const candidateDirected = line?.is_candidate_directed_oneoff_payout === true;
-    const expenseHints = [
-      itemType,
-      upperTrim(itemLabel),
-      upperTrim(line?.expense_category || ''),
-      upperTrim(line?.expense_type || ''),
-      upperTrim(line?.category || '')
-    ];
-    const looksExpense = expenseHints.some((x) =>
-      x.includes('EXPENSE') ||
-      x.includes('MILEAGE') ||
-      x.includes('TRAVEL') ||
-      x.includes('ACCOMMODATION') ||
-      x.includes('PARKING') ||
-      x.includes('SUBSISTENCE') ||
-      x.includes('REIMBURSE')
-    );
-
-    if (candidateDirected) {
-      return {
-        text: 'Candidate payout',
-        badges_html: `<span class="pill pill-warn">Candidate payout</span>`,
-        sort_group: 4
-      };
-    }
-
-    if (itemType === 'OVERPAYMENT_RECOVERY') {
-      return {
-        text: 'Overpayment recovery',
-        badges_html: `<span class="pill pill-warn">Deduction</span>`,
-        sort_group: 3
-      };
-    }
-
-    if (itemType === 'LOAN_REPAYMENT' || itemType === 'PAYMENT_ADVANCE_REPAYMENT') {
-      return {
-        text: 'Payment Advance Repayment',
-        badges_html: `<span class="pill pill-warn">Deduction</span>`,
-        sort_group: 3
-      };
-    }
-
-    if (itemType === 'MANUAL_DEBT_RECOVERY' || (itemType === 'MANUAL_DEBT_ADJUSTMENT' && paymentOrDeduction === 'DEDUCTION')) {
-      return {
-        text: 'Manual debt',
-        badges_html: `<span class="pill pill-warn">Deduction</span>`,
-        sort_group: 4
-      };
-    }
-
-    if (itemType === 'MANUAL_CREDIT_ADJUSTMENT') {
-      return {
-        text: 'Manual credit',
-        badges_html: '',
-        sort_group: 4
-      };
-    }
-
-    if (looksExpense) {
-      return {
-        text: 'Expense',
-        badges_html: '',
-        sort_group: 2
-      };
-    }
-
-    if (itemType === 'ADDITIONAL_UNIT') {
-      return {
-        text: 'Additional unit',
-        badges_html: '',
-        sort_group: 1
-      };
-    }
-
-    if (itemType === 'TS_BUCKET' || ['DAY', 'NIGHT', 'SAT', 'SUN', 'BH'].includes(upperTrim(line?.bucket_code || ''))) {
-      return {
-        text: 'Shift',
-        badges_html: '',
-        sort_group: 1
-      };
-    }
-
-    if (unitOrCategoryText && unitOrCategoryText !== '—' && (line?.units != null || line?.rate != null)) {
-      return {
-        text: 'Additional unit',
-        badges_html: '',
-        sort_group: 1
-      };
-    }
-
-    return {
-      text: itemLabel || 'Line item',
-      badges_html: '',
-      sort_group: 4
-    };
-  };
-
-  const buildFrozenFinanceSummaryForLine = (candidate, line) => {
-    const matchedItems = findFrozenFinanceItemsForLine(candidate, line);
-    if (!matchedItems.length) {
-      return {
-        text: '—',
-        badges_html: ''
-      };
-    }
-
-    const classifications = [];
-    const directions = [];
-    const firstItem = matchedItems[0];
-
-    for (const item of matchedItems) {
-      const snapshotJson = parseMaybeJsonObject(item.frozen_component_snapshot_json) || {};
-      const classification = upperTrim(item.frozen_component_classification || snapshotJson.classification || snapshotJson.component_classification || '');
-      const sourcePayMethod = upperTrim(item.frozen_source_pay_method || snapshotJson.source_pay_method || '');
-      const targetPayMethod = upperTrim(item.frozen_target_pay_method || snapshotJson.saved_target_pay_method || snapshotJson.current_target_pay_method || '');
-
-      if (classification) classifications.push(classification);
-      if (sourcePayMethod || targetPayMethod) directions.push(`${sourcePayMethod || '—'}→${targetPayMethod || '—'}`);
-    }
-
-    const uniqueClassifications = [...new Set(classifications)];
-    const uniqueDirections = [...new Set(directions)];
-
-    const classificationSummary =
-      uniqueClassifications.length > 1
-        ? 'Mixed'
-        : snapshotClassificationLabel(uniqueClassifications[0] || '');
-
-    const badges = [];
-    if (classificationSummary === 'Mixed') {
-      badges.push(`<span class="pill pill-warn">Mixed</span>`);
-    } else if (classificationSummary === 'Taxable') {
-      badges.push(`<span class="pill pill-info">Taxable</span>`);
-    } else if (classificationSummary === 'Fixed reimbursement') {
-      badges.push(`<span class="pill">Fixed reimbursement</span>`);
-    }
-
-    if (matchedItems.length === 1) {
-      const amount = summarizeFrozenResolutionResultAmount(firstItem?.frozen_resolution_result_json, firstItem);
-      const direction = uniqueDirections.length === 1 ? uniqueDirections[0] : '';
-      const bits = [
-        classificationSummary || 'Finance',
-        direction,
-        `£${amount}`
-      ].filter(Boolean);
-
-      return {
-        text: bits.join(' · '),
-        badges_html: badges.join(' ')
-      };
-    }
-
-    const bits = [
-      classificationSummary || 'Finance',
-      `${matchedItems.length} components`
-    ].filter(Boolean);
-
-    return {
-      text: bits.join(' · '),
-      badges_html: badges.join(' ')
-    };
-  };
-
-  const pickCount = (obj, keys) => {
-    const src = asObj(obj) || {};
-    for (const key of keys) {
-      const n = Number(src[key]);
-      if (Number.isFinite(n)) return Math.trunc(n);
-    }
-    return 0;
-  };
-
-  const communicationModeLabel = (rawMode, hasRemittances, hasPayoutNotices) => {
-    const mode = upperTrim(rawMode);
-    if (mode === 'BOTH' || mode === 'REMITTANCES_AND_PAYOUT_NOTICES' || mode === 'REMITTANCE_AND_PAYOUT_NOTICE') return 'Remittances + payout notices';
-    if (mode === 'REMITTANCES_ONLY' || mode === 'REMITTANCE_ONLY') return 'Remittances only';
-    if (mode === 'PAYOUT_NOTICES_ONLY' || mode === 'PAYOUT_NOTICE_ONLY') return 'Payout notices only';
-    if (hasRemittances && hasPayoutNotices) return 'Remittances + payout notices';
-    if (hasRemittances) return 'Remittances only';
-    if (hasPayoutNotices) return 'Payout notices only';
-    return 'No communications';
-  };
-
-  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
-  const st = (mc && mc.banking && typeof mc.banking === 'object') ? mc.banking : null;
-  const pay = (st && st.pay && typeof st.pay === 'object') ? st.pay : null;
-  const child = (pay && pay.child && typeof pay.child === 'object') ? pay.child : null;
-
-  if (!mc || String(mc.entity || '') !== 'banking' || !child) {
-    return `
-      <div>
-        <div class="card">
-          <div class="row">
-            <label>Pay batch</label>
-            <div class="controls">
-              <div class="mini" style="opacity:.85;">Child modal state not available.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  const rootId = String(child.rootId || '').trim();
-  const id = String(child.batchId || '').trim();
-
-  const data = (child.data && typeof child.data === 'object') ? child.data : null;
-  const batch = (data && data.batch && typeof data.batch === 'object') ? data.batch : null;
-  const transfers = (data && Array.isArray(data.transfers)) ? data.transfers : [];
-  const candidates = (data && Array.isArray(data.candidates)) ? data.candidates : [];
-  const items = (data && Array.isArray(data.items)) ? data.items : [];
-  const linesRawTop = (data && Array.isArray(data.candidate_lines)) ? data.candidate_lines : [];
-  const financeCaseGroups = (data && Array.isArray(data.finance_case_groups)) ? data.finance_case_groups : [];
-  const providerSubmitOverviewModel = buildProviderSubmitOverviewModel(data);
-  const providerSubmitOverviewHtml = renderProviderSubmitOverviewCard(providerSubmitOverviewModel);
-
-  const isBootstrapOnly = data?.bootstrap_only === true || batch?.bootstrap_only === true;
-  if (isBootstrapOnly) {
-    const b = batch || {};
-    const statusText = upperTrim(b.status || data?.status || '—') || '—';
-    const providerText = upperTrim(b.rail_provider_snapshot || b.rail_provider || data?.rail_provider_snapshot || data?.rail_provider || '');
-    const envText = upperTrim(b.rail_env_snapshot || b.rail_env || data?.rail_env_snapshot || data?.rail_env || '');
-    const payDateText = trimStr(b.pay_date || data?.pay_date || '');
-    const executionCommitStateText = upperTrim(b.execution_commit_state || data?.execution_commit_state || '');
-    const activeOperation = asObj(data?.active_operation) || asObj(data?.operation) || asObj(b.active_operation) || null;
-    const freshness = asObj(data?.freshness) || asObj(data?.freshness_result_json) || asObj(b.freshness_result_json) || data || {};
-    const availableSections = Array.isArray(data?.available_sections)
-      ? data.available_sections.map((section) => trimStr(section)).filter(Boolean)
-      : [];
-    const recommendedPageSize = asNum(data?.recommended_page_size || b.recommended_page_size || child.recommended_page_size, 100);
-    const countValue = (...values) => {
-      for (const value of values) {
-        const n = Number(value);
-        if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
-      }
-      return 0;
-    };
-    const amountValue = (...values) => {
-      for (const value of values) {
-        const n = Number(value);
-        if (Number.isFinite(n)) return n;
-      }
-      return 0;
-    };
-    const candidateCount = countValue(data?.candidate_count, data?.candidates_count, b.candidate_count, b.candidates_count);
-    const itemCount = countValue(data?.item_count, data?.items_count, b.item_count, b.items_count);
-    const breakdownCount = countValue(data?.item_breakdown_count, data?.breakdown_count, b.item_breakdown_count, b.breakdown_count);
-    const transferCount = countValue(data?.transfer_count, data?.transfers_count, b.transfer_count, b.transfers_count);
-    const remittanceCount = countValue(data?.remittance_count, data?.remittances_count, b.remittance_count, b.remittances_count);
-    const submittedTransferCount = countValue(data?.provider_submitted_transfer_count, data?.submitted_transfer_count, data?.submitted_transfers, b.provider_submitted_transfer_count, b.submitted_transfer_count);
-    const localOnlyTransferCount = countValue(data?.local_only_transfer_count, data?.local_idempotency_only_count, b.local_only_transfer_count, b.local_idempotency_only_count);
-    const pendingTransferCount = countValue(data?.pending_transfer_count, data?.pending_transfers, b.pending_transfer_count, b.pending_transfers);
-    const failedTransferCount = countValue(data?.failed_transfer_count, data?.failed_transfers, b.failed_transfer_count, b.failed_transfers);
-    const ambiguousTransferCount = countValue(data?.ambiguous_transfer_count, b.ambiguous_transfer_count);
-    const totalAmount = amountValue(data?.total_amount, data?.total_amount_inc_vat, data?.total_pay_amount, b.total_amount, b.total_amount_inc_vat, b.total_pay_amount);
-    const batchKindLabel = upperTrim(data?.batch_kind || b.batch_kind || b.batch_kind_fixed || '') || 'UNKNOWN';
-    const freshnessStatus = upperTrim(data?.freshness_validation_status || b.freshness_validation_status || freshness.freshness_validation_status || freshness.status || 'NOT_CHECKED');
-    const freshnessCheckedAt = trimStr(data?.freshness_checked_at_utc || b.freshness_checked_at_utc || freshness.freshness_checked_at_utc || '');
-    const freshnessHash = trimStr(data?.freshness_result_hash || b.freshness_result_hash || freshness.freshness_result_hash || '');
-    const scopeHash = trimStr(data?.freshness_scope_hash || b.freshness_scope_hash || freshness.freshness_scope_hash || '');
-    const opId = trimStr(activeOperation?.operation_id || activeOperation?.id || data?.active_operation_id || data?.operation_id || '');
-    const opStatus = upperTrim(activeOperation?.status || data?.active_operation_status || data?.operation_status || '');
-    const opPhase = upperTrim(activeOperation?.phase || data?.active_operation_phase || data?.operation_phase || '');
-    const sectionPillsHtml = availableSections.length
-      ? availableSections.map((section) => `<span class="pill pill-info">${enc(section.replace(/_/g, ' '))}</span>`).join(' ')
-      : `<span class="mini" style="opacity:.75;">No section list returned.</span>`;
-    const errHtml = String(child.error || '').trim()
-      ? `<div class="error" style="white-space:pre-wrap;">${enc(String(child.error || '').trim())}</div>`
-      : '';
-    const providerEnvText = [providerText || '—', envText || ''].filter(Boolean).join('/');
-
-    return `
-      <div id="${enc(rootId)}">
-        <div class="card">
-          <div class="row">
-            <label>Overview</label>
-            <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-              ${errHtml}
-              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                <span class="pill pill-info">BOOTSTRAP</span>
-                <span class="pill">${enc(statusText)}</span>
-                <span class="pill pill-info">${enc(batchKindLabel)}</span>
-                <span class="mini">${enc(providerEnvText)}</span>
-                <span class="mini">Pay date: <span class="mono">${enc(payDateText ? formatIsoToUkLocal(payDateText) : '—')}</span></span>
-                <span class="mini">Execution state: <span class="mono">${enc(executionCommitStateText || '—')}</span></span>
-                <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
-                </div>
-              </div>
-
-              ${providerSubmitOverviewHtml}
-
-              <div class="card" style="padding:10px;">
-                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Batch summary</div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Candidates</div><div class="mono">${enc(String(candidateCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Items</div><div class="mono">${enc(String(itemCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Breakdowns</div><div class="mono">${enc(String(breakdownCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Transfers</div><div class="mono">${enc(String(transferCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Remittances</div><div class="mono">${enc(String(remittanceCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Total amount</div><div class="mono">£${enc(fmtMoney(totalAmount))}</div></div>
-                </div>
-              </div>
-
-              <div class="card" style="padding:10px;">
-                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Provider / transfer state</div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;">
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Provider submitted</div><div class="mono">${enc(String(submittedTransferCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Local-only evidence</div><div class="mono">${enc(String(localOnlyTransferCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Pending</div><div class="mono">${enc(String(pendingTransferCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Failed</div><div class="mono">${enc(String(failedTransferCount))}</div></div>
-                  <div class="card" style="padding:8px;"><div class="mini" style="opacity:.8;">Ambiguous</div><div class="mono">${enc(String(ambiguousTransferCount))}</div></div>
-                </div>
-              </div>
-
-              <div class="card" style="padding:10px;">
-                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Freshness at execution boundary</div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">
-                  <div><strong>Status</strong><br><span class="mono">${enc(freshnessStatus || 'NOT_CHECKED')}</span></div>
-                  <div><strong>Checked</strong><br><span class="mono">${enc(freshnessCheckedAt ? fmtUtcToUk(freshnessCheckedAt) : 'Not recorded')}</span></div>
-                  <div><strong>Result hash</strong><br><span class="mono">${enc(freshnessHash || '—')}</span></div>
-                  <div><strong>Scope hash</strong><br><span class="mono">${enc(scopeHash || '—')}</span></div>
-                </div>
-              </div>
-
-              <div class="card" style="padding:10px;">
-                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Active operation</div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">
-                  <div><strong>Operation ID</strong><br><span class="mono">${enc(opId || '—')}</span></div>
-                  <div><strong>Status</strong><br><span class="mono">${enc(opStatus || '—')}</span></div>
-                  <div><strong>Phase</strong><br><span class="mono">${enc(opPhase || '—')}</span></div>
-                </div>
-              </div>
-
-              <div class="card" style="padding:10px;">
-                <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Lazy detail sections</div>
-                <div class="mini" style="opacity:.86;margin-bottom:8px;">This is a large batch. Details load page-by-page when you open the relevant tab. Recommended page size: <span class="mono">${enc(String(recommendedPageSize))}</span>.</div>
-                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">${sectionPillsHtml}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  const financeGroupById = new Map(
-    financeCaseGroups
-      .filter((g) => g && typeof g === 'object' && trimStr(g.finance_case_id))
-      .map((g) => [trimStr(g.finance_case_id), g])
-  );
-
-  const batchKindInfo = (typeof bankingNormalizeBatchKind === 'function')
-    ? bankingNormalizeBatchKind(data)
-    : {
-        rawKind: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase(),
-        normalizedKind: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase(),
-        isKnown: true,
-        isLoans: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'LOANS',
-        isPaye: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'PAYE',
-        isUmbrella: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'UMBRELLA',
-        isMixed: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'MIXED',
-        isPayeish: ['PAYE', 'MIXED'].includes(String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase()),
-        isUmbrellaish: ['UMBRELLA', 'MIXED'].includes(String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase()),
-        label: String(data?.batch_kind || batch?.batch_kind || batch?.batch_kind_fixed || '').trim().toUpperCase() || 'UNKNOWN'
-      };
-
-  const batchKind = String(batchKindInfo.normalizedKind || '').trim().toUpperCase();
-  const status = String(batch?.status || '').trim().toUpperCase() || '—';
-  const provider = String(batch?.rail_provider_snapshot || batch?.rail_provider || '').trim().toUpperCase();
-  const env = String(batch?.rail_env_snapshot || '').trim().toUpperCase();
-  const payDate = String(batch?.pay_date || '').trim();
-  const authoritativePaymentDate = String(batch?.authoritative_payment_date || data?.authoritative_payment_date || '').trim();
-  const lastCheck = fmtUtcToUk(batch?.last_status_checked_at_utc || '');
-
-  const isDraftLike = (status === 'DRAFT' || status === 'DRAFT_CREATED');
-  const batchCancelMode = bankingPayResolveBatchCancelMode(batch);
-  const canDeleteDraft = (batchCancelMode === 'DRAFT_DELETE');
-  const canCancelUnpaid = (batchCancelMode === 'CANCEL_UNPAID');
-
-  const firstFiniteNonNegativeInteger = (...values) => {
-    for (const value of values) {
-      if (value === null || value === undefined || String(value).trim?.() === '') continue;
-      const n = Number(value);
-      if (Number.isFinite(n) && n >= 0) return Math.trunc(n);
-    }
-    return null;
-  };
-
-  const firstFiniteNumber = (...values) => {
-    for (const value of values) {
-      if (value === null || value === undefined || String(value).trim?.() === '') continue;
-      const n = Number(value);
-      if (Number.isFinite(n)) return n;
-    }
-    return null;
-  };
-
-  const candidateLineEntryCount = (() => {
-    if (!data || !Array.isArray(data.candidate_lines)) return null;
-    let count = 0;
-    for (const entry of linesRawTop) {
-      if (!entry || typeof entry !== 'object') continue;
-
-      const normalizedBlock = (entry.candidate_lines_normalized && typeof entry.candidate_lines_normalized === 'object') ? entry.candidate_lines_normalized : null;
-      if (normalizedBlock) {
-        if (Array.isArray(normalizedBlock.tsLines)) count += normalizedBlock.tsLines.filter(Boolean).length;
-        if (Array.isArray(normalizedBlock.nonTsLines)) count += normalizedBlock.nonTsLines.filter(Boolean).length;
-        continue;
-      }
-
-      if (Array.isArray(entry.lines)) { count += entry.lines.filter(Boolean).length; continue; }
-      if (Array.isArray(entry.line_items)) { count += entry.line_items.filter(Boolean).length; continue; }
-      if (Array.isArray(entry.items)) { count += entry.items.filter(Boolean).length; continue; }
-      if (Array.isArray(entry.breakdown_lines)) { count += entry.breakdown_lines.filter(Boolean).length; continue; }
-
-      count += 1;
-    }
-    return count;
-  })();
-
-  const explicitActiveBatchItemCount = firstFiniteNonNegativeInteger(
-    data?.active_item_count,
-    data?.active_items,
-    data?.active_batch_item_count,
-    data?.active_batch_items,
-    data?.active_payment_item_count,
-    data?.active_pay_batch_item_count,
-    batch?.active_item_count,
-    batch?.active_items,
-    batch?.active_batch_item_count,
-    batch?.active_batch_items,
-    batch?.active_payment_item_count,
-    batch?.active_pay_batch_item_count
-  );
-  const explicitActiveBatchAmount = firstFiniteNumber(
-    data?.active_amount_inc_vat,
-    data?.active_batch_amount_inc_vat,
-    data?.active_payment_amount_inc_vat,
-    data?.active_bank_out,
-    batch?.active_amount_inc_vat,
-    batch?.active_batch_amount_inc_vat,
-    batch?.active_payment_amount_inc_vat,
-    batch?.active_bank_out
-  );
-  const activeCountFromItems = (data && Array.isArray(data.items))
-    ? items.filter((item) => item && typeof item === 'object' && item.is_voided !== true && item.voided !== true && String(item.status || '').trim().toUpperCase() !== 'VOIDED').length
-    : null;
-  const activeCountFromLines = (candidateLineEntryCount !== null) ? candidateLineEntryCount : null;
-  const activeBatchItemCountKnown = explicitActiveBatchItemCount !== null || activeCountFromItems !== null || activeCountFromLines !== null;
-  const activeBatchItemCount = explicitActiveBatchItemCount !== null
-    ? explicitActiveBatchItemCount
-    : (activeCountFromItems !== null ? activeCountFromItems : (activeCountFromLines !== null ? activeCountFromLines : 0));
-  const activeBatchAmountIncVat = explicitActiveBatchAmount !== null
-    ? explicitActiveBatchAmount
-    : (activeBatchItemCountKnown ? items.reduce((total, item) => {
-        if (!item || typeof item !== 'object') return total;
-        if (item.is_voided === true || item.voided === true || String(item.status || '').trim().toUpperCase() === 'VOIDED') return total;
-        const n = Number(item.amount_inc_vat ?? item.amount_ex_vat ?? item.amount ?? 0);
-        return Number.isFinite(n) ? total + n : total;
-      }, 0) : null);
-  const hasActivePayments = !activeBatchItemCountKnown || activeBatchItemCount > 0;
-  const emptyDraftNoActivePayments = isDraftLike && activeBatchItemCountKnown && activeBatchItemCount <= 0;
-  const emptyDraftNoActivePaymentsMessage = 'This draft batch has no active payments. Delete the draft or create a new batch.';
-
-  const pillStatus =
-    (status === 'SETTLED') ? 'pill pill-ok'
-    : (status === 'EXECUTING' || status === 'PARTIAL' || status === 'AWAITING_AUTHORISATION') ? 'pill pill-warn'
-    : (status === 'DRAFT' || status === 'READY' || status === 'WAITING_BANK_CONFIRM') ? 'pill pill-info'
-    : 'pill';
-
-  const batchKindPillClass =
-    batchKindInfo.isLoans ? 'pill pill-info'
-    : batchKindInfo.isPaye ? 'pill pill-info'
-    : batchKindInfo.isUmbrella ? 'pill pill-info'
-    : batchKindInfo.isMixed ? 'pill pill-warn'
-    : 'pill';
-
-  const pendingCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'PENDING').length;
-  const completedCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'COMPLETED').length;
-  const failedCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'FAILED').length;
-  const blockedCount = transfers.filter(t => String(t?.status || '').trim().toUpperCase() === 'BLOCKED').length;
-
-  const hasTransferRailSubmissionEvidence = (t) => {
-    if (!t || typeof t !== 'object') return false;
-
-    const railTxId = String(t.rail_tx_id || '').trim();
-    if (railTxId) return true;
-
-    const externalStateTokens = [
-      'SUBMITTED',
-      'QUEUED',
-      'ACCEPTED',
-      'PROCESSING',
-      'IN_FLIGHT',
-      'PENDING_SETTLEMENT',
-      'PENDING_CONFIRMATION',
-      'PENDING_SUBMISSION',
-      'COMPLETED',
-      'SETTLED',
-      'COMMITTED',
-      'PAID',
-      'EXECUTED'
-    ];
-
-    const stateHasExternalSubmissionEvidence = (value) => {
-      const state = String(value || '').trim().toUpperCase();
-      if (!state) return false;
-      if (state === 'NOT_SUBMITTED' || state === 'UNSUBMITTED') return false;
-      if (externalStateTokens.includes(state)) return true;
-      if (state.includes('NOT_SUBMITTED') || state.includes('UNSUBMITTED')) return false;
-      return externalStateTokens.some((token) => {
-        if (token === 'SUBMITTED') return state === 'SUBMITTED';
-        return state.includes(token);
-      });
-    };
-
-    if (stateHasExternalSubmissionEvidence(t.rail_state)) return true;
-
-    const meta = asObj(t.rail_meta_json);
-    if (!meta) return false;
-
-    const metaExternalId = trimStr(
-      meta.provider_submission_id ||
-      meta.submission_id ||
-      meta.provider_transfer_id ||
-      meta.transfer_id ||
-      meta.external_transfer_id ||
-      meta.provider_payment_id ||
-      meta.payment_id ||
-      meta.external_payment_id ||
-      meta.transaction_id ||
-      meta.id ||
-      ''
-    );
-    if (metaExternalId) return true;
-
-    if (stateHasExternalSubmissionEvidence(meta.state || meta.status || meta.rail_state || meta.payment_state || meta.transfer_state)) return true;
-
-    const truthyMetaFlag = (value) => {
-      if (value === true) return true;
-      const s = String(value === undefined || value === null ? '' : value).trim().toLowerCase();
-      return ['true', '1', 'yes', 'y', 'on'].includes(s);
-    };
-
-    return (
-      truthyMetaFlag(meta.submitted) ||
-      truthyMetaFlag(meta.queued) ||
-      truthyMetaFlag(meta.accepted) ||
-      truthyMetaFlag(meta.processing) ||
-      truthyMetaFlag(meta.in_flight) ||
-      truthyMetaFlag(meta.pending_settlement) ||
-      truthyMetaFlag(meta.pending_confirmation) ||
-      truthyMetaFlag(meta.pending_submission) ||
-      truthyMetaFlag(meta.completed) ||
-      truthyMetaFlag(meta.committed) ||
-      truthyMetaFlag(meta.settled) ||
-      truthyMetaFlag(meta.paid)
-    );
-  };
-
-  const csvEvidence = (typeof deriveBankingPayBankCsvEvidence === 'function')
-    ? deriveBankingPayBankCsvEvidence(data)
-    : { raw: null };
-  const csvEvidenceRows = [
-    ['Generated at (UTC)', csvEvidence.generated_at_utc],
-    ['Generated by user', csvEvidence.generated_by_user_id],
-    ['Scope', csvEvidence.scope],
-    ['Filename', csvEvidence.filename],
-    ['Row count', csvEvidence.row_count],
-    ['Total amount', csvEvidence.total_amount],
-    ['Transfer hash', csvEvidence.transfer_hash],
-    ['Provider snapshot', csvEvidence.provider_snapshot],
-    ['Rail env snapshot', csvEvidence.rail_env_snapshot]
-  ].filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== '');
-
-  const expanded = (child.ui && typeof child.ui === 'object' && child.ui.expanded && typeof child.ui.expanded === 'object') ? child.ui.expanded : {};
-  const getCandidateExpansionKey = (candidate) => {
-    const c = asObj(candidate) || {};
-    return trimStr(
-      c.pay_batch_candidate_id ||
-      c.payBatchCandidateId ||
-      c.id ||
-      c.candidate_row_id ||
-      c.candidateRowId ||
-      c.candidate_id
-    );
-  };
-  const getLegacyCandidateExpansionKey = (candidate) => trimStr(asObj(candidate)?.candidate_id || '');
-  const isCandidateExpanded = (candidate) => {
-    const canonicalKey = getCandidateExpansionKey(candidate);
-    const legacyKey = getLegacyCandidateExpansionKey(candidate);
-    return !!(
-      (canonicalKey && expanded[canonicalKey]) ||
-      (legacyKey && legacyKey !== canonicalKey && expanded[legacyKey])
-    );
-  };
-  const candidateExpansionKeys = candidates.map((c) => getCandidateExpansionKey(c)).filter(Boolean);
-  const allExpanded = candidateExpansionKeys.length > 0 && candidates.every((candidate) => isCandidateExpanded(candidate));
-  const showUmbrellaColumn = !!(batchKindInfo.isUmbrellaish && !batchKindInfo.isLoans);
-  const showPayeNetColumn = !!(batchKindInfo.isPayeish && !batchKindInfo.isLoans);
-  const summaryColspan = 6 + (showUmbrellaColumn ? 1 : 0) + (showPayeNetColumn ? 1 : 0);
-
-  const hasPollablePending = (() => {
-    for (const t of transfers) {
-      const stx = String(t?.status || '').trim().toUpperCase();
-      if (stx !== 'PENDING') continue;
-      if (typeof bankingPayHasPollableRailEvidence === 'function' && bankingPayHasPollableRailEvidence(t)) return true;
-    }
-    return false;
-  })();
-
-  const pollNote = (() => {
-    const note0 = String(child?.ui?.last_poll_note || '').trim();
-    if (note0) return note0;
-
-    const pr = (data && typeof data === 'object') ? data.poll_result : null;
-    if (pr && typeof pr === 'object' && pr.skipped === true) {
-      const reason = String(pr.reason || '').trim();
-      return reason ? `Poll skipped: ${reason}` : 'Poll skipped.';
-    }
-
-    return '';
-  })();
-
-  const isPayeNetCompleteForBatch = (() => {
-    if (!batchKindInfo.isPayeish || batchKindInfo.isLoans) return true;
-
-    const payeCandidates = candidates.filter(c => {
-      const ps = (c && typeof c === 'object') ? c.paye_state : null;
-      return ps != null && String(ps).trim() !== '';
-    });
-
-    if (!payeCandidates.length) return false;
-
-    for (const c of payeCandidates) {
-      const stx = String(c?.paye_state || '').trim().toUpperCase();
-      if (stx !== 'READY') return false;
-
-      const v = c?.paye_net_amount;
-      if (v === null || v === undefined || String(v).trim() === '') return false;
-
-      const n = Number(v);
-      if (!Number.isFinite(n)) return false;
-      if (n < 0) return false;
-    }
-
-    return true;
-  })();
-
-  const payeNetStatus = (() => {
-    if (!batchKindInfo.isPayeish || batchKindInfo.isLoans) return { required: false, complete: true, missingCount: 0, totalCount: 0 };
-
-    const payeCandidates = candidates.filter(c => {
-      const ps = (c && typeof c === 'object') ? c.paye_state : null;
-      return ps != null && String(ps).trim() !== '';
-    });
-
-    let missing = 0;
-    for (const c of payeCandidates) {
-      const stx = String(c?.paye_state || '').trim().toUpperCase();
-      if (stx !== 'READY') { missing += 1; continue; }
-
-      const v = c?.paye_net_amount;
-      if (v === null || v === undefined || String(v).trim() === '') { missing += 1; continue; }
-
-      const n = Number(v);
-      if (!Number.isFinite(n) || n < 0) { missing += 1; continue; }
-    }
-
-    return {
-      required: true,
-      complete: (payeCandidates.length > 0 && missing === 0),
-      missingCount: missing,
-      totalCount: payeCandidates.length
-    };
-  })();
-
-  const executionCommitState = String(batch?.execution_commit_state || '').trim().toUpperCase();
-  const executionCommitRef = String(batch?.execution_commit_ref || data?.execution_commit_ref || '').trim();
-  const nonBlockedTransfers = transfers.filter((t) => String(t?.status || '').trim().toUpperCase() !== 'BLOCKED');
-  const allNonBlockedTransfersCompleted = nonBlockedTransfers.length > 0 && nonBlockedTransfers.every((t) => String(t?.status || '').trim().toUpperCase() === 'COMPLETED');
-  const isPaymentExecuted = (
-    status === 'SETTLED' ||
-    executionCommitState === 'COMMITTED' ||
-    allNonBlockedTransfersCompleted
-  );
-  const displayPaymentDate = isPaymentExecuted
-    ? (authoritativePaymentDate || payDate)
-    : (payDate || authoritativePaymentDate);
-  const paymentDateLabel = isPaymentExecuted ? 'Execution date' : 'Pay date';
-  const paymentExecutedBadgeHtml = isPaymentExecuted
-    ? `<span class="pill pill-ok" title="Payment execution/settlement is complete">PAYMENT EXECUTED</span>`
-    : '';
-  const executionMetaHtml = isPaymentExecuted
-    ? `<span class="mini" style="opacity:.85;">${enc(paymentDateLabel)}: <span class="mono">${enc(displayPaymentDate ? formatIsoToUkLocal(displayPaymentDate) : '—')}</span></span>${executionCommitRef ? `<span class="mini" style="opacity:.85;">Commit ref: <span class="mono">${enc(executionCommitRef)}</span></span>` : ''}`
-    : `<span class="mini">${enc(paymentDateLabel)}: <span class="mono">${enc(displayPaymentDate ? formatIsoToUkLocal(displayPaymentDate) : '—')}</span></span>`;
-
-  const isBlockedFundsBatch = status === 'BLOCKED_FUNDS' || upperTrim(data?.banking_alert_kind || batch?.banking_alert_kind || '') === 'BLOCKED_FUNDS';
-  const blockedFundsRequiredGbp = firstFiniteNumber(
-    data?.blocked_funds_required_gbp,
-    batch?.blocked_funds_required_gbp,
-    data?.blocked_funds_payment_issue?.required_gbp,
-    data?.last_funds_check_json?.required_gbp,
-    batch?.last_funds_check_json?.required_gbp
-  );
-  const blockedFundsAvailableGbp = firstFiniteNumber(
-    data?.blocked_funds_available_gbp,
-    batch?.blocked_funds_available_gbp,
-    data?.blocked_funds_payment_issue?.available_gbp,
-    data?.last_funds_check_json?.available_gbp,
-    batch?.last_funds_check_json?.available_gbp
-  );
-  const blockedFundsProvider = trimStr(
-    data?.blocked_funds_provider ||
-    batch?.blocked_funds_provider ||
-    data?.blocked_funds_payment_issue?.provider ||
-    data?.last_funds_check_json?.rail_provider ||
-    batch?.last_funds_check_json?.rail_provider ||
-    batch?.rail_provider_snapshot ||
-    batch?.rail_provider ||
-    provider
-  ).toUpperCase();
-  const blockedFundsEnv = trimStr(
-    data?.blocked_funds_env ||
-    batch?.blocked_funds_env ||
-    data?.blocked_funds_payment_issue?.env ||
-    data?.last_funds_check_json?.rail_env ||
-    batch?.last_funds_check_json?.rail_env ||
-    batch?.rail_env_snapshot ||
-    env
-  ).toUpperCase();
-  const blockedFundsAccountRef = trimStr(
-    data?.blocked_funds_account_ref ||
-    batch?.blocked_funds_account_ref ||
-    data?.blocked_funds_payment_issue?.funding_account_ref ||
-    data?.last_funds_check_json?.funding_account_ref ||
-    batch?.last_funds_check_json?.funding_account_ref ||
-    data?.funding_account_ref ||
-    batch?.funding_account_ref ||
-    ''
-  );
-  const blockedFundsLastCheckRaw = trimStr(
-    data?.last_funds_check_at_utc ||
-    batch?.last_funds_check_at_utc ||
-    data?.blocked_funds_payment_issue?.last_funds_check_at_utc ||
-    data?.last_funds_check_json?.checked_at_utc ||
-    batch?.last_funds_check_json?.checked_at_utc ||
-    data?.last_funds_check_json?.funds_check_checked_at_utc ||
-    batch?.last_funds_check_json?.funds_check_checked_at_utc ||
-    ''
-  );
-  const blockedFundsLastCheck = blockedFundsLastCheckRaw ? fmtUtcToUk(blockedFundsLastCheckRaw) : 'Not recorded';
-  const canRetryBlockedFunds = isBlockedFundsBatch && (
-    data?.can_retry_blocked_funds === true ||
-    batch?.can_retry_blocked_funds === true ||
-    data?.blocked_funds_payment_issue?.can_retry_blocked_funds === true
-  );
-  const blockedFundsRetryDisabledAttr = (!canRetryBlockedFunds || child.loading || (child.actionsBusy && (child.actionsBusy.retryingBlockedFunds || child.actionsBusy.refreshing || child.actionsBusy.polling)))
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const blockedFundsCancelDisabledAttr = (!canCancelUnpaid || child.loading || (child.actionsBusy && (child.actionsBusy.refreshing || child.actionsBusy.polling || child.actionsBusy.retryingBlockedFunds)))
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const blockedFundsProviderEnv = [blockedFundsProvider || '—', blockedFundsEnv || ''].filter(Boolean).join(' / ');
-  const statusAllowedForExecute = (
-    executionCommitState !== 'COMMITTED'
-    && executionCommitState !== 'SETTLED'
-    && executionCommitState !== 'CANCELLED'
-    && executionCommitState !== 'SUBMITTED_NOT_COMMITTED'
-    && status !== 'COMMITTED'
-    && status !== 'CANCELLED'
-    && status !== 'SETTLED'
-    && status !== 'SUBMITTED_NOT_COMMITTED'
-    && (
-      status === 'DRAFT'
-      || status === 'DRAFT_CREATED'
-      || status === 'READY'
-      || status === 'WAITING_BANK_CONFIRM'
-      || status === 'PARTIAL'
-    )
-  );
-  const canExecute =
-    statusAllowedForExecute
-    && hasActivePayments
-    && (!payeNetStatus.required || payeNetStatus.complete === true)
-    && !batchKindInfo.isLoans;
-
-  const executeDisabledReason = (() => {
-    if (batchKindInfo.isLoans) return 'Execute payment is not available from this overview for LOANS batches.';
-    if (emptyDraftNoActivePayments) return emptyDraftNoActivePaymentsMessage;
-    if (!statusAllowedForExecute) return `Execute is only allowed for retryable, not-committed statuses (DRAFT, DRAFT_CREATED, READY, WAITING_BANK_CONFIRM, PARTIAL). Current: ${status || '—'}.`;
-    if (payeNetStatus.required && !payeNetStatus.complete) {
-      const miss = Number(payeNetStatus.missingCount || 0);
-      const tot = Number(payeNetStatus.totalCount || 0);
-      return `PAYE net payments are incomplete (${miss}/${tot} missing). Click “Enter PAYE payments”, save, then execute.`;
-    }
-    return '';
-  })();
-
-  const normalizeCandidateLineEntries = (candId) => {
-    const cid = String(candId || '').trim();
-
-    const out = [];
-    for (const x of (Array.isArray(linesRawTop) ? linesRawTop : [])) {
-      if (!x || typeof x !== 'object') continue;
-
-      const xid = String(x?.candidate_id || '').trim();
-      if (xid !== cid) continue;
-
-      const normalizedBlock = (x.candidate_lines_normalized && typeof x.candidate_lines_normalized === 'object') ? x.candidate_lines_normalized : null;
-      if (normalizedBlock) {
-        const tsNorm = Array.isArray(normalizedBlock.tsLines) ? normalizedBlock.tsLines : [];
-        const nonTsNorm = Array.isArray(normalizedBlock.nonTsLines) ? normalizedBlock.nonTsLines : [];
-        for (const t of tsNorm) {
-          if (t && typeof t === 'object') out.push({ ...t, candidate_id: cid });
-        }
-        for (const n of nonTsNorm) {
-          if (n && typeof n === 'object') out.push({ ...n, candidate_id: cid });
-        }
-        continue;
-      }
-
-      const hasTsLines = Array.isArray(x.ts_lines);
-      const hasNonTsLines = Array.isArray(x.non_ts_lines);
-      if (hasTsLines || hasNonTsLines) {
-        for (const t of (hasTsLines ? x.ts_lines : [])) {
-          if (t && typeof t === 'object') out.push({ ...t, candidate_id: cid });
-        }
-        for (const n of (hasNonTsLines ? x.non_ts_lines : [])) {
-          if (n && typeof n === 'object') out.push({ ...n, candidate_id: cid });
-        }
-        continue;
-      }
-
-      if (Array.isArray(x.timesheets)) {
-        for (const t of x.timesheets) {
-          if (t && typeof t === 'object') out.push({ ...t, candidate_id: cid });
-        }
-        continue;
-      }
-
-      out.push(x);
-    }
-    return out;
-  };
-
-  const allNormalizedCandidateLines = candidates.flatMap((candidate) => {
-    const cid = String(candidate?.candidate_id || '').trim();
-    return cid ? normalizeCandidateLineEntries(cid) : [];
-  });
-
-  const childComms = (child.communications && typeof child.communications === 'object') ? child.communications : {};
-  const dataComms = (data && data.communications && typeof data.communications === 'object') ? data.communications : {};
-  const commSummary = asObj(childComms.summary) || asObj(dataComms) || {};
-  const commResult = asObj(childComms.result) || {};
-  const remittanceSummary = asObj(commSummary.remittance);
-  const payoutNoticeSummary = asObj(commSummary.payout_notice);
-  const remittanceResult = asObj(commResult.remittance);
-  const payoutNoticeResult = asObj(commResult.payout_notice);
-
-  const fallbackHasRemittances = allNormalizedCandidateLines.some((line) => line?.appears_on_umbrella_remittance === true);
-  const fallbackHasPayoutNotices = allNormalizedCandidateLines.some((line) => line?.generates_candidate_payment_advice === true || line?.is_candidate_directed_oneoff_payout === true);
-
-  const remittanceTargetCount = Math.max(
-    pickCount(remittanceSummary, ['target_count', 'targets_count', 'candidate_count_targeted', 'candidate_count', 'candidate_copy_job_count', 'umbrella_remittance_job_count', 'umbrella_count_targeted', 'umbrella_count', 'item_count', 'count']),
-    fallbackHasRemittances ? allNormalizedCandidateLines.filter((line) => line?.appears_on_umbrella_remittance === true).length : 0
-  );
-
-  const payoutNoticeTargetCount = Math.max(
-    pickCount(payoutNoticeSummary, ['target_count', 'targets_count', 'candidate_count_targeted', 'candidate_count', 'item_count', 'count']),
-    fallbackHasPayoutNotices ? allNormalizedCandidateLines.filter((line) => line?.generates_candidate_payment_advice === true || line?.is_candidate_directed_oneoff_payout === true).length : 0
-  );
-
-  const remittanceQueuedCount = Math.max(
-    pickCount(remittanceResult, ['queued_count']),
-    pickCount(remittanceSummary, ['queued_count', 'candidate_count_queued'])
-  );
-  const remittanceSentCount = Math.max(
-    pickCount(remittanceResult, ['sent_count']),
-    pickCount(remittanceSummary, ['sent_count', 'candidate_count_sent'])
-  );
-  const remittanceFailedCount = Math.max(
-    pickCount(remittanceResult, ['failed_count']),
-    pickCount(remittanceSummary, ['failed_count', 'candidate_count_error'])
-  );
-  const remittanceSkippedCount = pickCount(remittanceResult, ['skipped_count']);
-
-  const payoutNoticeQueuedCount = Math.max(
-    pickCount(payoutNoticeResult, ['queued_count']),
-    pickCount(payoutNoticeSummary, ['queued_count'])
-  );
-  const payoutNoticeSentCount = Math.max(
-    pickCount(payoutNoticeResult, ['sent_count']),
-    pickCount(payoutNoticeSummary, ['sent_count'])
-  );
-  const payoutNoticeFailedCount = Math.max(
-    pickCount(payoutNoticeResult, ['failed_count']),
-    pickCount(payoutNoticeSummary, ['failed_count'])
-  );
-  const payoutNoticeSkippedCount = pickCount(payoutNoticeResult, ['skipped_count']);
-
-  const hasRemittances =
-    childComms.has_remittances === true ||
-    remittanceSummary?.contains_items === true ||
-    remittanceTargetCount > 0 ||
-    remittanceQueuedCount > 0 ||
-    remittanceSentCount > 0 ||
-    remittanceFailedCount > 0 ||
-    remittanceSkippedCount > 0 ||
-    pickCount(remittanceSummary, ['outbox_row_count']) > 0 ||
-    fallbackHasRemittances;
-
-  const hasPayoutNotices =
-    childComms.has_payout_notices === true ||
-    payoutNoticeSummary?.contains_items === true ||
-    payoutNoticeTargetCount > 0 ||
-    payoutNoticeQueuedCount > 0 ||
-    payoutNoticeSentCount > 0 ||
-    payoutNoticeFailedCount > 0 ||
-    payoutNoticeSkippedCount > 0 ||
-    pickCount(payoutNoticeSummary, ['outbox_row_count']) > 0 ||
-    fallbackHasPayoutNotices;
-
-  const hasBothCommunications = childComms.has_both === true || commSummary.contains_both === true || (hasRemittances && hasPayoutNotices);
-  const communicationsModeLabel = communicationModeLabel(
-    childComms.mode || commResult.mode || commSummary.communication_mode || '',
-    hasRemittances,
-    hasPayoutNotices
-  );
-
-  const hasCommunicationResult =
-    !!upperTrim(commResult.mode || commSummary.communication_mode || '') ||
-    remittanceQueuedCount > 0 ||
-    remittanceSentCount > 0 ||
-    remittanceFailedCount > 0 ||
-    remittanceSkippedCount > 0 ||
-    payoutNoticeQueuedCount > 0 ||
-    payoutNoticeSentCount > 0 ||
-    payoutNoticeFailedCount > 0 ||
-    payoutNoticeSkippedCount > 0;
-
-  const communicationPresenceText = hasBothCommunications
-    ? 'This batch contains both umbrella remittance items and candidate payout notices.'
-    : hasRemittances
-      ? 'This batch contains umbrella remittance items only.'
-      : hasPayoutNotices
-        ? 'This batch contains candidate payout notices only.'
-        : 'This batch currently contains no remittance or payout-notice items.';
-
-  const communicationsSummaryHtml = `
-    <div class="card" style="padding:10px; margin-bottom:10px;">
-      <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Communications</div>
-      <div class="mini" style="opacity:.9; margin-bottom:8px;">${enc(communicationPresenceText)}</div>
-      ${
-        hasPayoutNotices
-          ? `<div class="mini" style="opacity:.85; margin-bottom:8px;">${enc('Candidate-directed one-off payouts are excluded from umbrella remittance and generate candidate payout notices only.')}</div>`
-          : ''
-      }
-      <div style="display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:8px;">
-        <div class="card" style="padding:8px;">
-          <div class="mini" style="opacity:.8;">Umbrella remittance items</div>
-          <div class="mono">${enc(hasRemittances ? 'Yes' : 'No')}</div>
-          <div class="mini" style="opacity:.85;">
-            Targets: <span class="mono">${enc(String(remittanceTargetCount))}</span>
-            • Queued: <span class="mono">${enc(String(remittanceQueuedCount))}</span>
-            • Sent: <span class="mono">${enc(String(remittanceSentCount))}</span>
-          </div>
-        </div>
-        <div class="card" style="padding:8px;">
-          <div class="mini" style="opacity:.8;">Candidate payout notices</div>
-          <div class="mono">${enc(hasPayoutNotices ? 'Yes' : 'No')}</div>
-          <div class="mini" style="opacity:.85;">
-            Targets: <span class="mono">${enc(String(payoutNoticeTargetCount))}</span>
-            • Queued: <span class="mono">${enc(String(payoutNoticeQueuedCount))}</span>
-            • Sent: <span class="mono">${enc(String(payoutNoticeSentCount))}</span>
-          </div>
-        </div>
-        <div class="card" style="padding:8px;">
-          <div class="mini" style="opacity:.8;">Latest communication result</div>
-          <div class="mono">${enc(hasCommunicationResult ? communicationsModeLabel : 'Not sent yet')}</div>
-          ${
-            hasCommunicationResult
-              ? `
-                <div class="mini" style="opacity:.85;">
-                  Remittances — queued <span class="mono">${enc(String(remittanceQueuedCount))}</span>,
-                  sent <span class="mono">${enc(String(remittanceSentCount))}</span>,
-                  failed <span class="mono">${enc(String(remittanceFailedCount))}</span>,
-                  skipped <span class="mono">${enc(String(remittanceSkippedCount))}</span>
-                </div>
-                <div class="mini" style="opacity:.85;">
-                  Payout notices — queued <span class="mono">${enc(String(payoutNoticeQueuedCount))}</span>,
-                  sent <span class="mono">${enc(String(payoutNoticeSentCount))}</span>,
-                  failed <span class="mono">${enc(String(payoutNoticeFailedCount))}</span>,
-                  skipped <span class="mono">${enc(String(payoutNoticeSkippedCount))}</span>
-                </div>
-              `
-              : `<div class="mini" style="opacity:.85;">No communication run has been recorded in this modal yet.</div>`
-          }
-        </div>
-      </div>
-    </div>
-  `;
-
-  const findFrozenFinanceItemsForLine = (candidate, line) => {
-    const candidatePbcId = trimStr(candidate?.id || candidate?.pay_batch_candidate_id || '');
-    const lineTimesheetId = trimStr(line?.timesheet_id || line?.timesheet?.timesheet_id || '');
-    const lineSourceRef = trimStr(line?.source_ref || '');
-    const lineItemType = upperTrim(line?.item_type || line?.line_kind || line?.kind || line?.normalizedKind || '');
-    const lineRepaymentWeekStart = trimStr(line?.repayment_week_start || '');
-
-    const out = [];
-    for (const item of items) {
-      if (!item || typeof item !== 'object') continue;
-      const itemPbcId = trimStr(item.pay_batch_candidate_id || '');
-      if (candidatePbcId && itemPbcId !== candidatePbcId) continue;
-
-      const financeCaseId = trimStr(item.finance_case_id || '');
-      const financeComponentId = trimStr(item.finance_component_id || '');
-      const frozenClassification = upperTrim(item.frozen_component_classification || '');
-      const hasFrozenContext = !!financeCaseId || !!financeComponentId || !!frozenClassification || !!trimStr(item.frozen_resolution_mode || '');
-      if (!hasFrozenContext) continue;
-
-      const itemTimesheetId = trimStr(item.timesheet_id || '');
-      const itemSourceRef = trimStr(item.source_ref || '');
-      const itemType = upperTrim(item.item_type || '');
-      const itemRepaymentWeekStart = trimStr(item.repayment_week_start || '');
-
-      let matched = false;
-      if (lineTimesheetId) {
-        matched = !!itemTimesheetId && itemTimesheetId === lineTimesheetId;
-      } else {
-        if (lineSourceRef && itemSourceRef && lineSourceRef === itemSourceRef) matched = true;
-        if (!matched && lineItemType && itemType && lineItemType === itemType) {
-          if (!lineRepaymentWeekStart || !itemRepaymentWeekStart || lineRepaymentWeekStart === itemRepaymentWeekStart) {
-            matched = true;
-          }
-        }
-      }
-
-      if (matched) out.push(item);
-    }
-    return out;
-  };
-
-  const buildFrozenSnapshotHtmlForLine = (candidate, line) => {
-    const matchedItems = findFrozenFinanceItemsForLine(candidate, line);
-    if (!matchedItems.length) return '';
-
-    const entries = matchedItems.map((item) => {
-      const snapshotJson = parseMaybeJsonObject(item.frozen_component_snapshot_json) || {};
-      const classification = upperTrim(item.frozen_component_classification || snapshotJson.classification || snapshotJson.component_classification || '');
-      const sourcePayMethod = upperTrim(item.frozen_source_pay_method || snapshotJson.source_pay_method || '');
-      const targetPayMethod = upperTrim(item.frozen_target_pay_method || snapshotJson.saved_target_pay_method || snapshotJson.current_target_pay_method || '');
-      const resolutionMode = trimStr(item.frozen_resolution_mode || snapshotJson.saved_resolution_mode || snapshotJson.resolution_mode || '');
-      const resolutionResultJson = item.frozen_resolution_result_json || snapshotJson.saved_resolution_result_json || snapshotJson.resolution_result_json || null;
-      const sourceAmount = (item.frozen_source_amount != null)
-        ? Number(item.frozen_source_amount)
-        : Number(snapshotJson.source_amount);
-      const resolvedAmount = summarizeFrozenResolutionResultAmount(resolutionResultJson, item);
-      const financeCaseId = trimStr(item.finance_case_id || '');
-      const financeGroup = financeCaseId ? financeGroupById.get(financeCaseId) : null;
-      const keyType = trimStr(item.frozen_component_key_type || snapshotJson.component_key_type || '');
-      const keyValue = trimStr(item.frozen_component_key_value || snapshotJson.component_key_value || '');
-      const componentLabel = keyValue || keyType || trimStr(snapshotJson.label || snapshotJson.component_label || snapshotJson.description || 'Component');
-      const classificationLabel = snapshotClassificationLabel(classification);
-      const resolutionLabel = resolutionMode ? snapshotResolutionModeLabel(resolutionMode) : (classification === 'REIMBURSEMENT_GROSS_FIXED' ? 'Fixed reimbursement' : '—');
-      const treatmentLabel = classification === 'REIMBURSEMENT_GROSS_FIXED'
-        ? 'Fixed reimbursement — no channel conversion'
-        : (resolutionMode ? 'Taxable converted using saved draft-time resolution' : 'Taxable component');
-
-      return `
-        <div class="card" style="padding:8px; margin-top:6px;">
-          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-            <span class="${enc(snapshotPillClass(classification, resolutionMode))}">${enc(classificationLabel)}</span>
-            ${resolutionMode ? `<span class="pill pill-info">${enc(resolutionLabel)}</span>` : ''}
-            ${financeGroup ? financeCaseStateBadgeHtml(financeGroup) : ''}
-          </div>
-          <div class="mini" style="opacity:.9; margin-top:6px;">${enc(componentLabel)}</div>
-          <div class="mini" style="opacity:.85; margin-top:4px; white-space:pre-wrap;">
-            ${enc(treatmentLabel)}
-          </div>
-          <div class="mini" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:6px; opacity:.9;">
-            <span>Source: <span class="mono">${enc(sourcePayMethod || '—')}</span></span>
-            <span>Target: <span class="mono">${enc(targetPayMethod || '—')}</span></span>
-            <span>Source amount: <span class="mono">£${enc(fmtMoney(Number.isFinite(sourceAmount) ? sourceAmount : 0))}</span></span>
-            <span>Resolved amount: <span class="mono">£${enc(resolvedAmount)}</span></span>
-          </div>
-        </div>
-      `;
-    });
-
-    return `
-      <div style="margin-top:6px; display:flex; flex-direction:column; gap:6px;">
-        ${entries.join('')}
-      </div>
-    `;
-  };
-  const buildBreakdownRowsForCandidate = (candidate) => {
-    const candId = String(candidate?.candidate_id || '').trim();
-    const entries = normalizeCandidateLineEntries(candId);
-    const rows = [];
-
-    for (const ln of entries) {
-      const weekEndingDate =
-        String(
-          ln?.week_ending_date ||
-          ln?.week_ending_bucket ||
-          ln?.timesheet?.week_ending_date ||
-          ''
-        ).trim();
-
-      const clientName =
-        String(
-          ln?.client_name ||
-          ln?.timesheet?.client_name ||
-          ''
-        ).trim();
-
-      if (Array.isArray(ln.breakdown_lines)) {
-        for (const bl of ln.breakdown_lines) {
-          if (!bl || typeof bl !== 'object') continue;
-
-          const mergedLine = { ...ln, ...bl };
-          const qty = (bl.units == null) ? null : Number(bl.units);
-          const hasQty = (bl.units != null) && Number.isFinite(qty);
-
-          if (hasQty && isZeroQty(qty)) continue;
-
-          const isAmountOnly = (bl.units == null) || (!Number.isFinite(qty));
-          const rate = (bl.rate == null) ? null : Number(bl.rate);
-          const hasRate = Number.isFinite(rate);
-          const amount = pickAmount(batchKind, bl);
-          const unitOrCategoryText = deriveUnitOrCategoryText(mergedLine);
-          const lineType = deriveExpandedLineType(mergedLine, unitOrCategoryText);
-          const destinationSummary = buildDestinationSummaryForLine(mergedLine);
-          const financeSummary = buildFrozenFinanceSummaryForLine(candidate, mergedLine);
-
-          rows.push({
-            week_ending_date: weekEndingDate,
-            client_name: clientName,
-            unit_or_category_text: unitOrCategoryText,
-            line_type_text: lineType.text,
-            line_type_badges_html: lineType.badges_html,
-            qty_text: isAmountOnly ? '' : fmtQty(qty),
-            rate_text: (isAmountOnly || !hasRate) ? '' : fmtMoney(rate),
-            amount_text: fmtMoney(amount),
-            destination_text: destinationSummary.text,
-            destination_badges_html: destinationSummary.badges_html,
-            finance_summary_text: financeSummary.text,
-            finance_badges_html: financeSummary.badges_html,
-            sort_group: Number.isFinite(Number(lineType.sort_group)) ? Number(lineType.sort_group) : 99
-          });
-        }
-        continue;
-      }
-
-      const unitOrCategoryText = deriveUnitOrCategoryText(ln);
-      const units = (ln?.units != null) ? Number(ln.units) : NaN;
-
-      if (Number.isFinite(units) && isZeroQty(units)) continue;
-
-      const rateVal = (ln?.rate != null) ? Number(ln.rate) : NaN;
-      const paymentAmt =
-        (ln?.payment_amount != null) ? Number(ln.payment_amount)
-        : (ln?.subtotal != null) ? Number(ln.subtotal)
-        : NaN;
-
-      const total = Number.isFinite(paymentAmt)
-        ? paymentAmt
-        : pickAmount(batchKind, ln);
-
-      const lineType = deriveExpandedLineType(ln, unitOrCategoryText);
-      const destinationSummary = buildDestinationSummaryForLine(ln);
-      const financeSummary = buildFrozenFinanceSummaryForLine(candidate, ln);
-
-      rows.push({
-        week_ending_date: weekEndingDate,
-        client_name: clientName,
-        unit_or_category_text: unitOrCategoryText,
-        line_type_text: lineType.text,
-        line_type_badges_html: lineType.badges_html,
-        qty_text: Number.isFinite(units) ? fmtQty(units) : '',
-        rate_text: Number.isFinite(rateVal) ? fmtMoney(rateVal) : '',
-        amount_text: fmtMoney(total),
-        destination_text: destinationSummary.text,
-        destination_badges_html: destinationSummary.badges_html,
-        finance_summary_text: financeSummary.text,
-        finance_badges_html: financeSummary.badges_html,
-        sort_group: Number.isFinite(Number(lineType.sort_group)) ? Number(lineType.sort_group) : 99
-      });
-    }
-
-    rows.sort((a, b) => {
-      const wa = String(a.week_ending_date || '');
-      const wb = String(b.week_ending_date || '');
-      if (wa !== wb) return wb.localeCompare(wa);
-
-      const ca = String(a.client_name || '');
-      const cb = String(b.client_name || '');
-      if (ca !== cb) return ca.localeCompare(cb);
-
-      const ga = Number.isFinite(Number(a.sort_group)) ? Number(a.sort_group) : 99;
-      const gb = Number.isFinite(Number(b.sort_group)) ? Number(b.sort_group) : 99;
-      if (ga !== gb) return ga - gb;
-
-      const ua = String(a.unit_or_category_text || '');
-      const ub = String(b.unit_or_category_text || '');
-      if (ua !== ub) return ua.localeCompare(ub);
-
-      const ta = String(a.line_type_text || '');
-      const tb = String(b.line_type_text || '');
-      if (ta !== tb) return ta.localeCompare(tb);
-
-      const aa = Number(a.amount_text || 0);
-      const ab = Number(b.amount_text || 0);
-      if (Number.isFinite(aa) && Number.isFinite(ab) && aa !== ab) return ab - aa;
-
-      return 0;
-    });
-
-    return rows;
-  };
-
-  const allRemittanceSummaries = candidates.map((candidate) => {
-    const normalized = (candidate && typeof candidate === 'object' && candidate.remittance_summary && typeof candidate.remittance_summary === 'object')
-      ? candidate.remittance_summary
-      : ((candidate && typeof candidate === 'object' && candidate.remittanceSummary && typeof candidate.remittanceSummary === 'object')
-          ? candidate.remittanceSummary
-          : ((typeof bankingNormalizeRemittanceFinancialSummary === 'function')
-              ? bankingNormalizeRemittanceFinancialSummary(candidate)
-              : {
-                  baseAmount: Number(candidate?.gross_preview || 0),
-                  overpaymentRecovery: Number(candidate?.overpayment_recovery_taken || 0),
-                  loanRepayment: Number(candidate?.loan_repayment_taken || 0),
-                  finalPaid: (candidate?.net_bank_amount != null) ? Number(candidate.net_bank_amount) : null,
-                  payeNetAmount: (candidate?.paye_net_amount != null) ? Number(candidate.paye_net_amount) : null,
-                  awaitingNet: !!candidate?.awaiting_net_amount,
-                  payePendingAdvisory: !!candidate?.awaiting_net_amount ? 'PAYE net is still pending, so final deduction impact may change until net is entered.' : '',
-                  raw: candidate
-                }));
-
-    if (hasCurrentEffectiveCandidateAmount(candidate)) {
-      const effective = deriveCurrentEffectiveFinancials(candidate, null, normalized);
-      return {
-        ...normalized,
-        baseAmount: effective.grossPositive,
-        overpaymentRecovery: effective.overpaymentRecovery,
-        loanRepayment: effective.loanRepayment,
-        finalPaid: effective.finalPaid,
-        payeNetAmount: effective.payeNetAmount,
-        awaitingNet: effective.awaitingNet,
-        raw: candidate
-      };
-    }
-
-    return normalized;
-  });
-
-  const remittanceTotals = allRemittanceSummaries.reduce((acc, r) => {
-    const base = Number(r?.baseAmount);
-    const op = Number(r?.overpaymentRecovery);
-    const loan = Number(r?.loanRepayment);
-    const finalPaid = Number(r?.finalPaid);
-    if (Number.isFinite(base)) acc.base += base;
-    if (Number.isFinite(op)) acc.overpayment += op;
-    if (Number.isFinite(loan)) acc.loan += loan;
-    if (Number.isFinite(finalPaid)) acc.final += finalPaid;
-    return acc;
-  }, { base: 0, overpayment: 0, loan: 0, final: 0 });
-  const displayedRemittanceTotals = emptyDraftNoActivePayments
-    ? { base: 0, overpayment: 0, loan: 0, final: 0 }
-    : remittanceTotals;
-
-  const candidateRowsHtml = candidates.length
-    ? `
-      <div style="overflow:auto; border:1px solid var(--line); border-radius:10px; max-height:min(60vh,820px);">
-        <table class="grid" style="min-width:${showUmbrellaColumn && showPayeNetColumn ? '1180px' : (showUmbrellaColumn || showPayeNetColumn ? '1040px' : '920px')}; table-layout:fixed; margin:0;">
-          <thead>
-            <tr>
-              <th style="width:56px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">
-                <button
-                  type="button"
-                  class="btn btn-sm btn-outline"
-                  data-action="${allExpanded ? 'banking:pay:child:collapseAll' : 'banking:pay:child:expandAll'}"
-                  title="${allExpanded ? 'Collapse all' : 'Expand all'}"
-                  style="min-width:32px; padding:0 8px;"
-                >${allExpanded ? '−' : '+'}</button>
-              </th>
-              <th style="position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Candidate name</th>
-              ${showUmbrellaColumn ? `<th style="position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Umbrella name</th>` : ``}
-              <th style="width:120px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Gross</th>
-              <th style="width:120px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Overpayment</th>
-              <th style="width:170px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Payment Advance Repayment</th>
-              ${showPayeNetColumn ? `<th style="width:120px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">PAYE Net</th>` : ``}
-              <th style="width:140px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Final Payable</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              candidates.map((c) => {
-                const cid = String(c?.candidate_id || '').trim();
-                const name = String(c?.candidate_display_name || c?.display_name || '').trim() || '—';
-                const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
-                const umbrellaName = String(
-                  c?.umbrella_display_name ||
-                  c?.umbrella_name ||
-                  c?.umbrella_company_name ||
-                  c?.payee_display_name ||
-                  c?.payee_name ||
-                  ''
-                ).trim() || '—';
-
-                const candidateLines = normalizeCandidateLineEntries(cid);
-                const candidateHasRemittanceItems = candidateLines.some((line) => line?.appears_on_umbrella_remittance === true);
-                const candidateHasPayoutNotices = candidateLines.some((line) => line?.generates_candidate_payment_advice === true || line?.is_candidate_directed_oneoff_payout === true);
-
-                const normalizedDeductions = (c && typeof c === 'object' && c.deductionsSummary && typeof c.deductionsSummary === 'object')
-                  ? c.deductionsSummary
-                  : ((c && typeof c === 'object' && c.deductions_summary && typeof c.deductions_summary === 'object')
-                      ? c.deductions_summary
-                      : ((typeof bankingNormalizeCandidateDeductionsSummary === 'function')
-                          ? bankingNormalizeCandidateDeductionsSummary(c)
-                          : {
-                              grossPositive: Number(c?.gross_preview || 0),
-                              overpaymentRecovery: Number(c?.overpayment_recovery_taken || 0),
-                              loanRepayment: Number(c?.loan_repayment_taken || 0),
-                              finalPayable: (c?.net_bank_amount != null) ? Number(c.net_bank_amount) : null,
-                              awaitingNet: !!c?.awaiting_net_amount,
-                              payeNetAmount: (c?.paye_net_amount != null) ? Number(c.payeNetAmount ?? c.paye_net_amount) : null,
-                              pendingAdvisory: !!c?.awaiting_net_amount ? 'Final deductions will be confirmed after PAYE net is entered.' : '',
-                              hasKnownFinalPayable: c?.net_bank_amount != null,
-                              raw: c
-                            }));
-
-                const normalizedRemittance = (c && typeof c === 'object' && c.remittance_summary && typeof c.remittance_summary === 'object')
-                  ? c.remittance_summary
-                  : ((c && typeof c === 'object' && c.remittanceSummary && typeof c.remittanceSummary === 'object')
-                      ? c.remittanceSummary
-                      : ((typeof bankingNormalizeRemittanceFinancialSummary === 'function')
-                          ? bankingNormalizeRemittanceFinancialSummary(c)
-                          : {
-                              baseAmount: normalizedDeductions.grossPositive,
-                              overpaymentRecovery: normalizedDeductions.overpaymentRecovery,
-                              loanRepayment: normalizedDeductions.loanRepayment,
-                              finalPaid: normalizedDeductions.finalPayable,
-                              payeNetAmount: normalizedDeductions.payeNetAmount,
-                              awaitingNet: normalizedDeductions.awaitingNet,
-                              payePendingAdvisory: normalizedDeductions.awaitingNet ? 'PAYE net is still pending, so final deduction impact may change until net is entered.' : '',
-                              raw: c
-                            }));
-
-                const effectiveFinancials = hasCurrentEffectiveCandidateAmount(c)
-                  ? deriveCurrentEffectiveFinancials(c, normalizedDeductions, normalizedRemittance)
-                  : null;
-
-                const deductions = effectiveFinancials
-                  ? {
-                      ...normalizedDeductions,
-                      grossPositive: effectiveFinancials.grossPositive,
-                      overpaymentRecovery: effectiveFinancials.overpaymentRecovery,
-                      loanRepayment: effectiveFinancials.loanRepayment,
-                      finalPayable: effectiveFinancials.finalPayable,
-                      awaitingNet: effectiveFinancials.awaitingNet,
-                      payeNetAmount: effectiveFinancials.payeNetAmount,
-                      hasKnownFinalPayable: effectiveFinancials.finalPayable !== null,
-                      raw: c
-                    }
-                  : normalizedDeductions;
-
-                const remittance = effectiveFinancials
-                  ? {
-                      ...normalizedRemittance,
-                      baseAmount: effectiveFinancials.grossPositive,
-                      overpaymentRecovery: effectiveFinancials.overpaymentRecovery,
-                      loanRepayment: effectiveFinancials.loanRepayment,
-                      finalPaid: effectiveFinancials.finalPaid,
-                      payeNetAmount: effectiveFinancials.payeNetAmount,
-                      awaitingNet: effectiveFinancials.awaitingNet,
-                      raw: c
-                    }
-                  : normalizedRemittance;
-
-                const payeState = String(c?.paye_state || '').trim().toUpperCase();
-                const candTransfers = transfers.filter((t) => String(t?.candidate_id || '').trim() === cid);
-
-                const roll = (() => {
-                  if (!candTransfers.length) return { pill: '', sub: '' };
-                  const sts = candTransfers.map((t) => String(t?.status || '').trim().toUpperCase()).filter(Boolean);
-                  const rs = candTransfers.map((t) => String(t?.rail_state || '').trim().toUpperCase()).filter(Boolean);
-                  const hasPending = sts.includes('PENDING');
-                  const hasFailed = sts.includes('FAILED');
-                  const hasBlocked = sts.includes('BLOCKED');
-                  const allDone = sts.length > 0 && sts.every((x) => x === 'COMPLETED');
-                  const hasRailEvidence = candTransfers.some((t) => hasTransferRailSubmissionEvidence(t)) || executionCommitState === 'SUBMITTED_NOT_COMMITTED';
-                  const hasCsvEvidenceOnly = !!(csvEvidence && csvEvidence.raw) && !hasRailEvidence;
-
-                  if (allDone) {
-                    const sub = rs.includes('MANUAL_CONFIRM') ? 'CSV payment settled' : (rs.includes('BANK_CONFIRMED') ? 'Bank confirmed' : '');
-                    return { pill: `<span class="pill pill-ok">PAID</span>`, sub: sub ? `<div class="mini" style="opacity:.8;">${enc(sub)}</div>` : '' };
-                  }
-                  if (hasFailed) return { pill: `<span class="pill pill-warn">FAILED</span>`, sub: '' };
-                  if (hasBlocked) return { pill: `<span class="pill pill-warn">BLOCKED</span>`, sub: '' };
-                  if (hasPending && hasRailEvidence) return { pill: `<span class="pill pill-info">SUBMITTED</span>`, sub: `<div class="mini" style="opacity:.8;">In flight</div>` };
-                  if (hasPending && hasCsvEvidenceOnly) return { pill: `<span class="pill pill-info">CSV GENERATED</span>`, sub: `<div class="mini" style="opacity:.8;">Not settled</div>` };
-                  if (hasPending) return { pill: `<span class="pill pill-info">READY</span>`, sub: `<div class="mini" style="opacity:.8;">Awaiting execution</div>` };
-                  return { pill: `<span class="pill pill-info">IN PROGRESS</span>`, sub: '' };
-                })();
-
-                const candidateExpansionKey = getCandidateExpansionKey(c) || cid;
-                const isExpanded = isCandidateExpanded(c);
-                const rows = isExpanded ? buildBreakdownRowsForCandidate(c) : [];
-
-                const payeBadge = (batchKindInfo.isPayeish && !batchKindInfo.isLoans)
-                  ? ((payeState && payeState !== 'READY')
-                      ? `<span class="pill pill-warn">Awaiting Net amount</span>`
-                      : (payeState ? `<span class="pill pill-ok">READY</span>` : ``))
-                  : '';
-
-                const candidateCommBadgesHtml = `
-                  ${candidateHasRemittanceItems ? `<span class="pill pill-info">Umbrella remittance</span>` : ``}
-                  ${candidateHasPayoutNotices ? `<span class="pill pill-warn">Candidate payout notice</span>` : ``}
-                `;
-
-                const paymentIssueBadgeHtml = candidatePaymentIssueBadgeHtml(c);
-                const paymentIssueLabelText = candidatePaymentIssueLabel(c);
-                const noCandidateRowsMessage = paymentIssueBadgeHtml
-                  ? `No active current-payment breakdown rows remain for this candidate. ${paymentIssueLabelText ? `Status: ${paymentIssueLabelText}.` : 'This candidate has a payment issue.'}`
-                  : 'No canonical breakdown lines were returned for this candidate.';
-
-                const finalAmount = (deductions.finalPayable != null)
-                  ? `£${fmtMoney(deductions.finalPayable)}`
-                  : (deductions.awaitingNet ? 'Pending' : `£${fmtMoney(remittance.finalPaid)}`);
-                const detailHtml = isExpanded
-                  ? `
-                    <tr>
-                      <td colspan="${enc(String(summaryColspan))}" style="padding:0;">
-                        <div style="padding:10px 12px; background:rgba(0,0,0,.02); border-top:1px solid var(--line);">
-                          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-                            <div class="mini" style="font-weight:700; opacity:.9;">Line items</div>
-                            <div class="mini" style="opacity:.85;">${enc(String(rows.length))} row${rows.length === 1 ? '' : 's'}</div>
-                            ${paymentIssueBadgeHtml}
-                            ${candidateCommBadgesHtml}
-                          </div>
-                          ${
-                            rows.length
-                              ? `
-                                <div style="max-height:min(42vh,460px); overflow:auto; border:1px solid var(--line); border-radius:10px;">
-                                  <table class="grid" style="min-width:1280px; table-layout:auto; margin:0;">
-                                    <thead>
-                                      <tr>
-                                        <th style="width:130px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Week ending</th>
-                                        <th style="position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Client</th>
-                                        <th style="width:170px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Unit / category</th>
-                                        <th style="width:190px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Line type</th>
-                                        <th style="width:90px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Qty</th>
-                                        <th style="width:110px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Rate</th>
-                                        <th style="width:120px; text-align:right; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Amount</th>
-                                        <th style="width:220px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Destination</th>
-                                        <th style="width:260px; position:sticky; top:0; z-index:1; background:var(--panel,#fff);">Finance</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      ${
-                                        rows.map((rw) => {
-                                          const we = String(rw.week_ending_date || '').trim();
-                                          const cl = String(rw.client_name || '').trim();
-                                          const unitOrCategory = String(rw.unit_or_category_text || '').trim();
-                                          const lineType = String(rw.line_type_text || '').trim() || '—';
-                                          const qtyText = String(rw.qty_text || '').trim();
-                                          const rateText = String(rw.rate_text || '').trim();
-                                          const amountText = String(rw.amount_text || '').trim();
-                                          const destinationText = String(rw.destination_text || '').trim();
-                                          const financeSummaryText = String(rw.finance_summary_text || '').trim();
-
-                                          return `
-                                            <tr>
-                                              <td class="mini" style="white-space:nowrap;">${enc(we ? formatIsoToUkLocal(we) : '—')}</td>
-                                              <td class="mini">${enc(cl || '—')}</td>
-                                              <td class="mini">${enc(unitOrCategory || '—')}</td>
-                                              <td>
-                                                <div style="display:flex; flex-direction:column; gap:4px;">
-                                                  <div class="mini">${enc(lineType)}</div>
-                                                  ${rw.line_type_badges_html ? `<div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">${rw.line_type_badges_html}</div>` : ''}
-                                                </div>
-                                              </td>
-                                              <td class="mono" style="text-align:right;">${enc(qtyText || '—')}</td>
-                                              <td class="mono" style="text-align:right;">${enc(rateText ? `£${rateText}` : '—')}</td>
-                                              <td class="mono" style="text-align:right;">£${enc(amountText || '0.00')}</td>
-                                              <td>
-                                                <div style="display:flex; flex-direction:column; gap:4px;">
-                                                  <div class="mini">${enc(destinationText || '—')}</div>
-                                                  ${rw.destination_badges_html ? `<div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">${rw.destination_badges_html}</div>` : ''}
-                                                </div>
-                                              </td>
-                                              <td>
-                                                <div style="display:flex; flex-direction:column; gap:4px;">
-                                                  <div class="mini">${enc(financeSummaryText || '—')}</div>
-                                                  ${rw.finance_badges_html ? `<div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">${rw.finance_badges_html}</div>` : ''}
-                                                </div>
-                                              </td>
-                                            </tr>
-                                          `;
-                                        }).join('')
-                                      }
-                                    </tbody>
-                                  </table>
-                                </div>
-                              `
-                              : `<div class="mini" style="opacity:.85;">${enc(noCandidateRowsMessage)}</div>`
-                          }
-                        </div>
-                      </td>
-                    </tr>
-                  `
-                  : '';
-
-                return `
-                  <tr>
-                    <td style="width:56px;">
-                      <button
-                        type="button"
-                        class="btn btn-sm btn-outline"
-                        data-action="banking:pay:child:toggleExpandCandidate"
-                        data-candidate-id="${enc(candidateExpansionKey)}"
-                        data-pay-batch-candidate-id="${enc(trimStr(c?.pay_batch_candidate_id || c?.payBatchCandidateId || ''))}"
-                        data-candidate-row-id="${enc(trimStr(c?.id || c?.candidate_row_id || c?.candidateRowId || ''))}"
-                        data-actual-candidate-id="${enc(cid)}"
-                        title="${isExpanded ? 'Collapse' : 'Expand'}"
-                        style="min-width:32px; padding:0 8px;"
-                      >${isExpanded ? '−' : '+'}</button>
-                    </td>
-                    <td>
-                      <div style="display:flex; flex-direction:column; gap:4px;">
-                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                          <div style="font-weight:700;">${enc(name)}</div>
-                          ${tms ? `<span class="mono">${enc(tms)}</span>` : ``}
-                          ${paymentIssueBadgeHtml}
-                          ${roll.pill}
-                          ${payeBadge}
-                        </div>
-                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                          ${candidateCommBadgesHtml}
-                        </div>
-                        ${paymentIssueBadgeHtml ? `<div class="mini" style="opacity:.85;">${enc(paymentIssueLabelText)}</div>` : ``}
-                        ${roll.sub}
-                      </div>
-                    </td>
-                    ${showUmbrellaColumn ? `<td class="mini">${enc(umbrellaName)}</td>` : ``}
-                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(deductions.grossPositive))}</td>
-                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(deductions.overpaymentRecovery))}</td>
-                    <td class="mono" style="text-align:right;">£${enc(fmtMoney(deductions.loanRepayment))}</td>
-                    ${showPayeNetColumn ? `<td class="mono" style="text-align:right;">${enc(deductions.payeNetAmount != null ? `£${fmtMoney(deductions.payeNetAmount)}` : '—')}</td>` : ``}
-                    <td class="mono" style="text-align:right;">${enc(finalAmount)}</td>
-                  </tr>
-                  ${detailHtml}
-                `;
-              }).join('')
-            }
-          </tbody>
-        </table>
-      </div>
-    `
-    : emptyDraftNoActivePayments
-      ? `<div class="mini" style="opacity:.85;">No active candidate payments remain in this draft batch.</div>`
-      : `<div class="mini" style="opacity:.85;">No candidates found in this batch.</div>`;
-
-  const errHtml = String(child.error || '').trim()
-    ? `<div class="error" style="white-space:pre-wrap;">${enc(String(child.error || '').trim())}</div>`
-    : '';
-
-  const emptyDraftNoActivePaymentsHtml = emptyDraftNoActivePayments
-    ? `
-      <div class="card" style="padding:10px; border-color:rgba(180,120,0,.35); background:rgba(255,193,7,.08);">
-        <div style="display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;">
-          <span class="pill pill-warn">No active payments</span>
-          <div style="display:flex; flex-direction:column; gap:4px;">
-            <div class="mini" style="font-weight:700; opacity:.95;">This draft batch has no active payments.</div>
-            <div class="mini" style="opacity:.88;">Delete the draft or create a new batch. Execute Payment and bank exports are disabled for this empty draft.</div>
-          </div>
-        </div>
-      </div>
-    `
-    : '';
-
-  const blockedFundsBannerHtml = isBlockedFundsBatch
-    ? `
-      <div class="card banking-pay-blocked-funds-overview-banner" style="padding:12px;border:1px solid #fecaca;background:#fef2f2;color:#7f1d1d;">
-        <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
-          <div style="display:flex;flex-direction:column;gap:8px;min-width:260px;flex:1;">
-            <div style="font-weight:800;font-size:14px;letter-spacing:.01em;">BANK REJECTED PAYMENT — BLOCKED FUNDS</div>
-            <div class="mini" style="opacity:.96;white-space:pre-wrap;">CloudTMS did not submit this payment because the funding account did not have enough funds.</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">
-              <div><strong>Required</strong><br><span class="mono">${blockedFundsRequiredGbp !== null ? `£${enc(fmtMoney(blockedFundsRequiredGbp))}` : '—'}</span></div>
-              <div><strong>Available</strong><br><span class="mono">${blockedFundsAvailableGbp !== null ? `£${enc(fmtMoney(blockedFundsAvailableGbp))}` : '—'}</span></div>
-              <div><strong>Provider</strong><br><span class="mono">${enc(blockedFundsProviderEnv || '—')}</span></div>
-              <div><strong>Funding account</strong><br><span class="mono">${enc(blockedFundsAccountRef || '—')}</span></div>
-              <div><strong>Last funds checked</strong><br><span class="mono">${enc(blockedFundsLastCheck || 'Not recorded')}</span></div>
-              <div><strong>Execution state</strong><br><span class="mono">${enc(executionCommitState || 'NOT_SUBMITTED')}</span></div>
-              <div><strong>Bank submission</strong><br><span class="mono">No bank payment was submitted</span></div>
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:retryBlockedFunds" data-batch-id="${enc(id)}" ${blockedFundsRetryDisabledAttr} title="${enc(canRetryBlockedFunds ? 'Retry this blocked-funds payment' : 'Retry is not currently safe for this batch. Refresh or review Payment Issues.')}" >Retry payment</button>
-            <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:blockedFunds:cancel" data-batch-id="${enc(id)}" ${blockedFundsCancelDisabledAttr} title="${enc(canCancelUnpaid ? 'Cancel/release this blocked-funds batch' : 'Cancel/release is not currently available for this batch.')}" >Cancel/release payment</button>
-          </div>
-        </div>
-      </div>
-    `
-    : '';
-
-    const busyLine = (() => {
-    const bits = [];
-    if (child.loading) bits.push('Loading…');
-    if (child.actionsBusy && child.actionsBusy.polling) bits.push('Checking bank status…');
-    if (child.actionsBusy && child.actionsBusy.executing) bits.push('Executing…');
-    if (child.actionsBusy && child.actionsBusy.retryingBlockedFunds) bits.push('Retrying payment…');
-    if (child.actionsBusy && child.actionsBusy.exportingCsv) bits.push('Exporting bank CSV…');
-    if (child.actionsBusy && child.actionsBusy.exportingDetailCsv) bits.push('Exporting detailed CSV…');
-    if (child.actionsBusy && child.actionsBusy.exportingDetailPdf) bits.push('Exporting detailed PDF…');
-    return bits.length ? `<span class="mini" style="opacity:.8;">${enc(bits.join(' '))}</span>` : '';
-  })();
-
-  const pollNoteHtml = pollNote
-    ? `<div class="mini" style="opacity:.85;">${enc(pollNote)}</div>`
-    : '';
-
-  const canPollButton = hasPollablePending;
-  const pollBtnDisabledAttr = (!canPollButton)
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-
-  const showPayeEntryBtn = (batchKindInfo.isPayeish && !batchKindInfo.isLoans);
-  const isPayeEntryDraftAllowed = (status === 'DRAFT' || status === 'DRAFT_CREATED');
-  const payeEntryDisabledAttr = (!isPayeEntryDraftAllowed)
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const payeEntryButtonTitle = isPayeEntryDraftAllowed
-    ? 'Open PAYE entry (view/edit net payments)'
-    : `PAYE entry is only available for draft batches (current status: ${status || '—'}).`;
-
-  const executeBtnDisabledAttr = (!canExecute || child.loading || (child.actionsBusy && (child.actionsBusy.executing || child.actionsBusy.refreshing || child.actionsBusy.polling)))
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-
-  const executeBtnTitle = (!canExecute)
-    ? executeDisabledReason
-    : 'Execute → Prepare → Schedule (may require re-auth for scheduling)';
-
-  const executeHelpHtml = (!canExecute && executeDisabledReason)
-    ? `<div class="mini" style="opacity:.85;">${enc(executeDisabledReason)}</div>`
-    : '';
-
-  const canRequestBankCsv = (
-    child.loading !== true
-    && !emptyDraftNoActivePayments
-    && !!(typeof bankingPayIsCsvExportAllowedByStatus === 'function' && bankingPayIsCsvExportAllowedByStatus(data))
-  );
-  const csvExportDisabledAttr = (!canRequestBankCsv)
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const csvExportButtonTitle = (() => {
-    if (emptyDraftNoActivePayments) return emptyDraftNoActivePaymentsMessage;
-    if (canRequestBankCsv) {
-      return (provider === 'REV' || provider === 'REVOLUT') ? 'Generate and download bank CSV backstop export' : 'Generate and download bank CSV';
-    }
-    return 'CSV export is unavailable for this batch status/provider/commit state.';
-  })();
-
-  const payeEntryHelpHtml = (showPayeEntryBtn && payeNetStatus.required && !payeNetStatus.complete)
-    ? `<div class="mini" style="opacity:.85;">${enc('Enter what you have now — partial saves are allowed. Execution is blocked until every PAYE candidate has a net value.')}</div>`
-    : '';
-
-  const detailExportBusy = !!(child.actionsBusy && (child.actionsBusy.exportingDetailCsv || child.actionsBusy.exportingDetailPdf));
-  const detailExportDisabledAttr = (emptyDraftNoActivePayments || detailExportBusy || child.loading || (child.actionsBusy && (child.actionsBusy.refreshing || child.actionsBusy.polling)))
-    ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"'
-    : '';
-  const detailExportButtonTitle = emptyDraftNoActivePayments
-    ? emptyDraftNoActivePaymentsMessage
-    : 'Download operator-readable detail export';
-  const correctionState = (child.correction && typeof child.correction === 'object') ? child.correction : null;
-  const paymentStatusSummaryHtml = (() => {
-    const issueState = (() => {
-      try {
-        if (typeof normaliseBankingPaymentIssueState === 'function') {
-          const out = normaliseBankingPaymentIssueState(data, { correctionState });
-          return (out && typeof out === 'object') ? out : {};
-        }
-      } catch {}
-      return {};
-    })();
-
-    const safeText = (value) => String(value == null ? '' : value).trim();
-    const safeUpper = (value) => safeText(value).toUpperCase();
-    const hasObjectKeys = (value) => !!(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0);
-
-    if (providerSubmitOverviewModel.hasIssue === true) return '';
-
-    const issueKind = safeUpper(issueState.issueKindForDisplay || issueState.issueKind || issueState.issue_kind || '');
-    const headlineRaw = safeText(issueState.headline || issueState.statusText || issueState.summaryText || '');
-    const headlineUpper = safeUpper(headlineRaw);
-    const backendClass = safeUpper(issueState.backendClassification || issueState.backend_classification || '');
-    const progressRaw = (data && data.correction_progress && typeof data.correction_progress === 'object') ? data.correction_progress : null;
-    const hasBankEvidence = !!(data && Array.isArray(data.bank_evidence) && data.bank_evidence.length > 0);
-    const hasProgress = hasObjectKeys(progressRaw);
-    const hasManualActions = hasObjectKeys(data && data.manual_actions);
-    const hasBackendIssueEvidence = hasObjectKeys(data && data.payment_correction) || hasBankEvidence || hasProgress || hasManualActions;
-
-    const isProcessing =
-      headlineUpper === 'PROCESSING' ||
-      issueKind === 'PROCESSING' ||
-      backendClass === 'PROCESSING' ||
-      backendClass === 'AUTO_PROCESSING' ||
-      backendClass === 'EXPANDED' ||
-      backendClass === 'AUTHORISED' ||
-      safeUpper(progressRaw?.status || progressRaw?.state || '').includes('PROCESS');
-
-    const isWaiting =
-      headlineUpper === 'WAITING FOR APPROVAL' ||
-      issueKind === 'WAITING' ||
-      backendClass === 'AWAITING_AUTHORISATION' ||
-      backendClass === 'REQUESTED' ||
-      safeUpper(progressRaw?.status || progressRaw?.state || '').includes('WAITING');
-
-    const isApplied =
-      headlineUpper === 'APPLIED' ||
-      issueKind === 'APPLIED' ||
-      backendClass === 'APPLIED' ||
-      backendClass === 'SETTLED_REVERSAL_APPLIED' ||
-      backendClass === 'NO_MONEY_UNWOUND' ||
-      backendClass === 'PRE_BANK_CANCELLED' ||
-      safeUpper(progressRaw?.status || progressRaw?.state || '').includes('APPLIED');
-
-    const isReturned =
-      headlineUpper.includes('RETURNED') ||
-      issueKind.includes('RETURN') ||
-      backendClass.includes('RETURN');
-
-    const isRejected =
-      headlineUpper.includes('REJECTED') ||
-      headlineUpper.includes('DECLINED') ||
-      issueKind.includes('REJECT') ||
-      issueKind.includes('DECLIN') ||
-      backendClass.includes('REJECT') ||
-      backendClass.includes('DECLIN');
-
-    const isReview =
-      issueState.requiresUserAction === true ||
-      issueState.navAlert === true ||
-      issueState.hasActionableIssueRows === true ||
-      headlineUpper.includes('NEEDS REVIEW') ||
-      issueKind.includes('REVIEW') ||
-      backendClass.includes('BLOCKED') ||
-      backendClass.includes('FAILED');
-
-    const isCleanIssueKind = !issueKind || ['NONE', 'PAID', 'CLEAN_PAID', 'SETTLED_NO_CORRECTION_REQUIRED', 'MANUAL_PAID_ACTION'].includes(issueKind);
-    const hasRealIssue = !!(isReturned || isRejected || isProcessing || isWaiting || isApplied || isReview || (issueState.hasIssue === true && !isCleanIssueKind) || hasBackendIssueEvidence);
-
-    let title = 'Payment status';
-    let primary = '';
-    let secondary = '';
-    let pillClass = 'pill';
-
-    if (isReturned) {
-      primary = 'Bank returned payment';
-      secondary = 'Review this payment in Payment Issues.';
-      pillClass = 'pill pill-warn';
-    } else if (isRejected) {
-      primary = 'Bank rejected payment';
-      secondary = 'Review this payment in Payment Issues.';
-      pillClass = 'pill pill-warn';
-    } else if (isWaiting) {
-      primary = 'Waiting for approval';
-      secondary = 'Review this payment in Payment Issues.';
-      pillClass = 'pill pill-info';
-    } else if (isProcessing) {
-      primary = 'Processing';
-      secondary = 'Selected payments are being updated.';
-      pillClass = 'pill pill-info';
-    } else if (isApplied) {
-      primary = 'Applied';
-      secondary = 'The selected amounts are now available to be processed in the next batch.';
-      pillClass = 'pill pill-ok';
-    } else if (isReview || hasRealIssue) {
-      primary = 'Needs review';
-      secondary = 'Review this payment in Payment Issues.';
-      pillClass = 'pill pill-warn';
-    } else if (isPaymentExecuted) {
-      primary = 'Paid successfully.';
-      secondary = 'No action needed.';
-      pillClass = 'pill pill-ok';
-    } else if (status === 'CANCELLED') {
-      primary = 'Cancelled';
-      secondary = 'No action needed.';
-      pillClass = 'pill';
-    } else if (isDraftLike || status === 'READY' || status === 'WAITING_BANK_CONFIRM' || status === 'PARTIAL') {
-      primary = 'Not paid.';
-      secondary = 'No action needed.';
-      pillClass = 'pill pill-info';
-    } else {
-      primary = 'Payment status';
-      secondary = 'No action needed.';
-      pillClass = 'pill';
-    }
-
-    return `
-      <div class="card payment-issue-summary-card" style="padding:10px; margin-bottom:10px;">
-        <div style="display:flex; gap:10px; align-items:flex-start; justify-content:space-between; flex-wrap:wrap;">
-          <div style="display:flex; flex-direction:column; gap:6px; min-width:220px;">
-            <div class="mini" style="font-weight:700; opacity:.9;">${enc(title)}</div>
-            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-              <span class="${enc(pillClass)}">${enc(primary.replace(/\.$/, ''))}</span>
-            </div>
-            <div class="mini" style="opacity:.88; white-space:pre-wrap;">${enc(primary)}${secondary ? `\n${enc(secondary)}` : ''}</div>
-          </div>
-          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-left:auto;">
-            <button
-              type="button"
-              class="btn btn-sm btn-outline"
-              data-action="banking:pay:child:openPaymentIssues"
-              title="Open Payment Issues"
-            >Open Payment Issues</button>
-          </div>
-        </div>
-      </div>
-    `;
-  })();
-
-  return `
-    <div id="${enc(rootId)}">
-      <div class="card">
-        <div class="row">
-          <label>Overview</label>
-          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-            ${errHtml}
-            ${emptyDraftNoActivePaymentsHtml}
-            ${blockedFundsBannerHtml}
-
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-              <span class="${enc(pillStatus)}">${enc(status)}</span>
-              ${paymentExecutedBadgeHtml}
-              ${batchKind ? `<span class="${enc(batchKindPillClass)}" title="Batch kind">${enc(batchKind)}</span>` : ``}
-              <span class="mini">${enc((provider || '—') + (env ? `/${env}` : ''))}</span>
-              ${executionMetaHtml}
-              <span class="mini">Last check: <span class="mono">${enc(lastCheck || '—')}</span></span>
-              <span class="mini" style="opacity:.8;">Transfers: <span class="mono">${enc(String(transfers.length))}</span> (PENDING ${enc(String(pendingCount))} • DONE ${enc(String(completedCount))} • FAILED ${enc(String(failedCount))} • BLOCKED ${enc(String(blockedCount))})</span>
-                    <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
-                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:poll" ${pollBtnDisabledAttr} title="${!canPollButton ? 'Nothing pollable yet (no external rail evidence on any pending transfer)' : 'Check bank status (throttled by backend)'}">Check Bank Status</button>
-                ${busyLine}
-              </div>
-            </div>
-
-            ${pollNoteHtml}
-            ${providerSubmitOverviewHtml}
-            ${paymentStatusSummaryHtml}
-            ${communicationsSummaryHtml}
-
-            <div class="card" style="padding:10px;">
-              <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Batch payment / remittance totals</div>
-              <div style="display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:8px;">
-                <div class="card" style="padding:8px;">
-                  <div class="mini" style="opacity:.8;">Base amount</div>
-                  <div class="mono">£${enc(fmtMoney(displayedRemittanceTotals.base))}</div>
-                </div>
-                <div class="card" style="padding:8px;">
-                  <div class="mini" style="opacity:.8;">Overpayment recovery</div>
-                  <div class="mono">£${enc(fmtMoney(displayedRemittanceTotals.overpayment))}</div>
-                </div>
-                <div class="card" style="padding:8px;">
-                  <div class="mini" style="opacity:.8;">Payment Advance Repayment</div>
-                  <div class="mono">£${enc(fmtMoney(displayedRemittanceTotals.loan))}</div>
-                </div>
-                <div class="card" style="padding:8px;">
-                  <div class="mini" style="opacity:.8;">Final paid</div>
-                  <div class="mono">£${enc(fmtMoney(displayedRemittanceTotals.final))}</div>
-                </div>
-              </div>
-              ${payeNetStatus.required && !payeNetStatus.complete ? `<div class="mini" style="opacity:.85; margin-top:8px;">${enc('PAYE net is incomplete, so final PAYE deduction impact may still change until every PAYE candidate has a net value.')}</div>` : ``}
-            </div>
-            <div class="card" style="padding:10px;">
-              <div class="row">
-                <label>Actions</label>
-                <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
-                  <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    ${
-                      isBlockedFundsBatch
-                        ? `
-                          <button
-                            type="button"
-                            class="btn btn-sm btn-primary"
-                            data-action="banking:pay:child:retryBlockedFunds"
-                            data-batch-id="${enc(id)}"
-                            ${blockedFundsRetryDisabledAttr}
-                            title="${enc(canRetryBlockedFunds ? 'Retry this blocked-funds payment' : 'Retry is not currently safe for this batch. Refresh or review Payment Issues.')}"
-                          >Retry payment</button>
-                        `
-                        : ``
-                    }
-                    ${
-                      canDeleteDraft
-                        ? `
-                          <button
-                            type="button"
-                            class="btn btn-sm btn-outline"
-                            data-action="banking:pay:child:deleteDraft"
-                            data-batch-id="${enc(id)}"
-                            ${child.loading ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
-                            title="Delete draft batch (releases reservations)"
-                          >Delete draft</button>
-                        `
-                        : ``
-                    }
-                    ${
-                      canCancelUnpaid
-                        ? `
-                          <button
-                            type="button"
-                            class="btn btn-sm btn-outline"
-                            data-action="${enc(isBlockedFundsBatch ? 'banking:pay:blockedFunds:cancel' : 'banking:pay:child:cancelBatch')}"
-                            data-batch-id="${enc(id)}"
-                            ${child.loading ? 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' : ''}
-                            title="${enc(isBlockedFundsBatch ? 'Cancel/release this blocked-funds batch.' : 'Open Payment Issues to review affected payments.')}"
-                          >${enc(isBlockedFundsBatch ? 'Cancel/release payment' : 'Cancel batch')}</button>
-                        `
-                        : ``
-                    }
-
-                    ${
-                      showPayeEntryBtn
-                        ? `
-                          <button
-                            type="button"
-                            class="btn btn-sm btn-outline"
-                            data-action="banking:pay:child:openPayeEntry"
-                            ${payeEntryDisabledAttr}
-                            title="${enc(payeEntryButtonTitle)}"
-                          >Enter PAYE payments</button>
-                        `
-                        : ``
-                    }
-
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-primary"
-                      data-action="banking:pay:child:executePayment"
-                      ${executeBtnDisabledAttr}
-                      title="${enc(executeBtnTitle)}"
-                    >Execute Payment</button>
-
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-outline"
-                      data-action="banking:pay:child:exportDetailCsv"
-                      ${detailExportDisabledAttr}
-                      title="${enc(detailExportButtonTitle)}"
-                    >Detailed CSV</button>
-
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-outline"
-                      data-action="banking:pay:child:exportDetailPdf"
-                      ${detailExportDisabledAttr}
-                      title="${enc(detailExportButtonTitle)}"
-                    >Detailed PDF</button>
-
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-outline"
-                      data-action="banking:pay:child:generateCsv"
-                      ${csvExportDisabledAttr}
-                      title="${enc(csvExportButtonTitle)}"
-                    >Bank CSV export</button>
-
-                    ${child.csv && child.csv.generated_at_utc ? `<span class="mini" style="opacity:.85;">Generated: <span class="mono">${enc(fmtUtcToUk(child.csv.generated_at_utc))}</span></span>` : ``}
-                  </div>
-
-                  ${payeEntryHelpHtml}
-                  ${executeHelpHtml}
-
-                  <div class="card" style="padding:10px;">
-                      <div class="mini" style="opacity:.9; font-weight:700; margin-bottom:8px;">CloudTMS CSV file evidence</div>
-                      <div class="mini" style="opacity:.9; margin-bottom:6px;">Creating a CSV banking file does not settle this batch.</div>
-                      <div class="mini" style="opacity:.85; margin-bottom:8px;">After you upload/process the CSV with the bank, use Execute → CSV settlement to complete settlement through the normal authorisation process.</div>
-                      ${
-                        csvEvidenceRows.length
-                          ? `
-                            <div style="display:grid; grid-template-columns:minmax(180px,220px) 1fr; gap:6px 10px;">
-                              ${csvEvidenceRows.map(([k, v]) => `
-                                <div class="mini" style="opacity:.75;">${enc(k)}</div>
-                                <div class="mini mono">${enc(String(v))}</div>
-                              `).join('')}
-                            </div>
-                          `
-                          : `<div class="mini" style="opacity:.8;">No CSV generation evidence has been recorded yet for this batch.</div>`
-                      }
-                    </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="card" style="padding:10px;">
-              <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:8px;">Beneficiaries</div>
-              ${candidateRowsHtml}
-            </div>
-
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
 
 
 async function openBankingPayBatchPayeEntryModal(payBatchId) {
@@ -157092,7 +150807,6 @@ function renderBulkProcessSelectedSummaryStrip(state) {
 }
 
 
-
 function renderBulkProcessEvidencePane(state) {
   const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
   const enc = (typeof escapeHtml === 'function')
@@ -157526,7 +151240,15 @@ function renderBulkProcessEvidencePane(state) {
     return rows;
   };
   const attachedRows = collectAttachedRowsForRender();
-  if (!renderIsBulkAuthoriseContext && (evidenceLayerAuthoritative || pane.__attached_loaded === true || pane.__evidence_loaded === true || Array.isArray(pane.attached_rows) || Array.isArray(pane.attached_all_rows))) {
+  if (
+    !renderIsBulkAuthoriseContext &&
+    attachedRows.length > 0 &&
+    (
+      evidenceLayerAuthoritative ||
+      pane.__attached_loaded === true ||
+      pane.__evidence_loaded === true
+    )
+  ) {
     pane.attached_rows = attachedRows.map((item) => ({ ...(item || {}) }));
     pane.attached_all_rows = attachedRows.map((item) => ({ ...(item || {}) }));
     pane.__attached_loaded = true;
@@ -157723,6 +151445,8 @@ function renderBulkProcessEvidencePane(state) {
     </div>
   `);
 }
+
+
 
 
 
@@ -191007,6 +184731,7 @@ async function handleBulkAuthoriseOpenExpensesModal(state) {
 
 
 
+
 async function handleBulkProcessRowChange(nextRowKey, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][ROW-CHANGE]');
   GC('handleBulkProcessRowChange');
@@ -194062,7 +187787,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
         'client_display_name', 'hospital_name', 'site_name', 'ward_name', 'booking_ref',
         'external_ref', 'week_ending_date', 'contract_week_ending_date', 'work_date',
         'date', 'shift_date', 'period_type', 'timesheet_type_sort_key', 'sheet_scope',
-        'timesheet_scope', 'submission_mode', 'submission_mode_snapshot', 'status',
+        'timesheet_scope', 'submission_mode', 'submission_mode_snapshot', 'status', 'section',
         'tools_stage', 'summary_stage', 'processing_status', 'processing_status_display',
         'bulk_process_bucket', 'route_type', 'route_display', 'route_family',
         'route_subfamily', 'underlying_channel_family', 'total_hours', 'total_pay_ex_vat',
@@ -194157,19 +187882,45 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
     const resolveBulkProcessContextStage = (...sources) => {
       const terminal = new Set(['UNPROCESSED', 'PROCESSED', 'AUTHORISED', 'AUTHORIZED', 'INVOICED', 'PAID']);
       const unprocessedStatuses = new Set(['RECEIVED', 'SUBMITTED', 'PENDING', 'PENDING_REVIEW', 'DRAFT', 'AWAITING_EVIDENCE', 'AWAITING_REVIEW']);
-      const readStage = (value) => {
+      const explicitBulkProcessStageKeys = ['section', 'tools_stage', 'summary_stage', 'bulk_process_bucket'];
+      const ordinaryTimesheetStatusKeys = ['status', 'timesheet_status', 'row_status', 'processing_status', 'processing_status_display'];
+      const readStage = (value, optsForStage = {}) => {
         const stage = upper(value);
         if (!stage) return '';
         if (terminal.has(stage)) return stage === 'AUTHORIZED' ? 'AUTHORISED' : stage;
-        if (unprocessedStatuses.has(stage)) return 'UNPROCESSED';
+        if (optsForStage.allowLifecycleStatusMapping === true && unprocessedStatuses.has(stage)) return 'UNPROCESSED';
         return '';
       };
+      const readFirstStageFromKeys = (source, keys, optsForStage = {}) => {
+        if (!source || typeof source !== 'object') return '';
+        for (const key of keys) {
+          if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+          const stage = readStage(source[key], optsForStage);
+          if (stage) return stage;
+        }
+        return '';
+      };
+      const targetIdentityForStage = getIdentityPartsFromRow(dataRow || row || {});
+      const targetRowKeyForStage = trimStr(targetIdentityForStage.rowKey || targetIdentityForStage.identity || '');
+      const targetIsTimesheetIdentity = !!(
+        /^timesheet:/i.test(targetRowKeyForStage) ||
+        trimStr(targetIdentityForStage.timesheetId || '')
+      );
+      const trustedProcessedSources = [row, matchingDatasetRowBeforeMerge].filter((source) => source && typeof source === 'object');
+      const hasTrustedProcessedAuthority = trustedProcessedSources.some((source) => (
+        readFirstStageFromKeys(source, explicitBulkProcessStageKeys, { allowLifecycleStatusMapping: true }) === 'PROCESSED'
+      ));
+      const protectProcessedTimesheetFromStatusDowngrade = !!(targetIsTimesheetIdentity && hasTrustedProcessedAuthority);
+
       for (const source of sources) {
-        if (!source || typeof source !== 'object') continue;
-        const directStage = readStage(source.tools_stage || source.summary_stage || source.bulk_process_bucket || source.processing_status_display || source.processing_status);
-        if (directStage) return directStage;
-        const statusStage = readStage(source.status || source.timesheet_status || source.row_status);
-        if (statusStage) return statusStage;
+        const explicitStage = readFirstStageFromKeys(source, explicitBulkProcessStageKeys, { allowLifecycleStatusMapping: true });
+        if (explicitStage) return explicitStage;
+      }
+      for (const source of sources) {
+        const statusStage = readFirstStageFromKeys(source, ordinaryTimesheetStatusKeys, { allowLifecycleStatusMapping: true });
+        if (!statusStage) continue;
+        if (protectProcessedTimesheetFromStatusDowngrade && statusStage === 'UNPROCESSED') continue;
+        return statusStage;
       }
       return '';
     };
@@ -195615,8 +189366,6 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
     st.__bulk_process_row_change_in_progress = false;
   }
 }
-
-
 
 
 
