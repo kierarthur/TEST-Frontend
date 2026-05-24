@@ -52896,16 +52896,20 @@ const retryBlockedFundsPipeline = async () => {
 
     if (safeKey === 'payment_issues') {
       if (typeof renderBankingPayBatchChildModalPaymentIssues === 'function') {
-        return withPagedControls(renderBankingPayBatchChildModalPaymentIssues(child.data, child.correction));
+        return `
+          <div id="${enc(rootId)}" class="payment-issues-tab">
+            ${withPagedControls(renderBankingPayBatchChildModalPaymentIssues(child.data, child.correction))}
+          </div>
+        `;
       }
       if (typeof renderBankingPaymentIssuePanel === 'function') {
-        return withPagedControls(`
+        return `
           <div id="${enc(rootId)}" class="payment-issues-tab">
-            ${renderBankingPaymentIssuePanel(child.data, child.correction)}
+            ${withPagedControls(renderBankingPaymentIssuePanel(child.data, child.correction))}
           </div>
-        `);
+        `;
       }
-      return withPagedControls(`
+      return `
         <div id="${enc(rootId)}" class="card payment-issues-tab">
           <div class="row">
             <label>Current Payment Status</label>
@@ -52914,7 +52918,7 @@ const retryBlockedFundsPipeline = async () => {
             </div>
           </div>
         </div>
-      `);
+      `;
     }
 
     if (safeKey === 'paye_worksheet') {
@@ -54877,8 +54881,6 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
   await rerenderChild();
   scheduleWire();
 }
-
-
 
 
 
@@ -154519,6 +154521,7 @@ function ensureBulkAuthoriseManualDraftState(state) {
   return controller;
 }
 
+
 function bindBulkProcessEvidencePane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -157548,26 +157551,44 @@ function bindBulkProcessEvidencePane(state) {
         if (!isActiveBind()) return;
         const clickedSelectionKey = normaliseAttachedPreviewSelectionKey(thumb.dataset.attachedSelectionKey || thumb.getAttribute('data-attached-selection-key') || '');
         const clickedFileKey = cleanAttachedEvidenceFileKey(thumb.dataset.fileKey || thumb.dataset.storageKey || thumb.getAttribute('data-file-key') || thumb.getAttribute('data-storage-key') || '');
-        const clickedAttachedId = trimStr(thumb.dataset.attachedId || thumb.dataset.evidenceId || thumb.dataset.queueId || thumb.getAttribute('data-attached-id') || thumb.getAttribute('data-evidence-id') || thumb.getAttribute('data-queue-id') || '');
+        const clickedKind = normaliseEvidenceKind(thumb.dataset.kind || thumb.dataset.evidenceKind || thumb.getAttribute('data-kind') || thumb.getAttribute('data-evidence-kind') || '');
         if (!clickedFileKey || !clickedSelectionKey) return;
+
+        const matchesClickedThumb = (item) => {
+          const itemFileKey = getAttachedEvidenceFileKey(item);
+          if (!itemFileKey || itemFileKey !== clickedFileKey) return false;
+          const itemKind = normaliseEvidenceKind(item?.kind || item?.evidence_kind || item?.evidenceKind || item?.staged_kind || item?.stagedKind || '');
+          return !clickedKind || !itemKind || itemKind === clickedKind;
+        };
+
         const rows = getAuthoritativeAttachedRows();
-        const selected = rows.find((item) => buildAttachedPreviewSelectionKey(item) === clickedSelectionKey) ||
-          rows.find((item) => {
-            const itemFileKey = getAttachedEvidenceFileKey(item);
-            const itemId = getAttachedEvidenceId(item);
-            return !!(itemFileKey && itemFileKey === clickedFileKey && (!clickedAttachedId || itemId === clickedAttachedId));
-          }) || null;
+        const selectedByExactKey = rows.find((item) => buildAttachedPreviewSelectionKey(item) === clickedSelectionKey) || null;
+        const selectedByStorageAndKind = (!selectedByExactKey && !isBulkAuthoriseContext)
+          ? (rows.find(matchesClickedThumb) || null)
+          : null;
+        const selected = selectedByExactKey || selectedByStorageAndKind || null;
         if (!selected) return;
+
         const selectedKey = buildAttachedPreviewSelectionKey(selected);
-        if (!selectedKey || selectedKey !== clickedSelectionKey) return;
+        const selectedFileKey = getAttachedEvidenceFileKey(selected);
+        if (!selectedKey || !selectedFileKey || selectedFileKey !== clickedFileKey) return;
+
         selectAttachedEvidenceItem(selected, { forceAttached: true, clearQueue: true });
         syncActiveRowEvidencePresence();
         reconcileEvidenceState();
+
         const finalRows = getAuthoritativeAttachedRows();
         const finalSelected = finalRows.find((item) => buildAttachedPreviewSelectionKey(item) === selectedKey) ||
-          finalRows.find((item) => getAttachedEvidenceFileKey(item) === clickedFileKey && getAttachedEvidenceId(item) === getAttachedEvidenceId(selected)) ||
+          finalRows.find(matchesClickedThumb) ||
           null;
-        if (finalSelected) selectAttachedEvidenceItem(finalSelected, { forceAttached: true, clearQueue: true });
+
+        if (finalSelected) {
+          const finalSelectedFileKey = getAttachedEvidenceFileKey(finalSelected);
+          if (finalSelectedFileKey && finalSelectedFileKey === clickedFileKey) {
+            selectAttachedEvidenceItem(finalSelected, { forceAttached: true, clearQueue: true });
+          }
+        }
+
         await rerenderWorkbench('evidence-attached-thumb-select');
       });
     });
@@ -157846,6 +157867,7 @@ function bindBulkProcessEvidencePane(state) {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
+
 
 
 
