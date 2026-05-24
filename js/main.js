@@ -22135,6 +22135,7 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
   return rows;
 }
 
+
 function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
   const payload = (batchPayload && typeof batchPayload === 'object') ? batchPayload : {};
   const state = (correctionState && typeof correctionState === 'object') ? correctionState : {};
@@ -22181,6 +22182,145 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     row?.payBatchCandidateId || row?.pay_batch_candidate_id || row?.candidateId || row?.candidate_id ||
     (index != null ? `row-${index}` : '')
   );
+
+  const stateUi = (state.ui && typeof state.ui === 'object' && !Array.isArray(state.ui)) ? state.ui : {};
+  const expandedSupportRowKey = toText(
+    state.expandedSupportRowKey ||
+    state.supportDetailsRowKey ||
+    state.expandedRowKey ||
+    state.detailsRowKey ||
+    state.viewDetailsRowKey ||
+    stateUi.expandedSupportRowKey ||
+    stateUi.supportDetailsRowKey ||
+    stateUi.expandedRowKey ||
+    stateUi.detailsRowKey ||
+    stateUi.viewDetailsRowKey ||
+    ''
+  );
+  const supportDetailsOf = (row) => {
+    if (row && row.supportDetails && typeof row.supportDetails === 'object' && !Array.isArray(row.supportDetails)) return row.supportDetails;
+    if (row && row.support_details && typeof row.support_details === 'object' && !Array.isArray(row.support_details)) return row.support_details;
+    return {};
+  };
+  const primitiveText = (value) => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return toText(value);
+    return '';
+  };
+  const renderSupportJson = (value) => {
+    if (value === null || value === undefined || value === '') return '';
+    try {
+      if (typeof value === 'string') {
+        const text = value.trim();
+        if (!text) return '';
+        try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
+      }
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return toText(value);
+    }
+  };
+  const firstPrimitive = (...values) => {
+    for (const value of values) {
+      const text = primitiveText(value);
+      if (text) return text;
+    }
+    return '';
+  };
+  const firstDetailValue = (...values) => {
+    for (const value of values) {
+      if (value === null || value === undefined) continue;
+      const text = primitiveText(value);
+      if (text) return value;
+    }
+    return undefined;
+  };
+  const buildSupportDetailPairs = (row, index) => {
+    const details = supportDetailsOf(row);
+    if (!details || !Object.keys(details).length) return [];
+    const rowKey = rowKeyOf(row, index);
+    const seen = new Set();
+    const pairs = [];
+    const add = (key, value) => {
+      const label = toText(key);
+      if (!label || seen.has(label)) return;
+      const text = primitiveText(value);
+      if (!text) return;
+      seen.add(label);
+      pairs.push([label, text]);
+    };
+
+    add('row_key', rowKey);
+    add('display_state', firstDetailValue(row?.displayState, row?.display_state));
+    add('action_type', firstDetailValue(row?.actionType, row?.action_type));
+    add('backend_action', firstDetailValue(row?.backendAction, row?.backend_action));
+    add('pay_batch_id', firstDetailValue(payload.pay_batch_id, payload.payBatchId, payload.id, payload.batch?.id, details.pay_batch_id, details.payBatchId));
+    add('operation_id', firstDetailValue(details.operation_id, details.operationId, row?.operation_id, row?.operationId));
+    add('chunk_id', firstDetailValue(details.chunk_id, details.chunkId, row?.chunk_id, row?.chunkId));
+    add('transfer_id', firstDetailValue(details.transfer_id, details.transferId, row?.payBankTransferId, row?.pay_bank_transfer_id, row?.transferId, row?.transfer_id));
+    add('transfer_scope_id', firstDetailValue(details.transfer_scope_id, details.transferScopeId));
+    add('auth_request_id', firstDetailValue(details.auth_request_id, details.authRequestId));
+    add('local_request_id', firstDetailValue(details.local_request_id, details.localRequestId, details.request_id, details.requestId));
+    add('local_idempotency_key', firstDetailValue(details.local_idempotency_key, details.localIdempotencyKey, details.idempotency_key, details.idempotencyKey));
+    add('provider_submission_status', firstDetailValue(details.provider_submission_status, details.providerSubmissionStatus, row?.provider_submission_status, row?.providerSubmissionStatus));
+    add('provider_http_status', firstDetailValue(details.provider_http_status, details.providerHttpStatus, row?.provider_http_status, row?.providerHttpStatus));
+    add('provider_transaction_id', firstDetailValue(details.provider_transaction_id, details.providerTransactionId, row?.provider_transaction_id, row?.providerTransactionId));
+    add('provider_reference', firstDetailValue(details.provider_reference, details.providerReference, row?.provider_reference, row?.providerReference));
+    add('provider_response_present', firstDetailValue(details.provider_response_present, details.providerResponsePresent));
+    add('provider_response_received', firstDetailValue(details.provider_response_received, details.providerResponseReceived));
+    add('provider_request_sent', firstDetailValue(details.provider_request_sent, details.providerRequestSent));
+    add('provider_submission_rejected', firstDetailValue(details.provider_submission_rejected, details.providerSubmissionRejected));
+    add('safe_retry_available', firstDetailValue(details.safe_retry_available, details.safeRetryAvailable));
+    add('rail_tx_id', firstDetailValue(details.rail_tx_id, details.railTxId, row?.rail_tx_id, row?.railTxId));
+    add('rail_state', firstDetailValue(details.rail_state, details.railState, row?.rail_state, row?.railState));
+
+    try {
+      Object.keys(details).sort().forEach((key) => {
+        if (seen.has(key)) return;
+        add(key, details[key]);
+      });
+    } catch {}
+    return pairs;
+  };
+
+  const renderSupportDetailsCard = (row, index, options = {}) => {
+    const rowKey = rowKeyOf(row, index);
+    const details = supportDetailsOf(row);
+    const hasSupportDetails = !!(details && Object.keys(details).length);
+    const pairs = buildSupportDetailPairs(row, index);
+    const candidateLabel = firstPrimitive(row?.candidateName, row?.candidate_name, row?.candidateTmsRef, row?.candidate_tms_ref, rowKey) || rowKey || 'payment row';
+    const rawBlocks = [];
+    const rawProvider = details.raw_provider_diagnostic || details.rawProviderDiagnostic || details.provider_submit_diagnostic || details.providerSubmitDiagnostic || details.provider_diagnostic || details.providerDiagnostic || null;
+    const rawSupport = details.raw_support_details || details.rawSupportDetails || null;
+    const rawProviderText = renderSupportJson(rawProvider);
+    const rawSupportText = renderSupportJson(rawSupport);
+    if (rawProviderText) rawBlocks.push(['Raw provider diagnostic', rawProviderText]);
+    if (rawSupportText && rawSupportText !== rawProviderText) rawBlocks.push(['Raw support details', rawSupportText]);
+    const inline = options && options.inline === true;
+
+    return `
+      <div class="card payment-issue-row-support-details" data-support-row-key="${enc(rowKey)}" style="padding:10px;${inline ? 'margin:6px 0;' : ''}">
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:8px;">
+          <div>
+            <div style="font-weight:800;">Support details</div>
+            <div class="mini" style="opacity:.78;">${enc(candidateLabel)}</div>
+          </div>
+          ${rowKey ? `<span class="mini mono" style="opacity:.72;">${enc(rowKey)}</span>` : ''}
+        </div>
+        ${hasSupportDetails && pairs.length ? `
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;">
+            ${pairs.map(([key, value]) => `<div class="mini"><strong>${enc(key)}</strong><br><span class="mono">${enc(value)}</span></div>`).join('')}
+          </div>
+        ` : '<div class="mini" style="opacity:.85;">No additional support details were returned for this row.</div>'}
+        ${rawBlocks.map(([label, text]) => `
+          <details style="margin-top:8px;">
+            <summary class="mini" style="cursor:pointer;font-weight:700;">${enc(label)}</summary>
+            <pre class="mono" style="white-space:pre-wrap;overflow:auto;max-height:260px;margin:6px 0 0;padding:8px;border:1px solid var(--line);border-radius:8px;background:rgba(15,23,42,.04);">${enc(text)}</pre>
+          </details>
+        `).join('')}
+      </div>
+    `;
+  };
 
   const previousSelectedKeys = makeSet(state.selectedRowKeys);
   for (const row of asArray(state.rows || state.issueRows)) {
@@ -22348,16 +22488,24 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
       VIEW_DETAILS: 'viewDetails'
     };
     const action = actionMap[actionType] || 'viewDetails';
+    const isExpanded = actionType === 'VIEW_DETAILS' && !!rowKey && expandedSupportRowKey === rowKey;
+    const buttonLabel = isExpanded ? 'Hide details' : actionLabel;
+    const expandedAttr = actionType === 'VIEW_DETAILS' ? ` aria-expanded="${isExpanded ? 'true' : 'false'}"` : '';
     const disabledAttr = (row.requiresBackendSupport === true && (actionType === 'CANDIDATE_RETURNED_FUNDS' || actionType === 'REVERSE_RETURNED'))
       ? ' data-disabled="1" aria-disabled="true" style="opacity:.55;filter:saturate(.7);"'
       : '';
-    return `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:${enc(action)}" data-row-key="${enc(rowKey)}"${disabledAttr}>${enc(actionLabel)}</button>`;
+    return `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:issue:${enc(action)}" data-row-key="${enc(rowKey)}"${expandedAttr}${disabledAttr}>${enc(buttonLabel)}</button>`;
   };
 
+  const colSpan = selectColumnVisible ? 7 : 6;
   const tableRowsHtml = rows.map((row, index) => {
     const rowKey = rowKeyOf(row, index);
     const selectable = row.selectable === true;
     const checked = row.selected === true;
+    const isExpanded = !!rowKey && expandedSupportRowKey === rowKey;
+    const detailRowHtml = isExpanded
+      ? `<tr class="payment-issue-support-row" data-support-row-key="${enc(rowKey)}"><td colspan="${enc(String(colSpan))}">${renderSupportDetailsCard(row, index, { inline: true })}</td></tr>`
+      : '';
     return `
       <tr data-row-key="${enc(rowKey)}"${checked ? ' class="payment-issue-row-selected"' : ''}>
         ${selectColumnVisible ? `<td style="width:54px;">${selectable ? `<input type="checkbox" data-action="banking:pay:issue:toggleRow" data-row-key="${enc(rowKey)}"${checked ? ' checked' : ''}>` : ''}</td>` : ''}
@@ -22368,39 +22516,17 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
         <td>${enc(toText(row.resultLabel || row.result_label || row.whatHappenedLabel || row.what_happened_label || 'Check required'))}</td>
         <td>${actionButtonHtml(row, index)}</td>
       </tr>
+      ${detailRowHtml}
     `;
   }).join('');
 
-  const supportDetailsRows = rows.map((row, index) => {
-    const details = (row && typeof row.supportDetails === 'object' && !Array.isArray(row.supportDetails)) ? row.supportDetails : {};
-    const rowKey = rowKeyOf(row, index);
-    const pairs = [
-      ['row_key', rowKey],
-      ['display_state', row.displayState || row.display_state],
-      ['action_type', row.actionType || row.action_type],
-      ['backend_action', row.backendAction || row.backend_action],
-      ['pay_batch_id', payload.pay_batch_id || payload.id || payload.batch?.id],
-      ['operation_id', details.operation_id],
-      ['chunk_id', details.chunk_id],
-      ['transfer_id', details.transfer_id || row.payBankTransferId || row.pay_bank_transfer_id],
-      ['transfer_scope_id', details.transfer_scope_id],
-      ['auth_request_id', details.auth_request_id],
-      ['local_request_id', details.local_request_id || details.request_id],
-      ['local_idempotency_key', details.local_idempotency_key || details.idempotency_key],
-      ['provider_submission_status', details.provider_submission_status],
-      ['provider_http_status', details.provider_http_status],
-      ['rail_tx_id', details.rail_tx_id],
-      ['rail_state', details.rail_state]
-    ].filter(([, value]) => toText(value));
-    return `
-      <div class="card" style="padding:8px;">
-        <div class="mini" style="font-weight:700;margin-bottom:6px;">${enc(toText(row.candidateName || row.candidate_name || rowKey))}</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;">
-          ${pairs.map(([key, value]) => `<div class="mini"><strong>${enc(key)}</strong><br><span class="mono">${enc(toText(value))}</span></div>`).join('')}
-        </div>
-      </div>
-    `;
-  }).join('');
+  const expandedSupportRowIndex = expandedSupportRowKey
+    ? rows.findIndex((row, index) => rowKeyOf(row, index) === expandedSupportRowKey)
+    : -1;
+  const expandedSupportRow = expandedSupportRowIndex >= 0 ? rows[expandedSupportRowIndex] : null;
+  const supportDetailsRows = expandedSupportRow
+    ? renderSupportDetailsCard(expandedSupportRow, expandedSupportRowIndex, { inline: false })
+    : '<div class="mini" style="opacity:.85;">Use View details on a payment row to open row-scoped support details.</div>';
 
   const selectionFooterHtml = selectableRows.length ? `
     <div class="payment-issue-selection-footer card" style="padding:10px;">
@@ -22454,7 +22580,7 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
               </tr>
             </thead>
             <tbody>
-              ${tableRowsHtml || `<tr><td colspan="${selectColumnVisible ? '7' : '6'}"><div class="mini" style="opacity:.85;">No payment rows were returned for this batch.</div></td></tr>`}
+              ${tableRowsHtml || `<tr><td colspan="${colSpan}"><div class="mini" style="opacity:.85;">No payment rows were returned for this batch.</div></td></tr>`}
             </tbody>
           </table>
         </div>
@@ -43011,7 +43137,6 @@ function refreshBankingNavAttentionFromCachedRows() {
   } catch {}
 }
 
-
 function renderPayBatchListPanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -43134,11 +43259,275 @@ function renderPayBatchListPanel() {
 
   const limitOptions = [25, 50, 100, 200];
 
+  const deriveBankingPayBatchPaymentOutcomeDisplay = (row) => {
+    const source = (row && typeof row === 'object' && !Array.isArray(row)) ? row : {};
+    const toText = (value) => String(value == null ? '' : value).trim();
+    const toUpper = (value) => toText(value).toUpperCase();
+    const isObj = (value) => !!(value && typeof value === 'object' && !Array.isArray(value));
+    const toCount = (value, fallback = 0) => {
+      const n = Number(value);
+      return Number.isFinite(n) && n > 0 ? Math.trunc(n) : fallback;
+    };
+    const firstCount = (...values) => {
+      for (const value of values) {
+        const n = Number(value);
+        if (Number.isFinite(n) && n >= 0) return Math.trunc(n);
+      }
+      return 0;
+    };
+    const readBool = (value) => {
+      if (value === true) return true;
+      if (value === false) return false;
+      const text = toText(value).toLowerCase();
+      if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+      if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+      return null;
+    };
+    const readFirst = (obj, keys) => {
+      if (!isObj(obj)) return undefined;
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+        const value = obj[key];
+        if (value === null || value === undefined) continue;
+        if (typeof value === 'object') continue;
+        if (toText(value) !== '' || typeof value === 'boolean') return value;
+      }
+      return undefined;
+    };
+    const walkObjects = (root) => {
+      const out = [];
+      const seen = new Set();
+      const queue = [root];
+      while (queue.length && out.length < 350) {
+        const value = queue.shift();
+        if (value == null) continue;
+        if (typeof value === 'string') {
+          const text = value.trim();
+          if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+            try { queue.push(JSON.parse(text)); } catch {}
+          }
+          continue;
+        }
+        if (Array.isArray(value)) {
+          value.forEach((item) => queue.push(item));
+          continue;
+        }
+        if (!isObj(value) || seen.has(value)) continue;
+        seen.add(value);
+        out.push(value);
+        Object.keys(value).forEach((key) => {
+          const next = value[key];
+          if (next && (typeof next === 'object' || typeof next === 'string')) queue.push(next);
+        });
+      }
+      return out;
+    };
+    const objectSources = walkObjects(source);
+    const localReferenceSet = () => {
+      const refs = new Set();
+      const localKeys = [
+        'local_request_id', 'localRequestId', 'request_id', 'requestId', 'idempotency_key', 'idempotencyKey',
+        'local_idempotency_key', 'localIdempotencyKey', 'client_request_id', 'clientRequestId', 'auth_request_id', 'authRequestId',
+        'chunk_id', 'chunkId', 'operation_id', 'operationId', 'scope_id', 'scopeId', 'transfer_scope_id', 'transferScopeId',
+        'pay_batch_id', 'payBatchId', 'id'
+      ];
+      objectSources.forEach((obj) => {
+        localKeys.forEach((key) => {
+          const text = toText(obj[key]);
+          if (text) refs.add(text.toLowerCase());
+        });
+      });
+      return refs;
+    };
+    const strictExternalEvidencePresent = () => {
+      const localRefs = localReferenceSet();
+      const externalKeys = [
+        'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId', 'provider_payment_id', 'providerPaymentId',
+        'provider_reference', 'providerReference', 'provider_event_id', 'providerEventId', 'provider_submission_id', 'providerSubmissionId',
+        'provider_transfer_id', 'providerTransferId', 'external_transfer_id', 'externalTransferId', 'external_payment_id', 'externalPaymentId',
+        'external_reference', 'externalReference', 'bank_reference', 'bankReference', 'revolut_payment_id', 'revolutPaymentId',
+        'revolut_transaction_id', 'revolutTransactionId', 'transaction_id', 'transactionId', 'payment_id', 'paymentId'
+      ];
+      for (const obj of objectSources) {
+        for (const key of externalKeys) {
+          const text = toText(obj[key]);
+          if (!text) continue;
+          if (localRefs.has(text.toLowerCase())) continue;
+          return true;
+        }
+      }
+      return false;
+    };
+    const providerAcceptedEvidencePresent = () => {
+      const hasExternal = strictExternalEvidencePresent();
+      if (!hasExternal) return false;
+      let accepted = false;
+      let httpOk = false;
+      let responseOrRequest = false;
+      let rejected = false;
+      for (const obj of objectSources) {
+        const status = toUpper(readFirst(obj, [
+          'provider_submission_status', 'providerSubmissionStatus', 'outcome_code', 'outcomeCode', 'provider_status', 'providerStatus'
+        ]));
+        if (status === 'PROVIDER_SUBMISSION_ACCEPTED' || status === 'ACCEPTED' || status === 'SUBMITTED' || status === 'SENT') accepted = true;
+        if (status.includes('REJECT') || status.includes('DECLIN') || status.includes('FAILED')) rejected = true;
+        const httpStatus = Number(readFirst(obj, ['provider_http_status', 'providerHttpStatus', 'http_status', 'httpStatus', 'status_code', 'statusCode']));
+        if (Number.isFinite(httpStatus) && httpStatus >= 200 && httpStatus < 300) httpOk = true;
+        const responsePresent = readBool(readFirst(obj, ['provider_response_present', 'providerResponsePresent', 'provider_response_received', 'providerResponseReceived', 'response_present', 'responsePresent', 'response_received', 'responseReceived']));
+        const requestSent = readBool(readFirst(obj, ['provider_request_sent', 'providerRequestSent', 'request_sent', 'requestSent', 'provider_submission_attempted', 'providerSubmissionAttempted']));
+        const rejectedFlag = readBool(readFirst(obj, ['provider_submission_rejected', 'providerSubmissionRejected', 'provider_rejected', 'providerRejected']));
+        if (responsePresent === true || requestSent === true) responseOrRequest = true;
+        if (rejectedFlag === true) rejected = true;
+        if (readBool(readFirst(obj, ['provider_acceptance_evidence_present', 'providerAcceptanceEvidencePresent'])) === true) accepted = true;
+      }
+      return accepted && rejected !== true && (httpOk || responseOrRequest || hasExternal);
+    };
+    const textEvidence = (value) => objectSources.map((obj) => toUpper(readFirst(obj, [
+      'displayState', 'display_state', 'resultLabel', 'result_label', 'status', 'state', 'rail_state', 'railState',
+      'payment_status', 'paymentStatus', 'transfer_status', 'transferStatus', 'bank_status', 'bankStatus', 'issue_kind', 'issueKind',
+      'banking_alert_kind', 'bankingAlertKind', 'alert_kind', 'alertKind', 'kind', 'type', 'label', 'badgeText'
+    ]))).filter(Boolean).join(' ') + ' ' + toUpper(value);
+    const hasSentEvidence = (value = '') => {
+      if (providerAcceptedEvidencePresent()) return true;
+      const text = textEvidence(value);
+      if (/PAYMENT_SENT|PAYMENT_PAID|\bSENT\b|\bPAID\b|SETTLED|COMPLETED|COMMITTED|SUCCESS/.test(text)) return true;
+      return objectSources.some((obj) => toText(obj.completed_at_utc || obj.completedAtUtc || obj.settled_at_utc || obj.settledAtUtc || obj.paid_at_utc || obj.paidAtUtc));
+    };
+    const hasFailedEvidence = (value = '') => {
+      const text = textEvidence(value);
+      return /RETURNED|REVERTED|REJECTED|DECLINED|FAILED|INSUFFICIENT|BLOCKED_FUNDS|NO_MONEY|UNWIND_FAILED_PAYMENT|BANK_REJECTED/.test(text);
+    };
+    const hasCheckEvidence = (value = '') => {
+      if (providerAcceptedEvidencePresent()) return false;
+      const text = textEvidence(value);
+      return /UNKNOWN|TIMEOUT|MALFORMED|CHECK_REQUIRED|REVIEW|MANUAL|PROVIDER_SUBMIT_REVIEW|PAYMENT_PROVIDER_SUBMIT_REVIEW|STALE/.test(text);
+    };
+    const resultFromCounts = (sentCount, failedReturnedCount, checkRequiredCount, totalRelevantCount) => {
+      const sent = Math.max(0, Math.trunc(Number(sentCount) || 0));
+      const failed = Math.max(0, Math.trunc(Number(failedReturnedCount) || 0));
+      const check = Math.max(0, Math.trunc(Number(checkRequiredCount) || 0));
+      const total = Math.max(Math.trunc(Number(totalRelevantCount) || 0), sent + failed + check);
+      if (sent > 0 && failed === 0 && check === 0 && total > 0) {
+        return { label: 'Paid - no issues', tone: 'ok', sentCount: sent, failedReturnedCount: failed, checkRequiredCount: check, totalRelevantCount: total, hasIssues: false, showCurrentPaymentStatusAction: false };
+      }
+      if (sent > 0 && (failed > 0 || check > 0)) {
+        return { label: 'Partially Paid - some issues', tone: 'warn', sentCount: sent, failedReturnedCount: failed, checkRequiredCount: check, totalRelevantCount: total, hasIssues: true, showCurrentPaymentStatusAction: true };
+      }
+      if (sent === 0 && failed > 0) {
+        return { label: 'Nothing Paid (failed)', tone: 'warn', sentCount: sent, failedReturnedCount: failed, checkRequiredCount: check, totalRelevantCount: Math.max(total, failed + check), hasIssues: true, showCurrentPaymentStatusAction: true };
+      }
+      return null;
+    };
+    const classifyOutcomeRow = (paymentRow) => {
+      const rowSource = (paymentRow && typeof paymentRow === 'object') ? paymentRow : {};
+      const support = isObj(rowSource.supportDetails) ? rowSource.supportDetails : (isObj(rowSource.support_details) ? rowSource.support_details : {});
+      const combined = { ...rowSource, supportDetails: support, provider_submit_diagnostic: support.raw_provider_diagnostic || support.rawProviderDiagnostic || rowSource.provider_submit_diagnostic || rowSource.providerSubmitDiagnostic || support };
+      const symbol = toText(rowSource.statusSymbol || rowSource.status_symbol);
+      const stateText = [
+        rowSource.displayState, rowSource.display_state, rowSource.resultLabel, rowSource.result_label,
+        rowSource.whatHappenedLabel, rowSource.what_happened_label, rowSource.status, rowSource.state
+      ].map(toUpper).filter(Boolean).join(' ');
+      if (symbol === '✅' || /PAYMENT_SENT|PAYMENT_PAID|\bSENT\b|\bPAID\b|SETTLED|COMPLETED|COMMITTED/.test(stateText)) return 'sent';
+      if (walkObjects(combined).some((obj) => toUpper(obj.provider_submission_status || obj.providerSubmissionStatus) === 'PROVIDER_SUBMISSION_ACCEPTED') && strictExternalEvidencePresent()) return 'sent';
+      if (symbol === '❌' || /RETURNED|REJECTED|DECLINED|FAILED|INSUFFICIENT|BLOCKED_FUNDS|NO_MONEY/.test(stateText)) return 'failed';
+      if (/UNKNOWN|CHECK|REVIEW|TIMEOUT|MALFORMED|MANUAL/.test(stateText)) return 'check';
+      return '';
+    };
+    const countsFromRows = (paymentRows) => {
+      const list = Array.isArray(paymentRows) ? paymentRows.filter((item) => item && typeof item === 'object') : [];
+      if (!list.length) return null;
+      return list.reduce((acc, paymentRow) => {
+        const tone = classifyOutcomeRow(paymentRow);
+        if (tone === 'sent') acc.sent += 1;
+        else if (tone === 'failed') acc.failed += 1;
+        else if (tone === 'check') acc.check += 1;
+        return acc;
+      }, { sent: 0, failed: 0, check: 0, total: list.length });
+    };
+
+    try {
+      if (typeof buildBankingPaymentIssueRows === 'function') {
+        const builtRows = buildBankingPaymentIssueRows(source, { correctionState: {} });
+        const builtCounts = countsFromRows(Array.isArray(builtRows) ? builtRows : []);
+        if (builtCounts && (builtCounts.sent > 0 || builtCounts.failed > 0)) {
+          const builtResult = resultFromCounts(builtCounts.sent, builtCounts.failed, builtCounts.check, builtCounts.total);
+          if (builtResult) return builtResult;
+        }
+      }
+    } catch {}
+
+    const candidateRows = [];
+    const pushRows = (value) => {
+      if (Array.isArray(value)) value.forEach((item) => { if (item && typeof item === 'object') candidateRows.push(item); });
+      else if (isObj(value)) {
+        ['rows', 'payments', 'transfers', 'items', 'issues', 'payment_issues', 'paymentIssues', 'bank_transfers', 'bankTransfers'].forEach((key) => pushRows(value[key]));
+      }
+    };
+    [
+      source.current_payment_status, source.currentPaymentStatus, source.payment_execution_review, source.paymentExecutionReview,
+      source.payment_issue_summary, source.paymentIssueSummary, source.provider_submit_diagnostic, source.providerSubmitDiagnostic,
+      source.payment_correction, source.paymentCorrection, source.correction_progress, source.correctionProgress,
+      source.transfers, source.bank_transfers, source.bankTransfers, source.pay_bank_transfers, source.payBankTransfers,
+      source.payment_issues, source.paymentIssues, source.issues, source.transfer_provider_outcomes, source.transferProviderOutcomes,
+      source.provider_outcomes, source.providerOutcomes
+    ].forEach(pushRows);
+    const rowCounts = countsFromRows(candidateRows);
+    if (rowCounts && (rowCounts.sent > 0 || rowCounts.failed > 0)) {
+      const rowResult = resultFromCounts(rowCounts.sent, rowCounts.failed, rowCounts.check, rowCounts.total);
+      if (rowResult) return rowResult;
+    }
+
+    const totalAggregate = firstCount(
+      source.payment_count, source.paymentCount, source.total_payment_count, source.totalPaymentCount,
+      source.transfer_count, source.transferCount, source.total_transfer_count, source.totalTransferCount,
+      source.payee_count, source.payeeCount, source.payments_total, source.paymentsTotal
+    );
+    let aggregateSent = firstCount(
+      source.sent_count, source.sentCount, source.payment_sent_count, source.paymentSentCount,
+      source.paid_count, source.paidCount, source.payment_paid_count, source.paymentPaidCount,
+      source.successful_payment_count, source.successfulPaymentCount, source.provider_accepted_count, source.providerAcceptedCount,
+      source.completed_transfer_count, source.completedTransferCount, source.settled_transfer_count, source.settledTransferCount
+    );
+    const aggregateFailed = firstCount(
+      source.failed_returned_count, source.failedReturnedCount, source.payment_failed_returned_count, source.paymentFailedReturnedCount,
+      source.failed_count, source.failedCount, source.rejected_count, source.rejectedCount, source.returned_count, source.returnedCount,
+      source.insufficient_funds_count, source.insufficientFundsCount, source.blocked_funds_count, source.blockedFundsCount,
+      source.no_money_count, source.noMoneyCount
+    );
+    let aggregateCheck = firstCount(
+      source.check_required_count, source.checkRequiredCount, source.payment_check_required_count, source.paymentCheckRequiredCount,
+      source.unknown_count, source.unknownCount, source.provider_unknown_count, source.providerUnknownCount
+    );
+
+    const acceptedEvidence = providerAcceptedEvidencePresent();
+    if (acceptedEvidence) {
+      const inferredSent = aggregateSent > 0
+        ? aggregateSent
+        : (totalAggregate > 0 && aggregateFailed > 0 ? Math.max(1, totalAggregate - aggregateFailed - aggregateCheck) : Math.max(1, totalAggregate || 1));
+      aggregateSent = inferredSent;
+      if (aggregateFailed === 0) aggregateCheck = 0;
+      const acceptedResult = resultFromCounts(aggregateSent, aggregateFailed, aggregateCheck, Math.max(totalAggregate, aggregateSent + aggregateFailed + aggregateCheck));
+      if (acceptedResult) return acceptedResult;
+    }
+
+    if (aggregateSent > 0 || aggregateFailed > 0) {
+      const aggregateResult = resultFromCounts(aggregateSent, aggregateFailed, aggregateCheck, Math.max(totalAggregate, aggregateSent + aggregateFailed + aggregateCheck));
+      if (aggregateResult) return aggregateResult;
+    }
+
+    if (hasSentEvidence()) return resultFromCounts(Math.max(1, totalAggregate || 1), 0, 0, Math.max(1, totalAggregate || 1));
+    if (hasFailedEvidence()) return resultFromCounts(0, Math.max(1, aggregateFailed || 1), hasCheckEvidence() ? Math.max(aggregateCheck, 1) : aggregateCheck, Math.max(1, totalAggregate || aggregateFailed || 1));
+
+    return null;
+  };
+
   const rowsHtml = items.map((r) => {
     const id = String(r?.id || r?.pay_batch_id || '').trim();
     const payDate = String(r?.pay_date || '').trim();
     const stx = String(r?.status || '').trim().toUpperCase() || '—';
-    const displayStatus = safeBatchStatusLabel(stx, r);
+    const paymentOutcome = deriveBankingPayBatchPaymentOutcomeDisplay(r) || null;
+    const hasPaymentOutcome = !!(paymentOutcome && paymentOutcome.label);
+    const displayStatus = hasPaymentOutcome ? paymentOutcome.label : safeBatchStatusLabel(stx, r);
     const commitState = String(r?.execution_commit_state || '').trim().toUpperCase();
     const prov = String(r?.rail_provider_snapshot || r?.rail_provider || '').trim().toUpperCase();
     const env = String(r?.rail_env_snapshot || r?.rail_env || '').trim().toUpperCase();
@@ -43156,28 +43545,33 @@ function renderPayBatchListPanel() {
     const isActive = (id && selectedId && id === selectedId);
     const issueBadge = bankingPayNormaliseBatchIssueBadge(r);
     const cancelMode = bankingPayResolveBatchCancelMode(r);
-    const paymentIssuesRequired = cancelMode === 'PAYMENT_ISSUES_REQUIRED';
+    const paymentIssuesRequired = cancelMode === 'PAYMENT_ISSUES_REQUIRED' && !hasPaymentOutcome;
+    const currentPaymentStatusAction = hasPaymentOutcome && paymentOutcome.showCurrentPaymentStatusAction === true;
     const issueBadges = issueBadge.label ? [safeIssueBadgeLabel(issueBadge.label)].filter(Boolean) : [];
     const rawBlockedFundsRow = stx === 'BLOCKED_FUNDS' || issueBadge.secondaryLabel === 'BLOCKED FUNDS';
-    const blockedFundsRow = rawBlockedFundsRow && !paymentIssuesRequired;
+    const blockedFundsRow = rawBlockedFundsRow && !paymentIssuesRequired && !hasPaymentOutcome;
     const blockedFundsReason = blockedFundsRow
       ? (issueBadge.reason || `Required ${fmtGbp(r?.blocked_funds_required_gbp ?? r?.last_funds_check_json?.required_gbp)} / Available ${fmtGbp(r?.blocked_funds_available_gbp ?? r?.last_funds_check_json?.available_gbp)}`)
       : '';
     const acknowledgedAlert = r?.banking_alert_acknowledged_for_user === true || issueBadge.acknowledged === true;
 
-    const issuePillsHtml = paymentIssuesRequired
-      ? ` <span class="pill pill-warn" title="Use Payment Issues to resolve failed payments.">PAYMENT ISSUES</span>`
-      : blockedFundsRow
-        ? ` <span class="pill pill-warn banking-pay-blocked-funds-badge" style="background:#dc2626;color:#fff;border-color:#b91c1c;" title="${enc(blockedFundsReason)}">BANK REJECTED PAYMENT</span> <span class="pill pill-warn" style="background:#fee2e2;color:#991b1b;border-color:#fecaca;" title="${enc(blockedFundsReason)}">BLOCKED FUNDS</span>${acknowledgedAlert ? ' <span class="pill" title="This alert has been cleared from your Banking button only.">Cleared from my alerts</span>' : ''}`
-        : issueBadges.map((label) => ` <span class="pill">${enc(label)}</span>`).join('');
+    const issuePillsHtml = hasPaymentOutcome
+      ? ''
+      : paymentIssuesRequired
+        ? ` <span class="pill pill-warn" title="Use Current Payment Status to review affected payments.">PAYMENT ISSUES</span>`
+        : blockedFundsRow
+          ? ` <span class="pill pill-warn banking-pay-blocked-funds-badge" style="background:#dc2626;color:#fff;border-color:#b91c1c;" title="${enc(blockedFundsReason)}">BANK REJECTED PAYMENT</span> <span class="pill pill-warn" style="background:#fee2e2;color:#991b1b;border-color:#fecaca;" title="${enc(blockedFundsReason)}">BLOCKED FUNDS</span>${acknowledgedAlert ? ' <span class="pill" title="This alert has been cleared from your Banking button only.">Cleared from my alerts</span>' : ''}`
+          : issueBadges.map((label) => ` <span class="pill">${enc(label)}</span>`).join('');
 
-    const pillClass =
-      (stx === 'SETTLED') ? 'pill-ok'
-      : (stx === 'EXECUTING' || stx === 'PARTIAL') ? 'pill-warn'
-      : (stx === 'DRAFT') ? 'pill-info'
-      : 'pill';
+    const pillClass = hasPaymentOutcome
+      ? (paymentOutcome.tone === 'ok' ? 'pill-ok' : 'pill-warn')
+      : (stx === 'SETTLED') ? 'pill-ok'
+        : (stx === 'EXECUTING' || stx === 'PARTIAL') ? 'pill-warn'
+        : (stx === 'DRAFT') ? 'pill-info'
+        : 'pill';
 
     const authPill = (() => {
+      if (hasPaymentOutcome) return '';
       const has = (authLabel && authLabel.includes('/')) || (Number.isFinite(authReq) && Number.isFinite(authApproved));
       if (!has) return '';
       const label = authLabel && authLabel.includes('/')
@@ -43200,56 +43594,69 @@ function renderPayBatchListPanel() {
       return ` <span class="${enc(cls)}" title="${enc(title)}">${enc(txt)}</span>`;
     })();
 
-    const deleteDraftBtn = (paymentIssuesRequired && id)
-      ? `
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <button
-            type="button"
-            class="btn btn-sm btn-outline disabled"
-            data-disabled="1"
-            aria-disabled="true"
-            style="opacity:.45;filter:saturate(0.6) brightness(0.9);"
-            title="Use Payment Issues to resolve failed payments."
-          >Delete/cancel blocked</button>
+    const deleteDraftBtn = hasPaymentOutcome
+      ? (currentPaymentStatusAction && id
+        ? `
           <button
             type="button"
             class="btn btn-sm btn-primary"
             data-action="banking:pay:openChild"
             data-batch-id="${enc(id)}"
             data-tab-key="payment_issues"
-            title="Use Payment Issues to resolve failed payments."
-          >Open Payment Issues</button>
-        </div>
-      `
-      : (cancelMode === 'DRAFT_DELETE' && id)
-        ? `
-          <button
-            type="button"
-            class="btn btn-sm btn-outline"
-            data-action="banking:pay:deleteDraft"
-            data-batch-id="${enc(id)}"
-            title="Delete draft batch (releases reservations)"
-          >Delete draft</button>
+            title="Open Current Payment Status for this batch."
+          >Current Payment Status</button>
         `
-        : (cancelMode === 'CANCEL_UNPAID' && id)
+        : `<span class="mini" style="opacity:.65;">—</span>`)
+      : (paymentIssuesRequired && id)
+        ? `
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <button
+              type="button"
+              class="btn btn-sm btn-outline disabled"
+              data-disabled="1"
+              aria-disabled="true"
+              style="opacity:.45;filter:saturate(0.6) brightness(0.9);"
+              title="Use Current Payment Status to review affected payments."
+            >Delete/cancel blocked</button>
+            <button
+              type="button"
+              class="btn btn-sm btn-primary"
+              data-action="banking:pay:openChild"
+              data-batch-id="${enc(id)}"
+              data-tab-key="payment_issues"
+              title="Use Current Payment Status to review affected payments."
+            >Current Payment Status</button>
+          </div>
+        `
+        : (cancelMode === 'DRAFT_DELETE' && id)
           ? `
             <button
               type="button"
               class="btn btn-sm btn-outline"
-              data-action="banking:pay:cancel"
+              data-action="banking:pay:deleteDraft"
               data-batch-id="${enc(id)}"
-              title="${enc(commitState === 'SUBMITTED_NOT_COMMITTED' ? 'Review unpaid batch safely.' : 'Open Payment Issues to review affected payments.')}"
-            >Cancel batch</button>
+              title="Delete draft batch (releases reservations)"
+            >Delete draft</button>
           `
-          : `<span class="mini" style="opacity:.65;">—</span>`;
+          : (cancelMode === 'CANCEL_UNPAID' && id)
+            ? `
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:cancel"
+                data-batch-id="${enc(id)}"
+                title="${enc(commitState === 'SUBMITTED_NOT_COMMITTED' ? 'Review unpaid batch safely.' : 'Open Current Payment Status to review affected payments.')}"
+              >Cancel batch</button>
+            `
+            : `<span class="mini" style="opacity:.65;">—</span>`;
 
     return `
       <tr
         ${isActive ? 'class="active"' : ''}
         style="cursor:pointer;"
         data-batch-id="${enc(id)}"
-        data-has-payment-issue="${issueBadge.hasPaymentIssue || paymentIssuesRequired ? '1' : '0'}"
-        data-focus-payment-issue-panel="${issueBadge.focusPaymentIssuePanel || paymentIssuesRequired ? '1' : '0'}"
+        data-has-payment-issue="${hasPaymentOutcome ? (paymentOutcome.hasIssues ? '1' : '0') : (issueBadge.hasPaymentIssue || paymentIssuesRequired ? '1' : '0')}"
+        data-focus-payment-issue-panel="${hasPaymentOutcome ? (paymentOutcome.showCurrentPaymentStatusAction ? '1' : '0') : (issueBadge.focusPaymentIssuePanel || paymentIssuesRequired ? '1' : '0')}"
         title="${enc(id)}"
       >
         <td class="mono">${enc(id ? (id.slice(0, 8) + '…') : '')}</td>
@@ -52941,8 +53348,26 @@ const retryBlockedFundsPipeline = async () => {
 
              try {
             if (act === 'banking:pay:issue:viewDetails') {
-              const row = findPaymentIssueRowByKey(attr('rowKey', 'data-row-key'));
-              await showPaymentIssueRowDetails(row, 'Payment details');
+              const rowKey = attr('rowKey', 'data-row-key');
+              const row = findPaymentIssueRowByKey(rowKey);
+              if (!row) {
+                toast('Payment row could not be found. Refresh the batch and try again.');
+                return;
+              }
+              correctionState.ui = (correctionState.ui && typeof correctionState.ui === 'object' && !Array.isArray(correctionState.ui)) ? correctionState.ui : {};
+              const currentKey = String(
+                correctionState.expandedSupportRowKey ||
+                correctionState.supportDetailsRowKey ||
+                correctionState.ui.expandedSupportRowKey ||
+                correctionState.ui.supportDetailsRowKey ||
+                ''
+              ).trim();
+              const nextKey = currentKey === rowKey ? '' : rowKey;
+              correctionState.expandedSupportRowKey = nextKey;
+              correctionState.supportDetailsRowKey = nextKey;
+              correctionState.ui.expandedSupportRowKey = nextKey;
+              correctionState.ui.supportDetailsRowKey = nextKey;
+              await rerenderPaymentIssuesOnly();
               return;
             }
 
@@ -54452,6 +54877,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
   await rerenderChild();
   scheduleWire();
 }
+
 
 
 
