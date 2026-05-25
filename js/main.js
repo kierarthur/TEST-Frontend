@@ -165163,6 +165163,38 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     return `attached|${targetId || fileKey}|${fileKey}`;
   })();
 
+  const preserveExplicitAttachedManualSelection = !!(
+    !isBulkAuthoriseTimesheets &&
+    pane.active_tab === 'attached' &&
+    pane.__attached_manual_override === true &&
+    previousSelection.mode === 'attached' &&
+    !!previousSelection.file_key &&
+    !!currentAttachedSelectionKey &&
+    !selectedArtifactRemoved
+  );
+  const preferredManualAttachedFileKey = preserveExplicitAttachedManualSelection
+    ? safeStorageKey(previousSelection.file_key || getItemStorageKey(previewStateAtStart.active_attached_item) || '')
+    : '';
+  const preferredManualAttachedKind = preserveExplicitAttachedManualSelection
+    ? normaliseBulkProcessEvidenceKindForReconcile(
+        previewStateAtStart.active_attached_item?.kind ||
+        previewStateAtStart.active_attached_item?.staged_kind ||
+        previewStateAtStart.active_attached_item?.evidence_kind ||
+        previewStateAtStart.active_attached_item?.evidenceKind ||
+        ''
+      )
+    : '';
+  const findExplicitManualAttachedSelection = () => {
+    if (!preserveExplicitAttachedManualSelection || !preferredManualAttachedFileKey) return null;
+    return attachedAllRows.find((item) => {
+      const itemFileKey = getItemStorageKey(item);
+      if (!itemFileKey || itemFileKey.toLowerCase() !== preferredManualAttachedFileKey.toLowerCase()) return false;
+      const itemKind = normaliseBulkProcessEvidenceKindForReconcile(item?.kind || item?.staged_kind || item?.evidence_kind || item?.evidenceKind || '');
+      if (preferredManualAttachedKind && itemKind && itemKind !== preferredManualAttachedKind) return false;
+      return !!buildCanonicalAttachedSelectionKey(item);
+    }) || null;
+  };
+
   const findPreferredTimesheetAttached = () => {
     const validTimesheetRows = timesheetRows.filter((item) => !!buildCanonicalAttachedSelectionKey(item));
     if (!validTimesheetRows.length) return null;
@@ -165185,14 +165217,19 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     if (aliasedSelectionKey && attachedBySelectionKey.has(aliasedSelectionKey)) activeAttached = { ...(attachedBySelectionKey.get(aliasedSelectionKey) || {}) };
   }
 
+  if (!activeAttached && preserveExplicitAttachedManualSelection) {
+    const explicitManualAttached = findExplicitManualAttachedSelection();
+    if (explicitManualAttached) activeAttached = { ...(explicitManualAttached || {}) };
+  }
+
   if (!isBulkAuthoriseTimesheets && canUseAnyAttachedForExplicitBulkProcess && activeAttached) {
     const activeAttachedKind = normaliseBulkProcessEvidenceKindForReconcile(activeAttached?.kind || activeAttached?.staged_kind || activeAttached?.evidence_kind || activeAttached?.evidenceKind || '');
     if (activeAttachedKind === 'TIMESHEET' || !hasRealEvidenceIdentityForReconcile(activeAttached)) activeAttached = null;
   }
-  if (!isBulkAuthoriseTimesheets && !canUseAnyAttachedForExplicitBulkProcess && activeAttached && hasTimesheetEvidence && normaliseBulkProcessEvidenceKindForReconcile(activeAttached?.kind || activeAttached?.staged_kind || '') !== 'TIMESHEET') {
+  if (!preserveExplicitAttachedManualSelection && !isBulkAuthoriseTimesheets && !canUseAnyAttachedForExplicitBulkProcess && activeAttached && hasTimesheetEvidence && normaliseBulkProcessEvidenceKindForReconcile(activeAttached?.kind || activeAttached?.staged_kind || '') !== 'TIMESHEET') {
     activeAttached = null;
   }
-  if (!isBulkAuthoriseTimesheets && !canUseAnyAttachedForExplicitBulkProcess && selectedRowArtifactKey && activeAttached && getItemStorageKey(activeAttached).toLowerCase() !== selectedRowArtifactKey.toLowerCase()) {
+  if (!preserveExplicitAttachedManualSelection && !isBulkAuthoriseTimesheets && !canUseAnyAttachedForExplicitBulkProcess && selectedRowArtifactKey && activeAttached && getItemStorageKey(activeAttached).toLowerCase() !== selectedRowArtifactKey.toLowerCase()) {
     activeAttached = null;
   }
 
@@ -165232,6 +165269,9 @@ function reconcileBulkProcessEvidenceStateAfterContextRefresh(state) {
     active_attached_selection_key: activeAttached ? buildCanonicalAttachedSelectionKey(activeAttached) : null,
     current_attached_selection_key: currentAttachedSelectionKey || null,
     can_use_any_attached_for_explicit_bulk_process: canUseAnyAttachedForExplicitBulkProcess,
+    preserve_explicit_attached_manual_selection: preserveExplicitAttachedManualSelection,
+    preferred_manual_attached_file_key: preferredManualAttachedFileKey || null,
+    preferred_manual_attached_kind: preferredManualAttachedKind || null,
     pane_before_active_attached_apply: stateAuditPaneSummary()
   });
   if (activeAttached && buildCanonicalAttachedSelectionKey(activeAttached)) {
