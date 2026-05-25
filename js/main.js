@@ -48242,7 +48242,6 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
 
 
 
-
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -50203,6 +50202,31 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     } catch {}
   };
 
+  const clearPaymentIssueSupportExpansion = () => {
+    try {
+      const correctionState = (child.correction && typeof child.correction === 'object' && !Array.isArray(child.correction)) ? child.correction : null;
+      if (!correctionState) return;
+      correctionState.expandedSupportRowKey = '';
+      correctionState.supportDetailsRowKey = '';
+      correctionState.expandedRowKey = '';
+      correctionState.detailsRowKey = '';
+      correctionState.viewDetailsRowKey = '';
+      correctionState.ui = (correctionState.ui && typeof correctionState.ui === 'object' && !Array.isArray(correctionState.ui)) ? correctionState.ui : {};
+      correctionState.ui.expandedSupportRowKey = '';
+      correctionState.ui.supportDetailsRowKey = '';
+    } catch {}
+  };
+
+  const paymentIssuesPanelInsideChildRoot = () => {
+    try {
+      const root = document.getElementById(rootId);
+      const panel = document.getElementById('payment-issue-panel');
+      return !!(root && panel && root.contains(panel));
+    } catch {
+      return false;
+    }
+  };
+
   const rerenderPaymentIssuesOnly = async () => {
     try {
       child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
@@ -50210,7 +50234,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
       if (typeof rerenderBankingPaymentIssuePanel === 'function') {
         const ok = rerenderBankingPaymentIssuePanel();
-        if (ok) {
+        if (ok && paymentIssuesPanelInsideChildRoot()) {
           try { wire(); } catch {}
           syncChildFooterState();
           return;
@@ -52866,6 +52890,7 @@ const retryBlockedFundsPipeline = async () => {
     try { setTimeout(syncChildFooterState, 0); } catch {}
 
     const safeKey = String(key || '').trim() || 'overview';
+    if (safeKey !== 'payment_issues') clearPaymentIssueSupportExpansion();
     ensureFirstPageForActiveTab(safeKey);
 
     const withPagedControls = (html) => {
@@ -53083,6 +53108,7 @@ const retryBlockedFundsPipeline = async () => {
             : (normalizeChildTabKey(el.getAttribute('data-tab-key') || el.getAttribute('data-tab') || el.dataset?.tabKey || el.dataset?.tab || '') || 'overview');
            child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
           child.ui.activeTabKey = nextTabKey;
+          if (nextTabKey !== 'payment_issues') clearPaymentIssueSupportExpansion();
           ensureFirstPageForActiveTab(nextTabKey);
           await rerenderChild();
           return;
@@ -54881,6 +54907,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
   await rerenderChild();
   scheduleWire();
 }
+
 
 
 
