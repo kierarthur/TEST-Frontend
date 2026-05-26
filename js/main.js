@@ -56462,7 +56462,9 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
 
 
 
+
 function renderBankingPayBatchChildModalOverview() {
+  try { window.__CTMS_OVERVIEW_RUNTIME_PROOF_MARKER = 'renderBankingPayBatchChildModalOverview:overview-draft-not-sent:2026-05-26'; } catch {}
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -57735,6 +57737,10 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
+
+
+
+
 
 function openBulkTimesheetActionProgressModal(options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
