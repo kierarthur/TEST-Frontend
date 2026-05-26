@@ -1,7 +1,7 @@
 // ===== Base URL + helpers =====
 
 // ===== Base URL + helpers =====
-// ===== Base URL + helpers ===== 
+// ===== Base URL +  helpers ===== 
 function _defaultBrokerBaseUrl() {
   const h = String(location.hostname || '').toLowerCase();
 
@@ -169592,6 +169592,8 @@ async function rerenderBulkProcessWorkbench(state, logPrefix) {
   }
 }
 
+
+
 async function handleBulkProcessSave(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][SAVE]');
   GC('handleBulkProcessSave');
@@ -170693,6 +170695,339 @@ async function handleBulkProcessSave(state) {
     st.active_ctx = normaliseBulkTimesheetWorkbenchCtx(deep(rowPatched), nextDetails);
   };
 
+
+  const parseExpenseTotalsObjectForSave = (value) => {
+    if (!value) return {};
+    if (value && typeof value === 'object' && !Array.isArray(value)) return deep(value) || {};
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+      } catch {}
+    }
+    return {};
+  };
+
+  const patchExpenseDraftIntoTotalsForSave = (target, committedDraft) => {
+    if (!target || typeof target !== 'object') return;
+    const draft = (committedDraft && typeof committedDraft === 'object' && !Array.isArray(committedDraft)) ? deep(committedDraft) : {};
+    if (Object.prototype.hasOwnProperty.call(target, 'contract_week_totals_json') || target.contract_week_totals_json) {
+      const totals = parseExpenseTotalsObjectForSave(target.contract_week_totals_json);
+      target.contract_week_totals_json = { ...totals, expenses_draft: deep(draft) };
+    }
+    if (Object.prototype.hasOwnProperty.call(target, 'totals_json') || target.totals_json) {
+      const totals = parseExpenseTotalsObjectForSave(target.totals_json);
+      target.totals_json = { ...totals, expenses_draft: deep(draft) };
+    }
+    if (target.contract_week && typeof target.contract_week === 'object') {
+      const totals = parseExpenseTotalsObjectForSave(target.contract_week.totals_json);
+      target.contract_week.totals_json = { ...totals, expenses_draft: deep(draft) };
+    }
+    if (target.details && typeof target.details === 'object') {
+      patchExpenseDraftIntoTotalsForSave(target.details, draft);
+    }
+  };
+
+  const expenseIdentityMatchesTargetForSave = (target, identity = {}) => {
+    if (!target || typeof target !== 'object') return false;
+    const targetRowKey = trimStr(target.row_key || target.new_row_key || makeRowKey(target) || '');
+    const targetTimesheetId = trimStr(target.current_timesheet_id || target.timesheet_id || target.requested_timesheet_id || target.expected_timesheet_id || target.timesheet?.timesheet_id || '');
+    const targetContractWeekId = trimStr(target.contract_week_id || target.contractWeekId || target.contract_week?.id || target.id || '');
+    const rowKey = trimStr(identity.rowKey || identity.row_key || '');
+    const timesheetId = trimStr(identity.timesheetId || identity.timesheet_id || '');
+    const expectedTimesheetId = trimStr(identity.expectedTimesheetId || identity.expected_timesheet_id || '');
+    const contractWeekId = trimStr(identity.contractWeekId || identity.contract_week_id || '');
+    if (rowKey && targetRowKey && rowKey === targetRowKey) return true;
+    if (timesheetId && targetTimesheetId && timesheetId === targetTimesheetId) return true;
+    if (expectedTimesheetId && targetTimesheetId && expectedTimesheetId === targetTimesheetId) return true;
+    if (contractWeekId && targetContractWeekId && contractWeekId === targetContractWeekId) return true;
+    return false;
+  };
+
+  const patchExpenseRowForSave = (target, rowExpensePatch, committedDraft) => {
+    if (!target || typeof target !== 'object') return;
+    if (rowExpensePatch && typeof rowExpensePatch === 'object') Object.assign(target, deep(rowExpensePatch));
+    patchExpenseDraftIntoTotalsForSave(target, committedDraft);
+  };
+
+  const patchExpenseRowsInCollectionForSave = (collection, rowExpensePatch, committedDraft, identity = {}) => {
+    if (!Array.isArray(collection)) return;
+    for (let i = 0; i < collection.length; i += 1) {
+      const item = collection[i];
+      if (!expenseIdentityMatchesTargetForSave(item, identity)) continue;
+      const next = (item && typeof item === 'object') ? deep(item) : {};
+      patchExpenseRowForSave(next, rowExpensePatch, committedDraft);
+      collection[i] = next;
+    }
+  };
+
+  const patchExpenseRowsAcrossStoresForSave = (rowExpensePatch, committedDraft, identity = {}) => {
+    const ds = ensureDataset();
+    [
+      ds.unprocessed_rows,
+      ds.processed_rows,
+      ds.rows,
+      st.unprocessed_rows,
+      st.processed_rows,
+      st.rows,
+      st.visible_rows,
+      st.visible_unprocessed_rows,
+      st.visible_processed_rows,
+      ds.visible_rows,
+      ds.visible_unprocessed_rows,
+      ds.visible_processed_rows
+    ].forEach((collection) => patchExpenseRowsInCollectionForSave(collection, rowExpensePatch, committedDraft, identity));
+    if (ds.sections && typeof ds.sections === 'object') {
+      Object.keys(ds.sections).forEach((key) => patchExpenseRowsInCollectionForSave(ds.sections[key], rowExpensePatch, committedDraft, identity));
+    }
+  };
+
+  const clearExpenseRowContextCachesForSave = (identity = {}) => {
+    const identityKeys = new Set();
+    const identityFragments = new Set();
+    const addKey = (value) => {
+      const clean = trimStr(value || '');
+      if (clean) identityKeys.add(clean);
+    };
+    const addFragment = (value) => {
+      const clean = trimStr(value || '');
+      if (clean) identityFragments.add(clean);
+    };
+
+    addKey(identity.rowKey);
+    addKey(identity.row_key);
+    addKey(st.active_row_key);
+    addKey(st.active_row?.row_key);
+    addKey(identity.timesheetId ? `timesheet:${identity.timesheetId}` : '');
+    addKey(identity.timesheet_id ? `timesheet:${identity.timesheet_id}` : '');
+    addKey(identity.expectedTimesheetId ? `timesheet:${identity.expectedTimesheetId}` : '');
+    addKey(identity.expected_timesheet_id ? `timesheet:${identity.expected_timesheet_id}` : '');
+    addKey(identity.contractWeekId ? `contract_week:${identity.contractWeekId}` : '');
+    addKey(identity.contract_week_id ? `contract_week:${identity.contract_week_id}` : '');
+
+    addFragment(identity.timesheetId);
+    addFragment(identity.timesheet_id);
+    addFragment(identity.expectedTimesheetId);
+    addFragment(identity.expected_timesheet_id);
+    addFragment(identity.contractWeekId);
+    addFragment(identity.contract_week_id);
+    addFragment(identity.rowSignature);
+    addFragment(identity.row_signature);
+
+    const cacheNames = [
+      '__row_context_cache',
+      '__row_context_inflight',
+      '__bulk_process_row_context_cache',
+      '__bulk_process_row_context_inflight',
+      '__bulk_process_context_cache',
+      '__active_context_cache',
+      '__rowContextCache'
+    ];
+
+    for (const cacheName of cacheNames) {
+      const cache = st?.[cacheName];
+      if (!cache || typeof cache !== 'object') continue;
+      for (const key of Object.keys(cache)) {
+        const cleanKey = trimStr(key || '');
+        const entry = cache[key];
+        const entryText = (() => {
+          if (!entry || typeof entry !== 'object') return '';
+          try { return JSON.stringify(entry); } catch { return ''; }
+        })();
+        if (
+          identityKeys.has(cleanKey) ||
+          Array.from(identityKeys).some((candidate) => candidate && cleanKey.includes(candidate)) ||
+          Array.from(identityFragments).some((fragment) => fragment && (cleanKey.includes(fragment) || entryText.includes(fragment)))
+        ) {
+          try { delete cache[key]; } catch {}
+        }
+      }
+    }
+  };
+
+  const applyExpensePostCommitSyncForSave = ({
+    expenseCommitResult: commitResult = null,
+    committedDraft = null,
+    row: sourceRow = {},
+    details: sourceDetails = {},
+    ctx: sourceCtx = {},
+    tsfin: sourceTsfin = {},
+    currentRowKey: sourceRowKey = '',
+    actualTimesheetId: sourceTimesheetId = '',
+    expectedTimesheetId: sourceExpectedTimesheetId = '',
+    weekId: sourceContractWeekId = ''
+  } = {}) => {
+    const committedDraftForSave = (typeof normaliseTimesheetExpensesDraft === 'function')
+      ? normaliseTimesheetExpensesDraft(commitResult?.committedDraft || committedDraft || {}, { context: sourceCtx, details: sourceDetails, tsfin: commitResult?.updatedTsfin || sourceDetails?.tsfin || sourceTsfin || {} })
+      : deep(commitResult?.committedDraft || committedDraft || {});
+    const updatedTsfinForSave = (commitResult?.updatedTsfin && typeof commitResult.updatedTsfin === 'object')
+      ? deep(commitResult.updatedTsfin)
+      : {};
+    const fallbackTsfinForSave = {
+      ...((sourceDetails?.tsfin && typeof sourceDetails.tsfin === 'object') ? sourceDetails.tsfin : {}),
+      ...((sourceCtx?.details?.tsfin && typeof sourceCtx.details.tsfin === 'object') ? sourceCtx.details.tsfin : {}),
+      ...((sourceCtx?.tsfin && typeof sourceCtx.tsfin === 'object') ? sourceCtx.tsfin : {}),
+      ...((st?.active_details?.tsfin && typeof st.active_details.tsfin === 'object') ? st.active_details.tsfin : {})
+    };
+    const fallbackRowForSave = {
+      ...((sourceRow && typeof sourceRow === 'object') ? sourceRow : {}),
+      ...((st?.active_row && typeof st.active_row === 'object') ? st.active_row : {})
+    };
+    const expenseNumberForSave = (value, dp = 2) => {
+      if (value === null || value === undefined || value === '') return null;
+      const n = Number(String(value).replace(/[^0-9.-]/g, ''));
+      if (!Number.isFinite(n)) return null;
+      const m = Math.pow(10, dp);
+      return Math.round(n * m) / m;
+    };
+    const firstExpenseNumberForSave = (dp, ...values) => {
+      for (const value of values) {
+        const n = expenseNumberForSave(value, dp);
+        if (n !== null) return n;
+      }
+      return 0;
+    };
+    const travelPay = firstExpenseNumberForSave(2, updatedTsfinForSave.travel_pay_ex_vat, fallbackTsfinForSave.travel_pay_ex_vat, fallbackRowForSave.tsfin_travel_pay_ex_vat, committedDraftForSave.travel_pay);
+    const travelCharge = firstExpenseNumberForSave(2, updatedTsfinForSave.travel_charge_ex_vat, fallbackTsfinForSave.travel_charge_ex_vat, fallbackRowForSave.tsfin_travel_charge_ex_vat, committedDraftForSave.travel_charge);
+    const accommodationPay = firstExpenseNumberForSave(2, updatedTsfinForSave.accommodation_pay_ex_vat, fallbackTsfinForSave.accommodation_pay_ex_vat, fallbackRowForSave.tsfin_accommodation_pay_ex_vat, committedDraftForSave.accommodation_pay);
+    const accommodationCharge = firstExpenseNumberForSave(2, updatedTsfinForSave.accommodation_charge_ex_vat, fallbackTsfinForSave.accommodation_charge_ex_vat, fallbackRowForSave.tsfin_accommodation_charge_ex_vat, committedDraftForSave.accommodation_charge);
+    const otherPay = firstExpenseNumberForSave(2, updatedTsfinForSave.other_pay_ex_vat, fallbackTsfinForSave.other_pay_ex_vat, fallbackRowForSave.tsfin_other_pay_ex_vat, committedDraftForSave.other_pay);
+    const otherCharge = firstExpenseNumberForSave(2, updatedTsfinForSave.other_charge_ex_vat, fallbackTsfinForSave.other_charge_ex_vat, fallbackRowForSave.tsfin_other_charge_ex_vat, committedDraftForSave.other_charge);
+    const mileageUnits = firstExpenseNumberForSave(3, updatedTsfinForSave.mileage_units, fallbackTsfinForSave.mileage_units, fallbackRowForSave.tsfin_mileage_units, committedDraftForSave.mileage_units);
+    const mileagePay = firstExpenseNumberForSave(2, updatedTsfinForSave.mileage_pay_ex_vat, fallbackTsfinForSave.mileage_pay_ex_vat, fallbackRowForSave.tsfin_mileage_pay_ex_vat);
+    const mileageCharge = firstExpenseNumberForSave(2, updatedTsfinForSave.mileage_charge_ex_vat, fallbackTsfinForSave.mileage_charge_ex_vat, fallbackRowForSave.tsfin_mileage_charge_ex_vat);
+    const expensesPay = firstExpenseNumberForSave(2, updatedTsfinForSave.expenses_pay_ex_vat, fallbackTsfinForSave.expenses_pay_ex_vat, fallbackRowForSave.tsfin_expenses_pay_ex_vat, travelPay + accommodationPay + otherPay);
+    const expensesCharge = firstExpenseNumberForSave(2, updatedTsfinForSave.expenses_charge_ex_vat, fallbackTsfinForSave.expenses_charge_ex_vat, fallbackRowForSave.tsfin_expenses_charge_ex_vat, travelCharge + accommodationCharge + otherCharge);
+    const tsfinPatchForSave = {
+      ...updatedTsfinForSave,
+      expenses_pay_ex_vat: expensesPay,
+      expenses_charge_ex_vat: expensesCharge,
+      travel_pay_ex_vat: travelPay,
+      travel_charge_ex_vat: travelCharge,
+      accommodation_pay_ex_vat: accommodationPay,
+      accommodation_charge_ex_vat: accommodationCharge,
+      other_pay_ex_vat: otherPay,
+      other_charge_ex_vat: otherCharge,
+      mileage_units: mileageUnits,
+      mileage_pay_ex_vat: mileagePay,
+      mileage_charge_ex_vat: mileageCharge
+    };
+    const activeSignatureForSave = trimStr(
+      st.active_row?.row_signature ||
+      st.active_context?.row_signature ||
+      st.active_context?.row?.row_signature ||
+      st.active_context?.data_row?.row_signature ||
+      st.active_ctx?.row_signature ||
+      st.active_ctx?.row?.row_signature ||
+      sourceRow?.row_signature ||
+      ''
+    );
+    const rowExpensePatchForSave = {
+      tsfin_expenses_pay_ex_vat: tsfinPatchForSave.expenses_pay_ex_vat,
+      tsfin_expenses_charge_ex_vat: tsfinPatchForSave.expenses_charge_ex_vat,
+      tsfin_mileage_units: tsfinPatchForSave.mileage_units,
+      tsfin_mileage_pay_ex_vat: tsfinPatchForSave.mileage_pay_ex_vat,
+      tsfin_mileage_charge_ex_vat: tsfinPatchForSave.mileage_charge_ex_vat,
+      tsfin_travel_pay_ex_vat: tsfinPatchForSave.travel_pay_ex_vat,
+      tsfin_travel_charge_ex_vat: tsfinPatchForSave.travel_charge_ex_vat,
+      tsfin_accommodation_pay_ex_vat: tsfinPatchForSave.accommodation_pay_ex_vat,
+      tsfin_accommodation_charge_ex_vat: tsfinPatchForSave.accommodation_charge_ex_vat,
+      tsfin_other_pay_ex_vat: tsfinPatchForSave.other_pay_ex_vat,
+      tsfin_other_charge_ex_vat: tsfinPatchForSave.other_charge_ex_vat
+    };
+    if (activeSignatureForSave) rowExpensePatchForSave.row_signature = activeSignatureForSave;
+    for (const key of ['total_pay_ex_vat', 'total_charge_ex_vat', 'margin_ex_vat']) {
+      if (Object.prototype.hasOwnProperty.call(tsfinPatchForSave, key)) rowExpensePatchForSave[key] = tsfinPatchForSave[key];
+    }
+    for (const key of ['contract_week_totals_json', 'totals_json']) {
+      const sourceValue = st.active_row?.[key] || st.active_context?.row?.[key] || st.active_context?.data_row?.[key] || sourceRow?.[key];
+      if (sourceValue && typeof sourceValue === 'object') rowExpensePatchForSave[key] = deep(sourceValue);
+    }
+
+    const rebaseExpenseStateForSave = (target) => {
+      if (!target || typeof target !== 'object') return;
+      target.expensesDraft = deep(committedDraftForSave);
+      target.expensesBaseline = deep(committedDraftForSave);
+      target.expensesDirty = false;
+      target.expensesDraftDirty = false;
+      target.hasStagedExpensesDirty = false;
+      target.stagedExpensesDirty = false;
+      target.expenseDirtyMarker = false;
+    };
+    const patchTsfinContainerForSave = (target) => {
+      if (!target || typeof target !== 'object') return;
+      if (target.details && typeof target.details === 'object') {
+        target.details.tsfin = {
+          ...((target.details.tsfin && typeof target.details.tsfin === 'object') ? target.details.tsfin : {}),
+          ...deep(tsfinPatchForSave)
+        };
+        patchExpenseDraftIntoTotalsForSave(target.details, committedDraftForSave);
+      }
+      target.tsfin = {
+        ...((target.tsfin && typeof target.tsfin === 'object') ? target.tsfin : {}),
+        ...deep(tsfinPatchForSave)
+      };
+      patchExpenseDraftIntoTotalsForSave(target, committedDraftForSave);
+    };
+    const identity = {
+      rowKey: trimStr(sourceRowKey || st.active_row_key || sourceRow?.row_key || ''),
+      timesheetId: trimStr(sourceTimesheetId || sourceExpectedTimesheetId || sourceRow?.current_timesheet_id || sourceRow?.timesheet_id || ''),
+      expectedTimesheetId: trimStr(sourceExpectedTimesheetId || sourceTimesheetId || sourceRow?.expected_timesheet_id || ''),
+      contractWeekId: trimStr(sourceContractWeekId || sourceRow?.contract_week_id || sourceDetails?.contract_week_id || sourceDetails?.contract_week?.id || ''),
+      rowSignature: activeSignatureForSave
+    };
+
+    for (const targetState of [st?.active_ctx?.state, st?.active_context?.state, st?.formState, window.modalCtx?.active_ctx?.state, window.modalCtx?.active_context?.state, window.modalCtx?.bulkProcessState?.active_ctx?.state, window.modalCtx?.bulkProcessState?.active_context?.state]) {
+      rebaseExpenseStateForSave(targetState);
+    }
+    for (const target of [st.active_details, st.active_context, st.active_ctx, window.modalCtx?.active_context, window.modalCtx?.active_ctx, window.modalCtx?.bulkProcessState?.active_context, window.modalCtx?.bulkProcessState?.active_ctx]) {
+      patchTsfinContainerForSave(target);
+    }
+    for (const targetRow of [st.active_row, st.active_context?.row, st.active_context?.data_row, st.active_ctx?.row, st.active_ctx?.data_row, window.modalCtx?.active_row, window.modalCtx?.active_context?.row, window.modalCtx?.active_context?.data_row]) {
+      patchExpenseRowForSave(targetRow, rowExpensePatchForSave, committedDraftForSave);
+    }
+    patchExpenseRowsAcrossStoresForSave(rowExpensePatchForSave, committedDraftForSave, identity);
+    clearExpenseRowContextCachesForSave(identity);
+    if (typeof invalidateBulkTimesheetCachesForPatch === 'function') {
+      try {
+        invalidateBulkTimesheetCachesForPatch(st, {
+          row_key: identity.rowKey || null,
+          current_timesheet_id: identity.timesheetId || null,
+          timesheet_id: identity.timesheetId || null,
+          expected_timesheet_id: identity.expectedTimesheetId || null,
+          contract_week_id: identity.contractWeekId || null,
+          row_signature: identity.rowSignature || null,
+          manual_changed: true,
+          invalidate_context: true,
+          invalidate_row_context: true,
+          cache_invalidation_hints: {
+            row_key: identity.rowKey || null,
+            timesheet_id: identity.timesheetId || null,
+            expected_timesheet_id: identity.expectedTimesheetId || null,
+            contract_week_id: identity.contractWeekId || null,
+            row_signature: identity.rowSignature || null,
+            manual_changed: true,
+            invalidate_context: true,
+            invalidate_row_context: true
+          }
+        }, {
+          mode: 'bulk_process',
+          action: 'save',
+          manual_changed: true,
+          invalidate_context: true,
+          invalidate_row_context: true
+        });
+      } catch {}
+    }
+
+    return {
+      committedDraftForSave,
+      tsfinPatchForSave,
+      rowExpensePatchForSave,
+      identity
+    };
+  };
+
   try {
     const uiSnapshot = captureBulkProcessUiSnapshot(st);
     st.__suppress_dirty_marking = true;
@@ -171249,6 +171584,7 @@ async function handleBulkProcessSave(state) {
     if (effectiveTsId) tsId = effectiveTsId;
 
     let expenseCommitResult = null;
+    let committedExpenseDraftForSave = null;
     if (expensesChanged && tsfinExpenseSave && !plannedContractWeekExpenseDraftSave) {
       expenseCommitResult = await commitTimesheetExpensesMileageDraft({
         source: 'bulk-process',
@@ -171274,6 +171610,7 @@ async function handleBulkProcessSave(state) {
         return { ok: false, message: msg, error: expenseCommitResult?.error || 'EXPENSE_SAVE_FAILED', evidenceRequired: expenseCommitResult?.evidenceRequired === true, expense_result: expenseCommitResult };
       }
       const committed = deep(expenseCommitResult?.committedDraft || stagedExpenses);
+      committedExpenseDraftForSave = deep(committed);
       for (const target of [st?.active_ctx?.state, st?.active_context?.state].filter((t) => t && typeof t === 'object')) {
         target.expensesDraft = deep(committed);
         target.expensesBaseline = deep(committed);
@@ -171283,6 +171620,18 @@ async function handleBulkProcessSave(state) {
         target.stagedExpensesDirty = false;
         target.expenseDirtyMarker = false;
       }
+      applyExpensePostCommitSyncForSave({
+        expenseCommitResult,
+        committedDraft: committedExpenseDraftForSave,
+        row,
+        details,
+        ctx,
+        tsfin,
+        currentRowKey,
+        actualTimesheetId,
+        expectedTimesheetId,
+        weekId
+      });
     }
 
     if (plannedContractWeekExpenseDraftSave && saveResult) {
@@ -171507,6 +171856,18 @@ async function handleBulkProcessSave(state) {
           patchRowForSave(targetRow);
         }
       }
+      applyExpensePostCommitSyncForSave({
+        expenseCommitResult,
+        committedDraft: committedDraftForSave,
+        row,
+        details,
+        ctx,
+        tsfin,
+        currentRowKey: st.active_row_key || currentRowKey,
+        actualTimesheetId,
+        expectedTimesheetId,
+        weekId
+      });
 
       installBulkProcessModalCtxPatch(st, { forceIdentityRebase: true });
       if (typeof resetBulkProcessDirtyBaseline === 'function') {
@@ -171638,6 +171999,21 @@ async function handleBulkProcessSave(state) {
       }
     }
 
+    if (expensesChanged && tsfinExpenseSave && !plannedContractWeekExpenseDraftSave && expenseCommitResult?.ok) {
+      applyExpensePostCommitSyncForSave({
+        expenseCommitResult,
+        committedDraft: committedExpenseDraftForSave || stagedExpenses,
+        row,
+        details,
+        ctx,
+        tsfin,
+        currentRowKey: st.active_row_key || currentRowKey,
+        actualTimesheetId,
+        expectedTimesheetId,
+        weekId
+      });
+    }
+
     if (evidenceChanged && typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
       try { reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch {}
     } else if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
@@ -171692,6 +172068,7 @@ async function handleBulkProcessSave(state) {
     return { ok: false, error: st.error_text };
   }
 }
+
 
 
 async function handleBulkProcessProcess(state) {
