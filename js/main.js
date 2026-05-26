@@ -21729,6 +21729,146 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
   const rawItems = asArray(src.items);
   const items = rawItems.filter((item) => !(item?.is_voided === true || item?.isVoided === true || toUpper(item?.status || item?.item_status || item?.itemStatus) === 'VOIDED'));
   const bankEvidence = asArray(src.bank_evidence || src.bankEvidence);
+  const paymentIssueRows = [
+    ...asArray(src.payment_issues),
+    ...asArray(src.paymentIssues),
+    ...asArray(src.issues),
+    ...asArray(batch.payment_issues),
+    ...asArray(batch.paymentIssues)
+  ];
+  const anyPositiveNumber = (...values) => values.some((value) => {
+    if (value === null || value === undefined || toText(value) === '') return false;
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0;
+  });
+  const anyTrueBool = (...values) => values.some((value) => readBool(value) === true);
+  const candidateIssuePresent = candidateRows.some((candidate) => {
+    const c = asObj(candidate) || {};
+    const paymentStatus = toUpper(c.payment_status || c.paymentStatus || c.status || '');
+    return (
+      c.payment_issue_badge === true ||
+      c.paymentIssueBadge === true ||
+      asArray(c.payment_issue_kinds || c.paymentIssueKinds).length > 0 ||
+      anyPositiveNumber(c.corrected_item_count, c.correctedItemCount) ||
+      paymentStatus === 'PAYMENT_ISSUE' ||
+      paymentStatus === 'PAYMENT_ISSUE_PARTIAL'
+    );
+  });
+  const explicitIssuePresent = !!(
+    paymentIssueRows.length > 0 ||
+    candidateIssuePresent ||
+    anyPositiveNumber(
+      src.payment_issue_candidate_count,
+      src.paymentIssueCandidateCount,
+      batch.payment_issue_candidate_count,
+      batch.paymentIssueCandidateCount
+    ) ||
+    anyTrueBool(
+      src.has_payment_issue_candidates,
+      src.hasPaymentIssueCandidates,
+      batch.has_payment_issue_candidates,
+      batch.hasPaymentIssueCandidates,
+      src.payment_provider_review_required,
+      src.paymentProviderReviewRequired,
+      batch.payment_provider_review_required,
+      batch.paymentProviderReviewRequired,
+      src.provider_submit_issue_present,
+      src.providerSubmitIssuePresent,
+      batch.provider_submit_issue_present,
+      batch.providerSubmitIssuePresent
+    )
+  );
+  const providerSubmissionStatusForBatch = toUpper(
+    src.provider_submission_status ||
+    src.providerSubmissionStatus ||
+    batch.provider_submission_status ||
+    batch.providerSubmissionStatus ||
+    src.payment_execution_review?.provider_submission_status ||
+    src.paymentExecutionReview?.providerSubmissionStatus ||
+    batch.payment_execution_review?.provider_submission_status ||
+    batch.paymentExecutionReview?.providerSubmissionStatus ||
+    ''
+  );
+  const providerReviewReasonForBatch = toUpper(
+    src.review_reason_code ||
+    src.reviewReasonCode ||
+    batch.review_reason_code ||
+    batch.reviewReasonCode ||
+    src.payment_execution_review?.review_reason_code ||
+    src.paymentExecutionReview?.reviewReasonCode ||
+    batch.payment_execution_review?.review_reason_code ||
+    batch.paymentExecutionReview?.reviewReasonCode ||
+    ''
+  );
+  const providerDiagnosticPresent = !!(
+    providerReviewReasonForBatch ||
+    (providerSubmissionStatusForBatch && !['NO_PROVIDER_SUBMISSION_ATTEMPTED', 'CLAIMED_NOT_PROVIDER_CALLED_YET'].includes(providerSubmissionStatusForBatch)) ||
+    firstText(
+      src.provider_submit_diagnostic?.provider_error_code,
+      src.providerSubmitDiagnostic?.providerErrorCode,
+      batch.provider_submit_diagnostic?.provider_error_code,
+      batch.providerSubmitDiagnostic?.providerErrorCode,
+      src.payment_execution_review?.provider_error_code,
+      src.paymentExecutionReview?.providerErrorCode,
+      batch.payment_execution_review?.provider_error_code,
+      batch.paymentExecutionReview?.providerErrorCode,
+      src.provider_submit_diagnostic?.provider_error_message_redacted,
+      src.providerSubmitDiagnostic?.providerErrorMessageRedacted,
+      batch.provider_submit_diagnostic?.provider_error_message_redacted,
+      batch.providerSubmitDiagnostic?.providerErrorMessageRedacted,
+      src.payment_execution_review?.provider_error_message_redacted,
+      src.paymentExecutionReview?.providerErrorMessageRedacted,
+      batch.payment_execution_review?.provider_error_message_redacted,
+      batch.paymentExecutionReview?.providerErrorMessageRedacted
+    )
+  );
+  const executionActivityPresent = !!(
+    transferRows.length > 0 ||
+    bankEvidence.length > 0 ||
+    anyPositiveNumber(
+      src.transfer_count,
+      src.transferCount,
+      batch.transfer_count,
+      batch.transferCount,
+      src.pending_transfer_count,
+      src.pendingTransferCount,
+      batch.pending_transfer_count,
+      batch.pendingTransferCount,
+      src.provider_submitted_transfer_count,
+      src.providerSubmittedTransferCount,
+      batch.provider_submitted_transfer_count,
+      batch.providerSubmittedTransferCount,
+      src.attempted_but_unproven_count,
+      src.attemptedButUnprovenCount,
+      batch.attempted_but_unproven_count,
+      batch.attemptedButUnprovenCount
+    ) ||
+    anyTrueBool(
+      src.has_external_submission_evidence,
+      src.hasExternalSubmissionEvidence,
+      batch.has_external_submission_evidence,
+      batch.hasExternalSubmissionEvidence,
+      src.no_submission_evidence_flags?.has_external_submission_evidence,
+      src.noSubmissionEvidenceFlags?.hasExternalSubmissionEvidence,
+      batch.no_submission_evidence_flags?.has_external_submission_evidence,
+      batch.noSubmissionEvidenceFlags?.hasExternalSubmissionEvidence
+    ) ||
+    firstText(
+      src.execution_commit_ref,
+      src.executionCommitRef,
+      batch.execution_commit_ref,
+      batch.executionCommitRef,
+      src.settlement_confirmation_json,
+      src.settlementConfirmationJson,
+      batch.settlement_confirmation_json,
+      batch.settlementConfirmationJson
+    ) ||
+    ['COMMITTED', 'SETTLED', 'SUBMITTED', 'SUBMITTED_NOT_COMMITTED'].includes(toUpper(src.execution_commit_state || src.executionCommitState || batch.execution_commit_state || batch.executionCommitState || ''))
+  );
+
+  if (['DRAFT', 'DRAFT_CREATED'].includes(batchStatus) && !executionActivityPresent && !explicitIssuePresent && !providerDiagnosticPresent) {
+    return [];
+  }
 
   const candidateByPayBatchCandidateId = new Map();
   const candidateByCandidateId = new Map();
@@ -22134,6 +22274,7 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
 
   return rows;
 }
+
 
 
 function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
@@ -57067,6 +57208,44 @@ function renderBankingPayBatchChildModalOverview() {
   const providerDiagnostic = extractProviderSubmitDiagnosticFromOverviewData(data);
   const providerAcceptedSent = isProviderAcceptedSent(providerDiagnostic) || providerSubmitOverviewModel.isAcceptedSent === true;
   const providerExecutionEvidence = hasProviderOrBankExecutionEvidence(data);
+  const paymentIssuePayloadRows = asArr(data.payment_issues || data.paymentIssues || batch.payment_issues || batch.paymentIssues);
+  const bankEvidenceRows = asArr(data.bank_evidence || data.bankEvidence || batch.bank_evidence || batch.bankEvidence);
+  const explicitTransferCount = firstFiniteNumber(
+    data.transfer_count,
+    data.transferCount,
+    batch.transfer_count,
+    batch.transferCount,
+    data.pending_transfer_count,
+    data.pendingTransferCount,
+    batch.pending_transfer_count,
+    batch.pendingTransferCount,
+    data.provider_submitted_transfer_count,
+    data.providerSubmittedTransferCount,
+    batch.provider_submitted_transfer_count,
+    batch.providerSubmittedTransferCount
+  ) ?? transfers.length;
+  const batchHasRealPaymentIssues = !!(
+    paymentIssuePayloadRows.length > 0 ||
+    readBool(data.has_payment_issue_candidates || data.hasPaymentIssueCandidates || batch.has_payment_issue_candidates || batch.hasPaymentIssueCandidates) ||
+    readBool(data.payment_provider_review_required || data.paymentProviderReviewRequired || batch.payment_provider_review_required || batch.paymentProviderReviewRequired) ||
+    readBool(data.provider_submit_issue_present || data.providerSubmitIssuePresent || batch.provider_submit_issue_present || batch.providerSubmitIssuePresent) ||
+    firstFiniteNumber(data.payment_issue_candidate_count, data.paymentIssueCandidateCount, batch.payment_issue_candidate_count, batch.paymentIssueCandidateCount) > 0
+  );
+  const batchHasPaymentSubmissionActivity = !!(
+    explicitTransferCount > 0 ||
+    bankEvidenceRows.length > 0 ||
+    providerExecutionEvidence ||
+    readBool(data.has_external_submission_evidence || data.hasExternalSubmissionEvidence || batch.has_external_submission_evidence || batch.hasExternalSubmissionEvidence) ||
+    firstText(data.execution_commit_ref, batch.execution_commit_ref, data.settlement_confirmation_json, batch.settlement_confirmation_json) ||
+    upperTrim(data.execution_commit_state || batch.execution_commit_state || '') === 'COMMITTED'
+  );
+  const isDraftLikeBatch = ['DRAFT', 'DRAFT_CREATED'].includes(status);
+  const overviewIsPreSubmissionDraft = !!(
+    isDraftLikeBatch &&
+    !batchHasPaymentSubmissionActivity &&
+    !batchHasRealPaymentIssues &&
+    providerSubmitOverviewModel.hasIssue !== true
+  );
 
   const transfersForCandidate = (candidateId) => transfers.filter((transfer) => trimStr(transfer?.candidate_id || transfer?.candidateId || '') === trimStr(candidateId));
 
@@ -57092,9 +57271,10 @@ function renderBankingPayBatchChildModalOverview() {
     if (hasCompleted || candidateProviderSent || hasExternalSent) return { tone: 'sent', symbol: '✅', label: 'Sent', result: 'Sent', amountTone: 'sent' };
     if (hasFailed) return { tone: 'failed', symbol: '❌', label: 'Bank rejected', result: 'Bank rejected', amountTone: 'failed' };
     if (hasBlocked) return { tone: 'failed', symbol: '❌', label: 'Insufficient funds', result: 'Insufficient funds', amountTone: 'failed' };
+    if (overviewIsPreSubmissionDraft) return { tone: 'draft', symbol: '📝', label: 'Draft — not sent', result: 'Draft — not sent', amountTone: 'draft' };
     if (providerSubmitOverviewModel.hasIssue === true && candidates.length === 1) return { tone: 'check', symbol: '❓', label: 'Check required', result: 'Check required', amountTone: 'check' };
     if (providerExecutionEvidence && candidateTransfers.length > 0) return { tone: 'sent', symbol: '✅', label: 'Sent', result: 'Sent', amountTone: 'sent' };
-    return { tone: 'check', symbol: '❓', label: 'Check required', result: 'Check required', amountTone: 'check' };
+    return { tone: 'draft', symbol: '📝', label: 'Not sent yet', result: 'Not sent yet', amountTone: 'draft' };
   };
 
   const externalRows = rowFromExternalPaymentRows().map(classifyExternalRow).filter(Boolean);
@@ -57130,7 +57310,7 @@ function renderBankingPayBatchChildModalOverview() {
   );
 
   const paymentSummary = (() => {
-    const summary = { sentCount: 0, failedReturnedCount: 0, checkRequiredCount: 0, totalSentAmount: 0 };
+    const summary = { sentCount: 0, failedReturnedCount: 0, checkRequiredCount: 0, notSentCount: 0, notSentAmount: 0, totalSentAmount: 0 };
     const countableRows = candidateViewModels.length ? candidateViewModels : [];
     for (const row of countableRows) {
       if (row.statusInfo.tone === 'sent') {
@@ -57138,6 +57318,9 @@ function renderBankingPayBatchChildModalOverview() {
         summary.totalSentAmount += Number(row.financials.finalPayable) || 0;
       } else if (row.statusInfo.tone === 'failed') {
         summary.failedReturnedCount += 1;
+      } else if (row.statusInfo.tone === 'draft' || row.statusInfo.tone === 'not_sent') {
+        summary.notSentCount += 1;
+        summary.notSentAmount += Number(row.financials.finalPayable) || 0;
       } else {
         summary.checkRequiredCount += 1;
       }
@@ -57352,6 +57535,7 @@ function renderBankingPayBatchChildModalOverview() {
                 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
                   <span class="mini">✅ Sent: <span class="mono">${enc(String(paymentSummary.sentCount))}</span></span>
                   <span class="mini">❌ Failed / returned: <span class="mono">${enc(String(paymentSummary.failedReturnedCount))}</span></span>
+                  ${paymentSummary.notSentCount > 0 ? `<span class="mini">📝 Not sent: <span class="mono">${enc(String(paymentSummary.notSentCount))}</span></span>` : ''}
                   <span class="mini">❓ Check required: <span class="mono">${enc(String(paymentSummary.checkRequiredCount))}</span></span>
                   <span class="mini">Total sent: <span class="mono">£${enc(fmtMoney(paymentSummary.totalSentAmount))}</span></span>
                 </div>
@@ -57516,7 +57700,8 @@ function renderBankingPayBatchChildModalOverview() {
               <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
                 <span class="mini">✅ Sent: <span class="mono">${enc(String(paymentSummary.sentCount))}</span></span>
                 <span class="mini">❌ Failed / returned: <span class="mono">${enc(String(paymentSummary.failedReturnedCount))}</span></span>
-                <span class="mini">❓ Check required: <span class="mono">${enc(String(paymentSummary.checkRequiredCount))}</span></span>
+                ${paymentSummary.notSentCount > 0 ? `<span class="mini">📝 Not sent: <span class="mono">${enc(String(paymentSummary.notSentCount))}</span></span>` : ''}
+                  <span class="mini">❓ Check required: <span class="mono">${enc(String(paymentSummary.checkRequiredCount))}</span></span>
                 <span class="mini">Total sent: <span class="mono">£${enc(fmtMoney(paymentSummary.totalSentAmount))}</span></span>
               </div>
             </div>
