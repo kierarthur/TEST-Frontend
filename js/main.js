@@ -1,7 +1,7 @@
 // ===== Base URL + helpers =====
 
 // ===== Base URL + helpers =====
-// ===== Base URL +  helpers ===== 
+// ===== Base URL + helpers ===== 
 function _defaultBrokerBaseUrl() {
   const h = String(location.hostname || '').toLowerCase();
 
@@ -179972,11 +179972,12 @@ function applyBulkTimesheetRowPatches(state, patches, options = {}) {
 
 
 
-
 function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}) {
   const st = (state && typeof state === 'object') ? state : {};
   const opts = (options && typeof options === 'object') ? options : {};
   const patch = (patchOrHints && typeof patchOrHints === 'object') ? patchOrHints : {};
+  const mode = String(opts.mode || opts.context || patch.mode || patch.context || '').trim().toLowerCase();
+  const action = String(opts.action || patch.action || '').trim().toLowerCase();
   const embeddedHints = (patch.cache_invalidation_hints && typeof patch.cache_invalidation_hints === 'object') ? patch.cache_invalidation_hints : {};
   const optionHints = (opts.cache_invalidation_hints && typeof opts.cache_invalidation_hints === 'object') ? opts.cache_invalidation_hints : {};
   const hints = { ...embeddedHints, ...optionHints };
@@ -180010,6 +180011,17 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
   const oldStorageKeys = new Set();
   const newStorageKeys = new Set();
   const allStorageKeys = new Set();
+  const addIdsFromRowKey = (rowKey) => {
+    const key = trimStr(rowKey);
+    if (!key) return;
+    if (/^timesheet:/i.test(key)) {
+      addValue(timesheetIds, key.replace(/^timesheet:/i, ''));
+      return;
+    }
+    if (/^contract_week:/i.test(key)) {
+      addValue(contractWeekIds, key.replace(/^contract_week:/i, ''));
+    }
+  };
 
   addArray(rowKeys, patch.row_key);
   addArray(rowKeys, patch.rowKey);
@@ -180125,8 +180137,60 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
   const explicitPreviewFalse = patch.invalidate_preview === false || hints.invalidate_preview === false || opts.invalidate_preview === false || opts.invalidatePreview === false;
   const explicitEvidenceTrue = flagValue(patch.invalidate_evidence, hints.invalidate_evidence, opts.invalidate_evidence, opts.invalidateEvidence);
   const explicitEvidenceFalse = patch.invalidate_evidence === false || hints.invalidate_evidence === false || opts.invalidate_evidence === false || opts.invalidateEvidence === false;
+  const actionIsBulkProcessIdentityTransition = !!(
+    mode === 'bulk_process' &&
+    (action === 'process' || action === 'unprocess')
+  );
+  const explicitNewIdentityRowKey = stringFirst(
+    patch.new_row_key,
+    patch.newRowKey,
+    patch.row_key_after,
+    patch.rowKeyAfter,
+    hints.new_row_key,
+    hints.newRowKey,
+    hints.row_key_after,
+    hints.rowKeyAfter,
+    actionIsBulkProcessIdentityTransition ? patch.row_key : '',
+    actionIsBulkProcessIdentityTransition ? patch.rowKey : '',
+    actionIsBulkProcessIdentityTransition && action === 'process' && currentTimesheetId ? `timesheet:${currentTimesheetId}` : '',
+    actionIsBulkProcessIdentityTransition && action === 'unprocess' && contractWeekId ? `contract_week:${contractWeekId}` : '',
+    actionIsBulkProcessIdentityTransition && currentTimesheetId ? `timesheet:${currentTimesheetId}` : '',
+    actionIsBulkProcessIdentityTransition && contractWeekId ? `contract_week:${contractWeekId}` : ''
+  );
+  const explicitOldIdentityRowKey = stringFirst(
+    patch.previous_row_key,
+    patch.previousRowKey,
+    patch.row_key_before,
+    patch.rowKeyBefore,
+    patch.old_row_key,
+    patch.oldRowKey,
+    hints.previous_row_key,
+    hints.previousRowKey,
+    hints.row_key_before,
+    hints.rowKeyBefore,
+    hints.old_row_key,
+    hints.oldRowKey,
+    actionIsBulkProcessIdentityTransition ? patch.source_row_key : '',
+    actionIsBulkProcessIdentityTransition ? patch.sourceRowKey : '',
+    actionIsBulkProcessIdentityTransition && action === 'process' && (previousContractWeekId || contractWeekId) ? `contract_week:${previousContractWeekId || contractWeekId}` : '',
+    actionIsBulkProcessIdentityTransition && action === 'unprocess' && (previousTimesheetId || currentTimesheetId) ? `timesheet:${previousTimesheetId || currentTimesheetId}` : '',
+    actionIsBulkProcessIdentityTransition && previousTimesheetId ? `timesheet:${previousTimesheetId}` : '',
+    actionIsBulkProcessIdentityTransition && previousContractWeekId ? `contract_week:${previousContractWeekId}` : ''
+  );
+  const mutationIdentityTransition = !!(
+    actionIsBulkProcessIdentityTransition &&
+    explicitOldIdentityRowKey &&
+    explicitNewIdentityRowKey &&
+    explicitOldIdentityRowKey !== explicitNewIdentityRowKey
+  );
+  addValue(rowKeys, explicitNewIdentityRowKey);
+  addValue(rowKeys, explicitOldIdentityRowKey);
+  addIdsFromRowKey(explicitNewIdentityRowKey);
+  addIdsFromRowKey(explicitOldIdentityRowKey);
+
   const statusOnly = !!(
     flagValue(patch.status_only, hints.status_only, opts.status_only, opts.statusOnly) &&
+    !mutationIdentityTransition &&
     !flagValue(patch.identity_changed, hints.identity_changed, opts.identity_changed, opts.identityChanged) &&
     !flagValue(patch.manual_changed, hints.manual_changed, opts.manual_changed, opts.manualChanged) &&
     !flagValue(patch.evidence_changed, hints.evidence_changed, opts.evidence_changed, opts.evidenceChanged) &&
@@ -180138,7 +180202,7 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
   const rawStorageChangedHint = flagValue(patch.storage_changed, hints.storage_changed, opts.storage_changed, opts.storageChanged);
   const storageChangedHint = !!(!explicitPreviewFalse && rawStorageChangedHint);
   const previewChanged = !!(!statusOnly && !explicitPreviewFalse && (force || explicitPreviewTrue || storageChangedHint || evidenceChanged));
-  const identityChangedHint = flagValue(patch.identity_changed, hints.identity_changed, opts.identity_changed, opts.identityChanged);
+  const identityChangedHint = !!(flagValue(patch.identity_changed, hints.identity_changed, opts.identity_changed, opts.identityChanged) || mutationIdentityTransition);
   const explicitOldNewStorage = oldStorageKeys.size > 0 && newStorageKeys.size > 0;
   const activeRowKey = stringFirst(st.active_row_key, st.activeRowKey, st.active_row && st.active_row.row_key, st.active_ctx && st.active_ctx.row && st.active_ctx.row.row_key, st.active_context && st.active_context.row && st.active_context.row.row_key);
   const activeTimesheetId = stringFirst(st.active_row && (st.active_row.current_timesheet_id || st.active_row.timesheet_id || st.active_row.requested_timesheet_id), st.active_ctx && st.active_ctx.row && (st.active_ctx.row.current_timesheet_id || st.active_ctx.row.timesheet_id || st.active_ctx.row.requested_timesheet_id), st.active_context && st.active_context.row && (st.active_context.row.current_timesheet_id || st.active_context.row.timesheet_id || st.active_context.row.requested_timesheet_id));
@@ -180150,8 +180214,6 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
     || (activeContractWeekId && contractWeekIds.has(activeContractWeekId))
   );
   const activeContextRowKey = stringFirst(st.active_context && st.active_context.row && st.active_context.row.row_key, st.active_ctx && st.active_ctx.row && st.active_ctx.row.row_key, activeRowKey);
-  const explicitNewIdentityRowKey = stringFirst(patch.new_row_key, patch.newRowKey, patch.row_key_after, patch.rowKeyAfter, hints.new_row_key, hints.newRowKey, hints.row_key_after, hints.rowKeyAfter);
-  const explicitOldIdentityRowKey = stringFirst(patch.previous_row_key, patch.previousRowKey, patch.row_key_before, patch.rowKeyBefore, patch.old_row_key, patch.oldRowKey, hints.previous_row_key, hints.previousRowKey, hints.row_key_before, hints.rowKeyBefore);
   const identityChangedForActiveContext = !!(
     identityChangedHint &&
     activeRowAffected &&
@@ -180173,7 +180235,8 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
       manualChanged ||
       evidenceChanged ||
       previewChanged ||
-      identityChangedForActiveContext
+      identityChangedForActiveContext ||
+      mutationIdentityTransition
     )
   );
   let storageChanged = !!(
@@ -180195,12 +180258,35 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
     storageChanged = false;
   }
 
+  const clearBulkProcessDatasetCachesForIdentityTransition = () => {
+    if (!mutationIdentityTransition || mode !== 'bulk_process' || (action !== 'process' && action !== 'unprocess')) return 0;
+    if (typeof fetchBulkProcessDataset !== 'function') return 0;
+    let cleared = 0;
+    const clearStore = (store) => {
+      if (!store || typeof store !== 'object') return;
+      for (const key of Object.keys(store)) {
+        try {
+          delete store[key];
+          cleared += 1;
+        } catch {}
+      }
+    };
+    clearStore(fetchBulkProcessDataset.__cache);
+    clearStore(fetchBulkProcessDataset.__inflight);
+    clearStore(fetchBulkProcessDataset.__latest_request_seq_by_signature);
+    try { fetchBulkProcessDataset.__cache_invalidated_at = Date.now(); } catch {}
+    try { fetchBulkProcessDataset.__cache_invalidated_reason = `bulk-process-${action}-identity-transition`; } catch {}
+    return cleared;
+  };
+
   const result = {
     ok: true,
     invalidated_context_entries: 0,
     invalidated_preview_entries: 0,
+    invalidated_dataset_cache_entries: clearBulkProcessDatasetCachesForIdentityTransition(),
     aborted_preview_work: 0,
     storage_changed: storageChanged,
+    identity_transition: mutationIdentityTransition,
     affected_row_keys: Array.from(rowKeys),
     affected_storage_keys: storageChanged ? Array.from(allStorageKeys) : []
   };
@@ -180363,7 +180449,6 @@ function invalidateBulkTimesheetCachesForPatch(state, patchOrHints, options = {}
 
   return result;
 }
-
 
 
 function renderBulkAuthoriseCompactSummary(input = {}) {
