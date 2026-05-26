@@ -56315,7 +56315,6 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
 
 
 
-
 function renderBankingPayBatchChildModalOverview() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -57160,8 +57159,162 @@ function renderBankingPayBatchChildModalOverview() {
     data.remittances_sent ?? batch.remittances_sent ?? child.communications?.remittances_sent ?? communicationSummarySource.remittances_sent
   ) || pickCount(remittanceResult, ['sent_count', 'candidate_count_sent']) > 0 || pickCount(remittanceSummary, ['sent_count', 'candidate_count_sent']) > 0;
 
-  const canShowExecutePayment = false;
-  void canShowExecutePayment;
+  const readFirstBool = (...values) => {
+    for (const value of values) {
+      if (value === true) return true;
+      if (value === false) return false;
+      if (value === null || value === undefined) continue;
+      const text = trimStr(value);
+      if (!text) continue;
+      return readBool(text);
+    }
+    return false;
+  };
+
+  const hasActiveBatchPayments = (() => {
+    try {
+      if (typeof hasActivePaymentsForBatch === 'function') return hasActivePaymentsForBatch(data) === true;
+    } catch {}
+    const explicitCount = firstFiniteNumber(
+      data.active_payment_item_count,
+      data.activePaymentItemCount,
+      batch.active_payment_item_count,
+      batch.activePaymentItemCount,
+      data.active_effective_item_count,
+      data.activeEffectiveItemCount,
+      batch.active_effective_item_count,
+      batch.activeEffectiveItemCount,
+      data.active_item_count,
+      data.activeItemCount,
+      batch.active_item_count,
+      batch.activeItemCount,
+      data.item_count,
+      batch.item_count
+    );
+    if (explicitCount !== null) return explicitCount > 0;
+    const activeItemCount = items.filter((item) => {
+      const itemObj = asObj(item) || {};
+      if (itemObj.is_voided === true || itemObj.voided === true) return false;
+      const itemStatus = upperTrim(itemObj.status || '');
+      return itemStatus !== 'VOIDED' && itemStatus !== 'CANCELLED' && itemStatus !== 'CANCELED';
+    }).length;
+    if (activeItemCount > 0) return true;
+    return candidates.length > 0;
+  })();
+
+  const overviewStatusAllowsExecute = (() => {
+    try {
+      if (typeof isExecuteAllowedByStatus === 'function') return isExecuteAllowedByStatus(data) === true;
+    } catch {}
+    const commitState = upperTrim(batch.execution_commit_state || data.execution_commit_state || '');
+    if (['COMMITTED', 'SETTLED', 'CANCELLED', 'CANCELED', 'SUBMITTED_NOT_COMMITTED'].includes(commitState)) return false;
+    if (['COMMITTED', 'SETTLED', 'CANCELLED', 'CANCELED', 'SUBMITTED_NOT_COMMITTED'].includes(status)) return false;
+    return ['DRAFT', 'DRAFT_CREATED', 'READY', 'WAITING_BANK_CONFIRM', 'PARTIAL'].includes(status);
+  })();
+
+  const overviewStatusAllowsPayeEntry = (() => {
+    try {
+      if (typeof isPayeEntryAllowedByStatus === 'function') return isPayeEntryAllowedByStatus(data) === true;
+    } catch {}
+    return status === 'DRAFT' || status === 'DRAFT_CREATED';
+  })();
+
+  const overviewStatusAllowsCsv = (() => {
+    try {
+      if (typeof isCsvExportAllowedByStatus === 'function') return isCsvExportAllowedByStatus(data) === true;
+    } catch {}
+    return hasActiveBatchPayments && ['DRAFT', 'DRAFT_CREATED', 'READY', 'WAITING_BANK_CONFIRM', 'PARTIAL'].includes(status);
+  })();
+
+  const overviewHasExternalSubmissionEvidence = readFirstBool(
+    data.has_external_submission_evidence,
+    data.hasExternalSubmissionEvidence,
+    batch.has_external_submission_evidence,
+    batch.hasExternalSubmissionEvidence,
+    data.no_submission_evidence_flags?.has_external_submission_evidence,
+    data.noSubmissionEvidenceFlags?.hasExternalSubmissionEvidence
+  );
+  const overviewHasExecutionEvidence = overviewHasExternalSubmissionEvidence || providerExecutionEvidence;
+  const overviewCanStartStandardExecution = readFirstBool(
+    data.can_start_standard_execution,
+    data.canStartStandardExecution,
+    batch.can_start_standard_execution,
+    batch.canStartStandardExecution
+  );
+  const overviewNativeExecutionAvailable = readFirstBool(
+    data.native_execution_available,
+    data.nativeExecutionAvailable,
+    batch.native_execution_available,
+    batch.nativeExecutionAvailable
+  );
+  const overviewCanExecute = readFirstBool(
+    data.can_execute,
+    data.canExecute,
+    data.execute_allowed,
+    data.executeAllowed,
+    batch.can_execute,
+    batch.canExecute,
+    batch.execute_allowed,
+    batch.executeAllowed
+  );
+  const overviewCanStartCsvSettlement = readFirstBool(
+    data.can_start_csv_settlement,
+    data.canStartCsvSettlement,
+    batch.can_start_csv_settlement,
+    batch.canStartCsvSettlement
+  );
+  const overviewCanStartExternalSettlement = readFirstBool(
+    data.can_start_external_settlement,
+    data.canStartExternalSettlement,
+    batch.can_start_external_settlement,
+    batch.canStartExternalSettlement
+  );
+  const canShowExecutePayment = !!(
+    hasActiveBatchPayments &&
+    overviewStatusAllowsExecute &&
+    !overviewHasExecutionEvidence &&
+    providerSubmitOverviewModel.hasIssue !== true &&
+    (
+      overviewCanStartStandardExecution ||
+      overviewNativeExecutionAvailable ||
+      overviewCanExecute ||
+      overviewCanStartCsvSettlement ||
+      overviewCanStartExternalSettlement
+    )
+  );
+
+  const canShowPayeEntry = !!(
+    batchKindInfo.isPayeish === true &&
+    batchKindInfo.isLoans !== true &&
+    overviewStatusAllowsPayeEntry
+  );
+
+  const overviewCanCreateBankCsvFile = readFirstBool(
+    data.can_create_bank_csv_file,
+    data.canCreateBankCsvFile,
+    batch.can_create_bank_csv_file,
+    batch.canCreateBankCsvFile
+  );
+  const canShowGenerateCsv = !!(
+    hasActiveBatchPayments &&
+    overviewStatusAllowsCsv &&
+    overviewCanCreateBankCsvFile
+  );
+
+  const actionDisabledAttr = (disabled, title) => disabled
+    ? ` disabled aria-disabled="true" title="${enc(title || 'Action is currently unavailable')}" style="opacity:.55;filter:saturate(0.65);"`
+    : '';
+  const primaryActionButtonsHtml = [
+    canShowExecutePayment
+      ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:executePayment"${actionDisabledAttr(!!child.actionsBusy?.executing || !!child.loading || !!child.__loadInFlight || !!child.actionsBusy?.refreshing || !!child.actionsBusy?.polling, 'Execution is already running or the batch is refreshing')} title="Execute eligible payments">${child.actionsBusy?.executing ? 'Executing…' : 'Execute'}</button>`
+      : '',
+    canShowPayeEntry
+      ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPayeEntry"${actionDisabledAttr(!!child.loading || !!child.__loadInFlight || !!child.actionsBusy?.refreshing || !!child.actionsBusy?.polling, 'PAYE entry is unavailable while the batch is refreshing')} title="Enter PAYE net payments">Enter PAYE payments</button>`
+      : '',
+    canShowGenerateCsv
+      ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:generateCsv"${actionDisabledAttr(!!child.actionsBusy?.exportingCsv || !!child.loading || !!child.__loadInFlight || !!child.actionsBusy?.refreshing || !!child.actionsBusy?.polling, 'Bank CSV generation is already running or the batch is refreshing')} title="Create bank CSV file">${child.actionsBusy?.exportingCsv ? 'Creating bank CSV…' : 'Create bank CSV'}</button>`
+      : ''
+  ].filter(Boolean).join('');
 
   const errHtml = trimStr(child.error)
     ? `<div class="error" style="white-space:pre-wrap;">${enc(trimStr(child.error))}</div>`
@@ -57171,6 +57324,8 @@ function renderBankingPayBatchChildModalOverview() {
     if (child.loading) bits.push('Loading…');
     if (child.actionsBusy?.refreshing) bits.push('Refreshing…');
     if (child.actionsBusy?.polling) bits.push('Checking bank status…');
+    if (child.actionsBusy?.executing) bits.push('Executing payment…');
+    if (child.actionsBusy?.exportingCsv) bits.push('Creating bank CSV…');
     if (child.actionsBusy?.exportingDetailCsv) bits.push('Exporting detailed CSV…');
     if (child.actionsBusy?.exportingDetailPdf) bits.push('Exporting detailed PDF…');
     return bits.length ? `<span class="mini" style="opacity:.8;">${enc(bits.join(' '))}</span>` : '';
@@ -57202,6 +57357,7 @@ function renderBankingPayBatchChildModalOverview() {
                 </div>
               </div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                ${primaryActionButtonsHtml}
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh">Refresh Batch</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailCsv">Detailed CSV</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailPdf">Detailed PDF</button>
@@ -57368,6 +57524,7 @@ function renderBankingPayBatchChildModalOverview() {
             <div class="card" style="padding:10px;">
               <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Actions</div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                ${primaryActionButtonsHtml}
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailCsv" title="Download detailed CSV">Detailed CSV</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailPdf" title="Download detailed PDF">Detailed PDF</button>
@@ -57387,6 +57544,7 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
+
 
 
 function openBulkTimesheetActionProgressModal(options = {}) {
@@ -169239,8 +169397,6 @@ async function rerenderBulkProcessWorkbench(state, logPrefix) {
   }
 }
 
-
-
 async function handleBulkProcessSave(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][SAVE]');
   GC('handleBulkProcessSave');
@@ -170987,11 +171143,179 @@ async function handleBulkProcessSave(state) {
     const didRunManualSave = !!saveResult;
     const expensesOnlySave = !!(expensesChanged && !nonExpenseDirty && !plannedContractWeekExpenseDraftSave);
     if (expensesOnlySave && !didRunManualSave) {
-      if (expenseCommitResult?.updatedTsfin && st.active_details && typeof st.active_details === 'object') {
-        st.active_details.tsfin = {
-          ...((st.active_details.tsfin && typeof st.active_details.tsfin === 'object') ? st.active_details.tsfin : {}),
-          ...(expenseCommitResult.updatedTsfin || {})
+      const committedDraftForSave = (typeof normaliseTimesheetExpensesDraft === 'function')
+        ? normaliseTimesheetExpensesDraft(expenseCommitResult?.committedDraft || stagedExpenses || {}, { context: ctx, details, tsfin: expenseCommitResult?.updatedTsfin || details?.tsfin || {} })
+        : deep(expenseCommitResult?.committedDraft || stagedExpenses || {});
+      const updatedTsfinForSave = (expenseCommitResult?.updatedTsfin && typeof expenseCommitResult.updatedTsfin === 'object')
+        ? deep(expenseCommitResult.updatedTsfin)
+        : {};
+      const fallbackTsfinForSave = {
+        ...((details?.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {}),
+        ...((ctx?.details?.tsfin && typeof ctx.details.tsfin === 'object') ? ctx.details.tsfin : {}),
+        ...((ctx?.tsfin && typeof ctx.tsfin === 'object') ? ctx.tsfin : {}),
+        ...((st?.active_details?.tsfin && typeof st.active_details.tsfin === 'object') ? st.active_details.tsfin : {})
+      };
+      const fallbackRowForSave = {
+        ...((row && typeof row === 'object') ? row : {}),
+        ...((st?.active_row && typeof st.active_row === 'object') ? st.active_row : {})
+      };
+      const expenseNumber = (value, dp = 2) => {
+        if (value === null || value === undefined || value === '') return null;
+        const n = Number(String(value).replace(/[^0-9.-]/g, ''));
+        if (!Number.isFinite(n)) return null;
+        const m = Math.pow(10, dp);
+        return Math.round(n * m) / m;
+      };
+      const firstExpenseNumber = (dp, ...values) => {
+        for (const value of values) {
+          const n = expenseNumber(value, dp);
+          if (n !== null) return n;
+        }
+        return 0;
+      };
+      const travelPay = firstExpenseNumber(2, updatedTsfinForSave.travel_pay_ex_vat, fallbackTsfinForSave.travel_pay_ex_vat, fallbackRowForSave.tsfin_travel_pay_ex_vat, committedDraftForSave.travel_pay);
+      const travelCharge = firstExpenseNumber(2, updatedTsfinForSave.travel_charge_ex_vat, fallbackTsfinForSave.travel_charge_ex_vat, fallbackRowForSave.tsfin_travel_charge_ex_vat, committedDraftForSave.travel_charge);
+      const accommodationPay = firstExpenseNumber(2, updatedTsfinForSave.accommodation_pay_ex_vat, fallbackTsfinForSave.accommodation_pay_ex_vat, fallbackRowForSave.tsfin_accommodation_pay_ex_vat, committedDraftForSave.accommodation_pay);
+      const accommodationCharge = firstExpenseNumber(2, updatedTsfinForSave.accommodation_charge_ex_vat, fallbackTsfinForSave.accommodation_charge_ex_vat, fallbackRowForSave.tsfin_accommodation_charge_ex_vat, committedDraftForSave.accommodation_charge);
+      const otherPay = firstExpenseNumber(2, updatedTsfinForSave.other_pay_ex_vat, fallbackTsfinForSave.other_pay_ex_vat, fallbackRowForSave.tsfin_other_pay_ex_vat, committedDraftForSave.other_pay);
+      const otherCharge = firstExpenseNumber(2, updatedTsfinForSave.other_charge_ex_vat, fallbackTsfinForSave.other_charge_ex_vat, fallbackRowForSave.tsfin_other_charge_ex_vat, committedDraftForSave.other_charge);
+      const mileageUnits = firstExpenseNumber(3, updatedTsfinForSave.mileage_units, fallbackTsfinForSave.mileage_units, fallbackRowForSave.tsfin_mileage_units, committedDraftForSave.mileage_units);
+      const mileagePay = firstExpenseNumber(2, updatedTsfinForSave.mileage_pay_ex_vat, fallbackTsfinForSave.mileage_pay_ex_vat, fallbackRowForSave.tsfin_mileage_pay_ex_vat);
+      const mileageCharge = firstExpenseNumber(2, updatedTsfinForSave.mileage_charge_ex_vat, fallbackTsfinForSave.mileage_charge_ex_vat, fallbackRowForSave.tsfin_mileage_charge_ex_vat);
+      const expensesPay = firstExpenseNumber(2, updatedTsfinForSave.expenses_pay_ex_vat, fallbackTsfinForSave.expenses_pay_ex_vat, fallbackRowForSave.tsfin_expenses_pay_ex_vat, travelPay + accommodationPay + otherPay);
+      const expensesCharge = firstExpenseNumber(2, updatedTsfinForSave.expenses_charge_ex_vat, fallbackTsfinForSave.expenses_charge_ex_vat, fallbackRowForSave.tsfin_expenses_charge_ex_vat, travelCharge + accommodationCharge + otherCharge);
+      const tsfinPatchForSave = {
+        ...updatedTsfinForSave,
+        expenses_pay_ex_vat: expensesPay,
+        expenses_charge_ex_vat: expensesCharge,
+        travel_pay_ex_vat: travelPay,
+        travel_charge_ex_vat: travelCharge,
+        accommodation_pay_ex_vat: accommodationPay,
+        accommodation_charge_ex_vat: accommodationCharge,
+        other_pay_ex_vat: otherPay,
+        other_charge_ex_vat: otherCharge,
+        mileage_units: mileageUnits,
+        mileage_pay_ex_vat: mileagePay,
+        mileage_charge_ex_vat: mileageCharge
+      };
+      const rowExpensePatchForSave = {
+        tsfin_expenses_pay_ex_vat: tsfinPatchForSave.expenses_pay_ex_vat,
+        tsfin_expenses_charge_ex_vat: tsfinPatchForSave.expenses_charge_ex_vat,
+        tsfin_mileage_units: tsfinPatchForSave.mileage_units,
+        tsfin_mileage_pay_ex_vat: tsfinPatchForSave.mileage_pay_ex_vat,
+        tsfin_mileage_charge_ex_vat: tsfinPatchForSave.mileage_charge_ex_vat,
+        tsfin_travel_pay_ex_vat: tsfinPatchForSave.travel_pay_ex_vat,
+        tsfin_travel_charge_ex_vat: tsfinPatchForSave.travel_charge_ex_vat,
+        tsfin_accommodation_pay_ex_vat: tsfinPatchForSave.accommodation_pay_ex_vat,
+        tsfin_accommodation_charge_ex_vat: tsfinPatchForSave.accommodation_charge_ex_vat,
+        tsfin_other_pay_ex_vat: tsfinPatchForSave.other_pay_ex_vat,
+        tsfin_other_charge_ex_vat: tsfinPatchForSave.other_charge_ex_vat
+      };
+      for (const key of ['total_pay_ex_vat', 'total_charge_ex_vat', 'margin_ex_vat']) {
+        if (Object.prototype.hasOwnProperty.call(tsfinPatchForSave, key)) rowExpensePatchForSave[key] = tsfinPatchForSave[key];
+      }
+      const rebaseExpenseStateForSave = (target) => {
+        if (!target || typeof target !== 'object') return;
+        target.expensesDraft = deep(committedDraftForSave);
+        target.expensesBaseline = deep(committedDraftForSave);
+        target.expensesDirty = false;
+        target.expensesDraftDirty = false;
+        target.hasStagedExpensesDirty = false;
+        target.stagedExpensesDirty = false;
+        target.expenseDirtyMarker = false;
+      };
+      const patchTsfinContainerForSave = (target) => {
+        if (!target || typeof target !== 'object') return;
+        if (target.details && typeof target.details === 'object') {
+          target.details.tsfin = {
+            ...((target.details.tsfin && typeof target.details.tsfin === 'object') ? target.details.tsfin : {}),
+            ...deep(tsfinPatchForSave)
+          };
+        }
+        target.tsfin = {
+          ...((target.tsfin && typeof target.tsfin === 'object') ? target.tsfin : {}),
+          ...deep(tsfinPatchForSave)
         };
+      };
+      const patchRowForSave = (target) => {
+        if (!target || typeof target !== 'object') return;
+        Object.assign(target, deep(rowExpensePatchForSave));
+      };
+      const dropActiveRowContextCacheForSave = () => {
+        const identityKeys = new Set();
+        const addKey = (value) => {
+          const clean = trimStr(value || '');
+          if (clean) identityKeys.add(clean);
+        };
+        addKey(currentRowKey);
+        addKey(st.active_row_key);
+        addKey(row?.row_key);
+        addKey(row?.timesheet_id ? `timesheet:${row.timesheet_id}` : '');
+        addKey(row?.current_timesheet_id ? `timesheet:${row.current_timesheet_id}` : '');
+        addKey(actualTimesheetId ? `timesheet:${actualTimesheetId}` : '');
+        addKey(expectedTimesheetId ? `timesheet:${expectedTimesheetId}` : '');
+        addKey(weekId ? `contract_week:${weekId}` : '');
+        const identityFragments = [actualTimesheetId, expectedTimesheetId, weekId].map((value) => trimStr(value || '')).filter(Boolean);
+        for (const cacheName of ['__bulk_process_row_context_cache', '__bulk_process_row_context_inflight']) {
+          const cache = st?.[cacheName];
+          if (!cache || typeof cache !== 'object') continue;
+          for (const key of Object.keys(cache)) {
+            const cleanKey = trimStr(key || '');
+            if (identityKeys.has(cleanKey) || identityFragments.some((fragment) => cleanKey.includes(fragment))) {
+              try { delete cache[key]; } catch {}
+            }
+          }
+        }
+      };
+
+      for (const targetState of [st?.active_ctx?.state, st?.active_context?.state, st?.formState, window.modalCtx?.active_ctx?.state, window.modalCtx?.active_context?.state, window.modalCtx?.bulkProcessState?.active_ctx?.state, window.modalCtx?.bulkProcessState?.active_context?.state]) {
+        rebaseExpenseStateForSave(targetState);
+      }
+      for (const target of [st.active_details, st.active_context, st.active_ctx, window.modalCtx?.active_context, window.modalCtx?.active_ctx, window.modalCtx?.bulkProcessState?.active_context, window.modalCtx?.bulkProcessState?.active_ctx]) {
+        patchTsfinContainerForSave(target);
+      }
+      for (const targetRow of [st.active_row, st.active_context?.row, st.active_context?.data_row, st.active_ctx?.row, st.active_ctx?.data_row, window.modalCtx?.active_row, window.modalCtx?.active_context?.row, window.modalCtx?.active_context?.data_row]) {
+        patchRowForSave(targetRow);
+      }
+      const expenseOnlyDataset = ensureDataset();
+      const expenseOnlyLocation = findRowLocation(expenseOnlyDataset, currentRowKey || st.active_row_key || makeRowKey(st.active_row || row || {}));
+      if (expenseOnlyLocation.index >= 0) {
+        const bucketRows = expenseOnlyLocation.bucket === 'UNPROCESSED' ? expenseOnlyDataset.unprocessed_rows : expenseOnlyDataset.processed_rows;
+        patchRowForSave(bucketRows[expenseOnlyLocation.index]);
+      }
+      if (st.active_ctx && typeof st.active_ctx === 'object') st.active_ctx.expense_storage_target = 'TSFIN';
+      if (st.active_context && typeof st.active_context === 'object') st.active_context.expense_storage_target = 'TSFIN';
+      dropActiveRowContextCacheForSave();
+      clearLivePreviewState({ timesheetId: actualTimesheetId || expectedTimesheetId || '', contractWeekId: weekId || '' });
+
+      let refreshedAfterExpenseSave = false;
+      try {
+        refreshedAfterExpenseSave = await refreshActiveContext({
+          profile: 'editor',
+          context_profile: 'editor',
+          includeEvidence: false,
+          manualChanged: true,
+          expensesChanged: true
+        });
+      } catch (err) {
+        refreshedAfterExpenseSave = false;
+        st.warning_text = trimStr(err?.message || err || 'Bulk Process row context refresh failed after saving expenses.');
+      }
+      if (refreshedAfterExpenseSave) {
+        for (const targetState of [st?.active_ctx?.state, st?.active_context?.state, st?.formState, window.modalCtx?.active_ctx?.state, window.modalCtx?.active_context?.state, window.modalCtx?.bulkProcessState?.active_ctx?.state, window.modalCtx?.bulkProcessState?.active_context?.state]) {
+          rebaseExpenseStateForSave(targetState);
+        }
+        for (const target of [st.active_details, st.active_context, st.active_ctx, window.modalCtx?.active_context, window.modalCtx?.active_ctx, window.modalCtx?.bulkProcessState?.active_context, window.modalCtx?.bulkProcessState?.active_ctx]) {
+          patchTsfinContainerForSave(target);
+        }
+        for (const targetRow of [st.active_row, st.active_context?.row, st.active_context?.data_row, st.active_ctx?.row, st.active_ctx?.data_row, window.modalCtx?.active_row, window.modalCtx?.active_context?.row, window.modalCtx?.active_context?.data_row]) {
+          patchRowForSave(targetRow);
+        }
+      }
+
+      installBulkProcessModalCtxPatch(st, { forceIdentityRebase: true });
+      if (typeof resetBulkProcessDirtyBaseline === 'function') {
+        resetBulkProcessDirtyBaseline(st, 'save-success-expenses', { rowKey: st.active_row_key || currentRowKey || null, expense_storage_target: 'TSFIN' });
       }
       st.saving = false;
       st.save_in_flight = false;
@@ -171000,7 +171324,7 @@ async function handleBulkProcessSave(state) {
       st.dirty = false;
       await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE][EXPENSES]');
       GE();
-      return { ok: true, expense_result: expenseCommitResult || null };
+      return { ok: true, expense_result: expenseCommitResult || null, refreshed_context: refreshedAfterExpenseSave };
     }
 
     const ds = ensureDataset();
