@@ -162329,7 +162329,6 @@ async function refreshBulkProcessSummaryByIdentity(opts = {}) {
   } catch {}
 }
 
-
 async function handleBulkProcessOpenExpensesModal(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -162406,8 +162405,204 @@ async function handleBulkProcessOpenExpensesModal(state) {
     }
     return undefined;
   };
-  const draftSeed = deep(readExpenseValue(['expensesDraft']) || {});
-  const baselineSeed = deep(readExpenseValue(['expensesBaseline']) || draftSeed || {});
+  const hasOwn = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const firstDefined = (...values) => {
+    for (const value of values) {
+      if (value !== undefined && value !== null && value !== '') return value;
+    }
+    return undefined;
+  };
+  const toNumberOrUndefined = (value) => {
+    if (value === undefined || value === null || value === '') return undefined;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const hasAnyExpenseSourceField = (source) => {
+    if (!source || typeof source !== 'object') return false;
+    return [
+      'mileage_units',
+      'exp_mileage_units',
+      'mileage_pay_ex_vat',
+      'mileage_charge_ex_vat',
+      'travel_pay',
+      'travel_charge',
+      'exp_travel_pay',
+      'exp_travel_charge',
+      'travel_pay_ex_vat',
+      'travel_charge_ex_vat',
+      'accommodation_pay',
+      'accommodation_charge',
+      'exp_accom_pay',
+      'exp_accom_charge',
+      'accommodation_pay_ex_vat',
+      'accommodation_charge_ex_vat',
+      'other_pay',
+      'other_charge',
+      'exp_other_pay',
+      'exp_other_charge',
+      'other_pay_ex_vat',
+      'other_charge_ex_vat',
+      'note',
+      'expenses_description'
+    ].some((key) => hasOwn(source, key));
+  };
+  const buildExpenseSeedFromSource = (source, options = {}) => {
+    const sourceObj = (source && typeof source === 'object') ? source : {};
+    const seed = {
+      mileage_units: toNumberOrUndefined(firstDefined(sourceObj.mileage_units, sourceObj.exp_mileage_units)) ?? 0,
+      travel_pay: toNumberOrUndefined(firstDefined(sourceObj.travel_pay, sourceObj.exp_travel_pay, sourceObj.travel_pay_ex_vat)) ?? 0,
+      travel_charge: toNumberOrUndefined(firstDefined(sourceObj.travel_charge, sourceObj.exp_travel_charge, sourceObj.travel_charge_ex_vat)) ?? 0,
+      accommodation_pay: toNumberOrUndefined(firstDefined(sourceObj.accommodation_pay, sourceObj.exp_accom_pay, sourceObj.accommodation_pay_ex_vat)) ?? 0,
+      accommodation_charge: toNumberOrUndefined(firstDefined(sourceObj.accommodation_charge, sourceObj.exp_accom_charge, sourceObj.accommodation_charge_ex_vat)) ?? 0,
+      other_pay: toNumberOrUndefined(firstDefined(sourceObj.other_pay, sourceObj.exp_other_pay, sourceObj.other_pay_ex_vat)) ?? 0,
+      other_charge: toNumberOrUndefined(firstDefined(sourceObj.other_charge, sourceObj.exp_other_charge, sourceObj.other_charge_ex_vat)) ?? 0,
+      note: String(firstDefined(sourceObj.note, sourceObj.expenses_description, '') ?? '')
+    };
+    const mileagePayRate = toNumberOrUndefined(firstDefined(sourceObj.mileage_pay_rate, options?.tsfin?.mileage_pay_rate, options?.details?.mileage_pay_rate));
+    const mileageChargeRate = toNumberOrUndefined(firstDefined(sourceObj.mileage_charge_rate, options?.tsfin?.mileage_charge_rate, options?.details?.mileage_charge_rate));
+    if (mileagePayRate !== undefined) seed.mileage_pay_rate = mileagePayRate;
+    if (mileageChargeRate !== undefined) seed.mileage_charge_rate = mileageChargeRate;
+    const normalisedSeed = (typeof normaliseTimesheetExpensesDraft === 'function')
+      ? normaliseTimesheetExpensesDraft(seed, {
+          context: options?.context || ctx,
+          details: options?.details || {},
+          tsfin: options?.tsfin || {},
+          rates: {
+            mileage_pay_rate: seed.mileage_pay_rate ?? options?.tsfin?.mileage_pay_rate,
+            mileage_charge_rate: seed.mileage_charge_rate ?? options?.tsfin?.mileage_charge_rate
+          }
+        })
+      : seed;
+    return deep(normalisedSeed || seed);
+  };
+  const firstExpenseSeedFromSources = (sources = [], options = {}) => {
+    const list = Array.isArray(sources) ? sources : [sources];
+    for (const source of list) {
+      if (hasAnyExpenseSourceField(source)) {
+        return buildExpenseSeedFromSource(source, options);
+      }
+    }
+    return null;
+  };
+  const details = (ctx?.details && typeof ctx.details === 'object') ? ctx.details : {};
+  const tsfin = (details?.tsfin && typeof details.tsfin === 'object')
+    ? details.tsfin
+    : ((ctx?.tsfin && typeof ctx.tsfin === 'object') ? ctx.tsfin : {});
+  const row = (ctx?.row && typeof ctx.row === 'object') ? ctx.row : {};
+  const activeRow = (st?.active_row && typeof st.active_row === 'object') ? st.active_row : {};
+  const actionFlags = (ctx?.action_flags && typeof ctx.action_flags === 'object')
+    ? ctx.action_flags
+    : ((details?.action_flags && typeof details.action_flags === 'object')
+      ? details.action_flags
+      : ((row?.action_flags && typeof row.action_flags === 'object')
+        ? row.action_flags
+        : ((activeRow?.action_flags && typeof activeRow.action_flags === 'object') ? activeRow.action_flags : {})));
+  const rowPatch = (ctx?.row_patch && typeof ctx.row_patch === 'object')
+    ? ctx.row_patch
+    : ((row?.row_patch && typeof row.row_patch === 'object')
+      ? row.row_patch
+      : ((activeRow?.row_patch && typeof activeRow.row_patch === 'object') ? activeRow.row_patch : {}));
+  const rowKey = String(firstDefined(ctx?.row_key, row?.row_key, activeRow?.row_key, details?.row_key, '') || '');
+  const realTimesheetId = firstDefined(
+    ctx?.current_timesheet_id,
+    ctx?.timesheet_id,
+    details?.current_timesheet_id,
+    details?.timesheet_id,
+    details?.timesheet?.timesheet_id,
+    tsfin?.timesheet_id,
+    row?.current_timesheet_id,
+    row?.timesheet_id,
+    activeRow?.current_timesheet_id,
+    activeRow?.timesheet_id
+  );
+  const hasRealTimesheet = !!(
+    realTimesheetId ||
+    rowKey.indexOf('timesheet:') === 0 ||
+    boolish(row?.has_timesheet) ||
+    boolish(row?.is_real_timesheet_row) ||
+    boolish(details?.has_timesheet)
+  );
+  const expenseStorageTarget = String(firstDefined(
+    actionFlags?.expense_storage_target,
+    actionFlags?.expenseStorageTarget,
+    details?.action_flags?.expense_storage_target,
+    details?.action_flags?.expenseStorageTarget,
+    row?.action_flags?.expense_storage_target,
+    row?.action_flags?.expenseStorageTarget,
+    activeRow?.action_flags?.expense_storage_target,
+    activeRow?.action_flags?.expenseStorageTarget,
+    rowPatch?.action_flags?.expense_storage_target,
+    rowPatch?.action_flags?.expenseStorageTarget,
+    rowPatch?.expense_storage_target,
+    rowPatch?.expenseStorageTarget,
+    row?.expense_storage_target,
+    row?.expenseStorageTarget,
+    activeRow?.expense_storage_target,
+    activeRow?.expenseStorageTarget,
+    ''
+  ) || '').trim().toUpperCase();
+  const seedFromContractWeekDraft = expenseStorageTarget === 'CONTRACT_WEEK_DRAFT' || (!hasRealTimesheet && expenseStorageTarget !== 'TSFIN');
+  const seedFromProcessedTimesheet = expenseStorageTarget === 'TSFIN' || (hasRealTimesheet && expenseStorageTarget !== 'CONTRACT_WEEK_DRAFT');
+  const existingDraftRaw = readExpenseValue(['expensesDraft']);
+  const existingBaselineRaw = readExpenseValue(['expensesBaseline']);
+  const existingDirtyFlag = !!(
+    boolish(readExpenseValue(['expensesDirty'])) ||
+    boolish(readExpenseValue(['expensesDraftDirty'])) ||
+    boolish(readExpenseValue(['hasStagedExpensesDirty'])) ||
+    boolish(readExpenseValue(['stagedExpensesDirty'])) ||
+    boolish(readExpenseValue(['expenseDirtyMarker']))
+  );
+  const existingDraftSeed = hasAnyExpenseSourceField(existingDraftRaw)
+    ? buildExpenseSeedFromSource(existingDraftRaw, { context: ctx, details, tsfin })
+    : null;
+  const existingBaselineSeed = hasAnyExpenseSourceField(existingBaselineRaw)
+    ? buildExpenseSeedFromSource(existingBaselineRaw, { context: ctx, details, tsfin })
+    : null;
+  const derivedDirty = !!(
+    existingDraftSeed &&
+    existingBaselineSeed &&
+    stableStringify(existingDraftSeed) !== stableStringify(existingBaselineSeed)
+  );
+  const processedAuthoritySeed = seedFromProcessedTimesheet
+    ? firstExpenseSeedFromSources([
+        tsfin,
+        details?.tsfin,
+        ctx?.tsfin,
+        details,
+        row,
+        activeRow
+      ], { context: ctx, details, tsfin })
+    : null;
+  const contractWeekExpenseDrafts = seedFromContractWeekDraft
+    ? [
+        details?.contract_week?.totals_json?.expenses_draft,
+        ctx?.contract_week?.totals_json?.expenses_draft,
+        row?.contract_week_totals_json?.expenses_draft,
+        activeRow?.contract_week_totals_json?.expenses_draft,
+        st?.active_ctx?.details?.contract_week?.totals_json?.expenses_draft,
+        st?.active_context?.details?.contract_week?.totals_json?.expenses_draft
+      ]
+    : [];
+  const unprocessedAuthoritySeed = seedFromContractWeekDraft
+    ? firstExpenseSeedFromSources(contractWeekExpenseDrafts, { context: ctx, details, tsfin })
+    : null;
+  const zeroSeed = buildExpenseSeedFromSource({}, { context: ctx, details, tsfin });
+  const authoritySeed = deep(processedAuthoritySeed || unprocessedAuthoritySeed || zeroSeed || {});
+  const preserveExistingDraft = !!(
+    existingDraftSeed &&
+    (
+      derivedDirty ||
+      (
+        existingDirtyFlag &&
+        (
+          !existingBaselineSeed ||
+          stableStringify(existingDraftSeed) !== stableStringify(existingBaselineSeed)
+        )
+      )
+    )
+  );
+  const draftSeed = deep(preserveExistingDraft ? existingDraftSeed : authoritySeed);
+  const baselineSeed = deep(preserveExistingDraft ? (existingBaselineSeed || authoritySeed) : authoritySeed);
   const childCtx = {
     ...(ctx || {}),
     state: {
@@ -162465,8 +162660,8 @@ async function handleBulkProcessOpenExpensesModal(state) {
     }
     const details = (ctx?.details && typeof ctx.details === 'object') ? ctx.details : {};
     const tsfin = (details?.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
-    const baselineRef = deep(ctx?.state?.expensesBaseline || baselineSeed || {});
-    const prevDraft = deep(ctx?.state?.expensesDraft || {});
+    const baselineRef = deep(childCtx?.state?.expensesBaseline || ctx?.state?.expensesBaseline || baselineSeed || {});
+    const prevDraft = deep(childCtx?.state?.expensesDraft || ctx?.state?.expensesDraft || {});
     const normDraft = (typeof normaliseTimesheetExpensesDraft === 'function')
       ? normaliseTimesheetExpensesDraft(mergedDraft, {
           context: ctx,
