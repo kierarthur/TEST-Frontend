@@ -294816,7 +294816,7 @@ async function bootstrapApp(){
         hb._started = true;
         hb._disabled = false;
         hb._wired = !!hb._wired;
-        hb.intervalMs = Number(hb.intervalMs || 15000); // default 15s
+        hb.intervalMs = Number(hb.intervalMs || 45000); // default 15s
         hb._lastPingAtMs = Number(hb._lastPingAtMs || 0);
 
         const entityToSection = {
