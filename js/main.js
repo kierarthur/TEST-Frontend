@@ -21666,6 +21666,20 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
     return { state: 'provider_pending', label: 'Pending with provider', what: 'Provider has not returned a final outcome yet.', action: 'CHECK_PROVIDER_STATUS', tone: 'warning', selectable: false };
   };
 
+  const selectionDisabledReasonFor = (row, status, rowSelectable, fullScope, transferIds, itemIds, candidateIds, payBatchCandidateIds) => {
+    const backendReason = text(row.selection_disabled_reason || row.selectionDisabledReason || row.disabled_reason || row.disabledReason || row.reason_disabled || row.reasonDisabled);
+    const action = upper(status.action || row.recommended_action || row.action || row.actionType || row.action_type);
+    const lifecycle = upper(row.payment_lifecycle_state || row.lifecycle || row.lifecycle_state || row.status_lifecycle || row.displayState || row.display_state || row.status_state);
+    const hasScope = Object.keys(fullScope || {}).length > 0 || transferIds.length > 0 || itemIds.length > 0 || candidateIds.length > 0 || payBatchCandidateIds.length > 0;
+    const hasSignature = !!text(row.status_update_signature || row.live_status_signature || row.statusUpdateSignature || row.liveStatusSignature || row.scope_signature || row.scopeSignature);
+    if (rowSelectable === true) return '';
+    if (action === 'RETRY_PROVIDER_LATER') return 'Use Overview to retry unsent payments.';
+    if ((lifecycle.includes('PAID') || lifecycle.includes('SETTLED') || upper(row.statusLabel || row.status_label).includes('PAID')) && action !== 'AMEND_AND_RECOVER_OVERPAYMENT') return 'Paid payments cannot be rewound.';
+    if (displayOnlyActions.has(action) || action === 'VIEW_RECALCULATE_NEXT_STEP' || action === 'VIEW_PROGRESS' || action === 'VIEW_DETAILS') return 'This row is view-only.';
+    if ((status.selectable === true || row.selectable === true || row.row_selectable === true || row.can_select === true) && (!hasScope || !hasSignature)) return 'Refresh Current Payment Status; row scope is incomplete.';
+    return backendReason || 'This row is not selectable.';
+  };
+
   const rows = sourceRows.map((raw, index) => {
     const row = obj(raw);
     const status = statusFor(row);
@@ -21679,7 +21693,16 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
     const itemIds = uniq([row.pay_batch_item_ids, row.payBatchItemIds, row.pay_batch_item_id, row.payBatchItemId, fullScope.pay_batch_item_ids]);
     const candidateIds = uniq([row.candidate_ids, row.candidateIds, row.candidate_id, row.candidateId, fullScope.candidate_ids]);
     const payBatchCandidateIds = uniq([row.pay_batch_candidate_ids, row.payBatchCandidateIds, row.pay_batch_candidate_id, row.payBatchCandidateId, fullScope.pay_batch_candidate_ids]);
-    const rowSelectable = status.selectable === true && mutableActions.has(status.action) && !displayOnlyActions.has(status.action) && status.action !== 'RETRY_PROVIDER_LATER';
+    const hasScope = Object.keys(fullScope).length > 0 || transferIds.length > 0 || itemIds.length > 0 || candidateIds.length > 0 || payBatchCandidateIds.length > 0;
+    const hasSignature = !!text(row.status_update_signature || row.live_status_signature || row.statusUpdateSignature || row.liveStatusSignature || row.scope_signature || row.scopeSignature);
+    const rowSelectable = status.selectable === true
+      && mutableActions.has(status.action)
+      && !displayOnlyActions.has(status.action)
+      && status.action !== 'RETRY_PROVIDER_LATER'
+      && hasScope
+      && hasSignature;
+    const selectionDisabledReason = selectionDisabledReasonFor(row, status, rowSelectable, fullScope, transferIds, itemIds, candidateIds, payBatchCandidateIds);
+    const actionLabel = actionLabelFor(status.action, upper(row.payment_lifecycle_state || row.lifecycle), status.state === 'rewinding');
 
     return {
       ...row,
@@ -21707,15 +21730,19 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
       manual_adjustments: manualAdjustmentItems,
       actionType: status.action,
       action_type: status.action,
-      actionLabel: actionLabelFor(status.action, upper(row.payment_lifecycle_state || row.lifecycle), status.state === 'rewinding'),
-      action_label: actionLabelFor(status.action, upper(row.payment_lifecycle_state || row.lifecycle), status.state === 'rewinding'),
+      actionLabel,
+      action_label: actionLabel,
       row_action: status.rowAction || (status.action === 'RETRY_PROVIDER_LATER' ? 'OPEN_RETRY_SUMMARY' : status.action),
       rowAction: status.rowAction || (status.action === 'RETRY_PROVIDER_LATER' ? 'OPEN_RETRY_SUMMARY' : status.action),
+      row_action_label: actionLabel,
+      rowActionLabel: actionLabel,
+      selection_disabled_reason: selectionDisabledReason,
+      selectionDisabledReason,
       recommended_action: status.action,
       next_step: row.next_step || row.nextStep || (status.action === 'VIEW_RECALCULATE_NEXT_STEP' ? 'VIEW_RECALCULATE_NEXT_STEP' : null),
       next_step_label: row.next_step_label || row.nextStepLabel || (status.action === 'VIEW_RECALCULATE_NEXT_STEP' ? status.label : null),
-      provider_failure_reason_group: text(row.provider_failure_reason_group || '') || null,
-      provider_failure_reason_label: text(row.provider_failure_reason_label || row.failure_reason_label || '') || null,
+      provider_failure_reason_group: text(row.provider_failure_reason_group || row.providerFailureReasonGroup || row.failure_reason_group || row.failureReasonGroup || '') || null,
+      provider_failure_reason_label: text(row.provider_failure_reason_label || row.providerFailureReasonLabel || row.failure_reason_label || row.failureReasonLabel || '') || null,
       provider_webhook_evidence_json: row.provider_webhook_evidence_json || row.webhook_evidence || null,
       verified_webhook_evidence_count: row.verified_webhook_evidence_count ?? null,
       invalid_webhook_evidence_count: row.invalid_webhook_evidence_count ?? null,
@@ -21747,6 +21774,7 @@ function buildBankingPaymentIssueRows(batchPayload, opts = {}) {
 
   return rows;
 }
+
 
 
 
@@ -21851,11 +21879,6 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
 
   let anchorRowKey = text(state.anchor_row_key || state.anchorRowKey || '');
   let anchorRow = anchorRowKey ? rows.find((row) => rowKeyOf(row) === anchorRowKey) : null;
-  if ((!anchorRow || !actionOf(anchorRow)) && selectedRows.length) {
-    setAnchorFromRow(selectedRows[0]);
-    anchorRowKey = text(state.anchor_row_key || state.anchorRowKey || '');
-    anchorRow = anchorRowKey ? rows.find((row) => rowKeyOf(row) === anchorRowKey) : null;
-  }
   const anchorIssueState = text(state.anchor_issue_state || state.anchorIssueState || anchorRow?.payment_issue_state || anchorRow?.status_state || anchorRow?.display_state || anchorRow?.displayState || '');
   const anchorAction = actionOf(anchorRow || { recommended_action: state.anchor_recommended_action || state.anchorRecommendedAction || '' });
   const anchorFailureGroup = text(state.anchor_failure_reason_group || state.anchorFailureReasonGroup || anchorRow?.provider_failure_reason_group || '');
@@ -21912,13 +21935,17 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     const retryRow = action === 'RETRY_PROVIDER_LATER';
     const selectable = row.selectable === true && !displayOnlyActions.has(action) && action !== 'VIEW_RECALCULATE_NEXT_STEP' && !retryRow;
     const checked = row.selected === true && selectable;
-    const actionLabel = text(row.actionLabel || row.action_label || (retryRow ? 'View details / Open retry summary' : (displayOnlyActions.has(action) ? 'Details' : 'Review')));
+    const disabledReason = text(row.selection_disabled_reason || row.selectionDisabledReason || (retryRow ? 'Use Overview to retry unsent payments.' : 'This row is not selectable.'));
+    const actionLabel = text(row.actionLabel || row.action_label || row.row_action_label || row.rowActionLabel || (retryRow ? 'View details / Open retry summary' : (displayOnlyActions.has(action) ? 'Details' : 'Review')));
     const actionDisabled = displayOnlyActions.has(action) || action === 'VIEW_RECALCULATE_NEXT_STEP';
     const rowButtonAction = retryRow ? 'banking:pay:child:switchTab' : (actionDisabled ? 'banking:pay:issue:viewDetails' : 'banking:pay:issue:rowAction');
     const rowButtonExtraAttrs = retryRow ? ' data-tab-key="overview" title="Open the Overview retry summary"' : '';
+    const selectCell = selectable
+      ? `<input type="checkbox" data-action="banking:pay:issue:toggleRow" data-row-key="${enc(key)}"${checked ? ' checked' : ''} aria-label="Select payment row">`
+      : `<input type="checkbox" disabled aria-disabled="true" title="${enc(disabledReason)}" aria-label="${enc(disabledReason)}"><div class="mini" style="opacity:.75;max-width:140px;">${enc(disabledReason)}</div>`;
     return `
-      <tr data-row-key="${enc(key)}"${checked ? ' class="payment-issue-row-selected"' : ''}>
-        <td>${selectable ? `<input type="checkbox" data-action="banking:pay:issue:toggleRow" data-row-key="${enc(key)}"${checked ? ' checked' : ''}>` : ''}</td>
+      <tr data-action="banking:pay:issue:focusRow" data-row-key="${enc(key)}" data-row-focusable="1"${checked ? ' class="payment-issue-row-selected"' : ''}>
+        <td>${selectCell}</td>
         <td>${enc(text(row.statusLabel || row.status_label || 'Check provider status'))}</td>
         <td>${enc(text(row.candidateName || row.candidate_name || ''))}<div class="mini">${enc(text(row.payeeName || row.payee_name || row.payeeUmbrellaName || row.payee_umbrella_name || ''))}</div></td>
         <td class="mono" style="text-align:right;">${enc(formatAmount(row.paymentAmount ?? row.payment_amount ?? row.amount ?? row.amount_affected))}</td>
@@ -21972,6 +21999,7 @@ function renderBankingPaymentIssuePanel(batchPayload, correctionState) {
     </section>
   `;
 }
+
 
 
 
@@ -24919,11 +24947,6 @@ function rerenderBankingPaymentIssuePanel() {
 }
 
 
-
-
-
-
-
 function selectBankingPaymentIssueRows(correctionState, mode, options = {}) {
   const state = (correctionState && typeof correctionState === 'object' && !Array.isArray(correctionState)) ? correctionState : null;
   if (!state) return null;
@@ -25000,8 +25023,15 @@ function selectBankingPaymentIssueRows(correctionState, mode, options = {}) {
 
   if (['clear', 'clearAll', 'clearSelection'].includes(modeText)) return clear();
 
+  const visibleRows = rows.filter(visible);
   const visibleSelectable = rows.filter(selectable);
-  if (!visibleSelectable.length) return { error: true, message: 'No selectable payment rows are available.' };
+  const visibleRowsByAction = (actionType) => visibleRows.filter((row) => actionOf(row) === actionType && row.hidden !== true && row.disabled !== true);
+  const matchingMode = modeText === 'allMatching'
+    || modeText === 'matchingIssue'
+    || modeText === 'MATCHING_ISSUE'
+    || modeText === 'selectAllMatchingCurrentIssue'
+    || modeText === 'selectAllMatchingIssue';
+  if (!visibleSelectable.length && !matchingMode) return { error: true, message: 'No selectable payment rows are available.' };
 
   let targetRows = [];
   let selectionMode = modeText;
@@ -25015,6 +25045,25 @@ function selectBankingPaymentIssueRows(correctionState, mode, options = {}) {
     }
     targetRows = visibleSelectable.filter((row) => actionOf(row) === actionTypes[0]);
     selectionMode = 'visibleCompatible';
+  } else if (modeText === 'allMatching') {
+    const currentAction = upper(opts.actionType || opts.action_type || opts.recommended_action || opts.recommendedAction || '');
+    if (!currentAction) {
+      state.selectionSummaryCopy = 'Select a payment row first.';
+      return { error: true, message: 'Select a payment row first.' };
+    }
+    if (currentAction === 'RETRY_PROVIDER_LATER') {
+      targetRows = visibleRowsByAction(currentAction);
+      matchingIssueKey = text(opts.issueKey || opts.issue_key || state.anchor_issue_key || state.anchorIssueKey || 'provider_outage_retry_available');
+      selectionMode = 'matchingIssue';
+    } else {
+      targetRows = visibleSelectable.filter((row) => actionOf(row) === currentAction);
+      const lifecycleTypes = Array.from(new Set(targetRows.map(lifecycleOf).filter(Boolean)));
+      if (lifecycleTypes.length > 1) {
+        state.selectionSummaryCopy = 'Mixed statuses selected. Select payments with the same action type.';
+        return { error: true, message: state.selectionSummaryCopy };
+      }
+      selectionMode = 'visibleCompatible';
+    }
   } else if (modeText === 'matchingIssue' || modeText === 'MATCHING_ISSUE' || modeText === 'selectAllMatchingCurrentIssue' || modeText === 'selectAllMatchingIssue') {
     const anchorRowKey = text(opts.anchor_row_key || opts.anchorRowKey || state.anchor_row_key || state.anchorRowKey || '');
     const anchorRow = opts.row && typeof opts.row === 'object'
@@ -25032,7 +25081,8 @@ function selectBankingPaymentIssueRows(correctionState, mode, options = {}) {
       state.selectionSummaryCopy = 'Select a payment row first.';
       return { error: true, message: 'Select a payment row first.' };
     }
-    targetRows = visibleSelectable.filter((row) => {
+    const matchingSourceRows = currentAction === 'RETRY_PROVIDER_LATER' ? visibleRowsByAction(currentAction) : visibleSelectable;
+    targetRows = matchingSourceRows.filter((row) => {
       const sameAction = actionOf(row) === currentAction;
       const sameIssue = !currentIssue || issueStateOf(row) === currentIssue;
       const rowLifecycle = lifecycleOf(row);
@@ -25157,6 +25207,10 @@ function selectBankingPaymentIssueRows(correctionState, mode, options = {}) {
 
   return finalRows;
 }
+
+
+
+
 
 
 
@@ -40617,7 +40671,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'critical',
       title: 'Payment retry needs review',
-      message: 'The blocked-funds retry needs review because CloudTMS could not confirm that its local execution artefacts are safe to clean.',
+      message: 'Retry unsent payments needs review because CloudTMS could not confirm that its local execution artefacts are safe to clean.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40636,8 +40690,8 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       ok: true,
       http_status: 200,
       severity: 'critical',
-      title: 'Bank rejected payment — blocked funds',
-      message: 'The bank rejected the payment because the funding account does not have enough money. No payment was submitted. Fund the account and retry, or cancel/release the batch.',
+      title: 'Bank unavailable — unsent payments can be retried',
+      message: 'The payment was not submitted to the bank/provider. Use Retry unsent payments from Overview when funding is available.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true,
@@ -40731,7 +40785,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40741,7 +40795,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40751,7 +40805,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40761,7 +40815,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40771,7 +40825,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40781,7 +40835,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40791,7 +40845,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40801,7 +40855,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40811,7 +40865,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40821,7 +40875,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40831,7 +40885,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -40841,7 +40895,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 409,
       severity: 'warning',
       title: 'Payment retry did not complete',
-      message: 'CloudTMS could not safely complete this blocked-funds retry. No payment was submitted. Refresh Banking, review the batch status, then try again.',
+      message: 'Retry unsent payments needs review. No payment was submitted. Refresh Banking and review the batch status before trying again.',
       user_action: 'REVIEW_PAYMENT_ISSUES',
       confirm_label: 'OK',
       show_modal: true
@@ -41202,7 +41256,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
       http_status: 400,
       severity: 'warning',
       title: 'Banking setup needs attention',
-      message: 'CloudTMS could not retry this payment because the configured banking rail does not support retrying this batch. Review Banking settings, then retry or cancel/release the batch.',
+      message: 'CloudTMS could not retry this payment because the configured banking rail does not support retrying this batch. Review Banking settings, then use an available banking action.',
       user_action: 'CHECK_BANKING_SETTINGS',
       confirm_label: 'OK',
       show_modal: true
@@ -41513,7 +41567,7 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
   } else if (isPostCreatePreviewRefresh) {
     actionAwareTemplate = { ...actionAwareTemplate, ok: false, http_status: 500, severity: actionAwareTemplate.severity || 'warning', ...postCreatePreviewRefreshCopy };
   } else if (errorCode === 'BATCH_STALE') {
-    if (action === 'RETRY_BLOCKED_FUNDS') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch has changed', message: 'This blocked-funds batch is no longer up to date. No payment was submitted. Refresh Banking, review the latest payment differences, then create or authorise a new payment batch.', user_action: 'REFRESH_BATCH' };
+    if (action === 'RETRY_BLOCKED_FUNDS') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch has changed', message: 'This payment batch is no longer up to date. No payment was submitted. Refresh Banking and review the latest payment status before trying again.', user_action: 'REFRESH_BATCH' };
     else if (action === 'CREATE_DRAFT') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch could not be created', message: 'Payment details changed while the batch was being prepared. Refresh the preview, review the latest payment details, then try again.', user_action: 'REFRESH_PREVIEW' };
     else if (action === 'PREVIEW' || action === 'WORKBENCH_SESSION_OPEN') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment preview needs refreshing', message: 'The payment preview is no longer up to date. Refresh the preview, review the latest payment details, then try again.', user_action: 'REFRESH_PREVIEW' };
     else if (action === 'PAYE_NET_IMPORT' || action === 'PAYE_NET_SAVE') actionAwareTemplate = { ...actionAwareTemplate, title: 'Payment batch has changed', message: 'This batch is no longer up to date. Refresh the batch, review the latest payment details, then try again.', user_action: 'REFRESH_BATCH' };
@@ -41721,6 +41775,8 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 
   return result;
 }
+
+
 
 
 
@@ -42246,7 +42302,6 @@ function updateBankingNavAttentionState(attentionState) {
 }
 
 
-
 function bankingPayNormaliseBatchIssueBadge(row) {
   const asUpper = (v) => String(v || '').trim().toUpperCase();
   const toNum = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -42297,7 +42352,28 @@ function bankingPayNormaliseBatchIssueBadge(row) {
 
   const rowAlerts = Array.isArray(row?.banking_alerts) ? row.banking_alerts : [];
   const rowHasBlockedFundsAlert = rowAlerts.some((alert) => asUpper(alert?.alert_kind || alert?.kind || alert?.issue_kind) === 'BLOCKED_FUNDS');
-  const isBlockedFunds = status === 'BLOCKED_FUNDS' || asUpper(row?.banking_alert_kind || row?.alert_kind) === 'BLOCKED_FUNDS' || rowHasBlockedFundsAlert;
+  const issueKindRaw = asUpper(row?.banking_alert_kind || row?.alert_kind || row?.issue_kind || row?.issueKind || '');
+  const retryEligibleCount = toNum(row?.retry_eligible_count ?? row?.retryEligibleCount ?? row?.retry_available_count ?? row?.retryAvailableCount);
+  const retryIneligibleCount = toNum(row?.retry_ineligible_count ?? row?.retryIneligibleCount);
+  const retryInProgress = row?.retry_in_progress === true ||
+    row?.retryInProgress === true ||
+    row?.retry_already_in_progress === true ||
+    row?.retryAlreadyInProgress === true ||
+    ['RUNNING', 'IN_PROGRESS', 'PROCESSING', 'STARTED', 'QUEUED'].includes(asUpper(row?.retry_operation_status || row?.retryOperationStatus || row?.retry_status || row?.retryStatus));
+  const retryAvailable = retryEligibleCount > 0 ||
+    row?.retry_available === true ||
+    row?.retryAvailable === true ||
+    row?.safe_retry_available === true ||
+    row?.safeRetryAvailable === true ||
+    /RETRY UNSENT PAYMENTS|RETRY AVAILABLE|UNSENT PAYMENTS CAN BE RETRIED/.test(asUpper(row?.retry_button_label || row?.retryButtonLabel || row?.payment_issue_label || row?.badgeText || ''));
+  const providerSubmissionAttempted = row?.provider_submission_attempted === true ||
+    row?.providerSubmissionAttempted === true ||
+    row?.provider_request_sent === true ||
+    row?.providerRequestSent === true ||
+    row?.submitted_to_bank === true ||
+    row?.submittedToBank === true ||
+    !!String(row?.rail_tx_id || row?.provider_transaction_id || row?.providerTransactionId || row?.provider_payment_id || row?.providerPaymentId || row?.provider_event_id || row?.providerEventId || row?.execution_commit_ref || '').trim();
+  const isBlockedFunds = status === 'BLOCKED_FUNDS' || issueKindRaw === 'BLOCKED_FUNDS' || rowHasBlockedFundsAlert;
   if (isBlockedFunds) {
     const required = Number(row?.blocked_funds_required_gbp ?? row?.required_gbp ?? row?.last_funds_check_json?.required_gbp);
     const available = Number(row?.blocked_funds_available_gbp ?? row?.available_gbp ?? row?.last_funds_check_json?.available_gbp);
@@ -42305,14 +42381,22 @@ function bankingPayNormaliseBatchIssueBadge(row) {
       if (!Number.isFinite(value)) return '—';
       try { return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(value); } catch { return `£${value.toFixed(2)}`; }
     };
+    const label = retryInProgress
+      ? 'Retrying unsent payments'
+      : ((retryAvailable || providerSubmissionAttempted !== true)
+          ? 'Bank unavailable — unsent payments can be retried'
+          : 'Failed — not paid');
     return {
-      label: 'BANK REJECTED PAYMENT',
-      secondaryLabel: 'BLOCKED FUNDS',
+      label,
+      secondaryLabel: retryInProgress ? 'Retry in progress' : (retryAvailable ? 'Retry available' : ''),
       reason: `Required ${fmt(required)} / Available ${fmt(available)}`,
-      tone: 'critical',
-      requiresAction: true,
+      tone: retryInProgress ? 'info' : 'warn',
+      requiresAction: retryInProgress !== true,
       hasPaymentIssue: true,
       focusPaymentIssuePanel: true,
+      retry_eligible_count: retryEligibleCount,
+      retry_ineligible_count: retryIneligibleCount,
+      retry_in_progress: retryInProgress,
       acknowledged: row?.banking_alert_acknowledged_for_user === true
     };
   }
@@ -42325,6 +42409,10 @@ function bankingPayNormaliseBatchIssueBadge(row) {
   const requiresUserAction = row?.correction_requires_user_action === true || row?.payment_correction?.requires_user_action === true || row?.correction_progress?.requires_user_action === true || toNum(row?.current_user_actionable_request_count) > 0 || toNum(row?.correction_current_user_actionable_request_count) > 0;
   const hasActionSignal = requiresUserAction || requiredCount > 0;
   const explicitActionRequired = /ACTION_REQUIRED|REQUIRES_ACTION|AMBIGUOUS|AMBIGUOUS_REVIEW_REQUIRED|BLOCKED|AUTO_CORRECTION_BLOCKED|SUGGESTED_RESOLUTION_REQUIRED/.test(issueEvidenceText);
+  const textForDisplayClassification = [status, issueKindRaw, issueEvidenceText, asUpper(row?.badgeText || row?.payment_issue_label || row?.status_label || row?.statusLabel || '')].filter(Boolean).join(' ');
+  const manualAdjustmentBlocker = /MANUAL_ADJUSTMENT|MANUAL ADJUSTMENT|MANUAL_ADJUSTMENTS_CARRIED_FORWARD/.test(textForDisplayClassification);
+  const providerUnknown = /PROVIDER_UNKNOWN|PROVIDER OUTCOME UNKNOWN|PROVIDER_OUTCOME_UNKNOWN|UNKNOWN_PROVIDER|UNKNOWN PROVIDER|UNKNOWN_PAYMENT|OUTCOME_UNKNOWN|MALFORMED|TIMEOUT|CHECK_PROVIDER/.test(textForDisplayClassification);
+  const paidRecoveryRequired = /PAID_RECOVERY_REQUIRED|RECOVER_OVERPAYMENT|OVERPAYMENT_RECOVERY|RETURNED|REVERTED|SETTLED_RETURNED|TRUE_SETTLED_REVERSAL_REQUIRED|MANUAL_EVIDENCE_SETTLED_RETURN/.test(textForDisplayClassification);
 
   const plainLabel = asUpper(row?.badgeText || row?.payment_issue_label || '');
   const isPartlyAppliedReview = /PARTLY_APPLIED_REVIEW_NEEDED|APPLIED_WITH_BLOCKERS|PARTLY APPLIED(?:\s*[—-]\s*REVIEW NEEDED)?/.test([plainLabel, issueEvidenceText].filter(Boolean).join(' '));
@@ -42340,24 +42428,27 @@ function bankingPayNormaliseBatchIssueBadge(row) {
     toNum(row?.failed_returned_event_count) > 0
   );
   const bankAdaptorCancelled = /\bCANCELLED\b/.test(bankEvidence) || (/\bCANCELLED\b/.test(issueEvidenceText) && providerOrRailEvidence && !/PRE_BANK_CANCELLED|PAYMENT CANCELLED/.test(issueEvidenceText));
-  const hasRejectedEvidence = /BANK REJECTED PAYMENT|FAILED|DECLINED|REJECTED|NO_MONEY_UNWIND|MANUAL_EVIDENCE_NO_MONEY/.test([plainLabel, issueEvidenceText].filter(Boolean).join(' ')) || bankAdaptorCancelled;
+  const hasRejectedEvidence = /BANK[ _]REJECTED[ _]PAYMENT|FAILED|DECLINED|REJECTED|NO_MONEY_UNWIND|MANUAL_EVIDENCE_NO_MONEY/.test([plainLabel, issueEvidenceText].filter(Boolean).join(' ')) || bankAdaptorCancelled;
   const hasProcessingEvidence = processingCount > 0 || /AUTO_PROCESSING|PROCESSING|IN_PROGRESS/.test(issueEvidenceText) || /\bPROCESSING\b/.test(plainLabel);
   const hasReviewProblem = blockedCount > 0 || failedCount > 0;
 
   if (isPartlyAppliedReview || (hasProcessingEvidence && hasReviewProblem)) return { label: 'Partly applied', tone: 'warn', requiresAction: true, hasPaymentIssue: true, focusPaymentIssuePanel: true };
   if (failedCount > 0) return { label: 'Could not apply', tone: 'warn', requiresAction: true, hasPaymentIssue: true, focusPaymentIssuePanel: true };
+  if (manualAdjustmentBlocker) return { label: 'Manual adjustment needs review', tone: 'warn', requiresAction: true, hasPaymentIssue: true, focusPaymentIssuePanel: true };
+  if (providerUnknown && !paidRecoveryRequired) return { label: 'Provider outcome unknown — check provider', tone: 'warn', requiresAction: true, hasPaymentIssue: true, focusPaymentIssuePanel: true };
   if (blockedCount > 0 || explicitActionRequired) return { label: hasActionSignal ? 'Action needed' : 'Needs review', tone: 'warn', requiresAction: true, hasPaymentIssue: true, focusPaymentIssuePanel: true };
   if (waitingApprovalCount > 0 || /WAITING_APPROVAL|AWAITING_APPROVAL|AWAITING_AUTHORISATION|AWAITING_AUTHORIZATION|WAITING_FOR_APPROVAL|REQUESTED/.test(issueEvidenceText)) return { label: 'Waiting for approval', tone: 'warn', requiresAction: false, hasPaymentIssue: true, focusPaymentIssuePanel: true };
   if (hasProcessingEvidence) return { label: 'Processing', tone: 'info', requiresAction: false, hasPaymentIssue: true, focusPaymentIssuePanel: true };
   if (isPartlyApplied) return { label: 'Partly applied', tone: 'info', requiresAction: false, hasPaymentIssue: true, focusPaymentIssuePanel: true };
   if (isApplied) return { label: 'Applied', tone: 'ok', requiresAction: false, hasPaymentIssue: true, focusPaymentIssuePanel: true };
-  if (hasReturnedEvidence && hasActionSignal) return { label: 'Bank returned payment', tone: 'warn', requiresAction: true, hasPaymentIssue: true, focusPaymentIssuePanel: true };
-  if (hasRejectedEvidence && (hasActionSignal || providerOrRailEvidence)) return { label: 'Bank rejected payment', tone: 'warn', requiresAction: true, hasPaymentIssue: true, focusPaymentIssuePanel: true };
+  if (hasReturnedEvidence && hasActionSignal) return { label: 'Recover overpayment in next pay run', tone: 'warn', requiresAction: true, hasPaymentIssue: true, focusPaymentIssuePanel: true };
+  if (hasRejectedEvidence && (hasActionSignal || providerOrRailEvidence)) return { label: 'Failed — not paid', tone: 'warn', requiresAction: true, hasPaymentIssue: true, focusPaymentIssuePanel: true };
   if (hasActionSignal) return { label: 'Action needed', tone: 'warn', requiresAction: true, hasPaymentIssue: true, focusPaymentIssuePanel: true };
   if (status === 'SETTLED' || status === 'COMPLETED') return { label: 'Paid', tone: 'ok', requiresAction: false, hasPaymentIssue: false, focusPaymentIssuePanel: false };
   if (status === 'CANCELLED') return { label: 'Cancelled', tone: 'warn', requiresAction: false, hasPaymentIssue: false, focusPaymentIssuePanel: false };
   return { label: '', tone: '', requiresAction: false, hasPaymentIssue: false, focusPaymentIssuePanel: false };
 }
+
 
 
 function refreshBankingNavAttentionFromCachedRows() {
@@ -42515,13 +42606,13 @@ function renderPayBatchListPanel() {
     const commitState = String(row?.execution_commit_state || '').trim().toUpperCase();
     if (s === 'SETTLED' || s === 'COMMITTED' || commitState === 'COMMITTED' || commitState === 'SETTLED') return 'Paid';
     if (s === 'DRAFT' || s === 'DRAFT_CREATED' || s === 'READY' || s === 'SCHEDULED' || s === 'AUTHORISED_FOR_PAYMENT') return 'Not paid';
-    if (s === 'BLOCKED_FUNDS') return 'Bank rejected payment';
+    if (s === 'BLOCKED_FUNDS') return 'Bank unavailable — unsent payments can be retried';
     if (s === 'WAITING_BANK_CONFIRM' || s === 'AWAITING_AUTHORISATION' || s === 'AWAITING_AUTHORIZATION') return 'Waiting for approval';
     if (s === 'EXECUTING' || s === 'PROCESSING') return 'Processing';
     if (s === 'PARTIAL') return 'Partly paid';
     if (s === 'CANCELLED') return 'Cancelled';
-    if (s === 'FAILED' || s === 'REJECTED' || s === 'DECLINED') return 'Bank rejected payment';
-    if (s === 'RETURNED' || s === 'REVERTED') return 'Bank returned payment';
+    if (s === 'FAILED' || s === 'REJECTED' || s === 'DECLINED') return 'Failed — not paid';
+    if (s === 'RETURNED' || s === 'REVERTED') return 'Recover overpayment in next pay run';
     return s ? 'Not paid' : 'Not paid';
   };
 
@@ -42529,19 +42620,21 @@ function renderPayBatchListPanel() {
     const s0 = String(rawLabel || '').trim();
     const s = s0.toUpperCase();
     if (!s0) return '';
-    if (s.includes('RETURN')) return 'Bank returned payment';
-    if (s.includes('REJECT') || s.includes('DECLIN')) return 'Bank rejected payment';
+    if (s.includes('RETURN')) return 'Recover overpayment in next pay run';
+    if (s.includes('REJECT') || s.includes('DECLIN')) return 'Failed — not paid';
     if (s.includes('PARTLY') && s.includes('APPLIED')) return 'Partly applied';
     if (s.includes('PARTLY') || s.includes('PARTIAL')) return 'Partly paid';
     if (s.includes('WAIT')) return 'Waiting for approval';
     if (s.includes('PROCESS')) return 'Processing';
     if (s.includes('APPLIED') || s.includes('AUTO_APPLIED')) return 'Applied';
     if (s.includes('COULD NOT') || s.includes('FAILED')) return 'Could not apply';
+    if (s.includes('RETRY') || s.includes('UNSENT')) return 'Bank unavailable — retry available';
+    if (s.includes('UNKNOWN')) return 'Provider outcome unknown';
     if (s.includes('REVIEW') || s.includes('ACTION') || s.includes('BLOCK')) return 'Needs review';
     if (s === 'PAID' || s === 'SETTLED') return 'Paid';
     if (s === 'NOT PAID' || s === 'DRAFT') return 'Not paid';
     if (s === 'CANCELLED') return 'Cancelled';
-    const allowed = new Set(['Action needed', 'Bank returned payment', 'Bank rejected payment', 'Partly paid', 'Partly applied', 'Needs review', 'Processing', 'Applied', 'Could not apply', 'Waiting for approval', 'Cancelled', 'Paid', 'Not paid', 'Returned']);
+    const allowed = new Set(['Action needed', 'Recover overpayment in next pay run', 'Failed — not paid', 'Provider outcome unknown', 'Bank unavailable — retry available', 'Bank unavailable — unsent payments can be retried', 'Retrying unsent payments', 'Partly paid', 'Partly applied', 'Needs review', 'Processing', 'Applied', 'Could not apply', 'Waiting for approval', 'Cancelled', 'Paid', 'Not paid', 'Returned']);
     return allowed.has(s0) ? s0 : 'Needs review';
   };
 
@@ -42553,7 +42646,7 @@ function renderPayBatchListPanel() {
     { v: 'AUTHORISED_FOR_PAYMENT', label: 'Not paid' },
     { v: 'EXECUTING', label: 'Processing' },
     { v: 'PARTIAL', label: 'Partly paid' },
-    { v: 'BLOCKED_FUNDS', label: 'Blocked funds' },
+    { v: 'BLOCKED_FUNDS', label: 'Bank unavailable — retry available' },
     { v: 'SETTLED', label: 'Paid' }
   ];
 
@@ -42714,7 +42807,7 @@ function renderPayBatchListPanel() {
         return { label: 'Partially Paid - some issues', tone: 'warn', sentCount: sent, failedReturnedCount: failed, checkRequiredCount: check, totalRelevantCount: total, hasIssues: true, showCurrentPaymentStatusAction: true };
       }
       if (sent === 0 && failed > 0) {
-        return { label: 'Nothing Paid (failed)', tone: 'warn', sentCount: sent, failedReturnedCount: failed, checkRequiredCount: check, totalRelevantCount: Math.max(total, failed + check), hasIssues: true, showCurrentPaymentStatusAction: true };
+        return { label: 'Failed — not paid', tone: 'warn', sentCount: sent, failedReturnedCount: failed, checkRequiredCount: check, totalRelevantCount: Math.max(total, failed + check), hasIssues: true, showCurrentPaymentStatusAction: true };
       }
       return null;
     };
@@ -42848,19 +42941,21 @@ function renderPayBatchListPanel() {
     const paymentIssuesRequired = cancelMode === 'PAYMENT_ISSUES_REQUIRED' && !hasPaymentOutcome;
     const currentPaymentStatusAction = hasPaymentOutcome && paymentOutcome.showCurrentPaymentStatusAction === true;
     const issueBadges = issueBadge.label ? [safeIssueBadgeLabel(issueBadge.label)].filter(Boolean) : [];
-    const rawBlockedFundsRow = stx === 'BLOCKED_FUNDS' || issueBadge.secondaryLabel === 'BLOCKED FUNDS';
+    const rawBlockedFundsRow = stx === 'BLOCKED_FUNDS' ||
+      /BANK UNAVAILABLE|RETRY UNSENT|RETRY AVAILABLE|UNSENT PAYMENTS/.test(String(issueBadge.label || '').trim().toUpperCase());
     const blockedFundsRow = rawBlockedFundsRow && !paymentIssuesRequired && !hasPaymentOutcome;
     const blockedFundsReason = blockedFundsRow
       ? (issueBadge.reason || `Required ${fmtGbp(r?.blocked_funds_required_gbp ?? r?.last_funds_check_json?.required_gbp)} / Available ${fmtGbp(r?.blocked_funds_available_gbp ?? r?.last_funds_check_json?.available_gbp)}`)
       : '';
     const acknowledgedAlert = r?.banking_alert_acknowledged_for_user === true || issueBadge.acknowledged === true;
+    const blockedFundsPublicLabel = String(issueBadge.label || '').trim() || 'Bank unavailable — retry available';
 
     const issuePillsHtml = hasPaymentOutcome
       ? ''
       : paymentIssuesRequired
         ? ` <span class="pill pill-warn" title="Use Current Payment Status to review affected payments.">PAYMENT ISSUES</span>`
         : blockedFundsRow
-          ? ` <span class="pill pill-warn banking-pay-blocked-funds-badge" style="background:#dc2626;color:#fff;border-color:#b91c1c;" title="${enc(blockedFundsReason)}">BANK REJECTED PAYMENT</span> <span class="pill pill-warn" style="background:#fee2e2;color:#991b1b;border-color:#fecaca;" title="${enc(blockedFundsReason)}">BLOCKED FUNDS</span>${acknowledgedAlert ? ' <span class="pill" title="This alert has been cleared from your Banking button only.">Cleared from my alerts</span>' : ''}`
+          ? ` <span class="pill pill-warn" title="${enc(blockedFundsReason)}">${enc(blockedFundsPublicLabel === 'Bank unavailable — unsent payments can be retried' ? 'Bank unavailable — retry available' : blockedFundsPublicLabel)}</span>${acknowledgedAlert ? ' <span class="pill" title="This alert has been cleared from your Banking button only.">Cleared from my alerts</span>' : ''}`
           : issueBadges.map((label) => ` <span class="pill">${enc(label)}</span>`).join('');
 
     const pillClass = hasPaymentOutcome
@@ -43085,6 +43180,8 @@ function renderPayBatchListPanel() {
     </div>
   `;
 }
+
+
 
 
 function renderPayBatchDetailPanel() {
@@ -44251,18 +44348,32 @@ function renderBankingPaymentSettingsTab() {
   const webhookStatusSummary = (st.settings.banking_webhook_status_summary && typeof st.settings.banking_webhook_status_summary === 'object' && !Array.isArray(st.settings.banking_webhook_status_summary))
     ? st.settings.banking_webhook_status_summary
     : ((s.banking_webhook_status_summary && typeof s.banking_webhook_status_summary === 'object' && !Array.isArray(s.banking_webhook_status_summary)) ? s.banking_webhook_status_summary : null);
-  const currentAlertMode = String(
+  const normaliseAlertReasonKeyForSettings = (value) => {
+    const key = String(value == null ? '' : value).trim().toUpperCase();
+    if (key === 'PROVIDER_OUTCOME_UNKNOWN') return 'PROVIDER_UNKNOWN';
+    if (key === 'UNSPECIFIED_PROVIDER_FAILURE') return 'PROVIDER_FAILED_UNSPECIFIED';
+    if (key === 'NONE') return '';
+    return key;
+  };
+  const normaliseAlertModeForSettings = (value, enabled) => {
+    const key = String(value == null ? '' : value).trim().toUpperCase();
+    if (key === 'NONE' || key === 'NO_BANKING_PAY_ALERTS' || enabled === false) return 'NO_BANKING_PAY_ALERTS';
+    if (key === 'SELECTED' || key === 'SELECTED_FAILURE_REASONS') return 'SELECTED_FAILURE_REASONS';
+    return 'ALL_ACTION_REQUIRED';
+  };
+  const currentAlertMode = normaliseAlertModeForSettings(
     alertPreferenceState.mode ||
     alertPreferenceState.alert_mode ||
     alertPreferenceState.banking_pay_alert_mode ||
     alertPreferenceState.bankingPayAlertMode ||
-    'ALL_ACTION_REQUIRED'
-  ).trim().toUpperCase();
+    'ALL_ACTION_REQUIRED',
+    alertPreferenceState.enabled
+  );
   const enabledFailureReasons = new Set(
     (Array.isArray(alertPreferenceState.failure_reason_groups)
       ? alertPreferenceState.failure_reason_groups
       : (Array.isArray(alertPreferenceState.failureReasonGroups) ? alertPreferenceState.failureReasonGroups : []))
-      .map((value) => String(value || '').trim().toUpperCase())
+      .map((value) => normaliseAlertReasonKeyForSettings(value))
       .filter(Boolean)
   );
   const enabledInfoKinds = new Set(
@@ -44322,8 +44433,8 @@ function renderBankingPaymentSettingsTab() {
     ['BANK_REJECTED', 'bank rejected'],
     ['COMPLIANCE_REVIEW', 'compliance/review'],
     ['PROVIDER_OUTAGE', 'provider outage'],
-    ['PROVIDER_OUTCOME_UNKNOWN', 'provider outcome unknown'],
-    ['UNSPECIFIED_PROVIDER_FAILURE', 'unspecified provider failure']
+    ['PROVIDER_UNKNOWN', 'provider unknown'],
+    ['PROVIDER_FAILED_UNSPECIFIED', 'unspecified provider failure']
   ];
   const progressInfoOptions = [
     ['AUTO_UNWIND_PROGRESS', 'auto-unwind progress'],
@@ -44338,7 +44449,7 @@ function renderBankingPaymentSettingsTab() {
           <div class="mini" style="opacity:.85;">Choose which action-required Banking Pay alerts are shown in your Banking button. Completed successful payments do not create alerts.</div>
           <label class="inline mini"><input type="radio" name="bankingAlertPreferenceMode" value="ALL_ACTION_REQUIRED" data-alert-preference-key="mode" ${currentAlertMode === 'ALL_ACTION_REQUIRED' ? 'checked' : ''} /> All action-required Banking Pay alerts</label>
           <label class="inline mini"><input type="radio" name="bankingAlertPreferenceMode" value="SELECTED_FAILURE_REASONS" data-alert-preference-key="mode" ${currentAlertMode === 'SELECTED_FAILURE_REASONS' ? 'checked' : ''} /> Only selected failure reasons</label>
-          <label class="inline mini"><input type="radio" name="bankingAlertPreferenceMode" value="NONE" data-alert-preference-key="mode" ${currentAlertMode === 'NONE' || currentAlertMode === 'NO_BANKING_PAY_ALERTS' ? 'checked' : ''} /> No Banking Pay alerts</label>
+          <label class="inline mini"><input type="radio" name="bankingAlertPreferenceMode" value="NO_BANKING_PAY_ALERTS" data-alert-preference-key="mode" ${currentAlertMode === 'NO_BANKING_PAY_ALERTS' ? 'checked' : ''} /> No Banking Pay alerts</label>
           <div class="mini" style="font-weight:700;opacity:.9;margin-top:4px;">Failure reasons</div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px;">
             ${failureReasonOptions.map(([key, label]) => `
@@ -44391,7 +44502,10 @@ function renderBankingPaymentSettingsTab() {
                     <th>Provider</th>
                     <th>Environment</th>
                     <th>Status</th>
+                    <th>Webhook public ID</th>
+                    <th>Provider webhook ID</th>
                     <th>Event types</th>
+                    <th>Last verified</th>
                     <th>Last event</th>
                     <th>Last error</th>
                     <th>Unmatched</th>
@@ -44404,15 +44518,18 @@ function renderBankingPaymentSettingsTab() {
                   ${webhookRows.map((row) => `
                     <tr>
                       <td class="mono">${enc(row.provider_key || row.provider || '—')}</td>
-                      <td class="mono">${enc(row.rail_env || row.env || '—')}</td>
+                      <td class="mono">${enc(row.rail_env || row.environment || row.env || row.railEnvironment || '—')}</td>
                       <td>${enc(row.status || '—')}</td>
-                      <td>${enc(Array.isArray(row.event_types) ? row.event_types.join(', ') : (row.event_types || row.events || '—'))}</td>
-                      <td>${enc(row.last_event_at_utc || row.last_event_time || row.lastEventTime || '—')}</td>
-                      <td>${enc(row.last_error || row.last_error_message || row.lastError || '—')}</td>
-                      <td class="mono">${enc(String(row.unmatched_count ?? row.unmatchedCount ?? 0))}</td>
-                      <td>${enc(row.failed_replay_sync_state || row.failedReplaySyncState || row.replay_sync_state || row.replaySyncState || '—')}</td>
-                      <td>${enc((row.secret_configured === true || row.signing_secret_configured === true) ? 'Yes' : 'No')}</td>
-                      <td>${enc(row.old_secret_overlap_status || row.oldSecretOverlapStatus || '—')}</td>
+                      <td class="mono">${enc(row.webhook_public_id || row.webhookPublicId || '—')}</td>
+                      <td>${enc((row.provider_webhook_id_set === true || row.providerWebhookIdSet === true || row.provider_webhook_id_present === true || row.providerWebhookIdPresent === true || row.provider_webhook_id_configured === true || row.providerWebhookIdConfigured === true) ? 'Set' : 'Not set')}</td>
+                      <td>${enc(Array.isArray(row.configured_event_types) ? row.configured_event_types.join(', ') : (Array.isArray(row.event_types) ? row.event_types.join(', ') : (row.configuredEventTypes || row.event_types || row.events || '—')))}</td>
+                      <td>${enc(row.last_verified_at_utc || row.lastVerifiedAtUtc || row.last_verified_time || row.lastVerifiedTime || '—')}</td>
+                      <td>${enc(row.last_event_at_utc || row.lastEventAtUtc || row.last_event_time || row.lastEventTime || '—')}</td>
+                      <td>${enc(row.last_error_at_utc || row.lastErrorAtUtc || row.last_error || row.last_error_message || row.lastError || '—')}</td>
+                      <td class="mono">${enc(String(row.unmatched_verified_webhook_count ?? row.unmatchedVerifiedWebhookCount ?? row.unmatched_count ?? row.unmatchedCount ?? 0))}</td>
+                      <td>${enc(row.failed_replay_sync_state || row.failedReplaySyncState || row.replay_sync_state || row.replaySyncState || '—')}${row.last_failed_replay_sync_at_utc || row.lastFailedReplaySyncAtUtc ? ` · ${enc(row.last_failed_replay_sync_at_utc || row.lastFailedReplaySyncAtUtc)}` : ''}</td>
+                      <td>${enc((row.secret_configured === true || row.signing_secret_configured === true || row.signingSecretConfigured === true) ? 'Yes' : 'No')}</td>
+                      <td>${enc(row.old_secret_overlap_status || row.oldSecretOverlapStatus || (row.old_secret_overlap_active === true || row.oldSecretOverlapActive === true ? 'Active' : 'Inactive'))}</td>
                     </tr>
                   `).join('')}
                 </tbody>
@@ -44659,8 +44776,6 @@ function renderBankingPaymentSettingsTab() {
     </div>
   `;
 }
-
-
 
 
 
@@ -46630,6 +46745,7 @@ async function openBankingPayFiltersModal(seed = {}) {
   );
 }
 
+
 async function openBankingPayExecuteConfirmModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -46774,12 +46890,35 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     return String(v || '').trim();
   };
 
+  const canStartStandardExecution = flag('can_start_standard_execution', false);
+  const standardExecutionExplicitlyDisabled =
+    flag('standard_execution_disabled', false) ||
+    flag('standard_bank_execution_disabled', false) ||
+    flag('standardExecutionDisabled', false) ||
+    flag('standardBankExecutionDisabled', false);
+  const standardExecutionUnavailableReason =
+    strField('standard_execution_disabled_reason') ||
+    strField('standard_bank_execution_disabled_reason') ||
+    strField('standardExecutionDisabledReason') ||
+    strField('standardBankExecutionDisabledReason') ||
+    (!canStartStandardExecution ? strField('native_execution_unavailable_reason') : '') ||
+    'Standard bank execution is unavailable for this batch.';
+  const resolvedFundingAccountRef =
+    strField('funding_account_ref') ||
+    strField('fundingAccountRef') ||
+    strField('rail_default_funding_account_ref') ||
+    strField('railDefaultFundingAccountRef') ||
+    strField('standard_bank_funding_account_ref') ||
+    strField('standardBankFundingAccountRef') ||
+    strField('default_funding_account_ref') ||
+    strField('defaultFundingAccountRef');
+
   const modeInfo = {
     STANDARD_BANK: {
       label: 'Standard bank execution',
       desc: 'Use the configured banking rail to execute/send the payment through the bank adaptor.',
-      enabled: flag('can_start_standard_execution', false) && flag('native_execution_available', false),
-      disabledReason: strField('native_execution_unavailable_reason') || 'Standard bank execution is unavailable for this batch.'
+      enabled: canStartStandardExecution === true && standardExecutionExplicitlyDisabled !== true,
+      disabledReason: standardExecutionUnavailableReason
     },
     CSV_SETTLEMENT: {
       label: 'CSV settlement',
@@ -46926,7 +47065,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     time_uk: '',
     payment_date_uk: '',
     auth_mode: 'NORMAL',
-    funding_account_ref: '',
+    funding_account_ref: resolvedFundingAccountRef || '',
     warning_hours_json_raw: '',
     suppress_remittances: false,
     suppress_remittances_confirmed: false,
@@ -47075,6 +47214,15 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
                 </div>
 
                 ${isStandard ? `
+                  ${!String(state.funding_account_ref || '').trim() ? `
+                    <div class="notice warning mini" style="margin-bottom:8px;">
+                      Funding account ref is missing. Standard bank execution remains available, but the backend will validate the funding account before submission.
+                      <div style="margin-top:6px;">
+                        <label class="inline mini" style="opacity:.85;">Funding account ref</label>
+                        <input class="input" type="text" value="${enc(state.funding_account_ref)}" placeholder="Enter funding account ref if required" data-action="pay-exec:setFundingAccountRef" ${dis} />
+                      </div>
+                    </div>
+                  ` : ''}
                   <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
                     <label class="inline mini" style="display:flex;gap:6px;align-items:center;">
                       <input type="radio" name="pay_exec_schedule_kind" value="IMMEDIATE" ${String(state.schedule_kind).toUpperCase() === 'IMMEDIATE' ? 'checked' : ''} ${dis} data-action="pay-exec:setScheduleKind" />
@@ -47437,6 +47585,7 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
 
 
 
+
 async function bankingPayBatchExecutePayment(payBatchId, payload) {
   const id = String(payBatchId || '').trim();
   if (!id) throw new Error('bankingPayBatchExecutePayment: payBatchId is required');
@@ -47692,8 +47841,6 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
 
   return finalResult;
 }
-
-
 
 
 
@@ -48845,7 +48992,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     return String(fallback || 'CloudTMS could not complete this Banking action. Please refresh and try again.').trim();
   };
 
- const buildBlockedFundsRetryModalCopy = (payload, error = null, fallbackMessage = '') => {
+ const buildRetryUnsentPaymentsNoticeCopy = (payload, error = null, fallbackMessage = '') => {
     const p = (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {};
     const retryAlreadyInProgress = p.retry_already_in_progress === true || p.retryAlreadyInProgress === true;
     const retryInProgress = retryAlreadyInProgress || p.retry_in_progress === true || p.retryInProgress === true;
@@ -48864,8 +49011,8 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   };
 
 
-  const showBlockedFundsRetryModal = async ({ title, message, detailRows = [], confirmClass = 'btn btn-primary' } = {}) => {
-    // Retired blocking retry modal. Retry unsent payments is now
+  const showRetryUnsentPaymentsNotice = async ({ title, message, detailRows = [], confirmClass = 'btn btn-primary' } = {}) => {
+    // Retired blocking dialog. Retry unsent payments is now
     // backend queued and non-blocking, so only show a transient notice/toast.
     const msg = String(message || title || 'Retrying unsent payments — you can continue using CloudTMS while this runs.').trim();
     try {
@@ -49781,7 +49928,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       row.manual_action_available = false;
       if (manualPaidActionMode === true && (displayState === 'PAYMENT_SENT' || displayState === 'PAYMENT_PAID' || issueKind === 'PAID' || issueKind === 'MANUAL_PAID_ACTION')) {
         row.actionType = row.actionType || 'CANDIDATE_RETURNED_FUNDS';
-        row.actionLabel = 'Candidate returned funds';
+        row.actionLabel = 'Recover overpayment in next pay run';
       } else if (oldAction.includes('ELIGIBLE')) {
         row.actionLabel = (typeof getBankingPaymentIssueActionLabel === 'function') ? getBankingPaymentIssueActionLabel(row) : 'View details';
       }
@@ -51707,8 +51854,8 @@ const executePaymentPipeline = async () => {
 
     if (genuineBlockedFunds) {
       await showChildFriendlyNotice({
-        title: 'Payment not sent — funding unavailable',
-        message: 'No bank submission was completed because the funding account did not have enough available balance. Review Current Payment Status; if retry is available, use Retry unsent payments from Overview.',
+        title: 'Bank unavailable — unsent payments can be retried',
+        message: 'The payment request was not sent. Review Current Payment Status; if retry is available, use Retry unsent payments from Overview.',
         confirmLabel: 'OK',
         kind: 'import-summary-banking-execute-funding-unavailable',
         confirmClass: 'btn btn-primary'
@@ -51928,13 +52075,13 @@ const executePaymentPipeline = async () => {
   }
 };
 
-const retryBlockedFundsPipeline = async () => {
+const retryUnsentPaymentsPipeline = async () => {
   if (child.actionsBusy.retryingBlockedFunds) return;
   if (child.__loadInFlight || child.loading || child.actionsBusy.refreshing || child.actionsBusy.polling) return;
 
   const activeRetryTabKey = normalizeChildTabKey(child.ui?.activeTabKey || 'overview') || 'overview';
   if (activeRetryTabKey !== 'overview') {
-    await showBlockedFundsRetryModal({
+    await showRetryUnsentPaymentsNotice({
       title: 'Use Overview to retry unsent payments',
       message: 'Use Overview to retry unsent payments.'
     });
@@ -51948,12 +52095,12 @@ const retryBlockedFundsPipeline = async () => {
   const retryScopeSignature = String(data.retry_scope_signature || batch.retry_scope_signature || data.retry_eligible_scope_json?.retry_scope_signature || batch.retry_eligible_scope_json?.retry_scope_signature || '').trim();
 
   if (retryInProgress) {
-    await showBlockedFundsRetryModal({ title: 'Retry already in progress', message: 'Retry already in progress.' });
+    await showRetryUnsentPaymentsNotice({ title: 'Retry already in progress', message: 'Retry already in progress.' });
     return;
   }
 
   if (retryEligibleCount <= 0) {
-    await showBlockedFundsRetryModal({
+    await showRetryUnsentPaymentsNotice({
       title: 'Retry unsent payments unavailable',
       message: 'No unsent payments are currently available to retry.'
     });
@@ -51976,7 +52123,7 @@ const retryBlockedFundsPipeline = async () => {
   } catch (e) {
     const message = pickSafeChildMessage([e?.json?.user_message, e?.json?.message, e?.message], 'Payment verification failed. Please try again.');
     child.error = message;
-    await showBlockedFundsRetryModal({ title: 'Payment verification failed', message });
+    await showRetryUnsentPaymentsNotice({ title: 'Payment verification failed', message });
     child.actionsBusy.retryingBlockedFunds = false;
     await rerenderChild();
     return;
@@ -51984,7 +52131,7 @@ const retryBlockedFundsPipeline = async () => {
 
   if (!reauthToken || !String(reauthToken).trim()) {
     child.error = 'Payment verification did not complete. Retry was not attempted — please try again.';
-    await showBlockedFundsRetryModal({ title: 'Payment verification incomplete', message: child.error });
+    await showRetryUnsentPaymentsNotice({ title: 'Payment verification incomplete', message: child.error });
     child.actionsBusy.retryingBlockedFunds = false;
     await rerenderChild();
     return;
@@ -52047,7 +52194,7 @@ const retryBlockedFundsPipeline = async () => {
 
     try { if (typeof refreshBankingNavAttentionFromCachedRows === 'function') refreshBankingNavAttentionFromCachedRows(); } catch {}
 
-    await showBlockedFundsRetryModal(buildBlockedFundsRetryModalCopy(retryResult, null, 'Retrying unsent payments — you can continue using CloudTMS while this runs.'));
+    await showRetryUnsentPaymentsNotice(buildRetryUnsentPaymentsNoticeCopy(retryResult, null, 'Retrying unsent payments — you can continue using CloudTMS while this runs.'));
   } catch (e) {
     const normalized = normaliseChildFriendlyError(e, 'BANKING_ACTION_FAILED', {
       action: 'RETRY_UNSENT_PAYMENTS',
@@ -52060,7 +52207,7 @@ const retryBlockedFundsPipeline = async () => {
     const message = String(normalized?.message || normalized?.user_message || 'Retry unsent payments could not be started. Refresh the batch and try again.').trim();
     child.error = message;
     child.friendlyError = normalized || null;
-    await showBlockedFundsRetryModal({ title: 'Retry unsent payments unavailable', message });
+    await showRetryUnsentPaymentsNotice({ title: 'Retry unsent payments unavailable', message });
     try { await loadBatch({ forcePoll: false, silent: true }); } catch {}
   } finally {
     child.actionsBusy.retryingBlockedFunds = false;
@@ -52502,6 +52649,28 @@ const retryBlockedFundsPipeline = async () => {
           const refreshAttention = () => {
             try { if (typeof refreshBankingNavAttentionFromCachedRows === 'function') refreshBankingNavAttentionFromCachedRows(); } catch {}
           };
+          const setPaymentIssueAnchorOnly = (row) => {
+            try {
+              if (!row || typeof row !== 'object') return false;
+              const rowKey = String(row.rowKey || row.row_key || '').trim();
+              if (!rowKey) return false;
+              correctionState.anchor_row_key = rowKey;
+              correctionState.anchorRowKey = rowKey;
+              correctionState.anchor_issue_state = String(row.payment_issue_state || row.status_state || row.display_state || row.displayState || row.lifecycle || row.payment_lifecycle_state || '').trim();
+              correctionState.anchorIssueState = correctionState.anchor_issue_state;
+              correctionState.anchor_recommended_action = paymentIssueRowActionType(row);
+              correctionState.anchorRecommendedAction = correctionState.anchor_recommended_action;
+              correctionState.anchor_failure_reason_group = String(row.provider_failure_reason_group || row.failure_reason_group || row.providerFailureReasonGroup || '').trim();
+              correctionState.anchorFailureReasonGroup = correctionState.anchor_failure_reason_group;
+              correctionState.anchor_scope_signature = String(row.status_update_signature || row.statusUpdateSignature || row.live_status_signature || row.liveStatusSignature || row.scope_signature || row.scopeSignature || '').trim();
+              correctionState.anchorScopeSignature = correctionState.anchor_scope_signature;
+              correctionState.anchor_issue_key = String(row.matching_issue_key || row.issue_key || correctionState.anchor_issue_state || rowKey).trim();
+              correctionState.anchorIssueKey = correctionState.anchor_issue_key;
+              return true;
+            } catch {
+              return false;
+            }
+          };
 
           const applyManualPaidActionMode = async (enabled) => {
             correctionState.manualPaidActionMode = false;
@@ -52513,7 +52682,7 @@ const retryBlockedFundsPipeline = async () => {
             resetPaymentIssueLocalSelectionAndPlan(correctionState);
             child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
             child.ui.activeTabKey = 'payment_issues';
-            try { toast('Use Candidate returned funds from Current Payment Status for supported sent payments.'); } catch {}
+            try { toast('Use Recover overpayment in next pay run from Current Payment Status for supported paid/settled payments.'); } catch {}
             await rerenderPaymentIssuesOnly();
           };
 
@@ -52523,7 +52692,15 @@ const retryBlockedFundsPipeline = async () => {
             return correctionState.rows.find((row) => String(row?.rowKey || row?.row_key || '').trim() === key) || null;
           };
 
-          const paymentIssueRowActionType = (row) => String(row?.actionType || row?.action_type || row?.bulkActionType || row?.bulk_action_type || row?.backendAction || row?.backend_action || '').trim().toUpperCase();
+          const paymentIssueRowActionType = (row) => {
+            const actionText = String(row?.actionType || row?.action_type || row?.bulkActionType || row?.bulk_action_type || row?.backendAction || row?.backend_action || row?.recommended_action || row?.recommendedAction || '').trim().toUpperCase();
+            if (actionText === 'RELEASE_FOR_NEXT_RUN' || actionText === 'UNWIND_FAILED_PAYMENT' || actionText === 'CONFIRM_NO_MONEY_AND_UNWIND') return 'NO_MONEY_UNWIND_AND_RECALCULATE';
+            if (actionText === 'REVERSE_SETTLED_REVERSAL' || actionText === 'REVERSE_RETURNED' || actionText === 'REVERSE_SETTLED_PAYMENT' || actionText === 'CANDIDATE_RETURNED_FUNDS') return 'AMEND_AND_RECOVER_OVERPAYMENT';
+            if (actionText === 'CHECK_PROVIDER' || actionText === 'POLL_PROVIDER_STATUS') return 'CHECK_PROVIDER_STATUS';
+            if (actionText === 'OPEN_RETRY_SUMMARY' || actionText === 'VIEW_RETRY_SUMMARY' || actionText === 'RETRY_BLOCKED_FUNDS') return 'RETRY_PROVIDER_LATER';
+            if (actionText === 'CANCEL_NOT_SENT_RECALCULATE' || actionText === 'CANCEL_PAYMENT_NOT_SENT_AND_RECALCULATE') return 'PRE_PROVIDER_CANCEL_AND_RECALCULATE';
+            return actionText;
+          };
 
           const paymentIssueRowNeedsBackendSupport = (row) => row?.requiresBackendSupport === true || row?.requires_backend_support === true || row?.futureActionPendingBackend === true || row?.future_action_pending_backend === true;
 
@@ -52577,7 +52754,7 @@ const retryBlockedFundsPipeline = async () => {
               <div style="display:flex;flex-direction:column;gap:8px;">
                 <button type="button" class="btn btn-sm btn-outline" data-choice="PAYMENT_WAS_MADE">Payment was made</button>
                 <button type="button" class="btn btn-sm btn-outline" data-choice="NO_PAYMENT_WAS_MADE">No payment was made</button>
-                <button type="button" class="btn btn-sm btn-outline" data-choice="CANDIDATE_RETURNED_FUNDS">Candidate returned funds</button>
+                <button type="button" class="btn btn-sm btn-outline" data-choice="CANDIDATE_RETURNED_FUNDS">Recover overpayment in next pay run</button>
                 <button type="button" class="btn btn-sm btn-outline" data-choice="STILL_UNSURE">Still unsure — leave for review</button>
               </div>
             `;
@@ -52595,21 +52772,31 @@ const retryBlockedFundsPipeline = async () => {
           });
 
           const buildWholeBatchActionModelForChild = () => {
+            const normaliseWholeBatchAction = (raw) => {
+              const actionText = String(raw || '').trim().toUpperCase();
+              if (!actionText) return '';
+              if (actionText === 'RELEASE_FOR_NEXT_RUN' || actionText === 'UNWIND_FAILED_PAYMENT' || actionText === 'CONFIRM_NO_MONEY_AND_UNWIND') return 'NO_MONEY_UNWIND_AND_RECALCULATE';
+              if (actionText === 'REVERSE_SETTLED_REVERSAL' || actionText === 'REVERSE_RETURNED' || actionText === 'REVERSE_SETTLED_PAYMENT' || actionText === 'CANDIDATE_RETURNED_FUNDS') return 'AMEND_AND_RECOVER_OVERPAYMENT';
+              if (actionText === 'CANCEL_NOT_SENT_RECALCULATE' || actionText === 'CANCEL_PAYMENT_NOT_SENT_AND_RECALCULATE') return 'PRE_PROVIDER_CANCEL_AND_RECALCULATE';
+              if (actionText === 'CHECK_PROVIDER' || actionText === 'POLL_PROVIDER_STATUS') return 'CHECK_PROVIDER_STATUS';
+              if (actionText === 'OPEN_RETRY_SUMMARY' || actionText === 'VIEW_RETRY_SUMMARY' || actionText === 'RETRY_BLOCKED_FUNDS') return 'RETRY_PROVIDER_LATER';
+              return actionText;
+            };
             const allRows = correctionState.rows.filter((row) => row && typeof row === 'object');
             const activeRows = allRows.filter((row) => {
-              const actionType = String(row?.wholeBatchEligibleActionType || row?.bulkActionType || row?.actionType || '').trim().toUpperCase();
-              return actionType && actionType !== 'VIEW_DETAILS';
+              const actionType = normaliseWholeBatchAction(row?.wholeBatchEligibleActionType || row?.bulkActionType || row?.actionType || row?.recommended_action || row?.recommendedAction);
+              return actionType && actionType !== 'VIEW_DETAILS' && actionType !== 'VIEW_PROGRESS' && actionType !== 'RETRY_PROVIDER_LATER';
             });
             if (!activeRows.length) return { enabled: false, actionType: '', eligibleRows: [], excludedRows: allRows, disabledReason: 'No batch-level action is available.' };
-            const actionTypes = Array.from(new Set(activeRows.map((row) => String(row?.wholeBatchEligibleActionType || row?.bulkActionType || row?.actionType || '').trim().toUpperCase()).filter(Boolean)));
+            const actionTypes = Array.from(new Set(activeRows.map((row) => normaliseWholeBatchAction(row?.wholeBatchEligibleActionType || row?.bulkActionType || row?.actionType || row?.recommended_action || row?.recommendedAction)).filter(Boolean)));
             if (actionTypes.length !== 1) return { enabled: false, actionType: '', eligibleRows: [], excludedRows: allRows, disabledReason: 'Use row-level actions for mixed payment statuses.' };
             const actionType = actionTypes[0];
-            const eligibleRows = activeRows.filter((row) => String(row?.wholeBatchEligibleActionType || row?.bulkActionType || row?.actionType || '').trim().toUpperCase() === actionType);
+            const eligibleRows = activeRows.filter((row) => normaliseWholeBatchAction(row?.wholeBatchEligibleActionType || row?.bulkActionType || row?.actionType || row?.recommended_action || row?.recommendedAction) === actionType);
             const excludedRows = allRows.filter((row) => !eligibleRows.includes(row));
             if (excludedRows.length) return { enabled: false, actionType, eligibleRows, excludedRows, disabledReason: 'This batch has mixed payment statuses. Use row-level actions for eligible rows.' };
-            if (actionType === 'RELEASE_FOR_NEXT_RUN') {
-              const allSafe = eligibleRows.every((row) => row.selectable === true && String(row?.bulkActionType || row?.actionType || '').trim().toUpperCase() === 'RELEASE_FOR_NEXT_RUN' && rowHasSentOrAcceptedEvidenceForNoMoneyBlock(row) !== true);
-              return { enabled: allSafe, actionType, eligibleRows, excludedRows, disabledReason: allSafe ? '' : 'Release for next run is only available when every row is safely selectable for no-payment release.' };
+            if (actionType === 'NO_MONEY_UNWIND_AND_RECALCULATE') {
+              const allSafe = eligibleRows.every((row) => row.selectable === true && normaliseWholeBatchAction(row?.wholeBatchEligibleActionType || row?.bulkActionType || row?.actionType || row?.recommended_action || row?.recommendedAction) === 'NO_MONEY_UNWIND_AND_RECALCULATE' && rowHasSentOrAcceptedEvidenceForNoMoneyBlock(row) !== true);
+              return { enabled: allSafe, actionType, eligibleRows, excludedRows, disabledReason: allSafe ? '' : 'Rewind financials is only available when every selected row is safely failed-not-paid with no sent/accepted evidence.' };
             }
             const allBackendSafe = eligibleRows.every((row) => row.wholeBatchActionSafe === true || row.whole_batch_action_safe === true || row.backendWholeBatchSafe === true || row.backend_whole_batch_safe === true);
             return { enabled: allBackendSafe, actionType, eligibleRows, excludedRows, disabledReason: allBackendSafe ? '' : 'This whole-batch action is waiting for backend safety support.' };
@@ -52682,6 +52869,36 @@ const retryBlockedFundsPipeline = async () => {
 
 
              try {
+            if (act === 'banking:pay:issue:focusRow') {
+              const rowKey = attr('rowKey', 'data-row-key');
+              const row = findPaymentIssueRowByKey(rowKey);
+              if (!row) {
+                toast('Select a payment row first.');
+                return;
+              }
+              let focusResult = null;
+              try {
+                if (typeof setBankingPaymentIssueRowSelection === 'function') {
+                  focusResult = setBankingPaymentIssueRowSelection(correctionState, rowKey, false, {
+                    focusOnly: true,
+                    focus_only: true,
+                    row
+                  });
+                }
+              } catch {}
+              if (focusResult && focusResult.error === true) {
+                toast(String(focusResult.message || 'Select a payment row first.'));
+                return;
+              }
+              if (!setPaymentIssueAnchorOnly(row)) {
+                toast('Select a payment row first.');
+                return;
+              }
+              try { if (typeof invalidateBankingPaymentIssuePlan === 'function') invalidateBankingPaymentIssuePlan(correctionState); } catch {}
+              await rerenderPaymentIssuesOnly();
+              return;
+            }
+
             if (act === 'banking:pay:issue:viewDetails') {
               const rowKey = attr('rowKey', 'data-row-key');
               const row = findPaymentIssueRowByKey(rowKey);
@@ -52709,55 +52926,55 @@ const retryBlockedFundsPipeline = async () => {
             if (act === 'banking:pay:issue:candidateReturnedFunds') {
               const row = findPaymentIssueRowByKey(attr('rowKey', 'data-row-key'));
               if (!row) {
-                await showProviderSubmitResolutionNotice({ title: 'Candidate returned funds', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
+                await showProviderSubmitResolutionNotice({ title: 'Recover overpayment in next pay run', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
                 return;
               }
               const actionType = paymentIssueRowActionType(row);
-              if (actionType !== 'CANDIDATE_RETURNED_FUNDS' && actionType !== 'REVERSE_SETTLED_PAYMENT') {
-                await showPaymentIssueRowDetails(row, 'Candidate returned funds', 'This row is not currently routable to Candidate returned funds.');
+              if (actionType !== 'CANDIDATE_RETURNED_FUNDS' && actionType !== 'REVERSE_SETTLED_PAYMENT' && actionType !== 'AMEND_AND_RECOVER_OVERPAYMENT') {
+                await showPaymentIssueRowDetails(row, 'Recover overpayment in next pay run', 'This row is not currently routable to overpayment recovery.');
                 return;
               }
               if (paymentIssueRowNeedsBackendSupport(row) || row.candidateReturnedFundsAvailable === false || row.candidate_returned_funds_available === false) {
-                await showPaymentIssueRowDetails(row, 'Candidate returned funds', 'This action is waiting for backend safety support. No payment correction has been applied.');
+                await showPaymentIssueRowDetails(row, 'Recover overpayment in next pay run', 'This recovery action is waiting for backend safety support. No payment correction has been applied.');
                 return;
               }
               selectSinglePaymentIssueRowForAction(row);
-              await openSelectedPaymentIssueCorrection('REVERSE_SETTLED_PAYMENT', [row]);
+              await openSelectedPaymentIssueCorrection('AMEND_AND_RECOVER_OVERPAYMENT', [row]);
               return;
             }
 
             if (act === 'banking:pay:issue:reverseReturned') {
               const row = findPaymentIssueRowByKey(attr('rowKey', 'data-row-key'));
               if (!row) {
-                await showProviderSubmitResolutionNotice({ title: 'Reverse returned', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
+                await showProviderSubmitResolutionNotice({ title: 'Recover overpayment in next pay run', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
                 return;
               }
               const actionType = paymentIssueRowActionType(row);
-              if (actionType !== 'REVERSE_RETURNED' && actionType !== 'REVERSE_SETTLED_REVERSAL') {
-                await showPaymentIssueRowDetails(row, 'Reverse returned', 'This row is not currently routable to Reverse returned.');
+              if (actionType !== 'REVERSE_RETURNED' && actionType !== 'REVERSE_SETTLED_REVERSAL' && actionType !== 'AMEND_AND_RECOVER_OVERPAYMENT') {
+                await showPaymentIssueRowDetails(row, 'Recover overpayment in next pay run', 'This row is not currently routable to overpayment recovery.');
                 return;
               }
-              if (paymentIssueRowNeedsBackendSupport(row) || row.reverseReturnedAvailable !== true && row.reverse_returned_available !== true) {
-                await showPaymentIssueRowDetails(row, 'Reverse returned', 'Reverse returned is waiting for backend safety support. No payment correction has been applied.');
+              if (paymentIssueRowNeedsBackendSupport(row) || row.reverseReturnedAvailable === false || row.reverse_returned_available === false) {
+                await showPaymentIssueRowDetails(row, 'Recover overpayment in next pay run', 'This recovery action is waiting for backend safety support. No payment correction has been applied.');
                 return;
               }
               selectSinglePaymentIssueRowForAction(row);
-              await openSelectedPaymentIssueCorrection('REVERSE_SETTLED_REVERSAL', [row]);
+              await openSelectedPaymentIssueCorrection('AMEND_AND_RECOVER_OVERPAYMENT', [row]);
               return;
             }
 
             if (act === 'banking:pay:issue:releaseForNextRun') {
               const row = findPaymentIssueRowByKey(attr('rowKey', 'data-row-key'));
               if (!row) {
-                await showProviderSubmitResolutionNotice({ title: 'Release for next run', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
+                await showProviderSubmitResolutionNotice({ title: 'Rewind financials', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
                 return;
               }
               if (rowHasSentOrAcceptedEvidenceForNoMoneyBlock(row)) {
-                await showProviderSubmitResolutionNotice({ title: 'Selected payment cannot be released', message: 'This payment has sent, paid, provider-accepted, or transaction evidence. It cannot be released as no-payment.', confirmClass: 'btn btn-danger' });
+                await showProviderSubmitResolutionNotice({ title: 'Selected payment cannot be rewound', message: 'This payment has sent, paid, provider-accepted, or transaction evidence. It cannot be treated as failed-not-paid.', confirmClass: 'btn btn-danger' });
                 return;
               }
               selectSinglePaymentIssueRowForAction(row);
-              await openSelectedPaymentIssueCorrection('UNWIND_FAILED_PAYMENT', [row]);
+              await openSelectedPaymentIssueCorrection('NO_MONEY_UNWIND_AND_RECALCULATE', [row]);
               return;
             }
 
@@ -52770,29 +52987,29 @@ const retryBlockedFundsPipeline = async () => {
               }
               if (choice === 'NO_PAYMENT_WAS_MADE') {
                 if (!row || rowHasSentOrAcceptedEvidenceForNoMoneyBlock(row)) {
-                  await showProviderSubmitResolutionNotice({ title: 'No payment was made', message: 'This row cannot be released as no-payment because sent/accepted/paid evidence is present or the row could not be found.', confirmClass: 'btn btn-danger' });
+                  await showProviderSubmitResolutionNotice({ title: 'No payment was made', message: 'This row cannot be treated as failed-not-paid because sent/accepted/paid evidence is present or the row could not be found.', confirmClass: 'btn btn-danger' });
                   return;
                 }
                 selectSinglePaymentIssueRowForAction(row);
-                await openSelectedPaymentIssueCorrection('UNWIND_FAILED_PAYMENT', [row]);
+                await openSelectedPaymentIssueCorrection('NO_MONEY_UNWIND_AND_RECALCULATE', [row]);
                 return;
               }
               if (choice === 'CANDIDATE_RETURNED_FUNDS') {
                 if (!row) {
-                  await showProviderSubmitResolutionNotice({ title: 'Candidate returned funds', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
+                  await showProviderSubmitResolutionNotice({ title: 'Recover overpayment in next pay run', message: 'Payment row could not be found. Refresh the batch and try again.', confirmClass: 'btn btn-primary' });
                   return;
                 }
                 const actionType = paymentIssueRowActionType(row);
-                if (actionType !== 'CANDIDATE_RETURNED_FUNDS' && actionType !== 'REVERSE_SETTLED_PAYMENT') {
-                  await showPaymentIssueRowDetails(row, 'Candidate returned funds', 'This row is not currently routable to Candidate returned funds.');
+                if (actionType !== 'CANDIDATE_RETURNED_FUNDS' && actionType !== 'REVERSE_SETTLED_PAYMENT' && actionType !== 'AMEND_AND_RECOVER_OVERPAYMENT') {
+                  await showPaymentIssueRowDetails(row, 'Recover overpayment in next pay run', 'This row is not currently routable to overpayment recovery.');
                   return;
                 }
                 if (paymentIssueRowNeedsBackendSupport(row) || row.candidateReturnedFundsAvailable === false || row.candidate_returned_funds_available === false) {
-                  await showPaymentIssueRowDetails(row, 'Candidate returned funds', 'This route requires returned-funds backend safety support before CloudTMS can apply a correction. No payment correction has been applied.');
+                  await showPaymentIssueRowDetails(row, 'Recover overpayment in next pay run', 'This recovery route requires backend safety support before CloudTMS can apply a correction. No payment correction has been applied.');
                   return;
                 }
                 selectSinglePaymentIssueRowForAction(row);
-                await openSelectedPaymentIssueCorrection('REVERSE_SETTLED_PAYMENT', [row]);
+                await openSelectedPaymentIssueCorrection('AMEND_AND_RECOVER_OVERPAYMENT', [row]);
                 return;
               }
               if (choice === 'PAYMENT_WAS_MADE') {
@@ -52805,10 +53022,10 @@ const retryBlockedFundsPipeline = async () => {
             if (act === 'banking:pay:issue:reverseEntireBatch') {
               const model = buildWholeBatchActionModelForChild();
               if (!model.enabled) {
-                await showProviderSubmitResolutionNotice({ title: 'Reverse entire batch', message: model.disabledReason || 'This whole-batch action is not currently safe. Use row-level actions for eligible rows.', confirmClass: 'btn btn-primary' });
+                await showProviderSubmitResolutionNotice({ title: 'Review selected payments', message: model.disabledReason || 'This whole-batch action is not currently safe. Use row-level actions for eligible rows.', confirmClass: 'btn btn-primary' });
                 return;
               }
-              if (model.actionType === 'RELEASE_FOR_NEXT_RUN') {
+              if (model.actionType === 'NO_MONEY_UNWIND_AND_RECALCULATE') {
                 resetPaymentIssueLocalSelectionAndPlan(correctionState);
                 const nextKeys = new Set();
                 const nextTransfers = new Set();
@@ -52826,10 +53043,31 @@ const retryBlockedFundsPipeline = async () => {
                 correctionState.selectedTransferIds = nextTransfers;
                 correctionState.selectedPayBatchItemIds = nextItems;
                 correctionState.selectedPayBatchCandidateIds = nextCandidates;
-                await openSelectedPaymentIssueCorrection('UNWIND_FAILED_PAYMENT', model.eligibleRows);
+                await openSelectedPaymentIssueCorrection('NO_MONEY_UNWIND_AND_RECALCULATE', model.eligibleRows);
                 return;
               }
-              await showProviderSubmitResolutionNotice({ title: 'Reverse entire batch', message: 'This whole-batch action is waiting for backend safety support. No payment correction has been applied.', confirmClass: 'btn btn-primary' });
+              if (model.actionType === 'AMEND_AND_RECOVER_OVERPAYMENT') {
+                resetPaymentIssueLocalSelectionAndPlan(correctionState);
+                const nextKeys = new Set();
+                const nextTransfers = new Set();
+                const nextItems = new Set();
+                const nextCandidates = new Set();
+                for (const row of model.eligibleRows) {
+                  row.selected = true;
+                  const key = String(row.rowKey || row.row_key || '').trim();
+                  if (key) nextKeys.add(key);
+                  addPaymentIssueValuesToSet(nextTransfers, row.payBankTransferIds || row.pay_bank_transfer_ids || row.payBankTransferId || row.pay_bank_transfer_id);
+                  addPaymentIssueValuesToSet(nextItems, row.payBatchItemIds || row.pay_batch_item_ids || row.payBatchItemId || row.pay_batch_item_id);
+                  addPaymentIssueValuesToSet(nextCandidates, row.payBatchCandidateIds || row.pay_batch_candidate_ids || row.payBatchCandidateId || row.pay_batch_candidate_id);
+                }
+                correctionState.selectedRowKeys = nextKeys;
+                correctionState.selectedTransferIds = nextTransfers;
+                correctionState.selectedPayBatchItemIds = nextItems;
+                correctionState.selectedPayBatchCandidateIds = nextCandidates;
+                await openSelectedPaymentIssueCorrection('AMEND_AND_RECOVER_OVERPAYMENT', model.eligibleRows);
+                return;
+              }
+              await showProviderSubmitResolutionNotice({ title: 'Review selected payments', message: 'This whole-batch action is waiting for backend safety support. No payment correction has been applied.', confirmClass: 'btn btn-primary' });
               return;
             }
 
@@ -52855,7 +53093,7 @@ const retryBlockedFundsPipeline = async () => {
               if (!rowsForResolution.length) {
                 await showProviderSubmitResolutionNotice({
                   title: 'Select failed payment',
-                  message: 'Select the failed provider-rejected payment that you want to release.',
+                  message: 'Select the failed-not-paid provider-rejected payment that you want to rewind.',
                   confirmClass: 'btn btn-primary'
                 });
                 return;
@@ -53002,8 +53240,8 @@ const retryBlockedFundsPipeline = async () => {
               const invalidReturnedRows = rowsForResolution.filter((row) => rowLooksReturnedOrReverted(row, diagnosticForRow(row)));
               if (invalidReturnedRows.length) {
                 await showProviderSubmitResolutionNotice({
-                  title: 'Use returned-payment reversal',
-                  message: 'One or more selected payments appear to have been returned or reverted after bank processing. Use the returned-payment reversal action rather than no-payment release.',
+                  title: 'Recover overpayment in next pay run',
+                  message: 'One or more selected payments appear to have been returned or reverted after bank processing. Use the overpayment recovery action rather than failed-not-paid rewind.',
                   confirmClass: 'btn btn-primary'
                 });
                 return;
@@ -53012,8 +53250,8 @@ const retryBlockedFundsPipeline = async () => {
               const invalidReleasedRows = rowsForResolution.filter((row) => rowLooksAlreadyReleasedOrInProgress(row, diagnosticForRow(row)));
               if (invalidReleasedRows.length) {
                 await showProviderSubmitResolutionNotice({
-                  title: 'Selected payment already released',
-                  message: 'One or more selected payments have already been released for the next run or have a release/reversal in progress.',
+                  title: 'Selected payment already resolved',
+                  message: 'One or more selected payments have already been resolved or already have a correction in progress.',
                   confirmClass: 'btn btn-primary'
                 });
                 return;
@@ -53022,7 +53260,7 @@ const retryBlockedFundsPipeline = async () => {
               const invalidAcceptedRows = rowsForResolution.filter((row) => rowLooksAcceptedOrSuccessful(row, diagnosticForRow(row)));
               if (invalidAcceptedRows.length) {
                 await showProviderSubmitResolutionNotice({
-                  title: 'Selected payment cannot be released',
+                  title: 'Selected payment cannot be rewound',
                   message: 'One or more selected payments have successful, accepted, or paid evidence. Select only failed/rejected payments that were not made by the bank/provider.',
                   confirmClass: 'btn btn-danger'
                 });
@@ -53135,8 +53373,8 @@ const retryBlockedFundsPipeline = async () => {
               const eligibleRows = rowEligibility.filter((entry) => entry.staleEligible || entry.rejectedEligible);
               if (eligibleRows.length !== rowEligibility.length) {
                 await showProviderSubmitResolutionNotice({
-                  title: 'Current Payment Status cannot be resolved here',
-                  message: 'This action is available only for stale provider-submit reviews or confirmed provider/bank-rejected payments where no provider acceptance or transaction evidence exists. Refresh the batch and review the latest payment state.',
+                  title: 'Current Payment Status needs review',
+                  message: 'This action is available only for stale provider-submit reviews or confirmed failed-not-paid payments where no provider acceptance or transaction evidence exists. Refresh the batch and review the latest payment state.',
                   confirmClass: 'btn btn-primary'
                 });
                 return;
@@ -53187,8 +53425,8 @@ const retryBlockedFundsPipeline = async () => {
 
               if (typeof openBankingNoPaymentCancelConfirmationFlow !== 'function') {
                 await showProviderSubmitResolutionNotice({
-                  title: 'Release for next run unavailable',
-                  message: 'The Release for next run flow is not available in this version. Refresh CloudTMS and try again.',
+                  title: 'Rewind financials unavailable',
+                  message: 'The Rewind financials flow is not available in this version. Refresh CloudTMS and try again.',
                   confirmClass: 'btn btn-primary'
                 });
                 return;
@@ -53236,7 +53474,7 @@ const retryBlockedFundsPipeline = async () => {
                 if (wholeBatchUnsafeRows.length > 0 || wholeBatchUnselectedRows.length > 0) {
                   await showProviderSubmitResolutionNotice({
                     title: 'Resolve selected payments instead',
-                    message: 'Whole-batch no-payment resolution is only available when every payment in the batch is failed/rejected/no-payment eligible and no payment has acceptance, successful, returned, released, or transaction evidence. Resolve the failed selected payments individually instead.',
+                    message: 'Whole-batch Rewind financials is only available when every payment in the batch is failed-not-paid eligible and no payment has acceptance, successful, returned, resolved, or transaction evidence. Resolve the failed selected payments individually instead.',
                     confirmClass: 'btn btn-primary'
                   });
                   return;
@@ -53282,10 +53520,10 @@ const retryBlockedFundsPipeline = async () => {
                   pay_batch_item_ids: selectedPayBatchItemIds,
                   selectedRows: rowsForResolution,
                   selected_rows: rowsForResolution,
-                  successTitle: selectedPayBankTransferIds.length > 1 ? 'Selected payments released' : 'Selected payment released',
+                  successTitle: selectedPayBankTransferIds.length > 1 ? 'Selected payments rewound' : 'Selected payment rewound',
                   successMessage: selectedPayBankTransferIds.length > 1
-                    ? 'The selected failed payments were released for the next Banking Pay run.'
-                    : 'The selected failed payment was released for the next Banking Pay run.',
+                    ? 'The selected failed payments were rewound and will be recalculated for the next Banking Pay run.'
+                    : 'The selected failed payment was rewound and will be recalculated for the next Banking Pay run.',
                   onBeforeMutation: async () => {
                     child.actionsBusy.resolvingProviderSubmitReview = true;
                     child.error = '';
@@ -53321,7 +53559,7 @@ const retryBlockedFundsPipeline = async () => {
                           silent: true,
                           context: {
                             source: 'openBankingNoPaymentCancelConfirmationFlow',
-                            action: 'NO_PAYMENT_SELECTED_PAYMENTS_RELEASE_SUCCESS',
+                            action: 'NO_PAYMENT_SELECTED_PAYMENTS_REWIND_SUCCESS',
                             pay_batch_id: id,
                             pay_bank_transfer_ids: selectedPayBankTransferIds
                           }
@@ -53634,7 +53872,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
         }
 
         if (act === 'banking:pay:child:retryBlockedFunds' || act === 'banking:pay:blockedFunds:retry') {
-          await retryBlockedFundsPipeline();
+          await retryUnsentPaymentsPipeline();
           return;
         }
 
@@ -54213,6 +54451,8 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
   await rerenderChild();
   scheduleWire();
 }
+
+
 
 
 
@@ -59485,7 +59725,6 @@ function renderBankingPayBatchChildModalPayeWorksheetTab() {
 }
 
 
-
 function renderBankingAlertPreferencesPanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -59501,11 +59740,18 @@ function renderBankingAlertPreferencesPanel() {
   const asArr = (value) => Array.isArray(value) ? value : [];
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const upperTrim = (value) => trimStr(value).toUpperCase();
+  const normaliseAlertReasonKey = (value) => {
+    const key = upperTrim(value);
+    if (key === 'PROVIDER_OUTCOME_UNKNOWN') return 'PROVIDER_UNKNOWN';
+    if (key === 'UNSPECIFIED_PROVIDER_FAILURE') return 'PROVIDER_FAILED_UNSPECIFIED';
+    if (key === 'NONE') return '';
+    return key;
+  };
   const uniqueUpperArray = (values) => {
     const out = [];
     const seen = new Set();
     for (const value of asArr(values)) {
-      const text = upperTrim(value);
+      const text = normaliseAlertReasonKey(value);
       if (!text || seen.has(text)) continue;
       seen.add(text);
       out.push(text);
@@ -59552,8 +59798,8 @@ function renderBankingAlertPreferencesPanel() {
     ['BANK_REJECTED', 'bank rejected'],
     ['COMPLIANCE_REVIEW', 'compliance/review'],
     ['PROVIDER_OUTAGE', 'provider outage'],
-    ['PROVIDER_OUTCOME_UNKNOWN', 'provider unknown'],
-    ['UNSPECIFIED_PROVIDER_FAILURE', 'unspecified provider failure']
+    ['PROVIDER_UNKNOWN', 'provider unknown'],
+    ['PROVIDER_FAILED_UNSPECIFIED', 'unspecified provider failure']
   ];
   const informationalOptions = [
     ['AUTO_UNWIND_PROGRESS', 'auto-unwind progress'],
@@ -59690,7 +59936,7 @@ function renderBankingAlertPreferencesPanel() {
   );
 
   const deriveMode = () => {
-    if (currentModeRaw === 'NONE' || currentModeRaw === 'NO_BANKING_PAY_ALERTS' || prefs.enabled === false || prefs.include_action_required === false) return 'NONE';
+    if (currentModeRaw === 'NONE' || currentModeRaw === 'NO_BANKING_PAY_ALERTS' || prefs.enabled === false || prefs.include_action_required === false) return 'NO_BANKING_PAY_ALERTS';
     if (currentModeRaw === 'SELECTED_FAILURE_REASONS' || currentModeRaw === 'SELECTED' || failureReasonValues.length > 0) return 'SELECTED_FAILURE_REASONS';
     return 'ALL_ACTION_REQUIRED';
   };
@@ -59736,7 +59982,7 @@ function renderBankingAlertPreferencesPanel() {
     ? '<div class="mini" data-banking-alert-preferences-status="1" style="opacity:.78;">Loading saved preferences…</div>'
     : '<div class="mini" data-banking-alert-preferences-status="1" style="opacity:.78;">Payment status will still update in Current Payment Status even if Banking Alerts are disabled.</div>';
 
-  const saveHandlerScript = `(async()=>{try{const root=document.getElementById('bankingAlertPreferencesPanel');if(!root){alert('Banking Alert preferences panel is not available.');return;}const q=(sel)=>root.querySelector(sel);const qa=(sel)=>Array.from(root.querySelectorAll(sel));const mode=String(q('input[name="bankingAlertPreferenceMode"]:checked')?.value||'ALL_ACTION_REQUIRED').trim().toUpperCase();const failure_reason_groups=qa('[data-alert-preference-failure-reason]').filter(el=>el&&el.checked===true).map(el=>String(el.getAttribute('data-alert-preference-failure-reason')||'').trim().toUpperCase()).filter(Boolean);const informational_alert_kinds=qa('[data-alert-preference-info-kind]').filter(el=>el&&el.checked===true).map(el=>String(el.getAttribute('data-alert-preference-info-kind')||'').trim().toUpperCase()).filter(Boolean);const splitList=(value)=>String(value||'').split(/[\\n,]+/g).map(v=>String(v||'').trim()).filter(Boolean).filter((v,i,a)=>a.findIndex(x=>String(x).toLowerCase()===String(v).toLowerCase())===i);const muted_provider_keys=splitList(q('[data-alert-preference-muted-providers]')?.value||'');const muted_pay_batch_ids=splitList(q('[data-alert-preference-muted-batches]')?.value||'');const snoozeRaw=String(q('[data-alert-preference-snoozed-until]')?.value||'').trim();const snoozed_until_utc=snoozeRaw?new Date(snoozeRaw).toISOString():null;const preferences={mode,failure_reason_groups,informational_alert_kinds,muted_provider_keys,muted_pay_batch_ids,snoozed_until_utc,enabled:mode!=='NONE',include_action_required:mode!=='NONE',include_progress_alerts:mode!=='NONE'&&informational_alert_kinds.some(k=>k==='AUTO_UNWIND_PROGRESS'||k==='WHOLE_BATCH_CANCELLATION_PROGRESS'),include_informational_alerts:mode!=='NONE'&&informational_alert_kinds.includes('MANUAL_ADJUSTMENTS_CARRIED_FORWARD'),include_success_alerts:false,failure_reason_allowlist:mode==='SELECTED_FAILURE_REASONS'?failure_reason_groups:null,failure_reason_blocklist:[]};const status=root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent='Saving Banking Alert preferences…';const fn=(typeof window.bankingAlertPreferencesSave==='function')?window.bankingAlertPreferencesSave:((typeof bankingAlertPreferencesSave==='function')?bankingAlertPreferencesSave:null);if(typeof fn!=='function'){throw new Error('Banking Alert preferences save is not available');}const result=await fn(preferences);window.__BANKING_ALERT_PREFERENCES_CACHE__={fetched_at_ms:Date.now(),payload:result&&typeof result==='object'?result:{preferences,ok:true},preferences:(result&&typeof result==='object'&&result.preferences&&typeof result.preferences==='object')?result.preferences:preferences,options:(result&&typeof result==='object'&&result.options&&typeof result.options==='object')?result.options:null};try{if(typeof window.bankingAlertPreferencesFetch==='function')await window.bankingAlertPreferencesFetch({silent:true});}catch(_){}try{if(typeof window.refreshBankingNavAttentionFromCachedRows==='function')window.refreshBankingNavAttentionFromCachedRows();else if(typeof refreshBankingNavAttentionFromCachedRows==='function')refreshBankingNavAttentionFromCachedRows();}catch(_){}try{const hb=window.__changesHeartbeat||window.__changeHeartbeat||null;if(hb&&typeof hb.requestBankingAlertSummaryDetailRefresh==='function')hb.requestBankingAlertSummaryDetailRefresh('banking-alert-preferences-panel-save');}catch(_){}if(status)status.textContent='Banking Alert preferences saved. Current Payment Status is unaffected.';if(typeof window.__toast==='function')window.__toast('Banking Alert preferences saved');}catch(e){const msg=String(e&&e.message?e.message:e||'Save failed');const root=document.getElementById('bankingAlertPreferencesPanel');const status=root&&root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent=msg;else alert(msg);}})();`;
+  const saveHandlerScript = `(async()=>{try{const root=document.getElementById('bankingAlertPreferencesPanel');if(!root){alert('Banking Alert preferences panel is not available.');return;}const q=(sel)=>root.querySelector(sel);const qa=(sel)=>Array.from(root.querySelectorAll(sel));const mode=String(q('input[name="bankingAlertPreferenceMode"]:checked')?.value||'ALL_ACTION_REQUIRED').trim().toUpperCase();const failure_reason_groups=qa('[data-alert-preference-failure-reason]').filter(el=>el&&el.checked===true).map(el=>String(el.getAttribute('data-alert-preference-failure-reason')||'').trim().toUpperCase()).filter(Boolean);const informational_alert_kinds=qa('[data-alert-preference-info-kind]').filter(el=>el&&el.checked===true).map(el=>String(el.getAttribute('data-alert-preference-info-kind')||'').trim().toUpperCase()).filter(Boolean);const splitList=(value)=>String(value||'').split(/[\\n,]+/g).map(v=>String(v||'').trim()).filter(Boolean).filter((v,i,a)=>a.findIndex(x=>String(x).toLowerCase()===String(v).toLowerCase())===i);const muted_provider_keys=splitList(q('[data-alert-preference-muted-providers]')?.value||'');const muted_pay_batch_ids=splitList(q('[data-alert-preference-muted-batches]')?.value||'');const snoozeRaw=String(q('[data-alert-preference-snoozed-until]')?.value||'').trim();const snoozed_until_utc=snoozeRaw?new Date(snoozeRaw).toISOString():null;const preferences={mode,failure_reason_groups,informational_alert_kinds,muted_provider_keys,muted_pay_batch_ids,snoozed_until_utc,enabled:mode!=='NO_BANKING_PAY_ALERTS',include_action_required:mode!=='NO_BANKING_PAY_ALERTS',include_progress_alerts:mode!=='NO_BANKING_PAY_ALERTS'&&informational_alert_kinds.some(k=>k==='AUTO_UNWIND_PROGRESS'||k==='WHOLE_BATCH_CANCELLATION_PROGRESS'),include_informational_alerts:mode!=='NO_BANKING_PAY_ALERTS'&&informational_alert_kinds.includes('MANUAL_ADJUSTMENTS_CARRIED_FORWARD'),include_success_alerts:false,failure_reason_allowlist:mode==='SELECTED_FAILURE_REASONS'?failure_reason_groups:null,failure_reason_blocklist:[]};const status=root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent='Saving Banking Alert preferences…';const fn=(typeof window.bankingAlertPreferencesSave==='function')?window.bankingAlertPreferencesSave:((typeof bankingAlertPreferencesSave==='function')?bankingAlertPreferencesSave:null);if(typeof fn!=='function'){throw new Error('Banking Alert preferences save is not available');}const result=await fn(preferences);window.__BANKING_ALERT_PREFERENCES_CACHE__={fetched_at_ms:Date.now(),payload:result&&typeof result==='object'?result:{preferences,ok:true},preferences:(result&&typeof result==='object'&&result.preferences&&typeof result.preferences==='object')?result.preferences:preferences,options:(result&&typeof result==='object'&&result.options&&typeof result.options==='object')?result.options:null};try{if(typeof window.bankingAlertPreferencesFetch==='function')await window.bankingAlertPreferencesFetch({silent:true});}catch(_){}try{if(typeof window.refreshBankingNavAttentionFromCachedRows==='function')window.refreshBankingNavAttentionFromCachedRows();else if(typeof refreshBankingNavAttentionFromCachedRows==='function')refreshBankingNavAttentionFromCachedRows();}catch(_){}try{const hb=window.__changesHeartbeat||window.__changeHeartbeat||null;if(hb&&typeof hb.requestBankingAlertSummaryDetailRefresh==='function')hb.requestBankingAlertSummaryDetailRefresh('banking-alert-preferences-panel-save');}catch(_){}if(status)status.textContent='Banking Alert preferences saved. Current Payment Status is unaffected.';if(typeof window.__toast==='function')window.__toast('Banking Alert preferences saved');}catch(e){const msg=String(e&&e.message?e.message:e||'Save failed');const root=document.getElementById('bankingAlertPreferencesPanel');const status=root&&root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent=msg;else alert(msg);}})();`;
 
   const refreshHandlerScript = `(async()=>{try{const root=document.getElementById('bankingAlertPreferencesPanel');const status=root&&root.querySelector('[data-banking-alert-preferences-status="1"]');if(status)status.textContent='Refreshing Banking Alert preferences…';const fn=(typeof window.bankingAlertPreferencesFetch==='function')?window.bankingAlertPreferencesFetch:((typeof bankingAlertPreferencesFetch==='function')?bankingAlertPreferencesFetch:null);if(typeof fn!=='function'){throw new Error('Banking Alert preferences fetch is not available');}const payload=await fn({silent:true});window.__BANKING_ALERT_PREFERENCES_CACHE__={fetched_at_ms:Date.now(),payload:payload&&typeof payload==='object'?payload:{preferences:{},ok:true},preferences:(payload&&typeof payload==='object'&&payload.preferences&&typeof payload.preferences==='object')?payload.preferences:(payload&&typeof payload==='object'?payload:{}),options:(payload&&typeof payload==='object'&&payload.options&&typeof payload.options==='object')?payload.options:null};const renderFn=(typeof window.renderBankingAlertPreferencesPanel==='function')?window.renderBankingAlertPreferencesPanel:((typeof renderBankingAlertPreferencesPanel==='function')?renderBankingAlertPreferencesPanel:null);const panel=renderFn?renderFn():'';if(root&&panel)root.outerHTML=panel;}catch(e){const root=document.getElementById('bankingAlertPreferencesPanel');const status=root&&root.querySelector('[data-banking-alert-preferences-status="1"]');const msg=String(e&&e.message?e.message:e||'Refresh failed');if(status)status.textContent=msg;else alert(msg);}})();`;
 
@@ -59779,7 +60025,7 @@ function renderBankingAlertPreferencesPanel() {
             <span>Only selected failure reasons</span>
           </label>
           <label class="inline mini" style="display:flex;gap:7px;align-items:center;">
-            <input type="radio" name="bankingAlertPreferenceMode" value="NONE" data-alert-preference-key="mode" ${currentMode === 'NONE' ? 'checked' : ''} />
+            <input type="radio" name="bankingAlertPreferenceMode" value="NO_BANKING_PAY_ALERTS" data-alert-preference-key="mode" ${currentMode === 'NO_BANKING_PAY_ALERTS' ? 'checked' : ''} />
             <span>No Banking Pay alerts</span>
           </label>
         </div>
@@ -59830,6 +60076,10 @@ function renderBankingAlertPreferencesPanel() {
     </div>
   `;
 }
+
+
+
+
 
 
 function attachBankingModalDelegatedHandlers() {
@@ -65695,7 +65945,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     }
 
     if (a === 'banking:pay:child:switchTab') {
-      const tabKey = String(ds('tabKey') || dget('data-tab-key') || ds('tab') || dget('data-tab') || 'overview').trim().toLowerCase() || 'overview';
+      const requestedTabKey = String(ds('tabKey') || dget('data-tab-key') || ds('tab') || dget('data-tab') || 'overview').trim().toLowerCase() || 'overview';
+      const tabKey = ['payment_issues', 'issues', 'payment_status', 'current_payment_status', 'currentpaymentstatus'].includes(requestedTabKey)
+        ? 'current_payment_status'
+        : requestedTabKey;
       try {
         st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
         st.pay.child = (st.pay.child && typeof st.pay.child === 'object') ? st.pay.child : {};
@@ -66456,8 +66709,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           return true;
         }
         if (requestedAction !== 'CHECK_PROVIDER_STATUS') {
-          await selectRowAndOpenSafeIssueAction(row, requestedAction, title);
-          return true;
+          await showRefreshCurrentPaymentStatusMessage(title);
+          return false;
         }
         if (!issueRowAllowsBackendAction(row, requestedAction)) {
           await showRefreshCurrentPaymentStatusMessage(title);
@@ -66564,7 +66817,44 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         return true;
       };
 
-      if (a === 'banking:pay:issue:rowAction') {
+      if (a === 'banking:pay:issue:focusRow') {
+        const rowKey = String(ds('rowKey') || dget('data-row-key') || '').trim();
+        const row = findIssueRowByKey(rowKey);
+        if (!row) {
+          toast('Select a payment row first.');
+          return;
+        }
+        let focusResult = null;
+        try {
+          if (typeof setBankingPaymentIssueRowSelection === 'function') {
+            focusResult = setBankingPaymentIssueRowSelection(correctionState, rowKey, false, {
+              focusOnly: true,
+              focus_only: true,
+              row
+            });
+          }
+        } catch {}
+        if (focusResult && focusResult.error === true) {
+          toast(String(focusResult.message || 'Select a payment row first.'));
+          return;
+        }
+        if (!setIssueRowAnchorOnly(row)) {
+          toast('Select a payment row first.');
+          return;
+        }
+        correctionState.selectionNotice = '';
+        try { if (typeof invalidateBankingPaymentIssuePlan === 'function') invalidateBankingPaymentIssuePlan(correctionState); } catch {}
+        try {
+          if (typeof rerenderBankingPaymentIssuePanel === 'function') {
+            rerenderBankingPaymentIssuePanel();
+          } else {
+            await safeRerender(null);
+          }
+        } catch {
+          await safeRerender(null);
+        }
+        return;
+      } else if (a === 'banking:pay:issue:rowAction') {
         const row = findIssueRowByKey(String(ds('rowKey') || dget('data-row-key') || '').trim());
         if (!row) {
           await showCurrentPaymentStatusNotice({ title: 'Current Payment Status', message: 'Payment row could not be found. Refresh the batch and try again.' });
@@ -67206,8 +67496,6 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
   return { ok: true };
 }
-
-
 
 
 async function openBankingPaySuggestedRatesReviewModal(seed = {}) {
@@ -268140,6 +268428,12 @@ async function applyBankingPayLiveRefresh(signalPayload) {
   const clone = (value) => { try { return JSON.parse(JSON.stringify(value == null ? null : value)); } catch { return value; } };
   const trim = (value) => String(value == null ? '' : value).trim();
   const upper = (value) => trim(value).toUpperCase();
+  const normaliseTabKey = (value) => {
+    const key = trim(value).toLowerCase().replace(/[\s-]+/g, '_');
+    if (key === 'current_payment_status' || key === 'currentpaymentstatus' || key === 'payment_status' || key === 'paymentstatus' || key === 'payment_issues' || key === 'issues') return 'CURRENT_PAYMENT_STATUS';
+    if (key === 'overview') return 'OVERVIEW';
+    return key ? key.toUpperCase() : '';
+  };
   const payload = isPlainObject(signalPayload) ? signalPayload : {};
   const recommended = upper(payload.recommended_refresh || payload.recommendedRefresh || 'NONE') || 'NONE';
   const retrySignalChanged = payload.retry_in_progress === true || payload.retry_already_in_progress === true || payload.retry_eligible_count != null || payload.retry_operation_id != null || payload.retry_operation_status != null || upper(payload.change_reason || payload.reason || '').includes('RETRY');
@@ -268274,15 +268568,25 @@ async function applyBankingPayLiveRefresh(signalPayload) {
     const child = pay && pay.child && typeof pay.child === 'object' ? pay.child : {};
     const visiblePage = child.visiblePage && typeof child.visiblePage === 'object' ? child.visiblePage : {};
     const sectionPage = child.sectionPage && typeof child.sectionPage === 'object' ? child.sectionPage : {};
-    const currentTab = upper(watcherCtx.current_tab || child.ui?.activeTabKey || child.ui?.active_tab || child.activeTab || child.active_tab || pay.activeTab || pay.active_tab || 'CURRENT_PAYMENT_STATUS') || 'CURRENT_PAYMENT_STATUS';
-    const section = trim(watcherSection.section || visiblePage.section || sectionPage.section || (currentTab === 'CURRENT_PAYMENT_STATUS' ? 'current_payment_status' : '')).toLowerCase() || 'current_payment_status';
+    const sectionPages = child.sectionPages && typeof child.sectionPages === 'object' ? child.sectionPages : {};
+    const currentTab = normaliseTabKey(child.ui?.activeTabKey || child.ui?.active_tab || child.activeTab || child.active_tab || pay.activeTab || pay.active_tab || watcherCtx.current_tab || payload.current_tab || payload.currentTab || 'OVERVIEW') || 'OVERVIEW';
+    const liveCurrentPaymentPage = currentTab === 'CURRENT_PAYMENT_STATUS'
+      ? (visiblePage.current_payment_status || sectionPages.current_payment_status || visiblePage.payment_issues || sectionPages.payment_issues || visiblePage)
+      : visiblePage;
+    const liveSectionPage = currentTab === 'CURRENT_PAYMENT_STATUS'
+      ? (sectionPages.current_payment_status || sectionPages.payment_issues || sectionPage)
+      : sectionPage;
+    const liveSection = currentTab === 'CURRENT_PAYMENT_STATUS'
+      ? (liveCurrentPaymentPage.section || liveSectionPage.section || 'current_payment_status')
+      : (visiblePage.section || sectionPage.section || '');
+    const section = trim(liveSection || watcherSection.section || (currentTab === 'CURRENT_PAYMENT_STATUS' ? 'current_payment_status' : 'overview')).toLowerCase() || (currentTab === 'CURRENT_PAYMENT_STATUS' ? 'current_payment_status' : 'overview');
     return {
       section,
-      limit: watcherSection.limit || visiblePage.limit || sectionPage.limit || 100,
-      cursor: watcherSection.cursor || visiblePage.cursor || sectionPage.cursor || null,
-      filters: watcherSection.filters || visiblePage.filters || sectionPage.filters || {},
-      sort: watcherSection.sort || visiblePage.sort || sectionPage.sort || {},
-      page_key: watcherSection.page_key || watcherSection.pageKey || visiblePage.page_key || visiblePage.pageKey || sectionPage.page_key || sectionPage.pageKey || null
+      limit: liveCurrentPaymentPage.limit || liveSectionPage.limit || watcherSection.limit || 100,
+      cursor: liveCurrentPaymentPage.cursor || liveSectionPage.cursor || watcherSection.cursor || null,
+      filters: liveCurrentPaymentPage.filters || liveSectionPage.filters || watcherSection.filters || {},
+      sort: liveCurrentPaymentPage.sort || liveSectionPage.sort || watcherSection.sort || {},
+      page_key: liveCurrentPaymentPage.page_key || liveCurrentPaymentPage.pageKey || liveSectionPage.page_key || liveSectionPage.pageKey || watcherSection.page_key || watcherSection.pageKey || null
     };
   };
 
@@ -268562,6 +268866,8 @@ async function applyBankingPayLiveRefresh(signalPayload) {
   }
   return result;
 }
+
+
 
 
 
@@ -268904,9 +269210,87 @@ async function bankingPayProviderWebhookReplayFailedEvents(provider, webhookPubl
   };
 }
 
+
+
 async function bankingAlertPreferencesFetch() {
   if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingAlertPreferencesFetch: authFetch/API is required');
+
   const parse = (text) => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
+  const asObj = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+  const asArray = (value) => Array.isArray(value) ? value : [];
+  const upper = (value) => String(value == null ? '' : value).trim().toUpperCase();
+  const uniqueUpper = (values) => {
+    const out = [];
+    const seen = new Set();
+    for (const value of asArray(values)) {
+      const key = normaliseReasonAlias(value);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+    }
+    return out;
+  };
+  const normaliseReasonAlias = (value) => {
+    const key = upper(value);
+    if (!key) return '';
+    if (key === 'PROVIDER_OUTCOME_UNKNOWN') return 'PROVIDER_UNKNOWN';
+    if (key === 'UNSPECIFIED_PROVIDER_FAILURE') return 'PROVIDER_FAILED_UNSPECIFIED';
+    if (key === 'NONE') return '';
+    return key;
+  };
+  const canonicalReasonSet = new Set([
+    'INSUFFICIENT_FUNDS',
+    'UNKNOWN_RECIPIENT',
+    'INVALID_ACCOUNT',
+    'ACCOUNT_CLOSED',
+    'BANK_REJECTED',
+    'PROVIDER_OUTAGE',
+    'PROVIDER_UNKNOWN',
+    'COMPLIANCE_REVIEW',
+    'DUPLICATE_RISK',
+    'PAID_RECOVERY_REQUIRED',
+    'MANUAL_ADJUSTMENT_BLOCKER',
+    'WEBHOOK_UNMATCHED',
+    'PROVIDER_FAILED_UNSPECIFIED'
+  ]);
+  const normaliseReasonList = (values) => uniqueUpper(values).filter((key) => canonicalReasonSet.has(key));
+  const uniqueText = (values) => {
+    const out = [];
+    const seen = new Set();
+    for (const value of asArray(values)) {
+      const text = String(value == null ? '' : value).trim();
+      if (!text) continue;
+      const dedupe = text.toLowerCase();
+      if (seen.has(dedupe)) continue;
+      seen.add(dedupe);
+      out.push(text);
+    }
+    return out;
+  };
+  const boolOr = (value, fallback) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (value === 1 || value === '1') return true;
+    if (value === 0 || value === '0') return false;
+    const text = String(value == null ? '' : value).trim().toLowerCase();
+    if (['true', 't', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', 'no', 'n', 'off'].includes(text)) return false;
+    return !!fallback;
+  };
+  const normaliseMode = (prefs, failureReasons) => {
+    const raw = upper(
+      prefs.mode ||
+      prefs.alert_mode ||
+      prefs.banking_alert_mode ||
+      prefs.banking_pay_alert_mode ||
+      prefs.bankingPayAlertMode ||
+      ''
+    );
+    if (raw === 'NONE' || raw === 'NO_BANKING_PAY_ALERTS' || prefs.enabled === false) return 'NO_BANKING_PAY_ALERTS';
+    if (raw === 'SELECTED_FAILURE_REASONS' || raw === 'SELECTED' || failureReasons.length > 0) return 'SELECTED_FAILURE_REASONS';
+    return 'ALL_ACTION_REQUIRED';
+  };
+
   const response = await authFetch(API('/api/banking/alerts/preferences'), { method: 'GET' });
   const text = await response.text().catch(() => '');
   const parsed = parse(text);
@@ -268917,39 +269301,219 @@ async function bankingAlertPreferencesFetch() {
     err.json = parsed;
     throw err;
   }
-  const src = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  const prefs = src.preferences && typeof src.preferences === 'object' && !Array.isArray(src.preferences) ? src.preferences : src;
-  const options = src.options && typeof src.options === 'object' && !Array.isArray(src.options) ? src.options : (src.banking_alert_preference_options || null);
-  return {
+
+  const src = asObj(parsed);
+  const rawPrefs = asObj(
+    src.preferences ||
+    src.effective_preferences ||
+    src.effectivePreferences ||
+    src.effective ||
+    src.banking_alert_preferences ||
+    src.bankingAlertPreferences ||
+    src
+  );
+  const options = asObj(
+    src.effective_options_json ||
+    src.effectiveOptionsJson ||
+    src.options ||
+    src.banking_alert_preference_options ||
+    rawPrefs.effective_options_json ||
+    rawPrefs.options
+  );
+  const failureReasons = normaliseReasonList(
+    rawPrefs.failure_reason_groups ||
+    rawPrefs.failureReasonGroups ||
+    rawPrefs.failure_reason_allowlist ||
+    rawPrefs.failureReasonAllowlist ||
+    []
+  );
+  const informationalAlertKinds = uniqueUpper(
+    rawPrefs.informational_alert_kinds ||
+    rawPrefs.informationalAlertKinds ||
+    rawPrefs.progress_alert_kinds ||
+    rawPrefs.progressAlertKinds ||
+    []
+  );
+  const enabled = rawPrefs.enabled !== false;
+  const mode = normaliseMode({ ...rawPrefs, enabled }, failureReasons);
+  const effectivePreferences = {
+    enabled,
+    alert_kind_allowlist: Array.isArray(rawPrefs.alert_kind_allowlist) ? rawPrefs.alert_kind_allowlist.slice() : null,
+    alert_kind_blocklist: Array.isArray(rawPrefs.alert_kind_blocklist) ? rawPrefs.alert_kind_blocklist.slice() : [],
+    failure_reason_allowlist: failureReasons.length ? failureReasons.slice() : null,
+    failure_reason_blocklist: normaliseReasonList(rawPrefs.failure_reason_blocklist || rawPrefs.failureReasonBlocklist || []),
+    include_action_required: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(rawPrefs.include_action_required, true),
+    include_progress_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(rawPrefs.include_progress_alerts, true),
+    include_informational_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(rawPrefs.include_informational_alerts, false),
+    include_success_alerts: false,
+    severity_min: upper(rawPrefs.severity_min || rawPrefs.severityMin || 'ACTION_REQUIRED') || 'ACTION_REQUIRED',
+    muted_provider_keys: uniqueText(rawPrefs.muted_provider_keys || rawPrefs.mutedProviderKeys || rawPrefs.muted_providers || rawPrefs.mutedProviders || []),
+    muted_pay_batch_ids: uniqueText(rawPrefs.muted_pay_batch_ids || rawPrefs.mutedPayBatchIds || rawPrefs.muted_batch_ids || rawPrefs.mutedBatchIds || []),
+    snoozed_until_utc: rawPrefs.snoozed_until_utc || rawPrefs.snoozedUntilUtc || rawPrefs.snooze_until_utc || rawPrefs.snoozeUntilUtc || null,
+    effective_defaults_applied: rawPrefs.effective_defaults_applied === true || rawPrefs.effectiveDefaultsApplied === true,
+    mode,
+    failure_reason_groups: failureReasons.slice(),
+    informational_alert_kinds: informationalAlertKinds,
+    effective_options_json: options,
+    options
+  };
+
+  const out = {
     ...src,
-    preferences: {
-      enabled: prefs.enabled !== false,
-      alert_kind_allowlist: Array.isArray(prefs.alert_kind_allowlist) ? prefs.alert_kind_allowlist : null,
-      alert_kind_blocklist: Array.isArray(prefs.alert_kind_blocklist) ? prefs.alert_kind_blocklist : [],
-      failure_reason_allowlist: Array.isArray(prefs.failure_reason_allowlist) ? prefs.failure_reason_allowlist : null,
-      failure_reason_blocklist: Array.isArray(prefs.failure_reason_blocklist) ? prefs.failure_reason_blocklist : [],
-      include_action_required: prefs.include_action_required !== false,
-      include_progress_alerts: prefs.include_progress_alerts !== false,
-      include_informational_alerts: prefs.include_informational_alerts === true,
-      include_success_alerts: prefs.include_success_alerts === true,
-      severity_min: String(prefs.severity_min || 'ACTION_REQUIRED').trim().toUpperCase() || 'ACTION_REQUIRED',
-      muted_provider_keys: Array.isArray(prefs.muted_provider_keys) ? prefs.muted_provider_keys : [],
-      muted_pay_batch_ids: Array.isArray(prefs.muted_pay_batch_ids) ? prefs.muted_pay_batch_ids : [],
-      snoozed_until_utc: prefs.snoozed_until_utc || null,
-      effective_defaults_applied: prefs.effective_defaults_applied === true
-    },
+    ...effectivePreferences,
+    preferences: effectivePreferences,
+    effective_preferences: effectivePreferences,
     options,
+    effective_options_json: options,
     ok: src.ok !== false
   };
+
+  try {
+    const state = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+    if (state && typeof state === 'object') {
+      state.bankingAlertPreferences = effectivePreferences;
+      state.alertPreferences = effectivePreferences;
+      state.settings = (state.settings && typeof state.settings === 'object') ? state.settings : {};
+      state.settings.banking_alert_preference_options = options;
+    }
+  } catch {}
+  try {
+    if (typeof window !== 'undefined') {
+      window.__BANKING_ALERT_PREFERENCES_CACHE__ = {
+        fetched_at_ms: Date.now(),
+        payload: out,
+        preferences: effectivePreferences,
+        options
+      };
+    }
+  } catch {}
+
+  return out;
 }
+
+
 async function bankingAlertPreferencesSave(preferences) {
   if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingAlertPreferencesSave: authFetch/API is required');
-  const prefs = (preferences && typeof preferences === 'object' && !Array.isArray(preferences)) ? { ...preferences } : {};
+
   const parse = (text) => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
+  const asObj = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+  const asArray = (value) => Array.isArray(value) ? value : [];
+  const upper = (value) => String(value == null ? '' : value).trim().toUpperCase();
+  const uniqueText = (values) => {
+    const source = Array.isArray(values) ? values : String(values == null ? '' : values).split(/[\n,]+/g);
+    const out = [];
+    const seen = new Set();
+    for (const value of source) {
+      const text = String(value == null ? '' : value).trim();
+      if (!text) continue;
+      const key = text.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(text);
+    }
+    return out;
+  };
+  const normaliseReasonAlias = (value) => {
+    const key = upper(value);
+    if (!key) return '';
+    if (key === 'PROVIDER_OUTCOME_UNKNOWN') return 'PROVIDER_UNKNOWN';
+    if (key === 'UNSPECIFIED_PROVIDER_FAILURE') return 'PROVIDER_FAILED_UNSPECIFIED';
+    if (key === 'NONE') return '';
+    return key;
+  };
+  const canonicalReasonSet = new Set([
+    'INSUFFICIENT_FUNDS',
+    'UNKNOWN_RECIPIENT',
+    'INVALID_ACCOUNT',
+    'ACCOUNT_CLOSED',
+    'BANK_REJECTED',
+    'PROVIDER_OUTAGE',
+    'PROVIDER_UNKNOWN',
+    'COMPLIANCE_REVIEW',
+    'DUPLICATE_RISK',
+    'PAID_RECOVERY_REQUIRED',
+    'MANUAL_ADJUSTMENT_BLOCKER',
+    'WEBHOOK_UNMATCHED',
+    'PROVIDER_FAILED_UNSPECIFIED'
+  ]);
+  const normaliseReasonList = (values) => {
+    const out = [];
+    const seen = new Set();
+    for (const value of asArray(values)) {
+      const key = normaliseReasonAlias(value);
+      if (!key || !canonicalReasonSet.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+    }
+    return out;
+  };
+  const normaliseInfoKinds = (values) => {
+    const out = [];
+    const seen = new Set();
+    for (const value of asArray(values)) {
+      const key = upper(value);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+    }
+    return out;
+  };
+  const boolOr = (value, fallback) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (value === 1 || value === '1') return true;
+    if (value === 0 || value === '0') return false;
+    const text = String(value == null ? '' : value).trim().toLowerCase();
+    if (['true', 't', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', 'no', 'n', 'off'].includes(text)) return false;
+    return !!fallback;
+  };
+
+  const prefs = asObj(preferences);
+  const requestedModeRaw = upper(
+    prefs.mode ||
+    prefs.alert_mode ||
+    prefs.banking_alert_mode ||
+    prefs.banking_pay_alert_mode ||
+    prefs.bankingPayAlertMode ||
+    ''
+  );
+  const requestedReasons = normaliseReasonList(
+    prefs.failure_reason_groups ||
+    prefs.failureReasonGroups ||
+    prefs.failure_reason_allowlist ||
+    prefs.failureReasonAllowlist ||
+    []
+  );
+  const mode = (requestedModeRaw === 'NONE' || requestedModeRaw === 'NO_BANKING_PAY_ALERTS' || prefs.enabled === false)
+    ? 'NO_BANKING_PAY_ALERTS'
+    : ((requestedModeRaw === 'SELECTED_FAILURE_REASONS' || requestedModeRaw === 'SELECTED' || requestedReasons.length > 0)
+      ? 'SELECTED_FAILURE_REASONS'
+      : 'ALL_ACTION_REQUIRED');
+
+  const canonicalPayload = {
+    enabled: mode !== 'NO_BANKING_PAY_ALERTS',
+    alert_kind_allowlist: Array.isArray(prefs.alert_kind_allowlist) ? prefs.alert_kind_allowlist.slice() : null,
+    alert_kind_blocklist: Array.isArray(prefs.alert_kind_blocklist) ? prefs.alert_kind_blocklist.slice() : [],
+    failure_reason_allowlist: mode === 'SELECTED_FAILURE_REASONS' ? requestedReasons : null,
+    failure_reason_blocklist: normaliseReasonList(prefs.failure_reason_blocklist || prefs.failureReasonBlocklist || []),
+    include_action_required: mode !== 'NO_BANKING_PAY_ALERTS',
+    include_progress_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(prefs.include_progress_alerts, true),
+    include_informational_alerts: mode !== 'NO_BANKING_PAY_ALERTS' && boolOr(prefs.include_informational_alerts, false),
+    include_success_alerts: false,
+    severity_min: upper(prefs.severity_min || prefs.severityMin || 'ACTION_REQUIRED') || 'ACTION_REQUIRED',
+    muted_provider_keys: uniqueText(prefs.muted_provider_keys || prefs.mutedProviderKeys || prefs.muted_providers || prefs.mutedProviders || []),
+    muted_pay_batch_ids: uniqueText(prefs.muted_pay_batch_ids || prefs.mutedPayBatchIds || prefs.muted_batch_ids || prefs.mutedBatchIds || []),
+    snoozed_until_utc: prefs.snoozed_until_utc || prefs.snoozedUntilUtc || prefs.snooze_until_utc || prefs.snoozeUntilUtc || null,
+    mode,
+    failure_reason_groups: mode === 'SELECTED_FAILURE_REASONS' ? requestedReasons : [],
+    informational_alert_kinds: normaliseInfoKinds(prefs.informational_alert_kinds || prefs.informationalAlertKinds || prefs.progress_alert_kinds || prefs.progressAlertKinds || [])
+  };
+
   const response = await authFetch(API('/api/banking/alerts/preferences'), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(prefs)
+    body: JSON.stringify(canonicalPayload)
   });
   const text = await response.text().catch(() => '');
   const parsed = parse(text);
@@ -268960,10 +269524,48 @@ async function bankingAlertPreferencesSave(preferences) {
     err.json = parsed;
     throw err;
   }
+
   const payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  let effectivePayload = { ...payload, ok: payload.ok !== false };
+  try {
+    if (typeof bankingAlertPreferencesFetch === 'function') {
+      const fetched = await bankingAlertPreferencesFetch();
+      if (fetched && typeof fetched === 'object' && !Array.isArray(fetched)) effectivePayload = { ...payload, ...fetched, ok: payload.ok !== false && fetched.ok !== false };
+    }
+  } catch {
+    const effectivePreferences = {
+      ...canonicalPayload,
+      effective_options_json: asObj(payload.effective_options_json || payload.options),
+      options: asObj(payload.options || payload.effective_options_json)
+    };
+    effectivePayload = {
+      ...payload,
+      ...effectivePreferences,
+      preferences: effectivePreferences,
+      effective_preferences: effectivePreferences,
+      ok: payload.ok !== false
+    };
+    try {
+      const state = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+      if (state && typeof state === 'object') {
+        state.bankingAlertPreferences = effectivePreferences;
+        state.alertPreferences = effectivePreferences;
+      }
+    } catch {}
+    try {
+      if (typeof window !== 'undefined') {
+        window.__BANKING_ALERT_PREFERENCES_CACHE__ = {
+          fetched_at_ms: Date.now(),
+          payload: effectivePayload,
+          preferences: effectivePreferences,
+          options: effectivePreferences.options
+        };
+      }
+    } catch {}
+  }
 
   try {
-    const summary = payload.alert_summary || payload.banking_alert_summary || payload.updated_alert_signal || payload.alert_signal || null;
+    const summary = payload.alert_summary || payload.banking_alert_summary || payload.updated_alert_signal || payload.alert_signal || effectivePayload.alert_summary || effectivePayload.banking_alert_summary || null;
     if (summary && typeof applyAlertSummaryToState === 'function') {
       applyAlertSummaryToState({ banking_alert_summary: summary, banking_alert_summary_included: true });
     }
@@ -268984,9 +269586,12 @@ async function bankingAlertPreferencesSave(preferences) {
     try { console.warn('[BANKING_ALERT_PREFERENCES] alert summary refresh failed', e && e.message ? e.message : String(e)); } catch {}
   }
 
-  try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
-  return { ...payload, ok: payload.ok !== false };
+  return { ...effectivePayload, ok: effectivePayload.ok !== false };
 }
+
+
+
+
 
 
 
@@ -269128,7 +269733,7 @@ function startBankingPayBatchLiveWatch(batchId, options = {}) {
     const visiblePage = child.visiblePage && typeof child.visiblePage === 'object' ? child.visiblePage : {};
     const sectionState = child.sectionPage && typeof child.sectionPage === 'object' ? child.sectionPage : {};
     const sectionPages = child.sectionPages && typeof child.sectionPages === 'object' ? child.sectionPages : {};
-    const currentTab = normaliseTabKey(currentOpts.currentTab || currentOpts.current_tab || child.ui?.activeTabKey || child.ui?.active_tab || child.activeTab || child.active_tab || pay.activeTab || pay.active_tab || 'OVERVIEW') || 'OVERVIEW';
+    const currentTab = normaliseTabKey(child.ui?.activeTabKey || child.ui?.active_tab || child.activeTab || child.active_tab || pay.activeTab || pay.active_tab || currentOpts.currentTab || currentOpts.current_tab || 'OVERVIEW') || 'OVERVIEW';
     const currentPage = currentTab === 'CURRENT_PAYMENT_STATUS'
       ? (visiblePage.current_payment_status || sectionPages.current_payment_status || visiblePage.payment_issues || sectionPages.payment_issues || visiblePage)
       : visiblePage;
