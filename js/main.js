@@ -48526,6 +48526,7 @@ async function bankingPayBatchExecutePayment(payBatchId, payload) {
 
 
 
+
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -50579,23 +50580,43 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     if (!sectionKeys.length) return '';
     ensureChildLazySections(child.data);
 
+    const shouldShowDebugPagingControls = (() => {
+      try {
+        if (child?.ui?.showPagedDetailLoading === true) return true;
+        if (child?.ui?.showSectionPagingControls === true) return true;
+        if (window.__CLOUDTMS_DEBUG_BANKING_PAY_CHILD_PAGING === true) return true;
+        if (window.__BANKING_PAY_CHILD_PAGING_DEBUG === true) return true;
+        const ls = window.localStorage;
+        if (ls && String(ls.getItem('cloudtms.debug.bankingPayChildPaging') || '').trim().toLowerCase() === 'true') return true;
+      } catch {}
+      return false;
+    })();
+
     const rows = sectionKeys.map((sectionKey) => {
       const key = normaliseChildSectionKey(sectionKey);
       const state = createChildSectionState(key, child.sections[key]);
       const label = key.replace(/_/g, ' ');
       const rowCount = Array.isArray(state.rows) ? state.rows.length : 0;
-      const totalText = state.known_total_count === null ? '' : ` of ${state.known_total_count}`;
-      const canLoadFirstPage = state.loaded !== true && state.loading !== true;
-      const canLoadMore = state.loading !== true && (canLoadFirstPage || !!state.next_cursor);
-      const loadButtonLabel = state.loading ? 'Loading…' : (canLoadFirstPage ? 'Load section' : 'Load more');
-      const loadButtonTitle = canLoadFirstPage
-        ? 'Load this section'
-        : (canLoadMore ? 'Load the next page' : 'No more rows to load');
+      const knownTotal = Number.isFinite(Number(state.known_total_count))
+        ? Math.max(0, Math.trunc(Number(state.known_total_count)))
+        : null;
+      const displayTotal = knownTotal !== null && knownTotal >= rowCount ? knownTotal : null;
+      const totalText = displayTotal === null ? '' : ` of ${displayTotal}`;
+      const hasNextPage = !!state.next_cursor;
+      const hasError = !!String(state.error || '').trim();
+      const isLoading = state.loading === true;
+      const shouldShowRow = shouldShowDebugPagingControls || hasNextPage || hasError || (isLoading && hasNextPage);
+      if (!shouldShowRow) return '';
+      const canLoadMore = isLoading !== true && (hasNextPage || hasError);
+      const loadButtonLabel = isLoading ? 'Loading…' : (hasError ? 'Retry section' : 'Load more');
+      const loadButtonTitle = hasError
+        ? 'Retry loading this section'
+        : (hasNextPage ? 'Load the next page' : 'No more rows to load');
       return `
         <div class="card" style="padding:8px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
           <div>
             <div class="mini" style="font-weight:700;opacity:.9;">${enc(label)}</div>
-            <div class="mini" style="opacity:.82;">Loaded <span class="mono">${enc(String(rowCount))}</span>${enc(totalText)}${state.loading ? ' · loading…' : ''}${state.error ? ` · ${enc(state.error)}` : ''}</div>
+            <div class="mini" style="opacity:.82;">Loaded <span class="mono">${enc(String(rowCount))}</span>${enc(totalText)}${isLoading ? ' · loading…' : ''}${hasError ? ` · ${enc(state.error)}` : ''}</div>
           </div>
           <button
             type="button"
@@ -50607,13 +50628,15 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
           >${enc(loadButtonLabel)}</button>
         </div>
       `;
-    }).join('');
+    }).filter((rowHtml) => String(rowHtml || '').trim()).join('');
+
+    if (!rows) return '';
 
     return `
-      <div class="card" style="padding:10px;margin-top:10px;">
-        <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Paged detail loading</div>
-        <div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>
-      </div>
+      <details class="card" style="padding:10px;margin-top:10px;"${shouldShowDebugPagingControls ? ' open' : ''}>
+        <summary class="mini" style="font-weight:700;opacity:.9;cursor:pointer;">Additional paged detail rows</summary>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px;">${rows}</div>
+      </details>
     `;
   };
 
