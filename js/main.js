@@ -51854,8 +51854,8 @@ const executePaymentPipeline = async () => {
 
     if (genuineBlockedFunds) {
       await showChildFriendlyNotice({
-        title: 'Bank unavailable — unsent payments can be retried',
-        message: 'The payment request was not sent. Review Current Payment Status; if retry is available, use Retry unsent payments from Overview.',
+        title: 'Payment not sent — funding unavailable',
+        message: 'No bank submission was completed because the funding account did not have enough available balance. Review Current Payment Status; if retry is available, use Retry unsent payments from Overview.',
         confirmLabel: 'OK',
         kind: 'import-summary-banking-execute-funding-unavailable',
         confirmClass: 'btn btn-primary'
@@ -52333,6 +52333,84 @@ const retryUnsentPaymentsPipeline = async () => {
     try { if (typeof window.__toast === 'function') window.__toast(msg1); } catch {}
     await rerenderChild();
   };
+
+  const shouldShowOverviewExecuteFallback = () => {
+    try {
+      const data = (child.data && typeof child.data === 'object' && !Array.isArray(child.data)) ? child.data : {};
+      const batch = deriveBatchObj(data) || {};
+      const explicitCanStartStandardExecution = readProviderSubmitBool(data.can_start_standard_execution)
+        || readProviderSubmitBool(data.canStartStandardExecution)
+        || readProviderSubmitBool(batch.can_start_standard_execution)
+        || readProviderSubmitBool(batch.canStartStandardExecution);
+      const explicitCanExecute = readProviderSubmitBool(data.can_execute)
+        || readProviderSubmitBool(data.canExecute)
+        || readProviderSubmitBool(data.execute_allowed)
+        || readProviderSubmitBool(data.executeAllowed)
+        || readProviderSubmitBool(batch.can_execute)
+        || readProviderSubmitBool(batch.canExecute)
+        || readProviderSubmitBool(batch.execute_allowed)
+        || readProviderSubmitBool(batch.executeAllowed);
+      const explicitlyDisabled = readProviderSubmitBool(data.standard_execution_disabled)
+        || readProviderSubmitBool(data.standardExecutionDisabled)
+        || readProviderSubmitBool(data.standard_bank_execution_disabled)
+        || readProviderSubmitBool(data.standardBankExecutionDisabled)
+        || readProviderSubmitBool(data.execute_disabled)
+        || readProviderSubmitBool(data.executeDisabled)
+        || readProviderSubmitBool(batch.standard_execution_disabled)
+        || readProviderSubmitBool(batch.standardExecutionDisabled)
+        || readProviderSubmitBool(batch.standard_bank_execution_disabled)
+        || readProviderSubmitBool(batch.standardBankExecutionDisabled)
+        || readProviderSubmitBool(batch.execute_disabled)
+        || readProviderSubmitBool(batch.executeDisabled);
+
+      if (explicitlyDisabled) return false;
+      if (!(explicitCanStartStandardExecution || explicitCanExecute)) return false;
+      if (!hasActivePaymentsForBatch(data)) return false;
+      if (!isExecuteAllowedByStatus(data)) return false;
+      if (providerSubmitReviewIssuePresent(data, batch) === true) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const injectOverviewExecuteFallback = (html) => {
+    const source = String(html || '');
+    if (!source) return source;
+    if (source.includes('data-action="banking:pay:child:executePayment"') || source.includes("data-action='banking:pay:child:executePayment'")) return source;
+    if (!shouldShowOverviewExecuteFallback()) return source;
+
+    const busy = !!(
+      child.actionsBusy?.executing ||
+      child.loading ||
+      child.__loadInFlight ||
+      child.actionsBusy?.refreshing ||
+      child.actionsBusy?.polling
+    );
+    const disabledAttr = busy
+      ? ' disabled aria-disabled="true" data-disabled="1" title="Execution is already running or the batch is refreshing" style="opacity:.55;filter:saturate(0.65);"'
+      : ' title="Execute eligible payments"';
+    const buttonLabel = child.actionsBusy?.executing ? 'Executing…' : 'Execute';
+    const fallbackHtml = `
+      <div class="card banking-pay-execute-fallback-card" data-banking-pay-execute-fallback="1" style="padding:10px;margin-bottom:10px;border:1px solid var(--line);">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:800;font-size:14px;">Standard bank execution available</div>
+            <div class="mini" style="opacity:.82;">This draft is executable. Use Execute to start the normal payment flow.</div>
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:executePayment"${disabledAttr}>${enc(buttonLabel)}</button>
+        </div>
+      </div>
+    `;
+
+    const escapeRegExp = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rootPattern = new RegExp(`(<[^>]+id=["']${escapeRegExp(rootId)}["'][^>]*>)`);
+    if (rootPattern.test(source)) return source.replace(rootPattern, `$1${fallbackHtml}`);
+    return `<div id="${enc(rootId)}" class="banking-pay-batch-child-overview-fallback-root">${fallbackHtml}${source}</div>`;
+  };
+
+  const renderChildOverviewHtml = () => injectOverviewExecuteFallback(renderBankingPayBatchChildModalOverview());
+
   const renderTab = (key) => {
     try {
       child.ui.activeTabKey = String(key || '').trim() || 'overview';
@@ -52366,7 +52444,7 @@ const retryUnsentPaymentsPipeline = async () => {
 
     if (safeKey === 'overview') {
       if (typeof renderBankingPayBatchChildModalOverview === 'function') {
-        return renderBankingPayBatchChildModalOverview();
+        return renderChildOverviewHtml();
       }
     }
 
@@ -52682,7 +52760,7 @@ const retryUnsentPaymentsPipeline = async () => {
             resetPaymentIssueLocalSelectionAndPlan(correctionState);
             child.ui = (child.ui && typeof child.ui === 'object') ? child.ui : {};
             child.ui.activeTabKey = 'payment_issues';
-            try { toast('Use Recover overpayment in next pay run from Current Payment Status for supported paid/settled payments.'); } catch {}
+            try { toast('Use Candidate returned funds from Current Payment Status for supported sent payments.'); } catch {}
             await rerenderPaymentIssuesOnly();
           };
 
@@ -53251,7 +53329,7 @@ const retryUnsentPaymentsPipeline = async () => {
               if (invalidReleasedRows.length) {
                 await showProviderSubmitResolutionNotice({
                   title: 'Selected payment already resolved',
-                  message: 'One or more selected payments have already been resolved or already have a correction in progress.',
+                  message: 'One or more selected payments have already been resolved or have a correction in progress.',
                   confirmClass: 'btn btn-primary'
                 });
                 return;
@@ -53260,7 +53338,7 @@ const retryUnsentPaymentsPipeline = async () => {
               const invalidAcceptedRows = rowsForResolution.filter((row) => rowLooksAcceptedOrSuccessful(row, diagnosticForRow(row)));
               if (invalidAcceptedRows.length) {
                 await showProviderSubmitResolutionNotice({
-                  title: 'Selected payment cannot be rewound',
+                  title: 'Selected payment cannot be released',
                   message: 'One or more selected payments have successful, accepted, or paid evidence. Select only failed/rejected payments that were not made by the bank/provider.',
                   confirmClass: 'btn btn-danger'
                 });
@@ -53559,7 +53637,7 @@ const retryUnsentPaymentsPipeline = async () => {
                           silent: true,
                           context: {
                             source: 'openBankingNoPaymentCancelConfirmationFlow',
-                            action: 'NO_PAYMENT_SELECTED_PAYMENTS_REWIND_SUCCESS',
+                            action: 'NO_PAYMENT_SELECTED_PAYMENTS_RELEASE_SUCCESS',
                             pay_batch_id: id,
                             pay_bank_transfer_ids: selectedPayBankTransferIds
                           }
@@ -54451,7 +54529,6 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
   await rerenderChild();
   scheduleWire();
 }
-
 
 
 
