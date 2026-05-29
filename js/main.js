@@ -22155,7 +22155,7 @@ function attachBankingNavAlertPopoverHandlers() {
   const canRequestDeferredDetailForHash = (hb, hash, reason = '') => {
     const h = String(hash || '').trim();
     if (!hb || !h) return false;
-    const force = /force|manual|user|explicit/i.test(String(reason || '')) || detailHashField(hb, '_bankingAlertSummaryDetailForceRefreshHash') === h;
+    const force = /force|manual|user|explicit|popover/i.test(String(reason || '')) || detailHashField(hb, '_bankingAlertSummaryDetailForceRefreshHash') === h;
     const inFlight = detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash') === h
       || (hb._bankingAlertSummaryDetailInFlight === true && !detailHashField(hb, '_bankingAlertSummaryDetailInFlightHash') && detailHashField(hb, '_bankingAlertSummaryDetailRequestedHash') === h);
     if (inFlight) return false;
@@ -22175,15 +22175,27 @@ function attachBankingNavAlertPopoverHandlers() {
       const hb = getHeartbeat();
       if (!hb) return false;
       const hash = syncDetailHash(state);
-      if (!hash || !canRequestDeferredDetailForHash(hb, hash, reason)) return false;
+      if (!hash) return false;
+      const missingRowsForPositiveCount = getAttentionCount(state) > 0 && getAttentionAlerts(state).length < 1;
+      const requestReason = missingRowsForPositiveCount === true && !/force|manual|user|explicit|popover/i.test(String(reason || ''))
+        ? `${String(reason || 'banking-alert-popover-detail')}:popover-force-missing-rows`
+        : String(reason || 'banking-alert-popover-detail');
+      if (missingRowsForPositiveCount === true) {
+        if (detailHashField(hb, '_bankingAlertSummaryDetailLoadedHash') === hash) hb._bankingAlertSummaryDetailLoadedHash = '';
+        if (detailHashField(hb, '_bankingAlertSummaryDetailSettledDeferredHash') === hash) hb._bankingAlertSummaryDetailSettledDeferredHash = '';
+        hb._bankingAlertSummaryDeferred = true;
+        hb._bankingAlertSummaryDetailForceRefreshHash = hash;
+      }
+      if (!canRequestDeferredDetailForHash(hb, hash, requestReason)) return false;
       if (typeof hb.requestBankingAlertSummaryDetailRefresh === 'function') {
-        return hb.requestBankingAlertSummaryDetailRefresh(reason || 'banking-alert-popover-detail') === true;
+        return hb.requestBankingAlertSummaryDetailRefresh(requestReason) === true;
       }
       hb._bankingAlertSummaryDeferred = true;
       hb._bankingAlertSummaryDetailPending = true;
       hb._bankingAlertSummaryDetailPendingHash = hash;
+      if (missingRowsForPositiveCount === true) hb._bankingAlertSummaryDetailForceRefreshHash = hash;
       if (hb._pingInFlight === true) {
-        hb._pendingPingReason = String(reason || 'banking-alert-popover-detail');
+        hb._pendingPingReason = requestReason;
         return true;
       }
       const now = Date.now();
@@ -22196,7 +22208,7 @@ function attachBankingNavAlertPopoverHandlers() {
       );
       if (typeof hb.pingOnce === 'function') {
         setTimeout(() => {
-          try { hb.pingOnce && hb.pingOnce(reason || 'banking-alert-popover-detail'); } catch {}
+          try { hb.pingOnce && hb.pingOnce(requestReason); } catch {}
         }, delayMs);
         return true;
       }
@@ -22525,9 +22537,48 @@ function attachBankingNavAlertPopoverHandlers() {
               hide_cancel: true,
               kind: 'banking-alert-preferences'
             });
+          } else if (typeof openUiConfirmModal === 'function') {
+            await openUiConfirmModal({
+              title: 'Banking Alert preferences',
+              message_html: html,
+              confirm_label: 'Close',
+              hide_cancel: true,
+              kind: 'banking-alert-preferences',
+              confirm_class: 'btn btn-primary'
+            });
           } else if (html) {
+            document.querySelectorAll('[data-banking-alert-preferences-fallback="1"]').forEach((node) => {
+              try { if (node && node.parentNode) node.parentNode.removeChild(node); } catch {}
+            });
             const wrapper = document.createElement('div');
-            wrapper.innerHTML = html;
+            wrapper.setAttribute('data-banking-alert-preferences-fallback', '1');
+            wrapper.style.position = 'fixed';
+            wrapper.style.zIndex = '2147483001';
+            wrapper.style.inset = '0';
+            wrapper.style.background = 'rgba(15,23,42,.24)';
+            wrapper.style.display = 'flex';
+            wrapper.style.alignItems = 'flex-start';
+            wrapper.style.justifyContent = 'center';
+            wrapper.style.padding = '32px 12px';
+            wrapper.innerHTML = `
+              <div class="card" style="width:min(760px,calc(100vw - 24px));max-height:calc(100vh - 64px);overflow:auto;padding:12px;background:var(--card,#fff);box-shadow:0 18px 48px rgba(15,23,42,.22);">
+                <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;">
+                  <div style="font-weight:800;">Banking Alert preferences</div>
+                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:nav:alerts:preferences:fallbackClose">Close</button>
+                </div>
+                ${html}
+              </div>
+            `;
+            wrapper.addEventListener('click', (ev) => {
+              try {
+                const close = ev.target && ev.target.closest ? ev.target.closest('[data-action="banking:nav:alerts:preferences:fallbackClose"]') : null;
+                if (close || ev.target === wrapper) {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  if (wrapper.parentNode) wrapper.parentNode.removeChild(wrapper);
+                }
+              } catch {}
+            }, true);
             document.body.appendChild(wrapper);
           }
         } else if (typeof openSettings === 'function') {
@@ -22611,6 +22662,9 @@ function attachBankingNavAlertPopoverHandlers() {
     window.__bankingNavAlertPopoverHandlersAttached = false;
   };
 }
+
+
+
 
 
 
@@ -23153,8 +23207,14 @@ function applyAlertSummaryToState(responsePayload) {
     const hb = getHeartbeat();
     const h = syncDetailHashState(hash);
     if (!hb || !h || !canQueueDetailRefreshForHash(h, options)) return false;
+    if (options.force === true) {
+      if (detailHashField(hb, '_bankingAlertSummaryDetailLoadedHash') === h) hb._bankingAlertSummaryDetailLoadedHash = '';
+      if (detailHashField(hb, '_bankingAlertSummaryDetailSettledDeferredHash') === h) hb._bankingAlertSummaryDetailSettledDeferredHash = '';
+      hb._bankingAlertSummaryDetailForceRefreshHash = h;
+      hb._bankingAlertSummaryDeferred = true;
+    }
     if (typeof hb.requestBankingAlertSummaryDetailRefresh === 'function') {
-      return hb.requestBankingAlertSummaryDetailRefresh(reason || 'banking-alert-detail-deferred') === true;
+      return hb.requestBankingAlertSummaryDetailRefresh(reason || (options.force === true ? 'banking-alert-detail-force-refresh' : 'banking-alert-detail-deferred')) === true;
     }
     hb._bankingAlertSummaryDeferred = true;
     hb._bankingAlertSummaryDetailPending = true;
@@ -23379,7 +23439,227 @@ function applyAlertSummaryToState(responsePayload) {
   const rawCount = toCount(countRaw, responseAlerts.length || filteredAlerts.length);
   const usableAlertRows = filteredAlerts.filter((alert) => !!getFingerprint(alert));
   const positiveWithoutUsableAlertRows = rawCount > 0 && usableAlertRows.length < 1;
+
+  const readExistingDetailedAttentionStateForHash = (targetHash, targetCount) => {
+    if (typeof window === 'undefined') return null;
+    const h = toText(targetHash);
+    const expectedCount = toCount(targetCount, 0);
+    if (!h || expectedCount < 1) return null;
+    const ackAt = currentAckMutationAtMs();
+    if (ackAt > 0 && Date.now() - ackAt < (2 * 60 * 1000)) return null;
+
+    const readHash = (candidate) => {
+      if (!isPlainObject(candidate)) return '';
+      const candidateAlertSummary = isPlainObject(candidate.alertSummary) ? candidate.alertSummary : null;
+      const candidateBankingSummary = isPlainObject(candidate.banking_alert_summary) ? candidate.banking_alert_summary : null;
+      return toText(
+        candidate.banking_alert_hash
+        || candidate.banking_alert_summary_signature
+        || candidateAlertSummary?.banking_alert_hash
+        || candidateAlertSummary?.banking_alert_summary_signature
+        || candidateBankingSummary?.banking_alert_hash
+        || candidateBankingSummary?.banking_alert_summary_signature
+        || ''
+      );
+    };
+    const readSummary = (candidate) => {
+      if (!isPlainObject(candidate)) return null;
+      const alertSummary = isPlainObject(candidate.alertSummary) ? candidate.alertSummary : null;
+      const bankingSummary = isPlainObject(candidate.banking_alert_summary) ? candidate.banking_alert_summary : null;
+      const globalSummary = candidate === window.__bankingAlertSummary ? candidate : null;
+      if (alertSummary && collectAlertRows(alertSummary).length > 0) return alertSummary;
+      if (bankingSummary && collectAlertRows(bankingSummary).length > 0) return bankingSummary;
+      return alertSummary || bankingSummary || globalSummary || null;
+    };
+    const visibleRows = (candidate, candidateSummary) => collectAlertRows(candidate, candidateSummary).filter((alert) => {
+      const fingerprint = getFingerprint(alert);
+      if (!fingerprint) return false;
+      if (suppressionMap[fingerprint]) return false;
+      if (isPreferenceHiddenAlert(alert) || isSuccessOnlyAlert(alert)) return false;
+      if (alert.acknowledged_for_current_user === true || alert.banking_alert_acknowledged_for_user === true || alert.alert_acknowledged_for_current_user === true) return false;
+      return true;
+    });
+
+    const candidates = [
+      window.__bankingNavAttentionState,
+      window.__bankingAlertSummary,
+      window.modalCtx?.banking?.pay?.list
+    ];
+    for (const candidate of candidates) {
+      if (!isPlainObject(candidate)) continue;
+      const candidateHash = readHash(candidate);
+      if (!candidateHash || candidateHash !== h) continue;
+      const candidateSummary = readSummary(candidate);
+      const rows = visibleRows(candidate, candidateSummary);
+      if (rows.length < 1 || rows.length > expectedCount) continue;
+      return {
+        hash: h,
+        rows,
+        summary: candidateSummary,
+        count: expectedCount
+      };
+    }
+    return null;
+  };
+
+  const preserveExistingDetailedState = (preserved) => {
+    if (!preserved || !Array.isArray(preserved.rows) || preserved.rows.length < 1) return null;
+    const preservedHash = toText(preserved.hash || alertHash || resolveDetailHash(alertHash));
+    const preservedCount = toCount(preserved.count, preserved.rows.length);
+    const preservedAlerts = deepClone(preserved.rows) || preserved.rows.slice();
+    const highestLabelRaw = summary?.highest_label
+      ?? summary?.banking_highest_alert_label
+      ?? preserved.summary?.highest_label
+      ?? preserved.summary?.banking_highest_alert_label
+      ?? acknowledgement.highest_label
+      ?? acknowledgement.banking_highest_alert_label
+      ?? payload.highest_label
+      ?? payload.banking_highest_alert_label
+      ?? preservedAlerts[0]?.label
+      ?? preservedAlerts[0]?.title
+      ?? 'Banking issue';
+    const highestSeverityRaw = summary?.highest_severity
+      ?? summary?.banking_highest_alert_severity
+      ?? preserved.summary?.highest_severity
+      ?? preserved.summary?.banking_highest_alert_severity
+      ?? acknowledgement.highest_severity
+      ?? acknowledgement.banking_highest_alert_severity
+      ?? payload.highest_severity
+      ?? payload.banking_highest_alert_severity
+      ?? preservedAlerts[0]?.severity
+      ?? 'critical';
+    const highestLabel = preservedCount > 0 && highestLabelRaw ? String(highestLabelRaw) : null;
+    const highestSeverity = preservedCount > 0 && highestSeverityRaw ? String(highestSeverityRaw) : null;
+    const detailHash = preservedHash ? syncDetailHashState(preservedHash) : '';
+    if (preservedCount > 0 && preservedAlerts.length > 0) markDetailSettledLoaded(detailHash);
+    const summaryToStore = {
+      ...(summary ? deepClone(summary) : {}),
+      ...(preserved.summary ? deepClone(preserved.summary) : {}),
+      ok: true,
+      alerts: deepClone(preservedAlerts) || [],
+      banking_alerts: deepClone(preservedAlerts) || [],
+      unacknowledged_count: preservedCount,
+      banking_unacknowledged_alert_count: preservedCount,
+      banking_alert_group_count: preservedCount,
+      grouped_alert_count: preservedCount,
+      highest_label: highestLabel,
+      banking_highest_alert_label: highestLabel,
+      highest_severity: highestSeverity,
+      banking_highest_alert_severity: highestSeverity,
+      banking_alert_hash: preservedHash,
+      banking_alert_summary_signature: preservedHash,
+      banking_alert_summary_deferred: false,
+      detailsDeferred: false,
+      detailsLoading: false,
+      detailsSettledDeferred: false,
+      detailsSettledLoaded: true,
+      banking_alert_summary_detail_settled_deferred: false,
+      banking_alert_summary_detail_settled_loaded: true,
+      banking_alert_summary_included: true,
+      summaryIncluded: true
+    };
+
+    try {
+      window.__bankingAlertHash = preservedHash;
+      window.__bankingAlertSummarySignature = preservedHash;
+      window.__bankingAlertSummary = deepClone(summaryToStore) || summaryToStore;
+      window.__bankingAlertCount = preservedCount;
+    } catch {}
+
+    const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    const list = mc?.banking?.pay?.list;
+    if (list && typeof list === 'object') {
+      list.banking_alerts = deepClone(preservedAlerts) || [];
+      list.banking_unacknowledged_alert_count = preservedCount;
+      list.banking_highest_alert_label = highestLabel;
+      list.banking_highest_alert_severity = highestSeverity;
+      list.banking_alert_summary = deepClone(summaryToStore) || {};
+      list.banking_alert_summary_deferred = false;
+      if (preservedHash) list.banking_alert_hash = preservedHash;
+    }
+
+    const hadOpenPopover = (() => {
+      try { return !!document.querySelector('.banking-nav-alert-popover[data-banking-nav-alert-popover="1"]'); } catch { return false; }
+    })();
+    const attentionState = {
+      requiresAttention: preservedCount > 0,
+      count: preservedCount,
+      unacknowledgedCount: preservedCount,
+      unacknowledged_count: preservedCount,
+      banking_unacknowledged_alert_count: preservedCount,
+      alerts: deepClone(preservedAlerts) || [],
+      banking_alerts: deepClone(preservedAlerts) || [],
+      highestPriorityLabel: highestLabel,
+      highest_label: highestLabel,
+      banking_highest_alert_label: highestLabel,
+      highestSeverity,
+      highest_severity: highestSeverity,
+      banking_highest_alert_severity: highestSeverity,
+      alertSummary: deepClone(summaryToStore) || {},
+      banking_alert_summary: deepClone(summaryToStore) || {},
+      banking_alert_hash: preservedHash,
+      banking_alert_summary_signature: preservedHash,
+      banking_alert_summary_deferred: false,
+      detailsDeferred: false,
+      detailsLoading: false,
+      detailsSettledDeferred: false,
+      detailsSettledLoaded: true,
+      banking_alert_summary_detail_settled_deferred: false,
+      banking_alert_summary_detail_settled_loaded: true,
+      banking_alert_summary_included: true,
+      summaryIncluded: true,
+      title: preservedCount > 0
+        ? String(highestLabel || 'Banking action needed')
+        : 'No current unacknowledged Banking alerts',
+      keepPopoverOpen: hadOpenPopover,
+      forceReapply: hadOpenPopover
+    };
+
+    try {
+      if (typeof updateBankingNavAttentionState === 'function') updateBankingNavAttentionState(attentionState);
+      else window.__bankingNavAttentionState = attentionState;
+    } catch {
+      try { window.__bankingNavAttentionState = attentionState; } catch {}
+    }
+
+    try {
+      const popover = document.querySelector('.banking-nav-alert-popover[data-banking-nav-alert-popover="1"]');
+      if (popover && typeof renderBankingNavAlertPopover === 'function') {
+        const trigger = document.querySelector('[data-banking-nav-alert-trigger="1"]');
+        const oldTop = popover.style.top;
+        const oldLeft = popover.style.left;
+        const oldRight = popover.style.right;
+        const replacement = document.createElement('div');
+        replacement.innerHTML = renderBankingNavAlertPopover(attentionState);
+        const next = replacement.firstElementChild;
+        if (next) {
+          popover.replaceWith(next);
+          if (trigger && typeof trigger.getBoundingClientRect === 'function') {
+            const rect = trigger.getBoundingClientRect();
+            const margin = 8;
+            const maxLeft = Math.max(margin, window.innerWidth - next.offsetWidth - margin);
+            next.style.top = `${Math.max(margin, rect.bottom + margin)}px`;
+            next.style.left = `${Math.min(Math.max(margin, rect.right - next.offsetWidth), maxLeft)}px`;
+            next.style.right = '';
+            trigger.setAttribute('aria-expanded', 'true');
+          } else {
+            if (oldTop) next.style.top = oldTop;
+            if (oldLeft) next.style.left = oldLeft;
+            if (oldRight) next.style.right = oldRight;
+          }
+          if (typeof attachBankingNavAlertPopoverHandlers === 'function') attachBankingNavAlertPopoverHandlers();
+        }
+      }
+    } catch {}
+
+    return attentionState;
+  };
+
   if (positiveWithoutUsableAlertRows) {
+    const preservedDetails = readExistingDetailedAttentionStateForHash(alertHash || resolveDetailHash(alertHash), rawCount);
+    const preservedState = preserveExistingDetailedState(preservedDetails);
+    if (preservedState) return preservedState;
+
     const responseStartedBeforeAck = payload.banking_alert_response_started_before_ack === true
       || payload.response_started_before_ack === true
       || payload.positive_response_started_before_ack === true;
@@ -23473,7 +23753,16 @@ function applyAlertSummaryToState(responsePayload) {
     const detailHash = alertHash ? syncDetailHashState(alertHash) : '';
     const wasRequestedDetailResponse = wasRequestedDetailResponseForHash(detailHash);
     if (wasRequestedDetailResponse) markDetailSettledDeferred(detailHash);
-    const queuedDetailRefresh = !wasRequestedDetailResponse && queueDetailRefreshForHash(detailHash, 'banking-alert-detail-deferred');
+    const staleLoadedMarkerWithoutRows = detailHash && isDetailSettledLoadedForHash(detailHash);
+    if (staleLoadedMarkerWithoutRows) {
+      const hb = getHeartbeat();
+      if (hb && detailHashField(hb, '_bankingAlertSummaryDetailLoadedHash') === detailHash) hb._bankingAlertSummaryDetailLoadedHash = '';
+    }
+    const queuedDetailRefresh = !wasRequestedDetailResponse && queueDetailRefreshForHash(
+      detailHash,
+      staleLoadedMarkerWithoutRows ? 'banking-alert-detail-force-missing-rows' : 'banking-alert-detail-deferred',
+      { force: staleLoadedMarkerWithoutRows === true }
+    );
     const detailsSettledDeferred = isDetailSettledDeferredForHash(detailHash);
     const detailsSettledLoaded = false;
     const detailsLoading = deferredCount > 0
@@ -23825,6 +24114,9 @@ function applyAlertSummaryToState(responsePayload) {
 
   return attentionState;
 }
+
+
+
 
 
 async function bankingAcknowledgeAlerts(input = {}) {
@@ -41777,9 +42069,6 @@ function bankingNormalizeApiError(error, backendPayload = null, context = {}) {
 }
 
 
-
-
-
 function updateBankingNavAttentionState(attentionState) {
   const navRoot = (typeof byId === 'function' ? byId('nav') : document.getElementById('nav')) || document;
   const state = (attentionState && typeof attentionState === 'object') ? attentionState : {};
@@ -41805,7 +42094,7 @@ function updateBankingNavAttentionState(attentionState) {
     return alertSummary || bankingSummary || {};
   })();
 
-  const activeAlertsRaw = Array.isArray(state.alerts) && state.alerts.length > 0
+  let activeAlertsRaw = Array.isArray(state.alerts) && state.alerts.length > 0
     ? state.alerts
     : (Array.isArray(state.banking_alerts) && state.banking_alerts.length > 0
       ? state.banking_alerts
@@ -41823,7 +42112,6 @@ function updateBankingNavAttentionState(attentionState) {
     ?? activeAlertsRaw.length
   );
 
-  const activeAlerts = count > 0 ? activeAlertsRaw : [];
   const alertHash = String(
     state.banking_alert_hash
     || state.banking_alert_summary_signature
@@ -41832,11 +42120,72 @@ function updateBankingNavAttentionState(attentionState) {
     || (typeof window !== 'undefined' ? (window.__bankingAlertHash || window.__bankingAlertSummarySignature || '') : '')
     || ''
   ).trim();
+
+  const readRowsForPreserve = (candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [];
+    const candidateSummary = (candidate.alertSummary && typeof candidate.alertSummary === 'object' && !Array.isArray(candidate.alertSummary))
+      ? candidate.alertSummary
+      : ((candidate.banking_alert_summary && typeof candidate.banking_alert_summary === 'object' && !Array.isArray(candidate.banking_alert_summary)) ? candidate.banking_alert_summary : null);
+    const rows = Array.isArray(candidate.alerts) && candidate.alerts.length > 0
+      ? candidate.alerts
+      : (Array.isArray(candidate.banking_alerts) && candidate.banking_alerts.length > 0
+        ? candidate.banking_alerts
+        : (Array.isArray(candidateSummary?.alerts) && candidateSummary.alerts.length > 0
+          ? candidateSummary.alerts
+          : (Array.isArray(candidateSummary?.banking_alerts) ? candidateSummary.banking_alerts : [])));
+    return Array.isArray(rows) ? rows.filter((row) => row && typeof row === 'object') : [];
+  };
+  const readHashForPreserve = (candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return '';
+    const candidateSummary = (candidate.alertSummary && typeof candidate.alertSummary === 'object' && !Array.isArray(candidate.alertSummary))
+      ? candidate.alertSummary
+      : ((candidate.banking_alert_summary && typeof candidate.banking_alert_summary === 'object' && !Array.isArray(candidate.banking_alert_summary)) ? candidate.banking_alert_summary : null);
+    return String(candidate.banking_alert_hash || candidate.banking_alert_summary_signature || candidateSummary?.banking_alert_hash || candidateSummary?.banking_alert_summary_signature || '').trim();
+  };
+  const hasRecentLocalAck = (() => {
+    try {
+      const ackAt = Math.max(
+        Number((typeof window !== 'undefined' && window.__bankingLastAlertAckMutationAtMs) || 0) || 0,
+        Number((typeof window !== 'undefined' && window.__changesHeartbeat && window.__changesHeartbeat._lastBankingAckMutationAtMs) || 0) || 0,
+        Number((typeof window !== 'undefined' && window.__changeHeartbeat && window.__changeHeartbeat._lastBankingAckMutationAtMs) || 0) || 0
+      );
+      return ackAt > 0 && Date.now() - ackAt < (2 * 60 * 1000);
+    } catch {
+      return false;
+    }
+  })();
+  if (count > 0 && activeAlertsRaw.length < 1 && alertHash && hasRecentLocalAck !== true && typeof window !== 'undefined') {
+    try {
+      const candidates = [
+        window.__bankingNavAttentionState,
+        window.__bankingAlertSummary,
+        window.modalCtx?.banking?.pay?.list
+      ];
+      for (const candidate of candidates) {
+        const candidateHash = readHashForPreserve(candidate);
+        if (!candidateHash || candidateHash !== alertHash) continue;
+        const candidateRows = readRowsForPreserve(candidate);
+        if (candidateRows.length > 0 && candidateRows.length <= count) {
+          activeAlertsRaw = deepClone(candidateRows) || candidateRows;
+          break;
+        }
+      }
+    } catch {}
+  }
+
+  const activeAlerts = count > 0 ? activeAlertsRaw : [];
   const hb = (typeof window !== 'undefined' && window.__changesHeartbeat && typeof window.__changesHeartbeat === 'object')
     ? window.__changesHeartbeat
     : ((typeof window !== 'undefined' && window.__changeHeartbeat && typeof window.__changeHeartbeat === 'object') ? window.__changeHeartbeat : null);
   const detailHashField = (field) => String((hb && Object.prototype.hasOwnProperty.call(hb, field)) ? (hb[field] || '') : '').trim();
   const hasAlertRows = count > 0 && activeAlerts.length > 0;
+  if (count > 0 && !hasAlertRows && alertHash && hb && detailHashField('_bankingAlertSummaryDetailLoadedHash') === alertHash) {
+    try {
+      hb._bankingAlertSummaryDetailLoadedHash = '';
+      hb._bankingAlertSummaryDeferred = true;
+      if (!detailHashField('_bankingAlertSummaryDetailInFlightHash')) hb._bankingAlertSummaryDetailInFlight = false;
+    } catch {}
+  }
   const inferredDetailsDeferred = count > 0 && !hasAlertRows;
   const detailsSettledDeferred = count > 0 && !hasAlertRows && !!alertHash && (
     state.detailsSettledDeferred === true
@@ -42300,6 +42649,9 @@ function updateBankingNavAttentionState(attentionState) {
 
   return nextState;
 }
+
+
+
 
 
 function bankingPayNormaliseBatchIssueBadge(row) {
@@ -46746,6 +47098,7 @@ async function openBankingPayFiltersModal(seed = {}) {
 }
 
 
+
 async function openBankingPayExecuteConfirmModal(opts = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -46945,25 +47298,268 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
 
   const hasProviderOrBankExecutionEvidence = () => {
     const acceptedStatuses = new Set([
-      'PROVIDER_SUBMISSION_ACCEPTED', 'PAYMENT_SENT', 'PAYMENT_PAID', 'PAID', 'SENT',
-      'ACCEPTED', 'SUBMITTED', 'SETTLED', 'COMPLETED', 'COMMITTED', 'SUCCESS', 'SUCCESSFUL'
+      'PROVIDER_SUBMISSION_ACCEPTED',
+      'PAYMENT_SENT',
+      'PAYMENT_PAID',
+      'PAID',
+      'SENT',
+      'ACCEPTED',
+      'SUBMITTED',
+      'SUBMITTED_NOT_COMMITTED',
+      'SETTLED',
+      'COMPLETED',
+      'COMMITTED',
+      'SUCCESS',
+      'SUCCESSFUL',
+      'EXECUTED',
+      'WAITING_BANK_CONFIRM',
+      'BANK_CONFIRM_PENDING',
+      'BANK_SUBMITTED',
+      'PROVIDER_SUBMITTED',
+      'PROVIDER_SUBMITTED_PENDING',
+      'PROVIDER_ACCEPTED',
+      'FINAL_PAID'
     ]);
-    const hasEvidence = (value, seen = new WeakSet()) => {
+    const noSubmissionStatuses = new Set([
+      'NO_PROVIDER_SUBMISSION_ATTEMPTED',
+      'NO_PROVIDER_SUBMIT_ATTEMPT',
+      'CLAIMED_NOT_PROVIDER_CALLED_YET',
+      'PROVIDER_SUBMISSION_BLOCKED_PRE_CALL',
+      'PROVIDER_SUBMIT_BLOCKED_PRE_CALL',
+      'NOT_SUBMITTED',
+      'DRAFT',
+      'LOCAL_PREPARED_NOT_SENT',
+      'NO_PROVIDER_EVIDENCE',
+      'NO_PROVIDER_SUBMISSION_EVIDENCE'
+    ]);
+    const positiveExecutionCommitStates = new Set([
+      'SUBMITTED',
+      'SUBMITTED_NOT_COMMITTED',
+      'COMMITTED',
+      'SETTLED',
+      'PAID',
+      'EXECUTED',
+      'WAITING_BANK_CONFIRM',
+      'BANK_CONFIRM_PENDING',
+      'BANK_SUBMITTED',
+      'PROVIDER_SUBMITTED',
+      'PROVIDER_SUBMITTED_PENDING',
+      'COMPLETED',
+      'COMPLETE',
+      'SUCCESS',
+      'SUCCESSFUL'
+    ]);
+    const providerEvidenceStatuses = new Set([
+      'PROVIDER_SUBMISSION_REJECTED',
+      'PROVIDER_REJECTED_PAYMENT',
+      'PROVIDER_SUBMISSION_UNKNOWN_STALE_CHUNK',
+      'UNKNOWN_PROVIDER_SUBMISSION_OUTCOME',
+      'PROVIDER_SUBMISSION_MALFORMED_RESPONSE',
+      'PROVIDER_SUBMISSION_ATTEMPTED_NO_EXTERNAL_ID',
+      'PROVIDER_SUBMISSION_ACCEPTED',
+      'PROVIDER_SUBMITTED',
+      'PROVIDER_SUBMITTED_PENDING',
+      'PROVIDER_FAILED_NO_MONEY',
+      'PROVIDER_CANCELLED_NO_MONEY',
+      'TERMINAL_NO_MONEY',
+      'PAID_OR_SETTLED',
+      'FINAL_PAID',
+      'PROVIDER_OUTCOME_UNKNOWN',
+      'PROVIDER_OUTCOME_UNKNOWN_CHECK_PROVIDER'
+    ]);
+    const zeroEvidenceObjectKeys = new Set([
+      'no_submission_evidence_flags',
+      'noSubmissionEvidenceFlags',
+      'provider_webhook_evidence_json',
+      'providerWebhookEvidenceJson',
+      'pending_provider_evidence_json',
+      'pendingProviderEvidenceJson',
+      'provider_outcome_unknown_evidence_json',
+      'providerOutcomeUnknownEvidenceJson',
+      'grouped_alert_summary',
+      'groupedAlertSummary',
+      'banking_alerts',
+      'bankingAlerts',
+      'payment_issues',
+      'paymentIssues',
+      'manual_actions',
+      'manualActions'
+    ]);
+    const normaliseStatus = (value) => String(value == null ? '' : value)
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    const numericField = (obj, ...keys) => {
+      const source = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+        const n = Number(source[key]);
+        if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
+      }
+      return 0;
+    };
+    const trueField = (obj, ...keys) => {
+      const source = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+        const value = source[key];
+        if (value === true) return true;
+        if (value === false || value === null || value === undefined) continue;
+        const text = String(value).trim().toLowerCase();
+        if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+      }
+      return false;
+    };
+    const nonBlank = (obj, ...keys) => {
+      const source = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+        const value = source[key];
+        if (value === null || value === undefined) continue;
+        if (typeof value === 'object') {
+          if (Array.isArray(value) && value.length > 0) return true;
+          if (!Array.isArray(value) && Object.keys(value).length > 0) return true;
+          continue;
+        }
+        const text = String(value).trim();
+        if (text && !['null', 'undefined', 'false', '0', 'NOT_SUBMITTED', 'NO_PROVIDER_SUBMISSION_ATTEMPTED'].includes(text.toUpperCase())) return true;
+      }
+      return false;
+    };
+    const hasPositiveEvidenceCounts = (obj) => numericField(
+      obj,
+      'provider_acceptance_evidence_count',
+      'providerAcceptanceEvidenceCount',
+      'provider_response_present_count',
+      'providerResponsePresentCount',
+      'provider_request_sent_count',
+      'providerRequestSentCount',
+      'provider_submission_unknown_count',
+      'providerSubmissionUnknownCount',
+      'provider_submission_rejected_count',
+      'providerSubmissionRejectedCount',
+      'provider_rejection_count',
+      'providerRejectionCount',
+      'provider_poll_evidence_count',
+      'providerPollEvidenceCount',
+      'provider_webhook_evidence_count',
+      'providerWebhookEvidenceCount',
+      'failed_webhook_replay_evidence_count',
+      'failedWebhookReplayEvidenceCount',
+      'bank_transfer_event_count',
+      'bankTransferEventCount',
+      'submitted_count',
+      'submittedCount',
+      'submitted_this_chunk',
+      'submittedThisChunk',
+      'successful_payment_count',
+      'successfulPaymentCount'
+    ) > 0;
+    const hasPositiveProviderFlags = (obj) => trueField(
+      obj,
+      'provider_acceptance_evidence_present',
+      'providerAcceptanceEvidencePresent',
+      'provider_response_present',
+      'providerResponsePresent',
+      'provider_response_received',
+      'providerResponseReceived',
+      'provider_request_sent',
+      'providerRequestSent',
+      'provider_submission_attempted',
+      'providerSubmissionAttempted',
+      'submitted_to_bank',
+      'submittedToBank',
+      'money_moved_evidence',
+      'moneyMovedEvidence',
+      'manual_paid_evidence',
+      'manualPaidEvidence',
+      'execution_committed',
+      'executionCommitted',
+      'settlement_confirmed',
+      'settlementConfirmed'
+    );
+    const hasPositiveProviderIds = (obj) => nonBlank(
+      obj,
+      'rail_tx_id',
+      'railTxId',
+      'provider_transaction_id',
+      'providerTransactionId',
+      'provider_payment_id',
+      'providerPaymentId',
+      'external_payment_id',
+      'externalPaymentId',
+      'revolut_payment_id',
+      'revolutPaymentId',
+      'provider_reference',
+      'providerReference',
+      'provider_submission_id',
+      'providerSubmissionId',
+      'transaction_id',
+      'transactionId',
+      'payment_id',
+      'paymentId',
+      'execution_commit_ref',
+      'executionCommitRef',
+      'execution_committed_at_utc',
+      'executionCommittedAtUtc',
+      'completed_at_utc',
+      'completedAtUtc',
+      'settlement_confirmation_json',
+      'settlementConfirmationJson'
+    );
+    const hasPositiveExecutionCommitState = (obj) => {
+      const commitState = normaliseStatus(
+        obj.execution_commit_state ||
+        obj.executionCommitState ||
+        obj.commit_state ||
+        obj.commitState ||
+        ''
+      );
+      return positiveExecutionCommitStates.has(commitState);
+    };
+    const isExplicitNoSubmissionDiagnostic = (obj) => {
+      const statusText = normaliseStatus(
+        obj.provider_submission_status ||
+        obj.providerSubmissionStatus ||
+        obj.review_reason_code ||
+        obj.reviewReasonCode ||
+        obj.status ||
+        obj.state ||
+        ''
+      );
+      const diagnosticOnly = obj.provider_submit_is_diagnostic_only === true || obj.providerSubmitIsDiagnosticOnly === true;
+      const explicitlyNoSubmission = noSubmissionStatuses.has(statusText)
+        || obj.no_possible_provider_attempt_evidence === true
+        || obj.noPossibleProviderAttemptEvidence === true
+        || (obj.no_submission_evidence_flags && typeof obj.no_submission_evidence_flags === 'object')
+        || (obj.noSubmissionEvidenceFlags && typeof obj.noSubmissionEvidenceFlags === 'object');
+      return (diagnosticOnly || explicitlyNoSubmission)
+        && hasPositiveEvidenceCounts(obj) !== true
+        && hasPositiveProviderFlags(obj) !== true
+        && hasPositiveProviderIds(obj) !== true
+        && hasPositiveExecutionCommitState(obj) !== true;
+    };
+    const hasEvidence = (value, seen = new WeakSet(), parentKey = '') => {
       if (value === null || value === undefined) return false;
-      if (Array.isArray(value)) return value.some((entry) => hasEvidence(entry, seen));
+      if (Array.isArray(value)) return value.some((entry) => hasEvidence(entry, seen, parentKey));
       if (typeof value === 'string') {
         const text = value.trim();
         if (!text) return false;
         try {
           const parsed = JSON.parse(text);
-          return !!(parsed && typeof parsed === 'object' && hasEvidence(parsed, seen));
+          return !!(parsed && typeof parsed === 'object' && hasEvidence(parsed, seen, parentKey));
         } catch {}
         return false;
       }
       if (typeof value !== 'object') return false;
       if (seen.has(value)) return false;
       seen.add(value);
-      const statusText = String(
+
+      const explicitNoSubmissionDiagnostic = isExplicitNoSubmissionDiagnostic(value);
+      if (zeroEvidenceObjectKeys.has(parentKey) && explicitNoSubmissionDiagnostic) return false;
+
+      const statusText = normaliseStatus(
         value.displayState ||
         value.display_state ||
         value.provider_submission_status ||
@@ -46981,40 +47577,58 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
         value.outcome_code ||
         value.outcomeCode ||
         ''
-      ).trim().toUpperCase();
+      );
+      const providerScopedStatusText = normaliseStatus(
+        value.provider_submission_status ||
+        value.providerSubmissionStatus ||
+        value.review_reason_code ||
+        value.reviewReasonCode ||
+        value.provider_state ||
+        value.providerState ||
+        value.rail_state ||
+        value.railState ||
+        value.bank_status ||
+        value.bankStatus ||
+        value.outcome_code ||
+        value.outcomeCode ||
+        ''
+      );
+
       if (acceptedStatuses.has(statusText)) return true;
-      if (statusText.includes('SENT') || statusText.includes('PAID') || statusText.includes('ACCEPTED')) return true;
-      if (value.safe_retry_available === false || value.safeRetryAvailable === false) {
-        if (value.provider_submit_diagnostic || value.providerSubmitDiagnostic || value.provider_submission_status || value.providerSubmissionStatus) return true;
-      }
-      if (value.provider_acceptance_evidence_present === true || value.providerAcceptanceEvidencePresent === true) return true;
-      if (value.provider_response_present === true || value.providerResponsePresent === true) {
-        const rejected = value.provider_rejected === true || value.providerRejected === true || String(value.provider_submission_status || value.providerSubmissionStatus || '').toUpperCase().includes('REJECTED');
-        if (!rejected) return true;
-      }
-      if (value.money_moved_evidence === true || value.moneyMovedEvidence === true || value.manual_paid_evidence === true || value.manualPaidEvidence === true) return true;
-      for (const key of [
-        'rail_tx_id', 'railTxId', 'provider_transaction_id', 'providerTransactionId',
-        'provider_payment_id', 'providerPaymentId', 'external_payment_id', 'externalPaymentId',
-        'revolut_payment_id', 'revolutPaymentId', 'bank_reference', 'bankReference',
-        'transaction_id', 'transactionId', 'payment_id', 'paymentId', 'payment_reference', 'paymentReference',
-        'execution_commit_ref', 'executionCommitRef', 'settlement_confirmation_json', 'settlementConfirmationJson'
-      ]) {
-        if (String(value[key] == null ? '' : value[key]).trim()) return true;
-      }
+      if (providerEvidenceStatuses.has(providerScopedStatusText)) return true;
+      if (hasPositiveExecutionCommitState(value)) return true;
+
+      if (hasPositiveEvidenceCounts(value)) return true;
+      if (hasPositiveProviderFlags(value)) return true;
+      if (hasPositiveProviderIds(value)) return true;
+
       const childKeys = [
-        'transfers', 'payment_issues', 'paymentIssues', 'issues', 'rows', 'items',
-        'bank_evidence', 'bankEvidence', 'provider_submit_diagnostic', 'providerSubmitDiagnostic',
-        'payment_execution_review', 'paymentExecutionReview', 'provider_response', 'providerResponse',
-        'rail_meta_json', 'railMetaJson', 'settlement_confirmation_json', 'settlementConfirmationJson',
-        'corrections', 'correction_items', 'correctionItems', 'events'
+        'transfers',
+        'bank_evidence',
+        'bankEvidence',
+        'provider_response',
+        'providerResponse',
+        'rail_meta_json',
+        'railMetaJson',
+        'settlement_confirmation_json',
+        'settlementConfirmationJson',
+        'provider_submit_diagnostic',
+        'providerSubmitDiagnostic',
+        'payment_execution_review',
+        'paymentExecutionReview',
+        'events'
       ];
       for (const key of childKeys) {
-        if (value[key] && hasEvidence(value[key], seen)) return true;
+        if (!value[key]) continue;
+        if (zeroEvidenceObjectKeys.has(key)) continue;
+        if (hasEvidence(value[key], seen, key)) return true;
       }
       return false;
     };
-    return hasEvidence(batchData) || hasEvidence(batch) || hasEvidence(opts.provider_submit_diagnostic) || hasEvidence(opts.providerSubmitDiagnostic);
+    return hasEvidence(batchData, new WeakSet(), 'batchData')
+      || hasEvidence(batch, new WeakSet(), 'batch')
+      || hasEvidence(opts.provider_submit_diagnostic, new WeakSet(), 'provider_submit_diagnostic')
+      || hasEvidence(opts.providerSubmitDiagnostic, new WeakSet(), 'providerSubmitDiagnostic');
   };
 
   if (!manualResolutionMode && hasProviderOrBankExecutionEvidence()) {
@@ -47582,6 +48196,8 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
     try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
   });
 }
+
+
 
 
 
@@ -294089,6 +294705,49 @@ async function bootstrapApp(){
           const h = normalizeBankingAlertHash(hash);
           return !!(h && bankingDetailHashField('_bankingAlertSummaryDetailLoadedHash') === h);
         };
+        const hasStoredBankingAlertDetailRowsForHash = (hash) => {
+          const h = normalizeBankingAlertHash(hash);
+          if (!h) return false;
+          const readHash = (candidate) => {
+            if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return '';
+            const alertSummary = (candidate.alertSummary && typeof candidate.alertSummary === 'object' && !Array.isArray(candidate.alertSummary)) ? candidate.alertSummary : null;
+            const bankingSummary = (candidate.banking_alert_summary && typeof candidate.banking_alert_summary === 'object' && !Array.isArray(candidate.banking_alert_summary)) ? candidate.banking_alert_summary : null;
+            return normalizeBankingAlertHash(
+              candidate.banking_alert_hash
+              || candidate.banking_alert_summary_signature
+              || alertSummary?.banking_alert_hash
+              || alertSummary?.banking_alert_summary_signature
+              || bankingSummary?.banking_alert_hash
+              || bankingSummary?.banking_alert_summary_signature
+              || ''
+            );
+          };
+          const readRows = (candidate) => {
+            if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [];
+            const alertSummary = (candidate.alertSummary && typeof candidate.alertSummary === 'object' && !Array.isArray(candidate.alertSummary)) ? candidate.alertSummary : null;
+            const bankingSummary = (candidate.banking_alert_summary && typeof candidate.banking_alert_summary === 'object' && !Array.isArray(candidate.banking_alert_summary)) ? candidate.banking_alert_summary : null;
+            if (Array.isArray(candidate.alerts) && candidate.alerts.length > 0) return candidate.alerts;
+            if (Array.isArray(candidate.banking_alerts) && candidate.banking_alerts.length > 0) return candidate.banking_alerts;
+            if (Array.isArray(alertSummary?.alerts) && alertSummary.alerts.length > 0) return alertSummary.alerts;
+            if (Array.isArray(alertSummary?.banking_alerts) && alertSummary.banking_alerts.length > 0) return alertSummary.banking_alerts;
+            if (Array.isArray(bankingSummary?.alerts) && bankingSummary.alerts.length > 0) return bankingSummary.alerts;
+            if (Array.isArray(bankingSummary?.banking_alerts) && bankingSummary.banking_alerts.length > 0) return bankingSummary.banking_alerts;
+            return [];
+          };
+          const candidates = [
+            window.__bankingNavAttentionState,
+            window.__bankingAlertSummary,
+            window.modalCtx?.banking?.pay?.list
+          ];
+          return candidates.some((candidate) => readHash(candidate) === h && readRows(candidate).some((row) => row && typeof row === 'object'));
+        };
+        const clearStaleBankingAlertLoadedMarkerForHash = (hash) => {
+          const h = normalizeBankingAlertHash(hash);
+          if (!h || !isBankingAlertDetailSettledLoadedForHash(h) || hasStoredBankingAlertDetailRowsForHash(h)) return false;
+          if (bankingDetailHashField('_bankingAlertSummaryDetailLoadedHash') === h) hb._bankingAlertSummaryDetailLoadedHash = '';
+          hb._bankingAlertSummaryDeferred = true;
+          return true;
+        };
         const hasBankingAlertDetailRequestAlreadyBeenSentForHash = (hash) => {
           const h = normalizeBankingAlertHash(hash);
           return !!(h && bankingDetailHashField('_bankingAlertSummaryDetailRequestedHash') === h);
@@ -294098,7 +294757,7 @@ async function bootstrapApp(){
           if (!h) return false;
           const force = isExplicitBankingAlertDetailRefreshReason(reason) || bankingDetailHashField('_bankingAlertSummaryDetailForceRefreshHash') === h;
           if (isBankingAlertDetailInFlightForHash(h)) return false;
-          if (!force && isBankingAlertDetailSettledLoadedForHash(h)) return false;
+          if (!force && isBankingAlertDetailSettledLoadedForHash(h) && clearStaleBankingAlertLoadedMarkerForHash(h) !== true) return false;
           if (!force && isBankingAlertDetailSettledDeferredForHash(h)) return false;
           if (!force && isBankingAlertDetailPendingForHash(h)) return false;
           if (!force && hasBankingAlertDetailRequestAlreadyBeenSentForHash(h)) return false;
@@ -294222,7 +294881,10 @@ async function bootstrapApp(){
           }
 
           const detailsSettledDeferred = count > 0 && isBankingAlertDetailSettledDeferredForHash(currentHash);
-          const detailsSettledLoaded = count > 0 && (hasRealAlertRows || isBankingAlertDetailSettledLoadedForHash(currentHash));
+          const detailsSettledLoaded = count > 0 && (hasRealAlertRows || (isBankingAlertDetailSettledLoadedForHash(currentHash) && hasStoredBankingAlertDetailRowsForHash(currentHash)));
+          if (count > 0 && !hasRealAlertRows && isBankingAlertDetailSettledLoadedForHash(currentHash) && !hasStoredBankingAlertDetailRowsForHash(currentHash)) {
+            clearStaleBankingAlertLoadedMarkerForHash(currentHash);
+          }
           const detailsLoading = detailsDeferred === true && getBankingAlertDetailLoadingForHash(currentHash);
 
           const normalizedSummary = {
@@ -294386,6 +295048,8 @@ async function bootstrapApp(){
             if (allowDetailRefresh) {
               payload.banking_alert_summary_needed = true;
               payload.banking_alert_detail_refresh = true;
+              payload.force_banking_alert_summary = true;
+              payload.forceBankingAlertSummary = true;
               requestedBankingAlertDetailRefresh = true;
               requestedBankingAlertDetailRefreshHash = markBankingAlertDetailRequestInFlight(payloadHash, now);
             }
@@ -294712,6 +295376,8 @@ async function bootstrapApp(){
   renderTools();
   await renderAll();
 }
+
+
 
 
 
