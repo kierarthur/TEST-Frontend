@@ -91418,7 +91418,6 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
   };
 }
 
-
 async function bankingPayWorkbenchSessionOpen(payload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -91638,6 +91637,36 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
       server_selected_preview_row_ids_provided: payloadObj.server_selected_preview_row_ids_provided === true || previewObj?.server_selected_preview_row_ids_provided === true || sessionObj.server_selected_preview_row_ids_provided === true
     };
   };
+  const sanitiseWorkbenchOpenRequestPayload = (sourcePayload) => {
+    const out = isPlainObject(sourcePayload) ? (cloneJson(sourcePayload) || { ...sourcePayload }) : {};
+    const omittedLargeScopeArrays = [];
+    const capMetadataArrays = (target, pathLabel) => {
+      if (!isPlainObject(target)) return;
+      for (const key of ['dirty_candidate_ids', 'dirtyCandidateIds', 'created_pay_batch_ids', 'createdPayBatchIds', 'refresh_job_ids', 'refreshJobIds', 'obsolete_session_ids', 'obsoleteSessionIds']) {
+        if (Array.isArray(target[key])) target[key] = target[key].map((value) => trimStr(value)).filter(Boolean).slice(0, 100);
+      }
+      for (const key of ['candidate_ids', 'candidateIds', 'scope_candidate_ids', 'scopeCandidateIds', 'pending_candidate_ids', 'pendingCandidateIds', 'failed_candidate_ids', 'failedCandidateIds', 'timesheet_ids', 'timesheetIds', 'selected_timesheet_ids', 'selectedTimesheetIds', 'targeted_timesheet_ids', 'targetedTimesheetIds', 'linked_timesheet_ids', 'linkedTimesheetIds']) {
+        if (!Array.isArray(target[key])) continue;
+        const cleaned = target[key].map((value) => trimStr(value)).filter(Boolean);
+        if (cleaned.length > 100) {
+          delete target[key];
+          omittedLargeScopeArrays.push(`${pathLabel}${key}`);
+        } else {
+          target[key] = cleaned.slice(0, 100);
+        }
+      }
+    };
+    capMetadataArrays(out, '');
+    for (const nestedKey of ['filters_json', 'filtersJson', 'filters', 'preview_decisions_json', 'previewDecisionsJson', 'preview_decisions', 'previewDecisions']) {
+      if (isPlainObject(out[nestedKey])) capMetadataArrays(out[nestedKey], `${nestedKey}.`);
+    }
+    if (omittedLargeScopeArrays.length) {
+      out.row_backed_scope_required = true;
+      out.large_scope_arrays_omitted = Array.from(new Set(omittedLargeScopeArrays));
+      out.preview_context_mode = out.preview_context_mode || out.context_mode || 'SUMMARY';
+    }
+    return out;
+  };
   const makeApiPayloadError = (json, status, fallbackMessage) => {
     const payloadObj = isPlainObject(json) ? json : { raw_response: json };
     const message = trimStr(payloadObj.user_message || payloadObj.message || payloadObj.error || fallbackMessage || `Request failed (${status})`) || `Request failed (${status})`;
@@ -91713,7 +91742,7 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
   try {
     if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
     const requestPayload = {
-      ...(isPlainObject(payload) ? payload : {}),
+      ...sanitiseWorkbenchOpenRequestPayload(payload),
       seed_limit: Math.max(1, Math.min(100, Math.trunc(Number(payload?.seed_limit || payload?.seedLimit || 100) || 100))),
       progress_mode: 'LIGHT',
       mode: payload?.mode || 'BOOTSTRAP',
@@ -91762,6 +91791,68 @@ async function bankingPayWorkbenchSessionOpen(payload = {}) {
   }
 }
 
+function operationCanAdvance(operationState) {
+  const source = operationState && typeof operationState === 'object' && !Array.isArray(operationState) ? operationState : {};
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const upperText = (value) => trimStr(value).toUpperCase();
+  const readBool = (value) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    const text = trimStr(value).toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return false;
+  };
+  const readFirst = (...keys) => {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) return source[key];
+    }
+    const progress = source.progress && typeof source.progress === 'object' && !Array.isArray(source.progress) ? source.progress : null;
+    if (progress) {
+      for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(progress, key)) return progress[key];
+      }
+    }
+    const progressJson = source.progress_json && typeof source.progress_json === 'object' && !Array.isArray(source.progress_json) ? source.progress_json : null;
+    if (progressJson) {
+      for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(progressJson, key)) return progressJson[key];
+      }
+    }
+    return undefined;
+  };
+
+  const status = upperText(readFirst('status', 'operation_status', 'operationStatus', 'state'));
+  const phase = upperText(readFirst('phase', 'current_phase', 'currentPhase'));
+  const runnerState = upperText(readFirst('runner_state', 'runnerState', 'run_state', 'runState'));
+  const terminalStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'VOIDED']);
+  const waitingProviderStatuses = new Set(['WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'PROVIDER_WAIT', 'PROVIDER_WAITING', 'WAITING_PROVIDER_CONFIRMATION']);
+  const waitingAuthorisationStatuses = new Set(['WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'AUTHORISATION_REQUIRED', 'AUTHORIZATION_REQUIRED']);
+  const reviewStatuses = new Set(['REVIEW_REQUIRED', 'NEEDS_REVIEW', 'WAITING_USER_REVIEW', 'USER_REVIEW_REQUIRED']);
+
+  if (terminalStatuses.has(status)) return false;
+  if (status === 'FAILED' || status === 'ERROR' || readBool(readFirst('failed', 'is_failed', 'isFailed'))) return false;
+  if (status === 'CANCELLED' || status === 'CANCELED' || readBool(readFirst('cancelled', 'canceled', 'is_cancelled', 'isCanceled'))) return false;
+  if (waitingProviderStatuses.has(status) || waitingProviderStatuses.has(phase) || phase === 'WAIT_FOR_PROVIDER' || phase === 'WAITING_FOR_PROVIDER' || phase === 'PROVIDER_WAIT' || phase === 'WAITING_PROVIDER_CONFIRMATION' || readBool(readFirst('waiting_for_provider', 'waitingForProvider'))) return false;
+  if (waitingAuthorisationStatuses.has(status) || waitingAuthorisationStatuses.has(phase) || readBool(readFirst('waiting_for_authorisation', 'waitingForAuthorisation', 'waiting_for_authorization', 'waitingForAuthorization')) || phase === 'WAIT_FOR_AUTHORISATION' || phase === 'WAIT_FOR_AUTHORIZATION') return false;
+  if (reviewStatuses.has(status) || reviewStatuses.has(phase) || readBool(readFirst('review_required', 'reviewRequired', 'requires_review', 'requiresReview'))) return false;
+  if (readBool(readFirst('requires_user_action', 'requiresUserAction'))) return false;
+
+  const leaseOwner = trimStr(readFirst('lease_owner', 'leaseOwner', 'locked_by', 'lockedBy'));
+  const leaseExpiresAtUtc = trimStr(readFirst('lease_expires_at_utc', 'leaseExpiresAtUtc', 'lock_expires_at_utc', 'lockExpiresAtUtc'));
+  const leaseExpiresMs = leaseExpiresAtUtc ? Date.parse(leaseExpiresAtUtc) : NaN;
+  const leaseExpired = Number.isFinite(leaseExpiresMs) ? leaseExpiresMs <= Date.now() : false;
+  const leaseActive = (readBool(readFirst('leased', 'lease_active', 'leaseActive')) || !!leaseOwner) && !leaseExpired;
+  const serverRunning = readBool(readFirst('server_running', 'serverRunning', 'backend_running', 'backendRunning', 'server_owned', 'serverOwned')) || (runnerState === 'RUNNING' && leaseActive) || (status === 'RUNNING' && leaseActive);
+  if (leaseActive || serverRunning) return false;
+
+  const runAfterUtc = trimStr(readFirst('run_after_utc', 'runAfterUtc'));
+  const runAfterMs = runAfterUtc ? Date.parse(runAfterUtc) : NaN;
+  if (Number.isFinite(runAfterMs) && runAfterMs > Date.now() + 1000) return false;
+
+  const backendAllowsAdvance = readBool(readFirst('can_advance', 'canAdvance', 'can_nudge', 'canNudge', 'can_resume', 'canResume'));
+  return runnerState === 'RUNNABLE' || status === 'RUNNABLE' || backendAllowsAdvance;
+}
 
 
 function classifyTimesheetEditDomains(ctxInput) {
