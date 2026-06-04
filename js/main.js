@@ -26326,6 +26326,19 @@ async function bankingPayPreview(pay_date) {
   const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const asArray = (v) => Array.isArray(v) ? v : [];
+  const countLikeValue = (value) => {
+    if (Array.isArray(value)) return value.length;
+    if (value && typeof value === 'object') {
+      let best = 0;
+      for (const key of ['rows_count', 'row_count', 'returned_count', 'count', 'total', 'value', 'length']) {
+        const n = Number(value[key]);
+        if (Number.isFinite(n)) best = Math.max(best, Math.max(0, Math.trunc(n)));
+      }
+      return best;
+    }
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+  };
 
   const options = isPlainObject(pay_date) ? pay_date : { pay_date };
   const requestedPayDate = trimStr(options.pay_date || options.payDate || '');
@@ -27644,9 +27657,11 @@ async function bankingPayPreview(pay_date) {
       progressObj.ready === true ||
       progressObj.ready_flag === true ||
       statusText === 'READY' ||
+      statusText === 'READY_EMPTY' ||
       statusText === 'SUCCEEDED' ||
       statusText === 'SUCCESS' ||
       statusText === 'COMPLETED' ||
+      statusText === 'COMPLETE' ||
       statusText === 'DONE'
     );
   };
@@ -27738,6 +27753,21 @@ async function bankingPayPreview(pay_date) {
       candidateRowsById.get(candidateIdText).push(row);
     }
     const progressReady = workbenchProgressLooksReady(progressObj);
+    const progressPhaseText = trimStr(progressObj.phase || progressObj.current_phase || progressObj.status || progressObj.state || '');
+    const progressPhaseUpper = progressPhaseText.toUpperCase();
+    const progressReadyEmpty = !!(
+      progressObj.ready_empty === true ||
+      progressObj.readyEmpty === true ||
+      progressPhaseUpper === 'READY_EMPTY'
+    );
+    const progressStatusText = trimStr(
+      progressObj.status_text ||
+      progressObj.statusText ||
+      progressObj.message ||
+      progressObj.status_message ||
+      progressObj.statusMessage ||
+      ''
+    );
     const pendingCandidateIds = progressReady && activeCandidateIds.length === 0
       ? []
       : Array.from(new Set([
@@ -27794,7 +27824,13 @@ async function bankingPayPreview(pay_date) {
       selected_row_count: countValue('selected_row_count', 'selected_rows_count'),
       queued_jobs: countValue('queued_jobs', 'queued_job_count'),
       running_jobs: countValue('running_jobs', 'running_job_count'),
-      phase: trimStr(progressObj.phase || progressObj.current_phase || ''),
+      ready: progressReady,
+      ready_flag: progressReady,
+      ready_empty: progressReadyEmpty,
+      status_text: progressStatusText,
+      phase: progressPhaseText,
+      current_phase: trimStr(progressObj.current_phase || progressObj.phase || ''),
+      status: trimStr(progressObj.status || progressObj.state || ''),
       next_recommended_action: trimStr(progressObj.next_recommended_action || progressObj.next_action || ''),
       rows_available: progressObj.rows_available === true || progressObj.has_materialised_preview_rows === true || countValue('preview_row_count', 'preview_rows_count', 'row_count') > 0,
       has_materialised_preview_rows: progressObj.has_materialised_preview_rows === true || countValue('preview_row_count', 'preview_rows_count', 'row_count') > 0,
@@ -27802,6 +27838,21 @@ async function bankingPayPreview(pay_date) {
       section_counts: isPlainObject(progressObj.section_counts) ? (deep(progressObj.section_counts) || {}) : {}
     };
     wiz.workbench.last_progress_at = new Date().toISOString();
+
+    if (progressReadyEmpty) {
+      wiz.preview.ready_empty = true;
+      wiz.preview.status_text = 'No payable rows found.';
+      if (isPlainObject(wiz.preview.data)) {
+        wiz.preview.data.ready_empty = true;
+        wiz.preview.data.ready = true;
+        wiz.preview.data.ready_flag = true;
+        if (isPlainObject(wiz.preview.data.preview)) {
+          wiz.preview.data.preview.ready_empty = true;
+          wiz.preview.data.preview.ready = true;
+          wiz.preview.data.preview.ready_flag = true;
+        }
+      }
+    }
 
     if (wiz.decisions && typeof wiz.decisions === 'object') {
       wiz.decisions.dirty_candidate_ids = [...wiz.workbench.dirty_candidate_ids];
@@ -27864,14 +27915,18 @@ async function bankingPayPreview(pay_date) {
       return 0;
     };
     const lineUnitsPending = countValue('line_units_pending', 'pending_line_units');
-    const lineUnitsReady = countValue('line_units_ready', 'ready_line_units');
     const queuedJobs = countValue('queued_jobs', 'queued_job_count');
     const runningJobs = countValue('running_jobs', 'running_job_count');
+    const previewRowCount = countValue('preview_row_count', 'preview_rows_count', 'row_count');
+    const selectedRowCount = countValue('selected_row_count', 'selected_rows_count');
     const phase = trimStr(counts.phase || wiz?.workbench?.progress?.phase || wiz?.preview?.data?.progress?.phase || '').toUpperCase();
     const nextAction = trimStr(counts.next_recommended_action || wiz?.workbench?.progress?.next_recommended_action || wiz?.preview?.data?.progress?.next_recommended_action || '').toUpperCase();
-    if (lineUnitsPending > 0 || lineUnitsReady > 0 || queuedJobs > 0 || runningJobs > 0) return true;
-    if (['PROCESSING_LINE_WORK', 'MATERIALISING_PREVIEW_ROWS', 'PARTIAL_READY', 'REFRESHING_CANDIDATES', 'SEEDING_SCOPE', 'SEEDING_LINE_WORK', 'WORKBENCH_JOBS_RUNNING', 'WAIT_FOR_WORKER'].includes(phase)) return true;
-    if (['SEED_SCOPE_CHUNK', 'PROCESS_LINE_WORK_CHUNK', 'MATERIALISE_PREVIEW_ROWS_CHUNK', 'WAIT_FOR_WORKER'].includes(nextAction)) return true;
+    const terminalReady = workbenchProgressLooksReady({ progress: counts }) || ['READY', 'READY_EMPTY', 'SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE'].includes(phase);
+    const rowsAvailable = counts.rows_available === true || counts.has_materialised_preview_rows === true || previewRowCount > 0 || selectedRowCount > 0;
+    if (lineUnitsPending > 0 || queuedJobs > 0 || runningJobs > 0) return true;
+    if (!terminalReady && ['PROCESSING_LINE_WORK', 'MATERIALISING_PREVIEW_ROWS', 'PARTIAL_READY', 'REFRESHING_CANDIDATES', 'SEEDING_SCOPE', 'SEEDING_LINE_WORK', 'WORKBENCH_JOBS_RUNNING', 'WAIT_FOR_WORKER'].includes(phase)) return true;
+    if (!terminalReady && ['SEED_SCOPE_CHUNK', 'PROCESS_LINE_WORK_CHUNK', 'MATERIALISE_PREVIEW_ROWS_CHUNK', 'WAIT_FOR_WORKER'].includes(nextAction)) return true;
+    if ((terminalReady || rowsAvailable) && pendingIds.length <= 0) return false;
     if (pendingIds.length <= 0) return false;
     if (jobs.length <= 0) return true;
     const jobRowsByCandidateId = new Map();
@@ -27901,17 +27956,20 @@ async function bankingPayPreview(pay_date) {
       return 0;
     };
     const lineUnitsPending = Math.max(countValue(obj, 'line_units_pending', 'pending_line_units'), countValue(progressObj, 'line_units_pending', 'pending_line_units'));
-    const lineUnitsReady = Math.max(countValue(obj, 'line_units_ready', 'ready_line_units'), countValue(progressObj, 'line_units_ready', 'ready_line_units'));
     const queuedJobs = Math.max(countValue(obj, 'queued_jobs', 'queued_job_count'), countValue(progressObj, 'queued_jobs', 'queued_job_count'));
     const runningJobs = Math.max(countValue(obj, 'running_jobs', 'running_job_count'), countValue(progressObj, 'running_jobs', 'running_job_count'));
+    const previewRowCount = Math.max(countValue(obj, 'preview_row_count', 'preview_rows_count', 'row_count'), countValue(progressObj, 'preview_row_count', 'preview_rows_count', 'row_count'));
+    const selectedRowCount = Math.max(countValue(obj, 'selected_row_count', 'selected_rows_count'), countValue(progressObj, 'selected_row_count', 'selected_rows_count'));
     const scopePending = Math.max(countValue(obj, 'pending_candidates', 'pending_candidate_count', 'pending_count'), countValue(progressObj, 'pending_candidates', 'pending_candidate_count', 'pending_count'));
     const nextAction = trimStr(obj.next_recommended_action || progressObj.next_recommended_action || obj.next_action || progressObj.next_action || '').toUpperCase();
     const phase = trimStr(obj.phase || progressObj.phase || obj.status || progressObj.status || '').toUpperCase();
     const terminalReadAction = nextAction === 'READ_PREVIEW_PAGE' || nextAction === 'READY';
-    if (payloadReady && lineUnitsPending <= 0 && lineUnitsReady <= 0 && queuedJobs <= 0 && runningJobs <= 0 && scopePending <= 0 && terminalReadAction) return false;
-    if (lineUnitsPending > 0 || lineUnitsReady > 0 || queuedJobs > 0 || runningJobs > 0) return true;
-    if (['PROCESSING_LINE_WORK', 'MATERIALISING_PREVIEW_ROWS', 'PARTIAL_READY', 'REFRESHING_CANDIDATES', 'SEEDING_SCOPE', 'SEEDING_LINE_WORK', 'WORKBENCH_JOBS_RUNNING', 'WAIT_FOR_WORKER'].includes(phase)) return true;
-    if (['SEED_SCOPE_CHUNK', 'PROCESS_LINE_WORK_CHUNK', 'MATERIALISE_PREVIEW_ROWS_CHUNK', 'WAIT_FOR_WORKER'].includes(nextAction)) return true;
+    const terminalPhase = ['READY', 'READY_EMPTY', 'SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE'].includes(phase);
+    const rowsAvailable = obj.rows_available === true || progressObj.rows_available === true || obj.has_materialised_preview_rows === true || progressObj.has_materialised_preview_rows === true || previewRowCount > 0 || selectedRowCount > 0;
+    if ((payloadReady || terminalPhase || rowsAvailable) && lineUnitsPending <= 0 && queuedJobs <= 0 && runningJobs <= 0 && scopePending <= 0 && (terminalReadAction || rowsAvailable || payloadReady || terminalPhase)) return false;
+    if (lineUnitsPending > 0 || queuedJobs > 0 || runningJobs > 0) return true;
+    if (!payloadReady && !terminalPhase && ['PROCESSING_LINE_WORK', 'MATERIALISING_PREVIEW_ROWS', 'PARTIAL_READY', 'REFRESHING_CANDIDATES', 'SEEDING_SCOPE', 'SEEDING_LINE_WORK', 'WORKBENCH_JOBS_RUNNING', 'WAIT_FOR_WORKER'].includes(phase)) return true;
+    if (!payloadReady && !terminalPhase && ['SEED_SCOPE_CHUNK', 'PROCESS_LINE_WORK_CHUNK', 'MATERIALISE_PREVIEW_ROWS_CHUNK', 'WAIT_FOR_WORKER'].includes(nextAction)) return true;
     const candidateStatusRows = [
       ...candidateStatusRowsFromProgressLike(obj),
       ...candidateStatusRowsFromProgressLike(progressObj)
@@ -27945,11 +28003,11 @@ async function bankingPayPreview(pay_date) {
     const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
     const sectionCounts = isPlainObject(progressObj.section_counts) ? progressObj.section_counts : (isPlainObject(obj.section_counts) ? obj.section_counts : {});
     const countValue = (...values) => {
+      let best = 0;
       for (const value of values) {
-        const n = Number(value);
-        if (Number.isFinite(n) && n > 0) return Math.trunc(n);
+        best = Math.max(best, countLikeValue(value));
       }
-      return 0;
+      return best;
     };
     return !!(
       obj.rows_available === true ||
@@ -27958,7 +28016,10 @@ async function bankingPayPreview(pay_date) {
       progressObj.has_materialised_preview_rows === true ||
       countValue(obj.preview_row_count, progressObj.preview_row_count) > 0 ||
       countValue(obj.selected_row_count, progressObj.selected_row_count) > 0 ||
-      countValue(sectionCounts.canonical_preview_lines) > 0
+      countValue(sectionCounts.canonical_preview_lines) > 0 ||
+      countValue(sectionCounts.ready_to_pay) > 0 ||
+      countValue(sectionCounts.ready_preview_lines) > 0 ||
+      countValue(sectionCounts.preview_rows) > 0
     );
   };
 
@@ -28161,6 +28222,12 @@ async function bankingPayPreview(pay_date) {
     wiz.preview.loading = false;
     wiz.preview.error = '';
     wiz.preview.failure = null;
+    wiz.preview.status_text = 'No payable rows found.';
+    wiz.preview.progress_only = false;
+    wiz.preview.bootstrap_only = false;
+    wiz.preview.preview_ready_visual = true;
+    wiz.preview.ready_empty = true;
+    wiz.preview.first_page_applied = true;
     wiz.preview.readiness = null;
     wiz.preview.candidateDebtInfo = {};
     wiz.preview.componentStateCache = wiz.preview.data.preview.componentStateCache;
@@ -28514,6 +28581,8 @@ async function bankingPayPreview(pay_date) {
     const resolvedSection = trimStr(page.resolved_section || page.resolvedSection || page.section || requestedSection).toLowerCase() || requestedSection;
     const sessionIdText = trimStr(page.session_id || getCurrentWorkbenchSessionId() || '');
     if (!sessionIdText || !isSameWorkbenchSession(sessionIdText) || !isLatestRequest()) return null;
+    const readyLikePageSection = ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines'].includes(resolvedSection) ||
+      ['ready_to_pay', 'ready_preview_lines'].includes(requestedSection);
     const syntheticPayload = {
       ok: page.ok !== false,
       ready: page.ready === true,
@@ -28529,15 +28598,15 @@ async function bankingPayPreview(pay_date) {
       requested_section: requestedSection,
       resolved_section: resolvedSection,
       section_alias_applied: page.section_alias_applied === true || requestedSection !== resolvedSection,
-      canonical_preview_lines: resolvedSection === 'canonical_preview_lines' ? (deep(pageRows) || []) : [],
+      canonical_preview_lines: readyLikePageSection ? (deep(pageRows) || []) : [],
       preview_rows: deep(pageRows) || [],
-      ready_preview_lines: resolvedSection === 'canonical_preview_lines' ? (deep(pageRows) || []) : [],
+      ready_preview_lines: readyLikePageSection ? (deep(pageRows) || []) : [],
       rows: deep(pageRows) || [],
       preview: {
         ok: true,
-        canonical_preview_lines: resolvedSection === 'canonical_preview_lines' ? (deep(pageRows) || []) : [],
+        canonical_preview_lines: readyLikePageSection ? (deep(pageRows) || []) : [],
         preview_rows: deep(pageRows) || [],
-        ready_preview_lines: resolvedSection === 'canonical_preview_lines' ? (deep(pageRows) || []) : [],
+        ready_preview_lines: readyLikePageSection ? (deep(pageRows) || []) : [],
         rows: deep(pageRows) || [],
         componentStateCache: {
           case_resolution_states: [],
@@ -28545,12 +28614,12 @@ async function bankingPayPreview(pay_date) {
           safe_case_states: [],
           reusable_component_resolutions: {},
           stale_component_resolutions: {},
-          draftable_now: resolvedSection === 'canonical_preview_lines' ? (deep(pageRows) || []) : [],
+          draftable_now: readyLikePageSection ? (deep(pageRows) || []) : [],
           blocked_now: [],
-          ready_to_pay_now: resolvedSection === 'canonical_preview_lines' ? (deep(pageRows) || []) : [],
+          ready_to_pay_now: readyLikePageSection ? (deep(pageRows) || []) : [],
           blocked_for_pay_now: [],
           hidden_indefinite_snoozes: [],
-          ready_preview_lines: resolvedSection === 'canonical_preview_lines' ? (deep(pageRows) || []) : [],
+          ready_preview_lines: readyLikePageSection ? (deep(pageRows) || []) : [],
           blocked_preview_lines: [],
           hidden_preview_lines: []
         }
@@ -28563,6 +28632,57 @@ async function bankingPayPreview(pay_date) {
     };
     const applied = (typeof applyPayWorkbenchPreviewToState === 'function') ? applyPayWorkbenchPreviewToState(syntheticPayload, stLocal) : null;
     return applied || syntheticPayload;
+  };
+
+  const finalisePreviewVisualStateAfterRowsApplied = (pagePayload = null, sourcePayload = null) => {
+    const page = isPlainObject(pagePayload) ? pagePayload : {};
+    const pageRows = Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
+    const hasRows = pageRows.length > 0 || payloadHasFullPreviewData(sourcePayload) || payloadHasFullPreviewData(wiz.preview?.data);
+    if (!hasRows) return;
+
+    const source = isPlainObject(sourcePayload) ? sourcePayload : {};
+    const progress = isPlainObject(source.progress) ? source.progress : source;
+    const activePending = payloadHasActivePendingWorkbenchWork(source) || hasActiveWorkbenchPendingWork();
+    const readyNow = workbenchProgressLooksReady(source) || workbenchProgressLooksReady(progress) || !activePending;
+
+    wiz.preview.first_page_applied = true;
+    wiz.preview.ready_empty = false;
+    wiz.preview.preview_ready_visual = !!(readyNow && !activePending);
+    wiz.preview.error = '';
+    wiz.preview.failure = null;
+
+    if (readyNow && !activePending) {
+      wiz.preview.loading = false;
+      wiz.preview.status_text = 'Payment preview is ready.';
+      wiz.preview.progress_only = false;
+      wiz.preview.bootstrap_only = false;
+      if (isPlainObject(wiz.preview.data)) {
+        wiz.preview.data.ready = true;
+        wiz.preview.data.ready_flag = true;
+        wiz.preview.data.ready_empty = false;
+        wiz.preview.data.progress_only = false;
+        wiz.preview.data.bootstrap_only = false;
+        wiz.preview.data.preview_ready_visual = true;
+        wiz.preview.data.first_page_applied = true;
+        if (isPlainObject(wiz.preview.data.preview)) {
+          wiz.preview.data.preview.ready = true;
+          wiz.preview.data.preview.ready_flag = true;
+          wiz.preview.data.preview.ready_empty = false;
+          wiz.preview.data.preview.progress_only = false;
+          wiz.preview.data.preview.bootstrap_only = false;
+          wiz.preview.data.preview.preview_ready_visual = true;
+          wiz.preview.data.preview.first_page_applied = true;
+        }
+      }
+      wiz.workbench.create_draft_refresh_pending = false;
+      wiz.workbench.preview_reopen_required = false;
+      if (wiz.decisions && typeof wiz.decisions === 'object') wiz.decisions.create_draft_refresh_pending = false;
+    } else {
+      wiz.preview.loading = true;
+      wiz.preview.status_text = trimStr(wiz.preview.status_text || progress.status_text || source.status_text || 'Loading preview rows…');
+      wiz.preview.progress_only = true;
+      wiz.preview.bootstrap_only = false;
+    }
   };
 
   const maybeLoadFirstPreviewPageForPayload = async (payload) => {
@@ -28595,6 +28715,7 @@ async function bankingPayPreview(pay_date) {
       const existingVersion = existingPage.session_version ?? existingPage.sessionVersion ?? null;
       if (existingRows.length > 0 && (existingVersion === null || stored.session_version === null || String(existingVersion) === String(stored.session_version))) {
         applyPreviewPagePayloadToState(existingPage, payload);
+        finalisePreviewVisualStateAfterRowsApplied(existingPage, payload);
         return existingPage;
       }
     }
@@ -28645,7 +28766,10 @@ async function bankingPayPreview(pay_date) {
       }
     }
 
-    if (pageRows.length > 0) applyPreviewPagePayloadToState(pagePayload, payload);
+    if (pageRows.length > 0) {
+      applyPreviewPagePayloadToState(pagePayload, payload);
+      finalisePreviewVisualStateAfterRowsApplied(pagePayload, payload);
+    }
     return pagePayload;
   };
 
@@ -28796,20 +28920,45 @@ async function bankingPayPreview(pay_date) {
     const preview = isPlainObject(previewLike) ? previewLike : {};
     const out = [];
     const seen = new Set();
-    const pushId = (rowLike) => {
+    const pushId = (rowLike, sourceName = '') => {
       const row = isPlainObject(rowLike) ? rowLike : null;
       if (!row) return;
       const rowId = trimStr(row.preview_row_id || row.previewRowId || row.row_id || row.rowId || row.line_id || row.lineId || row.id || '');
       if (!rowId || seen.has(rowId)) return;
 
+      const source = trimStr(sourceName).toLowerCase();
       const presentationRole = trimStr(row.presentation_role || row.presentationRole || '').toUpperCase();
       if (presentationRole === 'HIDDEN') return;
 
       const presentationSection = trimStr(row.presentation_section || row.presentationSection || '').toUpperCase();
       const readinessState = trimStr(row.readiness_state || row.readinessState || '').toUpperCase();
+      const lineType = trimStr(row.line_type || row.lineType || '').toUpperCase();
+      const explicitReadySource = /ready_to_pay_now|draftable_now|ready_preview_lines|ready_to_pay/.test(source);
+      const fallbackCanonicalSource = /canonical_preview_lines|preview_rows|preview_lines|itemisation|\.rows$/.test(source);
+      const blockedLike = !!(
+        presentationSection === 'BLOCKED_FOR_PAY' ||
+        readinessState === 'BLOCKED_FOR_PAY' ||
+        presentationSection === 'CASES_RESOLUTIONS' ||
+        readinessState === 'CASES_RESOLUTIONS' ||
+        presentationSection === 'HIDDEN' ||
+        readinessState === 'HIDDEN' ||
+        lineType === 'BLOCKED_TIMESHEET' ||
+        lineType === 'DO_NOT_PAY' ||
+        row.do_not_pay === true ||
+        row.case_is_blocked === true ||
+        row.is_excluded_from_allocation === true ||
+        row.is_hidden === true ||
+        row.hidden === true ||
+        row.is_ready_for_draft === false ||
+        row.isReadyForDraft === false ||
+        row.ready_for_draft === false ||
+        row.readyForDraft === false
+      );
+      if (blockedLike) return;
+
       const isReadyToPay = presentationSection
         ? presentationSection === 'READY_TO_PAY'
-        : (readinessState ? readinessState === 'READY_TO_PAY' : false);
+        : (readinessState ? (readinessState === 'READY_TO_PAY' || readinessState === 'READY' || readinessState === 'DRAFTABLE') : false);
       const hasDraftableSignal = Object.prototype.hasOwnProperty.call(row, 'draftable') ||
         Object.prototype.hasOwnProperty.call(row, 'is_draftable') ||
         Object.prototype.hasOwnProperty.call(row, 'isDraftable');
@@ -28819,10 +28968,11 @@ async function bankingPayPreview(pay_date) {
         Object.prototype.hasOwnProperty.call(row, 'readyForDraft');
       const draftable = row.draftable === true || row.is_draftable === true || row.isDraftable === true;
       const readyForDraft = row.is_ready_for_draft === true || row.isReadyForDraft === true || row.ready_for_draft === true || row.readyForDraft === true;
+      const draftableFalse = row.draftable === false || row.is_draftable === false || row.isDraftable === false;
 
-      if (!isReadyToPay) return;
-      if (hasDraftableSignal && !draftable) return;
-      if (hasReadyForDraftSignal && !readyForDraft) return;
+      if (!isReadyToPay && !explicitReadySource && !readyForDraft && !draftable && !(fallbackCanonicalSource && !draftableFalse)) return;
+      if (hasDraftableSignal && !draftable && !explicitReadySource && !fallbackCanonicalSource) return;
+      if (hasReadyForDraftSignal && !readyForDraft && !explicitReadySource && !fallbackCanonicalSource) return;
 
       seen.add(rowId);
       out.push(rowId);
@@ -28833,29 +28983,29 @@ async function bankingPayPreview(pay_date) {
       : (isPlainObject(preview.component_state_cache) ? preview.component_state_cache : null);
 
     if (componentStateCache) {
-      for (const row of Array.isArray(componentStateCache.ready_preview_lines) ? componentStateCache.ready_preview_lines : []) pushId(row);
-      for (const row of Array.isArray(componentStateCache.ready_to_pay_now) ? componentStateCache.ready_to_pay_now : []) pushId(row);
-      for (const row of Array.isArray(componentStateCache.draftable_now) ? componentStateCache.draftable_now : []) pushId(row);
+      for (const row of Array.isArray(componentStateCache.ready_preview_lines) ? componentStateCache.ready_preview_lines : []) pushId(row, 'componentStateCache.ready_preview_lines');
+      for (const row of Array.isArray(componentStateCache.ready_to_pay_now) ? componentStateCache.ready_to_pay_now : []) pushId(row, 'componentStateCache.ready_to_pay_now');
+      for (const row of Array.isArray(componentStateCache.draftable_now) ? componentStateCache.draftable_now : []) pushId(row, 'componentStateCache.draftable_now');
     }
 
     for (const candidate of Array.isArray(preview.paye_candidates) ? preview.paye_candidates : []) {
       if (!isPlainObject(candidate)) continue;
-      for (const row of Array.isArray(candidate.itemisation) ? candidate.itemisation : []) pushId(row);
-      for (const row of Array.isArray(candidate.preview_rows) ? candidate.preview_rows : []) pushId(row);
-      for (const row of Array.isArray(candidate.preview_lines) ? candidate.preview_lines : []) pushId(row);
+      for (const row of Array.isArray(candidate.itemisation) ? candidate.itemisation : []) pushId(row, 'paye_candidates.itemisation');
+      for (const row of Array.isArray(candidate.preview_rows) ? candidate.preview_rows : []) pushId(row, 'paye_candidates.preview_rows');
+      for (const row of Array.isArray(candidate.preview_lines) ? candidate.preview_lines : []) pushId(row, 'paye_candidates.preview_lines');
     }
 
     for (const payee of Array.isArray(preview.non_paye_payees) ? preview.non_paye_payees : []) {
       if (!isPlainObject(payee)) continue;
-      for (const row of Array.isArray(payee.itemisation) ? payee.itemisation : []) pushId(row);
-      for (const row of Array.isArray(payee.preview_rows) ? payee.preview_rows : []) pushId(row);
-      for (const row of Array.isArray(payee.preview_lines) ? payee.preview_lines : []) pushId(row);
+      for (const row of Array.isArray(payee.itemisation) ? payee.itemisation : []) pushId(row, 'non_paye_payees.itemisation');
+      for (const row of Array.isArray(payee.preview_rows) ? payee.preview_rows : []) pushId(row, 'non_paye_payees.preview_rows');
+      for (const row of Array.isArray(payee.preview_lines) ? payee.preview_lines : []) pushId(row, 'non_paye_payees.preview_lines');
     }
 
-    for (const row of Array.isArray(preview.canonical_preview_lines) ? preview.canonical_preview_lines : []) pushId(row);
-    for (const row of Array.isArray(preview.ready_preview_lines) ? preview.ready_preview_lines : []) pushId(row);
-    for (const row of Array.isArray(preview.preview_rows) ? preview.preview_rows : []) pushId(row);
-    for (const row of Array.isArray(preview.rows) ? preview.rows : []) pushId(row);
+    for (const row of Array.isArray(preview.canonical_preview_lines) ? preview.canonical_preview_lines : []) pushId(row, 'canonical_preview_lines');
+    for (const row of Array.isArray(preview.ready_preview_lines) ? preview.ready_preview_lines : []) pushId(row, 'ready_preview_lines');
+    for (const row of Array.isArray(preview.preview_rows) ? preview.preview_rows : []) pushId(row, 'preview_rows');
+    for (const row of Array.isArray(preview.rows) ? preview.rows : []) pushId(row, 'rows');
 
     return out;
   };
@@ -28965,6 +29115,10 @@ async function bankingPayPreview(pay_date) {
     }
     if (isPostMutationRefresh && hasFullPreviewData && payloadHasActivePendingWorkbenchWork(payloadForApply)) {
       if (isPlainObject(payloadForApply?.progress)) syncProgressIntoState(payloadForApply.progress);
+      const appliedPendingEnvelope = applyPayWorkbenchPreviewToState(payloadForApply, stLocal);
+      const appliedPendingPayload = appliedPendingEnvelope || payloadForApply;
+      stampAppliedWorkbenchContext(appliedPendingPayload);
+      reconcileSelectedRowsAfterFreshPreview(appliedPendingPayload);
       wiz.workbench.create_draft_refresh_pending = true;
       wiz.workbench.preview_reopen_required = true;
       wiz.workbench.__post_mutation_preview_refresh_failed = false;
@@ -28972,10 +29126,14 @@ async function bankingPayPreview(pay_date) {
       wiz.preview.loading = true;
       wiz.preview.error = '';
       wiz.preview.failure = null;
+      wiz.preview.progress_only = true;
+      wiz.preview.bootstrap_only = false;
+      wiz.preview.preview_ready_visual = false;
+      wiz.preview.first_page_applied = true;
       wiz.preview.status_text = trimStr(payloadForApply?.progress?.status_text || payloadForApply?.status_text || 'Preparing payment preview candidates.');
       return {
-        status: 'deferred_active_jobs',
-        payload: null
+        status: 'applied_full_pending',
+        payload: appliedPendingPayload
       };
     }
     if (isPostMutationRefresh) {
@@ -29735,6 +29893,20 @@ async function bankingPayPreview(pay_date) {
     wiz.preview.loading = hasActiveWorkbenchPendingWork() || postMutationRebaseStillRequired;
     wiz.preview.error = '';
     wiz.preview.failure = null;
+    if (!wiz.preview.loading && (payloadHasFullPreviewData(wiz.preview.data) || wiz.preview.first_page_applied === true || wiz.preview.ready_empty === true)) {
+      const previewDataForStatus = isPlainObject(wiz.preview.data) ? wiz.preview.data : {};
+      const progressCountsForStatus = isPlainObject(wiz.workbench?.progress_counts) ? wiz.workbench.progress_counts : {};
+      const isReadyEmptyForStatus = !!(
+        wiz.preview.ready_empty === true ||
+        previewDataForStatus.ready_empty === true ||
+        previewDataForStatus.preview?.ready_empty === true ||
+        progressCountsForStatus.ready_empty === true
+      );
+      wiz.preview.status_text = isReadyEmptyForStatus ? 'No payable rows found.' : 'Payment preview is ready.';
+      wiz.preview.progress_only = false;
+      wiz.preview.bootstrap_only = false;
+      wiz.preview.preview_ready_visual = true;
+    }
 
     await rerenderQuietly();
 
@@ -29788,6 +29960,20 @@ async function bankingPayPreview(pay_date) {
         (wiz.workbench.preview_reopen_required === true || wiz.workbench.create_draft_refresh_pending === true)
       );
       wiz.preview.loading = hasActiveWorkbenchPendingWork() || postMutationRebaseStillRequired;
+      if (!wiz.preview.loading && (payloadHasFullPreviewData(wiz.preview.data) || wiz.preview.first_page_applied === true || wiz.preview.ready_empty === true)) {
+        const previewDataForStatus = isPlainObject(wiz.preview.data) ? wiz.preview.data : {};
+        const progressCountsForStatus = isPlainObject(wiz.workbench?.progress_counts) ? wiz.workbench.progress_counts : {};
+        const isReadyEmptyForStatus = !!(
+          wiz.preview.ready_empty === true ||
+          previewDataForStatus.ready_empty === true ||
+          previewDataForStatus.preview?.ready_empty === true ||
+          progressCountsForStatus.ready_empty === true
+        );
+        wiz.preview.status_text = isReadyEmptyForStatus ? 'No payable rows found.' : 'Payment preview is ready.';
+        wiz.preview.progress_only = false;
+        wiz.preview.bootstrap_only = false;
+        wiz.preview.preview_ready_visual = true;
+      }
     }
     if (trimStr(wiz?.workbench?.__preview_refresh_request_token || '') === requestToken) {
       wiz.workbench.__preview_refresh_request_token = '';
@@ -29876,68 +30062,108 @@ async function bankingPayCreateDraft(input = {}) {
     if (readinessState) return readinessState === 'READY_TO_PAY';
     return false;
   };
-  const collectPreviewRowIds = (previewLike) => {
-    const preview = (previewLike && typeof previewLike === 'object') ? previewLike : null;
-    if (!preview) return [];
-
+  const getPreviewRowId = (rowLike) => trimStr(
+    rowLike?.preview_row_id ||
+    rowLike?.previewRowId ||
+    rowLike?.row_id ||
+    rowLike?.rowId ||
+    rowLike?.line_id ||
+    rowLike?.lineId ||
+    rowLike?.id ||
+    ''
+  );
+  const collectPageRowsFromNode = (nodeLike) => {
+    const node = isPlainObject(nodeLike) ? nodeLike : {};
+    const out = [];
+    const pushRows = (rows) => {
+      for (const row of asArray(rows)) {
+        if (isPlainObject(row)) out.push(row);
+      }
+    };
+    const pushPage = (pageLike) => {
+      if (!isPlainObject(pageLike)) return;
+      pushRows(pageLike.rows);
+      pushRows(pageLike.items);
+      pushRows(pageLike.canonical_preview_lines);
+      pushRows(pageLike.canonicalPreviewLines);
+      pushRows(pageLike.ready_preview_lines);
+      pushRows(pageLike.readyPreviewLines);
+      pushRows(pageLike.ready_to_pay_now);
+      pushRows(pageLike.readyToPayNow);
+      pushRows(pageLike.preview_rows);
+      pushRows(pageLike.previewRows);
+    };
+    for (const cacheKey of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
+      const cache = node[cacheKey];
+      if (Array.isArray(cache)) {
+        for (const page of cache) pushPage(page);
+      } else if (isPlainObject(cache)) {
+        for (const page of Object.values(cache)) pushPage(page);
+      }
+    }
+    return out;
+  };
+  const collectDraftablePreviewRowIdsFromWizardState = (wizLike, previewLike) => {
     const out = [];
     const seen = new Set();
-
     const pushId = (raw) => {
       const s = trimStr(raw);
       if (!s || seen.has(s)) return;
       seen.add(s);
       out.push(s);
     };
-
-    const componentStateCache = (preview.componentStateCache && typeof preview.componentStateCache === 'object')
-      ? preview.componentStateCache
-      : (preview.component_state_cache && typeof preview.component_state_cache === 'object')
-        ? preview.component_state_cache
-        : null;
-
-    if (componentStateCache) {
-      const cachedRows = [
-        ...(Array.isArray(componentStateCache.ready_preview_lines) ? componentStateCache.ready_preview_lines : [])
-      ];
-
-      for (const row of cachedRows) {
-        if (!isDraftCreateEligiblePreviewRow(row)) continue;
-        pushId(row.preview_row_id || row.row_id || row.line_id || row.id);
-      }
-
-      if (out.length > 0) return out;
-    }
-
-    const candidateBuckets = [
-      Array.isArray(preview?.paye_candidates) ? preview.paye_candidates : [],
-      Array.isArray(preview?.non_paye_payees) ? preview.non_paye_payees : []
-    ];
-
-    for (const bucket of candidateBuckets) {
-      for (const cand of bucket) {
-        if (!isPlainObject(cand)) continue;
-        const itemisation = Array.isArray(cand.itemisation) ? cand.itemisation : [];
-        for (const item of itemisation) {
-          if (!isDraftCreateEligiblePreviewRow(item)) continue;
-          pushId(item.preview_row_id || item.row_id || item.line_id || item.id);
+    const pushEligibleRow = (rowLike) => {
+      if (!isDraftCreateEligiblePreviewRow(rowLike)) return;
+      pushId(getPreviewRowId(rowLike));
+    };
+    const pushEligibleRows = (rows) => {
+      for (const row of asArray(rows)) pushEligibleRow(row);
+    };
+    const pushComponentCacheRows = (cacheLike) => {
+      const cache = isPlainObject(cacheLike) ? cacheLike : null;
+      if (!cache) return;
+      pushEligibleRows(cache.ready_to_pay_now);
+      pushEligibleRows(cache.readyToPayNow);
+      pushEligibleRows(cache.draftable_now);
+      pushEligibleRows(cache.draftableNow);
+      pushEligibleRows(cache.ready_preview_lines);
+      pushEligibleRows(cache.readyPreviewLines);
+    };
+    const pushCandidateBuckets = (nodeLike) => {
+      const node = isPlainObject(nodeLike) ? nodeLike : {};
+      for (const bucketKey of ['paye_candidates', 'payeCandidates', 'non_paye_payees', 'nonPayePayees', 'payees', 'candidates']) {
+        for (const candidate of asArray(node[bucketKey])) {
+          if (!isPlainObject(candidate)) continue;
+          pushEligibleRow(candidate);
+          for (const rowKey of ['itemisation', 'canonical_preview_lines', 'canonicalPreviewLines', 'preview_lines', 'previewLines', 'preview_rows', 'previewRows', 'ready_preview_lines', 'readyPreviewLines', 'rows', 'lines']) {
+            pushEligibleRows(candidate[rowKey]);
+          }
         }
       }
-    }
+    };
+    const pushNodeRows = (nodeLike) => {
+      const node = isPlainObject(nodeLike) ? nodeLike : null;
+      if (!node) return;
+      pushComponentCacheRows(node.componentStateCache);
+      pushComponentCacheRows(node.component_state_cache);
+      for (const rowKey of ['ready_to_pay_now', 'readyToPayNow', 'draftable_now', 'draftableNow', 'ready_preview_lines', 'readyPreviewLines', 'canonical_preview_lines', 'canonicalPreviewLines', 'preview_rows', 'previewRows', 'rows', 'itemisation']) {
+        pushEligibleRows(node[rowKey]);
+      }
+      pushCandidateBuckets(node);
+      for (const row of collectPageRowsFromNode(node)) pushEligibleRow(row);
+    };
 
-    const topLevelRows = [
-      ...(Array.isArray(preview?.canonical_preview_lines) ? preview.canonical_preview_lines : []),
-      ...(Array.isArray(preview?.preview_rows) ? preview.preview_rows : []),
-      ...(Array.isArray(preview?.rows) ? preview.rows : [])
-    ];
-
-    for (const row of topLevelRows) {
-      if (!isDraftCreateEligiblePreviewRow(row)) continue;
-      pushId(row.preview_row_id || row.row_id || row.line_id || row.id);
-    }
-
+    const wizard = isPlainObject(wizLike) ? wizLike : {};
+    const previewData = isPlainObject(wizard.preview?.data) ? wizard.preview.data : {};
+    pushNodeRows(previewLike);
+    pushNodeRows(isPlainObject(previewData.preview) ? previewData.preview : null);
+    pushNodeRows(previewData);
+    pushNodeRows(wizard.preview?.componentStateCache);
+    pushNodeRows(wizard.decisions);
+    pushNodeRows(wizard.workbench);
     return out;
   };
+  const collectPreviewRowIds = (previewLike) => collectDraftablePreviewRowIdsFromWizardState(wiz, previewLike);
   const countEligibleCandidatesForScope = (scopeCandidates, includeCandidateIds = [], selectedPreviewRowIds = []) => {
     const arr = Array.isArray(scopeCandidates) ? scopeCandidates : [];
     const includeSet = Array.isArray(includeCandidateIds) && includeCandidateIds.length
@@ -31393,36 +31619,58 @@ async function bankingPayCreateDraft(input = {}) {
     const considerRow = (rowLike, fallbackChannel = '') => {
       const row = isPlainObject(rowLike) ? rowLike : null;
       if (!row) return;
-      const rowId = trimStr(row.preview_row_id || row.row_id || row.line_id || row.id || '');
+      const rowId = getPreviewRowId(row);
       if (!rowId || !selectedSet.has(rowId)) return;
       const ch = upperTrim(row.pay_channel || row.payChannel || row.channel || fallbackChannel || '');
       if (ch === 'PAYE' || ch === 'UMBRELLA') foundChannels.add(ch);
     };
+    const considerRows = (rows, fallbackChannel = '') => {
+      for (const row of asArray(rows)) considerRow(row, fallbackChannel);
+    };
+    const considerComponentCache = (cacheLike, fallbackChannel = '') => {
+      const cache = isPlainObject(cacheLike) ? cacheLike : null;
+      if (!cache) return;
+      considerRows(cache.ready_to_pay_now, fallbackChannel);
+      considerRows(cache.readyToPayNow, fallbackChannel);
+      considerRows(cache.draftable_now, fallbackChannel);
+      considerRows(cache.draftableNow, fallbackChannel);
+      considerRows(cache.ready_preview_lines, fallbackChannel);
+      considerRows(cache.readyPreviewLines, fallbackChannel);
+    };
+    const considerCandidateBuckets = (nodeLike) => {
+      const node = isPlainObject(nodeLike) ? nodeLike : {};
+      for (const cand of asArray(node.paye_candidates).concat(asArray(node.payeCandidates))) {
+        if (!isPlainObject(cand)) continue;
+        considerRow(cand, 'PAYE');
+        for (const rowKey of ['itemisation', 'canonical_preview_lines', 'canonicalPreviewLines', 'preview_lines', 'previewLines', 'preview_rows', 'previewRows', 'ready_preview_lines', 'readyPreviewLines', 'rows', 'lines']) considerRows(cand[rowKey], 'PAYE');
+      }
+      for (const payee of asArray(node.non_paye_payees).concat(asArray(node.nonPayePayees))) {
+        if (!isPlainObject(payee)) continue;
+        considerRow(payee, 'UMBRELLA');
+        for (const rowKey of ['itemisation', 'canonical_preview_lines', 'canonicalPreviewLines', 'preview_lines', 'previewLines', 'preview_rows', 'previewRows', 'ready_preview_lines', 'readyPreviewLines', 'rows', 'lines']) considerRows(payee[rowKey], 'UMBRELLA');
+      }
+    };
+    const considerNode = (nodeLike, fallbackChannel = '') => {
+      const node = isPlainObject(nodeLike) ? nodeLike : null;
+      if (!node) return;
+      considerComponentCache(node.componentStateCache, fallbackChannel);
+      considerComponentCache(node.component_state_cache, fallbackChannel);
+      for (const rowKey of ['ready_to_pay_now', 'readyToPayNow', 'draftable_now', 'draftableNow', 'ready_preview_lines', 'readyPreviewLines', 'canonical_preview_lines', 'canonicalPreviewLines', 'preview_rows', 'previewRows', 'rows', 'itemisation']) considerRows(node[rowKey], fallbackChannel);
+      considerCandidateBuckets(node);
+      for (const row of collectPageRowsFromNode(node)) considerRow(row, fallbackChannel);
+    };
 
-    const componentStateCache = isPlainObject(previewLike?.componentStateCache)
-      ? previewLike.componentStateCache
-      : (isPlainObject(previewLike?.component_state_cache) ? previewLike.component_state_cache : null);
-    if (componentStateCache) {
-      for (const row of asArray(componentStateCache.ready_preview_lines)) considerRow(row, '');
-      for (const row of asArray(componentStateCache.draftable_now)) considerRow(row, '');
-    }
-
-    for (const cand of asArray(previewLike?.paye_candidates)) {
-      if (!isPlainObject(cand)) continue;
-      for (const item of asArray(cand.itemisation)) considerRow(item, 'PAYE');
-    }
-    for (const payee of asArray(previewLike?.non_paye_payees)) {
-      if (!isPlainObject(payee)) continue;
-      for (const item of asArray(payee.itemisation)) considerRow(item, 'UMBRELLA');
-    }
-    for (const row of asArray(previewLike?.canonical_preview_lines)) considerRow(row, '');
-    for (const row of asArray(previewLike?.preview_rows)) considerRow(row, '');
-    for (const row of asArray(previewLike?.rows)) considerRow(row, '');
+    const previewDataForScope = isPlainObject(wiz.preview?.data) ? wiz.preview.data : {};
+    considerNode(previewLike, '');
+    considerNode(isPlainObject(previewDataForScope.preview) ? previewDataForScope.preview : null, '');
+    considerNode(previewDataForScope, '');
+    considerNode(wiz.preview?.componentStateCache, '');
+    considerNode(wiz.decisions, '');
+    considerNode(wiz.workbench, '');
 
     if (foundChannels.size === 1) return Array.from(foundChannels)[0];
     return null;
   };
-
   const countEligibleCandidatesForPreview = (scopeCandidates) => {
     const includeCandidateIds = Array.isArray(wiz.decisions.candidate_ids) ? wiz.decisions.candidate_ids : [];
     return countEligibleCandidatesForScope(scopeCandidates, includeCandidateIds, selectedPreviewRowIdsForServer);
@@ -32094,6 +32342,11 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
+
+
+
+
 
 async function openPayDraftSkippedTimesheetsModal(exclusions) {
   const enc = (typeof escapeHtml === 'function')
@@ -38407,6 +38660,19 @@ function renderPayNewBatchWizard() {
     const n = Number(s);
     return Number.isFinite(n) ? n : def;
   };
+  const countLikeValue = (value) => {
+    if (Array.isArray(value)) return value.length;
+    if (value && typeof value === 'object') {
+      let best = 0;
+      for (const key of ['rows_count', 'row_count', 'returned_count', 'count', 'total', 'value', 'length']) {
+        const n = Number(value[key]);
+        if (Number.isFinite(n)) best = Math.max(best, Math.max(0, Math.trunc(n)));
+      }
+      return best;
+    }
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+  };
   const deep = (o) => JSON.parse(JSON.stringify(o == null ? null : o));
   const uniqTrimmed = (arr) => Array.isArray(arr)
     ? Array.from(new Set(arr.map((x) => trimStr(x)).filter(Boolean)))
@@ -38522,9 +38788,6 @@ function renderPayNewBatchWizard() {
   };
 
   const collectPreviewRowIds = (previewLike) => {
-    const preview = (previewLike && typeof previewLike === 'object') ? previewLike : null;
-    if (!preview) return [];
-
     const out = [];
     const seen = new Set();
     const pushId = (raw) => {
@@ -38533,46 +38796,124 @@ function renderPayNewBatchWizard() {
       seen.add(s);
       out.push(s);
     };
-
-    const componentStateCache = (preview.componentStateCache && typeof preview.componentStateCache === 'object')
-      ? preview.componentStateCache
-      : (preview.component_state_cache && typeof preview.component_state_cache === 'object')
-        ? preview.component_state_cache
-        : null;
-
-    const cachedRows = [
-      ...(Array.isArray(componentStateCache?.ready_preview_lines) ? componentStateCache.ready_preview_lines : []),
-      ...(Array.isArray(componentStateCache?.blocked_preview_lines) ? componentStateCache.blocked_preview_lines : []),
-      ...(Array.isArray(componentStateCache?.hidden_preview_lines) ? componentStateCache.hidden_preview_lines : [])
-    ];
-    for (const row of cachedRows) {
-      if (!isPlainObject(row)) continue;
-      pushId(row.preview_row_id || row.row_id || row.line_id || row.id);
-    }
-
-    const candidateBuckets = [
-      Array.isArray(preview?.paye_candidates) ? preview.paye_candidates : [],
-      Array.isArray(preview?.non_paye_payees) ? preview.non_paye_payees : []
-    ];
-    for (const bucket of candidateBuckets) {
-      for (const cand of bucket) {
-        if (!isPlainObject(cand)) continue;
-        for (const item of (Array.isArray(cand.itemisation) ? cand.itemisation : [])) {
-          if (!isPlainObject(item)) continue;
-          pushId(item.preview_row_id || item.row_id || item.line_id || item.id);
+    const pushRow = (row) => {
+      if (!isPlainObject(row)) return;
+      pushId(row.preview_row_id || row.previewRowId || row.row_id || row.rowId || row.line_id || row.lineId || row.id);
+    };
+    const pushRows = (rows) => {
+      for (const row of asArray(rows)) pushRow(row);
+    };
+    const pushCandidateBuckets = (node) => {
+      if (!isPlainObject(node)) return;
+      const candidateBuckets = [
+        asArray(node.paye_candidates),
+        asArray(node.payeCandidates),
+        asArray(node.non_paye_payees),
+        asArray(node.nonPayePayees),
+        asArray(node.payees),
+        asArray(node.candidates)
+      ];
+      for (const bucket of candidateBuckets) {
+        for (const cand of bucket) {
+          if (!isPlainObject(cand)) continue;
+          pushRows(cand.itemisation);
+          pushRows(cand.preview_rows);
+          pushRows(cand.previewRows);
+          pushRows(cand.preview_lines);
+          pushRows(cand.previewLines);
+          pushRows(cand.rows);
         }
       }
-    }
+    };
+    const pushPageRows = (pageLike) => {
+      if (!isPlainObject(pageLike)) return;
+      pushRows(pageLike.rows);
+      pushRows(pageLike.items);
+      pushRows(pageLike.preview_rows);
+      pushRows(pageLike.previewRows);
+      pushRows(pageLike.ready_preview_lines);
+      pushRows(pageLike.readyPreviewLines);
+      pushRows(pageLike.canonical_preview_lines);
+      pushRows(pageLike.canonicalPreviewLines);
+    };
+    const pushPageCaches = (node) => {
+      if (!isPlainObject(node)) return;
+      for (const cacheKey of [
+        'preview_pages',
+        'previewPages',
+        'preview_page_cache',
+        'previewPageCache',
+        'page_cache',
+        'pageCache',
+        'pages'
+      ]) {
+        const cache = node[cacheKey];
+        if (Array.isArray(cache)) {
+          for (const page of cache) pushPageRows(page);
+          continue;
+        }
+        if (!isPlainObject(cache)) continue;
+        for (const page of Object.values(cache)) pushPageRows(page);
+      }
+    };
+    const pushNode = (node) => {
+      if (!isPlainObject(node)) return;
+      const componentStateCache = isPlainObject(node.componentStateCache)
+        ? node.componentStateCache
+        : (isPlainObject(node.component_state_cache) ? node.component_state_cache : null);
 
-    const topLevelRows = [
-      ...(Array.isArray(preview?.canonical_preview_lines) ? preview.canonical_preview_lines : []),
-      ...(Array.isArray(preview?.preview_rows) ? preview.preview_rows : []),
-      ...(Array.isArray(preview?.rows) ? preview.rows : [])
-    ];
-    for (const row of topLevelRows) {
-      if (!isPlainObject(row)) continue;
-      pushId(row.preview_row_id || row.row_id || row.line_id || row.id);
-    }
+      if (componentStateCache) {
+        for (const rowKey of [
+          'ready_to_pay_now',
+          'draftable_now',
+          'ready_preview_lines',
+          'blocked_for_pay_now',
+          'blocked_now',
+          'blocked_preview_lines',
+          'case_resolution_states',
+          'blocked_case_states',
+          'hidden_preview_lines',
+          'hidden_indefinite_snoozes',
+          'canonical_preview_lines',
+          'preview_rows',
+          'rows'
+        ]) {
+          pushRows(componentStateCache[rowKey]);
+        }
+      }
+
+      for (const rowKey of [
+        'ready_to_pay_now',
+        'draftable_now',
+        'ready_preview_lines',
+        'blocked_for_pay_now',
+        'blocked_now',
+        'blocked_preview_lines',
+        'case_resolution_states',
+        'blocked_case_states',
+        'hidden_preview_lines',
+        'hidden_indefinite_snoozes',
+        'canonical_preview_lines',
+        'canonicalPreviewLines',
+        'preview_rows',
+        'previewRows',
+        'rows',
+        'itemisation'
+      ]) {
+        pushRows(node[rowKey]);
+      }
+
+      pushCandidateBuckets(node);
+      pushPageCaches(node);
+    };
+
+    const preview = (previewLike && typeof previewLike === 'object') ? previewLike : null;
+    pushNode(preview);
+    pushNode(wiz?.preview?.componentStateCache);
+    pushNode(wiz?.preview?.data);
+    pushNode(wiz?.preview?.data?.preview);
+    pushNode(wiz?.decisions);
+    pushNode(wiz?.workbench);
 
     return out;
   };
@@ -38825,7 +39166,7 @@ function renderPayNewBatchWizard() {
 
   const getPreviewRowId = (line) => {
     if (!isPlainObject(line)) return '';
-    return trimStr(line.preview_row_id || line.row_id || line.line_id || line.id);
+    return trimStr(line.preview_row_id || line.previewRowId || line.row_id || line.rowId || line.line_id || line.lineId || line.id);
   };
 
   const allPreviewRowIds = uniqTrimmed(collectPreviewRowIds(pv));
@@ -38845,7 +39186,7 @@ function renderPayNewBatchWizard() {
   selectedPreviewRowIds = reconciledLocalSelection.selected_preview_row_ids;
   selectedPreviewRowMode = reconciledLocalSelection.selected_preview_row_mode;
 
-  const selectedPreviewRowSet = (() => {
+  let selectedPreviewRowSet = (() => {
     if (selectedPreviewRowMode === 'EXPLICIT_NONE') return new Set();
     if (selectedPreviewRowMode === 'IMPLICIT_ALL') return new Set(allPreviewRowIds);
     return new Set(selectedPreviewRowIds.filter((rowId) => allPreviewRowIdSet.has(rowId)));
@@ -39623,33 +39964,598 @@ function renderPayNewBatchWizard() {
     }).join('');
   };
 
-  const canonicalPreviewLines = Array.isArray(pv?.canonical_preview_lines)
-    ? pv.canonical_preview_lines.filter((line) => isPlainObject(line))
-    : null;
+  const normalisePreviewRowArray = (value) => asArray(value).filter((line) => isPlainObject(line));
 
-  const readyPreviewLines = (() => {
-    if (canonicalPreviewLines) {
-      return canonicalPreviewLines.filter((line) => upperTrim(line?.presentation_section || '') === 'READY_TO_PAY');
+  const pushUniquePreviewRows = (out, seen, rows, sourceName = '', filterFn = null) => {
+    const source = trimStr(sourceName);
+    for (const line of normalisePreviewRowArray(rows)) {
+      if (filterFn && !filterFn(line, source)) continue;
+      const rowId = getPreviewRowId(line);
+      const dedupeKey = rowId || [
+        source,
+        trimStr(line?.candidate_id),
+        trimStr(line?.line_type),
+        trimStr(line?.timesheet_id || line?.linked_timesheet_id),
+        trimStr(line?.finance_case_id || line?.case_key),
+        trimStr(line?.source_ref),
+        trimStr(line?.presentation_section),
+        trimStr(getLineSectionAmount(line))
+      ].join('|');
+      if (!dedupeKey || seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      out.push(line);
     }
-    return asArray(componentStateCache.ready_preview_lines).filter((line) => isPlainObject(line));
-  })();
-  const blockedPreviewLines = (() => {
-    if (canonicalPreviewLines) {
-      return canonicalPreviewLines.filter((line) => upperTrim(line?.presentation_section || '') === 'BLOCKED_FOR_PAY');
+    return out;
+  };
+
+  const collectRowsFromPageCaches = (rootLike, sections = []) => {
+    const sectionFilter = new Set(asArray(sections).map((section) => trimStr(section).toLowerCase()).filter(Boolean));
+    const rows = [];
+    const seen = new Set();
+    const shouldIncludePage = (pageLike, fallbackSection = '') => {
+      if (sectionFilter.size <= 0) return true;
+      const page = isPlainObject(pageLike) ? pageLike : {};
+      const candidates = [
+        fallbackSection,
+        page.section,
+        page.requested_section,
+        page.requestedSection,
+        page.resolved_section,
+        page.resolvedSection,
+        page.request_section
+      ].map((section) => trimStr(section).toLowerCase()).filter(Boolean);
+      return candidates.some((section) => sectionFilter.has(section));
+    };
+    const pushPage = (pageLike, fallbackSection = '') => {
+      if (!isPlainObject(pageLike) || !shouldIncludePage(pageLike, fallbackSection)) return;
+      pushUniquePreviewRows(rows, seen, pageLike.rows, `page:${fallbackSection || pageLike.section || pageLike.resolved_section || pageLike.requested_section || 'rows'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.items, `page:${fallbackSection || pageLike.section || pageLike.resolved_section || pageLike.requested_section || 'items'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.canonical_preview_lines, `page:${fallbackSection || 'canonical_preview_lines'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.ready_preview_lines, `page:${fallbackSection || 'ready_preview_lines'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.ready_to_pay_now, `page:${fallbackSection || 'ready_to_pay_now'}`);
+      pushUniquePreviewRows(rows, seen, pageLike.preview_rows, `page:${fallbackSection || 'preview_rows'}`);
+    };
+    const pushCacheRoot = (cacheRoot) => {
+      if (Array.isArray(cacheRoot)) {
+        for (const page of cacheRoot) pushPage(page, '');
+        return;
+      }
+      if (!isPlainObject(cacheRoot)) return;
+      for (const [section, page] of Object.entries(cacheRoot)) {
+        pushPage(page, section);
+      }
+    };
+    const root = isPlainObject(rootLike) ? rootLike : {};
+    for (const cacheKey of [
+      'preview_pages',
+      'previewPages',
+      'preview_page_cache',
+      'previewPageCache',
+      'page_cache',
+      'pageCache',
+      'pages'
+    ]) {
+      pushCacheRoot(root[cacheKey]);
     }
-    return asArray(componentStateCache.blocked_preview_lines).filter((line) => isPlainObject(line));
-  })();
-  const casePreviewLines = (() => {
-    if (canonicalPreviewLines) {
-      return canonicalPreviewLines.filter((line) => upperTrim(line?.presentation_section || '') === 'CASES_RESOLUTIONS');
+    return rows;
+  };
+
+  const collectFirstPopulatedRows = (sources, filterFn = null) => {
+    for (const source of asArray(sources)) {
+      if (!isPlainObject(source)) continue;
+      const out = [];
+      const seen = new Set();
+      pushUniquePreviewRows(out, seen, source.rows, source.name || '', filterFn);
+      if (out.length > 0) return out;
     }
     return [];
-  })();
-  const hiddenPreviewLines = (() => {
-    const hiddenFromCache = asArray(componentStateCache.hidden_preview_lines).filter((line) => isPlainObject(line));
-    if (hiddenFromCache.length) return hiddenFromCache.filter((line) => !!trimStr(line?.candidate_id));
-    return [];
-  })();
+  };
+
+  const collectUnionRows = (sources, filterFn = null) => {
+    const out = [];
+    const seen = new Set();
+    for (const source of asArray(sources)) {
+      if (!isPlainObject(source)) continue;
+      pushUniquePreviewRows(out, seen, source.rows, source.name || '', filterFn);
+    }
+    return out;
+  };
+
+  const previewComponentStateCache = (pv?.componentStateCache && typeof pv.componentStateCache === 'object')
+    ? pv.componentStateCache
+    : ((pv?.component_state_cache && typeof pv.component_state_cache === 'object') ? pv.component_state_cache : null);
+  const previewDataRoot = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : {};
+  const previewDataPreview = (previewDataRoot.preview && typeof previewDataRoot.preview === 'object' && !Array.isArray(previewDataRoot.preview)) ? previewDataRoot.preview : {};
+  const previewDataComponentStateCache = (previewDataPreview.componentStateCache && typeof previewDataPreview.componentStateCache === 'object')
+    ? previewDataPreview.componentStateCache
+    : ((previewDataPreview.component_state_cache && typeof previewDataPreview.component_state_cache === 'object') ? previewDataPreview.component_state_cache : null);
+  const previewReadyPageRows = collectRowsFromPageCaches(wiz.workbench, ['ready_to_pay', 'ready_preview_lines']);
+  const previewDataReadyPageRows = collectRowsFromPageCaches(previewDataRoot, ['ready_to_pay', 'ready_preview_lines']);
+  const previewPageRows = collectRowsFromPageCaches(wiz.workbench, ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows']);
+  const previewDataPageRows = collectRowsFromPageCaches(previewDataRoot, ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows']);
+
+  const isHiddenDisplayRow = (line) => {
+    const presentationRole = upperTrim(line?.presentation_role || line?.presentationRole || '');
+    const presentationSection = upperTrim(line?.presentation_section || line?.presentationSection || '');
+    const readinessState = upperTrim(line?.readiness_state || line?.readinessState || '');
+    return !!(
+      presentationRole === 'HIDDEN' ||
+      presentationSection === 'HIDDEN' ||
+      readinessState === 'HIDDEN' ||
+      asBool(line?.is_hidden) ||
+      asBool(line?.hidden) ||
+      asBool(line?.hidden_indefinite_snooze) ||
+      asBool(line?.is_indefinitely_snoozed)
+    );
+  };
+
+  const isBlockedDisplayRow = (line) => {
+    const section = upperTrim(line?.presentation_section || line?.presentationSection || '');
+    const readinessState = upperTrim(line?.readiness_state || line?.readinessState || '');
+    const lineType = upperTrim(line?.line_type || line?.lineType || '');
+    const snoozeInfo = getSnoozeInfo(line);
+    return !!(
+      section === 'BLOCKED_FOR_PAY' ||
+      readinessState === 'BLOCKED_FOR_PAY' ||
+      lineType === 'BLOCKED_TIMESHEET' ||
+      lineType === 'DO_NOT_PAY' ||
+      asBool(line?.do_not_pay) ||
+      asBool(line?.case_is_blocked) ||
+      asBool(line?.is_excluded_from_allocation) ||
+      line?.is_ready_for_draft === false ||
+      line?.isReadyForDraft === false ||
+      snoozeInfo.isIndefinite ||
+      snoozeInfo.isDated
+    );
+  };
+
+  const isCaseDisplayRow = (line, sourceName = '') => {
+    const section = upperTrim(line?.presentation_section || line?.presentationSection || '');
+    const readinessState = upperTrim(line?.readiness_state || line?.readinessState || '');
+    const source = trimStr(sourceName).toLowerCase();
+    if (section) return section === 'CASES_RESOLUTIONS';
+    if (readinessState) return readinessState === 'CASES_RESOLUTIONS';
+    if (/case_resolution_states|cases_resolutions/.test(source)) return true;
+    return !!(
+      asBool(line?.case_needs_resolution) ||
+      asBool(line?.needs_resolution) ||
+      asBool(line?.case_requires_resolution) ||
+      asBool(line?.requires_resolution)
+    );
+  };
+
+  const isReadyDisplayRow = (line, sourceName = '') => {
+    if (!isPlainObject(line)) return false;
+    if (isHiddenDisplayRow(line) || isBlockedDisplayRow(line) || isCaseDisplayRow(line, sourceName)) return false;
+    const source = trimStr(sourceName).toLowerCase();
+    const section = upperTrim(line?.presentation_section || line?.presentationSection || '');
+    const readinessState = upperTrim(line?.readiness_state || line?.readinessState || '');
+    const explicitReadySource = /ready_to_pay_now|draftable_now|ready_preview_lines|ready_to_pay/.test(source);
+    if (explicitReadySource) return true;
+    if (section) return section === 'READY_TO_PAY';
+    if (readinessState) return readinessState === 'READY_TO_PAY' || readinessState === 'READY' || readinessState === 'DRAFTABLE';
+    if (line?.is_ready_for_draft === true || line?.isReadyForDraft === true || line?.ready_for_draft === true || line?.readyForDraft === true) return true;
+    if (line?.draftable === true || line?.is_draftable === true || line?.isDraftable === true) return true;
+
+    const fallbackCanonicalSource = /canonical_preview_lines|preview_rows|previewrows|\.rows$|page\.cache\.preview\.rows|preview\.data\.page\.cache\.preview\.rows/.test(source);
+    const readyFalse = line?.is_ready_for_draft === false ||
+      line?.isReadyForDraft === false ||
+      line?.ready_for_draft === false ||
+      line?.readyForDraft === false;
+    const draftableFalse = line?.draftable === false ||
+      line?.is_draftable === false ||
+      line?.isDraftable === false;
+    if (fallbackCanonicalSource && !readyFalse && !draftableFalse) return true;
+
+    return false;
+  };
+
+  const rowSources = {
+    ready: [
+      { name: 'wiz.preview.componentStateCache.ready_to_pay_now', rows: componentStateCache.ready_to_pay_now },
+      { name: 'wiz.preview.componentStateCache.draftable_now', rows: componentStateCache.draftable_now },
+      { name: 'wiz.preview.componentStateCache.ready_preview_lines', rows: componentStateCache.ready_preview_lines },
+      { name: 'wiz.decisions.ready_to_pay_now', rows: wiz.decisions.ready_to_pay_now },
+      { name: 'wiz.decisions.draftable_now', rows: wiz.decisions.draftable_now },
+      { name: 'wiz.decisions.ready_preview_lines', rows: wiz.decisions.ready_preview_lines },
+      { name: 'wiz.preview.data.preview.componentStateCache.ready_to_pay_now', rows: previewDataComponentStateCache?.ready_to_pay_now },
+      { name: 'wiz.preview.data.preview.componentStateCache.draftable_now', rows: previewDataComponentStateCache?.draftable_now },
+      { name: 'wiz.preview.data.preview.componentStateCache.ready_preview_lines', rows: previewDataComponentStateCache?.ready_preview_lines },
+      { name: 'pv.componentStateCache.ready_to_pay_now', rows: previewComponentStateCache?.ready_to_pay_now },
+      { name: 'pv.componentStateCache.draftable_now', rows: previewComponentStateCache?.draftable_now },
+      { name: 'pv.componentStateCache.ready_preview_lines', rows: previewComponentStateCache?.ready_preview_lines },
+      { name: 'wiz.preview.data.preview.ready_preview_lines', rows: previewDataPreview.ready_preview_lines },
+      { name: 'wiz.preview.data.preview.canonical_preview_lines', rows: previewDataPreview.canonical_preview_lines },
+      { name: 'wiz.preview.data.preview_rows', rows: previewDataRoot.preview_rows },
+      { name: 'wiz.preview.data.rows', rows: previewDataRoot.rows },
+      { name: 'wiz.workbench.ready_preview_lines', rows: wiz.workbench.ready_preview_lines },
+      { name: 'wiz.workbench.canonical_preview_lines', rows: wiz.workbench.canonical_preview_lines },
+      { name: 'page.cache.ready_to_pay', rows: previewReadyPageRows },
+      { name: 'preview.data.page.cache.ready_to_pay', rows: previewDataReadyPageRows },
+      { name: 'page.cache.preview.rows', rows: previewPageRows },
+      { name: 'preview.data.page.cache.preview.rows', rows: previewDataPageRows },
+      { name: 'pv.canonical_preview_lines', rows: pv?.canonical_preview_lines },
+      { name: 'pv.preview_rows', rows: pv?.preview_rows },
+      { name: 'pv.rows', rows: pv?.rows }
+    ],
+    canonical: [
+      { name: 'pv.canonical_preview_lines', rows: pv?.canonical_preview_lines },
+      { name: 'wiz.preview.data.preview.canonical_preview_lines', rows: previewDataPreview.canonical_preview_lines },
+      { name: 'wiz.workbench.canonical_preview_lines', rows: wiz.workbench.canonical_preview_lines },
+      { name: 'page.cache.canonical_preview_lines', rows: previewPageRows },
+      { name: 'preview.data.page.cache.canonical_preview_lines', rows: previewDataPageRows },
+      { name: 'pv.preview_rows', rows: pv?.preview_rows },
+      { name: 'pv.rows', rows: pv?.rows }
+    ],
+    cases: [
+      { name: 'wiz.preview.componentStateCache.case_resolution_states', rows: componentStateCache.case_resolution_states },
+      { name: 'wiz.decisions.case_resolution_states', rows: wiz.decisions.case_resolution_states },
+      { name: 'wiz.preview.data.preview.componentStateCache.case_resolution_states', rows: previewDataComponentStateCache?.case_resolution_states },
+      { name: 'wiz.preview.data.preview.case_resolution_states', rows: previewDataPreview.case_resolution_states },
+      { name: 'wiz.workbench.case_resolution_states', rows: wiz.workbench.case_resolution_states },
+      { name: 'pv.case_resolution_states', rows: pv?.case_resolution_states },
+      { name: 'pv.canonical_preview_lines', rows: pv?.canonical_preview_lines },
+      { name: 'wiz.workbench.canonical_preview_lines', rows: wiz.workbench.canonical_preview_lines },
+      { name: 'page.cache.canonical_preview_lines', rows: previewPageRows }
+    ],
+    blocked: [
+      { name: 'wiz.preview.componentStateCache.blocked_for_pay_now', rows: componentStateCache.blocked_for_pay_now },
+      { name: 'wiz.preview.componentStateCache.blocked_now', rows: componentStateCache.blocked_now },
+      { name: 'wiz.preview.componentStateCache.blocked_preview_lines', rows: componentStateCache.blocked_preview_lines },
+      { name: 'wiz.decisions.blocked_for_pay_now', rows: wiz.decisions.blocked_for_pay_now },
+      { name: 'wiz.decisions.blocked_now', rows: wiz.decisions.blocked_now },
+      { name: 'wiz.decisions.blocked_preview_lines', rows: wiz.decisions.blocked_preview_lines },
+      { name: 'wiz.preview.data.preview.componentStateCache.blocked_for_pay_now', rows: previewDataComponentStateCache?.blocked_for_pay_now },
+      { name: 'wiz.preview.data.preview.componentStateCache.blocked_now', rows: previewDataComponentStateCache?.blocked_now },
+      { name: 'wiz.preview.data.preview.componentStateCache.blocked_preview_lines', rows: previewDataComponentStateCache?.blocked_preview_lines },
+      { name: 'pv.componentStateCache.blocked_for_pay_now', rows: previewComponentStateCache?.blocked_for_pay_now },
+      { name: 'pv.componentStateCache.blocked_now', rows: previewComponentStateCache?.blocked_now },
+      { name: 'pv.componentStateCache.blocked_preview_lines', rows: previewComponentStateCache?.blocked_preview_lines },
+      { name: 'pv.canonical_preview_lines', rows: pv?.canonical_preview_lines },
+      { name: 'wiz.workbench.canonical_preview_lines', rows: wiz.workbench.canonical_preview_lines },
+      { name: 'page.cache.canonical_preview_lines', rows: previewPageRows }
+    ],
+    hidden: [
+      { name: 'wiz.preview.componentStateCache.hidden_preview_lines', rows: componentStateCache.hidden_preview_lines },
+      { name: 'wiz.preview.componentStateCache.hidden_indefinite_snoozes', rows: componentStateCache.hidden_indefinite_snoozes },
+      { name: 'wiz.decisions.hidden_preview_lines', rows: wiz.decisions.hidden_preview_lines },
+      { name: 'wiz.decisions.hidden_indefinite_snoozes', rows: wiz.decisions.hidden_indefinite_snoozes },
+      { name: 'wiz.preview.data.preview.componentStateCache.hidden_preview_lines', rows: previewDataComponentStateCache?.hidden_preview_lines },
+      { name: 'wiz.preview.data.preview.componentStateCache.hidden_indefinite_snoozes', rows: previewDataComponentStateCache?.hidden_indefinite_snoozes },
+      { name: 'pv.componentStateCache.hidden_preview_lines', rows: previewComponentStateCache?.hidden_preview_lines },
+      { name: 'pv.componentStateCache.hidden_indefinite_snoozes', rows: previewComponentStateCache?.hidden_indefinite_snoozes },
+      { name: 'pv.canonical_preview_lines', rows: pv?.canonical_preview_lines },
+      { name: 'wiz.workbench.canonical_preview_lines', rows: wiz.workbench.canonical_preview_lines },
+      { name: 'page.cache.canonical_preview_lines', rows: previewPageRows }
+    ]
+  };
+
+  const resolveReadyPreviewRows = () => collectFirstPopulatedRows(rowSources.ready, isReadyDisplayRow);
+  const resolveCasePreviewRows = () => collectUnionRows(rowSources.cases, (line, sourceName) => isCaseDisplayRow(line, sourceName) && !isHiddenDisplayRow(line));
+  const resolveBlockedPreviewRows = () => collectUnionRows(rowSources.blocked, (line, sourceName) => isBlockedDisplayRow(line) && !isHiddenDisplayRow(line) && !isCaseDisplayRow(line, sourceName));
+  const resolveHiddenPreviewRows = () => collectUnionRows(rowSources.hidden, (line) => isHiddenDisplayRow(line)).filter((line) => !!trimStr(line?.candidate_id));
+  const resolveAllCanonicalPreviewRows = () => collectUnionRows(rowSources.canonical, null);
+  const resolveAllSelectablePreviewRowIds = () => uniqTrimmed([
+    ...allPreviewRowIds,
+    ...collectUnionRows([...rowSources.ready, ...rowSources.cases, ...rowSources.blocked, ...rowSources.hidden, ...rowSources.canonical], null).map((line) => getPreviewRowId(line)).filter(Boolean)
+  ]);
+
+  const getProgressCountsForRender = () => {
+    const out = {};
+    const assignIfMissing = (key, value) => {
+      if (value === undefined || value === null || value === '') return;
+      if (Object.prototype.hasOwnProperty.call(out, key) && out[key] !== undefined && out[key] !== null && out[key] !== '') return;
+      out[key] = value;
+    };
+    const mergeSectionCountsIfMissing = (value) => {
+      if (!isPlainObject(value)) return;
+      out.section_counts = isPlainObject(out.section_counts) ? out.section_counts : {};
+      for (const [sectionKey, sectionValue] of Object.entries(value)) {
+        if (sectionValue === undefined || sectionValue === null || sectionValue === '') continue;
+        if (Object.prototype.hasOwnProperty.call(out.section_counts, sectionKey) && out.section_counts[sectionKey] !== undefined && out.section_counts[sectionKey] !== null && out.section_counts[sectionKey] !== '') continue;
+        out.section_counts[sectionKey] = sectionValue;
+      }
+    };
+    const mergePrioritySource = (source) => {
+      if (!isPlainObject(source)) return;
+      for (const [key, value] of Object.entries(source)) {
+        if (key === 'section_counts') {
+          mergeSectionCountsIfMissing(value);
+          continue;
+        }
+        assignIfMissing(key, value);
+      }
+    };
+
+    mergePrioritySource(wiz.workbench.progress_counts);
+    mergePrioritySource(wiz.decisions.progress_counts);
+    mergePrioritySource(previewEnvelope.progress_counts);
+    mergePrioritySource(previewEnvelope.progress);
+    mergePrioritySource(previewDataPreview.progress_counts);
+    mergePrioritySource(previewDataPreview.progress);
+
+    return out;
+  };
+
+  const buildPayPreviewProgressViewModel = (wizLike, rowVm = {}) => {
+    const loadState = isPlainObject(rowVm?.loadState) ? rowVm.loadState : {};
+    const counts = isPlainObject(loadState.progressCounts) ? loadState.progressCounts : getProgressCountsForRender();
+    const countValue = (...keys) => {
+      for (const key of keys) {
+        const n = Number(counts[key]);
+        if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
+      }
+      return 0;
+    };
+    const sectionCounts = isPlainObject(counts.section_counts) ? counts.section_counts : {};
+    const sectionCountValue = (...keys) => {
+      let best = 0;
+      for (const key of keys) {
+        best = Math.max(best, countLikeValue(sectionCounts[key]));
+      }
+      return best;
+    };
+    const rowReadyCount = asArray(rowVm.readyRows).length;
+    const rowBlockedCount = asArray(rowVm.blockedRows).length;
+    const rowCaseCount = asArray(rowVm.caseRows).length;
+    const selectedSetSize = (rowVm.selectedPreviewRowSet instanceof Set) ? rowVm.selectedPreviewRowSet.size : 0;
+
+    const lineTotal = countValue('line_units_total', 'total_line_units', 'line_unit_count');
+    const lineComplete = countValue('line_units_complete', 'completed_line_units', 'line_units_completed');
+    const linePending = countValue('line_units_pending', 'pending_line_units');
+    const lineReady = countValue('line_units_ready', 'ready_line_units');
+    const lineError = countValue('line_units_error', 'line_units_failed', 'error_line_units');
+    const totalCandidates = countValue('total_candidates', 'total_candidate_count', 'candidate_count', 'total_count', 'total');
+    const readyCandidates = countValue('ready_candidates', 'ready_candidate_count', 'completed_candidates', 'completed_count', 'ready_count');
+    const pendingCandidates = countValue('pending_candidates', 'pending_candidate_count', 'pending_count', 'pending');
+    const failedCandidates = countValue('failed_candidates', 'failed_candidate_count', 'failed_count', 'failed');
+    const previewRowCount = Math.max(
+      countValue('preview_row_count', 'preview_rows_count', 'row_count'),
+      sectionCountValue('canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows'),
+      rowReadyCount + rowBlockedCount + rowCaseCount
+    );
+    const selectedRowCount = Math.max(countValue('selected_row_count', 'selected_rows_count'), selectedSetSize);
+    const queuedJobs = countValue('queued_jobs', 'queued_job_count');
+    const runningJobs = countValue('running_jobs', 'running_job_count');
+    const phase = upperTrim(counts.phase || counts.current_phase || counts.status || counts.state || '');
+    const nextAction = upperTrim(counts.next_recommended_action || counts.next_action || '');
+    const rowsAvailable = !!(
+      counts.rows_available === true ||
+      counts.has_materialised_preview_rows === true ||
+      counts.selected_rows_available === true ||
+      previewRowCount > 0 ||
+      selectedRowCount > 0
+    );
+
+    let percent = null;
+    if (lineTotal > 0) {
+      percent = Math.round(Math.min(98, Math.max(0, (lineComplete / lineTotal) * 100)));
+    } else if (totalCandidates > 0) {
+      percent = Math.round(Math.min(98, Math.max(0, (readyCandidates / totalCandidates) * 100)));
+    } else if (rowsAvailable && !loadState.isReady) {
+      percent = 90;
+    } else if (phase) {
+      percent = null;
+    }
+    if (loadState.isReady && !loadState.isProgressActive) percent = 100;
+
+    const phaseText = (() => {
+      if (loadState.isReady && !loadState.isProgressActive) return 'Payment preview ready.';
+      if (phase === 'SEEDING_SCOPE' || nextAction === 'SEED_SCOPE_CHUNK') return 'Finding candidates…';
+      if (phase === 'SEEDING_LINE_WORK') return 'Preparing timesheet lines…';
+      if (phase === 'PROCESSING_LINE_WORK' || nextAction === 'PROCESS_LINE_WORK_CHUNK') return 'Processing pay lines…';
+      if (phase === 'MATERIALISING_PREVIEW_ROWS' || nextAction === 'MATERIALISE_PREVIEW_ROWS_CHUNK') return 'Building preview rows…';
+      if (phase === 'PARTIAL_READY' || nextAction === 'READ_PREVIEW_PAGE') return 'Loading preview rows…';
+      if (phase === 'WAIT_FOR_WORKER' || nextAction === 'WAIT_FOR_WORKER') return 'Waiting for preview worker…';
+      if (rowsAvailable && !loadState.isReady) return 'Loading preview rows…';
+
+      const fallbackStatusText = trimStr(counts.status_text || counts.message || wizLike?.preview?.status_text || '');
+      const fallbackStatusCode = upperTrim(fallbackStatusText);
+      if (fallbackStatusCode === 'SEEDING_SCOPE') return 'Finding candidates…';
+      if (fallbackStatusCode === 'SEEDING_LINE_WORK') return 'Preparing timesheet lines…';
+      if (fallbackStatusCode === 'PROCESSING_LINE_WORK') return 'Processing pay lines…';
+      if (fallbackStatusCode === 'MATERIALISING_PREVIEW_ROWS') return 'Building preview rows…';
+      if (fallbackStatusCode === 'PARTIAL_READY') return 'Loading preview rows…';
+      if (fallbackStatusCode === 'WAIT_FOR_WORKER') return 'Waiting for preview worker…';
+      if (fallbackStatusCode === 'READY') return 'Payment preview ready.';
+      if (/^[A-Z0-9_]+$/.test(fallbackStatusCode) && fallbackStatusCode.includes('_')) return 'Preparing payment preview…';
+      return fallbackStatusText || 'Preparing payment preview…';
+    })();
+
+    return {
+      show: !!(loadState.isProgressActive && !loadState.isFailedOrStale),
+      indeterminate: percent === null,
+      percent: percent === null ? 0 : Math.max(0, Math.min(100, percent)),
+      phaseText,
+      phase,
+      nextAction,
+      lineTotal,
+      lineComplete,
+      linePending,
+      lineReady,
+      lineError,
+      totalCandidates,
+      readyCandidates,
+      pendingCandidates,
+      failedCandidates,
+      previewRowCount,
+      selectedRowCount,
+      queuedJobs,
+      runningJobs,
+      rowsAvailable
+    };
+  };
+
+  const renderPayPreviewProgress = (progressVm) => {
+    if (!isPlainObject(progressVm) || !progressVm.show) return '';
+    const countBits = [];
+    if (progressVm.totalCandidates > 0) countBits.push(`Candidates: ${progressVm.readyCandidates}/${progressVm.totalCandidates}`);
+    if (progressVm.lineTotal > 0) countBits.push(`Pay lines: ${progressVm.lineComplete}/${progressVm.lineTotal}`);
+    if (progressVm.previewRowCount > 0) countBits.push(`Preview rows: ${progressVm.previewRowCount}`);
+    if (progressVm.selectedRowCount > 0) countBits.push(`Selected: ${progressVm.selectedRowCount}`);
+    if (progressVm.queuedJobs > 0 || progressVm.runningJobs > 0) countBits.push(`Jobs: ${progressVm.runningJobs} running / ${progressVm.queuedJobs} queued`);
+    if (progressVm.lineError > 0 || progressVm.failedCandidates > 0) countBits.push(`Issues: ${progressVm.lineError + progressVm.failedCandidates}`);
+    const width = progressVm.indeterminate ? 100 : progressVm.percent;
+    const barInnerStyle = progressVm.indeterminate
+      ? 'width:100%;height:100%;opacity:.35;background:var(--accent,#3b82f6);'
+      : `width:${Math.max(0, Math.min(100, width))}%;height:100%;background:var(--accent,#3b82f6);transition:width .25s ease;`;
+    return `
+      <div class="card" id="bankingPayPreviewProgress" style="margin-top:10px;">
+        <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+          <div style="display:flex;flex-direction:column;gap:4px;min-width:260px;flex:1;">
+            <strong>${enc(progressVm.phaseText || 'Preparing payment preview…')}</strong>
+            ${countBits.length ? `<div class="mini" style="opacity:.85;">${enc(countBits.join(' • '))}</div>` : ''}
+          </div>
+          ${progressVm.indeterminate ? `<span class="pill pill-warn">${enc('Working')}</span>` : `<span class="pill">${enc(String(progressVm.percent))}%</span>`}
+        </div>
+        <div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${enc(progressVm.indeterminate ? '' : String(progressVm.percent))}" style="margin-top:8px;height:10px;border-radius:999px;overflow:hidden;background:rgba(148,163,184,.28);">
+          <div style="${barInnerStyle}"></div>
+        </div>
+      </div>
+    `;
+  };
+
+  const derivePreviewLoadState = ({ readyRows, blockedRows, caseRows, hiddenRows, canonicalRows }) => {
+    const progressCounts = getProgressCountsForRender();
+    const countValue = (...keys) => {
+      for (const key of keys) {
+        const n = Number(progressCounts[key]);
+        if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
+      }
+      return 0;
+    };
+    const phase = upperTrim(progressCounts.phase || progressCounts.current_phase || progressCounts.status || progressCounts.state || '');
+    const nextAction = upperTrim(progressCounts.next_recommended_action || progressCounts.next_action || '');
+    const sectionCounts = isPlainObject(progressCounts.section_counts) ? progressCounts.section_counts : {};
+    const hasReadyRows = readyRows.length > 0;
+    const hasCases = caseRows.length > 0;
+    const hasBlocked = blockedRows.length > 0;
+    const hasAnyRows = hasReadyRows || hasCases || hasBlocked || hiddenRows.length > 0 || canonicalRows.length > 0;
+    const terminalPhase = ['READY', 'READY_EMPTY', 'SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE'].includes(phase);
+    const explicitReady = !!(
+      previewEnvelope.ready === true ||
+      previewEnvelope.ready_flag === true ||
+      pv?.ready === true ||
+      pv?.ready_flag === true ||
+      progressCounts.ready === true ||
+      progressCounts.ready_flag === true ||
+      terminalPhase
+    );
+    const explicitReadyEmpty = !!(
+      previewEnvelope.ready_empty === true ||
+      pv?.ready_empty === true ||
+      progressCounts.ready_empty === true ||
+      progressCounts.readyEmpty === true ||
+      terminalPhase && phase === 'READY_EMPTY'
+    );
+    const rowCountSignal = Math.max(
+      countValue('preview_row_count', 'preview_rows_count', 'row_count'),
+      countValue('selected_row_count', 'selected_rows_count'),
+      countLikeValue(sectionCounts.canonical_preview_lines),
+      countLikeValue(sectionCounts.ready_to_pay),
+      countLikeValue(sectionCounts.ready_preview_lines),
+      countLikeValue(sectionCounts.preview_rows)
+    );
+    const firstPageApplied = !!(
+      wiz.preview.first_page_applied === true ||
+      previewEnvelope.first_page_applied === true ||
+      pv?.first_page_applied === true ||
+      pv?.firstPageApplied === true
+    );
+    const rowsAvailableSignal = !!(
+      progressCounts.rows_available === true ||
+      progressCounts.has_materialised_preview_rows === true ||
+      progressCounts.selected_rows_available === true ||
+      rowCountSignal > 0
+    );
+    const realPending = !!(
+      pendingCandidateIds.length > 0 ||
+      countValue('line_units_pending', 'pending_line_units') > 0 ||
+      countValue('queued_jobs', 'queued_job_count') > 0 ||
+      countValue('running_jobs', 'running_job_count') > 0 ||
+      (!explicitReady && ['PROCESSING_LINE_WORK', 'MATERIALISING_PREVIEW_ROWS', 'PARTIAL_READY', 'REFRESHING_CANDIDATES', 'SEEDING_SCOPE', 'SEEDING_LINE_WORK', 'WORKBENCH_JOBS_RUNNING', 'WAIT_FOR_WORKER'].includes(phase)) ||
+      (!explicitReady && ['SEED_SCOPE_CHUNK', 'PROCESS_LINE_WORK_CHUNK', 'MATERIALISE_PREVIEW_ROWS_CHUNK', 'WAIT_FOR_WORKER'].includes(nextAction))
+    );
+    const isFailedOrStale = !!(
+      pvFriendly ||
+      ['FAILED', 'ERROR', 'STALE_SESSION', 'OBSOLETE_SESSION', 'REBASE_REQUIRED', 'BATCH_STALE'].includes(phase)
+    );
+    const needsFirstPageRows = !!(rowsAvailableSignal && rowCountSignal > 0 && !hasAnyRows && !firstPageApplied);
+    const isReadyEmpty = !!(explicitReadyEmpty || (explicitReady && rowCountSignal <= 0 && !hasAnyRows));
+    const isReadyWithAppliedRows = !!(explicitReady && (hasAnyRows || firstPageApplied) && !needsFirstPageRows);
+    const isReady = !!(isReadyEmpty || isReadyWithAppliedRows || (hasAnyRows && !realPending));
+    const isProgressActive = !!(!isFailedOrStale && !isReadyEmpty && (realPending || needsFirstPageRows || (pvLoading && !isReady) || (!hasAnyRows && !isReady && (pvLoading || rowsAvailableSignal))));
+    return {
+      hasReadyRows,
+      hasAnyRows,
+      hasCases,
+      hasBlocked,
+      isLoading: !!(pvLoading || realPending || needsFirstPageRows),
+      isProgressActive,
+      isReady,
+      isReadyEmpty,
+      isFailedOrStale,
+      loadingWithoutRows: isProgressActive && !hasAnyRows,
+      loadingWithRows: isProgressActive && hasAnyRows,
+      firstPageApplied,
+      rowsAvailableSignal,
+      rowCountSignal,
+      progressCounts
+    };
+  };
+
+  const buildPayPreviewRowsViewModel = () => {
+    const canonicalRows = resolveAllCanonicalPreviewRows();
+    const readyRows = resolveReadyPreviewRows();
+    const caseRows = resolveCasePreviewRows();
+    const blockedRows = resolveBlockedPreviewRows();
+    const hiddenRows = resolveHiddenPreviewRows();
+    const allSelectableRowIds = resolveAllSelectablePreviewRowIds();
+    const readyRowIds = uniqTrimmed(readyRows.map((line) => getPreviewRowId(line)).filter(Boolean));
+    const reconciledSelectionForRows = reconcileSelectedPreviewSelection(
+      selectedPreviewRowIds,
+      allSelectableRowIds,
+      selectedPreviewRowMode
+    );
+    const rowIdSet = new Set(allSelectableRowIds);
+    const selectedSetForRows = (() => {
+      if (reconciledSelectionForRows.selected_preview_row_mode === 'EXPLICIT_NONE') return new Set();
+      if (reconciledSelectionForRows.selected_preview_row_mode === 'IMPLICIT_ALL') return new Set(allSelectableRowIds);
+      return new Set(reconciledSelectionForRows.selected_preview_row_ids.filter((rowId) => rowIdSet.has(rowId)));
+    })();
+    const rowVm = {
+      readyRows,
+      caseRows,
+      blockedRows,
+      hiddenRows,
+      canonicalRows,
+      allSelectableRowIds,
+      readyRowIds,
+      selectedPreviewRowSet: selectedSetForRows,
+      selectedPreviewRowIds: reconciledSelectionForRows.selected_preview_row_ids,
+      selectedPreviewRowMode: reconciledSelectionForRows.selected_preview_row_mode
+    };
+    rowVm.loadState = derivePreviewLoadState({ readyRows, blockedRows, caseRows, hiddenRows, canonicalRows });
+    rowVm.progressVm = buildPayPreviewProgressViewModel(wiz, rowVm);
+    return rowVm;
+  };
+
+  const previewRowsVm = buildPayPreviewRowsViewModel();
+  selectedPreviewRowIds = uniqTrimmed(previewRowsVm.selectedPreviewRowIds);
+  selectedPreviewRowMode = normalizeSelectedPreviewRowMode(
+    previewRowsVm.selectedPreviewRowMode,
+    previewRowsVm.allSelectableRowIds,
+    selectedPreviewRowIds
+  );
+  selectedPreviewRowSet = (previewRowsVm.selectedPreviewRowSet instanceof Set) ? previewRowsVm.selectedPreviewRowSet : new Set();
+  const effectiveAllPreviewRowIds = uniqTrimmed(previewRowsVm.allSelectableRowIds);
+  const canonicalPreviewLines = previewRowsVm.canonicalRows;
+  const readyPreviewLines = previewRowsVm.readyRows;
+  const blockedPreviewLines = previewRowsVm.blockedRows;
+  const casePreviewLines = previewRowsVm.caseRows;
+  const hiddenPreviewLines = previewRowsVm.hiddenRows;
+  const effectivePvLoading = !!previewRowsVm.loadState.isProgressActive;
+  const previewProgressHtml = renderPayPreviewProgress(previewRowsVm.progressVm);
 
   const payeeReadinessBlockerCodes = new Set([
     'BLOCKED_BANK_DETAILS',
@@ -40278,10 +41184,11 @@ function renderPayNewBatchWizard() {
 
   const payeCreateBlocked = !!(payeGuardrails && payeGuardrails.create_paye_blocked === true);
   const payeOverrideRequired = !!(payeGuardrails && payeGuardrails.override_required === true);
-  const createBtnDisabled = cdBusy || pvLoading || hasPendingCandidates || !pv || !hasAnyReadyToPay || (payeCreateBlocked && !hasReadyUmbrella);
+  const createBtnDisabled = cdBusy || effectivePvLoading || hasPendingCandidates || !pv || !hasAnyReadyToPay || (payeCreateBlocked && !hasReadyUmbrella);
   const createDraftTitle = (() => {
     if (!pv) return 'Run Refresh first';
     if (hasPendingCandidates) return 'Candidates are still refreshing. Draft creation re-enables automatically when refresh finishes.';
+    if (effectivePvLoading) return 'Payment preview is still preparing. Draft creation re-enables automatically when ready rows have finished loading.';
     if (!hasAnyReadyToPay) return 'Nothing is currently in Ready to Pay. Resolve or unsnooze blocked items first.';
     if (payeCreateBlocked && hasReadyUmbrella) return 'PAYE draft creation is blocked, but umbrella-ready items can still continue.';
     if (payeCreateBlocked && !hasReadyUmbrella) return 'A PAYE draft already exists. Cancel or delete it first.';
@@ -40656,7 +41563,7 @@ function renderPayNewBatchWizard() {
   const previewRowsHtml = [
     renderTimesheetParentRows(displayLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
     renderSimplePreviewRows(displayLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'), 'Resolution required')
-  ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">No case-resolution items are currently in this preview.</td></tr>`;
+  ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(casesEmptyMessage())}</td></tr>`;
 
   return `
     <div class="card" style="margin-top:10px;">
@@ -40699,7 +41606,7 @@ function renderPayNewBatchWizard() {
     const previewRowsHtml = [
       renderTimesheetParentRows(displayLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
       renderSimplePreviewRows(displayLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'), 'Blocked for pay')
-    ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">No blocked live items.</td></tr>`;
+    ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(blockedEmptyMessage())}</td></tr>`;
 
     return `
       <div class="card" style="margin-top:10px;">
@@ -40735,10 +41642,26 @@ function renderPayNewBatchWizard() {
     `;
   };
 
+  const readyEmptyMessage = () => {
+    if (previewRowsVm.loadState.loadingWithoutRows) return 'Loading payment preview rows…';
+    if (previewRowsVm.loadState.isReadyEmpty) return 'No payable rows found.';
+    return 'No line-level items are currently ready to pay.';
+  };
+
+  const casesEmptyMessage = () => {
+    if (previewRowsVm.loadState.loadingWithoutRows) return 'Loading case-resolution state…';
+    return 'No cases need resolution.';
+  };
+
+  const blockedEmptyMessage = () => {
+    if (previewRowsVm.loadState.loadingWithoutRows) return 'Loading blocked-row state…';
+    return 'No rows are blocked for pay.';
+  };
+
   const readyCanonicalRowsHtml = [
     renderTimesheetParentRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') === 'TIMESHEET_PAYMENT')),
     renderSimplePreviewRows(readyPreviewLines.filter((line) => upperTrim(line?.line_type || '') !== 'TIMESHEET_PAYMENT'))
-  ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">No line-level items are currently ready to pay.</td></tr>`;
+  ].filter(Boolean).join('') || `<tr><td colspan="8" class="mini" style="opacity:.85;">${enc(readyEmptyMessage())}</td></tr>`;
 
   return `
     <div class="card" id="bankingPayNewBatchWizard">
@@ -40765,13 +41688,14 @@ function renderPayNewBatchWizard() {
             <div class="actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto;">
               <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:openFiltersModal" title="Open Banking Pay filters">Filters</button>
               <button type="button" class="btn btn-sm btn-primary ${createBtnDisabled ? 'disabled' : ''}" ${createBtnDisabled ? 'aria-disabled="true"' : ''} data-action="banking:pay:createDraft" title="${enc(createDraftTitle)}" style="font-weight:700;background:#198754;border-color:#198754;color:#fff;">${enc(createDraftLabel)}</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:selectAllPreviewRows" title="Select all preview rows" ${allPreviewRowIds.length ? '' : 'disabled'}>Select all</button>
-              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearAllPreviewRows" title="Unselect all preview rows" ${allPreviewRowIds.length ? '' : 'disabled'}>Unselect all</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:selectAllPreviewRows" title="Select all preview rows" ${effectiveAllPreviewRowIds.length ? '' : 'disabled'}>Select all</button>
+              <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:clearAllPreviewRows" title="Unselect all preview rows" ${effectiveAllPreviewRowIds.length ? '' : 'disabled'}>Unselect all</button>
               <button type="button" class="btn btn-sm btn-outline ${hasActivePayFilters ? '' : 'disabled'}" ${hasActivePayFilters ? '' : 'aria-disabled="true"'} data-action="banking:pay:clearFilters" title="${enc(clearFiltersTitle)}">Clear filters</button>
             </div>
           </div>
 
-          <div class="mini" style="opacity:.85;">${enc(`Selected preview rows: ${selectedPreviewRowSet.size}/${allPreviewRowIds.length || 0}${selectedPreviewRowSet.size === allPreviewRowIds.length && allPreviewRowIds.length ? ' (all selected)' : ''}`)}</div>
+          <div class="mini" style="opacity:.85;">${enc(`Selected preview rows: ${selectedPreviewRowSet.size}/${effectiveAllPreviewRowIds.length || 0}${selectedPreviewRowSet.size === effectiveAllPreviewRowIds.length && effectiveAllPreviewRowIds.length ? ' (all selected)' : ''}`)}</div>
+          ${previewProgressHtml}
 
           <div class="card" style="margin-top:10px;">
             <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
@@ -40800,6 +41724,11 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
+
+
+
+
+
 
 
 function deriveBankingAttentionStateFromBatchList(input) {
@@ -63662,6 +64591,10 @@ function renderBankingAlertPreferencesPanel() {
 
 
 
+
+
+
+
 function attachBankingModalDelegatedHandlers() {
   const LOG = (typeof window.__LOG_BANKING === 'boolean') ? window.__LOG_BANKING : false;
   const L = (...a) => { if (LOG) console.log('[BANKING][UI]', ...a); };
@@ -66360,6 +67293,191 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       ? Array.from(new Set(arr.map((x) => String(x || '').trim()).filter(Boolean)))
       : [];
 
+
+    const getPreviewRowIdFromRow = (rowLike) => String(
+      rowLike?.preview_row_id ||
+      rowLike?.previewRowId ||
+      rowLike?.row_id ||
+      rowLike?.rowId ||
+      rowLike?.line_id ||
+      rowLike?.lineId ||
+      rowLike?.id ||
+      ''
+    ).trim();
+
+    const pushPreviewRowIdsFromRows = (rows, pushId) => {
+      if (!Array.isArray(rows)) return;
+      for (const row of rows) {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+        pushId(getPreviewRowIdFromRow(row));
+      }
+    };
+
+    const pushPreviewRowIdsFromPageLike = (pageLike, pushId) => {
+      if (!pageLike || typeof pageLike !== 'object' || Array.isArray(pageLike)) return;
+      for (const rowKey of [
+        'rows',
+        'items',
+        'data',
+        'canonical_preview_lines',
+        'canonicalPreviewLines',
+        'ready_to_pay',
+        'readyToPay',
+        'ready_to_pay_now',
+        'readyToPayNow',
+        'draftable_now',
+        'draftableNow',
+        'ready_preview_lines',
+        'readyPreviewLines',
+        'preview_rows',
+        'previewRows',
+        'blocked_preview_lines',
+        'blockedPreviewLines',
+        'blocked_for_pay_now',
+        'blockedForPayNow',
+        'blocked_now',
+        'blockedNow'
+      ]) {
+        pushPreviewRowIdsFromRows(pageLike[rowKey], pushId);
+      }
+    };
+
+    const pushPreviewRowIdsFromPageCaches = (nodeLike, pushId) => {
+      if (!nodeLike || typeof nodeLike !== 'object' || Array.isArray(nodeLike)) return;
+      for (const cacheKey of [
+        'preview_pages',
+        'previewPages',
+        'preview_page_cache',
+        'previewPageCache',
+        'page_cache',
+        'pageCache',
+        'pages'
+      ]) {
+        const cache = nodeLike[cacheKey];
+        if (Array.isArray(cache)) {
+          for (const pageLike of cache) pushPreviewRowIdsFromPageLike(pageLike, pushId);
+        } else if (cache && typeof cache === 'object' && !Array.isArray(cache)) {
+          for (const pageLike of Object.values(cache)) pushPreviewRowIdsFromPageLike(pageLike, pushId);
+        }
+      }
+    };
+
+    const pushPreviewRowIdsFromNode = (nodeLike, pushId) => {
+      if (!nodeLike || typeof nodeLike !== 'object' || Array.isArray(nodeLike)) return;
+
+      for (const rowKey of [
+        'ready_to_pay_now',
+        'readyToPayNow',
+        'draftable_now',
+        'draftableNow',
+        'ready_preview_lines',
+        'readyPreviewLines',
+        'blocked_preview_lines',
+        'blockedPreviewLines',
+        'blocked_for_pay_now',
+        'blockedForPayNow',
+        'blocked_now',
+        'blockedNow',
+        'canonical_preview_lines',
+        'canonicalPreviewLines',
+        'preview_rows',
+        'previewRows',
+        'rows',
+        'itemisation',
+        'preview_lines',
+        'previewLines',
+        'lines'
+      ]) {
+        pushPreviewRowIdsFromRows(nodeLike[rowKey], pushId);
+      }
+
+      const componentStateCache = (nodeLike.componentStateCache && typeof nodeLike.componentStateCache === 'object' && !Array.isArray(nodeLike.componentStateCache))
+        ? nodeLike.componentStateCache
+        : ((nodeLike.component_state_cache && typeof nodeLike.component_state_cache === 'object' && !Array.isArray(nodeLike.component_state_cache)) ? nodeLike.component_state_cache : null);
+      if (componentStateCache && componentStateCache !== nodeLike) {
+        for (const rowKey of [
+          'ready_to_pay_now',
+          'readyToPayNow',
+          'draftable_now',
+          'draftableNow',
+          'ready_preview_lines',
+          'readyPreviewLines',
+          'blocked_preview_lines',
+          'blockedPreviewLines',
+          'blocked_for_pay_now',
+          'blockedForPayNow',
+          'blocked_now',
+          'blockedNow',
+          'hidden_preview_lines',
+          'hiddenPreviewLines'
+        ]) {
+          pushPreviewRowIdsFromRows(componentStateCache[rowKey], pushId);
+        }
+      }
+
+      for (const bucketKey of [
+        'paye_candidates',
+        'payeCandidates',
+        'non_paye_payees',
+        'nonPayePayees',
+        'payees',
+        'candidates'
+      ]) {
+        const bucket = Array.isArray(nodeLike[bucketKey]) ? nodeLike[bucketKey] : [];
+        for (const candidateLike of bucket) {
+          if (!candidateLike || typeof candidateLike !== 'object' || Array.isArray(candidateLike)) continue;
+          pushId(getPreviewRowIdFromRow(candidateLike));
+          for (const rowKey of [
+            'itemisation',
+            'canonical_preview_lines',
+            'canonicalPreviewLines',
+            'preview_lines',
+            'previewLines',
+            'preview_rows',
+            'previewRows',
+            'ready_preview_lines',
+            'readyPreviewLines',
+            'blocked_preview_lines',
+            'blockedPreviewLines',
+            'rows',
+            'lines'
+          ]) {
+            pushPreviewRowIdsFromRows(candidateLike[rowKey], pushId);
+          }
+        }
+      }
+
+      pushPreviewRowIdsFromPageCaches(nodeLike, pushId);
+    };
+
+    const getPayWizardSelectablePreviewRowIdsFromState = () => {
+      const out = [];
+      const seen = new Set();
+      const pushId = (raw) => {
+        const s = String(raw || '').trim();
+        if (!s || seen.has(s)) return;
+        seen.add(s);
+        out.push(s);
+      };
+
+      try {
+        const wiz = (st.pay && st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : null;
+        if (!wiz) return out;
+        const previewEnvelope = (wiz.preview && wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : null;
+        const previewPayload = (previewEnvelope && previewEnvelope.preview && typeof previewEnvelope.preview === 'object' && !Array.isArray(previewEnvelope.preview)) ? previewEnvelope.preview : previewEnvelope;
+
+        pushPreviewRowIdsFromNode(wiz.preview?.componentStateCache, pushId);
+        pushPreviewRowIdsFromNode(wiz.decisions, pushId);
+        pushPreviewRowIdsFromNode(wiz.workbench, pushId);
+        pushPreviewRowIdsFromNode(previewPayload, pushId);
+        pushPreviewRowIdsFromNode(previewEnvelope, pushId);
+        pushPreviewRowIdsFromPageCaches(wiz.preview || {}, pushId);
+        pushPreviewRowIdsFromPageCaches(wiz.workbench || {}, pushId);
+      } catch {}
+
+      return out;
+    };
+
     const getRenderedPreviewRowIds = () => {
       const out = [];
       const seen = new Set();
@@ -66383,53 +67501,9 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
 
       if (out.length > 0) return out;
 
-      try {
-        const cache = (st.pay && st.pay.draftWizard && st.pay.draftWizard.preview && st.pay.draftWizard.preview.componentStateCache && typeof st.pay.draftWizard.preview.componentStateCache === 'object')
-          ? st.pay.draftWizard.preview.componentStateCache
-          : null;
-
-        const cachedLines = [
-          ...(Array.isArray(cache?.ready_preview_lines) ? cache.ready_preview_lines : []),
-          ...(Array.isArray(cache?.blocked_preview_lines) ? cache.blocked_preview_lines : [])
-        ];
-
-        for (const row of cachedLines) {
-          if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
-          pushId(row.preview_row_id || row.row_id || row.line_id || row.id);
-        }
-      } catch {}
-
-      if (out.length > 0) return out;
-
-      try {
-        const pvData = (st.pay && st.pay.draftWizard && st.pay.draftWizard.preview && st.pay.draftWizard.preview.data && typeof st.pay.draftWizard.preview.data === 'object')
-          ? st.pay.draftWizard.preview.data
-          : null;
-
-        const pv = (pvData && pvData.preview && typeof pvData.preview === 'object') ? pvData.preview : pvData;
-        const payeCands = Array.isArray(pv?.paye_candidates) ? pv.paye_candidates : [];
-        const nonPaye = Array.isArray(pv?.non_paye_payees) ? pv.non_paye_payees : [];
-
-        for (const cand of [...payeCands, ...nonPaye]) {
-          if (!cand || typeof cand !== 'object' || Array.isArray(cand)) continue;
-          const itemisation = Array.isArray(cand.itemisation) ? cand.itemisation : [];
-          for (const item of itemisation) {
-            if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
-            pushId(item.preview_row_id || item.row_id || item.line_id || item.id);
-          }
-        }
-
-        const topLevelRows = [
-          ...(Array.isArray(pv?.canonical_preview_lines) ? pv.canonical_preview_lines : []),
-          ...(Array.isArray(pv?.preview_rows) ? pv.preview_rows : []),
-          ...(Array.isArray(pv?.rows) ? pv.rows : [])
-        ];
-
-        for (const row of topLevelRows) {
-          if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
-          pushId(row.preview_row_id || row.row_id || row.line_id || row.id);
-        }
-      } catch {}
+      for (const rowId of getPayWizardSelectablePreviewRowIdsFromState()) {
+        pushId(rowId);
+      }
 
       return out;
     };
@@ -66446,6 +67520,27 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
       if (selectedIds.length <= 0) return 'IMPLICIT_ALL';
       if (selectedIds.length >= validIds.length) return 'IMPLICIT_ALL';
       return 'EXPLICIT_SUBSET';
+    };
+
+
+    const writePreviewSelectionState = (decisions, selectedRowIds, mode) => {
+      const nextMode = String(mode || '').trim().toUpperCase();
+      const safeMode = (nextMode === 'IMPLICIT_ALL' || nextMode === 'EXPLICIT_SUBSET' || nextMode === 'EXPLICIT_NONE') ? nextMode : 'IMPLICIT_ALL';
+      const safeSelectedRowIds = normalizePreviewRowIdArray(selectedRowIds);
+
+      try {
+        decisions.selected_preview_row_ids = [...safeSelectedRowIds];
+        decisions.selected_preview_row_mode = safeMode;
+      } catch {}
+
+      try {
+        st.pay.draftWizard.selected_preview_row_mode = safeMode;
+        st.pay.draftWizard.workbench = (st.pay.draftWizard.workbench && typeof st.pay.draftWizard.workbench === 'object') ? st.pay.draftWizard.workbench : {};
+        st.pay.draftWizard.workbench.selected_preview_row_ids = [...safeSelectedRowIds];
+        st.pay.draftWizard.workbench.selected_preview_row_mode = safeMode;
+      } catch {}
+
+      return decisions;
     };
 
      const setPreviewRowSelectionState = ({ mode, selectedIds } = {}) => {
@@ -66490,51 +67585,31 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
         decisions.selected_preview_row_ids = normalizePreviewRowIdArray(decisions.selected_preview_row_ids);
         try {
           const currentMode = String(st.pay?.draftWizard?.selected_preview_row_mode || '').trim().toUpperCase();
-          st.pay.draftWizard.selected_preview_row_mode =
-            (currentMode === 'IMPLICIT_ALL' || currentMode === 'EXPLICIT_SUBSET' || currentMode === 'EXPLICIT_NONE')
-              ? currentMode
-              : 'IMPLICIT_ALL';
+          const safeMode = (currentMode === 'IMPLICIT_ALL' || currentMode === 'EXPLICIT_SUBSET' || currentMode === 'EXPLICIT_NONE')
+            ? currentMode
+            : 'IMPLICIT_ALL';
+          return writePreviewSelectionState(decisions, decisions.selected_preview_row_ids, safeMode);
         } catch {}
         return decisions;
       }
 
       if (nextMode === 'EXPLICIT_NONE') {
-        decisions.selected_preview_row_ids = [];
-        try {
-          st.pay.draftWizard.selected_preview_row_mode = 'EXPLICIT_NONE';
-        } catch {}
-        return decisions;
+        return writePreviewSelectionState(decisions, [], 'EXPLICIT_NONE');
       }
 
       if (nextMode === 'EXPLICIT_SUBSET') {
         if (filteredSelectedIds.length <= 0) {
-          decisions.selected_preview_row_ids = [];
-          try {
-            st.pay.draftWizard.selected_preview_row_mode = 'EXPLICIT_NONE';
-          } catch {}
-          return decisions;
+          return writePreviewSelectionState(decisions, [], 'EXPLICIT_NONE');
         }
 
         if (filteredSelectedIds.length >= allPreviewRowIds.length) {
-          decisions.selected_preview_row_ids = [...allPreviewRowIds];
-          try {
-            st.pay.draftWizard.selected_preview_row_mode = 'IMPLICIT_ALL';
-          } catch {}
-          return decisions;
+          return writePreviewSelectionState(decisions, allPreviewRowIds, 'IMPLICIT_ALL');
         }
 
-        decisions.selected_preview_row_ids = [...filteredSelectedIds];
-        try {
-          st.pay.draftWizard.selected_preview_row_mode = 'EXPLICIT_SUBSET';
-        } catch {}
-        return decisions;
+        return writePreviewSelectionState(decisions, filteredSelectedIds, 'EXPLICIT_SUBSET');
       }
 
-      decisions.selected_preview_row_ids = [...allPreviewRowIds];
-      try {
-        st.pay.draftWizard.selected_preview_row_mode = 'IMPLICIT_ALL';
-      } catch {}
-      return decisions;
+      return writePreviewSelectionState(decisions, allPreviewRowIds, 'IMPLICIT_ALL');
     };
 
     const togglePreviewRowSelection = (previewRowId, checked) => {
@@ -66665,42 +67740,6 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     if (selectedIds.length <= 0) return 'IMPLICIT_ALL';
     return 'EXPLICIT_SUBSET';
   };
-  const collectPreviewRowIds = (previewPayload) => {
-    const out = [];
-    const seen = new Set();
-    const pushId = (raw) => {
-      const s = trimStr(raw);
-      if (!s || seen.has(s)) return;
-      seen.add(s);
-      out.push(s);
-    };
-    const candidateArrays = [
-      asArray(previewPayload?.paye_candidates),
-      asArray(previewPayload?.non_paye_payees)
-    ];
-    for (const arr of candidateArrays) {
-      for (const cand of arr) {
-        if (!isPlainObject(cand)) continue;
-        for (const item of asArray(cand.itemisation)) {
-          if (!isPlainObject(item)) continue;
-          pushId(item.preview_row_id || item.line_id || item.row_id || item.id);
-        }
-      }
-    }
-    for (const item of asArray(previewPayload?.canonical_preview_lines)) {
-      if (!isPlainObject(item)) continue;
-      pushId(item.preview_row_id || item.line_id || item.row_id || item.id);
-    }
-    for (const item of asArray(previewPayload?.preview_rows)) {
-      if (!isPlainObject(item)) continue;
-      pushId(item.preview_row_id || item.line_id || item.row_id || item.id);
-    }
-    for (const item of asArray(previewPayload?.rows)) {
-      if (!isPlainObject(item)) continue;
-      pushId(item.preview_row_id || item.line_id || item.row_id || item.id);
-    }
-    return out;
-  };
   const reconcileSelection = (selectedIds, validIds, modeRaw) => {
     const validPreviewRowIds = uniqTrimmed(validIds);
     const validPreviewRowIdSet = new Set(validPreviewRowIds);
@@ -66732,7 +67771,7 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
   wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
   const previewEnvelope = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : {};
   const previewPayload = (previewEnvelope.preview && typeof previewEnvelope.preview === 'object' && !Array.isArray(previewEnvelope.preview)) ? previewEnvelope.preview : previewEnvelope;
-  const previewRowUniverse = collectPreviewRowIds(previewPayload);
+  const previewRowUniverse = getPayWizardSelectablePreviewRowIdsFromState();
 
   const selectionState = reconcileSelection(
     decisions.selected_preview_row_ids,
@@ -66741,7 +67780,10 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
   );
 
   decisions.selected_preview_row_ids = selectionState.selected_preview_row_ids;
+  decisions.selected_preview_row_mode = selectionState.selected_preview_row_mode;
   wiz.selected_preview_row_mode = selectionState.selected_preview_row_mode;
+  wiz.workbench.selected_preview_row_ids = [...selectionState.selected_preview_row_ids];
+  wiz.workbench.selected_preview_row_mode = selectionState.selected_preview_row_mode;
 
   const pendingCandidateIds = uniqTrimmed(
     wiz.workbench.pending_candidate_ids && wiz.workbench.pending_candidate_ids.length
@@ -66788,6 +67830,8 @@ const resetPayPreviewAndDecisions = async (options = {}) => {
     if (!Array.isArray(wiz.preview.componentStateCache.case_resolution_states)) wiz.preview.componentStateCache.case_resolution_states = [];
     if (!Array.isArray(wiz.preview.componentStateCache.blocked_case_states)) wiz.preview.componentStateCache.blocked_case_states = [];
     if (!Array.isArray(wiz.preview.componentStateCache.safe_case_states)) wiz.preview.componentStateCache.safe_case_states = [];
+    if (!Array.isArray(wiz.preview.componentStateCache.ready_to_pay_now)) wiz.preview.componentStateCache.ready_to_pay_now = [];
+    if (!Array.isArray(wiz.preview.componentStateCache.draftable_now)) wiz.preview.componentStateCache.draftable_now = [];
     if (!Array.isArray(wiz.preview.componentStateCache.ready_preview_lines)) wiz.preview.componentStateCache.ready_preview_lines = [];
     if (!Array.isArray(wiz.preview.componentStateCache.blocked_preview_lines)) wiz.preview.componentStateCache.blocked_preview_lines = [];
     if (!Array.isArray(wiz.preview.componentStateCache.hidden_preview_lines)) wiz.preview.componentStateCache.hidden_preview_lines = [];
@@ -72079,7 +73123,6 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
   return { ok: true };
 }
-
 
 
 
@@ -90586,6 +91629,7 @@ function computePayWorkbenchSessionSignature(input = null) {
   return stableStringify(signaturePayload);
 }
 
+
 function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -91239,7 +92283,71 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     target.bootstrap_only = false;
     target.preview_bootstrap = false;
   };
-  if (previewPayloadHasRows) {
+  const progressCountValue = (...keys) => {
+    for (const key of keys) {
+      const n = Number(responseObj[key] ?? previewObj[key] ?? progressObj[key]);
+      if (Number.isFinite(n)) return Math.max(0, Math.trunc(n));
+    }
+    return 0;
+  };
+  const rawProgressPhaseCode = trimStr(progressObj.phase || progressObj.current_phase || progressObj.status || responseObj.phase || responseObj.status || '').toUpperCase();
+  const rawProgressTerminalPhase = ['READY', 'READY_EMPTY', 'SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE'].includes(rawProgressPhaseCode);
+  const rawExplicitReadySignal = !!(responseObj.ready === true || responseObj.ready_flag === true || previewObj.ready === true || previewObj.ready_flag === true || progressObj.ready === true || progressObj.ready_flag === true || rawProgressTerminalPhase);
+  const rawExplicitReadyEmptySignal = !!(responseObj.ready_empty === true || responseObj.readyEmpty === true || previewObj.ready_empty === true || previewObj.readyEmpty === true || progressObj.ready_empty === true || progressObj.readyEmpty === true || rawProgressPhaseCode === 'READY_EMPTY');
+  const rawPendingCandidateIds = normalizeStringArray(responseObj.pending_candidate_ids ?? previewObj.pending_candidate_ids ?? progressObj.pending_candidate_ids ?? []);
+  const rawPendingJobIds = normalizeStringArray(responseObj.pending_job_ids ?? previewObj.pending_job_ids ?? progressObj.pending_job_ids ?? responseObj.refresh_job_ids ?? progressObj.refresh_job_ids ?? []);
+  const rawPendingJobRows = [
+    ...asArray(responseObj.pending_candidate_jobs),
+    ...asArray(previewObj.pending_candidate_jobs),
+    ...asArray(progressObj.pending_candidate_jobs),
+    ...asArray(responseObj.candidate_status_rows),
+    ...asArray(previewObj.candidate_status_rows),
+    ...asArray(progressObj.candidate_status_rows),
+    ...asArray(progressObj.candidate_statuses)
+  ].filter((row) => isPlainObject(row));
+  const rawHasActivePendingJob = rawPendingJobRows.some((row) => isActiveWorkbenchPendingJobRow(row));
+  const rawExplicitPendingRefresh = !!(
+    responseObj.pending_refresh === true ||
+    responseObj.refresh_pending === true ||
+    responseObj.preview_refresh_pending === true ||
+    previewObj.pending_refresh === true ||
+    previewObj.refresh_pending === true ||
+    previewObj.preview_refresh_pending === true ||
+    progressObj.pending_refresh === true ||
+    progressObj.refresh_pending === true ||
+    progressObj.preview_refresh_pending === true
+  );
+  const rawActiveBackendCounters = progressCountValue('line_units_pending', 'pending_line_units') > 0 ||
+    progressCountValue('queued_jobs', 'queued_job_count') > 0 ||
+    progressCountValue('running_jobs', 'running_job_count') > 0;
+  const rawRowsAvailableSignal = !!(
+    previewPayloadHasRows ||
+    responseObj.rows_available === true ||
+    previewObj.rows_available === true ||
+    progressObj.rows_available === true ||
+    responseObj.has_materialised_preview_rows === true ||
+    previewObj.has_materialised_preview_rows === true ||
+    progressObj.has_materialised_preview_rows === true ||
+    progressCountValue('preview_row_count', 'preview_rows_count', 'row_count', 'rows_count') > 0 ||
+    progressCountValue('selected_row_count', 'selected_rows_count') > 0
+  );
+  const rawStaleReadyOrRowsOnlySignal = !!((rawExplicitReadySignal || rawExplicitReadyEmptySignal || rawProgressTerminalPhase || rawRowsAvailableSignal) && !rawActiveBackendCounters && !rawHasActivePendingJob);
+  const rawPendingJobIdsIndicateActiveWork = rawPendingJobIds.length > 0 && !rawStaleReadyOrRowsOnlySignal;
+  const rawPendingCandidateIdsIndicateActiveWork = rawPendingCandidateIds.length > 0 && !rawExplicitReadySignal && !rawExplicitReadyEmptySignal && !rawProgressTerminalPhase && !(rawRowsAvailableSignal && !rawActiveBackendCounters && !rawHasActivePendingJob && !rawPendingJobIdsIndicateActiveWork);
+  const rawExplicitPendingRefreshIndicatesActiveWork = rawExplicitPendingRefresh && !rawStaleReadyOrRowsOnlySignal;
+  const rawPhasePending = !rawProgressTerminalPhase && ['REFRESHING_CANDIDATES', 'SEEDING_SCOPE', 'SEEDING_LINE_WORK', 'PROCESSING_LINE_WORK', 'MATERIALISING_PREVIEW_ROWS', 'SNAPSHOT_REFRESH_PENDING', 'WORKBENCH_REFRESH_PENDING', 'SNAPSHOT_REBUILD_PENDING', 'WORKBENCH_JOBS_RUNNING', 'WAIT_FOR_WORKER', 'PROCESS_LINE_WORK_CHUNK', 'MATERIALISE_PREVIEW_ROWS_CHUNK', 'PENDING_REFRESH', 'PREVIEW_REFRESH_PENDING'].includes(rawProgressPhaseCode) && !rawStaleReadyOrRowsOnlySignal;
+  const rawPendingWorkSignal = !!(
+    !rawExplicitReadyEmptySignal &&
+    (
+      rawExplicitPendingRefreshIndicatesActiveWork ||
+      rawActiveBackendCounters ||
+      rawHasActivePendingJob ||
+      rawPendingJobIdsIndicateActiveWork ||
+      rawPendingCandidateIdsIndicateActiveWork ||
+      rawPhasePending
+    )
+  );
+  if (previewPayloadHasRows && !rawPendingWorkSignal) {
     normalizeFullPreviewPayloadFlags(responseObj);
     normalizeFullPreviewPayloadFlags(previewObj);
   }
@@ -91273,7 +92381,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     const pendingIds = normalizeStringArray(responseObj.pending_candidate_ids || progressObj.pending_candidate_ids || []);
     const dirtyIds = normalizeStringArray(responseObj.dirty_candidate_ids || progressObj.dirty_candidate_ids || pendingIds);
     const refreshIds = normalizeStringArray(responseObj.refresh_job_ids || progressObj.refresh_job_ids || []);
-    const statusMessage = trimStr(responseObj.status_text || responseObj.message || progressObj.status_text || progressObj.message || (responseReadyEmpty ? 'Payment preview is ready.' : 'Payment draft updated. Refreshing payment preview…'));
+    const statusMessage = trimStr(responseObj.status_text || responseObj.message || progressObj.status_text || progressObj.message || (responseReadyEmpty ? 'No payable rows found.' : 'Payment draft updated. Refreshing payment preview…'));
     const shouldClearRowBackedStateForPending = !!(responseReadyEmpty || activeSessionChanged);
     const pendingEnvelope = {
       ...(cloneJson(responseObj) || {}),
@@ -91354,7 +92462,12 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
         ? (cloneJson(preservedComponentStateCache) || preservedComponentStateCache)
         : blankComponentStateCache();
     }
-    wiz.preview.status_text = statusMessage;
+    wiz.preview.status_text = responseReadyEmpty ? 'No payable rows found.' : statusMessage;
+    wiz.preview.progress_only = !responseReadyEmpty;
+    wiz.preview.bootstrap_only = false;
+    wiz.preview.preview_ready_visual = responseReadyEmpty;
+    wiz.preview.ready_empty = responseReadyEmpty;
+    if (responseReadyEmpty) wiz.preview.first_page_applied = true;
     wiz.lastPreviewFailure = null;
 
     if (!shouldClearRowBackedStateForPending) {
@@ -91453,13 +92566,13 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   let pendingCandidateJobs = normalizeActivePendingCandidateJobs(rawPendingCandidateJobRows);
   pendingCandidateIds = normalizeActivePendingCandidateIds(pendingCandidateIds, rawPendingCandidateJobRows, pendingCandidateJobs);
   pendingCandidateRows = candidateStatusRows.filter((row) => pendingCandidateIds.includes(trimStr(row?.candidate_id || '')));
-  const progressReadyFlag = responseObj.ready === true || responseObj.ready_flag === true || progressObj.ready === true || progressObj.ready_flag === true;
+  const progressReadyFlag = !rawPendingWorkSignal && (responseObj.ready === true || responseObj.ready_flag === true || progressObj.ready === true || progressObj.ready_flag === true);
   if (progressReadyFlag) {
     pendingCandidateIds = [];
     pendingCandidateRows = [];
     pendingCandidateJobs = [];
   }
-  const hasPendingWorkbenchRefresh = !progressReadyFlag && (pendingCandidateIds.length > 0 || pendingCandidateJobs.length > 0);
+  const hasPendingWorkbenchRefresh = !!(rawPendingWorkSignal || (!progressReadyFlag && (pendingCandidateIds.length > 0 || pendingCandidateJobs.length > 0)));
 
   const hasOwn = (obj, key) => isPlainObject(obj) && Object.prototype.hasOwnProperty.call(obj, key);
   const serverSelectionProvidedMarkerPresent = (
@@ -91521,6 +92634,124 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     ...collectPreviewRowIds(previewObj, responseObj),
     ...collectPreviewRowIdsFromPageMap(mergedPreviewPages)
   ]);
+  const mergedPreviewPageRows = (() => {
+    const out = [];
+    const seen = new Set();
+    const pageMap = isPlainObject(mergedPreviewPages) ? mergedPreviewPages : {};
+    for (const page of Object.values(pageMap)) {
+      if (!isPlainObject(page)) continue;
+      const rows = Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
+      for (const row of rows) pushUniquePreviewRow(out, seen, row);
+      for (const row of asArray(page.canonical_preview_lines)) pushUniquePreviewRow(out, seen, row);
+      for (const row of asArray(page.ready_preview_lines)) pushUniquePreviewRow(out, seen, row);
+      for (const row of asArray(page.ready_to_pay_now)) pushUniquePreviewRow(out, seen, row);
+      for (const row of asArray(page.preview_rows)) pushUniquePreviewRow(out, seen, row);
+    }
+    return out;
+  })();
+  const hasRowBackedPreviewRows = () => !!(
+    readyToPayNow.length > 0 ||
+    draftableNow.length > 0 ||
+    readyPreviewLines.length > 0 ||
+    canonicalPreviewLines.length > 0 ||
+    previewRows.length > 0 ||
+    mergedPreviewPageRows.length > 0
+  );
+  const friendlyPreviewProgressText = () => {
+    const phaseCode = trimStr(
+      progressObj.phase ||
+      progressObj.current_phase ||
+      progressObj.status_phase ||
+      progressObj.status ||
+      responseObj.phase ||
+      responseObj.status ||
+      ''
+    ).toUpperCase();
+    if (phaseCode === 'SEEDING_SCOPE') return 'Finding candidates…';
+    if (phaseCode === 'SEEDING_LINE_WORK') return 'Preparing timesheet lines…';
+    if (phaseCode === 'PROCESSING_LINE_WORK') return 'Processing pay lines…';
+    if (phaseCode === 'MATERIALISING_PREVIEW_ROWS') return 'Building preview rows…';
+    if (phaseCode === 'PARTIAL_READY') return 'Loading preview rows…';
+    if (phaseCode === 'WAIT_FOR_WORKER') return 'Waiting for preview worker…';
+    if (phaseCode === 'READY') return 'Payment preview is ready.';
+    const rawText = trimStr(
+      progressObj.status_text ||
+      progressObj.statusText ||
+      progressObj.message ||
+      responseObj.status_text ||
+      responseObj.message ||
+      wiz.preview.status_text ||
+      ''
+    );
+    const rawCode = rawText.toUpperCase();
+    if (rawCode === 'SEEDING_SCOPE') return 'Finding candidates…';
+    if (rawCode === 'SEEDING_LINE_WORK') return 'Preparing timesheet lines…';
+    if (rawCode === 'PROCESSING_LINE_WORK') return 'Processing pay lines…';
+    if (rawCode === 'MATERIALISING_PREVIEW_ROWS') return 'Building preview rows…';
+    if (rawCode === 'PARTIAL_READY') return 'Loading preview rows…';
+    if (rawCode === 'WAIT_FOR_WORKER') return 'Waiting for preview worker…';
+    if (rawCode === 'READY') return 'Payment preview is ready.';
+    if (/^[A-Z0-9_]+$/.test(rawCode) && rawCode.includes('_')) return 'Preparing payment preview…';
+    return rawText || 'Preparing payment preview…';
+  };
+  const deriveVisualPreviewReadyState = () => {
+    const hasRows = hasRowBackedPreviewRows();
+    const hasReadyRows = readyToPayNow.length > 0 || draftableNow.length > 0 || readyPreviewLines.length > 0;
+    const terminalPhase = ['READY', 'READY_EMPTY', 'SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE'].includes(trimStr(progressObj.phase || progressObj.current_phase || responseObj.phase || responseObj.status || '').toUpperCase());
+    const explicitReady = !!(responseObj.ready === true || responseObj.ready_flag === true || previewObj.ready === true || previewObj.ready_flag === true || progressObj.ready === true || progressObj.ready_flag === true || terminalPhase || previewPayloadHasRows);
+    const readyEmpty = !!(
+      responseReadyEmpty ||
+      responseObj.ready_empty === true ||
+      responseObj.readyEmpty === true ||
+      previewObj.ready_empty === true ||
+      previewObj.readyEmpty === true ||
+      progressObj.ready_empty === true ||
+      progressObj.readyEmpty === true ||
+      (!hasRows && !hasPendingWorkbenchRefresh && explicitReady)
+    );
+    const pending = !!(!readyEmpty && hasPendingWorkbenchRefresh);
+    const statusText = readyEmpty
+      ? 'No payable rows found.'
+      : (hasRows && !pending
+          ? 'Payment preview is ready.'
+          : friendlyPreviewProgressText());
+    return { hasRows, hasReadyRows, readyEmpty, pending, statusText };
+  };
+  const finalisePreviewStatusText = () => {
+    const visualState = deriveVisualPreviewReadyState();
+    wiz.preview.loading = visualState.pending;
+    wiz.preview.status_text = visualState.statusText;
+    wiz.preview.progress_only = visualState.pending;
+    wiz.preview.bootstrap_only = false;
+    wiz.preview.preview_ready_visual = !!(visualState.readyEmpty || (visualState.hasRows && !visualState.pending));
+    wiz.preview.ready_empty = !!visualState.readyEmpty;
+    if (mergedPreviewPageRows.length > 0 || visualState.readyEmpty) wiz.preview.first_page_applied = true;
+
+    if (isPlainObject(wiz.preview.data)) {
+      wiz.preview.data.ready = !!(visualState.readyEmpty || (visualState.hasRows && !visualState.pending));
+      wiz.preview.data.ready_flag = wiz.preview.data.ready;
+      wiz.preview.data.ready_empty = !!visualState.readyEmpty;
+      wiz.preview.data.progress_only = visualState.pending;
+      wiz.preview.data.bootstrap_only = false;
+      wiz.preview.data.preview_ready_visual = wiz.preview.preview_ready_visual;
+      if (wiz.preview.first_page_applied === true) wiz.preview.data.first_page_applied = true;
+      if (isPlainObject(wiz.preview.data.preview)) {
+        wiz.preview.data.preview.ready = wiz.preview.data.ready;
+        wiz.preview.data.preview.ready_flag = wiz.preview.data.ready_flag;
+        wiz.preview.data.preview.ready_empty = wiz.preview.data.ready_empty;
+        wiz.preview.data.preview.progress_only = wiz.preview.data.progress_only;
+        wiz.preview.data.preview.bootstrap_only = false;
+        wiz.preview.data.preview.preview_ready_visual = wiz.preview.preview_ready_visual;
+        if (wiz.preview.first_page_applied === true) wiz.preview.data.preview.first_page_applied = true;
+      }
+    }
+
+    wiz.decisions.create_draft_refresh_pending = visualState.pending;
+    wiz.decisions.pay_context_dirty = visualState.pending;
+    wiz.workbench.create_draft_refresh_pending = visualState.pending;
+    wiz.workbench.preview_reopen_required = visualState.pending;
+    return visualState;
+  };
   const rowBearingReplacementSessionContext = !!(
     previewPayloadHasRows && (
       Array.isArray(responseObj.obsolete_session_ids) && responseObj.obsolete_session_ids.length > 0 ||
@@ -91649,7 +92880,15 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.lastPreviewFailure = null;
   wiz.preview.readiness = normalizedEnvelope.readiness;
   wiz.preview.summary = isPlainObject(previewSummary) ? cloneJson(previewSummary) : null;
-  wiz.preview.context_signature = trimStr(canonicalSessionSignature || wiz.preview.context_signature || computePayWorkbenchSessionSignature());
+  const computedPreviewContextSignature = (() => {
+    try {
+      if (typeof computePayWorkbenchSessionSignature === 'function') {
+        return trimStr(computePayWorkbenchSessionSignature());
+      }
+    } catch {}
+    return '';
+  })();
+  wiz.preview.context_signature = trimStr(canonicalSessionSignature || wiz.preview.context_signature || computedPreviewContextSignature);
   wiz.preview.preview_epoch = Number.isFinite(Number(wiz.preview.preview_epoch)) ? (Number(wiz.preview.preview_epoch) + 1) : 1;
   wiz.preview.candidateDebtInfo = (isPlainObject(previewObj.candidateDebtInfo) ? cloneJson(previewObj.candidateDebtInfo) : (isPlainObject(previewObj.candidate_debt_info) ? cloneJson(previewObj.candidate_debt_info) : {})) || {};
   wiz.preview.componentStateCache = {
@@ -91749,6 +92988,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.summary = isPlainObject(previewSummary) ? (cloneJson(previewSummary) || {}) : {};
   wiz.workbench.last_preview_applied_at = new Date().toISOString();
   applyMergedPreviewPagesToState(normalizedEnvelope);
+  finalisePreviewStatusText();
 
   return normalizedEnvelope;
 }
@@ -95710,6 +96950,8 @@ async function bankingPayWorkbenchSessionGetCandidate(sessionId, candidateId, op
 }
 
 
+
+
 async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -95782,7 +97024,7 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       if (!s) return false;
       return ['SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'READY', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'SKIPPED'].includes(s);
     };
-    const hasActivePendingJobEvidence = pendingJobIds.length > 0 || pendingCandidateJobs.some((job) => {
+    const hasActiveNonTerminalPendingJobEvidence = pendingCandidateJobs.some((job) => {
       const jobId = trimStr(job?.pending_job_id || job?.job_id || '');
       const status = trimStr(job?.latest_job_status || job?.job_status || job?.status || job?.candidate_status || '');
       return !!jobId && !isTerminalJobStatus(status);
@@ -95802,20 +97044,47 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     const queuedJobs = toNumber(src.queued_jobs ?? src.queued_job_count);
     const runningJobs = toNumber(src.running_jobs ?? src.running_job_count);
     const sectionCounts = isPlainObject(src.section_counts) ? (cloneJson(src.section_counts) || {}) : {};
-    const rowsAvailable = src.rows_available === true || src.has_materialised_preview_rows === true || previewRowCount > 0 || toNumber(sectionCounts.canonical_preview_lines) > 0;
+    const rowsAvailable = src.rows_available === true || src.has_materialised_preview_rows === true || previewRowCount > 0 || toNumber(sectionCounts.canonical_preview_lines) > 0 || toNumber(sectionCounts.ready_to_pay) > 0 || toNumber(sectionCounts.ready_preview_lines) > 0 || toNumber(sectionCounts.preview_rows) > 0;
     const selectedRowsAvailable = src.selected_rows_available === true || selectedRowCount > 0;
     const explicitReadyFlag = src.ready_flag === true || src.ready === true || payloadObj.ready_flag === true || payloadObj.ready === true;
     const explicitReadyEmptyFlag = src.ready_empty === true || src.readyEmpty === true || payloadObj.ready_empty === true || payloadObj.readyEmpty === true;
     const explicitNotReadyFlag = src.ready_flag === false || src.ready === false || payloadObj.ready_flag === false || payloadObj.ready === false;
     const rawPhaseCode = normaliseProgressCode(src.phase || src.current_phase || src.status_phase || src.status || payloadObj.phase || payloadObj.current_phase || payloadObj.status || '');
-    const progressOnlyFlag = src.progress_only === true || payloadObj.progress_only === true || src.bootstrap_only === true || payloadObj.bootstrap_only === true || src.preview_bootstrap === true || payloadObj.preview_bootstrap === true;
-    const explicitPendingFlag = src.pending_refresh === true || payloadObj.pending_refresh === true || src.refresh_pending === true || payloadObj.refresh_pending === true || src.preview_refresh_pending === true || payloadObj.preview_refresh_pending === true || src.ready === false || src.ready_flag === false || payloadObj.ready === false || payloadObj.ready_flag === false;
-    const activeBackendCounters = lineUnitsPending > 0 || lineUnitsReady > 0 || queuedJobs > 0 || runningJobs > 0;
-    const phasePending = ['REFRESHING_CANDIDATES', 'SEEDING_SCOPE', 'SEEDING_LINE_WORK', 'PROCESSING_LINE_WORK', 'MATERIALISING_PREVIEW_ROWS', 'PARTIAL_READY', 'SNAPSHOT_REFRESH_PENDING', 'WORKBENCH_REFRESH_PENDING', 'SNAPSHOT_REBUILD_PENDING', 'WORKBENCH_JOBS_RUNNING', 'WAIT_FOR_WORKER', 'PROCESS_LINE_WORK_CHUNK', 'MATERIALISE_PREVIEW_ROWS_CHUNK', 'PENDING_REFRESH', 'PREVIEW_REFRESH_PENDING', 'PROGRESS_ONLY', 'BOOTSTRAP_ONLY'].includes(rawPhaseCode);
-    const backendWorkPending = !!(explicitPendingFlag || progressOnlyFlag || phasePending || activeBackendCounters || pendingCandidateIds.length > 0 || pendingJobIds.length > 0 || hasActivePendingJobEvidence || (isPostMutationContext && dirtyCandidateIds.length > 0 && !explicitReadyFlag && !explicitReadyEmptyFlag));
+    const isTerminalProgressPhase = (phase) => ['READY', 'READY_EMPTY', 'SUCCEEDED', 'SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE'].includes(normaliseProgressCode(phase));
+    const terminalProgressPhase = isTerminalProgressPhase(rawPhaseCode);
+    const progressOnlyFlag = src.progress_only === true || payloadObj.progress_only === true;
+    const bootstrapOnlyFlag = src.bootstrap_only === true || payloadObj.bootstrap_only === true || src.preview_bootstrap === true || payloadObj.preview_bootstrap === true;
+    const explicitPendingFlag = src.pending_refresh === true || payloadObj.pending_refresh === true || src.refresh_pending === true || payloadObj.refresh_pending === true || src.preview_refresh_pending === true || payloadObj.preview_refresh_pending === true;
+    const activeBackendCounters = lineUnitsPending > 0 || queuedJobs > 0 || runningJobs > 0;
+    const staleReadyOrRowsOnlySignal = !!((explicitReadyFlag || explicitReadyEmptyFlag || terminalProgressPhase || rowsAvailable) && !activeBackendCounters && !hasActiveNonTerminalPendingJobEvidence);
+    const pendingJobIdsIndicateActiveWork = pendingJobIds.length > 0 && !staleReadyOrRowsOnlySignal;
+    const hasActivePendingJobEvidence = hasActiveNonTerminalPendingJobEvidence || pendingJobIdsIndicateActiveWork;
+    const progressOnlyPending = !terminalProgressPhase && !rowsAvailable && !explicitReadyFlag && !explicitReadyEmptyFlag && (progressOnlyFlag || bootstrapOnlyFlag || rawPhaseCode === 'PROGRESS_ONLY' || rawPhaseCode === 'BOOTSTRAP_ONLY');
+    const phasePending = !terminalProgressPhase && ['REFRESHING_CANDIDATES', 'SEEDING_SCOPE', 'SEEDING_LINE_WORK', 'PROCESSING_LINE_WORK', 'MATERIALISING_PREVIEW_ROWS', 'PARTIAL_READY', 'SNAPSHOT_REFRESH_PENDING', 'WORKBENCH_REFRESH_PENDING', 'SNAPSHOT_REBUILD_PENDING', 'WORKBENCH_JOBS_RUNNING', 'WAIT_FOR_WORKER', 'PROCESS_LINE_WORK_CHUNK', 'MATERIALISE_PREVIEW_ROWS_CHUNK', 'PENDING_REFRESH', 'PREVIEW_REFRESH_PENDING'].includes(rawPhaseCode) && !staleReadyOrRowsOnlySignal;
+    const explicitPendingRefreshIndicatesActiveWork = explicitPendingFlag && !staleReadyOrRowsOnlySignal;
+    const hasActivePendingCandidateIds = pendingCandidateIds.length > 0 && !explicitReadyFlag && !explicitReadyEmptyFlag && !terminalProgressPhase && !(rowsAvailable && !activeBackendCounters && !hasActivePendingJobEvidence);
+    const hasRealBackendWorkPending = () => !!(
+      explicitPendingRefreshIndicatesActiveWork ||
+      progressOnlyPending ||
+      phasePending ||
+      activeBackendCounters ||
+      hasActivePendingCandidateIds ||
+      hasActivePendingJobEvidence ||
+      (isPostMutationContext && dirtyCandidateIds.length > 0 && !explicitReadyFlag && !explicitReadyEmptyFlag && !terminalProgressPhase && !rowsAvailable)
+    );
+    const backendWorkPending = hasRealBackendWorkPending();
     const pendingRefresh = backendWorkPending;
-    const readyFlag = explicitReadyEmptyFlag || (!backendWorkPending && (explicitReadyFlag || (!explicitNotReadyFlag && total > 0 && pending <= 0 && failed <= 0 && lineUnitsPending <= 0 && lineUnitsReady <= 0 && queuedJobs <= 0 && runningJobs <= 0 && !hasActivePendingJobEvidence)));
-    const readyEmptyFlag = explicitReadyEmptyFlag || (!isPostMutationContext && !pendingRefresh && !!readyFlag && total <= 0 && previewRowCount <= 0);
+    const deriveReadyFlag = () => {
+      if (explicitReadyEmptyFlag || explicitReadyFlag || terminalProgressPhase) return true;
+      if (backendWorkPending) return false;
+      if (rowsAvailable) return true;
+      if (explicitNotReadyFlag) return false;
+      if (total > 0 && pending <= 0 && failed <= 0 && lineUnitsPending <= 0 && queuedJobs <= 0 && runningJobs <= 0 && !hasActivePendingJobEvidence) return true;
+      if (lineUnitsTotal > 0 && lineUnitsComplete >= lineUnitsTotal && lineUnitsPending <= 0 && queuedJobs <= 0 && runningJobs <= 0 && !hasActivePendingJobEvidence) return true;
+      return false;
+    };
+    const readyFlag = deriveReadyFlag();
+    const readyEmptyFlag = explicitReadyEmptyFlag || (!isPostMutationContext && !pendingRefresh && !!readyFlag && total <= 0 && previewRowCount <= 0 && !rowsAvailable);
     const phase = trimStr(src.phase || src.current_phase || src.status_phase || payloadObj.phase || payloadObj.current_phase || (readyFlag ? 'READY' : (rowsAvailable ? 'PARTIAL_READY' : 'REFRESHING')));
     const statusText = trimStr(src.status_text || src.statusText || src.message || payloadObj.status_text || payloadObj.message || (readyFlag ? 'Preview ready' : 'Preparing payment preview candidates.'));
     return {
@@ -95845,6 +97114,7 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       has_materialised_preview_rows: rowsAvailable,
       selected_rows_available: selectedRowsAvailable,
       backend_work_pending: backendWorkPending,
+      visual_pending: backendWorkPending,
       sample_limit: sampleLimit,
       ready_flag: !!readyFlag,
       ready: !!readyFlag,
@@ -95853,8 +97123,8 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       refresh_pending: pendingRefresh,
       preview_refresh_pending: pendingRefresh,
       deferred: pendingRefresh && !readyFlag,
-      progress_only: pendingRefresh || progressOnlyFlag,
-      bootstrap_only: src.bootstrap_only === true || payloadObj.bootstrap_only === true || src.preview_bootstrap === true || payloadObj.preview_bootstrap === true,
+      progress_only: pendingRefresh,
+      bootstrap_only: pendingRefresh && bootstrapOnlyFlag,
       mutation_context: mutationContext || null,
       post_mutation_context: mutationContext || null,
       source_session_id: sourceSessionId || null,
@@ -96004,6 +97274,18 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
       try { return String(value || ''); } catch { return ''; }
     }
   };
+  const looksFatalProgressFailure = (value) => {
+    const text = serialiseProgressErrorPayload(value).toUpperCase();
+    if (!text) return false;
+    if (text.includes('UNAUTHORIZED') || text.includes('UNAUTHORISED') || text.includes('FORBIDDEN') || text.includes('PERMISSION')) return true;
+    if (text.includes('RLS') || text.includes('ROW LEVEL SECURITY') || text.includes('POLICY')) return true;
+    if (text.includes('INTEGRITY') || text.includes('DATA_CORRUPTION') || text.includes('CORRUPTION')) return true;
+    if (text.includes('MALFORMED') || text.includes('INVALID_JSON') || text.includes('ASSERT_INTEGRITY')) return true;
+    if (text.includes('SQLSTATE') || text.includes('SQL STATE') || text.includes('POSTGRES') || text.includes('SUPABASE') || text.includes('POSTGREST')) return true;
+    if (text.includes('INVALID INPUT SYNTAX') || text.includes('AMBIGUOUS') || text.includes('CONSTRAINT') || text.includes('VIOLATES')) return true;
+    if (/\b(RELATION|COLUMN|FUNCTION|TABLE|SCHEMA|TYPE|OPERATOR|TRIGGER|INDEX)\b[^\n]*\b(DOES NOT EXIST|NOT FOUND|IS AMBIGUOUS)\b/.test(text)) return true;
+    return false;
+  };
 
   const shouldTreatProgressStatusAsRebase = (status) => {
     const n = Number(status);
@@ -96140,8 +97422,6 @@ async function bankingPayWorkbenchSessionGetProgress(sessionId, options = {}) {
     throw error;
   }
 }
-
-
 
 
 async function bankingPayWorkbenchSessionApplyCaseResolution(sessionId, payload = {}) {
@@ -137094,6 +138374,7 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
     rows: [],
     next_cursor: null,
     returned_count: 0,
+    rows_count: 0,
     message
   });
 
@@ -137231,6 +138512,7 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
         ? payload.data
         : [];
   const returnedCountRaw = Number(payload.returned_count ?? payload.returnedCount ?? rows.length);
+  const rowsCountRaw = Number(payload.rows_count ?? payload.rowsCount ?? payload.row_count ?? payload.rowCount ?? payload.total_count ?? payload.totalCount ?? returnedCountRaw);
 
   const requestedSection = trimStr(payload.requested_section || payload.requestedSection || sectionText).toLowerCase() || sectionText || 'canonical_preview_lines';
   const resolvedSection = trimStr(payload.resolved_section || payload.resolvedSection || payload.section || requestedSection).toLowerCase() || requestedSection;
@@ -137246,13 +138528,13 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
     items: rows,
     rows,
     next_cursor: payload.next_cursor ?? payload.nextCursor ?? null,
-    returned_count: Number.isFinite(returnedCountRaw) ? returnedCountRaw : rows.length,
+    returned_count: Number.isFinite(returnedCountRaw) ? Math.max(0, Math.trunc(returnedCountRaw)) : rows.length,
+    rows_count: Number.isFinite(rowsCountRaw) ? Math.max(0, Math.trunc(rowsCountRaw)) : (Number.isFinite(returnedCountRaw) ? Math.max(0, Math.trunc(returnedCountRaw)) : rows.length),
     session_version: payload.session_version ?? payload.sessionVersion ?? null,
     session_signature: payload.session_signature ?? payload.sessionSignature ?? null,
     limit
   };
 }
-
 
 
 function classifyBulkAuthoriseEditability(ctxInput) {
