@@ -29981,7 +29981,6 @@ async function bankingPayPreview(pay_date) {
   }
 }
 
-
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -30046,21 +30045,35 @@ async function bankingPayCreateDraft(input = {}) {
       selected_preview_row_mode: 'IMPLICIT_ALL'
     };
   };
+  const booleanFlag = (value) => value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(trimStr(value).toLowerCase());
+  const amountFromPreviewRow = (row) => {
+    const raw = trimStr(row?.amount_ex_vat ?? row?.amountExVat ?? row?.preview_amount_ex_vat ?? row?.previewAmountExVat ?? '');
+    if (!/^-?[0-9]+(\.[0-9]+)?$/.test(raw)) return null;
+    return round2(raw);
+  };
   const isDraftCreateEligiblePreviewRow = (rowLike) => {
     const row = isPlainObject(rowLike) ? rowLike : null;
     if (!row) return false;
 
-    if (row.draftable !== true) return false;
-    if (row.is_ready_for_draft !== true) return false;
-
+    const rowId = getPreviewRowId(row);
+    const rowKey = trimStr(row.row_key || row.rowKey || row.line_key || row.lineKey || row.key || '');
+    const sourceKind = upperTrim(row.source_kind || row.sourceKind || row.source_type || row.sourceType || '');
     const presentationSection = upperTrim(row.presentation_section || row.presentationSection || '');
-    const readinessState = upperTrim(row.readiness_state || row.readinessState || '');
+    const selectionState = upperTrim(row.selection_state || row.selectionState || '');
     const presentationRole = upperTrim(row.presentation_role || row.presentationRole || '');
+    const amount = amountFromPreviewRow(row);
 
+    if (!rowId) return false;
+    if (rowKey.toLowerCase().startsWith('timesheet_snapshot:')) return false;
+    if (sourceKind === 'TIMESHEET_SNAPSHOT' || sourceKind === 'TIMESHEET_SNAPSHOT_EVIDENCE' || sourceKind === 'RAW_TIMESHEET_SNAPSHOT' || sourceKind === 'INTERNAL_ONLY') return false;
     if (presentationRole === 'HIDDEN') return false;
-    if (presentationSection) return presentationSection === 'READY_TO_PAY';
-    if (readinessState) return readinessState === 'READY_TO_PAY';
-    return false;
+    if (row.selected !== true) return false;
+    if (selectionState !== 'SELECTED') return false;
+    if (presentationSection !== 'READY_TO_PAY') return false;
+    if (!booleanFlag(row.draftable)) return false;
+    if (!booleanFlag(row.is_ready_for_draft ?? row.isReadyForDraft)) return false;
+    if (amount === null || amount === 0) return false;
+    return true;
   };
   const getPreviewRowId = (rowLike) => trimStr(
     rowLike?.preview_row_id ||
@@ -30174,7 +30187,7 @@ async function bankingPayCreateDraft(input = {}) {
     const seen = new Set();
     let eligible = 0;
 
-    const rowIdOf = (rowLike) => trimStr(rowLike?.preview_row_id || rowLike?.row_id || rowLike?.line_id || rowLike?.id || '');
+    const rowIdOf = (rowLike) => trimStr(rowLike?.preview_row_id || rowLike?.previewRowId || rowLike?.row_id || rowLike?.rowId || rowLike?.line_id || rowLike?.lineId || rowLike?.id || '');
     const candidateRows = (candidateLike) => {
       const candidate = isPlainObject(candidateLike) ? candidateLike : null;
       if (!candidate) return [];
@@ -32342,6 +32355,8 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
+
 
 
 
@@ -50695,7 +50710,6 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
 
 
 
-
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -51557,6 +51571,206 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     const d = (data && typeof data === 'object') ? data : null;
     const b = d && d.batch && typeof d.batch === 'object' ? d.batch : null;
     return b || null;
+  };
+
+  const childBatchStatusFirstText = (...values) => {
+    for (const value of values) {
+      if (Array.isArray(value)) {
+        const nested = childBatchStatusFirstText(...value);
+        if (nested) return nested;
+        continue;
+      }
+      const text = String(value == null ? '' : value).trim();
+      if (text) return text;
+    }
+    return '';
+  };
+
+  const childBatchStatusReadCount = (...values) => {
+    for (const value of values) {
+      if (value === null || value === undefined || String(value).trim() === '') continue;
+      const n = Number(value);
+      if (Number.isFinite(n) && n >= 0) return Math.trunc(n);
+    }
+    return 0;
+  };
+
+  const childBatchStatusReadBool = (value, fallback = false) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    const text = String(value == null ? '' : value).trim().toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return !!fallback;
+  };
+
+  const formatBankingPayBatchStatusLabelFallback = (dataPayload = null) => {
+    const source = (dataPayload && typeof dataPayload === 'object' && !Array.isArray(dataPayload)) ? dataPayload : {};
+    const batchObj = deriveBatchObj(source) || {};
+    const displaySummary = (source.pay_batch_display_summary && typeof source.pay_batch_display_summary === 'object' && !Array.isArray(source.pay_batch_display_summary))
+      ? source.pay_batch_display_summary
+      : ((source.payBatchDisplaySummary && typeof source.payBatchDisplaySummary === 'object' && !Array.isArray(source.payBatchDisplaySummary))
+          ? source.payBatchDisplaySummary
+          : ((source.display_summary && typeof source.display_summary === 'object' && !Array.isArray(source.display_summary))
+              ? source.display_summary
+              : ((source.displaySummary && typeof source.displaySummary === 'object' && !Array.isArray(source.displaySummary))
+                  ? source.displaySummary
+                  : ((batchObj.pay_batch_display_summary && typeof batchObj.pay_batch_display_summary === 'object' && !Array.isArray(batchObj.pay_batch_display_summary))
+                      ? batchObj.pay_batch_display_summary
+                      : ((batchObj.payBatchDisplaySummary && typeof batchObj.payBatchDisplaySummary === 'object' && !Array.isArray(batchObj.payBatchDisplaySummary))
+                          ? batchObj.payBatchDisplaySummary
+                          : ((batchObj.display_summary && typeof batchObj.display_summary === 'object' && !Array.isArray(batchObj.display_summary))
+                              ? batchObj.display_summary
+                              : ((batchObj.displaySummary && typeof batchObj.displaySummary === 'object' && !Array.isArray(batchObj.displaySummary)) ? batchObj.displaySummary : {})))))));
+    const outcomeSummary = (source.payment_outcome_summary && typeof source.payment_outcome_summary === 'object' && !Array.isArray(source.payment_outcome_summary))
+      ? source.payment_outcome_summary
+      : ((source.paymentOutcomeSummary && typeof source.paymentOutcomeSummary === 'object' && !Array.isArray(source.paymentOutcomeSummary))
+          ? source.paymentOutcomeSummary
+          : ((batchObj.payment_outcome_summary && typeof batchObj.payment_outcome_summary === 'object' && !Array.isArray(batchObj.payment_outcome_summary))
+              ? batchObj.payment_outcome_summary
+              : ((batchObj.paymentOutcomeSummary && typeof batchObj.paymentOutcomeSummary === 'object' && !Array.isArray(batchObj.paymentOutcomeSummary)) ? batchObj.paymentOutcomeSummary : displaySummary)));
+
+    const rawStatus = String(childBatchStatusFirstText(
+      batchObj.batch_status_raw,
+      batchObj.batchStatusRaw,
+      source.batch_status_raw,
+      source.batchStatusRaw,
+      batchObj.status,
+      source.status
+    ) || '').trim().toUpperCase();
+    const pendingCount = childBatchStatusReadCount(
+      outcomeSummary.pending_bank_outcome_count,
+      outcomeSummary.pendingBankOutcomeCount,
+      batchObj.pending_bank_outcome_count,
+      batchObj.pendingBankOutcomeCount,
+      source.pending_bank_outcome_count,
+      source.pendingBankOutcomeCount,
+      displaySummary.pending_bank_outcome_count,
+      displaySummary.pendingBankOutcomeCount
+    );
+    const unknownCount = childBatchStatusReadCount(
+      outcomeSummary.unknown_bank_outcome_count,
+      outcomeSummary.unknownBankOutcomeCount,
+      batchObj.unknown_bank_outcome_count,
+      batchObj.unknownBankOutcomeCount,
+      source.unknown_bank_outcome_count,
+      source.unknownBankOutcomeCount,
+      displaySummary.unknown_bank_outcome_count,
+      displaySummary.unknownBankOutcomeCount
+    );
+    const terminalSuccessCount = childBatchStatusReadCount(
+      outcomeSummary.terminal_success_payment_count,
+      outcomeSummary.terminalSuccessPaymentCount,
+      batchObj.terminal_success_payment_count,
+      batchObj.terminalSuccessPaymentCount,
+      source.terminal_success_payment_count,
+      source.terminalSuccessPaymentCount,
+      displaySummary.terminal_success_payment_count,
+      displaySummary.terminalSuccessPaymentCount
+    );
+    const terminalFailedCount = childBatchStatusReadCount(
+      outcomeSummary.terminal_failed_payment_count,
+      outcomeSummary.terminalFailedPaymentCount,
+      batchObj.terminal_failed_payment_count,
+      batchObj.terminalFailedPaymentCount,
+      source.terminal_failed_payment_count,
+      source.terminalFailedPaymentCount,
+      displaySummary.terminal_failed_payment_count,
+      displaySummary.terminalFailedPaymentCount
+    );
+
+    const normaliseExplicitBatchStatusLabel = (labelValue) => {
+      const rawLabel = String(labelValue == null ? '' : labelValue).trim();
+      const upperLabel = rawLabel.toUpperCase();
+      if (!rawLabel) return '';
+      if (upperLabel === 'FAILED') return 'Completed with failed payments';
+      if (upperLabel === 'SETTLED' || upperLabel === 'COMPLETED' || upperLabel === 'COMMITTED') return 'Completed';
+      if (upperLabel === 'WAITING_BANK_CONFIRM') {
+        if (pendingCount > 0 || unknownCount > 0) return 'Waiting for bank confirmation';
+        if (terminalFailedCount > 0) return 'Completed with failed payments';
+        if (terminalSuccessCount > 0) return 'Completed';
+        return 'Waiting for bank confirmation';
+      }
+      return rawLabel;
+    };
+    const explicitLabel = normaliseExplicitBatchStatusLabel(childBatchStatusFirstText(
+      batchObj.batch_status_label,
+      batchObj.batchStatusLabel,
+      source.batch_status_label,
+      source.batchStatusLabel,
+      outcomeSummary.batch_status_label,
+      outcomeSummary.batchStatusLabel,
+      displaySummary.batch_status_label,
+      displaySummary.batchStatusLabel
+    ));
+    if (explicitLabel) return explicitLabel;
+    if (rawStatus === 'FAILED') return 'Completed with failed payments';
+    if (rawStatus === 'SETTLED' || rawStatus === 'COMPLETED' || rawStatus === 'COMMITTED') return 'Completed';
+    if (rawStatus === 'WAITING_BANK_CONFIRM') {
+      if (pendingCount > 0 || unknownCount > 0) return 'Waiting for bank confirmation';
+      if (terminalFailedCount > 0) return 'Completed with failed payments';
+      if (terminalSuccessCount > 0) return 'Completed';
+      return 'Waiting for bank confirmation';
+    }
+    if (rawStatus === 'PARTIAL') return terminalFailedCount > 0 ? 'Completed with failed payments' : 'Partially completed';
+    if (rawStatus === 'DRAFT' || rawStatus === 'DRAFT_CREATED') return 'Draft';
+    if (rawStatus === 'READY') return 'Ready';
+    if (rawStatus === 'CANCELLED' || rawStatus === 'CANCELED') return 'Cancelled';
+    return rawStatus || '';
+  };
+
+  const syncBankingPayBatchStatusDisplayFields = (dataPayload = null) => {
+    const source = (dataPayload && typeof dataPayload === 'object' && !Array.isArray(dataPayload)) ? dataPayload : dataPayload;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return source;
+    const batchObj = deriveBatchObj(source);
+    if (!batchObj || typeof batchObj !== 'object' || Array.isArray(batchObj)) return source;
+
+    const displaySummary = (source.pay_batch_display_summary && typeof source.pay_batch_display_summary === 'object' && !Array.isArray(source.pay_batch_display_summary))
+      ? source.pay_batch_display_summary
+      : ((source.payBatchDisplaySummary && typeof source.payBatchDisplaySummary === 'object' && !Array.isArray(source.payBatchDisplaySummary))
+          ? source.payBatchDisplaySummary
+          : ((source.display_summary && typeof source.display_summary === 'object' && !Array.isArray(source.display_summary))
+              ? source.display_summary
+              : ((source.displaySummary && typeof source.displaySummary === 'object' && !Array.isArray(source.displaySummary))
+                  ? source.displaySummary
+                  : ((batchObj.pay_batch_display_summary && typeof batchObj.pay_batch_display_summary === 'object' && !Array.isArray(batchObj.pay_batch_display_summary))
+                      ? batchObj.pay_batch_display_summary
+                      : ((batchObj.payBatchDisplaySummary && typeof batchObj.payBatchDisplaySummary === 'object' && !Array.isArray(batchObj.payBatchDisplaySummary))
+                          ? batchObj.payBatchDisplaySummary
+                          : ((batchObj.display_summary && typeof batchObj.display_summary === 'object' && !Array.isArray(batchObj.display_summary))
+                              ? batchObj.display_summary
+                              : ((batchObj.displaySummary && typeof batchObj.displaySummary === 'object' && !Array.isArray(batchObj.displaySummary)) ? batchObj.displaySummary : {})))))));
+    const outcomeSummary = (source.payment_outcome_summary && typeof source.payment_outcome_summary === 'object' && !Array.isArray(source.payment_outcome_summary))
+      ? source.payment_outcome_summary
+      : ((source.paymentOutcomeSummary && typeof source.paymentOutcomeSummary === 'object' && !Array.isArray(source.paymentOutcomeSummary))
+          ? source.paymentOutcomeSummary
+          : ((batchObj.payment_outcome_summary && typeof batchObj.payment_outcome_summary === 'object' && !Array.isArray(batchObj.payment_outcome_summary))
+              ? batchObj.payment_outcome_summary
+              : ((batchObj.paymentOutcomeSummary && typeof batchObj.paymentOutcomeSummary === 'object' && !Array.isArray(batchObj.paymentOutcomeSummary)) ? batchObj.paymentOutcomeSummary : displaySummary)));
+    const rawStatus = childBatchStatusFirstText(batchObj.batch_status_raw, batchObj.batchStatusRaw, source.batch_status_raw, source.batchStatusRaw, batchObj.status, source.status);
+    const pendingCount = childBatchStatusReadCount(outcomeSummary.pending_bank_outcome_count, outcomeSummary.pendingBankOutcomeCount, batchObj.pending_bank_outcome_count, batchObj.pendingBankOutcomeCount, source.pending_bank_outcome_count, source.pendingBankOutcomeCount, displaySummary.pending_bank_outcome_count, displaySummary.pendingBankOutcomeCount);
+    const unknownCount = childBatchStatusReadCount(outcomeSummary.unknown_bank_outcome_count, outcomeSummary.unknownBankOutcomeCount, batchObj.unknown_bank_outcome_count, batchObj.unknownBankOutcomeCount, source.unknown_bank_outcome_count, source.unknownBankOutcomeCount, displaySummary.unknown_bank_outcome_count, displaySummary.unknownBankOutcomeCount);
+    const terminalFailedCount = childBatchStatusReadCount(outcomeSummary.terminal_failed_payment_count, outcomeSummary.terminalFailedPaymentCount, batchObj.terminal_failed_payment_count, batchObj.terminalFailedPaymentCount, source.terminal_failed_payment_count, source.terminalFailedPaymentCount, displaySummary.terminal_failed_payment_count, displaySummary.terminalFailedPaymentCount);
+    const label = formatBankingPayBatchStatusLabelFallback(source);
+    const terminalWithFailedPayments = childBatchStatusReadBool(
+      childBatchStatusFirstText(batchObj.batch_terminal_with_failed_payments, batchObj.batchTerminalWithFailedPayments, source.batch_terminal_with_failed_payments, source.batchTerminalWithFailedPayments, outcomeSummary.batch_terminal_with_failed_payments, outcomeSummary.batchTerminalWithFailedPayments),
+      String(rawStatus || '').trim().toUpperCase() === 'FAILED' || (terminalFailedCount > 0 && pendingCount === 0 && unknownCount === 0)
+    );
+
+    batchObj.batch_status_raw = childBatchStatusFirstText(batchObj.batch_status_raw, rawStatus);
+    batchObj.batchStatusRaw = childBatchStatusFirstText(batchObj.batchStatusRaw, batchObj.batch_status_raw);
+    batchObj.batch_status_label = childBatchStatusFirstText(batchObj.batch_status_label, label);
+    batchObj.batchStatusLabel = childBatchStatusFirstText(batchObj.batchStatusLabel, batchObj.batch_status_label);
+    batchObj.batch_terminal_with_failed_payments = terminalWithFailedPayments;
+    batchObj.batchTerminalWithFailedPayments = terminalWithFailedPayments;
+
+    source.batch_status_raw = childBatchStatusFirstText(source.batch_status_raw, batchObj.batch_status_raw);
+    source.batchStatusRaw = childBatchStatusFirstText(source.batchStatusRaw, source.batch_status_raw);
+    source.batch_status_label = childBatchStatusFirstText(source.batch_status_label, batchObj.batch_status_label);
+    source.batchStatusLabel = childBatchStatusFirstText(source.batchStatusLabel, source.batch_status_label);
+    source.batch_terminal_with_failed_payments = terminalWithFailedPayments;
+    source.batchTerminalWithFailedPayments = terminalWithFailedPayments;
+    return source;
   };
 
   const syncChildCsvEvidenceFromData = (data) => {
@@ -55062,7 +55276,7 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
     const applyLoadedData = async (nextData) => {
       if (!shouldApplyChildMutation(expectedOpenToken, requestSeq)) return false;
 
-      child.data = deep(nextData);
+      child.data = syncBankingPayBatchStatusDisplayFields(deep(nextData));
       if (!shouldApplyChildMutation(expectedOpenToken, requestSeq)) return false;
 
       startChildLiveWatchFromPayload(child.data, { initial: child.liveWatch?.started !== true });
@@ -58618,8 +58832,6 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
 
 
 
-
-
 function openBulkTimesheetActionProgressModal(options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -60132,6 +60344,100 @@ function renderBankingPayBatchChildModalOverview() {
   const providerEnvHeader = `${batchKind || 'UNKNOWN'} · ${(provider || '—')}${env ? `/${env}` : ''}`;
   const payDate = trimStr(batch.pay_date || data.pay_date || batch.authoritative_payment_date || data.authoritative_payment_date || '');
 
+  const normalisePaymentStatusDisplayLabel = (value) => {
+    const raw = trimStr(value);
+    const upper = upperTrim(raw);
+    if (!raw) return '';
+    if (upper === 'SENT' || upper === 'SENT / CONFIRMED PAID' || upper === 'CONFIRMED PAID' || upper === 'PAID' || upper === 'PAYMENT SENT' || upper === 'PAYMENT PAID') return 'Payment completed successfully';
+    return raw;
+  };
+
+  const paymentOutcomeSummary = asObj(data.payment_outcome_summary || data.paymentOutcomeSummary || batch.payment_outcome_summary || batch.paymentOutcomeSummary || displaySummary.payment_outcome_summary || displaySummary.paymentOutcomeSummary) || {};
+  const readOutcomeCount = (...values) => firstFiniteNonNegativeInteger(...values) ?? 0;
+  const classifyTransferForBatchOutcome = (transfer) => {
+    const t = asObj(transfer) || {};
+    const statusText = upperTrim(t.status || t.payment_status_raw || t.paymentStatusRaw || '');
+    const railStateText = upperTrim(t.rail_state || t.railState || '');
+    const cashStateText = upperTrim(t.money_movement_cash_state || t.moneyMovementCashState || t.money_movement_classification?.cash_state || t.moneyMovementClassification?.cashState || '');
+    const completedAt = firstText(t.completed_at_utc, t.completedAtUtc, t.settled_at_utc, t.settledAtUtc);
+    if (
+      readBool(t.is_final_money_moved || t.isFinalMoneyMoved || t.final_money_moved || t.finalMoneyMoved) ||
+      ['COMPLETED','COMPLETE','SETTLED','PAID','COMMITTED','EXECUTED','SUCCESS','SUCCEEDED'].includes(statusText) ||
+      ['COMPLETED','COMPLETE','SETTLED','PAID','COMMITTED','EXECUTED','SUCCESS','SUCCEEDED','BANK_CONFIRMED','MANUAL_CONFIRM'].includes(railStateText) ||
+      ['FINAL_PAID','FINAL_MONEY_MOVED','MONEY_MOVED','PAID_OR_SETTLED'].includes(cashStateText) ||
+      (completedAt && !['FAILED','REJECTED','DECLINED','RETURNED','REVERTED','CANCELLED','CANCELED','SUBMISSION_FAILED','FAILED_BEFORE_COMMIT'].includes(statusText) && !['FAILED','REJECTED','DECLINED','RETURNED','REVERTED','CANCELLED','CANCELED'].includes(railStateText))
+    ) return 'TERMINAL_SUCCESS';
+    if (
+      ['FAILED','REJECTED','DECLINED','RETURNED','REVERTED','CANCELLED','CANCELED','SUBMISSION_FAILED','FAILED_BEFORE_COMMIT'].includes(statusText) ||
+      ['FAILED','REJECTED','DECLINED','RETURNED','REVERTED','CANCELLED','CANCELED'].includes(railStateText) ||
+      ['TERMINAL_NO_MONEY','NO_MONEY','FINAL_NO_MONEY','RETURNED','REVERTED'].includes(cashStateText)
+    ) return 'TERMINAL_FAILED';
+    if (['UNKNOWN','UNCERTAIN','REVIEW_REQUIRED','CHECK_REQUIRED','AMBIGUOUS','TIMEOUT','TIMED_OUT'].includes(statusText) || ['UNKNOWN','UNCERTAIN','REVIEW_REQUIRED','CHECK_REQUIRED','AMBIGUOUS','TIMEOUT','TIMED_OUT'].includes(railStateText)) return 'UNKNOWN';
+    if (['PENDING','SUBMITTED','PROCESSING','IN_FLIGHT','WAITING_BANK_CONFIRM','ACCEPTED','PENDING_SETTLEMENT','PENDING_CONFIRMATION'].includes(statusText) || ['PENDING','SUBMITTED','PROCESSING','IN_FLIGHT','WAITING_BANK_CONFIRM','ACCEPTED','PENDING_SETTLEMENT','PENDING_CONFIRMATION'].includes(railStateText) || firstText(t.rail_tx_id, t.railTxId)) return 'PENDING';
+    return 'UNKNOWN';
+  };
+  const transferOutcomeFallbackCounts = transfers.reduce((acc, transfer) => {
+    const cls = classifyTransferForBatchOutcome(transfer);
+    if (cls === 'TERMINAL_SUCCESS') acc.terminalSuccess += 1;
+    else if (cls === 'TERMINAL_FAILED') acc.terminalFailed += 1;
+    else if (cls === 'PENDING') acc.pending += 1;
+    else acc.unknown += 1;
+    return acc;
+  }, { pending: 0, unknown: 0, terminalSuccess: 0, terminalFailed: 0 });
+  const batchStatusRaw = upperTrim(firstText(batch.batch_status_raw, batch.batchStatusRaw, data.batch_status_raw, data.batchStatusRaw, batch.status, data.status));
+  const pendingBankOutcomeCount = readOutcomeCount(paymentOutcomeSummary.pending_bank_outcome_count, paymentOutcomeSummary.pendingBankOutcomeCount, batch.pending_bank_outcome_count, batch.pendingBankOutcomeCount, data.pending_bank_outcome_count, data.pendingBankOutcomeCount, displaySummary.pending_bank_outcome_count, displaySummary.pendingBankOutcomeCount, transfers.length ? transferOutcomeFallbackCounts.pending : null);
+  const unknownBankOutcomeCount = readOutcomeCount(paymentOutcomeSummary.unknown_bank_outcome_count, paymentOutcomeSummary.unknownBankOutcomeCount, batch.unknown_bank_outcome_count, batch.unknownBankOutcomeCount, data.unknown_bank_outcome_count, data.unknownBankOutcomeCount, displaySummary.unknown_bank_outcome_count, displaySummary.unknownBankOutcomeCount, transfers.length ? transferOutcomeFallbackCounts.unknown : null);
+  const terminalSuccessPaymentCount = readOutcomeCount(paymentOutcomeSummary.terminal_success_payment_count, paymentOutcomeSummary.terminalSuccessPaymentCount, batch.terminal_success_payment_count, batch.terminalSuccessPaymentCount, data.terminal_success_payment_count, data.terminalSuccessPaymentCount, displaySummary.terminal_success_payment_count, displaySummary.terminalSuccessPaymentCount, transfers.length ? transferOutcomeFallbackCounts.terminalSuccess : null);
+  const terminalFailedPaymentCount = readOutcomeCount(paymentOutcomeSummary.terminal_failed_payment_count, paymentOutcomeSummary.terminalFailedPaymentCount, batch.terminal_failed_payment_count, batch.terminalFailedPaymentCount, data.terminal_failed_payment_count, data.terminalFailedPaymentCount, displaySummary.terminal_failed_payment_count, displaySummary.terminalFailedPaymentCount, transfers.length ? transferOutcomeFallbackCounts.terminalFailed : null);
+  const batchTerminalWithFailedPayments = readBool(firstText(batch.batch_terminal_with_failed_payments, batch.batchTerminalWithFailedPayments, data.batch_terminal_with_failed_payments, data.batchTerminalWithFailedPayments, paymentOutcomeSummary.batch_terminal_with_failed_payments, paymentOutcomeSummary.batchTerminalWithFailedPayments)) || batchStatusRaw === 'FAILED' || (terminalFailedPaymentCount > 0 && pendingBankOutcomeCount === 0 && unknownBankOutcomeCount === 0);
+  const formatBatchStatusLabelFallback = () => {
+    const normaliseExplicitBatchStatusLabel = (labelValue) => {
+      const rawLabel = trimStr(labelValue);
+      const upperLabel = upperTrim(rawLabel);
+      if (!rawLabel) return '';
+      if (upperLabel === 'FAILED') return 'Completed with failed payments';
+      if (upperLabel === 'SETTLED' || upperLabel === 'COMPLETED' || upperLabel === 'COMMITTED') return 'Completed';
+      if (upperLabel === 'WAITING_BANK_CONFIRM') {
+        if (pendingBankOutcomeCount > 0 || unknownBankOutcomeCount > 0) return 'Waiting for bank confirmation';
+        if (terminalFailedPaymentCount > 0) return 'Completed with failed payments';
+        if (terminalSuccessPaymentCount > 0) return 'Completed';
+        return 'Waiting for bank confirmation';
+      }
+      return rawLabel;
+    };
+    const explicit = normaliseExplicitBatchStatusLabel(firstText(batch.batch_status_label, batch.batchStatusLabel, data.batch_status_label, data.batchStatusLabel, paymentOutcomeSummary.batch_status_label, paymentOutcomeSummary.batchStatusLabel, displaySummary.batch_status_label, displaySummary.batchStatusLabel));
+    if (explicit) return explicit;
+    if (batchStatusRaw === 'FAILED') return 'Completed with failed payments';
+    if (batchStatusRaw === 'SETTLED' || batchStatusRaw === 'COMPLETED' || batchStatusRaw === 'COMMITTED') return 'Completed';
+    if (batchStatusRaw === 'WAITING_BANK_CONFIRM') {
+      if (pendingBankOutcomeCount > 0 || unknownBankOutcomeCount > 0) return 'Waiting for bank confirmation';
+      if (terminalFailedPaymentCount > 0) return 'Completed with failed payments';
+      if (terminalSuccessPaymentCount > 0) return 'Completed';
+      return 'Waiting for bank confirmation';
+    }
+    if (batchStatusRaw === 'PARTIAL') return terminalFailedPaymentCount > 0 ? 'Completed with failed payments' : 'Partially completed';
+    if (batchStatusRaw === 'DRAFT' || batchStatusRaw === 'DRAFT_CREATED') return 'Draft';
+    if (batchStatusRaw === 'READY') return 'Ready';
+    if (batchStatusRaw === 'CANCELLED' || batchStatusRaw === 'CANCELED') return 'Cancelled';
+    return batchStatusRaw || '—';
+  };
+  const batchStatusLabel = formatBatchStatusLabelFallback();
+  const executionCommitState = upperTrim(batch.execution_commit_state || data.execution_commit_state || 'NOT_SUBMITTED') || 'NOT_SUBMITTED';
+  const finalisedAtUtc = firstText(batch.finalised_at_utc, batch.finalisedAtUtc, data.finalised_at_utc, data.finalisedAtUtc, batch.completed_at_utc, batch.completedAtUtc, data.completed_at_utc, data.completedAtUtc);
+  const batchOutcomeHtml = `
+    <div class="card banking-pay-batch-outcome-card" data-batch-outcome-card="1" style="padding:10px;border:1px solid var(--line);">
+      <div class="mini" style="font-weight:800;opacity:.9;margin-bottom:6px;">Batch outcome</div>
+      <div class="mini" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <span class="pill">${enc(batchStatusLabel || '—')}</span>
+        ${batchStatusRaw ? `<span>Raw status: <span class="mono">${enc(batchStatusRaw)}</span></span>` : ''}
+        <span>Execution commit: <span class="mono">${enc(executionCommitState || '—')}</span></span>
+        ${finalisedAtUtc ? `<span>Completed/finalised: <span class="mono">${enc(fmtUtcToUk(finalisedAtUtc))}</span></span>` : ''}
+        ${(pendingBankOutcomeCount > 0 || unknownBankOutcomeCount > 0) ? `<span>Pending/unknown bank outcomes: <span class="mono">${enc(String(pendingBankOutcomeCount + unknownBankOutcomeCount))}</span></span>` : ''}
+        ${terminalFailedPaymentCount > 0 ? `<span>Failed terminal payments: <span class="mono">${enc(String(terminalFailedPaymentCount))}</span></span>` : ''}
+      </div>
+    </div>
+  `;
+
   const isBootstrapOnly = data.bootstrap_only === true || batch.bootstrap_only === true;
   const durableCandidateCount = firstFiniteNonNegativeInteger(durableCounts.candidate_count, data.durable_candidate_count, data.candidate_count, batch.candidate_count) ?? candidates.length;
   const durableItemCount = firstFiniteNonNegativeInteger(durableCounts.item_count, data.durable_item_count, data.item_count, batch.item_count) ?? items.length;
@@ -60488,7 +60794,7 @@ function renderBankingPayBatchChildModalOverview() {
     const candidateId = trimStr(row.candidateId || row.candidate_id || '');
     const statusText = `${displayState} ${symbol} ${result}`.toUpperCase();
     if (symbol === '✅' || displayState.includes('PAYMENT_SENT') || displayState.includes('PAYMENT_PAID') || statusText.includes('SENT') || statusText.includes('PAID')) {
-      return { tone: 'sent', result: result || 'Sent', action, amount, candidateId };
+      return { tone: 'sent', result: normalisePaymentStatusDisplayLabel(result) || 'Payment completed successfully', action, amount, candidateId };
     }
     if (symbol === '❓' || displayState.includes('UNKNOWN') || displayState.includes('CHECK') || statusText.includes('CHECK REQUIRED') || statusText.includes('UNKNOWN') || statusText.includes('TIMEOUT')) {
       return { tone: 'check', result: result || 'Check required', action: action || 'Resolve manually', amount, candidateId };
@@ -60563,7 +60869,7 @@ function renderBankingPayBatchChildModalOverview() {
       if (labelUpper.includes('REJECT') || labelUpper.includes('UNWIND') || labelUpper.includes('REVERSED')) return { tone: 'failed', symbol: '❌', label: candidateIssueLabel, result: candidateIssueLabel, amountTone: 'failed' };
       if (hasIssue) return { tone: 'check', symbol: '❓', label: 'Check required', result: 'Check required', amountTone: 'check' };
     }
-    if (hasCompleted || candidateProviderSent || hasExternalSent) return { tone: 'sent', symbol: '✅', label: 'Sent / confirmed paid', result: 'Sent / confirmed paid', amountTone: 'sent' };
+    if (hasCompleted || candidateProviderSent || hasExternalSent) return { tone: 'sent', symbol: '✅', label: 'Payment completed successfully', result: 'Payment completed successfully', amountTone: 'sent' };
     if (hasFailed) return { tone: 'failed', symbol: '❌', label: 'Bank rejected', result: 'Bank rejected', amountTone: 'failed' };
     if (hasPendingSubmitted) return { tone: 'pending', symbol: '⏳', label: 'Submitted / pending bank confirmation', result: 'Submitted / pending bank confirmation', amountTone: 'pending' };
     if (hasBlocked) return { tone: 'failed', symbol: '❌', label: 'Insufficient funds', result: 'Insufficient funds', amountTone: 'failed' };
@@ -60589,7 +60895,7 @@ function renderBankingPayBatchChildModalOverview() {
     if (externalClassifications.length) {
       if (externalClassifications.some((row) => row.tone === 'failed')) statusInfo = { tone: 'failed', symbol: '❌', label: externalClassifications.find((row) => row.tone === 'failed')?.result || 'Failed / returned', result: externalClassifications.find((row) => row.tone === 'failed')?.result || 'Failed / returned' };
       else if (externalClassifications.some((row) => row.tone === 'check')) statusInfo = { tone: 'check', symbol: '❓', label: externalClassifications.find((row) => row.tone === 'check')?.result || 'Check required', result: externalClassifications.find((row) => row.tone === 'check')?.result || 'Check required' };
-      else if (externalClassifications.some((row) => row.tone === 'sent')) statusInfo = { tone: 'sent', symbol: '✅', label: externalClassifications.find((row) => row.tone === 'sent')?.result || 'Sent', result: externalClassifications.find((row) => row.tone === 'sent')?.result || 'Sent' };
+      else if (externalClassifications.some((row) => row.tone === 'sent')) statusInfo = { tone: 'sent', symbol: '✅', label: normalisePaymentStatusDisplayLabel(externalClassifications.find((row) => row.tone === 'sent')?.result) || 'Payment completed successfully', result: normalisePaymentStatusDisplayLabel(externalClassifications.find((row) => row.tone === 'sent')?.result) || 'Payment completed successfully' };
     }
     return { candidate, candidateId, financials, statusInfo };
   });
@@ -60676,7 +60982,7 @@ function renderBankingPayBatchChildModalOverview() {
     <div class="card" style="padding:10px;">
       <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Payment status</div>
       <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-        <span class="mini">✅ Sent / confirmed paid: <span class="mono">${enc(String(paymentSummary.sentConfirmedCount))}</span> · <span class="mono">£${enc(fmtMoney(paymentSummary.sentConfirmedAmount))}</span></span>
+        <span class="mini">✅ Payment completed successfully: <span class="mono">${enc(String(paymentSummary.sentConfirmedCount))}</span> · <span class="mono">£${enc(fmtMoney(paymentSummary.sentConfirmedAmount))}</span></span>
         <span class="mini">⏳ Submitted / pending bank confirmation: <span class="mono">${enc(String(paymentSummary.pendingSubmittedCount))}</span> · <span class="mono">£${enc(fmtMoney(paymentSummary.pendingSubmittedAmount))}</span></span>
         <span class="mini">❌ Failed / returned: <span class="mono">${enc(String(paymentSummary.failedReturnedCount))}</span>${paymentSummary.failedReturnedAmount ? ` · <span class="mono">£${enc(fmtMoney(paymentSummary.failedReturnedAmount))}</span>` : ''}</span>
         <span class="mini">❓ Check required: <span class="mono">${enc(String(paymentSummary.checkRequiredCount))}</span>${paymentSummary.checkRequiredAmount ? ` · <span class="mono">£${enc(fmtMoney(paymentSummary.checkRequiredAmount))}</span>` : ''}</span>
@@ -61001,6 +61307,11 @@ function renderBankingPayBatchChildModalOverview() {
   const activeRunnerState = upperTrim(activeOperation?.runner_state || activeOperation?.runnerState || '');
   const activeOperationId = trimStr(activeOperation?.operation_id || activeOperation?.operationId || activeOperation?.id || data.active_operation_id || data.activeOperationId || batch.active_operation_id || batch.activeOperationId || '');
   const activeOperationTerminal = ['COMPLETE', 'COMPLETED', 'SUCCESS', 'FAILED', 'CANCELLED', 'CANCELED'].includes(activeOperationStatus) || ['COMPLETE', 'COMPLETED', 'FAILED', 'CANCELLED', 'CANCELED'].includes(activeRunnerState);
+  const activeOperationStatusLabel = activeOperationStatus === 'FAILED' || activeRunnerState === 'FAILED'
+    ? 'Operation failed'
+    : (activeOperationStatus === 'COMPLETE' || activeOperationStatus === 'COMPLETED' || activeRunnerState === 'COMPLETE' || activeRunnerState === 'COMPLETED')
+      ? 'Operation complete'
+      : (activeOperationStatus || activeRunnerState || 'In progress');
   const activeOperationLeased = readFirstBool(activeOperation?.server_running, activeOperation?.serverRunning, activeOperation?.leased, activeOperation?.lease_active, activeOperation?.leaseActive) || !!trimStr(activeOperation?.lease_owner || activeOperation?.leaseOwner || '');
   const activeOperationWaitingProvider = ['WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'PROVIDER_WAIT', 'AWAITING_PROVIDER'].includes(activeOperationStatus) || readFirstBool(activeOperation?.waiting_for_provider, activeOperation?.waitingForProvider);
   const waitingAuthorisation = !!(
@@ -61030,7 +61341,7 @@ function renderBankingPayBatchChildModalOverview() {
     <div class="card banking-pay-active-operation-summary" style="padding:10px;border:1px solid var(--line);">
       <div class="mini" style="font-weight:800;opacity:.9;margin-bottom:4px;">Active payment operation</div>
       <div class="mini" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <span class="pill">${enc(activeOperationStatus || activeRunnerState || 'In progress')}</span>
+        <span class="pill">${enc(activeOperationStatusLabel || 'In progress')}</span>
         ${activeRunnerState ? `<span class="pill">Runner: ${enc(activeRunnerState)}</span>` : ''}
         ${activeOperationId ? `<span class="mono">${enc(activeOperationId)}</span>` : ''}
       </div>
@@ -61128,7 +61439,7 @@ function renderBankingPayBatchChildModalOverview() {
             const weekContext = r.week_ending_date ? `Week ending ${formatIsoToUkLocal(r.week_ending_date)}` : '';
             const detailText = firstText(r.description, r.summary, friendlyItemType, r.client_name, r.clientName, weekContext);
             const rawContext = firstText(r.payment_context_label, r.paymentContextLabel, r.status_label, r.statusLabel, r.payment_status_label, r.paymentStatusLabel, r.payment_status, r.paymentStatus, r.source_label, r.sourceLabel, weekContext);
-            const contextText = cleanOverviewContextText(rawContext) || (overviewIsPreSubmissionDraft ? 'Draft — not sent' : '—');
+            const contextText = normalisePaymentStatusDisplayLabel(cleanOverviewContextText(rawContext)) || (overviewIsPreSubmissionDraft ? 'Draft — not sent' : '—');
             const amount = overviewAmountForRow(r);
             return `
               <tr>
@@ -61170,6 +61481,7 @@ function renderBankingPayBatchChildModalOverview() {
                   <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
                 </div>
               </div>
+              ${batchOutcomeHtml}
               ${providerSubmitOverviewHtml}
               ${webhookEvidenceHtml}
               ${liveProgressHtml}
@@ -61332,6 +61644,7 @@ function renderBankingPayBatchChildModalOverview() {
               </div>
             </div>
 
+            ${batchOutcomeHtml}
             ${providerSubmitOverviewHtml}
             ${webhookEvidenceHtml}
             ${liveProgressHtml}
@@ -91835,28 +92148,60 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     }
     return out;
   };
+  const normalizePreviewPageSection = (value) => {
+    const raw = trimStr(value || 'canonical_preview_lines').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!raw) return 'canonical_preview_lines';
+    if (raw === 'preview_rows' || raw === 'ready_to_pay' || raw === 'ready_preview_lines') return 'canonical_preview_lines';
+    if (raw === 'cases_resolutions' || raw === 'case_resolution_states' || raw === 'case_resolutions') return 'cases_resolutions';
+    if (raw === 'blocked_for_pay' || raw === 'blocked_items' || raw === 'blocked_preview_lines' || raw === 'blocked_now') return 'blocked_for_pay';
+    return raw;
+  };
+  const isTruthyFlag = (value) => value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(trimStr(value).toLowerCase());
+  const numericAmountFromPreviewRow = (row) => {
+    const raw = trimStr(row?.amount_ex_vat ?? row?.amountExVat ?? row?.preview_amount_ex_vat ?? row?.previewAmountExVat ?? '');
+    if (!/^-?[0-9]+(\.[0-9]+)?$/.test(raw)) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+  };
+  const previewRowPresentationSection = (row) => trimStr(row?.presentation_section || row?.presentationSection || '').toUpperCase();
+  const previewRowSectionFromRow = (row, fallbackSection = '') => {
+    const presentationSection = previewRowPresentationSection(row);
+    if (presentationSection === 'READY_TO_PAY') return 'canonical_preview_lines';
+    if (presentationSection === 'CASES_RESOLUTIONS') return 'cases_resolutions';
+    if (presentationSection === 'BLOCKED_FOR_PAY') return 'blocked_for_pay';
+    return normalizePreviewPageSection(row?.resolved_section || row?.resolvedSection || row?.section || fallbackSection || 'canonical_preview_lines');
+  };
   const isReadyToPayPreviewRow = (row) => {
     if (!isPlainObject(row)) return false;
     const presentationRole = trimStr(row.presentation_role || row.presentationRole || '').toUpperCase();
-    const presentationSection = trimStr(row.presentation_section || row.presentationSection || '').toUpperCase();
+    const presentationSection = previewRowPresentationSection(row);
     const readinessState = trimStr(row.readiness_state || row.readinessState || '').toUpperCase();
     const rowStatus = trimStr(row.status || row.row_status || row.rowStatus || '').toUpperCase();
-    const selectionState = trimStr(row.selection_state || row.selectionState || '').toUpperCase();
-    const section = trimStr(row.section || row.resolved_section || row.resolvedSection || '').toLowerCase();
-    const resolvedSection = trimStr(row.resolved_section || row.resolvedSection || row.section || '').toLowerCase();
-    const rowKey = trimStr(row.row_key || row.rowKey || row.key || '');
+    const section = normalizePreviewPageSection(row.section || row.resolved_section || row.resolvedSection || '');
+    const rowKey = trimStr(row.row_key || row.rowKey || row.line_key || row.lineKey || row.key || '');
+    const sourceKind = trimStr(row.source_kind || row.sourceKind || row.source_type || row.sourceType || '').toUpperCase();
     const rowId = rowIdFromPreviewRow(row);
     const draftableExplicitFalse = row.draftable === false || row.is_draftable === false || row.isDraftable === false || row.draftable_now === false || row.draftableNow === false;
     if (presentationRole === 'HIDDEN') return false;
+    if (sourceKind === 'TIMESHEET_SNAPSHOT' || sourceKind === 'TIMESHEET_SNAPSHOT_EVIDENCE' || sourceKind === 'RAW_TIMESHEET_SNAPSHOT' || sourceKind === 'INTERNAL_ONLY') return false;
+    if (rowKey.toLowerCase().startsWith('timesheet_snapshot:')) return false;
     if (readinessState === 'BLOCKED' || rowStatus === 'BLOCKED' || rowStatus === 'ERROR') return false;
     if (row.blocked === true || row.do_not_pay === true || row.doNotPay === true || row.excluded === true) return false;
-    if (selectionState === 'EXCLUDED' || selectionState === 'SUPERSEDED') return false;
     if (draftableExplicitFalse) return false;
     if (!rowId && !rowKey) return false;
-    if (presentationSection === 'READY_TO_PAY' || readinessState === 'READY_TO_PAY') return true;
-    const canonicalSection = section === 'canonical_preview_lines' || resolvedSection === 'canonical_preview_lines';
-    if (!canonicalSection) return false;
-    return rowStatus === 'READY' || row.selected === true || selectionState === 'SELECTED' || selectionState === 'IMPLICIT_ALL' || selectionState === 'EXPLICIT_SUBSET';
+    if (presentationSection === 'READY_TO_PAY') return true;
+    return section === 'canonical_preview_lines' && readinessState === 'READY_TO_PAY';
+  };
+  const isDraftableWorkbenchReadyRow = (row) => {
+    if (!isReadyToPayPreviewRow(row)) return false;
+    const selectionState = trimStr(row.selection_state || row.selectionState || '').toUpperCase();
+    const amount = numericAmountFromPreviewRow(row);
+    if (row.selected !== true) return false;
+    if (selectionState !== 'SELECTED') return false;
+    if (previewRowPresentationSection(row) !== 'READY_TO_PAY') return false;
+    if (!isTruthyFlag(row.draftable) || !isTruthyFlag(row.is_ready_for_draft ?? row.isReadyForDraft)) return false;
+    if (amount === null || amount === 0) return false;
+    return !!rowIdFromPreviewRow(row);
   };
   const deriveReadyPreviewRows = (rowUniverse, ...previewPayloads) => {
     const explicitSources = [];
@@ -92060,7 +92405,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     return { selected_preview_row_ids: [...validPreviewRowIds], selected_preview_row_mode: 'IMPLICIT_ALL' };
   };
 
-  const normalizePreviewPageSection = (value) => trimStr(value || 'canonical_preview_lines').toLowerCase() || 'canonical_preview_lines';
+
   const normalizePreviewPagePayload = (pageLike, fallbackSection = '') => {
     const page = isPlainObject(pageLike) ? pageLike : {};
     const requestedSection = normalizePreviewPageSection(page.requested_section || page.requestedSection || page.request_section || page.requestSection || fallbackSection || page.section || page.section_key || page.sectionKey);
@@ -92110,6 +92455,17 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
       if (normalized.requested_section && normalized.requested_section !== normalized.section) target[normalized.requested_section] = normalized;
       if (normalized.resolved_section && normalized.resolved_section !== normalized.section) target[normalized.resolved_section] = normalized;
     }
+    const sourceRows = Array.isArray(source.rows)
+      ? source.rows
+      : (Array.isArray(source.items)
+          ? source.items
+          : (Array.isArray(source.data) ? source.data : []));
+    if (sourceRows.length > 0) {
+      const normalized = normalizePreviewPagePayload(source, fallbackSection || source.resolved_section || source.resolvedSection || source.section || source.section_key || source.sectionKey || 'canonical_preview_lines');
+      if (normalized.section) target[normalized.section] = normalized;
+      if (normalized.requested_section && normalized.requested_section !== normalized.section) target[normalized.requested_section] = normalized;
+      if (normalized.resolved_section && normalized.resolved_section !== normalized.section) target[normalized.resolved_section] = normalized;
+    }
     return target;
   };
   const collectExistingPreviewPagesForWorkbench = () => {
@@ -92142,7 +92498,34 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     const map = isPlainObject(pageMap) ? pageMap : {};
     for (const page of Object.values(map)) {
       const rows = Array.isArray(page?.rows) ? page.rows : (Array.isArray(page?.items) ? page.items : []);
-      for (const row of rows) pushId(rowIdFromPreviewRow(row));
+      for (const row of rows) {
+        if (isDraftableWorkbenchReadyRow(row)) pushId(rowIdFromPreviewRow(row));
+      }
+    }
+    return out;
+  };
+  const collectPreviewRowsBySectionFromPageMap = (pageMap) => {
+    const out = {
+      canonical_preview_lines: [],
+      cases_resolutions: [],
+      blocked_for_pay: []
+    };
+    const seen = new Set();
+    const pushRow = (sectionName, row) => {
+      if (!isPlainObject(row)) return;
+      const targetSection = normalizePreviewPageSection(sectionName);
+      if (!Object.prototype.hasOwnProperty.call(out, targetSection)) return;
+      const key = `${targetSection}:${previewRowDedupeKey(row)}`;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      out[targetSection].push(row);
+    };
+    const map = isPlainObject(pageMap) ? pageMap : {};
+    for (const page of Object.values(map)) {
+      if (!isPlainObject(page)) continue;
+      const fallbackSection = normalizePreviewPageSection(page.resolved_section || page.resolvedSection || page.section || page.requested_section || page.requestedSection || 'canonical_preview_lines');
+      const rows = Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
+      for (const row of rows) pushRow(previewRowSectionFromRow(row, fallbackSection), row);
     }
     return out;
   };
@@ -92220,6 +92603,10 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const previousPreviewPages = collectExistingPreviewPagesForWorkbench();
   const incomingPreviewPages = collectIncomingPreviewPagesForPayload(responseObj, previewObj, progressObj);
   const mergedPreviewPages = activeSessionChanged ? { ...incomingPreviewPages } : { ...previousPreviewPages, ...incomingPreviewPages };
+  const mergedPreviewPageRowsBySection = collectPreviewRowsBySectionFromPageMap(mergedPreviewPages);
+  const pageReadyRows = asArray(mergedPreviewPageRowsBySection.canonical_preview_lines);
+  const pageCaseRows = asArray(mergedPreviewPageRowsBySection.cases_resolutions);
+  const pageBlockedRows = asArray(mergedPreviewPageRowsBySection.blocked_for_pay);
   const applyMergedPreviewPagesToState = (targetEnvelope = null) => {
     const pageMap = isPlainObject(mergedPreviewPages) ? (cloneJson(mergedPreviewPages) || {}) : {};
     wiz.workbench.preview_pages = pageMap;
@@ -92612,21 +92999,22 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     );
   const previewComponentStateCache = getComponentStateCache(previewObj) || {};
   const responseComponentStateCache = getComponentStateCache(responseObj) || {};
-  const caseResolutionStates = firstNonEmptyArray(previewObj.case_resolution_states, responseObj.case_resolution_states, previewComponentStateCache.case_resolution_states, responseComponentStateCache.case_resolution_states);
-  const blockedCaseStates = firstNonEmptyArray(previewObj.blocked_case_states, responseObj.blocked_case_states, previewComponentStateCache.blocked_case_states, responseComponentStateCache.blocked_case_states);
+  const caseResolutionStates = firstNonEmptyArray(previewObj.case_resolution_states, responseObj.case_resolution_states, previewComponentStateCache.case_resolution_states, responseComponentStateCache.case_resolution_states, pageCaseRows);
+  const blockedCaseStates = firstNonEmptyArray(previewObj.blocked_case_states, responseObj.blocked_case_states, previewComponentStateCache.blocked_case_states, responseComponentStateCache.blocked_case_states, pageBlockedRows);
   const safeCaseStates = firstNonEmptyArray(previewObj.safe_case_states, responseObj.safe_case_states, previewComponentStateCache.safe_case_states, responseComponentStateCache.safe_case_states);
   const stablePreviewRows = collectPreviewRowObjects(previewObj, responseObj);
+  const stableReadyPreviewRows = stablePreviewRows.filter(isReadyToPayPreviewRow);
   const explicitCanonicalPreviewLines = firstNonEmptyArray(previewObj.canonical_preview_lines, responseObj.canonical_preview_lines, previewObj.canonicalPreviewLines, responseObj.canonicalPreviewLines);
-  const canonicalPreviewLines = explicitCanonicalPreviewLines.length > 0 ? explicitCanonicalPreviewLines : stablePreviewRows;
+  const canonicalPreviewLines = explicitCanonicalPreviewLines.length > 0 ? explicitCanonicalPreviewLines.filter(isReadyToPayPreviewRow) : firstNonEmptyArray(pageReadyRows, stableReadyPreviewRows);
   const explicitPreviewRows = firstNonEmptyArray(previewObj.preview_rows, responseObj.preview_rows, previewObj.previewRows, responseObj.previewRows, previewObj.rows, responseObj.rows);
-  const previewRows = explicitPreviewRows.length > 0 ? explicitPreviewRows : stablePreviewRows;
-  const readyPreviewLines = deriveReadyPreviewRows(stablePreviewRows, previewObj, responseObj);
-  const blockedPreviewLines = firstNonEmptyArray(previewObj.blocked_preview_lines, responseObj.blocked_preview_lines, previewComponentStateCache.blocked_preview_lines, responseComponentStateCache.blocked_preview_lines);
+  const previewRows = explicitPreviewRows.length > 0 ? explicitPreviewRows.filter(isReadyToPayPreviewRow) : firstNonEmptyArray(pageReadyRows, stableReadyPreviewRows);
+  const readyPreviewLines = deriveReadyPreviewRows(firstNonEmptyArray(pageReadyRows, stableReadyPreviewRows), previewObj, responseObj);
+  const blockedPreviewLines = firstNonEmptyArray(previewObj.blocked_preview_lines, responseObj.blocked_preview_lines, previewComponentStateCache.blocked_preview_lines, responseComponentStateCache.blocked_preview_lines, pageBlockedRows);
   const hiddenPreviewLines = firstNonEmptyArray(previewObj.hidden_preview_lines, responseObj.hidden_preview_lines, previewComponentStateCache.hidden_preview_lines, responseComponentStateCache.hidden_preview_lines);
-  const draftableNow = firstNonEmptyArray(previewObj.draftable_now, responseObj.draftable_now, previewComponentStateCache.draftable_now, responseComponentStateCache.draftable_now, readyPreviewLines);
-  const blockedNow = firstNonEmptyArray(previewObj.blocked_now, responseObj.blocked_now, previewComponentStateCache.blocked_now, responseComponentStateCache.blocked_now);
+  const draftableNow = firstNonEmptyArray(previewObj.draftable_now, responseObj.draftable_now, previewComponentStateCache.draftable_now, responseComponentStateCache.draftable_now, readyPreviewLines.filter(isDraftableWorkbenchReadyRow));
+  const blockedNow = firstNonEmptyArray(previewObj.blocked_now, responseObj.blocked_now, previewComponentStateCache.blocked_now, responseComponentStateCache.blocked_now, pageBlockedRows);
   const readyToPayNow = firstNonEmptyArray(previewObj.ready_to_pay_now, responseObj.ready_to_pay_now, previewComponentStateCache.ready_to_pay_now, responseComponentStateCache.ready_to_pay_now, readyPreviewLines);
-  const blockedForPayNow = firstNonEmptyArray(previewObj.blocked_for_pay_now, responseObj.blocked_for_pay_now, previewComponentStateCache.blocked_for_pay_now, responseComponentStateCache.blocked_for_pay_now);
+  const blockedForPayNow = firstNonEmptyArray(previewObj.blocked_for_pay_now, responseObj.blocked_for_pay_now, previewComponentStateCache.blocked_for_pay_now, responseComponentStateCache.blocked_for_pay_now, pageBlockedRows);
   const hiddenIndefiniteSnoozes = firstNonEmptyArray(previewObj.hidden_indefinite_snoozes, responseObj.hidden_indefinite_snoozes, previewComponentStateCache.hidden_indefinite_snoozes, responseComponentStateCache.hidden_indefinite_snoozes);
   const payees = derivePayeesForWorkbench(previewObj, responseObj);
   const previewSummary = isPlainObject(previewObj.summary) ? previewObj.summary : (isPlainObject(responseObj.summary) ? responseObj.summary : {});
@@ -92981,9 +93369,12 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.__post_create_refresh_pending = false;
   wiz.workbench.__post_cancel_refresh_pending = false;
   wiz.workbench.case_resolution_states = cloneJson(caseResolutionStates) || [];
+  wiz.workbench.blocked_case_states = cloneJson(blockedCaseStates) || [];
   wiz.workbench.canonical_preview_lines = cloneJson(canonicalPreviewLines) || [];
   wiz.workbench.preview_rows = cloneJson(previewRows) || [];
   wiz.workbench.ready_preview_lines = cloneJson(readyPreviewLines) || [];
+  wiz.workbench.blocked_preview_lines = cloneJson(blockedPreviewLines) || [];
+  wiz.workbench.blocked_for_pay_now = cloneJson(blockedForPayNow) || [];
   wiz.workbench.payees = cloneJson(payees) || [];
   wiz.workbench.summary = isPlainObject(previewSummary) ? (cloneJson(previewSummary) || {}) : {};
   wiz.workbench.last_preview_applied_at = new Date().toISOString();
@@ -92992,6 +93383,7 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
 
   return normalizedEnvelope;
 }
+
 
 
 
@@ -138300,7 +138692,15 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const id = trimStr(sessionId && typeof sessionId === 'object' ? (sessionId.session_id || sessionId.sessionId || sessionId.id) : sessionId);
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
-  const sectionText = trimStr(section || opts.section || (sessionId && typeof sessionId === 'object' ? sessionId.section : '') || 'canonical_preview_lines').toLowerCase();
+  const normalizePreviewPageSectionName = (value) => {
+    const raw = trimStr(value || 'canonical_preview_lines').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!raw) return 'canonical_preview_lines';
+    if (raw === 'preview_rows' || raw === 'ready_to_pay' || raw === 'ready_preview_lines') return 'canonical_preview_lines';
+    if (raw === 'cases_resolutions' || raw === 'case_resolution_states' || raw === 'case_resolutions') return 'cases_resolutions';
+    if (raw === 'blocked_for_pay' || raw === 'blocked_items' || raw === 'blocked_preview_lines' || raw === 'blocked_now') return 'blocked_for_pay';
+    return raw;
+  };
+  const sectionText = normalizePreviewPageSectionName(section || opts.section || (sessionId && typeof sessionId === 'object' ? sessionId.section : '') || 'canonical_preview_lines');
   const obsoleteSessionIds = Array.from(new Set([
     ...(Array.isArray(opts.obsolete_session_ids) ? opts.obsolete_session_ids : []),
     ...(Array.isArray(opts.obsoleteSessionIds) ? opts.obsoleteSessionIds : []),
@@ -138396,8 +138796,14 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
     'finance_case_groups',
     'preview_rows',
     'ready_to_pay',
-    'blocked_now',
-    'ready_preview_lines'
+    'ready_preview_lines',
+    'cases_resolutions',
+    'case_resolution_states',
+    'case_resolutions',
+    'blocked_for_pay',
+    'blocked_items',
+    'blocked_preview_lines',
+    'blocked_now'
   ]);
   if (!allowedSections.has(sectionText)) {
     throw new Error(`bankingPayWorkbenchSessionGetPreviewPage: invalid section ${sectionText}`);
@@ -138514,8 +138920,8 @@ async function bankingPayWorkbenchSessionGetPreviewPage(sessionId, section, opti
   const returnedCountRaw = Number(payload.returned_count ?? payload.returnedCount ?? rows.length);
   const rowsCountRaw = Number(payload.rows_count ?? payload.rowsCount ?? payload.row_count ?? payload.rowCount ?? payload.total_count ?? payload.totalCount ?? returnedCountRaw);
 
-  const requestedSection = trimStr(payload.requested_section || payload.requestedSection || sectionText).toLowerCase() || sectionText || 'canonical_preview_lines';
-  const resolvedSection = trimStr(payload.resolved_section || payload.resolvedSection || payload.section || requestedSection).toLowerCase() || requestedSection;
+  const requestedSection = normalizePreviewPageSectionName(payload.requested_section || payload.requestedSection || sectionText);
+  const resolvedSection = normalizePreviewPageSectionName(payload.resolved_section || payload.resolvedSection || payload.section || requestedSection);
 
   return {
     ...payload,
@@ -275347,7 +275753,6 @@ function stopBankingPayBatchLiveWatch(batchId) {
   return stoppedAny;
 }
 
-
 async function applyBankingPayLiveRefresh(signalPayload) {
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const clone = (value) => {
@@ -275388,6 +275793,27 @@ async function applyBankingPayLiveRefresh(signalPayload) {
     ...(Array.isArray(changedScope.changedAreas) ? changedScope.changedAreas : [])
   ].map(upper).filter(Boolean);
   const changedAreaText = changedAreaTokens.join(' ');
+  const scopeText = JSON.stringify(changedScope || {}).toUpperCase();
+  const paymentStatusSignalChanged = (
+    payload.changed === true
+    && (
+      changedAreaTokens.some((token) => token === 'PAYMENT_STATUS' || token.includes('PAYMENT_STATUS') || token.includes('BANK_OUTCOME') || token.includes('SETTLEMENT'))
+      || scopeText.includes('PAYMENT_STATUS')
+      || scopeText.includes('BANK_OUTCOME')
+      || scopeText.includes('SETTLEMENT')
+      || ['CURRENT_PAYMENT_STATUS', 'CURRENT_PAYMENT_STATUS_VISIBLE_PAGE', 'CURRENT_PAYMENT_STATUS_AND_OVERVIEW'].includes(recommendedRaw)
+    )
+  );
+  const overviewSignalChanged = (
+    payload.changed === true
+    && (
+      changedAreaTokens.some((token) => token === 'OVERVIEW' || token.includes('OVERVIEW') || token.includes('BATCH_STATUS') || token.includes('SETTLEMENT'))
+      || scopeText.includes('OVERVIEW')
+      || scopeText.includes('BATCH_STATUS')
+      || scopeText.includes('SETTLEMENT')
+      || ['OVERVIEW', 'OVERVIEW_ONLY', 'CURRENT_PAYMENT_STATUS_AND_OVERVIEW'].includes(recommendedRaw)
+    )
+  );
   const retrySignalChanged = payload.retry_in_progress === true || payload.retry_already_in_progress === true || payload.retry_eligible_count != null || payload.retry_operation_id != null || payload.retry_operation_status != null || upper(payload.change_reason || payload.reason || changedScope.change_reason || changedScope.reason || '').includes('RETRY');
   const operationProgressRefreshRequested = [
     'OPERATION_PROGRESS',
@@ -275567,6 +275993,31 @@ async function applyBankingPayLiveRefresh(signalPayload) {
     };
   };
 
+
+  const markSectionStale = (section, reason = 'live-signal-change') => {
+    if (!child || typeof child !== 'object') return false;
+    const key = trim(section).toLowerCase();
+    if (!key) return false;
+    const nowIso = new Date().toISOString();
+    child.sections = child.sections && typeof child.sections === 'object' ? child.sections : {};
+    child.sectionPages = child.sectionPages && typeof child.sectionPages === 'object' ? child.sectionPages : {};
+    child.visiblePage = child.visiblePage && typeof child.visiblePage === 'object' ? child.visiblePage : {};
+    const stalePatch = { loaded: false, loading: false, stale: true, stale_reason: reason, stale_at_utc: nowIso };
+    child.sections[key] = { ...(child.sections[key] && typeof child.sections[key] === 'object' ? child.sections[key] : {}), ...stalePatch };
+    child.sectionPages[key] = { ...(child.sectionPages[key] && typeof child.sectionPages[key] === 'object' ? child.sectionPages[key] : {}), ...stalePatch };
+    child.visiblePage[key] = { ...(child.visiblePage[key] && typeof child.visiblePage[key] === 'object' ? child.visiblePage[key] : {}), ...stalePatch };
+    if (key === 'current_payment_status') {
+      child.correction = child.correction && typeof child.correction === 'object' ? child.correction : {};
+      child.correction.current_payment_status_stale = true;
+      child.correction.currentPaymentStatusStale = true;
+      child.correction.current_payment_status_stale_reason = reason;
+      child.correction.current_payment_status_stale_at_utc = nowIso;
+      child.correction.rowsStale = true;
+      child.correction.rows_stale = true;
+    }
+    return true;
+  };
+
   const mergeSectionPageToChildState = (section, page, rows) => {
     if (!pay) return;
     pay.livePage = pay.livePage && typeof pay.livePage === 'object' ? pay.livePage : {};
@@ -275576,9 +276027,9 @@ async function applyBankingPayLiveRefresh(signalPayload) {
     child.sections = child.sections && typeof child.sections === 'object' ? child.sections : {};
     child.sectionPages = child.sectionPages && typeof child.sectionPages === 'object' ? child.sectionPages : {};
     child.visiblePage = child.visiblePage && typeof child.visiblePage === 'object' ? child.visiblePage : {};
-    child.sections[section] = { ...page, rows, items: rows, loaded: true, loading: false, refreshed_at_utc: new Date().toISOString() };
-    child.sectionPages[section] = { ...page, rows, items: rows, loaded: true, loading: false, refreshed_at_utc: new Date().toISOString() };
-    child.visiblePage[section] = { ...page, rows, items: rows, loaded: true, loading: false, refreshed_at_utc: new Date().toISOString() };
+    child.sections[section] = { ...page, rows, items: rows, loaded: true, loading: false, stale: false, stale_reason: '', refreshed_at_utc: new Date().toISOString() };
+    child.sectionPages[section] = { ...page, rows, items: rows, loaded: true, loading: false, stale: false, stale_reason: '', refreshed_at_utc: new Date().toISOString() };
+    child.visiblePage[section] = { ...page, rows, items: rows, loaded: true, loading: false, stale: false, stale_reason: '', refreshed_at_utc: new Date().toISOString() };
 
     if (section === 'overview_items') {
       child.overview_items = rows;
@@ -275595,6 +276046,10 @@ async function applyBankingPayLiveRefresh(signalPayload) {
       child.correction.rows = rows;
       child.correction.current_payment_status_rows = rows;
       child.correction.currentPaymentStatusRows = rows;
+      child.correction.current_payment_status_stale = false;
+      child.correction.currentPaymentStatusStale = false;
+      child.correction.rowsStale = false;
+      child.correction.rows_stale = false;
     }
   };
 
@@ -275886,17 +276341,49 @@ async function applyBankingPayLiveRefresh(signalPayload) {
       await refreshSafeCurrentVisibleSection('safe_current_section');
     } else if (recommended === 'CURRENT_PAYMENT_STATUS_VISIBLE_PAGE' || recommended === 'CURRENT_PAYMENT_STATUS') {
       const ctx = detectCurrentContext();
+      markSectionStale('current_payment_status', 'watch-payment-status-change');
       if (ctx.current_tab === 'CURRENT_PAYMENT_STATUS') {
         result.page = await refreshCurrentPaymentStatusVisiblePage();
         pushRefreshed('current_payment_status_visible_page');
       } else {
-        result.current_payment_status_refresh_skipped = true;
+        result.current_payment_status_marked_stale = true;
+        result.current_payment_status_refresh_deferred = true;
         result.current_payment_status_refresh_skipped_reason = 'CURRENT_PAYMENT_STATUS_NOT_VISIBLE';
         result.current_tab = ctx.current_tab || null;
       }
+      if (overviewSignalChanged) {
+        result.overview = await refreshOverviewSafe();
+        pushRefreshed('overview_bootstrap', 'overview_items');
+      }
     } else if (recommended === 'CURRENT_PAYMENT_STATUS_AND_OVERVIEW') {
-      await refreshSafeCurrentVisibleSection('current_payment_status_and_overview');
-      result.downgraded_combined_refresh_to_visible_section = true;
+      const ctx = detectCurrentContext();
+      markSectionStale('current_payment_status', 'watch-payment-status-and-overview-change');
+      result.overview = await refreshOverviewSafe();
+      pushRefreshed('overview_bootstrap', 'overview_items');
+      if (ctx.current_tab === 'CURRENT_PAYMENT_STATUS') {
+        result.page = await refreshCurrentPaymentStatusVisiblePage();
+        pushRefreshed('current_payment_status_visible_page');
+      } else {
+        result.current_payment_status_marked_stale = true;
+        result.current_payment_status_refresh_deferred = true;
+        result.current_payment_status_refresh_skipped_reason = 'CURRENT_PAYMENT_STATUS_NOT_VISIBLE';
+        result.current_tab = ctx.current_tab || null;
+      }
+    } else if (recommended === 'NONE' && paymentStatusSignalChanged) {
+      const ctx = detectCurrentContext();
+      markSectionStale('current_payment_status', 'watch-payment-status-change');
+      if (overviewSignalChanged) {
+        result.overview = await refreshOverviewSafe();
+        pushRefreshed('overview_bootstrap', 'overview_items');
+      }
+      if (ctx.current_tab === 'CURRENT_PAYMENT_STATUS') {
+        result.page = await refreshCurrentPaymentStatusVisiblePage();
+        pushRefreshed('current_payment_status_visible_page');
+      } else {
+        result.current_payment_status_marked_stale = true;
+        result.current_payment_status_refresh_deferred = true;
+        result.current_tab = ctx.current_tab || null;
+      }
     } else if (recommended === 'NONE' && retrySignalChanged) {
       await refreshSafeCurrentVisibleSection('retry_signal');
       result.alert_summary = await applyCachedAlertSignalOnly();
@@ -275927,8 +276414,6 @@ async function applyBankingPayLiveRefresh(signalPayload) {
   }
   return result;
 }
-
-
 
 
 
