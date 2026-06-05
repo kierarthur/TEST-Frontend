@@ -28019,7 +28019,13 @@ async function bankingPayPreview(pay_date) {
       countValue(sectionCounts.canonical_preview_lines) > 0 ||
       countValue(sectionCounts.ready_to_pay) > 0 ||
       countValue(sectionCounts.ready_preview_lines) > 0 ||
-      countValue(sectionCounts.preview_rows) > 0
+      countValue(sectionCounts.preview_rows) > 0 ||
+      countValue(sectionCounts.blocked_for_pay) > 0 ||
+      countValue(sectionCounts.blocked_items) > 0 ||
+      countValue(sectionCounts.blocked_preview_lines) > 0 ||
+      countValue(sectionCounts.cases_resolutions) > 0 ||
+      countValue(sectionCounts.case_resolution_states) > 0 ||
+      countValue(sectionCounts.case_resolutions) > 0
     );
   };
 
@@ -28573,65 +28579,272 @@ async function bankingPayPreview(pay_date) {
     };
   };
 
-  const applyPreviewPagePayloadToState = (pagePayload, sourcePayload = null) => {
+  const normalisePreviewPageSectionName = (section) => {
+    const raw = trimStr(section || 'canonical_preview_lines').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!raw) return 'canonical_preview_lines';
+    if (raw === 'preview_rows' || raw === 'ready_to_pay' || raw === 'ready_preview_lines') return 'canonical_preview_lines';
+    if (raw === 'blocked_items' || raw === 'blocked_preview_lines' || raw === 'blocked_now') return 'blocked_for_pay';
+    if (raw === 'case_resolution_states' || raw === 'case_resolutions') return 'cases_resolutions';
+    return raw;
+  };
+  const requiredRowBackedPreviewSections = ['canonical_preview_lines', 'blocked_for_pay', 'cases_resolutions'];
+  const getPreviewPageRows = (pageLike) => {
+    const page = isPlainObject(pageLike) ? pageLike : {};
+    return Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
+  };
+  const normalisePreviewPagePayloadForState = (pagePayload, fallbackSection = 'canonical_preview_lines') => {
     const page = isPlainObject(pagePayload) ? pagePayload : {};
-    const pageRows = Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
-    if (pageRows.length <= 0) return null;
-    const requestedSection = trimStr(page.requested_section || page.requestedSection || page.request_section || page.section || 'canonical_preview_lines').toLowerCase() || 'canonical_preview_lines';
-    const resolvedSection = trimStr(page.resolved_section || page.resolvedSection || page.section || requestedSection).toLowerCase() || requestedSection;
-    const sessionIdText = trimStr(page.session_id || getCurrentWorkbenchSessionId() || '');
-    if (!sessionIdText || !isSameWorkbenchSession(sessionIdText) || !isLatestRequest()) return null;
-    const readyLikePageSection = ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines'].includes(resolvedSection) ||
-      ['ready_to_pay', 'ready_preview_lines'].includes(requestedSection);
-    const syntheticPayload = {
+    const requestedSection = normalisePreviewPageSectionName(page.requested_section || page.requestedSection || page.request_section || page.section || fallbackSection || 'canonical_preview_lines');
+    const resolvedSection = normalisePreviewPageSectionName(page.resolved_section || page.resolvedSection || page.section || requestedSection);
+    const rows = getPreviewPageRows(page);
+    const returnedCountRaw = Number(page.returned_count ?? page.returnedCount ?? rows.length);
+    const rowsCountRaw = Number(page.rows_count ?? page.rowsCount ?? page.row_count ?? page.rowCount ?? page.total_count ?? page.totalCount ?? returnedCountRaw);
+    const limitRaw = Number(page.limit ?? rows.length ?? 100);
+    return {
+      ...(deep(page) || {}),
+      ok: page.ok !== false,
+      requested_section: requestedSection,
+      resolved_section: resolvedSection,
+      section: resolvedSection,
+      section_alias_applied: page.section_alias_applied === true || requestedSection !== resolvedSection,
+      rows: deep(rows) || [],
+      items: deep(rows) || [],
+      next_cursor: page.next_cursor ?? page.nextCursor ?? null,
+      returned_count: Number.isFinite(returnedCountRaw) ? Math.max(0, Math.trunc(returnedCountRaw)) : rows.length,
+      rows_count: Number.isFinite(rowsCountRaw) ? Math.max(0, Math.trunc(rowsCountRaw)) : rows.length,
+      session_id: trimStr(page.session_id || page.sessionId || getCurrentWorkbenchSessionId() || ''),
+      session_version: page.session_version ?? page.sessionVersion ?? wiz.workbench.session_version ?? null,
+      session_signature: page.session_signature ?? page.sessionSignature ?? wiz.workbench.session_signature ?? null,
+      limit: Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.trunc(limitRaw))) : 100
+    };
+  };
+  const ensureRowBackedPreviewSectionState = () => {
+    const ensureObject = (target, key) => {
+      target[key] = (target[key] && typeof target[key] === 'object' && !Array.isArray(target[key])) ? target[key] : {};
+      return target[key];
+    };
+    wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
+    wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
+    wiz.decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {};
+    wiz.preview.componentStateCache = (wiz.preview.componentStateCache && typeof wiz.preview.componentStateCache === 'object') ? wiz.preview.componentStateCache : {};
+    ensureObject(wiz.preview, 'preview_pages');
+    ensureObject(wiz.preview, 'previewPageCache');
+    ensureObject(wiz.preview, 'preview_page_cache');
+    ensureObject(wiz.preview, 'page_cache');
+    ensureObject(wiz.preview, 'pageCache');
+    ensureObject(wiz.workbench, 'preview_pages');
+    ensureObject(wiz.workbench, 'previewPages');
+    ensureObject(wiz.workbench, 'preview_page_cache');
+    ensureObject(wiz.workbench, 'previewPageCache');
+    ensureObject(wiz.workbench, 'page_cache');
+    ensureObject(wiz.workbench, 'pageCache');
+    if (isPlainObject(wiz.preview.data)) {
+      ensureObject(wiz.preview.data, 'preview_pages');
+      ensureObject(wiz.preview.data, 'previewPageCache');
+      ensureObject(wiz.preview.data, 'preview_page_cache');
+      ensureObject(wiz.preview.data, 'page_cache');
+      if (isPlainObject(wiz.preview.data.preview)) {
+        wiz.preview.data.preview.componentStateCache = isPlainObject(wiz.preview.data.preview.componentStateCache) ? wiz.preview.data.preview.componentStateCache : {};
+        ensureObject(wiz.preview.data.preview, 'preview_pages');
+        ensureObject(wiz.preview.data.preview, 'previewPageCache');
+        ensureObject(wiz.preview.data.preview, 'preview_page_cache');
+        ensureObject(wiz.preview.data.preview, 'page_cache');
+      }
+    }
+  };
+  const writePreviewPageCacheForSection = (pagePayload) => {
+    const page = normalisePreviewPagePayloadForState(pagePayload);
+    const sections = Array.from(new Set([page.resolved_section, page.requested_section, page.section].map((section) => normalisePreviewPageSectionName(section)).filter(Boolean)));
+    ensureRowBackedPreviewSectionState();
+    for (const section of sections) {
+      wiz.preview.preview_pages[section] = page;
+      wiz.preview.previewPageCache[section] = page;
+      wiz.preview.preview_page_cache[section] = page;
+      wiz.preview.page_cache[section] = page;
+      wiz.preview.pageCache[section] = page;
+      wiz.workbench.preview_pages[section] = page;
+      wiz.workbench.previewPages[section] = page;
+      wiz.workbench.preview_page_cache[section] = page;
+      wiz.workbench.previewPageCache[section] = page;
+      wiz.workbench.page_cache[section] = page;
+      wiz.workbench.pageCache[section] = page;
+      if (isPlainObject(wiz.preview.data)) {
+        wiz.preview.data.preview_pages[section] = page;
+        wiz.preview.data.previewPageCache[section] = page;
+        wiz.preview.data.preview_page_cache[section] = page;
+        wiz.preview.data.page_cache[section] = page;
+        if (isPlainObject(wiz.preview.data.preview)) {
+          wiz.preview.data.preview.preview_pages[section] = page;
+          wiz.preview.data.preview.previewPageCache[section] = page;
+          wiz.preview.data.preview.preview_page_cache[section] = page;
+          wiz.preview.data.preview.page_cache[section] = page;
+        }
+      }
+    }
+    return page;
+  };
+  const replacePreviewRowsForSection = (section, rows) => {
+    const normalisedSection = normalisePreviewPageSectionName(section);
+    const safeRows = deep(Array.isArray(rows) ? rows : []) || [];
+    ensureRowBackedPreviewSectionState();
+    const previewData = isPlainObject(wiz.preview.data) ? wiz.preview.data : null;
+    const previewDataPreview = previewData && isPlainObject(previewData.preview) ? previewData.preview : null;
+    if (normalisedSection === 'canonical_preview_lines') {
+      wiz.workbench.canonical_preview_lines = safeRows;
+      wiz.workbench.preview_rows = safeRows;
+      wiz.workbench.ready_preview_lines = safeRows;
+      wiz.preview.componentStateCache.draftable_now = safeRows;
+      wiz.preview.componentStateCache.ready_to_pay_now = safeRows;
+      wiz.preview.componentStateCache.ready_preview_lines = safeRows;
+      wiz.preview.componentStateCache.canonical_preview_lines = safeRows;
+      wiz.decisions.draftable_now = safeRows;
+      wiz.decisions.ready_to_pay_now = safeRows;
+      wiz.decisions.ready_preview_lines = safeRows;
+      wiz.decisions.canonical_preview_lines = safeRows;
+      if (previewData) {
+        previewData.canonical_preview_lines = safeRows;
+        previewData.preview_rows = safeRows;
+        previewData.ready_preview_lines = safeRows;
+      }
+      if (previewDataPreview) {
+        previewDataPreview.canonical_preview_lines = safeRows;
+        previewDataPreview.preview_rows = safeRows;
+        previewDataPreview.ready_preview_lines = safeRows;
+        previewDataPreview.componentStateCache.draftable_now = safeRows;
+        previewDataPreview.componentStateCache.ready_to_pay_now = safeRows;
+        previewDataPreview.componentStateCache.ready_preview_lines = safeRows;
+        previewDataPreview.componentStateCache.canonical_preview_lines = safeRows;
+      }
+    } else if (normalisedSection === 'blocked_for_pay') {
+      wiz.workbench.blocked_for_pay_now = safeRows;
+      wiz.workbench.blocked_now = safeRows;
+      wiz.workbench.blocked_preview_lines = safeRows;
+      wiz.preview.componentStateCache.blocked_for_pay_now = safeRows;
+      wiz.preview.componentStateCache.blocked_now = safeRows;
+      wiz.preview.componentStateCache.blocked_preview_lines = safeRows;
+      wiz.decisions.blocked_for_pay_now = safeRows;
+      wiz.decisions.blocked_now = safeRows;
+      wiz.decisions.blocked_preview_lines = safeRows;
+      if (previewData) {
+        previewData.blocked_for_pay_now = safeRows;
+        previewData.blocked_now = safeRows;
+        previewData.blocked_preview_lines = safeRows;
+      }
+      if (previewDataPreview) {
+        previewDataPreview.blocked_for_pay_now = safeRows;
+        previewDataPreview.blocked_now = safeRows;
+        previewDataPreview.blocked_preview_lines = safeRows;
+        previewDataPreview.componentStateCache.blocked_for_pay_now = safeRows;
+        previewDataPreview.componentStateCache.blocked_now = safeRows;
+        previewDataPreview.componentStateCache.blocked_preview_lines = safeRows;
+      }
+    } else if (normalisedSection === 'cases_resolutions') {
+      wiz.workbench.case_resolution_states = safeRows;
+      wiz.workbench.cases_resolutions = safeRows;
+      wiz.preview.componentStateCache.case_resolution_states = safeRows;
+      wiz.preview.componentStateCache.cases_resolutions = safeRows;
+      wiz.decisions.case_resolution_states = safeRows;
+      wiz.decisions.cases_resolutions = safeRows;
+      if (previewData) {
+        previewData.case_resolution_states = safeRows;
+        previewData.cases_resolutions = safeRows;
+      }
+      if (previewDataPreview) {
+        previewDataPreview.case_resolution_states = safeRows;
+        previewDataPreview.cases_resolutions = safeRows;
+        previewDataPreview.componentStateCache.case_resolution_states = safeRows;
+        previewDataPreview.componentStateCache.cases_resolutions = safeRows;
+      }
+    }
+  };
+  const buildSectionSpecificSyntheticPreviewPayload = (section, rows, pagePayload, sourcePayload = null) => {
+    const normalisedSection = normalisePreviewPageSectionName(section);
+    const page = normalisePreviewPagePayloadForState(pagePayload, normalisedSection);
+    const safeRows = deep(Array.isArray(rows) ? rows : []) || [];
+    const componentStateCache = {};
+    const preview = { ok: true, componentStateCache };
+    const synthetic = {
       ok: page.ok !== false,
       ready: page.ready === true,
       ready_flag: page.ready === true,
       pending_refresh: hasActiveWorkbenchPendingWork(),
       requires_paging: true,
-      session_id: sessionIdText,
+      session_id: page.session_id,
       snapshot_run_id: trimStr(page.snapshot_run_id || page.source_snapshot_run_id || wiz.workbench.snapshot_run_id || ''),
       session_version: page.session_version ?? page.sessionVersion ?? wiz.workbench.session_version ?? null,
       session_signature: page.session_signature ?? page.sessionSignature ?? wiz.workbench.session_signature ?? null,
       pay_date: effectivePayDate,
       week_ending_cutoff_date: weekEndingCutoffDate,
-      requested_section: requestedSection,
-      resolved_section: resolvedSection,
-      section_alias_applied: page.section_alias_applied === true || requestedSection !== resolvedSection,
-      canonical_preview_lines: readyLikePageSection ? (deep(pageRows) || []) : [],
-      preview_rows: deep(pageRows) || [],
-      ready_preview_lines: readyLikePageSection ? (deep(pageRows) || []) : [],
-      rows: deep(pageRows) || [],
-      preview: {
-        ok: true,
-        canonical_preview_lines: readyLikePageSection ? (deep(pageRows) || []) : [],
-        preview_rows: deep(pageRows) || [],
-        ready_preview_lines: readyLikePageSection ? (deep(pageRows) || []) : [],
-        rows: deep(pageRows) || [],
-        componentStateCache: {
-          case_resolution_states: [],
-          blocked_case_states: [],
-          safe_case_states: [],
-          reusable_component_resolutions: {},
-          stale_component_resolutions: {},
-          draftable_now: readyLikePageSection ? (deep(pageRows) || []) : [],
-          blocked_now: [],
-          ready_to_pay_now: readyLikePageSection ? (deep(pageRows) || []) : [],
-          blocked_for_pay_now: [],
-          hidden_indefinite_snoozes: [],
-          ready_preview_lines: readyLikePageSection ? (deep(pageRows) || []) : [],
-          blocked_preview_lines: [],
-          hidden_preview_lines: []
-        }
-      },
+      requested_section: page.requested_section,
+      resolved_section: normalisedSection,
+      section_alias_applied: page.section_alias_applied === true || page.requested_section !== normalisedSection,
+      preview,
       preview_pages: {
-        [resolvedSection]: page,
-        ...(requestedSection !== resolvedSection ? { [requestedSection]: page } : {})
+        [normalisedSection]: page,
+        ...(page.requested_section !== normalisedSection ? { [page.requested_section]: page } : {})
       },
       progress: isPlainObject(sourcePayload?.progress) ? (deep(sourcePayload.progress) || sourcePayload.progress) : (isPlainObject(sourcePayload) ? (deep(sourcePayload) || sourcePayload) : {})
     };
-    const applied = (typeof applyPayWorkbenchPreviewToState === 'function') ? applyPayWorkbenchPreviewToState(syntheticPayload, stLocal) : null;
-    return applied || syntheticPayload;
+    if (normalisedSection === 'canonical_preview_lines') {
+      synthetic.canonical_preview_lines = safeRows;
+      synthetic.preview_rows = safeRows;
+      synthetic.ready_preview_lines = safeRows;
+      synthetic.rows = safeRows;
+      preview.canonical_preview_lines = safeRows;
+      preview.preview_rows = safeRows;
+      preview.ready_preview_lines = safeRows;
+      preview.rows = safeRows;
+      componentStateCache.draftable_now = safeRows;
+      componentStateCache.ready_to_pay_now = safeRows;
+      componentStateCache.ready_preview_lines = safeRows;
+      componentStateCache.canonical_preview_lines = safeRows;
+    } else if (normalisedSection === 'blocked_for_pay') {
+      synthetic.blocked_for_pay_now = safeRows;
+      synthetic.blocked_now = safeRows;
+      synthetic.blocked_preview_lines = safeRows;
+      preview.blocked_for_pay_now = safeRows;
+      preview.blocked_now = safeRows;
+      preview.blocked_preview_lines = safeRows;
+      componentStateCache.blocked_for_pay_now = safeRows;
+      componentStateCache.blocked_now = safeRows;
+      componentStateCache.blocked_preview_lines = safeRows;
+    } else if (normalisedSection === 'cases_resolutions') {
+      synthetic.case_resolution_states = safeRows;
+      synthetic.cases_resolutions = safeRows;
+      preview.case_resolution_states = safeRows;
+      preview.cases_resolutions = safeRows;
+      componentStateCache.case_resolution_states = safeRows;
+      componentStateCache.cases_resolutions = safeRows;
+    }
+    return synthetic;
+  };
+  const applyPreviewPagePayloadToState = (pagePayload, sourcePayload = null) => {
+    const page = normalisePreviewPagePayloadForState(pagePayload);
+    const pageRows = getPreviewPageRows(page);
+    const resolvedSection = normalisePreviewPageSectionName(page.resolved_section || page.section || page.requested_section || 'canonical_preview_lines');
+    const sessionIdText = trimStr(page.session_id || getCurrentWorkbenchSessionId() || '');
+    if (!sessionIdText || !isSameWorkbenchSession(sessionIdText) || !isLatestRequest()) return null;
+
+    const cachedPage = writePreviewPageCacheForSection({ ...page, session_id: sessionIdText, resolved_section: resolvedSection, section: resolvedSection });
+    replacePreviewRowsForSection(resolvedSection, pageRows);
+
+    const loadedSections = wiz.workbench.required_preview_sections_loaded && typeof wiz.workbench.required_preview_sections_loaded === 'object'
+      ? wiz.workbench.required_preview_sections_loaded
+      : {};
+    loadedSections[resolvedSection] = true;
+    wiz.workbench.required_preview_sections_loaded = loadedSections;
+    wiz.workbench.requiredPreviewSectionsLoaded = { ...loadedSections };
+
+    const syntheticPayload = buildSectionSpecificSyntheticPreviewPayload(resolvedSection, pageRows, cachedPage, sourcePayload);
+    if (typeof applyPayWorkbenchPreviewToState === 'function') {
+      try {
+        const applied = applyPayWorkbenchPreviewToState(syntheticPayload, stLocal);
+        return applied || syntheticPayload;
+      } catch {
+        return syntheticPayload;
+      }
+    }
+    return syntheticPayload;
   };
 
   const finalisePreviewVisualStateAfterRowsApplied = (pagePayload = null, sourcePayload = null) => {
@@ -28685,6 +28898,87 @@ async function bankingPayPreview(pay_date) {
     }
   };
 
+  const loadRequiredPreviewSectionsForReadyWorkbench = async (sessionId, loadOptions = {}) => {
+    if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return null;
+    const sessionIdText = trimStr(sessionId || getCurrentWorkbenchSessionId() || '');
+    if (!sessionIdText || !isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) return null;
+
+    const opts = isPlainObject(loadOptions) ? loadOptions : {};
+    const sourcePayload = isPlainObject(opts.sourcePayload) ? opts.sourcePayload : null;
+    const storedContext = isPlainObject(opts.stored) ? opts.stored : {};
+    const progressObj = isPlainObject(opts.progressObj) ? opts.progressObj : (isPlainObject(sourcePayload?.progress) ? sourcePayload.progress : (isPlainObject(sourcePayload) ? sourcePayload : {}));
+    const limitRaw = Number(opts.limit || storedContext.recommended_page_size || progressObj.recommended_page_size || 100);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.trunc(limitRaw))) : 100;
+    const existingPageMap = (wiz.workbench.preview_page_cache && typeof wiz.workbench.preview_page_cache === 'object') ? wiz.workbench.preview_page_cache : {};
+    const sectionPages = {};
+    const loadedSections = {};
+    const emptySections = {};
+    const errors = [];
+    const combinedRows = [];
+
+    for (const requiredSection of requiredRowBackedPreviewSections) {
+      if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) break;
+      const section = normalisePreviewPageSectionName(requiredSection);
+      let page = null;
+      const cachedPage = existingPageMap[section] || null;
+      const cachedRows = getPreviewPageRows(cachedPage);
+      const cachedVersion = cachedPage?.session_version ?? cachedPage?.sessionVersion ?? null;
+      const storedVersion = storedContext.session_version ?? wiz.workbench.session_version ?? null;
+      const cachedUsable = !!(cachedPage && (Array.isArray(cachedPage.rows) || Array.isArray(cachedPage.items)) && (cachedVersion === null || storedVersion === null || String(cachedVersion) === String(storedVersion)));
+      if (cachedUsable) {
+        page = cachedPage;
+      } else {
+        try {
+          page = await bankingPayWorkbenchSessionGetPreviewPage(sessionIdText, section, {
+            limit,
+            expected_session_id: sessionIdText,
+            current_session_id: sessionIdText,
+            source: opts.source || 'bankingPayPreview.requiredPreviewSections'
+          });
+        } catch (pageError) {
+          errors.push({ section, message: trimStr(pageError?.message || pageError || '') || 'Preview section could not be loaded.' });
+          continue;
+        }
+      }
+      if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) break;
+      const normalisedPage = normalisePreviewPagePayloadForState(page, section);
+      normalisedPage.session_id = sessionIdText;
+      const rows = getPreviewPageRows(normalisedPage);
+      applyPreviewPagePayloadToState(normalisedPage, sourcePayload);
+      sectionPages[section] = normalisedPage;
+      loadedSections[section] = true;
+      emptySections[section] = rows.length === 0;
+      combinedRows.push(...rows);
+    }
+
+    ensureRowBackedPreviewSectionState();
+    wiz.workbench.required_preview_sections_loaded = Object.assign({}, wiz.workbench.required_preview_sections_loaded || {}, loadedSections);
+    wiz.workbench.requiredPreviewSectionsLoaded = Object.assign({}, wiz.workbench.requiredPreviewSectionsLoaded || {}, loadedSections);
+    wiz.workbench.required_preview_sections_empty = Object.assign({}, wiz.workbench.required_preview_sections_empty || {}, emptySections);
+    wiz.workbench.requiredPreviewSectionsEmpty = Object.assign({}, wiz.workbench.requiredPreviewSectionsEmpty || {}, emptySections);
+
+    const summary = {
+      ok: errors.length === 0,
+      multi_section_preview_loaded: true,
+      requested_sections: requiredRowBackedPreviewSections.slice(),
+      loaded_sections: Object.keys(loadedSections),
+      empty_sections: Object.keys(emptySections).filter((section) => emptySections[section]),
+      section_pages: sectionPages,
+      pages_by_section: sectionPages,
+      errors,
+      session_id: sessionIdText,
+      rows: combinedRows,
+      items: combinedRows,
+      returned_count: combinedRows.length,
+      section_row_counts: Object.fromEntries(requiredRowBackedPreviewSections.map((section) => {
+        const page = sectionPages[section] || {};
+        return [section, getPreviewPageRows(page).length];
+      }))
+    };
+    wiz.workbench.required_preview_sections_summary = summary;
+    return summary;
+  };
+
   const maybeLoadFirstPreviewPageForPayload = async (payload) => {
     if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return null;
     const shouldAttemptPage = loadFirstPage || workbenchProgressHasRowsAvailable(payload) || workbenchProgressLooksReady(payload) || workbenchProgressLooksReady(payload?.progress);
@@ -28695,82 +28989,21 @@ async function bankingPayPreview(pay_date) {
     if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) return null;
 
     const progressObj = isPlainObject(payload?.progress) ? payload.progress : (isPlainObject(payload) ? payload : {});
-    const sectionHints = [
-      trimStr(progressObj.primary_preview_section || ''),
-      trimStr(progressObj.ready_to_pay_section || ''),
-      trimStr(progressObj.preview_rows_section || '')
-    ].map((section) => section.toLowerCase()).filter(Boolean);
-    const sections = Array.from(new Set([
-      ...sectionHints,
-      ...(Array.isArray(stored?.available_sections) ? stored.available_sections : []),
-      ...(Array.isArray(progressObj.available_sections) ? progressObj.available_sections : []),
-      ...(Array.isArray(progressObj.pageable_sections) ? progressObj.pageable_sections : [])
-    ].map((section) => trimStr(section).toLowerCase()).filter(Boolean)));
-    const preferredSections = ['canonical_preview_lines', 'ready_to_pay', 'ready_preview_lines', 'preview_rows', 'paye_candidates', 'non_paye_payees', 'payees', 'itemisation', 'candidates'];
-    const selectedSection = preferredSections.find((section) => sections.includes(section)) || sections[0] || 'canonical_preview_lines';
-    const existingPageMap = (wiz.workbench.preview_page_cache && typeof wiz.workbench.preview_page_cache === 'object') ? wiz.workbench.preview_page_cache : {};
-    const existingPage = existingPageMap[selectedSection] || existingPageMap.canonical_preview_lines || null;
-    if (existingPage && (Array.isArray(existingPage.rows) || Array.isArray(existingPage.items))) {
-      const existingRows = Array.isArray(existingPage.rows) ? existingPage.rows : existingPage.items;
-      const existingVersion = existingPage.session_version ?? existingPage.sessionVersion ?? null;
-      if (existingRows.length > 0 && (existingVersion === null || stored.session_version === null || String(existingVersion) === String(stored.session_version))) {
-        applyPreviewPagePayloadToState(existingPage, payload);
-        finalisePreviewVisualStateAfterRowsApplied(existingPage, payload);
-        return existingPage;
-      }
-    }
-    const page = await bankingPayWorkbenchSessionGetPreviewPage(sessionIdText, selectedSection, {
-      limit: stored.recommended_page_size || progressObj.recommended_page_size || 100,
-      expected_session_id: sessionIdText,
-      current_session_id: sessionIdText,
-      source: 'bankingPayPreview.firstPage'
+    const pageLoadSummary = await loadRequiredPreviewSectionsForReadyWorkbench(sessionIdText, {
+      stored,
+      progressObj,
+      sourcePayload: payload,
+      limit: stored?.recommended_page_size || progressObj.recommended_page_size || 100,
+      source: 'bankingPayPreview.firstPage.requiredSections'
     });
-    if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) return page;
 
-    const requestedSection = trimStr(page?.requested_section || page?.requestedSection || selectedSection).toLowerCase() || selectedSection;
-    const resolvedSection = trimStr(page?.resolved_section || page?.resolvedSection || page?.section || selectedSection).toLowerCase() || selectedSection;
-    const pageRows = Array.isArray(page?.rows) ? page.rows : (Array.isArray(page?.items) ? page.items : []);
-    const pagePayload = {
-      ok: page?.ok !== false,
-      requested_section: requestedSection,
-      resolved_section: resolvedSection,
-      section_alias_applied: page?.section_alias_applied === true || requestedSection !== resolvedSection,
-      section: resolvedSection,
-      rows: deep(pageRows) || [],
-      items: deep(pageRows) || [],
-      next_cursor: page?.next_cursor ?? page?.nextCursor ?? null,
-      returned_count: Number.isFinite(Number(page?.returned_count ?? page?.returnedCount ?? pageRows.length)) ? Math.max(0, Math.trunc(Number(page?.returned_count ?? page?.returnedCount ?? pageRows.length))) : pageRows.length,
-      session_id: sessionIdText,
-      session_version: page?.session_version ?? page?.sessionVersion ?? stored.session_version ?? null,
-      session_signature: page?.session_signature ?? page?.sessionSignature ?? stored.session_signature ?? null,
-      limit: Number.isFinite(Number(page?.limit)) ? Math.max(1, Math.min(100, Math.trunc(Number(page.limit)))) : (stored.recommended_page_size || progressObj.recommended_page_size || 100)
-    };
-
-    wiz.workbench.preview_pages = (wiz.workbench.preview_pages && typeof wiz.workbench.preview_pages === 'object') ? wiz.workbench.preview_pages : {};
-    wiz.workbench.previewPages = (wiz.workbench.previewPages && typeof wiz.workbench.previewPages === 'object') ? wiz.workbench.previewPages : {};
-    wiz.workbench.preview_page_cache = (wiz.workbench.preview_page_cache && typeof wiz.workbench.preview_page_cache === 'object') ? wiz.workbench.preview_page_cache : {};
-    wiz.workbench.previewPageCache = (wiz.workbench.previewPageCache && typeof wiz.workbench.previewPageCache === 'object') ? wiz.workbench.previewPageCache : {};
-    for (const cacheSection of Array.from(new Set([resolvedSection, requestedSection, selectedSection].map((section) => trimStr(section).toLowerCase()).filter(Boolean)))) {
-      wiz.workbench.preview_pages[cacheSection] = pagePayload;
-      wiz.workbench.previewPages[cacheSection] = pagePayload;
-      wiz.workbench.preview_page_cache[cacheSection] = pagePayload;
-      wiz.workbench.previewPageCache[cacheSection] = pagePayload;
+    if (!isLatestRequest() || !isSameWorkbenchSession(sessionIdText)) return pageLoadSummary;
+    const anySectionRows = Array.isArray(pageLoadSummary?.rows) && pageLoadSummary.rows.length > 0;
+    const anySectionLoaded = Array.isArray(pageLoadSummary?.loaded_sections) && pageLoadSummary.loaded_sections.length > 0;
+    if (anySectionRows || anySectionLoaded) {
+      finalisePreviewVisualStateAfterRowsApplied(pageLoadSummary, payload);
     }
-
-    if (isPlainObject(wiz.preview.data)) {
-      wiz.preview.data.preview_pages = (wiz.preview.data.preview_pages && typeof wiz.preview.data.preview_pages === 'object') ? wiz.preview.data.preview_pages : {};
-      wiz.preview.data.previewPageCache = (wiz.preview.data.previewPageCache && typeof wiz.preview.data.previewPageCache === 'object') ? wiz.preview.data.previewPageCache : {};
-      for (const cacheSection of Array.from(new Set([resolvedSection, requestedSection, selectedSection].map((section) => trimStr(section).toLowerCase()).filter(Boolean)))) {
-        wiz.preview.data.preview_pages[cacheSection] = pagePayload;
-        wiz.preview.data.previewPageCache[cacheSection] = pagePayload;
-      }
-    }
-
-    if (pageRows.length > 0) {
-      applyPreviewPagePayloadToState(pagePayload, payload);
-      finalisePreviewVisualStateAfterRowsApplied(pagePayload, payload);
-    }
-    return pagePayload;
+    return pageLoadSummary;
   };
 
   const stampPendingReplacementWorkbenchContext = (payload) => {
@@ -29981,6 +30214,8 @@ async function bankingPayPreview(pay_date) {
   }
 }
 
+
+
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -30115,6 +30350,230 @@ async function bankingPayCreateDraft(input = {}) {
       }
     }
     return out;
+  };
+  const normalisePreviewPageSectionName = (section) => {
+    const raw = trimStr(section || 'canonical_preview_lines').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!raw) return 'canonical_preview_lines';
+    if (raw === 'preview_rows' || raw === 'ready_to_pay' || raw === 'ready_preview_lines') return 'canonical_preview_lines';
+    if (raw === 'blocked_items' || raw === 'blocked_preview_lines' || raw === 'blocked_now') return 'blocked_for_pay';
+    if (raw === 'case_resolution_states' || raw === 'case_resolutions') return 'cases_resolutions';
+    return raw;
+  };
+  const requiredCreateDraftPreviewSections = ['canonical_preview_lines', 'blocked_for_pay', 'cases_resolutions'];
+  const previewPageRows = (pageLike) => {
+    const page = isPlainObject(pageLike) ? pageLike : {};
+    return Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
+  };
+  const normaliseCreateDraftPreviewPage = (pageLike, fallbackSection = 'canonical_preview_lines') => {
+    const page = isPlainObject(pageLike) ? pageLike : {};
+    const requestedSection = normalisePreviewPageSectionName(page.requested_section || page.requestedSection || page.request_section || page.section || fallbackSection || 'canonical_preview_lines');
+    const resolvedSection = normalisePreviewPageSectionName(page.resolved_section || page.resolvedSection || page.section || requestedSection);
+    const rows = previewPageRows(page);
+    const returnedCount = Number(page.returned_count ?? page.returnedCount ?? rows.length);
+    const totalCount = Number(page.total_count ?? page.totalCount ?? page.rows_count ?? page.rowsCount ?? page.row_count ?? page.rowCount ?? returnedCount);
+    return {
+      ...(deep(page) || {}),
+      ok: page.ok !== false,
+      requested_section: requestedSection,
+      resolved_section: resolvedSection,
+      section: resolvedSection,
+      section_alias_applied: page.section_alias_applied === true || requestedSection !== resolvedSection,
+      rows: deep(rows) || [],
+      items: deep(rows) || [],
+      returned_count: Number.isFinite(returnedCount) ? Math.max(0, Math.trunc(returnedCount)) : rows.length,
+      total_count: Number.isFinite(totalCount) ? Math.max(0, Math.trunc(totalCount)) : rows.length,
+      next_cursor: page.next_cursor ?? page.nextCursor ?? null
+    };
+  };
+  const pushCreateDraftSectionRow = (out, seen, section, row) => {
+    const targetSection = normalisePreviewPageSectionName(section);
+    if (!Object.prototype.hasOwnProperty.call(out, targetSection)) return;
+    if (!isPlainObject(row)) return;
+    const rowId = getPreviewRowId(row);
+    const key = rowId ? `${targetSection}:id:${rowId}` : `${targetSection}:row:${JSON.stringify(row)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out[targetSection].push(row);
+  };
+  const collectLoadedPreviewRowsBySectionForCreateDraft = () => {
+    const out = { canonical_preview_lines: [], blocked_for_pay: [], cases_resolutions: [] };
+    const seen = new Set();
+    const pushRows = (section, rows) => {
+      for (const row of asArray(rows)) pushCreateDraftSectionRow(out, seen, section, row);
+    };
+    const pushCache = (cacheLike) => {
+      const cache = isPlainObject(cacheLike) ? cacheLike : {};
+      pushRows('canonical_preview_lines', cache.canonical_preview_lines || cache.canonicalPreviewLines || cache.ready_to_pay_now || cache.readyToPayNow || cache.ready_preview_lines || cache.readyPreviewLines || cache.draftable_now || cache.draftableNow);
+      pushRows('blocked_for_pay', cache.blocked_for_pay || cache.blockedForPay || cache.blocked_for_pay_now || cache.blockedForPayNow || cache.blocked_now || cache.blockedNow || cache.blocked_preview_lines || cache.blockedPreviewLines);
+      pushRows('cases_resolutions', cache.cases_resolutions || cache.casesResolutions || cache.case_resolution_states || cache.caseResolutionStates);
+    };
+    const pushPages = (nodeLike) => {
+      const node = isPlainObject(nodeLike) ? nodeLike : {};
+      for (const cacheKey of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
+        const cache = node[cacheKey];
+        const pages = Array.isArray(cache) ? cache : (isPlainObject(cache) ? Object.values(cache) : []);
+        for (const pageLike of pages) {
+          const page = normaliseCreateDraftPreviewPage(pageLike);
+          const section = normalisePreviewPageSectionName(page.resolved_section || page.section || page.requested_section);
+          pushRows(section, page.rows);
+        }
+      }
+    };
+    try { pushRows('canonical_preview_lines', wiz?.workbench?.canonical_preview_lines); } catch {}
+    try { pushRows('canonical_preview_lines', wiz?.workbench?.preview_rows); } catch {}
+    try { pushRows('canonical_preview_lines', wiz?.workbench?.ready_preview_lines); } catch {}
+    try { pushRows('blocked_for_pay', wiz?.workbench?.blocked_for_pay); } catch {}
+    try { pushRows('blocked_for_pay', wiz?.workbench?.blocked_for_pay_now); } catch {}
+    try { pushRows('blocked_for_pay', wiz?.workbench?.blocked_now); } catch {}
+    try { pushRows('blocked_for_pay', wiz?.workbench?.blocked_preview_lines); } catch {}
+    try { pushRows('blocked_for_pay', wiz?.workbench?.blockedPreviewLines); } catch {}
+    try { pushRows('cases_resolutions', wiz?.workbench?.cases_resolutions); } catch {}
+    try { pushRows('cases_resolutions', wiz?.workbench?.case_resolution_states); } catch {}
+    try { pushCache(wiz?.preview?.componentStateCache); } catch {}
+    try { pushCache(wiz?.preview?.data?.preview?.componentStateCache); } catch {}
+    try { pushCache(wiz?.decisions); } catch {}
+    try { pushPages(wiz?.workbench); } catch {}
+    try { pushPages(wiz?.preview); } catch {}
+    try { pushPages(wiz?.preview?.data); } catch {}
+    return out;
+  };
+  const previewSectionIsExplicitlyLoadedForCreateDraft = (section) => {
+    const normalisedSection = normalisePreviewPageSectionName(section);
+    const loadedMap = isPlainObject(wiz?.workbench?.required_preview_sections_loaded) ? wiz.workbench.required_preview_sections_loaded : {};
+    if (loadedMap[normalisedSection] === true) return true;
+    const containers = [wiz?.workbench, wiz?.preview, wiz?.preview?.data, wiz?.preview?.data?.preview, wiz?.decisions];
+    for (const container of containers) {
+      const node = isPlainObject(container) ? container : {};
+      for (const cacheKey of ['preview_pages', 'previewPages', 'preview_page_cache', 'previewPageCache', 'page_cache', 'pageCache', 'pages']) {
+        const cache = node[cacheKey];
+        if (!isPlainObject(cache)) continue;
+        const page = cache[normalisedSection];
+        if (isPlainObject(page) && (Array.isArray(page.rows) || Array.isArray(page.items))) return true;
+      }
+    }
+    return false;
+  };
+  const applyCreateDraftPreviewSectionPageToState = (pagePayload) => {
+    const page = normaliseCreateDraftPreviewPage(pagePayload);
+    const section = normalisePreviewPageSectionName(page.resolved_section || page.section || page.requested_section);
+    const rows = deep(previewPageRows(page)) || [];
+    const synthetic = {
+      ok: page.ok !== false,
+      ready: true,
+      ready_flag: true,
+      session_id: sessionId,
+      session_version: page.session_version ?? page.sessionVersion ?? wiz?.workbench?.session_version ?? null,
+      session_signature: page.session_signature ?? page.sessionSignature ?? wiz?.workbench?.session_signature ?? null,
+      pay_date: pd,
+      week_ending_cutoff_date: cutoffIso,
+      requested_section: page.requested_section,
+      resolved_section: section,
+      section,
+      preview_pages: {
+        [section]: page,
+        ...(page.requested_section !== section ? { [page.requested_section]: page } : {})
+      },
+      preview: { ok: true, componentStateCache: {} }
+    };
+    if (section === 'canonical_preview_lines') {
+      synthetic.canonical_preview_lines = rows;
+      synthetic.preview_rows = rows;
+      synthetic.ready_preview_lines = rows;
+      synthetic.rows = rows;
+      synthetic.preview.canonical_preview_lines = rows;
+      synthetic.preview.preview_rows = rows;
+      synthetic.preview.ready_preview_lines = rows;
+      synthetic.preview.rows = rows;
+      synthetic.preview.componentStateCache.draftable_now = rows;
+      synthetic.preview.componentStateCache.ready_to_pay_now = rows;
+      synthetic.preview.componentStateCache.ready_preview_lines = rows;
+      synthetic.preview.componentStateCache.canonical_preview_lines = rows;
+    } else if (section === 'blocked_for_pay') {
+      synthetic.blocked_for_pay = rows;
+      synthetic.blocked_for_pay_now = rows;
+      synthetic.blocked_now = rows;
+      synthetic.blocked_preview_lines = rows;
+      synthetic.preview.blocked_for_pay = rows;
+      synthetic.preview.blocked_for_pay_now = rows;
+      synthetic.preview.blocked_now = rows;
+      synthetic.preview.blocked_preview_lines = rows;
+      synthetic.preview.componentStateCache.blocked_for_pay = rows;
+      synthetic.preview.componentStateCache.blocked_for_pay_now = rows;
+      synthetic.preview.componentStateCache.blocked_now = rows;
+      synthetic.preview.componentStateCache.blocked_preview_lines = rows;
+    } else if (section === 'cases_resolutions') {
+      synthetic.case_resolution_states = rows;
+      synthetic.cases_resolutions = rows;
+      synthetic.preview.case_resolution_states = rows;
+      synthetic.preview.cases_resolutions = rows;
+      synthetic.preview.componentStateCache.case_resolution_states = rows;
+      synthetic.preview.componentStateCache.cases_resolutions = rows;
+    }
+    if (typeof applyPayWorkbenchPreviewToState === 'function') {
+      try { applyPayWorkbenchPreviewToState(synthetic); } catch {}
+    }
+    try {
+      wiz.workbench.required_preview_sections_loaded = isPlainObject(wiz.workbench.required_preview_sections_loaded) ? wiz.workbench.required_preview_sections_loaded : {};
+      wiz.workbench.required_preview_sections_loaded[section] = true;
+      wiz.workbench.requiredPreviewSectionsLoaded = { ...wiz.workbench.required_preview_sections_loaded };
+    } catch {}
+    return synthetic;
+  };
+  const ensureRequiredPreviewSectionsLoadedForCreateDraft = async (activeSessionId) => {
+    const id = trimStr(activeSessionId);
+    const missingSections = requiredCreateDraftPreviewSections.filter((section) => !previewSectionIsExplicitlyLoadedForCreateDraft(section));
+    if (missingSections.length <= 0) return { ok: true, loaded_sections: requiredCreateDraftPreviewSections.slice(), missing_sections: [] };
+    if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') {
+      return { ok: false, error_code: 'BANKING_PAY_PREVIEW_PAGE_FETCH_UNAVAILABLE', missing_sections: missingSections };
+    }
+    const loaded = [];
+    const failed = [];
+    for (const section of missingSections) {
+      try {
+        const page = await bankingPayWorkbenchSessionGetPreviewPage(id, section, {
+          limit: 100,
+          expected_session_id: id,
+          current_session_id: id,
+          source: 'bankingPayCreateDraft.ensureRequiredPreviewSectionsLoadedForCreateDraft'
+        });
+        const normalisedPage = normaliseCreateDraftPreviewPage(page, section);
+        applyCreateDraftPreviewSectionPageToState(normalisedPage);
+        loaded.push(normalisePreviewPageSectionName(normalisedPage.resolved_section || normalisedPage.section || section));
+      } catch (error) {
+        failed.push({ section, message: trimStr(error?.message || error || '') || 'Preview section could not be loaded.' });
+      }
+    }
+    return { ok: failed.length === 0, loaded_sections: loaded, missing_sections: failed.map((row) => row.section), errors: failed };
+  };
+  const buildCreateDraftPreviewDecisionsFromLoadedSections = (baseDecisionSource, selectedRowsForServer, selectedMode, channelScope) => {
+    const source = isPlainObject(baseDecisionSource) ? (deep(baseDecisionSource) || {}) : {};
+    const rowsBySection = collectLoadedPreviewRowsBySectionForCreateDraft();
+    const selectedSet = new Set(uniqTrimmed(selectedRowsForServer));
+    const selectedDraftableRows = asArray(rowsBySection.canonical_preview_lines)
+      .filter((row) => isDraftCreateEligiblePreviewRow(row))
+      .filter((row) => selectedSet.size <= 0 || selectedSet.has(getPreviewRowId(row)));
+    const blockedRows = deep(rowsBySection.blocked_for_pay) || [];
+    const caseRows = deep(rowsBySection.cases_resolutions) || [];
+    return {
+      ...source,
+      selected_preview_row_ids: uniqTrimmed(selectedRowsForServer),
+      __selected_preview_row_mode: selectedMode,
+      selected_preview_row_mode: selectedMode,
+      pay_channel_scope: channelScope || 'ALL',
+      draftable_now: deep(selectedDraftableRows) || [],
+      ready_to_pay_now: deep(rowsBySection.canonical_preview_lines) || [],
+      ready_preview_lines: deep(rowsBySection.canonical_preview_lines) || [],
+      canonical_preview_lines: deep(rowsBySection.canonical_preview_lines) || [],
+      blocked_for_pay: blockedRows,
+      blocked_for_pay_now: blockedRows,
+      blocked_now: blockedRows,
+      blocked_preview_lines: blockedRows,
+      blockedForPayNow: blockedRows,
+      blockedPreviewLines: blockedRows,
+      case_resolution_states: caseRows,
+      cases_resolutions: caseRows,
+      caseResolutionStates: caseRows
+    };
   };
   const collectDraftablePreviewRowIdsFromWizardState = (wizLike, previewLike) => {
     const out = [];
@@ -30705,6 +31164,49 @@ async function bankingPayCreateDraft(input = {}) {
         await bankingRerender(null);
       }
     } catch {}
+  };
+
+  const rememberActiveDraftCreateOperation = (operationLike, context = {}) => {
+    const operation = isPlainObject(operationLike) ? (deep(operationLike) || operationLike) : {};
+    const operationId = trimStr(operation.operation_id || operation.operationId || operation.id || context.operation_id || context.operationId || '');
+    const workbenchSessionId = trimStr(operation.workbench_session_id || operation.workbenchSessionId || operation.session_id || operation.sessionId || context.workbench_session_id || context.workbenchSessionId || context.session_id || context.sessionId || '');
+    const status = upperTrim(operation.status || operation.operation_status || operation.operationStatus || context.status || 'RUNNING') || 'RUNNING';
+    const stored = {
+      ...operation,
+      operation_id: operationId || null,
+      operationId: operationId || null,
+      operation_type: upperTrim(operation.operation_type || operation.operationType || 'DRAFT_CREATE') || 'DRAFT_CREATE',
+      operationType: upperTrim(operation.operation_type || operation.operationType || 'DRAFT_CREATE') || 'DRAFT_CREATE',
+      workbench_session_id: workbenchSessionId || null,
+      workbenchSessionId: workbenchSessionId || null,
+      status,
+      draft_create_status: status,
+      backend_runner_owned: operation.backend_runner_owned !== false && operation.backendRunnerOwned !== false,
+      backendRunnerOwned: operation.backend_runner_owned !== false && operation.backendRunnerOwned !== false,
+      frontend_completion_required: operation.frontend_completion_required === true || operation.frontendCompletionRequired === true ? true : false,
+      frontendCompletionRequired: operation.frontend_completion_required === true || operation.frontendCompletionRequired === true ? true : false,
+      last_observed_at_utc: new Date().toISOString()
+    };
+    try {
+      wiz.workbench.active_draft_create_operation_id = operationId || null;
+      wiz.workbench.activeDraftCreateOperationId = operationId || null;
+      wiz.workbench.active_draft_create_operation = stored;
+      wiz.workbench.activeDraftCreateOperation = stored;
+      wiz.workbench.draft_create_status = status;
+      wiz.workbench.draftCreateStatus = status;
+      wiz.workbench.last_create_draft_operation_payload = stored;
+      wiz.workbench.lastCreateDraftOperationPayload = stored;
+      wiz.decisions.active_draft_create_operation_id = operationId || null;
+      wiz.decisions.active_draft_create_operation = stored;
+      wiz.decisions.draft_create_status = status;
+      wiz.lastCreateDraftOperationPayload = stored;
+    } catch {}
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage && operationId) {
+        window.sessionStorage.setItem(`bankingPay.activeDraftCreateOperation.${workbenchSessionId || operationId}`, JSON.stringify(stored));
+      }
+    } catch {}
+    return stored;
   };
 
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
@@ -31377,8 +31879,8 @@ async function bankingPayCreateDraft(input = {}) {
     });
   }
 
-  const previewEnvelope = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : {};
-  const previewObj = (previewEnvelope.preview && typeof previewEnvelope.preview === 'object' && !Array.isArray(previewEnvelope.preview)) ? previewEnvelope.preview : previewEnvelope;
+  let previewEnvelope = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : {};
+  let previewObj = (previewEnvelope.preview && typeof previewEnvelope.preview === 'object' && !Array.isArray(previewEnvelope.preview)) ? previewEnvelope.preview : previewEnvelope;
   const previewPayDate = trimStr(previewEnvelope.pay_date || previewEnvelope.session?.pay_date || previewObj.pay_date || '');
   const workbenchPayDate = trimStr(wiz.workbench.pay_date || wiz.decisions.pay_date || '');
   const previewCutoffRaw = trimStr(
@@ -31516,6 +32018,19 @@ async function bankingPayCreateDraft(input = {}) {
       active_pay_date: pd
     });
   }
+
+  const requiredSectionLoadResult = await ensureRequiredPreviewSectionsLoadedForCreateDraft(sessionId);
+  if (!requiredSectionLoadResult || requiredSectionLoadResult.ok === false) {
+    return await failCreateDraftContext('Banking Pay preview sections could not be loaded. Refresh Banking preview and try again.', {
+      code: requiredSectionLoadResult?.error_code || 'BANKING_PAY_PREVIEW_REQUIRED_SECTIONS_NOT_LOADED',
+      reason: 'REQUIRED_PREVIEW_SECTIONS_NOT_LOADED',
+      session_id: sessionId,
+      required_sections: requiredCreateDraftPreviewSections,
+      missing_sections: requiredSectionLoadResult?.missing_sections || []
+    });
+  }
+  previewEnvelope = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : previewEnvelope;
+  previewObj = (previewEnvelope.preview && typeof previewEnvelope.preview === 'object' && !Array.isArray(previewEnvelope.preview)) ? previewEnvelope.preview : previewEnvelope;
 
   const previewRowUniverse = collectPreviewRowIds(previewObj);
 
@@ -31977,19 +32492,20 @@ async function bankingPayCreateDraft(input = {}) {
     wiz.selected_preview_row_mode = selectedPreviewSelection.selected_preview_row_mode;
     wiz.decisions.selected_preview_row_ids = [...selectedPreviewSelection.selected_preview_row_ids];
 
+    const createDraftPreviewDecisions = buildCreateDraftPreviewDecisionsFromLoadedSections(
+      callerDecisionSource,
+      syncedSelectedRows,
+      selectedPreviewSelection.selected_preview_row_mode,
+      payChannelScope || 'ALL'
+    );
+
     const reqBody = {
       pay_date: pd,
       week_ending_cutoff_date: cutoffIso,
       session_id: sessionId,
       selected_preview_row_ids: [...syncedSelectedRows],
       selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
-      preview_decisions_json: {
-        ...(callerDecisionSource && typeof callerDecisionSource === 'object' && !Array.isArray(callerDecisionSource) ? deep(callerDecisionSource) : {}),
-        selected_preview_row_ids: [...syncedSelectedRows],
-        __selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
-        selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
-        pay_channel_scope: payChannelScope || 'ALL'
-      }
+      preview_decisions_json: createDraftPreviewDecisions
     };
 
     if (activeSessionSignature) reqBody.session_signature = activeSessionSignature;
@@ -32073,18 +32589,80 @@ async function bankingPayCreateDraft(input = {}) {
       operation_phase: trimStr(operationPayload.phase || '')
     });
 
+    rememberActiveDraftCreateOperation(operationPayload, { session_id: sessionId, workbench_session_id: sessionId });
+
     const terminalOperation = await runBankingPayOperationWithProgress(operationPayload, {
       title: 'Creating payment draft',
       operationKind: 'DRAFT_CREATE',
       finalResultExtractor: (operation) => operation?.result || operation?.final_result || operation
     });
 
+    rememberActiveDraftCreateOperation(terminalOperation, { session_id: sessionId, workbench_session_id: sessionId });
+
     const terminalFailure = detectCreateDraftFailureEnvelope(terminalOperation);
     if (terminalFailure) {
       throwCreateDraftFailureEnvelope(terminalFailure, 'BANKING_PAY_CREATE_DRAFT_FAILED');
     }
 
+    const terminalStatus = upperTrim(terminalOperation?.status || terminalOperation?.operation_status || terminalOperation?.operationStatus || '');
+    const terminalComplete = terminalOperation?.terminal === true && ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE'].includes(terminalStatus);
+    const terminalReviewOrFailure = ['FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW'].includes(terminalStatus) || terminalOperation?.review_required === true || terminalOperation?.reviewRequired === true;
+    if (terminalReviewOrFailure) {
+      throwCreateDraftFailureEnvelope({
+        ...(isPlainObject(terminalOperation) ? terminalOperation : {}),
+        ok: false,
+        error_code: terminalStatus || 'BANKING_PAY_CREATE_DRAFT_OPERATION_REVIEW_REQUIRED',
+        code: terminalStatus || 'BANKING_PAY_CREATE_DRAFT_OPERATION_REVIEW_REQUIRED',
+        message: trimStr(terminalOperation?.status_text || terminalOperation?.message || terminalOperation?.error || 'Draft creation needs review before it can complete.')
+      }, 'BANKING_PAY_CREATE_DRAFT_FAILED');
+    }
+    if (!terminalComplete) {
+      const inProgressOperation = rememberActiveDraftCreateOperation({
+        ...(isPlainObject(terminalOperation) ? terminalOperation : {}),
+        terminal: false,
+        backend_execution_continues: true,
+        backendExecutionContinues: true,
+        backend_work_continues: true,
+        backendWorkContinues: true,
+        can_reopen: true,
+        canReopen: true,
+        status: terminalStatus || terminalOperation?.status || 'RUNNING',
+        draft_create_status: terminalStatus || terminalOperation?.status || 'RUNNING',
+        status_text: trimStr(terminalOperation?.status_text || terminalOperation?.statusText || 'Draft creation is running in the background.') || 'Draft creation is running in the background.'
+      }, { session_id: sessionId, workbench_session_id: sessionId });
+      wiz.createDraftBusy = false;
+      wiz.createDraftError = '';
+      wiz.createDraftFriendlyError = null;
+      logTroubleshoot('info', 'DRAFT_CREATE_OPERATION_STILL_RUNNING', {
+        ...requestSummary,
+        operation_id: trimStr(inProgressOperation.operation_id || ''),
+        status: inProgressOperation.status || null,
+        phase: inProgressOperation.phase || null
+      });
+      return deep({
+        ok: true,
+        create_draft_operation_started: true,
+        draft_create_in_progress: true,
+        backend_execution_continues: true,
+        can_reopen: true,
+        operation: inProgressOperation,
+        operation_id: inProgressOperation.operation_id || null,
+        workbench_session_id: sessionId,
+        status: inProgressOperation.status || 'RUNNING',
+        phase: inProgressOperation.phase || null
+      });
+    }
+
     const terminalCreatedPayBatchIds = collectCreatedPayBatchIdsForPostCreate(terminalOperation);
+    if (terminalCreatedPayBatchIds.length <= 0) {
+      throwCreateDraftFailureEnvelope({
+        ok: false,
+        error_code: 'BANKING_PAY_CREATE_DRAFT_NO_BATCH_CREATED',
+        code: 'BANKING_PAY_CREATE_DRAFT_NO_BATCH_CREATED',
+        message: 'Draft creation completed but no draft batch was returned. Refresh Banking and check draft status.',
+        operation: terminalOperation
+      }, 'BANKING_PAY_CREATE_DRAFT_NO_BATCH_CREATED');
+    }
     const sourceWorkbenchSessionId = sessionId;
     const sourceWorkbenchSnapshotRunId = trimStr(
       wiz.workbench?.snapshot_run_id ||
@@ -32355,8 +32933,6 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
-
-
 
 
 
@@ -38628,6 +39204,10 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
   );
 }
 
+
+
+
+
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -39076,6 +39656,494 @@ function renderPayNewBatchWizard() {
     'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.'
   ) || 'CloudTMS could not create this payment batch because some payment details need attention. Review the highlighted items, refresh Banking, then try again.';
   const cdBusy = !!wiz.createDraftBusy;
+  const activeDraftCreateTerminalStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED']);
+  const activeDraftCreateReviewStatuses = new Set(['REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW']);
+  const activeDraftCreateWaitingAuthorisationStatuses = new Set(['WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'AUTHORISATION_REQUIRED', 'AUTHORIZATION_REQUIRED']);
+  const readActiveDraftCreateBool = (value, fallback = false) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (value == null || value === '') return fallback;
+    const text = trimStr(value).toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return fallback;
+  };
+  const activeDraftCreateStatus = (operationLike) => upperTrim(operationLike?.status || operationLike?.operation_status || operationLike?.operationStatus || operationLike?.state || '');
+  const activeDraftCreatePhase = (operationLike) => upperTrim(operationLike?.phase || operationLike?.operation_phase || operationLike?.operationPhase || '');
+  const activeDraftCreateOperationType = (operationLike) => upperTrim(operationLike?.operation_type || operationLike?.operationType || operationLike?.type || 'DRAFT_CREATE') || 'DRAFT_CREATE';
+  const activeDraftCreateOperationId = (operationLike) => trimStr(operationLike?.operation_id || operationLike?.operationId || operationLike?.id || '');
+  const activeDraftCreateWorkbenchSessionId = (operationLike = null) => trimStr(
+    operationLike?.workbench_session_id ||
+    operationLike?.workbenchSessionId ||
+    operationLike?.session_id ||
+    operationLike?.sessionId ||
+    wiz.workbench?.session_id ||
+    wiz.workbench?.active_workbench_session_id ||
+    wiz.workbench?.__active_workbench_session_id ||
+    wiz.decisions?.session_id ||
+    wiz.preview?.data?.session_id ||
+    wiz.preview?.data?.session?.session_id ||
+    ''
+  );
+  const collectActiveDraftCreateBatchIds = (operationLike) => {
+    const out = [];
+    const seen = new Set();
+    const push = (value) => {
+      const text = trimStr(value);
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      out.push(text);
+    };
+    const visit = (node, depth = 0) => {
+      if (node == null || depth > 5) return;
+      if (typeof node === 'string' || typeof node === 'number') return;
+      if (Array.isArray(node)) {
+        for (const entry of node) {
+          if (typeof entry === 'string' || typeof entry === 'number') push(entry);
+          else visit(entry, depth + 1);
+        }
+        return;
+      }
+      if (!isPlainObject(node)) return;
+      for (const key of ['pay_batch_id', 'payBatchId', 'primary_pay_batch_id', 'primaryPayBatchId']) push(node[key]);
+      for (const key of ['pay_batch_ids', 'payBatchIds', 'created_pay_batch_ids', 'createdPayBatchIds']) {
+        for (const id of asArray(node[key])) push(id);
+      }
+      for (const key of ['result', 'result_json', 'resultJson', 'result_summary', 'resultSummary', 'post_create_refresh', 'postCreateRefresh', 'refresh', 'operation', 'active_draft_create_operation', 'activeDraftCreateOperation']) {
+        if (Object.prototype.hasOwnProperty.call(node, key)) visit(node[key], depth + 1);
+      }
+    };
+    visit(operationLike, 0);
+    return out;
+  };
+  const isActiveDraftCreateComplete = (operationLike) => {
+    const status = activeDraftCreateStatus(operationLike);
+    return status === 'COMPLETE' || status === 'COMPLETED' || status === 'SUCCESS' || status === 'SUCCEEDED' || status === 'DONE' || readActiveDraftCreateBool(operationLike?.draft_created, false) || readActiveDraftCreateBool(operationLike?.draftCreated, false);
+  };
+  const isActiveDraftCreateFailureOrReview = (operationLike) => {
+    const status = activeDraftCreateStatus(operationLike);
+    return status === 'FAILED' || status === 'ERROR' || status === 'CANCELLED' || status === 'CANCELED' || activeDraftCreateReviewStatuses.has(status) || activeDraftCreateWaitingAuthorisationStatuses.has(status) || readActiveDraftCreateBool(operationLike?.review_required, false) || readActiveDraftCreateBool(operationLike?.reviewRequired, false) || readActiveDraftCreateBool(operationLike?.requires_user_action, false) || readActiveDraftCreateBool(operationLike?.requiresUserAction, false);
+  };
+  const isActiveDraftCreateTerminal = (operationLike) => {
+    const status = activeDraftCreateStatus(operationLike);
+    return readActiveDraftCreateBool(operationLike?.terminal, false) || activeDraftCreateTerminalStatuses.has(status);
+  };
+  const activeDraftCreateStatusMessage = (operationLike) => {
+    const resultSummary = isPlainObject(operationLike?.result_summary) ? operationLike.result_summary : (isPlainObject(operationLike?.resultSummary) ? operationLike.resultSummary : {});
+    const errorObj = isPlainObject(operationLike?.error) ? operationLike.error : (isPlainObject(operationLike?.small_error_summary) ? operationLike.small_error_summary : {});
+    return trimStr(
+      operationLike?.status_text ||
+      operationLike?.statusText ||
+      operationLike?.last_message ||
+      operationLike?.message ||
+      resultSummary.last_message ||
+      errorObj.message ||
+      operationLike?.error_message ||
+      operationLike?.errorMessage ||
+      ''
+    );
+  };
+  const storeActiveDraftCreateOperationForRender = (operationLike) => {
+    const operation = isPlainObject(operationLike) ? operationLike : null;
+    const operationId = operation ? activeDraftCreateOperationId(operation) : '';
+    const status = operation ? activeDraftCreateStatus(operation) : '';
+    const targets = [wiz, wiz.workbench, wiz.decisions].filter((target) => isPlainObject(target));
+    for (const target of targets) {
+      target.active_draft_create_operation_id = operationId || null;
+      target.activeDraftCreateOperationId = operationId || null;
+      target.active_draft_create_operation = operation || null;
+      target.activeDraftCreateOperation = operation || null;
+      target.draft_create_status = operation ? (status || null) : null;
+      target.draftCreateStatus = operation ? (status || null) : null;
+      if (operation) target.last_create_draft_operation_payload = operation;
+    }
+    try {
+      const root = (typeof window !== 'undefined') ? window : globalThis;
+      if (root) {
+        root.__bankingPayActiveDraftCreateOperationBySession = root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
+          ? root.__bankingPayActiveDraftCreateOperationBySession
+          : Object.create(null);
+        const sessionId = operation ? activeDraftCreateWorkbenchSessionId(operation) : activeDraftCreateWorkbenchSessionId(null);
+        if (sessionId && operation && operationId) root.__bankingPayActiveDraftCreateOperationBySession[sessionId] = operation;
+        if (sessionId && (!operation || !operationId)) {
+          try { delete root.__bankingPayActiveDraftCreateOperationBySession[sessionId]; } catch {}
+        }
+      }
+    } catch {}
+    return operation;
+  };
+  const getActiveDraftCreateOperationFromState = () => {
+    const candidates = [
+      wiz.workbench?.active_draft_create_operation,
+      wiz.workbench?.activeDraftCreateOperation,
+      wiz.decisions?.active_draft_create_operation,
+      wiz.decisions?.activeDraftCreateOperation,
+      wiz.active_draft_create_operation,
+      wiz.activeDraftCreateOperation,
+      wiz.last_create_draft_operation_payload,
+      wiz.workbench?.last_create_draft_operation_payload,
+      wiz.decisions?.last_create_draft_operation_payload,
+      wiz.createDraftOperation,
+      wiz.create_draft_operation,
+      wiz.lastCreateDraftOperation,
+      wiz.last_create_draft_operation
+    ];
+    try {
+      const sessionId = activeDraftCreateWorkbenchSessionId(null);
+      const root = (typeof window !== 'undefined') ? window : globalThis;
+      const cache = root && root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
+        ? root.__bankingPayActiveDraftCreateOperationBySession
+        : null;
+      if (sessionId && cache && isPlainObject(cache[sessionId])) candidates.push(cache[sessionId]);
+    } catch {}
+    for (const candidate of candidates) {
+      if (!isPlainObject(candidate)) continue;
+      const operationId = activeDraftCreateOperationId(candidate);
+      const operationType = activeDraftCreateOperationType(candidate);
+      if (!operationId) continue;
+      if (operationType && operationType !== 'DRAFT_CREATE') continue;
+      return storeActiveDraftCreateOperationForRender(candidate);
+    }
+    return null;
+  };
+  const refreshBatchListAfterDraftCreateComplete = (operationLike) => {
+    if (!isActiveDraftCreateComplete(operationLike)) return;
+    const batchIds = collectActiveDraftCreateBatchIds(operationLike);
+    if (!batchIds.length) return;
+    const operationId = activeDraftCreateOperationId(operationLike) || batchIds.join(',');
+    const refreshKey = `${operationId}:${batchIds.join(',')}`;
+    wiz.workbench.__draft_create_batch_list_refresh_keys = isPlainObject(wiz.workbench.__draft_create_batch_list_refresh_keys) ? wiz.workbench.__draft_create_batch_list_refresh_keys : {};
+    if (wiz.workbench.__draft_create_batch_list_refresh_keys[refreshKey] === true || wiz.workbench.__draft_create_batch_list_refresh_in_flight === true) return;
+    wiz.workbench.__draft_create_batch_list_refresh_keys[refreshKey] = true;
+    wiz.workbench.__draft_create_batch_list_refresh_in_flight = true;
+    wiz.workbench.__draft_create_batch_list_refresh_started_at_utc = new Date().toISOString();
+    if (typeof bankingPayBatchesList !== 'function') {
+      wiz.workbench.__draft_create_batch_list_refresh_in_flight = false;
+      wiz.workbench.__draft_create_batch_list_refresh_unavailable = true;
+      return;
+    }
+    Promise.resolve()
+      .then(() => bankingPayBatchesList({
+        status: st.pay?.list?.statusFilter,
+        limit: st.pay?.list?.limit || 50,
+        offset: 0,
+        display_mode: 'LIGHT',
+        displayMode: 'LIGHT',
+        include_diagnostics: false,
+        includeDiagnostics: false,
+        include_alerts: false,
+        includeAlerts: false,
+        include_correction_summary: false,
+        includeCorrectionSummary: false,
+        source: 'renderPayNewBatchWizard.refreshBatchListAfterDraftCreateComplete'
+      }))
+      .catch((error) => {
+        try { wiz.workbench.__draft_create_batch_list_refresh_last_error = String(error?.message || error || ''); } catch {}
+      })
+      .finally(() => {
+        try {
+          wiz.workbench.__draft_create_batch_list_refresh_in_flight = false;
+          wiz.workbench.__draft_create_batch_list_refreshed_at_utc = new Date().toISOString();
+        } catch {}
+      });
+  };
+  const scheduleActiveDraftCreateOperationLookup = () => {
+    const sessionId = activeDraftCreateWorkbenchSessionId(null);
+    if (!sessionId || typeof bankingPayFindActiveDraftCreateOperation !== 'function') return;
+    wiz.workbench.__active_draft_create_lookup_by_session = isPlainObject(wiz.workbench.__active_draft_create_lookup_by_session) ? wiz.workbench.__active_draft_create_lookup_by_session : {};
+    const existing = wiz.workbench.__active_draft_create_lookup_by_session[sessionId];
+    const nowMs = Date.now();
+    if (existing && existing.in_flight === true) return;
+    if (existing && Number.isFinite(Number(existing.last_checked_ms)) && nowMs - Number(existing.last_checked_ms) < 10000) return;
+    wiz.workbench.__active_draft_create_lookup_by_session[sessionId] = {
+      in_flight: true,
+      started_at_utc: new Date().toISOString(),
+      last_checked_ms: nowMs
+    };
+    Promise.resolve()
+      .then(() => bankingPayFindActiveDraftCreateOperation(sessionId, {
+        include_recent_terminal: true,
+        includeRecentTerminal: true,
+        recent_terminal_minutes: 1440,
+        recentTerminalMinutes: 1440,
+        state: wiz.workbench,
+        wizardState: wiz,
+        wiz,
+        targetState: wiz.decisions,
+        userInitiated: false,
+        silent: true,
+        background: true,
+        action: 'BANKING_PAY_ACTIVE_DRAFT_CREATE_STATUS_LOOKUP'
+      }))
+      .then((operation) => {
+        const storedOperation = storeActiveDraftCreateOperationForRender(operation || null);
+        if (storedOperation && isActiveDraftCreateComplete(storedOperation)) refreshBatchListAfterDraftCreateComplete(storedOperation);
+        try {
+          if (typeof bankingRerender === 'function') bankingRerender(null);
+        } catch {}
+      })
+      .catch((error) => {
+        try {
+          wiz.workbench.__active_draft_create_lookup_last_error = String(error?.message || error || '');
+        } catch {}
+      })
+      .finally(() => {
+        try {
+          wiz.workbench.__active_draft_create_lookup_by_session[sessionId] = {
+            in_flight: false,
+            last_checked_ms: Date.now(),
+            finished_at_utc: new Date().toISOString()
+          };
+        } catch {}
+      });
+  };
+  const handleViewActiveDraftCreateStatus = (operationLike, label = 'View status') => {
+    const operationId = activeDraftCreateOperationId(operationLike);
+    const sessionId = activeDraftCreateWorkbenchSessionId(operationLike);
+    return `data-action="banking:pay:viewDraftCreateStatus" data-operation-id="${enc(operationId)}" data-workbench-session-id="${enc(sessionId)}" data-operation-type="DRAFT_CREATE" data-backend-runner-owned="true" title="${enc(label)}"`;
+  };
+  const activeDraftCreateBatchOpenButtonHtml = (operationLike) => {
+    const batchIds = collectActiveDraftCreateBatchIds(operationLike);
+    const primaryBatchId = trimStr(operationLike?.primary_pay_batch_id || operationLike?.primaryPayBatchId || operationLike?.pay_batch_id || operationLike?.payBatchId || batchIds[0] || '');
+    if (!primaryBatchId) return '';
+    return `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:openChild" data-batch-id="${enc(primaryBatchId)}" title="Open the created draft batch">Open draft batch</button>`;
+  };
+  const renderActiveDraftCreateStatusBanner = (operationLike) => {
+    const operation = isPlainObject(operationLike) ? operationLike : null;
+    if (!operation) return '';
+    if (activeDraftCreateOperationType(operation) !== 'DRAFT_CREATE') return '';
+    const operationId = activeDraftCreateOperationId(operation);
+    if (!operationId) return '';
+    const status = activeDraftCreateStatus(operation) || 'RUNNING';
+    const phase = activeDraftCreatePhase(operation) || 'INITIALISE';
+    const runnerState = upperTrim(operation.runner_state || operation.runnerState || '');
+    const sessionId = activeDraftCreateWorkbenchSessionId(operation);
+    const batchIds = collectActiveDraftCreateBatchIds(operation);
+    const complete = isActiveDraftCreateComplete(operation);
+    const failureOrReview = isActiveDraftCreateFailureOrReview(operation) && !complete;
+    const terminal = isActiveDraftCreateTerminal(operation);
+    const message = activeDraftCreateStatusMessage(operation) || (complete
+      ? 'Draft batch creation has completed.'
+      : (failureOrReview ? 'Draft creation needs attention.' : 'Draft creation is running in the background.'));
+    const title = complete
+      ? 'Draft created'
+      : (failureOrReview ? (activeDraftCreateReviewStatuses.has(status) || readActiveDraftCreateBool(operation.review_required, false) || readActiveDraftCreateBool(operation.reviewRequired, false) ? 'Draft creation needs review' : 'Draft creation failed') : 'Draft creation in progress');
+    const pillClass = complete ? 'pill-ok' : (failureOrReview ? 'pill-bad' : 'pill-warn');
+    const batchText = batchIds.length ? `Created draft batch${batchIds.length === 1 ? '' : 'es'}: ${batchIds.join(', ')}` : '';
+    const refreshedText = trimStr(operation.completed_at_utc || operation.completedAtUtc || operation.updated_at_utc || operation.updatedAtUtc || '');
+    const draftCreateStatusHintText = complete
+      ? ''
+      : (failureOrReview
+          ? 'Use View details to reopen the draft creation status. No manual resume action is required.'
+          : 'You can close the progress window. Draft creation continues in the background and can be reopened from Banking Pay.');
+    if (complete) refreshBatchListAfterDraftCreateComplete(operation);
+    const actionButtons = [
+      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, failureOrReview ? 'View details' : 'View status')}>${enc(failureOrReview ? 'View details' : 'View status')}</button>`,
+      sessionId ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:refreshDraftCreateStatus" data-operation-id="${enc(operationId)}" data-workbench-session-id="${enc(sessionId)}" data-operation-type="DRAFT_CREATE" title="Refresh draft creation status">Refresh status</button>` : '',
+      complete ? activeDraftCreateBatchOpenButtonHtml(operation) : ''
+    ].filter(Boolean).join(' ');
+    return `
+      <div class="card" data-banking-active-draft-create-status="true" data-operation-id="${enc(operationId)}" style="margin-top:10px;border-color:${failureOrReview ? '#fecaca' : (complete ? '#bbf7d0' : '#fde68a')};background:${failureOrReview ? '#fef2f2' : (complete ? '#f0fdf4' : '#fffbeb')};">
+        <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
+          <div style="display:flex;flex-direction:column;gap:6px;min-width:260px;flex:1;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <strong>${enc(title)}</strong>
+              <span class="pill ${enc(pillClass)}">${enc(status)}</span>
+              <span class="pill">${enc(phase)}</span>
+              ${runnerState ? `<span class="pill">Runner ${enc(runnerState)}</span>` : ''}
+            </div>
+            <div class="mini" style="opacity:.9;white-space:pre-wrap;">${enc(message)}</div>
+            ${batchText ? `<div class="mini" style="opacity:.9;">${enc(batchText)}</div>` : ''}
+            ${refreshedText ? `<div class="mini" style="opacity:.75;">Last update ${enc(fmtDateTime(refreshedText))}</div>` : ''}
+            ${draftCreateStatusHintText ? `<div class="mini" style="opacity:.82;">${enc(draftCreateStatusHintText)}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">${actionButtons}</div>
+        </div>
+      </div>
+    `;
+  };
+  const installActiveDraftCreateStatusActionHandlers = () => {
+    try {
+      const root = (typeof window !== 'undefined') ? window : globalThis;
+      const doc = root && root.document ? root.document : null;
+      if (!doc || root.__bankingPayDraftCreateStatusActionHandlersInstalled === true) return;
+      root.__bankingPayDraftCreateStatusActionHandlersInstalled = true;
+      const notify = (message) => {
+        const text = trimStr(message);
+        if (!text) return;
+        try {
+          if (typeof root.__toast === 'function') {
+            root.__toast(text);
+            return;
+          }
+        } catch {}
+        try { if (typeof console !== 'undefined' && console && typeof console.warn === 'function') console.warn(text); } catch {}
+      };
+      const getCurrentWizardState = () => {
+        try {
+          const liveState = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+          if (liveState && typeof liveState === 'object') {
+            liveState.pay = (liveState.pay && typeof liveState.pay === 'object') ? liveState.pay : {};
+            liveState.pay.draftWizard = (liveState.pay.draftWizard && typeof liveState.pay.draftWizard === 'object') ? liveState.pay.draftWizard : {};
+            liveState.pay.draftWizard.workbench = (liveState.pay.draftWizard.workbench && typeof liveState.pay.draftWizard.workbench === 'object') ? liveState.pay.draftWizard.workbench : {};
+            liveState.pay.draftWizard.decisions = (liveState.pay.draftWizard.decisions && typeof liveState.pay.draftWizard.decisions === 'object') ? liveState.pay.draftWizard.decisions : {};
+            return liveState.pay.draftWizard;
+          }
+        } catch {}
+        return wiz;
+      };
+      const storeOperationInCurrentWizard = (operationLike) => {
+        const operation = isPlainObject(operationLike) ? operationLike : null;
+        const currentWizard = getCurrentWizardState();
+        const currentWorkbench = (currentWizard.workbench && typeof currentWizard.workbench === 'object') ? currentWizard.workbench : {};
+        const currentDecisions = (currentWizard.decisions && typeof currentWizard.decisions === 'object') ? currentWizard.decisions : {};
+        const operationId = operation ? activeDraftCreateOperationId(operation) : '';
+        const status = operation ? activeDraftCreateStatus(operation) : '';
+        for (const target of [currentWizard, currentWorkbench, currentDecisions]) {
+          if (!target || typeof target !== 'object') continue;
+          target.active_draft_create_operation_id = operationId || null;
+          target.activeDraftCreateOperationId = operationId || null;
+          target.active_draft_create_operation = operation || null;
+          target.activeDraftCreateOperation = operation || null;
+          target.draft_create_status = operation ? (status || null) : null;
+          target.draftCreateStatus = operation ? (status || null) : null;
+          if (operation) target.last_create_draft_operation_payload = operation;
+        }
+        return operation;
+      };
+      const getOperationFromCurrentState = (operationId) => {
+        const currentWizard = getCurrentWizardState();
+        const candidates = [
+          currentWizard.workbench?.active_draft_create_operation,
+          currentWizard.workbench?.activeDraftCreateOperation,
+          currentWizard.decisions?.active_draft_create_operation,
+          currentWizard.decisions?.activeDraftCreateOperation,
+          currentWizard.active_draft_create_operation,
+          currentWizard.activeDraftCreateOperation,
+          currentWizard.last_create_draft_operation_payload,
+          currentWizard.workbench?.last_create_draft_operation_payload,
+          currentWizard.decisions?.last_create_draft_operation_payload
+        ];
+        const wanted = trimStr(operationId);
+        for (const candidate of candidates) {
+          if (!isPlainObject(candidate)) continue;
+          if (activeDraftCreateOperationType(candidate) !== 'DRAFT_CREATE') continue;
+          const candidateOperationId = activeDraftCreateOperationId(candidate);
+          if (!candidateOperationId) continue;
+          if (wanted && candidateOperationId !== wanted) continue;
+          return candidate;
+        }
+        return null;
+      };
+      const fetchOperationById = async (operationId) => {
+        const idText = trimStr(operationId);
+        if (!idText || typeof bankingPayOperationGet !== 'function') return null;
+        const payload = await bankingPayOperationGet(idText, {
+          mode: 'PROGRESS_LIGHT',
+          progress_mode: 'LIGHT',
+          progressMode: 'LIGHT',
+          observer_only: true,
+          observe_only: true,
+          no_auto_advance: true,
+          noAutoAdvance: true,
+          include_diagnostics: false,
+          includeDiagnostics: false,
+          userInitiated: true,
+          silent: false,
+          source: 'renderPayNewBatchWizard.activeDraftCreateStatusHandler'
+        });
+        return isPlainObject(payload) ? payload : null;
+      };
+      doc.addEventListener('click', (event) => {
+        const target = event && event.target && typeof event.target.closest === 'function'
+          ? event.target.closest('[data-action="banking:pay:viewDraftCreateStatus"],[data-action="banking:pay:refreshDraftCreateStatus"]')
+          : null;
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const action = trimStr(target.getAttribute('data-action') || '');
+        const operationId = trimStr(target.getAttribute('data-operation-id') || target.dataset?.operationId || '');
+        const sessionId = trimStr(target.getAttribute('data-workbench-session-id') || target.dataset?.workbenchSessionId || '');
+        Promise.resolve().then(async () => {
+          let operation = getOperationFromCurrentState(operationId);
+          if (action === 'banking:pay:refreshDraftCreateStatus') {
+            if (sessionId && typeof bankingPayFindActiveDraftCreateOperation === 'function') {
+              operation = await bankingPayFindActiveDraftCreateOperation(sessionId, {
+                include_recent_terminal: true,
+                includeRecentTerminal: true,
+                recent_terminal_minutes: 1440,
+                recentTerminalMinutes: 1440,
+                state: getCurrentWizardState().workbench,
+                wizardState: getCurrentWizardState(),
+                wiz: getCurrentWizardState(),
+                targetState: getCurrentWizardState().decisions,
+                userInitiated: true,
+                silent: false,
+                background: false,
+                action: 'BANKING_PAY_REFRESH_DRAFT_CREATE_STATUS'
+              });
+            } else if (operationId) {
+              operation = await fetchOperationById(operationId);
+            }
+            if (operation) {
+              storeOperationInCurrentWizard(operation);
+              if (isActiveDraftCreateComplete(operation)) refreshBatchListAfterDraftCreateComplete(operation);
+              if (typeof bankingRerender === 'function') await bankingRerender(null);
+            } else {
+              notify('No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
+            }
+            return;
+          }
+          if (!operation && operationId) operation = await fetchOperationById(operationId);
+          if (!operation && sessionId && typeof bankingPayFindActiveDraftCreateOperation === 'function') {
+            operation = await bankingPayFindActiveDraftCreateOperation(sessionId, {
+              include_recent_terminal: true,
+              includeRecentTerminal: true,
+              recent_terminal_minutes: 1440,
+              recentTerminalMinutes: 1440,
+              state: getCurrentWizardState().workbench,
+              wizardState: getCurrentWizardState(),
+              wiz: getCurrentWizardState(),
+              targetState: getCurrentWizardState().decisions,
+              userInitiated: true,
+              silent: false,
+              background: false,
+              action: 'BANKING_PAY_VIEW_DRAFT_CREATE_STATUS'
+            });
+          }
+          if (!operation) {
+            notify('Draft creation status could not be loaded. Refresh Banking Pay and try again.');
+            return;
+          }
+          const storedOperation = storeOperationInCurrentWizard(operation);
+          if (storedOperation && isActiveDraftCreateComplete(storedOperation)) refreshBatchListAfterDraftCreateComplete(storedOperation);
+          if (typeof openBankingPayOperationProgressModal === 'function') {
+            openBankingPayOperationProgressModal(storedOperation, {
+              title: 'Draft creation status',
+              operationId: activeDraftCreateOperationId(storedOperation),
+              operation_id: activeDraftCreateOperationId(storedOperation),
+              mode: 'PROGRESS_LIGHT',
+              progress_mode: 'LIGHT',
+              observer_only: true,
+              observe_only: true,
+              no_auto_advance: true,
+              noAutoAdvance: true,
+              source: 'renderPayNewBatchWizard.handleViewActiveDraftCreateStatus'
+            });
+          } else {
+            notify(activeDraftCreateStatusMessage(storedOperation) || 'Draft creation status loaded.');
+          }
+          if (typeof bankingRerender === 'function') await bankingRerender(null);
+        }).catch((error) => {
+          notify(String(error?.message || error || 'Draft creation status could not be loaded.'));
+        });
+      }, true);
+    } catch {}
+  };
+  installActiveDraftCreateStatusActionHandlers();
+  scheduleActiveDraftCreateOperationLookup();
+  const activeDraftCreateOperationForRender = getActiveDraftCreateOperationFromState();
+  const activeDraftCreateStatusBannerHtml = renderActiveDraftCreateStatusBanner(activeDraftCreateOperationForRender);
 
   const decisions = {
     candidate_ids: uniqTrimmed(wiz.decisions.candidate_ids),
@@ -41685,6 +42753,7 @@ function renderPayNewBatchWizard() {
         <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
           ${pvFriendly ? `<div class="error"><div style="font-weight:700;margin-bottom:4px;">${enc(pvFriendlyTitle)}</div><div style="white-space:pre-wrap;">${enc(pvFriendlyMessage)}</div></div>` : (pvErr ? `<div class="error" style="white-space:pre-wrap;">${enc(pvErr)}</div>` : '')}
           ${cdFriendly ? `<div class="error"><div style="font-weight:700;margin-bottom:4px;">${enc(cdFriendlyTitle)}</div><div style="white-space:pre-wrap;">${enc(cdFriendlyMessage)}</div></div>` : (cdErr ? `<div class="error" style="white-space:pre-wrap;">${enc(cdErr)}</div>` : '')}
+          ${activeDraftCreateStatusBannerHtml}
           ${guardrailsBannerHtml}
           ${readinessBannerHtml}
           ${(hasPendingCandidates || hasFailedCandidates) ? `
@@ -41739,9 +42808,6 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
-
-
-
 
 
 
@@ -44867,6 +45933,7 @@ function refreshBankingNavAttentionFromCachedRows() {
   } catch {}
 }
 
+
 function renderPayBatchListPanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -44926,6 +45993,502 @@ function renderPayBatchListPanel() {
 
   st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
   st.pay.list = (st.pay.list && typeof st.pay.list === 'object') ? st.pay.list : { items: [], limit: 50, offset: 0, statusFilter: '', loading: false, error: '' };
+  st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+  st.pay.draftWizard.workbench = (st.pay.draftWizard.workbench && typeof st.pay.draftWizard.workbench === 'object') ? st.pay.draftWizard.workbench : {};
+  st.pay.draftWizard.decisions = (st.pay.draftWizard.decisions && typeof st.pay.draftWizard.decisions === 'object') ? st.pay.draftWizard.decisions : {};
+  const wiz = st.pay.draftWizard;
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const upperTrim = (value) => trimStr(value).toUpperCase();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const asArray = (value) => Array.isArray(value) ? value : [];
+  const readActiveDraftCreateBool = (value, fallback = false) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (value == null || value === '') return fallback;
+    const text = trimStr(value).toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return fallback;
+  };
+  const activeDraftCreateTerminalStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED']);
+  const activeDraftCreateReviewStatuses = new Set(['REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW']);
+  const activeDraftCreateWaitingAuthorisationStatuses = new Set(['WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'AUTHORISATION_REQUIRED', 'AUTHORIZATION_REQUIRED']);
+  const activeDraftCreateStatus = (operationLike) => upperTrim(operationLike?.status || operationLike?.operation_status || operationLike?.operationStatus || operationLike?.state || '');
+  const activeDraftCreatePhase = (operationLike) => upperTrim(operationLike?.phase || operationLike?.operation_phase || operationLike?.operationPhase || '');
+  const activeDraftCreateOperationType = (operationLike) => upperTrim(operationLike?.operation_type || operationLike?.operationType || operationLike?.type || 'DRAFT_CREATE') || 'DRAFT_CREATE';
+  const activeDraftCreateOperationId = (operationLike) => trimStr(operationLike?.operation_id || operationLike?.operationId || operationLike?.id || '');
+  const activeDraftCreateWorkbenchSessionId = (operationLike = null) => trimStr(
+    operationLike?.workbench_session_id ||
+    operationLike?.workbenchSessionId ||
+    operationLike?.session_id ||
+    operationLike?.sessionId ||
+    wiz.workbench?.session_id ||
+    wiz.workbench?.active_workbench_session_id ||
+    wiz.workbench?.__active_workbench_session_id ||
+    wiz.decisions?.session_id ||
+    wiz.preview?.data?.session_id ||
+    wiz.preview?.data?.session?.session_id ||
+    ''
+  );
+  const collectActiveDraftCreateBatchIds = (operationLike) => {
+    const out = [];
+    const seen = new Set();
+    const push = (value) => {
+      const text = trimStr(value);
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      out.push(text);
+    };
+    const visit = (node, depth = 0) => {
+      if (node == null || depth > 5) return;
+      if (typeof node === 'string' || typeof node === 'number') return;
+      if (Array.isArray(node)) {
+        for (const entry of node) {
+          if (typeof entry === 'string' || typeof entry === 'number') push(entry);
+          else visit(entry, depth + 1);
+        }
+        return;
+      }
+      if (!isPlainObject(node)) return;
+      for (const key of ['pay_batch_id', 'payBatchId', 'primary_pay_batch_id', 'primaryPayBatchId']) push(node[key]);
+      for (const key of ['pay_batch_ids', 'payBatchIds', 'created_pay_batch_ids', 'createdPayBatchIds']) {
+        for (const id of asArray(node[key])) push(id);
+      }
+      for (const key of ['result', 'result_json', 'resultJson', 'result_summary', 'resultSummary', 'post_create_refresh', 'postCreateRefresh', 'refresh', 'operation', 'active_draft_create_operation', 'activeDraftCreateOperation']) {
+        if (Object.prototype.hasOwnProperty.call(node, key)) visit(node[key], depth + 1);
+      }
+    };
+    visit(operationLike, 0);
+    return out;
+  };
+  const isActiveDraftCreateComplete = (operationLike) => {
+    const status = activeDraftCreateStatus(operationLike);
+    return status === 'COMPLETE' || status === 'COMPLETED' || status === 'SUCCESS' || status === 'SUCCEEDED' || status === 'DONE' || readActiveDraftCreateBool(operationLike?.draft_created, false) || readActiveDraftCreateBool(operationLike?.draftCreated, false);
+  };
+  const isActiveDraftCreateFailureOrReview = (operationLike) => {
+    const status = activeDraftCreateStatus(operationLike);
+    return status === 'FAILED' || status === 'ERROR' || status === 'CANCELLED' || status === 'CANCELED' || activeDraftCreateReviewStatuses.has(status) || activeDraftCreateWaitingAuthorisationStatuses.has(status) || readActiveDraftCreateBool(operationLike?.review_required, false) || readActiveDraftCreateBool(operationLike?.reviewRequired, false) || readActiveDraftCreateBool(operationLike?.requires_user_action, false) || readActiveDraftCreateBool(operationLike?.requiresUserAction, false);
+  };
+  const isActiveDraftCreateTerminal = (operationLike) => {
+    const status = activeDraftCreateStatus(operationLike);
+    return readActiveDraftCreateBool(operationLike?.terminal, false) || activeDraftCreateTerminalStatuses.has(status);
+  };
+  const activeDraftCreateStatusMessage = (operationLike) => {
+    const resultSummary = isPlainObject(operationLike?.result_summary) ? operationLike.result_summary : (isPlainObject(operationLike?.resultSummary) ? operationLike.resultSummary : {});
+    const errorObj = isPlainObject(operationLike?.error) ? operationLike.error : (isPlainObject(operationLike?.small_error_summary) ? operationLike.small_error_summary : {});
+    return trimStr(
+      operationLike?.status_text ||
+      operationLike?.statusText ||
+      operationLike?.last_message ||
+      operationLike?.message ||
+      resultSummary.last_message ||
+      errorObj.message ||
+      operationLike?.error_message ||
+      operationLike?.errorMessage ||
+      ''
+    );
+  };
+  const storeActiveDraftCreateOperationForRender = (operationLike) => {
+    const operation = isPlainObject(operationLike) ? operationLike : null;
+    const operationId = operation ? activeDraftCreateOperationId(operation) : '';
+    const status = operation ? activeDraftCreateStatus(operation) : '';
+    const targets = [wiz, wiz.workbench, wiz.decisions].filter((target) => isPlainObject(target));
+    for (const target of targets) {
+      target.active_draft_create_operation_id = operationId || null;
+      target.activeDraftCreateOperationId = operationId || null;
+      target.active_draft_create_operation = operation || null;
+      target.activeDraftCreateOperation = operation || null;
+      target.draft_create_status = operation ? (status || null) : null;
+      target.draftCreateStatus = operation ? (status || null) : null;
+      if (operation) target.last_create_draft_operation_payload = operation;
+    }
+    try {
+      const root = (typeof window !== 'undefined') ? window : globalThis;
+      if (root) {
+        root.__bankingPayActiveDraftCreateOperationBySession = root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
+          ? root.__bankingPayActiveDraftCreateOperationBySession
+          : Object.create(null);
+        const sessionId = operation ? activeDraftCreateWorkbenchSessionId(operation) : activeDraftCreateWorkbenchSessionId(null);
+        if (sessionId && operation && operationId) root.__bankingPayActiveDraftCreateOperationBySession[sessionId] = operation;
+        if (sessionId && (!operation || !operationId)) {
+          try { delete root.__bankingPayActiveDraftCreateOperationBySession[sessionId]; } catch {}
+        }
+      }
+    } catch {}
+    return operation;
+  };
+  const getActiveDraftCreateOperationFromState = () => {
+    const candidates = [
+      wiz.workbench?.active_draft_create_operation,
+      wiz.workbench?.activeDraftCreateOperation,
+      wiz.decisions?.active_draft_create_operation,
+      wiz.decisions?.activeDraftCreateOperation,
+      wiz.active_draft_create_operation,
+      wiz.activeDraftCreateOperation,
+      wiz.last_create_draft_operation_payload,
+      wiz.workbench?.last_create_draft_operation_payload,
+      wiz.decisions?.last_create_draft_operation_payload,
+      wiz.createDraftOperation,
+      wiz.create_draft_operation,
+      wiz.lastCreateDraftOperation,
+      wiz.last_create_draft_operation
+    ];
+    try {
+      const sessionId = activeDraftCreateWorkbenchSessionId(null);
+      const root = (typeof window !== 'undefined') ? window : globalThis;
+      const cache = root && root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
+        ? root.__bankingPayActiveDraftCreateOperationBySession
+        : null;
+      if (sessionId && cache && isPlainObject(cache[sessionId])) candidates.push(cache[sessionId]);
+    } catch {}
+    for (const candidate of candidates) {
+      if (!isPlainObject(candidate)) continue;
+      const operationId = activeDraftCreateOperationId(candidate);
+      const operationType = activeDraftCreateOperationType(candidate);
+      if (!operationId) continue;
+      if (operationType && operationType !== 'DRAFT_CREATE') continue;
+      return storeActiveDraftCreateOperationForRender(candidate);
+    }
+    return null;
+  };
+  const refreshBatchListAfterDraftCreateComplete = (operationLike) => {
+    if (!isActiveDraftCreateComplete(operationLike)) return;
+    const batchIds = collectActiveDraftCreateBatchIds(operationLike);
+    if (!batchIds.length) return;
+    const operationId = activeDraftCreateOperationId(operationLike) || batchIds.join(',');
+    const refreshKey = `${operationId}:${batchIds.join(',')}`;
+    wiz.workbench.__draft_create_batch_list_refresh_keys = isPlainObject(wiz.workbench.__draft_create_batch_list_refresh_keys) ? wiz.workbench.__draft_create_batch_list_refresh_keys : {};
+    if (wiz.workbench.__draft_create_batch_list_refresh_keys[refreshKey] === true || wiz.workbench.__draft_create_batch_list_refresh_in_flight === true) return;
+    wiz.workbench.__draft_create_batch_list_refresh_keys[refreshKey] = true;
+    wiz.workbench.__draft_create_batch_list_refresh_in_flight = true;
+    wiz.workbench.__draft_create_batch_list_refresh_started_at_utc = new Date().toISOString();
+    if (typeof bankingPayBatchesList !== 'function') {
+      wiz.workbench.__draft_create_batch_list_refresh_in_flight = false;
+      wiz.workbench.__draft_create_batch_list_refresh_unavailable = true;
+      return;
+    }
+    Promise.resolve()
+      .then(() => bankingPayBatchesList({
+        status: st.pay?.list?.statusFilter,
+        limit: st.pay?.list?.limit || 50,
+        offset: 0,
+        display_mode: 'LIGHT',
+        displayMode: 'LIGHT',
+        include_diagnostics: false,
+        includeDiagnostics: false,
+        include_alerts: false,
+        includeAlerts: false,
+        include_correction_summary: false,
+        includeCorrectionSummary: false,
+        source: 'renderPayBatchListPanel.refreshBatchListAfterDraftCreateComplete'
+      }))
+      .catch((error) => {
+        try { wiz.workbench.__draft_create_batch_list_refresh_last_error = String(error?.message || error || ''); } catch {}
+      })
+      .finally(() => {
+        try {
+          wiz.workbench.__draft_create_batch_list_refresh_in_flight = false;
+          wiz.workbench.__draft_create_batch_list_refreshed_at_utc = new Date().toISOString();
+        } catch {}
+      });
+  };
+  const scheduleActiveDraftCreateOperationLookup = () => {
+    const sessionId = activeDraftCreateWorkbenchSessionId(null);
+    if (!sessionId || typeof bankingPayFindActiveDraftCreateOperation !== 'function') return;
+    wiz.workbench.__active_draft_create_lookup_by_session = isPlainObject(wiz.workbench.__active_draft_create_lookup_by_session) ? wiz.workbench.__active_draft_create_lookup_by_session : {};
+    const existing = wiz.workbench.__active_draft_create_lookup_by_session[sessionId];
+    const nowMs = Date.now();
+    if (existing && existing.in_flight === true) return;
+    if (existing && Number.isFinite(Number(existing.last_checked_ms)) && nowMs - Number(existing.last_checked_ms) < 10000) return;
+    wiz.workbench.__active_draft_create_lookup_by_session[sessionId] = {
+      in_flight: true,
+      started_at_utc: new Date().toISOString(),
+      last_checked_ms: nowMs
+    };
+    Promise.resolve()
+      .then(() => bankingPayFindActiveDraftCreateOperation(sessionId, {
+        include_recent_terminal: true,
+        includeRecentTerminal: true,
+        recent_terminal_minutes: 1440,
+        recentTerminalMinutes: 1440,
+        state: wiz.workbench,
+        wizardState: wiz,
+        wiz,
+        targetState: wiz.decisions,
+        userInitiated: false,
+        silent: true,
+        background: true,
+        action: 'BANKING_PAY_ACTIVE_DRAFT_CREATE_STATUS_LOOKUP'
+      }))
+      .then((operation) => {
+        const storedOperation = storeActiveDraftCreateOperationForRender(operation || null);
+        if (storedOperation && isActiveDraftCreateComplete(storedOperation)) refreshBatchListAfterDraftCreateComplete(storedOperation);
+        try {
+          if (typeof bankingRerender === 'function') bankingRerender(null);
+        } catch {}
+      })
+      .catch((error) => {
+        try {
+          wiz.workbench.__active_draft_create_lookup_last_error = String(error?.message || error || '');
+        } catch {}
+      })
+      .finally(() => {
+        try {
+          wiz.workbench.__active_draft_create_lookup_by_session[sessionId] = {
+            in_flight: false,
+            last_checked_ms: Date.now(),
+            finished_at_utc: new Date().toISOString()
+          };
+        } catch {}
+      });
+  };
+  const handleViewActiveDraftCreateStatus = (operationLike, label = 'View status') => {
+    const operationId = activeDraftCreateOperationId(operationLike);
+    const sessionId = activeDraftCreateWorkbenchSessionId(operationLike);
+    return `data-action="banking:pay:viewDraftCreateStatus" data-operation-id="${enc(operationId)}" data-workbench-session-id="${enc(sessionId)}" data-operation-type="DRAFT_CREATE" data-backend-runner-owned="true" title="${enc(label)}"`;
+  };
+  const activeDraftCreateBatchOpenButtonHtml = (operationLike) => {
+    const batchIds = collectActiveDraftCreateBatchIds(operationLike);
+    const primaryBatchId = trimStr(operationLike?.primary_pay_batch_id || operationLike?.primaryPayBatchId || operationLike?.pay_batch_id || operationLike?.payBatchId || batchIds[0] || '');
+    if (!primaryBatchId) return '';
+    return `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:openChild" data-batch-id="${enc(primaryBatchId)}" title="Open the created draft batch">Open draft batch</button>`;
+  };
+  const renderActiveDraftCreateStatusBanner = (operationLike) => {
+    const operation = isPlainObject(operationLike) ? operationLike : null;
+    if (!operation) return '';
+    if (activeDraftCreateOperationType(operation) !== 'DRAFT_CREATE') return '';
+    const operationId = activeDraftCreateOperationId(operation);
+    if (!operationId) return '';
+    const status = activeDraftCreateStatus(operation) || 'RUNNING';
+    const phase = activeDraftCreatePhase(operation) || 'INITIALISE';
+    const runnerState = upperTrim(operation.runner_state || operation.runnerState || '');
+    const sessionId = activeDraftCreateWorkbenchSessionId(operation);
+    const batchIds = collectActiveDraftCreateBatchIds(operation);
+    const complete = isActiveDraftCreateComplete(operation);
+    const failureOrReview = isActiveDraftCreateFailureOrReview(operation) && !complete;
+    const terminal = isActiveDraftCreateTerminal(operation);
+    const message = activeDraftCreateStatusMessage(operation) || (complete
+      ? 'Draft batch creation has completed.'
+      : (failureOrReview ? 'Draft creation needs attention.' : 'Draft creation is running in the background.'));
+    const title = complete
+      ? 'Draft created'
+      : (failureOrReview ? (activeDraftCreateReviewStatuses.has(status) || readActiveDraftCreateBool(operation.review_required, false) || readActiveDraftCreateBool(operation.reviewRequired, false) ? 'Draft creation needs review' : 'Draft creation failed') : 'Draft creation in progress');
+    const pillClass = complete ? 'pill-ok' : (failureOrReview ? 'pill-bad' : 'pill-warn');
+    const batchText = batchIds.length ? `Created draft batch${batchIds.length === 1 ? '' : 'es'}: ${batchIds.join(', ')}` : '';
+    const refreshedText = trimStr(operation.completed_at_utc || operation.completedAtUtc || operation.updated_at_utc || operation.updatedAtUtc || '');
+    const draftCreateStatusHintText = complete
+      ? ''
+      : (failureOrReview
+          ? 'Use View details to reopen the draft creation status. No manual resume action is required.'
+          : 'You can close the progress window. Draft creation continues in the background and can be reopened from Banking Pay.');
+    if (complete) refreshBatchListAfterDraftCreateComplete(operation);
+    const actionButtons = [
+      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, failureOrReview ? 'View details' : 'View status')}>${enc(failureOrReview ? 'View details' : 'View status')}</button>`,
+      sessionId ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:refreshDraftCreateStatus" data-operation-id="${enc(operationId)}" data-workbench-session-id="${enc(sessionId)}" data-operation-type="DRAFT_CREATE" title="Refresh draft creation status">Refresh status</button>` : '',
+      complete ? activeDraftCreateBatchOpenButtonHtml(operation) : ''
+    ].filter(Boolean).join(' ');
+    return `
+      <div class="card" data-banking-active-draft-create-status="true" data-operation-id="${enc(operationId)}" style="margin:0 0 10px 0;border-color:${failureOrReview ? '#fecaca' : (complete ? '#bbf7d0' : '#fde68a')};background:${failureOrReview ? '#fef2f2' : (complete ? '#f0fdf4' : '#fffbeb')};">
+        <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
+          <div style="display:flex;flex-direction:column;gap:6px;min-width:260px;flex:1;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <strong>${enc(title)}</strong>
+              <span class="pill ${enc(pillClass)}">${enc(status)}</span>
+              <span class="pill">${enc(phase)}</span>
+              ${runnerState ? `<span class="pill">Runner ${enc(runnerState)}</span>` : ''}
+            </div>
+            <div class="mini" style="opacity:.9;white-space:pre-wrap;">${enc(message)}</div>
+            ${batchText ? `<div class="mini" style="opacity:.9;">${enc(batchText)}</div>` : ''}
+            ${refreshedText ? `<div class="mini" style="opacity:.75;">Last update ${enc(fmtUtcToUk(refreshedText))}</div>` : ''}
+            ${draftCreateStatusHintText ? `<div class="mini" style="opacity:.82;">${enc(draftCreateStatusHintText)}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">${actionButtons}</div>
+        </div>
+      </div>
+    `;
+  };
+  const installActiveDraftCreateStatusActionHandlers = () => {
+    try {
+      const root = (typeof window !== 'undefined') ? window : globalThis;
+      const doc = root && root.document ? root.document : null;
+      if (!doc || root.__bankingPayDraftCreateStatusActionHandlersInstalled === true) return;
+      root.__bankingPayDraftCreateStatusActionHandlersInstalled = true;
+      const notify = (message) => {
+        const text = trimStr(message);
+        if (!text) return;
+        try {
+          if (typeof root.__toast === 'function') {
+            root.__toast(text);
+            return;
+          }
+        } catch {}
+        try { if (typeof console !== 'undefined' && console && typeof console.warn === 'function') console.warn(text); } catch {}
+      };
+      const getCurrentWizardState = () => {
+        try {
+          const liveState = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+          if (liveState && typeof liveState === 'object') {
+            liveState.pay = (liveState.pay && typeof liveState.pay === 'object') ? liveState.pay : {};
+            liveState.pay.draftWizard = (liveState.pay.draftWizard && typeof liveState.pay.draftWizard === 'object') ? liveState.pay.draftWizard : {};
+            liveState.pay.draftWizard.workbench = (liveState.pay.draftWizard.workbench && typeof liveState.pay.draftWizard.workbench === 'object') ? liveState.pay.draftWizard.workbench : {};
+            liveState.pay.draftWizard.decisions = (liveState.pay.draftWizard.decisions && typeof liveState.pay.draftWizard.decisions === 'object') ? liveState.pay.draftWizard.decisions : {};
+            return liveState.pay.draftWizard;
+          }
+        } catch {}
+        return wiz;
+      };
+      const storeOperationInCurrentWizard = (operationLike) => {
+        const operation = isPlainObject(operationLike) ? operationLike : null;
+        const currentWizard = getCurrentWizardState();
+        const currentWorkbench = (currentWizard.workbench && typeof currentWizard.workbench === 'object') ? currentWizard.workbench : {};
+        const currentDecisions = (currentWizard.decisions && typeof currentWizard.decisions === 'object') ? currentWizard.decisions : {};
+        const operationId = operation ? activeDraftCreateOperationId(operation) : '';
+        const status = operation ? activeDraftCreateStatus(operation) : '';
+        for (const target of [currentWizard, currentWorkbench, currentDecisions]) {
+          if (!target || typeof target !== 'object') continue;
+          target.active_draft_create_operation_id = operationId || null;
+          target.activeDraftCreateOperationId = operationId || null;
+          target.active_draft_create_operation = operation || null;
+          target.activeDraftCreateOperation = operation || null;
+          target.draft_create_status = operation ? (status || null) : null;
+          target.draftCreateStatus = operation ? (status || null) : null;
+          if (operation) target.last_create_draft_operation_payload = operation;
+        }
+        return operation;
+      };
+      const getOperationFromCurrentState = (operationId) => {
+        const currentWizard = getCurrentWizardState();
+        const candidates = [
+          currentWizard.workbench?.active_draft_create_operation,
+          currentWizard.workbench?.activeDraftCreateOperation,
+          currentWizard.decisions?.active_draft_create_operation,
+          currentWizard.decisions?.activeDraftCreateOperation,
+          currentWizard.active_draft_create_operation,
+          currentWizard.activeDraftCreateOperation,
+          currentWizard.last_create_draft_operation_payload,
+          currentWizard.workbench?.last_create_draft_operation_payload,
+          currentWizard.decisions?.last_create_draft_operation_payload
+        ];
+        const wanted = trimStr(operationId);
+        for (const candidate of candidates) {
+          if (!isPlainObject(candidate)) continue;
+          if (activeDraftCreateOperationType(candidate) !== 'DRAFT_CREATE') continue;
+          const candidateOperationId = activeDraftCreateOperationId(candidate);
+          if (!candidateOperationId) continue;
+          if (wanted && candidateOperationId !== wanted) continue;
+          return candidate;
+        }
+        return null;
+      };
+      const fetchOperationById = async (operationId) => {
+        const idText = trimStr(operationId);
+        if (!idText || typeof bankingPayOperationGet !== 'function') return null;
+        const payload = await bankingPayOperationGet(idText, {
+          mode: 'PROGRESS_LIGHT',
+          progress_mode: 'LIGHT',
+          progressMode: 'LIGHT',
+          observer_only: true,
+          observe_only: true,
+          no_auto_advance: true,
+          noAutoAdvance: true,
+          include_diagnostics: false,
+          includeDiagnostics: false,
+          userInitiated: true,
+          silent: false,
+          source: 'renderPayNewBatchWizard.activeDraftCreateStatusHandler'
+        });
+        return isPlainObject(payload) ? payload : null;
+      };
+      doc.addEventListener('click', (event) => {
+        const target = event && event.target && typeof event.target.closest === 'function'
+          ? event.target.closest('[data-action="banking:pay:viewDraftCreateStatus"],[data-action="banking:pay:refreshDraftCreateStatus"]')
+          : null;
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const action = trimStr(target.getAttribute('data-action') || '');
+        const operationId = trimStr(target.getAttribute('data-operation-id') || target.dataset?.operationId || '');
+        const sessionId = trimStr(target.getAttribute('data-workbench-session-id') || target.dataset?.workbenchSessionId || '');
+        Promise.resolve().then(async () => {
+          let operation = getOperationFromCurrentState(operationId);
+          if (action === 'banking:pay:refreshDraftCreateStatus') {
+            if (sessionId && typeof bankingPayFindActiveDraftCreateOperation === 'function') {
+              operation = await bankingPayFindActiveDraftCreateOperation(sessionId, {
+                include_recent_terminal: true,
+                includeRecentTerminal: true,
+                recent_terminal_minutes: 1440,
+                recentTerminalMinutes: 1440,
+                state: getCurrentWizardState().workbench,
+                wizardState: getCurrentWizardState(),
+                wiz: getCurrentWizardState(),
+                targetState: getCurrentWizardState().decisions,
+                userInitiated: true,
+                silent: false,
+                background: false,
+                action: 'BANKING_PAY_REFRESH_DRAFT_CREATE_STATUS'
+              });
+            } else if (operationId) {
+              operation = await fetchOperationById(operationId);
+            }
+            if (operation) {
+              storeOperationInCurrentWizard(operation);
+              if (isActiveDraftCreateComplete(operation)) refreshBatchListAfterDraftCreateComplete(operation);
+              if (typeof bankingRerender === 'function') await bankingRerender(null);
+            } else {
+              notify('No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
+            }
+            return;
+          }
+          if (!operation && operationId) operation = await fetchOperationById(operationId);
+          if (!operation && sessionId && typeof bankingPayFindActiveDraftCreateOperation === 'function') {
+            operation = await bankingPayFindActiveDraftCreateOperation(sessionId, {
+              include_recent_terminal: true,
+              includeRecentTerminal: true,
+              recent_terminal_minutes: 1440,
+              recentTerminalMinutes: 1440,
+              state: getCurrentWizardState().workbench,
+              wizardState: getCurrentWizardState(),
+              wiz: getCurrentWizardState(),
+              targetState: getCurrentWizardState().decisions,
+              userInitiated: true,
+              silent: false,
+              background: false,
+              action: 'BANKING_PAY_VIEW_DRAFT_CREATE_STATUS'
+            });
+          }
+          if (!operation) {
+            notify('Draft creation status could not be loaded. Refresh Banking Pay and try again.');
+            return;
+          }
+          const storedOperation = storeOperationInCurrentWizard(operation);
+          if (storedOperation && isActiveDraftCreateComplete(storedOperation)) refreshBatchListAfterDraftCreateComplete(storedOperation);
+          if (typeof openBankingPayOperationProgressModal === 'function') {
+            openBankingPayOperationProgressModal(storedOperation, {
+              title: 'Draft creation status',
+              operationId: activeDraftCreateOperationId(storedOperation),
+              operation_id: activeDraftCreateOperationId(storedOperation),
+              mode: 'PROGRESS_LIGHT',
+              progress_mode: 'LIGHT',
+              observer_only: true,
+              observe_only: true,
+              no_auto_advance: true,
+              noAutoAdvance: true,
+              source: 'renderPayNewBatchWizard.handleViewActiveDraftCreateStatus'
+            });
+          } else {
+            notify(activeDraftCreateStatusMessage(storedOperation) || 'Draft creation status loaded.');
+          }
+          if (typeof bankingRerender === 'function') await bankingRerender(null);
+        }).catch((error) => {
+          notify(String(error?.message || error || 'Draft creation status could not be loaded.'));
+        });
+      }, true);
+    } catch {}
+  };
+  installActiveDraftCreateStatusActionHandlers();
+  scheduleActiveDraftCreateOperationLookup();
+  const activeDraftCreateOperationForRender = getActiveDraftCreateOperationFromState();
+  const activeDraftCreateStatusBannerHtml = renderActiveDraftCreateStatusBanner(activeDraftCreateOperationForRender);
 
   const items = Array.isArray(st.pay.list.items) ? st.pay.list.items : [];
   const loading = !!st.pay.list.loading;
@@ -45427,6 +46990,7 @@ function renderPayBatchListPanel() {
         <label>Batches</label>
         <div class="controls" style="display:flex;flex-direction:column;gap:8px;">
           ${err ? `<div class="error" style="white-space:pre-wrap;">${enc(err)}</div>` : ''}
+          ${activeDraftCreateStatusBannerHtml}
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <label class="inline mini" style="opacity:.85;">Status</label>
@@ -45521,6 +47085,236 @@ function renderPayBatchListPanel() {
 }
 
 
+
+
+function normaliseActiveDraftCreateOperationLookupResponse(responsePayload = {}, options = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const upperTrim = (value) => trimStr(value).toUpperCase();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const readBool = (value, fallback = false) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (value === null || value === undefined) return fallback;
+    const text = trimStr(value).toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return fallback;
+  };
+  const unwrap = (value) => {
+    let payload = value;
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        if (Array.isArray(payload) && payload.length === 1 && isPlainObject(payload[0])) {
+          payload = payload[0];
+          continue;
+        }
+        if (!isPlainObject(payload)) break;
+        if (isPlainObject(payload.banking_pay_operation_find_active_draft_create)) {
+          payload = payload.banking_pay_operation_find_active_draft_create;
+          continue;
+        }
+        if (isPlainObject(payload.data) && (isPlainObject(payload.data.operation) || isPlainObject(payload.data.active_draft_create_operation) || isPlainObject(payload.data.activeDraftCreateOperation))) {
+          payload = payload.data;
+          continue;
+        }
+        break;
+      }
+    } catch {}
+    return isPlainObject(payload) ? payload : {};
+  };
+  const firstPlainObject = function () {
+    for (let index = 0; index < arguments.length; index += 1) {
+      const value = arguments[index];
+      if (isPlainObject(value)) return value;
+    }
+    return null;
+  };
+  const root = unwrap(responsePayload);
+  const opts = isPlainObject(options) ? options : {};
+  const operationSource = firstPlainObject(
+    root.operation,
+    root.active_draft_create_operation,
+    root.activeDraftCreateOperation,
+    root.draft_create_operation,
+    root.draftCreateOperation,
+    root.operation_json,
+    root.operationJson,
+    root.result && root.result.operation,
+    root.result && root.result.active_draft_create_operation,
+    root.progress && root.progress.operation,
+    root.progress && root.progress.active_draft_create_operation,
+    root
+  );
+
+  const operationId = trimStr(operationSource && (operationSource.operation_id || operationSource.operationId || operationSource.id || root.operation_id || root.operationId || root.id));
+  const foundFlag = readBool(root.found ?? root.operation_found ?? root.operationFound, !!operationId);
+  if (!foundFlag || !operationId) return null;
+
+  const normalisedBase = (typeof normaliseBankingPayOperationProgress === 'function')
+    ? normaliseBankingPayOperationProgress(operationSource)
+    : Object.assign({}, operationSource);
+  const normalised = isPlainObject(normalisedBase) ? Object.assign({}, operationSource, normalisedBase) : Object.assign({}, operationSource);
+
+  normalised.operation_id = trimStr(normalised.operation_id || normalised.operationId || operationId) || operationId;
+  normalised.id = trimStr(normalised.id || normalised.operation_id) || normalised.operation_id;
+  normalised.operationId = normalised.operation_id;
+  normalised.operation_type = upperTrim(normalised.operation_type || normalised.operationType || 'DRAFT_CREATE') || 'DRAFT_CREATE';
+  normalised.operationType = normalised.operation_type;
+
+  if (normalised.operation_type !== 'DRAFT_CREATE') return null;
+
+  normalised.workbench_session_id = trimStr(
+    normalised.workbench_session_id ||
+    normalised.workbenchSessionId ||
+    root.workbench_session_id ||
+    root.workbenchSessionId ||
+    opts.workbench_session_id ||
+    opts.workbenchSessionId ||
+    opts.session_id ||
+    opts.sessionId
+  ) || null;
+  normalised.workbenchSessionId = normalised.workbench_session_id;
+  normalised.active_draft_create_operation = true;
+  normalised.activeDraftCreateOperation = true;
+  normalised.found = true;
+  normalised.lookup_found = true;
+  normalised.lookupFound = true;
+  normalised.lookup_raw_payload = root;
+  normalised.lookupRawPayload = root;
+
+  if (!Object.prototype.hasOwnProperty.call(normalised, 'backend_runner_owned')) {
+    normalised.backend_runner_owned = readBool(normalised.backendRunnerOwned, true);
+  }
+  normalised.backendRunnerOwned = normalised.backend_runner_owned;
+
+  if (!Object.prototype.hasOwnProperty.call(normalised, 'frontend_completion_required')) {
+    normalised.frontend_completion_required = readBool(normalised.frontendCompletionRequired, false);
+  }
+  normalised.frontendCompletionRequired = normalised.frontend_completion_required;
+
+  return normalised;
+}
+
+async function bankingPayFindActiveDraftCreateOperation(sessionId, options = {}) {
+  const id = String(sessionId || '').trim();
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!id) throw new Error('bankingPayFindActiveDraftCreateOperation: sessionId is required');
+  if (!uuidRe.test(id)) throw new Error('bankingPayFindActiveDraftCreateOperation: invalid sessionId');
+  if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingPayFindActiveDraftCreateOperation: authFetch/API is required');
+
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const readBool = (value, fallback = false) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (value === null || value === undefined) return fallback;
+    const text = trimStr(value).toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return fallback;
+  };
+  const boundedInteger = (value, fallback, minimum, maximum) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(maximum, Math.max(minimum, Math.trunc(n)));
+  };
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const writeActiveDraftCreateOperationState = (operation) => {
+    const operationId = trimStr(operation && (operation.operation_id || operation.operationId || operation.id));
+    const status = trimStr(operation && (operation.status || operation.operation_status || operation.operationStatus));
+    const stateTargets = [opts.state, opts.wizardState, opts.wiz, opts.targetState, opts.target]
+      .filter((target) => isPlainObject(target));
+
+    for (const target of stateTargets) {
+      target.active_draft_create_operation_id = operationId || null;
+      target.activeDraftCreateOperationId = operationId || null;
+      target.active_draft_create_operation = operation || null;
+      target.activeDraftCreateOperation = operation || null;
+      target.draft_create_status = operation ? (status || null) : null;
+      target.draftCreateStatus = operation ? (status || null) : null;
+    }
+
+    const root = (typeof window !== 'undefined') ? window : globalThis;
+    root.__bankingPayActiveDraftCreateOperationBySession = root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
+      ? root.__bankingPayActiveDraftCreateOperationBySession
+      : Object.create(null);
+
+    if (operation && operationId) {
+      root.__bankingPayActiveDraftCreateOperationBySession[id] = operation;
+    } else {
+      try { delete root.__bankingPayActiveDraftCreateOperationBySession[id]; } catch {}
+    }
+  };
+
+  const includeRecentTerminal = readBool(opts.include_recent_terminal ?? opts.includeRecentTerminal, true);
+  const recentTerminalMinutes = boundedInteger(opts.recent_terminal_minutes ?? opts.recentTerminalMinutes, 60, 0, 10080);
+  const query = new URLSearchParams();
+  query.set('include_recent_terminal', includeRecentTerminal ? 'true' : 'false');
+  query.set('includeRecentTerminal', includeRecentTerminal ? 'true' : 'false');
+  query.set('recent_terminal_minutes', String(recentTerminalMinutes));
+  query.set('recentTerminalMinutes', String(recentTerminalMinutes));
+  if (opts.silent !== undefined && opts.silent !== null) query.set('silent', readBool(opts.silent, false) ? 'true' : 'false');
+
+  const requestPath = `/api/banking/pay/workbench/session/${encodeURIComponent(id)}/draft-create-operation`;
+  const requestUrl = API(`${requestPath}?${query.toString()}`);
+  const root = (typeof window !== 'undefined') ? window : globalThis;
+  root.__bankingPayActiveDraftCreateOperationLookupInFlight = root.__bankingPayActiveDraftCreateOperationLookupInFlight && typeof root.__bankingPayActiveDraftCreateOperationLookupInFlight === 'object'
+    ? root.__bankingPayActiveDraftCreateOperationLookupInFlight
+    : Object.create(null);
+
+  const dedupeKey = `${id}::${includeRecentTerminal ? 'recent' : 'active'}::${recentTerminalMinutes}`;
+  if (root.__bankingPayActiveDraftCreateOperationLookupInFlight[dedupeKey]) {
+    return root.__bankingPayActiveDraftCreateOperationLookupInFlight[dedupeKey];
+  }
+
+  const run = (async () => {
+    const response = await authFetch(requestUrl, { method: 'GET' });
+    const text = await response.text().catch(() => '');
+    let parsed = null;
+    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
+
+    if (!response.ok) {
+      const friendly = (typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(parsed || text || null, parsed, { action: opts.action || 'BANKING_PAY_DRAFT_CREATE_OPERATION_LOOKUP', sessionId: id, userInitiated: opts.userInitiated !== false })
+        : { ok: false, error_code: 'BANKING_PAY_DRAFT_CREATE_OPERATION_LOOKUP_FAILED', message: text || `Request failed (${response.status})` };
+      const err = new Error(String(friendly.user_message || friendly.message || friendly.error || `Draft creation status could not be loaded (${response.status}).`));
+      err.status = response.status;
+      err.body = text;
+      err.json = friendly;
+      err.error_code = friendly.error_code || friendly.code || 'BANKING_PAY_DRAFT_CREATE_OPERATION_LOOKUP_FAILED';
+      throw err;
+    }
+
+    if (parsed && typeof parsed === 'object' && parsed.ok === false) {
+      const friendly = (typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(parsed, parsed, { action: opts.action || 'BANKING_PAY_DRAFT_CREATE_OPERATION_LOOKUP', sessionId: id, userInitiated: opts.userInitiated !== false })
+        : parsed;
+      const err = new Error(String(friendly.user_message || friendly.message || friendly.error || 'Draft creation status could not be loaded.'));
+      err.status = Number(friendly.http_status || friendly.status_code || 400) || 400;
+      err.body = text;
+      err.json = friendly;
+      err.error_code = friendly.error_code || friendly.code || 'BANKING_PAY_DRAFT_CREATE_OPERATION_LOOKUP_FAILED';
+      throw err;
+    }
+
+    const operation = (typeof normaliseActiveDraftCreateOperationLookupResponse === 'function')
+      ? normaliseActiveDraftCreateOperationLookupResponse(parsed || {}, {
+        workbench_session_id: id,
+        session_id: id
+      })
+      : null;
+
+    writeActiveDraftCreateOperationState(operation || null);
+    return operation || null;
+  })();
+
+  root.__bankingPayActiveDraftCreateOperationLookupInFlight[dedupeKey] = run;
+  try {
+    return await run;
+  } finally {
+    try { delete root.__bankingPayActiveDraftCreateOperationLookupInFlight[dedupeKey]; } catch {}
+  }
+}
 
 
 function renderPayBatchDetailPanel() {
@@ -92037,7 +93831,13 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     hidden_indefinite_snoozes: [],
     ready_preview_lines: [],
     blocked_preview_lines: [],
-    hidden_preview_lines: []
+    hidden_preview_lines: [],
+    blocked_for_pay: [],
+    blockedForPayNow: [],
+    blockedNow: [],
+    blockedPreviewLines: [],
+    cases_resolutions: [],
+    caseResolutionStates: []
   });
   const getComponentStateCache = (payload) => {
     const obj = isPlainObject(payload) ? payload : {};
@@ -92529,6 +94329,68 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     }
     return out;
   };
+  const mergePreviewRowsUnique = (...rowLists) => {
+    const out = [];
+    const seen = new Set();
+    for (const rows of rowLists) {
+      for (const row of asArray(rows)) pushUniquePreviewRow(out, seen, row);
+    }
+    return out;
+  };
+  const mergeSectionRowsPreservingUnfetchedSections = (previousRowsBySection, incomingRowsBySection, fetchedSections) => {
+    const previous = isPlainObject(previousRowsBySection) ? previousRowsBySection : {};
+    const incoming = isPlainObject(incomingRowsBySection) ? incomingRowsBySection : {};
+    const fetched = fetchedSections instanceof Set ? fetchedSections : new Set(asArray(fetchedSections).map(normalizePreviewPageSection));
+    const out = {
+      canonical_preview_lines: [],
+      blocked_for_pay: [],
+      cases_resolutions: []
+    };
+    for (const section of Object.keys(out)) {
+      out[section] = fetched.has(section)
+        ? mergePreviewRowsUnique(incoming[section] || [])
+        : mergePreviewRowsUnique(previous[section] || [], incoming[section] || []);
+    }
+    return out;
+  };
+  const collectExistingPreviewRowsBySectionForWorkbench = () => {
+    const out = {
+      canonical_preview_lines: [],
+      blocked_for_pay: [],
+      cases_resolutions: []
+    };
+    const seen = new Set();
+    const push = (sectionName, rows) => {
+      const section = normalizePreviewPageSection(sectionName);
+      if (!Object.prototype.hasOwnProperty.call(out, section)) return;
+      for (const row of asArray(rows)) {
+        const key = `${section}:${previewRowDedupeKey(row)}`;
+        if (!isPlainObject(row) || seen.has(key)) continue;
+        seen.add(key);
+        out[section].push(row);
+      }
+    };
+    const pushCache = (cacheLike) => {
+      const cache = isPlainObject(cacheLike) ? cacheLike : {};
+      push('canonical_preview_lines', cache.canonical_preview_lines || cache.canonicalPreviewLines || cache.ready_to_pay_now || cache.readyToPayNow || cache.ready_preview_lines || cache.readyPreviewLines || cache.draftable_now || cache.draftableNow);
+      push('blocked_for_pay', cache.blocked_for_pay || cache.blockedForPay || cache.blocked_for_pay_now || cache.blockedForPayNow || cache.blocked_now || cache.blockedNow || cache.blocked_preview_lines || cache.blockedPreviewLines);
+      push('cases_resolutions', cache.cases_resolutions || cache.casesResolutions || cache.case_resolution_states || cache.caseResolutionStates);
+    };
+    try { push('canonical_preview_lines', wiz?.workbench?.canonical_preview_lines); } catch {}
+    try { push('canonical_preview_lines', wiz?.workbench?.preview_rows); } catch {}
+    try { push('canonical_preview_lines', wiz?.workbench?.ready_preview_lines); } catch {}
+    try { push('blocked_for_pay', wiz?.workbench?.blocked_for_pay); } catch {}
+    try { push('blocked_for_pay', wiz?.workbench?.blocked_for_pay_now); } catch {}
+    try { push('blocked_for_pay', wiz?.workbench?.blocked_now); } catch {}
+    try { push('blocked_for_pay', wiz?.workbench?.blocked_preview_lines); } catch {}
+    try { push('blocked_for_pay', wiz?.workbench?.blockedPreviewLines); } catch {}
+    try { push('cases_resolutions', wiz?.workbench?.cases_resolutions); } catch {}
+    try { push('cases_resolutions', wiz?.workbench?.case_resolution_states); } catch {}
+    try { pushCache(wiz?.preview?.componentStateCache); } catch {}
+    try { pushCache(wiz?.preview?.data?.preview?.componentStateCache); } catch {}
+    try { pushCache(wiz?.decisions); } catch {}
+    return out;
+  };
 
   const st = (() => {
     if (state && typeof state === 'object') return state;
@@ -92603,7 +94465,24 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const previousPreviewPages = collectExistingPreviewPagesForWorkbench();
   const incomingPreviewPages = collectIncomingPreviewPagesForPayload(responseObj, previewObj, progressObj);
   const mergedPreviewPages = activeSessionChanged ? { ...incomingPreviewPages } : { ...previousPreviewPages, ...incomingPreviewPages };
-  const mergedPreviewPageRowsBySection = collectPreviewRowsBySectionFromPageMap(mergedPreviewPages);
+  const previousPreviewPageRowsBySection = collectPreviewRowsBySectionFromPageMap(previousPreviewPages);
+  const previousStateRowsBySection = collectExistingPreviewRowsBySectionForWorkbench();
+  const previousRowsBySection = {
+    canonical_preview_lines: mergePreviewRowsUnique(previousPreviewPageRowsBySection.canonical_preview_lines, previousStateRowsBySection.canonical_preview_lines),
+    blocked_for_pay: mergePreviewRowsUnique(previousPreviewPageRowsBySection.blocked_for_pay, previousStateRowsBySection.blocked_for_pay),
+    cases_resolutions: mergePreviewRowsUnique(previousPreviewPageRowsBySection.cases_resolutions, previousStateRowsBySection.cases_resolutions)
+  };
+  const incomingPreviewPageRowsBySection = collectPreviewRowsBySectionFromPageMap(incomingPreviewPages);
+  const fetchedPreviewSections = new Set();
+  for (const page of Object.values(isPlainObject(incomingPreviewPages) ? incomingPreviewPages : {})) {
+    if (!isPlainObject(page)) continue;
+    const requested = normalizePreviewPageSection(page.requested_section || page.requestedSection || page.request_section || page.requestSection || page.section || page.section_key || page.sectionKey || '');
+    const resolved = normalizePreviewPageSection(page.resolved_section || page.resolvedSection || page.section || requested);
+    for (const section of [requested, resolved]) {
+      if (['canonical_preview_lines', 'blocked_for_pay', 'cases_resolutions'].includes(section)) fetchedPreviewSections.add(section);
+    }
+  }
+  const mergedPreviewPageRowsBySection = mergeSectionRowsPreservingUnfetchedSections(previousRowsBySection, incomingPreviewPageRowsBySection, fetchedPreviewSections);
   const pageReadyRows = asArray(mergedPreviewPageRowsBySection.canonical_preview_lines);
   const pageCaseRows = asArray(mergedPreviewPageRowsBySection.cases_resolutions);
   const pageBlockedRows = asArray(mergedPreviewPageRowsBySection.blocked_for_pay);
@@ -92894,7 +94773,15 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     wiz.decisions.draftable_now = [];
     wiz.decisions.ready_to_pay_now = [];
     wiz.decisions.blocked_now = [];
+    wiz.decisions.blockedNow = [];
+    wiz.decisions.blocked_for_pay = [];
     wiz.decisions.blocked_for_pay_now = [];
+    wiz.decisions.blockedForPayNow = [];
+    wiz.decisions.blocked_preview_lines = [];
+    wiz.decisions.blockedPreviewLines = [];
+    wiz.decisions.case_resolution_states = [];
+    wiz.decisions.caseResolutionStates = [];
+    wiz.decisions.cases_resolutions = [];
 
     wiz.workbench.session_id = responseReadyEmpty ? (sessionId || null) : null;
     wiz.workbench.snapshot_run_id = responseReadyEmpty ? (snapshotRunId || null) : null;
@@ -92912,6 +94799,15 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     wiz.workbench.canonical_preview_lines = [];
     wiz.workbench.preview_rows = [];
     wiz.workbench.ready_preview_lines = [];
+    wiz.workbench.blocked_for_pay = [];
+    wiz.workbench.blocked_for_pay_now = [];
+    wiz.workbench.blockedNow = [];
+    wiz.workbench.blocked_now = [];
+    wiz.workbench.blocked_preview_lines = [];
+    wiz.workbench.blockedPreviewLines = [];
+    wiz.workbench.case_resolution_states = [];
+    wiz.workbench.caseResolutionStates = [];
+    wiz.workbench.cases_resolutions = [];
     wiz.workbench.payees = [];
     wiz.workbench.summary = {};
     wiz.workbench.create_draft_refresh_pending = !responseReadyEmpty;
@@ -93015,6 +94911,8 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   const blockedNow = firstNonEmptyArray(previewObj.blocked_now, responseObj.blocked_now, previewComponentStateCache.blocked_now, responseComponentStateCache.blocked_now, pageBlockedRows);
   const readyToPayNow = firstNonEmptyArray(previewObj.ready_to_pay_now, responseObj.ready_to_pay_now, previewComponentStateCache.ready_to_pay_now, responseComponentStateCache.ready_to_pay_now, readyPreviewLines);
   const blockedForPayNow = firstNonEmptyArray(previewObj.blocked_for_pay_now, responseObj.blocked_for_pay_now, previewComponentStateCache.blocked_for_pay_now, responseComponentStateCache.blocked_for_pay_now, pageBlockedRows);
+  const blockedForPayRows = mergePreviewRowsUnique(blockedForPayNow, blockedNow, blockedPreviewLines, pageBlockedRows);
+  const caseResolutionRows = mergePreviewRowsUnique(caseResolutionStates, pageCaseRows);
   const hiddenIndefiniteSnoozes = firstNonEmptyArray(previewObj.hidden_indefinite_snoozes, responseObj.hidden_indefinite_snoozes, previewComponentStateCache.hidden_indefinite_snoozes, responseComponentStateCache.hidden_indefinite_snoozes);
   const payees = derivePayeesForWorkbench(previewObj, responseObj);
   const previewSummary = isPlainObject(previewObj.summary) ? previewObj.summary : (isPlainObject(responseObj.summary) ? responseObj.summary : {});
@@ -93199,22 +95097,37 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
     preview_rows: cloneJson(previewRows) || [],
     rows: cloneJson(firstNonEmptyArray(previewObj.rows, responseObj.rows, previewRows)) || [],
     ready_preview_lines: cloneJson(readyPreviewLines) || [],
-    blocked_preview_lines: cloneJson(blockedPreviewLines) || [],
+    blocked_preview_lines: cloneJson(blockedForPayRows) || [],
+    blockedPreviewLines: cloneJson(blockedForPayRows) || [],
+    blocked_for_pay: cloneJson(blockedForPayRows) || [],
+    blocked_for_pay_now: cloneJson(blockedForPayRows) || [],
+    blockedForPayNow: cloneJson(blockedForPayRows) || [],
+    blocked_now: cloneJson(blockedForPayRows) || [],
+    blockedNow: cloneJson(blockedForPayRows) || [],
+    case_resolution_states: cloneJson(caseResolutionRows) || [],
+    caseResolutionStates: cloneJson(caseResolutionRows) || [],
+    cases_resolutions: cloneJson(caseResolutionRows) || [],
     hidden_preview_lines: cloneJson(hiddenPreviewLines) || [],
     payees: cloneJson(payees) || [],
     summary: cloneJson(previewSummary) || {},
     componentStateCache: {
       ...(isPlainObject(previewComponentStateCache) ? cloneJson(previewComponentStateCache) || {} : {}),
-      case_resolution_states: cloneJson(caseResolutionStates) || [],
+      case_resolution_states: cloneJson(caseResolutionRows) || [],
+      caseResolutionStates: cloneJson(caseResolutionRows) || [],
+      cases_resolutions: cloneJson(caseResolutionRows) || [],
       blocked_case_states: cloneJson(blockedCaseStates) || [],
       safe_case_states: cloneJson(safeCaseStates) || [],
       draftable_now: cloneJson(draftableNow) || [],
-      blocked_now: cloneJson(blockedNow) || [],
+      blocked_now: cloneJson(blockedForPayRows) || [],
+      blockedNow: cloneJson(blockedForPayRows) || [],
       ready_to_pay_now: cloneJson(readyToPayNow) || [],
-      blocked_for_pay_now: cloneJson(blockedForPayNow) || [],
+      blocked_for_pay: cloneJson(blockedForPayRows) || [],
+      blocked_for_pay_now: cloneJson(blockedForPayRows) || [],
+      blockedForPayNow: cloneJson(blockedForPayRows) || [],
       hidden_indefinite_snoozes: cloneJson(hiddenIndefiniteSnoozes) || [],
       ready_preview_lines: cloneJson(readyPreviewLines) || [],
-      blocked_preview_lines: cloneJson(blockedPreviewLines) || [],
+      blocked_preview_lines: cloneJson(blockedForPayRows) || [],
+      blockedPreviewLines: cloneJson(blockedForPayRows) || [],
       hidden_preview_lines: cloneJson(hiddenPreviewLines) || []
     }
   };
@@ -93280,22 +95193,30 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.preview.preview_epoch = Number.isFinite(Number(wiz.preview.preview_epoch)) ? (Number(wiz.preview.preview_epoch) + 1) : 1;
   wiz.preview.candidateDebtInfo = (isPlainObject(previewObj.candidateDebtInfo) ? cloneJson(previewObj.candidateDebtInfo) : (isPlainObject(previewObj.candidate_debt_info) ? cloneJson(previewObj.candidate_debt_info) : {})) || {};
   wiz.preview.componentStateCache = {
-    case_resolution_states: cloneJson(caseResolutionStates) || [],
+    case_resolution_states: cloneJson(caseResolutionRows) || [],
+    caseResolutionStates: cloneJson(caseResolutionRows) || [],
+    cases_resolutions: cloneJson(caseResolutionRows) || [],
     blocked_case_states: cloneJson(blockedCaseStates) || [],
     safe_case_states: cloneJson(safeCaseStates) || [],
     reusable_component_resolutions: (isPlainObject(previewObj.reusable_component_resolutions) ? cloneJson(previewObj.reusable_component_resolutions) : {}) || {},
     stale_component_resolutions: (isPlainObject(previewObj.stale_component_resolutions) ? cloneJson(previewObj.stale_component_resolutions) : {}) || {},
     draftable_now: cloneJson(draftableNow) || [],
-    blocked_now: cloneJson(blockedNow) || [],
+    blocked_now: cloneJson(blockedForPayRows) || [],
+    blockedNow: cloneJson(blockedForPayRows) || [],
     ready_to_pay_now: cloneJson(readyToPayNow) || [],
-    blocked_for_pay_now: cloneJson(blockedForPayNow) || [],
+    blocked_for_pay: cloneJson(blockedForPayRows) || [],
+    blocked_for_pay_now: cloneJson(blockedForPayRows) || [],
+    blockedForPayNow: cloneJson(blockedForPayRows) || [],
     hidden_indefinite_snoozes: cloneJson(hiddenIndefiniteSnoozes) || [],
     ready_preview_lines: cloneJson(readyPreviewLines) || [],
-    blocked_preview_lines: cloneJson(blockedPreviewLines) || [],
+    blocked_preview_lines: cloneJson(blockedForPayRows) || [],
+    blockedPreviewLines: cloneJson(blockedForPayRows) || [],
     hidden_preview_lines: cloneJson(hiddenPreviewLines) || []
   };
 
-  wiz.decisions.case_resolution_states = cloneJson(caseResolutionStates) || [];
+  wiz.decisions.case_resolution_states = cloneJson(caseResolutionRows) || [];
+  wiz.decisions.caseResolutionStates = cloneJson(caseResolutionRows) || [];
+  wiz.decisions.cases_resolutions = cloneJson(caseResolutionRows) || [];
   wiz.decisions.blocked_case_states = cloneJson(blockedCaseStates) || [];
   wiz.decisions.safe_case_states = cloneJson(safeCaseStates) || [];
   wiz.decisions.reusable_component_resolutions = (isPlainObject(previewObj.reusable_component_resolutions) ? cloneJson(previewObj.reusable_component_resolutions) : {}) || {};
@@ -93304,9 +95225,14 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.decisions.preview_rows = cloneJson(previewRows) || [];
   wiz.decisions.ready_preview_lines = cloneJson(readyPreviewLines) || [];
   wiz.decisions.draftable_now = cloneJson(draftableNow) || [];
-  wiz.decisions.blocked_now = cloneJson(blockedNow) || [];
+  wiz.decisions.blocked_now = cloneJson(blockedForPayRows) || [];
+  wiz.decisions.blockedNow = cloneJson(blockedForPayRows) || [];
   wiz.decisions.ready_to_pay_now = cloneJson(readyToPayNow) || [];
-  wiz.decisions.blocked_for_pay_now = cloneJson(blockedForPayNow) || [];
+  wiz.decisions.blocked_for_pay = cloneJson(blockedForPayRows) || [];
+  wiz.decisions.blocked_for_pay_now = cloneJson(blockedForPayRows) || [];
+  wiz.decisions.blockedForPayNow = cloneJson(blockedForPayRows) || [];
+  wiz.decisions.blocked_preview_lines = cloneJson(blockedForPayRows) || [];
+  wiz.decisions.blockedPreviewLines = cloneJson(blockedForPayRows) || [];
   wiz.decisions.hidden_indefinite_snoozes = cloneJson(hiddenIndefiniteSnoozes) || [];
   wiz.decisions.context_signature = wiz.preview.context_signature;
   wiz.decisions.session_id = sessionId || null;
@@ -93368,13 +95294,20 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
   wiz.workbench.post_cancel_preview_refresh_failed = false;
   wiz.workbench.__post_create_refresh_pending = false;
   wiz.workbench.__post_cancel_refresh_pending = false;
-  wiz.workbench.case_resolution_states = cloneJson(caseResolutionStates) || [];
+  wiz.workbench.case_resolution_states = cloneJson(caseResolutionRows) || [];
+  wiz.workbench.caseResolutionStates = cloneJson(caseResolutionRows) || [];
+  wiz.workbench.cases_resolutions = cloneJson(caseResolutionRows) || [];
   wiz.workbench.blocked_case_states = cloneJson(blockedCaseStates) || [];
   wiz.workbench.canonical_preview_lines = cloneJson(canonicalPreviewLines) || [];
   wiz.workbench.preview_rows = cloneJson(previewRows) || [];
   wiz.workbench.ready_preview_lines = cloneJson(readyPreviewLines) || [];
-  wiz.workbench.blocked_preview_lines = cloneJson(blockedPreviewLines) || [];
-  wiz.workbench.blocked_for_pay_now = cloneJson(blockedForPayNow) || [];
+  wiz.workbench.blocked_preview_lines = cloneJson(blockedForPayRows) || [];
+  wiz.workbench.blockedPreviewLines = cloneJson(blockedForPayRows) || [];
+  wiz.workbench.blocked_for_pay = cloneJson(blockedForPayRows) || [];
+  wiz.workbench.blocked_for_pay_now = cloneJson(blockedForPayRows) || [];
+  wiz.workbench.blockedForPayNow = cloneJson(blockedForPayRows) || [];
+  wiz.workbench.blocked_now = cloneJson(blockedForPayRows) || [];
+  wiz.workbench.blockedNow = cloneJson(blockedForPayRows) || [];
   wiz.workbench.payees = cloneJson(payees) || [];
   wiz.workbench.summary = isPlainObject(previewSummary) ? (cloneJson(previewSummary) || {}) : {};
   wiz.workbench.last_preview_applied_at = new Date().toISOString();
@@ -93383,7 +95316,6 @@ function applyPayWorkbenchPreviewToState(previewResponse, state = null) {
 
   return normalizedEnvelope;
 }
-
 
 
 
@@ -94249,11 +96181,23 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     const progressObj = isPlainObject(obj.progress) ? obj.progress : obj;
     const sectionCounts = isPlainObject(progressObj.section_counts) ? progressObj.section_counts : (isPlainObject(obj.section_counts) ? obj.section_counts : {});
     const countValue = (...values) => {
+      let best = 0;
       for (const value of values) {
+        if (Array.isArray(value)) {
+          best = Math.max(best, value.length);
+          continue;
+        }
+        if (value && typeof value === 'object') {
+          for (const key of ['rows_count', 'row_count', 'returned_count', 'count', 'total', 'value', 'length']) {
+            const n = Number(value[key]);
+            if (Number.isFinite(n)) best = Math.max(best, Math.max(0, Math.trunc(n)));
+          }
+          continue;
+        }
         const n = Number(value);
-        if (Number.isFinite(n) && n > 0) return Math.trunc(n);
+        if (Number.isFinite(n)) best = Math.max(best, Math.max(0, Math.trunc(n)));
       }
-      return 0;
+      return best;
     };
     return !!(
       obj.rows_available === true ||
@@ -94262,7 +96206,16 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
       progressObj.has_materialised_preview_rows === true ||
       countValue(obj.preview_row_count, progressObj.preview_row_count) > 0 ||
       countValue(obj.selected_row_count, progressObj.selected_row_count) > 0 ||
-      countValue(sectionCounts.canonical_preview_lines) > 0
+      countValue(sectionCounts.canonical_preview_lines) > 0 ||
+      countValue(sectionCounts.ready_to_pay) > 0 ||
+      countValue(sectionCounts.ready_preview_lines) > 0 ||
+      countValue(sectionCounts.preview_rows) > 0 ||
+      countValue(sectionCounts.blocked_for_pay) > 0 ||
+      countValue(sectionCounts.blocked_items) > 0 ||
+      countValue(sectionCounts.blocked_preview_lines) > 0 ||
+      countValue(sectionCounts.cases_resolutions) > 0 ||
+      countValue(sectionCounts.case_resolution_states) > 0 ||
+      countValue(sectionCounts.case_resolutions) > 0
     );
   };
   const progressLooksReady = (progressLike) => {
@@ -94282,60 +96235,258 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') return null;
     if (!progressHasRowsAvailable(progressLike) && !progressLooksReady(progressLike)) return null;
     const progressObj = isPlainObject(progressLike?.progress) ? progressLike.progress : (isPlainObject(progressLike) ? progressLike : {});
-    const section = trimStr(progressObj.primary_preview_section || progressObj.ready_to_pay_section || progressObj.preview_rows_section || 'canonical_preview_lines').toLowerCase() || 'canonical_preview_lines';
-    const page = await bankingPayWorkbenchSessionGetPreviewPage(sessionIdText, section, {
-      limit: Number.isFinite(Number(options.limit || options.pageSize || options.page_size)) ? Math.max(1, Math.min(100, Math.trunc(Number(options.limit || options.pageSize || options.page_size)))) : 100,
-      expected_session_id: expectedSessionIdText,
-      current_session_id: expectedSessionIdText,
-      source: 'pollPayWorkbenchCandidateUntilSettled.sessionLevel'
-    });
-    if (updateState && page && page.ok !== false && typeof applyPayWorkbenchPreviewToState === 'function') {
-      const rows = Array.isArray(page.rows) ? page.rows : (Array.isArray(page.items) ? page.items : []);
-      if (rows.length > 0) {
-        applyPayWorkbenchPreviewToState({
-          ok: true,
-          session_id: sessionIdText,
-          session_version: page.session_version ?? page.sessionVersion ?? null,
-          session_signature: page.session_signature ?? page.sessionSignature ?? null,
-          requested_section: page.requested_section || page.requestedSection || section,
-          resolved_section: page.resolved_section || page.resolvedSection || page.section || section,
-          section: page.section || page.resolved_section || section,
-          canonical_preview_lines: rows,
-          preview_rows: rows,
-          ready_preview_lines: rows,
-          rows,
-          preview: {
-            canonical_preview_lines: rows,
-            preview_rows: rows,
-            ready_preview_lines: rows,
-            rows,
-            componentStateCache: {
-              draftable_now: rows,
-              ready_to_pay_now: rows,
-              ready_preview_lines: rows,
-              blocked_now: [],
-              blocked_for_pay_now: [],
-              hidden_preview_lines: [],
-              blocked_preview_lines: [],
-              hidden_indefinite_snoozes: [],
-              case_resolution_states: [],
-              blocked_case_states: [],
-              safe_case_states: [],
-              reusable_component_resolutions: {},
-              stale_component_resolutions: {}
-            }
-          },
-          preview_pages: { [page.section || page.resolved_section || section]: page }
+    const normalisePreviewPageSectionName = (section) => {
+      const raw = trimStr(section || 'canonical_preview_lines').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+      if (!raw) return 'canonical_preview_lines';
+      if (raw === 'preview_rows' || raw === 'ready_to_pay' || raw === 'ready_preview_lines') return 'canonical_preview_lines';
+      if (raw === 'blocked_items' || raw === 'blocked_preview_lines' || raw === 'blocked_now') return 'blocked_for_pay';
+      if (raw === 'case_resolution_states' || raw === 'case_resolutions') return 'cases_resolutions';
+      return raw;
+    };
+    const requiredSections = ['canonical_preview_lines', 'blocked_for_pay', 'cases_resolutions'];
+    const pageRows = (pageLike) => {
+      const pageObj = isPlainObject(pageLike) ? pageLike : {};
+      return Array.isArray(pageObj.rows) ? pageObj.rows : (Array.isArray(pageObj.items) ? pageObj.items : []);
+    };
+    const normalisePage = (pageLike, fallbackSection) => {
+      const pageObj = isPlainObject(pageLike) ? pageLike : {};
+      const requestedSection = normalisePreviewPageSectionName(pageObj.requested_section || pageObj.requestedSection || pageObj.request_section || pageObj.section || fallbackSection || 'canonical_preview_lines');
+      const resolvedSection = normalisePreviewPageSectionName(pageObj.resolved_section || pageObj.resolvedSection || pageObj.section || requestedSection);
+      const rows = pageRows(pageObj);
+      const returnedRaw = Number(pageObj.returned_count ?? pageObj.returnedCount ?? rows.length);
+      const rowsCountRaw = Number(pageObj.rows_count ?? pageObj.rowsCount ?? pageObj.row_count ?? pageObj.rowCount ?? pageObj.total_count ?? pageObj.totalCount ?? returnedRaw);
+      return {
+        ...(cloneJson(pageObj) || {}),
+        ok: pageObj.ok !== false,
+        requested_section: requestedSection,
+        resolved_section: resolvedSection,
+        section: resolvedSection,
+        section_alias_applied: pageObj.section_alias_applied === true || requestedSection !== resolvedSection,
+        rows: cloneJson(rows) || [],
+        items: cloneJson(rows) || [],
+        next_cursor: pageObj.next_cursor ?? pageObj.nextCursor ?? null,
+        returned_count: Number.isFinite(returnedRaw) ? Math.max(0, Math.trunc(returnedRaw)) : rows.length,
+        rows_count: Number.isFinite(rowsCountRaw) ? Math.max(0, Math.trunc(rowsCountRaw)) : rows.length,
+        session_id: sessionIdText,
+        session_version: pageObj.session_version ?? pageObj.sessionVersion ?? null,
+        session_signature: pageObj.session_signature ?? pageObj.sessionSignature ?? null
+      };
+    };
+    const ensureSectionState = () => {
+      if (!updateState) return null;
+      const st = getWorkbenchState();
+      if (!st || typeof st !== 'object') return null;
+      st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+      st.pay.draftWizard = (st.pay.draftWizard && typeof st.pay.draftWizard === 'object') ? st.pay.draftWizard : {};
+      const wiz = st.pay.draftWizard;
+      wiz.workbench = (wiz.workbench && typeof wiz.workbench === 'object') ? wiz.workbench : {};
+      wiz.decisions = (wiz.decisions && typeof wiz.decisions === 'object') ? wiz.decisions : {};
+      wiz.preview = (wiz.preview && typeof wiz.preview === 'object') ? wiz.preview : {};
+      wiz.preview.componentStateCache = (wiz.preview.componentStateCache && typeof wiz.preview.componentStateCache === 'object') ? wiz.preview.componentStateCache : {};
+      for (const target of [wiz.workbench, wiz.preview]) {
+        target.preview_pages = (target.preview_pages && typeof target.preview_pages === 'object') ? target.preview_pages : {};
+        target.previewPages = (target.previewPages && typeof target.previewPages === 'object') ? target.previewPages : {};
+        target.preview_page_cache = (target.preview_page_cache && typeof target.preview_page_cache === 'object') ? target.preview_page_cache : {};
+        target.previewPageCache = (target.previewPageCache && typeof target.previewPageCache === 'object') ? target.previewPageCache : {};
+        target.page_cache = (target.page_cache && typeof target.page_cache === 'object') ? target.page_cache : {};
+        target.pageCache = (target.pageCache && typeof target.pageCache === 'object') ? target.pageCache : {};
+      }
+      if (wiz.preview.data && typeof wiz.preview.data === 'object') {
+        wiz.preview.data.preview_pages = (wiz.preview.data.preview_pages && typeof wiz.preview.data.preview_pages === 'object') ? wiz.preview.data.preview_pages : {};
+        wiz.preview.data.previewPageCache = (wiz.preview.data.previewPageCache && typeof wiz.preview.data.previewPageCache === 'object') ? wiz.preview.data.previewPageCache : {};
+        wiz.preview.data.preview_page_cache = (wiz.preview.data.preview_page_cache && typeof wiz.preview.data.preview_page_cache === 'object') ? wiz.preview.data.preview_page_cache : {};
+        if (wiz.preview.data.preview && typeof wiz.preview.data.preview === 'object') {
+          wiz.preview.data.preview.componentStateCache = (wiz.preview.data.preview.componentStateCache && typeof wiz.preview.data.preview.componentStateCache === 'object') ? wiz.preview.data.preview.componentStateCache : {};
+          wiz.preview.data.preview.preview_pages = (wiz.preview.data.preview.preview_pages && typeof wiz.preview.data.preview.preview_pages === 'object') ? wiz.preview.data.preview.preview_pages : {};
+          wiz.preview.data.preview.previewPageCache = (wiz.preview.data.preview.previewPageCache && typeof wiz.preview.data.preview.previewPageCache === 'object') ? wiz.preview.data.preview.previewPageCache : {};
+          wiz.preview.data.preview.preview_page_cache = (wiz.preview.data.preview.preview_page_cache && typeof wiz.preview.data.preview.preview_page_cache === 'object') ? wiz.preview.data.preview.preview_page_cache : {};
+        }
+      }
+      return { st, wiz };
+    };
+    const writeSectionPageToState = (pagePayload) => {
+      const state = ensureSectionState();
+      if (!state) return;
+      const { wiz } = state;
+      const page = normalisePage(pagePayload, pagePayload?.section || 'canonical_preview_lines');
+      const section = normalisePreviewPageSectionName(page.resolved_section || page.section || page.requested_section);
+      const sections = Array.from(new Set([section, normalisePreviewPageSectionName(page.requested_section)].filter(Boolean)));
+      const rows = pageRows(page);
+      for (const cacheSection of sections) {
+        wiz.workbench.preview_pages[cacheSection] = page;
+        wiz.workbench.previewPages[cacheSection] = page;
+        wiz.workbench.preview_page_cache[cacheSection] = page;
+        wiz.workbench.previewPageCache[cacheSection] = page;
+        wiz.workbench.page_cache[cacheSection] = page;
+        wiz.workbench.pageCache[cacheSection] = page;
+        wiz.preview.preview_pages[cacheSection] = page;
+        wiz.preview.previewPages[cacheSection] = page;
+        wiz.preview.preview_page_cache[cacheSection] = page;
+        wiz.preview.previewPageCache[cacheSection] = page;
+        wiz.preview.page_cache[cacheSection] = page;
+        wiz.preview.pageCache[cacheSection] = page;
+        if (wiz.preview.data && typeof wiz.preview.data === 'object') {
+          wiz.preview.data.preview_pages[cacheSection] = page;
+          wiz.preview.data.previewPageCache[cacheSection] = page;
+          wiz.preview.data.preview_page_cache[cacheSection] = page;
+          if (wiz.preview.data.preview && typeof wiz.preview.data.preview === 'object') {
+            wiz.preview.data.preview.preview_pages[cacheSection] = page;
+            wiz.preview.data.preview.previewPageCache[cacheSection] = page;
+            wiz.preview.data.preview.preview_page_cache[cacheSection] = page;
+          }
+        }
+      }
+      if (section === 'canonical_preview_lines') {
+        wiz.workbench.canonical_preview_lines = cloneJson(rows) || [];
+        wiz.workbench.preview_rows = cloneJson(rows) || [];
+        wiz.workbench.ready_preview_lines = cloneJson(rows) || [];
+        wiz.preview.componentStateCache.draftable_now = cloneJson(rows) || [];
+        wiz.preview.componentStateCache.ready_to_pay_now = cloneJson(rows) || [];
+        wiz.preview.componentStateCache.ready_preview_lines = cloneJson(rows) || [];
+        wiz.preview.componentStateCache.canonical_preview_lines = cloneJson(rows) || [];
+        wiz.decisions.draftable_now = cloneJson(rows) || [];
+        wiz.decisions.ready_to_pay_now = cloneJson(rows) || [];
+        wiz.decisions.ready_preview_lines = cloneJson(rows) || [];
+        wiz.decisions.canonical_preview_lines = cloneJson(rows) || [];
+      } else if (section === 'blocked_for_pay') {
+        wiz.workbench.blocked_for_pay_now = cloneJson(rows) || [];
+        wiz.workbench.blocked_now = cloneJson(rows) || [];
+        wiz.workbench.blocked_preview_lines = cloneJson(rows) || [];
+        wiz.preview.componentStateCache.blocked_for_pay_now = cloneJson(rows) || [];
+        wiz.preview.componentStateCache.blocked_now = cloneJson(rows) || [];
+        wiz.preview.componentStateCache.blocked_preview_lines = cloneJson(rows) || [];
+        wiz.decisions.blocked_for_pay_now = cloneJson(rows) || [];
+        wiz.decisions.blocked_now = cloneJson(rows) || [];
+        wiz.decisions.blocked_preview_lines = cloneJson(rows) || [];
+      } else if (section === 'cases_resolutions') {
+        wiz.workbench.case_resolution_states = cloneJson(rows) || [];
+        wiz.workbench.cases_resolutions = cloneJson(rows) || [];
+        wiz.preview.componentStateCache.case_resolution_states = cloneJson(rows) || [];
+        wiz.preview.componentStateCache.cases_resolutions = cloneJson(rows) || [];
+        wiz.decisions.case_resolution_states = cloneJson(rows) || [];
+        wiz.decisions.cases_resolutions = cloneJson(rows) || [];
+      }
+      const loadedSections = wiz.workbench.required_preview_sections_loaded && typeof wiz.workbench.required_preview_sections_loaded === 'object' ? wiz.workbench.required_preview_sections_loaded : {};
+      loadedSections[section] = true;
+      wiz.workbench.required_preview_sections_loaded = loadedSections;
+      wiz.workbench.requiredPreviewSectionsLoaded = { ...loadedSections };
+    };
+    const buildSyntheticSectionPayload = (pagePayload) => {
+      const page = normalisePage(pagePayload, pagePayload?.section || 'canonical_preview_lines');
+      const section = normalisePreviewPageSectionName(page.resolved_section || page.section || page.requested_section);
+      const rows = pageRows(page);
+      const componentStateCache = {};
+      const preview = { ok: true, componentStateCache };
+      const payload = {
+        ok: true,
+        session_id: sessionIdText,
+        session_version: page.session_version ?? page.sessionVersion ?? null,
+        session_signature: page.session_signature ?? page.sessionSignature ?? null,
+        requested_section: page.requested_section,
+        resolved_section: section,
+        section,
+        preview,
+        preview_pages: { [section]: page, ...(page.requested_section !== section ? { [page.requested_section]: page } : {}) }
+      };
+      if (section === 'canonical_preview_lines') {
+        payload.canonical_preview_lines = rows;
+        payload.preview_rows = rows;
+        payload.ready_preview_lines = rows;
+        payload.rows = rows;
+        preview.canonical_preview_lines = rows;
+        preview.preview_rows = rows;
+        preview.ready_preview_lines = rows;
+        preview.rows = rows;
+        componentStateCache.draftable_now = rows;
+        componentStateCache.ready_to_pay_now = rows;
+        componentStateCache.ready_preview_lines = rows;
+        componentStateCache.canonical_preview_lines = rows;
+      } else if (section === 'blocked_for_pay') {
+        payload.blocked_for_pay_now = rows;
+        payload.blocked_now = rows;
+        payload.blocked_preview_lines = rows;
+        preview.blocked_for_pay_now = rows;
+        preview.blocked_now = rows;
+        preview.blocked_preview_lines = rows;
+        componentStateCache.blocked_for_pay_now = rows;
+        componentStateCache.blocked_now = rows;
+        componentStateCache.blocked_preview_lines = rows;
+      } else if (section === 'cases_resolutions') {
+        payload.case_resolution_states = rows;
+        payload.cases_resolutions = rows;
+        preview.case_resolution_states = rows;
+        preview.cases_resolutions = rows;
+        componentStateCache.case_resolution_states = rows;
+        componentStateCache.cases_resolutions = rows;
+      }
+      return payload;
+    };
+
+    const limit = Number.isFinite(Number(options.limit || options.pageSize || options.page_size)) ? Math.max(1, Math.min(100, Math.trunc(Number(options.limit || options.pageSize || options.page_size)))) : 100;
+    const sectionPages = {};
+    const loadedSections = {};
+    const emptySections = {};
+    const errors = [];
+    const combinedRows = [];
+
+    for (const section of requiredSections) {
+      const beforeSectionFetchGuard = evaluateStalenessGuard('before_session_preview_section_fetch', { section });
+      if (beforeSectionFetchGuard.aborted) return buildAbortResult(beforeSectionFetchGuard);
+      let page = null;
+      try {
+        page = await bankingPayWorkbenchSessionGetPreviewPage(sessionIdText, section, {
+          limit,
+          expected_session_id: expectedSessionIdText,
+          current_session_id: expectedSessionIdText,
+          source: 'pollPayWorkbenchCandidateUntilSettled.sessionLevel.requiredSections'
         });
-        try {
-          if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth();
-        } catch {}
-        try {
-          if (typeof bankingRerender === 'function') await bankingRerender(null);
-        } catch {}
+      } catch (pageError) {
+        errors.push({ section, message: trimStr(pageError?.message || pageError || '') || 'Preview section could not be loaded.' });
+        continue;
+      }
+      const afterSectionFetchGuard = evaluateStalenessGuard('after_session_preview_section_fetch', { section, page: cloneJson(page) });
+      if (afterSectionFetchGuard.aborted) return buildAbortResult(afterSectionFetchGuard);
+      const normalisedPage = normalisePage(page, section);
+      const resolvedSection = normalisePreviewPageSectionName(normalisedPage.resolved_section || normalisedPage.section || section);
+      const rows = pageRows(normalisedPage);
+      sectionPages[resolvedSection] = normalisedPage;
+      loadedSections[resolvedSection] = true;
+      emptySections[resolvedSection] = rows.length === 0;
+      combinedRows.push(...rows);
+      if (updateState && normalisedPage.ok !== false) {
+        writeSectionPageToState(normalisedPage);
+        if (typeof applyPayWorkbenchPreviewToState === 'function') {
+          try { applyPayWorkbenchPreviewToState(buildSyntheticSectionPayload(normalisedPage)); } catch {}
+        }
       }
     }
-    return page;
+
+    const summary = {
+      ok: errors.length === 0,
+      multi_section_preview_loaded: true,
+      requested_sections: requiredSections.slice(),
+      loaded_sections: Object.keys(loadedSections),
+      empty_sections: Object.keys(emptySections).filter((section) => emptySections[section]),
+      section_pages: sectionPages,
+      pages_by_section: sectionPages,
+      errors,
+      rows: combinedRows,
+      items: combinedRows,
+      returned_count: combinedRows.length,
+      session_id: sessionIdText,
+      session_version: progressLike?.session_version ?? progressLike?.progress?.session_version ?? null,
+      section_row_counts: Object.fromEntries(requiredSections.map((section) => [section, pageRows(sectionPages[section]).length]))
+    };
+
+    if (updateState && (Object.keys(loadedSections).length > 0 || combinedRows.length > 0)) {
+      try {
+        if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth();
+      } catch {}
+      try {
+        if (typeof bankingRerender === 'function') await bankingRerender(null);
+      } catch {}
+    }
+    return summary;
   };
 
   if (!candidateScopedPoll) {
@@ -94903,6 +97054,7 @@ async function pollPayWorkbenchCandidateUntilSettled(sessionId, candidateId, opt
     message: 'Candidate refresh is still running in the background.'
   };
 }
+
 
 
 
@@ -135870,7 +138022,6 @@ function bulkAuthoriseHasProcessedExpensesValue(ctxInput) {
   return !!(hasTimesheetAnchor && (numericDetected || descriptionDetected || stagedDetected));
 }
 
-
 function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOptions = {}) {
   const inputIsOptions = operationOrOptions && typeof operationOrOptions === 'object' && !Array.isArray(operationOrOptions) && (
     Object.prototype.hasOwnProperty.call(operationOrOptions, 'operation') ||
@@ -135938,11 +138089,20 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     return 'Operation complete.';
   };
   const operationStatus = (operationState) => upperTrim(operationState?.status || operationState?.operation_status || operationState?.operationStatus || operationState?.state || '');
+  const operationTypeOf = (operationState) => upperTrim(operationState?.operation_type || operationState?.operationType || operationState?.type || '');
+  const isBackendOwnedDraftCreateOperation = (operationState) => {
+    if (!operationState || typeof operationState !== 'object') return false;
+    if (operationTypeOf(operationState) !== 'DRAFT_CREATE') return false;
+    const backendOwned = readBool(operationState.backend_runner_owned) || readBool(operationState.backendRunnerOwned);
+    const frontendRequired = readBool(operationState.frontend_completion_required) || readBool(operationState.frontendCompletionRequired);
+    return backendOwned === true && frontendRequired !== true;
+  };
   const isTerminal = (operationState) => operationState?.terminal === true || ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED'].includes(operationStatus(operationState));
   const isWaitingAuthorisation = (operationState) => operationState?.waiting_for_authorisation === true || operationState?.waitingForAuthorisation === true || ['WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'AUTHORISATION_REQUIRED', 'AUTHORIZATION_REQUIRED'].includes(operationStatus(operationState));
   const isReviewRequired = (operationState) => operationState?.review_required === true || operationState?.reviewRequired === true || ['REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW'].includes(operationStatus(operationState));
   const isWaitingProvider = (operationState) => operationState?.waiting_for_provider === true || operationState?.waitingForProvider === true || ['WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'PROVIDER_WAIT', 'PROVIDER_WAITING', 'WAITING_PROVIDER_CONFIRMATION'].includes(operationStatus(operationState));
   const operationCanSafelyNudge = (operationState) => {
+    if (isBackendOwnedDraftCreateOperation(operationState)) return false;
     try {
       if (typeof operationCanAdvance === 'function') return operationCanAdvance(operationState) === true;
     } catch {}
@@ -135959,6 +138119,17 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     if (readBool(operationState.requires_user_action) || readBool(operationState.requiresUserAction)) return false;
     if (runAfterFuture) return false;
     return runnerState === 'RUNNABLE' || readBool(operationState.can_advance) || readBool(operationState.canAdvance) || readBool(operationState.can_nudge) || readBool(operationState.canNudge);
+  };
+  const buildDraftCreateProgressModalActions = (operationState) => {
+    const backendDraft = isBackendOwnedDraftCreateOperation(operationState);
+    return {
+      show_nudge: backendDraft ? false : operationCanSafelyNudge(operationState),
+      show_refresh: true,
+      close_label: isTerminal(operationState) ? 'Close' : (backendDraft ? 'Close — keep draft running' : 'Close — keep running'),
+      safe_close_text: backendDraft
+        ? 'Safe to close — draft creation continues in the background. Reopen Banking Pay to view status or the created draft.'
+        : 'Safe to close — closing this window does not cancel backend execution.'
+    };
   };
   const formatIso = (value) => {
     const s = trimStr(value);
@@ -136036,7 +138207,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
       <div>
         <div data-role="op-title" style="font-size:18px;font-weight:800;letter-spacing:-0.01em;"></div>
         <div data-role="op-status" style="font-size:13px;color:#475569;margin-top:6px;line-height:1.45;"></div>
-        <div style="font-size:12px;color:#64748b;margin-top:8px;">Safe to close — closing this window does not cancel backend execution.</div>
+        <div data-role="op-safe-close" style="font-size:12px;color:#64748b;margin-top:8px;">Safe to close — closing this window does not cancel backend execution.</div>
       </div>
       <div data-role="op-chip" style="flex:0 0 auto;border-radius:999px;background:#eef2ff;color:#3730a3;padding:6px 10px;font-size:12px;font-weight:800;white-space:nowrap;">0%</div>
     </div>
@@ -136107,8 +138278,10 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
       role('op-final').style.display = isTerminal(op) || op.still_running || op.stillRunning || op.backend_execution_continues || op.backendExecutionContinues ? '' : 'none';
       role('op-final').textContent = displayFinalTextForOperation(op);
     }
+    const draftCreateActions = buildDraftCreateProgressModalActions(op);
+    if (role('op-safe-close')) role('op-safe-close').textContent = draftCreateActions.safe_close_text;
     if (nudgeButton) {
-      const showNudge = operationCanSafelyNudge(op);
+      const showNudge = draftCreateActions.show_nudge === true;
       nudgeButton.style.display = showNudge ? '' : 'none';
       nudgeButton.disabled = modalState.nudgeInFlight || !showNudge;
     }
@@ -136120,7 +138293,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     }
     if (closeButton) {
       closeButton.disabled = false;
-      closeButton.textContent = isTerminal(op) ? 'Close' : 'Close — keep running';
+      closeButton.textContent = buildDraftCreateProgressModalActions(op).close_label;
     }
   };
 
@@ -136275,6 +138448,8 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   render();
   return controller;
 }
+
+
 
 async function bankingPayOperationGet(operationId, options = {}) {
   const id = String(operationId || '').trim();
@@ -166671,6 +168846,7 @@ function looksFatalProgressFailure(value) {
   return false;
 }
 
+
 async function runBankingPayOperationWithProgress(initialOperationPayload, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -166718,7 +168894,19 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
     const status = opStatus(operationState);
     return waitingProviderStatuses.has(status) || readBool(operationState?.waiting_for_provider) || readBool(operationState?.waitingForProvider);
   };
+  const isBackendOwnedDraftCreateOperation = (operationState) => {
+    const opType = upperTrim(operationState?.operation_type || operationState?.operationType || operationState?.type || opts.operationKind || opts.operation_kind || '');
+    if (opType !== 'DRAFT_CREATE') return false;
+    const backendOwned = readBool(operationState?.backend_runner_owned) || readBool(operationState?.backendRunnerOwned) || opts.backendRunnerOwned === true || opts.backend_runner_owned === true || opType === 'DRAFT_CREATE';
+    const frontendRequired = readBool(operationState?.frontend_completion_required) || readBool(operationState?.frontendCompletionRequired) || opts.frontendCompletionRequired === true || opts.frontend_completion_required === true;
+    return backendOwned === true && frontendRequired !== true;
+  };
+  const isBackendOwnedOperation = (operationState) => {
+    if (isBackendOwnedDraftCreateOperation(operationState)) return true;
+    return (readBool(operationState?.backend_runner_owned) || readBool(operationState?.backendRunnerOwned) || opts.backendRunnerOwned === true || opts.backend_runner_owned === true) && !(readBool(operationState?.frontend_completion_required) || readBool(operationState?.frontendCompletionRequired));
+  };
   const operationCanSafelyNudge = (operationState) => {
+    if (isBackendOwnedOperation(operationState) && opts.allowInternalOperationAdvance !== true && opts.allow_internal_operation_advance !== true && opts.debugNudge !== true && opts.debug_nudge !== true) return false;
     try {
       if (typeof operationCanAdvance === 'function') return operationCanAdvance(operationState) === true;
     } catch {}
@@ -166787,21 +168975,133 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
     } catch {}
   };
 
+  const collectCreatedBatchIdsFromOperation = (operationState) => {
+    const out = [];
+    const seen = new Set();
+    const push = (value) => {
+      const text = trimStr(value);
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      out.push(text);
+    };
+    const visit = (node, depth = 0) => {
+      if (node == null || depth > 5) return;
+      if (typeof node === 'string' || typeof node === 'number') return;
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          if (typeof item === 'string' || typeof item === 'number') push(item);
+          else visit(item, depth + 1);
+        }
+        return;
+      }
+      if (!isPlainObject(node)) return;
+      for (const key of ['pay_batch_id', 'payBatchId', 'primary_pay_batch_id', 'primaryPayBatchId']) push(node[key]);
+      for (const key of ['pay_batch_ids', 'payBatchIds', 'created_pay_batch_ids', 'createdPayBatchIds']) {
+        if (Array.isArray(node[key])) {
+          for (const item of node[key]) push(item);
+        }
+      }
+      for (const key of ['result', 'result_json', 'resultJson', 'final_result', 'finalResult', 'result_summary', 'resultSummary', 'post_create_refresh', 'postCreateRefresh']) {
+        if (Object.prototype.hasOwnProperty.call(node, key)) visit(node[key], depth + 1);
+      }
+    };
+    visit(operationState, 0);
+    return out;
+  };
+  const buildNonTerminalBackendOperationResult = (operationState, extra = {}) => {
+    const state = normalise({
+      ...(operationState && typeof operationState === 'object' ? operationState : {}),
+      ...extra
+    });
+    const operationType = upperTrim(state.operation_type || state.operationType || opts.operationKind || opts.operation_kind || '');
+    return {
+      ...state,
+      operation_id: trimStr(state.operation_id || state.operationId || operationId) || operationId,
+      operationId: trimStr(state.operationId || state.operation_id || operationId) || operationId,
+      workbench_session_id: trimStr(state.workbench_session_id || state.workbenchSessionId || opts.workbench_session_id || opts.workbenchSessionId || '') || null,
+      workbenchSessionId: trimStr(state.workbenchSessionId || state.workbench_session_id || opts.workbenchSessionId || opts.workbench_session_id || '') || null,
+      operation_type: operationType || state.operation_type || state.operationType || null,
+      operationType: operationType || state.operationType || state.operation_type || null,
+      phase: trimStr(state.phase || state.operation_phase || extra.phase || 'STILL_RUNNING') || 'STILL_RUNNING',
+      status: trimStr(state.status || state.operation_status || extra.status || 'RUNNING') || 'RUNNING',
+      runner_state: trimStr(state.runner_state || state.runnerState || extra.runner_state || '') || null,
+      terminal: false,
+      backend_execution_continues: true,
+      backendExecutionContinues: true,
+      backend_work_continues: true,
+      backendWorkContinues: true,
+      still_running: true,
+      stillRunning: true,
+      can_reopen: true,
+      canReopen: true,
+      observer_only: true,
+      progress_saved: extra.progress_saved !== false,
+      status_text: trimStr(extra.status_text || state.status_text || state.statusText || 'Still running. Progress saved. Backend execution continues.')
+    };
+  };
   const buildObserverReturn = (operationState, extra = {}) => {
     const state = normalise({
       ...(operationState && typeof operationState === 'object' ? operationState : {}),
       ...extra
     });
-    return {
+    const batchIds = collectCreatedBatchIdsFromOperation(state);
+    const operationIdText = trimStr(state.operation_id || state.operationId || operationId) || operationId;
+    const hasOwn = (obj, key) => isPlainObject(obj) && Object.prototype.hasOwnProperty.call(obj, key);
+    const explicitBackendExecutionContinues = hasOwn(extra, 'backend_execution_continues')
+      ? readBool(extra.backend_execution_continues)
+      : (hasOwn(extra, 'backendExecutionContinues')
+          ? readBool(extra.backendExecutionContinues)
+          : null);
+    const explicitStillRunning = hasOwn(extra, 'still_running')
+      ? readBool(extra.still_running)
+      : (hasOwn(extra, 'stillRunning')
+          ? readBool(extra.stillRunning)
+          : null);
+    const explicitCanReopen = hasOwn(extra, 'can_reopen')
+      ? readBool(extra.can_reopen)
+      : (hasOwn(extra, 'canReopen')
+          ? readBool(extra.canReopen)
+          : null);
+    const terminalOrUserActionState = isTerminal(state) || isFailed(state) || isCancelled(state) || isReview(state) || isWaitingForAuthorisation(state);
+    const backendExecutionContinues = terminalOrUserActionState
+      ? false
+      : (explicitBackendExecutionContinues !== null
+          ? explicitBackendExecutionContinues
+          : (readBool(state.backend_execution_continues) || readBool(state.backendExecutionContinues) || readBool(state.backend_work_continues) || readBool(state.backendWorkContinues) || !isTerminal(state)));
+    const stillRunning = terminalOrUserActionState
+      ? false
+      : (explicitStillRunning !== null
+          ? explicitStillRunning
+          : (readBool(state.still_running) || readBool(state.stillRunning) || !isTerminal(state)));
+    const canReopen = explicitCanReopen !== null
+      ? explicitCanReopen
+      : (readBool(state.can_reopen) || readBool(state.canReopen) || (!isTerminal(state) && (isBackendOwnedOperation(state) || isReview(state) || isWaitingForAuthorisation(state) || isWaitingForProvider(state))));
+    const out = {
       ...state,
-      operation_id: trimStr(state.operation_id || state.operationId || operationId) || operationId,
-      operationId: trimStr(state.operationId || state.operation_id || operationId) || operationId,
+      operation_id: operationIdText,
+      operationId: trimStr(state.operationId || state.operation_id || operationIdText) || operationIdText,
+      workbench_session_id: trimStr(state.workbench_session_id || state.workbenchSessionId || opts.workbench_session_id || opts.workbenchSessionId || '') || null,
+      workbenchSessionId: trimStr(state.workbenchSessionId || state.workbench_session_id || opts.workbenchSessionId || opts.workbench_session_id || '') || null,
       observer_only: true,
       progress_saved: extra.progress_saved !== false,
-      backend_execution_continues: extra.backend_execution_continues === true || state.backend_execution_continues === true || state.backendWorkContinues === true || !isTerminal(state),
-      still_running: extra.still_running === true || state.still_running === true || state.stillRunning === true || (!isTerminal(state) && !isReview(state)),
-      status_text: trimStr(extra.status_text || state.status_text || state.statusText || (isTerminal(state) ? 'Operation finished.' : 'Backend execution continues.'))
+      backend_execution_continues: backendExecutionContinues,
+      backendExecutionContinues: backendExecutionContinues,
+      still_running: stillRunning,
+      stillRunning: stillRunning,
+      can_reopen: canReopen,
+      canReopen: canReopen,
+      status_text: trimStr(extra.status_text || state.status_text || state.statusText || (isTerminal(state) ? 'Operation finished.' : (isReview(state) ? 'Review required.' : (isWaitingForAuthorisation(state) ? 'Waiting for authorisation.' : 'Backend execution continues.'))))
     };
+    if (batchIds.length > 0) {
+      out.pay_batch_ids = batchIds;
+      out.created_pay_batch_ids = batchIds;
+      out.createdPayBatchIds = batchIds;
+      out.primary_pay_batch_id = trimStr(out.primary_pay_batch_id || out.primaryPayBatchId || out.pay_batch_id || out.payBatchId || batchIds[0]) || batchIds[0];
+      out.primaryPayBatchId = out.primary_pay_batch_id;
+      out.pay_batch_id = trimStr(out.pay_batch_id || out.payBatchId || out.primary_pay_batch_id || batchIds[0]) || batchIds[0];
+      out.payBatchId = out.pay_batch_id;
+    }
+    return out;
   };
 
   const fetchProgressLight = async () => {
@@ -166828,7 +169128,8 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
 
   updateModal(current);
 
-  if (opts.explicitNudge === true || opts.explicit_nudge === true || opts.nudge === true || opts.resume === true) {
+  const explicitInternalAdvanceAllowed = opts.allowInternalOperationAdvance === true || opts.allow_internal_operation_advance === true || opts.debugNudge === true || opts.debug_nudge === true;
+  if ((opts.explicitNudge === true || opts.explicit_nudge === true || opts.nudge === true || opts.resume === true) && (!isBackendOwnedOperation(current) || explicitInternalAdvanceAllowed)) {
     if (operationCanSafelyNudge(current) && typeof bankingPayOperationAdvance === 'function') {
       try {
         current = normalise(await bankingPayOperationAdvance(operationId, {
@@ -166854,7 +169155,12 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
     if (isFailed(current) || isCancelled(current)) {
       try { if (modal && typeof modal.markCompleted === 'function') modal.markCompleted(current); } catch {}
     }
-    return buildObserverReturn(current, { progress_saved: true, backend_execution_continues: false, still_running: false });
+    return buildObserverReturn(current, {
+      progress_saved: true,
+      backend_execution_continues: false,
+      still_running: false,
+      can_reopen: isReview(current) || isWaitingForAuthorisation(current) || isBackendOwnedOperation(current)
+    });
   }
 
   const maxPolls = Math.max(1, Math.min(60, Number(opts.maxPolls || opts.max_polls || 10) || 10));
@@ -166869,7 +169175,8 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
         return buildObserverReturn(current, {
           progress_saved: true,
           backend_execution_continues: !(isTerminal(current) || isReview(current)),
-          still_running: !(isTerminal(current) || isReview(current))
+          still_running: !(isTerminal(current) || isReview(current)),
+          can_reopen: isBackendOwnedOperation(current) || isReview(current) || isWaitingForAuthorisation(current) || isWaitingForProvider(current)
         });
       }
       if (i < maxPolls - 1) await delay(pollMs);
@@ -166880,21 +169187,32 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
     }
   }
 
-  const nonTerminal = buildObserverReturn(current, {
-    status: current.status || 'RUNNING',
-    phase: current.phase || 'STILL_RUNNING',
-    phase_label: current.phase_label || 'Still running',
-    status_text: 'Still running. Progress saved. Backend execution continues.',
-    progress_saved: true,
-    backend_execution_continues: true,
-    backend_work_continues: true,
-    backendWorkContinues: true,
-    still_running: true,
-    stillRunning: true,
-    observer_timeout: true,
-    observerTimeout: true,
-    last_observer_error: lastError ? String(lastError.message || lastError) : null
-  });
+  const nonTerminal = isBackendOwnedOperation(current)
+    ? buildNonTerminalBackendOperationResult(current, {
+        status: current.status || 'RUNNING',
+        phase: current.phase || 'STILL_RUNNING',
+        phase_label: current.phase_label || 'Still running',
+        status_text: 'Still running. Progress saved. Backend execution continues.',
+        progress_saved: true,
+        observer_timeout: true,
+        observerTimeout: true,
+        last_observer_error: lastError ? String(lastError.message || lastError) : null
+      })
+    : buildObserverReturn(current, {
+        status: current.status || 'RUNNING',
+        phase: current.phase || 'STILL_RUNNING',
+        phase_label: current.phase_label || 'Still running',
+        status_text: 'Still running. Progress saved. Backend execution continues.',
+        progress_saved: true,
+        backend_execution_continues: true,
+        backend_work_continues: true,
+        backendWorkContinues: true,
+        still_running: true,
+        stillRunning: true,
+        observer_timeout: true,
+        observerTimeout: true,
+        last_observer_error: lastError ? String(lastError.message || lastError) : null
+      });
 
   try {
     if (modal && typeof modal.markStopped === 'function') {
@@ -166906,7 +169224,6 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
 
   return nonTerminal;
 }
-
 
 function renderBankingPayBatchChildModalPaymentIssues(batchPayload, correctionState) {
   const enc = (typeof escapeHtml === 'function')
