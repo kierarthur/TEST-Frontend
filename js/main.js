@@ -30214,6 +30214,7 @@ async function bankingPayPreview(pay_date) {
   }
 }
 
+
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -31367,6 +31368,21 @@ async function bankingPayCreateDraft(input = {}) {
     const operation = isPlainObject(operationLike) ? operationLike : {};
     const status = upperTrim(operation.status || operation.operation_status || operation.operationStatus || operation.state || '');
     return operation.terminal === true || ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW'].includes(status);
+  };
+  const draftCreateOperationFailed = (operationLike) => {
+    const operation = isPlainObject(operationLike) ? operationLike : {};
+    const status = upperTrim(operation.status || operation.operation_status || operation.operationStatus || operation.state || '');
+    return operation.failed === true || operation.is_failed === true || operation.isFailed === true || ['FAILED', 'ERROR'].includes(status);
+  };
+  const draftCreateOperationReviewRequired = (operationLike) => {
+    const operation = isPlainObject(operationLike) ? operationLike : {};
+    const status = upperTrim(operation.status || operation.operation_status || operation.operationStatus || operation.state || '');
+    return operation.review_required === true || operation.reviewRequired === true || ['REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW'].includes(status);
+  };
+  const draftCreateOperationCancelled = (operationLike) => {
+    const operation = isPlainObject(operationLike) ? operationLike : {};
+    const status = upperTrim(operation.status || operation.operation_status || operation.operationStatus || operation.state || '');
+    return operation.cancelled === true || operation.canceled === true || ['CANCELLED', 'CANCELED'].includes(status);
   };
   const clearActiveDraftCreateOperationState = (sessionIdValue, operationIdValue, options = {}) => {
     const sessionKey = trimStr(sessionIdValue || options.workbench_session_id || options.workbenchSessionId || options.session_id || options.sessionId || '');
@@ -32925,8 +32941,16 @@ async function bankingPayCreateDraft(input = {}) {
       operationKind: 'DRAFT_CREATE',
       finalResultExtractor: (operation) => operation?.result || operation?.final_result || operation,
       onTerminalClose: (operation) => clearActiveDraftCreateOperationState(sessionId, trimStr(operation?.operation_id || operation?.operationId || operation?.id || operationPayload.operation_id || operationPayload.id || ''), { terminal_operation: operation }),
-      onTerminalObserved: (operation) => {
-        if (isTerminalDraftCreateOperation(operation)) clearActiveDraftCreateOperationState(sessionId, trimStr(operation?.operation_id || operation?.operationId || operation?.id || operationPayload.operation_id || operationPayload.id || ''), { terminal_operation: operation });
+      onProgressObserved: async (operation) => {
+        const observed = rememberActiveDraftCreateOperation(operation, { session_id: sessionId, workbench_session_id: sessionId });
+        try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+        return observed;
+      },
+      onTerminalObserved: async (operation) => {
+        if (isTerminalDraftCreateOperation(operation) || draftCreateOperationFailed(operation) || draftCreateOperationReviewRequired(operation) || draftCreateOperationCancelled(operation)) {
+          clearActiveDraftCreateOperationState(sessionId, trimStr(operation?.operation_id || operation?.operationId || operation?.id || operationPayload.operation_id || operationPayload.id || ''), { terminal_operation: operation });
+          try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+        }
       }
     });
 
@@ -32938,15 +32962,20 @@ async function bankingPayCreateDraft(input = {}) {
     }
 
     const terminalStatus = upperTrim(terminalOperation?.status || terminalOperation?.operation_status || terminalOperation?.operationStatus || '');
-    const terminalComplete = terminalOperation?.terminal === true && ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE'].includes(terminalStatus);
-    const terminalReviewOrFailure = ['FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW'].includes(terminalStatus) || terminalOperation?.review_required === true || terminalOperation?.reviewRequired === true;
+    const terminalFailedFlag = draftCreateOperationFailed(terminalOperation);
+    const terminalReviewFlag = draftCreateOperationReviewRequired(terminalOperation);
+    const terminalCancelledFlag = draftCreateOperationCancelled(terminalOperation);
+    const terminalSuccessStatus = ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE'].includes(terminalStatus);
+    const terminalComplete = terminalOperation?.terminal === true && terminalSuccessStatus && terminalFailedFlag !== true && terminalReviewFlag !== true && terminalCancelledFlag !== true;
+    const terminalReviewOrFailure = terminalFailedFlag || terminalReviewFlag || terminalCancelledFlag;
     if (terminalReviewOrFailure) {
+      clearActiveDraftCreateOperationState(sessionId, trimStr(terminalOperation?.operation_id || terminalOperation?.operationId || terminalOperation?.id || operationPayload.operation_id || operationPayload.id || ''), { terminal_operation: terminalOperation });
       throwCreateDraftFailureEnvelope({
         ...(isPlainObject(terminalOperation) ? terminalOperation : {}),
         ok: false,
-        error_code: terminalStatus || 'BANKING_PAY_CREATE_DRAFT_OPERATION_REVIEW_REQUIRED',
-        code: terminalStatus || 'BANKING_PAY_CREATE_DRAFT_OPERATION_REVIEW_REQUIRED',
-        message: trimStr(terminalOperation?.status_text || terminalOperation?.message || terminalOperation?.error || 'Draft creation needs review before it can complete.')
+        error_code: trimStr(terminalOperation?.error_code || terminalOperation?.errorCode || terminalOperation?.code || terminalStatus || 'BANKING_PAY_CREATE_DRAFT_OPERATION_REVIEW_REQUIRED') || 'BANKING_PAY_CREATE_DRAFT_OPERATION_REVIEW_REQUIRED',
+        code: trimStr(terminalOperation?.error_code || terminalOperation?.errorCode || terminalOperation?.code || terminalStatus || 'BANKING_PAY_CREATE_DRAFT_OPERATION_REVIEW_REQUIRED') || 'BANKING_PAY_CREATE_DRAFT_OPERATION_REVIEW_REQUIRED',
+        message: trimStr(terminalOperation?.status_text || terminalOperation?.statusText || terminalOperation?.error_message || terminalOperation?.errorMessage || terminalOperation?.message || terminalOperation?.error || (terminalFailedFlag ? 'Draft creation failed.' : 'Draft creation needs review before it can complete.'))
       }, 'BANKING_PAY_CREATE_DRAFT_FAILED');
     }
     if (!terminalComplete) {
@@ -33268,6 +33297,7 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
+
 
 
 
@@ -39538,6 +39568,7 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
   );
 }
 
+
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -39995,7 +40026,7 @@ function renderPayNewBatchWizard() {
     if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
     return fallback;
   };
-  const activeDraftCreateActiveStatuses = new Set(['RUNNING', 'CONTINUING', 'WAITING_RETRY']);
+  const activeDraftCreateActiveStatuses = new Set(['RUNNING', 'CONTINUING', 'WAITING_RETRY', 'RUNNABLE', 'LEASED', 'ADVANCING', 'PENDING', 'QUEUED', 'STARTED', 'INITIALISING', 'INITIALIZING']);
   const activeDraftCreateTerminalStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW']);
   const activeDraftCreateReviewStatuses = new Set(['REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW']);
   const activeDraftCreateWaitingAuthorisationStatuses = new Set(['WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'AUTHORISATION_REQUIRED', 'AUTHORIZATION_REQUIRED']);
@@ -40063,10 +40094,11 @@ function renderPayNewBatchWizard() {
     if (!isPlainObject(operationLike)) return false;
     if (activeDraftCreateOperationType(operationLike) !== 'DRAFT_CREATE') return false;
     if (!activeDraftCreateOperationId(operationLike)) return false;
-    const status = activeDraftCreateStatus(operationLike);
-    if (!activeDraftCreateActiveStatuses.has(status)) return false;
     if (isActiveDraftCreateTerminal(operationLike) || isActiveDraftCreateFailureOrReview(operationLike)) return false;
-    return true;
+    const status = activeDraftCreateStatus(operationLike);
+    if (!status) return true;
+    if (activeDraftCreateActiveStatuses.has(status)) return true;
+    return !activeDraftCreateTerminalStatuses.has(status) && !activeDraftCreateReviewStatuses.has(status);
   };
   const activeDraftCreateStatusMessage = (operationLike) => {
     const resultSummary = isPlainObject(operationLike?.result_summary) ? operationLike.result_summary : (isPlainObject(operationLike?.resultSummary) ? operationLike.resultSummary : {});
@@ -40140,20 +40172,40 @@ function renderPayNewBatchWizard() {
     const operationId = operation ? activeDraftCreateOperationId(operation) : '';
     const sessionId = operation ? activeDraftCreateWorkbenchSessionId(operation) : activeDraftCreateWorkbenchSessionId(null);
     const status = operation ? activeDraftCreateStatus(operation) : '';
-    if (!isRenderableActiveDraftCreate(operation)) {
-      clearActiveDraftCreateOperationForSession(sessionId, operationId, operation && isActiveDraftCreateTerminal(operation) ? operation : null);
+    const storedOperation = operation ? {
+      ...operation,
+      operation_id: operationId || null,
+      operationId: operationId || null,
+      operation_type: 'DRAFT_CREATE',
+      operationType: 'DRAFT_CREATE',
+      workbench_session_id: sessionId || activeDraftCreateWorkbenchSessionId(null) || null,
+      workbenchSessionId: sessionId || activeDraftCreateWorkbenchSessionId(null) || null,
+      status: status || operation.status || 'RUNNING',
+      draft_create_status: status || operation.status || 'RUNNING',
+      backend_runner_owned: true,
+      backendRunnerOwned: true,
+      frontend_completion_required: false,
+      frontendCompletionRequired: false,
+      created_pay_batch_ids: collectActiveDraftCreateBatchIds(operation),
+      createdPayBatchIds: collectActiveDraftCreateBatchIds(operation),
+      last_observed_at_utc: new Date().toISOString()
+    } : null;
+
+    if (!isRenderableActiveDraftCreate(storedOperation)) {
+      clearActiveDraftCreateOperationForSession(sessionId, operationId, storedOperation && isActiveDraftCreateTerminal(storedOperation) ? storedOperation : null);
       return null;
     }
+
     const targets = [wiz, wiz.workbench, wiz.decisions].filter((target) => isPlainObject(target));
     for (const target of targets) {
       target.active_draft_create_operation_id = operationId || null;
       target.activeDraftCreateOperationId = operationId || null;
-      target.active_draft_create_operation = operation;
-      target.activeDraftCreateOperation = operation;
+      target.active_draft_create_operation = storedOperation;
+      target.activeDraftCreateOperation = storedOperation;
       target.draft_create_status = status || null;
       target.draftCreateStatus = status || null;
-      target.last_create_draft_operation_payload = operation;
-      target.lastCreateDraftOperationPayload = operation;
+      target.last_create_draft_operation_payload = storedOperation;
+      target.lastCreateDraftOperationPayload = storedOperation;
     }
     try {
       const root = (typeof window !== 'undefined') ? window : globalThis;
@@ -40161,15 +40213,17 @@ function renderPayNewBatchWizard() {
         root.__bankingPayActiveDraftCreateOperationBySession = root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
           ? root.__bankingPayActiveDraftCreateOperationBySession
           : Object.create(null);
-        if (sessionId && operationId) root.__bankingPayActiveDraftCreateOperationBySession[sessionId] = operation;
+        if (sessionId && operationId) root.__bankingPayActiveDraftCreateOperationBySession[sessionId] = storedOperation;
+        if (operationId) root.__bankingPayActiveDraftCreateOperationBySession[operationId] = storedOperation;
       }
     } catch {}
     try {
-      if (typeof window !== 'undefined' && window.sessionStorage && sessionId && operationId) {
-        window.sessionStorage.setItem(`bankingPay.activeDraftCreateOperation.${sessionId}`, JSON.stringify(operation));
+      if (typeof window !== 'undefined' && window.sessionStorage && operationId) {
+        if (sessionId) window.sessionStorage.setItem(`bankingPay.activeDraftCreateOperation.${sessionId}`, JSON.stringify(storedOperation));
+        window.sessionStorage.setItem(`bankingPay.activeDraftCreateOperation.${operationId}`, JSON.stringify(storedOperation));
       }
     } catch {}
-    return operation;
+    return storedOperation;
   };
   const getActiveDraftCreateOperationFromState = () => {
     const candidates = [
@@ -40188,13 +40242,48 @@ function renderPayNewBatchWizard() {
       const cache = root && root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
         ? root.__bankingPayActiveDraftCreateOperationBySession
         : null;
-      if (sessionId && cache && isPlainObject(cache[sessionId])) candidates.push(cache[sessionId]);
+      if (cache) {
+        if (sessionId && isPlainObject(cache[sessionId])) candidates.push(cache[sessionId]);
+        for (const cachedOperation of Object.values(cache)) {
+          if (isPlainObject(cachedOperation)) candidates.push(cachedOperation);
+        }
+      }
     } catch {}
+    try {
+      const sessionId = activeDraftCreateWorkbenchSessionId(null);
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        const explicitKeys = [
+          sessionId ? `bankingPay.activeDraftCreateOperation.${sessionId}` : ''
+        ].filter(Boolean);
+        for (const key of explicitKeys) {
+          const raw = window.sessionStorage.getItem(key);
+          if (!raw) continue;
+          try {
+            const parsed = JSON.parse(raw);
+            if (isPlainObject(parsed)) candidates.push(parsed);
+          } catch {}
+        }
+        for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
+          const key = window.sessionStorage.key(index);
+          if (!key || !key.startsWith('bankingPay.activeDraftCreateOperation.')) continue;
+          const raw = window.sessionStorage.getItem(key);
+          if (!raw) continue;
+          try {
+            const parsed = JSON.parse(raw);
+            if (isPlainObject(parsed)) candidates.push(parsed);
+          } catch {}
+        }
+      }
+    } catch {}
+    const seenOperationIds = new Set();
     for (const candidate of candidates) {
       if (!isPlainObject(candidate)) continue;
+      const candidateOperationId = activeDraftCreateOperationId(candidate);
+      if (!candidateOperationId || seenOperationIds.has(candidateOperationId)) continue;
+      seenOperationIds.add(candidateOperationId);
       if (!isRenderableActiveDraftCreate(candidate)) {
-        if (activeDraftCreateOperationId(candidate) && (isActiveDraftCreateTerminal(candidate) || isActiveDraftCreateFailureOrReview(candidate))) {
-          clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(candidate), activeDraftCreateOperationId(candidate), isActiveDraftCreateTerminal(candidate) ? candidate : null);
+        if (isActiveDraftCreateTerminal(candidate) || isActiveDraftCreateFailureOrReview(candidate)) {
+          clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(candidate), candidateOperationId, isActiveDraftCreateTerminal(candidate) ? candidate : null);
         }
         continue;
       }
@@ -40202,15 +40291,134 @@ function renderPayNewBatchWizard() {
     }
     return null;
   };
-  const refreshBatchListAfterDraftCreateComplete = (operationLike) => {
-    if (!isActiveDraftCreateComplete(operationLike)) return;
+  const refreshPreviewAfterDraftCreateTerminal = async (operationLike) => {
+    if (!isPlainObject(operationLike)) return null;
+    const operationId = activeDraftCreateOperationId(operationLike);
     const batchIds = collectActiveDraftCreateBatchIds(operationLike);
-    if (!batchIds.length) {
-      clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operationLike), activeDraftCreateOperationId(operationLike), operationLike);
-      return;
+    const resultSummary = isPlainObject(operationLike?.result_summary) ? operationLike.result_summary : (isPlainObject(operationLike?.resultSummary) ? operationLike.resultSummary : {});
+    const resultObject = isPlainObject(operationLike?.result) ? operationLike.result : (isPlainObject(operationLike?.result_json) ? operationLike.result_json : (isPlainObject(operationLike?.resultJson) ? operationLike.resultJson : {}));
+    const postCreateRefresh = isPlainObject(resultObject?.post_create_refresh) ? resultObject.post_create_refresh : (isPlainObject(resultObject?.postCreateRefresh) ? resultObject.postCreateRefresh : {});
+    const sourceSessionId = trimStr(
+      operationLike?.source_workbench_session_id ||
+      operationLike?.sourceWorkbenchSessionId ||
+      operationLike?.workbench_session_id ||
+      operationLike?.workbenchSessionId ||
+      resultSummary.source_workbench_session_id ||
+      resultSummary.sourceWorkbenchSessionId ||
+      resultSummary.workbench_session_id ||
+      resultSummary.workbenchSessionId ||
+      resultObject.source_workbench_session_id ||
+      resultObject.sourceWorkbenchSessionId ||
+      resultObject.workbench_session_id ||
+      resultObject.workbenchSessionId ||
+      postCreateRefresh.source_workbench_session_id ||
+      postCreateRefresh.sourceWorkbenchSessionId ||
+      activeDraftCreateWorkbenchSessionId(operationLike) ||
+      ''
+    );
+    const payDateForRefresh = trimStr(
+      operationLike?.pay_date ||
+      operationLike?.payDate ||
+      resultSummary.pay_date ||
+      resultSummary.payDate ||
+      resultObject.pay_date ||
+      resultObject.payDate ||
+      postCreateRefresh.pay_date ||
+      postCreateRefresh.payDate ||
+      wiz.pay_date ||
+      st.pay?.pay_date ||
+      st.pay?.selectedPayDate ||
+      ''
+    );
+    const terminalComplete = isActiveDraftCreateComplete(operationLike);
+    const previewRefreshPayload = {
+      pay_date: payDateForRefresh || undefined,
+      source_session_id: sourceSessionId || undefined,
+      sourceSessionId: sourceSessionId || undefined,
+      operation_id: operationId || undefined,
+      operationId: operationId || undefined,
+      created_pay_batch_ids: batchIds,
+      createdPayBatchIds: batchIds,
+      hard_session_reload: terminalComplete === true,
+      hardSessionReload: terminalComplete === true,
+      soft_refresh: terminalComplete !== true,
+      softRefresh: terminalComplete !== true,
+      force_new_session: terminalComplete === true,
+      forceNewSession: terminalComplete === true,
+      discard_source_session: terminalComplete === true,
+      discardSourceSession: terminalComplete === true,
+      full_preview: false,
+      fullPreview: false,
+      bootstrap_only: false,
+      bootstrapOnly: false,
+      progress_only: false,
+      progressOnly: false,
+      load_first_page: true,
+      loadFirstPage: true,
+      background: true,
+      silent: true,
+      userInitiated: false,
+      source: 'activeDraftCreateStatus.terminalPreviewRefresh'
+    };
+    try {
+      wiz.workbench.__draft_create_preview_refresh_in_flight = true;
+      wiz.workbench.__draft_create_preview_refresh_started_at_utc = new Date().toISOString();
+      wiz.workbench.__draft_create_preview_refresh_operation_id = operationId || null;
+      wiz.workbench.__draft_create_preview_refresh_batch_ids = batchIds;
+    } catch {}
+    try {
+      if (st.pay && typeof st.pay.refreshWorkbench === 'function') {
+        const result = await st.pay.refreshWorkbench(previewRefreshPayload);
+        try {
+          wiz.workbench.__draft_create_preview_refresh_in_flight = false;
+          wiz.workbench.__draft_create_preview_refreshed_at_utc = new Date().toISOString();
+        } catch {}
+        return result;
+      }
+    } catch (error) {
+      try { wiz.workbench.__draft_create_preview_refresh_last_error = String(error?.message || error || ''); } catch {}
     }
-    const operationId = activeDraftCreateOperationId(operationLike) || batchIds.join(',');
-    const refreshKey = `${operationId}:${batchIds.join(',')}`;
+    try {
+      if (typeof bankingPayPreview === 'function' && payDateForRefresh) {
+        const result = await bankingPayPreview(previewRefreshPayload);
+        try {
+          wiz.workbench.__draft_create_preview_refresh_in_flight = false;
+          wiz.workbench.__draft_create_preview_refreshed_at_utc = new Date().toISOString();
+        } catch {}
+        return result;
+      }
+    } catch (error) {
+      try { wiz.workbench.__draft_create_preview_refresh_last_error = String(error?.message || error || ''); } catch {}
+    }
+    try {
+      if (sourceSessionId && typeof bankingPayWorkbenchSessionGet === 'function' && typeof applyPayWorkbenchPreviewToState === 'function') {
+        const previewPayload = await bankingPayWorkbenchSessionGet(sourceSessionId, {
+          mode: 'SUMMARY',
+          allow_full_preview: false,
+          source: 'activeDraftCreateStatus.terminalPreviewRefresh.summary'
+        });
+        applyPayWorkbenchPreviewToState(previewPayload, st);
+        try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
+        try {
+          wiz.workbench.__draft_create_preview_refresh_in_flight = false;
+          wiz.workbench.__draft_create_preview_refreshed_at_utc = new Date().toISOString();
+        } catch {}
+        return previewPayload;
+      }
+    } catch (error) {
+      try { wiz.workbench.__draft_create_preview_refresh_last_error = String(error?.message || error || ''); } catch {}
+    }
+    try {
+      wiz.workbench.__draft_create_preview_refresh_in_flight = false;
+      wiz.workbench.__draft_create_preview_refresh_unavailable = true;
+    } catch {}
+    return null;
+  };
+  const refreshBatchListAfterDraftCreateTerminal = (operationLike) => {
+    if (!isPlainObject(operationLike)) return;
+    const batchIds = collectActiveDraftCreateBatchIds(operationLike);
+    const operationId = activeDraftCreateOperationId(operationLike) || batchIds.join(',') || 'unknown-operation';
+    const refreshKey = `${operationId}:${batchIds.join(',') || activeDraftCreateStatus(operationLike) || 'terminal'}`;
     wiz.workbench.__draft_create_batch_list_refresh_keys = isPlainObject(wiz.workbench.__draft_create_batch_list_refresh_keys) ? wiz.workbench.__draft_create_batch_list_refresh_keys : {};
     if (wiz.workbench.__draft_create_batch_list_refresh_keys[refreshKey] === true || wiz.workbench.__draft_create_batch_list_refresh_in_flight === true) {
       clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operationLike), activeDraftCreateOperationId(operationLike), operationLike);
@@ -40219,14 +40427,19 @@ function renderPayNewBatchWizard() {
     wiz.workbench.__draft_create_batch_list_refresh_keys[refreshKey] = true;
     wiz.workbench.__draft_create_batch_list_refresh_in_flight = true;
     wiz.workbench.__draft_create_batch_list_refresh_started_at_utc = new Date().toISOString();
-    if (typeof bankingPayBatchesList !== 'function') {
-      wiz.workbench.__draft_create_batch_list_refresh_in_flight = false;
-      wiz.workbench.__draft_create_batch_list_refresh_unavailable = true;
+    const finishRefresh = () => {
+      try {
+        wiz.workbench.__draft_create_batch_list_refresh_in_flight = false;
+        wiz.workbench.__draft_create_batch_list_refreshed_at_utc = new Date().toISOString();
+      } catch {}
       clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operationLike), activeDraftCreateOperationId(operationLike), operationLike);
-      return;
-    }
-    Promise.resolve()
-      .then(() => bankingPayBatchesList({
+      try {
+        if (typeof bankingRerender === 'function') bankingRerender(null);
+      } catch {}
+    };
+    const refreshTasks = [];
+    if (typeof bankingPayBatchesList === 'function') {
+      refreshTasks.push(Promise.resolve().then(() => bankingPayBatchesList({
         status: st.pay?.list?.statusFilter,
         limit: st.pay?.list?.limit || 50,
         offset: 0,
@@ -40238,26 +40451,58 @@ function renderPayNewBatchWizard() {
         includeAlerts: false,
         include_correction_summary: false,
         includeCorrectionSummary: false,
-        source: 'renderPayNewBatchWizard.refreshBatchListAfterDraftCreateComplete'
-      }))
-      .catch((error) => {
+        source: 'activeDraftCreateStatus.terminalRefresh'
+      })).catch((error) => {
         try { wiz.workbench.__draft_create_batch_list_refresh_last_error = String(error?.message || error || ''); } catch {}
-      })
-      .finally(() => {
-        try {
-          wiz.workbench.__draft_create_batch_list_refresh_in_flight = false;
-          wiz.workbench.__draft_create_batch_list_refreshed_at_utc = new Date().toISOString();
-        } catch {}
-        clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operationLike), activeDraftCreateOperationId(operationLike), operationLike);
-      });
+        return null;
+      }));
+    } else {
+      wiz.workbench.__draft_create_batch_list_refresh_unavailable = true;
+    }
+    refreshTasks.push(Promise.resolve().then(() => refreshPreviewAfterDraftCreateTerminal(operationLike)).catch((error) => {
+      try { wiz.workbench.__draft_create_preview_refresh_last_error = String(error?.message || error || ''); } catch {}
+      return null;
+    }));
+    Promise.allSettled(refreshTasks).finally(finishRefresh);
+  };
+  const refreshBatchListAfterDraftCreateComplete = (operationLike) => {
+    if (!isActiveDraftCreateComplete(operationLike)) return;
+    refreshBatchListAfterDraftCreateTerminal(operationLike);
+  };
+  const notifyActiveDraftCreateTerminalOutcome = (operationLike) => {
+    if (!isPlainObject(operationLike)) return;
+    const operationId = activeDraftCreateOperationId(operationLike);
+    const status = activeDraftCreateStatus(operationLike);
+    const notificationKey = `${operationId || activeDraftCreateWorkbenchSessionId(operationLike) || 'unknown'}:${status || 'terminal'}`;
+    wiz.workbench.__draft_create_terminal_notification_keys = isPlainObject(wiz.workbench.__draft_create_terminal_notification_keys) ? wiz.workbench.__draft_create_terminal_notification_keys : {};
+    if (wiz.workbench.__draft_create_terminal_notification_keys[notificationKey] === true) return;
+    let message = '';
+    if (status === 'FAILED' || status === 'ERROR' || status === 'CANCELLED' || status === 'CANCELED') {
+      message = activeDraftCreateStatusMessage(operationLike) || 'Draft creation failed.';
+    } else if (activeDraftCreateReviewStatuses.has(status) || activeDraftCreateWaitingAuthorisationStatuses.has(status) || readActiveDraftCreateBool(operationLike?.review_required, false) || readActiveDraftCreateBool(operationLike?.reviewRequired, false)) {
+      message = activeDraftCreateStatusMessage(operationLike) || 'Draft creation needs review.';
+    } else if (isActiveDraftCreateComplete(operationLike)) {
+      message = activeDraftCreateStatusMessage(operationLike) || 'Draft created. Banking Pay has been refreshed.';
+    }
+    if (!message) return;
+    wiz.workbench.__draft_create_terminal_notification_keys[notificationKey] = true;
+    try {
+      const root = (typeof window !== 'undefined') ? window : globalThis;
+      if (root && typeof root.__toast === 'function') root.__toast(message);
+    } catch {}
   };
   const scheduleActiveDraftCreateOperationLookup = () => {
-    const sessionId = activeDraftCreateWorkbenchSessionId(null);
-    if (!sessionId || typeof bankingPayFindActiveDraftCreateOperation !== 'function') return;
+    const knownOperation = getActiveDraftCreateOperationFromState();
+    const knownOperationId = activeDraftCreateOperationId(knownOperation);
+    const sessionId = activeDraftCreateWorkbenchSessionId(knownOperation || null);
+    if (!sessionId && !knownOperationId) return;
+    if (knownOperationId && typeof bankingPayOperationGet !== 'function') return;
+    if (!knownOperationId && typeof bankingPayFindActiveDraftCreateOperation !== 'function') return;
 
     const root = (() => {
       try { return (typeof window !== 'undefined') ? window : globalThis; } catch { return null; }
     })();
+    const timerKey = knownOperationId || sessionId;
     const timerMap = (() => {
       if (!root) return null;
       root.__bankingPayActiveDraftCreateLookupTimers = root.__bankingPayActiveDraftCreateLookupTimers && typeof root.__bankingPayActiveDraftCreateLookupTimers === 'object'
@@ -40266,46 +40511,68 @@ function renderPayNewBatchWizard() {
       return root.__bankingPayActiveDraftCreateLookupTimers;
     })();
     const clearAutoRefreshTimer = () => {
-      if (!timerMap || !timerMap[sessionId]) return;
-      try { clearTimeout(timerMap[sessionId]); } catch {}
-      try { delete timerMap[sessionId]; } catch { timerMap[sessionId] = null; }
+      if (!timerMap || !timerMap[timerKey]) return;
+      try { clearTimeout(timerMap[timerKey]); } catch {}
+      try { delete timerMap[timerKey]; } catch { timerMap[timerKey] = null; }
     };
-    const scheduleNextAutoRefresh = (delayMs = 7500) => {
+    const scheduleNextAutoRefresh = (delayMs = 2000) => {
       if (!timerMap) return;
       const currentOperation = getActiveDraftCreateOperationFromState();
       if (!currentOperation) {
         clearAutoRefreshTimer();
         return;
       }
-      if (timerMap[sessionId]) return;
-      timerMap[sessionId] = setTimeout(() => {
-        try { delete timerMap[sessionId]; } catch { timerMap[sessionId] = null; }
+      if (timerMap[timerKey]) return;
+      timerMap[timerKey] = setTimeout(() => {
+        try { delete timerMap[timerKey]; } catch { timerMap[timerKey] = null; }
         try { scheduleActiveDraftCreateOperationLookup(); } catch {}
-      }, Math.max(2000, Math.trunc(Number(delayMs) || 7500)));
+      }, Math.max(1500, Math.min(5000, Math.trunc(Number(delayMs) || 2000))));
     };
 
     wiz.workbench.__active_draft_create_lookup_by_session = isPlainObject(wiz.workbench.__active_draft_create_lookup_by_session) ? wiz.workbench.__active_draft_create_lookup_by_session : {};
-    const existing = wiz.workbench.__active_draft_create_lookup_by_session[sessionId];
+    const existing = wiz.workbench.__active_draft_create_lookup_by_session[timerKey];
     const nowMs = Date.now();
     if (existing && existing.in_flight === true) {
-      scheduleNextAutoRefresh(5000);
+      scheduleNextAutoRefresh(2000);
       return;
     }
     if (existing && Number.isFinite(Number(existing.last_checked_ms))) {
       const ageMs = nowMs - Number(existing.last_checked_ms);
-      if (ageMs < 6500) {
-        scheduleNextAutoRefresh(6500 - ageMs + 250);
+      if (ageMs < 1250) {
+        scheduleNextAutoRefresh(1500);
         return;
       }
     }
 
-    wiz.workbench.__active_draft_create_lookup_by_session[sessionId] = {
+    wiz.workbench.__active_draft_create_lookup_by_session[timerKey] = {
       in_flight: true,
       started_at_utc: new Date().toISOString(),
-      last_checked_ms: nowMs
+      last_checked_ms: nowMs,
+      operation_id: knownOperationId || null,
+      workbench_session_id: sessionId || null
     };
-    Promise.resolve()
-      .then(() => bankingPayFindActiveDraftCreateOperation(sessionId, {
+    const fetchByKnownOperationId = async () => {
+      if (!knownOperationId || typeof bankingPayOperationGet !== 'function') return null;
+      const payload = await bankingPayOperationGet(knownOperationId, {
+        mode: 'PROGRESS_LIGHT',
+        progress_mode: 'LIGHT',
+        progressMode: 'LIGHT',
+        observer_only: true,
+        observe_only: true,
+        no_auto_advance: true,
+        noAutoAdvance: true,
+        include_diagnostics: false,
+        includeDiagnostics: false,
+        userInitiated: false,
+        silent: true,
+        background: true,
+        source: 'activeDraftCreateStatus.knownOperationLookup'
+      });
+      return isPlainObject(payload) ? payload : null;
+    };
+    const findActiveBySession = async () => {
+      if (!sessionId || typeof bankingPayFindActiveDraftCreateOperation !== 'function') return null;
+      return bankingPayFindActiveDraftCreateOperation(sessionId, {
         include_recent_terminal: false,
         includeRecentTerminal: false,
         recent_terminal_minutes: 0,
@@ -40318,11 +40585,22 @@ function renderPayNewBatchWizard() {
         silent: true,
         background: true,
         action: 'BANKING_PAY_ACTIVE_DRAFT_CREATE_STATUS_LOOKUP'
-      }))
+      });
+    };
+    Promise.resolve()
+      .then(() => knownOperationId ? fetchByKnownOperationId() : findActiveBySession())
       .then((operation) => {
+        if (isPlainObject(operation) && (isActiveDraftCreateTerminal(operation) || isActiveDraftCreateFailureOrReview(operation))) {
+          clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operation), activeDraftCreateOperationId(operation), operation);
+          refreshBatchListAfterDraftCreateTerminal(operation);
+          try { notifyActiveDraftCreateTerminalOutcome(operation); } catch {}
+          clearAutoRefreshTimer();
+          try { if (typeof bankingRerender === 'function') bankingRerender(null); } catch {}
+          return;
+        }
         const storedOperation = storeActiveDraftCreateOperationForRender(operation || null);
         if (!storedOperation) clearAutoRefreshTimer();
-        else scheduleNextAutoRefresh(7500);
+        else scheduleNextAutoRefresh(2000);
         try {
           if (typeof bankingRerender === 'function') bankingRerender(null);
         } catch {}
@@ -40331,22 +40609,24 @@ function renderPayNewBatchWizard() {
         try {
           wiz.workbench.__active_draft_create_lookup_last_error = String(error?.message || error || '');
         } catch {}
-        scheduleNextAutoRefresh(12000);
+        scheduleNextAutoRefresh(4000);
       })
       .finally(() => {
         try {
-          wiz.workbench.__active_draft_create_lookup_by_session[sessionId] = {
+          wiz.workbench.__active_draft_create_lookup_by_session[timerKey] = {
             in_flight: false,
             last_checked_ms: Date.now(),
-            finished_at_utc: new Date().toISOString()
+            finished_at_utc: new Date().toISOString(),
+            operation_id: knownOperationId || null,
+            workbench_session_id: sessionId || null
           };
         } catch {}
       });
   };
-  const handleViewActiveDraftCreateStatus = (operationLike, label = 'View status') => {
+  const handleViewActiveDraftCreateStatus = (operationLike, label = 'View status', action = 'banking:pay:viewDraftCreateStatus') => {
     const operationId = activeDraftCreateOperationId(operationLike);
     const sessionId = activeDraftCreateWorkbenchSessionId(operationLike);
-    return `data-action="banking:pay:viewDraftCreateStatus" data-operation-id="${enc(operationId)}" data-workbench-session-id="${enc(sessionId)}" data-operation-type="DRAFT_CREATE" data-backend-runner-owned="true" title="${enc(label)}"`;
+    return `data-action="${enc(action)}" data-operation-id="${enc(operationId)}" data-workbench-session-id="${enc(sessionId)}" data-operation-type="DRAFT_CREATE" data-backend-runner-owned="true" title="${enc(label)}"`;
   };
   const activeDraftCreateBatchOpenButtonHtml = (operationLike) => {
     const batchIds = collectActiveDraftCreateBatchIds(operationLike);
@@ -40362,6 +40642,15 @@ function renderPayNewBatchWizard() {
     const phase = activeDraftCreatePhase(operation) || 'INITIALISE';
     const message = activeDraftCreateStatusMessage(operation) || 'Draft creation is running in the background.';
     const title = 'Draft creation in progress';
+    const createdBatchIds = collectActiveDraftCreateBatchIds(operation);
+    const numberValue = (value) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : null;
+    };
+    const completedUnits = numberValue(operation.completed_units ?? operation.completedUnits ?? operation.progress?.completed_units ?? operation.progress?.completedUnits);
+    const totalUnits = numberValue(operation.total_units ?? operation.totalUnits ?? operation.progress?.total_units ?? operation.progress?.totalUnits);
+    const currentChunkIndex = numberValue(operation.current_chunk_index ?? operation.currentChunkIndex ?? operation.progress?.current_chunk_index ?? operation.progress?.currentChunkIndex);
+    const chunkCount = numberValue(operation.chunk_count ?? operation.chunkCount ?? operation.progress?.chunk_count ?? operation.progress?.chunkCount);
 
     const normaliseStageKey = (value) => {
       const raw = upperTrim(value || '').replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -40440,9 +40729,10 @@ function renderPayNewBatchWizard() {
     const stageNumber = Number.isFinite(explicitStageIndex) && explicitStageIndex > 0
       ? Math.max(1, Math.min(stageTotal, Math.trunc(explicitStageIndex)))
       : Math.max(1, Math.min(stageTotal, (rawStageIndex >= 0 ? rawStageIndex : 0) + 1));
-    const explicitPercent = Number(operation.percent ?? operation.percentage ?? operation.progress?.percent ?? operation.progress?.percentage);
+    const explicitPercent = Number(operation.percent ?? operation.percentage ?? operation.percent_complete ?? operation.percentComplete ?? operation.progress?.percent ?? operation.progress?.percentage);
+    const unitPercent = totalUnits && completedUnits !== null ? Math.round((completedUnits / Math.max(1, totalUnits)) * 100) : null;
     const stagePercent = Math.max(4, Math.min(98, Math.round((stageNumber / stageTotal) * 100)));
-    const barPercent = Math.max(stagePercent, Number.isFinite(explicitPercent) ? Math.max(0, Math.min(98, Math.round(explicitPercent))) : 0);
+    const barPercent = Math.max(stagePercent, Number.isFinite(explicitPercent) ? Math.max(0, Math.min(98, Math.round(explicitPercent))) : (unitPercent === null ? 0 : Math.max(0, Math.min(98, unitPercent))));
     const stageLabel = humaniseStage(stageKey);
     const stageText = `Stage: ${stageLabel}`;
     const stageCountText = `Stage ${stageNumber} / ${stageTotal}`;
@@ -40465,12 +40755,16 @@ function renderPayNewBatchWizard() {
       return raw;
     };
     const actionButtons = [
-      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'View status')}>View status</button>`
+      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'View status')}>View status</button>`,
+      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'Refresh status', 'banking:pay:refreshDraftCreateStatus')}>Refresh status</button>`
     ].filter(Boolean).join(' ');
     const barInnerStyle = `width:${Math.max(0, Math.min(100, barPercent))}%;height:100%;background:var(--accent,#3b82f6);transition:width .25s ease;`;
     const statusBits = [
       stageCountText,
-      status ? `Status: ${status.replace(/_/g, ' ').toLowerCase().replace(/\w/g, (m) => m.toUpperCase())}` : '',
+      status ? `Status: ${status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase())}` : '',
+      totalUnits ? `Units: ${completedUnits || 0}/${totalUnits}` : '',
+      chunkCount ? `Chunk: ${currentChunkIndex || 0}/${chunkCount}` : '',
+      createdBatchIds.length ? `Created draft: ${createdBatchIds.join(', ')}` : '',
       refreshedText ? `Updated ${formatDraftCreateTime(refreshedText)}` : ''
     ].filter(Boolean).join(' • ');
     return `
@@ -40480,6 +40774,7 @@ function renderPayNewBatchWizard() {
             <strong>${enc(title)}</strong>
             <div class="mini" style="opacity:.9;">${enc(stageText)}</div>
             ${message ? `<div class="mini" style="opacity:.78;white-space:pre-wrap;">${enc(message)}</div>` : ''}
+            ${createdBatchIds.length ? `<div class="mini" style="opacity:.78;">${enc(`Created draft: ${createdBatchIds.join(', ')}`)}</div>` : ''}
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
             <span class="pill">${enc(stageCountText)}</span>
@@ -40625,33 +40920,14 @@ function renderPayNewBatchWizard() {
         const operationId = trimStr(target.getAttribute('data-operation-id') || target.dataset?.operationId || '');
         const sessionId = trimStr(target.getAttribute('data-workbench-session-id') || target.dataset?.workbenchSessionId || '');
         Promise.resolve().then(async () => {
-          let operation = getOperationFromCurrentState(operationId);
-          if (action === 'banking:pay:refreshDraftCreateStatus') {
-            if (sessionId && typeof bankingPayFindActiveDraftCreateOperation === 'function') {
-              operation = await bankingPayFindActiveDraftCreateOperation(sessionId, {
-                include_recent_terminal: false,
-                includeRecentTerminal: false,
-                recent_terminal_minutes: 0,
-                recentTerminalMinutes: 0,
-                state: getCurrentWizardState().workbench,
-                wizardState: getCurrentWizardState(),
-                wiz: getCurrentWizardState(),
-                targetState: getCurrentWizardState().decisions,
-                userInitiated: true,
-                silent: false,
-                background: false,
-                action: 'BANKING_PAY_REFRESH_DRAFT_CREATE_STATUS'
-              });
-            } else if (operationId) {
-              const fetched = await fetchOperationById(operationId);
-              operation = isRenderableActiveDraftCreate(fetched) ? fetched : null;
-            }
-            const storedOperation = storeOperationInCurrentWizard(operation || null);
-            if (!storedOperation) notify('No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
-            if (typeof bankingRerender === 'function') await bankingRerender(null);
-            return;
+          let operation = null;
+          if (operationId) {
+            operation = await fetchOperationById(operationId);
+            if (!operation) operation = getOperationFromCurrentState(operationId, { allowTerminalOneShot: true });
+          } else {
+            operation = getOperationFromCurrentState('', { allowTerminalOneShot: false });
           }
-          if (!operation && operationId) operation = await fetchOperationById(operationId);
+
           if (!operation && sessionId && typeof bankingPayFindActiveDraftCreateOperation === 'function') {
             operation = await bankingPayFindActiveDraftCreateOperation(sessionId, {
               include_recent_terminal: false,
@@ -40665,15 +40941,33 @@ function renderPayNewBatchWizard() {
               userInitiated: true,
               silent: false,
               background: false,
-              action: 'BANKING_PAY_VIEW_DRAFT_CREATE_STATUS'
+              action: action === 'banking:pay:refreshDraftCreateStatus' ? 'BANKING_PAY_REFRESH_DRAFT_CREATE_STATUS' : 'BANKING_PAY_VIEW_DRAFT_CREATE_STATUS'
             });
           }
+
           if (!operation) {
-            notify('Draft creation status could not be loaded. Refresh Banking Pay and try again.');
+            notify(operationId ? 'Draft creation status could not be loaded. Refresh Banking Pay and try again.' : 'No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
             return;
           }
-          const modal = openDraftCreateStatusModalForOperation(operation, { allowTerminalOneShot: !!operationId });
-          if (!modal && !isRenderableActiveDraftCreate(operation) && !isActiveDraftCreateTerminal(operation)) notify('No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
+
+          const terminal = isActiveDraftCreateTerminal(operation) || isActiveDraftCreateFailureOrReview(operation);
+          if (terminal) {
+            clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operation), activeDraftCreateOperationId(operation), operation);
+            refreshBatchListAfterDraftCreateTerminal(operation);
+          } else {
+            const storedOperation = storeOperationInCurrentWizard(operation);
+            if (!storedOperation) {
+              notify('No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
+              if (typeof bankingRerender === 'function') await bankingRerender(null);
+              return;
+            }
+          }
+
+          if (action === 'banking:pay:viewDraftCreateStatus' || terminal) {
+            const modal = openDraftCreateStatusModalForOperation(operation, { allowTerminalOneShot: !!operationId || terminal });
+            if (!modal && !isRenderableActiveDraftCreate(operation) && !terminal) notify('No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
+          }
+
           if (typeof bankingRerender === 'function') await bankingRerender(null);
         }).catch((error) => {
           notify(String(error?.message || error || 'Draft creation status could not be loaded.'));
@@ -43349,9 +43643,6 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
-
-
-
 
 
 
@@ -46552,7 +46843,7 @@ function renderPayBatchListPanel() {
     if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
     return fallback;
   };
-  const activeDraftCreateActiveStatuses = new Set(['RUNNING', 'CONTINUING', 'WAITING_RETRY']);
+  const activeDraftCreateActiveStatuses = new Set(['RUNNING', 'CONTINUING', 'WAITING_RETRY', 'RUNNABLE', 'LEASED', 'ADVANCING', 'PENDING', 'QUEUED', 'STARTED', 'INITIALISING', 'INITIALIZING']);
   const activeDraftCreateTerminalStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW']);
   const activeDraftCreateReviewStatuses = new Set(['REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW']);
   const activeDraftCreateWaitingAuthorisationStatuses = new Set(['WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'AUTHORISATION_REQUIRED', 'AUTHORIZATION_REQUIRED']);
@@ -46620,10 +46911,11 @@ function renderPayBatchListPanel() {
     if (!isPlainObject(operationLike)) return false;
     if (activeDraftCreateOperationType(operationLike) !== 'DRAFT_CREATE') return false;
     if (!activeDraftCreateOperationId(operationLike)) return false;
-    const status = activeDraftCreateStatus(operationLike);
-    if (!activeDraftCreateActiveStatuses.has(status)) return false;
     if (isActiveDraftCreateTerminal(operationLike) || isActiveDraftCreateFailureOrReview(operationLike)) return false;
-    return true;
+    const status = activeDraftCreateStatus(operationLike);
+    if (!status) return true;
+    if (activeDraftCreateActiveStatuses.has(status)) return true;
+    return !activeDraftCreateTerminalStatuses.has(status) && !activeDraftCreateReviewStatuses.has(status);
   };
   const activeDraftCreateStatusMessage = (operationLike) => {
     const resultSummary = isPlainObject(operationLike?.result_summary) ? operationLike.result_summary : (isPlainObject(operationLike?.resultSummary) ? operationLike.resultSummary : {});
@@ -46697,20 +46989,40 @@ function renderPayBatchListPanel() {
     const operationId = operation ? activeDraftCreateOperationId(operation) : '';
     const sessionId = operation ? activeDraftCreateWorkbenchSessionId(operation) : activeDraftCreateWorkbenchSessionId(null);
     const status = operation ? activeDraftCreateStatus(operation) : '';
-    if (!isRenderableActiveDraftCreate(operation)) {
-      clearActiveDraftCreateOperationForSession(sessionId, operationId, operation && isActiveDraftCreateTerminal(operation) ? operation : null);
+    const storedOperation = operation ? {
+      ...operation,
+      operation_id: operationId || null,
+      operationId: operationId || null,
+      operation_type: 'DRAFT_CREATE',
+      operationType: 'DRAFT_CREATE',
+      workbench_session_id: sessionId || activeDraftCreateWorkbenchSessionId(null) || null,
+      workbenchSessionId: sessionId || activeDraftCreateWorkbenchSessionId(null) || null,
+      status: status || operation.status || 'RUNNING',
+      draft_create_status: status || operation.status || 'RUNNING',
+      backend_runner_owned: true,
+      backendRunnerOwned: true,
+      frontend_completion_required: false,
+      frontendCompletionRequired: false,
+      created_pay_batch_ids: collectActiveDraftCreateBatchIds(operation),
+      createdPayBatchIds: collectActiveDraftCreateBatchIds(operation),
+      last_observed_at_utc: new Date().toISOString()
+    } : null;
+
+    if (!isRenderableActiveDraftCreate(storedOperation)) {
+      clearActiveDraftCreateOperationForSession(sessionId, operationId, storedOperation && isActiveDraftCreateTerminal(storedOperation) ? storedOperation : null);
       return null;
     }
+
     const targets = [wiz, wiz.workbench, wiz.decisions].filter((target) => isPlainObject(target));
     for (const target of targets) {
       target.active_draft_create_operation_id = operationId || null;
       target.activeDraftCreateOperationId = operationId || null;
-      target.active_draft_create_operation = operation;
-      target.activeDraftCreateOperation = operation;
+      target.active_draft_create_operation = storedOperation;
+      target.activeDraftCreateOperation = storedOperation;
       target.draft_create_status = status || null;
       target.draftCreateStatus = status || null;
-      target.last_create_draft_operation_payload = operation;
-      target.lastCreateDraftOperationPayload = operation;
+      target.last_create_draft_operation_payload = storedOperation;
+      target.lastCreateDraftOperationPayload = storedOperation;
     }
     try {
       const root = (typeof window !== 'undefined') ? window : globalThis;
@@ -46718,15 +47030,17 @@ function renderPayBatchListPanel() {
         root.__bankingPayActiveDraftCreateOperationBySession = root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
           ? root.__bankingPayActiveDraftCreateOperationBySession
           : Object.create(null);
-        if (sessionId && operationId) root.__bankingPayActiveDraftCreateOperationBySession[sessionId] = operation;
+        if (sessionId && operationId) root.__bankingPayActiveDraftCreateOperationBySession[sessionId] = storedOperation;
+        if (operationId) root.__bankingPayActiveDraftCreateOperationBySession[operationId] = storedOperation;
       }
     } catch {}
     try {
-      if (typeof window !== 'undefined' && window.sessionStorage && sessionId && operationId) {
-        window.sessionStorage.setItem(`bankingPay.activeDraftCreateOperation.${sessionId}`, JSON.stringify(operation));
+      if (typeof window !== 'undefined' && window.sessionStorage && operationId) {
+        if (sessionId) window.sessionStorage.setItem(`bankingPay.activeDraftCreateOperation.${sessionId}`, JSON.stringify(storedOperation));
+        window.sessionStorage.setItem(`bankingPay.activeDraftCreateOperation.${operationId}`, JSON.stringify(storedOperation));
       }
     } catch {}
-    return operation;
+    return storedOperation;
   };
   const getActiveDraftCreateOperationFromState = () => {
     const candidates = [
@@ -46745,13 +47059,48 @@ function renderPayBatchListPanel() {
       const cache = root && root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
         ? root.__bankingPayActiveDraftCreateOperationBySession
         : null;
-      if (sessionId && cache && isPlainObject(cache[sessionId])) candidates.push(cache[sessionId]);
+      if (cache) {
+        if (sessionId && isPlainObject(cache[sessionId])) candidates.push(cache[sessionId]);
+        for (const cachedOperation of Object.values(cache)) {
+          if (isPlainObject(cachedOperation)) candidates.push(cachedOperation);
+        }
+      }
     } catch {}
+    try {
+      const sessionId = activeDraftCreateWorkbenchSessionId(null);
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        const explicitKeys = [
+          sessionId ? `bankingPay.activeDraftCreateOperation.${sessionId}` : ''
+        ].filter(Boolean);
+        for (const key of explicitKeys) {
+          const raw = window.sessionStorage.getItem(key);
+          if (!raw) continue;
+          try {
+            const parsed = JSON.parse(raw);
+            if (isPlainObject(parsed)) candidates.push(parsed);
+          } catch {}
+        }
+        for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
+          const key = window.sessionStorage.key(index);
+          if (!key || !key.startsWith('bankingPay.activeDraftCreateOperation.')) continue;
+          const raw = window.sessionStorage.getItem(key);
+          if (!raw) continue;
+          try {
+            const parsed = JSON.parse(raw);
+            if (isPlainObject(parsed)) candidates.push(parsed);
+          } catch {}
+        }
+      }
+    } catch {}
+    const seenOperationIds = new Set();
     for (const candidate of candidates) {
       if (!isPlainObject(candidate)) continue;
+      const candidateOperationId = activeDraftCreateOperationId(candidate);
+      if (!candidateOperationId || seenOperationIds.has(candidateOperationId)) continue;
+      seenOperationIds.add(candidateOperationId);
       if (!isRenderableActiveDraftCreate(candidate)) {
-        if (activeDraftCreateOperationId(candidate) && (isActiveDraftCreateTerminal(candidate) || isActiveDraftCreateFailureOrReview(candidate))) {
-          clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(candidate), activeDraftCreateOperationId(candidate), isActiveDraftCreateTerminal(candidate) ? candidate : null);
+        if (isActiveDraftCreateTerminal(candidate) || isActiveDraftCreateFailureOrReview(candidate)) {
+          clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(candidate), candidateOperationId, isActiveDraftCreateTerminal(candidate) ? candidate : null);
         }
         continue;
       }
@@ -46759,15 +47108,134 @@ function renderPayBatchListPanel() {
     }
     return null;
   };
-  const refreshBatchListAfterDraftCreateComplete = (operationLike) => {
-    if (!isActiveDraftCreateComplete(operationLike)) return;
+  const refreshPreviewAfterDraftCreateTerminal = async (operationLike) => {
+    if (!isPlainObject(operationLike)) return null;
+    const operationId = activeDraftCreateOperationId(operationLike);
     const batchIds = collectActiveDraftCreateBatchIds(operationLike);
-    if (!batchIds.length) {
-      clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operationLike), activeDraftCreateOperationId(operationLike), operationLike);
-      return;
+    const resultSummary = isPlainObject(operationLike?.result_summary) ? operationLike.result_summary : (isPlainObject(operationLike?.resultSummary) ? operationLike.resultSummary : {});
+    const resultObject = isPlainObject(operationLike?.result) ? operationLike.result : (isPlainObject(operationLike?.result_json) ? operationLike.result_json : (isPlainObject(operationLike?.resultJson) ? operationLike.resultJson : {}));
+    const postCreateRefresh = isPlainObject(resultObject?.post_create_refresh) ? resultObject.post_create_refresh : (isPlainObject(resultObject?.postCreateRefresh) ? resultObject.postCreateRefresh : {});
+    const sourceSessionId = trimStr(
+      operationLike?.source_workbench_session_id ||
+      operationLike?.sourceWorkbenchSessionId ||
+      operationLike?.workbench_session_id ||
+      operationLike?.workbenchSessionId ||
+      resultSummary.source_workbench_session_id ||
+      resultSummary.sourceWorkbenchSessionId ||
+      resultSummary.workbench_session_id ||
+      resultSummary.workbenchSessionId ||
+      resultObject.source_workbench_session_id ||
+      resultObject.sourceWorkbenchSessionId ||
+      resultObject.workbench_session_id ||
+      resultObject.workbenchSessionId ||
+      postCreateRefresh.source_workbench_session_id ||
+      postCreateRefresh.sourceWorkbenchSessionId ||
+      activeDraftCreateWorkbenchSessionId(operationLike) ||
+      ''
+    );
+    const payDateForRefresh = trimStr(
+      operationLike?.pay_date ||
+      operationLike?.payDate ||
+      resultSummary.pay_date ||
+      resultSummary.payDate ||
+      resultObject.pay_date ||
+      resultObject.payDate ||
+      postCreateRefresh.pay_date ||
+      postCreateRefresh.payDate ||
+      wiz.pay_date ||
+      st.pay?.pay_date ||
+      st.pay?.selectedPayDate ||
+      ''
+    );
+    const terminalComplete = isActiveDraftCreateComplete(operationLike);
+    const previewRefreshPayload = {
+      pay_date: payDateForRefresh || undefined,
+      source_session_id: sourceSessionId || undefined,
+      sourceSessionId: sourceSessionId || undefined,
+      operation_id: operationId || undefined,
+      operationId: operationId || undefined,
+      created_pay_batch_ids: batchIds,
+      createdPayBatchIds: batchIds,
+      hard_session_reload: terminalComplete === true,
+      hardSessionReload: terminalComplete === true,
+      soft_refresh: terminalComplete !== true,
+      softRefresh: terminalComplete !== true,
+      force_new_session: terminalComplete === true,
+      forceNewSession: terminalComplete === true,
+      discard_source_session: terminalComplete === true,
+      discardSourceSession: terminalComplete === true,
+      full_preview: false,
+      fullPreview: false,
+      bootstrap_only: false,
+      bootstrapOnly: false,
+      progress_only: false,
+      progressOnly: false,
+      load_first_page: true,
+      loadFirstPage: true,
+      background: true,
+      silent: true,
+      userInitiated: false,
+      source: 'activeDraftCreateStatus.terminalPreviewRefresh'
+    };
+    try {
+      wiz.workbench.__draft_create_preview_refresh_in_flight = true;
+      wiz.workbench.__draft_create_preview_refresh_started_at_utc = new Date().toISOString();
+      wiz.workbench.__draft_create_preview_refresh_operation_id = operationId || null;
+      wiz.workbench.__draft_create_preview_refresh_batch_ids = batchIds;
+    } catch {}
+    try {
+      if (st.pay && typeof st.pay.refreshWorkbench === 'function') {
+        const result = await st.pay.refreshWorkbench(previewRefreshPayload);
+        try {
+          wiz.workbench.__draft_create_preview_refresh_in_flight = false;
+          wiz.workbench.__draft_create_preview_refreshed_at_utc = new Date().toISOString();
+        } catch {}
+        return result;
+      }
+    } catch (error) {
+      try { wiz.workbench.__draft_create_preview_refresh_last_error = String(error?.message || error || ''); } catch {}
     }
-    const operationId = activeDraftCreateOperationId(operationLike) || batchIds.join(',');
-    const refreshKey = `${operationId}:${batchIds.join(',')}`;
+    try {
+      if (typeof bankingPayPreview === 'function' && payDateForRefresh) {
+        const result = await bankingPayPreview(previewRefreshPayload);
+        try {
+          wiz.workbench.__draft_create_preview_refresh_in_flight = false;
+          wiz.workbench.__draft_create_preview_refreshed_at_utc = new Date().toISOString();
+        } catch {}
+        return result;
+      }
+    } catch (error) {
+      try { wiz.workbench.__draft_create_preview_refresh_last_error = String(error?.message || error || ''); } catch {}
+    }
+    try {
+      if (sourceSessionId && typeof bankingPayWorkbenchSessionGet === 'function' && typeof applyPayWorkbenchPreviewToState === 'function') {
+        const previewPayload = await bankingPayWorkbenchSessionGet(sourceSessionId, {
+          mode: 'SUMMARY',
+          allow_full_preview: false,
+          source: 'activeDraftCreateStatus.terminalPreviewRefresh.summary'
+        });
+        applyPayWorkbenchPreviewToState(previewPayload, st);
+        try { if (typeof recomputePayWizardLiveTruth === 'function') recomputePayWizardLiveTruth(); } catch {}
+        try {
+          wiz.workbench.__draft_create_preview_refresh_in_flight = false;
+          wiz.workbench.__draft_create_preview_refreshed_at_utc = new Date().toISOString();
+        } catch {}
+        return previewPayload;
+      }
+    } catch (error) {
+      try { wiz.workbench.__draft_create_preview_refresh_last_error = String(error?.message || error || ''); } catch {}
+    }
+    try {
+      wiz.workbench.__draft_create_preview_refresh_in_flight = false;
+      wiz.workbench.__draft_create_preview_refresh_unavailable = true;
+    } catch {}
+    return null;
+  };
+  const refreshBatchListAfterDraftCreateTerminal = (operationLike) => {
+    if (!isPlainObject(operationLike)) return;
+    const batchIds = collectActiveDraftCreateBatchIds(operationLike);
+    const operationId = activeDraftCreateOperationId(operationLike) || batchIds.join(',') || 'unknown-operation';
+    const refreshKey = `${operationId}:${batchIds.join(',') || activeDraftCreateStatus(operationLike) || 'terminal'}`;
     wiz.workbench.__draft_create_batch_list_refresh_keys = isPlainObject(wiz.workbench.__draft_create_batch_list_refresh_keys) ? wiz.workbench.__draft_create_batch_list_refresh_keys : {};
     if (wiz.workbench.__draft_create_batch_list_refresh_keys[refreshKey] === true || wiz.workbench.__draft_create_batch_list_refresh_in_flight === true) {
       clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operationLike), activeDraftCreateOperationId(operationLike), operationLike);
@@ -46776,14 +47244,19 @@ function renderPayBatchListPanel() {
     wiz.workbench.__draft_create_batch_list_refresh_keys[refreshKey] = true;
     wiz.workbench.__draft_create_batch_list_refresh_in_flight = true;
     wiz.workbench.__draft_create_batch_list_refresh_started_at_utc = new Date().toISOString();
-    if (typeof bankingPayBatchesList !== 'function') {
-      wiz.workbench.__draft_create_batch_list_refresh_in_flight = false;
-      wiz.workbench.__draft_create_batch_list_refresh_unavailable = true;
+    const finishRefresh = () => {
+      try {
+        wiz.workbench.__draft_create_batch_list_refresh_in_flight = false;
+        wiz.workbench.__draft_create_batch_list_refreshed_at_utc = new Date().toISOString();
+      } catch {}
       clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operationLike), activeDraftCreateOperationId(operationLike), operationLike);
-      return;
-    }
-    Promise.resolve()
-      .then(() => bankingPayBatchesList({
+      try {
+        if (typeof bankingRerender === 'function') bankingRerender(null);
+      } catch {}
+    };
+    const refreshTasks = [];
+    if (typeof bankingPayBatchesList === 'function') {
+      refreshTasks.push(Promise.resolve().then(() => bankingPayBatchesList({
         status: st.pay?.list?.statusFilter,
         limit: st.pay?.list?.limit || 50,
         offset: 0,
@@ -46795,26 +47268,58 @@ function renderPayBatchListPanel() {
         includeAlerts: false,
         include_correction_summary: false,
         includeCorrectionSummary: false,
-        source: 'renderPayBatchListPanel.refreshBatchListAfterDraftCreateComplete'
-      }))
-      .catch((error) => {
+        source: 'activeDraftCreateStatus.terminalRefresh'
+      })).catch((error) => {
         try { wiz.workbench.__draft_create_batch_list_refresh_last_error = String(error?.message || error || ''); } catch {}
-      })
-      .finally(() => {
-        try {
-          wiz.workbench.__draft_create_batch_list_refresh_in_flight = false;
-          wiz.workbench.__draft_create_batch_list_refreshed_at_utc = new Date().toISOString();
-        } catch {}
-        clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operationLike), activeDraftCreateOperationId(operationLike), operationLike);
-      });
+        return null;
+      }));
+    } else {
+      wiz.workbench.__draft_create_batch_list_refresh_unavailable = true;
+    }
+    refreshTasks.push(Promise.resolve().then(() => refreshPreviewAfterDraftCreateTerminal(operationLike)).catch((error) => {
+      try { wiz.workbench.__draft_create_preview_refresh_last_error = String(error?.message || error || ''); } catch {}
+      return null;
+    }));
+    Promise.allSettled(refreshTasks).finally(finishRefresh);
+  };
+  const refreshBatchListAfterDraftCreateComplete = (operationLike) => {
+    if (!isActiveDraftCreateComplete(operationLike)) return;
+    refreshBatchListAfterDraftCreateTerminal(operationLike);
+  };
+  const notifyActiveDraftCreateTerminalOutcome = (operationLike) => {
+    if (!isPlainObject(operationLike)) return;
+    const operationId = activeDraftCreateOperationId(operationLike);
+    const status = activeDraftCreateStatus(operationLike);
+    const notificationKey = `${operationId || activeDraftCreateWorkbenchSessionId(operationLike) || 'unknown'}:${status || 'terminal'}`;
+    wiz.workbench.__draft_create_terminal_notification_keys = isPlainObject(wiz.workbench.__draft_create_terminal_notification_keys) ? wiz.workbench.__draft_create_terminal_notification_keys : {};
+    if (wiz.workbench.__draft_create_terminal_notification_keys[notificationKey] === true) return;
+    let message = '';
+    if (status === 'FAILED' || status === 'ERROR' || status === 'CANCELLED' || status === 'CANCELED') {
+      message = activeDraftCreateStatusMessage(operationLike) || 'Draft creation failed.';
+    } else if (activeDraftCreateReviewStatuses.has(status) || activeDraftCreateWaitingAuthorisationStatuses.has(status) || readActiveDraftCreateBool(operationLike?.review_required, false) || readActiveDraftCreateBool(operationLike?.reviewRequired, false)) {
+      message = activeDraftCreateStatusMessage(operationLike) || 'Draft creation needs review.';
+    } else if (isActiveDraftCreateComplete(operationLike)) {
+      message = activeDraftCreateStatusMessage(operationLike) || 'Draft created. Banking Pay has been refreshed.';
+    }
+    if (!message) return;
+    wiz.workbench.__draft_create_terminal_notification_keys[notificationKey] = true;
+    try {
+      const root = (typeof window !== 'undefined') ? window : globalThis;
+      if (root && typeof root.__toast === 'function') root.__toast(message);
+    } catch {}
   };
   const scheduleActiveDraftCreateOperationLookup = () => {
-    const sessionId = activeDraftCreateWorkbenchSessionId(null);
-    if (!sessionId || typeof bankingPayFindActiveDraftCreateOperation !== 'function') return;
+    const knownOperation = getActiveDraftCreateOperationFromState();
+    const knownOperationId = activeDraftCreateOperationId(knownOperation);
+    const sessionId = activeDraftCreateWorkbenchSessionId(knownOperation || null);
+    if (!sessionId && !knownOperationId) return;
+    if (knownOperationId && typeof bankingPayOperationGet !== 'function') return;
+    if (!knownOperationId && typeof bankingPayFindActiveDraftCreateOperation !== 'function') return;
 
     const root = (() => {
       try { return (typeof window !== 'undefined') ? window : globalThis; } catch { return null; }
     })();
+    const timerKey = knownOperationId || sessionId;
     const timerMap = (() => {
       if (!root) return null;
       root.__bankingPayActiveDraftCreateLookupTimers = root.__bankingPayActiveDraftCreateLookupTimers && typeof root.__bankingPayActiveDraftCreateLookupTimers === 'object'
@@ -46823,46 +47328,68 @@ function renderPayBatchListPanel() {
       return root.__bankingPayActiveDraftCreateLookupTimers;
     })();
     const clearAutoRefreshTimer = () => {
-      if (!timerMap || !timerMap[sessionId]) return;
-      try { clearTimeout(timerMap[sessionId]); } catch {}
-      try { delete timerMap[sessionId]; } catch { timerMap[sessionId] = null; }
+      if (!timerMap || !timerMap[timerKey]) return;
+      try { clearTimeout(timerMap[timerKey]); } catch {}
+      try { delete timerMap[timerKey]; } catch { timerMap[timerKey] = null; }
     };
-    const scheduleNextAutoRefresh = (delayMs = 7500) => {
+    const scheduleNextAutoRefresh = (delayMs = 2000) => {
       if (!timerMap) return;
       const currentOperation = getActiveDraftCreateOperationFromState();
       if (!currentOperation) {
         clearAutoRefreshTimer();
         return;
       }
-      if (timerMap[sessionId]) return;
-      timerMap[sessionId] = setTimeout(() => {
-        try { delete timerMap[sessionId]; } catch { timerMap[sessionId] = null; }
+      if (timerMap[timerKey]) return;
+      timerMap[timerKey] = setTimeout(() => {
+        try { delete timerMap[timerKey]; } catch { timerMap[timerKey] = null; }
         try { scheduleActiveDraftCreateOperationLookup(); } catch {}
-      }, Math.max(2000, Math.trunc(Number(delayMs) || 7500)));
+      }, Math.max(1500, Math.min(5000, Math.trunc(Number(delayMs) || 2000))));
     };
 
     wiz.workbench.__active_draft_create_lookup_by_session = isPlainObject(wiz.workbench.__active_draft_create_lookup_by_session) ? wiz.workbench.__active_draft_create_lookup_by_session : {};
-    const existing = wiz.workbench.__active_draft_create_lookup_by_session[sessionId];
+    const existing = wiz.workbench.__active_draft_create_lookup_by_session[timerKey];
     const nowMs = Date.now();
     if (existing && existing.in_flight === true) {
-      scheduleNextAutoRefresh(5000);
+      scheduleNextAutoRefresh(2000);
       return;
     }
     if (existing && Number.isFinite(Number(existing.last_checked_ms))) {
       const ageMs = nowMs - Number(existing.last_checked_ms);
-      if (ageMs < 6500) {
-        scheduleNextAutoRefresh(6500 - ageMs + 250);
+      if (ageMs < 1250) {
+        scheduleNextAutoRefresh(1500);
         return;
       }
     }
 
-    wiz.workbench.__active_draft_create_lookup_by_session[sessionId] = {
+    wiz.workbench.__active_draft_create_lookup_by_session[timerKey] = {
       in_flight: true,
       started_at_utc: new Date().toISOString(),
-      last_checked_ms: nowMs
+      last_checked_ms: nowMs,
+      operation_id: knownOperationId || null,
+      workbench_session_id: sessionId || null
     };
-    Promise.resolve()
-      .then(() => bankingPayFindActiveDraftCreateOperation(sessionId, {
+    const fetchByKnownOperationId = async () => {
+      if (!knownOperationId || typeof bankingPayOperationGet !== 'function') return null;
+      const payload = await bankingPayOperationGet(knownOperationId, {
+        mode: 'PROGRESS_LIGHT',
+        progress_mode: 'LIGHT',
+        progressMode: 'LIGHT',
+        observer_only: true,
+        observe_only: true,
+        no_auto_advance: true,
+        noAutoAdvance: true,
+        include_diagnostics: false,
+        includeDiagnostics: false,
+        userInitiated: false,
+        silent: true,
+        background: true,
+        source: 'activeDraftCreateStatus.knownOperationLookup'
+      });
+      return isPlainObject(payload) ? payload : null;
+    };
+    const findActiveBySession = async () => {
+      if (!sessionId || typeof bankingPayFindActiveDraftCreateOperation !== 'function') return null;
+      return bankingPayFindActiveDraftCreateOperation(sessionId, {
         include_recent_terminal: false,
         includeRecentTerminal: false,
         recent_terminal_minutes: 0,
@@ -46875,11 +47402,22 @@ function renderPayBatchListPanel() {
         silent: true,
         background: true,
         action: 'BANKING_PAY_ACTIVE_DRAFT_CREATE_STATUS_LOOKUP'
-      }))
+      });
+    };
+    Promise.resolve()
+      .then(() => knownOperationId ? fetchByKnownOperationId() : findActiveBySession())
       .then((operation) => {
+        if (isPlainObject(operation) && (isActiveDraftCreateTerminal(operation) || isActiveDraftCreateFailureOrReview(operation))) {
+          clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operation), activeDraftCreateOperationId(operation), operation);
+          refreshBatchListAfterDraftCreateTerminal(operation);
+          try { notifyActiveDraftCreateTerminalOutcome(operation); } catch {}
+          clearAutoRefreshTimer();
+          try { if (typeof bankingRerender === 'function') bankingRerender(null); } catch {}
+          return;
+        }
         const storedOperation = storeActiveDraftCreateOperationForRender(operation || null);
         if (!storedOperation) clearAutoRefreshTimer();
-        else scheduleNextAutoRefresh(7500);
+        else scheduleNextAutoRefresh(2000);
         try {
           if (typeof bankingRerender === 'function') bankingRerender(null);
         } catch {}
@@ -46888,22 +47426,24 @@ function renderPayBatchListPanel() {
         try {
           wiz.workbench.__active_draft_create_lookup_last_error = String(error?.message || error || '');
         } catch {}
-        scheduleNextAutoRefresh(12000);
+        scheduleNextAutoRefresh(4000);
       })
       .finally(() => {
         try {
-          wiz.workbench.__active_draft_create_lookup_by_session[sessionId] = {
+          wiz.workbench.__active_draft_create_lookup_by_session[timerKey] = {
             in_flight: false,
             last_checked_ms: Date.now(),
-            finished_at_utc: new Date().toISOString()
+            finished_at_utc: new Date().toISOString(),
+            operation_id: knownOperationId || null,
+            workbench_session_id: sessionId || null
           };
         } catch {}
       });
   };
-  const handleViewActiveDraftCreateStatus = (operationLike, label = 'View status') => {
+  const handleViewActiveDraftCreateStatus = (operationLike, label = 'View status', action = 'banking:pay:viewDraftCreateStatus') => {
     const operationId = activeDraftCreateOperationId(operationLike);
     const sessionId = activeDraftCreateWorkbenchSessionId(operationLike);
-    return `data-action="banking:pay:viewDraftCreateStatus" data-operation-id="${enc(operationId)}" data-workbench-session-id="${enc(sessionId)}" data-operation-type="DRAFT_CREATE" data-backend-runner-owned="true" title="${enc(label)}"`;
+    return `data-action="${enc(action)}" data-operation-id="${enc(operationId)}" data-workbench-session-id="${enc(sessionId)}" data-operation-type="DRAFT_CREATE" data-backend-runner-owned="true" title="${enc(label)}"`;
   };
   const activeDraftCreateBatchOpenButtonHtml = (operationLike) => {
     const batchIds = collectActiveDraftCreateBatchIds(operationLike);
@@ -46919,6 +47459,15 @@ function renderPayBatchListPanel() {
     const phase = activeDraftCreatePhase(operation) || 'INITIALISE';
     const message = activeDraftCreateStatusMessage(operation) || 'Draft creation is running in the background.';
     const title = 'Draft creation in progress';
+    const createdBatchIds = collectActiveDraftCreateBatchIds(operation);
+    const numberValue = (value) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : null;
+    };
+    const completedUnits = numberValue(operation.completed_units ?? operation.completedUnits ?? operation.progress?.completed_units ?? operation.progress?.completedUnits);
+    const totalUnits = numberValue(operation.total_units ?? operation.totalUnits ?? operation.progress?.total_units ?? operation.progress?.totalUnits);
+    const currentChunkIndex = numberValue(operation.current_chunk_index ?? operation.currentChunkIndex ?? operation.progress?.current_chunk_index ?? operation.progress?.currentChunkIndex);
+    const chunkCount = numberValue(operation.chunk_count ?? operation.chunkCount ?? operation.progress?.chunk_count ?? operation.progress?.chunkCount);
 
     const normaliseStageKey = (value) => {
       const raw = upperTrim(value || '').replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -46997,9 +47546,10 @@ function renderPayBatchListPanel() {
     const stageNumber = Number.isFinite(explicitStageIndex) && explicitStageIndex > 0
       ? Math.max(1, Math.min(stageTotal, Math.trunc(explicitStageIndex)))
       : Math.max(1, Math.min(stageTotal, (rawStageIndex >= 0 ? rawStageIndex : 0) + 1));
-    const explicitPercent = Number(operation.percent ?? operation.percentage ?? operation.progress?.percent ?? operation.progress?.percentage);
+    const explicitPercent = Number(operation.percent ?? operation.percentage ?? operation.percent_complete ?? operation.percentComplete ?? operation.progress?.percent ?? operation.progress?.percentage);
+    const unitPercent = totalUnits && completedUnits !== null ? Math.round((completedUnits / Math.max(1, totalUnits)) * 100) : null;
     const stagePercent = Math.max(4, Math.min(98, Math.round((stageNumber / stageTotal) * 100)));
-    const barPercent = Math.max(stagePercent, Number.isFinite(explicitPercent) ? Math.max(0, Math.min(98, Math.round(explicitPercent))) : 0);
+    const barPercent = Math.max(stagePercent, Number.isFinite(explicitPercent) ? Math.max(0, Math.min(98, Math.round(explicitPercent))) : (unitPercent === null ? 0 : Math.max(0, Math.min(98, unitPercent))));
     const stageLabel = humaniseStage(stageKey);
     const stageText = `Stage: ${stageLabel}`;
     const stageCountText = `Stage ${stageNumber} / ${stageTotal}`;
@@ -47022,12 +47572,16 @@ function renderPayBatchListPanel() {
       return raw;
     };
     const actionButtons = [
-      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'View status')}>View status</button>`
+      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'View status')}>View status</button>`,
+      `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, 'Refresh status', 'banking:pay:refreshDraftCreateStatus')}>Refresh status</button>`
     ].filter(Boolean).join(' ');
     const barInnerStyle = `width:${Math.max(0, Math.min(100, barPercent))}%;height:100%;background:var(--accent,#3b82f6);transition:width .25s ease;`;
     const statusBits = [
       stageCountText,
-      status ? `Status: ${status.replace(/_/g, ' ').toLowerCase().replace(/\w/g, (m) => m.toUpperCase())}` : '',
+      status ? `Status: ${status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase())}` : '',
+      totalUnits ? `Units: ${completedUnits || 0}/${totalUnits}` : '',
+      chunkCount ? `Chunk: ${currentChunkIndex || 0}/${chunkCount}` : '',
+      createdBatchIds.length ? `Created draft: ${createdBatchIds.join(', ')}` : '',
       refreshedText ? `Updated ${formatDraftCreateTime(refreshedText)}` : ''
     ].filter(Boolean).join(' • ');
     return `
@@ -47037,6 +47591,7 @@ function renderPayBatchListPanel() {
             <strong>${enc(title)}</strong>
             <div class="mini" style="opacity:.9;">${enc(stageText)}</div>
             ${message ? `<div class="mini" style="opacity:.78;white-space:pre-wrap;">${enc(message)}</div>` : ''}
+            ${createdBatchIds.length ? `<div class="mini" style="opacity:.78;">${enc(`Created draft: ${createdBatchIds.join(', ')}`)}</div>` : ''}
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
             <span class="pill">${enc(stageCountText)}</span>
@@ -47182,33 +47737,14 @@ function renderPayBatchListPanel() {
         const operationId = trimStr(target.getAttribute('data-operation-id') || target.dataset?.operationId || '');
         const sessionId = trimStr(target.getAttribute('data-workbench-session-id') || target.dataset?.workbenchSessionId || '');
         Promise.resolve().then(async () => {
-          let operation = getOperationFromCurrentState(operationId);
-          if (action === 'banking:pay:refreshDraftCreateStatus') {
-            if (sessionId && typeof bankingPayFindActiveDraftCreateOperation === 'function') {
-              operation = await bankingPayFindActiveDraftCreateOperation(sessionId, {
-                include_recent_terminal: false,
-                includeRecentTerminal: false,
-                recent_terminal_minutes: 0,
-                recentTerminalMinutes: 0,
-                state: getCurrentWizardState().workbench,
-                wizardState: getCurrentWizardState(),
-                wiz: getCurrentWizardState(),
-                targetState: getCurrentWizardState().decisions,
-                userInitiated: true,
-                silent: false,
-                background: false,
-                action: 'BANKING_PAY_REFRESH_DRAFT_CREATE_STATUS'
-              });
-            } else if (operationId) {
-              const fetched = await fetchOperationById(operationId);
-              operation = isRenderableActiveDraftCreate(fetched) ? fetched : null;
-            }
-            const storedOperation = storeOperationInCurrentWizard(operation || null);
-            if (!storedOperation) notify('No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
-            if (typeof bankingRerender === 'function') await bankingRerender(null);
-            return;
+          let operation = null;
+          if (operationId) {
+            operation = await fetchOperationById(operationId);
+            if (!operation) operation = getOperationFromCurrentState(operationId, { allowTerminalOneShot: true });
+          } else {
+            operation = getOperationFromCurrentState('', { allowTerminalOneShot: false });
           }
-          if (!operation && operationId) operation = await fetchOperationById(operationId);
+
           if (!operation && sessionId && typeof bankingPayFindActiveDraftCreateOperation === 'function') {
             operation = await bankingPayFindActiveDraftCreateOperation(sessionId, {
               include_recent_terminal: false,
@@ -47222,15 +47758,33 @@ function renderPayBatchListPanel() {
               userInitiated: true,
               silent: false,
               background: false,
-              action: 'BANKING_PAY_VIEW_DRAFT_CREATE_STATUS'
+              action: action === 'banking:pay:refreshDraftCreateStatus' ? 'BANKING_PAY_REFRESH_DRAFT_CREATE_STATUS' : 'BANKING_PAY_VIEW_DRAFT_CREATE_STATUS'
             });
           }
+
           if (!operation) {
-            notify('Draft creation status could not be loaded. Refresh Banking Pay and try again.');
+            notify(operationId ? 'Draft creation status could not be loaded. Refresh Banking Pay and try again.' : 'No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
             return;
           }
-          const modal = openDraftCreateStatusModalForOperation(operation, { allowTerminalOneShot: !!operationId });
-          if (!modal && !isRenderableActiveDraftCreate(operation) && !isActiveDraftCreateTerminal(operation)) notify('No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
+
+          const terminal = isActiveDraftCreateTerminal(operation) || isActiveDraftCreateFailureOrReview(operation);
+          if (terminal) {
+            clearActiveDraftCreateOperationForSession(activeDraftCreateWorkbenchSessionId(operation), activeDraftCreateOperationId(operation), operation);
+            refreshBatchListAfterDraftCreateTerminal(operation);
+          } else {
+            const storedOperation = storeOperationInCurrentWizard(operation);
+            if (!storedOperation) {
+              notify('No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
+              if (typeof bankingRerender === 'function') await bankingRerender(null);
+              return;
+            }
+          }
+
+          if (action === 'banking:pay:viewDraftCreateStatus' || terminal) {
+            const modal = openDraftCreateStatusModalForOperation(operation, { allowTerminalOneShot: !!operationId || terminal });
+            if (!modal && !isRenderableActiveDraftCreate(operation) && !terminal) notify('No active draft creation status was found. Refresh Banking Pay to check the latest drafts.');
+          }
+
           if (typeof bankingRerender === 'function') await bankingRerender(null);
         }).catch((error) => {
           notify(String(error?.message || error || 'Draft creation status could not be loaded.'));
@@ -47256,7 +47810,116 @@ function renderPayBatchListPanel() {
     : (Number.isFinite(Number(st.pay.list.total)) ? Math.max(0, Math.trunc(Number(st.pay.list.total))) : null);
   const currentPage = Math.max(1, Math.floor(offsetNow / Math.max(1, limitNow)) + 1);
   const totalPages = (totalCount == null) ? null : Math.max(1, Math.ceil(totalCount / Math.max(1, limitNow)));
+  const parseBatchListJsonObject = (value) => {
+    if (isPlainObject(value)) return value;
+    const text = trimStr(value);
+    if (!text) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return isPlainObject(parsed) ? parsed : {};
+    } catch {}
+    return {};
+  };
+
+  const deriveDraftCreationFailedBatchDisplay = (row) => {
+    const batchRow = isPlainObject(row) ? row : {};
+    const displaySummary = parseBatchListJsonObject(batchRow.display_summary || batchRow.displaySummary || batchRow.display_summary_json || batchRow.displaySummaryJson);
+    const issueSummary = parseBatchListJsonObject(batchRow.issue_summary_counts || batchRow.issueSummaryCounts || batchRow.issue_summary_json || batchRow.issueSummaryJson);
+    const latestOperationType = upperTrim(
+      batchRow.latest_operation_type ||
+      batchRow.latestOperationType ||
+      displaySummary.latest_operation_type ||
+      displaySummary.latestOperationType ||
+      issueSummary.latest_operation_type ||
+      issueSummary.latestOperationType ||
+      displaySummary.draft_creation_failed_operation_type ||
+      issueSummary.draft_creation_failed_operation_type ||
+      ''
+    );
+    const latestOperationStatus = upperTrim(
+      batchRow.latest_operation_status ||
+      batchRow.latestOperationStatus ||
+      displaySummary.latest_operation_status ||
+      displaySummary.latestOperationStatus ||
+      issueSummary.latest_operation_status ||
+      issueSummary.latestOperationStatus ||
+      displaySummary.draft_creation_failed_operation_status ||
+      issueSummary.draft_creation_failed_operation_status ||
+      ''
+    );
+    const failedStatus = ['FAILED', 'ERROR', 'REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW'].includes(latestOperationStatus);
+    const explicitFailure = readActiveDraftCreateBool(displaySummary.draft_creation_failed, false) ||
+      readActiveDraftCreateBool(displaySummary.draftCreationFailed, false) ||
+      readActiveDraftCreateBool(displaySummary.draft_creation_failed_partial, false) ||
+      readActiveDraftCreateBool(displaySummary.draftCreationFailedPartial, false) ||
+      readActiveDraftCreateBool(issueSummary.draft_creation_failed, false) ||
+      readActiveDraftCreateBool(issueSummary.draftCreationFailed, false) ||
+      readActiveDraftCreateBool(issueSummary.draft_creation_failed_partial, false) ||
+      readActiveDraftCreateBool(issueSummary.draftCreationFailedPartial, false);
+    const actionBlocked = readActiveDraftCreateBool(displaySummary.batch_action_blocked, false) ||
+      readActiveDraftCreateBool(displaySummary.batchActionBlocked, false) ||
+      readActiveDraftCreateBool(displaySummary.normal_draft_actions_blocked, false) ||
+      readActiveDraftCreateBool(displaySummary.normalDraftActionsBlocked, false) ||
+      readActiveDraftCreateBool(issueSummary.batch_action_blocked, false) ||
+      readActiveDraftCreateBool(issueSummary.batchActionBlocked, false) ||
+      readActiveDraftCreateBool(issueSummary.normal_draft_actions_blocked, false) ||
+      readActiveDraftCreateBool(issueSummary.normalDraftActionsBlocked, false);
+    const latestOperationPhase = upperTrim(
+      batchRow.latest_operation_phase ||
+      batchRow.latestOperationPhase ||
+      displaySummary.latest_operation_phase ||
+      displaySummary.latestOperationPhase ||
+      issueSummary.latest_operation_phase ||
+      issueSummary.latestOperationPhase ||
+      displaySummary.draft_creation_failed_operation_phase ||
+      issueSummary.draft_creation_failed_operation_phase ||
+      ''
+    );
+    const batchStatus = upperTrim(batchRow.status || batchRow.batch_status || batchRow.batchStatus || displaySummary.batch_status || displaySummary.batchStatus || '');
+    const commitState = upperTrim(batchRow.execution_commit_state || batchRow.executionCommitState || displaySummary.execution_commit_state || displaySummary.executionCommitState || '');
+    const candidateCount = Math.max(0, Math.trunc(Number(batchRow.candidate_count ?? batchRow.candidateCount ?? displaySummary.candidate_count ?? displaySummary.candidateCount ?? issueSummary.candidate_count ?? issueSummary.candidateCount ?? 0) || 0));
+    const itemCount = Math.max(0, Math.trunc(Number(batchRow.item_count ?? batchRow.itemCount ?? displaySummary.item_count ?? displaySummary.itemCount ?? issueSummary.item_count ?? issueSummary.itemCount ?? 0) || 0));
+    const failedByLatestOperation = latestOperationType === 'DRAFT_CREATE' && failedStatus && latestOperationPhase !== 'COMPLETE';
+    const draftPartialStatusMatches = batchStatus === 'DRAFT' || batchStatus === 'CANCELLED' || batchStatus === 'CANCELED' || batchStatus === 'BLOCKED' || batchStatus === 'FAILED';
+    const notSubmitted = !commitState || commitState === 'NOT_SUBMITTED';
+    const failedPartialByLatestOperation = failedByLatestOperation && draftPartialStatusMatches && notSubmitted && (candidateCount > 0 || itemCount > 0);
+    const failed = explicitFailure || actionBlocked || failedPartialByLatestOperation;
+    const displayLabel = trimStr(
+      displaySummary.display_label ||
+      displaySummary.displayLabel ||
+      displaySummary.batch_status_label ||
+      displaySummary.batchStatusLabel ||
+      batchRow.display_label ||
+      batchRow.displayLabel ||
+      batchRow.batch_status_label ||
+      batchRow.batchStatusLabel ||
+      ''
+    );
+    const operationId = trimStr(
+      displaySummary.draft_creation_failed_operation_id ||
+      displaySummary.draftCreationFailedOperationId ||
+      issueSummary.draft_creation_failed_operation_id ||
+      issueSummary.draftCreationFailedOperationId ||
+      batchRow.latest_operation_id ||
+      batchRow.latestOperationId ||
+      ''
+    );
+    return {
+      failed,
+      partial: readActiveDraftCreateBool(displaySummary.draft_creation_failed_partial, false) || readActiveDraftCreateBool(displaySummary.draftCreationFailedPartial, false) || readActiveDraftCreateBool(issueSummary.draft_creation_failed_partial, false) || readActiveDraftCreateBool(issueSummary.draftCreationFailedPartial, false) || failedPartialByLatestOperation,
+      action_blocked: actionBlocked || failed,
+      label: failed ? (displayLabel && /draft creation failed/i.test(displayLabel) ? displayLabel : 'Draft creation failed') : '',
+      operation_id: operationId || null,
+      phase: latestOperationPhase || null,
+      has_items: itemCount > 0,
+      display_summary: displaySummary,
+      issue_summary_counts: issueSummary
+    };
+  };
+
   const safeBatchStatusLabel = (rawStatus, row = null) => {
+    const draftCreationFailure = deriveDraftCreationFailedBatchDisplay(row);
+    if (draftCreationFailure.failed) return draftCreationFailure.label || 'Draft creation failed';
     const s = String(rawStatus || '').trim().toUpperCase();
     const commitState = String(row?.execution_commit_state || '').trim().toUpperCase();
     if (s === 'SETTLED' || s === 'COMMITTED' || commitState === 'COMMITTED' || commitState === 'SETTLED') return 'Paid';
@@ -47573,9 +48236,11 @@ function renderPayBatchListPanel() {
     const id = String(r?.id || r?.pay_batch_id || '').trim();
     const payDate = String(r?.pay_date || '').trim();
     const stx = String(r?.status || '').trim().toUpperCase() || '—';
-    const paymentOutcome = deriveBankingPayBatchPaymentOutcomeDisplay(r) || null;
-    const hasPaymentOutcome = !!(paymentOutcome && paymentOutcome.label);
-    const displayStatus = hasPaymentOutcome ? paymentOutcome.label : safeBatchStatusLabel(stx, r);
+    const draftCreationFailureDisplay = deriveDraftCreationFailedBatchDisplay(r);
+    const hasDraftCreationFailure = draftCreationFailureDisplay.failed === true;
+    const paymentOutcome = hasDraftCreationFailure ? null : (deriveBankingPayBatchPaymentOutcomeDisplay(r) || null);
+    const hasPaymentOutcome = !hasDraftCreationFailure && !!(paymentOutcome && paymentOutcome.label);
+    const displayStatus = hasDraftCreationFailure ? (draftCreationFailureDisplay.label || 'Draft creation failed') : (hasPaymentOutcome ? paymentOutcome.label : safeBatchStatusLabel(stx, r));
     const commitState = String(r?.execution_commit_state || '').trim().toUpperCase();
     const prov = String(r?.rail_provider_snapshot || r?.rail_provider || '').trim().toUpperCase();
     const env = String(r?.rail_env_snapshot || r?.rail_env || '').trim().toUpperCase();
@@ -47605,20 +48270,24 @@ function renderPayBatchListPanel() {
     const acknowledgedAlert = r?.banking_alert_acknowledged_for_user === true || issueBadge.acknowledged === true;
     const blockedFundsPublicLabel = String(issueBadge.label || '').trim() || 'Bank unavailable — retry available';
 
-    const issuePillsHtml = hasPaymentOutcome
-      ? ''
-      : paymentIssuesRequired
-        ? ` <span class="pill pill-warn" title="Use Current Payment Status to review affected payments.">PAYMENT ISSUES</span>`
-        : blockedFundsRow
-          ? ` <span class="pill pill-warn" title="${enc(blockedFundsReason)}">${enc(blockedFundsPublicLabel === 'Bank unavailable — unsent payments can be retried' ? 'Bank unavailable — retry available' : blockedFundsPublicLabel)}</span>${acknowledgedAlert ? ' <span class="pill" title="This alert has been cleared from your Banking button only.">Cleared from my alerts</span>' : ''}`
-          : issueBadges.map((label) => ` <span class="pill">${enc(label)}</span>`).join('');
+    const issuePillsHtml = hasDraftCreationFailure
+      ? ` <span class="pill pill-bad" title="${enc('Draft creation failed and normal draft actions are blocked.')}">${enc('Creation failed')}</span>`
+      : hasPaymentOutcome
+        ? ''
+        : paymentIssuesRequired
+          ? ` <span class="pill pill-warn" title="Use Current Payment Status to review affected payments.">PAYMENT ISSUES</span>`
+          : blockedFundsRow
+            ? ` <span class="pill pill-warn" title="${enc(blockedFundsReason)}">${enc(blockedFundsPublicLabel === 'Bank unavailable — unsent payments can be retried' ? 'Bank unavailable — retry available' : blockedFundsPublicLabel)}</span>${acknowledgedAlert ? ' <span class="pill" title="This alert has been cleared from your Banking button only.">Cleared from my alerts</span>' : ''}`
+            : issueBadges.map((label) => ` <span class="pill">${enc(label)}</span>`).join('');
 
-    const pillClass = hasPaymentOutcome
-      ? (paymentOutcome.tone === 'ok' ? 'pill-ok' : 'pill-warn')
-      : (stx === 'SETTLED') ? 'pill-ok'
-        : (stx === 'EXECUTING' || stx === 'PARTIAL') ? 'pill-warn'
-        : (stx === 'DRAFT') ? 'pill-info'
-        : 'pill';
+    const pillClass = hasDraftCreationFailure
+      ? 'pill-bad'
+      : hasPaymentOutcome
+        ? (paymentOutcome.tone === 'ok' ? 'pill-ok' : 'pill-warn')
+        : (stx === 'SETTLED') ? 'pill-ok'
+          : (stx === 'EXECUTING' || stx === 'PARTIAL') ? 'pill-warn'
+          : (stx === 'DRAFT') ? 'pill-info'
+          : 'pill';
 
     const authPill = (() => {
       if (hasPaymentOutcome) return '';
@@ -47644,9 +48313,23 @@ function renderPayBatchListPanel() {
       return ` <span class="${enc(cls)}" title="${enc(title)}">${enc(txt)}</span>`;
     })();
 
-    const deleteDraftBtn = hasPaymentOutcome
-      ? (currentPaymentStatusAction && id
+    const draftCreationFailureOperationId = draftCreationFailureDisplay.operation_id || trimStr(r?.latest_operation_id || r?.latestOperationId || '');
+    const deleteDraftBtn = hasDraftCreationFailure
+      ? (draftCreationFailureOperationId
         ? `
+          <button
+            type="button"
+            class="btn btn-sm btn-primary"
+            data-action="banking:pay:viewDraftCreateStatus"
+            data-operation-id="${enc(draftCreationFailureOperationId)}"
+            data-batch-id="${enc(id)}"
+            title="View failed draft creation status."
+          >View status</button>
+        `
+        : `<span class="mini" style="opacity:.75;">Creation failed</span>`)
+      : hasPaymentOutcome
+        ? (currentPaymentStatusAction && id
+          ? `
           <button
             type="button"
             class="btn btn-sm btn-primary"
@@ -47705,8 +48388,8 @@ function renderPayBatchListPanel() {
         ${isActive ? 'class="active"' : ''}
         style="cursor:pointer;"
         data-batch-id="${enc(id)}"
-        data-has-payment-issue="${hasPaymentOutcome ? (paymentOutcome.hasIssues ? '1' : '0') : (issueBadge.hasPaymentIssue || paymentIssuesRequired ? '1' : '0')}"
-        data-focus-payment-issue-panel="${hasPaymentOutcome ? (paymentOutcome.showCurrentPaymentStatusAction ? '1' : '0') : (issueBadge.focusPaymentIssuePanel || paymentIssuesRequired ? '1' : '0')}"
+        data-has-payment-issue="${hasDraftCreationFailure ? '1' : (hasPaymentOutcome ? (paymentOutcome.hasIssues ? '1' : '0') : (issueBadge.hasPaymentIssue || paymentIssuesRequired ? '1' : '0'))}"
+        data-focus-payment-issue-panel="${hasDraftCreationFailure ? '1' : (hasPaymentOutcome ? (paymentOutcome.showCurrentPaymentStatusAction ? '1' : '0') : (issueBadge.focusPaymentIssuePanel || paymentIssuesRequired ? '1' : '0'))}"
         title="${enc(id)}"
       >
         <td class="mono">${enc(id ? (id.slice(0, 8) + '…') : '')}</td>
@@ -47836,7 +48519,6 @@ function renderPayBatchListPanel() {
     </div>
   `;
 }
-
 
 function normaliseActiveDraftCreateOperationLookupResponse(responsePayload = {}, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -138917,7 +139599,6 @@ function bulkAuthoriseHasProcessedExpensesValue(ctxInput) {
   return !!(hasTimesheetAnchor && (numericDetected || descriptionDetected || stagedDetected));
 }
 
-
 function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOptions = {}) {
   const inputIsOptions = operationOrOptions && typeof operationOrOptions === 'object' && !Array.isArray(operationOrOptions) && (
     Object.prototype.hasOwnProperty.call(operationOrOptions, 'operation') ||
@@ -138951,6 +139632,41 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     const s = upperTrim(value);
     return s === 'TRUE' || s === 'T' || s === '1' || s === 'YES' || s === 'Y' || s === 'ON';
   };
+  const firstText = function () {
+    for (let i = 0; i < arguments.length; i += 1) {
+      const text = trimStr(arguments[i]);
+      if (text) return text;
+    }
+    return '';
+  };
+  const humanisePhaseName = (value) => {
+    const text = upperTrim(value);
+    if (!text) return '';
+    return text.toLowerCase().split('_').filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+  };
+  const extractStringArray = (value) => {
+    if (Array.isArray(value)) return value.map((item) => trimStr(item)).filter(Boolean);
+    const text = trimStr(value);
+    return text ? [text] : [];
+  };
+  const collectCreatedPayBatchIds = (operationState) => {
+    const op = operationState && typeof operationState === 'object' ? operationState : {};
+    const ids = [];
+    const seen = new Set();
+    const push = (value) => {
+      const text = trimStr(value);
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      ids.push(text);
+    };
+    for (const value of [op.pay_batch_id, op.payBatchId, op.primary_pay_batch_id, op.primaryPayBatchId]) push(value);
+    for (const list of [op.pay_batch_ids, op.payBatchIds, op.created_pay_batch_ids, op.createdPayBatchIds]) {
+      for (const item of extractStringArray(list)) push(item);
+    }
+    return ids;
+  };
+  const operationErrorCode = (operationState) => firstText(operationState?.error_code, operationState?.errorCode, operationState?.code, operationState?.error?.code, operationState?.small_error_summary?.code);
+  const operationErrorMessage = (operationState) => firstText(operationState?.error_message, operationState?.errorMessage, operationState?.message, operationState?.error?.message, operationState?.small_error_summary?.message);
 
   let state = normalise(suppliedOperation || {});
   if (!state.operation_id && opts.operation_id) state.operation_id = trimStr(opts.operation_id);
@@ -138966,6 +139682,19 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   const displayTitleForOperation = (operationState) => executionOutcomeTitle(operationState) || operationState?.title || 'Payment execution status';
   const displayStatusForOperation = (operationState) => {
     if (hasExecutionOutcome(operationState)) return executionOutcomeStatusText(operationState) || operationState?.status_text || '';
+    const backendDraft = isBackendOwnedDraftCreateOperation(operationState);
+    const failedDraft = backendDraft && (operationState?.failed === true || ['FAILED', 'ERROR'].includes(operationStatus(operationState)));
+    const reviewDraft = backendDraft && isReviewRequired(operationState);
+    if (failedDraft || reviewDraft) {
+      const phaseLabel = firstText(operationState?.phase_label, operationState?.phaseLabel, humanisePhaseName(operationState?.phase || operationState?.operation_phase || operationState?.operationPhase || ''));
+      const code = operationErrorCode(operationState);
+      const message = operationErrorMessage(operationState);
+      const base = failedDraft
+        ? `Draft creation failed${phaseLabel ? ` at ${phaseLabel}` : ''}`
+        : `Draft creation needs review${phaseLabel ? ` at ${phaseLabel}` : ''}`;
+      const withCode = [base, code].filter(Boolean).join(' — ');
+      return message && message !== code ? `${withCode}. ${message}` : withCode;
+    }
     if (operationState?.review_required) return operationState?.status_text || 'Review required.';
     if (operationState?.waiting_for_authorisation || operationState?.waitingForAuthorisation) return operationState?.status_text || 'Waiting for authorisation.';
     if (operationState?.waiting_for_provider || operationState?.waitingForProvider) return operationState?.status_text || 'Waiting for provider.';
@@ -138978,6 +139707,14 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
       const counts = executionOutcomeCountText(operationState);
       return [main, counts].filter(Boolean).join(' ');
     }
+    const backendDraft = isBackendOwnedDraftCreateOperation(operationState);
+    if (backendDraft && (operationState?.failed === true || ['FAILED', 'ERROR'].includes(operationStatus(operationState)) || operationState?.draft_creation_failed_partial === true || operationState?.draftCreationFailedPartial === true)) {
+      const cleanupStatus = upperTrim(operationState?.failed_partial_cleanup_status || operationState?.failedPartialCleanupStatus || operationState?.cleanup_status || operationState?.cleanupStatus || '');
+      if (cleanupStatus === 'FAILED') return 'Draft creation failed. Partial draft cleanup could not be completed automatically; normal draft actions are blocked.';
+      if (cleanupStatus === 'ABORTED' || operationState?.batch_action_blocked === true || operationState?.batchActionBlocked === true || operationState?.normal_draft_actions_blocked === true || operationState?.normalDraftActionsBlocked === true) return 'Draft creation failed. Any partial draft has been cleaned up or blocked, and normal draft actions are disabled.';
+      return 'Draft creation failed.';
+    }
+    if (backendDraft && ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE'].includes(operationStatus(operationState))) return 'Draft created successfully.';
     if (operationState?.failed) return 'Operation failed.';
     if (operationState?.review_required) return 'Operation needs review.';
     if (operationState?.cancelled) return 'Operation cancelled.';
@@ -139023,7 +139760,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
       show_refresh: true,
       close_label: isTerminal(operationState) ? 'Close' : (backendDraft ? 'Close — draft creation will continue' : 'Close — keep running'),
       safe_close_text: backendDraft
-        ? 'Safe to close — draft creation continues in the background. Reopen Banking Pay to view status or the created draft.'
+        ? 'Safe to close — draft creation continues in the background and Banking Pay will keep showing status.'
         : 'Safe to close — closing this window does not cancel backend execution.'
     };
   };
@@ -139046,6 +139783,16 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     const linkedRows = numberValue(op.linked_allocation_rows ?? op.linkedAllocationRows);
     const currentChunk = numberValue(op.current_chunk_index ?? op.currentChunkIndex) ?? 0;
     const chunks = numberValue(op.chunk_count ?? op.chunkCount) ?? 0;
+    const createdBatchIds = collectCreatedPayBatchIds(op);
+    const cleanupStatus = firstText(op.failed_partial_cleanup_status, op.failedPartialCleanupStatus, op.cleanup_status, op.cleanupStatus);
+    const failedPartial = op.draft_creation_failed_partial === true || op.draftCreationFailedPartial === true;
+    const batchBlocked = op.batch_action_blocked === true || op.batchActionBlocked === true || op.normal_draft_actions_blocked === true || op.normalDraftActionsBlocked === true;
+    const extraMeta = [
+      createdBatchIds.length ? `Created draft: ${createdBatchIds.join(', ')}.` : '',
+      failedPartial ? 'Draft creation failed after partial draft artifacts were created.' : '',
+      cleanupStatus ? `Cleanup: ${cleanupStatus}.` : '',
+      batchBlocked ? 'Normal draft actions are blocked for this partial draft.' : ''
+    ].filter(Boolean);
     const hasPhaseProgress = isDraftCreate && phaseIndex !== null && phaseTotal !== null && phaseTotal > 0;
     if (!hasPhaseProgress) {
       return {
@@ -139057,7 +139804,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
         failed_text: String(failedUnits),
         chunk_label: 'Chunk',
         chunk_text: `${currentChunk}/${chunks}`,
-        meta_prefix: `${completedUnits} completed, ${failedUnits} failed, ${totalUnits} total.`
+        meta_prefix: [`${completedUnits} completed, ${failedUnits} failed, ${totalUnits} total.`, ...extraMeta].filter(Boolean).join(' ')
       };
     }
     const itemMetric = insertedItems !== null && insertedItems > 0 ? insertedItems : (linkedRows !== null && linkedRows > 0 ? linkedRows : null);
@@ -139070,7 +139817,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
       failed_text: op.failed || op.status === 'FAILED' || op.status === 'ERROR' ? String(failedUnits) : (candidateScopes === null ? '—' : String(candidateScopes)),
       chunk_label: chunks > 0 ? 'Chunk' : 'Items',
       chunk_text: chunks > 0 ? `${currentChunk}/${chunks}` : (itemMetric === null ? '—' : String(itemMetric)),
-      meta_prefix: `Stage ${phaseIndex}/${phaseTotal}${op.phase_label ? ` — ${op.phase_label}` : ''}.`
+      meta_prefix: [`Stage ${phaseIndex}/${phaseTotal}${op.phase_label ? ` — ${op.phase_label}` : ''}.`, ...extraMeta].filter(Boolean).join(' ')
     };
   };
   const formatIso = (value) => {
@@ -139195,7 +139942,9 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     const totalUnits = Number(op.total_units || 0) || 0;
     const completedUnits = Number(op.completed_units || 0) || 0;
     const failedUnits = Number(op.failed_units || 0) || 0;
-    const percent = Math.max(0, Math.min(100, Number(op.percent || 0) || 0));
+    const rawPercent = Number(op.percent ?? op.percent_complete ?? op.percentComplete);
+    const inferredPercent = totalUnits > 0 ? Math.round(((completedUnits + failedUnits) / totalUnits) * 100) : (isTerminal(op) && ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE'].includes(operationStatus(op)) ? 100 : 0);
+    const percent = Math.max(0, Math.min(100, Number.isFinite(rawPercent) ? rawPercent : inferredPercent));
     const draftCreateFields = renderDraftCreateProgressFields(op);
     if (role('op-title')) role('op-title').textContent = displayTitleForOperation(op);
     if (role('op-status')) role('op-status').textContent = displayStatusForOperation(op);
@@ -139282,7 +140031,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
         canAdvance: false,
         can_cancel: false,
         percent: Number.isFinite(Number(op.percent)) && Number(op.percent) > 0 ? Number(op.percent) : inferredPercent,
-        status_text: suppliedText || executionOutcomeStatusText(suppliedOperation) || suppliedOperation.status_text || op.status_text || (op.review_required ? 'Operation needs review.' : (op.cancelled ? 'Operation cancelled.' : 'Operation complete.'))
+        status_text: suppliedText || executionOutcomeStatusText(suppliedOperation) || suppliedOperation.status_text || op.status_text || displayFinalTextForOperation(op) || (op.review_required ? 'Operation needs review.' : (op.cancelled ? 'Operation cancelled.' : 'Operation complete.'))
       };
       render();
       return controller;
@@ -169923,6 +170672,7 @@ function looksFatalProgressFailure(value) {
   return false;
 }
 
+
 async function runBankingPayOperationWithProgress(initialOperationPayload, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -169938,8 +170688,20 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
     const s = upperTrim(value);
     return s === 'TRUE' || s === 'T' || s === '1' || s === 'YES' || s === 'Y' || s === 'ON';
   };
+  const firstText = function () {
+    for (let i = 0; i < arguments.length; i += 1) {
+      const text = trimStr(arguments[i]);
+      if (text) return text;
+    }
+    return '';
+  };
+  const humanisePhaseName = (value) => {
+    const text = upperTrim(value);
+    if (!text) return 'Unknown phase';
+    return text.toLowerCase().split('_').filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+  };
 
-  const terminalStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED']);
+  const terminalStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW']);
   const reviewStatuses = new Set(['REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW']);
   const waitingAuthorisationStatuses = new Set(['WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'AUTHORISATION_REQUIRED', 'AUTHORIZATION_REQUIRED']);
   const waitingProviderStatuses = new Set(['WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'PROVIDER_WAIT', 'PROVIDER_WAITING', 'WAITING_PROVIDER_CONFIRMATION']);
@@ -170085,6 +170847,84 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
     visit(operationState, 0);
     return out;
   };
+  const buildDraftCreateTerminalStatusText = (operationState) => {
+    const status = opStatus(operationState);
+    const phaseName = firstText(operationState?.phase_label, operationState?.phaseLabel, humanisePhaseName(operationState?.phase || operationState?.operation_phase || operationState?.operationPhase || ''));
+    const code = firstText(operationState?.error_code, operationState?.errorCode, operationState?.code, operationState?.small_error_summary?.code, operationState?.error?.code);
+    const message = firstText(operationState?.error_message, operationState?.errorMessage, operationState?.message, operationState?.status_text, operationState?.statusText, operationState?.error?.message);
+    if (isFailed(operationState)) {
+      const prefix = isBackendOwnedDraftCreateOperation(operationState)
+        ? `Draft creation failed${phaseName ? ` at ${phaseName}` : ''}`
+        : `Operation failed${phaseName ? ` at ${phaseName}` : ''}`;
+      return [prefix, code].filter(Boolean).join(' — ') + (message && message !== code && !prefix.includes(message) ? `. ${message}` : '');
+    }
+    if (isReview(operationState)) {
+      const prefix = isBackendOwnedDraftCreateOperation(operationState)
+        ? `Draft creation needs review${phaseName ? ` at ${phaseName}` : ''}`
+        : `Operation needs review${phaseName ? ` at ${phaseName}` : ''}`;
+      return [prefix, code].filter(Boolean).join(' — ') + (message && message !== code && !prefix.includes(message) ? `. ${message}` : '');
+    }
+    if (isCancelled(operationState)) return isBackendOwnedDraftCreateOperation(operationState) ? 'Draft creation was cancelled.' : 'Operation was cancelled.';
+    if (status === 'COMPLETE' || status === 'COMPLETED' || status === 'SUCCESS' || status === 'SUCCEEDED' || status === 'DONE') return isBackendOwnedDraftCreateOperation(operationState) ? 'Draft created.' : 'Operation complete.';
+    return firstText(message, operationState?.status_text, operationState?.statusText, 'Operation finished.');
+  };
+  const markTerminalStateVisible = (operationState) => {
+    const state = normalise(operationState || {});
+    const visibleState = {
+      ...state,
+      terminal: true,
+      failed: isFailed(state),
+      cancelled: isCancelled(state),
+      review_required: isReview(state),
+      reviewRequired: isReview(state),
+      backend_execution_continues: false,
+      backendExecutionContinues: false,
+      backend_work_continues: false,
+      backendWorkContinues: false,
+      still_running: false,
+      stillRunning: false,
+      can_reopen: false,
+      canReopen: false,
+      status_text: buildDraftCreateTerminalStatusText(state)
+    };
+    try {
+      if (modal && typeof modal.markCompleted === 'function') modal.markCompleted(visibleState);
+      else updateModal(visibleState);
+    } catch {}
+    return visibleState;
+  };
+  const notifyNonTerminalProgressObserved = async (operationState) => {
+    if (!isBackendOwnedDraftCreateOperation(operationState)) return;
+    if (isTerminal(operationState) || isFailed(operationState) || isCancelled(operationState) || isReview(operationState) || isWaitingForAuthorisation(operationState)) return;
+    try {
+      if (typeof opts.onProgressObserved === 'function') await opts.onProgressObserved(operationState);
+      else if (typeof opts.onOperationProgress === 'function') await opts.onOperationProgress(operationState);
+      else if (typeof opts.onStatusObserved === 'function') await opts.onStatusObserved(operationState);
+    } catch {}
+  };
+  let terminalUserNotificationSent = false;
+  const notifyTerminalUserVisible = async (operationState) => {
+    if (terminalUserNotificationSent) return;
+    if (!isBackendOwnedDraftCreateOperation(operationState)) return;
+    if (!(isFailed(operationState) || isCancelled(operationState) || isReview(operationState))) return;
+    terminalUserNotificationSent = true;
+    const message = buildDraftCreateTerminalStatusText(operationState);
+    try {
+      if (typeof opts.onFailureNotification === 'function') {
+        await opts.onFailureNotification(operationState, message);
+        return;
+      }
+      if (typeof opts.onTerminalNotification === 'function') {
+        await opts.onTerminalNotification(operationState, message);
+        return;
+      }
+    } catch {}
+    if (opts.silent === true || opts.background === true || opts.showFailureNotification === false || opts.show_failure_notification === false) return;
+    try {
+      if (typeof window !== 'undefined' && typeof window.__toast === 'function') window.__toast(message || 'Draft creation failed.');
+    } catch {}
+  };
+
   const buildNonTerminalBackendOperationResult = (operationState, extra = {}) => {
     const state = normalise({
       ...(operationState && typeof operationState === 'object' ? operationState : {}),
@@ -170190,6 +171030,7 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
     if (!isBackendOwnedDraftCreateOperation(operationState)) return;
     if (!(isTerminal(operationState) || isFailed(operationState) || isCancelled(operationState) || isReview(operationState))) return;
     const observedBatchIds = collectCreatedBatchIdsFromOperation(operationState);
+    await notifyTerminalUserVisible(operationState);
     try {
       if (typeof opts.onTerminalObserved === 'function') await opts.onTerminalObserved(operationState);
     } catch {}
@@ -170268,12 +171109,9 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
   }
 
   if (isTerminal(current) || isReview(current) || isWaitingForAuthorisation(current)) {
-    updateModal(current);
-    if (isFailed(current) || isCancelled(current)) {
-      try { if (modal && typeof modal.markCompleted === 'function') modal.markCompleted(current); } catch {}
-    }
-    await notifyTerminalObserved(current);
-    return buildObserverReturn(current, {
+    const visibleTerminal = (isTerminal(current) || isReview(current) || isFailed(current) || isCancelled(current)) ? markTerminalStateVisible(current) : current;
+    await notifyTerminalObserved(visibleTerminal);
+    return buildObserverReturn(visibleTerminal, {
       progress_saved: true,
       backend_execution_continues: false,
       still_running: false,
@@ -170329,13 +171167,15 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
     try {
       current = await fetchProgressLight();
       updateModal(current);
+      if (backendOwnedDraftCreateObserver && modalIsClosed()) await notifyNonTerminalProgressObserved(current);
       if (isTerminal(current) || isReview(current) || isWaitingForAuthorisation(current) || isWaitingForProvider(current)) {
-        if (isTerminal(current) || isReview(current) || isWaitingForAuthorisation(current)) await notifyTerminalObserved(current);
-        return buildObserverReturn(current, {
+        const visibleTerminal = (isTerminal(current) || isReview(current) || isFailed(current) || isCancelled(current)) ? markTerminalStateVisible(current) : current;
+        if (isTerminal(visibleTerminal) || isReview(visibleTerminal) || isWaitingForAuthorisation(visibleTerminal)) await notifyTerminalObserved(visibleTerminal);
+        return buildObserverReturn(visibleTerminal, {
           progress_saved: true,
-          backend_execution_continues: !(isTerminal(current) || isReview(current)),
-          still_running: !(isTerminal(current) || isReview(current)),
-          can_reopen: isBackendOwnedOperation(current) || isReview(current) || isWaitingForAuthorisation(current) || isWaitingForProvider(current)
+          backend_execution_continues: !(isTerminal(visibleTerminal) || isReview(visibleTerminal)),
+          still_running: !(isTerminal(visibleTerminal) || isReview(visibleTerminal)),
+          can_reopen: isBackendOwnedOperation(visibleTerminal) || isReview(visibleTerminal) || isWaitingForAuthorisation(visibleTerminal) || isWaitingForProvider(visibleTerminal)
         });
       }
     } catch (e) {
@@ -170383,6 +171223,8 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
       updateModal(nonTerminal);
     }
   } catch {}
+
+  await notifyNonTerminalProgressObserved(nonTerminal);
 
   return nonTerminal;
 }
