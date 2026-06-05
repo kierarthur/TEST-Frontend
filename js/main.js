@@ -30648,6 +30648,69 @@ async function bankingPayCreateDraft(input = {}) {
     rowLike?.economicKey?.pay_channel ||
     ''
   );
+  const buildCreateDraftSelectedPreviewRowContract = (rowLike, index = 0) => {
+    const row = isPlainObject(rowLike) ? rowLike : {};
+    const rowJson = isPlainObject(row.row_json) ? row.row_json : (isPlainObject(row.rowJson) ? row.rowJson : {});
+    const economicKey = isPlainObject(row.economic_key) ? row.economic_key : (isPlainObject(row.economicKey) ? row.economicKey : (isPlainObject(rowJson.economic_key) ? rowJson.economic_key : {}));
+    const materialisedPreviewRowId = trimStr(row.id || row.row_id || row.rowId || row.preview_row_pk || row.previewRowPk || '');
+    const presentationPreviewRowId = getPreviewRowId(row);
+    const rowKey = trimStr(row.row_key || row.rowKey || row.line_key || row.lineKey || rowJson.row_key || rowJson.rowKey || rowJson.line_key || rowJson.lineKey || '');
+    const lineId = trimStr(row.line_id || row.lineId || rowJson.line_id || rowJson.lineId || '');
+    const section = normalisePreviewPageSectionName(row.section || rowJson.section || 'canonical_preview_lines');
+    const candidateId = trimStr(row.candidate_id || row.candidateId || rowJson.candidate_id || rowJson.candidateId || '');
+    const timesheetId = trimStr(row.timesheet_id || row.timesheetId || economicKey.timesheet_id || economicKey.timesheetId || rowJson.timesheet_id || rowJson.timesheetId || '');
+    const keyType = upperTrim(row.key_type || row.keyType || economicKey.key_type || economicKey.keyType || row.component_key_type || row.componentKeyType || rowJson.key_type || rowJson.keyType || rowJson.component_key_type || rowJson.componentKeyType || '');
+    const keyValue = trimStr(row.key_value || row.keyValue || economicKey.key_value || economicKey.keyValue || row.component_key_value || row.componentKeyValue || rowJson.key_value || rowJson.keyValue || rowJson.component_key_value || rowJson.componentKeyValue || '');
+    const payChannel = getPreviewRowPayChannelForCreateDraft(row);
+    const presentationSection = upperTrim(row.presentation_section || row.presentationSection || rowJson.presentation_section || rowJson.presentationSection || '');
+    const selectionState = upperTrim(row.selection_state || row.selectionState || rowJson.selection_state || rowJson.selectionState || '');
+    const status = upperTrim(row.status || rowJson.status || '');
+    const contract = {
+      contract_version: 1,
+      contract_index: Number.isFinite(Number(index)) ? Math.max(0, Math.trunc(Number(index))) : 0,
+      source: 'banking_pay_workbench_preview_rows',
+      preview_row_id: materialisedPreviewRowId || presentationPreviewRowId || null,
+      materialised_preview_row_id: materialisedPreviewRowId || null,
+      presentation_preview_row_id: presentationPreviewRowId || null,
+      row_id: materialisedPreviewRowId || null,
+      line_id: lineId || null,
+      row_key: rowKey || null,
+      section: section || 'canonical_preview_lines',
+      candidate_id: candidateId || null,
+      timesheet_id: timesheetId || null,
+      key_type: keyType || null,
+      key_value: keyValue || null,
+      pay_channel: payChannel || null,
+      amount_ex_vat: amountFromPreviewRow(row),
+      presentation_section: presentationSection || null,
+      selection_state: selectionState || null,
+      status: status || null,
+      draftable: booleanFlag(row.draftable ?? rowJson.draftable),
+      is_ready_for_draft: booleanFlag(row.is_ready_for_draft ?? row.isReadyForDraft ?? rowJson.is_ready_for_draft ?? rowJson.isReadyForDraft),
+      selected: row.selected === true || rowJson.selected === true,
+      economic_key: {
+        timesheet_id: timesheetId || null,
+        key_type: keyType || null,
+        key_value: keyValue || null
+      },
+      economic_keyspace: 'timesheet_id,key_type,key_value',
+      policy_x_authority_scope: 'PRE_DRAFT_LIVE_TRUTH'
+    };
+    return Object.fromEntries(Object.entries(contract).filter(([, value]) => value !== undefined));
+  };
+  const buildCreateDraftEconomicKeyContract = (contractLike) => {
+    const contract = isPlainObject(contractLike) ? contractLike : {};
+    return {
+      candidate_id: trimStr(contract.candidate_id || '') || null,
+      timesheet_id: trimStr(contract.timesheet_id || contract.economic_key?.timesheet_id || '') || null,
+      key_type: upperTrim(contract.key_type || contract.economic_key?.key_type || '') || null,
+      key_value: trimStr(contract.key_value || contract.economic_key?.key_value || '') || null,
+      row_key: trimStr(contract.row_key || '') || null,
+      pay_channel: upperTrim(contract.pay_channel || '') || null,
+      section: normalisePreviewPageSectionName(contract.section || 'canonical_preview_lines'),
+      economic_keyspace: 'timesheet_id,key_type,key_value'
+    };
+  };
   const refreshCurrentSelectedPreviewRowsForCreateDraft = async (activeSessionId, previousSelectedRowIds = [], selectedMode = 'IMPLICIT_ALL', channelScope = 'ALL') => {
     const id = trimStr(activeSessionId);
     const requestedScope = upperTrim(channelScope || 'ALL') || 'ALL';
@@ -30750,6 +30813,9 @@ async function bankingPayCreateDraft(input = {}) {
       wiz.local_selected_preview_row_ids_dirty = false;
     } catch {}
 
+    const selectedPreviewRowContracts = currentEligibleSelectedRows.map((row, index) => buildCreateDraftSelectedPreviewRowContract(row, index));
+    const selectedEconomicKeys = selectedPreviewRowContracts.map((contract) => buildCreateDraftEconomicKeyContract(contract));
+
     return {
       ok: true,
       session_id: id,
@@ -30760,7 +30826,11 @@ async function bankingPayCreateDraft(input = {}) {
       preview_row_universe_ids: currentUniverseIds,
       selection_remapped_to_current_session: remapped,
       previous_selected_preview_row_ids: previousIds,
-      current_selected_preview_row_ids: currentSelectedIds
+      current_selected_preview_row_ids: currentSelectedIds,
+      selected_preview_row_contracts: selectedPreviewRowContracts,
+      draft_selected_preview_row_contracts: selectedPreviewRowContracts,
+      selected_economic_keys: selectedEconomicKeys,
+      draft_selected_economic_keys: selectedEconomicKeys
     };
   };
   const countEligibleCandidatesForScope = (scopeCandidates, includeCandidateIds = [], selectedPreviewRowIds = []) => {
@@ -32730,12 +32800,27 @@ async function bankingPayCreateDraft(input = {}) {
       payChannelScope || 'ALL'
     );
 
+    const draftSelectedPreviewRowContracts = asArray(currentSelectionBeforeSubmit.selected_preview_row_contracts || currentSelectionBeforeSubmit.draft_selected_preview_row_contracts)
+      .filter((contract) => isPlainObject(contract))
+      .map((contract) => deep(contract) || contract);
+    const draftSelectedEconomicKeys = asArray(currentSelectionBeforeSubmit.selected_economic_keys || currentSelectionBeforeSubmit.draft_selected_economic_keys)
+      .filter((contract) => isPlainObject(contract))
+      .map((contract) => deep(contract) || contract);
+    createDraftPreviewDecisions.draft_selected_preview_row_contracts = deep(draftSelectedPreviewRowContracts) || [];
+    createDraftPreviewDecisions.selected_preview_row_contracts = deep(draftSelectedPreviewRowContracts) || [];
+    createDraftPreviewDecisions.draft_selected_economic_keys = deep(draftSelectedEconomicKeys) || [];
+    createDraftPreviewDecisions.selected_economic_keys = deep(draftSelectedEconomicKeys) || [];
+
     const reqBody = {
       pay_date: pd,
       week_ending_cutoff_date: cutoffIso,
       session_id: sessionId,
       selected_preview_row_ids: [...syncedSelectedRows],
       selected_preview_row_mode: selectedPreviewSelection.selected_preview_row_mode,
+      draft_selected_preview_row_contracts: deep(draftSelectedPreviewRowContracts) || [],
+      selected_preview_row_contracts: deep(draftSelectedPreviewRowContracts) || [],
+      draft_selected_economic_keys: deep(draftSelectedEconomicKeys) || [],
+      selected_economic_keys: deep(draftSelectedEconomicKeys) || [],
       preview_decisions_json: createDraftPreviewDecisions
     };
 
@@ -32761,7 +32846,9 @@ async function bankingPayCreateDraft(input = {}) {
       current_session_selection_refreshed: true,
       selection_remapped_to_current_session: currentSelectionBeforeSubmit.selection_remapped_to_current_session === true,
       current_session_version: currentSelectionBeforeSubmit.session_version ?? null,
-      current_selected_preview_row_ids_sample: syncedSelectedRows.slice(0, 10)
+      current_selected_preview_row_ids_sample: syncedSelectedRows.slice(0, 10),
+      draft_selected_preview_row_contract_count: draftSelectedPreviewRowContracts.length,
+      draft_selected_economic_key_count: draftSelectedEconomicKeys.length
     });
 
     if (typeof runBankingPayOperationWithProgress !== 'function') {
@@ -33181,7 +33268,6 @@ async function bankingPayCreateDraft(input = {}) {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
-
 
 
 
