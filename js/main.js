@@ -30214,8 +30214,6 @@ async function bankingPayPreview(pay_date) {
   }
 }
 
-
-
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -30636,6 +30634,135 @@ async function bankingPayCreateDraft(input = {}) {
     return out;
   };
   const collectPreviewRowIds = (previewLike) => collectDraftablePreviewRowIdsFromWizardState(wiz, previewLike);
+  const getPreviewRowPayChannelForCreateDraft = (rowLike) => upperTrim(
+    rowLike?.pay_channel ||
+    rowLike?.payChannel ||
+    rowLike?.channel ||
+    rowLike?.row_json?.pay_channel ||
+    rowLike?.rowJson?.pay_channel ||
+    rowLike?.row_json?.current_pay_method ||
+    rowLike?.rowJson?.current_pay_method ||
+    rowLike?.row_json?.candidate_pay_method ||
+    rowLike?.rowJson?.candidate_pay_method ||
+    rowLike?.economic_key?.pay_channel ||
+    rowLike?.economicKey?.pay_channel ||
+    ''
+  );
+  const refreshCurrentSelectedPreviewRowsForCreateDraft = async (activeSessionId, previousSelectedRowIds = [], selectedMode = 'IMPLICIT_ALL', channelScope = 'ALL') => {
+    const id = trimStr(activeSessionId);
+    const requestedScope = upperTrim(channelScope || 'ALL') || 'ALL';
+    const previousIds = uniqTrimmed(previousSelectedRowIds);
+    if (!id) {
+      return {
+        ok: false,
+        error_code: 'BANKING_PAY_CREATE_DRAFT_SESSION_REQUIRED',
+        message: 'No active Banking Pay workbench session is available.'
+      };
+    }
+    if (typeof bankingPayWorkbenchSessionGetPreviewPage !== 'function') {
+      return {
+        ok: false,
+        error_code: 'BANKING_PAY_PREVIEW_PAGE_FETCH_UNAVAILABLE',
+        message: 'The current Banking Pay preview rows could not be re-read before draft creation.'
+      };
+    }
+
+    let page = null;
+    try {
+      page = await bankingPayWorkbenchSessionGetPreviewPage(id, 'canonical_preview_lines', {
+        limit: 100,
+        mode: 'PAGE',
+        expected_session_id: id,
+        current_session_id: id,
+        force_current: true,
+        forceCurrent: true,
+        bypass_cache: true,
+        bypassCache: true,
+        source: 'bankingPayCreateDraft.refreshCurrentSelectedPreviewRowsForCreateDraft'
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        error_code: 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
+        message: 'The current selected payment rows could not be re-read before draft creation.',
+        error: trimStr(error?.message || error || '') || null
+      };
+    }
+
+    const normalisedPage = normaliseCreateDraftPreviewPage(page, 'canonical_preview_lines');
+    applyCreateDraftPreviewSectionPageToState(normalisedPage);
+    const rows = previewPageRows(normalisedPage).filter((row) => isPlainObject(row));
+    const currentEligibleSelectedRows = rows.filter((row) => {
+      if (!isDraftCreateEligiblePreviewRow(row)) return false;
+      if (requestedScope === 'PAYE' || requestedScope === 'UMBRELLA') {
+        const rowChannel = getPreviewRowPayChannelForCreateDraft(row);
+        if (rowChannel && rowChannel !== requestedScope) return false;
+      }
+      return true;
+    });
+    const currentSelectedIds = uniqTrimmed(currentEligibleSelectedRows.map((row) => getPreviewRowId(row)));
+    const currentUniverseIds = uniqTrimmed(rows.filter((row) => {
+      if (!isDraftCreateEligiblePreviewRow(row)) return false;
+      if (requestedScope === 'PAYE' || requestedScope === 'UMBRELLA') {
+        const rowChannel = getPreviewRowPayChannelForCreateDraft(row);
+        if (rowChannel && rowChannel !== requestedScope) return false;
+      }
+      return true;
+    }).map((row) => getPreviewRowId(row)));
+
+    if (currentSelectedIds.length <= 0) {
+      return {
+        ok: false,
+        error_code: 'BANKING_PAY_CREATE_DRAFT_NO_CURRENT_SELECTED_ROWS',
+        message: 'No current selected Ready to Pay rows are available for draft creation.',
+        previous_selected_preview_row_ids: previousIds,
+        session_id: id,
+        session_version: normalisedPage.session_version ?? normalisedPage.sessionVersion ?? null,
+        returned_count: normalisedPage.returned_count ?? rows.length
+      };
+    }
+
+    const previousSet = new Set(previousIds);
+    const currentSet = new Set(currentSelectedIds);
+    const remapped = previousIds.length !== currentSelectedIds.length || previousIds.some((rowId) => !currentSet.has(rowId));
+    const selectedModeNormalised = normalizeSelectedPreviewRowMode(selectedMode || 'IMPLICIT_ALL', currentUniverseIds, currentSelectedIds);
+
+    try {
+      wiz.workbench.session_id = id;
+      wiz.decisions.session_id = id;
+      if (normalisedPage.session_version !== undefined || normalisedPage.sessionVersion !== undefined) {
+        wiz.workbench.session_version = normalisedPage.session_version ?? normalisedPage.sessionVersion;
+        wiz.decisions.session_version = normalisedPage.session_version ?? normalisedPage.sessionVersion;
+      }
+      if (trimStr(normalisedPage.session_signature || normalisedPage.sessionSignature || '')) {
+        wiz.workbench.session_signature = trimStr(normalisedPage.session_signature || normalisedPage.sessionSignature || '');
+        wiz.decisions.session_signature = trimStr(normalisedPage.session_signature || normalisedPage.sessionSignature || '');
+      }
+      wiz.workbench.selected_preview_row_ids = [...currentSelectedIds];
+      wiz.decisions.selected_preview_row_ids = [...currentSelectedIds];
+      wiz.workbench.server_selected_preview_row_ids = [...currentSelectedIds];
+      wiz.decisions.server_selected_preview_row_ids = [...currentSelectedIds];
+      wiz.workbench.server_selected_preview_row_ids_provided = true;
+      wiz.decisions.server_selected_preview_row_ids_provided = true;
+      wiz.workbench.selected_preview_row_mode = selectedModeNormalised;
+      wiz.decisions.selected_preview_row_mode = selectedModeNormalised;
+      wiz.selected_preview_row_mode = selectedModeNormalised;
+      wiz.local_selected_preview_row_ids_dirty = false;
+    } catch {}
+
+    return {
+      ok: true,
+      session_id: id,
+      session_version: normalisedPage.session_version ?? normalisedPage.sessionVersion ?? null,
+      session_signature: trimStr(normalisedPage.session_signature || normalisedPage.sessionSignature || '') || null,
+      selected_preview_row_ids: currentSelectedIds,
+      selected_preview_row_mode: selectedModeNormalised,
+      preview_row_universe_ids: currentUniverseIds,
+      selection_remapped_to_current_session: remapped,
+      previous_selected_preview_row_ids: previousIds,
+      current_selected_preview_row_ids: currentSelectedIds
+    };
+  };
   const countEligibleCandidatesForScope = (scopeCandidates, includeCandidateIds = [], selectedPreviewRowIds = []) => {
     const arr = Array.isArray(scopeCandidates) ? scopeCandidates : [];
     const includeSet = Array.isArray(includeCandidateIds) && includeCandidateIds.length
@@ -32546,7 +32673,7 @@ async function bankingPayCreateDraft(input = {}) {
       throwCreateDraftFailureEnvelope(selectionSyncFailure, 'BANKING_PAY_CREATE_DRAFT_FAILED');
     }
 
-    const syncedSelectedRows = uniqTrimmed(
+    let syncedSelectedRows = uniqTrimmed(
       Array.isArray(selectionSyncResult?.selected_preview_row_ids)
         ? selectionSyncResult.selected_preview_row_ids
         : selectedPreviewRowIdsForServer
@@ -32562,6 +32689,39 @@ async function bankingPayCreateDraft(input = {}) {
     wiz.decisions.server_selected_preview_row_ids_provided = (syncedSelectedRowsProvided === null) ? true : syncedSelectedRowsProvided;
     wiz.selected_preview_row_mode = selectedPreviewSelection.selected_preview_row_mode;
     wiz.decisions.selected_preview_row_ids = [...selectedPreviewSelection.selected_preview_row_ids];
+
+    const currentSelectionBeforeSubmit = await refreshCurrentSelectedPreviewRowsForCreateDraft(
+      sessionId,
+      syncedSelectedRows,
+      selectedPreviewSelection.selected_preview_row_mode,
+      payChannelScope || 'ALL'
+    );
+
+    if (!currentSelectionBeforeSubmit || currentSelectionBeforeSubmit.ok !== true) {
+      throwCreateDraftFailureEnvelope({
+        ok: false,
+        error_code: currentSelectionBeforeSubmit?.error_code || 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
+        code: currentSelectionBeforeSubmit?.error_code || 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED',
+        message: currentSelectionBeforeSubmit?.message || 'The Banking Pay preview refreshed while creating the draft. Refresh Banking preview and try again.',
+        details: currentSelectionBeforeSubmit || null,
+        session_id: sessionId,
+        previous_selected_preview_row_ids: syncedSelectedRows
+      }, 'BANKING_PAY_CURRENT_SELECTION_REFRESH_FAILED');
+    }
+
+    syncedSelectedRows = uniqTrimmed(currentSelectionBeforeSubmit.selected_preview_row_ids);
+    selectedPreviewRowIdsForServer = [...syncedSelectedRows];
+    selectedPreviewSelection.selected_preview_row_ids = [...syncedSelectedRows];
+    selectedPreviewSelection.selected_preview_row_mode = currentSelectionBeforeSubmit.selected_preview_row_mode || selectedPreviewSelection.selected_preview_row_mode;
+    wiz.selected_preview_row_mode = selectedPreviewSelection.selected_preview_row_mode;
+    wiz.workbench.server_selected_preview_row_ids = [...syncedSelectedRows];
+    wiz.decisions.server_selected_preview_row_ids = [...syncedSelectedRows];
+    wiz.workbench.server_selected_preview_row_ids_provided = true;
+    wiz.decisions.server_selected_preview_row_ids_provided = true;
+    wiz.decisions.selected_preview_row_ids = [...syncedSelectedRows];
+
+    previewEnvelope = (wiz.preview.data && typeof wiz.preview.data === 'object' && !Array.isArray(wiz.preview.data)) ? wiz.preview.data : previewEnvelope;
+    previewObj = (previewEnvelope.preview && typeof previewEnvelope.preview === 'object' && !Array.isArray(previewEnvelope.preview)) ? previewEnvelope.preview : previewEnvelope;
 
     const createDraftPreviewDecisions = buildCreateDraftPreviewDecisionsFromLoadedSections(
       callerDecisionSource,
@@ -32579,9 +32739,16 @@ async function bankingPayCreateDraft(input = {}) {
       preview_decisions_json: createDraftPreviewDecisions
     };
 
-    if (activeSessionSignature) reqBody.session_signature = activeSessionSignature;
-    if (previewSessionSignature && !reqBody.session_signature) reqBody.session_signature = previewSessionSignature;
-    if (computedLiveSessionSignature && !reqBody.session_signature) reqBody.session_signature = computedLiveSessionSignature;
+    const currentSessionSignatureForSubmit = trimStr(
+      currentSelectionBeforeSubmit.session_signature ||
+      wiz.workbench.session_signature ||
+      wiz.decisions.session_signature ||
+      activeSessionSignature ||
+      previewSessionSignature ||
+      computedLiveSessionSignature ||
+      ''
+    );
+    if (currentSessionSignatureForSubmit) reqBody.session_signature = currentSessionSignatureForSubmit;
     if (payChannelScope) reqBody.pay_channel_scope = payChannelScope;
     if (overrideReason) reqBody.same_week_paye_override_reason = overrideReason;
     if (overrideContinue === true) reqBody.same_week_paye_override_continue = true;
@@ -32590,7 +32757,11 @@ async function bankingPayCreateDraft(input = {}) {
     logTroubleshoot('info', 'API_POST_CREATE_DRAFT_SESSION', {
       ...requestSummary,
       synced_selected_preview_row_ids_count: syncedSelectedRows.length,
-      synced_selected_preview_row_ids_sample: syncedSelectedRows.slice(0, 10)
+      synced_selected_preview_row_ids_sample: syncedSelectedRows.slice(0, 10),
+      current_session_selection_refreshed: true,
+      selection_remapped_to_current_session: currentSelectionBeforeSubmit.selection_remapped_to_current_session === true,
+      current_session_version: currentSelectionBeforeSubmit.session_version ?? null,
+      current_selected_preview_row_ids_sample: syncedSelectedRows.slice(0, 10)
     });
 
     if (typeof runBankingPayOperationWithProgress !== 'function') {
