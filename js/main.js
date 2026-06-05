@@ -39850,11 +39850,51 @@ function renderPayNewBatchWizard() {
   const scheduleActiveDraftCreateOperationLookup = () => {
     const sessionId = activeDraftCreateWorkbenchSessionId(null);
     if (!sessionId || typeof bankingPayFindActiveDraftCreateOperation !== 'function') return;
+
+    const root = (() => {
+      try { return (typeof window !== 'undefined') ? window : globalThis; } catch { return null; }
+    })();
+    const timerMap = (() => {
+      if (!root) return null;
+      root.__bankingPayActiveDraftCreateLookupTimers = root.__bankingPayActiveDraftCreateLookupTimers && typeof root.__bankingPayActiveDraftCreateLookupTimers === 'object'
+        ? root.__bankingPayActiveDraftCreateLookupTimers
+        : Object.create(null);
+      return root.__bankingPayActiveDraftCreateLookupTimers;
+    })();
+    const clearAutoRefreshTimer = () => {
+      if (!timerMap || !timerMap[sessionId]) return;
+      try { clearTimeout(timerMap[sessionId]); } catch {}
+      try { delete timerMap[sessionId]; } catch { timerMap[sessionId] = null; }
+    };
+    const scheduleNextAutoRefresh = (delayMs = 7500) => {
+      if (!timerMap) return;
+      const currentOperation = getActiveDraftCreateOperationFromState();
+      if (!currentOperation || isActiveDraftCreateTerminal(currentOperation)) {
+        clearAutoRefreshTimer();
+        return;
+      }
+      if (timerMap[sessionId]) return;
+      timerMap[sessionId] = setTimeout(() => {
+        try { delete timerMap[sessionId]; } catch { timerMap[sessionId] = null; }
+        try { scheduleActiveDraftCreateOperationLookup(); } catch {}
+      }, Math.max(2000, Math.trunc(Number(delayMs) || 7500)));
+    };
+
     wiz.workbench.__active_draft_create_lookup_by_session = isPlainObject(wiz.workbench.__active_draft_create_lookup_by_session) ? wiz.workbench.__active_draft_create_lookup_by_session : {};
     const existing = wiz.workbench.__active_draft_create_lookup_by_session[sessionId];
     const nowMs = Date.now();
-    if (existing && existing.in_flight === true) return;
-    if (existing && Number.isFinite(Number(existing.last_checked_ms)) && nowMs - Number(existing.last_checked_ms) < 10000) return;
+    if (existing && existing.in_flight === true) {
+      scheduleNextAutoRefresh(5000);
+      return;
+    }
+    if (existing && Number.isFinite(Number(existing.last_checked_ms))) {
+      const ageMs = nowMs - Number(existing.last_checked_ms);
+      if (ageMs < 6500) {
+        scheduleNextAutoRefresh(6500 - ageMs + 250);
+        return;
+      }
+    }
+
     wiz.workbench.__active_draft_create_lookup_by_session[sessionId] = {
       in_flight: true,
       started_at_utc: new Date().toISOString(),
@@ -39878,6 +39918,8 @@ function renderPayNewBatchWizard() {
       .then((operation) => {
         const storedOperation = storeActiveDraftCreateOperationForRender(operation || null);
         if (storedOperation && isActiveDraftCreateComplete(storedOperation)) refreshBatchListAfterDraftCreateComplete(storedOperation);
+        if (!storedOperation || isActiveDraftCreateTerminal(storedOperation)) clearAutoRefreshTimer();
+        else scheduleNextAutoRefresh(7500);
         try {
           if (typeof bankingRerender === 'function') bankingRerender(null);
         } catch {}
@@ -39886,6 +39928,7 @@ function renderPayNewBatchWizard() {
         try {
           wiz.workbench.__active_draft_create_lookup_last_error = String(error?.message || error || '');
         } catch {}
+        scheduleNextAutoRefresh(12000);
       })
       .finally(() => {
         try {
@@ -39914,10 +39957,9 @@ function renderPayNewBatchWizard() {
     if (activeDraftCreateOperationType(operation) !== 'DRAFT_CREATE') return '';
     const operationId = activeDraftCreateOperationId(operation);
     if (!operationId) return '';
+
     const status = activeDraftCreateStatus(operation) || 'RUNNING';
     const phase = activeDraftCreatePhase(operation) || 'INITIALISE';
-    const runnerState = upperTrim(operation.runner_state || operation.runnerState || '');
-    const sessionId = activeDraftCreateWorkbenchSessionId(operation);
     const batchIds = collectActiveDraftCreateBatchIds(operation);
     const complete = isActiveDraftCreateComplete(operation);
     const failureOrReview = isActiveDraftCreateFailureOrReview(operation) && !complete;
@@ -39928,37 +39970,143 @@ function renderPayNewBatchWizard() {
     const title = complete
       ? 'Draft created'
       : (failureOrReview ? (activeDraftCreateReviewStatuses.has(status) || readActiveDraftCreateBool(operation.review_required, false) || readActiveDraftCreateBool(operation.reviewRequired, false) ? 'Draft creation needs review' : 'Draft creation failed') : 'Draft creation in progress');
-    const pillClass = complete ? 'pill-ok' : (failureOrReview ? 'pill-bad' : 'pill-warn');
+
+    const normaliseStageKey = (value) => {
+      const raw = upperTrim(value || '').replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      const aliases = {
+        START: 'INITIALISE',
+        STARTING: 'INITIALISE',
+        RUNNING: 'INITIALISE',
+        STILL_RUNNING: 'INITIALISE',
+        WAITING: 'WAIT_FOR_PREVIEW_READY',
+        WAITING_RETRY: 'WAIT_FOR_PREVIEW_READY',
+        COMPLETED: 'COMPLETE',
+        SUCCEEDED: 'COMPLETE',
+        SUCCESS: 'COMPLETE',
+        DONE: 'COMPLETE',
+        ERROR: 'FAILED',
+        CANCELED: 'CANCELLED',
+        NEEDS_REVIEW: 'REVIEW_REQUIRED',
+        REVIEW: 'REVIEW_REQUIRED'
+      };
+      return aliases[raw] || raw || 'INITIALISE';
+    };
+    const draftCreateStageOrder = [
+      'INITIALISE',
+      'VALIDATE_SESSION',
+      'SYNC_SELECTED_ROWS',
+      'WAIT_FOR_PREVIEW_READY',
+      'SEED_CANDIDATE_SCOPE',
+      'DRAIN_TSFIN',
+      'ENSURE_PAYEE_READINESS',
+      'SEED_ALLOCATION_ROWS',
+      'CREATE_BATCH_SHELLS',
+      'SEED_DRAFT_CHUNKS',
+      'INSERT_CANDIDATES',
+      'INSERT_ITEMS',
+      'APPLY_FINANCE_ADJUSTMENTS',
+      'FINALISE_RESERVATIONS',
+      'POPULATE_CANDIDATE_SUMMARIES',
+      'CREATE_TIMESHEET_SNAPSHOTS',
+      'BUILD_ITEM_BREAKDOWNS',
+      'ASSERT_INTEGRITY',
+      'POST_CREATE_REFRESH',
+      'COMPLETE'
+    ];
+    const stageLabels = {
+      INITIALISE: 'Initialise',
+      VALIDATE_SESSION: 'Validate Session',
+      SYNC_SELECTED_ROWS: 'Sync Selected Rows',
+      WAIT_FOR_PREVIEW_READY: 'Wait For Preview Ready',
+      SEED_CANDIDATE_SCOPE: 'Seed Candidate Scope',
+      DRAIN_TSFIN: 'Prepare Timesheet Financials',
+      ENSURE_PAYEE_READINESS: 'Ensure Payee Readiness',
+      SEED_ALLOCATION_ROWS: 'Seed Allocation Rows',
+      CREATE_BATCH_SHELLS: 'Create Batch Shells',
+      SEED_DRAFT_CHUNKS: 'Seed Draft Chunks',
+      INSERT_CANDIDATES: 'Insert Candidates',
+      INSERT_ITEMS: 'Insert Items',
+      APPLY_FINANCE_ADJUSTMENTS: 'Apply Finance Adjustments',
+      FINALISE_RESERVATIONS: 'Finalise Reservations',
+      POPULATE_CANDIDATE_SUMMARIES: 'Populate Candidate Summaries',
+      CREATE_TIMESHEET_SNAPSHOTS: 'Create Timesheet Snapshots',
+      BUILD_ITEM_BREAKDOWNS: 'Build Item Breakdowns',
+      ASSERT_INTEGRITY: 'Assert Integrity',
+      POST_CREATE_REFRESH: 'Post Create Refresh',
+      COMPLETE: 'Complete',
+      FAILED: 'Failed',
+      CANCELLED: 'Cancelled',
+      REVIEW_REQUIRED: 'Review Required'
+    };
+    const humaniseStage = (value) => {
+      const key = normaliseStageKey(value);
+      if (stageLabels[key]) return stageLabels[key];
+      return key.toLowerCase().split('_').filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ') || 'Initialise';
+    };
+    const stageKey = complete ? 'COMPLETE' : normaliseStageKey(phase);
+    const stageTotal = draftCreateStageOrder.length;
+    const rawStageIndex = draftCreateStageOrder.indexOf(stageKey);
+    const stageIndex = complete ? (stageTotal - 1) : (rawStageIndex >= 0 ? rawStageIndex : 0);
+    const stageNumber = Math.max(1, Math.min(stageTotal, stageIndex + 1));
+    const explicitPercent = Number(operation.percent ?? operation.percentage ?? operation.progress?.percent ?? operation.progress?.percentage);
+    const stagePercent = complete ? 100 : Math.max(4, Math.min(98, Math.round((stageNumber / stageTotal) * 100)));
+    const barPercent = complete
+      ? 100
+      : Math.max(stagePercent, Number.isFinite(explicitPercent) ? Math.max(0, Math.min(98, Math.round(explicitPercent))) : 0);
+    const stageLabel = humaniseStage(stageKey);
+    const stageText = terminal && failureOrReview
+      ? `Stage: ${stageLabel}`
+      : `Stage: ${stageLabel}`;
+    const stageCountText = `Stage ${stageNumber} / ${stageTotal}`;
     const batchText = batchIds.length ? `Created draft batch${batchIds.length === 1 ? '' : 'es'}: ${batchIds.join(', ')}` : '';
     const refreshedText = trimStr(operation.completed_at_utc || operation.completedAtUtc || operation.updated_at_utc || operation.updatedAtUtc || '');
-    const draftCreateStatusHintText = complete
-      ? ''
-      : (failureOrReview
-          ? 'Use View details to reopen the draft creation status. No manual resume action is required.'
-          : 'You can close the progress window. Draft creation continues in the background and can be reopened from Banking Pay.');
+    const formatDraftCreateTime = (value) => {
+      const raw = trimStr(value);
+      if (!raw) return '';
+      try {
+        if (typeof fmtUtcToUk === 'function') {
+          const formatted = fmtUtcToUk(raw);
+          if (formatted) return formatted;
+        }
+      } catch {}
+      try {
+        if (typeof formatCloudTmsLondonDateTime === 'function') {
+          const formatted = formatCloudTmsLondonDateTime(raw);
+          if (formatted && formatted !== 'Not recorded') return formatted;
+        }
+      } catch {}
+      return raw;
+    };
     if (complete) refreshBatchListAfterDraftCreateComplete(operation);
     const actionButtons = [
       `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, failureOrReview ? 'View details' : 'View status')}>${enc(failureOrReview ? 'View details' : 'View status')}</button>`,
-      sessionId ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:refreshDraftCreateStatus" data-operation-id="${enc(operationId)}" data-workbench-session-id="${enc(sessionId)}" data-operation-type="DRAFT_CREATE" title="Refresh draft creation status">Refresh status</button>` : '',
       complete ? activeDraftCreateBatchOpenButtonHtml(operation) : ''
     ].filter(Boolean).join(' ');
+    const barInnerStyle = `width:${Math.max(0, Math.min(100, barPercent))}%;height:100%;background:var(--accent,#3b82f6);transition:width .25s ease;`;
+    const statusBits = [
+      stageCountText,
+      status ? `Status: ${status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase())}` : '',
+      refreshedText ? `Updated ${formatDraftCreateTime(refreshedText)}` : ''
+    ].filter(Boolean).join(' • ');
     return `
-      <div class="card" data-banking-active-draft-create-status="true" data-operation-id="${enc(operationId)}" style="margin-top:10px;border-color:${failureOrReview ? '#fecaca' : (complete ? '#bbf7d0' : '#fde68a')};background:${failureOrReview ? '#fef2f2' : (complete ? '#f0fdf4' : '#fffbeb')};">
-        <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
-          <div style="display:flex;flex-direction:column;gap:6px;min-width:260px;flex:1;">
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-              <strong>${enc(title)}</strong>
-              <span class="pill ${enc(pillClass)}">${enc(status)}</span>
-              <span class="pill">${enc(phase)}</span>
-              ${runnerState ? `<span class="pill">Runner ${enc(runnerState)}</span>` : ''}
-            </div>
-            <div class="mini" style="opacity:.9;white-space:pre-wrap;">${enc(message)}</div>
-            ${batchText ? `<div class="mini" style="opacity:.9;">${enc(batchText)}</div>` : ''}
-            ${refreshedText ? `<div class="mini" style="opacity:.75;">Last update ${enc(fmtDateTime(refreshedText))}</div>` : ''}
-            ${draftCreateStatusHintText ? `<div class="mini" style="opacity:.82;">${enc(draftCreateStatusHintText)}</div>` : ''}
+      <div class="card" data-banking-active-draft-create-status="true" data-operation-id="${enc(operationId)}" style="margin:0 0 10px 0;border-color:var(--line,#e2e8f0);background:var(--panel,#fff);">
+        <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+          <div style="display:flex;flex-direction:column;gap:4px;min-width:260px;flex:1;">
+            <strong>${enc(title)}</strong>
+            <div class="mini" style="opacity:.9;">${enc(stageText)}</div>
+            ${message ? `<div class="mini" style="opacity:.78;white-space:pre-wrap;">${enc(message)}</div>` : ''}
+            ${batchText ? `<div class="mini" style="opacity:.85;">${enc(batchText)}</div>` : ''}
           </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">${actionButtons}</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+            <span class="pill">${enc(stageCountText)}</span>
+            ${failureOrReview ? `<span class="pill pill-bad">${enc('Needs attention')}</span>` : (complete ? `<span class="pill pill-ok">${enc('Complete')}</span>` : `<span class="pill">${enc('Working')}</span>`)}
+            ${actionButtons}
+          </div>
         </div>
+        <div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${enc(String(Math.round(barPercent)))}" style="margin-top:8px;height:10px;border-radius:999px;overflow:hidden;background:rgba(148,163,184,.28);">
+          <div style="${barInnerStyle}"></div>
+        </div>
+        ${statusBits ? `<div class="mini" style="opacity:.72;margin-top:6px;">${enc(statusBits)}</div>` : ''}
       </div>
     `;
   };
@@ -45934,6 +46082,7 @@ function refreshBankingNavAttentionFromCachedRows() {
 }
 
 
+
 function renderPayBatchListPanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -46195,11 +46344,51 @@ function renderPayBatchListPanel() {
   const scheduleActiveDraftCreateOperationLookup = () => {
     const sessionId = activeDraftCreateWorkbenchSessionId(null);
     if (!sessionId || typeof bankingPayFindActiveDraftCreateOperation !== 'function') return;
+
+    const root = (() => {
+      try { return (typeof window !== 'undefined') ? window : globalThis; } catch { return null; }
+    })();
+    const timerMap = (() => {
+      if (!root) return null;
+      root.__bankingPayActiveDraftCreateLookupTimers = root.__bankingPayActiveDraftCreateLookupTimers && typeof root.__bankingPayActiveDraftCreateLookupTimers === 'object'
+        ? root.__bankingPayActiveDraftCreateLookupTimers
+        : Object.create(null);
+      return root.__bankingPayActiveDraftCreateLookupTimers;
+    })();
+    const clearAutoRefreshTimer = () => {
+      if (!timerMap || !timerMap[sessionId]) return;
+      try { clearTimeout(timerMap[sessionId]); } catch {}
+      try { delete timerMap[sessionId]; } catch { timerMap[sessionId] = null; }
+    };
+    const scheduleNextAutoRefresh = (delayMs = 7500) => {
+      if (!timerMap) return;
+      const currentOperation = getActiveDraftCreateOperationFromState();
+      if (!currentOperation || isActiveDraftCreateTerminal(currentOperation)) {
+        clearAutoRefreshTimer();
+        return;
+      }
+      if (timerMap[sessionId]) return;
+      timerMap[sessionId] = setTimeout(() => {
+        try { delete timerMap[sessionId]; } catch { timerMap[sessionId] = null; }
+        try { scheduleActiveDraftCreateOperationLookup(); } catch {}
+      }, Math.max(2000, Math.trunc(Number(delayMs) || 7500)));
+    };
+
     wiz.workbench.__active_draft_create_lookup_by_session = isPlainObject(wiz.workbench.__active_draft_create_lookup_by_session) ? wiz.workbench.__active_draft_create_lookup_by_session : {};
     const existing = wiz.workbench.__active_draft_create_lookup_by_session[sessionId];
     const nowMs = Date.now();
-    if (existing && existing.in_flight === true) return;
-    if (existing && Number.isFinite(Number(existing.last_checked_ms)) && nowMs - Number(existing.last_checked_ms) < 10000) return;
+    if (existing && existing.in_flight === true) {
+      scheduleNextAutoRefresh(5000);
+      return;
+    }
+    if (existing && Number.isFinite(Number(existing.last_checked_ms))) {
+      const ageMs = nowMs - Number(existing.last_checked_ms);
+      if (ageMs < 6500) {
+        scheduleNextAutoRefresh(6500 - ageMs + 250);
+        return;
+      }
+    }
+
     wiz.workbench.__active_draft_create_lookup_by_session[sessionId] = {
       in_flight: true,
       started_at_utc: new Date().toISOString(),
@@ -46223,6 +46412,8 @@ function renderPayBatchListPanel() {
       .then((operation) => {
         const storedOperation = storeActiveDraftCreateOperationForRender(operation || null);
         if (storedOperation && isActiveDraftCreateComplete(storedOperation)) refreshBatchListAfterDraftCreateComplete(storedOperation);
+        if (!storedOperation || isActiveDraftCreateTerminal(storedOperation)) clearAutoRefreshTimer();
+        else scheduleNextAutoRefresh(7500);
         try {
           if (typeof bankingRerender === 'function') bankingRerender(null);
         } catch {}
@@ -46231,6 +46422,7 @@ function renderPayBatchListPanel() {
         try {
           wiz.workbench.__active_draft_create_lookup_last_error = String(error?.message || error || '');
         } catch {}
+        scheduleNextAutoRefresh(12000);
       })
       .finally(() => {
         try {
@@ -46259,10 +46451,9 @@ function renderPayBatchListPanel() {
     if (activeDraftCreateOperationType(operation) !== 'DRAFT_CREATE') return '';
     const operationId = activeDraftCreateOperationId(operation);
     if (!operationId) return '';
+
     const status = activeDraftCreateStatus(operation) || 'RUNNING';
     const phase = activeDraftCreatePhase(operation) || 'INITIALISE';
-    const runnerState = upperTrim(operation.runner_state || operation.runnerState || '');
-    const sessionId = activeDraftCreateWorkbenchSessionId(operation);
     const batchIds = collectActiveDraftCreateBatchIds(operation);
     const complete = isActiveDraftCreateComplete(operation);
     const failureOrReview = isActiveDraftCreateFailureOrReview(operation) && !complete;
@@ -46273,37 +46464,143 @@ function renderPayBatchListPanel() {
     const title = complete
       ? 'Draft created'
       : (failureOrReview ? (activeDraftCreateReviewStatuses.has(status) || readActiveDraftCreateBool(operation.review_required, false) || readActiveDraftCreateBool(operation.reviewRequired, false) ? 'Draft creation needs review' : 'Draft creation failed') : 'Draft creation in progress');
-    const pillClass = complete ? 'pill-ok' : (failureOrReview ? 'pill-bad' : 'pill-warn');
+
+    const normaliseStageKey = (value) => {
+      const raw = upperTrim(value || '').replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      const aliases = {
+        START: 'INITIALISE',
+        STARTING: 'INITIALISE',
+        RUNNING: 'INITIALISE',
+        STILL_RUNNING: 'INITIALISE',
+        WAITING: 'WAIT_FOR_PREVIEW_READY',
+        WAITING_RETRY: 'WAIT_FOR_PREVIEW_READY',
+        COMPLETED: 'COMPLETE',
+        SUCCEEDED: 'COMPLETE',
+        SUCCESS: 'COMPLETE',
+        DONE: 'COMPLETE',
+        ERROR: 'FAILED',
+        CANCELED: 'CANCELLED',
+        NEEDS_REVIEW: 'REVIEW_REQUIRED',
+        REVIEW: 'REVIEW_REQUIRED'
+      };
+      return aliases[raw] || raw || 'INITIALISE';
+    };
+    const draftCreateStageOrder = [
+      'INITIALISE',
+      'VALIDATE_SESSION',
+      'SYNC_SELECTED_ROWS',
+      'WAIT_FOR_PREVIEW_READY',
+      'SEED_CANDIDATE_SCOPE',
+      'DRAIN_TSFIN',
+      'ENSURE_PAYEE_READINESS',
+      'SEED_ALLOCATION_ROWS',
+      'CREATE_BATCH_SHELLS',
+      'SEED_DRAFT_CHUNKS',
+      'INSERT_CANDIDATES',
+      'INSERT_ITEMS',
+      'APPLY_FINANCE_ADJUSTMENTS',
+      'FINALISE_RESERVATIONS',
+      'POPULATE_CANDIDATE_SUMMARIES',
+      'CREATE_TIMESHEET_SNAPSHOTS',
+      'BUILD_ITEM_BREAKDOWNS',
+      'ASSERT_INTEGRITY',
+      'POST_CREATE_REFRESH',
+      'COMPLETE'
+    ];
+    const stageLabels = {
+      INITIALISE: 'Initialise',
+      VALIDATE_SESSION: 'Validate Session',
+      SYNC_SELECTED_ROWS: 'Sync Selected Rows',
+      WAIT_FOR_PREVIEW_READY: 'Wait For Preview Ready',
+      SEED_CANDIDATE_SCOPE: 'Seed Candidate Scope',
+      DRAIN_TSFIN: 'Prepare Timesheet Financials',
+      ENSURE_PAYEE_READINESS: 'Ensure Payee Readiness',
+      SEED_ALLOCATION_ROWS: 'Seed Allocation Rows',
+      CREATE_BATCH_SHELLS: 'Create Batch Shells',
+      SEED_DRAFT_CHUNKS: 'Seed Draft Chunks',
+      INSERT_CANDIDATES: 'Insert Candidates',
+      INSERT_ITEMS: 'Insert Items',
+      APPLY_FINANCE_ADJUSTMENTS: 'Apply Finance Adjustments',
+      FINALISE_RESERVATIONS: 'Finalise Reservations',
+      POPULATE_CANDIDATE_SUMMARIES: 'Populate Candidate Summaries',
+      CREATE_TIMESHEET_SNAPSHOTS: 'Create Timesheet Snapshots',
+      BUILD_ITEM_BREAKDOWNS: 'Build Item Breakdowns',
+      ASSERT_INTEGRITY: 'Assert Integrity',
+      POST_CREATE_REFRESH: 'Post Create Refresh',
+      COMPLETE: 'Complete',
+      FAILED: 'Failed',
+      CANCELLED: 'Cancelled',
+      REVIEW_REQUIRED: 'Review Required'
+    };
+    const humaniseStage = (value) => {
+      const key = normaliseStageKey(value);
+      if (stageLabels[key]) return stageLabels[key];
+      return key.toLowerCase().split('_').filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ') || 'Initialise';
+    };
+    const stageKey = complete ? 'COMPLETE' : normaliseStageKey(phase);
+    const stageTotal = draftCreateStageOrder.length;
+    const rawStageIndex = draftCreateStageOrder.indexOf(stageKey);
+    const stageIndex = complete ? (stageTotal - 1) : (rawStageIndex >= 0 ? rawStageIndex : 0);
+    const stageNumber = Math.max(1, Math.min(stageTotal, stageIndex + 1));
+    const explicitPercent = Number(operation.percent ?? operation.percentage ?? operation.progress?.percent ?? operation.progress?.percentage);
+    const stagePercent = complete ? 100 : Math.max(4, Math.min(98, Math.round((stageNumber / stageTotal) * 100)));
+    const barPercent = complete
+      ? 100
+      : Math.max(stagePercent, Number.isFinite(explicitPercent) ? Math.max(0, Math.min(98, Math.round(explicitPercent))) : 0);
+    const stageLabel = humaniseStage(stageKey);
+    const stageText = terminal && failureOrReview
+      ? `Stage: ${stageLabel}`
+      : `Stage: ${stageLabel}`;
+    const stageCountText = `Stage ${stageNumber} / ${stageTotal}`;
     const batchText = batchIds.length ? `Created draft batch${batchIds.length === 1 ? '' : 'es'}: ${batchIds.join(', ')}` : '';
     const refreshedText = trimStr(operation.completed_at_utc || operation.completedAtUtc || operation.updated_at_utc || operation.updatedAtUtc || '');
-    const draftCreateStatusHintText = complete
-      ? ''
-      : (failureOrReview
-          ? 'Use View details to reopen the draft creation status. No manual resume action is required.'
-          : 'You can close the progress window. Draft creation continues in the background and can be reopened from Banking Pay.');
+    const formatDraftCreateTime = (value) => {
+      const raw = trimStr(value);
+      if (!raw) return '';
+      try {
+        if (typeof fmtUtcToUk === 'function') {
+          const formatted = fmtUtcToUk(raw);
+          if (formatted) return formatted;
+        }
+      } catch {}
+      try {
+        if (typeof formatCloudTmsLondonDateTime === 'function') {
+          const formatted = formatCloudTmsLondonDateTime(raw);
+          if (formatted && formatted !== 'Not recorded') return formatted;
+        }
+      } catch {}
+      return raw;
+    };
     if (complete) refreshBatchListAfterDraftCreateComplete(operation);
     const actionButtons = [
       `<button type="button" class="btn btn-sm btn-outline" ${handleViewActiveDraftCreateStatus(operation, failureOrReview ? 'View details' : 'View status')}>${enc(failureOrReview ? 'View details' : 'View status')}</button>`,
-      sessionId ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:refreshDraftCreateStatus" data-operation-id="${enc(operationId)}" data-workbench-session-id="${enc(sessionId)}" data-operation-type="DRAFT_CREATE" title="Refresh draft creation status">Refresh status</button>` : '',
       complete ? activeDraftCreateBatchOpenButtonHtml(operation) : ''
     ].filter(Boolean).join(' ');
+    const barInnerStyle = `width:${Math.max(0, Math.min(100, barPercent))}%;height:100%;background:var(--accent,#3b82f6);transition:width .25s ease;`;
+    const statusBits = [
+      stageCountText,
+      status ? `Status: ${status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase())}` : '',
+      refreshedText ? `Updated ${formatDraftCreateTime(refreshedText)}` : ''
+    ].filter(Boolean).join(' • ');
     return `
-      <div class="card" data-banking-active-draft-create-status="true" data-operation-id="${enc(operationId)}" style="margin:0 0 10px 0;border-color:${failureOrReview ? '#fecaca' : (complete ? '#bbf7d0' : '#fde68a')};background:${failureOrReview ? '#fef2f2' : (complete ? '#f0fdf4' : '#fffbeb')};">
-        <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
-          <div style="display:flex;flex-direction:column;gap:6px;min-width:260px;flex:1;">
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-              <strong>${enc(title)}</strong>
-              <span class="pill ${enc(pillClass)}">${enc(status)}</span>
-              <span class="pill">${enc(phase)}</span>
-              ${runnerState ? `<span class="pill">Runner ${enc(runnerState)}</span>` : ''}
-            </div>
-            <div class="mini" style="opacity:.9;white-space:pre-wrap;">${enc(message)}</div>
-            ${batchText ? `<div class="mini" style="opacity:.9;">${enc(batchText)}</div>` : ''}
-            ${refreshedText ? `<div class="mini" style="opacity:.75;">Last update ${enc(fmtUtcToUk(refreshedText))}</div>` : ''}
-            ${draftCreateStatusHintText ? `<div class="mini" style="opacity:.82;">${enc(draftCreateStatusHintText)}</div>` : ''}
+      <div class="card" data-banking-active-draft-create-status="true" data-operation-id="${enc(operationId)}" style="margin:0 0 10px 0;border-color:var(--line,#e2e8f0);background:var(--panel,#fff);">
+        <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+          <div style="display:flex;flex-direction:column;gap:4px;min-width:260px;flex:1;">
+            <strong>${enc(title)}</strong>
+            <div class="mini" style="opacity:.9;">${enc(stageText)}</div>
+            ${message ? `<div class="mini" style="opacity:.78;white-space:pre-wrap;">${enc(message)}</div>` : ''}
+            ${batchText ? `<div class="mini" style="opacity:.85;">${enc(batchText)}</div>` : ''}
           </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">${actionButtons}</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+            <span class="pill">${enc(stageCountText)}</span>
+            ${failureOrReview ? `<span class="pill pill-bad">${enc('Needs attention')}</span>` : (complete ? `<span class="pill pill-ok">${enc('Complete')}</span>` : `<span class="pill">${enc('Working')}</span>`)}
+            ${actionButtons}
+          </div>
         </div>
+        <div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${enc(String(Math.round(barPercent)))}" style="margin-top:8px;height:10px;border-radius:999px;overflow:hidden;background:rgba(148,163,184,.28);">
+          <div style="${barInnerStyle}"></div>
+        </div>
+        ${statusBits ? `<div class="mini" style="opacity:.72;margin-top:6px;">${enc(statusBits)}</div>` : ''}
       </div>
     `;
   };
@@ -168002,6 +168299,24 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
 
   const operationId = trimStr(src.operation_id || src.operationId || src.id || progress.operation_id || progress.operationId || '');
   const operationType = upperTrim(src.operation_type || src.operationType || progress.operation_type || progress.operationType || src.operation_kind || src.operationKind || progress.operation_kind || progress.operationKind || '');
+  const firstOperationBool = (...keys) => {
+    const sources = [src, progress, resultJson, errorJson].filter((entry) => isPlainObject(entry));
+    for (const source of sources) {
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+        const parsed = boolFromProviderDiagnostic(source[key]);
+        if (parsed !== null) return parsed;
+      }
+    }
+    return null;
+  };
+  const explicitBackendRunnerOwned = firstOperationBool('backend_runner_owned', 'backendRunnerOwned');
+  const explicitFrontendCompletionRequired = firstOperationBool('frontend_completion_required', 'frontendCompletionRequired');
+  const frontendCompletionRequired = explicitFrontendCompletionRequired === true;
+  const backendRunnerOwned = operationType === 'DRAFT_CREATE'
+    ? (frontendCompletionRequired === true ? explicitBackendRunnerOwned === true : true)
+    : explicitBackendRunnerOwned === true;
+  const backendOwnedDraftCreate = operationType === 'DRAFT_CREATE' && backendRunnerOwned === true && frontendCompletionRequired !== true;
   const status = upperTrim(src.status || src.operation_status || src.operationStatus || src.state || progress.status || progress.operation_status || progress.operationStatus || progress.state || '');
   const rawPhase = upperTrim(src.phase || progress.phase || '');
   const phase = rawPhase || (
@@ -168597,6 +168912,10 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     operation_id: operationId || null,
     id: operationId || null,
     operation_type: operationType || null,
+    backend_runner_owned: backendRunnerOwned === true,
+    backendRunnerOwned: backendRunnerOwned === true,
+    frontend_completion_required: frontendCompletionRequired === true,
+    frontendCompletionRequired: frontendCompletionRequired === true,
     operation_kind_label: isRetryUnsentOperation ? 'Retry unsent payments' : (operationType || null),
     retry_in_progress: retryInProgress === true,
     retry_complete: retryComplete === true,
@@ -168643,10 +168962,10 @@ function normaliseBankingPayOperationProgress(operationPayload = {}) {
     percent,
     can_advance: canAdvance,
     canAdvance,
-    can_nudge: canAdvance,
-    canNudge: canAdvance,
-    can_resume: canAdvance,
-    canResume: canAdvance,
+    can_nudge: backendOwnedDraftCreate ? false : canAdvance,
+    canNudge: backendOwnedDraftCreate ? false : canAdvance,
+    can_resume: backendOwnedDraftCreate ? false : canAdvance,
+    canResume: backendOwnedDraftCreate ? false : canAdvance,
     can_cancel: canCancel,
     terminal,
     complete,
