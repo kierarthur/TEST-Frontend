@@ -169666,7 +169666,6 @@ function looksFatalProgressFailure(value) {
   return false;
 }
 
-
 async function runBankingPayOperationWithProgress(initialOperationPayload, options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -169822,7 +169821,7 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
           for (const item of node[key]) push(item);
         }
       }
-      for (const key of ['result', 'result_json', 'resultJson', 'final_result', 'finalResult', 'result_summary', 'resultSummary', 'post_create_refresh', 'postCreateRefresh']) {
+      for (const key of ['result', 'result_json', 'resultJson', 'final_result', 'finalResult', 'result_summary', 'resultSummary', 'post_create_refresh', 'postCreateRefresh', 'error', 'error_json', 'errorJson', 'small_error_summary', 'smallErrorSummary', 'created_batch_cleanup', 'createdBatchCleanup']) {
         if (Object.prototype.hasOwnProperty.call(node, key)) visit(node[key], depth + 1);
       }
     };
@@ -169933,8 +169932,35 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
   const notifyTerminalObserved = async (operationState) => {
     if (!isBackendOwnedDraftCreateOperation(operationState)) return;
     if (!(isTerminal(operationState) || isFailed(operationState) || isCancelled(operationState) || isReview(operationState))) return;
+    const observedBatchIds = collectCreatedBatchIdsFromOperation(operationState);
     try {
       if (typeof opts.onTerminalObserved === 'function') await opts.onTerminalObserved(operationState);
+    } catch {}
+    try {
+      if (observedBatchIds.length && typeof opts.onBatchListRefresh === 'function') {
+        await opts.onBatchListRefresh({ operation: operationState, pay_batch_ids: observedBatchIds, source: 'runBankingPayOperationWithProgress.terminalDraftCreate' });
+      }
+    } catch {}
+    try {
+      if (observedBatchIds.length && opts.refreshBatchListOnTerminal !== false && typeof bankingPayBatchesList === 'function') {
+        await bankingPayBatchesList({
+          status: opts.statusFilter || opts.status || '',
+          limit: opts.listLimit || opts.limit || 50,
+          offset: 0,
+          display_mode: 'LIGHT',
+          displayMode: 'LIGHT',
+          include_diagnostics: false,
+          includeDiagnostics: false,
+          include_alerts: false,
+          includeAlerts: false,
+          include_correction_summary: false,
+          includeCorrectionSummary: false,
+          source: 'runBankingPayOperationWithProgress.terminalDraftCreate'
+        });
+      }
+    } catch {}
+    try {
+      if (typeof bankingRerender === 'function') await bankingRerender(null);
     } catch {}
   };
 
@@ -169998,11 +170024,51 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
     });
   }
 
-  const maxPolls = Math.max(1, Math.min(60, Number(opts.maxPolls || opts.max_polls || 10) || 10));
-  const pollMs = Math.max(500, Math.min(10000, Number(opts.pollMs || opts.poll_ms || 1500) || 1500));
+  const backendOwnedDraftCreateObserver = isBackendOwnedDraftCreateOperation(current);
+  const defaultMaxPolls = backendOwnedDraftCreateObserver ? 120 : 10;
+  const defaultPollMs = backendOwnedDraftCreateObserver ? 1500 : 1500;
+  const maxPolls = Math.max(1, Math.min(backendOwnedDraftCreateObserver ? 240 : 60, Number(opts.maxPolls || opts.max_polls || defaultMaxPolls) || defaultMaxPolls));
+  const pollMs = Math.max(500, Math.min(backendOwnedDraftCreateObserver ? 5000 : 10000, Number(opts.pollMs || opts.poll_ms || defaultPollMs) || defaultPollMs));
   let lastError = null;
 
-  for (let i = 0; i < maxPolls; i += 1) {
+  const modalHasVisibleLifecycle = () => {
+    try {
+      return !!(modal && (modal.root || modal.overlay));
+    } catch {
+      return false;
+    }
+  };
+  const modalIsClosed = () => {
+    try {
+      if (!modal) return true;
+      if (typeof modal.getState === 'function') {
+        const modalState = modal.getState();
+        if (modalState && modalState.closed === true) return true;
+      }
+      if (modal.overlay && typeof modal.overlay.isConnected === 'boolean' && modal.overlay.isConnected === false) return true;
+      if (modal.root && typeof modal.root.isConnected === 'boolean' && modal.root.isConnected === false) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  };
+  const modalStopRequested = () => {
+    try {
+      return !!(modal && typeof modal.isStopRequested === 'function' && modal.isStopRequested());
+    } catch {
+      return false;
+    }
+  };
+  const shouldKeepPollingVisibleDraftCreateModal = () => {
+    return backendOwnedDraftCreateObserver
+      && opts.keepPollingWhileModalOpen !== false
+      && modalHasVisibleLifecycle()
+      && !modalIsClosed()
+      && !modalStopRequested();
+  };
+
+  let pollIndex = 0;
+  while (pollIndex < maxPolls || shouldKeepPollingVisibleDraftCreateModal()) {
     try {
       current = await fetchProgressLight();
       updateModal(current);
@@ -170015,12 +170081,15 @@ async function runBankingPayOperationWithProgress(initialOperationPayload, optio
           can_reopen: isBackendOwnedOperation(current) || isReview(current) || isWaitingForAuthorisation(current) || isWaitingForProvider(current)
         });
       }
-      if (i < maxPolls - 1) await delay(pollMs);
     } catch (e) {
       lastError = e;
       if (looksFatal(e)) throw e;
-      if (i < maxPolls - 1) await delay(pollMs);
     }
+
+    pollIndex += 1;
+    if (modalStopRequested()) break;
+    if (pollIndex >= maxPolls && !shouldKeepPollingVisibleDraftCreateModal()) break;
+    await delay(pollMs);
   }
 
   const nonTerminal = isBackendOwnedOperation(current)
