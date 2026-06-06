@@ -55692,7 +55692,23 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
 
   const isCsvExportAllowedByStatus = (data) => {
     if (!hasActivePaymentsForBatch(data)) return false;
-    return !!(typeof bankingPayIsCsvExportAllowedByStatus === 'function' && bankingPayIsCsvExportAllowedByStatus(data));
+    try {
+      if (typeof bankingPayIsCsvExportAllowedByStatus === 'function' && bankingPayIsCsvExportAllowedByStatus(data) === true) return true;
+    } catch {}
+    const d = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+    const b = deriveBatchObj(d) || {};
+    const explicitBankCsvAllowed =
+      childBatchStatusReadBool(d.can_create_bank_csv_file) ||
+      childBatchStatusReadBool(d.canCreateBankCsvFile) ||
+      childBatchStatusReadBool(b.can_create_bank_csv_file) ||
+      childBatchStatusReadBool(b.canCreateBankCsvFile);
+    if (explicitBankCsvAllowed) return true;
+    const stx = String(b.status || d.status || '').trim().toUpperCase();
+    const commitState = String(b.execution_commit_state || d.execution_commit_state || 'NOT_SUBMITTED').trim().toUpperCase() || 'NOT_SUBMITTED';
+    if (commitState !== 'NOT_SUBMITTED') return false;
+    if (!['DRAFT', 'DRAFT_CREATED', 'READY'].includes(stx)) return false;
+    if (hasProviderOrBankExecutionEvidence(d) === true) return false;
+    return true;
   };
 
   const isPayeNetCompleteForBatch = (data) => {
@@ -65066,12 +65082,25 @@ function renderBankingPayBatchChildModalOverview() {
     overviewStatusAllowsPayeEntry
   );
 
-  const overviewCanCreateBankCsvFile = readFirstBool(
+  const overviewBankCsvFlagStates = [
     data.can_create_bank_csv_file,
     data.canCreateBankCsvFile,
     batch.can_create_bank_csv_file,
     batch.canCreateBankCsvFile
+  ].map(readOptionalBool).filter((value) => value !== null);
+  const overviewExplicitBankCsvAllowed = overviewBankCsvFlagStates.includes(true);
+  const cleanDraftBankCsvInference = !!(
+    overviewIsPreSubmissionDraft &&
+    hasActiveBatchPayments &&
+    overviewStatusAllowsCsv &&
+    !overviewHasExecutionEvidence &&
+    !activePaymentExecuteOperation &&
+    !waitingAuthorisation &&
+    !reviewRequired &&
+    providerSubmitOverviewModel.hasIssue !== true &&
+    !executeBlockedByState
   );
+  const overviewCanCreateBankCsvFile = overviewExplicitBankCsvAllowed || cleanDraftBankCsvInference;
   const canShowGenerateCsv = !!(
     hasActiveBatchPayments &&
     overviewStatusAllowsCsv &&
