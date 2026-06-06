@@ -30215,6 +30215,8 @@ async function bankingPayPreview(pay_date) {
 }
 
 
+
+
 async function bankingPayCreateDraft(input = {}) {
   const inputOptions = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const { pay_date, preview_decisions_json } = inputOptions;
@@ -31583,6 +31585,74 @@ async function bankingPayCreateDraft(input = {}) {
       }
     } catch {}
     try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
+  };
+
+  const isPostCreateRefreshPendingMessage = (value) => {
+    const normalised = trimStr(value).replace(/\u2026/g, '...').toLowerCase();
+    return normalised === 'payment draft created. refreshing payment preview...'
+      || normalised === 'payment draft created. refreshing payment preview';
+  };
+  const extractCreateDraftFailureMessage = (friendly, errorLike, fallbackMessage = 'Payment batch could not be created. Refresh the preview, review the latest payment details, then try again.') => {
+    const candidates = [
+      friendly?.user_message,
+      friendly?.message,
+      friendly?.friendly_error?.message,
+      errorLike?.user_message,
+      errorLike?.message,
+      errorLike?.error_message,
+      errorLike?.errorMessage,
+      errorLike?.status_text,
+      errorLike?.statusText,
+      errorLike?.error?.message,
+      errorLike?.json?.user_message,
+      errorLike?.json?.message,
+      errorLike?.json?.error_message,
+      errorLike?.json?.status_text,
+      errorLike?.payload?.user_message,
+      errorLike?.payload?.message,
+      errorLike?.payload?.error_message,
+      errorLike?.payload?.status_text
+    ];
+    for (const candidate of candidates) {
+      const message = trimStr(candidate);
+      if (message && !isPostCreateRefreshPendingMessage(message)) return message;
+    }
+    return fallbackMessage;
+  };
+  const clearCreateDraftTransientRefreshState = (failureMessage = '') => {
+    const message = trimStr(failureMessage);
+    try { wiz.createDraftBusy = false; } catch {}
+    const targets = [wiz, wiz.workbench, wiz.decisions].filter((target) => isPlainObject(target));
+    for (const target of targets) {
+      try {
+        target.create_draft_refresh_pending = false;
+        target.createDraftRefreshPending = false;
+        target.preview_reopen_required = false;
+        target.previewReopenRequired = false;
+        target.post_create_preview_refresh_failed = false;
+        target.postCreatePreviewRefreshFailed = false;
+        target.active_draft_create_operation_id = null;
+        target.activeDraftCreateOperationId = null;
+        target.active_draft_create_operation = null;
+        target.activeDraftCreateOperation = null;
+        target.draft_create_status = null;
+        target.draftCreateStatus = null;
+        if (isPostCreateRefreshPendingMessage(target.createDraftError)) target.createDraftError = '';
+      } catch {}
+    }
+    try {
+      if (isPlainObject(wiz.preview)) {
+        wiz.preview.__post_create_refresh_pending = false;
+        wiz.preview.__post_mutation_preview_refresh_failed = false;
+        wiz.preview.post_create_preview_refresh_failed = false;
+        wiz.preview.postCreatePreviewRefreshFailed = false;
+        if (isPostCreateRefreshPendingMessage(wiz.preview.status_text) || isPostCreateRefreshPendingMessage(wiz.preview.message)) {
+          wiz.preview.loading = false;
+          wiz.preview.status_text = message || 'Payment batch could not be created.';
+          wiz.preview.message = message || 'Payment batch could not be created.';
+        }
+      }
+    } catch {}
   };
 
   const failCreateDraftContext = async (message, details = {}) => {
@@ -33276,29 +33346,54 @@ async function bankingPayCreateDraft(input = {}) {
           showModal: createDraftUserInitiated && !createDraftSilent && !createDraftBackground
         })
       : null;
-    const errMessage = trimStr(
+    const rawErrMessage = trimStr(
       friendly?.user_message ||
       friendly?.message ||
       'Payment batch could not be created. Refresh the preview, review the latest payment details, then try again.'
     ) || 'Payment batch could not be created. Refresh the preview, review the latest payment details, then try again.';
+    const errMessage = isPostCreateRefreshPendingMessage(rawErrMessage)
+      ? extractCreateDraftFailureMessage(friendly, e, 'Payment batch could not be created. Refresh the preview, review the latest payment details, then try again.')
+      : rawErrMessage;
+    const friendlyForDisplay = (() => {
+      if (!friendly || typeof friendly !== 'object') return friendly;
+      const hasStaleFriendlyMessage = [
+        friendly.user_message,
+        friendly.message,
+        friendly.error,
+        friendly.friendly_error?.message
+      ].some((value) => isPostCreateRefreshPendingMessage(value));
+      if (!hasStaleFriendlyMessage) return friendly;
+      return {
+        ...friendly,
+        user_message: errMessage,
+        message: errMessage,
+        error: isPostCreateRefreshPendingMessage(friendly.error) ? errMessage : friendly.error,
+        friendly_error: (friendly.friendly_error && typeof friendly.friendly_error === 'object')
+          ? {
+              ...friendly.friendly_error,
+              message: errMessage
+            }
+          : friendly.friendly_error
+      };
+    })();
+
     logTroubleshoot('error', 'API_POST_CREATE_DRAFT_FAILED', {
       ...requestSummary,
       message: errMessage
     });
 
     try {
+      clearCreateDraftTransientRefreshState(errMessage);
       wiz.createDraftError = errMessage;
-      wiz.createDraftFriendlyError = friendly && typeof friendly === 'object' ? friendly : null;
+      wiz.createDraftFriendlyError = friendlyForDisplay && typeof friendlyForDisplay === 'object' ? friendlyForDisplay : null;
     } catch {}
 
-    await presentCreateDraftFriendlyError(friendly, 'Payment batch could not be created', errMessage);
+    await presentCreateDraftFriendlyError(friendlyForDisplay, 'Payment batch could not be created', errMessage);
     return null;
   } finally {
     try { wiz.createDraftBusy = false; } catch {}
   }
 }
-
-
 
 
 
@@ -48661,8 +48756,6 @@ function normaliseActiveDraftCreateOperationLookupResponse(responsePayload = {},
   return normalised;
 }
 
-
-
 async function bankingPayFindActiveDraftCreateOperation(sessionId, options = {}) {
   const id = String(sessionId || '').trim();
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -48681,6 +48774,11 @@ async function bankingPayFindActiveDraftCreateOperation(sessionId, options = {})
     if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
     if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
     return fallback;
+  };
+  const isPostCreateRefreshPendingMessage = (value) => {
+    const normalised = trimStr(value).replace(/\u2026/g, '...').toLowerCase();
+    return normalised === 'payment draft created. refreshing payment preview...'
+      || normalised === 'payment draft created. refreshing payment preview';
   };
   const boundedInteger = (value, fallback, minimum, maximum) => {
     const n = Number(value);
@@ -48720,6 +48818,20 @@ async function bankingPayFindActiveDraftCreateOperation(sessionId, options = {})
       target.activeDraftCreateOperation = null;
       target.draft_create_status = null;
       target.draftCreateStatus = null;
+      target.create_draft_refresh_pending = false;
+      target.createDraftRefreshPending = false;
+      target.preview_reopen_required = false;
+      target.previewReopenRequired = false;
+      target.post_create_preview_refresh_failed = false;
+      target.postCreatePreviewRefreshFailed = false;
+      if (isPostCreateRefreshPendingMessage(target.createDraftError)) target.createDraftError = '';
+      if (target.preview && typeof target.preview === 'object' && !Array.isArray(target.preview)) {
+        target.preview.__post_create_refresh_pending = false;
+        target.preview.post_create_preview_refresh_failed = false;
+        target.preview.postCreatePreviewRefreshFailed = false;
+        if (isPostCreateRefreshPendingMessage(target.preview.status_text)) target.preview.status_text = 'Payment preview is ready.';
+        if (isPostCreateRefreshPendingMessage(target.preview.message)) target.preview.message = 'Payment preview is ready.';
+      }
       if (terminalObject) {
         target.last_create_draft_operation_payload = terminalObject;
         target.lastCreateDraftOperationPayload = terminalObject;
@@ -48892,6 +49004,7 @@ async function bankingPayFindActiveDraftCreateOperation(sessionId, options = {})
     try { delete root.__bankingPayActiveDraftCreateOperationLookupInFlight[dedupeKey]; } catch {}
   }
 }
+
 
 
 function renderPayBatchDetailPanel() {
