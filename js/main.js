@@ -63806,7 +63806,7 @@ function renderBankingPayBatchChildModalOverview() {
             <div style="font-weight:800;font-size:14px;letter-spacing:.01em;">${enc(model.headline || 'Check required')}</div>
             <div class="mini" style="opacity:.96;white-space:pre-wrap;">${enc(model.summary || '')}${model.action ? `\n${enc(model.action)}` : ''}</div>
           </div>
-          <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPaymentIssues">Current Payment Status</button>
+     
         </div>
       </div>
     `;
@@ -65357,10 +65357,9 @@ function renderBankingPayBatchChildModalOverview() {
               ${renderPaymentSummaryHtml()}
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 ${primaryActionButtonsHtml}
-                <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh">Refresh Batch</button>
+                  <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh">Refresh Batch</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailCsv">Detailed CSV</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailPdf">Detailed PDF</button>
-                <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPaymentIssues">Current Payment Status</button>
                 ${busyLine}
               </div>
               <div class="mini" style="opacity:.88;">Remittances sent: <span class="mono">${enc(remittancesSent ? 'Yes' : 'No')}</span></div>
@@ -65525,7 +65524,6 @@ function renderBankingPayBatchChildModalOverview() {
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailCsv" title="Download detailed CSV">Detailed CSV</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailPdf" title="Download detailed PDF">Detailed PDF</button>
-                <button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openPaymentIssues" title="Open Current Payment Status">Current Payment Status</button>
               </div>
             </div>
 
