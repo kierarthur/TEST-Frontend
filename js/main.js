@@ -48461,10 +48461,11 @@ function renderPayBatchListPanel() {
             <button
               type="button"
               class="btn btn-sm btn-outline"
+              style="font-weight:800;background:#dc2626;border-color:#dc2626;color:#fff;"
               data-action="banking:pay:deleteDraft"
               data-batch-id="${enc(id)}"
-              title="Delete draft batch (releases reservations)"
-            >Delete draft</button>
+              title="Cancel draft batch (releases reservations)"
+            >Cancel Draft Batch</button>
           `
           : (cancelMode === 'CANCEL_UNPAID' && id)
             ? `
@@ -48556,7 +48557,7 @@ function renderPayBatchListPanel() {
                   <th>Status</th>
                   <th>Rail</th>
                   <th>Created</th>
-                  <th style="width:140px;">Actions</th>
+                  <th style="width:190px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -48614,6 +48615,10 @@ function renderPayBatchListPanel() {
     </div>
   `;
 }
+
+
+
+
 
 function normaliseActiveDraftCreateOperationLookupResponse(responsePayload = {}, options = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -63413,8 +63418,6 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
   return result;
 }
 
-
-
 function renderBankingPayBatchChildModalOverview() {
   try { window.__CTMS_OVERVIEW_RUNTIME_PROOF_MARKER = 'renderBankingPayBatchChildModalOverview:overview-draft-not-sent:2026-05-26'; } catch {}
   const enc = (typeof escapeHtml === 'function')
@@ -65197,6 +65200,9 @@ function renderBankingPayBatchChildModalOverview() {
     batch.can_pre_provider_cancel,
     batch.canPreProviderCancel
   );
+  const overviewCancelMode = (typeof bankingPayResolveBatchCancelMode === 'function')
+    ? bankingPayResolveBatchCancelMode({ ...batch, ...data, batch })
+    : '';
   const overviewCancelHiddenByProviderState = [
     'PROVIDER_SUBMITTED_PENDING',
     'PROVIDER_OUTCOME_UNKNOWN',
@@ -65217,12 +65223,26 @@ function renderBankingPayBatchChildModalOverview() {
     'VIEW_RECALCULATE_NEXT_STEP'
   ].includes(overviewRecommendedAction) || overviewNextStep === 'VIEW_RECALCULATE_NEXT_STEP';
   const canShowWholeBatchCancel = !!(
+    overviewCancelMode !== 'DRAFT_DELETE' &&
     overviewCanPreProviderCancel &&
     overviewRecommendedAction === 'PRE_PROVIDER_CANCEL_AND_RECALCULATE' &&
     (overviewLifecycleState === 'LOCAL_PREPARED_NOT_SENT' || overviewLifecycleState === 'SCHEDULED_LOCAL_NOT_SENT') &&
     overviewCancelHiddenByProviderState !== true &&
     providerSubmitOverviewModel.hasIssue !== true &&
     overviewHasExecutionEvidence !== true
+  );
+  const canShowDraftCancel = !!(
+    overviewCancelMode === 'DRAFT_DELETE' &&
+    providerSubmitOverviewModel.hasIssue !== true &&
+    overviewHasExecutionEvidence !== true &&
+    !activePaymentExecuteOperation &&
+    !waitingAuthorisation &&
+    !reviewRequired &&
+    !child.actionsBusy?.executing &&
+    !child.loading &&
+    !child.__loadInFlight &&
+    !child.actionsBusy?.refreshing &&
+    !child.actionsBusy?.polling
   );
   const canShowCancelReverseCorrectPanel = !!(
     !overviewIsPreSubmissionDraft &&
@@ -65258,6 +65278,9 @@ function renderBankingPayBatchChildModalOverview() {
       : '',
     canShowWholeBatchCancel
       ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:cancelNotSentRecalculate" title="Cancel this locally scheduled batch before it is sent to the bank/provider">Cancel scheduled batch and recalculate</button>`
+      : '',
+    canShowDraftCancel
+      ? `<button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:deleteDraft" title="Cancel this unsubmitted draft batch before it is sent to the bank/provider" style="font-weight:800;background:#dc2626;border-color:#dc2626;color:#fff;">Cancel Draft Batch</button>`
       : '',
     canShowExecutePayment
       ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:executePayment"${executeButtonDisabledAttr}${executeButtonSuccessStyle} title="Execute eligible payments">${child.actionsBusy?.executing ? 'Executing…' : 'Execute payment'}</button>`
@@ -65568,6 +65591,8 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
+
+
 
 
 function openBulkTimesheetActionProgressModal(options = {}) {
@@ -133518,6 +133543,7 @@ const BANKING_PAY_CANCELABLE_UNPAID_STATUSES = new Set([
 
 function bankingPayResolveBatchCancelMode(batchLike) {
   const b = (batchLike && typeof batchLike === 'object' && !Array.isArray(batchLike)) ? batchLike : {};
+  const nestedBatch = (b.batch && typeof b.batch === 'object' && !Array.isArray(b.batch)) ? b.batch : {};
   const bool = (value) => {
     if (value === true) return true;
     if (value === false) return false;
@@ -133527,12 +133553,103 @@ function bankingPayResolveBatchCancelMode(batchLike) {
     return false;
   };
   const upper = (value) => String(value == null ? '' : value).trim().toUpperCase();
+  const first = (...values) => {
+    for (const value of values) {
+      if (value == null) continue;
+      if (typeof value === 'string' && value.trim() === '') continue;
+      return value;
+    }
+    return '';
+  };
+  const numberOrNull = (value) => {
+    if (value == null || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+  const anyPositive = (...values) => values.some((value) => {
+    const n = numberOrNull(value);
+    return n !== null && n > 0;
+  });
+  const hasTextEvidence = (...values) => values.some((value) => {
+    if (value == null) return false;
+    if (value === true) return true;
+    if (value === false) return false;
+    if (typeof value === 'object') return false;
+    const raw = String(value).trim();
+    if (!raw) return false;
+    const normalized = raw.toUpperCase();
+    return !['0', 'FALSE', 'NO', 'N', 'NONE', 'NULL', 'UNDEFINED', 'N/A', 'NA', '—', '-'].includes(normalized);
+  });
+  const arrayFrom = (...values) => {
+    const out = [];
+    const push = (value) => {
+      if (!value) return;
+      if (Array.isArray(value)) value.forEach(push);
+      else out.push(value);
+    };
+    values.forEach(push);
+    return out;
+  };
+  const hasUnsafeTransferEvidence = (...values) => {
+    const rows = arrayFrom(...values).filter((row) => row && typeof row === 'object' && !Array.isArray(row));
+    return rows.some((row) => {
+      const rowStatus = upper(row.status || row.transfer_status || row.provider_status || row.rail_status || row.execution_status || row.state || row.provider_state);
+      const unsafeStatuses = new Set([
+        'SUBMITTED',
+        'SENT',
+        'ACCEPTED',
+        'PROCESSING',
+        'PENDING',
+        'COMPLETED',
+        'COMMITTED',
+        'EXECUTED',
+        'PAID',
+        'SETTLED',
+        'SUCCESS',
+        'SUCCEEDED',
+        'FAILED',
+        'REJECTED',
+        'RETURNED',
+        'CANCELLED_BY_PROVIDER',
+        'CANCELED_BY_PROVIDER',
+        'UNKNOWN'
+      ]);
+      return unsafeStatuses.has(rowStatus) || hasTextEvidence(
+        row.provider_transfer_id,
+        row.providerTransferId,
+        row.provider_payment_id,
+        row.providerPaymentId,
+        row.provider_transaction_id,
+        row.providerTransactionId,
+        row.provider_external_id,
+        row.providerExternalId,
+        row.external_id,
+        row.externalId,
+        row.rail_transaction_id,
+        row.railTransactionId,
+        row.rail_submission_id,
+        row.railSubmissionId,
+        row.submitted_at_utc,
+        row.submittedAtUtc,
+        row.accepted_at_utc,
+        row.acceptedAtUtc,
+        row.completed_at_utc,
+        row.completedAtUtc,
+        row.committed_at_utc,
+        row.committedAtUtc,
+        row.settled_at_utc,
+        row.settledAtUtc
+      );
+    });
+  };
 
-  const lifecycle = upper(b.payment_lifecycle_state || b.lifecycle || b.lifecycle_state || b.batch?.payment_lifecycle_state || b.batch?.lifecycle || b.batch?.lifecycle_state);
-  const action = upper(b.recommended_action || b.action || b.batch?.recommended_action || b.batch?.action);
-  const nextStep = upper(b.next_step || b.nextStep || b.batch?.next_step || b.batch?.nextStep);
-  const wholeBatchCancelAvailable = bool(b.whole_batch_cancel_available ?? b.batch?.whole_batch_cancel_available);
-  const canPreProviderCancel = bool(b.can_pre_provider_cancel ?? b.batch?.can_pre_provider_cancel);
+  const status = upper(first(b.status, b.db_status, b.batch_status, nestedBatch.status, nestedBatch.db_status, nestedBatch.batch_status));
+  const dbStatus = upper(first(b.db_status, nestedBatch.db_status, b.status, nestedBatch.status));
+  const lifecycle = upper(b.payment_lifecycle_state || b.lifecycle || b.lifecycle_state || nestedBatch.payment_lifecycle_state || nestedBatch.lifecycle || nestedBatch.lifecycle_state);
+  const action = upper(b.recommended_action || b.action || nestedBatch.recommended_action || nestedBatch.action);
+  const nextStep = upper(b.next_step || b.nextStep || nestedBatch.next_step || nestedBatch.nextStep);
+  const wholeBatchCancelAvailable = bool(b.whole_batch_cancel_available ?? nestedBatch.whole_batch_cancel_available);
+  const canPreProviderCancel = bool(b.can_pre_provider_cancel ?? nestedBatch.can_pre_provider_cancel);
 
   if (
     nextStep === 'VIEW_RECALCULATE_NEXT_STEP' ||
@@ -133559,14 +133676,326 @@ function bankingPayResolveBatchCancelMode(batchLike) {
     return 'CURRENT_PAYMENT_STATUS';
   }
 
+  const draftStatusValues = [status, dbStatus].filter(Boolean);
+  const neutralDraftDisplayStatuses = new Set(['NOT_PAID', 'NOT PAID', 'UNPAID', 'NOTPAID']);
+  const hasDraftStatus = draftStatusValues.some((value) => BANKING_PAY_DRAFT_STATUSES.has(value));
+  const statusContradictsDraft = draftStatusValues.some((value) => !BANKING_PAY_DRAFT_STATUSES.has(value) && !neutralDraftDisplayStatuses.has(value));
+  const executionCommitState = upper(first(
+    b.execution_commit_state,
+    b.executionCommitState,
+    b.commit_state,
+    b.commitState,
+    nestedBatch.execution_commit_state,
+    nestedBatch.executionCommitState,
+    nestedBatch.commit_state,
+    nestedBatch.commitState
+  ));
+  const activeOperationStatus = upper(first(b.active_operation_status, b.activeOperationStatus, nestedBatch.active_operation_status, nestedBatch.activeOperationStatus));
+  const activeOperationKind = upper(first(b.active_operation_kind, b.activeOperationKind, b.active_operation_type, b.activeOperationType, nestedBatch.active_operation_kind, nestedBatch.activeOperationKind, nestedBatch.active_operation_type, nestedBatch.activeOperationType));
+  const terminalOperationStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE', 'FAILED', 'ERROR', 'ERRORED', 'REVIEW_REQUIRED', 'CANCELLED', 'CANCELED', 'ABORTED']);
+  const activeOperationStatuses = new Set([
+    'QUEUED',
+    'RUNNABLE',
+    'RUNNING',
+    'CONTINUING',
+    'WAITING_RETRY',
+    'LEASED',
+    'ADVANCING',
+    'PENDING',
+    'STARTED',
+    'INITIALISING',
+    'INITIALIZING',
+    'PROCESSING',
+    'CLAIMED',
+    'IN_PROGRESS',
+    'WAITING_PROVIDER',
+    'WAITING_FOR_PROVIDER',
+    'PROVIDER_WAIT',
+    'PROVIDER_WAITING',
+    'WAITING_PROVIDER_CONFIRMATION',
+    'WAITING_AUTHORISATION',
+    'WAITING_AUTHORIZATION',
+    'AWAITING_AUTHORISATION',
+    'AWAITING_AUTHORIZATION',
+    'AUTHORISATION_REQUIRED',
+    'AUTHORIZATION_REQUIRED',
+    'WAITING_BANK_CONFIRM',
+    'SUBMITTED_NOT_COMMITTED'
+  ]);
+  const activeUnsafeOperationKinds = new Set([
+    'DRAFT_CREATE',
+    'PAYMENT_DRAFT_CREATE',
+    'PAY_BATCH_DRAFT_CREATE',
+    'CREATE_DRAFT',
+    'PAYMENT_EXECUTE',
+    'PAY_EXECUTE',
+    'PROVIDER_SUBMIT',
+    'PAYMENT_PROVIDER_SUBMIT',
+    'PAYMENT_SUBMISSION',
+    'RAIL_SUBMIT',
+    'BANK_SUBMISSION',
+    'PAYMENT_AUTHORISE',
+    'PAYMENT_AUTHORIZE',
+    'PAYMENT_AUTH_START',
+    'PAYMENT_RETRY_BLOCKED_FUNDS',
+    'PAYMENT_RETRY_UNSENT_PAYMENTS',
+    'PAYMENT_RETRY_UNSENT',
+    'PAYMENT_SETTLEMENT'
+  ]);
+  const operationEntries = [];
+  const addOperationEntry = (value, forcedKind = '') => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach((entry) => addOperationEntry(entry, forcedKind));
+      return;
+    }
+    if (typeof value !== 'object') return;
+    operationEntries.push({ row: value, forcedKind });
+  };
+  addOperationEntry({ operation_type: activeOperationKind, status: activeOperationStatus });
+  addOperationEntry(b.active_operation, activeOperationKind);
+  addOperationEntry(b.activeOperation, activeOperationKind);
+  addOperationEntry(b.payment_execute_operation, 'PAYMENT_EXECUTE');
+  addOperationEntry(b.paymentExecuteOperation, 'PAYMENT_EXECUTE');
+  addOperationEntry(b.active_payment_execute_operation, 'PAYMENT_EXECUTE');
+  addOperationEntry(b.activePaymentExecuteOperation, 'PAYMENT_EXECUTE');
+  addOperationEntry(b.provider_submit_operation, 'PROVIDER_SUBMIT');
+  addOperationEntry(b.providerSubmitOperation, 'PROVIDER_SUBMIT');
+  addOperationEntry(b.active_provider_submit_operation, 'PROVIDER_SUBMIT');
+  addOperationEntry(b.activeProviderSubmitOperation, 'PROVIDER_SUBMIT');
+  addOperationEntry(b.payment_retry_operation, 'PAYMENT_RETRY_UNSENT_PAYMENTS');
+  addOperationEntry(b.paymentRetryOperation, 'PAYMENT_RETRY_UNSENT_PAYMENTS');
+  addOperationEntry(b.active_payment_retry_operation, 'PAYMENT_RETRY_UNSENT_PAYMENTS');
+  addOperationEntry(b.activePaymentRetryOperation, 'PAYMENT_RETRY_UNSENT_PAYMENTS');
+  addOperationEntry(b.payment_settlement_operation, 'PAYMENT_SETTLEMENT');
+  addOperationEntry(b.paymentSettlementOperation, 'PAYMENT_SETTLEMENT');
+  addOperationEntry(b.active_payment_settlement_operation, 'PAYMENT_SETTLEMENT');
+  addOperationEntry(b.activePaymentSettlementOperation, 'PAYMENT_SETTLEMENT');
+  addOperationEntry(b.active_draft_create_operation, 'DRAFT_CREATE');
+  addOperationEntry(b.activeDraftCreateOperation, 'DRAFT_CREATE');
+  addOperationEntry(b.draft_create_operation, 'DRAFT_CREATE');
+  addOperationEntry(b.draftCreateOperation, 'DRAFT_CREATE');
+  addOperationEntry(nestedBatch.active_operation, activeOperationKind);
+  addOperationEntry(nestedBatch.activeOperation, activeOperationKind);
+  addOperationEntry(nestedBatch.payment_execute_operation, 'PAYMENT_EXECUTE');
+  addOperationEntry(nestedBatch.paymentExecuteOperation, 'PAYMENT_EXECUTE');
+  addOperationEntry(nestedBatch.active_payment_execute_operation, 'PAYMENT_EXECUTE');
+  addOperationEntry(nestedBatch.activePaymentExecuteOperation, 'PAYMENT_EXECUTE');
+  addOperationEntry(nestedBatch.provider_submit_operation, 'PROVIDER_SUBMIT');
+  addOperationEntry(nestedBatch.providerSubmitOperation, 'PROVIDER_SUBMIT');
+  addOperationEntry(nestedBatch.active_provider_submit_operation, 'PROVIDER_SUBMIT');
+  addOperationEntry(nestedBatch.activeProviderSubmitOperation, 'PROVIDER_SUBMIT');
+  addOperationEntry(nestedBatch.payment_retry_operation, 'PAYMENT_RETRY_UNSENT_PAYMENTS');
+  addOperationEntry(nestedBatch.paymentRetryOperation, 'PAYMENT_RETRY_UNSENT_PAYMENTS');
+  addOperationEntry(nestedBatch.active_payment_retry_operation, 'PAYMENT_RETRY_UNSENT_PAYMENTS');
+  addOperationEntry(nestedBatch.activePaymentRetryOperation, 'PAYMENT_RETRY_UNSENT_PAYMENTS');
+  addOperationEntry(nestedBatch.payment_settlement_operation, 'PAYMENT_SETTLEMENT');
+  addOperationEntry(nestedBatch.paymentSettlementOperation, 'PAYMENT_SETTLEMENT');
+  addOperationEntry(nestedBatch.active_payment_settlement_operation, 'PAYMENT_SETTLEMENT');
+  addOperationEntry(nestedBatch.activePaymentSettlementOperation, 'PAYMENT_SETTLEMENT');
+  addOperationEntry(nestedBatch.active_draft_create_operation, 'DRAFT_CREATE');
+  addOperationEntry(nestedBatch.activeDraftCreateOperation, 'DRAFT_CREATE');
+  addOperationEntry(nestedBatch.draft_create_operation, 'DRAFT_CREATE');
+  addOperationEntry(nestedBatch.draftCreateOperation, 'DRAFT_CREATE');
+  const activeUnsafeOperation = operationEntries.some(({ row, forcedKind }) => {
+    const operationKind = upper(first(
+      row.operation_type,
+      row.operationType,
+      row.operation_kind,
+      row.operationKind,
+      row.kind,
+      row.type,
+      forcedKind
+    ));
+    if (!operationKind || !activeUnsafeOperationKinds.has(operationKind)) return false;
+    const statusSignals = [
+      row.status,
+      row.operation_status,
+      row.operationStatus,
+      row.state,
+      row.runner_state,
+      row.runnerState,
+      row.lifecycle_state,
+      row.lifecycleState
+    ].map(upper).filter(Boolean);
+    const phaseSignal = upper(row.phase || row.operation_phase || row.operationPhase);
+    const isTerminal = statusSignals.some((signal) => terminalOperationStatuses.has(signal)) || (!statusSignals.length && terminalOperationStatuses.has(phaseSignal));
+    if (isTerminal) return false;
+    return !statusSignals.length || statusSignals.some((signal) => activeOperationStatuses.has(signal)) || !!phaseSignal || hasTextEvidence(
+      row.lease_owner,
+      row.leaseOwner,
+      row.locked_by,
+      row.lockedBy,
+      row.operation_id,
+      row.operationId,
+      row.id
+    );
+  });
+  const hasProviderOrCommitEvidence = !!(
+    executionCommitState !== 'NOT_SUBMITTED' ||
+    activeUnsafeOperation ||
+    hasTextEvidence(
+      b.execution_commit_ref,
+      b.executionCommitRef,
+      b.execution_commit_id,
+      b.executionCommitId,
+      b.execution_committed_at_utc,
+      b.executionCommittedAtUtc,
+      b.execution_committed_at,
+      b.executionCommittedAt,
+      b.execution_submitted_at_utc,
+      b.executionSubmittedAtUtc,
+      b.provider_submission_id,
+      b.providerSubmissionId,
+      b.provider_transfer_id,
+      b.providerTransferId,
+      b.provider_payment_id,
+      b.providerPaymentId,
+      b.provider_transaction_id,
+      b.providerTransactionId,
+      b.provider_external_id,
+      b.providerExternalId,
+      b.provider_submitted_at_utc,
+      b.providerSubmittedAtUtc,
+      b.provider_request_sent_at_utc,
+      b.providerRequestSentAtUtc,
+      b.provider_response_at_utc,
+      b.providerResponseAtUtc,
+      b.provider_event_at_utc,
+      b.providerEventAtUtc,
+      b.rail_submission_id,
+      b.railSubmissionId,
+      b.rail_transaction_id,
+      b.railTransactionId,
+      b.rail_submitted_at_utc,
+      b.railSubmittedAtUtc,
+      b.settlement_finalised_at_utc,
+      b.settlementFinalisedAtUtc,
+      b.remittance_finalised_at_utc,
+      b.remittanceFinalisedAtUtc,
+      nestedBatch.execution_commit_ref,
+      nestedBatch.executionCommitRef,
+      nestedBatch.execution_commit_id,
+      nestedBatch.executionCommitId,
+      nestedBatch.execution_committed_at_utc,
+      nestedBatch.executionCommittedAtUtc,
+      nestedBatch.execution_submitted_at_utc,
+      nestedBatch.executionSubmittedAtUtc,
+      nestedBatch.provider_submission_id,
+      nestedBatch.providerSubmissionId,
+      nestedBatch.provider_transfer_id,
+      nestedBatch.providerTransferId,
+      nestedBatch.provider_payment_id,
+      nestedBatch.providerPaymentId,
+      nestedBatch.provider_transaction_id,
+      nestedBatch.providerTransactionId,
+      nestedBatch.provider_external_id,
+      nestedBatch.providerExternalId,
+      nestedBatch.provider_submitted_at_utc,
+      nestedBatch.providerSubmittedAtUtc,
+      nestedBatch.rail_submission_id,
+      nestedBatch.railSubmissionId,
+      nestedBatch.rail_transaction_id,
+      nestedBatch.railTransactionId,
+      nestedBatch.rail_submitted_at_utc,
+      nestedBatch.railSubmittedAtUtc,
+      nestedBatch.settlement_finalised_at_utc,
+      nestedBatch.settlementFinalisedAtUtc,
+      nestedBatch.remittance_finalised_at_utc,
+      nestedBatch.remittanceFinalisedAtUtc
+    ) ||
+    bool(b.has_provider_submission_evidence ?? b.hasProviderSubmissionEvidence ?? nestedBatch.has_provider_submission_evidence ?? nestedBatch.hasProviderSubmissionEvidence) ||
+    bool(b.provider_submitted ?? b.providerSubmitted ?? nestedBatch.provider_submitted ?? nestedBatch.providerSubmitted) ||
+    bool(b.provider_request_sent ?? b.providerRequestSent ?? nestedBatch.provider_request_sent ?? nestedBatch.providerRequestSent) ||
+    bool(b.provider_response_present ?? b.providerResponsePresent ?? nestedBatch.provider_response_present ?? nestedBatch.providerResponsePresent) ||
+    bool(b.provider_event_present ?? b.providerEventPresent ?? nestedBatch.provider_event_present ?? nestedBatch.providerEventPresent) ||
+    bool(b.provider_external_id_present ?? b.providerExternalIdPresent ?? nestedBatch.provider_external_id_present ?? nestedBatch.providerExternalIdPresent) ||
+    bool(b.has_completed_rail_transaction ?? b.hasCompletedRailTransaction ?? nestedBatch.has_completed_rail_transaction ?? nestedBatch.hasCompletedRailTransaction) ||
+    bool(b.has_settlement_finalisation ?? b.hasSettlementFinalisation ?? nestedBatch.has_settlement_finalisation ?? nestedBatch.hasSettlementFinalisation) ||
+    bool(b.has_remittance_finalisation ?? b.hasRemittanceFinalisation ?? nestedBatch.has_remittance_finalisation ?? nestedBatch.hasRemittanceFinalisation) ||
+    anyPositive(
+      b.transfer_count,
+      b.transferCount,
+      b.pay_bank_transfer_count,
+      b.payBankTransferCount,
+      b.provider_submitted_transfer_count,
+      b.providerSubmittedTransferCount,
+      b.submitted_transfer_count,
+      b.submittedTransferCount,
+      b.accepted_transfer_count,
+      b.acceptedTransferCount,
+      b.completed_transfer_count,
+      b.completedTransferCount,
+      b.committed_transfer_count,
+      b.committedTransferCount,
+      b.settled_transfer_count,
+      b.settledTransferCount,
+      b.payment_sent_count,
+      b.paymentSentCount,
+      b.paid_count,
+      b.paidCount,
+      b.settlement_count,
+      b.settlementCount,
+      b.remittance_count,
+      b.remittanceCount,
+      b.total_bank_out,
+      b.totalBankOut,
+      nestedBatch.transfer_count,
+      nestedBatch.transferCount,
+      nestedBatch.pay_bank_transfer_count,
+      nestedBatch.payBankTransferCount,
+      nestedBatch.provider_submitted_transfer_count,
+      nestedBatch.providerSubmittedTransferCount,
+      nestedBatch.submitted_transfer_count,
+      nestedBatch.submittedTransferCount,
+      nestedBatch.accepted_transfer_count,
+      nestedBatch.acceptedTransferCount,
+      nestedBatch.completed_transfer_count,
+      nestedBatch.completedTransferCount,
+      nestedBatch.committed_transfer_count,
+      nestedBatch.committedTransferCount,
+      nestedBatch.settled_transfer_count,
+      nestedBatch.settledTransferCount,
+      nestedBatch.payment_sent_count,
+      nestedBatch.paymentSentCount,
+      nestedBatch.paid_count,
+      nestedBatch.paidCount,
+      nestedBatch.settlement_count,
+      nestedBatch.settlementCount,
+      nestedBatch.remittance_count,
+      nestedBatch.remittanceCount,
+      nestedBatch.total_bank_out,
+      nestedBatch.totalBankOut
+    ) ||
+    hasUnsafeTransferEvidence(
+      b.transfers,
+      b.bank_transfers,
+      b.bankTransfers,
+      b.pay_bank_transfers,
+      b.payBankTransfers,
+      nestedBatch.transfers,
+      nestedBatch.bank_transfers,
+      nestedBatch.bankTransfers,
+      nestedBatch.pay_bank_transfers,
+      nestedBatch.payBankTransfers
+    )
+  );
+  const isSafeDraftBatch = !!(
+    hasDraftStatus &&
+    !statusContradictsDraft &&
+    executionCommitState === 'NOT_SUBMITTED' &&
+    !hasProviderOrCommitEvidence
+  );
+  if (isSafeDraftBatch) {
+    return 'DRAFT_DELETE';
+  }
+
   if ((wholeBatchCancelAvailable || canPreProviderCancel) && action === 'PRE_PROVIDER_CANCEL_AND_RECALCULATE') {
     return 'CANCEL_NOT_SENT_RECALCULATE';
   }
 
   return '';
 }
-
-
 
 
 function bankingPayBuildCancelPromptCopy({ batch, mode }) {
@@ -133607,14 +134036,16 @@ function bankingPayBuildCancelPromptCopy({ batch, mode }) {
   ) || 0;
   const hasCarryForward = carryForwardCount > 0 || carryForwardItems.length > 0 || b.has_manual_adjustment_carry_forward === true || b.manual_adjustment_carry_forward_required === true;
 
+  const draftDeleteCopy = 'CloudTMS will cancel this unsubmitted draft batch before it is sent to the bank/provider. Linked reservations and draft payment artifacts will be released or voided through the existing safe cancellation path, and the batch will remain available for audit.';
   const wholeBatchCopy = 'CloudTMS will cancel this locally scheduled payment batch before it is sent to the bank/provider. Linked loan, debt, and recovery reservations will be released, the old batch will remain for audit, and you can amend the timesheets and recalculate the next pay run.';
   const selectedPaymentCopy = 'CloudTMS will cancel this locally scheduled payment before it is sent to the bank/provider, release linked financial reservations, keep the old batch for audit, and allow the corrected timesheet to be recalculated.';
   const carryForwardCopy = 'This payment includes manual adjustments that are not linked to a live source. CloudTMS will carry them forward into the next recalculated pay run.';
   const displayOnlyCopy = 'This payment has already been cancelled or rewound. Amend the timesheet and recalculate the next pay run.';
 
+  const isDraftDelete = resolvedMode === 'DRAFT_DELETE';
   const isSelected = resolvedMode === 'SELECTED_PAYMENT' || resolvedMode === 'SELECTED' || resolvedMode === 'ROW' || resolvedMode === 'CURRENT_PAYMENT_STATUS_SELECTION';
   const isDisplayOnly = resolvedMode === 'VIEW_RECALCULATE_NEXT_STEP' || String(b.next_step || b.nextStep || b.recommended_action || b.action || '').trim().toUpperCase() === 'VIEW_RECALCULATE_NEXT_STEP';
-  const mainCopy = isDisplayOnly ? displayOnlyCopy : (isSelected ? selectedPaymentCopy : wholeBatchCopy);
+  const mainCopy = isDisplayOnly ? displayOnlyCopy : (isDraftDelete ? draftDeleteCopy : (isSelected ? selectedPaymentCopy : wholeBatchCopy));
 
   const carryForwardExamples = carryForwardItems.map((item) => {
     const row = (item && typeof item === 'object' && !Array.isArray(item)) ? item : {};
@@ -133641,25 +134072,34 @@ function bankingPayBuildCancelPromptCopy({ batch, mode }) {
     display_only: isDisplayOnly,
     title: isDisplayOnly
       ? 'Amend and recalculate'
-      : (isSelected ? 'Cancel this payment and recalculate' : 'Cancel scheduled payment and recalculate'),
+      : (isDraftDelete ? 'Cancel Draft Batch' : (isSelected ? 'Cancel this payment and recalculate' : 'Cancel scheduled payment and recalculate')),
     subtitle,
     body: mainCopy,
     selected_payment_copy: selectedPaymentCopy,
     whole_batch_copy: wholeBatchCopy,
+    draft_delete_copy: draftDeleteCopy,
     carry_forward_copy: carryForwardCopy,
     display_only_copy: displayOnlyCopy,
     carry_forward_examples: carryForwardExamples,
     show_carry_forward_copy: hasCarryForward,
-    defaultReason: isSelected ? 'Cancel this payment and recalculate' : 'Cancel scheduled payment and recalculate',
-    confirmLabel: isDisplayOnly ? 'OK' : (isSelected ? 'Cancel this payment and recalculate' : 'Cancel scheduled batch and recalculate'),
-    progressCopy: {
-      starting: 'Cancelling scheduled batch…',
-      releasing: 'Releasing linked finance reservations…',
-      carryingForward: 'Carrying forward manual adjustments…',
-      complete: 'Cancellation complete — amend timesheets and recalculate.'
-    }
+    defaultReason: isDraftDelete ? 'Cancel draft batch' : (isSelected ? 'Cancel this payment and recalculate' : 'Cancel scheduled payment and recalculate'),
+    confirmLabel: isDisplayOnly ? 'OK' : (isDraftDelete ? 'Cancel Draft Batch' : (isSelected ? 'Cancel this payment and recalculate' : 'Cancel scheduled batch and recalculate')),
+    progressCopy: isDraftDelete
+      ? {
+        starting: 'Cancelling draft batch…',
+        releasing: 'Releasing draft reservations…',
+        carryingForward: 'Carrying forward manual adjustments…',
+        complete: 'Draft batch cancelled.'
+      }
+      : {
+        starting: 'Cancelling scheduled batch…',
+        releasing: 'Releasing linked finance reservations…',
+        carryingForward: 'Carrying forward manual adjustments…',
+        complete: 'Cancellation complete — amend timesheets and recalculate.'
+      }
   };
 }
+
 
 
 async function runBankingPayBatchCancelFlow({
@@ -133678,16 +134118,19 @@ async function runBankingPayBatchCancelFlow({
   const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
   const bool = (value) => value === true || ['true', 't', '1', 'yes', 'y', 'on'].includes(String(value == null ? '' : value).trim().toLowerCase());
   const explicitMode = upper(mode);
-  const backendResolvedMode = upper(bankingPayResolveBatchCancelMode(batch));
+  const backendResolvedMode = upper(typeof bankingPayResolveBatchCancelMode === 'function' ? bankingPayResolveBatchCancelMode(batch) : '');
   const selectedModes = new Set(['SELECTED_PAYMENT', 'SELECTED', 'ROW', 'CURRENT_PAYMENT_STATUS_SELECTION']);
   const isExplicitSelectedMode = selectedModes.has(explicitMode);
   const isSelectedCurrentStatusCancel = isExplicitSelectedMode || selectedModes.has(backendResolvedMode);
-  const resolvedMode = isExplicitSelectedMode ? explicitMode : backendResolvedMode;
-  const isWholeBatchCancel = !isSelectedCurrentStatusCancel && backendResolvedMode === 'CANCEL_NOT_SENT_RECALCULATE';
+  const isSafeDraftBatchDelete = backendResolvedMode === 'DRAFT_DELETE';
+  const resolvedMode = isExplicitSelectedMode ? explicitMode : (isSafeDraftBatchDelete ? 'DRAFT_DELETE' : backendResolvedMode);
+  const isWholeBatchCancel = !isSelectedCurrentStatusCancel && (backendResolvedMode === 'CANCEL_NOT_SENT_RECALCULATE' || isSafeDraftBatchDelete);
   if (!isWholeBatchCancel && !isSelectedCurrentStatusCancel) {
     const msg = backendResolvedMode === 'VIEW_RECALCULATE_NEXT_STEP'
       ? 'This payment is already ready for amendment and recalculation. No cancellation action is required.'
-      : 'Provider-called or paid batches must be handled from Current Payment Status.';
+      : (explicitMode === 'DRAFT_DELETE'
+        ? 'This batch is not a safe unsubmitted draft batch, so Cancel Draft Batch is unavailable.'
+        : 'Provider-called or paid batches must be handled from Current Payment Status.');
     try { if (typeof window.__toast === 'function') window.__toast(msg); } catch {}
     return false;
   }
@@ -133810,7 +134253,8 @@ async function runBankingPayBatchCancelFlow({
     return {
       scope_type: 'BATCH',
       requested_action: 'PRE_PROVIDER_CANCEL_AND_RECALCULATE',
-      source_context: 'runBankingPayBatchCancelFlow',
+      source_context: resolvedMode === 'DRAFT_DELETE' ? 'runBankingPayBatchCancelFlow.draft_delete' : 'runBankingPayBatchCancelFlow',
+      ui_mode: resolvedMode || null,
       expected_status_update_signature: currentStatusSignature || null
     };
   };
@@ -133909,6 +134353,19 @@ async function runBankingPayBatchCancelFlow({
 
       await setProgressMessage(promptCopy.progressCopy?.complete || 'Cancellation complete — amend timesheets and recalculate.', { completed: true, result });
 
+      try {
+        const payState = (st && st.pay && typeof st.pay === 'object')
+          ? st.pay
+          : ((typeof window !== 'undefined' && window.modalCtx?.banking?.pay && typeof window.modalCtx.banking.pay === 'object') ? window.modalCtx.banking.pay : null);
+        const openChild = (payState?.child && typeof payState.child === 'object') ? payState.child : null;
+        const childBatchId = String(openChild?.batchId || openChild?.pay_batch_id || openChild?.payBatchId || openChild?.id || '').trim();
+        if (openChild && childBatchId && childBatchId === id) {
+          try { openChild.__loadInFlight = false; } catch {}
+          try { openChild.loading = false; } catch {}
+          payState.child = null;
+        }
+      } catch {}
+
       if (typeof onSuccess === 'function') {
         await onSuccess({ id, responsePayload: result, result, payBatchId: id });
       }
@@ -133925,6 +134382,8 @@ async function runBankingPayBatchCancelFlow({
     }
   }
 }
+
+
 
 
 
