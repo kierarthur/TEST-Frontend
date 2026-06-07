@@ -54197,9 +54197,6 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
   };
 }
 
-
-
-
 async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -55379,10 +55376,95 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
   const getActivePaymentStateForBatch = (data) => {
     const d = (data && typeof data === 'object') ? data : null;
     const b = deriveBatchObj(d) || {};
-    const stx = String(b.status || '').trim().toUpperCase();
+    const displaySummary = (d?.display_summary && typeof d.display_summary === 'object' && !Array.isArray(d.display_summary))
+      ? d.display_summary
+      : ((d?.displaySummary && typeof d.displaySummary === 'object' && !Array.isArray(d.displaySummary))
+          ? d.displaySummary
+          : ((d?.pay_batch_display_summary && typeof d.pay_batch_display_summary === 'object' && !Array.isArray(d.pay_batch_display_summary))
+              ? d.pay_batch_display_summary
+              : ((d?.payBatchDisplaySummary && typeof d.payBatchDisplaySummary === 'object' && !Array.isArray(d.payBatchDisplaySummary))
+                  ? d.payBatchDisplaySummary
+                  : ((b?.display_summary && typeof b.display_summary === 'object' && !Array.isArray(b.display_summary))
+                      ? b.display_summary
+                      : ((b?.displaySummary && typeof b.displaySummary === 'object' && !Array.isArray(b.displaySummary))
+                          ? b.displaySummary
+                          : ((b?.pay_batch_display_summary && typeof b.pay_batch_display_summary === 'object' && !Array.isArray(b.pay_batch_display_summary))
+                              ? b.pay_batch_display_summary
+                              : ((b?.payBatchDisplaySummary && typeof b.payBatchDisplaySummary === 'object' && !Array.isArray(b.payBatchDisplaySummary)) ? b.payBatchDisplaySummary : {})))))));
+    const durableCounts = (d?.durable_counts && typeof d.durable_counts === 'object' && !Array.isArray(d.durable_counts))
+      ? d.durable_counts
+      : ((d?.durableCounts && typeof d.durableCounts === 'object' && !Array.isArray(d.durableCounts))
+          ? d.durableCounts
+          : ((b?.durable_counts && typeof b.durable_counts === 'object' && !Array.isArray(b.durable_counts))
+              ? b.durable_counts
+              : ((b?.durableCounts && typeof b.durableCounts === 'object' && !Array.isArray(b.durableCounts)) ? b.durableCounts : {})));
+    const stx = String(b.status || d?.status || '').trim().toUpperCase();
     const isDraftLikeBatch = (stx === 'DRAFT' || stx === 'DRAFT_CREATED');
 
-    const explicitActiveCount = firstFiniteNonNegativeInteger(
+    const numericValues = (...values) => values.map((value) => {
+      if (value === null || value === undefined) return null;
+      const s = String(value).trim();
+      if (!s) return null;
+      const n = Number(s);
+      return Number.isFinite(n) ? n : null;
+    }).filter((value) => value !== null);
+    const firstPositiveOrFirstFinite = (...values) => {
+      const nums = numericValues(...values);
+      const positive = nums.find((value) => value > 0);
+      return positive !== undefined ? positive : (nums.length ? nums[0] : null);
+    };
+    const firstPositiveOrFirstNonNegativeInteger = (...values) => {
+      const nums = numericValues(...values).filter((value) => value >= 0).map((value) => Math.trunc(value));
+      const positive = nums.find((value) => value > 0);
+      return positive !== undefined ? positive : (nums.length ? nums[0] : null);
+    };
+
+    const durableCount = firstPositiveOrFirstNonNegativeInteger(
+      displaySummary.item_count,
+      displaySummary.itemCount,
+      displaySummary.pay_batch_item_count,
+      displaySummary.payBatchItemCount,
+      durableCounts.item_count,
+      durableCounts.itemCount,
+      durableCounts.pay_batch_item_count,
+      durableCounts.payBatchItemCount,
+      d?.durable_item_count,
+      d?.durableItemCount,
+      d?.item_count,
+      d?.itemCount,
+      b?.durable_item_count,
+      b?.durableItemCount,
+      b?.item_count,
+      b?.itemCount
+    );
+    const durableAmount = firstPositiveOrFirstFinite(
+      displaySummary.total_payable,
+      displaySummary.totalPayable,
+      displaySummary.total_amount_inc_vat,
+      displaySummary.totalAmountIncVat,
+      displaySummary.total_amount,
+      displaySummary.totalAmount,
+      durableCounts.total_payable,
+      durableCounts.totalPayable,
+      durableCounts.total_amount_inc_vat,
+      durableCounts.totalAmountIncVat,
+      durableCounts.total_amount,
+      durableCounts.totalAmount,
+      d?.durable_total_payable,
+      d?.durableTotalPayable,
+      d?.total_payable,
+      d?.totalPayable,
+      d?.total_amount_inc_vat,
+      d?.totalAmountIncVat,
+      b?.durable_total_payable,
+      b?.durableTotalPayable,
+      b?.total_payable,
+      b?.totalPayable,
+      b?.total_amount_inc_vat,
+      b?.totalAmountIncVat
+    );
+
+    const explicitActiveCount = firstPositiveOrFirstNonNegativeInteger(
       d?.active_item_count,
       d?.active_items,
       d?.active_batch_item_count,
@@ -55399,7 +55481,7 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       b?.active_batch_item_count_after
     );
 
-    const explicitActiveAmount = firstFiniteNumber(
+    const explicitActiveAmount = firstPositiveOrFirstFinite(
       d?.active_amount_inc_vat,
       d?.active_batch_amount_inc_vat,
       d?.active_payment_amount_inc_vat,
@@ -55417,7 +55499,19 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       if (!item || typeof item !== 'object') return false;
       if (item.is_voided === true || item.voided === true) return false;
       const itemStatus = String(item.status || '').trim().toUpperCase();
-      return itemStatus !== 'VOIDED' && itemStatus !== 'CANCELLED' && itemStatus !== 'CANCELED';
+      if (itemStatus === 'VOIDED' || itemStatus === 'CANCELLED' || itemStatus === 'CANCELED') return false;
+      const n = firstFiniteNumber(
+        item.frozen_target_amount_inc_vat,
+        item.frozenTargetAmountIncVat,
+        item.amount_inc_vat,
+        item.amountIncVat,
+        item.frozen_target_amount_ex_vat,
+        item.frozenTargetAmountExVat,
+        item.amount_ex_vat,
+        item.amountExVat,
+        item.amount
+      );
+      return Number.isFinite(n) && n > 0;
     }).length : null;
 
     const activeAmountFromItems = dataItems ? dataItems.reduce((total, item) => {
@@ -55425,25 +55519,38 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
       if (item.is_voided === true || item.voided === true) return total;
       const itemStatus = String(item.status || '').trim().toUpperCase();
       if (itemStatus === 'VOIDED' || itemStatus === 'CANCELLED' || itemStatus === 'CANCELED') return total;
-      const n = Number(item.amount_inc_vat ?? item.amount_ex_vat ?? item.amount ?? 0);
-      return Number.isFinite(n) ? total + n : total;
+      const n = firstFiniteNumber(
+        item.frozen_target_amount_inc_vat,
+        item.frozenTargetAmountIncVat,
+        item.amount_inc_vat,
+        item.amountIncVat,
+        item.frozen_target_amount_ex_vat,
+        item.frozenTargetAmountExVat,
+        item.amount_ex_vat,
+        item.amountExVat,
+        item.amount
+      );
+      return Number.isFinite(n) && n > 0 ? total + n : total;
     }, 0) : null;
 
     const activeCountFromLines = countCandidateLineEntriesForBatch(d);
-    const known = explicitActiveCount !== null || activeCountFromItems !== null || activeCountFromLines !== null;
-    const count = explicitActiveCount !== null
-      ? explicitActiveCount
-      : (activeCountFromItems !== null ? activeCountFromItems : (activeCountFromLines !== null ? activeCountFromLines : 0));
-    const amount = explicitActiveAmount !== null
-      ? explicitActiveAmount
-      : (activeAmountFromItems !== null ? activeAmountFromItems : null);
+    const knownReliable = durableCount !== null || durableAmount !== null || activeCountFromItems !== null || activeAmountFromItems !== null || activeCountFromLines !== null;
+    const hasPayableContent = (durableCount !== null && durableCount > 0) ||
+      (durableAmount !== null && durableAmount > 0) ||
+      (explicitActiveCount !== null && explicitActiveCount > 0) ||
+      (explicitActiveAmount !== null && explicitActiveAmount > 0) ||
+      (activeCountFromItems !== null && activeCountFromItems > 0) ||
+      (activeAmountFromItems !== null && activeAmountFromItems > 0) ||
+      (activeCountFromLines !== null && activeCountFromLines > 0);
+    const count = firstPositiveOrFirstNonNegativeInteger(durableCount, explicitActiveCount, activeCountFromItems, activeCountFromLines) ?? 0;
+    const amount = firstPositiveOrFirstFinite(durableAmount, explicitActiveAmount, activeAmountFromItems);
 
     return {
-      known,
+      known: knownReliable,
       count,
       amount_inc_vat: amount,
-      hasActivePayments: !known || count > 0,
-      emptyDraftNoActivePayments: isDraftLikeBatch && known && count <= 0,
+      hasActivePayments: hasPayableContent || !knownReliable,
+      emptyDraftNoActivePayments: isDraftLikeBatch && knownReliable && !hasPayableContent,
       message: EMPTY_DRAFT_NO_ACTIVE_PAYMENTS_MESSAGE
     };
   };
@@ -56033,16 +56140,37 @@ async function openBankingPayBatchChildModal(batchId, seed = {}) {
     if (b.settlement_confirmation_json || d.settlement_confirmation_json) return true;
     if (providerSubmitHasAcceptanceEvidence(d) === true) return true;
     if (providerSubmitTransactionIdentifierPresent(d) === true) return true;
+    const submittedStates = new Set(['SUBMITTED', 'SENT', 'ACCEPTED', 'PROCESSING', 'IN_FLIGHT', 'PENDING_SETTLEMENT', 'COMPLETED', 'SETTLED', 'PAID', 'COMMITTED', 'EXECUTED']);
+    const eventHasExecutionEvidence = (eventValue) => {
+      const ev = (eventValue && typeof eventValue === 'object' && !Array.isArray(eventValue)) ? eventValue : {};
+      if (!ev || !Object.keys(ev).length) return false;
+      if (providerSubmitHasAcceptanceEvidence(ev) === true) return true;
+      if (providerSubmitTransactionIdentifierPresent(ev) === true) return true;
+      const eventStates = [
+        ev.status,
+        ev.state,
+        ev.rail_state,
+        ev.railState,
+        ev.provider_state,
+        ev.providerState,
+        ev.payment_lifecycle_state,
+        ev.paymentLifecycleState,
+        ev.normalised_state,
+        ev.normalized_state
+      ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+      if (eventStates.some((state) => submittedStates.has(state))) return true;
+      const eventKind = String(ev.event_type || ev.eventType || ev.kind || ev.type || ev.action || ev.action_type || ev.actionType || '').trim().toUpperCase();
+      return /(?:PROVIDER|BANK|RAIL)/.test(eventKind) && /(?:SUBMIT|SUBMITTED|SENT|ACCEPT|ACCEPTED|PAID|SETTLED|SETTLEMENT|COMMIT|COMMITTED|EXECUT)/.test(eventKind);
+    };
     for (const transfer of deriveTransfers(d)) {
       if (providerSubmitHasAcceptanceEvidence(transfer) === true) return true;
       if (providerSubmitTransactionIdentifierPresent(transfer) === true) return true;
-      const state = String(transfer?.status || transfer?.rail_state || transfer?.railState || transfer?.normalised_state || transfer?.normalized_state || '').trim().toUpperCase();
-      if (['SUBMITTED', 'SENT', 'ACCEPTED', 'PROCESSING', 'IN_FLIGHT', 'PENDING_SETTLEMENT', 'COMPLETED', 'SETTLED', 'PAID', 'COMMITTED', 'EXECUTED'].includes(state)) return true;
-      if (String(transfer?.completed_at_utc || transfer?.completedAtUtc || '').trim()) return true;
-      if (String(transfer?.request_id || transfer?.requestId || transfer?.payment_reference || transfer?.paymentReference || '').trim()) return true;
+      const states = [transfer?.status, transfer?.rail_state, transfer?.railState, transfer?.normalised_state, transfer?.normalized_state].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean);
+      if (states.some((state) => submittedStates.has(state))) return true;
+      if (String(transfer?.completed_at_utc || transfer?.completedAtUtc || transfer?.settled_at_utc || transfer?.settledAtUtc || '').trim()) return true;
     }
     const eventSources = [d.bank_evidence, d.bankEvidence, d.payment_events, d.paymentEvents, d.transfer_events, d.transferEvents, d.provider_events, d.providerEvents, d.provider_transfer_events, d.providerTransferEvents];
-    if (eventSources.some((value) => Array.isArray(value) && value.length > 0)) return true;
+    if (eventSources.some((value) => Array.isArray(value) && value.some((eventValue) => eventHasExecutionEvidence(eventValue)))) return true;
     const diagStatus = providerSubmitStatusFromDiagnostic(d);
     const safeRetry = (() => {
       for (const obj of providerSubmitCollectDiagnosticSources(d)) {
@@ -62486,6 +62614,7 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
 }
 
 
+
 function openBulkTimesheetActionProgressModal(options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -63462,6 +63591,29 @@ function renderBankingPayBatchChildModalOverview() {
     }
     return null;
   };
+  const firstPositiveOrFiniteNumber = (...values) => {
+    let firstFinite = null;
+    for (const value of values) {
+      if (value === null || value === undefined || trimStr(value) === '') continue;
+      const n = Number(value);
+      if (!Number.isFinite(n)) continue;
+      if (firstFinite === null) firstFinite = n;
+      if (n > 0) return n;
+    }
+    return firstFinite;
+  };
+  const firstPositiveOrNonNegativeInteger = (...values) => {
+    let firstFinite = null;
+    for (const value of values) {
+      if (value === null || value === undefined || trimStr(value) === '') continue;
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0) continue;
+      const integer = Math.trunc(n);
+      if (firstFinite === null) firstFinite = integer;
+      if (integer > 0) return integer;
+    }
+    return firstFinite;
+  };
   const pickCount = (source, keys) => {
     const obj = asObj(source) || {};
     const keyList = Array.isArray(keys) ? keys : [];
@@ -64181,18 +64333,41 @@ function renderBankingPayBatchChildModalOverview() {
     const p = asObj(payload) || {};
     const b = asObj(p.batch) || {};
     const diagnostic = extractProviderSubmitDiagnosticFromOverviewData(p);
+    const submittedStates = new Set(['SUBMITTED', 'SENT', 'ACCEPTED', 'PROCESSING', 'IN_FLIGHT', 'PENDING_SETTLEMENT', 'COMPLETED', 'SETTLED', 'PAID', 'COMMITTED', 'EXECUTED']);
+    const eventHasExecutionEvidence = (eventValue) => {
+      const ev = asObj(eventValue) || {};
+      if (!Object.keys(ev).length) return false;
+      if (isProviderAcceptedSent(ev)) return true;
+      if (providerSubmitStrictExternalEvidencePresent(ev)) return true;
+      const eventStates = [
+        ev.status,
+        ev.state,
+        ev.rail_state,
+        ev.railState,
+        ev.provider_state,
+        ev.providerState,
+        ev.payment_lifecycle_state,
+        ev.paymentLifecycleState,
+        ev.normalised_state,
+        ev.normalized_state
+      ].map(upperTrim).filter(Boolean);
+      if (eventStates.some((state) => submittedStates.has(state))) return true;
+      const eventKind = upperTrim(ev.event_type || ev.eventType || ev.kind || ev.type || ev.action || ev.action_type || ev.actionType || '');
+      return /(?:PROVIDER|BANK|RAIL)/.test(eventKind) && /(?:SUBMIT|SUBMITTED|SENT|ACCEPT|ACCEPTED|PAID|SETTLED|SETTLEMENT|COMMIT|COMMITTED|EXECUT)/.test(eventKind);
+    };
     if (isProviderAcceptedSent(diagnostic)) return true;
     if (providerSubmitStrictExternalEvidencePresent(diagnostic)) return true;
     if (readBool(diagnostic?.safe_retry_available) === false && diagnostic && upperTrim(diagnostic.provider_submission_status || '').includes('PROVIDER_SUBMISSION')) return true;
     if (upperTrim(b.execution_commit_state || p.execution_commit_state || '') === 'COMMITTED') return true;
     if (firstText(b.execution_commit_ref, p.execution_commit_ref, b.settlement_confirmation_json, p.settlement_confirmation_json)) return true;
     for (const t of asArr(p.transfers)) {
-      const st = upperTrim(t?.status || '');
-      if (['COMPLETED', 'SETTLED', 'PAID'].includes(st)) return true;
+      const transferStates = [t?.status, t?.rail_state, t?.railState, t?.normalised_state, t?.normalized_state].map(upperTrim).filter(Boolean);
+      if (transferStates.some((state) => submittedStates.has(state))) return true;
       if (hasTransferRailSubmissionEvidence(t)) return true;
     }
-    if (asArr(p.bank_evidence || p.bankEvidence).length > 0) return true;
-    if (asArr(p.payment_events || p.paymentEvents || p.transfer_events || p.transferEvents).length > 0) return true;
+    if (asArr(p.bank_evidence || p.bankEvidence).some((eventValue) => eventHasExecutionEvidence(eventValue))) return true;
+    if (asArr(p.payment_events || p.paymentEvents || p.transfer_events || p.transferEvents).some((eventValue) => eventHasExecutionEvidence(eventValue))) return true;
+    if (asArr(p.provider_events || p.providerEvents || p.provider_transfer_events || p.providerTransferEvents).some((eventValue) => eventHasExecutionEvidence(eventValue))) return true;
     return false;
   };
 
@@ -64247,10 +64422,13 @@ function renderBankingPayBatchChildModalOverview() {
     const bucket = upperTrim(t.payment_status_bucket || t.paymentStatusBucket || '');
     const providerStatus = transferProviderStatus(t);
     const cashState = upperTrim(t.money_movement_cash_state || t.moneyMovementCashState || t.money_movement_classification?.cash_state || t.moneyMovementClassification?.cashState || '');
+    const railSubmissionEvidencePresent = hasTransferRailSubmissionEvidence(t);
+    const statusSubmitted = ['SUBMITTED', 'PROCESSING', 'IN_FLIGHT', 'WAITING_BANK_CONFIRM'].includes(statusText) || (statusText === 'PENDING' && railSubmissionEvidencePresent);
+    const railSubmitted = ['SUBMITTED', 'PROCESSING', 'IN_FLIGHT', 'ACCEPTED', 'PENDING_SETTLEMENT', 'PENDING_CONFIRMATION'].includes(railStateText) || (railStateText === 'PENDING' && railSubmissionEvidencePresent);
     return bucket === 'PENDING_SUBMITTED' ||
-      cashState === 'PENDING_NON_FINAL' ||
-      ['PENDING', 'SUBMITTED', 'PROCESSING', 'IN_FLIGHT', 'WAITING_BANK_CONFIRM'].includes(statusText) ||
-      ['PENDING', 'SUBMITTED', 'PROCESSING', 'IN_FLIGHT', 'ACCEPTED', 'PENDING_SETTLEMENT', 'PENDING_CONFIRMATION'].includes(railStateText) ||
+      (cashState === 'PENDING_NON_FINAL' && railSubmissionEvidencePresent) ||
+      statusSubmitted ||
+      railSubmitted ||
       ['PROVIDER_SUBMISSION_ACCEPTED', 'ACCEPTED', 'SUBMITTED', 'PROVIDER_SUBMITTED'].includes(providerStatus) ||
       (!!trimStr(t.rail_tx_id || t.railTxId) && !isFinalTransferMoneyMoved(t));
   };
@@ -64517,9 +64695,25 @@ function renderBankingPayBatchChildModalOverview() {
     readBool(data.provider_submit_issue_present || data.providerSubmitIssuePresent || batch.provider_submit_issue_present || batch.providerSubmitIssuePresent) ||
     firstFiniteNumber(data.payment_issue_candidate_count, data.paymentIssueCandidateCount, batch.payment_issue_candidate_count, batch.paymentIssueCandidateCount) > 0
   );
+  const explicitSubmittedTransferCount = firstFiniteNumber(
+    data.submitted_transfer_count,
+    data.submittedTransferCount,
+    batch.submitted_transfer_count,
+    batch.submittedTransferCount,
+    data.provider_submitted_transfer_count,
+    data.providerSubmittedTransferCount,
+    batch.provider_submitted_transfer_count,
+    batch.providerSubmittedTransferCount
+  ) ?? 0;
+  const transferRailSubmissionEvidencePresent = transfers.some((transfer) => hasTransferRailSubmissionEvidence(transfer));
   const batchHasPaymentSubmissionActivity = !!(
-    explicitTransferCount > 0 ||
-    bankEvidenceRows.length > 0 ||
+    explicitSubmittedTransferCount > 0 ||
+    transferRailSubmissionEvidencePresent ||
+    bankEvidenceRows.some((eventValue) => {
+      const eventObj = asObj(eventValue) || {};
+      if (!Object.keys(eventObj).length) return false;
+      return providerSubmitStrictExternalEvidencePresent(eventObj) || isProviderAcceptedSent(eventObj) || ['SUBMITTED', 'SENT', 'ACCEPTED', 'PROCESSING', 'COMPLETED', 'SETTLED', 'PAID', 'COMMITTED', 'EXECUTED'].includes(upperTrim(eventObj.status || eventObj.state || eventObj.rail_state || eventObj.railState || ''));
+    }) ||
     providerExecutionEvidence ||
     readBool(data.has_external_submission_evidence || data.hasExternalSubmissionEvidence || batch.has_external_submission_evidence || batch.hasExternalSubmissionEvidence) ||
     firstText(data.execution_commit_ref, batch.execution_commit_ref, data.settlement_confirmation_json, batch.settlement_confirmation_json) ||
@@ -64708,11 +64902,114 @@ function renderBankingPayBatchChildModalOverview() {
     return null;
   };
 
-  const hasActiveBatchPayments = (() => {
-    try {
-      if (typeof hasActivePaymentsForBatch === 'function') return hasActivePaymentsForBatch(data) === true;
-    } catch {}
-    const explicitCount = firstFiniteNumber(
+  const countCandidateLineEntriesForOverview = () => {
+    if (!Array.isArray(linesRawTop)) return null;
+    let count = 0;
+    for (const entry of linesRawTop) {
+      const e = asObj(entry);
+      if (!e) continue;
+      const normalizedBlock = asObj(e.candidate_lines_normalized || e.candidateLinesNormalized);
+      if (normalizedBlock) {
+        if (Array.isArray(normalizedBlock.tsLines)) count += normalizedBlock.tsLines.filter(Boolean).length;
+        if (Array.isArray(normalizedBlock.nonTsLines)) count += normalizedBlock.nonTsLines.filter(Boolean).length;
+        continue;
+      }
+      if (Array.isArray(e.ts_lines) || Array.isArray(e.tsLines) || Array.isArray(e.non_ts_lines) || Array.isArray(e.nonTsLines)) {
+        if (Array.isArray(e.ts_lines)) count += e.ts_lines.filter(Boolean).length;
+        if (Array.isArray(e.tsLines)) count += e.tsLines.filter(Boolean).length;
+        if (Array.isArray(e.non_ts_lines)) count += e.non_ts_lines.filter(Boolean).length;
+        if (Array.isArray(e.nonTsLines)) count += e.nonTsLines.filter(Boolean).length;
+        continue;
+      }
+      let pushed = false;
+      for (const key of ['lines', 'line_items', 'lineItems', 'items', 'breakdown_lines', 'breakdownLines', 'timesheets']) {
+        if (Array.isArray(e[key])) {
+          count += e[key].filter(Boolean).length;
+          pushed = true;
+        }
+      }
+      if (!pushed) count += 1;
+    }
+    return count;
+  };
+
+  const payableDraftContentState = (() => {
+    const itemRowSources = dedupeOverviewRows([
+      ...asArr(overviewRows),
+      ...asArr(items)
+    ]);
+    let payableItemCountFromRows = itemRowSources.length ? 0 : null;
+    let payableAmountFromRows = itemRowSources.length ? 0 : null;
+    for (const item of itemRowSources) {
+      const itemObj = asObj(item) || {};
+      if (itemObj.is_voided === true || itemObj.voided === true) continue;
+      const itemStatus = upperTrim(itemObj.status || '');
+      if (itemStatus === 'VOIDED' || itemStatus === 'CANCELLED' || itemStatus === 'CANCELED') continue;
+      const amount = firstFiniteNumber(
+        itemObj.frozen_target_amount_inc_vat,
+        itemObj.frozenTargetAmountIncVat,
+        itemObj.amount_inc_vat,
+        itemObj.amountIncVat,
+        itemObj.frozen_target_amount_ex_vat,
+        itemObj.frozenTargetAmountExVat,
+        itemObj.amount_ex_vat,
+        itemObj.amountExVat,
+        itemObj.amount
+      );
+      if (Number.isFinite(amount) && amount > 0) {
+        payableItemCountFromRows += 1;
+        payableAmountFromRows += amount;
+      }
+    }
+    const lineCount = countCandidateLineEntriesForOverview();
+    const durableItemCountForContent = firstPositiveOrNonNegativeInteger(
+      displaySummary.item_count,
+      displaySummary.itemCount,
+      displaySummary.pay_batch_item_count,
+      displaySummary.payBatchItemCount,
+      durableCounts.item_count,
+      durableCounts.itemCount,
+      durableCounts.pay_batch_item_count,
+      durableCounts.payBatchItemCount,
+      data.durable_item_count,
+      data.durableItemCount,
+      data.item_count,
+      data.itemCount,
+      batch.durable_item_count,
+      batch.durableItemCount,
+      batch.item_count,
+      batch.itemCount,
+      payableItemCountFromRows,
+      lineCount
+    );
+    const durableAmountForContent = firstPositiveOrFiniteNumber(
+      displaySummary.total_payable,
+      displaySummary.totalPayable,
+      displaySummary.total_amount_inc_vat,
+      displaySummary.totalAmountIncVat,
+      displaySummary.total_amount,
+      displaySummary.totalAmount,
+      durableCounts.total_payable,
+      durableCounts.totalPayable,
+      durableCounts.total_amount_inc_vat,
+      durableCounts.totalAmountIncVat,
+      durableCounts.total_amount,
+      durableCounts.totalAmount,
+      data.durable_total_payable,
+      data.durableTotalPayable,
+      data.total_payable,
+      data.totalPayable,
+      data.total_amount_inc_vat,
+      data.totalAmountIncVat,
+      batch.durable_total_payable,
+      batch.durableTotalPayable,
+      batch.total_payable,
+      batch.totalPayable,
+      batch.total_amount_inc_vat,
+      batch.totalAmountIncVat,
+      payableAmountFromRows
+    );
+    const activeItemCountForContent = firstPositiveOrNonNegativeInteger(
       data.active_payment_item_count,
       data.activePaymentItemCount,
       batch.active_payment_item_count,
@@ -64724,18 +65021,41 @@ function renderBankingPayBatchChildModalOverview() {
       data.active_item_count,
       data.activeItemCount,
       batch.active_item_count,
-      batch.activeItemCount,
-      data.item_count,
-      batch.item_count
+      batch.activeItemCount
     );
-    if (explicitCount !== null) return explicitCount > 0;
-    const activeItemCount = items.filter((item) => {
-      const itemObj = asObj(item) || {};
-      if (itemObj.is_voided === true || itemObj.voided === true) return false;
-      const itemStatus = upperTrim(itemObj.status || '');
-      return itemStatus !== 'VOIDED' && itemStatus !== 'CANCELLED' && itemStatus !== 'CANCELED';
-    }).length;
-    if (activeItemCount > 0) return true;
+    const activeAmountForContent = firstPositiveOrFiniteNumber(
+      data.active_payment_amount_inc_vat,
+      data.activePaymentAmountIncVat,
+      batch.active_payment_amount_inc_vat,
+      batch.activePaymentAmountIncVat,
+      data.active_amount_inc_vat,
+      data.activeAmountIncVat,
+      batch.active_amount_inc_vat,
+      batch.activeAmountIncVat
+    );
+    const known = durableItemCountForContent !== null || durableAmountForContent !== null || payableItemCountFromRows !== null || payableAmountFromRows !== null || lineCount !== null;
+    const hasPayableContent = (durableItemCountForContent !== null && durableItemCountForContent > 0) ||
+      (durableAmountForContent !== null && durableAmountForContent > 0) ||
+      (activeItemCountForContent !== null && activeItemCountForContent > 0) ||
+      (activeAmountForContent !== null && activeAmountForContent > 0) ||
+      (payableItemCountFromRows !== null && payableItemCountFromRows > 0) ||
+      (payableAmountFromRows !== null && payableAmountFromRows > 0) ||
+      (lineCount !== null && lineCount > 0);
+    return {
+      known,
+      knownEmpty: known && !hasPayableContent,
+      hasPayableContent,
+      itemCount: firstPositiveOrNonNegativeInteger(durableItemCountForContent, activeItemCountForContent, payableItemCountFromRows, lineCount),
+      totalPayable: firstPositiveOrFiniteNumber(durableAmountForContent, activeAmountForContent, payableAmountFromRows)
+    };
+  })();
+
+  const hasActiveBatchPayments = (() => {
+    if (payableDraftContentState.hasPayableContent === true) return true;
+    if (payableDraftContentState.knownEmpty === true) return false;
+    try {
+      if (typeof hasActivePaymentsForBatch === 'function') return hasActivePaymentsForBatch(data) === true;
+    } catch {}
     return candidates.length > 0;
   })();
 
@@ -64990,7 +65310,16 @@ function renderBankingPayBatchChildModalOverview() {
   ].map(readOptionalBool).filter((value) => value !== null);
   const overviewExplicitExecuteAllowed = standardExecuteFlagStates.includes(true);
   const overviewExplicitExecuteDenied = standardExecuteFlagStates.length > 0 && !overviewExplicitExecuteAllowed;
-  const activePaymentItemCountForExecute = firstFiniteNonNegativeInteger(
+  const activePaymentItemCountForExecute = firstPositiveOrNonNegativeInteger(
+    payableDraftContentState.itemCount,
+    displaySummary.item_count,
+    displaySummary.itemCount,
+    durableCounts.item_count,
+    durableCounts.itemCount,
+    data.item_count,
+    data.itemCount,
+    batch.item_count,
+    batch.itemCount,
     data.active_payment_item_count,
     data.activePaymentItemCount,
     batch.active_payment_item_count,
@@ -65002,11 +65331,22 @@ function renderBankingPayBatchChildModalOverview() {
     data.active_item_count,
     data.activeItemCount,
     batch.active_item_count,
-    batch.activeItemCount,
-    data.item_count,
-    batch.item_count
+    batch.activeItemCount
   );
-  const activePaymentAmountForExecute = firstFiniteNumber(
+  const activePaymentAmountForExecute = firstPositiveOrFiniteNumber(
+    payableDraftContentState.totalPayable,
+    displaySummary.total_payable,
+    displaySummary.totalPayable,
+    displaySummary.total_amount_inc_vat,
+    displaySummary.totalAmountIncVat,
+    durableCounts.total_payable,
+    durableCounts.totalPayable,
+    durableCounts.total_amount_inc_vat,
+    durableCounts.totalAmountIncVat,
+    data.total_payable,
+    data.totalPayable,
+    batch.total_payable,
+    batch.totalPayable,
     data.active_payment_amount_inc_vat,
     data.activePaymentAmountIncVat,
     batch.active_payment_amount_inc_vat,
@@ -65022,11 +65362,7 @@ function renderBankingPayBatchChildModalOverview() {
     data.active_amount,
     data.activeAmount,
     batch.active_amount,
-    batch.activeAmount,
-    data.total_payable,
-    data.totalPayable,
-    batch.total_payable,
-    batch.totalPayable
+    batch.activeAmount
   );
   const executeDisabledExplicit = readFirstBool(data.execute_disabled, data.executeDisabled, batch.execute_disabled, batch.executeDisabled);
   const executeBlockedByState = readFirstBool(
@@ -65591,7 +65927,6 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
-
 
 
 
@@ -134101,7 +134436,6 @@ function bankingPayBuildCancelPromptCopy({ batch, mode }) {
 }
 
 
-
 async function runBankingPayBatchCancelFlow({
   batch = null,
   batchId = '',
@@ -134125,6 +134459,7 @@ async function runBankingPayBatchCancelFlow({
   const isSafeDraftBatchDelete = backendResolvedMode === 'DRAFT_DELETE';
   const resolvedMode = isExplicitSelectedMode ? explicitMode : (isSafeDraftBatchDelete ? 'DRAFT_DELETE' : backendResolvedMode);
   const isWholeBatchCancel = !isSelectedCurrentStatusCancel && (backendResolvedMode === 'CANCEL_NOT_SENT_RECALCULATE' || isSafeDraftBatchDelete);
+  const isDraftDeleteMode = resolvedMode === 'DRAFT_DELETE';
   if (!isWholeBatchCancel && !isSelectedCurrentStatusCancel) {
     const msg = backendResolvedMode === 'VIEW_RECALCULATE_NEXT_STEP'
       ? 'This payment is already ready for amendment and recalculation. No cancellation action is required.'
@@ -134242,6 +134577,588 @@ async function runBankingPayBatchCancelFlow({
     } catch {}
   };
 
+  const extractCancelFailurePayload = (value) => {
+    const parseObject = (candidate) => {
+      try {
+        if (typeof candidate !== 'string') return null;
+        const text = candidate.trim();
+        if (!text) return null;
+        const parsed = JSON.parse(text);
+        return isPlainObject(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    };
+    const queue = [];
+    const seen = new Set();
+    const findings = [];
+    const normaliseFailureCode = (candidate) => upper(candidate).replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    const isGenericWrapperCode = (code) => (
+      !code ||
+      code === 'BANKING_ACTION_FAILED' ||
+      code === 'HTTP_ERROR' ||
+      code === 'REQUEST_FAILED' ||
+      code === 'RPC_ERROR' ||
+      code === 'FETCH_ERROR' ||
+      code === 'ERROR' ||
+      (code.startsWith('BANKING_') && code.endsWith('_FAILED'))
+    );
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const parsed = parseObject(candidate);
+        if (parsed) enqueue(parsed);
+        return;
+      }
+      if (typeof candidate !== 'object') return;
+      if (seen.has(candidate)) return;
+      seen.add(candidate);
+      queue.push(candidate);
+    };
+    const enqueueChildren = (candidate) => {
+      enqueue(candidate.backendPayload);
+      enqueue(candidate.payload);
+      enqueue(candidate.json);
+      enqueue(candidate.data);
+      enqueue(candidate.body);
+      enqueue(candidate.response);
+      enqueue(candidate.result);
+      enqueue(candidate.error);
+      enqueue(candidate.details);
+      enqueue(candidate.detail);
+      enqueue(candidate.cause);
+      enqueue(candidate.source_error);
+      enqueue(candidate.sourceError);
+      enqueue(candidate.friendly_error);
+      enqueue(candidate.friendlyError);
+      enqueue(candidate.message);
+    };
+    const scoreCandidate = (candidate) => {
+      const src = isPlainObject(candidate) ? candidate : {};
+      const code = normaliseFailureCode(src.error_code || src.errorCode || src.code || '');
+      const hasSpecificCancelCode = (
+        code.startsWith('PAY_PAYMENT_CANCEL_NOT_SENT_') ||
+        code.startsWith('PAYMENT_CANCEL_NOT_SENT_') ||
+        code === 'PAYMENT_CANCEL_NOT_SENT_RECALCULATE_FAILED'
+      );
+      const hasUsefulStructuredDetail = !!(
+        src.user_message ||
+        src.userMessage ||
+        src.title ||
+        src.failure_summary ||
+        src.failureSummary ||
+        src.process_result ||
+        src.processResult ||
+        src.diagnostic_json ||
+        src.diagnosticJson ||
+        src.live_signal ||
+        src.liveSignal ||
+        src.correction_request_id ||
+        src.correctionRequestId
+      );
+      const hasFailureShape = !!(
+        src.ok === false ||
+        code ||
+        hasUsefulStructuredDetail ||
+        (typeof src.error === 'string' && src.error.trim()) ||
+        (typeof src.message === 'string' && src.message.trim())
+      );
+      if (!hasFailureShape) return null;
+      const genericWrapper = isGenericWrapperCode(code);
+      let score = 0;
+      if (hasSpecificCancelCode) score += 1000;
+      if (src.ok === false) score += 250;
+      if (hasUsefulStructuredDetail) score += 175;
+      if (src.failure_summary || src.failureSummary) score += 75;
+      if (src.process_result || src.processResult) score += 75;
+      if (src.diagnostic_json || src.diagnosticJson) score += 50;
+      if (src.user_message || src.userMessage) score += 75;
+      if (src.pay_batch_id || src.payBatchId) score += 25;
+      if (src.correction_request_id || src.correctionRequestId) score += 25;
+      if (genericWrapper) score -= 250;
+      if (candidate instanceof Error) score -= 50;
+      return { payload: src, score, code };
+    };
+
+    enqueue(value);
+    while (queue.length) {
+      const current = queue.shift();
+      if (!current || typeof current !== 'object') continue;
+      const candidate = isPlainObject(current) ? current : {};
+      const scored = scoreCandidate(candidate);
+      if (scored) findings.push(scored);
+      enqueueChildren(candidate);
+    }
+
+    if (!findings.length) return null;
+    findings.sort((a, b) => b.score - a.score);
+    return findings[0].payload;
+  };
+
+  const buildCancelStructuredError = (source, status = 409, originalError = null) => {
+    const payload = isPlainObject(source)
+      ? { ...source }
+      : { ok: false, message: String(source || 'Cancel Draft Batch could not be completed.') };
+    if (source && typeof source === 'object') {
+      if (!payload.message && source.message) payload.message = source.message;
+      if (!payload.user_message && source.user_message) payload.user_message = source.user_message;
+      if (!payload.userMessage && source.userMessage) payload.userMessage = source.userMessage;
+      if (!payload.error_code && source.error_code) payload.error_code = source.error_code;
+      if (!payload.errorCode && source.errorCode) payload.errorCode = source.errorCode;
+      if (!payload.code && source.code) payload.code = source.code;
+      if (!payload.json && source.json) payload.json = source.json;
+      if (!payload.payload && source.payload) payload.payload = source.payload;
+      if (!payload.backendPayload && source.backendPayload) payload.backendPayload = source.backendPayload;
+    }
+    payload.ok = false;
+    payload.pay_batch_id = payload.pay_batch_id || payload.payBatchId || id;
+    const code = upper(payload.error_code || payload.errorCode || payload.code || 'PAY_PAYMENT_CANCEL_NOT_SENT_NOT_APPLIED') || 'PAY_PAYMENT_CANCEL_NOT_SENT_NOT_APPLIED';
+    const message = String(
+      payload.user_message ||
+      payload.userMessage ||
+      payload.message ||
+      payload.error?.user_message ||
+      payload.error?.userMessage ||
+      payload.error?.message ||
+      payload.error ||
+      'Cancel Draft Batch could not be completed. Refresh the batch and try again.'
+    ).trim();
+    const err = new Error(message);
+    err.name = 'BankingPayBatchCancelFlowError';
+    err.status = Number(status) || 409;
+    err.status_code = err.status;
+    err.http_status = err.status;
+    err.error_code = code;
+    err.code = payload.code || code;
+    err.user_message = message;
+    err.json = payload;
+    err.payload = payload;
+    err.backendPayload = payload;
+    err.pay_batch_id = payload.pay_batch_id;
+    err.correction_request_id = payload.correction_request_id || payload.correctionRequestId || null;
+    err.failure_summary = payload.failure_summary || payload.failureSummary || null;
+    err.process_result = payload.process_result || payload.processResult || null;
+    err.diagnostic_json = payload.diagnostic_json || payload.diagnosticJson || null;
+    err.live_signal = payload.live_signal || payload.liveSignal || null;
+    if (originalError) err.source_error = originalError;
+    return err;
+  };
+
+  const formatCancelFailureSummary = (summary) => {
+    const src = isPlainObject(summary) ? summary : null;
+    if (!src) return '';
+    const parts = [];
+    const add = (label, value) => {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) parts.push(`${label}: ${Math.trunc(n)}`);
+    };
+    add('blocked', src.blocked);
+    add('failed', Number(src.failed_final || 0) + Number(src.failed || 0));
+    add('retryable', src.failed_retryable);
+    add('pending', src.pending);
+    add('processing', src.processing);
+    const parentStatus = String(src.parent_status || src.parentStatus || '').trim();
+    const body = parts.length ? ` (${parts.join(', ')})` : '';
+    return parentStatus ? ` Status: ${parentStatus}${body}.` : (body ? ` Work-item summary${body}.` : '');
+  };
+
+  const showCancelFailureModal = async (errorValue) => {
+    const payload = extractCancelFailurePayload(errorValue) || (isPlainObject(errorValue) ? errorValue : {});
+    const code = upper(payload.error_code || payload.errorCode || payload.code || errorValue?.error_code || errorValue?.code || 'PAY_PAYMENT_CANCEL_NOT_SENT_NOT_APPLIED') || 'PAY_PAYMENT_CANCEL_NOT_SENT_NOT_APPLIED';
+    const titleByCode = {
+      PAY_PAYMENT_CANCEL_NOT_SENT_DRAFT_DELETE_OPERATION_IN_PROGRESS: 'Cancel Draft Batch is already running',
+      PAY_PAYMENT_CANCEL_NOT_SENT_DRAFT_DELETE_NOT_AVAILABLE: 'Cancel Draft Batch is not available',
+      PAY_PAYMENT_CANCEL_NOT_SENT_COMMIT_BOUNDARY_CROSSED: 'Cancel Draft Batch is no longer safe',
+      PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_BLOCKED: 'Cancel Draft Batch could not be completed',
+      PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_RETRYABLE: 'Cancel Draft Batch needs a retry',
+      PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_FAILED: 'Cancel Draft Batch failed',
+      PAY_PAYMENT_CANCEL_NOT_SENT_NOT_APPLIED: 'Cancel Draft Batch could not be completed'
+    };
+    const fallbackMessageByCode = {
+      PAY_PAYMENT_CANCEL_NOT_SENT_DRAFT_DELETE_OPERATION_IN_PROGRESS: 'CloudTMS is already cancelling this draft batch. Refresh the batch list in a moment to see the latest status.',
+      PAY_PAYMENT_CANCEL_NOT_SENT_DRAFT_DELETE_NOT_AVAILABLE: 'This batch is no longer an unsubmitted draft, so it cannot be cancelled from Cancel Draft Batch.',
+      PAY_PAYMENT_CANCEL_NOT_SENT_COMMIT_BOUNDARY_CROSSED: 'This batch has crossed the bank/provider submission boundary, so CloudTMS cannot safely cancel it as a draft.',
+      PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_BLOCKED: 'CloudTMS could not complete Cancel Draft Batch because the cancellation work item was blocked.',
+      PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_RETRYABLE: 'CloudTMS could not complete Cancel Draft Batch because the cancellation work item needs to be retried.',
+      PAY_PAYMENT_CANCEL_NOT_SENT_PROCESS_FAILED: 'CloudTMS could not complete Cancel Draft Batch because the cancellation work item failed.',
+      PAY_PAYMENT_CANCEL_NOT_SENT_NOT_APPLIED: 'CloudTMS could not complete Cancel Draft Batch because no cancellation work item was applied.'
+    };
+    const title = String(
+      payload.title ||
+      payload.friendly_error?.title ||
+      payload.friendlyError?.title ||
+      titleByCode[code] ||
+      (isDraftDeleteMode ? 'Cancel Draft Batch failed' : 'Cancellation could not be completed')
+    ).trim();
+    const specificMessage = String(
+      payload.user_message ||
+      payload.userMessage ||
+      payload.message ||
+      payload.friendly_error?.message ||
+      payload.friendlyError?.message ||
+      payload.error?.user_message ||
+      payload.error?.userMessage ||
+      payload.error?.message ||
+      payload.error ||
+      errorValue?.user_message ||
+      errorValue?.message ||
+      ''
+    ).trim();
+    const summarySuffix = formatCancelFailureSummary(payload.failure_summary || payload.failureSummary || errorValue?.failure_summary || null);
+    const message = specificMessage || `${fallbackMessageByCode[code] || 'CloudTMS could not complete this Banking action. Please refresh and try again.'}${summarySuffix}`;
+
+    try {
+      console.error('[Banking Pay] Cancel Draft Batch failed', {
+        error_code: code,
+        pay_batch_id: id,
+        correction_request_id: payload.correction_request_id || payload.correctionRequestId || errorValue?.correction_request_id || null,
+        payload,
+        error: errorValue
+      });
+    } catch {}
+
+    try {
+      const payState = resolvePayState();
+      if (payState && typeof payState === 'object') {
+        if (payState.list && typeof payState.list === 'object') payState.list.error = message;
+        const openChild = payState.child && typeof payState.child === 'object' ? payState.child : null;
+        const childBatchId = String(openChild?.batchId || openChild?.pay_batch_id || openChild?.payBatchId || openChild?.id || '').trim();
+        if (openChild && (!childBatchId || childBatchId === id)) openChild.error = message;
+      }
+    } catch {}
+
+    if (typeof openUiConfirmModal === 'function') {
+      try {
+        await openUiConfirmModal({
+          kind: 'banking-friendly-error',
+          title,
+          message,
+          confirm_label: 'OK',
+          hide_cancel: true,
+          confirm_class: 'btn btn-primary'
+        });
+        return { ok: false, title, message, error_code: code, payload };
+      } catch {}
+    }
+
+    try { if (typeof window.__toast === 'function') window.__toast(message); } catch {}
+    return { ok: false, title, message, error_code: code, payload };
+  };
+
+  const resolvePayState = () => {
+    if (st && st.pay && typeof st.pay === 'object') return st.pay;
+    try {
+      const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      if (mc && mc.banking && mc.banking.pay && typeof mc.banking.pay === 'object') return mc.banking.pay;
+    } catch {}
+    return null;
+  };
+
+  const getCurrentWorkbenchSessionId = () => {
+    try {
+      const payState = resolvePayState();
+      return String(
+        payState?.draftWizard?.workbench?.session_id ||
+        payState?.draftWizard?.workbench?.sessionId ||
+        payState?.draftWizard?.decisions?.session_id ||
+        payState?.draftWizard?.decisions?.sessionId ||
+        ''
+      ).trim();
+    } catch {
+      return '';
+    }
+  };
+
+  const uniqStrings = (...values) => {
+    const out = [];
+    const add = (value) => {
+      if (!value) return;
+      if (Array.isArray(value)) { value.forEach(add); return; }
+      const text = String(value).trim();
+      if (text && !out.includes(text)) out.push(text);
+    };
+    values.forEach(add);
+    return out;
+  };
+
+  const buildPostDraftCancelResetOptions = (result) => {
+    const source = isPlainObject(result) ? result : {};
+    const processResult = isPlainObject(source.process_result) ? source.process_result : (isPlainObject(source.processResult) ? source.processResult : {});
+    const freshnessDirty = isPlainObject(source.freshness_dirty_result)
+      ? source.freshness_dirty_result
+      : (isPlainObject(source.freshnessDirtyResult)
+        ? source.freshnessDirtyResult
+        : (isPlainObject(processResult.freshness_dirty_result) ? processResult.freshness_dirty_result : {}));
+    const postCancelRefresh = isPlainObject(source.post_cancel_refresh)
+      ? source.post_cancel_refresh
+      : (isPlainObject(source.postCancelRefresh)
+        ? source.postCancelRefresh
+        : (isPlainObject(source.post_cancel_refresh_json)
+          ? source.post_cancel_refresh_json
+          : freshnessDirty));
+    const currentSessionId = getCurrentWorkbenchSessionId();
+    const sourceSessionId = String(
+      source.source_session_id ||
+      source.sourceSessionId ||
+      source.workbench_session_id ||
+      source.workbenchSessionId ||
+      postCancelRefresh.source_session_id ||
+      postCancelRefresh.sourceSessionId ||
+      currentSessionId ||
+      ''
+    ).trim();
+    const obsoleteSessionIds = uniqStrings(
+      source.obsolete_session_ids,
+      source.obsoleteSessionIds,
+      postCancelRefresh.obsolete_session_ids,
+      postCancelRefresh.obsoleteSessionIds,
+      sourceSessionId
+    );
+    const dirtyCandidateIds = uniqStrings(
+      source.dirty_candidate_ids,
+      source.dirtyCandidateIds,
+      postCancelRefresh.dirty_candidate_ids,
+      postCancelRefresh.dirtyCandidateIds,
+      freshnessDirty.dirty_candidate_ids,
+      freshnessDirty.dirtyCandidateIds,
+      processResult.dirty_candidate_ids,
+      processResult.dirtyCandidateIds,
+      source.changed_candidate_ids,
+      source.changedCandidateIds
+    );
+    const pendingCandidateIds = uniqStrings(
+      source.pending_candidate_ids,
+      source.pendingCandidateIds,
+      postCancelRefresh.pending_candidate_ids,
+      postCancelRefresh.pendingCandidateIds,
+      freshnessDirty.pending_candidate_ids,
+      freshnessDirty.pendingCandidateIds,
+      processResult.pending_candidate_ids,
+      processResult.pendingCandidateIds,
+      dirtyCandidateIds
+    );
+    return {
+      mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+      reason: 'CANCEL_DELETE_DRAFT_SUCCESS',
+      mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+      force_new_session: true,
+      discard_source_session: true,
+      ignore_replacement_session: true,
+      preview_reopen_required: true,
+      pay_batch_id: id,
+      cancelled_pay_batch_id: id,
+      correction_request_id: source.correction_request_id || source.correctionRequestId || null,
+      source_session_id: sourceSessionId || null,
+      obsolete_session_ids: obsoleteSessionIds,
+      dirty_candidate_ids: dirtyCandidateIds,
+      pending_candidate_ids: pendingCandidateIds,
+      refresh_job_ids: uniqStrings(source.refresh_job_ids, source.refreshJobIds, postCancelRefresh.refresh_job_ids, postCancelRefresh.refreshJobIds, freshnessDirty.refresh_job_ids, freshnessDirty.refreshJobIds),
+      source_snapshot_run_id: source.source_snapshot_run_id || source.sourceSnapshotRunId || postCancelRefresh.source_snapshot_run_id || postCancelRefresh.sourceSnapshotRunId || null,
+      source_session_version: source.source_session_version ?? source.sourceSessionVersion ?? postCancelRefresh.source_session_version ?? postCancelRefresh.sourceSessionVersion ?? null,
+      source_session_signature: source.source_session_signature || source.sourceSessionSignature || postCancelRefresh.source_session_signature || postCancelRefresh.sourceSessionSignature || null,
+      snapshot_rebuild: source.snapshot_rebuild || source.snapshotRebuild || postCancelRefresh.snapshot_rebuild || postCancelRefresh.snapshotRebuild || null,
+      post_cancel_refresh: postCancelRefresh,
+      response_payload: source
+    };
+  };
+
+  const markCancelledBatchLocally = (result) => {
+    const payState = resolvePayState();
+    if (!payState || typeof payState !== 'object') return false;
+    const displaySummary = (result && isPlainObject(result.pay_batch_display_summary))
+      ? result.pay_batch_display_summary
+      : ((result && isPlainObject(result.payBatchDisplaySummary))
+        ? result.payBatchDisplaySummary
+        : ((result && isPlainObject(result.display_summary)) ? result.display_summary : null));
+    const patchRow = (row) => {
+      if (!row || typeof row !== 'object') return false;
+      const rowId = String(row.id || row.pay_batch_id || row.payBatchId || '').trim();
+      if (rowId !== id) return false;
+      row.status = 'CANCELLED';
+      row.batch_status = 'CANCELLED';
+      row.db_status = 'CANCELLED';
+      row.execution_commit_state = row.execution_commit_state || 'NOT_SUBMITTED';
+      row.can_pre_provider_cancel = false;
+      row.canPreProviderCancel = false;
+      row.whole_batch_cancel_available = false;
+      row.wholeBatchCancelAvailable = false;
+      row.row_cancel_available = false;
+      row.rowCancelAvailable = false;
+      row.total_bank_out = 0;
+      row.totalBankOut = 0;
+      row.total_payable = 0;
+      row.totalPayable = 0;
+      row.transfer_count = 0;
+      row.transferCount = 0;
+      row.item_count = 0;
+      row.itemCount = 0;
+      if (displaySummary) {
+        row.pay_batch_display_summary = { ...(row.pay_batch_display_summary || {}), ...displaySummary, batch_status: 'CANCELLED' };
+        row.display_summary = { ...(row.display_summary || {}), ...displaySummary, batch_status: 'CANCELLED' };
+        if (displaySummary.display_label) row.display_label = displaySummary.display_label;
+      }
+      return true;
+    };
+    let changed = false;
+    try {
+      const list = payState.list && typeof payState.list === 'object' ? payState.list : null;
+      if (Array.isArray(list?.items)) list.items.forEach((row) => { if (patchRow(row)) changed = true; });
+      if (Array.isArray(list?.rows)) list.rows.forEach((row) => { if (patchRow(row)) changed = true; });
+    } catch {}
+    try { if (patchRow(payState.selected?.data)) changed = true; } catch {}
+    try { if (patchRow(payState.child?.data?.batch)) changed = true; } catch {}
+    try { if (patchRow(payState.child?.data)) changed = true; } catch {}
+    return changed;
+  };
+
+  const refreshParentBatchList = async () => {
+    try {
+      if (typeof bankingPayBatchesList !== 'function') return false;
+      const payState = resolvePayState();
+      const listState = (payState?.list && typeof payState.list === 'object') ? payState.list : {};
+      const statusFilter = upper(listState.statusFilter || listState.status || '');
+      if (statusFilter === 'DRAFT') {
+        try { listState.statusFilter = ''; } catch {}
+        try { listState.status = ''; } catch {}
+      }
+      const effectiveStatusFilter = statusFilter === 'DRAFT' ? null : (listState.statusFilter || listState.status || null);
+      const limitRaw = Number(listState.limit || 50);
+      const offsetRaw = Number(listState.offset || 0);
+      await bankingPayBatchesList({
+        status: effectiveStatusFilter,
+        limit: Number.isFinite(limitRaw) ? Math.max(1, Math.min(50, Math.trunc(limitRaw))) : 50,
+        offset: Number.isFinite(offsetRaw) ? Math.max(0, Math.trunc(offsetRaw)) : 0,
+        display_mode: 'LIGHT',
+        displayMode: 'LIGHT',
+        include_diagnostics: false,
+        includeDiagnostics: false,
+        include_alerts: false,
+        includeAlerts: false,
+        include_correction_summary: false,
+        includeCorrectionSummary: false,
+        silent: true,
+        reportError: false,
+        userInitiated: false
+      });
+      return true;
+    } catch (e) {
+      try { console.warn('[Banking Pay] Draft cancel succeeded but batch list refresh failed', e); } catch {}
+      return false;
+    }
+  };
+
+  const clearCancelledChildState = () => {
+    const payState = resolvePayState();
+    if (!payState || typeof payState !== 'object') return false;
+    let changed = false;
+    try {
+      if (String(payState.selectedBatchId || '').trim() === id) {
+        payState.selectedBatchId = null;
+        changed = true;
+      }
+      const selectedId = String(payState.selected?.data?.id || payState.selected?.data?.pay_batch_id || '').trim();
+      if (selectedId === id) {
+        payState.selected = null;
+        changed = true;
+      }
+    } catch {}
+    try {
+      const openChild = payState.child && typeof payState.child === 'object' ? payState.child : null;
+      const childBatchId = String(openChild?.batchId || openChild?.pay_batch_id || openChild?.payBatchId || openChild?.id || openChild?.data?.pay_batch_id || openChild?.data?.batch?.id || '').trim();
+      if (openChild && (!childBatchId || childBatchId === id)) {
+        try { openChild.__loadInFlight = false; } catch {}
+        try { openChild.loading = false; } catch {}
+        try { if (typeof stopBankingPayBatchLiveWatch === 'function') stopBankingPayBatchLiveWatch(id); } catch {}
+        payState.child = null;
+        changed = true;
+      }
+    } catch {}
+    return changed;
+  };
+
+  const closeMatchingChildModalFrames = async () => {
+    const readFrameBatchId = (frame) => String(
+      frame?.payBatchId ||
+      frame?.pay_batch_id ||
+      frame?.batchId ||
+      frame?.batch_id ||
+      frame?.options?.payBatchId ||
+      frame?.options?.pay_batch_id ||
+      frame?.options?.batchId ||
+      frame?.options?.batch_id ||
+      frame?.opts?.payBatchId ||
+      frame?.opts?.pay_batch_id ||
+      frame?.opts?.batchId ||
+      frame?.opts?.batch_id ||
+      ''
+    ).trim();
+    for (let i = 0; i < 3; i += 1) {
+      let frame = null;
+      try { frame = (typeof window !== 'undefined' && typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null; } catch { frame = null; }
+      const kind = String(frame?.kind || '').trim();
+      if (kind !== 'banking-pay-batch-child' && kind !== 'import-summary-banking-cancel-pay') break;
+      const frameBatchId = readFrameBatchId(frame);
+      if (kind === 'banking-pay-batch-child' && frameBatchId && frameBatchId !== id) break;
+      try {
+        if (typeof closeCurrentModalFrameSafely === 'function') closeCurrentModalFrameSafely({ expectedKind: kind });
+        else if (typeof closeModal === 'function') closeModal();
+        else document.getElementById('btnCloseModal')?.click?.();
+      } catch {
+        try { document.getElementById('btnCloseModal')?.click?.(); } catch {}
+      }
+      try { await Promise.resolve(); } catch {}
+    }
+  };
+
+  const refreshWorkbenchAfterDraftCancel = async (result) => {
+    const resetOptions = buildPostDraftCancelResetOptions(result);
+    let applied = false;
+    let error = null;
+    try {
+      if (typeof resetPayPreviewAndDecisions === 'function') {
+        await resetPayPreviewAndDecisions(resetOptions);
+        applied = true;
+      } else {
+        const payState = resolvePayState();
+        const payDate = String(payState?.draftWizard?.pay_date || payState?.pay_date || payState?.selectedPayDate || '').trim();
+        if (payDate && typeof bankingPayPreview === 'function') {
+          await bankingPayPreview({
+            pay_date: payDate,
+            mode: 'POST_DRAFT_CANCEL_DISCARD_AND_REOPEN',
+            hard_session_reload: true,
+            force_new_session: true,
+            discard_source_session: true,
+            ignore_replacement_session: true,
+            preview_reopen_required: true,
+            source_session_id: resetOptions.source_session_id || null,
+            obsolete_session_ids: Array.isArray(resetOptions.obsolete_session_ids) ? resetOptions.obsolete_session_ids : [],
+            dirty_candidate_ids: Array.isArray(resetOptions.dirty_candidate_ids) ? resetOptions.dirty_candidate_ids : [],
+            pending_candidate_ids: Array.isArray(resetOptions.pending_candidate_ids) ? resetOptions.pending_candidate_ids : [],
+            refresh_job_ids: Array.isArray(resetOptions.refresh_job_ids) ? resetOptions.refresh_job_ids : [],
+            mutation_context: 'CANCEL_DELETE_DRAFT_SUCCESS',
+            userInitiated: false,
+            silent: true,
+            background: true
+          });
+          applied = true;
+        }
+      }
+    } catch (e) {
+      error = e;
+      try { console.warn('[Banking Pay] Draft cancel succeeded but preview/workbench rebase failed', e); } catch {}
+    }
+    return {
+      postCancelRefresh: resetOptions.post_cancel_refresh || {},
+      postCancelResetOptions: resetOptions,
+      previewResetOptions: resetOptions,
+      currentWorkbenchSessionId: resetOptions.source_session_id || null,
+      previewResetAlreadyApplied: applied,
+      postCancelPreviewResetAlreadyApplied: applied,
+      skipFollowUpPreviewReset: applied,
+      postCancelPreviewResetError: error
+    };
+  };
+
   const buildSelectionJson = () => {
     if (selectionObj) {
       return {
@@ -134255,6 +135172,7 @@ async function runBankingPayBatchCancelFlow({
       requested_action: 'PRE_PROVIDER_CANCEL_AND_RECALCULATE',
       source_context: resolvedMode === 'DRAFT_DELETE' ? 'runBankingPayBatchCancelFlow.draft_delete' : 'runBankingPayBatchCancelFlow',
       ui_mode: resolvedMode || null,
+      draft_delete_requested: isDraftDeleteMode,
       expected_status_update_signature: currentStatusSignature || null
     };
   };
@@ -134289,6 +135207,7 @@ async function runBankingPayBatchCancelFlow({
       confirmation_json: {
         source: 'runBankingPayBatchCancelFlow',
         ui_mode: resolvedMode,
+        draft_delete_requested: isDraftDeleteMode,
         password_supplied: !!password,
         reauth_token_supplied: !!reauthToken,
         expected_status_update_signature: currentStatusSignature || null,
@@ -134301,6 +135220,9 @@ async function runBankingPayBatchCancelFlow({
     try {
       await setProgressMessage(promptCopy.progressCopy?.starting || 'Cancelling scheduled batch…');
       const result = await bankingPayCancelNotSentAndRecalculate(id, requestPayload);
+      if (!result || result.ok === false) {
+        throw buildCancelStructuredError(result || { ok: false, pay_batch_id: id }, 409);
+      }
       const progress = (result && typeof result.progress === 'object') ? result.progress : {};
       const completed = Number(progress.completed ?? result.completed ?? 0) || 0;
       const total = Number(progress.total ?? result.total ?? 0) || 0;
@@ -134308,6 +135230,55 @@ async function runBankingPayBatchCancelFlow({
       await setProgressMessage(promptCopy.progressCopy?.releasing || 'Releasing linked finance reservations…', { carry_forward_counts: result.carry_forward_counts || null });
       if ((Number(result.carry_forward_counts?.created || result.carry_forward_created_count || 0) + Number(result.carry_forward_counts?.existing || result.carry_forward_existing_count || 0)) > 0) {
         await setProgressMessage(promptCopy.progressCopy?.carryingForward || 'Carrying forward manual adjustments…', { carry_forward_counts: result.carry_forward_counts });
+      }
+
+      if (isDraftDeleteMode) {
+        try {
+          if (result.live_signal && typeof applyBankingPayLiveRefresh === 'function') await applyBankingPayLiveRefresh(result.live_signal);
+        } catch {}
+        try { if (typeof stopBankingPayBatchLiveWatch === 'function') stopBankingPayBatchLiveWatch(id); } catch {}
+
+        markCancelledBatchLocally(result);
+        clearCancelledChildState();
+        const parentListRefreshed = await refreshParentBatchList();
+        if (!parentListRefreshed) markCancelledBatchLocally(result);
+
+        const postCancelMaintenance = await refreshWorkbenchAfterDraftCancel(result);
+        await closeMatchingChildModalFrames();
+
+        try {
+          if (result.grouped_alert_summary && typeof applyAlertSummaryToState === 'function') {
+            applyAlertSummaryToState({ banking_alert_summary: result.grouped_alert_summary, banking_alert_summary_included: true });
+          }
+        } catch {}
+
+        await setProgressMessage(promptCopy.progressCopy?.complete || 'Draft batch cancelled.', {
+          completed: true,
+          result,
+          draft_cancel_terminal: true,
+          parent_list_refreshed: parentListRefreshed,
+          post_cancel_reset_options: postCancelMaintenance.postCancelResetOptions || null,
+          preview_reset_already_applied: postCancelMaintenance.previewResetAlreadyApplied === true
+        });
+
+        if (typeof onSuccess === 'function') {
+          try {
+            await onSuccess({
+              id,
+              responsePayload: result,
+              result,
+              payBatchId: id,
+              parentListRefreshed,
+              draftCancelTerminal: true,
+              ...postCancelMaintenance
+            });
+          } catch (postSuccessError) {
+            try { console.warn('[Banking Pay] Draft cancel succeeded but post-success callback failed', postSuccessError); } catch {}
+          }
+        }
+
+        try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+        return true;
       }
 
       try {
@@ -134375,13 +135346,13 @@ async function runBankingPayBatchCancelFlow({
         authFailedMessage = String(e.message || 'Authentication failed. Please try again.');
         continue;
       }
-      if (typeof bankingHandleApiError === 'function') {
-        try { bankingHandleApiError(e, { action: 'CANCEL_NOT_SENT_RECALCULATE', batchId: id }); } catch {}
-      }
-      throw e;
+      try { await showCancelFailureModal(e); } catch {}
+      try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+      return false;
     }
   }
 }
+
 
 
 
@@ -281717,8 +282688,6 @@ async function applyBankingPayLiveRefresh(signalPayload) {
 }
 
 
-
-
 async function bankingPayCancelNotSentAndRecalculate(payBatchId, payload) {
   const id = String(payBatchId == null ? '' : payBatchId).trim();
   if (!id) throw new Error('bankingPayCancelNotSentAndRecalculate: payBatchId is required');
@@ -281745,6 +282714,14 @@ async function bankingPayCancelNotSentAndRecalculate(payBatchId, payload) {
     'VIEW_PROGRESS'
   ]);
   const allowedAction = 'PRE_PROVIDER_CANCEL_AND_RECALCULATE';
+  const draftDeleteAliases = new Set([
+    'DRAFT_DELETE',
+    'DELETE_DRAFT',
+    'CANCEL_DRAFT',
+    'CANCEL_DRAFT_BATCH',
+    'PRE_BANK_CANCEL_DRAFT',
+    'PRE_BANK_DRAFT_CANCEL'
+  ]);
 
   const requestedAction = upper(
     body.requested_action ||
@@ -281756,13 +282733,14 @@ async function bankingPayCancelNotSentAndRecalculate(payBatchId, payload) {
     body.selection?.requested_action ||
     body.selection?.requestedAction
   );
+  const effectiveRequestedAction = draftDeleteAliases.has(requestedAction) ? allowedAction : requestedAction;
   if (displayOnlyActions.has(requestedAction)) {
     throw new Error('This payment is already ready for amendment and recalculation. No cancellation action is required.');
   }
   if (forbiddenActions.has(requestedAction)) {
     throw new Error('This old payment cancellation action is no longer supported. Refresh the batch and use Cancel scheduled payment and recalculate.');
   }
-  if (requestedAction && requestedAction !== allowedAction) {
+  if (effectiveRequestedAction && effectiveRequestedAction !== allowedAction) {
     throw new Error('This action cannot be sent through the local cancellation wrapper. Refresh the batch and use the current payment status action.');
   }
 
@@ -281801,6 +282779,13 @@ async function bankingPayCancelNotSentAndRecalculate(payBatchId, payload) {
       next_step: src.next_step || src.nextStep || null,
       next_step_label: src.next_step_label || src.nextStepLabel || null,
       correction_request_id: src.correction_request_id || src.request_id || src.correctionRequestId || null,
+      error_code: src.error_code || src.errorCode || src.code || null,
+      code: src.code || src.error_code || src.errorCode || null,
+      message: src.message || src.error || src.user_message || src.userMessage || null,
+      user_message: src.user_message || src.userMessage || src.message || null,
+      failure_summary: src.failure_summary || src.failureSummary || null,
+      process_result: src.process_result || src.processResult || null,
+      diagnostic_json: src.diagnostic_json || src.diagnosticJson || null,
       progress,
       carry_forward_counts: carryForwardCounts,
       carry_forward_created_count: toNumber(src.carry_forward_created_count ?? carryForwardCounts.created),
@@ -281822,9 +282807,173 @@ async function bankingPayCancelNotSentAndRecalculate(payBatchId, payload) {
     };
   };
 
+  const extractStructuredFailurePayload = (value) => {
+    const queue = [];
+    const seen = new Set();
+    const findings = [];
+    const normaliseFailureCode = (candidate) => upper(candidate).replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    const isGenericWrapperCode = (code) => (
+      !code ||
+      code === 'BANKING_ACTION_FAILED' ||
+      code === 'HTTP_ERROR' ||
+      code === 'REQUEST_FAILED' ||
+      code === 'RPC_ERROR' ||
+      code === 'FETCH_ERROR' ||
+      code === 'ERROR' ||
+      (code.startsWith('BANKING_') && code.endsWith('_FAILED'))
+    );
+    const enqueue = (candidate) => {
+      if (candidate == null) return;
+      if (typeof candidate === 'string') {
+        const parsed = parse(candidate);
+        if (parsed) enqueue(parsed);
+        return;
+      }
+      if (typeof candidate !== 'object') return;
+      if (seen.has(candidate)) return;
+      seen.add(candidate);
+      queue.push(candidate);
+    };
+    const enqueueChildren = (candidate) => {
+      enqueue(candidate.backendPayload);
+      enqueue(candidate.payload);
+      enqueue(candidate.json);
+      enqueue(candidate.data);
+      enqueue(candidate.body);
+      enqueue(candidate.response);
+      enqueue(candidate.result);
+      enqueue(candidate.error);
+      enqueue(candidate.details);
+      enqueue(candidate.detail);
+      enqueue(candidate.cause);
+      enqueue(candidate.source_error);
+      enqueue(candidate.sourceError);
+      enqueue(candidate.friendly_error);
+      enqueue(candidate.friendlyError);
+      enqueue(candidate.message);
+    };
+    const scoreCandidate = (candidate) => {
+      const src = isObject(candidate) ? candidate : {};
+      const code = normaliseFailureCode(src.error_code || src.errorCode || src.code || '');
+      const hasSpecificCancelCode = (
+        code.startsWith('PAY_PAYMENT_CANCEL_NOT_SENT_') ||
+        code.startsWith('PAYMENT_CANCEL_NOT_SENT_') ||
+        code === 'PAYMENT_CANCEL_NOT_SENT_RECALCULATE_FAILED'
+      );
+      const hasUsefulStructuredDetail = !!(
+        src.user_message ||
+        src.userMessage ||
+        src.title ||
+        src.failure_summary ||
+        src.failureSummary ||
+        src.process_result ||
+        src.processResult ||
+        src.diagnostic_json ||
+        src.diagnosticJson ||
+        src.live_signal ||
+        src.liveSignal ||
+        src.correction_request_id ||
+        src.correctionRequestId
+      );
+      const hasFailureShape = !!(
+        src.ok === false ||
+        code ||
+        hasUsefulStructuredDetail ||
+        (typeof src.error === 'string' && src.error.trim()) ||
+        (typeof src.message === 'string' && src.message.trim())
+      );
+      if (!hasFailureShape) return null;
+      const genericWrapper = isGenericWrapperCode(code);
+      let score = 0;
+      if (hasSpecificCancelCode) score += 1000;
+      if (src.ok === false) score += 250;
+      if (hasUsefulStructuredDetail) score += 175;
+      if (src.failure_summary || src.failureSummary) score += 75;
+      if (src.process_result || src.processResult) score += 75;
+      if (src.diagnostic_json || src.diagnosticJson) score += 50;
+      if (src.user_message || src.userMessage) score += 75;
+      if (src.pay_batch_id || src.payBatchId) score += 25;
+      if (src.correction_request_id || src.correctionRequestId) score += 25;
+      if (genericWrapper) score -= 250;
+      if (candidate instanceof Error) score -= 50;
+      return { payload: src, score, code };
+    };
+
+    enqueue(value);
+    while (queue.length) {
+      const current = queue.shift();
+      if (!current || typeof current !== 'object') continue;
+      const candidate = isObject(current) ? current : {};
+      const scored = scoreCandidate(candidate);
+      if (scored) findings.push(scored);
+      enqueueChildren(candidate);
+    }
+
+    if (!findings.length) return null;
+    findings.sort((a, b) => b.score - a.score);
+    return findings[0].payload;
+  };
+
+  const buildStructuredFailureError = (source, status = 409, originalError = null) => {
+    const payloadObj = isObject(source)
+      ? { ...source }
+      : { ok: false, message: String(source || 'Cancel Draft Batch could not be completed.') };
+    if (isObject(source)) {
+      if (!payloadObj.message && source.message) payloadObj.message = source.message;
+      if (!payloadObj.user_message && source.user_message) payloadObj.user_message = source.user_message;
+      if (!payloadObj.userMessage && source.userMessage) payloadObj.userMessage = source.userMessage;
+      if (!payloadObj.error_code && source.error_code) payloadObj.error_code = source.error_code;
+      if (!payloadObj.errorCode && source.errorCode) payloadObj.errorCode = source.errorCode;
+      if (!payloadObj.code && source.code) payloadObj.code = source.code;
+      if (!payloadObj.json && source.json) payloadObj.json = source.json;
+      if (!payloadObj.payload && source.payload) payloadObj.payload = source.payload;
+      if (!payloadObj.backendPayload && source.backendPayload) payloadObj.backendPayload = source.backendPayload;
+    }
+    payloadObj.ok = false;
+    payloadObj.pay_batch_id = payloadObj.pay_batch_id || payloadObj.payBatchId || id;
+    const code = payloadObj.error_code || payloadObj.errorCode || payloadObj.code || 'PAY_PAYMENT_CANCEL_NOT_SENT_NOT_APPLIED';
+    const message = String(
+      payloadObj.user_message ||
+      payloadObj.userMessage ||
+      payloadObj.message ||
+      payloadObj.error?.user_message ||
+      payloadObj.error?.message ||
+      payloadObj.error ||
+      'Cancel Draft Batch could not be completed. Refresh the batch and try again.'
+    ).trim();
+    const err = new Error(message);
+    err.name = 'BankingPayCancelNotSentError';
+    err.status = Number(status) || 409;
+    err.status_code = err.status;
+    err.http_status = err.status;
+    err.error_code = code;
+    err.code = payloadObj.code || code;
+    err.message = message;
+    err.user_message = message;
+    err.json = payloadObj;
+    err.payload = payloadObj;
+    err.backendPayload = payloadObj;
+    err.pay_batch_id = payloadObj.pay_batch_id;
+    err.correction_request_id = payloadObj.correction_request_id || payloadObj.correctionRequestId || null;
+    err.failure_summary = payloadObj.failure_summary || payloadObj.failureSummary || null;
+    err.process_result = payloadObj.process_result || payloadObj.processResult || null;
+    err.diagnostic_json = payloadObj.diagnostic_json || payloadObj.diagnosticJson || null;
+    err.live_signal = payloadObj.live_signal || payloadObj.liveSignal || null;
+    if (originalError) err.source_error = originalError;
+    return err;
+  };
+
   let obj;
   if (typeof apiPostJson === 'function') {
-    obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel-not-sent-recalculate`, cleanBody, { action: 'CANCEL_NOT_SENT_RECALCULATE' });
+    try {
+      obj = await apiPostJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel-not-sent-recalculate`, cleanBody, { action: 'CANCEL_NOT_SENT_RECALCULATE' });
+    } catch (e) {
+      const structuredPayload = extractStructuredFailurePayload(e);
+      if (structuredPayload) {
+        throw buildStructuredFailureError(structuredPayload, e?.status || e?.status_code || e?.http_status || 409, e);
+      }
+      throw e;
+    }
   } else {
     if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingPayCancelNotSentAndRecalculate: authFetch/API is required');
     const response = await authFetch(API(`/api/banking/pay/batch/${encodeURIComponent(id)}/cancel-not-sent-recalculate`), {
@@ -281835,20 +282984,23 @@ async function bankingPayCancelNotSentAndRecalculate(payBatchId, payload) {
     const text = await response.text().catch(() => '');
     obj = parse(text) || {};
     if (!response.ok) {
-      const err = new Error(String((obj && (obj.error || obj.message)) || text || `Cancel request failed (${response.status})`));
-      err.status = response.status;
-      err.body = text;
-      err.json = obj;
-      throw err;
+      throw buildStructuredFailureError(
+        isObject(obj) && Object.keys(obj).length ? obj : { ok: false, message: text || `Cancel request failed (${response.status})` },
+        response.status || 409
+      );
     }
   }
 
   const out = normalise(obj);
+  if (out.ok === false) {
+    throw buildStructuredFailureError(out, 409);
+  }
   try {
     if (out.live_signal && typeof applyBankingPayLiveRefresh === 'function') await applyBankingPayLiveRefresh(out.live_signal);
   } catch {}
   return out;
 }
+
 
 
 async function bankingPayConfirmNoMoneyAndUnwind(payBatchId, payload) {
