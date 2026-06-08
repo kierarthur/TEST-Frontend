@@ -46862,6 +46862,9 @@ function refreshBankingNavAttentionFromCachedRows() {
   } catch {}
 }
 
+
+
+
 function renderPayBatchListPanel() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -47916,6 +47919,78 @@ function renderPayBatchListPanel() {
     return {};
   };
 
+  const activePaymentExecutionOperationTypes = new Set(['PAYMENT_EXECUTE', 'PAYMENT_RETRY_BLOCKED_FUNDS']);
+  const activePaymentExecutionStatuses = new Set([
+    'QUEUED', 'RUNNING', 'WAITING', 'RUNNABLE', 'CONTINUING', 'WAITING_RETRY',
+    'WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION',
+    'WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'AWAITING_PROVIDER',
+    'WAITING_USER', 'WAITING_USER_REVIEW', 'REVIEW_REQUIRED'
+  ]);
+  const terminalPaymentExecutionStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE', 'FAILED', 'ERROR', 'ERRORED', 'CANCELLED', 'CANCELED', 'ABORTED']);
+  const normaliseActivePaymentExecutionOperationForListRow = (row) => {
+    const batchRow = isPlainObject(row) ? row : {};
+    const displaySummary = parseBatchListJsonObject(batchRow.display_summary || batchRow.displaySummary || batchRow.display_summary_json || batchRow.displaySummaryJson);
+    const specificScalarOperationId = trimStr(batchRow.active_payment_operation_id || batchRow.activePaymentOperationId || batchRow.payment_execute_operation_id || batchRow.paymentExecuteOperationId || displaySummary.active_payment_operation_id || displaySummary.activePaymentOperationId || displaySummary.payment_execute_operation_id || displaySummary.paymentExecuteOperationId || '');
+    const genericScalarOperationId = trimStr(batchRow.active_operation_id || batchRow.activeOperationId || displaySummary.active_operation_id || displaySummary.activeOperationId || '');
+    const specificScalarOperationType = batchRow.active_payment_operation_type || batchRow.activePaymentOperationType || batchRow.payment_execute_operation_type || batchRow.paymentExecuteOperationType || displaySummary.active_payment_operation_type || displaySummary.activePaymentOperationType || displaySummary.payment_execute_operation_type || displaySummary.paymentExecuteOperationType || '';
+    const genericScalarOperationType = batchRow.active_operation_type || batchRow.activeOperationType || displaySummary.active_operation_type || displaySummary.activeOperationType || '';
+    const candidates = [
+      { payload: batchRow.active_payment_operation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: batchRow.activePaymentOperation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: batchRow.active_payment_execute_operation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: batchRow.activePaymentExecuteOperation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: batchRow.payment_execute_operation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: batchRow.paymentExecuteOperation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: batchRow.active_operation, fallbackType: '' },
+      { payload: batchRow.activeOperation, fallbackType: '' },
+      { payload: displaySummary.active_payment_operation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: displaySummary.activePaymentOperation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: displaySummary.active_payment_execute_operation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: displaySummary.activePaymentExecuteOperation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: displaySummary.payment_execute_operation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: displaySummary.paymentExecuteOperation, fallbackType: 'PAYMENT_EXECUTE' },
+      { payload: displaySummary.active_operation, fallbackType: '' },
+      { payload: displaySummary.activeOperation, fallbackType: '' },
+      {
+        payload: {
+          operation_id: specificScalarOperationId || genericScalarOperationId || '',
+          operation_type: specificScalarOperationType || genericScalarOperationType || (specificScalarOperationId ? 'PAYMENT_EXECUTE' : ''),
+          status: batchRow.active_payment_operation_status || batchRow.activePaymentOperationStatus || batchRow.payment_execute_operation_status || batchRow.paymentExecuteOperationStatus || batchRow.active_operation_status || batchRow.activeOperationStatus || displaySummary.active_payment_operation_status || displaySummary.activePaymentOperationStatus || displaySummary.payment_execute_operation_status || displaySummary.paymentExecuteOperationStatus || displaySummary.active_operation_status || displaySummary.activeOperationStatus,
+          phase: batchRow.active_payment_operation_phase || batchRow.activePaymentOperationPhase || batchRow.payment_execute_operation_phase || batchRow.paymentExecuteOperationPhase || batchRow.active_operation_phase || batchRow.activeOperationPhase || displaySummary.active_payment_operation_phase || displaySummary.activePaymentOperationPhase || displaySummary.payment_execute_operation_phase || displaySummary.paymentExecuteOperationPhase || displaySummary.active_operation_phase || displaySummary.activeOperationPhase,
+          runner_state: batchRow.active_payment_operation_runner_state || batchRow.activePaymentOperationRunnerState || batchRow.payment_execute_operation_runner_state || batchRow.paymentExecuteOperationRunnerState || displaySummary.active_payment_operation_runner_state || displaySummary.activePaymentOperationRunnerState || displaySummary.payment_execute_operation_runner_state || displaySummary.paymentExecuteOperationRunnerState,
+          pay_batch_id: batchRow.pay_batch_id || batchRow.id || displaySummary.pay_batch_id || displaySummary.id
+        },
+        fallbackType: ''
+      }
+    ];
+    for (const entry of candidates) {
+      const candidate = entry?.payload;
+      const op = isPlainObject(candidate) ? candidate : parseBatchListJsonObject(candidate);
+      if (!Object.keys(op).length) continue;
+      const operationId = trimStr(op.operation_id || op.operationId || op.id || '');
+      if (!operationId) continue;
+      const fallbackType = trimStr(entry?.fallbackType || '');
+      const operationType = upperTrim(op.operation_type || op.operationType || op.kind || op.operation_kind || op.operationKind || fallbackType || '');
+      if (!operationType || !activePaymentExecutionOperationTypes.has(operationType)) continue;
+      const signals = [op.status, op.operation_status, op.operationStatus, op.phase, op.runner_state, op.runnerState, op.state, op.lifecycle_state, op.lifecycleState].map(upperTrim).filter(Boolean);
+      if (signals.some((signal) => terminalPaymentExecutionStatuses.has(signal))) continue;
+      if (!signals.some((signal) => activePaymentExecutionStatuses.has(signal))) continue;
+      return { ...op, operation_id: operationId, operationId, operation_type: operationType, operationType, pay_batch_id: trimStr(op.pay_batch_id || op.payBatchId || batchRow.pay_batch_id || batchRow.id || '') };
+    }
+    return null;
+  };
+  const formatActivePaymentExecutionStatusLabel = (operation) => {
+    const op = isPlainObject(operation) ? operation : {};
+    const status = upperTrim(op.status || op.operation_status || op.operationStatus || op.runner_state || op.runnerState || op.phase || 'RUNNING');
+    const mapped = {
+      QUEUED: 'Queued', WAITING: 'Waiting', RUNNABLE: 'Queued', RUNNING: 'Running', CONTINUING: 'Running', WAITING_RETRY: 'Waiting to retry',
+      WAITING_AUTHORISATION: 'Waiting for authorisation', WAITING_AUTHORIZATION: 'Waiting for authorisation', AWAITING_AUTHORISATION: 'Waiting for authorisation', AWAITING_AUTHORIZATION: 'Waiting for authorisation',
+      WAITING_PROVIDER: 'Waiting for provider', WAITING_FOR_PROVIDER: 'Waiting for provider', AWAITING_PROVIDER: 'Waiting for provider',
+      WAITING_USER: 'Waiting for user', WAITING_USER_REVIEW: 'Waiting for review', REVIEW_REQUIRED: 'Review required'
+    };
+    return mapped[status] || status.replace(/_/g, ' ').toLowerCase().replace(/(^|\s)\S/g, (s) => s.toUpperCase()) || 'In progress';
+  };
+
   const deriveDraftCreationFailedBatchDisplay = (row) => {
     const batchRow = isPlainObject(row) ? row : {};
     const displaySummary = parseBatchListJsonObject(batchRow.display_summary || batchRow.displaySummary || batchRow.display_summary_json || batchRow.displaySummaryJson);
@@ -48341,6 +48416,26 @@ function renderPayBatchListPanel() {
     const env = String(r?.rail_env_snapshot || r?.rail_env || '').trim().toUpperCase();
     const created = fmtUtcToUk(r?.created_at_utc || r?.created_at || '');
     const lastFundsChecked = fmtUtcToUk(r?.last_funds_check_at_utc || r?.last_funds_check_json?.checked_at_utc || '');
+    const activePaymentExecutionOperation = normaliseActivePaymentExecutionOperationForListRow(r);
+    const activePaymentExecutionOperationId = trimStr(activePaymentExecutionOperation?.operation_id || activePaymentExecutionOperation?.operationId || '');
+    const activePaymentExecutionStatusLabel = activePaymentExecutionOperation ? formatActivePaymentExecutionStatusLabel(activePaymentExecutionOperation) : '';
+    const activePaymentExecutionActionHtml = (activePaymentExecutionOperation && activePaymentExecutionOperationId && id)
+      ? `
+        <button
+          type="button"
+          class="btn btn-sm btn-primary"
+          data-action="banking:pay:child:viewExecutionStatus"
+          data-batch-id="${enc(id)}"
+          data-operation-id="${enc(activePaymentExecutionOperationId)}"
+          data-operation-type="${enc(activePaymentExecutionOperation.operation_type || activePaymentExecutionOperation.operationType || 'PAYMENT_EXECUTE')}"
+          data-operation-status="${enc(activePaymentExecutionOperation.status || activePaymentExecutionOperation.operation_status || activePaymentExecutionOperation.operationStatus || '')}"
+          data-operation-phase="${enc(activePaymentExecutionOperation.phase || '')}"
+          data-runner-state="${enc(activePaymentExecutionOperation.runner_state || activePaymentExecutionOperation.runnerState || '')}"
+          data-payment-execute="true"
+          title="View the active payment execution operation (${enc(activePaymentExecutionStatusLabel)})."
+        >View execution status</button>
+      `
+      : '';
 
     const authState = String(r?.auth_state || '').trim().toUpperCase();
     const authLabel = String(r?.auth_label || '').trim();
@@ -48352,7 +48447,9 @@ function renderPayBatchListPanel() {
 
     const isActive = (id && selectedId && id === selectedId);
     const issueBadge = bankingPayNormaliseBatchIssueBadge(r);
-    const cancelMode = bankingPayResolveBatchCancelMode(r);
+    const cancelMode = (typeof bankingPayResolveBatchCancelMode === 'function')
+      ? bankingPayResolveBatchCancelMode(r)
+      : '';
     const paymentIssuesRequired = cancelMode === 'PAYMENT_ISSUES_REQUIRED' && !hasPaymentOutcome;
     const currentPaymentStatusAction = hasPaymentOutcome && paymentOutcome.showCurrentPaymentStatusAction === true;
     const issueBadges = issueBadge.label ? [safeIssueBadgeLabel(issueBadge.label)].filter(Boolean) : [];
@@ -48409,8 +48506,10 @@ function renderPayBatchListPanel() {
     })();
 
     const draftCreationFailureOperationId = draftCreationFailureDisplay.operation_id || trimStr(r?.latest_operation_id || r?.latestOperationId || '');
-    const deleteDraftBtn = hasDraftCreationFailure
-      ? (draftCreationFailureOperationId
+    const deleteDraftBtn = activePaymentExecutionActionHtml
+      ? activePaymentExecutionActionHtml
+      : hasDraftCreationFailure
+        ? (draftCreationFailureOperationId
         ? `
           <button
             type="button"
@@ -48615,8 +48714,6 @@ function renderPayBatchListPanel() {
     </div>
   `;
 }
-
-
 
 
 
@@ -53673,9 +53770,6 @@ async function openBankingPayExecuteConfirmModal(opts = {}) {
   });
 }
 
-
-
-
 async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
   const id = String(payBatchId || '').trim();
   if (!id) throw new Error('bankingPayBatchExecutePayment: payBatchId is required');
@@ -53738,7 +53832,13 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
       'code',
       'error_code',
       'operation_created',
+      'operation_reused',
+      'active_operation_reused',
+      'existing_active_operation',
+      'active_execution_already_exists',
+      'duplicate_start_prevented',
       'execute_payment_operation_started',
+      'execute_payment_operation_available',
       'submitted_to_bank',
       'provider_submission_attempted',
       'diagnostic_stage',
@@ -53752,7 +53852,13 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
     const safeAliases = {
       errorCode: 'error_code',
       operationCreated: 'operation_created',
+      operationReused: 'operation_reused',
+      activeOperationReused: 'active_operation_reused',
+      existingActiveOperation: 'existing_active_operation',
+      activeExecutionAlreadyExists: 'active_execution_already_exists',
+      duplicateStartPrevented: 'duplicate_start_prevented',
       executePaymentOperationStarted: 'execute_payment_operation_started',
+      executePaymentOperationAvailable: 'execute_payment_operation_available',
       submittedToBank: 'submitted_to_bank',
       providerSubmissionAttempted: 'provider_submission_attempted',
       diagnosticStage: 'diagnostic_stage',
@@ -54099,8 +54205,26 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
     ''
   ).trim();
 
+  const resolvedOperationType = upperTrim(
+    operationPayload?.operation_type ||
+    operationPayload?.operationType ||
+    operationPayload?.operation?.operation_type ||
+    operationPayload?.operation?.operationType ||
+    operationPayload?.data?.operation_type ||
+    operationPayload?.data?.operationType ||
+    ((body0.retry_blocked_funds === true || body0.retryBlockedFunds === true) ? 'PAYMENT_RETRY_BLOCKED_FUNDS' : 'PAYMENT_EXECUTE')
+  ) || 'PAYMENT_EXECUTE';
+
   const operationPayloadCode = readBusinessCode(operationPayload);
-  const operationStarted = !!operationId && operationPayload?.operation_created !== false && operationPayload?.execute_payment_operation_started !== false;
+  const operationReused = operationPayload?.operation_reused === true ||
+    operationPayload?.active_operation_reused === true ||
+    operationPayload?.existing_active_operation === true ||
+    operationPayload?.active_execution_already_exists === true ||
+    operationPayload?.duplicate_start_prevented === true ||
+    operationPayload?.is_existing === true ||
+    operationPayload?.operation_created === false;
+  const operationAvailable = !!operationId && operationPayload?.execute_payment_operation_available !== false;
+  const operationStarted = operationAvailable && (operationReused || operationPayload?.operation_created !== false) && (operationReused || operationPayload?.execute_payment_operation_started !== false);
 
   if (!operationStarted) {
     const fallbackCode = preOperationBusinessCodes.has(operationPayloadCode)
@@ -54116,8 +54240,8 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
         ...operationPayload,
         operation_id: operationId,
         operationId,
-        operation_type: 'PAYMENT_EXECUTE',
-        operationType: 'PAYMENT_EXECUTE',
+        operation_type: resolvedOperationType,
+        operationType: resolvedOperationType,
         pay_batch_id: id,
         payBatchId: id
       });
@@ -54181,11 +54305,19 @@ async function bankingPayBatchExecutePayment(payBatchId, payload = {}) {
 
   return {
     ok: true,
-    started: true,
-    operation_started: true,
-    execute_payment_operation_started: true,
+    started: !operationReused,
+    operation_started: !operationReused,
+    operation_reused: operationReused,
+    active_operation_reused: operationReused,
+    existing_active_operation: operationReused,
+    active_execution_already_exists: operationReused,
+    duplicate_start_prevented: operationReused,
+    execute_payment_operation_started: !operationReused,
+    execute_payment_operation_available: true,
     operation_id: operationId,
     operationId,
+    operation_type: resolvedOperationType,
+    operationType: resolvedOperationType,
     pay_batch_id: id,
     payBatchId: id,
     progress,
@@ -58892,18 +59024,18 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
     if (!op) return null;
     const paymentTypes = new Set([
       'PAYMENT_EXECUTE',
-      'PAYMENT_EXECUTION',
-      'PAYMENT_RETRY_BLOCKED_FUNDS',
-      'PAYMENT_RETRY_UNSENT_PAYMENTS',
-      'PAYMENT_RETRY_UNSENT',
-      'PAYMENT_SETTLEMENT',
-      'PAYMENT_PROVIDER_SUBMIT',
-      'PAYMENT_SUBMISSION'
+      'PAYMENT_RETRY_BLOCKED_FUNDS'
     ]);
     const terminalStates = new Set([
       'COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE',
-      'FAILED', 'ERROR', 'ERRORED', 'REVIEW_REQUIRED',
+      'FAILED', 'ERROR', 'ERRORED', 'ABORTED',
       'CANCELLED', 'CANCELED'
+    ]);
+    const activeStates = new Set([
+      'QUEUED', 'RUNNING', 'WAITING', 'RUNNABLE', 'CONTINUING', 'WAITING_RETRY',
+      'WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION',
+      'WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'AWAITING_PROVIDER',
+      'WAITING_USER', 'WAITING_USER_REVIEW', 'REVIEW_REQUIRED'
     ]);
     const explicitType = upper(
       op.operation_type ||
@@ -58944,21 +59076,42 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
     const type = explicitType || upper(forcedType || '');
     if (!type || !paymentTypes.has(type)) return null;
     if (states.some((state) => terminalStates.has(state))) return null;
+    const hasActiveState = states.some((state) => activeStates.has(state));
     const opId = toText(op.operation_id || op.operationId || op.id || '');
-    if (!opId && !states.length) return null;
+    if (!opId || !hasActiveState) return null;
     return { ...op, operation_type: type };
   };
 
   const scrubLoadedChildActiveOperationState = (payload) => {
     const toUpperTrim = (value) => String(value == null ? '' : value).trim().toUpperCase();
+    const toText = (value) => String(value == null ? '' : value).trim();
     const asPlainObj = (value) => (value && typeof value === 'object' && !Array.isArray(value)) ? value : null;
     const removeActiveOperationFields = (target) => {
       if (!target || typeof target !== 'object') return;
       for (const key of [
         'active_operation', 'activeOperation', 'active_operation_id', 'activeOperationId',
-        'active_operation_type', 'activeOperationType',
+        'active_operation_type', 'activeOperationType', 'active_operation_status', 'activeOperationStatus',
+        'active_operation_phase', 'activeOperationPhase', 'active_operation_runner_state', 'activeOperationRunnerState',
+        'active_payment_operation', 'activePaymentOperation',
+        'active_payment_operation_id', 'activePaymentOperationId',
+        'active_payment_operation_type', 'activePaymentOperationType',
+        'active_payment_operation_status', 'activePaymentOperationStatus',
+        'active_payment_operation_phase', 'activePaymentOperationPhase',
+        'active_payment_operation_runner_state', 'activePaymentOperationRunnerState',
+        'active_payment_operation_requires_user_action', 'activePaymentOperationRequiresUserAction',
+        'active_payment_operation_resume_reason', 'activePaymentOperationResumeReason',
         'payment_execute_operation', 'paymentExecuteOperation',
-        'active_payment_execute_operation', 'activePaymentExecuteOperation'
+        'payment_execute_operation_id', 'paymentExecuteOperationId',
+        'payment_execute_operation_type', 'paymentExecuteOperationType',
+        'payment_execute_operation_status', 'paymentExecuteOperationStatus',
+        'payment_execute_operation_phase', 'paymentExecuteOperationPhase',
+        'payment_execute_operation_runner_state', 'paymentExecuteOperationRunnerState',
+        'active_payment_execute_operation', 'activePaymentExecuteOperation',
+        'active_payment_execute_operation_id', 'activePaymentExecuteOperationId',
+        'active_payment_execute_operation_type', 'activePaymentExecuteOperationType',
+        'active_payment_execute_operation_status', 'activePaymentExecuteOperationStatus',
+        'active_payment_execute_operation_phase', 'activePaymentExecuteOperationPhase',
+        'active_payment_execute_operation_runner_state', 'activePaymentExecuteOperationRunnerState'
       ]) {
         try { delete target[key]; } catch {}
       }
@@ -58966,9 +59119,23 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
     const chooseOperationFrom = (target) => {
       const obj = asPlainObj(target);
       if (!obj) return null;
-      return normaliseLoadedChildPaymentOperation(obj.payment_execute_operation || obj.paymentExecuteOperation, 'PAYMENT_EXECUTE') ||
-        normaliseLoadedChildPaymentOperation(obj.active_payment_execute_operation || obj.activePaymentExecuteOperation, 'PAYMENT_EXECUTE') ||
-        normaliseLoadedChildPaymentOperation(obj.active_operation || obj.activeOperation);
+      return normaliseLoadedChildPaymentOperation(obj.active_payment_operation || obj.activePaymentOperation) ||
+        normaliseLoadedChildPaymentOperation(obj.payment_execute_operation || obj.paymentExecuteOperation) ||
+        normaliseLoadedChildPaymentOperation(obj.active_payment_execute_operation || obj.activePaymentExecuteOperation) ||
+        normaliseLoadedChildPaymentOperation(obj.active_operation || obj.activeOperation) ||
+        (() => {
+          const specificPaymentOperationId = toText(obj.active_payment_operation_id || obj.activePaymentOperationId || obj.payment_execute_operation_id || obj.paymentExecuteOperationId || '');
+          const genericOperationId = toText(obj.active_operation_id || obj.activeOperationId || '');
+          const specificPaymentOperationType = obj.active_payment_operation_type || obj.activePaymentOperationType || obj.payment_execute_operation_type || obj.paymentExecuteOperationType || '';
+          const genericOperationType = obj.active_operation_type || obj.activeOperationType || '';
+          return normaliseLoadedChildPaymentOperation({
+            operation_id: specificPaymentOperationId || genericOperationId || '',
+            operation_type: specificPaymentOperationType || genericOperationType || (specificPaymentOperationId ? 'PAYMENT_EXECUTE' : ''),
+            status: obj.active_payment_operation_status || obj.activePaymentOperationStatus || obj.payment_execute_operation_status || obj.paymentExecuteOperationStatus || obj.active_operation_status || obj.activeOperationStatus || '',
+            phase: obj.active_payment_operation_phase || obj.activePaymentOperationPhase || obj.payment_execute_operation_phase || obj.paymentExecuteOperationPhase || obj.active_operation_phase || obj.activeOperationPhase || '',
+            runner_state: obj.active_payment_operation_runner_state || obj.activePaymentOperationRunnerState || obj.payment_execute_operation_runner_state || obj.paymentExecuteOperationRunnerState || ''
+          });
+        })();
     };
     const dataObj = asPlainObj(payload) || payload;
     if (!dataObj || typeof dataObj !== 'object') return payload;
@@ -58976,12 +59143,13 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
     const validFromPayload = chooseOperationFrom(dataObj) || chooseOperationFrom(batchObj);
     removeActiveOperationFields(dataObj);
     removeActiveOperationFields(batchObj);
-    const currentValid = normaliseLoadedChildPaymentOperation(child.activeOperation || child.active_operation || child.payment_execute_operation || child.paymentExecuteOperation || child.active_payment_execute_operation || child.activePaymentExecuteOperation);
-    const valid = validFromPayload || currentValid;
+    const valid = validFromPayload;
     if (valid) {
       dataObj.active_operation = valid;
       dataObj.activeOperation = valid;
-      if (toUpperTrim(valid.operation_type || valid.operationType || '') === 'PAYMENT_EXECUTE') {
+      if (toUpperTrim(valid.operation_type || valid.operationType || '') === 'PAYMENT_EXECUTE' || toUpperTrim(valid.operation_type || valid.operationType || '') === 'PAYMENT_RETRY_BLOCKED_FUNDS') {
+        dataObj.active_payment_operation = valid;
+        dataObj.activePaymentOperation = valid;
         dataObj.payment_execute_operation = valid;
         dataObj.paymentExecuteOperation = valid;
         dataObj.active_payment_execute_operation = valid;
@@ -58990,7 +59158,9 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
       if (batchObj) {
         batchObj.active_operation = valid;
         batchObj.activeOperation = valid;
-        if (toUpperTrim(valid.operation_type || valid.operationType || '') === 'PAYMENT_EXECUTE') {
+        if (toUpperTrim(valid.operation_type || valid.operationType || '') === 'PAYMENT_EXECUTE' || toUpperTrim(valid.operation_type || valid.operationType || '') === 'PAYMENT_RETRY_BLOCKED_FUNDS') {
+          batchObj.active_payment_operation = valid;
+          batchObj.activePaymentOperation = valid;
           batchObj.payment_execute_operation = valid;
           batchObj.paymentExecuteOperation = valid;
           batchObj.active_payment_execute_operation = valid;
@@ -58999,7 +59169,9 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
       }
       child.activeOperation = valid;
       child.active_operation = valid;
-      if (toUpperTrim(valid.operation_type || valid.operationType || '') === 'PAYMENT_EXECUTE') {
+      if (toUpperTrim(valid.operation_type || valid.operationType || '') === 'PAYMENT_EXECUTE' || toUpperTrim(valid.operation_type || valid.operationType || '') === 'PAYMENT_RETRY_BLOCKED_FUNDS') {
+        child.active_payment_operation = valid;
+        child.activePaymentOperation = valid;
         child.payment_execute_operation = valid;
         child.paymentExecuteOperation = valid;
         child.active_payment_execute_operation = valid;
@@ -59008,6 +59180,7 @@ const normaliseChildFriendlyError = (errorValue, fallbackCode = 'BANKING_ACTION_
     } else {
       for (const key of [
         'activeOperation', 'active_operation', 'activeOperationType', 'active_operation_type',
+        'active_payment_operation', 'activePaymentOperation',
         'payment_execute_operation', 'paymentExecuteOperation',
         'active_payment_execute_operation', 'activePaymentExecuteOperation'
       ]) {
@@ -59781,6 +59954,7 @@ const executePaymentPipeline = async () => {
       errorPayload.operationType ||
       'PAYMENT_EXECUTE'
     ).trim().toUpperCase() || 'PAYMENT_EXECUTE';
+    const observerNonFatalPaymentOperationTypes = new Set(['PAYMENT_EXECUTE', 'PAYMENT_RETRY_BLOCKED_FUNDS']);
     const observerNonFatalCodes = new Set([
       'PAYMENT_EXECUTE_STILL_RUNNING',
       'PAYMENT_OPERATION_STILL_RUNNING',
@@ -59801,14 +59975,20 @@ const executePaymentPipeline = async () => {
     ]);
     const observerNonFatalStatuses = new Set([
       'RUNNING',
+      'WAITING',
+      'RUNNABLE',
       'CONTINUING',
       'WAITING_RETRY',
       'WAITING_PROVIDER',
       'WAITING_FOR_PROVIDER',
+      'AWAITING_PROVIDER',
       'WAITING_AUTHORISATION',
       'WAITING_AUTHORIZATION',
+      'AWAITING_AUTHORISATION',
+      'AWAITING_AUTHORIZATION',
+      'WAITING_USER',
+      'WAITING_USER_REVIEW',
       'REVIEW_REQUIRED',
-      'RUNNABLE',
       'PENDING',
       'QUEUED'
     ]);
@@ -59855,7 +60035,7 @@ const executePaymentPipeline = async () => {
     const observerNonFatalMessageMatch = /STILL\s+RUNNING|BACKEND\s+WORK\s+CONTINUES|OBSERVER\s+(STOPPED|TIMEOUT)|LOCAL\s+OBSERVER|RUNNER\s+LIMIT|CONTINUES\s+IN\s+THE\s+BACKGROUND/.test(observerNonFatalMessage);
     const observerNonFatalExecutionContinues = !!(
       observerNonFatalOperationId &&
-      observerNonFatalOperationType === 'PAYMENT_EXECUTE' &&
+      observerNonFatalPaymentOperationTypes.has(observerNonFatalOperationType) &&
       (
         observerNonFatalFlag ||
         observerNonFatalCodes.has(friendlyCode) ||
@@ -59870,8 +60050,8 @@ const executePaymentPipeline = async () => {
         ...(observerNonFatalPayload && typeof observerNonFatalPayload === 'object' && !Array.isArray(observerNonFatalPayload) ? deep(observerNonFatalPayload) : {}),
         operation_id: observerNonFatalOperationId,
         operationId: observerNonFatalOperationId,
-        operation_type: 'PAYMENT_EXECUTE',
-        operationType: 'PAYMENT_EXECUTE',
+        operation_type: observerNonFatalOperationType,
+        operationType: observerNonFatalOperationType,
         status: observerNonFatalStatus || observerNonFatalPayload.status || 'RUNNING',
         runner_state: observerNonFatalRunnerState || observerNonFatalPayload.runner_state || observerNonFatalPayload.runnerState || 'RUNNABLE',
         runnerState: observerNonFatalRunnerState || observerNonFatalPayload.runnerState || observerNonFatalPayload.runner_state || 'RUNNABLE',
@@ -60312,12 +60492,15 @@ const retryUnsentPaymentsPipeline = async () => {
       if (!isExecuteAllowedByStatus(data)) return false;
       if (providerSubmitReviewIssuePresent(data, batch) === true) return false;
 
-      const currentActivePaymentOperation = normaliseLoadedChildPaymentOperation(data.payment_execute_operation || data.paymentExecuteOperation, 'PAYMENT_EXECUTE') ||
-        normaliseLoadedChildPaymentOperation(data.active_payment_execute_operation || data.activePaymentExecuteOperation, 'PAYMENT_EXECUTE') ||
-        normaliseLoadedChildPaymentOperation(batch.payment_execute_operation || batch.paymentExecuteOperation, 'PAYMENT_EXECUTE') ||
-        normaliseLoadedChildPaymentOperation(batch.active_payment_execute_operation || batch.activePaymentExecuteOperation, 'PAYMENT_EXECUTE') ||
-        normaliseLoadedChildPaymentOperation(child.payment_execute_operation || child.paymentExecuteOperation, 'PAYMENT_EXECUTE') ||
-        normaliseLoadedChildPaymentOperation(child.active_payment_execute_operation || child.activePaymentExecuteOperation, 'PAYMENT_EXECUTE') ||
+      const currentActivePaymentOperation = normaliseLoadedChildPaymentOperation(data.active_payment_operation || data.activePaymentOperation) ||
+        normaliseLoadedChildPaymentOperation(data.payment_execute_operation || data.paymentExecuteOperation) ||
+        normaliseLoadedChildPaymentOperation(data.active_payment_execute_operation || data.activePaymentExecuteOperation) ||
+        normaliseLoadedChildPaymentOperation(batch.active_payment_operation || batch.activePaymentOperation) ||
+        normaliseLoadedChildPaymentOperation(batch.payment_execute_operation || batch.paymentExecuteOperation) ||
+        normaliseLoadedChildPaymentOperation(batch.active_payment_execute_operation || batch.activePaymentExecuteOperation) ||
+        normaliseLoadedChildPaymentOperation(child.active_payment_operation || child.activePaymentOperation) ||
+        normaliseLoadedChildPaymentOperation(child.payment_execute_operation || child.paymentExecuteOperation) ||
+        normaliseLoadedChildPaymentOperation(child.active_payment_execute_operation || child.activePaymentExecuteOperation) ||
         normaliseLoadedChildPaymentOperation(data.active_operation || data.activeOperation) ||
         normaliseLoadedChildPaymentOperation(batch.active_operation || batch.activeOperation) ||
         normaliseLoadedChildPaymentOperation(child.activeOperation || child.active_operation);
@@ -62114,7 +62297,9 @@ if (act === 'banking:pay:issue:startManualPaidAction') {
         if (act === 'banking:pay:child:deleteDraft' || act === 'banking:pay:child:cancelBatch' || act === 'banking:pay:blockedFunds:cancel') {
           try {
             const b = deriveBatchObj(child.data) || {};
-            const resolvedMode = bankingPayResolveBatchCancelMode(b);
+            const resolvedMode = (typeof bankingPayResolveBatchCancelMode === 'function')
+              ? bankingPayResolveBatchCancelMode(b)
+              : (act === 'banking:pay:child:deleteDraft' ? 'DRAFT_DELETE' : 'CANCEL_UNPAID');
             const isCancelAction = act === 'banking:pay:child:cancelBatch' || act === 'banking:pay:blockedFunds:cancel';
             const modeMatchesAction =
               (act === 'banking:pay:child:deleteDraft' && resolvedMode === 'DRAFT_DELETE') ||
@@ -65093,14 +65278,20 @@ function renderBankingPayBatchChildModalOverview() {
   );
   const overviewHasExecutionEvidence = overviewHasExternalSubmissionEvidence || providerExecutionEvidence;
   const activePaymentOperationSourceFromSpecificFields = asObj(
+    data.active_payment_operation ||
+    data.activePaymentOperation ||
     data.payment_execute_operation ||
     data.paymentExecuteOperation ||
     data.active_payment_execute_operation ||
     data.activePaymentExecuteOperation ||
+    batch.active_payment_operation ||
+    batch.activePaymentOperation ||
     batch.payment_execute_operation ||
     batch.paymentExecuteOperation ||
     batch.active_payment_execute_operation ||
     batch.activePaymentExecuteOperation ||
+    child.active_payment_operation ||
+    child.activePaymentOperation ||
     child.payment_execute_operation ||
     child.paymentExecuteOperation ||
     child.active_payment_execute_operation ||
@@ -65108,17 +65299,17 @@ function renderBankingPayBatchChildModalOverview() {
   ) || null;
   const paymentOperationTypes = new Set([
     'PAYMENT_EXECUTE',
-    'PAYMENT_EXECUTION',
-    'PAYMENT_RETRY_BLOCKED_FUNDS',
-    'PAYMENT_RETRY_UNSENT_PAYMENTS',
-    'PAYMENT_RETRY_UNSENT',
-    'PAYMENT_SETTLEMENT',
-    'PAYMENT_PROVIDER_SUBMIT',
-    'PAYMENT_SUBMISSION'
+    'PAYMENT_RETRY_BLOCKED_FUNDS'
+  ]);
+  const activePaymentOperationStates = new Set([
+    'QUEUED', 'RUNNING', 'WAITING', 'RUNNABLE', 'CONTINUING', 'WAITING_RETRY',
+    'WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION',
+    'WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'AWAITING_PROVIDER',
+    'WAITING_USER', 'WAITING_USER_REVIEW', 'REVIEW_REQUIRED'
   ]);
   const terminalOperationStates = new Set([
     'COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE',
-    'FAILED', 'ERROR', 'ERRORED', 'REVIEW_REQUIRED',
+    'FAILED', 'ERROR', 'ERRORED', 'ABORTED',
     'CANCELLED', 'CANCELED'
   ]);
   const operationStateSignals = (operation) => {
@@ -65140,6 +65331,7 @@ function renderBankingPayBatchChildModalOverview() {
     if (!upper) return '';
     const mapped = {
       RUNNING: 'Running',
+      WAITING: 'Waiting',
       RUNNABLE: 'Queued',
       CONTINUING: 'Running',
       WAITING_RETRY: 'Waiting to retry',
@@ -65175,10 +65367,20 @@ function renderBankingPayBatchChildModalOverview() {
     if (explicitType && !paymentOperationTypes.has(explicitType)) return null;
     const forced = upperTrim(forcedType);
     const contextualType = upperTrim(
+      data.active_payment_operation_type ||
+      data.activePaymentOperationType ||
+      data.payment_execute_operation_type ||
+      data.paymentExecuteOperationType ||
       data.active_operation_type ||
       data.activeOperationType ||
+      batch.active_payment_operation_type ||
+      batch.activePaymentOperationType ||
+      batch.payment_execute_operation_type ||
+      batch.paymentExecuteOperationType ||
       batch.active_operation_type ||
       batch.activeOperationType ||
+      child.activePaymentOperationType ||
+      child.paymentExecuteOperationType ||
       child.activeOperationType ||
       ''
     );
@@ -65202,20 +65404,33 @@ function renderBankingPayBatchChildModalOverview() {
     const type = explicitType || (paymentOperationTypes.has(contextualType) ? contextualType : '') || forced;
     if (!type || !paymentOperationTypes.has(type)) return null;
     if (signals.some((signal) => terminalOperationStates.has(signal))) return null;
-    const opId = trimStr(op.operation_id || op.operationId || op.id || data.active_operation_id || data.activeOperationId || batch.active_operation_id || batch.activeOperationId || '');
-    if (!opId && !signals.length) return null;
+    const hasActiveState = signals.some((signal) => activePaymentOperationStates.has(signal));
+    const opId = trimStr(op.operation_id || op.operationId || op.id || data.active_payment_operation_id || data.activePaymentOperationId || data.payment_execute_operation_id || data.paymentExecuteOperationId || data.active_operation_id || data.activeOperationId || batch.active_payment_operation_id || batch.activePaymentOperationId || batch.payment_execute_operation_id || batch.paymentExecuteOperationId || batch.active_operation_id || batch.activeOperationId || '');
+    if (!opId || !hasActiveState) return null;
     return { ...op, operation_type: type };
   };
   const activePaymentExecuteOperationSource = normaliseActivePaymentOperation(activePaymentOperationSourceFromSpecificFields, 'PAYMENT_EXECUTE');
+  const specificPaymentScalarOperationId = trimStr(data.active_payment_operation_id || data.activePaymentOperationId || data.payment_execute_operation_id || data.paymentExecuteOperationId || batch.active_payment_operation_id || batch.activePaymentOperationId || batch.payment_execute_operation_id || batch.paymentExecuteOperationId || '');
+  const genericActiveScalarOperationId = trimStr(data.active_operation_id || data.activeOperationId || batch.active_operation_id || batch.activeOperationId || '');
+  const specificPaymentScalarOperationType = data.active_payment_operation_type || data.activePaymentOperationType || data.payment_execute_operation_type || data.paymentExecuteOperationType || batch.active_payment_operation_type || batch.activePaymentOperationType || batch.payment_execute_operation_type || batch.paymentExecuteOperationType || '';
+  const genericActiveScalarOperationType = data.active_operation_type || data.activeOperationType || batch.active_operation_type || batch.activeOperationType || '';
   const activeOperation = activePaymentExecuteOperationSource ||
+    normaliseActivePaymentOperation(data.active_payment_operation || data.activePaymentOperation || batch.active_payment_operation || batch.activePaymentOperation || child.active_payment_operation || child.activePaymentOperation) ||
     normaliseActivePaymentOperation(data.active_operation || data.activeOperation || batch.active_operation || batch.activeOperation || child.activeOperation) ||
+    normaliseActivePaymentOperation({
+      operation_id: specificPaymentScalarOperationId || genericActiveScalarOperationId || '',
+      operation_type: specificPaymentScalarOperationType || genericActiveScalarOperationType || (specificPaymentScalarOperationId ? 'PAYMENT_EXECUTE' : ''),
+      status: data.active_payment_operation_status || data.activePaymentOperationStatus || data.payment_execute_operation_status || data.paymentExecuteOperationStatus || data.active_operation_status || data.activeOperationStatus || batch.active_payment_operation_status || batch.activePaymentOperationStatus || batch.payment_execute_operation_status || batch.paymentExecuteOperationStatus || batch.active_operation_status || batch.activeOperationStatus || '',
+      phase: data.active_payment_operation_phase || data.activePaymentOperationPhase || data.payment_execute_operation_phase || data.paymentExecuteOperationPhase || data.active_operation_phase || data.activeOperationPhase || batch.active_payment_operation_phase || batch.activePaymentOperationPhase || batch.payment_execute_operation_phase || batch.paymentExecuteOperationPhase || batch.active_operation_phase || batch.activeOperationPhase || '',
+      runner_state: data.active_payment_operation_runner_state || data.activePaymentOperationRunnerState || data.payment_execute_operation_runner_state || data.paymentExecuteOperationRunnerState || batch.active_payment_operation_runner_state || batch.activePaymentOperationRunnerState || batch.payment_execute_operation_runner_state || batch.paymentExecuteOperationRunnerState || ''
+    }) ||
     null;
-  const activeOperationType = upperTrim(activeOperation?.operation_type || activeOperation?.operationType || '');
+  const activeOperationType = upperTrim(activeOperation?.operation_type || activeOperation?.operationType || data.active_payment_operation_type || data.activePaymentOperationType || data.payment_execute_operation_type || data.paymentExecuteOperationType || batch.active_payment_operation_type || batch.activePaymentOperationType || batch.payment_execute_operation_type || batch.paymentExecuteOperationType || '');
   const activeOperationSignals = operationStateSignals(activeOperation);
-  const activeOperationStatus = upperTrim(activeOperation?.status || activeOperation?.operation_status || activeOperation?.operationStatus || activeOperation?.state || activeOperationSignals[0] || '');
-  const activeOperationPhase = upperTrim(activeOperation?.phase || '');
-  const activeRunnerState = upperTrim(activeOperation?.runner_state || activeOperation?.runnerState || '');
-  const activeOperationId = trimStr(activeOperation?.operation_id || activeOperation?.operationId || activeOperation?.id || '');
+  const activeOperationStatus = upperTrim(activeOperation?.status || activeOperation?.operation_status || activeOperation?.operationStatus || activeOperation?.state || data.active_payment_operation_status || data.activePaymentOperationStatus || data.payment_execute_operation_status || data.paymentExecuteOperationStatus || batch.active_payment_operation_status || batch.activePaymentOperationStatus || batch.payment_execute_operation_status || batch.paymentExecuteOperationStatus || activeOperationSignals[0] || '');
+  const activeOperationPhase = upperTrim(activeOperation?.phase || data.active_payment_operation_phase || data.activePaymentOperationPhase || data.payment_execute_operation_phase || data.paymentExecuteOperationPhase || batch.active_payment_operation_phase || batch.activePaymentOperationPhase || batch.payment_execute_operation_phase || batch.paymentExecuteOperationPhase || '');
+  const activeRunnerState = upperTrim(activeOperation?.runner_state || activeOperation?.runnerState || data.active_payment_operation_runner_state || data.activePaymentOperationRunnerState || data.payment_execute_operation_runner_state || data.paymentExecuteOperationRunnerState || batch.active_payment_operation_runner_state || batch.activePaymentOperationRunnerState || batch.payment_execute_operation_runner_state || batch.paymentExecuteOperationRunnerState || '');
+  const activeOperationId = trimStr(activeOperation?.operation_id || activeOperation?.operationId || activeOperation?.id || data.active_payment_operation_id || data.activePaymentOperationId || data.payment_execute_operation_id || data.paymentExecuteOperationId || batch.active_payment_operation_id || batch.activePaymentOperationId || batch.payment_execute_operation_id || batch.paymentExecuteOperationId || '');
   const activeOperationTerminal = !!(activeOperation && activeOperationSignals.some((signal) => terminalOperationStates.has(signal)));
   const activeOperationStatusLabel = formatOperationStatusLabel(activeOperationStatus || activeRunnerState || activeOperationPhase) || 'In progress';
   const activeOperationLeased = readFirstBool(activeOperation?.server_running, activeOperation?.serverRunning, activeOperation?.leased, activeOperation?.lease_active, activeOperation?.leaseActive) || !!trimStr(activeOperation?.lease_owner || activeOperation?.leaseOwner || '');
@@ -65234,14 +65449,13 @@ function renderBankingPayBatchChildModalOverview() {
   );
   const activePaymentExecuteOperation = !!(
     activeOperation &&
+    activeOperationId &&
     paymentOperationTypes.has(activeOperationType) &&
     !activeOperationTerminal &&
-    !waitingAuthorisation &&
-    !reviewRequired &&
     (
-      ['RUNNING', 'CONTINUING', 'WAITING_RETRY', 'WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'AWAITING_PROVIDER'].includes(activeOperationStatus) ||
-      ['RUNNABLE', 'RUNNING'].includes(activeRunnerState) ||
-      activeOperationPhase ||
+      activePaymentOperationStates.has(activeOperationStatus) ||
+      activePaymentOperationStates.has(activeRunnerState) ||
+      activePaymentOperationStates.has(activeOperationPhase) ||
       activeOperationLeased ||
       activeOperationWaitingProvider
     )
@@ -65600,7 +65814,7 @@ function renderBankingPayBatchChildModalOverview() {
   const executeButtonSuccessStyle = executeButtonDisabled ? '' : ' style="font-weight:800;background:#198754;border-color:#198754;color:#fff;"';
   const primaryActionButtonsHtml = [
     activePaymentExecuteOperation
-      ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:viewExecutionStatus" data-operation-id="${enc(activeOperationId)}" title="View backend execution progress">View execution status</button>`
+      ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:viewExecutionStatus" data-batch-id="${enc(id)}" data-operation-id="${enc(activeOperationId)}" data-operation-type="${enc(activeOperationType || 'PAYMENT_EXECUTE')}" data-operation-status="${enc(activeOperationStatus)}" data-operation-phase="${enc(activeOperationPhase)}" data-runner-state="${enc(activeRunnerState)}" data-payment-execute="true" title="View backend execution progress">View execution status</button>`
       : '',
     waitingAuthorisation && !activePaymentExecuteOperation
       ? `<button type="button" class="btn btn-sm btn-primary" data-action="banking:pay:child:openAuthorisation" data-operation-id="${enc(activeOperationId)}" title="Open authorisation workflow">Authorisation required</button>`
@@ -69152,9 +69366,6 @@ function renderBankingAlertPreferencesPanel() {
     </div>
   `;
 }
-
-
-
 
 
 
@@ -74895,19 +75106,23 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     if (a === 'banking:pay:setStatusFilter') {
       const v = (el && el.value != null) ? String(el.value) : '';
       try { st.pay.list.statusFilter = String(v || '').trim().toUpperCase(); st.pay.list.offset = 0; } catch {}
-      await bankingPayBatchesList?.({
-        status: st.pay.list.statusFilter,
-        limit: Math.max(1, Math.min(50, Math.trunc(Number(st.pay?.list?.limit || 50)) || 50)),
-        offset: 0,
-        display_mode: 'LIGHT',
-        displayMode: 'LIGHT',
-        include_diagnostics: false,
-        includeDiagnostics: false,
-        include_alerts: false,
-        includeAlerts: false,
-        include_correction_summary: false,
-        includeCorrectionSummary: false
-      });
+      if (typeof bankingPayBatchesList === 'function') {
+        await bankingPayBatchesList({
+          status: st.pay.list.statusFilter,
+          limit: Math.max(1, Math.min(50, Math.trunc(Number(st.pay?.list?.limit || 50)) || 50)),
+          offset: 0,
+          display_mode: 'LIGHT',
+          displayMode: 'LIGHT',
+          include_diagnostics: false,
+          includeDiagnostics: false,
+          include_alerts: false,
+          includeAlerts: false,
+          include_correction_summary: false,
+          includeCorrectionSummary: false
+        });
+      } else {
+        await safeRerender(null);
+      }
       return;
     }
 
@@ -74917,19 +75132,23 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       const existingLimit = Number(st.pay?.list?.limit || 50);
       const lim = Number.isFinite(n) ? Math.max(1, Math.min(50, Math.trunc(n))) : (Number.isFinite(existingLimit) ? Math.max(1, Math.min(50, Math.trunc(existingLimit))) : 50);
       try { st.pay.list.limit = lim; st.pay.list.offset = 0; } catch {}
-      await bankingPayBatchesList?.({
-        status: st.pay.list.statusFilter,
-        limit: lim,
-        offset: 0,
-        display_mode: 'LIGHT',
-        displayMode: 'LIGHT',
-        include_diagnostics: false,
-        includeDiagnostics: false,
-        include_alerts: false,
-        includeAlerts: false,
-        include_correction_summary: false,
-        includeCorrectionSummary: false
-      });
+      if (typeof bankingPayBatchesList === 'function') {
+        await bankingPayBatchesList({
+          status: st.pay.list.statusFilter,
+          limit: lim,
+          offset: 0,
+          display_mode: 'LIGHT',
+          displayMode: 'LIGHT',
+          include_diagnostics: false,
+          includeDiagnostics: false,
+          include_alerts: false,
+          includeAlerts: false,
+          include_correction_summary: false,
+          includeCorrectionSummary: false
+        });
+      } else {
+        await safeRerender(null);
+      }
       return;
     }
 
@@ -74955,19 +75174,23 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         st.pay.list.offset = off2;
       } catch {}
 
-      await bankingPayBatchesList?.({
-        status: st.pay.list.statusFilter,
-        limit: lim2,
-        offset: off2,
-        display_mode: 'LIGHT',
-        displayMode: 'LIGHT',
-        include_diagnostics: false,
-        includeDiagnostics: false,
-        include_alerts: false,
-        includeAlerts: false,
-        include_correction_summary: false,
-        includeCorrectionSummary: false
-      });
+      if (typeof bankingPayBatchesList === 'function') {
+        await bankingPayBatchesList({
+          status: st.pay.list.statusFilter,
+          limit: lim2,
+          offset: off2,
+          display_mode: 'LIGHT',
+          displayMode: 'LIGHT',
+          include_diagnostics: false,
+          includeDiagnostics: false,
+          include_alerts: false,
+          includeAlerts: false,
+          include_correction_summary: false,
+          includeCorrectionSummary: false
+        });
+      } else {
+        await safeRerender(null);
+      }
       return;
     }
 
@@ -75007,7 +75230,9 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         ? st.pay.list.items
         : (Array.isArray(st.pay?.list?.rows) ? st.pay.list.rows : []);
       const selectedBatch = listCollection.find((it) => String(it?.id || it?.pay_batch_id || '').trim() === id) || null;
-      const mode = (a === 'banking:pay:deleteDraft') ? 'DRAFT_DELETE' : (bankingPayResolveBatchCancelMode(selectedBatch) || 'CANCEL_UNPAID');
+      const mode = (a === 'banking:pay:deleteDraft')
+        ? 'DRAFT_DELETE'
+        : ((typeof bankingPayResolveBatchCancelMode === 'function' ? bankingPayResolveBatchCancelMode(selectedBatch) : '') || 'CANCEL_UNPAID');
       try {
         await runBankingPayBatchCancelFlow({
           batch: selectedBatch,
@@ -75248,7 +75473,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           operationId: ds('operationId') || dget('data-operation-id'),
           operation_type: ds('operationType') || dget('data-operation-type'),
           operationType: ds('operationType') || dget('data-operation-type'),
+          pay_batch_id: ds('batchId') || dget('data-batch-id'),
+          payBatchId: ds('batchId') || dget('data-batch-id'),
           status: ds('operationStatus') || dget('data-operation-status'),
+          phase: ds('operationPhase') || dget('data-operation-phase'),
           runner_state: ds('runnerState') || dget('data-runner-state'),
           server_running: ds('serverRunning') || dget('data-server-running'),
           serverRunning: ds('serverRunning') || dget('data-server-running'),
@@ -75264,10 +75492,14 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           active_backend_execution: ds('activeBackendExecution') || dget('data-active-backend-execution'),
           activeBackendExecution: ds('activeBackendExecution') || dget('data-active-backend-execution')
         } },
+        { source: 'child.active_payment_operation', payload: child?.active_payment_operation },
+        { source: 'child.activePaymentOperation', payload: child?.activePaymentOperation },
         { source: 'child.payment_execute_operation', payload: child?.payment_execute_operation },
         { source: 'child.paymentExecuteOperation', payload: child?.paymentExecuteOperation },
         { source: 'child.active_payment_execute_operation', payload: child?.active_payment_execute_operation },
         { source: 'child.activePaymentExecuteOperation', payload: child?.activePaymentExecuteOperation },
+        { source: 'child.data.active_payment_operation', payload: childData.active_payment_operation },
+        { source: 'child.data.activePaymentOperation', payload: childData.activePaymentOperation },
         { source: 'child.data.payment_execute_operation', payload: childData.payment_execute_operation },
         { source: 'child.data.paymentExecuteOperation', payload: childData.paymentExecuteOperation },
         { source: 'child.data.active_payment_execute_operation', payload: childData.active_payment_execute_operation },
@@ -75290,6 +75522,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           isPlainOperationPayload(dataObj.operationJson) ? dataObj.operationJson : null,
           isPlainOperationPayload(dataObj.active_operation) ? dataObj.active_operation : null,
           isPlainOperationPayload(dataObj.activeOperation) ? dataObj.activeOperation : null,
+          isPlainOperationPayload(dataObj.active_payment_operation) ? dataObj.active_payment_operation : null,
+          isPlainOperationPayload(dataObj.activePaymentOperation) ? dataObj.activePaymentOperation : null,
           isPlainOperationPayload(dataObj.payment_execute_operation) ? dataObj.payment_execute_operation : null,
           isPlainOperationPayload(dataObj.paymentExecuteOperation) ? dataObj.paymentExecuteOperation : null,
           isPlainOperationPayload(dataObj.active_payment_execute_operation) ? dataObj.active_payment_execute_operation : null,
@@ -75297,6 +75531,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           isPlainOperationPayload(progressObj.operation) ? progressObj.operation : null,
           isPlainOperationPayload(progressObj.operation_json) ? progressObj.operation_json : null,
           isPlainOperationPayload(progressObj.operationJson) ? progressObj.operationJson : null,
+          isPlainOperationPayload(progressObj.active_payment_operation) ? progressObj.active_payment_operation : null,
+          isPlainOperationPayload(progressObj.activePaymentOperation) ? progressObj.activePaymentOperation : null,
           isPlainOperationPayload(progressObj.payment_execute_operation) ? progressObj.payment_execute_operation : null,
           isPlainOperationPayload(progressObj.paymentExecuteOperation) ? progressObj.paymentExecuteOperation : null,
           isPlainOperationPayload(obj.operation) ? obj.operation : null,
@@ -75304,6 +75540,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           isPlainOperationPayload(obj.operationJson) ? obj.operationJson : null,
           isPlainOperationPayload(obj.active_operation) ? obj.active_operation : null,
           isPlainOperationPayload(obj.activeOperation) ? obj.activeOperation : null,
+          isPlainOperationPayload(obj.active_payment_operation) ? obj.active_payment_operation : null,
+          isPlainOperationPayload(obj.activePaymentOperation) ? obj.activePaymentOperation : null,
           isPlainOperationPayload(obj.payment_execute_operation) ? obj.payment_execute_operation : null,
           isPlainOperationPayload(obj.paymentExecuteOperation) ? obj.paymentExecuteOperation : null,
           isPlainOperationPayload(obj.active_payment_execute_operation) ? obj.active_payment_execute_operation : null,
@@ -75324,11 +75562,16 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         }
         return '';
       };
-      const terminalOperationStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED']);
-      const directActiveOperationStatuses = new Set(['RUNNING', 'CONTINUING', 'WAITING_RETRY']);
-      const providerWaitOperationStatuses = new Set(['WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'PROVIDER_WAIT', 'PROVIDER_WAITING', 'WAITING_PROVIDER_CONFIRMATION']);
-      const nonExecutionStatusActions = new Set(['WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION', 'AUTHORISATION_REQUIRED', 'AUTHORIZATION_REQUIRED', 'REVIEW_REQUIRED']);
-      const activeRunnerStates = new Set(['RUNNING', 'RUNNABLE']);
+      const paymentExecutionOperationTypes = new Set(['PAYMENT_EXECUTE', 'PAYMENT_RETRY_BLOCKED_FUNDS']);
+      const terminalOperationStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCESS', 'SUCCEEDED', 'DONE', 'FAILED', 'ERROR', 'ERRORED', 'CANCELLED', 'CANCELED', 'ABORTED']);
+      const directActiveOperationStatuses = new Set([
+        'QUEUED', 'RUNNING', 'WAITING', 'RUNNABLE', 'CONTINUING', 'WAITING_RETRY',
+        'WAITING_AUTHORISATION', 'WAITING_AUTHORIZATION', 'AWAITING_AUTHORISATION', 'AWAITING_AUTHORIZATION',
+        'WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'AWAITING_PROVIDER',
+        'WAITING_USER', 'WAITING_USER_REVIEW', 'REVIEW_REQUIRED'
+      ]);
+      const providerWaitOperationStatuses = new Set(['WAITING_PROVIDER', 'WAITING_FOR_PROVIDER', 'PROVIDER_WAIT', 'PROVIDER_WAITING', 'WAITING_PROVIDER_CONFIRMATION', 'AWAITING_PROVIDER']);
+      const activeRunnerStates = new Set(['RUNNING', 'WAITING', 'RUNNABLE', 'QUEUED', 'CONTINUING', 'WAITING_RETRY']);
       const asBool = (value) => {
         if (value === true) return true;
         if (value === false) return false;
@@ -75344,18 +75587,18 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         const operationId = readOperationText(payload, ['operation_id', 'operationId', 'id']);
         if (!operationId) continue;
         const operationType = readOperationText(payload, ['operation_type', 'operationType', 'kind', 'operation_kind', 'operationKind']).toUpperCase();
-        const sourceIsPaymentExecute = String(entry.source || '').toLowerCase().includes('payment_execute');
+        const sourceIsPaymentExecute = String(entry.source || '').toLowerCase().includes('payment_execute') || String(entry.source || '').toLowerCase().includes('active_payment');
         const elementDeclaresPaymentExecute = entry.source === 'element' && (
           String(ds('paymentExecute') || dget('data-payment-execute') || '').trim().toLowerCase() === 'true' ||
           a === 'banking:pay:child:viewExecutionStatus'
         );
-        if (operationType && operationType !== 'PAYMENT_EXECUTE') continue;
+        if (operationType && !paymentExecutionOperationTypes.has(operationType)) continue;
         if (!operationType && !sourceIsPaymentExecute && !elementDeclaresPaymentExecute) continue;
+        const resolvedOperationType = paymentExecutionOperationTypes.has(operationType) ? operationType : 'PAYMENT_EXECUTE';
 
         const status = readOperationText(payload, ['status', 'operation_status', 'operationStatus']).toUpperCase();
         const runnerState = readOperationText(payload, ['runner_state', 'runnerState']).toUpperCase();
         if (terminalOperationStatuses.has(status)) continue;
-        if (nonExecutionStatusActions.has(status)) continue;
 
         const activeByStatus = directActiveOperationStatuses.has(status);
         const activeByRunner = activeRunnerStates.has(runnerState);
@@ -75373,7 +75616,7 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         const activeByElementViewAction = entry.source === 'element' && a === 'banking:pay:child:viewExecutionStatus' && !!operationId && !status && !runnerState;
         if (!activeByStatus && !activeByRunner && !activeByLease && !activeByContinuation && !activeByProviderWait && !activeByElementViewAction) continue;
 
-        selectedOperation = { ...payload, operation_id: operationId, operationId, operation_type: 'PAYMENT_EXECUTE', operationType: 'PAYMENT_EXECUTE' };
+        selectedOperation = { ...payload, operation_id: operationId, operationId, operation_type: resolvedOperationType, operationType: resolvedOperationType };
         break;
       }
 
@@ -75448,9 +75691,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           (refreshedActiveByStatus || refreshedActiveByRunner || refreshedActiveByLease || refreshedActiveByContinuation || refreshedActiveByProviderWait)
         );
         if (
-          (refreshedTypeRaw && refreshedTypeRaw !== 'PAYMENT_EXECUTE') ||
+          (refreshedTypeRaw && !paymentExecutionOperationTypes.has(refreshedTypeRaw)) ||
           terminalOperationStatuses.has(refreshedStatus) ||
-          nonExecutionStatusActions.has(refreshedStatus) ||
           !refreshedStillActive
         ) {
           toast(
@@ -75474,14 +75716,18 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
         ...(progressPayload && typeof progressPayload === 'object' && !Array.isArray(progressPayload) ? progressPayload : {}),
         operation_id: operationId,
         operationId,
-        operation_type: 'PAYMENT_EXECUTE',
-        operationType: 'PAYMENT_EXECUTE'
+        operation_type: selectedOperation.operation_type || selectedOperation.operationType || 'PAYMENT_EXECUTE',
+        operationType: selectedOperation.operationType || selectedOperation.operation_type || 'PAYMENT_EXECUTE',
+        pay_batch_id: selectedOperation.pay_batch_id || selectedOperation.payBatchId || child?.batchId || childData.pay_batch_id || childData.id || null,
+        payBatchId: selectedOperation.payBatchId || selectedOperation.pay_batch_id || child?.batchId || childData.pay_batch_id || childData.id || null
       });
 
       try {
         if (child) {
           child.activeOperation = modalPayload;
           child.active_operation = modalPayload;
+          child.active_payment_operation = modalPayload;
+          child.activePaymentOperation = modalPayload;
           child.payment_execute_operation = modalPayload;
           child.paymentExecuteOperation = modalPayload;
           child.active_payment_execute_operation = modalPayload;
@@ -75489,6 +75735,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
           if (child.data && typeof child.data === 'object' && !Array.isArray(child.data)) {
             child.data.active_operation = modalPayload;
             child.data.activeOperation = modalPayload;
+            child.data.active_payment_operation = modalPayload;
+            child.data.activePaymentOperation = modalPayload;
             child.data.payment_execute_operation = modalPayload;
             child.data.paymentExecuteOperation = modalPayload;
             child.data.active_payment_execute_operation = modalPayload;
@@ -75499,8 +75747,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
       if (typeof openBankingPayOperationProgressModal === 'function') {
         await openBankingPayOperationProgressModal(modalPayload, {
-          payBatchId: child?.batchId || childData.pay_batch_id || childData.id || null,
-          pay_batch_id: child?.batchId || childData.pay_batch_id || childData.id || null,
+          payBatchId: modalPayload.payBatchId || modalPayload.pay_batch_id || child?.batchId || childData.pay_batch_id || childData.id || null,
+          pay_batch_id: modalPayload.pay_batch_id || modalPayload.payBatchId || child?.batchId || childData.pay_batch_id || childData.id || null,
           operationId,
           operation_id: operationId,
           mode: 'PROGRESS_LIGHT',
@@ -77687,6 +77935,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
   return { ok: true };
 }
+
+
 
 
 
