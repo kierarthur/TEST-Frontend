@@ -3488,6 +3488,11 @@ async function apiPostJson(path, body, options = {}) {
     }
   };
   const safeTrim = (value) => safeString(value).trim();
+  const boundedHttpStatus = (value, fallback = 400) => {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric >= 200 && numeric < 600) return Math.trunc(numeric);
+    return fallback;
+  };
   const isBankingPayPath = String(path || '').startsWith('/api/banking/pay/');
   const opts = (options && typeof options === 'object') ? options : {};
   const contextAction = opts.action;
@@ -3784,6 +3789,9 @@ async function apiPostJson(path, body, options = {}) {
 
   return (parsed != null) ? parsed : {};
 }
+
+
+
 
 
 
