@@ -141812,6 +141812,7 @@ function bulkAuthoriseHasProcessedExpensesValue(ctxInput) {
   return !!(hasTimesheetAnchor && (numericDetected || descriptionDetected || stagedDetected));
 }
 
+
 function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOptions = {}) {
   const inputIsOptions = operationOrOptions && typeof operationOrOptions === 'object' && !Array.isArray(operationOrOptions) && (
     Object.prototype.hasOwnProperty.call(operationOrOptions, 'operation') ||
@@ -142006,7 +142007,58 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
       cleanupStatus ? `Cleanup: ${cleanupStatus}.` : '',
       batchBlocked ? 'Normal draft actions are blocked for this partial draft.' : ''
     ].filter(Boolean);
-    const hasPhaseProgress = isDraftCreate && phaseIndex !== null && phaseTotal !== null && phaseTotal > 0;
+
+    if (!isDraftCreate) {
+      const displayCounters = isPlainObject(op.display_counters) ? op.display_counters : (isPlainObject(op.displayCounters) ? op.displayCounters : {});
+      const counterLabel = firstText(op.display_counter_label, op.displayCounterLabel, displayCounters.label, displayCounters.counter_label, displayCounters.counterLabel);
+      const counterModeRaw = upperTrim(firstText(op.display_counter_mode, op.displayCounterMode, displayCounters.mode, displayCounters.counter_mode, displayCounters.counterMode));
+      const counterScope = firstText(op.display_counter_scope, op.displayCounterScope, displayCounters.scope, displayCounters.counter_scope, displayCounters.counterScope);
+      const rawTotal = numberValue(displayCounters.total ?? displayCounters.total_units ?? displayCounters.totalUnits ?? op.display_total_units ?? op.displayTotalUnits ?? op.total_units ?? op.totalUnits);
+      const rawCompleted = numberValue(displayCounters.completed ?? displayCounters.completed_units ?? displayCounters.completedUnits ?? op.display_completed_units ?? op.displayCompletedUnits ?? op.completed_units ?? op.completedUnits);
+      const rawFailed = numberValue(displayCounters.failed ?? displayCounters.failed_units ?? displayCounters.failedUnits ?? op.display_failed_units ?? op.displayFailedUnits ?? op.failed_units ?? op.failedUnits);
+      const rawCurrentChunk = numberValue(displayCounters.current_chunk_index ?? displayCounters.currentChunkIndex ?? displayCounters.chunks_processed ?? displayCounters.chunksProcessed ?? op.display_current_chunk_index ?? op.displayCurrentChunkIndex ?? op.current_chunk_index ?? op.currentChunkIndex);
+      const rawChunkCount = numberValue(displayCounters.chunk_count ?? displayCounters.chunkCount ?? op.display_chunk_count ?? op.displayChunkCount ?? op.chunk_count ?? op.chunkCount);
+      const impossibleCounter = rawTotal !== null && rawTotal >= 0 && (
+        (rawCompleted !== null && rawCompleted > rawTotal)
+        || (rawFailed !== null && rawFailed > rawTotal)
+        || (rawCompleted !== null && rawFailed !== null && rawCompleted + rawFailed > rawTotal)
+      );
+      const counterMode = counterModeRaw === 'CUMULATIVE' || counterModeRaw === 'CURRENT_PHASE'
+        ? counterModeRaw
+        : (impossibleCounter ? 'CUMULATIVE' : 'CURRENT_PHASE');
+      const cumulativeCounters = counterMode === 'CUMULATIVE';
+      const completedForDisplay = cumulativeCounters || rawTotal === null || rawCompleted === null ? rawCompleted : Math.min(rawCompleted, rawTotal);
+      const failedForDisplay = cumulativeCounters || rawTotal === null || rawFailed === null ? rawFailed : Math.min(rawFailed, Math.max(rawTotal - (completedForDisplay || 0), 0));
+      const totalLabel = counterLabel || (cumulativeCounters ? 'Scope' : 'Phase scope');
+      const chunkHasScope = rawChunkCount !== null && rawChunkCount > 0;
+      const chunkHasProgress = rawCurrentChunk !== null && rawCurrentChunk > 0;
+      const chunkText = chunkHasScope
+        ? (cumulativeCounters && rawCurrentChunk !== null && rawCurrentChunk > rawChunkCount ? `${rawCurrentChunk} processed / ${rawChunkCount} scope` : `${Math.min(rawCurrentChunk || 0, rawChunkCount)}/${rawChunkCount}`)
+        : (cumulativeCounters && chunkHasProgress ? `${rawCurrentChunk} processed` : '—');
+      const metaPieces = [];
+      if (rawCompleted !== null || rawFailed !== null || rawTotal !== null) {
+        metaPieces.push([
+          rawCompleted !== null ? `${rawCompleted} completed${cumulativeCounters ? ' so far' : ''}` : '',
+          rawFailed !== null ? `${rawFailed} failed${cumulativeCounters ? ' so far' : ''}` : '',
+          rawTotal !== null ? `${rawTotal} ${cumulativeCounters ? 'scope' : 'total'}` : ''
+        ].filter(Boolean).join(', ') + '.');
+      }
+      if (counterModeRaw || impossibleCounter) metaPieces.push(`Counter mode: ${cumulativeCounters ? 'cumulative' : 'current phase'}.`);
+      if (counterScope) metaPieces.push(`Counter scope: ${counterScope}.`);
+      return {
+        total_label: totalLabel,
+        total_text: rawTotal === null ? '—' : String(rawTotal),
+        completed_label: cumulativeCounters ? 'Completed so far' : 'Completed',
+        completed_text: completedForDisplay === null ? '—' : String(completedForDisplay),
+        failed_label: cumulativeCounters ? 'Failed so far' : 'Failed',
+        failed_text: failedForDisplay === null ? '—' : String(failedForDisplay),
+        chunk_label: cumulativeCounters ? 'Chunks processed' : 'Chunk',
+        chunk_text: chunkText,
+        meta_prefix: [...metaPieces, ...extraMeta].filter(Boolean).join(' ')
+      };
+    }
+
+    const hasPhaseProgress = phaseIndex !== null && phaseTotal !== null && phaseTotal > 0;
     if (!hasPhaseProgress) {
       return {
         total_label: 'Total',
@@ -142015,8 +142067,8 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
         completed_text: String(completedUnits),
         failed_label: 'Failed',
         failed_text: String(failedUnits),
-        chunk_label: 'Chunk',
-        chunk_text: `${currentChunk}/${chunks}`,
+        chunk_label: chunks > 0 ? 'Chunk' : 'Chunk',
+        chunk_text: chunks > 0 ? `${Math.min(currentChunk, chunks)}/${chunks}` : '—',
         meta_prefix: [`${completedUnits} completed, ${failedUnits} failed, ${totalUnits} total.`, ...extraMeta].filter(Boolean).join(' ')
       };
     }
@@ -142099,7 +142151,7 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   cleanupStaleBankingOperationProgressOverlays();
 
   const instanceId = `banking_pay_operation_progress_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const modalState = { closed: false, operation: state, nudgeInFlight: false, pollTimer: null, pollInFlight: false, terminalPainted: false, terminalPaintedAtUtc: null };
+  const modalState = { closed: false, operation: state, nudgeInFlight: false, pollTimer: null, pollInFlight: false, terminalPainted: false, terminalPaintedAtUtc: null, terminalChildVerificationInFlight: false };
   const overlay = document.createElement('div');
   overlay.id = `${instanceId}_overlay`;
   overlay.setAttribute('data-cloudtms-banking-pay-operation-progress', 'true');
@@ -142192,7 +142244,9 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
     const completedUnits = Number(op.display_completed_units ?? op.displayCompletedUnits ?? op.completed_units ?? op.completedUnits ?? 0) || 0;
     const failedUnits = Number(op.display_failed_units ?? op.displayFailedUnits ?? op.failed_units ?? op.failedUnits ?? 0) || 0;
     const rawPercent = Number(op.display_percent ?? op.displayPercent ?? op.percent ?? op.percent_complete ?? op.percentComplete);
-    const inferredPercent = totalUnits > 0 ? Math.round(((completedUnits + failedUnits) / totalUnits) * 100) : (isTerminal(op) && ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE'].includes(operationStatus(op)) ? 100 : 0);
+    const attemptedUnits = Math.max(0, completedUnits + failedUnits);
+    const canInferPercentFromCounters = totalUnits > 0 && attemptedUnits <= totalUnits;
+    const inferredPercent = canInferPercentFromCounters ? Math.round((attemptedUnits / totalUnits) * 100) : (isTerminal(op) && ['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE'].includes(operationStatus(op)) ? 100 : 0);
     const percent = Math.max(0, Math.min(100, Number.isFinite(rawPercent) ? rawPercent : inferredPercent));
     const draftCreateFields = renderDraftCreateProgressFields(op);
     if (role('op-title')) role('op-title').textContent = displayTitleForOperation(op);
@@ -142232,8 +142286,10 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
         const childType = operationTypeOf(child) || op.active_child_operation_type || op.activeChildOperationType || 'CHILD_OPERATION';
         const childPhase = firstText(child.phase_label, child.phaseLabel, humanisePhaseName(child.phase || child.operation_phase || child.operationPhase || ''));
         const childStatus = firstText(child.status_text, child.statusText, displayStatusForOperation(child));
+        const childFields = renderDraftCreateProgressFields(child);
+        const childProgressText = childFields && childFields.meta_prefix ? ` ${childFields.meta_prefix}` : '';
         role('op-child').style.display = '';
-        role('op-child').textContent = `${childType.replace(/_/g, ' ')}: ${childPhase}${childStatus ? ` — ${childStatus}` : ''}`;
+        role('op-child').textContent = `${childType.replace(/_/g, ' ')}: ${childPhase}${childStatus ? ` — ${childStatus}` : ''}${childProgressText}`;
       } else {
         role('op-child').style.display = 'none';
         role('op-child').textContent = '';
@@ -142298,6 +142354,59 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
         status_text: suppliedText || executionOutcomeStatusText(suppliedOperation) || suppliedOperation.status_text || op.status_text || displayFinalTextForOperation(op) || (op.review_required ? 'Operation needs review.' : (op.cancelled ? 'Operation cancelled.' : 'Operation complete.'))
       };
       render();
+      if (operationHasActiveChild(modalState.operation)) {
+        modalState.terminalPainted = false;
+        modalState.terminalPaintedAtUtc = null;
+        schedulePoll();
+        return controller;
+      }
+
+      const terminalOperationId = trimStr(modalState.operation?.operation_id || modalState.operation?.operationId || opts.operation_id || opts.operationId || '');
+      const terminalOperationType = operationTypeOf(modalState.operation);
+      const shouldVerifyTerminalChildren = !!terminalOperationId
+        && ['PAYMENT_EXECUTE', 'PAYMENT_SETTLEMENT', 'REMITTANCE_QUEUE'].includes(terminalOperationType)
+        && modalState.terminalChildVerificationInFlight !== true
+        && opts.autoPoll !== false
+        && opts.auto_poll !== false;
+
+      if (shouldVerifyTerminalChildren) {
+        modalState.terminalPainted = false;
+        modalState.terminalPaintedAtUtc = null;
+        modalState.terminalChildVerificationInFlight = true;
+        setTimeout(async () => {
+          try {
+            if (modalState.closed) return;
+            const latest = await fetchProgressLightWithChildren(terminalOperationId, {
+              userInitiated: false,
+              silent: true,
+              background: true,
+              source: 'openBankingPayOperationProgressModal.markCompletedTerminalChildVerification'
+            });
+            if (!modalState.closed && latest && typeof latest === 'object') controller.updateFromOperation(latest);
+          } catch {}
+          finally {
+            modalState.terminalChildVerificationInFlight = false;
+            if (modalState.closed) return;
+            const latestOperation = modalState.operation || {};
+            if (operationHasActiveChild(latestOperation)) {
+              modalState.terminalPainted = false;
+              modalState.terminalPaintedAtUtc = null;
+              schedulePoll();
+              return;
+            }
+            if (isTerminal(latestOperation) || isReviewRequired(latestOperation)) {
+              modalState.terminalPainted = true;
+              modalState.terminalPaintedAtUtc = new Date().toISOString();
+              render();
+              stopPoll();
+            } else {
+              schedulePoll();
+            }
+          }
+        }, 0);
+        return controller;
+      }
+
       modalState.terminalPainted = true;
       modalState.terminalPaintedAtUtc = new Date().toISOString();
       stopPoll();
@@ -142481,6 +142590,23 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
       render();
     }
   });
+  const performInitialProgressRefresh = () => {
+    const operationId = trimStr(modalState.operation?.operation_id || modalState.operation?.operationId || opts.operation_id || opts.operationId || '');
+    if (!operationId || opts.autoPoll === false || opts.auto_poll === false) return;
+    setTimeout(async () => {
+      if (modalState.closed) return;
+      try {
+        const next = await fetchProgressLightWithChildren(operationId, {
+          userInitiated: false,
+          silent: true,
+          background: true,
+          source: 'openBankingPayOperationProgressModal.initialProgressRefresh'
+        });
+        if (!modalState.closed) controller.updateFromOperation(next);
+      } catch {}
+    }, 0);
+  };
+
   if (nudgeButton) nudgeButton.addEventListener('click', async () => {
     const operationId = trimStr(modalState.operation?.operation_id || modalState.operation?.operationId || opts.operation_id || opts.operationId || '');
     if (!operationId || typeof bankingPayOperationAdvance !== 'function' || !operationCanSafelyNudge(modalState.operation)) return;
@@ -142513,9 +142639,12 @@ function openBankingPayOperationProgressModal(operationOrOptions = {}, maybeOpti
   });
 
   render();
+  performInitialProgressRefresh();
   schedulePoll();
   return controller;
 }
+
+
 
 
 async function bankingPayOperationGet(operationId, options = {}) {
@@ -142641,14 +142770,23 @@ async function bankingPayOperationGet(operationId, options = {}) {
     if (camelKey) query.set(camelKey, text);
   };
 
+  const requestPurpose = opts.purpose || opts.request_purpose || opts.requestPurpose || 'operation-progress';
+  const requestActionContext = opts.action_context || opts.actionContext || 'operation-progress-light';
+  const childOperationOptionValue = opts.include_child_operations ?? opts.includeChildOperations ?? opts.include_children ?? opts.includeChildren;
+  const childOperationOptionWasSupplied = childOperationOptionValue !== undefined && childOperationOptionValue !== null;
+  const includeChildOperations = childOperationOptionWasSupplied
+    ? readBool(childOperationOptionValue)
+    : /operation-progress/i.test(`${requestPurpose} ${requestActionContext}`);
+
   setTextParam('mode', effectiveMode);
   setTextParam('progress_mode', effectiveProgressMode);
   setTextParam('progressMode', effectiveProgressMode);
-  setTextParam('purpose', opts.purpose || opts.request_purpose || opts.requestPurpose || 'operation-progress');
-  setTextParam('action_context', opts.action_context || opts.actionContext || 'operation-progress-light');
+  setTextParam('purpose', requestPurpose);
+  setTextParam('action_context', requestActionContext);
   setBoolAliases('observer_only', 'observerOnly', opts.observer_only ?? opts.observerOnly ?? opts.observe_only ?? opts.observeOnly ?? true);
   setBoolAliases('observe_only', 'observeOnly', opts.observe_only ?? opts.observeOnly ?? opts.observer_only ?? opts.observerOnly ?? true);
   setBoolAliases('no_auto_advance', 'noAutoAdvance', opts.no_auto_advance ?? opts.noAutoAdvance ?? true);
+  setBoolAliases('include_child_operations', 'includeChildOperations', includeChildOperations);
   setBoolAliases('include_diagnostics', 'includeDiagnostics', false);
   setBoolParam('silent', opts.silent);
   setBoolParam('user_initiated', opts.userInitiated ?? opts.user_initiated);
@@ -142656,7 +142794,7 @@ async function bankingPayOperationGet(operationId, options = {}) {
   const requestPath = `/api/banking/pay/operation/${encodeURIComponent(id)}`;
   const queryText = query.toString();
   const requestUrl = API(queryText ? `${requestPath}?${queryText}` : requestPath);
-  const dedupeKey = `${id}::${effectiveMode}::${effectiveProgressMode}`;
+  const dedupeKey = `${id}::${effectiveMode}::${effectiveProgressMode}::children:${includeChildOperations ? '1' : '0'}`;
 
   const root = (typeof window !== 'undefined') ? window : globalThis;
   root.__bankingPayOperationGetInFlight = root.__bankingPayOperationGetInFlight && typeof root.__bankingPayOperationGetInFlight === 'object'
@@ -142707,8 +142845,6 @@ async function bankingPayOperationGet(operationId, options = {}) {
     try { delete root.__bankingPayOperationGetInFlight[dedupeKey]; } catch {}
   }
 }
-
-
 
 
 
