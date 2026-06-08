@@ -3775,20 +3775,25 @@ async function apiPostJson(path, body, options = {}) {
   }
 
   if (isBankingPayPath) {
-    const businessFailure = extractBusinessFailureEnvelope(parsed, txt);
-    if (businessFailure) {
-      buildAndThrowBankingError(
-        businessFailure.code === 'BATCH_STALE' ? 409 : boundedHttpStatus(parsed?.http_status || parsed?.status_code, 400),
-        txt,
-        parsed,
-        null,
-        businessFailure
-      );
+    const topLevelSuccess = isPlainObject(parsed) && parsed.ok === true;
+    if (!topLevelSuccess) {
+      const businessFailure = extractBusinessFailureEnvelope(parsed, txt);
+      if (businessFailure) {
+        buildAndThrowBankingError(
+          businessFailure.code === 'BATCH_STALE' ? 409 : boundedHttpStatus(parsed?.http_status || parsed?.status_code, 400),
+          txt,
+          parsed,
+          null,
+          businessFailure
+        );
+      }
     }
   }
 
   return (parsed != null) ? parsed : {};
 }
+
+
 
 
 
