@@ -90034,6 +90034,8 @@ function summaryInsertRowIfMissing(section, patchedRow) {
     return false;
   }
 }
+
+
 function summaryUpdateRowDom(section, id, patchedRow) {
   section = String(section || '').trim();
   id = String(id || '').trim();
@@ -90085,7 +90087,12 @@ function summaryUpdateRowDom(section, id, patchedRow) {
         const invIssueStage = String(row?.invoice_issue_stage || '').trim().toUpperCase();
 
         const isFullyInvoiced      = (invSegStage === 'FULLY_INVOICED');
-        const isPaidToCandidate    = !!row?.paid_at_utc;
+        const payStatus = String(row?.pay_status_code || '').trim().toUpperCase();
+        const isPaidToCandidate =
+          payStatus === 'PAID' ||
+          payStatus === 'PARTIALLY_PAID' ||
+          !!row?.pay_paid_at_utc ||
+          !!row?.paid_at_utc;
         const isInvoiceIssued      = (invIssueStage === 'INVOICED_ISSUED');
         const isInvoiceNotIssued   = (invIssueStage === 'INVOICED_NOT_ISSUED');
 
@@ -90109,7 +90116,56 @@ function summaryUpdateRowDom(section, id, patchedRow) {
     } catch {}
   };
 
-  const renderIssueBadges = (codes) => {
+  const fmtSummaryMoney = (n) => {
+    const v = Number(n || 0);
+    const safe = Number.isFinite(v) ? v : 0;
+    return `£${Math.abs(safe).toFixed(2)}`;
+  };
+
+  const buildTimesheetPayIcon = (rowObj) => {
+    const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
+    let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
+
+    if (!iconCode || iconCode === 'NONE') {
+      if (payStatus === 'PAID') iconCode = 'COIN';
+      else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
+      else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
+    }
+
+    if (!iconCode || iconCode === 'NONE') return null;
+
+    const badge = document.createElement('span');
+    badge.className = 'coin-badge issue-pay-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    badge.style.marginLeft = '0';
+    badge.style.flex = '0 0 auto';
+    badge.style.alignSelf = 'center';
+
+    if (iconCode === 'CLOCK') {
+      badge.textContent = '◷';
+      badge.title = (payStatus === 'ADVANCED') ? 'Marked for Advance Pay' : 'Payment in progress';
+    } else if (iconCode === 'COIN') {
+      badge.textContent = '£';
+      badge.title = 'Paid';
+    } else if (iconCode === 'HALF_COIN') {
+      badge.textContent = '£';
+      badge.style.background = 'linear-gradient(90deg, #d4af37 0%, #d4af37 50%, #334155 50%, #334155 100%)';
+      badge.style.color = '#ffffff';
+      badge.title = 'Partly paid';
+    } else if (iconCode === 'RED_COIN') {
+      const delta = Number(rowObj?.net_delta_ex_vat || 0);
+      badge.textContent = '£';
+      badge.style.background = 'radial-gradient(circle at 30% 30%, #fecaca 0%, #f87171 35%, #dc2626 60%, #7f1d1d 100%)';
+      badge.style.color = '#ffffff';
+      badge.title = `Overpaid by ${fmtSummaryMoney(delta)} (adjusted)`;
+    } else {
+      return null;
+    }
+
+    return badge;
+  };
+
+  const renderIssueBadges = (codes, rowObj = null) => {
     const wrap = document.createElement('div');
     wrap.className = 'issue-badges';
 
@@ -90136,6 +90192,14 @@ function summaryUpdateRowDom(section, id, patchedRow) {
 
     const rest = arr0.filter(x => !REF_ALL.has(x));
     const arr = refChosen ? [refChosen, ...rest] : rest;
+
+    const payIcon = (section === 'timesheets' && rowObj)
+      ? buildTimesheetPayIcon(rowObj)
+      : null;
+
+    if (payIcon) {
+      wrap.appendChild(payIcon);
+    }
 
     if (!arr.length) {
       const ok = document.createElement('span');
@@ -90187,32 +90251,13 @@ function summaryUpdateRowDom(section, id, patchedRow) {
       const hasTs = !!row.timesheet_id;
       const codes = Array.isArray(v) ? v.filter(Boolean) : [];
       if (!hasTs) td.textContent = '';
-      else td.appendChild(renderIssueBadges(codes));
+      else td.appendChild(renderIssueBadges(codes, row));
       return td;
     }
 
     if (section === 'timesheets' && colKey === 'candidate_name') {
       const txt = String((typeof formatDisplayValue === 'function' ? formatDisplayValue(colKey, v) : (v ?? '')) ?? '');
-      const isPaidToCandidate = !!row?.paid_at_utc;
-
-      if (isPaidToCandidate && txt) {
-        const wrap = document.createElement('div');
-        wrap.className = 'cell-right-icon';
-
-        const main = document.createElement('span');
-        main.className = 'cell-main';
-        main.textContent = txt;
-
-        const coin = document.createElement('span');
-        coin.className = 'coin-badge';
-        coin.textContent = '£';
-
-        wrap.appendChild(main);
-        wrap.appendChild(coin);
-        td.appendChild(wrap);
-      } else {
-        td.textContent = txt;
-      }
+      td.textContent = txt;
       return td;
     }
 
@@ -90298,6 +90343,8 @@ function summaryUpdateRowDom(section, id, patchedRow) {
   applyRowStyle();
   return true;
 }
+
+
 
 function summaryInsertRowDom(section, patchedRow) {
   section = String(section || '').trim();
@@ -90648,7 +90695,56 @@ function summaryInsertRowDom(section, patchedRow) {
 
   mutateMembershipCacheOnInsert(stableId);
 
-  const renderIssueBadges = (codes) => {
+  const fmtSummaryMoney = (n) => {
+    const v = Number(n || 0);
+    const safe = Number.isFinite(v) ? v : 0;
+    return `£${Math.abs(safe).toFixed(2)}`;
+  };
+
+  const buildTimesheetPayIcon = (rowObj) => {
+    const payStatus = String(rowObj?.pay_status_code || '').trim().toUpperCase();
+    let iconCode = String(rowObj?.pay_icon_code || '').trim().toUpperCase();
+
+    if (!iconCode || iconCode === 'NONE') {
+      if (payStatus === 'PAID') iconCode = 'COIN';
+      else if (payStatus === 'PARTIALLY_PAID') iconCode = 'HALF_COIN';
+      else if (payStatus === 'PROCESSING' || payStatus === 'ADVANCED') iconCode = 'CLOCK';
+    }
+
+    if (!iconCode || iconCode === 'NONE') return null;
+
+    const badge = document.createElement('span');
+    badge.className = 'coin-badge issue-pay-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    badge.style.marginLeft = '0';
+    badge.style.flex = '0 0 auto';
+    badge.style.alignSelf = 'center';
+
+    if (iconCode === 'CLOCK') {
+      badge.textContent = '◷';
+      badge.title = (payStatus === 'ADVANCED') ? 'Marked for Advance Pay' : 'Payment in progress';
+    } else if (iconCode === 'COIN') {
+      badge.textContent = '£';
+      badge.title = 'Paid';
+    } else if (iconCode === 'HALF_COIN') {
+      badge.textContent = '£';
+      badge.style.background = 'linear-gradient(90deg, #d4af37 0%, #d4af37 50%, #334155 50%, #334155 100%)';
+      badge.style.color = '#ffffff';
+      badge.title = 'Partly paid';
+    } else if (iconCode === 'RED_COIN') {
+      const delta = Number(rowObj?.net_delta_ex_vat || 0);
+      badge.textContent = '£';
+      badge.style.background = 'radial-gradient(circle at 30% 30%, #fecaca 0%, #f87171 35%, #dc2626 60%, #7f1d1d 100%)';
+      badge.style.color = '#ffffff';
+      badge.title = `Overpaid by ${fmtSummaryMoney(delta)} (adjusted)`;
+    } else {
+      return null;
+    }
+
+    return badge;
+  };
+
+  const renderIssueBadges = (codes, rowObj = null) => {
     const wrap = document.createElement('div');
     wrap.className = 'issue-badges';
 
@@ -90676,6 +90772,14 @@ function summaryInsertRowDom(section, patchedRow) {
 
     const rest = arr0.filter((x) => !REF_ALL.has(x));
     const arr = refChosen ? [refChosen, ...rest] : rest;
+
+    const payIcon = (section === 'timesheets' && rowObj)
+      ? buildTimesheetPayIcon(rowObj)
+      : null;
+
+    if (payIcon) {
+      wrap.appendChild(payIcon);
+    }
 
     if (!arr.length) {
       const ok = document.createElement('span');
@@ -90726,32 +90830,13 @@ function summaryInsertRowDom(section, patchedRow) {
       const hasTs = !!row.timesheet_id;
       const codes = Array.isArray(v) ? v.filter(Boolean) : [];
       if (!hasTs) td.textContent = '';
-      else td.appendChild(renderIssueBadges(codes));
+      else td.appendChild(renderIssueBadges(codes, row));
       return td;
     }
 
     if (section === 'timesheets' && colKey === 'candidate_name') {
       const txt = String((typeof formatDisplayValue === 'function' ? formatDisplayValue(colKey, v) : (v ?? '')) ?? '');
-      const isPaidToCandidate = !!row?.paid_at_utc;
-
-      if (isPaidToCandidate && txt) {
-        const wrap = document.createElement('div');
-        wrap.className = 'cell-right-icon';
-
-        const main = document.createElement('span');
-        main.className = 'cell-main';
-        main.textContent = txt;
-
-        const coin = document.createElement('span');
-        coin.className = 'coin-badge';
-        coin.textContent = '£';
-
-        wrap.appendChild(main);
-        wrap.appendChild(coin);
-        td.appendChild(wrap);
-      } else {
-        td.textContent = txt;
-      }
+      td.textContent = txt;
       return td;
     }
 
@@ -90830,7 +90915,12 @@ function summaryInsertRowDom(section, patchedRow) {
         const invIssueStage = String(row?.invoice_issue_stage || '').trim().toUpperCase();
 
         const isFullyInvoiced = (invSegStage === 'FULLY_INVOICED');
-        const isPaidToCandidate = !!row?.paid_at_utc;
+        const payStatus = String(row?.pay_status_code || '').trim().toUpperCase();
+        const isPaidToCandidate =
+          payStatus === 'PAID' ||
+          payStatus === 'PARTIALLY_PAID' ||
+          !!row?.pay_paid_at_utc ||
+          !!row?.paid_at_utc;
         const isInvoiceIssued = (invIssueStage === 'INVOICED_ISSUED');
         const isInvoiceNotIssued = (invIssueStage === 'INVOICED_NOT_ISSUED');
 
@@ -292247,7 +292337,6 @@ async function openTimesheetPaymentSnoozeModal(input = {}) {
   });
 }
 
-
 function wireTimesheetOverviewFinanceActions(rootArg = null) {
   const root = rootArg || document.getElementById('modalBody');
   if (!root) return { ok: false, error: 'modalBody not found' };
@@ -292381,12 +292470,52 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
     window.modalCtx.timesheetDetails.pay_state = ps;
     window.modalCtx.timesheetPayState = ps;
 
-    const status = String(ps.paid_status || '').trim().toUpperCase();
+    const statusRaw = String(ps.paid_status || '').trim().toUpperCase();
+    const allowedStatuses = new Set(['PAID', 'PARTIALLY_PAID', 'PROCESSING', 'ADVANCED', 'UNPAID']);
+    const status = allowedStatuses.has(statusRaw) ? statusRaw : 'UNPAID';
+    const isAdvanced = !!(ps.is_advanced === true || ps.advanced_any === true);
+    const paidAt = ps.paid_at_utc ? String(ps.paid_at_utc).trim() : '';
+    const adjusted = (ps.adjusted && typeof ps.adjusted === 'object') ? ps.adjusted : null;
+    const netDelta = adjusted ? Number(adjusted.net_delta_ex_vat || 0) : null;
+    const consumedByBatchId = ps.advanced_consumed_by_batch_id != null && String(ps.advanced_consumed_by_batch_id).trim()
+      ? String(ps.advanced_consumed_by_batch_id).trim()
+      : null;
+    const consumedAtUtc = ps.advanced_consumed_at_utc != null && String(ps.advanced_consumed_at_utc).trim()
+      ? String(ps.advanced_consumed_at_utc).trim()
+      : null;
+    const advancedBatchStatus = ps.advanced_batch_status != null && String(ps.advanced_batch_status).trim()
+      ? String(ps.advanced_batch_status).trim()
+      : null;
+    const advanceStatus = ps.advance_status != null && String(ps.advance_status).trim()
+      ? String(ps.advance_status).trim()
+      : (isAdvanced ? 'ADVANCED' : 'NOT_ADVANCED');
+
     if (window.modalCtx.data && typeof window.modalCtx.data === 'object') {
-      window.modalCtx.data.pay_status_code = status || window.modalCtx.data.pay_status_code;
+      window.modalCtx.data.pay_status_code = status;
+      window.modalCtx.data.pay_paid_at_utc = paidAt || null;
+
+      if (Number.isFinite(netDelta)) {
+        window.modalCtx.data.net_delta_ex_vat = netDelta;
+      }
+
+      window.modalCtx.data.is_advanced = isAdvanced;
+      window.modalCtx.data.advanced_any = isAdvanced;
+      window.modalCtx.data.advance_status = advanceStatus;
+      window.modalCtx.data.advanced_consumed_by_batch_id = consumedByBatchId;
+      window.modalCtx.data.advanced_consumed_at_utc = consumedAtUtc;
+      window.modalCtx.data.advanced_batch_status = advancedBatchStatus;
+
+      if (!isAdvanced) {
+        window.modalCtx.data.advanced_override_id = null;
+        window.modalCtx.data.advance_override_id = null;
+        window.modalCtx.data.timesheet_payment_override_id = null;
+        window.modalCtx.data.payment_override_id = null;
+      }
+
       if (status === 'PAID') window.modalCtx.data.pay_icon_code = 'COIN';
       else if (status === 'PARTIALLY_PAID') window.modalCtx.data.pay_icon_code = 'HALF_COIN';
-      else if (status === 'PROCESSING' || ps.is_advanced) window.modalCtx.data.pay_icon_code = 'CLOCK';
+      else if (status === 'PROCESSING' || status === 'ADVANCED' || isAdvanced) window.modalCtx.data.pay_icon_code = 'CLOCK';
+      else window.modalCtx.data.pay_icon_code = 'NONE';
     }
   };
 
@@ -292709,6 +292838,7 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
 
   return { ok: true };
 }
+
 
 function renderTimesheetOverviewTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OVERVIEW]');
@@ -293185,27 +293315,11 @@ function renderTimesheetOverviewTab(ctx) {
   const showAdvancePaymentAction =
     !!tsId &&
     hasTsfin &&
-    !isAdjustment &&
-    !importAuthoritative &&
-    !locked &&
-    !payStateIsAdvanced &&
-    !isEffectivelyPaid &&
-    !isEffectivelyPartPaid &&
-    !isEffectivelyProcessing &&
-    (
-      backendCanAdvancePayment ||
-      (!payStateOk && !isPaid)
-    );
+    backendCanAdvancePayment;
 
   const showUnadvancePaymentAction =
     !!tsId &&
     hasTsfin &&
-    !locked &&
-    payStateIsAdvanced &&
-    payStateCanUnadvance &&
-    !isEffectivelyPaid &&
-    !isEffectivelyPartPaid &&
-    !isEffectivelyProcessing &&
     backendCanUnadvancePayment;
 
   const showSnoozePaymentAction =
@@ -293327,7 +293441,7 @@ function renderTimesheetOverviewTab(ctx) {
   if (payState && typeof payState === 'object' && payState.ok === true) {
     if (payStateIsAdvanced) {
       addStage(
-        'ADVANCED',
+        'Advanced',
         'pill-warn',
         payStateAdvancedConsumedByBatchId
           ? `This Advance Pay marker has already been consumed by pay batch ${payStateAdvancedConsumedByBatchId}.`
@@ -293337,7 +293451,7 @@ function renderTimesheetOverviewTab(ctx) {
 
     if (payStatePaidStatus === 'PAID') {
       addStage(
-        'PAID',
+        'Paid',
         'pill-ok',
         payStatePaidAtLabelUk
           ? `Paid at ${payStatePaidAtLabelUk}.`
@@ -293347,7 +293461,7 @@ function renderTimesheetOverviewTab(ctx) {
       const paidParts = Number(payCounts.paid_components || 0);
       const payableParts = Number(payCounts.payable_components || 0);
       addStage(
-        'PARTIALLY PAID',
+        'Partly Paid',
         'pill-warn',
         (payStatePaidAtLabelUk
           ? `Last paid at ${payStatePaidAtLabelUk}. `
@@ -293358,10 +293472,10 @@ function renderTimesheetOverviewTab(ctx) {
       );
     }
 
-    if (payStateProcessingAny) {
+    if (payStateProcessingAny || payStatePaidStatus === 'PROCESSING') {
       const processingParts = Number(payCounts.processing_components || 0);
       addStage(
-        'PROCESSING',
+        'Payment in progress',
         'pill-info',
         processingParts > 0
           ? `${processingParts} component(s) are currently in payment processing.`
@@ -293467,7 +293581,7 @@ function renderTimesheetOverviewTab(ctx) {
   if (invoicePaid) {
     addStage('Invoice Paid', 'pill-ok', 'This timesheet is on an invoice that has been marked as paid.');
   } else {
-    if (isPaid) addStage('Paid', 'pill-ok', 'This timesheet has been marked as paid.');
+    if (isPaid && !payStateOk) addStage('Paid', 'pill-ok', 'This timesheet has been marked as paid.');
 
     if (isInvoiced) {
       if (hasLockedInvoiceStatus) {
@@ -293778,10 +293892,10 @@ function renderTimesheetOverviewTab(ctx) {
     if (!payStateOk || !tsId) return '';
 
     const paidStatusLabel =
-      (payStatePaidStatus === 'PAID') ? 'PAID' :
-      (payStatePaidStatus === 'PARTIALLY_PAID') ? 'PARTIALLY PAID' :
-      (payStatePaidStatus === 'PROCESSING') ? 'PROCESSING' :
-      'UNPAID';
+      (payStatePaidStatus === 'PAID') ? 'Paid' :
+      (payStatePaidStatus === 'PARTIALLY_PAID') ? 'Partly Paid' :
+      (payStatePaidStatus === 'PROCESSING') ? 'Payment in progress' :
+      'Unpaid';
 
     const adjustedLabel =
       (payAdjustedPill === 'PAY_OUTSTANDING') ? 'PAY_OUTSTANDING' :
@@ -293890,9 +294004,9 @@ function renderTimesheetOverviewTab(ctx) {
           class="pill pill-info"
           style="${badgeBtnStyle}"
           data-ts-action="advance-payment"
-          title="${enc('Mark this timesheet for Advance Pay in the next eligible pay run.')}"
+          title="${enc('Only the outstanding unpaid difference will be advanced.')}"
         >
-          Advance Pay
+          Advance outstanding adjustment
         </button>
       `
       : '';
@@ -293932,9 +294046,9 @@ function renderTimesheetOverviewTab(ctx) {
           <div class="controls" style="display:flex;flex-direction:column;gap:8px;">
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
               <span class="pill ${paidCls}" style="font-weight:600;" title="${enc(paidTitle)}">${enc(paidStatusLabel)}</span>
-              ${payStateIsAdvanced ? `<span class="pill ${advancedCls}" style="font-weight:600;" title="${enc(advancedTitle)}">${enc('ADVANCED')}</span>` : ''}
+              ${payStateIsAdvanced ? `<span class="pill ${advancedCls}" style="font-weight:600;" title="${enc(advancedTitle)}">${enc('Advanced')}</span>` : ''}
               ${payStateIsSnoozed ? `<span class="pill ${snoozedCls}" style="font-weight:600;" title="${enc(snoozedTitle)}">${enc('SNOOZED')}</span>` : ''}
-              ${payStateProcessingAny ? `<span class="pill ${processingCls}" style="font-weight:600;" title="${enc(processingTitle)}">${enc('PROCESSING')}</span>` : ''}
+              ${payStateProcessingAny ? `<span class="pill ${processingCls}" style="font-weight:600;" title="${enc(processingTitle)}">${enc('Payment in progress')}</span>` : ''}
               ${adjustedLabel ? `<span class="pill ${adjustedCls}" style="font-weight:600;" title="${enc(adjustedTitle)}">${enc(adjustedLabel)}</span>` : ''}
             </div>
             ${paidAtMini}
@@ -294265,7 +294379,6 @@ function renderTimesheetOverviewTab(ctx) {
     </div>
   `;
 }
-
 
 
 async function handleHrRotaFileDrop(file) {
