@@ -39676,7 +39676,6 @@ async function openBankingFinanceCaseAuditModal(seed = {}) {
   );
 }
 
-
 function renderPayNewBatchWizard() {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -41540,12 +41539,83 @@ function renderPayNewBatchWizard() {
     return trimStr(identity?.[key] || obj?.[key] || '');
   };
 
-  const getLinePresentationSection = (obj) => upperTrim(obj?.presentation_section || '');
+  const getNestedLinePayload = (obj) => isPlainObject(obj?.row_json)
+    ? obj.row_json
+    : (isPlainObject(obj?.rowJson) ? obj.rowJson : {});
+
+  const firstPresentPreviewValue = (...values) => {
+    for (const value of values) {
+      if (value === undefined || value === null) continue;
+      if (typeof value === 'string' && !trimStr(value)) continue;
+      return value;
+    }
+    return undefined;
+  };
+
+  const firstFinitePreviewNumber = (...values) => {
+    for (const value of values) {
+      if (value === undefined || value === null) continue;
+      if (typeof value === 'string' && !trimStr(value)) continue;
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  };
+
+  const getLinePresentationSection = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    return upperTrim(obj?.presentation_section || obj?.presentationSection || nested?.presentation_section || nested?.presentationSection || '');
+  };
+
+  const isPreviewChildRow = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    return upperTrim(obj?.presentation_role || obj?.presentationRole || nested?.presentation_role || nested?.presentationRole || '') === 'CHILD';
+  };
+
+  const getLineRowLevelAmount = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    return firstPresentPreviewValue(
+      obj?.amount_display,
+      obj?.amountDisplay,
+      nested?.amount_display,
+      nested?.amountDisplay,
+      obj?.amount_ex_vat,
+      obj?.amountExVat,
+      nested?.amount_ex_vat,
+      nested?.amountExVat,
+      obj?.preview_amount_ex_vat,
+      obj?.previewAmountExVat,
+      nested?.preview_amount_ex_vat,
+      nested?.previewAmountExVat,
+      obj?.ready_preview_amount_ex_vat,
+      obj?.readyPreviewAmountExVat,
+      nested?.ready_preview_amount_ex_vat,
+      nested?.readyPreviewAmountExVat,
+      obj?.component_amount_ex_vat,
+      obj?.componentAmountExVat,
+      nested?.component_amount_ex_vat,
+      nested?.componentAmountExVat
+    );
+  };
+
   const getLineSectionAmount = (obj) => {
-    if (obj?.section_amount_display != null) return obj.section_amount_display;
-    if (obj?.section_amount_ex_vat != null) return obj.section_amount_ex_vat;
-    if (obj?.amount_display != null) return obj.amount_display;
-    return obj?.amount_ex_vat;
+    const nested = getNestedLinePayload(obj);
+    if (isPreviewChildRow(obj)) return getLineRowLevelAmount(obj);
+    return firstPresentPreviewValue(
+      obj?.section_amount_display,
+      obj?.sectionAmountDisplay,
+      nested?.section_amount_display,
+      nested?.sectionAmountDisplay,
+      obj?.section_amount_ex_vat,
+      obj?.sectionAmountExVat,
+      nested?.section_amount_ex_vat,
+      nested?.sectionAmountExVat,
+      obj?.section_non_segment_amount_ex_vat,
+      obj?.sectionNonSegmentAmountExVat,
+      nested?.section_non_segment_amount_ex_vat,
+      nested?.sectionNonSegmentAmountExVat,
+      getLineRowLevelAmount(obj)
+    );
   };
 
   const getLineSectionSegmentRows = (obj) => {
@@ -41803,6 +41873,329 @@ function renderPayNewBatchWizard() {
     `;
   };
 
+  const getLineSourceBasisJson = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    if (isPlainObject(obj?.source_basis_json)) return obj.source_basis_json;
+    if (isPlainObject(obj?.sourceBasisJson)) return obj.sourceBasisJson;
+    if (isPlainObject(nested?.source_basis_json)) return nested.source_basis_json;
+    if (isPlainObject(nested?.sourceBasisJson)) return nested.sourceBasisJson;
+    return {};
+  };
+
+  const getLineCaseComponents = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    return [
+      ...asArray(obj?.case_components),
+      ...asArray(obj?.caseComponents),
+      ...asArray(nested?.case_components),
+      ...asArray(nested?.caseComponents)
+    ].filter((component) => isPlainObject(component));
+  };
+
+  const expenseInternalCodes = new Set([
+    'EXPENSE_DELTA',
+    'SEGMENT_DELTA',
+    'TS_TOTAL',
+    'TS_DAY',
+    'EXPENSE_CODE',
+    'SOURCE_REF',
+    'COMPONENT_KEY_TYPE',
+    'FROZEN_COMPONENT_KEY_VALUE',
+    'REIMBURSEMENT_GROSS_FIXED',
+    'POLICY_X_AUTHORITY_SCOPE',
+    'SOURCE_FAMILY_KEY',
+    'COMPONENT_KEY_VALUE',
+    'CASE_RESOLUTION_SUMMARY'
+  ]);
+
+  const normaliseExpenseCode = (value) => upperTrim(value || '').replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+  const getLineKeyType = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    const economicKey = isPlainObject(obj?.economic_key) ? obj.economic_key : (isPlainObject(obj?.economicKey) ? obj.economicKey : {});
+    return upperTrim(
+      obj?.key_type ||
+      obj?.keyType ||
+      economicKey?.key_type ||
+      economicKey?.keyType ||
+      nested?.key_type ||
+      nested?.keyType ||
+      ''
+    );
+  };
+
+  const getLineKeyValue = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    const economicKey = isPlainObject(obj?.economic_key) ? obj.economic_key : (isPlainObject(obj?.economicKey) ? obj.economicKey : {});
+    return trimStr(
+      obj?.key_value ||
+      obj?.keyValue ||
+      economicKey?.key_value ||
+      economicKey?.keyValue ||
+      nested?.key_value ||
+      nested?.keyValue ||
+      ''
+    );
+  };
+
+  const getLineComponentKeyType = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    return upperTrim(
+      obj?.component_key_type ||
+      obj?.componentKeyType ||
+      nested?.component_key_type ||
+      nested?.componentKeyType ||
+      obj?.frozen_component_key_type ||
+      obj?.frozenComponentKeyType ||
+      nested?.frozen_component_key_type ||
+      nested?.frozenComponentKeyType ||
+      ''
+    );
+  };
+
+  const getLineComponentKeyValue = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    return trimStr(
+      obj?.component_key_value ||
+      obj?.componentKeyValue ||
+      nested?.component_key_value ||
+      nested?.componentKeyValue ||
+      obj?.frozen_component_key_value ||
+      obj?.frozenComponentKeyValue ||
+      nested?.frozen_component_key_value ||
+      nested?.frozenComponentKeyValue ||
+      ''
+    );
+  };
+
+  const getLineItemType = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    return upperTrim(obj?.item_type || obj?.itemType || nested?.item_type || nested?.itemType || '');
+  };
+
+  const getLineExpenseCode = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    const sourceBasis = getLineSourceBasisJson(obj);
+    const keyType = getLineKeyType(obj);
+    const componentKeyType = getLineComponentKeyType(obj);
+    const itemType = getLineItemType(obj);
+
+    if (keyType === 'EXPENSE_CODE') return normaliseExpenseCode(getLineKeyValue(obj));
+    if (componentKeyType === 'EXPENSE_CODE') return normaliseExpenseCode(getLineComponentKeyValue(obj));
+    if (sourceBasis?.expense_code != null || sourceBasis?.expenseCode != null) return normaliseExpenseCode(sourceBasis.expense_code ?? sourceBasis.expenseCode);
+    if (obj?.expense_code != null || obj?.expenseCode != null || nested?.expense_code != null || nested?.expenseCode != null) {
+      return normaliseExpenseCode(obj?.expense_code ?? obj?.expenseCode ?? nested?.expense_code ?? nested?.expenseCode);
+    }
+    for (const component of getLineCaseComponents(obj)) {
+      const componentType = upperTrim(component?.component_key_type || component?.componentKeyType || component?.key_type || component?.keyType || '');
+      if (componentType === 'EXPENSE_CODE') return normaliseExpenseCode(component?.component_key_value ?? component?.componentKeyValue ?? component?.key_value ?? component?.keyValue ?? '');
+    }
+    if (itemType === 'MILEAGE_DELTA') return 'MILEAGE';
+    return '';
+  };
+
+  const isExpenseComponentLine = (obj) => {
+    const sourceBasis = getLineSourceBasisJson(obj);
+    const itemType = getLineItemType(obj);
+    return !!(
+      getLineKeyType(obj) === 'EXPENSE_CODE' ||
+      getLineComponentKeyType(obj) === 'EXPENSE_CODE' ||
+      sourceBasis?.expense_code != null ||
+      sourceBasis?.expenseCode != null ||
+      obj?.expense_code != null ||
+      obj?.expenseCode != null ||
+      getLineExpenseCode(obj) ||
+      itemType === 'EXPENSE_DELTA' ||
+      itemType === 'MILEAGE_DELTA'
+    );
+  };
+
+  const getFriendlyExpenseLabel = (rawCode) => {
+    const code = normaliseExpenseCode(rawCode);
+    if (code === 'ACCOMMODATION') return 'Accommodation';
+    if (code === 'TRAVEL') return 'Travel';
+    if (code === 'MILEAGE') return 'Mileage';
+    if (!code || code === 'OTHER' || code === 'OTHER_EXPENSE' || code === 'EXPENSE') return 'Other Expense';
+    if (expenseInternalCodes.has(code) || code.startsWith('POLICY_X') || code.includes('SOURCE_') || code.includes('COMPONENT_') || code.includes('FROZEN_')) return 'Other Expense';
+    const cleaned = code
+      .toLowerCase()
+      .split('_')
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+    return cleaned && cleaned.length <= 40 ? cleaned : 'Other Expense';
+  };
+
+  const getExpenseComponentFriendlyLabel = (obj) => isExpenseComponentLine(obj) ? getFriendlyExpenseLabel(getLineExpenseCode(obj)) : '';
+
+  const getLineCandidateId = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    return trimStr(obj?.candidate_id || obj?.candidateId || nested?.candidate_id || nested?.candidateId || '');
+  };
+
+  const getLineTimesheetId = (obj) => {
+    const nested = getNestedLinePayload(obj);
+    const economicKey = isPlainObject(obj?.economic_key) ? obj.economic_key : (isPlainObject(obj?.economicKey) ? obj.economicKey : {});
+    return trimStr(
+      obj?.timesheet_id ||
+      obj?.timesheetId ||
+      obj?.linked_timesheet_id ||
+      obj?.linkedTimesheetId ||
+      economicKey?.timesheet_id ||
+      economicKey?.timesheetId ||
+      nested?.timesheet_id ||
+      nested?.timesheetId ||
+      nested?.linked_timesheet_id ||
+      nested?.linkedTimesheetId ||
+      ''
+    );
+  };
+
+  const getExpenseBreakdownRowIdentity = (obj, fallbackIndex = 0) => {
+    const nested = getNestedLinePayload(obj);
+    return trimStr(
+      getPreviewRowId(obj) ||
+      obj?.row_key ||
+      obj?.rowKey ||
+      obj?.line_key ||
+      obj?.lineKey ||
+      nested?.row_key ||
+      nested?.rowKey ||
+      nested?.line_key ||
+      nested?.lineKey ||
+      [getLineTimesheetId(obj), getLineKeyType(obj), getLineKeyValue(obj), String(fallbackIndex)].join('|')
+    );
+  };
+
+  const sameExpenseBreakdownScope = (candidate, parentLine) => {
+    const parentTimesheetId = getLineTimesheetId(parentLine);
+    const candidateTimesheetId = getLineTimesheetId(candidate);
+    if (parentTimesheetId && candidateTimesheetId && parentTimesheetId !== candidateTimesheetId) return false;
+    if (parentTimesheetId && !candidateTimesheetId) return false;
+
+    const parentCandidateId = getLineCandidateId(parentLine);
+    const candidateId = getLineCandidateId(candidate);
+    if (parentCandidateId && candidateId && parentCandidateId !== candidateId) return false;
+
+    const parentSection = getLinePresentationSection(parentLine);
+    const candidateSection = getLinePresentationSection(candidate);
+    if (parentSection && candidateSection && parentSection !== candidateSection) return false;
+
+    return true;
+  };
+
+  const getLoadedExpenseComponentRows = (parentLine) => {
+    if (!isPlainObject(parentLine)) return [];
+    const parentTimesheetId = getLineTimesheetId(parentLine);
+    const candidates = parentTimesheetId
+      ? [
+          parentLine,
+          ...asArray(readyPreviewLines),
+          ...asArray(canonicalPreviewLines),
+          ...asArray(blockedPreviewLines)
+        ]
+      : [parentLine];
+    const out = [];
+    const seen = new Set();
+    candidates.forEach((candidate, index) => {
+      if (!isPlainObject(candidate)) return;
+      if (!sameExpenseBreakdownScope(candidate, parentLine)) return;
+      if (!isExpenseComponentLine(candidate)) return;
+      const identity = getExpenseBreakdownRowIdentity(candidate, index);
+      if (!identity || seen.has(identity)) return;
+      seen.add(identity);
+      out.push(candidate);
+    });
+    return out.sort((a, b) => {
+      const aOrdinal = firstFinitePreviewNumber(a?.row_ordinal, a?.rowOrdinal, a?.component_ordinal, a?.componentOrdinal, getNestedLinePayload(a)?.row_ordinal, getNestedLinePayload(a)?.rowOrdinal);
+      const bOrdinal = firstFinitePreviewNumber(b?.row_ordinal, b?.rowOrdinal, b?.component_ordinal, b?.componentOrdinal, getNestedLinePayload(b)?.row_ordinal, getNestedLinePayload(b)?.rowOrdinal);
+      if (aOrdinal !== null && bOrdinal !== null && aOrdinal !== bOrdinal) return aOrdinal - bOrdinal;
+      return String(getExpenseBreakdownRowIdentity(a)).localeCompare(String(getExpenseBreakdownRowIdentity(b)));
+    });
+  };
+
+  const getExpenseClampContextText = (row, label) => {
+    const nested = getNestedLinePayload(row);
+    const sourceBasis = getLineSourceBasisJson(row);
+    const clamped = asBool(row?.pay_outstanding_clamped ?? row?.payOutstandingClamped ?? nested?.pay_outstanding_clamped ?? nested?.payOutstandingClamped ?? row?.case_resolution_summary?.pay_outstanding_clamped ?? nested?.case_resolution_summary?.pay_outstanding_clamped);
+    if (!clamped) return '';
+
+    const original = firstFinitePreviewNumber(
+      row?.pay_outstanding_original_amount_ex_vat,
+      row?.payOutstandingOriginalAmountExVat,
+      nested?.pay_outstanding_original_amount_ex_vat,
+      nested?.payOutstandingOriginalAmountExVat,
+      row?.case_resolution_summary?.pay_outstanding_original_amount_ex_vat,
+      nested?.case_resolution_summary?.pay_outstanding_original_amount_ex_vat,
+      sourceBasis?.original_source_pay_ex_vat,
+      sourceBasis?.originalSourcePayExVat
+    );
+    const remaining = firstFinitePreviewNumber(
+      row?.pay_outstanding_clamped_amount_ex_vat,
+      row?.payOutstandingClampedAmountExVat,
+      row?.pay_outstanding_available_ex_vat,
+      row?.payOutstandingAvailableExVat,
+      nested?.pay_outstanding_clamped_amount_ex_vat,
+      nested?.payOutstandingClampedAmountExVat,
+      nested?.pay_outstanding_available_ex_vat,
+      nested?.payOutstandingAvailableExVat,
+      row?.case_resolution_summary?.pay_outstanding_clamped_amount_ex_vat,
+      nested?.case_resolution_summary?.pay_outstanding_clamped_amount_ex_vat,
+      getLineRowLevelAmount(row)
+    );
+    const accounted = (original !== null && remaining !== null) ? Math.max(0, Math.round((original - remaining) * 100) / 100) : null;
+    const labelText = trimStr(label).toLowerCase() || 'expense';
+    const parts = [];
+    if (original !== null) parts.push(`Original ${labelText} amount: ${fmtMoney(original)}`);
+    if (accounted !== null && accounted > 0) parts.push(`Already accounted for in previous batches: ${fmtMoney(accounted)}`);
+    if (remaining !== null) parts.push(`Remaining to pay: ${fmtMoney(remaining)}`);
+    return parts.join(' • ');
+  };
+
+  const renderExpenseComponentBreakdown = (parentLine) => {
+    const expenseRows = getLoadedExpenseComponentRows(parentLine);
+    if (!expenseRows.length) return '';
+
+    const summaryText = expenseRows.length > 1
+      ? `Show expense breakdown (${expenseRows.length})`
+      : 'Show expense component';
+    const explanation = expenseRows.length > 1
+      ? 'This timesheet has separate payable expense components. Each visible line remains a separate selected payment row.'
+      : 'This visible line is a separate payable expense component.';
+
+    return `
+      <details style="margin-top:8px;">
+        <summary class="mini" style="cursor:pointer; user-select:none;">${enc(summaryText)}</summary>
+        <div class="mini" style="margin-top:8px; opacity:.85;">${enc(explanation)}</div>
+        <div style="margin-top:8px; overflow:auto; border:1px solid var(--line); border-radius:10px;">
+          <table class="grid" style="min-width:720px; table-layout:auto;">
+            <thead>
+              <tr>
+                <th>Expense</th>
+                <th style="text-align:right; white-space:nowrap;">Pay amount</th>
+                <th>Context</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${expenseRows.map((row) => {
+                const label = getExpenseComponentFriendlyLabel(row) || 'Other Expense';
+                const rowAmount = getLineRowLevelAmount(row);
+                const clampText = getExpenseClampContextText(row, label);
+                return `
+                  <tr>
+                    <td class="mini">${enc(label)}</td>
+                    <td class="mono" style="text-align:right; white-space:nowrap;">${enc(fmtMoney(rowAmount))}</td>
+                    <td class="mini">${clampText ? enc(clampText) : '—'}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    `;
+  };
+
   const renderTimesheetParentRows = (lines) => {
     return lines.map((line) => {
       const amount = getLineSectionAmount(line);
@@ -41845,7 +42238,11 @@ function renderPayNewBatchWizard() {
         ? renderCaseActionButtons(line.__case_entry)
         : '';
       const combinedActionHtml = [caseActionHtml, blockedUi.extraActionHtml, wholeActionHtml].filter(Boolean).join(' ');
-      const detailRowHtml = blockedUi.showSegmentDetail ? renderTimesheetSegmentRows(line) : '';
+      const expenseComponentLabel = getExpenseComponentFriendlyLabel(line);
+      const detailRowHtml = [
+        blockedUi.showSegmentDetail ? renderTimesheetSegmentRows(line) : '',
+        renderExpenseComponentBreakdown(line)
+      ].filter(Boolean).join('');
       const advisory = getParentSectionAdvisory(line);
       const segmentCount = getLineSectionSegmentCount(line);
       const statePillClass = section === 'BLOCKED_FOR_PAY'
@@ -41886,6 +42283,7 @@ function renderPayNewBatchWizard() {
               <span class="mono">${enc(tmsRef || '')}</span>
               <span>${enc(displayName)}</span>
               ${renderCandidateWorkbenchIndicators(candidateId)}
+              ${expenseComponentLabel ? `<span class="mini" style="opacity:.75;">${enc(expenseComponentLabel)}</span>` : ''}
               ${segmentCount ? `<span class="mini" style="opacity:.75;">${enc(String(segmentCount))} segment(s)</span>` : ''}
             </div>
           </td>
@@ -41926,6 +42324,8 @@ function renderPayNewBatchWizard() {
         ? renderCaseActionButtons(line.__case_entry)
         : '';
       const combinedActionHtml = [caseActionHtml, blockedUi.extraActionHtml, actionHtml].filter(Boolean).join(' ');
+      const expenseComponentLabel = getExpenseComponentFriendlyLabel(line);
+      const detailRowHtml = renderExpenseComponentBreakdown(line);
       const info = getSnoozeInfo(line);
       const stateLabel = stateLabelOverride || (
         section === 'BLOCKED_FOR_PAY'
@@ -41972,6 +42372,7 @@ function renderPayNewBatchWizard() {
               <span class="mono">${enc(tmsRef || '')}</span>
               <span>${enc(displayName)}</span>
               ${renderCandidateWorkbenchIndicators(candidateId)}
+              ${expenseComponentLabel ? `<span class="mini" style="opacity:.75;">${enc(expenseComponentLabel)}</span>` : ''}
             </div>
           </td>
           <td class="mini">${enc(client)}</td>
@@ -41986,6 +42387,11 @@ function renderPayNewBatchWizard() {
           </td>
           <td style="white-space:nowrap;">${combinedActionHtml ? `<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;">${combinedActionHtml}</div>` : `<span class="mini" style="opacity:.7;">—</span>`}</td>
         </tr>
+        ${detailRowHtml ? `
+          <tr>
+            <td colspan="8" style="padding-top:0;">${detailRowHtml}</td>
+          </tr>
+        ` : ''}
       `;
     }).join('');
   };
@@ -42899,12 +43305,7 @@ function renderPayNewBatchWizard() {
     const buildOverlayedDisplayEntry = (entry, line) => {
       const displayEntry = deep(entry);
       const previewLine = isPlainObject(line) ? line : {};
-      const lineAmount = firstDefinedValue(
-        previewLine.section_amount_display,
-        previewLine.section_amount_ex_vat,
-        previewLine.amount_display,
-        previewLine.amount_ex_vat
-      );
+      const lineAmount = getLineSectionAmount(previewLine);
       const candidateDisplayName = trimStr(firstNonBlankString(previewLine.display_name, displayEntry.candidate_display_name));
       const candidateTmsRef = trimStr(firstNonBlankString(previewLine.tms_ref, displayEntry.candidate_tms_ref));
       const clientName = trimStr(firstNonBlankString(previewLine.client_name, previewLine.raw_case?.client_name, displayEntry.client_name, displayEntry.raw_case?.client_name));
@@ -43751,6 +44152,8 @@ function renderPayNewBatchWizard() {
     </div>
   `;
 }
+
+
 
 
 
