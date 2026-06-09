@@ -47280,8 +47280,8 @@ function refreshBankingNavAttentionFromCachedRows() {
 
 
 
-
 function renderPayBatchListPanel() {
+  try { installBankingPayBatchTimesheetSummaryShortcut(); } catch {}
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -48994,6 +48994,27 @@ function renderPayBatchListPanel() {
             `
             : `<span class="mini" style="opacity:.65;">—</span>`;
 
+    const batchTimesheetsBtn = id
+      ? `
+        <button
+          type="button"
+          class="btn btn-sm btn-outline"
+          data-action="banking:pay:viewBatchTimesheets"
+          data-batch-id="${enc(id)}"
+          aria-label="Show timesheets linked to this pay batch"
+          title="Show linked timesheets in the Timesheets summary without closing this modal"
+          style="font-weight:800;min-width:34px;padding-left:8px;padding-right:8px;"
+        >🗒️</button>
+      `
+      : '';
+
+    const batchActionsHtml = `
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        ${batchTimesheetsBtn}
+        ${deleteDraftBtn}
+      </div>
+    `;
+
     return `
       <tr
         ${isActive ? 'class="active"' : ''}
@@ -49009,7 +49030,7 @@ function renderPayBatchListPanel() {
         <td><span class="pill ${enc(blockedFundsRow ? 'pill-warn' : pillClass)}">${enc(displayStatus)}</span>${authPill}${issuePillsHtml}${blockedFundsReason ? `<div class="mini" style="margin-top:4px;color:#991b1b;font-weight:700;">${enc(blockedFundsReason)}</div>` : ''}${lastFundsChecked && blockedFundsRow ? `<div class="mini" style="margin-top:2px;opacity:.82;">Last funds checked ${enc(lastFundsChecked)}</div>` : ''}</td>
         <td class="mini">${enc((prov || '—') + (env ? `/${env}` : ''))}</td>
         <td class="mini">${enc(created || '')}</td>
-        <td style="white-space:nowrap;">${deleteDraftBtn}</td>
+        <td style="white-space:nowrap;">${batchActionsHtml}</td>
       </tr>
     `;
   }).join('');
@@ -49072,7 +49093,7 @@ function renderPayBatchListPanel() {
                   <th>Status</th>
                   <th>Rail</th>
                   <th>Created</th>
-                  <th style="width:190px;">Actions</th>
+                  <th style="width:240px;">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -49129,6 +49150,1136 @@ function renderPayBatchListPanel() {
       </div>
     </div>
   `;
+}
+
+
+
+function normaliseActiveDraftCreateOperationLookupResponse(responsePayload = {}, options = {}) {
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const upperTrim = (value) => trimStr(value).toUpperCase();
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const readBool = (value, fallback = false) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (value === null || value === undefined) return fallback;
+    const text = trimStr(value).toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return fallback;
+  };
+  const unwrap = (value) => {
+    let payload = value;
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        if (Array.isArray(payload) && payload.length === 1 && isPlainObject(payload[0])) {
+          payload = payload[0];
+          continue;
+        }
+        if (!isPlainObject(payload)) break;
+        if (isPlainObject(payload.banking_pay_operation_find_active_draft_create)) {
+          payload = payload.banking_pay_operation_find_active_draft_create;
+          continue;
+        }
+        if (isPlainObject(payload.data) && (isPlainObject(payload.data.operation) || isPlainObject(payload.data.active_draft_create_operation) || isPlainObject(payload.data.activeDraftCreateOperation))) {
+          payload = payload.data;
+          continue;
+        }
+        break;
+      }
+    } catch {}
+    return isPlainObject(payload) ? payload : {};
+  };
+  const firstPlainObject = function () {
+    for (let index = 0; index < arguments.length; index += 1) {
+      const value = arguments[index];
+      if (isPlainObject(value)) return value;
+    }
+    return null;
+  };
+  const activeDraftCreateStatuses = new Set(['RUNNING', 'CONTINUING', 'WAITING_RETRY']);
+  const terminalDraftCreateStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW']);
+  const isTerminalDraftCreateStatus = (statusValue, payload = {}) => {
+    const status = upperTrim(statusValue || payload.status || payload.operation_status || payload.operationStatus || payload.state || '');
+    return readBool(payload.terminal, false) || readBool(payload.is_terminal, false) || terminalDraftCreateStatuses.has(status) || readBool(payload.review_required, false) || readBool(payload.reviewRequired, false);
+  };
+
+  const root = unwrap(responsePayload);
+  const opts = isPlainObject(options) ? options : {};
+  const allowRecentTerminal = readBool(opts.allow_recent_terminal ?? opts.allowRecentTerminal ?? opts.include_recent_terminal ?? opts.includeRecentTerminal ?? opts.diagnostic ?? opts.diagnostic_mode ?? opts.diagnosticMode, false);
+  const operationSource = firstPlainObject(
+    root.operation,
+    root.active_draft_create_operation,
+    root.activeDraftCreateOperation,
+    root.draft_create_operation,
+    root.draftCreateOperation,
+    root.operation_json,
+    root.operationJson,
+    root.result && root.result.operation,
+    root.result && root.result.active_draft_create_operation,
+    root.progress && root.progress.operation,
+    root.progress && root.progress.active_draft_create_operation,
+    root
+  );
+
+  const operationId = trimStr(operationSource && (operationSource.operation_id || operationSource.operationId || operationSource.id || root.operation_id || root.operationId || root.id));
+  const foundFlag = readBool(root.found ?? root.operation_found ?? root.operationFound, !!operationId);
+  if (!foundFlag || !operationId) return null;
+
+  const normalisedBase = (typeof normaliseBankingPayOperationProgress === 'function')
+    ? normaliseBankingPayOperationProgress(operationSource)
+    : Object.assign({}, operationSource);
+  const normalised = isPlainObject(normalisedBase) ? Object.assign({}, operationSource, normalisedBase) : Object.assign({}, operationSource);
+
+  normalised.operation_id = trimStr(normalised.operation_id || normalised.operationId || operationId) || operationId;
+  normalised.id = trimStr(normalised.id || normalised.operation_id) || normalised.operation_id;
+  normalised.operationId = normalised.operation_id;
+  normalised.operation_type = upperTrim(normalised.operation_type || normalised.operationType || 'DRAFT_CREATE') || 'DRAFT_CREATE';
+  normalised.operationType = normalised.operation_type;
+
+  if (normalised.operation_type !== 'DRAFT_CREATE') return null;
+
+  normalised.workbench_session_id = trimStr(
+    normalised.workbench_session_id ||
+    normalised.workbenchSessionId ||
+    root.workbench_session_id ||
+    root.workbenchSessionId ||
+    opts.workbench_session_id ||
+    opts.workbenchSessionId ||
+    opts.session_id ||
+    opts.sessionId
+  ) || null;
+  normalised.workbenchSessionId = normalised.workbench_session_id;
+
+  if (!Object.prototype.hasOwnProperty.call(normalised, 'backend_runner_owned')) {
+    normalised.backend_runner_owned = readBool(normalised.backendRunnerOwned, true);
+  }
+  normalised.backendRunnerOwned = normalised.backend_runner_owned;
+
+  if (!Object.prototype.hasOwnProperty.call(normalised, 'frontend_completion_required')) {
+    normalised.frontend_completion_required = readBool(normalised.frontendCompletionRequired, false);
+  }
+  normalised.frontendCompletionRequired = normalised.frontend_completion_required;
+
+  const status = upperTrim(normalised.status || normalised.operation_status || normalised.operationStatus || normalised.state || '');
+  const terminal = isTerminalDraftCreateStatus(status, normalised);
+  const active = activeDraftCreateStatuses.has(status) && terminal !== true && readBool(normalised.requires_user_action, false) !== true && readBool(normalised.requiresUserAction, false) !== true;
+
+  normalised.found = true;
+  normalised.lookup_found = true;
+  normalised.lookupFound = true;
+  normalised.lookup_raw_payload = root;
+  normalised.lookupRawPayload = root;
+
+  if (terminal) {
+    if (!allowRecentTerminal) return null;
+    normalised.active_draft_create_operation = false;
+    normalised.activeDraftCreateOperation = false;
+    normalised.recent_terminal_draft_create_operation = true;
+    normalised.recentTerminalDraftCreateOperation = true;
+    normalised.terminal = true;
+    normalised.lookup_terminal = true;
+    normalised.lookupTerminal = true;
+    return normalised;
+  }
+
+  if (!active) return null;
+
+  normalised.active_draft_create_operation = true;
+  normalised.activeDraftCreateOperation = true;
+  normalised.recent_terminal_draft_create_operation = false;
+  normalised.recentTerminalDraftCreateOperation = false;
+  normalised.terminal = false;
+  normalised.lookup_terminal = false;
+  normalised.lookupTerminal = false;
+
+  return normalised;
+}
+
+async function bankingPayFindActiveDraftCreateOperation(sessionId, options = {}) {
+  const id = String(sessionId || '').trim();
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!id) throw new Error('bankingPayFindActiveDraftCreateOperation: sessionId is required');
+  if (!uuidRe.test(id)) throw new Error('bankingPayFindActiveDraftCreateOperation: invalid sessionId');
+  if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('bankingPayFindActiveDraftCreateOperation: authFetch/API is required');
+
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const upperTrim = (value) => trimStr(value).toUpperCase();
+  const readBool = (value, fallback = false) => {
+    if (value === true) return true;
+    if (value === false) return false;
+    if (value === null || value === undefined) return fallback;
+    const text = trimStr(value).toLowerCase();
+    if (['true', 't', '1', 'yes', 'y', 'on'].includes(text)) return true;
+    if (['false', 'f', '0', 'no', 'n', 'off'].includes(text)) return false;
+    return fallback;
+  };
+  const isPostCreateRefreshPendingMessage = (value) => {
+    const normalised = trimStr(value).replace(/\u2026/g, '...').toLowerCase();
+    return normalised === 'payment draft created. refreshing payment preview...'
+      || normalised === 'payment draft created. refreshing payment preview';
+  };
+  const boundedInteger = (value, fallback, minimum, maximum) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(maximum, Math.max(minimum, Math.trunc(n)));
+  };
+  const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+  const activeDraftCreateStatuses = new Set(['RUNNING', 'CONTINUING', 'WAITING_RETRY']);
+  const terminalDraftCreateStatuses = new Set(['COMPLETE', 'COMPLETED', 'SUCCEEDED', 'SUCCESS', 'DONE', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'REVIEW_REQUIRED', 'NEEDS_REVIEW', 'REVIEW']);
+  const isTerminalDraftCreateStatus = (operation) => {
+    const op = isPlainObject(operation) ? operation : {};
+    const status = upperTrim(op.status || op.operation_status || op.operationStatus || op.state || '');
+    return readBool(op.terminal, false) || readBool(op.is_terminal, false) || terminalDraftCreateStatuses.has(status) || readBool(op.review_required, false) || readBool(op.reviewRequired, false);
+  };
+  const isNonTerminalActiveDraftCreate = (operation) => {
+    const op = isPlainObject(operation) ? operation : {};
+    const operationId = trimStr(op.operation_id || op.operationId || op.id || '');
+    const operationType = upperTrim(op.operation_type || op.operationType || op.type || 'DRAFT_CREATE') || 'DRAFT_CREATE';
+    const status = upperTrim(op.status || op.operation_status || op.operationStatus || op.state || '');
+    if (!operationId || operationType !== 'DRAFT_CREATE') return false;
+    if (!activeDraftCreateStatuses.has(status)) return false;
+    if (isTerminalDraftCreateStatus(op)) return false;
+    if (readBool(op.requires_user_action, false) || readBool(op.requiresUserAction, false)) return false;
+    return true;
+  };
+  const clearActiveDraftCreateOperationState = (terminalOperation = null) => {
+    const terminalObject = isPlainObject(terminalOperation) ? terminalOperation : null;
+    const terminalOperationId = trimStr(terminalObject && (terminalObject.operation_id || terminalObject.operationId || terminalObject.id));
+    const terminalSessionId = trimStr(terminalObject && (terminalObject.workbench_session_id || terminalObject.workbenchSessionId || terminalObject.session_id || terminalObject.sessionId));
+    const stateTargets = [opts.state, opts.wizardState, opts.wiz, opts.targetState, opts.target]
+      .filter((target) => isPlainObject(target));
+
+    for (const target of stateTargets) {
+      target.active_draft_create_operation_id = null;
+      target.activeDraftCreateOperationId = null;
+      target.active_draft_create_operation = null;
+      target.activeDraftCreateOperation = null;
+      target.draft_create_status = null;
+      target.draftCreateStatus = null;
+      target.create_draft_refresh_pending = false;
+      target.createDraftRefreshPending = false;
+      target.preview_reopen_required = false;
+      target.previewReopenRequired = false;
+      target.post_create_preview_refresh_failed = false;
+      target.postCreatePreviewRefreshFailed = false;
+      if (isPostCreateRefreshPendingMessage(target.createDraftError)) target.createDraftError = '';
+      if (target.preview && typeof target.preview === 'object' && !Array.isArray(target.preview)) {
+        target.preview.__post_create_refresh_pending = false;
+        target.preview.post_create_preview_refresh_failed = false;
+        target.preview.postCreatePreviewRefreshFailed = false;
+        if (isPostCreateRefreshPendingMessage(target.preview.status_text)) target.preview.status_text = 'Payment preview is ready.';
+        if (isPostCreateRefreshPendingMessage(target.preview.message)) target.preview.message = 'Payment preview is ready.';
+      }
+      if (terminalObject) {
+        target.last_create_draft_operation_payload = terminalObject;
+        target.lastCreateDraftOperationPayload = terminalObject;
+      }
+    }
+
+    const root = (typeof window !== 'undefined') ? window : globalThis;
+    root.__bankingPayActiveDraftCreateOperationBySession = root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
+      ? root.__bankingPayActiveDraftCreateOperationBySession
+      : Object.create(null);
+
+    try { delete root.__bankingPayActiveDraftCreateOperationBySession[id]; } catch {}
+    if (terminalSessionId && terminalSessionId !== id) {
+      try { delete root.__bankingPayActiveDraftCreateOperationBySession[terminalSessionId]; } catch {}
+    }
+    if (terminalOperationId) {
+      try { delete root.__bankingPayActiveDraftCreateOperationBySession[terminalOperationId]; } catch {}
+    }
+    try {
+      for (const [cacheKey, cacheValue] of Object.entries(root.__bankingPayActiveDraftCreateOperationBySession)) {
+        if (!isPlainObject(cacheValue)) continue;
+        const cachedOperationId = trimStr(cacheValue.operation_id || cacheValue.operationId || cacheValue.id || '');
+        const cachedSessionId = trimStr(cacheValue.workbench_session_id || cacheValue.workbenchSessionId || cacheValue.session_id || cacheValue.sessionId || '');
+        if (
+          cachedSessionId === id ||
+          (terminalSessionId && cachedSessionId === terminalSessionId) ||
+          (terminalOperationId && cachedOperationId === terminalOperationId)
+        ) {
+          try { delete root.__bankingPayActiveDraftCreateOperationBySession[cacheKey]; } catch { root.__bankingPayActiveDraftCreateOperationBySession[cacheKey] = null; }
+        }
+      }
+    } catch {}
+
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.removeItem(`bankingPay.activeDraftCreateOperation.${id}`);
+        if (terminalSessionId && terminalSessionId !== id) window.sessionStorage.removeItem(`bankingPay.activeDraftCreateOperation.${terminalSessionId}`);
+        if (terminalOperationId) window.sessionStorage.removeItem(`bankingPay.activeDraftCreateOperation.${terminalOperationId}`);
+        for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
+          const key = window.sessionStorage.key(index);
+          if (!key || !key.startsWith('bankingPay.activeDraftCreateOperation.')) continue;
+          const raw = window.sessionStorage.getItem(key);
+          if (!raw) continue;
+          let parsed = null;
+          try { parsed = JSON.parse(raw); } catch { parsed = null; }
+          const storedOperationId = trimStr(parsed && (parsed.operation_id || parsed.operationId || parsed.id));
+          const storedSessionId = trimStr(parsed && (parsed.workbench_session_id || parsed.workbenchSessionId || parsed.session_id || parsed.sessionId));
+          if (
+            storedSessionId === id ||
+            (terminalSessionId && storedSessionId === terminalSessionId) ||
+            (terminalOperationId && storedOperationId === terminalOperationId)
+          ) {
+            window.sessionStorage.removeItem(key);
+          }
+        }
+      }
+    } catch {}
+  };
+  const writeActiveDraftCreateOperationState = (operation) => {
+    const operationObject = isPlainObject(operation) ? operation : null;
+    if (!isNonTerminalActiveDraftCreate(operationObject)) {
+      clearActiveDraftCreateOperationState(operationObject && isTerminalDraftCreateStatus(operationObject) ? operationObject : null);
+      return null;
+    }
+
+    const operationId = trimStr(operationObject.operation_id || operationObject.operationId || operationObject.id);
+    const status = trimStr(operationObject.status || operationObject.operation_status || operationObject.operationStatus);
+    const stateTargets = [opts.state, opts.wizardState, opts.wiz, opts.targetState, opts.target]
+      .filter((target) => isPlainObject(target));
+
+    for (const target of stateTargets) {
+      target.active_draft_create_operation_id = operationId || null;
+      target.activeDraftCreateOperationId = operationId || null;
+      target.active_draft_create_operation = operationObject;
+      target.activeDraftCreateOperation = operationObject;
+      target.draft_create_status = status || null;
+      target.draftCreateStatus = status || null;
+      target.last_create_draft_operation_payload = operationObject;
+      target.lastCreateDraftOperationPayload = operationObject;
+    }
+
+    const root = (typeof window !== 'undefined') ? window : globalThis;
+    root.__bankingPayActiveDraftCreateOperationBySession = root.__bankingPayActiveDraftCreateOperationBySession && typeof root.__bankingPayActiveDraftCreateOperationBySession === 'object'
+      ? root.__bankingPayActiveDraftCreateOperationBySession
+      : Object.create(null);
+
+    root.__bankingPayActiveDraftCreateOperationBySession[id] = operationObject;
+
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.setItem(`bankingPay.activeDraftCreateOperation.${id}`, JSON.stringify(operationObject));
+      }
+    } catch {}
+
+    return operationObject;
+  };
+
+  const includeRecentTerminal = readBool(opts.include_recent_terminal ?? opts.includeRecentTerminal, false);
+  const recentTerminalMinutes = boundedInteger(opts.recent_terminal_minutes ?? opts.recentTerminalMinutes, includeRecentTerminal ? 60 : 0, 0, 10080);
+  const query = new URLSearchParams();
+  query.set('include_recent_terminal', includeRecentTerminal ? 'true' : 'false');
+  query.set('includeRecentTerminal', includeRecentTerminal ? 'true' : 'false');
+  query.set('recent_terminal_minutes', String(recentTerminalMinutes));
+  query.set('recentTerminalMinutes', String(recentTerminalMinutes));
+  if (opts.silent !== undefined && opts.silent !== null) query.set('silent', readBool(opts.silent, false) ? 'true' : 'false');
+
+  const requestPath = `/api/banking/pay/workbench/session/${encodeURIComponent(id)}/draft-create-operation`;
+  const requestUrl = API(`${requestPath}?${query.toString()}`);
+  const root = (typeof window !== 'undefined') ? window : globalThis;
+  root.__bankingPayActiveDraftCreateOperationLookupInFlight = root.__bankingPayActiveDraftCreateOperationLookupInFlight && typeof root.__bankingPayActiveDraftCreateOperationLookupInFlight === 'object'
+    ? root.__bankingPayActiveDraftCreateOperationLookupInFlight
+    : Object.create(null);
+
+  const dedupeKey = `${id}::${includeRecentTerminal ? 'recent' : 'active'}::${recentTerminalMinutes}`;
+  if (root.__bankingPayActiveDraftCreateOperationLookupInFlight[dedupeKey]) {
+    return root.__bankingPayActiveDraftCreateOperationLookupInFlight[dedupeKey];
+  }
+
+  const run = (async () => {
+    const response = await authFetch(requestUrl, { method: 'GET' });
+    const text = await response.text().catch(() => '');
+    let parsed = null;
+    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
+
+    if (!response.ok) {
+      const friendly = (typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(parsed || text || null, parsed, { action: opts.action || 'BANKING_PAY_DRAFT_CREATE_OPERATION_LOOKUP', sessionId: id, userInitiated: opts.userInitiated !== false })
+        : { ok: false, error_code: 'BANKING_PAY_DRAFT_CREATE_OPERATION_LOOKUP_FAILED', message: text || `Request failed (${response.status})` };
+      const err = new Error(String(friendly.user_message || friendly.message || friendly.error || `Draft creation status could not be loaded (${response.status}).`));
+      err.status = response.status;
+      err.body = text;
+      err.json = friendly;
+      err.error_code = friendly.error_code || friendly.code || 'BANKING_PAY_DRAFT_CREATE_OPERATION_LOOKUP_FAILED';
+      throw err;
+    }
+
+    if (parsed && typeof parsed === 'object' && parsed.ok === false) {
+      const friendly = (typeof bankingNormalizeApiError === 'function')
+        ? bankingNormalizeApiError(parsed, parsed, { action: opts.action || 'BANKING_PAY_DRAFT_CREATE_OPERATION_LOOKUP', sessionId: id, userInitiated: opts.userInitiated !== false })
+        : parsed;
+      const err = new Error(String(friendly.user_message || friendly.message || friendly.error || 'Draft creation status could not be loaded.'));
+      err.status = Number(friendly.http_status || friendly.status_code || 400) || 400;
+      err.body = text;
+      err.json = friendly;
+      err.error_code = friendly.error_code || friendly.code || 'BANKING_PAY_DRAFT_CREATE_OPERATION_LOOKUP_FAILED';
+      throw err;
+    }
+
+    const operation = (typeof normaliseActiveDraftCreateOperationLookupResponse === 'function')
+      ? normaliseActiveDraftCreateOperationLookupResponse(parsed || {}, {
+        workbench_session_id: id,
+        session_id: id,
+        include_recent_terminal: includeRecentTerminal,
+        includeRecentTerminal,
+        allow_recent_terminal: includeRecentTerminal,
+        allowRecentTerminal: includeRecentTerminal,
+        diagnostic: includeRecentTerminal,
+        diagnostic_mode: includeRecentTerminal
+      })
+      : null;
+
+    writeActiveDraftCreateOperationState(operation || null);
+    return operation || null;
+  })();
+
+  root.__bankingPayActiveDraftCreateOperationLookupInFlight[dedupeKey] = run;
+  try {
+    return await run;
+  } finally {
+    try { delete root.__bankingPayActiveDraftCreateOperationLookupInFlight[dedupeKey]; } catch {}
+  }
+}
+
+
+
+function renderPayBatchDetailPanel() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPayBatchDetailPanel">
+        <div class="row">
+          <label>Batch detail</label>
+          <div class="controls">
+            <span class="mini">Banking state not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  const selectedId = String(st.pay.selectedBatchId || '').trim();
+
+  return `
+    <div class="card" id="bankingPayBatchDetailPanel">
+      <div class="row">
+        <label>Batch detail</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:8px;">
+          <div class="mini" style="opacity:.9;">
+            Batch actions (Execute, CSV export, Confirm CSV, status refresh, remittances, etc.) have moved to the batch child modal.
+          </div>
+          <div class="mini" style="opacity:.85;">
+            Double-click a batch in the list to open it.
+          </div>
+          <div class="mini" style="opacity:.75;">
+            Selected: <span class="mono">${enc(selectedId ? (selectedId.slice(0, 8) + '…') : 'None')}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function openUiPromptModal(opts = {}) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '')
+        .replaceAll('&','&amp;')
+        .replaceAll('<','&lt;')
+        .replaceAll('>','&gt;')
+        .replaceAll('"','&quot;')
+        .replaceAll("'","&#39;");
+
+  const htmlWrap = (typeof html === 'function') ? html : (s) => String(s ?? '');
+
+  const title = String(opts.title ?? 'Enter details').trim() || 'Enter details';
+
+  const messageHtml =
+    (opts.message_html != null && String(opts.message_html).trim() !== '')
+      ? String(opts.message_html)
+      : (opts.message != null && String(opts.message).trim() !== '')
+        ? `<div class="mini" style="white-space:pre-wrap;">${enc(String(opts.message))}</div>`
+        : `<div class="mini">Please enter a value.</div>`;
+
+  const placeholder = String(opts.placeholder ?? 'Enter reason…').trim();
+  const initialValue = String(opts.value ?? opts.initial_value ?? '').trim();
+
+  const confirmLabel = String(opts.confirm_label ?? 'Save').trim() || 'Save';
+  const cancelLabelRaw = (opts.cancel_label == null) ? 'Cancel' : String(opts.cancel_label);
+  const cancelLabel = String(cancelLabelRaw ?? '').trim() || 'Cancel';
+
+  const confirmBtnClass = String(opts.confirm_class ?? 'btn btn-primary').trim() || 'btn btn-primary';
+  const cancelBtnClass  = String(opts.cancel_class  ?? 'btn btn-outline').trim() || 'btn btn-outline';
+
+  const required = (opts.required !== false);
+  const minLen = Number.isFinite(Number(opts.min_length)) ? Math.max(0, Math.trunc(Number(opts.min_length))) : 1;
+
+  // IMPORTANT: use an import-summary-* kind so showModal treats it as a utility modal
+  // (view-only, no global Save/Edit, no dirty/discard prompts).
+  const kind = String(opts.kind ?? 'import-summary-ui-prompt').trim() || 'import-summary-ui-prompt';
+
+  const rows = Number.isFinite(Number(opts.rows)) ? Math.max(2, Math.min(12, Math.trunc(Number(opts.rows)))) : 4;
+
+  const instanceId = `uipr_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const rootId = `${instanceId}_root`;
+  const inputId = `${instanceId}_input`;
+  const errId = `${instanceId}_err`;
+
+  return await new Promise((resolve) => {
+    let done = false;
+    let ownerToken = null;
+    let watchTimer = 0;
+
+    let pendingConfirmed = null; // true|false|null
+    let pendingVia = null; // 'save'|'cancel'|'close'|null
+    let pendingValue = initialValue;
+
+    const hasGetFrame = (typeof window.__getModalFrame === 'function');
+    const hasStack = Array.isArray(window.__modalStack);
+
+    const isThisModalLive = () => {
+      try {
+        const modal = document.getElementById('modal');
+        const mk = modal?.dataset?.uiprKind ? String(modal.dataset.uiprKind) : '';
+        const mr = modal?.dataset?.uiprRootId ? String(modal.dataset.uiprRootId) : '';
+        if (mk === String(kind) && mr === String(rootId)) return true;
+      } catch {}
+      try { return !!document.getElementById(rootId); } catch { return false; }
+    };
+
+    const resolveOnce = (confirmed, via, value) => {
+      if (done) return;
+      done = true;
+      try { cleanup(); } catch {}
+      resolve({
+        confirmed: !!confirmed,
+        via: String(via || 'auto'),
+        value: (value == null) ? '' : String(value)
+      });
+    };
+
+      const requestClose = () => {
+      try {
+        const btn = document.getElementById('btnCloseModal');
+        if (btn) {
+          if (typeof btn.onclick === 'function') {
+            btn.onclick({
+              currentTarget: btn,
+              preventDefault() {},
+              stopPropagation() {}
+            });
+            return;
+          }
+          if (typeof btn.click === 'function') {
+            btn.click();
+            return;
+          }
+        } else if (typeof closeModal === 'function') {
+          closeModal();
+          return;
+        }
+      } catch {}
+      try { if (typeof closeModal === 'function') closeModal(); } catch {}
+    };
+    const setErr = (msg) => {
+      try {
+        const el = document.getElementById(errId);
+        if (!el) return;
+        const s = String(msg || '').trim();
+        el.textContent = s;
+        el.style.display = s ? '' : 'none';
+      } catch {}
+    };
+
+    const cleanup = () => {
+      try {
+        const body = document.getElementById('modalBody');
+        if (body) {
+          body.removeEventListener('click', onBodyClick, true);
+          body.removeEventListener('input', onBodyInput, true);
+        }
+      } catch {}
+
+      try { if (watchTimer) clearInterval(watchTimer); } catch {}
+      watchTimer = 0;
+
+      // do NOT touch btnCloseModal.dataset.ownerToken
+      try {
+        const closeBtn = document.getElementById('btnCloseModal');
+        if (closeBtn && closeBtn.dataset) {
+          if (closeBtn.dataset.uiprKind) delete closeBtn.dataset.uiprKind;
+          if (closeBtn.dataset.uiprRootId) delete closeBtn.dataset.uiprRootId;
+        }
+      } catch {}
+
+      try {
+        const modal = document.getElementById('modal');
+        if (modal && modal.dataset) {
+          if (modal.dataset.uiprKind === String(kind)) delete modal.dataset.uiprKind;
+          if (modal.dataset.uiprRootId === String(rootId)) delete modal.dataset.uiprRootId;
+        }
+      } catch {}
+    };
+
+    const onBodyInput = (ev) => {
+      if (done) return;
+      if (!isThisModalLive()) return;
+      const t = ev && ev.target ? ev.target : null;
+      if (!t) return;
+      if (String(t.id || '') !== String(inputId)) return;
+      pendingValue = String(t.value ?? '');
+      if (!required) return;
+      if (String(pendingValue || '').trim().length >= minLen) setErr('');
+    };
+
+    const onBodyClick = (ev) => {
+      if (done) return;
+      if (!isThisModalLive()) return;
+
+      const btn = ev?.target && ev.target.closest ? ev.target.closest('button[data-act]') : null;
+      if (!btn) return;
+
+      const act = String(btn.getAttribute('data-act') || '');
+      if (act !== 'uipr-save' && act !== 'uipr-cancel') return;
+
+      try { ev.preventDefault(); ev.stopPropagation(); } catch {}
+
+      if (act === 'uipr-cancel') {
+        pendingConfirmed = false;
+        pendingVia = 'cancel';
+        requestClose();
+        return;
+      }
+
+      // save
+      const v = String(pendingValue || '');
+      const vTrim = v.trim();
+
+      if (required && vTrim.length < minLen) {
+        setErr(minLen <= 1 ? 'Reason is required.' : `Please enter at least ${minLen} characters.`);
+        try {
+          const inp = document.getElementById(inputId);
+          inp && inp.focus && inp.focus();
+        } catch {}
+        return;
+      }
+
+      pendingConfirmed = true;
+      pendingVia = 'save';
+      requestClose();
+    };
+
+    const onDismiss = () => {
+      if (done) return;
+      const via = pendingVia ? pendingVia : 'close';
+      const confirmed = (pendingConfirmed === true);
+      const value = confirmed ? String(pendingValue || '') : '';
+      resolveOnce(confirmed, via, value);
+    };
+
+    const renderTab = (key) => {
+      if (key !== 'main') return '';
+
+      const note = required
+        ? `<div class="mini" style="margin-top:8px;opacity:.8;">This action is auditable and requires a reason.</div>`
+        : ``;
+
+      return htmlWrap(`
+        <div class="tabc" id="${enc(rootId)}">
+          <div class="card">
+            <div class="row">
+              <label></label>
+              <div class="controls">
+                <div style="font-size:14px;font-weight:700;margin-bottom:6px;">${enc(title)}</div>
+                ${messageHtml}
+
+                <div style="margin-top:10px;">
+                  <label class="inline mini" style="opacity:.85;">Reason</label>
+                  <textarea
+                    id="${enc(inputId)}"
+                    class="input"
+                    rows="${enc(String(rows))}"
+                    placeholder="${enc(placeholder)}"
+                    style="width:100%;resize:vertical;"
+                  >${enc(initialValue)}</textarea>
+                  <div id="${enc(errId)}" class="error" style="display:none;white-space:pre-wrap;margin-top:8px;"></div>
+                  ${note}
+                </div>
+
+                <div style="display:flex;gap:10px;margin-top:14px;align-items:center;">
+                  <button type="button" class="${enc(confirmBtnClass)}" data-act="uipr-save">${enc(confirmLabel)}</button>
+                  <button type="button" class="${enc(cancelBtnClass)}" data-act="uipr-cancel">${enc(cancelLabel)}</button>
+                </div>
+
+                <div class="mini" style="margin-top:10px;opacity:.75;">You can also close this dialog to cancel.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `);
+    };
+
+    showModal(
+      title,
+      [{ key: 'main', label: 'Prompt' }],
+      renderTab,
+      null,
+      false,
+      null,
+      {
+        kind,
+        noParentGate: true,
+        showSave: false,
+        showApply: false,
+        onDismiss
+      }
+    );
+
+    try {
+      const modal = document.getElementById('modal');
+      if (modal && modal.dataset) {
+        modal.dataset.uiprKind = String(kind);
+        modal.dataset.uiprRootId = String(rootId);
+      }
+    } catch {}
+
+    try {
+      if (hasGetFrame) {
+        const fr = window.__getModalFrame();
+        ownerToken = fr && fr.kind === kind ? fr._token : null;
+      } else {
+        ownerToken = null;
+      }
+    } catch {
+      ownerToken = null;
+    }
+
+    try {
+      const closeBtn = document.getElementById('btnCloseModal');
+      if (closeBtn && closeBtn.dataset) {
+        closeBtn.dataset.uiprKind = String(kind);
+        closeBtn.dataset.uiprRootId = String(rootId);
+      }
+    } catch {}
+
+    try {
+      const body = document.getElementById('modalBody');
+      if (body) {
+        body.addEventListener('click', onBodyClick, true);
+        body.addEventListener('input', onBodyInput, true);
+      }
+    } catch {}
+
+    try {
+      setTimeout(() => {
+        try {
+          const inp = document.getElementById(inputId);
+          inp && inp.focus && inp.focus();
+          if (inp && typeof inp.setSelectionRange === 'function') {
+            const len = String(inp.value || '').length;
+            inp.setSelectionRange(len, len);
+          }
+        } catch {}
+      }, 0);
+    } catch {}
+
+    if (ownerToken && hasGetFrame && hasStack) {
+      watchTimer = setInterval(() => {
+        if (done) return;
+
+        const stk = window.__modalStack;
+        const stillThere = Array.isArray(stk) && stk.some(fr => fr && fr._token === ownerToken);
+
+        if (!stillThere) {
+          try { if (isThisModalLive()) requestClose(); } catch {}
+          resolveOnce(false, 'auto', '');
+        }
+      }, 250);
+    }
+  });
+}
+function renderPayPreparePanel() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+
+  const st = (typeof bankingGetState === 'function') ? bankingGetState() : null;
+  if (!st) {
+    return `
+      <div class="card" id="bankingPayPreparePanel">
+        <div class="row">
+          <label>Prepare</label>
+          <div class="controls">
+            <span class="mini">Banking state not available.</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  st.pay = (st.pay && typeof st.pay === 'object') ? st.pay : {};
+  st.pay.selected = (st.pay.selected && typeof st.pay.selected === 'object') ? st.pay.selected : { data: null, loading: false, error: '' };
+  st.pay.actionsBusy = (st.pay.actionsBusy && typeof st.pay.actionsBusy === 'object') ? st.pay.actionsBusy : {
+    executingBank: false,
+    preparing: false,
+    scheduling: false,
+    polling: false,
+    exporting: false,
+    manualConfirming: false,
+    sendingRemittances: false
+  };
+  st.pay.prepareOverrides = (st.pay.prepareOverrides && typeof st.pay.prepareOverrides === 'object') ? st.pay.prepareOverrides : { items: [] };
+
+  const preparing = !!st.pay.actionsBusy.preparing;
+
+  const sel = (st.pay.selected.data && typeof st.pay.selected.data === 'object') ? st.pay.selected.data : null;
+  const batch = (sel && sel.batch && typeof sel.batch === 'object') ? sel.batch : null;
+  const batchId = String(batch?.id || '').trim() || String(st.pay.selectedBatchId || '').trim();
+
+  const prepResult =
+    (st.pay.selected && typeof st.pay.selected === 'object' && st.pay.selected.prepareResult && typeof st.pay.selected.prepareResult === 'object')
+      ? st.pay.selected.prepareResult
+      : null;
+
+  const overrides = Array.isArray(st.pay.prepareOverrides.items) ? st.pay.prepareOverrides.items : [];
+
+  const counts = (() => {
+    const obj = (prepResult && typeof prepResult === 'object') ? prepResult : {};
+    const keys = ['missing_payee_map', 'name_check_failed', 'name_check_pending', 'ready', 'blocked'];
+    const out = {};
+    for (const k of keys) {
+      const arr = Array.isArray(obj[k]) ? obj[k] : [];
+      out[k] = arr.length;
+    }
+    return out;
+  })();
+
+  const overrideRowsHtml = overrides.length ? overrides.map((o, i) => {
+    const ek = String(o?.entity_kind || '').trim();
+    const eid = String(o?.entity_id || '').trim();
+    const reason = String(o?.reason || '').trim();
+    return `
+      <tr>
+        <td class="mini">${enc(String(i + 1))}</td>
+        <td class="mini">${enc(ek || '—')}</td>
+        <td class="mono">${enc(eid || '—')}</td>
+        <td class="mini" style="white-space:normal;overflow-wrap:break-word;">${enc(reason || '—')}</td>
+        <td style="white-space:nowrap;">
+          <button
+            type="button"
+            class="btn btn-sm btn-outline"
+            data-action="banking:pay:prepare:removeOverride"
+            data-override-index="${enc(String(i))}"
+            title="Remove this override"
+          >Remove</button>
+        </td>
+      </tr>
+    `;
+  }).join('') : `
+    <tr><td colspan="5" class="mini" style="opacity:.85;">No overrides staged.</td></tr>
+  `;
+
+  return `
+    <div class="card" id="bankingPayPreparePanel">
+      <div class="row" style="gap:10px;">
+        <label>Prepare</label>
+        <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <span class="mini" style="opacity:.85;">
+              Prepare checks whether each payee is ready (payee mapping + name checks) before you schedule payments.
+            </span>
+            <span class="pill pill-info" title="Selected batch id">${enc(batchId ? (batchId.slice(0, 8) + '…') : 'No batch')}</span>
+
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline"
+                data-action="banking:pay:prepare"
+                data-batch-id="${enc(batchId)}"
+                ${batchId ? '' : 'data-disabled="1" aria-disabled="true" style="opacity:.45;filter:saturate(0.6) brightness(0.9);"' }
+                title="${batchId ? 'Run prepare for this batch' : 'Select a batch first'}"
+              >${preparing ? 'Preparing…' : 'Run prepare'}</button>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <span class="pill" title="Missing payee map">${enc('Missing payee-map: ' + String(counts.missing_payee_map || 0))}</span>
+            <span class="pill" title="Name-check failed">${enc('Name-check failed: ' + String(counts.name_check_failed || 0))}</span>
+            <span class="pill" title="Name-check pending">${enc('Name-check pending: ' + String(counts.name_check_pending || 0))}</span>
+            <span class="pill" title="Ready">${enc('Ready: ' + String(counts.ready || 0))}</span>
+            <span class="pill" title="Blocked">${enc('Blocked: ' + String(counts.blocked || 0))}</span>
+          </div>
+
+          <div class="card" style="padding:10px;">
+            <div class="row">
+              <label>Stage an override</label>
+              <div class="controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select
+                  class="input"
+                  id="bankingPrepareOverrideKind"
+                  data-action="banking:pay:prepare:setOverrideKind"
+                  style="max-width:220px;"
+                  title="Entity kind"
+                >
+                  <option value="">Entity kind…</option>
+                  <option value="CANDIDATE">Candidate</option>
+                  <option value="UMBRELLA">Umbrella</option>
+                  <option value="PAYEE">Payee</option>
+                </select>
+
+                <input
+                  class="input"
+                  id="bankingPrepareOverrideEntityId"
+                  type="text"
+                  placeholder="Entity ID"
+                  data-action="banking:pay:prepare:setOverrideEntityId"
+                  style="min-width:260px;max-width:360px;"
+                  title="Entity id (UUID or stable key)"
+                />
+
+                <input
+                  class="input"
+                  id="bankingPrepareOverrideReason"
+                  type="text"
+                  placeholder="Reason (required)"
+                  data-action="banking:pay:prepare:setOverrideReason"
+                  style="min-width:280px;max-width:520px;"
+                  title="Reason for override (audit)"
+                />
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline"
+                  data-action="banking:pay:prepare:addOverride"
+                  title="Add override to the staged list"
+                >Add override</button>
+              </div>
+              <div class="mini" style="opacity:.8;margin-top:6px;">
+                Overrides are applied the next time you click <strong>Run prepare</strong>.
+              </div>
+            </div>
+          </div>
+
+          <div style="overflow:auto; border:1px solid var(--line); border-radius:10px;">
+            <table class="grid" style="min-width:820px; table-layout:auto;">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Entity kind</th>
+                  <th>Entity id</th>
+                  <th>Reason</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${overrideRowsHtml}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mini" style="opacity:.8;">
+            Tip: if “Ready” is not high enough, fix payee mapping or name-check issues before scheduling.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
+  const root = (typeof window !== 'undefined') ? window : globalThis;
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const id = trimStr(
+    batchId ||
+    (options && (options.pay_batch_id || options.payBatchId || options.batch_id || options.batchId)) ||
+    ''
+  );
+
+  const notify = (message, tone = 'info') => {
+    const msg = trimStr(message);
+    if (!msg) return;
+    try {
+      if (typeof root.toast === 'function') return root.toast(msg, tone);
+      if (typeof root.showToast === 'function') return root.showToast(msg, tone);
+      if (typeof root.notify === 'function') return root.notify(msg, tone);
+      if (typeof root.__toast === 'function') return root.__toast(msg, tone);
+      if (tone === 'error' || tone === 'danger') console.warn(msg);
+      else console.log(msg);
+    } catch {}
+  };
+
+  if (!id) {
+    notify('Unable to show timesheets: missing pay batch id.', 'error');
+    return false;
+  }
+
+  root.__listState = root.__listState || {};
+  const existingState = (root.__listState.timesheets && typeof root.__listState.timesheets === 'object')
+    ? root.__listState.timesheets
+    : {};
+
+  const pageSize = existingState.pageSize || 50;
+  const sort = (existingState.sort && typeof existingState.sort === 'object')
+    ? { ...existingState.sort }
+    : { key: null, dir: 'asc' };
+
+  root.__listState.timesheets = {
+    ...existingState,
+    page: 1,
+    pageSize,
+    total: null,
+    hasMore: false,
+    totals: null,
+    filters: { pay_batch_id: id },
+    sort
+  };
+
+  try {
+    if (root.__summaryTypeAheadState && root.__summaryTypeAheadState.timesheets) {
+      root.__summaryTypeAheadState.timesheets = {};
+    }
+  } catch {}
+
+  try {
+    if (root.__summaryFilterDrafts && root.__summaryFilterDrafts.timesheets) {
+      delete root.__summaryFilterDrafts.timesheets;
+    }
+  } catch {}
+
+  try {
+    if (root.__activeRelatedContext && String(root.__activeRelatedContext.section || '').toLowerCase() === 'timesheets') {
+      root.__activeRelatedContext = null;
+    }
+  } catch {}
+
+  try {
+    if (typeof resetSelectionForDataset === 'function') {
+      resetSelectionForDataset('timesheets', JSON.stringify({ pay_batch_id: id }), 'banking-pay-batch-timesheets');
+    } else if (root.__selection && root.__selection.timesheets) {
+      const sel = root.__selection.timesheets;
+      if (sel.ids && typeof sel.ids.clear === 'function') sel.ids.clear();
+      if (sel.included_ids && typeof sel.included_ids.clear === 'function') sel.included_ids.clear();
+      if (sel.excluded_ids && typeof sel.excluded_ids.clear === 'function') sel.excluded_ids.clear();
+      sel.mode = 'explicit';
+    }
+  } catch {}
+
+  try { currentSection = 'timesheets'; } catch {}
+  try { root.currentSection = 'timesheets'; } catch {}
+
+  if (typeof renderAll === 'function') {
+    await renderAll();
+  } else if (typeof listTimesheetsSummary === 'function') {
+    root.currentRows = await listTimesheetsSummary({ pay_batch_id: id });
+  }
+
+  notify('Showing timesheets linked to the selected pay batch.', 'info');
+  return true;
+}
+
+function installBankingPayBatchTimesheetSummaryShortcut() {
+  try {
+    const root = (typeof window !== 'undefined') ? window : globalThis;
+    if (!root || root.__bankingPayBatchTimesheetSummaryShortcutInstalled) return;
+    root.__bankingPayBatchTimesheetSummaryShortcutInstalled = true;
+
+    const notify = (message, tone = 'info') => {
+      const msg = String(message == null ? '' : message).trim();
+      if (!msg) return;
+      try {
+        if (typeof root.toast === 'function') return root.toast(msg, tone);
+        if (typeof root.showToast === 'function') return root.showToast(msg, tone);
+        if (typeof root.notify === 'function') return root.notify(msg, tone);
+        if (typeof root.__toast === 'function') return root.__toast(msg, tone);
+        if (tone === 'error' || tone === 'danger') console.warn(msg);
+        else console.log(msg);
+      } catch {}
+    };
+
+    const handleShortcutEvent = async (ev) => {
+      const target = ev && ev.target;
+      if (!target || typeof target.closest !== 'function') return;
+
+      const btn = target.closest('[data-action="banking:pay:viewBatchTimesheets"],[data-action="banking:pay:child:viewTimesheets"]');
+      if (!btn) return;
+
+      const action = String(btn.getAttribute('data-action') || '').trim();
+      if (action !== 'banking:pay:viewBatchTimesheets' && action !== 'banking:pay:child:viewTimesheets') return;
+
+      try { ev.preventDefault(); } catch {}
+      try { ev.stopPropagation(); } catch {}
+      try { if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation(); } catch {}
+
+      if (
+        btn.disabled === true ||
+        btn.getAttribute('data-disabled') === '1' ||
+        String(btn.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
+      ) {
+        return;
+      }
+
+      const batchId = String(
+        btn.getAttribute('data-batch-id') ||
+        (btn.dataset && btn.dataset.batchId) ||
+        ''
+      ).trim();
+
+      if (!batchId) {
+        notify('Unable to show timesheets: missing pay batch id.', 'error');
+        return;
+      }
+
+      const now = Date.now();
+      const last = root.__bankingPayBatchTimesheetSummaryShortcutLast || null;
+      const gateKey = `${action}:${batchId}`;
+      if (last && last.key === gateKey && now - Number(last.at || 0) < 750) {
+        return;
+      }
+      root.__bankingPayBatchTimesheetSummaryShortcutLast = { key: gateKey, at: now };
+
+      const oldBusy = btn.getAttribute('aria-busy');
+      const oldTitle = btn.getAttribute('title');
+      const wasDisabled = btn.disabled === true;
+
+      try {
+        btn.setAttribute('aria-busy', 'true');
+        btn.setAttribute('title', 'Opening linked timesheets…');
+        btn.disabled = true;
+      } catch {}
+
+      try {
+        await navigateBankingPayBatchTimesheetsSummary(batchId, { sourceAction: action });
+      } catch (err) {
+        const message = err && err.message ? err.message : String(err || 'Unable to show linked timesheets.');
+        notify(message, 'error');
+      } finally {
+        try {
+          if (oldBusy == null) btn.removeAttribute('aria-busy');
+          else btn.setAttribute('aria-busy', oldBusy);
+          if (oldTitle == null) btn.removeAttribute('title');
+          else btn.setAttribute('title', oldTitle);
+          btn.disabled = wasDisabled;
+        } catch {}
+      }
+    };
+
+    document.addEventListener('click', handleShortcutEvent, true);
+    document.addEventListener('dblclick', handleShortcutEvent, true);
+  } catch (err) {
+    try { console.warn('[banking-pay] failed to install batch timesheet summary shortcut', err); } catch {}
+  }
 }
 
 
@@ -64447,7 +65598,9 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
   return result;
 }
 
+
 function renderBankingPayBatchChildModalOverview() {
+  try { installBankingPayBatchTimesheetSummaryShortcut(); } catch {}
   try { window.__CTMS_OVERVIEW_RUNTIME_PROOF_MARKER = 'renderBankingPayBatchChildModalOverview:overview-draft-not-sent:2026-05-26'; } catch {}
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
@@ -64905,6 +66058,19 @@ function renderBankingPayBatchChildModalOverview() {
 
   const rootId = trimStr(child.rootId);
   const id = trimStr(child.batchId);
+  const timesheetSummaryButtonHtml = id
+    ? `
+      <button
+        type="button"
+        class="btn btn-sm btn-outline"
+        data-action="banking:pay:child:viewTimesheets"
+        data-batch-id="${enc(id)}"
+        aria-label="Show timesheets linked to this pay batch"
+        title="Show linked timesheets in the Timesheets summary without closing this modal"
+        style="font-weight:800;min-width:34px;padding-left:8px;padding-right:8px;"
+      >🗒️</button>
+    `
+    : '';
   const data = asObj(child.data) || {};
   const batch = asObj(data.batch) || {};
   const displaySummary = asObj(data.pay_batch_display_summary || data.payBatchDisplaySummary || data.display_summary || data.displaySummary || batch.pay_batch_display_summary || batch.payBatchDisplaySummary || batch.display_summary || batch.displaySummary) || {};
@@ -66674,6 +67840,7 @@ function renderBankingPayBatchChildModalOverview() {
               ${renderPaymentSummaryHtml()}
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 ${primaryActionButtonsHtml}
+                ${timesheetSummaryButtonHtml}
                   <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh">Refresh Batch</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailCsv">Detailed CSV</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailPdf">Detailed PDF</button>
@@ -66838,6 +68005,7 @@ function renderBankingPayBatchChildModalOverview() {
               <div class="mini" style="font-weight:700;opacity:.9;margin-bottom:8px;">Actions</div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 ${primaryActionButtonsHtml}
+                ${timesheetSummaryButtonHtml}
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:refresh" title="Refresh batch">Refresh Batch</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailCsv" title="Download detailed CSV">Detailed CSV</button>
                 <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:child:exportDetailPdf" title="Download detailed PDF">Detailed PDF</button>
@@ -66856,6 +68024,2264 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
+
+
+
+function openBulkTimesheetActionProgressModal(options = {}) {
+  const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const trimStr = (value) => String(value == null ? '' : value).trim();
+  const toFiniteNumber = (value, fallback = 0) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+  };
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (value) => String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+
+  const actionRaw = trimStr(opts.action || opts.action_kind || opts.kind || 'AUTHORISE').toUpperCase();
+  const action = actionRaw === 'UNAUTHORISE' ? 'UNAUTHORISE' : 'AUTHORISE';
+  const defaultTitle = action === 'UNAUTHORISE' ? 'Unauthorising timesheets' : 'Authorising timesheets';
+  const title = trimStr(opts.title || defaultTitle) || defaultTitle;
+  const totalRows = Math.max(0, Math.floor(toFiniteNumber(opts.totalRows ?? opts.total_rows ?? opts.total, 0)));
+  const chunkSize = Math.max(1, Math.floor(toFiniteNumber(opts.chunkSize ?? opts.chunk_size, 50)));
+  const chunkCount = Math.max(
+    0,
+    Math.floor(toFiniteNumber(opts.chunkCount ?? opts.chunk_count, totalRows > 0 ? Math.ceil(totalRows / chunkSize) : 0))
+  );
+  const instanceId = `bulk_ts_progress_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  const state = {
+    action,
+    title,
+    totalRows,
+    chunkSize,
+    chunkCount,
+    currentChunkIndex: 0,
+    currentChunkSize: 0,
+    completedRows: 0,
+    failedRows: 0,
+    statusText: trimStr(opts.statusText || opts.status_text || 'Preparing action...') || 'Preparing action...',
+    finalSummary: '',
+    failures: [],
+    stopRequested: false,
+    structuralFailure: null,
+    completed: false,
+    stopped: false,
+    closed: false
+  };
+
+  if (typeof document === 'undefined' || !document.body) {
+    const noopController = {
+      id: instanceId,
+      update(values = {}) {
+        if (values && typeof values === 'object') Object.assign(state, values);
+        return noopController;
+      },
+      updateTotals(values = {}) {
+        if (values && typeof values === 'object') {
+          if (Object.prototype.hasOwnProperty.call(values, 'completedRows')) state.completedRows = Math.max(0, Math.floor(toFiniteNumber(values.completedRows, state.completedRows)));
+          if (Object.prototype.hasOwnProperty.call(values, 'failedRows')) state.failedRows = Math.max(0, Math.floor(toFiniteNumber(values.failedRows, state.failedRows)));
+          if (Object.prototype.hasOwnProperty.call(values, 'totalRows')) state.totalRows = Math.max(0, Math.floor(toFiniteNumber(values.totalRows, state.totalRows)));
+          if (Object.prototype.hasOwnProperty.call(values, 'statusText')) state.statusText = trimStr(values.statusText) || state.statusText;
+        }
+        return noopController;
+      },
+      updateCurrentChunk(chunkIndex, currentChunkSize, statusText) {
+        state.currentChunkIndex = Math.max(0, Math.floor(toFiniteNumber(chunkIndex, state.currentChunkIndex)));
+        state.currentChunkSize = Math.max(0, Math.floor(toFiniteNumber(currentChunkSize, state.currentChunkSize)));
+        if (statusText != null) state.statusText = trimStr(statusText) || state.statusText;
+        return noopController;
+      },
+      appendFailures(failures = []) {
+        const list = Array.isArray(failures) ? failures : [failures];
+        for (const item of list) {
+          if (item && typeof item === 'object') state.failures.push(item);
+        }
+        return noopController;
+      },
+      markStructuralFailure(error, statusText) {
+        state.structuralFailure = error || { message: trimStr(statusText || 'Action failed.') || 'Action failed.' };
+        state.statusText = trimStr(statusText || state.structuralFailure.message || 'Action failed.') || 'Action failed.';
+        return noopController;
+      },
+      markCompleted(summaryText) {
+        state.completed = true;
+        state.finalSummary = trimStr(summaryText || state.finalSummary || 'Action complete.') || 'Action complete.';
+        state.statusText = state.finalSummary;
+        return noopController;
+      },
+      markStopped(summaryText) {
+        state.stopped = true;
+        state.finalSummary = trimStr(summaryText || state.finalSummary || 'Stopped after the current chunk.') || 'Stopped after the current chunk.';
+        state.statusText = state.finalSummary;
+        return noopController;
+      },
+      requestStop() {
+        if (!state.completed && !state.structuralFailure) {
+          state.stopRequested = true;
+          state.statusText = 'Stopping after the current chunk...';
+        }
+        return noopController;
+      },
+      isStopRequested() { return !!state.stopRequested; },
+      close() { state.closed = true; return noopController; },
+      destroy() { state.closed = true; return noopController; },
+      getState() { return JSON.parse(JSON.stringify(state)); },
+      root: null,
+      overlay: null
+    };
+    return noopController;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = `${instanceId}_overlay`;
+  overlay.setAttribute('role', 'presentation');
+  overlay.style.cssText = [
+    'position:fixed',
+    'inset:0',
+    'z-index:2147483000',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'padding:24px',
+    'background:rgba(15,23,42,0.46)',
+    'backdrop-filter:blur(3px)'
+  ].join(';');
+
+  const root = document.createElement('div');
+  root.id = `${instanceId}_root`;
+  root.setAttribute('role', 'dialog');
+  root.setAttribute('aria-modal', 'true');
+  root.setAttribute('aria-label', title);
+  root.style.cssText = [
+    'width:min(720px,calc(100vw - 36px))',
+    'max-height:calc(100vh - 36px)',
+    'overflow:hidden',
+    'border-radius:18px',
+    'background:#ffffff',
+    'box-shadow:0 24px 70px rgba(15,23,42,0.32)',
+    'border:1px solid rgba(148,163,184,0.35)',
+    'font-family:inherit',
+    'color:#0f172a'
+  ].join(';');
+
+  root.innerHTML = `
+    <div style="padding:20px 22px 16px;border-bottom:1px solid rgba(226,232,240,0.95);display:flex;align-items:flex-start;justify-content:space-between;gap:16px;">
+      <div>
+        <div data-role="bulk-ts-progress-title" style="font-size:18px;font-weight:800;letter-spacing:-0.01em;">${enc(title)}</div>
+        <div data-role="bulk-ts-progress-status" style="font-size:13px;color:#475569;margin-top:6px;line-height:1.45;">${enc(state.statusText)}</div>
+      </div>
+      <div data-role="bulk-ts-progress-chip" style="flex:0 0 auto;border-radius:999px;background:#eef2ff;color:#3730a3;padding:6px 10px;font-size:12px;font-weight:800;white-space:nowrap;">0%</div>
+    </div>
+    <div style="padding:18px 22px 16px;">
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px;">
+        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Total</div>
+          <div data-role="bulk-ts-progress-total" style="font-size:20px;font-weight:900;margin-top:3px;">0</div>
+        </div>
+        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Completed</div>
+          <div data-role="bulk-ts-progress-completed" style="font-size:20px;font-weight:900;margin-top:3px;">0</div>
+        </div>
+        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Failed</div>
+          <div data-role="bulk-ts-progress-failed" style="font-size:20px;font-weight:900;margin-top:3px;">0</div>
+        </div>
+        <div style="border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#f8fafc;">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:800;">Chunk</div>
+          <div data-role="bulk-ts-progress-chunk" style="font-size:20px;font-weight:900;margin-top:3px;">0/0</div>
+        </div>
+      </div>
+      <div style="height:12px;border-radius:999px;background:#e2e8f0;overflow:hidden;border:1px solid rgba(148,163,184,0.38);">
+        <div data-role="bulk-ts-progress-bar" style="height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#22c55e);transition:width .18s ease;"></div>
+      </div>
+      <div data-role="bulk-ts-progress-meta" style="font-size:12px;color:#64748b;margin-top:9px;line-height:1.45;">0 of 0 rows attempted.</div>
+      <details data-role="bulk-ts-progress-failures-wrap" style="display:none;margin-top:14px;border:1px solid #fecaca;background:#fff7f7;border-radius:14px;overflow:hidden;">
+        <summary data-role="bulk-ts-progress-failures-summary" style="cursor:pointer;padding:10px 12px;font-size:13px;font-weight:800;color:#991b1b;">Failures</summary>
+        <div data-role="bulk-ts-progress-failures" style="max-height:190px;overflow:auto;padding:0 12px 12px;font-size:12px;color:#7f1d1d;line-height:1.45;"></div>
+      </details>
+      <div data-role="bulk-ts-progress-final" style="display:none;margin-top:14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#14532d;border-radius:14px;padding:10px 12px;font-size:13px;line-height:1.45;"></div>
+    </div>
+    <div style="padding:14px 22px 20px;border-top:1px solid rgba(226,232,240,0.95);display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <button type="button" data-act="bulk-ts-progress-stop" class="btn btn-outline" style="min-width:170px;">Stop after current chunk</button>
+      <button type="button" data-act="bulk-ts-progress-close" class="btn btn-primary" style="min-width:110px;" disabled>Close</button>
+    </div>
+  `;
+
+  overlay.appendChild(root);
+  document.body.appendChild(overlay);
+
+  const findRole = (role) => root.querySelector(`[data-role="${role}"]`);
+  const titleEl = findRole('bulk-ts-progress-title');
+  const statusEl = findRole('bulk-ts-progress-status');
+  const chipEl = findRole('bulk-ts-progress-chip');
+  const totalEl = findRole('bulk-ts-progress-total');
+  const completedEl = findRole('bulk-ts-progress-completed');
+  const failedEl = findRole('bulk-ts-progress-failed');
+  const chunkEl = findRole('bulk-ts-progress-chunk');
+  const barEl = findRole('bulk-ts-progress-bar');
+  const metaEl = findRole('bulk-ts-progress-meta');
+  const failuresWrapEl = findRole('bulk-ts-progress-failures-wrap');
+  const failuresSummaryEl = findRole('bulk-ts-progress-failures-summary');
+  const failuresEl = findRole('bulk-ts-progress-failures');
+  const finalEl = findRole('bulk-ts-progress-final');
+  const stopBtn = root.querySelector('[data-act="bulk-ts-progress-stop"]');
+  const closeBtn = root.querySelector('[data-act="bulk-ts-progress-close"]');
+
+  const normaliseFailure = (failure, context = {}) => {
+    const item = (failure && typeof failure === 'object') ? failure : { message: trimStr(failure) };
+    const rowKey = trimStr(item.row_key || item.row_key_before || item.row_key_after || item.new_row_key || item.timesheet_id || item.current_timesheet_id || item.contract_week_id || context.row_key || context.rowKey || 'row') || 'row';
+    const message = trimStr(item.reason || item.message || item.error || item.error_code || item.code || context.reason || context.message || 'Failed') || 'Failed';
+    return {
+      ...item,
+      row_key: rowKey,
+      message,
+      chunk_index: (item.chunk_index ?? context.chunk_index ?? context.chunkIndex ?? state.currentChunkIndex) || null
+    };
+  };
+
+  const renderFailures = () => {
+    if (!failuresWrapEl || !failuresEl || !failuresSummaryEl) return;
+    const count = state.failures.length;
+    failuresWrapEl.style.display = count > 0 ? '' : 'none';
+    failuresSummaryEl.textContent = count === 1 ? '1 failure' : `${count} failures`;
+    const visibleFailures = state.failures.slice(0, 200);
+    const lines = visibleFailures.map((failure) => {
+      const chunkText = failure.chunk_index ? `Chunk ${failure.chunk_index}: ` : '';
+      return `<div style="padding:6px 0;border-top:1px solid rgba(254,202,202,0.75);"><strong>${enc(chunkText + String(failure.row_key || 'row'))}</strong><br>${enc(failure.message || 'Failed')}</div>`;
+    });
+    if (state.failures.length > visibleFailures.length) {
+      lines.push(`<div style="padding:6px 0;border-top:1px solid rgba(254,202,202,0.75);font-weight:700;">${enc(`${state.failures.length - visibleFailures.length} more failures not shown here.`)}</div>`);
+    }
+    failuresEl.innerHTML = lines.join('');
+  };
+
+  const render = () => {
+    const attemptedRows = clamp(state.completedRows + state.failedRows, 0, state.totalRows || (state.completedRows + state.failedRows));
+    const denominator = Math.max(1, state.totalRows || attemptedRows || 1);
+    const pct = clamp(Math.round((attemptedRows / denominator) * 100), 0, 100);
+    const closeEnabled = !!(state.completed || state.stopped || state.structuralFailure || state.closed);
+
+    if (titleEl) titleEl.textContent = state.title;
+    if (statusEl) statusEl.textContent = state.statusText;
+    if (chipEl) chipEl.textContent = `${pct}%`;
+    if (totalEl) totalEl.textContent = String(state.totalRows || 0);
+    if (completedEl) completedEl.textContent = String(state.completedRows || 0);
+    if (failedEl) failedEl.textContent = String(state.failedRows || 0);
+    if (chunkEl) chunkEl.textContent = `${state.currentChunkIndex || 0}/${state.chunkCount || 0}`;
+    if (barEl) barEl.style.width = `${pct}%`;
+    if (metaEl) {
+      const chunkInfo = state.currentChunkIndex > 0
+        ? ` Current chunk: ${state.currentChunkIndex} of ${state.chunkCount || state.currentChunkIndex}${state.currentChunkSize ? ` (${state.currentChunkSize} rows)` : ''}.`
+        : '';
+      metaEl.textContent = `${attemptedRows} of ${state.totalRows || 0} rows attempted.${chunkInfo}`;
+    }
+    if (finalEl) {
+      const showFinal = !!(state.completed || state.stopped || state.structuralFailure || state.finalSummary);
+      finalEl.style.display = showFinal ? '' : 'none';
+      finalEl.style.borderColor = state.structuralFailure ? '#fecaca' : (state.stopped ? '#fde68a' : '#bbf7d0');
+      finalEl.style.background = state.structuralFailure ? '#fff7f7' : (state.stopped ? '#fffbeb' : '#f0fdf4');
+      finalEl.style.color = state.structuralFailure ? '#7f1d1d' : (state.stopped ? '#78350f' : '#14532d');
+      finalEl.textContent = state.finalSummary || state.statusText || '';
+    }
+    if (stopBtn) {
+      stopBtn.disabled = !!(state.stopRequested || state.completed || state.stopped || state.structuralFailure);
+      stopBtn.textContent = state.stopRequested ? 'Stopping after current chunk' : 'Stop after current chunk';
+    }
+    if (closeBtn) {
+      closeBtn.disabled = !closeEnabled;
+      closeBtn.textContent = closeEnabled ? 'Close' : 'Running...';
+    }
+    renderFailures();
+  };
+
+  const cleanup = () => {
+    try { root.removeEventListener('click', onClick); } catch {}
+  };
+
+  const controller = {
+    id: instanceId,
+    update(values = {}) {
+      if (values && typeof values === 'object') {
+        if (Object.prototype.hasOwnProperty.call(values, 'title')) state.title = trimStr(values.title) || state.title;
+        if (Object.prototype.hasOwnProperty.call(values, 'statusText')) state.statusText = trimStr(values.statusText) || state.statusText;
+        if (Object.prototype.hasOwnProperty.call(values, 'status_text')) state.statusText = trimStr(values.status_text) || state.statusText;
+        if (Object.prototype.hasOwnProperty.call(values, 'totalRows')) state.totalRows = Math.max(0, Math.floor(toFiniteNumber(values.totalRows, state.totalRows)));
+        if (Object.prototype.hasOwnProperty.call(values, 'total_rows')) state.totalRows = Math.max(0, Math.floor(toFiniteNumber(values.total_rows, state.totalRows)));
+        if (Object.prototype.hasOwnProperty.call(values, 'chunkSize')) state.chunkSize = Math.max(1, Math.floor(toFiniteNumber(values.chunkSize, state.chunkSize)));
+        if (Object.prototype.hasOwnProperty.call(values, 'chunk_size')) state.chunkSize = Math.max(1, Math.floor(toFiniteNumber(values.chunk_size, state.chunkSize)));
+        if (Object.prototype.hasOwnProperty.call(values, 'chunkCount')) state.chunkCount = Math.max(0, Math.floor(toFiniteNumber(values.chunkCount, state.chunkCount)));
+        if (Object.prototype.hasOwnProperty.call(values, 'chunk_count')) state.chunkCount = Math.max(0, Math.floor(toFiniteNumber(values.chunk_count, state.chunkCount)));
+        if (Object.prototype.hasOwnProperty.call(values, 'completedRows')) state.completedRows = Math.max(0, Math.floor(toFiniteNumber(values.completedRows, state.completedRows)));
+        if (Object.prototype.hasOwnProperty.call(values, 'failedRows')) state.failedRows = Math.max(0, Math.floor(toFiniteNumber(values.failedRows, state.failedRows)));
+        if (Object.prototype.hasOwnProperty.call(values, 'currentChunkIndex')) state.currentChunkIndex = Math.max(0, Math.floor(toFiniteNumber(values.currentChunkIndex, state.currentChunkIndex)));
+        if (Object.prototype.hasOwnProperty.call(values, 'currentChunkSize')) state.currentChunkSize = Math.max(0, Math.floor(toFiniteNumber(values.currentChunkSize, state.currentChunkSize)));
+      }
+      render();
+      return controller;
+    },
+    updateTotals(values = {}) {
+      return controller.update(values);
+    },
+    updateCurrentChunk(chunkIndex, currentChunkSize, statusText) {
+      state.currentChunkIndex = Math.max(0, Math.floor(toFiniteNumber(chunkIndex, state.currentChunkIndex)));
+      state.currentChunkSize = Math.max(0, Math.floor(toFiniteNumber(currentChunkSize, state.currentChunkSize)));
+      if (statusText != null) state.statusText = trimStr(statusText) || state.statusText;
+      render();
+      return controller;
+    },
+    appendFailures(failures = [], context = {}) {
+      const list = Array.isArray(failures) ? failures : [failures];
+      for (const failure of list) {
+        if (failure == null) continue;
+        state.failures.push(normaliseFailure(failure, context));
+      }
+      render();
+      return controller;
+    },
+    markStructuralFailure(error, statusText) {
+      const errObj = (error && typeof error === 'object') ? error : { message: trimStr(error) };
+      const message = trimStr(statusText || errObj.message || errObj.error || 'The action stopped because a request failed.') || 'The action stopped because a request failed.';
+      state.structuralFailure = { ...errObj, message };
+      state.statusText = message;
+      state.finalSummary = message;
+      render();
+      return controller;
+    },
+    markCompleted(summaryText) {
+      const summary = trimStr(summaryText || `${state.completedRows} completed, ${state.failedRows} failed.`) || `${state.completedRows} completed, ${state.failedRows} failed.`;
+      state.completed = true;
+      state.statusText = summary;
+      state.finalSummary = summary;
+      render();
+      return controller;
+    },
+    markStopped(summaryText) {
+      const summary = trimStr(summaryText || `Stopped after ${state.completedRows + state.failedRows} of ${state.totalRows} rows were attempted.`) || 'Stopped after the current chunk.';
+      state.stopped = true;
+      state.statusText = summary;
+      state.finalSummary = summary;
+      render();
+      return controller;
+    },
+    requestStop() {
+      if (!state.completed && !state.stopped && !state.structuralFailure) {
+        state.stopRequested = true;
+        state.statusText = 'Stopping after the current chunk...';
+        try {
+          if (typeof opts.onStopRequested === 'function') opts.onStopRequested(controller.getState());
+        } catch {}
+        render();
+      }
+      return controller;
+    },
+    isStopRequested() {
+      return !!state.stopRequested;
+    },
+    close() {
+      state.closed = true;
+      cleanup();
+      try { overlay.remove(); } catch {
+        try { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); } catch {}
+      }
+      return controller;
+    },
+    destroy() {
+      return controller.close();
+    },
+    getState() {
+      return JSON.parse(JSON.stringify(state));
+    },
+    root,
+    overlay
+  };
+
+  function onClick(ev) {
+    const btn = ev?.target && ev.target.closest ? ev.target.closest('button[data-act]') : null;
+    if (!btn) return;
+    const act = trimStr(btn.getAttribute('data-act'));
+    if (act === 'bulk-ts-progress-stop') {
+      controller.requestStop();
+      return;
+    }
+    if (act === 'bulk-ts-progress-close') {
+      if (btn.disabled) return;
+      controller.close();
+    }
+  }
+
+  root.addEventListener('click', onClick);
+  render();
+  return controller;
+}
+
+
+
+async function openBankingPayBatchPayeEntryModal(payBatchId) {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+
+  const deep = (o) => {
+    try { return JSON.parse(JSON.stringify(o || null)); } catch { return o; }
+  };
+
+  const mcBanking = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mcBanking || String(mcBanking.entity || '') !== 'banking') {
+    try { if (typeof window.__toast === 'function') window.__toast('Banking modal is not active.'); } catch {}
+    return;
+  }
+
+  mcBanking.banking = (mcBanking.banking && typeof mcBanking.banking === 'object') ? mcBanking.banking : {};
+  mcBanking.banking.pay = (mcBanking.banking.pay && typeof mcBanking.banking === 'object') ? mcBanking.banking.pay : {};
+
+  const stBanking = mcBanking.banking;
+  const payBanking = stBanking.pay;
+
+  const id = String(payBatchId || '').trim();
+  if (!id) {
+    try { if (typeof window.__toast === 'function') window.__toast('pay_batch_id is required'); } catch {}
+    return;
+  }
+
+  const KIND = 'banking-pay-paye-entry';
+  const rootId = `bankingPayeEntry_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const openToken = `paye-entry:${id}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
+  const toast = (msg) => {
+    try { if (typeof window.__toast === 'function') window.__toast(String(msg || '').trim()); } catch {}
+  };
+
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+
+  const normalizePayeEntryErrorCode = (value) => {
+    const raw = String(value || '').trim().toUpperCase();
+    if (!raw) return '';
+    const compact = raw.replace(/^ERROR[:\s]+/, '').replace(/^CODE[:\s]+/, '').replace(/[^A-Z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!compact || /^[0-9]{5}$/.test(compact) || /^P[0-9A-Z]{4}$/.test(compact)) return '';
+    if (compact === 'PAY_BATCH_VALIDATE_FRESHNESS_FAILED') return 'BATCH_STALE';
+    if (compact === 'PAYE_NET_REQUIRED' || compact === 'PAYE_NET_BANK_AMOUNT_MISSING') return 'PAYE_NET_MISSING';
+    if (compact === 'PAYE_NET_BANK_AMOUNT_INVALID' || compact === 'MANUAL_NET_INVALID') return 'PAYE_NET_INVALID';
+    if (compact === 'PAY_BATCH_GET_FAILED') return 'BANKING_PAY_BATCH_LOAD_FAILED';
+    return compact;
+  };
+
+  const stringifyPayeEntryErrorValue = (value) => {
+    try {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+      if (value instanceof Error) return String(value.message || value.name || '');
+      return JSON.stringify(value);
+    } catch {
+      try { return String(value || ''); } catch { return ''; }
+    }
+  };
+
+  const parsePayeEntryEmbeddedObject = (value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    const text = String(value == null ? '' : value).trim();
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch {}
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        const parsed = JSON.parse(text.slice(start, end + 1));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      } catch {}
+    }
+    return null;
+  };
+
+  const extractPayeEntryFailure = (errorValue, fallbackCode = 'BANKING_PAY_BATCH_LOAD_FAILED') => {
+    const knownCodes = [
+      'BATCH_STALE',
+      'PAY_BATCH_VALIDATE_FRESHNESS_FAILED',
+      'PAYE_NET_MISSING',
+      'PAYE_NET_REQUIRED',
+      'PAYE_NET_BANK_AMOUNT_MISSING',
+      'PAYE_NET_INVALID',
+      'PAYE_NET_BANK_AMOUNT_INVALID',
+      'MANUAL_NET_INVALID',
+      'SAGE_IMPORT_INVALID',
+      'BANKING_PAY_BATCH_LOAD_FAILED',
+      'PAY_BATCH_GET_FAILED'
+    ];
+    const queue = [];
+    const seenObjects = new Set();
+    const seenStrings = new Set();
+    const findings = [];
+    const rawMessages = [];
+    const enqueue = (candidate) => {
+      if (candidate === null || candidate === undefined) return;
+      if (typeof candidate === 'string') {
+        const text = candidate.trim();
+        if (!text || seenStrings.has(text)) return;
+        seenStrings.add(text);
+        queue.push(text);
+        return;
+      }
+      if (typeof candidate === 'object') {
+        if (seenObjects.has(candidate)) return;
+        seenObjects.add(candidate);
+      }
+      queue.push(candidate);
+    };
+    const addFinding = (payload, code, directKnown = false) => {
+      const normalizedCode = normalizePayeEntryErrorCode(code || fallbackCode);
+      if (!normalizedCode) return;
+      findings.push({
+        code: normalizedCode,
+        payload: (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : { message: stringifyPayeEntryErrorValue(payload) },
+        priority: normalizedCode === 'BATCH_STALE' ? 100 : (directKnown ? 80 : 40)
+      });
+    };
+
+    enqueue(errorValue);
+    while (queue.length) {
+      const item = queue.shift();
+      if (item instanceof Error) {
+        enqueue({
+          name: item.name,
+          message: item.message,
+          code: item.code,
+          error_code: item.error_code,
+          payload: item.payload,
+          json: item.json,
+          body: item.body,
+          backendPayload: item.backendPayload,
+          response_json: item.response_json,
+          raw_response_text: item.raw_response_text,
+          technical_message: item.technical_message,
+          details: item.details,
+          detail: item.detail,
+          reason: item.reason,
+          cause: item.cause
+        });
+        continue;
+      }
+      if (typeof item === 'string') {
+        const text = item.trim();
+        if (text) rawMessages.push(text);
+        const parsed = parsePayeEntryEmbeddedObject(text);
+        if (parsed) enqueue(parsed);
+        const upper = text.toUpperCase();
+        for (const knownCode of knownCodes) {
+          const pattern = new RegExp(`(^|[^A-Z0-9_])${knownCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9_]|$)`, 'i');
+          if (pattern.test(upper)) addFinding({ message: text }, knownCode, true);
+        }
+        continue;
+      }
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const directCode = normalizePayeEntryErrorCode(item.error_code || item.errorCode || item.code || item.error || '');
+      if (directCode) addFinding(item, directCode, knownCodes.map((code) => normalizePayeEntryErrorCode(code)).includes(directCode));
+      if (item.ok === false && !directCode) addFinding(item, fallbackCode, false);
+      for (const key of [
+        'error_code', 'errorCode', 'code', 'error', 'message', 'details', 'detail', 'reason', 'hint',
+        'body', 'json', 'payload', 'backendPayload', 'data', 'cause', 'response', 'result',
+        'technical_message', 'technicalMessage', 'rpc_error', 'rpcError', 'original_error', 'originalError',
+        'inner_error', 'innerError', 'friendly_error', 'friendlyError', 'raw_response_text'
+      ]) {
+        const nested = item[key];
+        enqueue(nested);
+        const parsed = parsePayeEntryEmbeddedObject(nested);
+        if (parsed) enqueue(parsed);
+      }
+      if (Array.isArray(item.errors)) item.errors.forEach(enqueue);
+    }
+
+    findings.sort((a, b) => b.priority - a.priority);
+    const best = findings[0] || null;
+    return {
+      code: best ? best.code : (normalizePayeEntryErrorCode(fallbackCode) || 'BANKING_PAY_BATCH_LOAD_FAILED'),
+      payload: best ? best.payload : null,
+      raw_message: rawMessages.find(Boolean) || stringifyPayeEntryErrorValue(errorValue)
+    };
+  };
+
+  const normalisePayeEntryFriendlyError = (errorValue, fallbackCode = 'BANKING_PAY_BATCH_LOAD_FAILED', context = {}) => {
+    const contextObj = (context && typeof context === 'object' && !Array.isArray(context)) ? context : {};
+    const failure = extractPayeEntryFailure(errorValue, fallbackCode);
+    const code = normalizePayeEntryErrorCode(failure.code || fallbackCode) || normalizePayeEntryErrorCode(fallbackCode) || 'BANKING_PAY_BATCH_LOAD_FAILED';
+    const action = String(contextObj.action || '').trim().toUpperCase();
+    const isLoadAction = action === 'PAYE_ENTRY_LOAD' || action === 'OPEN_PAYE_ENTRY' || code === 'BANKING_PAY_BATCH_LOAD_FAILED';
+    const isImportAction = action === 'PAYE_NET_IMPORT';
+    const isSaveAction = action === 'PAYE_NET_SAVE';
+    const stale = code === 'BATCH_STALE';
+    const missingNet = code === 'PAYE_NET_MISSING';
+    const invalidNet = code === 'PAYE_NET_INVALID' || code === 'SAGE_IMPORT_INVALID';
+    const title = stale
+      ? 'Payment batch has changed'
+      : (missingNet
+          ? 'PAYE net amounts are missing'
+          : (invalidNet
+              ? 'PAYE net amounts are invalid'
+              : (isLoadAction ? 'Unable to load payment batch' : (isImportAction || isSaveAction ? 'PAYE net amounts are invalid' : 'PAYE Entry could not be updated'))));
+    const message = stale
+      ? 'This batch is no longer up to date. Refresh the batch, review the latest payment details, then try again.'
+      : (missingNet
+          ? 'Enter the missing PAYE net amounts, click Save, then try again.'
+          : (invalidNet
+              ? 'Correct the PAYE net amounts, click Save, then try again.'
+              : (isLoadAction
+                  ? 'CloudTMS could not load this payment batch. Refresh Banking and try again.'
+                  : 'CloudTMS could not update PAYE net amounts. Refresh the batch and try again.')));
+    const backendPayload = (contextObj.backendPayload && typeof contextObj.backendPayload === 'object' && !Array.isArray(contextObj.backendPayload))
+      ? contextObj.backendPayload
+      : ((errorValue?.payload && typeof errorValue.payload === 'object' && !Array.isArray(errorValue.payload))
+          ? errorValue.payload
+          : ((errorValue?.json && typeof errorValue.json === 'object' && !Array.isArray(errorValue.json))
+              ? errorValue.json
+              : ((failure.payload && typeof failure.payload === 'object' && !Array.isArray(failure.payload)) ? failure.payload : null)));
+    const normalized = (typeof bankingNormalizeApiError === 'function')
+      ? bankingNormalizeApiError(errorValue, backendPayload || failure.payload || null, {
+          action: action || 'PAYE_ENTRY',
+          fallbackCode: code,
+          fallbackTitle: title,
+          fallbackMessage: message,
+          userInitiated: contextObj.userInitiated === true,
+          silent: contextObj.silent === true,
+          background: contextObj.background === true,
+          showModal: false,
+          batchId: id,
+          payload: backendPayload || failure.payload || undefined,
+          backendPayload: backendPayload || failure.payload || undefined,
+          technical_message: failure.raw_message || ''
+        })
+      : null;
+
+    return {
+      ...((normalized && typeof normalized === 'object') ? normalized : {}),
+      ok: false,
+      error_code: code,
+      code,
+      title,
+      message,
+      user_message: message,
+      error: message,
+      can_retry: true,
+      show_modal: false,
+      friendly_error: {
+        ...((normalized?.friendly_error && typeof normalized.friendly_error === 'object') ? normalized.friendly_error : {}),
+        code,
+        error_code: code,
+        title,
+        message,
+        show_modal: false
+      },
+      backendPayload: backendPayload || failure.payload || null,
+      technical_message: failure.raw_message || normalized?.technical_message || code
+    };
+  };
+
+  const fetchJsonGet = async (path) => {
+    if (typeof authFetch !== 'function' || typeof API !== 'function') throw new Error('authFetch/API missing');
+    const res = await authFetch(API(path), { method: 'GET' });
+    const txt = await res.text().catch(() => '');
+    let parsed = null;
+    try { parsed = txt ? JSON.parse(txt) : null; } catch { parsed = null; }
+    if (!res.ok) {
+      const rawMsg = (parsed && typeof parsed === 'object' && (parsed.error || parsed.message))
+        ? String(parsed.error || parsed.message)
+        : (txt || `Request failed (${res.status})`);
+      const friendly = normalisePayeEntryFriendlyError(
+        parsed || rawMsg || `Request failed (${res.status})`,
+        'BANKING_PAY_BATCH_LOAD_FAILED',
+        { action: 'PAYE_ENTRY_LOAD', userInitiated: false, silent: true, backendPayload: parsed || null }
+      );
+      const err = new Error(String(friendly?.user_message || friendly?.message || rawMsg || 'Request failed'));
+      err.status = res.status;
+      err.body = txt;
+      err.json = parsed;
+      err.payload = parsed;
+      err.backendPayload = parsed;
+      err.friendlyError = friendly;
+      err.error_code = String(friendly?.error_code || friendly?.code || 'BANKING_PAY_BATCH_LOAD_FAILED').trim() || 'BANKING_PAY_BATCH_LOAD_FAILED';
+      throw err;
+    }
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  };
+
+  const postJson = async (path, payload) => {
+    if (typeof apiPostJson !== 'function') throw new Error('apiPostJson missing');
+    return await apiPostJson(path, payload || {});
+  };
+
+  const getSurnameKey = (c) => {
+    try {
+      if (!c || typeof c !== 'object') return '';
+      const direct =
+        String(
+          c.candidate_last_name ||
+          c.last_name ||
+          c.surname ||
+          c.candidate_surname ||
+          ''
+        ).trim();
+      if (direct) return direct.toLowerCase();
+
+      const nm = String(c.candidate_display_name || c.display_name || '').trim();
+      if (!nm) return '';
+      const parts = nm.split(/\s+/).filter(Boolean);
+      if (!parts.length) return nm.toLowerCase();
+      return String(parts[parts.length - 1] || '').toLowerCase();
+    } catch {
+      return '';
+    }
+  };
+
+  const getForenameKey = (c) => {
+    try {
+      if (!c || typeof c !== 'object') return '';
+      const direct =
+        String(
+          c.candidate_first_name ||
+          c.first_name ||
+          c.forename ||
+          ''
+        ).trim();
+      if (direct) return direct.toLowerCase();
+
+      const nm = String(c.candidate_display_name || c.display_name || '').trim();
+      if (!nm) return '';
+      const parts = nm.split(/\s+/).filter(Boolean);
+      if (!parts.length) return nm.toLowerCase();
+      return String(parts[0] || '').toLowerCase();
+    } catch {
+      return '';
+    }
+  };
+
+  const sortCandidatesBySurname = (arr) => {
+    const a = Array.isArray(arr) ? arr.slice() : [];
+    a.sort((x, y) => {
+      const sx = getSurnameKey(x);
+      const sy = getSurnameKey(y);
+      if (sx < sy) return -1;
+      if (sx > sy) return 1;
+
+      const fx = getForenameKey(x);
+      const fy = getForenameKey(y);
+      if (fx < fy) return -1;
+      if (fx > fy) return 1;
+
+      const tx = String(x?.candidate_tms_ref || x?.tms_ref || '').trim().toLowerCase();
+      const ty = String(y?.candidate_tms_ref || y?.tms_ref || '').trim().toLowerCase();
+      if (tx < ty) return -1;
+      if (tx > ty) return 1;
+
+      const ix = String(x?.candidate_id || '').trim();
+      const iy = String(y?.candidate_id || '').trim();
+      if (ix < iy) return -1;
+      if (ix > iy) return 1;
+
+      return 0;
+    });
+    return a;
+  };
+
+  const deriveBatchObj = (dataObj) => {
+    const d = (dataObj && typeof dataObj === 'object') ? dataObj : null;
+    const b = (d && d.batch && typeof d.batch === 'object') ? d.batch : null;
+    return b || null;
+  };
+
+  const deriveBatchKindInfo = (dataObj) => {
+    if (typeof bankingNormalizeBatchKind === 'function') return bankingNormalizeBatchKind(dataObj);
+    const b = deriveBatchObj(dataObj);
+    const raw = String(dataObj?.batch_kind || b?.batch_kind || b?.batch_kind_fixed || '').trim().toUpperCase();
+    return {
+      rawKind: raw,
+      normalizedKind: raw,
+      isKnown: !!raw,
+      isLoans: raw === 'LOANS',
+      isPaye: raw === 'PAYE',
+      isUmbrella: raw === 'UMBRELLA',
+      isMixed: raw === 'MIXED',
+      isPayeish: raw === 'PAYE' || raw === 'MIXED',
+      isUmbrellaish: raw === 'UMBRELLA' || raw === 'MIXED',
+      label: raw || 'UNKNOWN'
+    };
+  };
+
+  const isDraftStatus = (dataObj) => {
+    try {
+      const d = (dataObj && typeof dataObj === 'object') ? dataObj : null;
+      const b = deriveBatchObj(d);
+      const stx = String(b?.status || '').trim().toUpperCase();
+      return (stx === 'DRAFT' || stx === 'DRAFT_CREATED');
+    } catch {
+      return false;
+    }
+  };
+
+  const stillTopIsThisModal = () => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (!fr) return false;
+      if (String(fr.kind || '') !== KIND) return false;
+      const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+      if (!ctx || String(ctx.entity || '') !== 'banking') return false;
+      if (fr._ctxRef !== ctx) return false;
+      const pe = (ctx.payeNetState && typeof ctx.payeNetState === 'object') ? ctx.payeNetState : null;
+      if (!pe) return false;
+      if (String(pe.openToken || '') !== String(openToken || '')) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const ensureCtxState = () => {
+    const ctx = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+    if (!ctx || String(ctx.entity || '') !== 'banking') return null;
+
+    ctx.payeNetState = (ctx.payeNetState && typeof ctx.payeNetState === 'object' && !Array.isArray(ctx.payeNetState))
+      ? ctx.payeNetState
+      : {};
+
+    const pe = ctx.payeNetState;
+
+    pe.openToken = openToken;
+    pe.rootId = rootId;
+    pe.payBatchId = id;
+
+    if (!('loading' in pe)) pe.loading = false;
+    if (!('error' in pe)) pe.error = '';
+    if (!('friendlyError' in pe)) pe.friendlyError = null;
+    if (!('importBusy' in pe)) pe.importBusy = false;
+    if (!('importError' in pe)) pe.importError = '';
+    if (!('importFriendlyError' in pe)) pe.importFriendlyError = null;
+    if (!('lastImportFilename' in pe)) pe.lastImportFilename = '';
+
+    if (!('netDraft' in pe) || typeof pe.netDraft !== 'object' || Array.isArray(pe.netDraft)) pe.netDraft = {};
+    if (!('baselineNet' in pe) || typeof pe.baselineNet !== 'object' || Array.isArray(pe.baselineNet)) pe.baselineNet = {};
+    if (!('baselineSource' in pe) || typeof pe.baselineSource !== 'object' || Array.isArray(pe.baselineSource)) pe.baselineSource = {};
+
+    if (!('__loadInFlight' in pe)) pe.__loadInFlight = false;
+    if (!('__saveInFlight' in pe)) pe.__saveInFlight = false;
+
+    return { ctx, pe };
+  };
+
+  const applyPayeEntryFriendlyError = (errorValue, fallbackCode = 'BANKING_PAY_BATCH_LOAD_FAILED', context = {}) => {
+    const ctxState = ensureCtxState();
+    const pe = ctxState ? ctxState.pe : null;
+    const contextObj = (context && typeof context === 'object' && !Array.isArray(context)) ? context : {};
+    const friendly = normalisePayeEntryFriendlyError(errorValue, fallbackCode, contextObj);
+    const message = String(friendly?.user_message || friendly?.message || friendly?.error || 'CloudTMS could not load this payment batch. Refresh Banking and try again.').trim();
+    if (pe) {
+      if (contextObj.target === 'import') {
+        pe.importError = message;
+        pe.importFriendlyError = friendly;
+      } else {
+        pe.error = message;
+        pe.friendlyError = friendly;
+      }
+    }
+    if (contextObj.userInitiated === true && contextObj.silent !== true) {
+      try { toast(message); } catch {}
+    }
+    return friendly;
+  };
+
+  const computeBaselinesFromData = (dataObj) => {
+    const ctxState = ensureCtxState();
+    if (!ctxState) return;
+    const pe = ctxState.pe;
+
+    const data = (dataObj && typeof dataObj === 'object') ? dataObj : null;
+    const candidates = (data && Array.isArray(data.candidates)) ? data.candidates : [];
+
+    const baselineNet = {};
+    const baselineSource = {};
+
+    const hasEnteredPayeNet = (row) => {
+      const src = String(row?.paye_net_source || '').trim().toUpperCase();
+      const state = String(row?.paye_state || '').trim().toUpperCase();
+      const rawNet = row?.paye_net_amount;
+      const hasNumericNet = (rawNet !== null && rawNet !== undefined && Number.isFinite(Number(rawNet)));
+
+      if (!hasNumericNet) return false;
+      if (src) return true;
+      if (state === 'READY' || state === 'ENTERED' || state === 'NET_ENTERED') return true;
+      return false;
+    };
+
+    for (const c of candidates) {
+      const candId = String(c?.candidate_id || '').trim();
+      if (!candId) continue;
+
+      const payeStateRaw = (c && Object.prototype.hasOwnProperty.call(c, 'paye_state')) ? c.paye_state : null;
+      if (payeStateRaw === null || payeStateRaw === undefined || String(payeStateRaw).trim() === '') continue;
+
+      baselineSource[candId] = String(c?.paye_net_source || '').trim().toUpperCase() || '';
+
+      if (!hasEnteredPayeNet(c)) {
+        baselineNet[candId] = '';
+        continue;
+      }
+
+      const net = fmtMoney(c?.paye_net_amount);
+      baselineNet[candId] = net || '';
+    }
+
+    pe.baselineNet = baselineNet;
+    pe.baselineSource = baselineSource;
+  };
+
+  const enableViewModeButtons = () => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (!fr) return;
+      if (String(fr.kind || '') !== KIND) return;
+      const mode = String(fr.mode || '').trim().toLowerCase();
+      if (mode !== 'view') return;
+
+      const root = document.getElementById(rootId);
+      if (!root) return;
+
+      const allowActs = new Set([
+        'banking:pay:payeEntry:refresh',
+        'banking:pay:payeEntry:printWorksheet'
+      ]);
+
+      const btns = root.querySelectorAll('button[data-action]');
+      for (const b of btns) {
+        const act = String(b.getAttribute('data-action') || '').trim();
+        if (!allowActs.has(act)) continue;
+        try { b.disabled = false; } catch {}
+        try { b.removeAttribute('disabled'); } catch {}
+        try { b.removeAttribute('readonly'); } catch {}
+        try { b.setAttribute('aria-disabled', 'false'); } catch {}
+        try { b.dataset.disabled = ''; } catch {}
+        try { b.classList && b.classList.remove('disabled'); } catch {}
+      }
+    } catch {}
+  };
+
+  const rerender = async () => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (!fr) return;
+      if (String(fr.kind || '') !== KIND) return;
+
+      fr._suppressDirty = true;
+      await fr.setTab(fr.currentTabKey || 'paye');
+      fr._suppressDirty = false;
+      fr._updateButtons && fr._updateButtons();
+    } catch {}
+
+    try { enableViewModeButtons(); } catch {}
+
+    try {
+      if (typeof attachUkDatePicker === 'function') {
+        const root = document.getElementById(rootId);
+        const els = root ? root.querySelectorAll('[data-uk-date="1"]') : [];
+        for (const el of els) {
+          try { attachUkDatePicker(el, {}); } catch {}
+        }
+      }
+    } catch {}
+  };
+
+  const refreshParentBankingSurfaces = async () => {
+    try {
+      if (typeof bankingPayBatchGet === 'function') {
+        await bankingPayBatchGet(id);
+      } else {
+        const obj0 = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
+        const obj = deep(obj0);
+        if (obj && typeof obj === 'object' && Array.isArray(obj.candidates)) {
+          obj.candidates = sortCandidatesBySurname(obj.candidates);
+        }
+        payBanking.selected = (payBanking.selected && typeof payBanking.selected === 'object') ? payBanking.selected : { data: null, loading: false, error: '' };
+        payBanking.selected.data = obj;
+        payBanking.selected.loading = false;
+        payBanking.selected.error = '';
+        payBanking.selectedBatchId = id;
+      }
+    } catch {}
+
+    try {
+      const childState = (payBanking && payBanking.child && typeof payBanking.child === 'object') ? payBanking.child : null;
+      if (childState && String(childState.batchId || '').trim() === id) {
+        if (typeof bankingPayBatchGet === 'function') {
+          const obj = await bankingPayBatchGet(id);
+          childState.data = deep(obj);
+          childState.error = '';
+          childState.loading = false;
+        } else {
+          const obj0 = await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
+          const obj = deep(obj0);
+          if (obj && typeof obj === 'object' && Array.isArray(obj.candidates)) {
+            obj.candidates = sortCandidatesBySurname(obj.candidates);
+          }
+          childState.data = obj;
+          childState.error = '';
+          childState.loading = false;
+        }
+      }
+    } catch {}
+
+    try {
+      if (typeof bankingPayBatchesList === 'function') {
+        await bankingPayBatchesList({
+          status: (payBanking && payBanking.list) ? payBanking.list.statusFilter : null,
+          limit: (payBanking && payBanking.list) ? payBanking.list.limit : null,
+          offset: (payBanking && payBanking.list) ? payBanking.list.offset : null
+        });
+      }
+    } catch {}
+
+    try { if (typeof bankingRerender === 'function') await bankingRerender(null); } catch {}
+  };
+
+  const loadBatchIntoModal = async (opts = {}) => {
+    const silent = !!opts.silent;
+
+    if (!stillTopIsThisModal()) return;
+    const ctxState = ensureCtxState();
+    if (!ctxState) return;
+
+    const pe = ctxState.pe;
+
+    if (pe.__loadInFlight) return;
+    pe.__loadInFlight = true;
+
+    if (!silent) {
+      pe.loading = true;
+      pe.error = '';
+      await rerender();
+    }
+
+    try {
+      const obj0 = (typeof bankingPayBatchGet === 'function')
+        ? await bankingPayBatchGet(id)
+        : await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
+      if (!stillTopIsThisModal()) return;
+
+      const obj = deep(obj0);
+
+      if (obj && typeof obj === 'object' && Array.isArray(obj.candidates)) {
+        obj.candidates = sortCandidatesBySurname(obj.candidates);
+      }
+
+      ctxState.ctx.data = obj;
+      computeBaselinesFromData(ctxState.ctx.data);
+
+      pe.loading = false;
+      pe.error = '';
+      await rerender();
+    } catch (e) {
+      pe.loading = false;
+      applyPayeEntryFriendlyError(e, 'BANKING_PAY_BATCH_LOAD_FAILED', {
+        action: 'PAYE_ENTRY_LOAD',
+        target: 'load',
+        userInitiated: opts.userInitiated === true,
+        silent: opts.silent === true,
+        backendPayload: e?.payload || e?.json || null
+      });
+      await rerender();
+    } finally {
+      pe.__loadInFlight = false;
+    }
+  };
+
+  const renderTab = (key) => {
+    try {
+      const ctxState = ensureCtxState();
+      const pe = ctxState ? ctxState.pe : null;
+      if (pe) pe.activeTabKey = String(key || '').trim() || 'paye';
+    } catch {}
+    return renderBankingPayBatchPayeEntryModal();
+  };
+
+  const onDismiss = () => {
+    try {
+      const body = document.getElementById('modalBody');
+      if (body && body.__bankingPayeEntryHandler) {
+        const h = body.__bankingPayeEntryHandler;
+        body.removeEventListener('click', h.onClick, true);
+        body.removeEventListener('change', h.onChange, true);
+        body.removeEventListener('input', h.onInput, true);
+        body.removeEventListener('keydown', h.onKeyDown, true);
+        try { window.removeEventListener('modal-frame-mode-changed', h.onModeChanged); } catch {}
+        delete body.__bankingPayeEntryHandler;
+      }
+    } catch {}
+
+    try { refreshParentBankingSurfaces(); } catch {}
+  };
+
+  const buildPatchEntries = (ctx, pe) => {
+    const data = (ctx && typeof ctx === 'object' && ctx.data && typeof ctx.data === 'object') ? ctx.data : null;
+    const candidates = (data && Array.isArray(data.candidates)) ? data.candidates : [];
+
+    const entries = [];
+
+    const baselineNet = (pe && pe.baselineNet && typeof pe.baselineNet === 'object') ? pe.baselineNet : {};
+    const draft = (pe && pe.netDraft && typeof pe.netDraft === 'object') ? pe.netDraft : {};
+    const normalizeTo2dpOrNull = (raw) => {
+      if (raw === null || raw === undefined) return null;
+      const s = String(raw).trim();
+      if (!s) return null;
+      const n = Number(s);
+      if (!Number.isFinite(n)) return { error: 'NOT_NUMERIC' };
+      if (n < 0) return { error: 'NEGATIVE' };
+      return (Math.round(n * 100) / 100).toFixed(2);
+    };
+
+    for (const c of candidates) {
+      const candId = String(c?.candidate_id || '').trim();
+      if (!candId) continue;
+
+      const payeStateRaw = (c && Object.prototype.hasOwnProperty.call(c, 'paye_state')) ? c.paye_state : null;
+      if (payeStateRaw === null || payeStateRaw === undefined || String(payeStateRaw).trim() === '') continue;
+
+      if (!Object.prototype.hasOwnProperty.call(draft, candId)) continue;
+
+      const draftRaw = draft[candId];
+      const next = normalizeTo2dpOrNull(draftRaw);
+      if (next && typeof next === 'object' && next.error) {
+        const name = String(c?.candidate_display_name || c?.display_name || candId).trim();
+        throw new Error(`Invalid net amount for ${name} (${next.error}). Net must be 0 or greater.`);
+      }
+
+      const prev = String(baselineNet[candId] || '').trim();
+      const nextStr = (next == null) ? '' : String(next);
+
+      if (prev === nextStr) continue;
+
+      const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim() || null;
+
+      if (next == null) {
+        entries.push({
+          pay_batch_candidate_id: (c?.pay_batch_candidate_id != null) ? String(c.pay_batch_candidate_id).trim() : null,
+          candidate_id: candId,
+          tms_ref: tms,
+          net_amount: null
+        });
+      } else {
+        entries.push({
+          pay_batch_candidate_id: (c?.pay_batch_candidate_id != null) ? String(c.pay_batch_candidate_id).trim() : null,
+          candidate_id: candId,
+          tms_ref: tms,
+          net_amount: nextStr
+        });
+      }
+    }
+
+    return entries;
+  };
+
+  const getPatchPreview = () => {
+    const ctxState = ensureCtxState();
+    if (!ctxState) return { entries: [], hasError: false };
+    try {
+      const entries = buildPatchEntries(ctxState.ctx, ctxState.pe);
+      return { entries, hasError: false };
+    } catch {
+      return { entries: [], hasError: true };
+    }
+  };
+
+  const syncPayeEntryFrameState = () => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      if (!fr || String(fr.kind || '') !== KIND) return;
+
+      const ctxState = ensureCtxState();
+      if (!ctxState) return;
+      const pe = ctxState.pe;
+
+      const mode = String(fr.mode || '').trim().toLowerCase();
+      const inEdit = (mode === 'edit' || mode === 'create');
+      const patch = getPatchPreview();
+      const dirty = !!(patch.entries && patch.entries.length);
+
+      fr.isDirty = !!dirty;
+
+      // Keep Save/Edit footer wiring active for this modal kind so view-mode Edit remains available.
+      // _updateButtons will still hide Save automatically in view mode.
+      fr._showSave = true;
+
+      if (typeof fr._updateButtons === 'function') fr._updateButtons();
+
+      if (inEdit) {
+        const btnSave = document.getElementById('btnSave');
+        if (btnSave) {
+          btnSave.disabled = !!pe.__saveInFlight || patch.hasError || !dirty;
+        }
+      }
+    } catch {}
+  };
+
+  const onSave = async () => {
+    try {
+      if (!stillTopIsThisModal()) return false;
+      const ctxState = ensureCtxState();
+      if (!ctxState) return false;
+
+      const ctx = ctxState.ctx;
+      const pe = ctxState.pe;
+
+      if (pe.__saveInFlight) return false;
+
+      const dataNow = (ctx && typeof ctx === 'object' && ctx.data && typeof ctx.data === 'object') ? ctx.data : null;
+      const isDraftNow = isDraftStatus(dataNow);
+      if (!isDraftNow) {
+        pe.error = 'PAYE Entry can only be saved while the batch is in DRAFT.';
+        await rerender();
+        toast(pe.error);
+        return false;
+      }
+
+      pe.__saveInFlight = true;
+
+      pe.error = '';
+      pe.friendlyError = null;
+      await rerender();
+
+      const entries = buildPatchEntries(ctx, pe);
+      if (!entries.length) {
+        toast('No changes to save');
+        return false;
+      }
+
+      await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/manual`, { entries });
+
+      await loadBatchIntoModal({ silent: true });
+
+      pe.netDraft = {};
+      computeBaselinesFromData(ctx.data);
+      syncPayeEntryFrameState();
+
+      await refreshParentBankingSurfaces();
+
+      try { if (typeof window.__toast === 'function') window.__toast('PAYE net payments saved'); } catch {}
+
+      return true;
+    } catch (e) {
+      try {
+        applyPayeEntryFriendlyError(e, 'MANUAL_NET_INVALID', {
+          action: 'PAYE_NET_SAVE',
+          target: 'load',
+          userInitiated: true,
+          silent: false,
+          backendPayload: e?.payload || e?.json || null
+        });
+      } catch {}
+      await rerender();
+      return false;
+    } finally {
+      try {
+        const ctxState = ensureCtxState();
+        if (ctxState) ctxState.pe.__saveInFlight = false;
+      } catch {}
+    }
+  };
+
+  let forceEdit = false;
+  try {
+    const pre0 = (typeof bankingPayBatchGet === 'function')
+      ? await bankingPayBatchGet(id)
+      : await fetchJsonGet(`/api/banking/pay/batch/${encodeURIComponent(id)}`);
+    const pre = deep(pre0);
+    forceEdit = false;
+
+    try {
+      const ctxState = ensureCtxState();
+      if (ctxState) {
+        const obj = deep(pre);
+        if (obj && typeof obj === 'object' && Array.isArray(obj.candidates)) {
+          obj.candidates = sortCandidatesBySurname(obj.candidates);
+        }
+        ctxState.ctx.data = obj;
+        computeBaselinesFromData(ctxState.ctx.data);
+      }
+    } catch {}
+  } catch (prefetchError) {
+    forceEdit = false;
+    applyPayeEntryFriendlyError(prefetchError, 'BANKING_PAY_BATCH_LOAD_FAILED', {
+      action: 'OPEN_PAYE_ENTRY',
+      target: 'load',
+      userInitiated: false,
+      silent: true,
+      backendPayload: prefetchError?.payload || prefetchError?.json || null
+    });
+  }
+
+  showModal(
+    `PAYE Entry — ${id.slice(0, 8)}`,
+    [
+      { key: 'paye', label: 'PAYE Entry' }
+    ],
+    renderTab,
+    onSave,
+    true,
+    null,
+    {
+      kind: KIND,
+      noParentGate: true,
+      showSave: true,
+      showApply: false,
+      forceEdit: forceEdit,
+      stayOpenOnSave: true,
+      onDismiss
+    }
+  );
+
+  const attachPayeEntryHandlers = () => {
+    const body = document.getElementById('modalBody');
+    if (!body) return;
+
+    if (body.__bankingPayeEntryHandler && body.__bankingPayeEntryHandler.openToken === openToken) return;
+
+    const findRoot = (t) => {
+      try {
+        if (!t || typeof t.closest !== 'function') return null;
+        return t.closest(`#${CSS.escape(rootId)}`);
+      } catch {
+        try { return t.closest(`#${rootId}`); } catch { return null; }
+      }
+    };
+
+    const findActionEl = (ev) => {
+      try {
+        const t = ev && ev.target ? ev.target : null;
+        if (!t || typeof t.closest !== 'function') return null;
+        return t.closest('[data-action]');
+      } catch {
+        return null;
+      }
+    };
+
+    const markDirtyLocal = () => {
+      syncPayeEntryFrameState();
+    };
+
+    const onClick = async (ev) => {
+      try {
+        if (!stillTopIsThisModal()) return;
+        const root = findRoot(ev.target);
+        if (!root) return;
+
+        const el = findActionEl(ev);
+        if (!el) return;
+
+        const act = String(el.getAttribute('data-action') || '').trim();
+        if (!act) return;
+
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        const ctxState = ensureCtxState();
+        if (!ctxState) return;
+        const pe = ctxState.pe;
+
+        if (act === 'banking:pay:payeEntry:refresh') {
+          await loadBatchIntoModal({ silent: false, userInitiated: true });
+          syncPayeEntryFrameState();
+          return;
+        }
+
+        if (act === 'banking:pay:payeEntry:importSage') {
+          const dataNow = (ctxState.ctx && typeof ctxState.ctx === 'object' && ctxState.ctx.data && typeof ctxState.ctx.data === 'object') ? ctxState.ctx.data : null;
+          const isDraftNow = isDraftStatus(dataNow);
+          if (!isDraftNow) {
+            toast('Sage import is only available while the batch is in DRAFT.');
+            return;
+          }
+
+          const inp = document.getElementById(`${rootId}__sageFile`);
+          if (inp && typeof inp.click === 'function') inp.click();
+          return;
+        }
+
+        if (act === 'banking:pay:payeEntry:printWorksheet') {
+          const data = (ctxState.ctx && ctxState.ctx.data && typeof ctxState.ctx.data === 'object') ? ctxState.ctx.data : null;
+          const candidates0 = (data && Array.isArray(data.candidates)) ? data.candidates : [];
+
+          const payeCandidates0 = candidates0.filter(c => {
+            const ps = (c && Object.prototype.hasOwnProperty.call(c, 'paye_state')) ? c.paye_state : null;
+            return ps != null && String(ps).trim() !== '';
+          });
+
+          const payeCandidates = sortCandidatesBySurname(payeCandidates0);
+
+          const title = `PAYE Worksheet — ${id.slice(0, 8)}`;
+          const rows = payeCandidates.map((c) => {
+            const name = String(c?.candidate_display_name || c?.display_name || '').trim() || '—';
+            const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
+            const deductions = (typeof bankingNormalizeCandidateDeductionsSummary === 'function')
+              ? bankingNormalizeCandidateDeductionsSummary(c)
+              : {
+                  grossPositive: Number(c?.gross_preview || 0),
+                  manualDebtRecovery: Number(c?.manual_debt_recovery_taken || c?.manual_debt_recovery || 0),
+                  manualDebtNetDeductions: Number(c?.manual_debt_net_deductions || c?.manual_debt_recovery_taken || c?.manual_debt_recovery || 0),
+                  paymentAdvanceRepayment: Number(c?.payment_advance_repayment || c?.loan_repayment_taken || 0),
+                  loanRepayment: Number(c?.loan_repayment_taken || c?.payment_advance_repayment || 0),
+                  repayment: ((c?.repayment !== null && c?.repayment !== undefined && String(c.repayment).trim() !== '' && Number.isFinite(Number(c.repayment)))
+                    ? Number(c.repayment)
+                    : (Number(c?.payment_advance_repayment || c?.loan_repayment_taken || 0) + Number(c?.manual_debt_net_deductions || c?.manual_debt_recovery_taken || c?.manual_debt_recovery || 0))),
+                  overpaymentRecovery: Number(c?.overpayment_recovery_taken || 0),
+                  finalPayable: (c?.net_bank_amount != null) ? Number(c.net_bank_amount) : null,
+                  awaitingNet: !!c?.awaiting_net_amount,
+                  payeNetAmount: (c?.paye_net_amount != null) ? Number(c.paye_net_amount) : null,
+                  pendingAdvisory: !!c?.awaiting_net_amount ? 'Final deductions will be confirmed after PAYE net is entered.' : '',
+                  hasKnownFinalPayable: c?.net_bank_amount != null,
+                  raw: c
+                };
+
+            const gross = `£${fmtMoney(deductions.grossPositive)}`;
+            const net = deductions.payeNetAmount != null ? `£${fmtMoney(deductions.payeNetAmount)}` : '';
+            const overpayment = `£${fmtMoney(deductions.overpaymentRecovery)}`;
+            const repayment = `£${fmtMoney(deductions.repayment)}`;
+            const finalBank = deductions.finalPayable != null ? `£${fmtMoney(deductions.finalPayable)}` : 'Pending';
+
+            return `
+              <tr>
+                <td>${enc(name)}</td>
+                <td class="mono">${enc(tms || '')}</td>
+                <td class="mono" style="text-align:right;">${enc(gross)}</td>
+                <td class="mono" style="text-align:right;">${enc(net || '—')}</td>
+                <td class="mono" style="text-align:right;">${enc(overpayment)}</td>
+                <td class="mono" style="text-align:right;">${enc(repayment)}</td>
+                <td class="mono" style="text-align:right;">${enc(finalBank)}</td>
+              </tr>
+            `;
+          }).join('');
+
+          const w = window.open('', '_blank', 'noopener,noreferrer,width=1180,height=760');
+          if (!w) throw new Error('Popup blocked');
+
+          w.document.open();
+          w.document.write(`
+            <html>
+              <head>
+                <title>${enc(title)}</title>
+                <style>
+                  body { font-family: Arial, sans-serif; padding: 18px; }
+                  h1 { font-size: 16px; margin: 0 0 10px 0; }
+                  .meta { font-size: 12px; color: #555; margin-bottom: 12px; }
+                  table { width: 100%; border-collapse: collapse; }
+                  th, td { padding: 8px; border: 1px solid #ddd; font-size: 12px; }
+                  th { background: #f6f6f6; text-align: left; }
+                  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+                </style>
+              </head>
+              <body>
+                <h1>${enc(title)}</h1>
+                <div class="meta">Printed: ${enc(new Intl.DateTimeFormat('en-GB', { timeZone:'Europe/London', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).format(new Date()).replace(',', ''))}</div>
+                <div class="meta">Deductions become final after PAYE net is entered.</div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Candidate</th>
+                      <th>Works No.</th>
+                      <th style="text-align:right;">Gross</th>
+                      <th style="text-align:right;">PAYE Net</th>
+                      <th style="text-align:right;">Overpayment</th>
+                      <th style="text-align:right;">Repayment</th>
+                      <th style="text-align:right;">Final Bank</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rows || `<tr><td colspan="7">No PAYE candidates.</td></tr>`}
+                  </tbody>
+                </table>
+                <script>
+                  setTimeout(() => { try { window.print(); } catch(e) {} }, 50);
+                </script>
+              </body>
+            </html>
+          `);
+          w.document.close();
+
+          return;
+        }
+
+        void pe;
+      } catch (e) {
+        try {
+          applyPayeEntryFriendlyError(e, 'BANKING_PAY_BATCH_LOAD_FAILED', {
+            action: 'PAYE_ENTRY_ACTION',
+            target: 'load',
+            userInitiated: true,
+            silent: false,
+            backendPayload: e?.payload || e?.json || null
+          });
+          await rerender();
+        } catch {}
+      }
+    };
+
+    const onChange = async (ev) => {
+      try {
+        if (!stillTopIsThisModal()) return;
+        const root = findRoot(ev.target);
+        if (!root) return;
+
+        const el = ev.target;
+
+        try {
+          if (el && el.id === `${rootId}__sageFile`) {
+            const f = (el.files && el.files[0]) ? el.files[0] : null;
+            try { el.value = ''; } catch {}
+            if (!f) return;
+
+            const ctxState = ensureCtxState();
+            if (!ctxState) return;
+            const pe = ctxState.pe;
+
+            const dataNow = (ctxState.ctx && typeof ctxState.ctx === 'object' && ctxState.ctx.data && typeof ctxState.ctx.data === 'object') ? ctxState.ctx.data : null;
+            const isDraftNow = isDraftStatus(dataNow);
+            if (!isDraftNow) {
+              toast('Sage import is only available while the batch is in DRAFT.');
+              return;
+            }
+
+            pe.importBusy = true;
+            pe.importError = '';
+            pe.importFriendlyError = null;
+            await rerender();
+
+            try {
+              const name = String(f.name || 'sage_export.csv');
+              const text = await f.text();
+              if (!String(text || '').trim()) throw new Error('File is empty');
+
+              await postJson(`/api/banking/pay/batch/${encodeURIComponent(id)}/paye-net/sage`, {
+                csv_raw: text,
+                source_filename: name
+              });
+
+              pe.lastImportFilename = name;
+
+              await loadBatchIntoModal({ silent: true });
+              pe.netDraft = {};
+              computeBaselinesFromData(ctxState.ctx.data);
+              syncPayeEntryFrameState();
+
+              await refreshParentBankingSurfaces();
+
+              try { if (typeof window.__toast === 'function') window.__toast('Sage import applied'); } catch {}
+            } catch (e2) {
+              applyPayeEntryFriendlyError(e2, 'SAGE_IMPORT_INVALID', {
+                action: 'PAYE_NET_IMPORT',
+                target: 'import',
+                userInitiated: true,
+                silent: false,
+                backendPayload: e2?.payload || e2?.json || null
+              });
+            } finally {
+              pe.importBusy = false;
+              await rerender();
+            }
+
+            return;
+          }
+        } catch {}
+      } catch {}
+    };
+
+    const onInput = async (ev) => {
+      try {
+        if (!stillTopIsThisModal()) return;
+        const root = findRoot(ev.target);
+        if (!root) return;
+
+        const el = findActionEl(ev);
+        if (!el) return;
+
+        const act = String(el.getAttribute('data-action') || '').trim();
+        if (!act) return;
+
+        if (act === 'banking:pay:payeEntry:setNetDraft') {
+          const cid = String(el.getAttribute('data-candidate-id') || '').trim();
+          if (!cid) return;
+
+          const ctxState = ensureCtxState();
+          if (!ctxState) return;
+          const pe = ctxState.pe;
+
+          pe.netDraft = (pe.netDraft && typeof pe.netDraft === 'object' && !Array.isArray(pe.netDraft)) ? pe.netDraft : {};
+          pe.netDraft[cid] = String(el.value || '').trim();
+
+          markDirtyLocal();
+          return;
+        }
+      } catch {}
+    };
+
+    const onKeyDown = async (ev) => {
+      try {
+        if (!stillTopIsThisModal()) return;
+        const root = findRoot(ev.target);
+        if (!root) return;
+
+        const t = ev && ev.target ? ev.target : null;
+        if (!t || !t.getAttribute) return;
+
+        const act = String(t.getAttribute('data-action') || '').trim();
+        if (act !== 'banking:pay:payeEntry:setNetDraft') return;
+
+        const k = String(ev.key || '');
+        if (k === '-' || k === 'e' || k === 'E') {
+          ev.preventDefault();
+          ev.stopPropagation();
+          return;
+        }
+      } catch {}
+    };
+
+    body.addEventListener('click', onClick, true);
+    body.addEventListener('change', onChange, true);
+    body.addEventListener('input', onInput, true);
+    body.addEventListener('keydown', onKeyDown, true);
+
+    const onModeChanged = (evt) => {
+      try {
+        const detail = (evt && evt.detail && typeof evt.detail === 'object') ? evt.detail : null;
+        if (!detail) return;
+        if (!stillTopIsThisModal()) return;
+        syncPayeEntryFrameState();
+      } catch {}
+    };
+
+    window.addEventListener('modal-frame-mode-changed', onModeChanged);
+
+    body.__bankingPayeEntryHandler = { openToken, onClick, onChange, onInput, onKeyDown, onModeChanged };
+    syncPayeEntryFrameState();
+  };
+
+  try { requestAnimationFrame(() => requestAnimationFrame(attachPayeEntryHandlers)); } catch { setTimeout(attachPayeEntryHandlers, 0); }
+
+  await loadBatchIntoModal({ silent: false });
+}
+
+
+function renderBankingPayBatchPayeEntryModal() {
+  const enc = (typeof escapeHtml === 'function')
+    ? escapeHtml
+    : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || String(mc.entity || '') !== 'banking') {
+    return `
+      <div class="tabc">
+        <div class="card">
+          <div class="row">
+            <label>PAYE Entry</label>
+            <div class="controls">
+              <div class="mini" style="opacity:.85;">Modal state not available.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  mc.payeNetState = (mc.payeNetState && typeof mc.payeNetState === 'object') ? mc.payeNetState : {};
+  const pe = mc.payeNetState;
+
+  const rootId = String(pe.rootId || '').trim();
+  const payBatchId = String(pe.payBatchId || '').trim();
+
+  const data = (mc.data && typeof mc.data === 'object') ? mc.data : null;
+  const batch = (data && data.batch && typeof data.batch === 'object') ? data.batch : null;
+
+  const batchKindInfo = (typeof bankingNormalizeBatchKind === 'function')
+    ? bankingNormalizeBatchKind(data)
+    : {
+        rawKind: String(data?.batch_kind || batch?.batch_kind || batch?.batchKind || batch?.batch_kind_fixed || '').trim().toUpperCase(),
+        normalizedKind: String(data?.batch_kind || batch?.batch_kind || batch?.batchKind || batch?.batch_kind_fixed || '').trim().toUpperCase(),
+        isKnown: true,
+        isLoans: String(data?.batch_kind || batch?.batch_kind || batch?.batchKind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'LOANS',
+        isPaye: String(data?.batch_kind || batch?.batch_kind || batch?.batchKind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'PAYE',
+        isUmbrella: String(data?.batch_kind || batch?.batch_kind || batch?.batchKind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'UMBRELLA',
+        isMixed: String(data?.batch_kind || batch?.batch_kind || batch?.batchKind || batch?.batch_kind_fixed || '').trim().toUpperCase() === 'MIXED',
+        isPayeish: ['PAYE', 'MIXED'].includes(String(data?.batch_kind || batch?.batch_kind || batch?.batchKind || batch?.batch_kind_fixed || '').trim().toUpperCase()),
+        isUmbrellaish: ['UMBRELLA', 'MIXED'].includes(String(data?.batch_kind || batch?.batch_kind || batch?.batchKind || batch?.batch_kind_fixed || '').trim().toUpperCase()),
+        label: String(data?.batch_kind || batch?.batch_kind || batch?.batchKind || batch?.batch_kind_fixed || '').trim().toUpperCase() || 'UNKNOWN'
+      };
+
+  if (batchKindInfo.isLoans) {
+    return `
+      <div class="tabc">
+        <div class="card">
+          <div class="row">
+            <label>PAYE Entry</label>
+            <div class="controls">
+              <div class="mini" style="opacity:.85;">This is a LOANS batch. PAYE entry is not applicable.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (!batchKindInfo.isPayeish) {
+    return `
+      <div class="tabc">
+        <div class="card">
+          <div class="row">
+            <label>PAYE Entry</label>
+            <div class="controls">
+              <div class="mini" style="opacity:.85;">This batch has no PAYE candidates.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const provider = String(batch?.rail_provider_snapshot || data?.rail_provider_snapshot || '—').trim().toUpperCase();
+  const env = String(batch?.rail_env_snapshot || data?.rail_env_snapshot || '').trim().toUpperCase();
+  const status = String(batch?.status || data?.status || '').trim().toUpperCase();
+
+  const isEdit = (() => {
+    try {
+      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      const m = fr ? String(fr.mode || '').trim().toLowerCase() : '';
+      return m === 'edit';
+    } catch {
+      return false;
+    }
+  })();
+
+  const loading = !!pe.loading;
+  const err = String(pe.error || '').trim();
+
+  const importBusy = !!pe.importBusy;
+  const importErr = String(pe.importError || '').trim();
+
+  const candidatesAll = (data && Array.isArray(data.candidates)) ? data.candidates : [];
+  const candidates = candidatesAll.filter((c) => {
+    const ps = (c && Object.prototype.hasOwnProperty.call(c, 'paye_state')) ? c.paye_state : null;
+    return ps != null && String(ps).trim() !== '';
+  });
+
+  const baselineNet = (pe.baselineNet && typeof pe.baselineNet === 'object') ? pe.baselineNet : {};
+  const baselineSource = (pe.baselineSource && typeof pe.baselineSource === 'object') ? pe.baselineSource : {};
+  const netDraft = (pe.netDraft && typeof pe.netDraft === 'object') ? pe.netDraft : {};
+
+  const normMoney2 = (v) => {
+    const s = String(v == null ? '' : v).trim();
+    if (!s) return '';
+    const n = Number(s);
+    if (!Number.isFinite(n)) return s;
+    if (n < 0) return s;
+    return (Math.round(n * 100) / 100).toFixed(2);
+  };
+
+  const effectiveNetForCandidate = (cid) => {
+    const id = String(cid || '').trim();
+    if (!id) return '';
+    if (Object.prototype.hasOwnProperty.call(netDraft, id)) {
+      const d = String(netDraft[id] || '').trim();
+      return d ? normMoney2(d) : '';
+    }
+    const b = String(baselineNet[id] || '').trim();
+    return b ? normMoney2(b) : '';
+  };
+
+  const completeness = (() => {
+    let total = 0;
+    let entered = 0;
+    let pending = 0;
+
+    for (const c of candidates) {
+      const cid = String(c?.candidate_id || '').trim();
+      if (!cid) continue;
+      total += 1;
+
+      const net = effectiveNetForCandidate(cid);
+      if (net) entered += 1;
+      else pending += 1;
+    }
+
+    return { total, entered, pending };
+  })();
+
+  const toUpper = (v) => String(v == null ? '' : v).trim().toUpperCase();
+  const toNumberOrNull = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const pickSnapshotNumber = (...vals) => {
+    for (const v of vals) {
+      const n = toNumberOrNull(v);
+      if (n != null) return n;
+    }
+    return null;
+  };
+  const pickSnapshotText = (...vals) => {
+    for (const v of vals) {
+      const s = String(v == null ? '' : v).trim();
+      if (s) return s;
+    }
+    return '';
+  };
+  const classificationLabel = (classification) => {
+    const c = toUpper(classification);
+    if (c === 'REIMBURSEMENT_GROSS_FIXED') return 'Fixed reimbursement';
+    if (c === 'TAXABLE_CHANNEL_SENSITIVE') return 'Taxable';
+    return c ? c.replace(/_/g, ' ') : '';
+  };
+  const resolutionModeLabel = (mode) => {
+    const m = toUpper(mode);
+    if (m === 'SUGGESTED_EQUIVALENT_BASIS') return 'Suggested basis';
+    if (m === 'MANUAL_REPLACEMENT_RATE') return 'Manual rate';
+    if (m === 'MANUAL_AMOUNT') return 'Manual amount';
+    return m ? m.replace(/_/g, ' ') : '';
+  };
+  const treatmentLabel = (ctx) => {
+    const classification = toUpper(ctx?.classification);
+    const sourceMethod = toUpper(ctx?.source_pay_method);
+    const targetMethod = toUpper(ctx?.target_pay_method);
+    if (classification === 'REIMBURSEMENT_GROSS_FIXED') return 'Fixed reimbursement';
+    if (classification === 'TAXABLE_CHANNEL_SENSITIVE' && sourceMethod && targetMethod && sourceMethod !== targetMethod) {
+      return 'Taxable converted';
+    }
+    if (classification === 'TAXABLE_CHANNEL_SENSITIVE') return 'Frozen finance adjustment';
+    return 'Frozen finance';
+  };
+  const normaliseFrozenFinanceContext = (src) => {
+    if (!src || typeof src !== 'object') return null;
+
+    const classification = pickSnapshotText(
+      src.classification,
+      src.finance_component_classification,
+      src.frozen_component_classification,
+      src.snapshot_classification
+    );
+
+    const sourcePayMethod = pickSnapshotText(
+      src.source_pay_method,
+      src.finance_source_pay_method,
+      src.frozen_source_pay_method,
+      src.snapshot_source_pay_method
+    );
+
+    const targetPayMethod = pickSnapshotText(
+      src.target_pay_method,
+      src.current_target_pay_method,
+      src.saved_target_pay_method,
+      src.finance_target_pay_method,
+      src.frozen_target_pay_method,
+      src.snapshot_target_pay_method
+    );
+
+    const resolutionMode = pickSnapshotText(
+      src.resolution_mode,
+      src.saved_resolution_mode,
+      src.matched_saved_resolution_mode,
+      src.finance_resolution_mode,
+      src.frozen_resolution_mode,
+      src.snapshot_resolution_mode
+    );
+
+    const resolvedAmount = pickSnapshotNumber(
+      src.resolved_amount,
+      src.resolved_amount_ex_vat,
+      src.target_amount,
+      src.target_amount_ex_vat,
+      src.saved_resolution_result_json?.resolved_amount,
+      src.saved_resolution_result_json?.resolved_amount_ex_vat,
+      src.saved_resolution_result_json?.target_amount,
+      src.saved_resolution_result_json?.target_amount_ex_vat,
+      src.matched_saved_resolution_result_json?.resolved_amount,
+      src.matched_saved_resolution_result_json?.resolved_amount_ex_vat,
+      src.matched_saved_resolution_result_json?.target_amount,
+      src.matched_saved_resolution_result_json?.target_amount_ex_vat,
+      src.finance_resolved_amount,
+      src.frozen_resolved_amount,
+      src.snapshot_resolved_amount
+    );
+
+    const lineKind = pickSnapshotText(
+      src.line_kind,
+      src.kind,
+      src.item_type,
+      src.normalizedKind
+    );
+
+    const mixedCase = (
+      src.is_mixed_case === true ||
+      src.finance_is_mixed_case === true ||
+      src.snapshot_is_mixed_case === true
+    );
+
+    const hasMeaningful =
+      !!classification ||
+      !!sourcePayMethod ||
+      !!targetPayMethod ||
+      !!resolutionMode ||
+      resolvedAmount != null ||
+      mixedCase;
+
+    if (!hasMeaningful) return null;
+
+    return {
+      classification,
+      source_pay_method: sourcePayMethod,
+      target_pay_method: targetPayMethod,
+      resolution_mode: resolutionMode,
+      resolved_amount: resolvedAmount,
+      line_kind: lineKind,
+      is_mixed_case: mixedCase
+    };
+  };
+  const collectFrozenFinanceContextsFromLine = (ln) => {
+    const contexts = [];
+
+    const directCandidates = [
+      ln?.finance_component_snapshot,
+      ln?.frozen_finance_component_snapshot,
+      ln?.frozen_component_snapshot,
+      ln?.finance_snapshot,
+      ln?.finance_context,
+      ln?.frozen_finance_context,
+      ln?.finance_component,
+      ln?.finance_component_snapshot_json
+    ];
+
+    for (const candidate of directCandidates) {
+      const ctx = normaliseFrozenFinanceContext(candidate);
+      if (ctx) contexts.push(ctx);
+    }
+
+    const directFromLine = normaliseFrozenFinanceContext(ln);
+    if (directFromLine) contexts.push(directFromLine);
+
+    if (Array.isArray(ln?.breakdown_lines)) {
+      for (const bl of ln.breakdown_lines) {
+        const directBreakdownCandidates = [
+          bl?.finance_component_snapshot,
+          bl?.frozen_finance_component_snapshot,
+          bl?.frozen_component_snapshot,
+          bl?.finance_snapshot,
+          bl?.finance_context,
+          bl?.frozen_finance_context,
+          bl?.finance_component,
+          bl?.finance_component_snapshot_json
+        ];
+        for (const candidate of directBreakdownCandidates) {
+          const ctx = normaliseFrozenFinanceContext(candidate);
+          if (ctx) contexts.push(ctx);
+        }
+        const breakdownLineCtx = normaliseFrozenFinanceContext(bl);
+        if (breakdownLineCtx) contexts.push(breakdownLineCtx);
+      }
+    }
+
+    const dedup = [];
+    const seen = new Set();
+    for (const ctx of contexts) {
+      const key = [
+        toUpper(ctx.classification),
+        toUpper(ctx.source_pay_method),
+        toUpper(ctx.target_pay_method),
+        toUpper(ctx.resolution_mode),
+        ctx.resolved_amount == null ? '' : fmtMoney(ctx.resolved_amount),
+        ctx.is_mixed_case ? '1' : '0',
+        toUpper(ctx.line_kind)
+      ].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedup.push(ctx);
+    }
+
+    return dedup;
+  };
+  const renderFrozenFinanceContextSummary = (contexts) => {
+    const list = Array.isArray(contexts) ? contexts : [];
+    if (!list.length) return '';
+
+    const rows = list.map((ctx) => {
+      const classification = classificationLabel(ctx.classification);
+      const sourceMethod = pickSnapshotText(ctx.source_pay_method);
+      const targetMethod = pickSnapshotText(ctx.target_pay_method);
+      const resolutionMode = resolutionModeLabel(ctx.resolution_mode);
+      const resolvedAmount = ctx.resolved_amount != null ? `£${fmtMoney(ctx.resolved_amount)}` : '';
+      const treatment = treatmentLabel(ctx);
+
+      const bits = [];
+      if (classification) bits.push(classification);
+      if (sourceMethod || targetMethod) {
+        bits.push(`${sourceMethod || '—'} → ${targetMethod || '—'}`);
+      }
+      if (resolutionMode) bits.push(resolutionMode);
+      if (resolvedAmount) bits.push(resolvedAmount);
+      bits.push(treatment);
+      if (ctx.is_mixed_case) bits.push('Mixed case');
+
+      return `<div class="mini" style="opacity:.9;">• ${enc(bits.join(' • '))}</div>`;
+    }).join('');
+
+    return `
+      <div class="card" style="padding:10px; margin-top:8px;">
+        <div class="mini" style="font-weight:700; opacity:.9; margin-bottom:6px;">Frozen finance context</div>
+        ${rows}
+      </div>
+    `;
+  };
+
+  const optionsHtml = [
+    `<option value="ALL"${String(pe.filterCandidateId || 'ALL').trim() === 'ALL' ? ' selected' : ''}>All</option>`,
+    ...candidates.map((c) => {
+      const cid = String(c?.candidate_id || '').trim();
+      if (!cid) return '';
+      const name = String(c?.candidate_display_name || c?.display_name || '').trim();
+      const tms = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
+      const label = `${name || '—'}${tms ? ` (${tms})` : ''}`;
+      return `<option value="${enc(cid)}"${cid === String(pe.filterCandidateId || '').trim() ? ' selected' : ''}>${enc(label)}</option>`;
+    }).filter(Boolean)
+  ].join('');
+
+  const normaliseCandidateLineEntries = (candidate) => {
+    const normalized = (candidate && typeof candidate === 'object' && candidate.candidate_lines_normalized && typeof candidate.candidate_lines_normalized === 'object')
+      ? candidate.candidate_lines_normalized
+      : ((typeof bankingNormalizeCandidateLines === 'function')
+          ? bankingNormalizeCandidateLines(candidate)
+          : {
+              tsLines: Array.isArray(candidate?.candidate_lines?.ts_lines) ? candidate.candidate_lines.ts_lines : [],
+              nonTsLines: Array.isArray(candidate?.candidate_lines?.non_ts_lines) ? candidate.candidate_lines.non_ts_lines : [],
+              deductionLines: [],
+              nonDeductionNonTsLines: [],
+              hasAnyLines: true,
+              hasAnyDeductions: false,
+              raw: candidate?.candidate_lines || {}
+            });
+
+    const out = [];
+    const tsLines = Array.isArray(normalized.tsLines) ? normalized.tsLines : [];
+    const nonTsLines = Array.isArray(normalized.nonTsLines) ? normalized.nonTsLines : [];
+
+    for (const ln of tsLines) {
+      if (ln && typeof ln === 'object') out.push(ln);
+    }
+    for (const ln of nonTsLines) {
+      if (ln && typeof ln === 'object') out.push(ln);
+    }
+    return out;
+  };
+
+  const rowsHtml = candidates.length
+    ? candidates.map((c) => {
+        const cid = String(c?.candidate_id || '').trim();
+        const name = String(c?.candidate_display_name || c?.display_name || '').trim() || '—';
+        const works = String(c?.candidate_tms_ref || c?.tms_ref || '').trim();
+
+        const deductions = (c && typeof c === 'object' && c.deductionsSummary && typeof c.deductionsSummary === 'object')
+          ? c.deductionsSummary
+          : ((typeof bankingNormalizeCandidateDeductionsSummary === 'function')
+              ? bankingNormalizeCandidateDeductionsSummary(c)
+              : {
+                  grossPositive: Number(c?.gross_preview || 0),
+                  overpaymentRecovery: Number(c?.overpayment_recovery_taken || 0),
+                  loanRepayment: Number(c?.loan_repayment_taken || 0),
+                  finalPayable: (c?.net_bank_amount != null) ? Number(c.net_bank_amount) : null,
+                  awaitingNet: !!c?.awaiting_net_amount,
+                  payeNetAmount: (c?.paye_net_amount != null) ? Number(c.paye_net_amount) : null,
+                  pendingAdvisory: !!c?.awaiting_net_amount ? 'Final deductions will be confirmed after PAYE net is entered.' : '',
+                  hasKnownFinalPayable: c?.net_bank_amount != null,
+                  raw: c
+                });
+
+        const payeState = String(c?.paye_state || '').trim().toUpperCase();
+        const payeBadge =
+          (!payeState || payeState === 'PENDING_NET')
+            ? `<span class="pill pill-warn">PENDING</span>`
+            : (payeState === 'READY')
+              ? `<span class="pill pill-ok">READY</span>`
+              : `<span class="pill pill-info">${enc(payeState)}</span>`;
+
+        const src = String(baselineSource[cid] || '').trim().toUpperCase();
+        const srcTxt = src ? src : '—';
+
+        const enteredNet = effectiveNetForCandidate(cid);
+        const displayNet = enteredNet || '';
+        const finalBankAmount = (enteredNet && deductions.finalPayable != null)
+          ? `£${fmtMoney(deductions.finalPayable)}`
+          : (deductions.awaitingNet || !enteredNet ? 'Pending' : (deductions.finalPayable != null ? `£${fmtMoney(deductions.finalPayable)}` : '—'));
+
+        const inputHtml = isEdit
+          ? `
+              <input
+                class="input"
+                type="text"
+                inputmode="decimal"
+                placeholder="e.g. 123.45"
+                value="${enc(Object.prototype.hasOwnProperty.call(netDraft, cid) ? String(netDraft[cid] || '') : displayNet)}"
+                data-action="banking:pay:payeEntry:setNetDraft"
+                data-candidate-id="${enc(cid)}"
+                title="Net payment (0 or greater). Blank means not entered yet."
+                style="max-width:140px;"
+              />
+            `
+          : `<span class="mono">${enc(displayNet ? `£${displayNet}` : '—')}</span>`;
+
+        const advisoryHtml = (!displayNet || deductions.awaitingNet)
+          ? `<div class="mini" style="opacity:.85; margin-top:4px;">${enc(deductions.pendingAdvisory || 'Deductions become final after PAYE net is entered.')}</div>`
+          : '';
+
+        const linesForCand = normaliseCandidateLineEntries(c);
+        const frozenFinanceContexts = [];
+        const seenFrozenFinanceContextKeys = new Set();
+
+        const addFrozenFinanceContext = (ctx) => {
+          if (!ctx) return;
+          const key = [
+            toUpper(ctx.classification),
+            toUpper(ctx.source_pay_method),
+            toUpper(ctx.target_pay_method),
+            toUpper(ctx.resolution_mode),
+            ctx.resolved_amount == null ? '' : fmtMoney(ctx.resolved_amount),
+            ctx.is_mixed_case ? '1' : '0',
+            toUpper(ctx.line_kind)
+          ].join('|');
+          if (seenFrozenFinanceContextKeys.has(key)) return;
+          seenFrozenFinanceContextKeys.add(key);
+          frozenFinanceContexts.push(ctx);
+        };
+
+        linesForCand.forEach((ln) => {
+          collectFrozenFinanceContextsFromLine(ln).forEach(addFrozenFinanceContext);
+        });
+
+        const frozenFinanceSummaryHtml = renderFrozenFinanceContextSummary(frozenFinanceContexts);
+
+        return `
+          <tr>
+            <td>
+              <div style="display:flex;flex-direction:column;gap:6px;">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <span style="font-weight:700;">${enc(name)}</span>
+                  ${works ? `<span class="mono">${enc(works)}</span>` : ``}
+                  ${payeBadge}
+                </div>
+                ${advisoryHtml}
+                ${frozenFinanceSummaryHtml}
+              </div>
+            </td>
+            <td class="mono" style="white-space:nowrap;text-align:right;">${enc(`£${fmtMoney(deductions.grossPositive)}`)}</td>
+            <td style="white-space:nowrap;text-align:right;">${inputHtml}</td>
+            <td class="mono" style="white-space:nowrap;text-align:right;">${enc(`£${fmtMoney(deductions.overpaymentRecovery)}`)}</td>
+            <td class="mono" style="white-space:nowrap;text-align:right;">${enc(`£${fmtMoney(deductions.loanRepayment)}`)}</td>
+            <td class="mono" style="white-space:nowrap;text-align:right;">${enc(finalBankAmount)}</td>
+            <td class="mini" style="white-space:nowrap;">${enc(srcTxt)}</td>
+          </tr>
+        `;
+      }).join('')
+    : `<tr><td colspan="7" class="mini" style="opacity:.85;">No PAYE candidates found.</td></tr>`;
+
+  const banner = (() => {
+    if (loading) {
+      return `<div class="mini" style="opacity:.9;">Loading…</div>`;
+    }
+    return `
+      <div class="mini" style="opacity:.9;">
+        Deductions become final after PAYE net is entered. Before net exists, the final bank amount remains advisory / pending.
+        This modal opens in view mode. Click <b>Edit</b> to enter net payments, then <b>Save</b>. Partial saves are allowed.
+        Frozen finance context is shown beneath each candidate when finance-related lines are present.
+      </div>
+    `;
+  })();
+
+  const errHtml = err ? `<div class="error" style="white-space:pre-wrap;">${enc(err)}</div>` : '';
+  const importErrHtml = importErr ? `<div class="error" style="white-space:pre-wrap;">${enc(importErr)}</div>` : '';
+
+  const headerMeta = `
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <span class="pill pill-info">${enc(batchKindInfo.label || '—')}</span>
+      <span class="pill">${enc(status || '—')}</span>
+      <span class="mini">${enc(provider + (env ? `/${env}` : ''))}</span>
+      <span class="mini">Batch: <span class="mono">${enc(payBatchId ? payBatchId.slice(0, 8) : '—')}</span></span>
+      <span class="mini" style="opacity:.85;">Net entered: <span class="mono">${enc(String(completeness.entered))}</span> / <span class="mono">${enc(String(completeness.total))}</span></span>
+      ${completeness.pending ? `<span class="pill pill-warn">Pending: ${enc(String(completeness.pending))}</span>` : `<span class="pill pill-ok">Complete</span>`}
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:payeEntry:refresh" title="Refresh batch data">Refresh</button>
+        <button type="button" class="btn btn-sm btn-outline ${importBusy ? 'disabled' : ''}" ${importBusy ? 'aria-disabled="true"' : ''} data-action="banking:pay:payeEntry:importSage" title="Import Sage net payments">Import Sage CSV</button>
+        <button type="button" class="btn btn-sm btn-outline" data-action="banking:pay:payeEntry:printWorksheet" title="Print worksheet">Print</button>
+      </div>
+    </div>
+  `;
+
+  const fileInput = `
+    <input id="${enc(rootId)}__sageFile" type="file" accept=".csv,text/csv" style="display:none;" />
+  `;
+
+  return `
+    <div class="tabc" id="${enc(rootId)}">
+      ${fileInput}
+
+      <div class="card">
+        <div class="row">
+          <label>PAYE Entry</label>
+          <div class="controls" style="display:flex;flex-direction:column;gap:10px;">
+            ${errHtml}
+            ${banner}
+            ${headerMeta}
+            ${importErrHtml}
+
+            <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;">
+              <table class="grid" style="min-width:1180px;table-layout:auto;">
+                <thead>
+                  <tr>
+                    <th>Candidate</th>
+                    <th style="width:140px;text-align:right;">Gross</th>
+                    <th style="width:180px;text-align:right;">Entered PAYE net</th>
+                    <th style="width:160px;text-align:right;">Overpayment recovery</th>
+                    <th style="width:140px;text-align:right;">Loan repayment</th>
+                    <th style="width:160px;text-align:right;">Final bank amount</th>
+                    <th style="width:160px;">Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rowsHtml}
+                </tbody>
+              </table>
+            </div>
+
+            <div class="mini" style="opacity:.8;">
+              Tips: In edit mode, enter numbers like <span class="mono">123.45</span>. Leaving blank is allowed. Blank candidates remain pending and execution will stay blocked until all PAYE net values are present.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+
 
 
 
@@ -250943,8 +254369,6 @@ function renderOutboxTable(content, rows) {
 }
 
 
-
-
 function renderSummary(rows){
   currentRows = rows;
   currentSelection = null;
@@ -251053,7 +254477,7 @@ function renderSummary(rows){
   let sel = getActiveSelection();
 
    // Small helper: render red issue badges or green OK for the Issues column
- const renderIssueBadges = (codes) => {
+ const renderIssueBadges = (codes, rowObj = null) => {
   const wrap = document.createElement('div');
   wrap.className = 'issue-badges';
 
@@ -251080,6 +254504,18 @@ function renderSummary(rows){
 
   const rest = arr0.filter(x => !REF_ALL.has(x));
   const arr = refChosen ? [refChosen, ...rest] : rest;
+
+  const payIcon = (currentSection === 'timesheets' && rowObj)
+    ? buildTimesheetPayIcon(rowObj)
+    : null;
+
+  if (payIcon) {
+    payIcon.classList.add('issue-pay-badge');
+    payIcon.style.marginLeft = '0';
+    payIcon.style.flex = '0 0 auto';
+    payIcon.style.alignSelf = 'center';
+    wrap.appendChild(payIcon);
+  }
 
   if (!arr.length) {
     const ok = document.createElement('span');
@@ -253988,8 +257424,8 @@ const getSelectionUiState = () => {
           // No timesheet yet (planned week only) – show nothing
           td.textContent = '';
         } else {
-          // Timesheet exists – use shared helper (green OK or red/amber badges)
-          td.appendChild(renderIssueBadges(codes));
+          // Timesheet exists – use shared helper (green OK or red/amber badges) plus cached pay icon.
+          td.appendChild(renderIssueBadges(codes, r));
         }
 
       } else if (currentSection === 'timesheets' && c === 'candidate_name') {
@@ -253998,24 +257434,7 @@ const getSelectionUiState = () => {
 
       } else if (currentSection === 'timesheets' && c === 'tools_stage') {
         const txt = String(formatDisplayValue(c, v) ?? '');
-        const payIconEl = buildTimesheetPayIcon(r);
-
-        if (payIconEl && txt) {
-          const wrap = document.createElement('div');
-          wrap.className = 'cell-right-icon';
-
-          const main = document.createElement('span');
-          main.className = 'cell-main';
-          main.textContent = txt;
-
-          wrap.appendChild(main);
-          wrap.appendChild(payIconEl);
-          td.appendChild(wrap);
-        } else if (payIconEl) {
-          td.appendChild(payIconEl);
-        } else {
-          td.textContent = txt;
-        }
+        td.textContent = txt;
 
       } else if (currentSection === 'timesheets' && (c === 'processing_status' || c === 'processing_status_display')) {
         // ✅ Processing Status is the canonical display label from the view (never TSFIN raw status)
@@ -254263,7 +257682,7 @@ const getSelectionUiState = () => {
 
   const fmtGBP = (n) => {
     const x = Number(n || 0);
-    const v = Number.isFinite(x) ? v = x : 0;
+    const v = Number.isFinite(x) ? x : 0;
     return `£${v.toFixed(2)}`;
   };
 
@@ -254677,6 +258096,8 @@ const getSelectionUiState = () => {
     })
     .catch(() => { /* non-blocking */ }); 
 }
+
+
 
 
 
@@ -306069,7 +309490,6 @@ async function saveNhspDeferrals(ctxOrId, deferrals) {
   return { ok: true };
 }
 
-
 async function listTimesheetsSummary(filters = {}) {
   window.__listState = window.__listState || {};
   const st = (window.__listState['timesheets'] ||= {
@@ -306112,6 +309532,17 @@ async function listTimesheetsSummary(filters = {}) {
 
   if (f.client_id) qs.set('client_id', String(f.client_id));
   if (f.candidate_id) qs.set('candidate_id', String(f.candidate_id));
+
+  try {
+    const payBatchId = String(
+      f.pay_batch_id ||
+      f.payBatchId ||
+      f.batch_id ||
+      f.batchId ||
+      ''
+    ).trim();
+    if (payBatchId) qs.set('pay_batch_id', payBatchId);
+  } catch {}
 
   // ─────────────────────────────────────────────────────────────
   // Canonical filters:
@@ -306294,6 +309725,10 @@ async function listTimesheetsSummary(filters = {}) {
 
   return rows;
 }
+
+
+
+
 
 async function deleteCandidate(candidateId) {
   const id = String(candidateId || '').trim();
