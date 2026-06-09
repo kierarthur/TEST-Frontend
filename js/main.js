@@ -2251,6 +2251,38 @@ async function loadSection() {
       st.sort = { key: null, dir: 'asc' };
     }
 
+
+    const getPayBatchFilterId = (filters) => {
+      if (!filters || typeof filters !== 'object' || Array.isArray(filters)) return '';
+      return String(
+        filters.pay_batch_id ||
+        filters.payBatchId ||
+        filters.batch_id ||
+        filters.batchId ||
+        ''
+      ).trim();
+    };
+
+    const isBankingPayBatchTimesheetShortcutView = () => {
+      const state = (window.__listState && window.__listState.timesheets && typeof window.__listState.timesheets === 'object')
+        ? window.__listState.timesheets
+        : st;
+      return !!(
+        sectionKey === 'timesheets' &&
+        state &&
+        typeof state === 'object' &&
+        getPayBatchFilterId(state.filters) &&
+        (
+          state.__openedFromBankingPayBatchShortcut === true ||
+          state.openedFromBankingPayBatchShortcut === true
+        )
+      );
+    };
+
+    if (isBankingPayBatchTimesheetShortcutView() && String(st.pageSize || '').trim().toUpperCase() === 'ALL') {
+      st.pageSize = 50;
+    }
+
     const clonePlain = (value) => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
       try {
@@ -2356,6 +2388,11 @@ async function loadSection() {
     }
 
     await loadUserGridPrefs(sectionKey);
+
+
+    if (isBankingPayBatchTimesheetShortcutView() && String(st.pageSize || '').trim().toUpperCase() === 'ALL') {
+      st.pageSize = 50;
+    }
 
     if ((!st.sort || !st.sort.key || !String(st.sort.key).trim()) && typeAheadSortKey) {
       st.sort = {
@@ -2954,6 +2991,32 @@ const selectionMode = String(sel.mode || 'explicit').trim().toLowerCase() === 'a
             membership_status: 'n/a'
           };
         }
+        return;
+      }
+
+      if (isBankingPayBatchTimesheetShortcutView()) {
+        window.__summaryLoadState = window.__summaryLoadState || {};
+        if (window.__summaryLoadState[sectionKey]) {
+          window.__summaryLoadState[sectionKey] = {
+            ...window.__summaryLoadState[sectionKey],
+            membership_status: 'deferred'
+          };
+        }
+
+        try {
+          if (typeof ensureSelection === 'function') {
+            const sel = ensureSelection(sectionKey);
+            if (sel && typeof sel === 'object') {
+              sel.dataset_key = datasetKey;
+              sel.fingerprint = datasetKey;
+              sel.membership_total = null;
+              sel.membership_status = 'deferred';
+              sel.membership_source = 'banking_pay_batch_shortcut';
+              sel.membership_authoritative = false;
+              sel.membership_fallback_total = null;
+            }
+          }
+        } catch {}
         return;
       }
 
@@ -50101,6 +50164,7 @@ function renderPayPreparePanel() {
 async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
   const root = (typeof window !== 'undefined') ? window : globalThis;
   const trimStr = (value) => String(value == null ? '' : value).trim();
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const id = trimStr(
     batchId ||
     (options && (options.pay_batch_id || options.payBatchId || options.batch_id || options.batchId)) ||
@@ -50125,15 +50189,30 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
     return false;
   }
 
+  if (!uuidRe.test(id)) {
+    notify('Unable to show timesheets: invalid pay batch id.', 'error');
+    return false;
+  }
+
   root.__listState = root.__listState || {};
   const existingState = (root.__listState.timesheets && typeof root.__listState.timesheets === 'object')
     ? root.__listState.timesheets
     : {};
 
-  const pageSize = existingState.pageSize || 50;
+  const rawPageSize = existingState.pageSize;
+  const numericPageSize = Number(rawPageSize);
+  const pageSize = (String(rawPageSize || '').trim().toUpperCase() === 'ALL' || !Number.isFinite(numericPageSize) || numericPageSize <= 0)
+    ? 50
+    : Math.max(1, Math.min(200, Math.floor(numericPageSize)));
+
   const sort = (existingState.sort && typeof existingState.sort === 'object')
     ? { ...existingState.sort }
     : { key: null, dir: 'asc' };
+
+  const datasetKey = JSON.stringify({
+    section: 'timesheets',
+    filters: { pay_batch_id: id }
+  });
 
   root.__listState.timesheets = {
     ...existingState,
@@ -50143,7 +50222,13 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
     hasMore: false,
     totals: null,
     filters: { pay_batch_id: id },
-    sort
+    sort,
+    __allRowsCache: null,
+    __lastSelectionDatasetKey: '',
+    __lastSelectionViewKey: '',
+    __openedFromBankingPayBatchShortcut: true,
+    openedFromBankingPayBatchShortcut: true,
+    __bankingPayBatchTimesheetShortcutPayBatchId: id
   };
 
   try {
@@ -50165,14 +50250,56 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
   } catch {}
 
   try {
+    if (root.__summaryCache && root.__summaryCache.timesheets && typeof root.__summaryCache.timesheets === 'object') {
+      root.__summaryCache.timesheets = {};
+    }
+  } catch {}
+
+  try {
+    if (root.__summaryLoadState && root.__summaryLoadState.timesheets && typeof root.__summaryLoadState.timesheets === 'object') {
+      root.__summaryLoadState.timesheets = {
+        ...root.__summaryLoadState.timesheets,
+        dataset_key: datasetKey,
+        membership_status: 'deferred'
+      };
+    }
+  } catch {}
+
+  try {
     if (typeof resetSelectionForDataset === 'function') {
-      resetSelectionForDataset('timesheets', JSON.stringify({ pay_batch_id: id }), 'banking-pay-batch-timesheets');
+      resetSelectionForDataset('timesheets', datasetKey, 'banking-pay-batch-timesheets');
     } else if (root.__selection && root.__selection.timesheets) {
       const sel = root.__selection.timesheets;
       if (sel.ids && typeof sel.ids.clear === 'function') sel.ids.clear();
       if (sel.included_ids && typeof sel.included_ids.clear === 'function') sel.included_ids.clear();
       if (sel.excluded_ids && typeof sel.excluded_ids.clear === 'function') sel.excluded_ids.clear();
       sel.mode = 'explicit';
+      sel.dataset_key = datasetKey;
+      sel.fingerprint = datasetKey;
+      sel.membership_total = null;
+      sel.membership_status = 'deferred';
+      sel.membership_source = 'banking_pay_batch_shortcut';
+      sel.membership_authoritative = false;
+      sel.membership_fallback_total = null;
+    }
+  } catch {}
+
+  try {
+    if (typeof ensureSelection === 'function') {
+      const sel = ensureSelection('timesheets');
+      if (sel && typeof sel === 'object') {
+        sel.dataset_key = datasetKey;
+        sel.fingerprint = datasetKey;
+        sel.mode = 'explicit';
+        if (sel.ids && typeof sel.ids.clear === 'function') sel.ids.clear();
+        if (sel.included_ids && typeof sel.included_ids.clear === 'function') sel.included_ids.clear();
+        if (sel.excluded_ids && typeof sel.excluded_ids.clear === 'function') sel.excluded_ids.clear();
+        sel.membership_total = null;
+        sel.membership_status = 'deferred';
+        sel.membership_source = 'banking_pay_batch_shortcut';
+        sel.membership_authoritative = false;
+        sel.membership_fallback_total = null;
+      }
     }
   } catch {}
 
@@ -50188,6 +50315,9 @@ async function navigateBankingPayBatchTimesheetsSummary(batchId, options = {}) {
   notify('Showing timesheets linked to the selected pay batch.', 'info');
   return true;
 }
+
+
+
 
 function installBankingPayBatchTimesheetSummaryShortcut() {
   try {
@@ -93958,7 +94088,8 @@ function getSummaryFingerprint(section){
    - Non-blocking; safe to call repeatedly (dedup by fingerprint)
 */
 // ─────────────────────────────────────────────────────────────────────────────
-async function primeSummaryMembership(section, fingerprint) {
+
+async function primeSummaryMembership(section, fingerprint, options = {}) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
 
   const allowedSections = new Set(['candidates', 'clients', 'umbrellas', 'contracts', 'timesheets', 'invoices']);
@@ -94118,6 +94249,46 @@ async function primeSummaryMembership(section, fingerprint) {
     return Number.isFinite(n) && n >= 0 ? n : fallback;
   };
 
+
+  const isTruthy = (value) => {
+    if (value === true) return true;
+    if (value === false || value == null) return false;
+    const s = String(value).trim().toLowerCase();
+    return ['1', 'true', 'yes', 'y', 'on', 'ids', 'full', 'full_ids'].includes(s);
+  };
+
+  const getPayBatchFilterId = (filters) => {
+    if (!filters || typeof filters !== 'object' || Array.isArray(filters)) return '';
+    return String(
+      filters.pay_batch_id ||
+      filters.payBatchId ||
+      filters.batch_id ||
+      filters.batchId ||
+      ''
+    ).trim();
+  };
+
+  const markActiveSelectionMembershipDeferred = (expectedDatasetKey, totalHint = null) => {
+    try {
+      const activeSel = getActiveSelection();
+      const currentFp = getCurrentSummaryFingerprint();
+      if (!activeSel || typeof activeSel !== 'object') return;
+
+      const activeDatasetKey = normalizeFingerprint(activeSel.dataset_key || activeSel.fingerprint || expectedDatasetKey);
+      if (expectedDatasetKey && activeDatasetKey && activeDatasetKey !== expectedDatasetKey) return;
+      if (currentFp && expectedDatasetKey && currentFp !== expectedDatasetKey) return;
+
+      const finiteTotalHint = toFiniteNonNegative(totalHint, null);
+      activeSel.dataset_key = expectedDatasetKey || activeDatasetKey;
+      activeSel.fingerprint = expectedDatasetKey || activeDatasetKey;
+      activeSel.membership_total = null;
+      activeSel.membership_status = 'deferred';
+      activeSel.membership_source = 'banking_pay_batch_shortcut';
+      activeSel.membership_authoritative = false;
+      activeSel.membership_fallback_total = finiteTotalHint;
+    } catch {}
+  };
+
   const inspectCacheEntry = (entry, expectedKey, hbRevNow, nowTs) => {
     const expectedDatasetKey = String(expectedKey || '').trim();
     const source = (entry && typeof entry === 'object') ? entry : {};
@@ -94224,6 +94395,54 @@ async function primeSummaryMembership(section, fingerprint) {
   const cacheKey = normalizeFingerprint(fingerprint);
   if (!cacheKey) return;
 
+  const opts = (options && typeof options === 'object') ? options : {};
+  const explicitFullMembership = !!(
+    isTruthy(opts.explicitFullMembership) ||
+    isTruthy(opts.explicit_full_membership) ||
+    isTruthy(opts.forceFullMembership) ||
+    isTruthy(opts.force_full_membership) ||
+    isTruthy(opts.includeIds) ||
+    isTruthy(opts.include_ids)
+  );
+
+  let activeFiltersForSection = {};
+  try {
+    const stForSection = window.__listState && window.__listState[secKey] && typeof window.__listState[secKey] === 'object'
+      ? window.__listState[secKey]
+      : null;
+    activeFiltersForSection = (
+      stForSection &&
+      stForSection.filters &&
+      typeof stForSection.filters === 'object' &&
+      !Array.isArray(stForSection.filters)
+    )
+      ? stForSection.filters
+      : {};
+
+    const payBatchId = getPayBatchFilterId(activeFiltersForSection);
+    const openedFromBankingPayBatchShortcut = !!(
+      stForSection &&
+      (
+        stForSection.__openedFromBankingPayBatchShortcut === true ||
+        stForSection.openedFromBankingPayBatchShortcut === true
+      )
+    );
+
+    if (secKey === 'timesheets' && payBatchId && openedFromBankingPayBatchShortcut && !explicitFullMembership) {
+      markActiveSelectionMembershipDeferred(cacheKey, null);
+      try {
+        window.__summaryLoadState = window.__summaryLoadState || {};
+        if (window.__summaryLoadState[secKey]) {
+          window.__summaryLoadState[secKey] = {
+            ...window.__summaryLoadState[secKey],
+            membership_status: 'deferred'
+          };
+        }
+      } catch {}
+      return;
+    }
+  } catch {}
+
   const hbRevNow = getHeartbeatRevFor(secKey);
   const nowTs = Date.now();
 
@@ -94281,7 +94500,10 @@ async function primeSummaryMembership(section, fingerprint) {
       body: JSON.stringify({
         section: secKey,
         dataset_key: cacheKey,
-        effective_filters: effectiveFilters
+        effective_filters: effectiveFilters,
+        include_ids: explicitFullMembership,
+        explicit_full_membership: explicitFullMembership,
+        membership_mode: explicitFullMembership ? 'ids' : 'deferred'
       })
     });
     const json = await resp.json().catch(() => null);
@@ -94292,6 +94514,52 @@ async function primeSummaryMembership(section, fingerprint) {
           ? String(json.error || json.message)
           : `Failed to load summary membership (${resp.status})`;
       throw new Error(msg);
+    }
+
+    const responseDeferred = !!(
+      json &&
+      typeof json === 'object' &&
+      !Array.isArray(json) &&
+      (
+        json.membership_deferred === true ||
+        json.deferred === true ||
+        json.ids_deferred === true
+      ) &&
+      !explicitFullMembership
+    );
+
+    if (responseDeferred) {
+      const deferredTotal = toFiniteNonNegative(
+        json.total_count ?? json.total ?? json.count ?? json.row_count,
+        null
+      );
+
+      cache[cacheKey] = {
+        dataset_key: normalizeFingerprint(json?.dataset_key || cacheKey) || cacheKey,
+        row_ids: [],
+        ids: [],
+        total_count: null,
+        total: null,
+        updatedAt: 0,
+        stale: true,
+        hb_rev: (hbRevNow != null ? hbRevNow : null),
+        last_error: null,
+        failedAt: null,
+        membership_deferred: true,
+        deferred_total_count: deferredTotal
+      };
+
+      markActiveSelectionMembershipDeferred(cacheKey, deferredTotal);
+      try {
+        window.__summaryLoadState = window.__summaryLoadState || {};
+        if (window.__summaryLoadState[secKey]) {
+          window.__summaryLoadState[secKey] = {
+            ...window.__summaryLoadState[secKey],
+            membership_status: 'deferred'
+          };
+        }
+      } catch {}
+      return;
     }
 
     const normalizedResponseIds = normalizeRowIds(
@@ -94383,6 +94651,9 @@ async function primeSummaryMembership(section, fingerprint) {
     if (cache[cacheKey]) delete cache[cacheKey]._inflight;
   }
 }
+
+
+
 function getSummaryMembership(section, fingerprint) {
   const allowedSections = new Set(['candidates', 'clients', 'umbrellas', 'contracts', 'timesheets', 'invoices']);
   const secKey = String(section == null ? '' : section).trim().toLowerCase();
