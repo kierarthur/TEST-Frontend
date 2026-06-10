@@ -289484,6 +289484,22 @@ async function fetchTimesheetDetails(timesheetId) {
   const validations = Array.isArray(json.validations) ? json.validations : [];
   const shifts      = Array.isArray(json.shifts)      ? json.shifts      : [];
 
+  // ✅ Preserve authoritative payment-state payload returned by /details.
+  // This is the only source the Timesheet modal payment badges/summary should use.
+  const pay_state = (json.pay_state && typeof json.pay_state === 'object' && !Array.isArray(json.pay_state))
+    ? json.pay_state
+    : null;
+
+  const segment_snoozes = Array.isArray(json.segment_snoozes)
+    ? json.segment_snoozes
+    : [];
+
+  const normaliseNullableString = (value) => {
+    if (value == null) return null;
+    const s = String(value).trim();
+    return s || null;
+  };
+
   // ✅ Rotation resolution metadata from backend
   const booking_id             = json.booking_id || (timesheet ? (timesheet.booking_id || null) : null);
   const requested_timesheet_id = json.requested_timesheet_id || timesheetId;
@@ -289545,6 +289561,18 @@ async function fetchTimesheetDetails(timesheetId) {
     policy: json.policy || null,
     action_flags: (json.action_flags && typeof json.action_flags === 'object') ? json.action_flags : null,
 
+    // ✅ Authoritative payment-state payload for Overview + Financials tabs.
+    // Do not reconstruct or fall back to summary-cache economics here.
+    pay_state,
+    segment_snoozes,
+    is_advanced: json.is_advanced === true,
+    can_unadvance: json.can_unadvance === true,
+    advanced_consumed_by_batch_id: normaliseNullableString(json.advanced_consumed_by_batch_id),
+    is_snoozed: json.is_snoozed === true,
+    snooze_until_date: normaliseNullableString(json.snooze_until_date),
+    snooze_is_indefinite: json.snooze_is_indefinite === true,
+    snooze_note: normaliseNullableString(json.snooze_note),
+
     // ✅ Rotation metadata for callers (openTimesheet + guarded writes)
     booking_id,
     requested_timesheet_id,
@@ -289568,6 +289596,27 @@ async function fetchTimesheetDetails(timesheetId) {
     hasActionFlags: !!detail.action_flags,
     contract_week_id: detail.contract_week_id || null,
     hasContractWeek: !!detail.contract_week,
+
+    hasPayState: !!detail.pay_state,
+    pay_state_ok: detail.pay_state ? detail.pay_state.ok === true : false,
+    paid_status: detail.pay_state ? (detail.pay_state.paid_status || null) : null,
+    hasPaidTotals: !!(detail.pay_state && detail.pay_state.paid_totals && typeof detail.pay_state.paid_totals === 'object'),
+    paid_to_date_ex_vat: detail.pay_state && detail.pay_state.paid_totals
+      ? detail.pay_state.paid_totals.paid_to_date_ex_vat
+      : null,
+    adjusted_outstanding_ex_vat: detail.pay_state && detail.pay_state.adjusted
+      ? detail.pay_state.adjusted.outstanding_ex_vat
+      : null,
+    adjusted_reserved_ex_vat: detail.pay_state && detail.pay_state.adjusted
+      ? detail.pay_state.adjusted.reserved_ex_vat
+      : null,
+    adjusted_net_delta_ex_vat: detail.pay_state && detail.pay_state.adjusted
+      ? detail.pay_state.adjusted.net_delta_ex_vat
+      : null,
+    segmentSnoozesCount: detail.segment_snoozes.length,
+    is_advanced: detail.is_advanced,
+    can_unadvance: detail.can_unadvance,
+    is_snoozed: detail.is_snoozed,
 
     booking_id: detail.booking_id,
     requested_timesheet_id: detail.requested_timesheet_id,
