@@ -293566,6 +293566,8 @@ function renderTimesheetOverviewTab(ctx) {
   const payStateProcessingAny = !!payState?.processing_any;
   const backendCanAdvancePayment = actionFlags.can_advance_payment === true;
   const backendCanUnadvancePayment = actionFlags.can_unadvance_payment === true;
+  const backendCanSnoozePayment = actionFlags.can_snooze_payment === true;
+  const backendCanClearPaymentSnooze = actionFlags.can_clear_payment_snooze === true;
   const effectivePaidStatus = payStateOk
     ? payStatePaidStatus
     : (isPaid ? 'PAID' : 'UNPAID');
@@ -293582,6 +293584,16 @@ function renderTimesheetOverviewTab(ctx) {
   const payAdjustedNetDelta = Number(payAdjusted?.net_delta_ex_vat);
   const payAdjustedOutstanding = Number(payAdjusted?.outstanding_ex_vat);
   const payAdjustedReserved = Number(payAdjusted?.reserved_ex_vat);
+  const payStateHasActiveReservation = !!(
+    payStateOk &&
+    Number.isFinite(payAdjustedReserved) &&
+    payAdjustedReserved > 0
+  );
+  const payStateIsOverpaid = !!(
+    payStateOk &&
+    Number.isFinite(payAdjustedNetDelta) &&
+    payAdjustedNetDelta < 0
+  );
 
   const showAdvancePaymentAction =
     !!tsId &&
@@ -293595,8 +293607,8 @@ function renderTimesheetOverviewTab(ctx) {
 
   const showSnoozePaymentAction =
     !!tsId &&
-    !locked &&
-    hasTsfin;
+    hasTsfin &&
+    (backendCanSnoozePayment || backendCanClearPaymentSnooze);
 
   // ─────────────────────────────────────────────────────────────
   // ✅ Invoice issuing delay badge (SEGMENTS mode, matches SQL rule)
@@ -293708,18 +293720,8 @@ function renderTimesheetOverviewTab(ctx) {
     );
   };
 
-  // ✅ NEW: pay-state badges (backend-authoritative; no client truth recompute)
-  if (payState && typeof payState === 'object' && payState.ok === true) {
-    if (payStateIsAdvanced) {
-      addStage(
-        'Advanced',
-        'pill-warn',
-        payStateAdvancedConsumedByBatchId
-          ? `This Advance Pay marker has already been consumed by pay batch ${payStateAdvancedConsumedByBatchId}.`
-          : 'This timesheet is marked for Advance Pay and will be included in the next eligible Banking Pay preview.'
-      );
-    }
-
+  // Authoritative pay-state badges. Do not synthesize payment state from summary-cache fields.
+  if (payStateOk) {
     if (payStatePaidStatus === 'PAID') {
       addStage(
         'Paid',
@@ -293743,7 +293745,33 @@ function renderTimesheetOverviewTab(ctx) {
       );
     }
 
-    if (payStateProcessingAny || payStatePaidStatus === 'PROCESSING') {
+    if (payStateIsOverpaid) {
+      addStage(
+        'Overpaid',
+        'pill-bad',
+        payAdjustedMessage || `This timesheet is currently overpaid by £${fmtMoney(Math.abs(payAdjustedNetDelta))} excl VAT.`
+      );
+    }
+
+    if (payStateHasActiveReservation) {
+      addStage(
+        'Payment Reserved',
+        'pill-ok',
+        `£${fmtMoney(payAdjustedReserved)} excl VAT is currently reserved for payment.`
+      );
+    }
+
+    if (payStateIsAdvanced) {
+      addStage(
+        'Advanced',
+        'pill-bad',
+        payStateAdvancedConsumedByBatchId
+          ? `This Advance Pay marker has already been consumed by pay batch ${payStateAdvancedConsumedByBatchId}.`
+          : 'This timesheet is marked for Advance Pay and will be included in the next eligible Banking Pay preview.'
+      );
+    }
+
+    if (payStatePaidStatus === 'PROCESSING' || payStateProcessingAny) {
       const processingParts = Number(payCounts.processing_components || 0);
       addStage(
         'Payment in progress',
@@ -293751,30 +293779,6 @@ function renderTimesheetOverviewTab(ctx) {
         processingParts > 0
           ? `${processingParts} component(s) are currently in payment processing.`
           : 'Payment processing is in progress for this timesheet.'
-      );
-    }
-
-    if (payAdjustedPill === 'PAY_OUTSTANDING') {
-      addStage(
-        'PAY_OUTSTANDING',
-        'pill-warn',
-        payAdjustedMessage ||
-        (
-          Number.isFinite(payAdjustedNetDelta)
-            ? `Additional pay outstanding: £${fmtMoney(Math.abs(payAdjustedNetDelta))}.`
-            : 'Additional pay is outstanding for this timesheet.'
-        )
-      );
-    } else if (payAdjustedPill === 'OVERPAID') {
-      addStage(
-        'OVERPAID',
-        'pill-bad',
-        payAdjustedMessage ||
-        (
-          Number.isFinite(payAdjustedNetDelta)
-            ? `This timesheet is overpaid by £${fmtMoney(Math.abs(payAdjustedNetDelta))}.`
-            : 'This timesheet is overpaid.'
-        )
       );
     }
   }
@@ -293852,8 +293856,8 @@ function renderTimesheetOverviewTab(ctx) {
   if (invoicePaid) {
     addStage('Invoice Paid', 'pill-ok', 'This timesheet is on an invoice that has been marked as paid.');
   } else {
-    if (isPaid && !payStateOk) addStage('Paid', 'pill-ok', 'This timesheet has been marked as paid.');
-
+    // Candidate payment badges are rendered only from authoritative pay_state above.
+    // Do not fall back to legacy tsfin.paid_at_utc / summary cache for payment state.
     if (isInvoiced) {
       if (hasLockedInvoiceStatus) {
         if (invoiceIssued) {
@@ -293899,7 +293903,9 @@ function renderTimesheetOverviewTab(ctx) {
     !isEffectivelyPaid &&
     !isEffectivelyPartPaid &&
     !isEffectivelyProcessing &&
-    !payStateIsAdvanced
+    !payStateIsAdvanced &&
+    !payStateHasActiveReservation &&
+    !payStateIsOverpaid
   ) {
     addStage('Ready to Pay', 'pill-ok', 'This timesheet is ready to be included in the next pay run.');
   }
@@ -294173,7 +294179,7 @@ function renderTimesheetOverviewTab(ctx) {
       (payAdjustedPill === 'OVERPAID') ? 'OVERPAID' :
       '';
 
-    const advancedCls = payStateIsAdvanced ? 'pill-warn' : 'pill';
+    const advancedCls = payStateIsAdvanced ? 'pill-bad' : 'pill';
     const snoozedCls = payStateIsSnoozed ? 'pill-warn' : 'pill';
     const paidCls =
       (payStatePaidStatus === 'PAID') ? 'pill-ok' :
@@ -294652,6 +294658,8 @@ function renderTimesheetOverviewTab(ctx) {
 }
 
 
+
+
 async function handleHrRotaFileDrop(file) {
   const summaryEl = document.getElementById('hrRotaImportSummary');
   if (summaryEl) {
@@ -295066,6 +295074,10 @@ async function switchContractWeekToManual(weekId) {
   return json;
 }
 
+
+
+
+
 function renderTimesheetFinanceTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][FINANCE]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -295223,6 +295235,64 @@ function renderTimesheetFinanceTab(ctx) {
     `;
   };
 
+  const buildPaymentSummaryHtml = ({ includeTitle = true } = {}) => {
+    const payState = (details && details.pay_state && typeof details.pay_state === 'object' && !Array.isArray(details.pay_state))
+      ? details.pay_state
+      : ((details && details.payState && typeof details.payState === 'object' && !Array.isArray(details.payState)) ? details.payState : null);
+
+    if (!payState || payState.ok !== true) return '';
+
+    const paidTotals = (payState.paid_totals && typeof payState.paid_totals === 'object' && !Array.isArray(payState.paid_totals))
+      ? payState.paid_totals
+      : null;
+    const adjusted = (payState.adjusted && typeof payState.adjusted === 'object' && !Array.isArray(payState.adjusted))
+      ? payState.adjusted
+      : null;
+
+    const readOwnMoney = (obj, key) => {
+      if (!obj || typeof obj !== 'object' || !Object.prototype.hasOwnProperty.call(obj, key)) return null;
+      const n = Number(obj[key]);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const paidToDateExVat = readOwnMoney(paidTotals, 'paid_to_date_ex_vat');
+    const outstandingExVatRaw = readOwnMoney(adjusted, 'outstanding_ex_vat');
+    const reservedExVatRaw = readOwnMoney(adjusted, 'reserved_ex_vat');
+    const netDeltaExVatRaw = readOwnMoney(adjusted, 'net_delta_ex_vat');
+
+    if (paidToDateExVat == null || outstandingExVatRaw == null || netDeltaExVatRaw == null) {
+      return '';
+    }
+
+    const reservedExVat = Math.max(reservedExVatRaw == null ? 0 : reservedExVatRaw, 0);
+    const amountStillOwedExVat = Math.max(outstandingExVatRaw, 0);
+    const amountOverpaidExVat = Math.abs(Math.min(netDeltaExVatRaw, 0));
+
+    const rows = [
+      ['Amount Paid', paidToDateExVat],
+      ...(reservedExVat > 0 ? [['Payment Reserved', reservedExVat]] : []),
+      ['Amount still owed', amountStillOwedExVat],
+      ...(amountOverpaidExVat > 0 ? [['Amount Overpaid', amountOverpaidExVat]] : [])
+    ];
+
+    return `
+      <div style="margin-top:10px;">
+        ${includeTitle ? '<div class="mini" style="font-weight:700;margin-bottom:4px;">Payment Summary</div>' : ''}
+        <table class="grid mini">
+          <thead>
+            <tr>
+              <th style="width:240px">Payment item</th>
+              <th style="width:160px">Pay (ex VAT)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(([label, value]) => `<tr><td>${enc(label)}</td><td>${fmtMoney(value)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  };
+
   const sheetScope = String(details.sheet_scope || row.sheet_scope || ts.sheet_scope || '').toUpperCase();
   const subMode = String(ts.submission_mode || row.submission_mode || '').toUpperCase();
   const mc = window.modalCtx || {};
@@ -295238,11 +295308,11 @@ function renderTimesheetFinanceTab(ctx) {
     const previewStatus = trimStr(previewState?.status || '');
     const previewMessage = trimStr(previewState?.message || '');
     const previewNote = (() => {
-      if (previewStatus === 'loading') return 'Refreshing backend daily finance preview…';
+      if (previewStatus === 'loading') return 'Refreshing daily finance preview…';
       if (previewStatus === 'invalid') return previewMessage || 'Fix the highlighted daily shift/break fields in Lines to refresh preview.';
-      if (previewStatus === 'error') return previewMessage || 'Backend daily preview unavailable.';
-      if (previewStatus === 'ready') return previewMessage || 'Showing current unsaved backend preview.';
-      return 'No unsaved backend daily preview yet.';
+      if (previewStatus === 'error') return previewMessage || 'Daily finance preview unavailable.';
+      if (previewStatus === 'ready') return previewMessage || '';
+      return 'No daily finance preview yet.';
     })();
 
     const savedTotals = {
@@ -295257,6 +295327,19 @@ function renderTimesheetFinanceTab(ctx) {
     const savedRateSourceHint = extractRateSourceHint({ snapshot: { rate_source_refs_json: tsfin.rate_source_refs_json || null } });
 
     GE();
+    const paymentSummaryCardHtml = (() => {
+      const html = buildPaymentSummaryHtml({ includeTitle: false });
+      if (!html) return '';
+      return `
+        <div class="card" style="margin-top:10px;">
+          <div class="row">
+            <label>Payment Summary</label>
+            <div class="controls">${html}</div>
+          </div>
+        </div>
+      `;
+    })();
+
     return `
       <div class="tabc">
         ${renderDailySummaryTable(
@@ -295264,15 +295347,16 @@ function renderTimesheetFinanceTab(ctx) {
           savedTotalsComplete,
           savedPayMethod,
           savedRateSourceHint,
-          savedTotalsComplete ? 'Current persisted TSFIN values.' : 'No saved TSFIN totals available yet.'
+          savedTotalsComplete ? '' : 'No saved finance totals available yet.'
         )}
         ${renderDailySummaryTable(
-          'Current unsaved preview',
+          'Current preview',
           previewTotals,
           previewPayMethod,
           previewRateSourceHint,
           previewNote
         )}
+        ${paymentSummaryCardHtml}
       </div>
     `;
   }
@@ -295622,6 +295706,8 @@ function renderTimesheetFinanceTab(ctx) {
   const summaryInitVals = computeTotals(stdPayInit, stdChgInit, stdMarInit);
   const summaryInitHtml = buildSummaryTableHtml(summaryInitVals);
 
+  const paymentSummaryHtml = buildPaymentSummaryHtml({ includeTitle: true });
+
   let previewHoursHtml = '';
   let bucketCardHtml = '';
   const previewHoursInnerId = 'tsFinancePreviewHoursInner';
@@ -295684,10 +295770,6 @@ function renderTimesheetFinanceTab(ctx) {
         </thead>
         <tbody>${rows}</tbody>
       </table>
-      <span class="mini" style="display:block;margin-top:4px;">
-        Based on the current Lines schedule (unsaved). For planned weeks this is a live preview;
-        for existing timesheets it reflects any staged schedule changes once saved.
-      </span>
     `;
   };
 
@@ -295706,7 +295788,7 @@ function renderTimesheetFinanceTab(ctx) {
         previewHoursHtml = `
           <div class="card" style="margin-top:10px;">
             <div class="row">
-              <label>Preview from Lines</label>
+              <label>Line hours</label>
               <div class="controls">
                 <div id="${previewHoursInnerId}">
                   <div class="hint mini">
@@ -295722,10 +295804,10 @@ function renderTimesheetFinanceTab(ctx) {
         previewHoursHtml = `
           <div class="card" style="margin-top:10px;">
             <div class="row">
-              <label>Preview from Lines</label>
+              <label>Line hours</label>
               <div class="controls">
                 <div id="${previewHoursInnerId}">
-                  <span class="mini">Loading total paid hours from current Lines schedule…</span>
+                  <span class="mini">Loading total hours…</span>
                 </div>
               </div>
             </div>
@@ -295766,7 +295848,7 @@ function renderTimesheetFinanceTab(ctx) {
                   <span class="pill pill-bad">Proposed Buckets</span>
                   <div id="${containerId}">
                     <div id="${innerId}">
-                      <span class="mini" id="tsBucketPreviewStatus">Loading bucket preview from Lines…</span>
+                      <span class="mini" id="tsBucketPreviewStatus">Loading bucket preview…</span>
                     </div>
                   </div>
                 </div>
@@ -295827,9 +295909,7 @@ function renderTimesheetFinanceTab(ctx) {
                 if (previewEl) {
                   previewEl.innerHTML = `
                     <div class="mini">
-                      Total paid hours from current Lines schedule (unsaved): <strong>${totalPaidHours.toFixed(2)}</strong><br/>
-                      The bucketed pay/charge ${useProposedBuckets ? 'below' : 'above'} will reflect this
-                      schedule once the timesheet is saved and TSFIN is recomputed.
+                      Total hours: <strong>${totalPaidHours.toFixed(2)}</strong>
                     </div>
                   `;
                 }
@@ -295957,22 +296037,13 @@ function renderTimesheetFinanceTab(ctx) {
                 ${tsfinBucketRows}
               </tbody>
             </table>
-            <span class="mini" style="display:block;margin-top:4px;">
-              These values come from the current financial snapshot (TSFIN).
-              If you change the Lines schedule and then click <strong>Save</strong>, a new snapshot will be generated.
-            </span>
           </div>
         </div>
       </div>
     `;
   }
 
-  const erniNote =
-    erniCtx.applies
-      ? `<div class="mini" style="margin-top:6px;color:#888">
-           PAYE margin includes ERNI (${Number.isFinite(Number(erniCtx.erni_pct)) ? `${Number(erniCtx.erni_pct).toFixed(2)}%` : 'configured'}).
-         </div>`
-      : '';
+  const erniNote = '';
 
   GE();
 
@@ -296016,10 +296087,8 @@ function renderTimesheetFinanceTab(ctx) {
             <div id="${summaryInnerId}">
               ${summaryInitHtml}
             </div>
+            ${paymentSummaryHtml}
             ${erniNote}
-            <div class="mini" style="margin-top:8px;color:rgba(255,255,255,0.7)">
-              In <strong>Edit</strong>, Expenses/Mileage reflect staged values (before Save). Standard hours may show as “Proposed” once the bucket preview loads.
-            </div>
           </div>
         </div>
       </div>
