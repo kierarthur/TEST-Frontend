@@ -105165,9 +105165,6 @@ function classifyTimesheetEditDomains(ctxInput) {
   } else if (isInvoiceLocked || isSegmentInvoiceLocked) {
     hoursScheduleDisabledReason = 'This timesheet is invoiced, so hours cannot be amended directly.';
     reasonCodes.push(isSegmentInvoiceLocked ? 'HOURS_SEGMENT_INVOICED' : 'HOURS_INVOICED');
-  } else if (isPaid) {
-    hoursScheduleDisabledReason = 'This timesheet is paid, so hours cannot be amended directly.';
-    reasonCodes.push('HOURS_PAID');
   } else if (isAuthoritativeNoTimesheetRequiredRow) {
     hoursScheduleDisabledReason = 'This timesheet type does not support hours entry.';
     reasonCodes.push('HOURS_NO_TIMESHEET_REQUIRED');
@@ -105354,6 +105351,11 @@ function classifyTimesheetEditDomains(ctxInput) {
     reasonCodes
   };
 }
+
+
+
+
+
 
 
 
@@ -293160,6 +293162,8 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
 }
 
 
+
+
 function renderTimesheetOverviewTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OVERVIEW]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -293346,7 +293350,10 @@ function renderTimesheetOverviewTab(ctx) {
 
   const isPaid     = !!(tsfin.paid_at_utc || row.paid_at_utc);
   const isInvoiced = !!(tsfin.locked_by_invoice_id || row.locked_by_invoice_id);
-  const locked     = isPaid || isInvoiced;
+
+  // Candidate payment status alone must not lock hours/route amendment actions.
+  // Invoice locks remain hard content locks.
+  const locked     = isInvoiced;
 
   // Sheet-level pay hold (NOT line-level)
   const payOnHold  = !!(tsfin.pay_on_hold ?? row.pay_on_hold);
@@ -293617,32 +293624,52 @@ function renderTimesheetOverviewTab(ctx) {
   const backendCanUnadvancePayment = actionFlags.can_unadvance_payment === true;
   const backendCanSnoozePayment = actionFlags.can_snooze_payment === true;
   const backendCanClearPaymentSnooze = actionFlags.can_clear_payment_snooze === true;
-  const effectivePaidStatus = payStateOk
-    ? payStatePaidStatus
-    : (isPaid ? 'PAID' : 'UNPAID');
-  const isEffectivelyPaid = effectivePaidStatus === 'PAID';
-  const isEffectivelyPartPaid = effectivePaidStatus === 'PARTIALLY_PAID';
-  const isEffectivelyProcessing = effectivePaidStatus === 'PROCESSING' || payStateProcessingAny;
-  const payStatePaidAtUtc = payState?.paid_at_utc || null;
+
+  const payTotals = (payState && payState.paid_totals && typeof payState.paid_totals === 'object')
+    ? payState.paid_totals
+    : {};
+  const payStatePaidToDateRaw = Number(payTotals?.paid_to_date_ex_vat);
+  const payStatePaidAmount = Number.isFinite(payStatePaidToDateRaw)
+    ? Math.max(payStatePaidToDateRaw, 0)
+    : 0;
+
+  const payStatePaidAtUtc = payTotals?.last_paid_at_utc || payState?.paid_at_utc || null;
   const payStatePaidAtLabelUk =
     String(payState?.paid_at_label_uk || '').trim() ||
     (payStatePaidAtUtc ? fmtUtcToUk(payStatePaidAtUtc) : '');
 
   const payAdjustedPill = String(payAdjusted?.pill || '').trim().toUpperCase();
   const payAdjustedMessage = String(payAdjusted?.message || '').trim();
-  const payAdjustedNetDelta = Number(payAdjusted?.net_delta_ex_vat);
-  const payAdjustedOutstanding = Number(payAdjusted?.outstanding_ex_vat);
-  const payAdjustedReserved = Number(payAdjusted?.reserved_ex_vat);
-  const payStateHasActiveReservation = !!(
+  const payAdjustedNetDeltaRaw = Number(payAdjusted?.net_delta_ex_vat);
+  const payAdjustedOutstandingRaw = Number(payAdjusted?.outstanding_ex_vat);
+  const payAdjustedReservedRaw = Number(payAdjusted?.reserved_ex_vat);
+  const payAdjustedNetDelta = Number.isFinite(payAdjustedNetDeltaRaw) ? payAdjustedNetDeltaRaw : 0;
+  const payAdjustedOutstanding = Number.isFinite(payAdjustedOutstandingRaw) ? Math.max(payAdjustedOutstandingRaw, 0) : 0;
+  const payAdjustedReserved = Number.isFinite(payAdjustedReservedRaw) ? Math.max(payAdjustedReservedRaw, 0) : 0;
+  const payStateHasActiveReservation = !!(payStateOk && payAdjustedReserved > 0);
+  const payStateHasOutstanding = !!(payStateOk && payAdjustedOutstanding > 0);
+  const payStateIsOverpaid = !!(payStateOk && payAdjustedNetDelta < 0);
+  const payStateReservationCoversAdjustment = !!(
     payStateOk &&
-    Number.isFinite(payAdjustedReserved) &&
-    payAdjustedReserved > 0
+    payStateHasActiveReservation &&
+    payAdjustedNetDelta > 0 &&
+    payAdjustedReserved >= payAdjustedNetDelta &&
+    payAdjustedOutstanding <= 0
   );
-  const payStateIsOverpaid = !!(
-    payStateOk &&
-    Number.isFinite(payAdjustedNetDelta) &&
-    payAdjustedNetDelta < 0
-  );
+
+  const effectivePaidStatus = (() => {
+    if (!payStateOk) return isPaid ? 'PAID' : 'UNPAID';
+    if (payStatePaidStatus === 'PROCESSING' || payStateProcessingAny) return 'PROCESSING';
+    if (payStateHasActiveReservation) return payStatePaidAmount > 0 ? 'PARTIALLY_PAID' : 'RESERVED';
+    if (payStateHasOutstanding && payStatePaidAmount > 0) return 'PARTIALLY_PAID';
+    if (payStatePaidAmount > 0) return 'PAID';
+    if (payStatePaidStatus === 'PARTIALLY_PAID') return 'PARTIALLY_PAID';
+    if (payStatePaidStatus === 'PAID') return 'PAID';
+    return 'UNPAID';
+  })();
+  const isEffectivelyPaid = effectivePaidStatus === 'PAID';
+  const isEffectivelyPartPaid = effectivePaidStatus === 'PARTIALLY_PAID';
+  const isEffectivelyProcessing = effectivePaidStatus === 'PROCESSING' || payStateProcessingAny;
 
   const showAdvancePaymentAction =
     !!tsId &&
@@ -293769,28 +293796,38 @@ function renderTimesheetOverviewTab(ctx) {
     );
   };
 
-  // Authoritative pay-state badges. Do not synthesize payment state from summary-cache fields.
+  // Authoritative pay-state badges. Payment money is driven from pay_state paid_totals/adjusted,
+  // not component-count diagnostics, and all payment badges stay in the Stage row.
   if (payStateOk) {
-    if (payStatePaidStatus === 'PAID') {
+    const paidAmountLabel = `£${fmtMoney(payStatePaidAmount)} ex VAT`;
+    const reservedAmountLabel = `£${fmtMoney(payAdjustedReserved)} ex VAT`;
+    const outstandingAmountLabel = `£${fmtMoney(payAdjustedOutstanding)} ex VAT`;
+
+    if (effectivePaidStatus === 'PAID' && !payStateHasActiveReservation) {
       addStage(
         'Paid',
         'pill-ok',
-        payStatePaidAtLabelUk
-          ? `Paid at ${payStatePaidAtLabelUk}.`
-          : 'This timesheet is fully paid.'
+        `${payStatePaidAtLabelUk ? `Paid at ${payStatePaidAtLabelUk}. ` : ''}Amount paid: ${paidAmountLabel}.`
       );
-    } else if (payStatePaidStatus === 'PARTIALLY_PAID') {
-      const paidParts = Number(payCounts.paid_components || 0);
-      const payableParts = Number(payCounts.payable_components || 0);
+    } else if (effectivePaidStatus === 'PARTIALLY_PAID') {
+      const hoverParts = [];
+      hoverParts.push(`${paidAmountLabel} has been paid to date.`);
+      if (payStatePaidAtLabelUk) hoverParts.push(`Last paid ${payStatePaidAtLabelUk}.`);
+      if (payStateHasActiveReservation) hoverParts.push(`${reservedAmountLabel} is reserved for payment.`);
+      hoverParts.push(`Amount still owed: ${outstandingAmountLabel}.`);
+
       addStage(
         'Partly Paid',
         'pill-warn',
-        (payStatePaidAtLabelUk
-          ? `Last paid at ${payStatePaidAtLabelUk}. `
-          : '') +
-        (payableParts > 0
-          ? `${paidParts} of ${payableParts} payable component(s) are settled.`
-          : 'Some payable components are settled.')
+        hoverParts.join(' ')
+      );
+    }
+
+    if (effectivePaidStatus === 'PROCESSING' || payStateProcessingAny) {
+      addStage(
+        'Payment in progress',
+        'pill-info',
+        'Payment execution/processing is in progress and has not yet settled/finalised.'
       );
     }
 
@@ -293798,7 +293835,7 @@ function renderTimesheetOverviewTab(ctx) {
       addStage(
         'Overpaid',
         'pill-bad',
-        payAdjustedMessage || `This timesheet is currently overpaid by £${fmtMoney(Math.abs(payAdjustedNetDelta))} excl VAT.`
+        `Current overpaid position: £${fmtMoney(Math.abs(payAdjustedNetDelta))} ex VAT.`
       );
     }
 
@@ -293806,7 +293843,30 @@ function renderTimesheetOverviewTab(ctx) {
       addStage(
         'Payment Reserved',
         'pill-ok',
-        `£${fmtMoney(payAdjustedReserved)} excl VAT is currently reserved for payment.`
+        payStateReservationCoversAdjustment
+          ? `${reservedAmountLabel} is reserved for the outstanding adjustment. No unreserved amount is currently owed.`
+          : `${reservedAmountLabel} is reserved for payment.`
+      );
+    }
+
+    if (payStateHasOutstanding && (payStatePaidAmount > 0 || payStateHasActiveReservation)) {
+      addStage(
+        'Pay Outstanding',
+        'pill-warn',
+        `${outstandingAmountLabel} remains outstanding and is not currently reserved.`
+      );
+    }
+
+    if (
+      effectivePaidStatus === 'UNPAID' &&
+      !payStateHasActiveReservation &&
+      !payStateProcessingAny &&
+      payStatePaidAmount <= 0
+    ) {
+      addStage(
+        'Unpaid',
+        'pill-bad',
+        'No settled or reserved candidate payment is currently recorded for this timesheet.'
       );
     }
 
@@ -293817,17 +293877,6 @@ function renderTimesheetOverviewTab(ctx) {
         payStateAdvancedConsumedByBatchId
           ? `This Advance Pay marker has already been consumed by pay batch ${payStateAdvancedConsumedByBatchId}.`
           : 'This timesheet is marked for Advance Pay and will be included in the next eligible Banking Pay preview.'
-      );
-    }
-
-    if (payStatePaidStatus === 'PROCESSING' || payStateProcessingAny) {
-      const processingParts = Number(payCounts.processing_components || 0);
-      addStage(
-        'Payment in progress',
-        'pill-info',
-        processingParts > 0
-          ? `${processingParts} component(s) are currently in payment processing.`
-          : 'Payment processing is in progress for this timesheet.'
       );
     }
   }
@@ -293920,7 +293969,7 @@ function renderTimesheetOverviewTab(ctx) {
     }
   }
 
-  if (hasTsfin && stageRaw === 'READY_FOR_INVOICE') {
+  if (hasTsfin && stageRaw === 'READY_FOR_INVOICE' && !invoicePaid && !isInvoiced) {
     addStage('Ready for Invoicing', 'pill-ok', 'This timesheet is authorised and ready to be added to an invoice.');
   }
   if (hasTsfin && stageRaw === 'READY_FOR_HR') {
@@ -294214,184 +294263,58 @@ function renderTimesheetOverviewTab(ctx) {
 
   const badgeBtnStyle = 'cursor:pointer;border:1px solid var(--line);background:transparent;color:inherit;padding:6px 10px;border-radius:999px;';
 
-  const paymentSurfaceHtml = (() => {
-    if (!payStateOk || !tsId) return '';
+  const advanceBtnHtml = (!suppressActionButtons && showAdvancePaymentAction)
+    ? `
+      <button
+        type="button"
+        class="pill pill-info"
+        style="${badgeBtnStyle}"
+        data-ts-action="advance-payment"
+        title="${enc('Only the outstanding unpaid difference will be advanced.')}"
+      >
+        Advance outstanding adjustment
+      </button>
+    `
+    : '';
 
-    const paidStatusLabel =
-      (payStatePaidStatus === 'PAID') ? 'Paid' :
-      (payStatePaidStatus === 'PARTIALLY_PAID') ? 'Partly Paid' :
-      (payStatePaidStatus === 'PROCESSING') ? 'Payment in progress' :
-      'Unpaid';
+  const unadvanceBtnHtml = (!suppressActionButtons && showUnadvancePaymentAction)
+    ? `
+      <button
+        type="button"
+        class="pill pill-info"
+        style="${badgeBtnStyle}"
+        data-ts-action="unadvance-payment"
+        title="${enc('Cancel Advance Pay for this timesheet before batching.')}"
+      >
+        Cancel Advance Pay
+      </button>
+    `
+    : '';
 
-    const adjustedLabel =
-      (payAdjustedPill === 'PAY_OUTSTANDING') ? 'PAY_OUTSTANDING' :
-      (payAdjustedPill === 'OVERPAID') ? 'OVERPAID' :
-      '';
+  const snoozeBtnHtml = (!suppressActionButtons && showSnoozePaymentAction)
+    ? `
+      <button
+        type="button"
+        class="pill pill-info"
+        style="${badgeBtnStyle}"
+        data-ts-action="${payStateIsSnoozed ? 'manage-snooze-payment' : 'snooze-payment'}"
+        title="${enc(payStateIsSnoozed ? 'Manage the current payment snooze for this timesheet.' : 'Snooze this timesheet payment.')}"
+      >
+        ${enc(payStateIsSnoozed ? 'Manage snooze' : 'Snooze payment')}
+      </button>
+    `
+    : '';
 
-    const advancedCls = payStateIsAdvanced ? 'pill-bad' : 'pill';
-    const snoozedCls = payStateIsSnoozed ? 'pill-warn' : 'pill';
-    const paidCls =
-      (payStatePaidStatus === 'PAID') ? 'pill-ok' :
-      (payStatePaidStatus === 'PARTIALLY_PAID') ? 'pill-warn' :
-      (payStatePaidStatus === 'PROCESSING') ? 'pill-info' :
-      'pill-info';
-
-    const processingCls = payStateProcessingAny ? 'pill-info' : 'pill';
-    const adjustedCls =
-      (payAdjustedPill === 'PAY_OUTSTANDING') ? 'pill-warn' :
-      (payAdjustedPill === 'OVERPAID') ? 'pill-bad' :
-      'pill';
-
-    const paidTitle =
-      payStatePaidAtLabelUk
-        ? `Paid status updated at ${payStatePaidAtLabelUk}`
-        : 'Paid status from backend pay-state';
-
-    const processingTitle =
-      Number(payCounts.processing_components || 0) > 0
-        ? `${Number(payCounts.processing_components || 0)} component(s) are still processing.`
-        : 'Processing status from backend pay-state.';
-
-    const advancedTitle =
-      payStateCanUnadvance
-        ? 'This timesheet has been marked as advanced and can still be cleared before batching.'
-        : (
-            payStateAdvancedConsumedByBatchId
-              ? `This timesheet has been marked as advanced and has already been consumed by batch ${payStateAdvancedConsumedByBatchId}.`
-              : 'This timesheet has been marked as advanced.'
-          );
-
-    const snoozedTitle =
-      payStateIsSnoozed
-        ? (
-            payStateSnoozeIsIndefinite
-              ? 'This timesheet payment is snoozed indefinitely.'
-              : `This timesheet payment is snoozed until ${fmtYmdToDmy(payStateSnoozeUntilDate)} and excluded from allocation.`
-          )
-        : 'This timesheet payment is not snoozed.';
-
-    const adjustedTitle =
-      payAdjustedMessage ||
-      (
-        adjustedLabel
-          ? `Adjusted status from backend pay-state.`
-          : ''
-      );
-
-    const countsMini = `
-      <div class="mini" style="opacity:.8;">
-        Payable: <span class="mono">${enc(String(Number(payCounts.payable_components || 0)))}</span>
-        • Paid: <span class="mono">${enc(String(Number(payCounts.paid_components || 0)))}</span>
-        • Processing: <span class="mono">${enc(String(Number(payCounts.processing_components || 0)))}</span>
-        • Unpaid: <span class="mono">${enc(String(Number(payCounts.unpaid_components || 0)))}</span>
-        • On hold: <span class="mono">${enc(String(Number(payCounts.on_hold_components || 0)))}</span>
-      </div>
-    `;
-
-    const adjustedMini = adjustedLabel
-      ? `
-        <div class="mini" style="opacity:.85;">
-          Net delta: <span class="mono">£${enc(fmtMoney(Math.abs(Number.isFinite(payAdjustedNetDelta) ? payAdjustedNetDelta : 0)))}</span>
-          ${
-            Number.isFinite(payAdjustedOutstanding)
-              ? `• Outstanding: <span class="mono">£${enc(fmtMoney(payAdjustedOutstanding))}</span>`
-              : ''
-          }
-          ${
-            Number.isFinite(payAdjustedReserved)
-              ? `• Reserved: <span class="mono">£${enc(fmtMoney(payAdjustedReserved))}</span>`
-              : ''
-          }
-        </div>
-      `
-      : '';
-
-    const paidAtMini = payStatePaidAtLabelUk
-      ? `<div class="mini" style="opacity:.85;">Paid at: <span class="mono">${enc(payStatePaidAtLabelUk)}</span></div>`
-      : '';
-
-    const snoozeMini = payStateIsSnoozed
-      ? `
-        <div class="mini" style="opacity:.85;">
-          ${
-            payStateSnoozeIsIndefinite
-              ? `Snooze: <span class="mono">${enc('Indefinite')}</span>`
-              : `Snooze until: <span class="mono">${enc(fmtYmdToDmy(payStateSnoozeUntilDate))}</span>`
-          }
-          ${payStateSnoozeNote ? `• Note: <span class="mono">${enc(payStateSnoozeNote)}</span>` : ''}
-        </div>
-      `
-      : '';
-
-    const advanceBtnHtml = (!suppressActionButtons && showAdvancePaymentAction)
-      ? `
-        <button
-          type="button"
-          class="pill pill-info"
-          style="${badgeBtnStyle}"
-          data-ts-action="advance-payment"
-          title="${enc('Only the outstanding unpaid difference will be advanced.')}"
-        >
-          Advance outstanding adjustment
-        </button>
-      `
-      : '';
-
-    const unadvanceBtnHtml = (!suppressActionButtons && showUnadvancePaymentAction)
-      ? `
-        <button
-          type="button"
-          class="pill pill-info"
-          style="${badgeBtnStyle}"
-          data-ts-action="unadvance-payment"
-          title="${enc('Cancel Advance Pay for this timesheet before batching.')}"
-        >
-          Cancel Advance Pay
-        </button>
-      `
-      : '';
-
-    const snoozeBtnHtml = (!suppressActionButtons && showSnoozePaymentAction)
-      ? `
-        <button
-          type="button"
-          class="pill pill-info"
-          style="${badgeBtnStyle}"
-          data-ts-action="${payStateIsSnoozed ? 'manage-snooze-payment' : 'snooze-payment'}"
-          title="${enc(payStateIsSnoozed ? 'Manage the current payment snooze for this timesheet.' : 'Snooze this timesheet payment.')}"
-        >
-          ${enc(payStateIsSnoozed ? 'Manage snooze' : 'Snooze payment')}
-        </button>
-      `
-      : '';
-
-    return `
-      <div class="card" style="margin-top:10px;">
-        <div class="row">
-          <label>Payment state</label>
-          <div class="controls" style="display:flex;flex-direction:column;gap:8px;">
-            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
-              <span class="pill ${paidCls}" style="font-weight:600;" title="${enc(paidTitle)}">${enc(paidStatusLabel)}</span>
-              ${payStateIsAdvanced ? `<span class="pill ${advancedCls}" style="font-weight:600;" title="${enc(advancedTitle)}">${enc('Advanced')}</span>` : ''}
-              ${payStateIsSnoozed ? `<span class="pill ${snoozedCls}" style="font-weight:600;" title="${enc(snoozedTitle)}">${enc('SNOOZED')}</span>` : ''}
-              ${payStateProcessingAny ? `<span class="pill ${processingCls}" style="font-weight:600;" title="${enc(processingTitle)}">${enc('Payment in progress')}</span>` : ''}
-              ${adjustedLabel ? `<span class="pill ${adjustedCls}" style="font-weight:600;" title="${enc(adjustedTitle)}">${enc(adjustedLabel)}</span>` : ''}
-            </div>
-            ${paidAtMini}
-            ${countsMini}
-            ${adjustedMini}
-            ${snoozeMini}
-            ${(advanceBtnHtml || unadvanceBtnHtml || snoozeBtnHtml) ? `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">${advanceBtnHtml}${unadvanceBtnHtml}${snoozeBtnHtml}</div>` : ''}
-          </div>
-        </div>
-      </div>
-    `;
-  })();
+  const paymentActionButtonsHtml = [advanceBtnHtml, unadvanceBtnHtml, snoozeBtnHtml]
+    .filter(Boolean)
+    .join('');
 
   const actionsHtml = (() => {
     if (suppressActionButtons) return '';
 
     const btns = [];
+
+    if (paymentActionButtonsHtml) btns.push(paymentActionButtonsHtml);
 
     const canRestorePending = !!actionFlags.can_restore_qr_pending;
     const canRestoreSigned  = !!actionFlags.can_restore_qr_signed;
@@ -294700,11 +294623,12 @@ function renderTimesheetOverviewTab(ctx) {
   return `
     <div class="tabc">
       ${headerHtml}
-      ${paymentSurfaceHtml}
       ${routeHtml}
     </div>
   `;
 }
+
+
 
 
 
@@ -296792,9 +296716,6 @@ async function saveMyEmailSignature() {
   }
 }
 
-
-
-
 async function openTimesheet(row) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OPEN]');
   GC('openTimesheet');
@@ -298640,7 +298561,7 @@ try {
       suppress_standard_schedule_fallback: canonicalSuppressStandardScheduleFallback,
       isPaid,
       isInvoiced,
-      isLocked: (isPaid || isInvoiced),
+      isLocked: isInvoiced,
       canDeletePermanently: canDeletePerm,
       contract_week_id: cwId,
       cw_submission_mode_snapshot: cwSubSnap,
@@ -299169,12 +299090,16 @@ const onSaveTimesheet = async () => {
         !(tsLocal.revoked_at || rowNow.revoked_at || det.revoked_at)
       );
 
-  const lockedNow = !!(
+  const invoiceLockedNow = !!(
     tsfinLocal.locked_by_invoice_id ||
-    tsfinLocal.paid_at_utc ||
     hasSegmentInvoiceLockForSave ||
-    (policy && (policy.isInvoiceLocked === true || policy.isSegmentInvoiceLocked === true || policy.isPaid === true))
+    (policy && (policy.isInvoiceLocked === true || policy.isSegmentInvoiceLocked === true))
   );
+  const paidNow = !!(
+    tsfinLocal.paid_at_utc ||
+    (policy && policy.isPaid === true)
+  );
+  const lockedNow = invoiceLockedNow;
 
   const canEditHoursForSave = !!(policy && policy.canEditHoursSchedule === true);
   const expenseStorageTargetForSave = String(policy?.expenseStorageTarget || mc.expenseStorageTarget || mc.expense_storage_target || '').trim().toUpperCase();
@@ -299715,6 +299640,12 @@ const onSaveTimesheet = async () => {
     segmentControlsDirty ||
     refChanged;
 
+  if (paidNow && expensesChanged) {
+    alert((policy && policy.expensesDisabledReason) || 'This timesheet is paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.');
+    GE();
+    return { ok: false };
+  }
+
   if (lockedNow && isContentChangeAttempt) {
     const lockedAttemptIsExpensesOnly = !!(
       expensesChanged &&
@@ -299724,9 +299655,9 @@ const onSaveTimesheet = async () => {
     );
 
     if (lockedAttemptIsExpensesOnly) {
-      alert((policy && policy.expensesDisabledReason) || 'This timesheet is invoiced or paid, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.');
+      alert((policy && policy.expensesDisabledReason) || 'This timesheet is invoiced, so expenses cannot be amended on it. Create an additional manual adjustment timesheet for the new expense or correction.');
     } else {
-      alert('This timesheet is locked (invoiced or paid). You cannot change schedule, references, segments, or expenses.');
+      alert('This timesheet is invoice locked. You cannot change schedule, references, segments, or expenses.');
     }
 
     GE();
@@ -300709,7 +300640,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
             qrStatus: qrU,
             isPaid: paid,
             isInvoiced: invo,
-            isLocked: (paid || invo),
+            isLocked: invo,
             contract_week_id: freshDetails?.contract_week_id || window.modalCtx?.data?.contract_week_id || null,
             expected_timesheet_id: newId,
             hasElectronicOriginal: !!(freshDetails?.action_flags && freshDetails.action_flags.can_revert_to_electronic)
@@ -300861,6 +300792,11 @@ showModal(
     GE();
   }
 }
+
+
+
+
+
 
 function renderWeeklyManualScheduleEditor(opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES][WEEKLY]');
