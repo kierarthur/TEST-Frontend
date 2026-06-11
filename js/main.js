@@ -116173,6 +116173,9 @@ function resetBulkProcessDirtyBaseline(state, reason, detail = {}) {
 
 
 
+
+
+
 async function hydrateTimesheetModalAfterOpen(openToken, row, idsArg) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OPEN]');
   GC('hydrateTimesheetModalAfterOpen');
@@ -116193,7 +116196,7 @@ async function hydrateTimesheetModalAfterOpen(openToken, row, idsArg) {
 
     const baseRow = { ...row };
 
-    const realTsId = baseRow.timesheet_id || null;
+    const realTsId = baseRow.current_timesheet_id || baseRow.timesheet_id || null;
     const weekId   = baseRow.contract_week_id || null;
     const hasTs    = !!realTsId;
     const isPlannedWeek = !hasTs && !!weekId;
@@ -116207,6 +116210,10 @@ async function hydrateTimesheetModalAfterOpen(openToken, row, idsArg) {
     }
 let tsId = hasTs ? realTsId : null;
 baseRow.id = hasTs ? realTsId : (weekId || baseRow.id);
+if (hasTs) {
+  baseRow.timesheet_id = realTsId;
+  baseRow.current_timesheet_id = realTsId;
+}
 
 
     const sheetScopeRaw = (baseRow.sheet_scope || '').toUpperCase();
@@ -116251,6 +116258,7 @@ try {
   if (hasTs && details && typeof details === 'object') {
     const fetchedCurrentId = String(
       details.current_timesheet_id ||
+      details.timesheet?.current_timesheet_id ||
       details.timesheet?.timesheet_id ||
       ''
     ).trim();
@@ -116258,6 +116266,7 @@ try {
     if (fetchedCurrentId) {
       if (details.timesheet && typeof details.timesheet === 'object') {
         details.timesheet.timesheet_id = fetchedCurrentId;
+        details.timesheet.current_timesheet_id = fetchedCurrentId;
       }
       details.current_timesheet_id = fetchedCurrentId;
       details.requested_timesheet_id = fetchedCurrentId;
@@ -116529,6 +116538,7 @@ const normaliseFetchedTimesheetDetailsIdentityForFastOpen = (detailsObj, adopted
 
   if (detailsObj.timesheet && typeof detailsObj.timesheet === 'object') {
     detailsObj.timesheet.timesheet_id = id;
+    detailsObj.timesheet.current_timesheet_id = id;
   }
 
   return detailsObj;
@@ -116541,6 +116551,7 @@ const getActiveModalTimesheetIdForFastOpen = () => {
       mcNow.data?.current_timesheet_id ||
       mcNow.data?.timesheet_id ||
       mcNow.timesheetDetails?.current_timesheet_id ||
+      mcNow.timesheetDetails?.timesheet?.current_timesheet_id ||
       mcNow.timesheetDetails?.timesheet?.timesheet_id ||
       ''
     ).trim();
@@ -116561,6 +116572,7 @@ const adoptMovedTimesheetIdFromFetchedDetailsForFastOpen = async (detailsObj, re
   const requestedId = String(requestedIdArg || '').trim();
   const currentId = String(
     detailsObj?.current_timesheet_id ||
+    detailsObj?.timesheet?.current_timesheet_id ||
     detailsObj?.timesheet?.timesheet_id ||
     ''
   ).trim();
@@ -116571,12 +116583,16 @@ const adoptMovedTimesheetIdFromFetchedDetailsForFastOpen = async (detailsObj, re
 
   if (requestedId && currentId !== requestedId) {
     if (!isActiveTimesheetModalToken(openToken)) return '';
+    const activeBeforeAdoptId = getActiveModalTimesheetIdForFastOpen();
+    if (activeBeforeAdoptId && activeBeforeAdoptId !== requestedId && activeBeforeAdoptId !== currentId) return '';
     const fr = getActiveTimesheetFrame();
-    await adoptMovedTimesheetIdForFastOpen(openToken, currentId, {
-      refreshDetails: false,
-      skipTabRefresh: true,
-      tabKey: fr?.currentTabKey || 'overview'
-    });
+    if (activeBeforeAdoptId !== currentId) {
+      await adoptMovedTimesheetIdForFastOpen(openToken, currentId, {
+        refreshDetails: false,
+        skipTabRefresh: true,
+        tabKey: fr?.currentTabKey || 'overview'
+      });
+    }
     if (!isActiveTimesheetModalToken(openToken)) return '';
     traceOpen('moved-id-adopted-from-details', {
       reason: String(reason || ''),
@@ -116625,7 +116641,7 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
   const existingModalDataId = String(modalCtx?.data?.id || '').trim();
   const existingModalTimesheetId = String(modalCtx?.data?.timesheet_id || '').trim();
   const existingModalCurrentTimesheetId = String(modalCtx?.data?.current_timesheet_id || '').trim();
-  const existingDetailsTimesheetId = String(existingDetails?.current_timesheet_id || existingDetails?.timesheet?.timesheet_id || '').trim();
+  const existingDetailsTimesheetId = String(existingDetails?.current_timesheet_id || existingDetails?.timesheet?.current_timesheet_id || existingDetails?.timesheet?.timesheet_id || '').trim();
   const existingDetailsContractWeekId = String(existingDetails?.contract_week_id || existingDetails?.contract_week?.id || '').trim();
   const activeModalTimesheetIdForRefresh = String(
     existingModalCurrentTimesheetId ||
@@ -116640,8 +116656,8 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
   );
 
   const detailsMatchTarget = !!existingDetails && !existingDetailsIdentityMismatch && (
-    existingModalTimesheetId === idArg ||
     existingModalCurrentTimesheetId === idArg ||
+    existingModalTimesheetId === idArg ||
     existingModalDataId === idArg ||
     existingDetailsTimesheetId === idArg ||
     existingDetailsContractWeekId === idArg
@@ -116665,7 +116681,7 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
   let freshEvidence = shouldFetchEvidence ? [] : existingEvidence;
   let freshPayState = null;
   let freshPayStateError = '';
-  let allowExistingDetailsFallback = !existingDetailsIdentityMismatch;
+  const allowExistingDetailsFallback = !existingDetailsIdentityMismatch;
 
   if (shouldFetchDetails) {
     try {
@@ -116683,7 +116699,7 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
       traceOpen('finance-refresh-after-details', {
         id_arg: idArg,
         effective_id_arg: effectiveIdArg,
-        fresh_current_timesheet_id: String(freshDetails?.current_timesheet_id || freshDetails?.timesheet?.timesheet_id || '').trim() || null,
+        fresh_current_timesheet_id: String(freshDetails?.current_timesheet_id || freshDetails?.timesheet?.current_timesheet_id || freshDetails?.timesheet?.timesheet_id || '').trim() || null,
         fresh_contract_week_id: String(freshDetails?.contract_week_id || freshDetails?.contract_week?.id || '').trim() || null,
         structural
       });
@@ -116744,11 +116760,15 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
           : ''
       ).trim();
       if (evidenceMovedId && evidenceMovedId !== effectiveIdArg) {
-        await adoptMovedTimesheetIdForFastOpen(openToken, evidenceMovedId, {
-          refreshDetails: false,
-          skipTabRefresh: true,
-          tabKey: getActiveTimesheetFrame()?.currentTabKey || 'overview'
-        });
+        const activeBeforeEvidenceAdoptId = getActiveModalTimesheetIdForFastOpen();
+        if (activeBeforeEvidenceAdoptId && activeBeforeEvidenceAdoptId !== effectiveIdArg && activeBeforeEvidenceAdoptId !== evidenceMovedId) return null;
+        if (activeBeforeEvidenceAdoptId !== evidenceMovedId) {
+          await adoptMovedTimesheetIdForFastOpen(openToken, evidenceMovedId, {
+            refreshDetails: false,
+            skipTabRefresh: true,
+            tabKey: getActiveTimesheetFrame()?.currentTabKey || 'overview'
+          });
+        }
         if (!isActiveTimesheetModalToken(openToken)) return null;
         effectiveIdArg = evidenceMovedId;
       }
@@ -116864,7 +116884,7 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
   traceOpen('finance-refresh-after-state-write', {
     id_arg: idArg,
     effective_id_arg: effectiveIdArg,
-    fresh_current_timesheet_id: String(detailsForState?.current_timesheet_id || detailsForState?.timesheet?.timesheet_id || '').trim() || null,
+    fresh_current_timesheet_id: String(detailsForState?.current_timesheet_id || detailsForState?.timesheet?.current_timesheet_id || detailsForState?.timesheet?.timesheet_id || '').trim() || null,
     structural,
     refresh_mode: refreshMode
   });
@@ -117308,8 +117328,9 @@ const refreshTimesheetModalFinanceState = async (timesheetIdArg, opts = {}) => {
         : {};
 
     const canonicalTimesheetId =
-      tsId ||
       details.current_timesheet_id ||
+      tsLocal.current_timesheet_id ||
+      tsId ||
       tsLocal.timesheet_id ||
       null;
 
@@ -118108,8 +118129,6 @@ try {
     const idNow =
       String(
         (window.modalCtx && window.modalCtx.data && (window.modalCtx.data.current_timesheet_id || window.modalCtx.data.timesheet_id)) ||
-        window.modalCtx?.timesheetDetails?.current_timesheet_id ||
-        window.modalCtx?.timesheetDetails?.timesheet?.timesheet_id ||
         canonicalTimesheetId ||
         ''
       ).trim();
@@ -118207,7 +118226,7 @@ const renderTab = (key, mergedRow) => {
   if (key === 'audit') {
     try {
       const mc = window.modalCtx || {};
-      const tsId = mc.data?.timesheet_id || ctxForTab.row?.timesheet_id || null;
+      const tsId = mc.data?.current_timesheet_id || mc.data?.timesheet_id || ctxForTab.row?.current_timesheet_id || ctxForTab.row?.timesheet_id || null;
       if (tsId && typeof fetchTimesheetAudit === 'function') {
         const cacheKey = String(tsId);
 
@@ -118223,7 +118242,7 @@ const renderTab = (key, mergedRow) => {
               const items = await fetchTimesheetAudit(tsId);
               if (!isActiveTimesheetModalToken(openToken)) return;
               const mcNow = window.modalCtx || {};
-              const currentTsId = String(mcNow.data?.timesheet_id || mcNow.timesheetDetails?.current_timesheet_id || '').trim();
+              const currentTsId = String(mcNow.data?.current_timesheet_id || mcNow.data?.timesheet_id || mcNow.timesheetDetails?.current_timesheet_id || '').trim();
               if (currentTsId && currentTsId !== cacheKey) return;
               mcNow.timesheetAuditCache ||= {};
               mcNow.timesheetAuditCache[cacheKey] = Array.isArray(items) ? items : (items?.items || []);
@@ -118261,16 +118280,35 @@ const renderTab = (key, mergedRow) => {
       const hydration = (window.modalCtx && window.modalCtx.timesheetHydration && typeof window.modalCtx.timesheetHydration === 'object')
         ? window.modalCtx.timesheetHydration
         : {};
-      const evidenceError = String(hydration.evidenceError || '').trim();
       const realEvidenceTsId = String(
+        window.modalCtx?.data?.current_timesheet_id ||
         window.modalCtx?.data?.timesheet_id ||
         window.modalCtx?.timesheetDetails?.current_timesheet_id ||
+        window.modalCtx?.timesheetDetails?.timesheet?.current_timesheet_id ||
         window.modalCtx?.timesheetDetails?.timesheet?.timesheet_id ||
         ''
       ).trim();
+      const evidenceHydrationTargetId = String(
+        hydration.evidenceTimesheetId ||
+        hydration.evidenceRequestTimesheetId ||
+        ''
+      ).trim();
+      const evidenceLoadedForCurrent = !!(
+        hydration.evidenceLoaded === true &&
+        evidenceHydrationTargetId &&
+        evidenceHydrationTargetId === realEvidenceTsId
+      );
+      const evidenceLoadingForCurrent = !!(
+        hydration.evidenceLoading === true &&
+        evidenceHydrationTargetId &&
+        evidenceHydrationTargetId === realEvidenceTsId
+      );
+      const evidenceError = (evidenceHydrationTargetId && evidenceHydrationTargetId !== realEvidenceTsId)
+        ? ''
+        : String(hydration.evidenceError || '').trim();
 
-      if (realEvidenceTsId && hydration.evidenceLoaded !== true) {
-        if (!evidenceError && hydration.evidenceLoading !== true) {
+      if (realEvidenceTsId && !evidenceLoadedForCurrent) {
+        if (!evidenceError && !evidenceLoadingForCurrent) {
           Promise.resolve()
             .then(() => ensureTimesheetEvidenceLoaded(openToken, { timesheetId: realEvidenceTsId }))
             .catch(() => {});
@@ -118637,12 +118675,12 @@ const onSaveTimesheet = async () => {
   const subModeSave    = (tsLocal.submission_mode || rowNow.submission_mode || '').toUpperCase();
 
   const weekIdSave     = rowNow.contract_week_id || det.contract_week_id || null;
-  let   tsIdSave       = (tsLocal.timesheet_id || rowNow.timesheet_id || null);
+  let   tsIdSave       = (det.current_timesheet_id || tsLocal.current_timesheet_id || tsLocal.timesheet_id || rowNow.current_timesheet_id || rowNow.timesheet_id || null);
 
   const isPlannedWeeklyWithoutTs =
     sheetScopeSave === 'WEEKLY' &&
     !!weekIdSave &&
-    !tsLocal.timesheet_id;
+    !(tsLocal.current_timesheet_id || tsLocal.timesheet_id);
 
   const isWeeklyManualContext =
     sheetScopeSave === 'WEEKLY' &&
@@ -118652,7 +118690,7 @@ const onSaveTimesheet = async () => {
   const isDailyManualContext =
     sheetScopeSave === 'DAILY' &&
     subModeSave === 'MANUAL' &&
-    !!tsLocal.timesheet_id;
+    !!(tsLocal.current_timesheet_id || tsLocal.timesheet_id);
 
   const weekEndingYmd =
     tsLocal.week_ending_date ||
@@ -118666,7 +118704,7 @@ const onSaveTimesheet = async () => {
   // - real TS: actual_schedule_json
   // - planned week: planned_schedule_json else std_schedule_json
   const currentWeeklyScheduleBaseline = normaliseScheduleJson(
-    (tsLocal && tsLocal.timesheet_id)
+    (tsLocal && (tsLocal.current_timesheet_id || tsLocal.timesheet_id))
       ? tsLocal.actual_schedule_json
       : (
           det && det.contract_week
@@ -119686,7 +119724,7 @@ const onSaveTimesheet = async () => {
       const result = await manualUpsertContractWeek(weekIdSave, payload);
       if (!isActiveTimesheetModalToken(openToken)) return;
 
-      const newTsId = result?.timesheet_id || result?.current_timesheet_id || null;
+      const newTsId = result?.current_timesheet_id || result?.timesheet_id || null;
       if (newTsId && String(newTsId) !== String(tsIdSave || '')) {
         tsIdSave = newTsId;
 
@@ -119870,7 +119908,7 @@ const onSaveTimesheet = async () => {
   }
 
   // Segments staging apply (FIXED: supports explicit clear + updates in-memory segments)
-if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
+if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.timesheet_id)) {
   tasks.push(async () => {
     const currentDetails = window.modalCtx.timesheetDetails || det;
     const segments = Array.isArray(currentDetails.segments) ? currentDetails.segments : [];
@@ -119936,7 +119974,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
     if (!updates.length) return;
 
     const res = await apiPatchJson(
-      `/api/tsfin/${encodeURIComponent(tsIdSave || rowNow.timesheet_id)}/segments`,
+      `/api/tsfin/${encodeURIComponent(tsIdSave || rowNow.current_timesheet_id || rowNow.timesheet_id)}/segments`,
       {
         expected_timesheet_id: (window.modalCtx?.timesheetMeta?.expected_timesheet_id || tsIdSave),
         segments: updates
@@ -120048,7 +120086,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
   // - once the save completes (and any rotation/adoption is done), send the QR now.
   if (qrSendNewNow && tsIdSave && !lockedNow) {
     tasks.push(async () => {
-      const idNow = (window.modalCtx?.data?.timesheet_id || tsIdSave || null);
+      const idNow = (window.modalCtx?.data?.current_timesheet_id || window.modalCtx?.data?.timesheet_id || tsIdSave || null);
       if (!idNow) throw new Error('Timesheet id missing; cannot send QR.');
 
       // This endpoint will issue a new token, generate the PDF, queue the email,
@@ -120058,16 +120096,17 @@ if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
 
       // Refresh details so Overview buttons/stage update immediately after the send
       try {
-        const id2 = (window.modalCtx?.data?.timesheet_id || idNow);
+        const id2 = (window.modalCtx?.data?.current_timesheet_id || window.modalCtx?.data?.timesheet_id || idNow);
         if (id2) {
           const fresh = await fetchTimesheetDetails(id2);
           if (!isActiveTimesheetModalToken(openToken)) return;
-          await adoptMovedTimesheetIdFromFetchedDetailsForFastOpen(
+          const adoptedFreshId = await adoptMovedTimesheetIdFromFetchedDetailsForFastOpen(
             fresh,
             id2,
             'qr-send-refresh'
           );
           if (!isActiveTimesheetModalToken(openToken)) return;
+          if (!adoptedFreshId && !activeModalMatchesTimesheetIdForFastOpen(id2)) return;
           window.modalCtx.timesheetDetails = fresh;
         }
       } catch {}
@@ -120230,7 +120269,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
             isInvoiced: invo,
             isLocked: invo,
             contract_week_id: freshDetails?.contract_week_id || window.modalCtx?.data?.contract_week_id || null,
-            expected_timesheet_id: tsIdSave || newId,
+            expected_timesheet_id: newId,
             hasElectronicOriginal: !!(freshDetails?.action_flags && freshDetails.action_flags.can_revert_to_electronic)
           };
 
@@ -120251,7 +120290,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
           }
         } catch {}
 
-        try { await refreshTimesheetsSummaryAfterRotation(tsIdSave || newId); } catch {}
+        try { await refreshTimesheetsSummaryAfterRotation(newId); } catch {}
         if (!isActiveTimesheetModalToken(openToken)) {
           GE();
           return { ok: false, stale: true };
@@ -120293,24 +120332,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
   const newDetails = (finalRefresh && finalRefresh.details) ? finalRefresh.details : (window.modalCtx.timesheetDetails || det);
   const newTsfin   = newDetails.tsfin || {};
   const newTs      = newDetails.timesheet || {};
-  const finalTsId  = String(
-    newDetails.current_timesheet_id ||
-    newTs.timesheet_id ||
-    window.modalCtx?.data?.timesheet_id ||
-    window.modalCtx?.data?.current_timesheet_id ||
-    tsIdSave ||
-    rowNow.timesheet_id ||
-    ''
-  ).trim() || null;
-
-  if (finalTsId && newDetails && typeof newDetails === 'object') {
-    newDetails.current_timesheet_id = finalTsId;
-    newDetails.requested_timesheet_id = finalTsId;
-    newDetails.expected_timesheet_id = finalTsId;
-    if (newDetails.timesheet && typeof newDetails.timesheet === 'object') {
-      newDetails.timesheet.timesheet_id = finalTsId;
-    }
-  }
+  const finalTsId  = newDetails.current_timesheet_id || newTs.current_timesheet_id || newTs.timesheet_id || tsIdSave || rowNow.current_timesheet_id || rowNow.timesheet_id;
 
   const updatedRow = {
     ...(window.modalCtx.data || rowNow),
@@ -120334,15 +120356,6 @@ if (segmentControlsDirty && (tsIdSave || rowNow.timesheet_id)) {
   window.modalCtx.timesheetPayStateError = (finalRefresh && Object.prototype.hasOwnProperty.call(finalRefresh, 'payStateError'))
     ? String(finalRefresh.payStateError || '')
     : String(window.modalCtx.timesheetPayStateError || '');
-
-  if (finalTsId) {
-    window.modalCtx.timesheetMeta = (window.modalCtx.timesheetMeta && typeof window.modalCtx.timesheetMeta === 'object') ? window.modalCtx.timesheetMeta : {};
-    window.modalCtx.timesheetMeta.expected_timesheet_id = finalTsId;
-    window.modalCtx.timesheetMeta.hasTs = true;
-    window.modalCtx.timesheetMeta.isPlannedWeek = false;
-    window.modalCtx.formState = (window.modalCtx.formState && typeof window.modalCtx.formState === 'object') ? window.modalCtx.formState : {};
-    window.modalCtx.formState.__forId = `timesheet:${finalTsId}`;
-  }
 
   if (window.modalCtx.timesheetState) {
     window.modalCtx.timesheetState.segmentOverrides      = {};
@@ -120421,9 +120434,13 @@ const fastOpenHydrationApplied = await completeTimesheetFastOpenHydration(openTo
     deletePreviewLoading: !!hasTs,
     deletePreviewLoaded: !hasTs,
     deletePreviewError: '',
+    deletePreviewRequestTimesheetId: hasTs ? (tsId || '') : '',
+    deletePreviewTimesheetId: '',
     evidenceLoading: false,
     evidenceLoaded: !hasTs,
     evidenceError: '',
+    evidenceRequestTimesheetId: '',
+    evidenceTimesheetId: hasTs ? '' : '',
     contractLoading: true,
     contractLoaded: false,
     contractError: ''
@@ -120438,7 +120455,7 @@ if (!fastOpenHydrationApplied || !isActiveTimesheetModalToken(openToken)) {
 Promise.resolve()
   .then(() => loadTimesheetSecondaryDataAfterDetails(openToken, {
     baseRow: { ...baseRow },
-    timesheetId: tsId || null,
+    timesheetId: (window.modalCtx?.data?.current_timesheet_id || window.modalCtx?.data?.timesheet_id || tsId || null),
     weekId: weekId || null,
     hasTs: !!hasTs,
     isPlannedWeek: !!isPlannedWeek
@@ -120463,6 +120480,7 @@ Promise.resolve()
     GE();
   }
 }
+
 
 
 
@@ -120612,6 +120630,7 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
         mcNow.data?.current_timesheet_id ||
         mcNow.data?.timesheet_id ||
         mcNow.timesheetDetails?.current_timesheet_id ||
+        mcNow.timesheetDetails?.timesheet?.current_timesheet_id ||
         mcNow.timesheetDetails?.timesheet?.timesheet_id ||
         ''
       ).trim();
@@ -120620,32 +120639,74 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
     }
   };
 
-  const mc0 = window.modalCtx || {};
-  const hydration0 = (mc0.timesheetHydration && typeof mc0.timesheetHydration === 'object') ? mc0.timesheetHydration : {};
-  if (hydration0.evidenceLoaded === true || hydration0.evidenceLoading === true) return false;
-
-  const tsId = String(
-    opts.timesheetId ||
-    mc0.data?.timesheet_id ||
-    mc0.data?.current_timesheet_id ||
-    mc0.timesheetDetails?.current_timesheet_id ||
-    mc0.timesheetDetails?.timesheet?.timesheet_id ||
+  const getEvidenceHydrationTargetId = (hydration) => String(
+    hydration?.evidenceTimesheetId ||
+    hydration?.evidenceRequestTimesheetId ||
     ''
   ).trim();
+
+  const rerenderEvidenceTabIfActive = async () => {
+    if (!isActiveTimesheetModalToken(openToken)) return false;
+    const fr = getActiveTimesheetFrame();
+    if (fr && fr.currentTabKey === 'evidence') {
+      await rerenderActiveTimesheetTabAfterSecondary(openToken, 'evidence');
+      return isActiveTimesheetModalToken(openToken);
+    }
+    return true;
+  };
+
+  const mc0 = window.modalCtx || {};
+  const activeInitialTsId = getActiveEvidenceTimesheetId();
+  const tsId = String(
+    activeInitialTsId ||
+    mc0.data?.current_timesheet_id ||
+    mc0.data?.timesheet_id ||
+    mc0.timesheetDetails?.current_timesheet_id ||
+    mc0.timesheetDetails?.timesheet?.current_timesheet_id ||
+    mc0.timesheetDetails?.timesheet?.timesheet_id ||
+    opts.timesheetId ||
+    ''
+  ).trim();
+
+  const patchEvidenceHydrationForThisRequest = (patch = {}) => {
+    if (!isActiveTimesheetModalToken(openToken)) return false;
+    try {
+      const hNow = (window.modalCtx?.timesheetHydration && typeof window.modalCtx.timesheetHydration === 'object')
+        ? window.modalCtx.timesheetHydration
+        : {};
+      const requestIdNow = String(hNow.evidenceRequestTimesheetId || '').trim();
+      const completedTargetNow = String(hNow.evidenceTimesheetId || '').trim();
+      if (requestIdNow && requestIdNow !== tsId) return false;
+      if (!requestIdNow && completedTargetNow && completedTargetNow !== tsId && (hNow.evidenceLoaded === true || hNow.evidenceLoading === true)) return false;
+    } catch {
+      return false;
+    }
+    return patchTimesheetHydrationState(openToken, patch);
+  };
 
   if (!tsId) {
     patchTimesheetHydrationState(openToken, {
       evidenceLoading: false,
       evidenceLoaded: true,
-      evidenceError: ''
+      evidenceError: '',
+      evidenceRequestTimesheetId: '',
+      evidenceTimesheetId: ''
     });
     return false;
   }
 
+  const hydration0 = (mc0.timesheetHydration && typeof mc0.timesheetHydration === 'object') ? mc0.timesheetHydration : {};
+  const hydrationTargetId0 = getEvidenceHydrationTargetId(hydration0);
+  const sameHydrationTarget0 = !!hydrationTargetId0 && hydrationTargetId0 === tsId;
+  if (hydration0.evidenceLoaded === true && sameHydrationTarget0) return false;
+  if (hydration0.evidenceLoading === true && sameHydrationTarget0) return false;
+
   patchTimesheetHydrationState(openToken, {
     evidenceLoading: true,
     evidenceLoaded: false,
-    evidenceError: ''
+    evidenceError: '',
+    evidenceRequestTimesheetId: tsId,
+    evidenceTimesheetId: ''
   });
 
   try {
@@ -120665,7 +120726,22 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
       payload.requested_timesheet_id = effectiveTsId;
     }
 
-    if (movedId && movedId !== tsId) {
+    const activeBeforeAdoptTsId = getActiveEvidenceTimesheetId();
+    if (activeBeforeAdoptTsId && tsId && activeBeforeAdoptTsId !== tsId && activeBeforeAdoptTsId !== effectiveTsId) {
+      const patched = patchEvidenceHydrationForThisRequest({
+        evidenceLoading: false,
+        evidenceLoaded: false,
+        evidenceError: '',
+        evidenceRequestTimesheetId: '',
+        evidenceTimesheetId: activeBeforeAdoptTsId || ''
+      });
+      if (patched) {
+        try { await rerenderEvidenceTabIfActive(); } catch {}
+      }
+      return false;
+    }
+
+    if (movedId && movedId !== tsId && activeBeforeAdoptTsId !== movedId) {
       await adoptMovedTimesheetIdForFastOpen(openToken, movedId, {
         refreshDetails: false,
         skipTabRefresh: true,
@@ -120677,11 +120753,16 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
 
     const activeTsId = getActiveEvidenceTimesheetId();
     if (activeTsId && effectiveTsId && activeTsId !== effectiveTsId) {
-      patchTimesheetHydrationState(openToken, {
+      const patched = patchEvidenceHydrationForThisRequest({
         evidenceLoading: false,
         evidenceLoaded: false,
-        evidenceError: ''
+        evidenceError: '',
+        evidenceRequestTimesheetId: '',
+        evidenceTimesheetId: activeTsId || ''
       });
+      if (patched) {
+        try { await rerenderEvidenceTabIfActive(); } catch {}
+      }
       return false;
     }
 
@@ -120712,44 +120793,49 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
     mc.timesheetDetails.evidence = Array.isArray(evidenceForDetails) ? evidenceForDetails : [];
     window.modalCtx = mc;
 
-    patchTimesheetHydrationState(openToken, {
+    const patched = patchEvidenceHydrationForThisRequest({
       evidenceLoading: false,
       evidenceLoaded: true,
-      evidenceError: ''
+      evidenceError: '',
+      evidenceRequestTimesheetId: '',
+      evidenceTimesheetId: effectiveTsId || tsId
     });
+    if (!patched) return false;
 
     if (!isActiveTimesheetModalToken(openToken)) return false;
-    const fr = getActiveTimesheetFrame();
-    if (fr && fr.currentTabKey === 'evidence') {
-      await rerenderActiveTimesheetTabAfterSecondary(openToken, 'evidence');
-      if (!isActiveTimesheetModalToken(openToken)) return false;
-    }
+    await rerenderEvidenceTabIfActive();
+    if (!isActiveTimesheetModalToken(openToken)) return false;
 
     return true;
   } catch (err) {
     if (!isActiveTimesheetModalToken(openToken)) return false;
     const activeTsId = getActiveEvidenceTimesheetId();
     if (activeTsId && tsId && activeTsId !== tsId) {
-      patchTimesheetHydrationState(openToken, {
+      const patched = patchEvidenceHydrationForThisRequest({
         evidenceLoading: false,
         evidenceLoaded: false,
-        evidenceError: ''
+        evidenceError: '',
+        evidenceRequestTimesheetId: '',
+        evidenceTimesheetId: activeTsId || ''
       });
+      if (patched) {
+        try { await rerenderEvidenceTabIfActive(); } catch {}
+      }
       return false;
     }
     const msg = String(err?.message || err || 'Failed to fetch evidence');
-    patchTimesheetHydrationState(openToken, {
+    const patched = patchEvidenceHydrationForThisRequest({
       evidenceLoading: false,
       evidenceLoaded: false,
-      evidenceError: msg
+      evidenceError: msg,
+      evidenceRequestTimesheetId: '',
+      evidenceTimesheetId: tsId
     });
+    if (!patched) return false;
 
     if (!isActiveTimesheetModalToken(openToken)) return false;
-    const fr = getActiveTimesheetFrame();
-    if (fr && fr.currentTabKey === 'evidence') {
-      await rerenderActiveTimesheetTabAfterSecondary(openToken, 'evidence');
-      if (!isActiveTimesheetModalToken(openToken)) return false;
-    }
+    await rerenderEvidenceTabIfActive();
+    if (!isActiveTimesheetModalToken(openToken)) return false;
     return false;
   }
 }
@@ -120780,6 +120866,7 @@ async function loadTimesheetDeletePreviewAfterDetails(openToken, opts = {}) {
         mcNow.data?.current_timesheet_id ||
         mcNow.data?.timesheet_id ||
         mcNow.timesheetDetails?.current_timesheet_id ||
+        mcNow.timesheetDetails?.timesheet?.current_timesheet_id ||
         mcNow.timesheetDetails?.timesheet?.timesheet_id ||
         ''
       ).trim();
@@ -120788,21 +120875,53 @@ async function loadTimesheetDeletePreviewAfterDetails(openToken, opts = {}) {
     }
   };
 
+  const refreshDeletePreviewChrome = async () => {
+    if (!isActiveTimesheetModalToken(openToken)) return false;
+    const fr = getActiveTimesheetFrame();
+    try { fr && fr._updateButtons && fr._updateButtons(); } catch {}
+    if (!isActiveTimesheetModalToken(openToken)) return false;
+    if (fr && fr.currentTabKey === 'overview') {
+      await rerenderActiveTimesheetTabAfterSecondary(openToken, 'overview');
+    }
+    return isActiveTimesheetModalToken(openToken);
+  };
+
   const mc0 = window.modalCtx || {};
+  const activeInitialTsId = getActiveDeletePreviewTimesheetId();
   const tsId = String(
-    opts.timesheetId ||
-    mc0.data?.timesheet_id ||
+    activeInitialTsId ||
     mc0.data?.current_timesheet_id ||
+    mc0.data?.timesheet_id ||
     mc0.timesheetDetails?.current_timesheet_id ||
+    mc0.timesheetDetails?.timesheet?.current_timesheet_id ||
     mc0.timesheetDetails?.timesheet?.timesheet_id ||
+    opts.timesheetId ||
     ''
   ).trim();
+
+  const patchDeletePreviewHydrationForThisRequest = (patch = {}) => {
+    if (!isActiveTimesheetModalToken(openToken)) return false;
+    try {
+      const hNow = (window.modalCtx?.timesheetHydration && typeof window.modalCtx.timesheetHydration === 'object')
+        ? window.modalCtx.timesheetHydration
+        : {};
+      const requestIdNow = String(hNow.deletePreviewRequestTimesheetId || '').trim();
+      const completedTargetNow = String(hNow.deletePreviewTimesheetId || '').trim();
+      if (requestIdNow && requestIdNow !== tsId) return false;
+      if (!requestIdNow && completedTargetNow && completedTargetNow !== tsId && (hNow.deletePreviewLoaded === true || hNow.deletePreviewLoading === true)) return false;
+    } catch {
+      return false;
+    }
+    return patchTimesheetHydrationState(openToken, patch);
+  };
 
   if (!tsId) {
     patchTimesheetHydrationState(openToken, {
       deletePreviewLoading: false,
       deletePreviewLoaded: true,
-      deletePreviewError: ''
+      deletePreviewError: '',
+      deletePreviewRequestTimesheetId: '',
+      deletePreviewTimesheetId: ''
     });
     return false;
   }
@@ -120810,7 +120929,9 @@ async function loadTimesheetDeletePreviewAfterDetails(openToken, opts = {}) {
   patchTimesheetHydrationState(openToken, {
     deletePreviewLoading: true,
     deletePreviewLoaded: false,
-    deletePreviewError: ''
+    deletePreviewError: '',
+    deletePreviewRequestTimesheetId: tsId,
+    deletePreviewTimesheetId: ''
   });
 
   try {
@@ -120829,7 +120950,22 @@ async function loadTimesheetDeletePreviewAfterDetails(openToken, opts = {}) {
       deletePreview.requested_timesheet_id = effectiveTsId;
     }
 
-    if (movedId && movedId !== tsId) {
+    const activeBeforeAdoptTsId = getActiveDeletePreviewTimesheetId();
+    if (activeBeforeAdoptTsId && tsId && activeBeforeAdoptTsId !== tsId && activeBeforeAdoptTsId !== effectiveTsId) {
+      const patched = patchDeletePreviewHydrationForThisRequest({
+        deletePreviewLoading: false,
+        deletePreviewLoaded: false,
+        deletePreviewError: '',
+        deletePreviewRequestTimesheetId: '',
+        deletePreviewTimesheetId: activeBeforeAdoptTsId || ''
+      });
+      if (patched) {
+        try { await refreshDeletePreviewChrome(); } catch {}
+      }
+      return false;
+    }
+
+    if (movedId && movedId !== tsId && activeBeforeAdoptTsId !== movedId) {
       await adoptMovedTimesheetIdForFastOpen(openToken, movedId, {
         refreshDetails: false,
         skipTabRefresh: true,
@@ -120841,11 +120977,16 @@ async function loadTimesheetDeletePreviewAfterDetails(openToken, opts = {}) {
 
     const activeTsId = getActiveDeletePreviewTimesheetId();
     if (activeTsId && effectiveTsId && activeTsId !== effectiveTsId) {
-      patchTimesheetHydrationState(openToken, {
+      const patched = patchDeletePreviewHydrationForThisRequest({
         deletePreviewLoading: false,
         deletePreviewLoaded: false,
-        deletePreviewError: ''
+        deletePreviewError: '',
+        deletePreviewRequestTimesheetId: '',
+        deletePreviewTimesheetId: activeTsId || ''
       });
+      if (patched) {
+        try { await refreshDeletePreviewChrome(); } catch {}
+      }
       return false;
     }
 
@@ -120854,43 +120995,50 @@ async function loadTimesheetDeletePreviewAfterDetails(openToken, opts = {}) {
     mc.timesheetDeletePreview = deletePreview;
     window.modalCtx = mc;
 
-    patchTimesheetHydrationState(openToken, {
+    const patched = patchDeletePreviewHydrationForThisRequest({
       deletePreviewLoading: false,
       deletePreviewLoaded: true,
-      deletePreviewError: ''
+      deletePreviewError: '',
+      deletePreviewRequestTimesheetId: '',
+      deletePreviewTimesheetId: effectiveTsId || tsId
     });
+    if (!patched) return false;
 
     if (!isActiveTimesheetModalToken(openToken)) return false;
-    const fr = getActiveTimesheetFrame();
-    try { fr && fr._updateButtons && fr._updateButtons(); } catch {}
-    if (!isActiveTimesheetModalToken(openToken)) return false;
-    if (fr && fr.currentTabKey === 'overview') {
-      await rerenderActiveTimesheetTabAfterSecondary(openToken, 'overview');
-    }
+    await refreshDeletePreviewChrome();
     if (!isActiveTimesheetModalToken(openToken)) return false;
     return true;
   } catch (err) {
     if (!isActiveTimesheetModalToken(openToken)) return false;
     const activeTsId = getActiveDeletePreviewTimesheetId();
     if (activeTsId && tsId && activeTsId !== tsId) {
-      patchTimesheetHydrationState(openToken, {
+      const patched = patchDeletePreviewHydrationForThisRequest({
         deletePreviewLoading: false,
         deletePreviewLoaded: false,
-        deletePreviewError: ''
+        deletePreviewError: '',
+        deletePreviewRequestTimesheetId: '',
+        deletePreviewTimesheetId: activeTsId || ''
       });
+      if (patched) {
+        try { await refreshDeletePreviewChrome(); } catch {}
+      }
       return false;
     }
-    patchTimesheetHydrationState(openToken, {
+    const patched = patchDeletePreviewHydrationForThisRequest({
       deletePreviewLoading: false,
       deletePreviewLoaded: false,
-      deletePreviewError: String(err?.message || err || 'Failed to fetch delete preview')
+      deletePreviewError: String(err?.message || err || 'Failed to fetch delete preview'),
+      deletePreviewRequestTimesheetId: '',
+      deletePreviewTimesheetId: tsId
     });
+    if (!patched) return false;
     if (!isActiveTimesheetModalToken(openToken)) return false;
     const fr = getActiveTimesheetFrame();
     try { fr && fr._updateButtons && fr._updateButtons(); } catch {}
     return false;
   }
 }
+
 
 
 
@@ -121528,6 +121676,7 @@ async function adoptMovedTimesheetIdForFastOpen(openToken, newId, opts = {}) {
 
 
 
+
 async function loadTimesheetContractEnrichmentAfterDetails(openToken, opts = {}) {
   if (!isActiveTimesheetModalToken(openToken)) return false;
 
@@ -121714,6 +121863,8 @@ async function loadTimesheetSecondaryDataAfterDetails(openToken, opts = {}) {
   await Promise.allSettled([contractJob, relatedJob]);
   return isActiveTimesheetModalToken(openToken);
 }
+
+
 
 
 
@@ -122891,7 +123042,6 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
 
   return { row: baseRow, details, related, state: mergedState };
 }
-
 
 
 async function openSendMailshotWizard() {
@@ -277803,6 +277953,9 @@ function tsExtractMoved409(err) {
 
 
 
+
+
+
 async function tsModalAdoptTimesheetId(newId, opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][ROTATE][ADOPT]');
   GC('tsModalAdoptTimesheetId');
@@ -295933,6 +296086,7 @@ function getTsLoggers(ns) {
 }
 
 
+
 function normaliseTimesheetCtx(ctx) {
   const baseCtx = ctx || {};
   const mc = window.modalCtx || {};
@@ -303112,6 +303266,7 @@ function refreshTimesheetModalTabsChrome(openToken) {
   return true;
 }
 
+
 async function safeRerenderTimesheetModal(openToken, preferredTab, opts = {}) {
   if (!isActiveTimesheetModalToken(openToken)) return false;
 
@@ -303179,6 +303334,353 @@ async function safeRerenderTimesheetModal(openToken, preferredTab, opts = {}) {
   return true;
 }
 
+// New Phase 3 helper functions for FRONTEND 10052026.js
+
+
+function cloneTimesheetFastOpenValue(value) {
+  if (value == null || typeof value !== 'object') return value;
+  try { return JSON.parse(JSON.stringify(value)); } catch {}
+  if (Array.isArray(value)) return value.slice();
+  return { ...value };
+}
+
+
+function boolishTimesheetFastOpenFlag(value) {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || value == null) return false;
+  const raw = String(value).trim().toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
+}
+
+
+function hasTimesheetStateFlag(state, keys) {
+  const st = (state && typeof state === 'object') ? state : {};
+  for (const key of keys || []) {
+    if (boolishTimesheetFastOpenFlag(st[key])) return true;
+  }
+  return false;
+}
+
+
+function timesheetObjectHasKeys(value) {
+  try {
+    return !!(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0);
+  } catch {
+    return false;
+  }
+}
+
+
+function timesheetArrayHasRows(value) {
+  return Array.isArray(value) && value.length > 0;
+}
+
+
+function timesheetEvidenceRowLooksLocalOrStaged(row) {
+  if (!row || typeof row !== 'object') return false;
+  const status = String(row.status || row.evidence_status || row.queue_status || '').trim().toUpperCase();
+  return !!(
+    row.__local === true ||
+    row.__staged === true ||
+    row.is_staged === true ||
+    row.is_staged_context === true ||
+    row.local_staged === true ||
+    row.pending_upload === true ||
+    row.uploading === true ||
+    row.temp_id ||
+    row.local_id ||
+    row.queue_id ||
+    ['STAGED', 'QUEUED', 'UPLOADING', 'PENDING', 'LOCAL'].includes(status)
+  );
+}
+
+
+function timesheetStateReferenceTouched(state, hydratedState, opts = {}) {
+  const st = (state && typeof state === 'object') ? state : {};
+  if (hasTimesheetStateFlag(st, [
+    '__referenceTouched',
+    'referenceTouched',
+    'referenceDirty',
+    '__referenceDirty'
+  ])) return true;
+
+  const modalCtx = (opts.modalCtx && typeof opts.modalCtx === 'object') ? opts.modalCtx : (window.modalCtx || {});
+  const frame = (typeof getActiveTimesheetFrame === 'function') ? getActiveTimesheetFrame() : null;
+  const isEditMode = !!(
+    modalCtx.mode === 'edit' ||
+    modalCtx.editing === true ||
+    frame?.mode === 'edit' ||
+    frame?.editing === true ||
+    frame?.isEditing === true
+  );
+  if (!isEditMode) return false;
+
+  const existingRef = String(st.reference == null ? '' : st.reference);
+  const loadedRef = String(
+    opts.loadedReference != null
+      ? opts.loadedReference
+      : ((hydratedState && typeof hydratedState === 'object') ? (hydratedState.reference ?? '') : '')
+  );
+  return existingRef !== loadedRef;
+}
+
+
+function timesheetStateScheduleTouched(state) {
+  return hasTimesheetStateFlag(state, [
+    '__weeklyScheduleTouched',
+    '__dailyScheduleTouched',
+    '__scheduleUserTouched',
+    'scheduleUserTouched',
+    '__weeklyScheduleUserTouched',
+    'weeklyScheduleUserTouched',
+    '__manualScheduleUserTouched',
+    'manualScheduleUserTouched',
+    'scheduleTouched',
+    'hoursScheduleTouched',
+    '__hoursScheduleTouched',
+    'hoursScheduleDirty',
+    '__hoursScheduleDirty',
+    '__dayReferencesTouched',
+    'dayReferencesTouched',
+    '__dayReferencesDirty',
+    'dayReferencesDirty'
+  ]);
+}
+
+
+function timesheetStateAdditionalRatesTouched(state) {
+  return hasTimesheetStateFlag(state, [
+    '__weeklyExtrasTouched',
+    '__additionalRatesTouched',
+    'additionalRatesTouched',
+    '__additionalRatesDirty',
+    'additionalRatesDirty',
+    'weeklyExtrasTouched',
+    'weeklyExtrasDirty'
+  ]);
+}
+
+
+function timesheetStateSegmentControlsTouched(state) {
+  const st = (state && typeof state === 'object') ? state : {};
+  return !!(
+    hasTimesheetStateFlag(st, [
+      '__segmentControlsTouched',
+      'segmentControlsTouched',
+      '__segmentControlsDirty',
+      'segmentControlsDirty',
+      'segmentOverridesDirty',
+      'segmentInvoiceTargetsDirty',
+      'nhspDeferralsDirty'
+    ]) ||
+    timesheetObjectHasKeys(st.segmentOverrides) ||
+    timesheetObjectHasKeys(st.segmentInvoiceTargets) ||
+    timesheetObjectHasKeys(st.nhspDeferrals)
+  );
+}
+
+
+function timesheetStateExpensesDirty(state) {
+  return hasTimesheetStateFlag(state, [
+    'expensesDirty',
+    'expensesDraftDirty',
+    'hasStagedExpensesDirty',
+    'stagedExpensesDirty',
+    'expenseDirtyMarker',
+    '__expensesDirty',
+    '__expensesDraftDirty'
+  ]);
+}
+
+
+function timesheetStateEvidenceDirty(state) {
+  const st = (state && typeof state === 'object') ? state : {};
+  if (hasTimesheetStateFlag(st, [
+    'evidenceDirty',
+    'evidenceDraftDirty',
+    'evidenceStagedDirty',
+    'stagedEvidenceDirty',
+    '__evidenceDirty',
+    '__evidenceTouched',
+    'evidenceTouched',
+    'evidenceUploading',
+    'evidenceUploadInProgress',
+    'evidenceDeleteInProgress'
+  ])) return true;
+
+  if (timesheetArrayHasRows(st.stagedEvidence) || timesheetArrayHasRows(st.staged_evidence)) return true;
+  if (timesheetArrayHasRows(st.contractWeekStagedEvidence) || timesheetArrayHasRows(st.contract_week_staged_evidence)) return true;
+  if (Array.isArray(st.evidence) && st.evidence.some(timesheetEvidenceRowLooksLocalOrStaged)) return true;
+  return false;
+}
+
+
+function mergeTimesheetHydratedStatePreservingUserEdits(existingStateArg, hydratedStateArg, opts = {}) {
+  const existingState = (existingStateArg && typeof existingStateArg === 'object') ? existingStateArg : {};
+  const hydratedState = (hydratedStateArg && typeof hydratedStateArg === 'object') ? hydratedStateArg : {};
+  const merged = cloneTimesheetFastOpenValue(hydratedState) || {};
+
+  const copyKeys = (keys) => {
+    for (const key of keys || []) {
+      if (Object.prototype.hasOwnProperty.call(existingState, key)) {
+        merged[key] = cloneTimesheetFastOpenValue(existingState[key]);
+      }
+    }
+  };
+
+  if (timesheetStateReferenceTouched(existingState, hydratedState, opts)) {
+    copyKeys(['reference', '__referenceTouched', 'referenceTouched', 'referenceDirty', '__referenceDirty']);
+  }
+
+  if (timesheetStateScheduleTouched(existingState)) {
+    copyKeys([
+      'schedule',
+      'baselineSchedule',
+      'weeklyLinesByDate',
+      'extraShiftCount',
+      'scheduleErrorsByDate',
+      'scheduleHasErrors',
+      'manualHours',
+      'dayReferences',
+      '__dailyScheduleShapeMode',
+      '__weeklyLinesSeedKey',
+      '__weeklyLinesSeedHash',
+      '__weeklyScheduleTouched',
+      '__dailyScheduleTouched',
+      '__scheduleUserTouched',
+      'scheduleUserTouched',
+      '__weeklyScheduleUserTouched',
+      'weeklyScheduleUserTouched',
+      '__manualScheduleUserTouched',
+      'manualScheduleUserTouched',
+      'scheduleTouched',
+      'hoursScheduleTouched',
+      '__keepAdditionalManualAdjustmentScheduleEmpty',
+      'keepAdditionalManualAdjustmentScheduleEmpty',
+      'keep_additional_manual_adjustment_schedule_empty',
+      '__suppressStandardScheduleFallback',
+      'suppressStandardScheduleFallback',
+      'suppress_standard_schedule_fallback'
+    ]);
+  }
+
+  if (timesheetStateAdditionalRatesTouched(existingState)) {
+    copyKeys([
+      'additionalRates',
+      '__weeklyExtrasTouched',
+      '__additionalRatesTouched',
+      'additionalRatesTouched',
+      '__additionalRatesDirty',
+      'additionalRatesDirty',
+      'weeklyExtrasTouched',
+      'weeklyExtrasDirty'
+    ]);
+  }
+
+  if (timesheetStateSegmentControlsTouched(existingState)) {
+    copyKeys([
+      'segmentOverrides',
+      'segmentInvoiceTargets',
+      'nhspDeferrals',
+      '__segmentControlsTouched',
+      'segmentControlsTouched',
+      '__segmentControlsDirty',
+      'segmentControlsDirty',
+      'segmentOverridesDirty',
+      'segmentInvoiceTargetsDirty',
+      'nhspDeferralsDirty'
+    ]);
+  }
+
+  if (timesheetStateExpensesDirty(existingState)) {
+    copyKeys([
+      'expensesDraft',
+      'expensesBaseline',
+      'expensesDirty',
+      'expensesDraftDirty',
+      'hasStagedExpensesDirty',
+      'stagedExpensesDirty',
+      'expenseDirtyMarker',
+      '__expensesDirty',
+      '__expensesDraftDirty'
+    ]);
+  }
+
+  if (timesheetStateEvidenceDirty(existingState)) {
+    copyKeys([
+      'evidence',
+      'stagedEvidence',
+      'staged_evidence',
+      'contractWeekStagedEvidence',
+      'contract_week_staged_evidence',
+      'evidenceDirty',
+      'evidenceDraftDirty',
+      'evidenceStagedDirty',
+      'stagedEvidenceDirty',
+      '__evidenceDirty',
+      '__evidenceTouched',
+      'evidenceTouched',
+      'evidenceUploading',
+      'evidenceUploadInProgress',
+      'evidenceDeleteInProgress'
+    ]);
+  }
+
+  return merged;
+}
+
+
+async function adoptMovedTimesheetIdForFastOpen(openToken, newId, opts = {}) {
+  if (!isActiveTimesheetModalToken(openToken)) return false;
+  const id = String(newId || '').trim();
+  if (!id) return false;
+
+  const initialFrame = getActiveTimesheetFrame();
+  const tabKey = String(opts.tabKey || initialFrame?.currentTabKey || 'overview').trim() || 'overview';
+  const adoptOpts = {
+    ...(opts && typeof opts === 'object' ? opts : {}),
+    openToken,
+    refreshDetails: opts.refreshDetails === true,
+    tabKey,
+    skipTabRefresh: opts.skipTabRefresh !== false
+  };
+
+  if (typeof tsModalAdoptTimesheetId === 'function') {
+    try { await tsModalAdoptTimesheetId(id, adoptOpts); } catch {}
+    if (!isActiveTimesheetModalToken(openToken)) return false;
+  }
+
+  if (!isActiveTimesheetModalToken(openToken)) return false;
+  const mc = window.modalCtx || {};
+  mc.data = (mc.data && typeof mc.data === 'object') ? mc.data : {};
+  mc.data.id = id;
+  mc.data.timesheet_id = id;
+  mc.data.current_timesheet_id = id;
+
+  mc.formState = (mc.formState && typeof mc.formState === 'object') ? mc.formState : {};
+  mc.formState.__forId = `timesheet:${id}`;
+
+  mc.timesheetMeta = (mc.timesheetMeta && typeof mc.timesheetMeta === 'object') ? mc.timesheetMeta : {};
+  mc.timesheetMeta.expected_timesheet_id = id;
+  mc.timesheetMeta.hasTs = true;
+  mc.timesheetMeta.isPlannedWeek = false;
+
+  mc.timesheetDetails = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : makeInitialTimesheetDetailsPlaceholder(mc.data || {});
+  mc.timesheetDetails.current_timesheet_id = id;
+  mc.timesheetDetails.requested_timesheet_id = id;
+  mc.timesheetDetails.expected_timesheet_id = id;
+  if (mc.timesheetDetails.timesheet && typeof mc.timesheetDetails.timesheet === 'object') {
+    mc.timesheetDetails.timesheet.timesheet_id = id;
+  }
+
+  if (!isActiveTimesheetModalToken(openToken)) return false;
+  window.modalCtx = mc;
+
+  if (!isActiveTimesheetModalToken(openToken)) return false;
+  const currentFrame = getActiveTimesheetFrame();
+  try { currentFrame && currentFrame._updateButtons && currentFrame._updateButtons(); } catch {}
+  return true;
+}
 
 
 
