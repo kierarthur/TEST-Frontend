@@ -2476,27 +2476,27 @@ body{
 
 
   <!-- ===== Draggable modal ===== -->
-  <div class="modal-back" id="modalBack">
-  <div class="modal" id="modal">
+  <div class="modal-back" id="modalBack" data-testid="modal-backdrop">
+  <div class="modal" id="modal" data-testid="modal">
 
     <div class="modal-h" id="modalDrag">
-      <div class="ttl" id="modalTitle">Details</div>
+      <div class="ttl" id="modalTitle" data-testid="modal-title">Details</div>
       <div class="spacer"></div>
       <!-- Related moved up next to Close -->
       <button id="btnRelated" style="display:none">Related</button>
-      <button id="btnCloseModal">Close</button>
+      <button id="btnCloseModal" data-testid="modal-close">Close</button>
     </div>
     <div class="modal-b">
-      <div class="tabs" id="modalTabs"></div>
-      <div class="tabc" id="modalBody"></div>
+      <div class="tabs" id="modalTabs" data-testid="modal-tabs"></div>
+      <div class="tabc" id="modalBody" data-testid="modal-body"></div>
     </div>
     <div class="actions" id="modalActions">
       <span class="hint" id="modalHint"></span>
       <div class="spacer"></div>
       <!-- Bottom row now only core actions -->
       <button id="btnDelete" class="danger" style="display:none">Delete</button>
-      <button id="btnEditModal" style="display:none">Edit</button>
-      <button id="btnSave" class="primary">Save</button>
+      <button id="btnEditModal" data-testid="modal-edit" style="display:none">Edit</button>
+      <button id="btnSave" class="primary" data-testid="modal-save">Save</button>
     </div>
   </div>
 </div>
@@ -2504,16 +2504,16 @@ body{
   <div class="auth-overlay" id="loginOverlay" aria-hidden="true">
     <div class="auth-card">
       <div class="auth-h"><div class="ttl">Sign in</div></div>
-      <form class="auth-f" id="loginForm">
+      <form class="auth-f" id="loginForm" data-testid="login-form">
         <div id="loginError" class="error" style="display:none"></div>
         <div class="row">
           <label>Email</label>
-          <input id="loginEmail" type="email" autocomplete="username" required />
+          <input id="loginEmail" data-testid="login-email" type="email" autocomplete="username" required />
         </div>
         <div class="row">
           <label>Password</label>
           <div class="split">
-            <input id="loginPassword" type="password" autocomplete="current-password" required />
+            <input id="loginPassword" data-testid="login-password" type="password" autocomplete="current-password" required />
             <span class="eye" id="toggleLoginPw">show</span>
           </div>
         </div>
@@ -2522,7 +2522,7 @@ body{
         </div>
         <div class="actions">
           <span class="link" id="linkForgot">Forgot password?</span>
-          <button type="submit" class="primary">Sign in</button>
+          <button type="submit" class="primary" data-testid="login-submit">Sign in</button>
         </div>
       </form>
     </div>
@@ -2558,6 +2558,7 @@ body{
           <label>Enter the 6-digit code we emailed you</label>
           <input
             id="tfaCode"
+            data-testid="tfa-code"
             type="text"
             inputmode="numeric"
             autocomplete="one-time-code"
