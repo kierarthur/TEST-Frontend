@@ -124643,9 +124643,80 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   mc.data = (mc.data && typeof mc.data === 'object') ? mc.data : baseRow;
   window.modalCtx = mc;
 
+  const syncActiveTimesheetFrameCtxAfterHydrate = (liveCtx) => {
+    if (!liveCtx || typeof liveCtx !== 'object') return false;
+    if (!hydrateTokenStillActive()) return false;
+    let fr = null;
+    try { fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null; } catch { fr = null; }
+    if (!fr || typeof fr !== 'object') return false;
+    if (String(fr.entity || fr.kind || '').trim().toLowerCase() !== 'timesheets') return false;
+
+    const existingCtx = (fr._ctxRef && typeof fr._ctxRef === 'object')
+      ? fr._ctxRef
+      : ((fr.ctx && typeof fr.ctx === 'object')
+          ? fr.ctx
+          : ((fr.modalCtx && typeof fr.modalCtx === 'object') ? fr.modalCtx : null));
+    const trimId = (value) => String(value == null ? '' : value).trim();
+    const ctxDetails = (ctx) => {
+      if (!ctx || typeof ctx !== 'object') return {};
+      return (ctx.timesheetDetails && typeof ctx.timesheetDetails === 'object')
+        ? ctx.timesheetDetails
+        : ((ctx.details && typeof ctx.details === 'object') ? ctx.details : {});
+    };
+    const ctxRow = (ctx) => {
+      if (!ctx || typeof ctx !== 'object') return {};
+      return (ctx.data && typeof ctx.data === 'object')
+        ? ctx.data
+        : ((ctx.row && typeof ctx.row === 'object') ? ctx.row : {});
+    };
+    const ctxTimesheetId = (ctx) => {
+      const rowLocal = ctxRow(ctx);
+      const detailsLocal = ctxDetails(ctx);
+      const tsLocalFrame = (detailsLocal.timesheet && typeof detailsLocal.timesheet === 'object') ? detailsLocal.timesheet : {};
+      const tsfinLocalFrame = (detailsLocal.tsfin && typeof detailsLocal.tsfin === 'object') ? detailsLocal.tsfin : {};
+      return trimId(
+        rowLocal.current_timesheet_id || rowLocal.timesheet_id || rowLocal.id_timesheet ||
+        ctx?.current_timesheet_id || ctx?.timesheet_id ||
+        detailsLocal.current_timesheet_id || detailsLocal.requested_timesheet_id || detailsLocal.timesheet_id ||
+        tsLocalFrame.current_timesheet_id || tsLocalFrame.timesheet_id ||
+        tsfinLocalFrame.timesheet_id ||
+        ''
+      );
+    };
+    const ctxContractWeekId = (ctx) => {
+      const rowLocal = ctxRow(ctx);
+      const detailsLocal = ctxDetails(ctx);
+      const cwLocal = (detailsLocal.contract_week && typeof detailsLocal.contract_week === 'object') ? detailsLocal.contract_week : {};
+      return trimId(
+        rowLocal.contract_week_id || rowLocal.week_id ||
+        ctx?.contract_week_id || ctx?.week_id ||
+        detailsLocal.contract_week_id || detailsLocal.week_id ||
+        cwLocal.id || cwLocal.contract_week_id ||
+        ''
+      );
+    };
+    const ctxToken = (ctx) => trimId(ctx?.openToken || ctx?.timesheetOpenToken || '');
+    const liveToken = ctxToken(liveCtx) || hydrateOpenToken;
+    const existingToken = ctxToken(existingCtx);
+    if (liveToken && existingToken && liveToken !== existingToken) return false;
+
+    const liveTs = ctxTimesheetId(liveCtx);
+    const existingTs = ctxTimesheetId(existingCtx);
+    if (liveTs && existingTs && liveTs !== existingTs) return false;
+    const liveCw = ctxContractWeekId(liveCtx);
+    const existingCw = ctxContractWeekId(existingCtx);
+    if (!liveTs && !existingTs && liveCw && existingCw && liveCw !== existingCw) return false;
+
+    fr._ctxRef = liveCtx;
+    if (fr.ctx && typeof fr.ctx === 'object' && fr.ctx !== liveCtx) fr.ctx = liveCtx;
+    if (fr.modalCtx && typeof fr.modalCtx === 'object' && fr.modalCtx !== liveCtx) fr.modalCtx = liveCtx;
+    return true;
+  };
+
+  syncActiveTimesheetFrameCtxAfterHydrate(mc);
+
   return { row: baseRow, details, related, state: mergedState };
 }
-
 
 async function openSendMailshotWizard() {
   const trimStr = (v) => String(v == null ? '' : v).trim();
@@ -143992,6 +144063,99 @@ function resolveTimesheetExpensesModalCtx(ctxArg = null) {
     typeof b === 'object' &&
     a === b
   );
+  const trimId = (value) => String(value == null ? '' : value).trim();
+  const ctxDetails = (ctx) => {
+    if (!ctx || typeof ctx !== 'object') return {};
+    return (ctx.timesheetDetails && typeof ctx.timesheetDetails === 'object')
+      ? ctx.timesheetDetails
+      : ((ctx.details && typeof ctx.details === 'object') ? ctx.details : {});
+  };
+  const ctxState = (ctx) => {
+    if (!ctx || typeof ctx !== 'object') return {};
+    return (ctx.timesheetState && typeof ctx.timesheetState === 'object')
+      ? ctx.timesheetState
+      : ((ctx.state && typeof ctx.state === 'object') ? ctx.state : {});
+  };
+  const ctxRow = (ctx) => {
+    if (!ctx || typeof ctx !== 'object') return {};
+    return (ctx.data && typeof ctx.data === 'object')
+      ? ctx.data
+      : ((ctx.row && typeof ctx.row === 'object') ? ctx.row : {});
+  };
+  const ctxToken = (ctx) => trimId(ctx?.openToken || ctx?.timesheetOpenToken || '');
+  const ctxTimesheetId = (ctx) => {
+    const row = ctxRow(ctx);
+    const details = ctxDetails(ctx);
+    const ts = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : {};
+    const tsfin = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
+    return trimId(
+      row.current_timesheet_id || row.timesheet_id || row.id_timesheet ||
+      ctx?.current_timesheet_id || ctx?.timesheet_id ||
+      details.current_timesheet_id || details.requested_timesheet_id || details.timesheet_id ||
+      ts.current_timesheet_id || ts.timesheet_id ||
+      tsfin.timesheet_id ||
+      ''
+    );
+  };
+  const ctxContractWeekId = (ctx) => {
+    const row = ctxRow(ctx);
+    const details = ctxDetails(ctx);
+    const cw = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : {};
+    return trimId(
+      row.contract_week_id || row.week_id ||
+      ctx?.contract_week_id || ctx?.week_id ||
+      details.contract_week_id || details.week_id ||
+      cw.id || cw.contract_week_id ||
+      ''
+    );
+  };
+  const sameTimesheetIdentity = (a, b) => {
+    if (!looksTimesheetCtx(a) || !looksTimesheetCtx(b)) return false;
+    const at = ctxToken(a);
+    const bt = ctxToken(b);
+    if (at && bt && at !== bt) return false;
+    const ats = ctxTimesheetId(a);
+    const bts = ctxTimesheetId(b);
+    if (ats && bts && ats !== bts) return false;
+    const acw = ctxContractWeekId(a);
+    const bcw = ctxContractWeekId(b);
+    if (!ats && !bts && acw && bcw && acw !== bcw) return false;
+    return true;
+  };
+  const expenseHasValue = (value) => {
+    if (!value || typeof value !== 'object') return false;
+    const keys = [
+      'mileage_units',
+      'travel_pay', 'travel_charge',
+      'accommodation_pay', 'accommodation_charge',
+      'other_pay', 'other_charge'
+    ];
+    return keys.some((key) => {
+      const n = Number(value[key]);
+      return Number.isFinite(n) && n !== 0;
+    }) || String(value.note || value.notes || '').trim() !== '';
+  };
+  const hydrationScore = (ctx) => {
+    if (!looksTimesheetCtx(ctx)) return -1000;
+    const details = ctxDetails(ctx);
+    const state = ctxState(ctx);
+    const hydration = (ctx.timesheetHydration && typeof ctx.timesheetHydration === 'object') ? ctx.timesheetHydration : {};
+    let score = 0;
+    if (details && typeof details === 'object') {
+      if (details.__placeholder === true) score -= 20;
+      if (details.__loading === true) score -= 20;
+      if (details.timesheet && typeof details.timesheet === 'object') score += 12;
+      if (details.tsfin && typeof details.tsfin === 'object') score += 24;
+      if (details.contract_week && typeof details.contract_week === 'object') score += 4;
+      if (details.action_flags && typeof details.action_flags === 'object') score += 8;
+      if (details.summary_stage || details.route_type || details.processing_status) score += 4;
+    }
+    if (hydration.detailsLoaded === true) score += 6;
+    if (hydration.detailsLoading === true) score -= 6;
+    if (expenseHasValue(state.expensesDraft)) score += 3;
+    if (expenseHasValue(state.expensesBaseline)) score += 3;
+    return score;
+  };
   const frameCtx = (frame) => {
     if (!frame || typeof frame !== 'object') return null;
     return unwrapCtx(frame._ctxRef) || unwrapCtx(frame.ctx) || unwrapCtx(frame.modalCtx) || null;
@@ -144005,6 +144169,31 @@ function resolveTimesheetExpensesModalCtx(ctxArg = null) {
       looksTimesheetCtx(frameCtx(frame))
     )
   );
+  const adoptFrameCtx = (frame, liveCtx) => {
+    if (!frame || typeof frame !== 'object' || !looksTimesheetCtx(liveCtx)) return false;
+    try { frame._ctxRef = liveCtx; } catch {}
+    try {
+      if (
+        frame.ctx &&
+        typeof frame.ctx === 'object' &&
+        frame.ctx !== liveCtx &&
+        sameTimesheetIdentity(frame.ctx, liveCtx)
+      ) {
+        frame.ctx = liveCtx;
+      }
+    } catch {}
+    try {
+      if (
+        frame.modalCtx &&
+        typeof frame.modalCtx === 'object' &&
+        frame.modalCtx !== liveCtx &&
+        sameTimesheetIdentity(frame.modalCtx, liveCtx)
+      ) {
+        frame.modalCtx = liveCtx;
+      }
+    } catch {}
+    return true;
+  };
 
   let activeFrame = null;
   try {
@@ -144013,14 +144202,32 @@ function resolveTimesheetExpensesModalCtx(ctxArg = null) {
       : null;
   } catch {}
 
+  const live = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object')
+    ? window.modalCtx
+    : null;
+
   const activeFrameCtx = frameCtx(activeFrame);
   const activeFrameIsTimesheet = frameLooksTimesheet(activeFrame);
   const activeCtxIsTimesheet = looksTimesheetCtx(activeFrameCtx);
 
-  if (supplied && looksTimesheetCtx(supplied) && activeFrameIsTimesheet && sameLiveCtx(supplied, activeFrameCtx)) {
-    return supplied;
-  }
   if (activeFrameIsTimesheet && activeCtxIsTimesheet) {
+    const frameScore = hydrationScore(activeFrameCtx);
+    const liveIsBetter = !!(
+      live &&
+      live !== activeFrameCtx &&
+      looksTimesheetCtx(live) &&
+      sameTimesheetIdentity(live, activeFrameCtx) &&
+      hydrationScore(live) > frameScore
+    );
+
+    if (liveIsBetter) {
+      if (typeof window !== 'undefined') {
+        try { window.modalCtx = live; } catch {}
+      }
+      adoptFrameCtx(activeFrame, live);
+      return live;
+    }
+
     if (typeof window !== 'undefined') {
       try { window.modalCtx = activeFrameCtx; } catch {}
     }
@@ -144028,31 +144235,37 @@ function resolveTimesheetExpensesModalCtx(ctxArg = null) {
   }
 
   let stackTimesheetCtx = null;
+  let stackTimesheetFrame = null;
   if (typeof window !== 'undefined' && Array.isArray(window.__modalStack)) {
     for (let i = window.__modalStack.length - 1; i >= 0; i--) {
       const fr = window.__modalStack[i];
       if (!frameLooksTimesheet(fr)) continue;
       const candidate = frameCtx(fr);
       if (looksTimesheetCtx(candidate)) {
-        if (supplied && sameLiveCtx(supplied, candidate)) return supplied;
         stackTimesheetCtx = candidate;
+        stackTimesheetFrame = fr;
         break;
       }
     }
   }
   if (stackTimesheetCtx) {
+    if (live && looksTimesheetCtx(live) && sameTimesheetIdentity(live, stackTimesheetCtx) && hydrationScore(live) > hydrationScore(stackTimesheetCtx)) {
+      if (typeof window !== 'undefined' && activeFrame && frameLooksTimesheet(activeFrame)) {
+        adoptFrameCtx(activeFrame, live);
+      }
+      if (stackTimesheetFrame && stackTimesheetFrame !== activeFrame) {
+        adoptFrameCtx(stackTimesheetFrame, live);
+      }
+      return live;
+    }
     if (typeof window !== 'undefined' && activeFrame && frameLooksTimesheet(activeFrame)) {
       try { window.modalCtx = stackTimesheetCtx; } catch {}
     }
     return stackTimesheetCtx;
   }
 
-  if (supplied && looksTimesheetCtx(supplied)) return supplied;
-
-  const live = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object')
-    ? window.modalCtx
-    : null;
   if (live && looksTimesheetCtx(live)) return live;
+  if (supplied && looksTimesheetCtx(supplied)) return supplied;
 
   return supplied || live || {};
 }
@@ -298592,8 +298805,10 @@ function normaliseTimesheetCtx(ctx) {
   const contractWeek = (details && details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : {};
 
   const hasRealTs =
-    !!(tsLocal && tsLocal.timesheet_id) ||
-    !!(row && row.timesheet_id);
+    !!(tsLocal && (tsLocal.timesheet_id || tsLocal.current_timesheet_id)) ||
+    !!(details && (details.current_timesheet_id || details.requested_timesheet_id || details.timesheet_id)) ||
+    !!(row && (row.current_timesheet_id || row.timesheet_id)) ||
+    !!(mc.data && (mc.data.current_timesheet_id || mc.data.timesheet_id));
 
   const sheetScope = String(details?.sheet_scope || row?.sheet_scope || tsLocal?.sheet_scope || '').toUpperCase();
   const isPlannedWeeklyManual =
@@ -298603,6 +298818,8 @@ function normaliseTimesheetCtx(ctx) {
 
   const defaultDraft = {
     mileage_units: 0,
+    mileage_pay_rate: null,
+    mileage_charge_rate: null,
     travel_pay: 0,
     travel_charge: 0,
     accommodation_pay: 0,
@@ -298615,6 +298832,11 @@ function normaliseTimesheetCtx(ctx) {
   const num0 = (v) => {
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
+  };
+
+  const rateOrNull = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
   };
 
   const safeJsonParse = (v) => {
@@ -298746,6 +298968,8 @@ function normaliseTimesheetCtx(ctx) {
 
     return {
       mileage_units: num0(tsfinLocal.mileage_units ?? 0),
+      mileage_pay_rate: rateOrNull(tsfinLocal.mileage_pay_rate),
+      mileage_charge_rate: rateOrNull(tsfinLocal.mileage_charge_rate),
 
       travel_pay: num0(tsfinLocal.travel_pay_ex_vat ?? 0),
       travel_charge: num0(tsfinLocal.travel_charge_ex_vat ?? 0),
@@ -298760,14 +298984,18 @@ function normaliseTimesheetCtx(ctx) {
     };
   })();
 
+  const hasRealTsfinExpenseAuthority = !!(hasRealTs && tsfinLocal);
+
   const preferredDraftSeed =
-    (isPlannedWeeklyManual && draftFromContractWeek && typeof draftFromContractWeek === 'object')
-      ? draftFromContractWeek
-      : draftFromTsfinCols;
+    hasRealTsfinExpenseAuthority
+      ? draftFromTsfinCols
+      : ((isPlannedWeeklyManual && draftFromContractWeek && typeof draftFromContractWeek === 'object')
+          ? draftFromContractWeek
+          : draftFromTsfinCols);
 
   const hasAuthoritativeExpenseSeed = !!(
-    (isPlannedWeeklyManual && contractWeekExpenseDraftWasExplicit) ||
-    (!isPlannedWeeklyManual && tsfinLocal)
+    hasRealTsfinExpenseAuthority ||
+    (isPlannedWeeklyManual && contractWeekExpenseDraftWasExplicit)
   );
 
   const expensesDirty = timesheetStateExpensesDirty(state);
@@ -298782,12 +299010,44 @@ function normaliseTimesheetCtx(ctx) {
     for (const k of keys) {
       if (num0(a?.[k]) !== num0(b?.[k])) return false;
     }
+    if (rateOrNull(a?.mileage_pay_rate) !== rateOrNull(b?.mileage_pay_rate)) return false;
+    if (rateOrNull(a?.mileage_charge_rate) !== rateOrNull(b?.mileage_charge_rate)) return false;
+    if (String(a?.note ?? '').trim() !== String(b?.note ?? '').trim()) return false;
     return true;
   };
 
-  if (!state.expensesDraft || typeof state.expensesDraft !== 'object') {
-    state.expensesDraft = JSON.parse(JSON.stringify(preferredDraftSeed));
-    state.__expensesSeededFromTsfinCols = true;
+  const cloneDraftForState = (value) => cloneExpenseDraftSeed(value || defaultDraft);
+  const normaliseExpenseSeedForState = (value) => {
+    const raw = {
+      ...defaultDraft,
+      ...((value && typeof value === 'object') ? value : {})
+    };
+    if (typeof normaliseTimesheetExpensesDraft === 'function') {
+      try {
+        return normaliseTimesheetExpensesDraft(raw, {
+          row,
+          details,
+          tsfin: tsfinLocal || {},
+          state,
+          context: mc
+        });
+      } catch {}
+    }
+    return raw;
+  };
+
+  const preferredDraftForState = normaliseExpenseSeedForState(preferredDraftSeed || defaultDraft);
+  const existingDraftIsObject = !!(state.expensesDraft && typeof state.expensesDraft === 'object');
+  const existingBaselineIsObject = !!(state.expensesBaseline && typeof state.expensesBaseline === 'object');
+  const existingDraftMatchesBaseline = !!(
+    existingDraftIsObject &&
+    existingBaselineIsObject &&
+    sameCoreNumbers(state.expensesDraft, state.expensesBaseline)
+  );
+
+  if (!existingDraftIsObject) {
+    state.expensesDraft = cloneDraftForState(preferredDraftForState);
+    state.__expensesSeededFromTsfinCols = !!hasRealTsfinExpenseAuthority;
   } else {
     for (const k of Object.keys(defaultDraft)) {
       if (!Object.prototype.hasOwnProperty.call(state.expensesDraft, k)) {
@@ -298796,23 +299056,20 @@ function normaliseTimesheetCtx(ctx) {
     }
 
     if (
-      preferredDraftSeed &&
+      preferredDraftForState &&
       hasAuthoritativeExpenseSeed &&
-      state.expensesBaseline &&
-      typeof state.expensesBaseline === 'object' &&
       !expensesDirty &&
-      !state.__expensesSeededFromTsfinCols &&
-      sameCoreNumbers(state.expensesDraft, state.expensesBaseline)
+      (!existingBaselineIsObject || existingDraftMatchesBaseline)
     ) {
-      state.expensesDraft = JSON.parse(JSON.stringify(preferredDraftSeed));
-      state.expensesBaseline = JSON.parse(JSON.stringify(preferredDraftSeed));
-      state.__expensesSeededFromTsfinCols = true;
+      state.expensesDraft = cloneDraftForState(preferredDraftForState);
+      state.expensesBaseline = cloneDraftForState(preferredDraftForState);
+      state.__expensesSeededFromTsfinCols = !!hasRealTsfinExpenseAuthority;
     }
   }
 
   if (!state.expensesBaseline || typeof state.expensesBaseline !== 'object') {
     if (!expensesDirty) {
-      state.expensesBaseline = JSON.parse(JSON.stringify(state.expensesDraft));
+      state.expensesBaseline = cloneDraftForState(state.expensesDraft);
     }
   } else if (!expensesDirty) {
     for (const k of Object.keys(defaultDraft)) {
@@ -306172,6 +306429,87 @@ async function completeTimesheetFastOpenHydration(openToken, payload = {}) {
   if (!isActiveTimesheetModalToken(openToken)) return false;
 
   const mc = window.modalCtx || {};
+  const trimId = (value) => String(value == null ? '' : value).trim();
+  const modalToken = trimId(openToken || mc.openToken || '');
+  const ctxDetails = (ctx) => {
+    if (!ctx || typeof ctx !== 'object') return {};
+    return (ctx.timesheetDetails && typeof ctx.timesheetDetails === 'object')
+      ? ctx.timesheetDetails
+      : ((ctx.details && typeof ctx.details === 'object') ? ctx.details : {});
+  };
+  const ctxRow = (ctx) => {
+    if (!ctx || typeof ctx !== 'object') return {};
+    return (ctx.data && typeof ctx.data === 'object')
+      ? ctx.data
+      : ((ctx.row && typeof ctx.row === 'object') ? ctx.row : {});
+  };
+  const ctxTimesheetId = (ctx) => {
+    const row = ctxRow(ctx);
+    const details = ctxDetails(ctx);
+    const ts = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : {};
+    const tsfin = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
+    return trimId(
+      row.current_timesheet_id || row.timesheet_id || row.id_timesheet ||
+      ctx?.current_timesheet_id || ctx?.timesheet_id ||
+      details.current_timesheet_id || details.requested_timesheet_id || details.timesheet_id ||
+      ts.current_timesheet_id || ts.timesheet_id ||
+      tsfin.timesheet_id ||
+      ''
+    );
+  };
+  const ctxContractWeekId = (ctx) => {
+    const row = ctxRow(ctx);
+    const details = ctxDetails(ctx);
+    const cw = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : {};
+    return trimId(
+      row.contract_week_id || row.week_id ||
+      ctx?.contract_week_id || ctx?.week_id ||
+      details.contract_week_id || details.week_id ||
+      cw.id || cw.contract_week_id ||
+      ''
+    );
+  };
+  const ctxOpenToken = (ctx) => trimId(ctx?.openToken || ctx?.timesheetOpenToken || '');
+  const sameTimesheetModalIdentity = (a, b) => {
+    if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+    const at = ctxOpenToken(a);
+    const bt = ctxOpenToken(b);
+    if (at && bt && at !== bt) return false;
+    const ats = ctxTimesheetId(a);
+    const bts = ctxTimesheetId(b);
+    if (ats && bts && ats !== bts) return false;
+    const acw = ctxContractWeekId(a);
+    const bcw = ctxContractWeekId(b);
+    if (!ats && !bts && acw && bcw && acw !== bcw) return false;
+    return true;
+  };
+  const frameCtx = (frame) => {
+    if (!frame || typeof frame !== 'object') return null;
+    return (frame._ctxRef && typeof frame._ctxRef === 'object')
+      ? frame._ctxRef
+      : ((frame.ctx && typeof frame.ctx === 'object')
+          ? frame.ctx
+          : ((frame.modalCtx && typeof frame.modalCtx === 'object') ? frame.modalCtx : null));
+  };
+  const syncActiveTimesheetFrameCtx = (frame, liveCtx) => {
+    if (!frame || typeof frame !== 'object' || !liveCtx || typeof liveCtx !== 'object') return false;
+    const frameIsTimesheet = String(frame.entity || frame.kind || '').trim().toLowerCase() === 'timesheets';
+    if (!frameIsTimesheet) return false;
+    const existingCtx = frameCtx(frame);
+    const frameToken = ctxOpenToken(existingCtx);
+    const liveToken = ctxOpenToken(liveCtx) || modalToken;
+    if (frameToken && liveToken && frameToken !== liveToken) return false;
+    if (existingCtx && !sameTimesheetModalIdentity(existingCtx, liveCtx)) return false;
+    frame._ctxRef = liveCtx;
+    if (frame.ctx && typeof frame.ctx === 'object' && frame.ctx !== liveCtx && sameTimesheetModalIdentity(frame.ctx, liveCtx)) {
+      frame.ctx = liveCtx;
+    }
+    if (frame.modalCtx && typeof frame.modalCtx === 'object' && frame.modalCtx !== liveCtx && sameTimesheetModalIdentity(frame.modalCtx, liveCtx)) {
+      frame.modalCtx = liveCtx;
+    }
+    return true;
+  };
+
   const currentHydration = (mc.timesheetHydration && typeof mc.timesheetHydration === 'object')
     ? mc.timesheetHydration
     : {};
@@ -306198,6 +306536,8 @@ async function completeTimesheetFastOpenHydration(openToken, payload = {}) {
   let fr = null;
   try { fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null; } catch { fr = null; }
 
+  syncActiveTimesheetFrameCtx(fr, mc);
+
   if (fr && fr.entity === 'timesheets') {
     if (Array.isArray(payload.tabDefs)) fr.tabs = payload.tabDefs.slice();
     if (typeof payload.renderTab === 'function') fr.renderTab = payload.renderTab;
@@ -306205,6 +306545,7 @@ async function completeTimesheetFastOpenHydration(openToken, payload = {}) {
     fr._showSave = null;
     fr._showApply = null;
     if (payload.title) fr.title = String(payload.title || fr.title || 'Timesheet');
+    syncActiveTimesheetFrameCtx(fr, mc);
   }
 
   await safeRerenderTimesheetModal(openToken, (fr && fr.currentTabKey) || 'overview', {
@@ -306212,9 +306553,15 @@ async function completeTimesheetFastOpenHydration(openToken, payload = {}) {
     refreshTabs: true
   });
 
+  if (isActiveTimesheetModalToken(openToken)) {
+    try {
+      const currentFrame = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
+      syncActiveTimesheetFrameCtx(currentFrame, window.modalCtx || mc);
+    } catch {}
+  }
+
   return true;
 }
-
 
 
 
