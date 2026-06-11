@@ -116176,6 +116176,8 @@ function resetBulkProcessDirtyBaseline(state, reason, detail = {}) {
 
 
 // Replacement function: hydrateTimesheetModalAfterOpen (patched source lines 116179-120501)
+
+
 async function hydrateTimesheetModalAfterOpen(openToken, row, idsArg) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OPEN]');
   GC('hydrateTimesheetModalAfterOpen');
@@ -117660,7 +117662,6 @@ try {
     return out;
   };
 
-  // ── Existing timesheet: seed from TSFIN additional_units_json (unchanged) ──
   // ✅ PLUS: seed per-day from timesheet.additional_units_per_day
   if (hasTs) {
     // Weekly totals: read from TS storage first
@@ -117689,7 +117690,6 @@ try {
     }
 
     // Normalise into the same shape as TSFIN additional_units_json:
-    // { EX1: { unit_count: 2 }, EX2: { unit_count: 1 }, ... }
     const norm = {};
     if (au && typeof au === 'object') {
       for (const [k, v] of Object.entries(au)) {
@@ -117852,7 +117852,10 @@ try {
       const cw2 = (details && details.contract_week) ? details.contract_week : null;
       const hasAuthoritativeCwSchedule = !!(
         typeof hasAuthoritativeContractWeekSchedule === 'function' &&
-        hasAuthoritativeContractWeekSchedule({ ...details, contract_week: cw2 || {} })
+        (
+          hasAuthoritativeContractWeekSchedule({ ...(baseRow || {}), ...(details || {}), contract_week: cw2 || details?.contract_week || baseRow?.contract_week || baseRow || {} }) ||
+          hasAuthoritativeContractWeekSchedule(baseRow || {})
+        )
       );
       const hasExistingContractWeek = !!String(
         cw2?.id || cw2?.contract_week_id || details?.contract_week_id || baseRow?.contract_week_id || ''
@@ -118421,9 +118424,7 @@ const adoptMovedTimesheetIdDuringSave = async (movedId, adoptOpts = {}) => {
   return result;
 };
 
-// ✅ Replace your existing `const onSaveTimesheet = async () => { ... }` inside openTimesheet(...) with this:
 
-// ✅ REPLACE your existing `const onSaveTimesheet = async () => { ... }` inside openTimesheet(...) with this:
 const onSaveTimesheet = async () => {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][SAVE]');
   GC('onSaveTimesheet');
@@ -118783,7 +118784,10 @@ const onSaveTimesheet = async () => {
   // - planned week: contract_week.planned_schedule_json when it is authoritative, including []
   const plannedBaselineSource = (() => {
     try {
-      if (det && det.contract_week && typeof hasAuthoritativeContractWeekSchedule === 'function' && hasAuthoritativeContractWeekSchedule({ ...det, contract_week: det.contract_week })) {
+      if (det && det.contract_week && typeof hasAuthoritativeContractWeekSchedule === 'function' && (
+        hasAuthoritativeContractWeekSchedule({ ...(rowNow || {}), ...(det || {}), contract_week: det.contract_week || rowNow?.contract_week || rowNow || {} }) ||
+        hasAuthoritativeContractWeekSchedule(rowNow || {})
+      )) {
         return (typeof resolveContractWeekScheduleForModal === 'function')
           ? resolveContractWeekScheduleForModal(rowNow || {}, det || {}, related?.contract || det?.contract || {}, { resetFromContract: false })
           : det.contract_week.planned_schedule_json;
@@ -119387,7 +119391,6 @@ const onSaveTimesheet = async () => {
     try { st.__forceQrActionEnum = null; } catch {}
   }
 
-  // Pay-hold / mark-paid staging (unchanged)
   const currentOnHold    = !!tsfinLocal.pay_on_hold;
   const payHoldDesired   = (st.payHoldDesired === true || st.payHoldDesired === false) ? st.payHoldDesired : null;
   const payHoldReason    = st.payHoldReason || '';
@@ -119797,9 +119800,21 @@ const onSaveTimesheet = async () => {
       }
 
       const expected = window.modalCtx?.timesheetMeta?.expected_timesheet_id || tsIdSave || null;
+      const weeklyScheduleExplicitUserEditForPayload = !!(
+        st.__weeklyScheduleTouched === true ||
+        st.weeklyScheduleUserTouched === true ||
+        st.scheduleUserTouched === true ||
+        st.__scheduleUserTouched === true ||
+        st.__scheduleExplicitlyCleared === true ||
+        st.__scheduleResetFromContract === true
+      );
       const payload = {
         expected_timesheet_id: expected,
         actual_schedule_json: schedulePayload,
+        explicit_schedule_edit: weeklyScheduleExplicitUserEditForPayload,
+        schedule_touched: weeklyScheduleExplicitUserEditForPayload,
+        schedule_user_edited: weeklyScheduleExplicitUserEditForPayload,
+        schedule_authority_source: st.__scheduleAuthoritySource || null,
 
         // ✅ NEW backend operations:
         //   - 'INVALIDATE'        (clear token/payload/scanned + clear hashes, stay QR-enabled)
@@ -120591,8 +120606,6 @@ Promise.resolve()
 
 
 
-
-
 function timesheetFastOpenPlainObject(value) {
   return !!(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -120949,22 +120962,30 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
 // Replacement function: hasAuthoritativeContractWeekSchedule (patched source lines 121251-121276)
 function hasAuthoritativeContractWeekSchedule(rowOrDetails) {
   const root = (rowOrDetails && typeof rowOrDetails === 'object') ? rowOrDetails : {};
-  const cw = (root.contract_week && typeof root.contract_week === 'object') ? root.contract_week : root;
   const own = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const rowLike = (root.row && typeof root.row === 'object') ? root.row : null;
+  const cw = (root.contract_week && typeof root.contract_week === 'object')
+    ? root.contract_week
+    : (rowLike || root);
   const contractWeekId = String(
     cw.id ||
     cw.contract_week_id ||
     root.contract_week_id ||
     root.contractWeekId ||
+    rowLike?.id ||
+    rowLike?.contract_week_id ||
+    rowLike?.contractWeekId ||
     ''
   ).trim();
 
   if (!contractWeekId) return false;
 
-  const hasPlannedKey = own(cw, 'planned_schedule_json') || own(root, 'planned_schedule_json');
+  const hasPlannedKey = own(cw, 'planned_schedule_json') || own(root, 'planned_schedule_json') || own(rowLike, 'planned_schedule_json');
   if (!hasPlannedKey) return false;
 
-  const raw = own(cw, 'planned_schedule_json') ? cw.planned_schedule_json : root.planned_schedule_json;
+  const raw = own(cw, 'planned_schedule_json')
+    ? cw.planned_schedule_json
+    : (own(root, 'planned_schedule_json') ? root.planned_schedule_json : rowLike.planned_schedule_json);
   if (Array.isArray(raw)) return true;
   if (typeof raw === 'string') {
     const s = raw.trim();
@@ -121444,7 +121465,10 @@ function patchTimesheetAdditionalRatesAndScheduleFromContractAfterSecondary(moda
   ).trim();
   const hasAuthoritativeContractWeekScheduleForEnrichment = !!(
     typeof hasAuthoritativeContractWeekSchedule === 'function' &&
-    hasAuthoritativeContractWeekSchedule({ ...detailsForScheduleAuthority, contract_week: cwForScheduleAuthority })
+    (
+      hasAuthoritativeContractWeekSchedule({ ...(rowForScheduleAuthority || {}), ...(detailsForScheduleAuthority || {}), contract_week: cwForScheduleAuthority || rowForScheduleAuthority || {} }) ||
+      hasAuthoritativeContractWeekSchedule(rowForScheduleAuthority || {})
+    )
   );
 
   const scheduleTouched = !!(
@@ -121525,6 +121549,10 @@ function patchTimesheetAdditionalRatesAndScheduleFromContractAfterSecondary(moda
 
   return changed;
 }
+
+
+
+
 
 // New Phase 3 helper functions for FRONTEND 10052026.js
 
@@ -122832,7 +122860,10 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
         const cw2 = (details && details.contract_week) ? details.contract_week : null;
         const hasAuthoritativeCwSchedule = !!(
           typeof hasAuthoritativeContractWeekSchedule === 'function' &&
-          hasAuthoritativeContractWeekSchedule({ ...details, contract_week: cw2 || {} })
+          (
+          hasAuthoritativeContractWeekSchedule({ ...(baseRow || {}), ...(details || {}), contract_week: cw2 || details?.contract_week || baseRow?.contract_week || baseRow || {} }) ||
+          hasAuthoritativeContractWeekSchedule(baseRow || {})
+        )
         );
         const hasExistingContractWeek = !!String(
           cw2?.id || cw2?.contract_week_id || details?.contract_week_id || baseRow?.contract_week_id || ''
@@ -123003,7 +123034,10 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   const hydrateCwForSeed = (details && details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : null;
   const hydrateHasAuthoritativeCwSeed = !!(
     typeof hasAuthoritativeContractWeekSchedule === 'function' &&
-    hasAuthoritativeContractWeekSchedule({ ...details, contract_week: hydrateCwForSeed || {} })
+    (
+    hasAuthoritativeContractWeekSchedule({ ...(baseRow || {}), ...(details || {}), contract_week: hydrateCwForSeed || details?.contract_week || baseRow?.contract_week || baseRow || {} }) ||
+    hasAuthoritativeContractWeekSchedule(baseRow || {})
+  )
   );
   const hydrateHasExplicitActualSchedule = Object.prototype.hasOwnProperty.call(tsLocal || {}, 'actual_schedule_json');
   const hydrateParsedActualSchedule = hydrateHasExplicitActualSchedule ? tryParse(tsLocal.actual_schedule_json) : null;
@@ -304060,6 +304094,7 @@ async function completeTimesheetFastOpenHydration(openToken, payload = {}) {
 
 // Replacement function: renderWeeklyManualScheduleEditor (patched source lines 304008-307195)
 // Replacement function: renderWeeklyManualScheduleEditor (patched source lines 304008-307195)
+
 function renderWeeklyManualScheduleEditor(opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES][WEEKLY]');
   const {
@@ -304483,7 +304518,10 @@ function renderWeeklyManualScheduleEditor(opts) {
     const contractWeekPlannedScheduleIsAuthoritative = !!(
       hasExistingContractWeekForScheduleAuthority &&
       typeof hasAuthoritativeContractWeekSchedule === 'function' &&
-      hasAuthoritativeContractWeekSchedule({ ...(details || {}), contract_week: contractWeekObj || {} })
+      (
+      hasAuthoritativeContractWeekSchedule({ ...(row || {}), ...(details || {}), contract_week: contractWeekObj || details?.contract_week || row?.contract_week || row || {} }) ||
+      hasAuthoritativeContractWeekSchedule(row || {})
+    )
     );
     const parsedActualScheduleForSeed = tryParse(ts?.actual_schedule_json);
     const hasExplicitActualScheduleForSeed = Object.prototype.hasOwnProperty.call(ts || {}, 'actual_schedule_json') && Array.isArray(parsedActualScheduleForSeed);
@@ -307293,7 +307331,164 @@ function renderWeeklyManualScheduleEditor(opts) {
 }
 
 
+function resolveContractWeekScheduleForModal(rowArg, detailsArg, contractArg, options = {}) {
+  const opts = (options && typeof options === 'object') ? options : {};
+  const row = (rowArg && typeof rowArg === 'object') ? rowArg : {};
+  const details = (detailsArg && typeof detailsArg === 'object') ? detailsArg : {};
+  const contract = (contractArg && typeof contractArg === 'object') ? contractArg : {};
+  const own = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
 
+  const rowLooksContractWeekLike = !!(
+    own(row, 'planned_schedule_json') ||
+    row.contract_week_id ||
+    row.contractWeekId ||
+    row.week_ending_date ||
+    row.additional_seq != null ||
+    row.is_adjustment != null
+  );
+
+  const cw = (details.contract_week && typeof details.contract_week === 'object')
+    ? details.contract_week
+    : ((row.contract_week && typeof row.contract_week === 'object')
+        ? row.contract_week
+        : (rowLooksContractWeekLike ? row : {}));
+
+  const clone = (value) => {
+    if (value == null || typeof value !== 'object') return value;
+    try { return JSON.parse(JSON.stringify(value)); } catch {}
+    return Array.isArray(value) ? value.slice() : { ...value };
+  };
+
+  const parseMaybeJson = (value) => {
+    if (value == null) return null;
+    if (Array.isArray(value) || (value && typeof value === 'object')) return clone(value);
+    if (typeof value !== 'string') return null;
+    const raw = value.trim();
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  };
+
+  const parseArray = (value) => {
+    const parsed = parseMaybeJson(value);
+    return Array.isArray(parsed) ? clone(parsed) : null;
+  };
+
+  const ymdFromDate = (d) => {
+    try {
+      const yyyy = d.getUTCFullYear();
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const buildWeekDays = () => {
+    const weekEnding = String(
+      opts.weekEndingDate ||
+      cw.week_ending_date ||
+      details.week_ending_date ||
+      row.week_ending_date ||
+      ''
+    ).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekEnding)) return [];
+    try {
+      const base = new Date(`${weekEnding}T00:00:00Z`);
+      if (Number.isNaN(base.getTime())) return [];
+      const days = [];
+      for (let offset = 6; offset >= 0; offset--) {
+        const d = new Date(base);
+        d.setUTCDate(base.getUTCDate() - offset);
+        days.push(ymdFromDate(d));
+      }
+      return days;
+    } catch {
+      return [];
+    }
+  };
+
+  const normaliseTemplateSchedule = (source) => {
+    const parsed = parseMaybeJson(source);
+    if (Array.isArray(parsed)) return clone(parsed);
+    if (!parsed || typeof parsed !== 'object') return [];
+
+    const days = buildWeekDays();
+    const out = [];
+    const dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const dateKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+    days.forEach((ymd) => {
+      let dow = null;
+      try { dow = new Date(`${ymd}T00:00:00Z`).getUTCDay(); } catch { dow = null; }
+      const candidates = [
+        ymd,
+        dow != null ? dayKeys[dow] : '',
+        dow != null ? dateKeys[dow] : '',
+        dow != null ? String(dow) : ''
+      ].filter(Boolean);
+
+      let cfg = null;
+      for (const key of candidates) {
+        if (parsed && parsed[key] && typeof parsed[key] === 'object') {
+          cfg = parsed[key];
+          break;
+        }
+      }
+      if (!cfg || typeof cfg !== 'object') return;
+
+      const start = String(cfg.start || cfg.start_time || cfg.from || cfg.start_local || '').trim();
+      const end = String(cfg.end || cfg.end_time || cfg.to || cfg.end_local || '').trim();
+      if (!start || !end) return;
+      const breakMins = Number(cfg.break_minutes ?? cfg.break_mins ?? cfg.break ?? cfg.breakMin ?? 0) || 0;
+      out.push({ date: ymd, start, end, break_minutes: breakMins });
+    });
+    return out;
+  };
+
+  const hasExistingContractWeek = !!String(
+    cw.id || cw.contract_week_id || details.contract_week_id || details.contractWeekId ||
+    row.contract_week_id || row.contractWeekId || row.id || ''
+  ).trim();
+
+  if (opts.resetFromContract === true) {
+    const templateSource =
+      opts.contractSchedule ?? contract.std_schedule_json ?? details.contract?.std_schedule_json ??
+      details.related?.contract?.std_schedule_json ?? row.std_schedule_json ?? row.contract_std_schedule_json ?? null;
+    return normaliseTemplateSchedule(templateSource);
+  }
+
+  const hasAuthoritativeSchedule = !!(
+    typeof hasAuthoritativeContractWeekSchedule === 'function' &&
+    (
+      hasAuthoritativeContractWeekSchedule({ ...row, ...details, contract_week: cw }) ||
+      hasAuthoritativeContractWeekSchedule(row)
+    )
+  );
+
+  if (hasAuthoritativeSchedule) {
+    const raw = own(cw, 'planned_schedule_json')
+      ? cw.planned_schedule_json
+      : (own(details, 'planned_schedule_json')
+          ? details.planned_schedule_json
+          : row.planned_schedule_json);
+    const parsed = parseArray(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  }
+
+  if (opts.physicalCreation === true || opts.creationSeed === true || opts.seedForNewContractWeek === true) {
+    const templateSource =
+      opts.contractSchedule ?? contract.std_schedule_json ?? details.contract?.std_schedule_json ??
+      details.related?.contract?.std_schedule_json ?? row.std_schedule_json ?? row.contract_std_schedule_json ?? null;
+    return normaliseTemplateSchedule(templateSource);
+  }
+
+  if (hasExistingContractWeek && opts.returnNullWhenExistingScheduleMissing === true) {
+    return null;
+  }
+
+  return [];
+}
 
 
 function normaliseDailyManualHHMM(raw) {
