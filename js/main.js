@@ -143910,8 +143910,8 @@ function renderTimesheetExpensesTab(ctx) {
                 <tr>
                   <td><strong>Travel</strong></td>
                   <td><span class="mini" style="opacity:.7">—</span></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_travel_pay" value="${fmt2(travelPay)}" ${ro} ${roStyle} data-exp-field="travel_pay" /></td>
-                  <td><input class="input" type="number" step="0.01" name="exp_travel_charge" value="${fmt2(travelChg)}" ${ro} ${roStyle} data-exp-field="travel_charge" /></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_travel_pay" data-testid="timesheet-expense-travel-pay" value="${fmt2(travelPay)}" ${ro} ${roStyle} data-exp-field="travel_pay" /></td>
+                  <td><input class="input" type="number" step="0.01" name="exp_travel_charge" data-testid="timesheet-expense-travel-charge" value="${fmt2(travelChg)}" ${ro} ${roStyle} data-exp-field="travel_charge" /></td>
                 </tr>
 
                 <tr>
@@ -275763,6 +275763,10 @@ let _pushedRight = false;
 (top.tabs||[]).forEach((t,i)=>{
   const b = document.createElement('button');
   b.textContent = t.label || t.title || t.key;
+  try {
+    const tabKeyForTest = String(t && t.key ? t.key : '').trim();
+    if (top && top.entity === 'timesheets' && tabKeyForTest) b.dataset.testid = `timesheet-tab-${tabKeyForTest}`;
+  } catch {}
 
   // ✅ NEW: Right-aligned tabs (first one pushes the rest to the far right)
   const alignRight = !!(t && (t.alignRight === true || t.align_right === true));
@@ -305685,6 +305689,7 @@ function refreshTimesheetModalTabsChrome(openToken) {
 
     const b = document.createElement('button');
     b.textContent = t.label || t.title || key;
+    try { b.dataset.testid = `timesheet-tab-${key}`; } catch {}
 
     const disabled = !!t.disabled;
     const reason = String(t.disabled_reason || 'This tab is currently unavailable.').trim();
@@ -319134,6 +319139,44 @@ async function renderAll(){
 }
 
 
+function isTestmodeE2eModalOpenAllowed() {
+  try {
+    const u = new URL(location.href);
+    return !!(
+      location.hostname === 'testmode.arthur-rai.co.uk' &&
+      u.searchParams.get('e2e') === '1'
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function maybeOpenTestmodeE2eModal() {
+  if (!isTestmodeE2eModalOpenAllowed()) return false;
+
+  let u;
+  try { u = new URL(location.href); } catch { return false; }
+
+  const modal = String(u.searchParams.get('modal') || '').trim().toLowerCase();
+  const timesheetId = String(u.searchParams.get('timesheetId') || '').trim();
+
+  if (modal !== 'timesheet' || !timesheetId) return false;
+
+  const key = `timesheet:${timesheetId}`;
+  if (window.__cloudTmsE2eOpenedModalKey === key) return true;
+  window.__cloudTmsE2eOpenedModalKey = key;
+
+  if (typeof openTimesheet !== 'function') return false;
+
+  await Promise.resolve(openTimesheet({
+    id: timesheetId,
+    timesheet_id: timesheetId
+  }));
+
+  return true;
+}
+
+
 async function bootstrapApp(){
   // Belt & braces: if loadSession() ran but globals are not mirrored, mirror now
   try {
@@ -320105,6 +320148,12 @@ async function bootstrapApp(){
   renderTopNav();
   renderTools();
   await renderAll();
+
+  try {
+    await maybeOpenTestmodeE2eModal();
+  } catch (err) {
+    console.warn('[E2E][modal-opener] failed', err);
+  }
 }
 
 

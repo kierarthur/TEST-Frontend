@@ -13,6 +13,7 @@ export default defineConfig({
   ],
   use: {
     baseURL: process.env.E2E_BASE_URL || 'https://testmode.arthur-rai.co.uk',
+    ignoreHTTPSErrors: true,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure'
