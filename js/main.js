@@ -116175,7 +116175,7 @@ function resetBulkProcessDirtyBaseline(state, reason, detail = {}) {
 
 
 
-
+// Replacement function: hydrateTimesheetModalAfterOpen (patched source lines 116179-120501)
 async function hydrateTimesheetModalAfterOpen(openToken, row, idsArg) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OPEN]');
   GC('hydrateTimesheetModalAfterOpen');
@@ -117803,37 +117803,108 @@ try {
 
 
      let schedule = null;
+let scheduleAuthoritySource = '';
+const cloneScheduleForAuthority = (value) => {
+  if (!Array.isArray(value)) return value;
+  try { return JSON.parse(JSON.stringify(value)); } catch { return value.slice(); }
+};
+const existingStateForScheduleAuthority = (window.modalCtx && window.modalCtx.timesheetState && typeof window.modalCtx.timesheetState === 'object')
+  ? window.modalCtx.timesheetState
+  : {};
+const scheduleWasUserTouchedForHydrate = !!(
+  existingStateForScheduleAuthority.__weeklyScheduleTouched === true ||
+  existingStateForScheduleAuthority.weeklyScheduleUserTouched === true ||
+  existingStateForScheduleAuthority.scheduleUserTouched === true ||
+  existingStateForScheduleAuthority.__scheduleUserTouched === true ||
+  existingStateForScheduleAuthority.__scheduleExplicitlyCleared === true ||
+  existingStateForScheduleAuthority.__scheduleResetFromContract === true
+);
+const existingStateScheduleTrustedForHydrate = !!(
+  Array.isArray(existingStateForScheduleAuthority.schedule) &&
+  (
+    scheduleWasUserTouchedForHydrate ||
+    existingStateForScheduleAuthority.__scheduleLoadedFromAuthoritativeContractWeek === true ||
+    existingStateForScheduleAuthority.__scheduleLoadedFromTimesheetActual === true ||
+    existingStateForScheduleAuthority.__scheduleLoadedFromCreationSeed === true ||
+    existingStateForScheduleAuthority.__schedulePayloadPartialPlannedScheduleMissing === true
+  )
+);
 try {
   if (canonicalKeepEmptyAdditionalManualAdjustment) {
     schedule = [];
+    scheduleAuthoritySource = 'additional_manual_explicit_empty';
   } else {
     if (hasTs && tsLocal.actual_schedule_json) {
       if (Array.isArray(tsLocal.actual_schedule_json) || typeof tsLocal.actual_schedule_json === 'object') {
         schedule = JSON.parse(JSON.stringify(tsLocal.actual_schedule_json));
+        scheduleAuthoritySource = 'timesheet_actual';
       } else if (typeof tsLocal.actual_schedule_json === 'string') {
         try {
           const parsed = JSON.parse(tsLocal.actual_schedule_json);
-          if (Array.isArray(parsed) || typeof parsed === 'object') schedule = parsed;
+          if (Array.isArray(parsed) || typeof parsed === 'object') {
+            schedule = parsed;
+            scheduleAuthoritySource = 'timesheet_actual';
+          }
         } catch {}
       }
     }
     if (!hasTs && !schedule) {
       const cw2 = (details && details.contract_week) ? details.contract_week : null;
+      const hasAuthoritativeCwSchedule = !!(
+        typeof hasAuthoritativeContractWeekSchedule === 'function' &&
+        hasAuthoritativeContractWeekSchedule({ ...details, contract_week: cw2 || {} })
+      );
+      const hasExistingContractWeek = !!String(
+        cw2?.id || cw2?.contract_week_id || details?.contract_week_id || baseRow?.contract_week_id || ''
+      ).trim();
 
-      const src = (cw2 && cw2.planned_schedule_json != null) ? cw2.planned_schedule_json
-               : (!canonicalSuppressStandardScheduleFallback && cw2 && cw2.std_schedule_json != null) ? cw2.std_schedule_json
-               : (!canonicalSuppressStandardScheduleFallback && contractTemplateSchedule != null) ? contractTemplateSchedule
-               : (!canonicalSuppressStandardScheduleFallback && baseRow.std_schedule_json != null) ? baseRow.std_schedule_json
-               : null;
-
-      if (src != null) {
-        if (Array.isArray(src) || typeof src === 'object') schedule = JSON.parse(JSON.stringify(src));
-        else if (typeof src === 'string') { try { const p = JSON.parse(src); if (Array.isArray(p) || typeof p === 'object') schedule = p; } catch {} }
+      if (hasAuthoritativeCwSchedule && !scheduleWasUserTouchedForHydrate) {
+        const resolved = (typeof resolveContractWeekScheduleForModal === 'function')
+          ? resolveContractWeekScheduleForModal(baseRow, details, related?.contract || details?.contract || {}, { resetFromContract: false })
+          : [];
+        schedule = Array.isArray(resolved) ? resolved : [];
+        scheduleAuthoritySource = 'contract_week_planned';
+      } else if (existingStateScheduleTrustedForHydrate) {
+        schedule = cloneScheduleForAuthority(existingStateForScheduleAuthority.schedule);
+        scheduleAuthoritySource = scheduleWasUserTouchedForHydrate ? 'state_user_touched' : 'state_preserved';
+      } else if (hasAuthoritativeCwSchedule) {
+        const resolved = (typeof resolveContractWeekScheduleForModal === 'function')
+          ? resolveContractWeekScheduleForModal(baseRow, details, related?.contract || details?.contract || {}, { resetFromContract: false })
+          : [];
+        schedule = Array.isArray(resolved) ? resolved : [];
+        scheduleAuthoritySource = 'contract_week_planned';
+      } else if (!hasExistingContractWeek && !canonicalSuppressStandardScheduleFallback) {
+        const src = contractTemplateSchedule != null
+          ? contractTemplateSchedule
+          : (baseRow.std_schedule_json != null ? baseRow.std_schedule_json : null);
+        if (src != null) {
+          if (Array.isArray(src) || typeof src === 'object') {
+            schedule = JSON.parse(JSON.stringify(src));
+            scheduleAuthoritySource = 'contract_creation_seed';
+          } else if (typeof src === 'string') {
+            try {
+              const p = JSON.parse(src);
+              if (Array.isArray(p) || typeof p === 'object') {
+                schedule = p;
+                scheduleAuthoritySource = 'contract_creation_seed';
+              }
+            } catch {}
+          }
+        }
+      } else if (hasExistingContractWeek) {
+        schedule = Array.isArray(existingStateForScheduleAuthority.schedule)
+          ? cloneScheduleForAuthority(existingStateForScheduleAuthority.schedule)
+          : [];
+        scheduleAuthoritySource = 'existing_contract_week_missing_planned_schedule_preserve';
+      } else {
+        schedule = [];
+        scheduleAuthoritySource = 'blank_no_source';
       }
     }
   }
 } catch {
   schedule = null;
+  scheduleAuthoritySource = 'error_blank';
 }
 
 
@@ -118158,6 +118229,13 @@ try {
       additionalRates,
       schedule: canonicalKeepEmptyAdditionalManualAdjustment ? [] : schedule,
       baselineSchedule: canonicalKeepEmptyAdditionalManualAdjustment ? [] : (Array.isArray(schedule) ? JSON.parse(JSON.stringify(schedule)) : schedule),
+      __scheduleAuthoritySource: canonicalKeepEmptyAdditionalManualAdjustment ? 'additional_manual_explicit_empty' : scheduleAuthoritySource,
+      __scheduleLoadedFromAuthoritativeContractWeek: scheduleAuthoritySource === 'contract_week_planned',
+      __scheduleLoadedFromTimesheetActual: scheduleAuthoritySource === 'timesheet_actual',
+      __scheduleLoadedFromCreationSeed: scheduleAuthoritySource === 'contract_creation_seed',
+      __schedulePayloadPartialPlannedScheduleMissing: scheduleAuthoritySource === 'existing_contract_week_missing_planned_schedule_preserve',
+      __contractWeekPlannedScheduleKeyPresent: scheduleAuthoritySource === 'contract_week_planned',
+      __authoritativeContractWeekScheduleEmpty: !!(scheduleAuthoritySource === 'contract_week_planned' && Array.isArray(schedule) && schedule.length === 0),
       __keepAdditionalManualAdjustmentScheduleEmpty: canonicalKeepEmptyAdditionalManualAdjustment,
       keepAdditionalManualAdjustmentScheduleEmpty: canonicalKeepEmptyAdditionalManualAdjustment,
       keep_additional_manual_adjustment_schedule_empty: canonicalKeepEmptyAdditionalManualAdjustment,
@@ -118702,15 +118780,21 @@ const onSaveTimesheet = async () => {
 
   // Baseline for change detection:
   // - real TS: actual_schedule_json
-  // - planned week: planned_schedule_json else std_schedule_json
+  // - planned week: contract_week.planned_schedule_json when it is authoritative, including []
+  const plannedBaselineSource = (() => {
+    try {
+      if (det && det.contract_week && typeof hasAuthoritativeContractWeekSchedule === 'function' && hasAuthoritativeContractWeekSchedule({ ...det, contract_week: det.contract_week })) {
+        return (typeof resolveContractWeekScheduleForModal === 'function')
+          ? resolveContractWeekScheduleForModal(rowNow || {}, det || {}, related?.contract || det?.contract || {}, { resetFromContract: false })
+          : det.contract_week.planned_schedule_json;
+      }
+    } catch {}
+    return [];
+  })();
   const currentWeeklyScheduleBaseline = normaliseScheduleJson(
     (tsLocal && (tsLocal.current_timesheet_id || tsLocal.timesheet_id))
       ? tsLocal.actual_schedule_json
-      : (
-          det && det.contract_week
-            ? (det.contract_week.planned_schedule_json != null ? det.contract_week.planned_schedule_json : det.contract_week.std_schedule_json)
-            : null
-        )
+      : plannedBaselineSource
   );
   const baselineSorted = sortScheduleStable(Array.isArray(currentWeeklyScheduleBaseline) ? currentWeeklyScheduleBaseline : []);
 
@@ -119373,6 +119457,11 @@ const onSaveTimesheet = async () => {
       st.expensesBaseline = JSON.parse(JSON.stringify(stagedExpenses));
       st.expensesDirty = false;
       st.expensesDraftDirty = false;
+      st.hasStagedExpensesDirty = false;
+      st.stagedExpensesDirty = false;
+      st.__expensesDirty = false;
+      st.__expensesDraftDirty = false;
+      st.expenseDirtyMarker = false;
     } catch {}
 
     try {
@@ -119397,6 +119486,11 @@ const onSaveTimesheet = async () => {
         window.modalCtx.timesheetState.expensesBaseline = JSON.parse(JSON.stringify(stagedExpenses));
         window.modalCtx.timesheetState.expensesDirty = false;
         window.modalCtx.timesheetState.expensesDraftDirty = false;
+        window.modalCtx.timesheetState.hasStagedExpensesDirty = false;
+        window.modalCtx.timesheetState.stagedExpensesDirty = false;
+        window.modalCtx.timesheetState.__expensesDirty = false;
+        window.modalCtx.timesheetState.__expensesDraftDirty = false;
+        window.modalCtx.timesheetState.expenseDirtyMarker = false;
       }
     } catch {}
 
@@ -119538,6 +119632,11 @@ const onSaveTimesheet = async () => {
       st.expensesBaseline = JSON.parse(JSON.stringify(saveExpOnly.committedDraft || stagedExpenses));
       st.expensesDirty = false;
       st.expensesDraftDirty = false;
+      st.hasStagedExpensesDirty = false;
+      st.stagedExpensesDirty = false;
+      st.__expensesDirty = false;
+      st.__expensesDraftDirty = false;
+      st.expenseDirtyMarker = false;
     } catch {}
 
     try {
@@ -120368,6 +120467,13 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
     try {
       window.modalCtx.timesheetState.expensesBaseline =
         JSON.parse(JSON.stringify(normExpenses(window.modalCtx.timesheetState.expensesDraft)));
+      window.modalCtx.timesheetState.expensesDirty = false;
+      window.modalCtx.timesheetState.expensesDraftDirty = false;
+      window.modalCtx.timesheetState.hasStagedExpensesDirty = false;
+      window.modalCtx.timesheetState.stagedExpensesDirty = false;
+      window.modalCtx.timesheetState.__expensesDirty = false;
+      window.modalCtx.timesheetState.__expensesDraftDirty = false;
+      window.modalCtx.timesheetState.expenseDirtyMarker = false;
     } catch {}
   }
 
@@ -120840,6 +120946,33 @@ async function ensureTimesheetEvidenceLoaded(openToken, opts = {}) {
   }
 }
 
+// Replacement function: hasAuthoritativeContractWeekSchedule (patched source lines 121251-121276)
+function hasAuthoritativeContractWeekSchedule(rowOrDetails) {
+  const root = (rowOrDetails && typeof rowOrDetails === 'object') ? rowOrDetails : {};
+  const cw = (root.contract_week && typeof root.contract_week === 'object') ? root.contract_week : root;
+  const own = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const contractWeekId = String(
+    cw.id ||
+    cw.contract_week_id ||
+    root.contract_week_id ||
+    root.contractWeekId ||
+    ''
+  ).trim();
+
+  if (!contractWeekId) return false;
+
+  const hasPlannedKey = own(cw, 'planned_schedule_json') || own(root, 'planned_schedule_json');
+  if (!hasPlannedKey) return false;
+
+  const raw = own(cw, 'planned_schedule_json') ? cw.planned_schedule_json : root.planned_schedule_json;
+  if (Array.isArray(raw)) return true;
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return false;
+    try { return Array.isArray(JSON.parse(s)); } catch { return false; }
+  }
+  return false;
+}
 
 
 async function fetchTimesheetDeletePreviewForFastOpen(timesheetId) {
@@ -121229,7 +121362,7 @@ function parseTimesheetMaybeJsonForSecondary(value, fallback) {
 }
 
 
-
+// Replacement function: patchTimesheetAdditionalRatesAndScheduleFromContractAfterSecondary (revised 2026-06-11; partial-payload schedule guard)
 function patchTimesheetAdditionalRatesAndScheduleFromContractAfterSecondary(modalCtx, contract) {
   if (!modalCtx || !contract || typeof contract !== 'object') return false;
 
@@ -121300,7 +121433,72 @@ function patchTimesheetAdditionalRatesAndScheduleFromContractAfterSecondary(moda
   );
 
   const currentSchedule = Array.isArray(state.schedule) ? state.schedule : [];
-  if (!hasRealTimesheet && !keepEmpty && !suppressFallback && currentSchedule.length === 0 && contract.std_schedule_json != null) {
+  const detailsForScheduleAuthority = (modalCtx.timesheetDetails && typeof modalCtx.timesheetDetails === 'object') ? modalCtx.timesheetDetails : {};
+  const rowForScheduleAuthority = (modalCtx.data && typeof modalCtx.data === 'object') ? modalCtx.data : {};
+  const cwForScheduleAuthority = (detailsForScheduleAuthority.contract_week && typeof detailsForScheduleAuthority.contract_week === 'object')
+    ? detailsForScheduleAuthority.contract_week
+    : ((rowForScheduleAuthority.contract_week && typeof rowForScheduleAuthority.contract_week === 'object') ? rowForScheduleAuthority.contract_week : {});
+  const hasExistingContractWeekForScheduleAuthority = !!String(
+    cwForScheduleAuthority.id || cwForScheduleAuthority.contract_week_id ||
+    detailsForScheduleAuthority.contract_week_id || rowForScheduleAuthority.contract_week_id || ''
+  ).trim();
+  const hasAuthoritativeContractWeekScheduleForEnrichment = !!(
+    typeof hasAuthoritativeContractWeekSchedule === 'function' &&
+    hasAuthoritativeContractWeekSchedule({ ...detailsForScheduleAuthority, contract_week: cwForScheduleAuthority })
+  );
+
+  const scheduleTouched = !!(
+    timesheetStateScheduleTouched(existingStateSnapshot) ||
+    existingStateSnapshot.__weeklyScheduleTouched === true ||
+    existingStateSnapshot.weeklyScheduleUserTouched === true ||
+    existingStateSnapshot.scheduleUserTouched === true ||
+    existingStateSnapshot.__scheduleUserTouched === true ||
+    existingStateSnapshot.__scheduleExplicitlyCleared === true ||
+    existingStateSnapshot.__scheduleResetFromContract === true
+  );
+
+  if (!hasRealTimesheet && hasAuthoritativeContractWeekScheduleForEnrichment) {
+    const resolvedSchedule = (typeof resolveContractWeekScheduleForModal === 'function')
+      ? resolveContractWeekScheduleForModal(rowForScheduleAuthority, detailsForScheduleAuthority, contract, { resetFromContract: false })
+      : [];
+    const authoritativeSchedule = Array.isArray(resolvedSchedule) ? resolvedSchedule : [];
+    const nextHash = (() => { try { return JSON.stringify(authoritativeSchedule); } catch { return ''; } })();
+    const currentHash = (() => { try { return JSON.stringify(currentSchedule); } catch { return ''; } })();
+    const baselineHash = (() => { try { return JSON.stringify(Array.isArray(state.baselineSchedule) ? state.baselineSchedule : null); } catch { return ''; } })();
+
+    if (!scheduleTouched && currentHash !== nextHash) {
+      try {
+        state.schedule = JSON.parse(JSON.stringify(authoritativeSchedule));
+      } catch {
+        state.schedule = authoritativeSchedule;
+      }
+      state.weeklyLinesByDate = null;
+      state.extraShiftCount = 0;
+      state.scheduleHasErrors = false;
+      state.scheduleErrorsByDate = {};
+      changed = true;
+    }
+
+    if (baselineHash !== nextHash) {
+      try {
+        state.baselineSchedule = JSON.parse(JSON.stringify(authoritativeSchedule));
+      } catch {
+        state.baselineSchedule = authoritativeSchedule;
+      }
+      changed = true;
+    }
+
+    state.__scheduleAuthoritySource = 'contract_week_planned';
+    state.__scheduleLoadedFromAuthoritativeContractWeek = true;
+    state.__scheduleLoadedFromTimesheetActual = false;
+    state.__scheduleLoadedFromCreationSeed = false;
+    state.__schedulePayloadPartialPlannedScheduleMissing = false;
+    state.__contractWeekPlannedScheduleKeyPresent = true;
+    state.__authoritativeContractWeekScheduleEmpty = authoritativeSchedule.length === 0;
+  } else if (!hasRealTimesheet && hasExistingContractWeekForScheduleAuthority) {
+    state.__schedulePayloadPartialPlannedScheduleMissing = true;
+    state.__scheduleAuthoritySource = state.__scheduleAuthoritySource || 'existing_contract_week_missing_planned_schedule_preserve';
+  } else if (!hasRealTimesheet && !hasExistingContractWeekForScheduleAuthority && !keepEmpty && !suppressFallback && currentSchedule.length === 0 && contract.std_schedule_json != null) {
     const parsedSchedule = parseTimesheetMaybeJsonForSecondary(contract.std_schedule_json, null);
     if (Array.isArray(parsedSchedule) || (parsedSchedule && typeof parsedSchedule === 'object')) {
       try {
@@ -121312,6 +121510,8 @@ function patchTimesheetAdditionalRatesAndScheduleFromContractAfterSecondary(moda
         state.baselineSchedule = parsedSchedule;
         changed = true;
       }
+      state.__scheduleAuthoritySource = 'contract_creation_seed';
+      state.__scheduleLoadedFromCreationSeed = true;
     }
   }
 
@@ -121472,8 +121672,30 @@ function timesheetStateSegmentControlsTouched(state) {
 }
 
 
+// Replacement function: timesheetStateExpensesDirty (definition 1; revised 2026-06-11; post-save dirty guard)
+// Replacement function: timesheetStateExpensesDirty (definition 2; revised 2026-06-11; post-save dirty guard)
 function timesheetStateExpensesDirty(state) {
-  return hasTimesheetStateFlag(state, [
+  const st = (state && typeof state === 'object') ? state : {};
+  const draft = (st.expensesDraft && typeof st.expensesDraft === 'object') ? st.expensesDraft : null;
+  const baseline = (st.expensesBaseline && typeof st.expensesBaseline === 'object') ? st.expensesBaseline : null;
+
+  if (draft && baseline) {
+    try {
+      if (typeof isTimesheetExpensesDraftDirty === 'function') {
+        const result = isTimesheetExpensesDraftDirty(draft, baseline, {
+          row: (window.modalCtx && window.modalCtx.data) || {},
+          details: (window.modalCtx && window.modalCtx.timesheetDetails) || {},
+          tsfin: (window.modalCtx && window.modalCtx.timesheetDetails && window.modalCtx.timesheetDetails.tsfin) || {},
+          state: st
+        });
+        return !!(result && result.dirty === true);
+      }
+    } catch {}
+
+    try { return JSON.stringify(draft) !== JSON.stringify(baseline); } catch { return true; }
+  }
+
+  return hasTimesheetStateFlag(st, [
     'expensesDirty',
     'expensesDraftDirty',
     'hasStagedExpensesDirty',
@@ -121868,8 +122090,7 @@ async function loadTimesheetSecondaryDataAfterDetails(openToken, opts = {}) {
 
 
 
-
-
+// Replacement function: hydrateTimesheetEditStateFromDetails (patched source lines 122104-123292)
 async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   let mc =
     (modalCtxArg && typeof modalCtxArg === 'object')
@@ -122552,50 +122773,117 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   );
 
   let schedule = null;
+  let scheduleAuthoritySource = '';
+  const cloneScheduleForAuthority = (value) => {
+    if (!Array.isArray(value)) return value;
+    try { return JSON.parse(JSON.stringify(value)); } catch { return value.slice(); }
+  };
+  const scheduleWasUserTouchedForHydrate = !!(
+    state.__weeklyScheduleTouched === true ||
+    state.weeklyScheduleUserTouched === true ||
+    state.scheduleUserTouched === true ||
+    state.__scheduleUserTouched === true ||
+    state.__scheduleExplicitlyCleared === true ||
+    state.__scheduleResetFromContract === true
+  );
+  const stateScheduleIsTrustedForHydrate = () => !!(
+    Array.isArray(state.schedule) &&
+    (
+      scheduleWasUserTouchedForHydrate ||
+      state.__scheduleLoadedFromAuthoritativeContractWeek === true ||
+      state.__scheduleLoadedFromTimesheetActual === true ||
+      state.__scheduleLoadedFromCreationSeed === true ||
+      state.__schedulePayloadPartialPlannedScheduleMissing === true
+    )
+  );
+
   try {
     if (hasTs && sheetScope === 'DAILY') {
       const stagedDailySchedule = parseScheduleLike(state.schedule);
       const parsedDailySchedule = parseScheduleLike(tsLocal.actual_schedule_json);
       if (isMeaningfulDailySchedule(stagedDailySchedule)) {
         schedule = stagedDailySchedule;
+        scheduleAuthoritySource = 'state_daily_schedule';
         state.__dailyScheduleShapeMode = Array.isArray(stagedDailySchedule) ? 'array' : 'object';
       } else if (isMeaningfulDailySchedule(parsedDailySchedule)) {
         schedule = parsedDailySchedule;
+        scheduleAuthoritySource = 'timesheet_actual';
         if (!state.__dailyScheduleShapeMode) {
           state.__dailyScheduleShapeMode = Array.isArray(parsedDailySchedule) ? 'array' : 'object';
         }
       } else {
         schedule = buildDailyScheduleFromCanonicalFields();
+        scheduleAuthoritySource = 'daily_canonical_fields';
         if (!state.__dailyScheduleShapeMode) state.__dailyScheduleShapeMode = 'object';
       }
     } else if (hasTs && tsLocal.actual_schedule_json) {
       const parsedSchedule = parseScheduleLike(tsLocal.actual_schedule_json);
-      if (parsedSchedule != null) schedule = parsedSchedule;
+      if (parsedSchedule != null) {
+        schedule = parsedSchedule;
+        scheduleAuthoritySource = 'timesheet_actual';
+      }
     }
 
     if (!hasTs && !schedule) {
       if (keepAdditionalManualAdjustmentScheduleEmpty) {
         schedule = [];
+        scheduleAuthoritySource = 'additional_manual_explicit_empty';
       } else {
         const cw2 = (details && details.contract_week) ? details.contract_week : null;
+        const hasAuthoritativeCwSchedule = !!(
+          typeof hasAuthoritativeContractWeekSchedule === 'function' &&
+          hasAuthoritativeContractWeekSchedule({ ...details, contract_week: cw2 || {} })
+        );
+        const hasExistingContractWeek = !!String(
+          cw2?.id || cw2?.contract_week_id || details?.contract_week_id || baseRow?.contract_week_id || ''
+        ).trim();
 
-        const src = (cw2 && cw2.planned_schedule_json != null) ? cw2.planned_schedule_json
-                 : (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && cw2 && cw2.std_schedule_json != null) ? cw2.std_schedule_json
-                 : (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && contractTemplateSchedule != null) ? contractTemplateSchedule
-                 : (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && baseRow.std_schedule_json != null) ? baseRow.std_schedule_json
-                 : null;
-
-        if (src) {
-          const parsedSchedule = parseScheduleLike(src);
-          if (parsedSchedule != null) schedule = parsedSchedule;
+        if (hasAuthoritativeCwSchedule && !scheduleWasUserTouchedForHydrate) {
+          const resolved = (typeof resolveContractWeekScheduleForModal === 'function')
+            ? resolveContractWeekScheduleForModal(baseRow, details, related?.contract || details?.contract || {}, { resetFromContract: false })
+            : parseScheduleLike(cw2?.planned_schedule_json);
+          schedule = Array.isArray(resolved) ? resolved : [];
+          scheduleAuthoritySource = 'contract_week_planned';
+        } else if (stateScheduleIsTrustedForHydrate()) {
+          schedule = cloneScheduleForAuthority(state.schedule);
+          scheduleAuthoritySource = scheduleWasUserTouchedForHydrate ? 'state_user_touched' : 'state_preserved';
+        } else if (hasAuthoritativeCwSchedule) {
+          const resolved = (typeof resolveContractWeekScheduleForModal === 'function')
+            ? resolveContractWeekScheduleForModal(baseRow, details, related?.contract || details?.contract || {}, { resetFromContract: false })
+            : parseScheduleLike(cw2?.planned_schedule_json);
+          schedule = Array.isArray(resolved) ? resolved : [];
+          scheduleAuthoritySource = 'contract_week_planned';
+        } else if (!hasExistingContractWeek && !suppressStandardScheduleFallbackForAdditionalManualAdjustment) {
+          const src = contractTemplateSchedule != null ? contractTemplateSchedule : (baseRow.std_schedule_json != null ? baseRow.std_schedule_json : null);
+          if (src != null) {
+            const parsedSchedule = parseScheduleLike(src);
+            if (parsedSchedule != null) {
+              schedule = parsedSchedule;
+              scheduleAuthoritySource = 'contract_creation_seed';
+            }
+          }
+        } else if (hasExistingContractWeek) {
+          schedule = Array.isArray(state.schedule) ? cloneScheduleForAuthority(state.schedule) : [];
+          scheduleAuthoritySource = 'existing_contract_week_missing_planned_schedule_preserve';
+        } else {
+          schedule = [];
+          scheduleAuthoritySource = 'blank_no_source';
         }
       }
     }
   } catch {
     schedule = null;
+    scheduleAuthoritySource = 'error_blank';
   }
 
   state.schedule = keepAdditionalManualAdjustmentScheduleEmpty ? [] : schedule;
+  state.__scheduleAuthoritySource = keepAdditionalManualAdjustmentScheduleEmpty ? 'additional_manual_explicit_empty' : scheduleAuthoritySource;
+  state.__scheduleLoadedFromAuthoritativeContractWeek = scheduleAuthoritySource === 'contract_week_planned';
+  state.__scheduleLoadedFromTimesheetActual = scheduleAuthoritySource === 'timesheet_actual';
+  state.__scheduleLoadedFromCreationSeed = scheduleAuthoritySource === 'contract_creation_seed';
+  state.__schedulePayloadPartialPlannedScheduleMissing = scheduleAuthoritySource === 'existing_contract_week_missing_planned_schedule_preserve';
+  state.__contractWeekPlannedScheduleKeyPresent = scheduleAuthoritySource === 'contract_week_planned';
+  state.__authoritativeContractWeekScheduleEmpty = !!(scheduleAuthoritySource === 'contract_week_planned' && Array.isArray(schedule) && schedule.length === 0);
   state.__suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
   state.__keepAdditionalManualAdjustmentScheduleEmpty = keepAdditionalManualAdjustmentScheduleEmpty;
   state.suppressStandardScheduleFallback = suppressStandardScheduleFallbackForAdditionalManualAdjustment;
@@ -122712,19 +123000,53 @@ async function hydrateTimesheetEditStateFromDetails(detailsArg, modalCtxArg) {
   };
 
   let seedSchedule = null;
+  const hydrateCwForSeed = (details && details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : null;
+  const hydrateHasAuthoritativeCwSeed = !!(
+    typeof hasAuthoritativeContractWeekSchedule === 'function' &&
+    hasAuthoritativeContractWeekSchedule({ ...details, contract_week: hydrateCwForSeed || {} })
+  );
+  const hydrateHasExplicitActualSchedule = Object.prototype.hasOwnProperty.call(tsLocal || {}, 'actual_schedule_json');
+  const hydrateParsedActualSchedule = hydrateHasExplicitActualSchedule ? tryParse(tsLocal.actual_schedule_json) : null;
+  const hydrateSeedStateScheduleTrusted = !!(
+    Array.isArray(state.schedule) &&
+    (
+      state.__weeklyScheduleTouched === true ||
+      state.weeklyScheduleUserTouched === true ||
+      state.scheduleUserTouched === true ||
+      state.__scheduleUserTouched === true ||
+      state.__scheduleExplicitlyCleared === true ||
+      state.__scheduleResetFromContract === true ||
+      state.__scheduleLoadedFromAuthoritativeContractWeek === true ||
+      state.__scheduleLoadedFromTimesheetActual === true ||
+      state.__scheduleLoadedFromCreationSeed === true ||
+      state.__schedulePayloadPartialPlannedScheduleMissing === true
+    )
+  );
   if (keepAdditionalManualAdjustmentScheduleEmpty) {
     seedSchedule = [];
-  } else if (Array.isArray(state.schedule) && state.schedule.length) {
+  } else if (
+    hydrateSeedStateScheduleTrusted &&
+    (
+      state.__weeklyScheduleTouched === true ||
+      state.weeklyScheduleUserTouched === true ||
+      state.scheduleUserTouched === true ||
+      state.__scheduleUserTouched === true ||
+      state.__scheduleExplicitlyCleared === true ||
+      state.__scheduleResetFromContract === true
+    )
+  ) {
+    seedSchedule = tryParse(state.schedule);
+  } else if (hydrateHasExplicitActualSchedule && Array.isArray(hydrateParsedActualSchedule)) {
+    seedSchedule = hydrateParsedActualSchedule;
+  } else if (hydrateHasAuthoritativeCwSeed) {
+    const resolved = (typeof resolveContractWeekScheduleForModal === 'function')
+      ? resolveContractWeekScheduleForModal(baseRow, details, related?.contract || details?.contract || {}, { resetFromContract: false })
+      : tryParse(hydrateCwForSeed?.planned_schedule_json);
+    seedSchedule = Array.isArray(resolved) ? resolved : [];
+  } else if (hydrateSeedStateScheduleTrusted) {
     seedSchedule = tryParse(state.schedule);
   } else {
-    seedSchedule = tryParse(tsLocal.actual_schedule_json);
-    if ((!seedSchedule || !seedSchedule.length) && details && details.contract_week) {
-      const cw2 = details.contract_week;
-      const src = (cw2.planned_schedule_json != null) ? cw2.planned_schedule_json
-               : (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && cw2.std_schedule_json != null) ? cw2.std_schedule_json
-               : null;
-      seedSchedule = tryParse(src);
-    }
+    seedSchedule = [];
   }
   if (!Array.isArray(seedSchedule)) seedSchedule = [];
 
@@ -303736,8 +304058,8 @@ async function completeTimesheetFastOpenHydration(openToken, payload = {}) {
 
 
 
-
-
+// Replacement function: renderWeeklyManualScheduleEditor (patched source lines 304008-307195)
+// Replacement function: renderWeeklyManualScheduleEditor (patched source lines 304008-307195)
 function renderWeeklyManualScheduleEditor(opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES][WEEKLY]');
   const {
@@ -304154,20 +304476,79 @@ function renderWeeklyManualScheduleEditor(opts) {
     }
 
      let seedSchedule = null;
+    let seedScheduleAuthoritySource = '';
+    const hasExistingContractWeekForScheduleAuthority = !!String(
+      contractWeekObj?.id || contractWeekObj?.contract_week_id || details?.contract_week_id || row?.contract_week_id || ctx?.contract_week_id || ''
+    ).trim();
+    const contractWeekPlannedScheduleIsAuthoritative = !!(
+      hasExistingContractWeekForScheduleAuthority &&
+      typeof hasAuthoritativeContractWeekSchedule === 'function' &&
+      hasAuthoritativeContractWeekSchedule({ ...(details || {}), contract_week: contractWeekObj || {} })
+    );
+    const parsedActualScheduleForSeed = tryParse(ts?.actual_schedule_json);
+    const hasExplicitActualScheduleForSeed = Object.prototype.hasOwnProperty.call(ts || {}, 'actual_schedule_json') && Array.isArray(parsedActualScheduleForSeed);
+    const scheduleTouchedForSeed = !!(
+      timesheetStateScheduleTouched(state) ||
+      state?.__weeklyScheduleTouched === true ||
+      state?.weeklyScheduleUserTouched === true ||
+      state?.scheduleUserTouched === true ||
+      state?.__scheduleUserTouched === true ||
+      state?.__scheduleExplicitlyCleared === true ||
+      state?.__scheduleResetFromContract === true
+    );
+    const stateScheduleTrustedForSeed = !!(
+      Array.isArray(state.schedule) &&
+      (
+        scheduleTouchedForSeed ||
+        state.__scheduleLoadedFromAuthoritativeContractWeek === true ||
+        state.__scheduleLoadedFromTimesheetActual === true ||
+        state.__scheduleLoadedFromCreationSeed === true ||
+        state.__schedulePayloadPartialPlannedScheduleMissing === true
+      )
+    );
+
     if (suppressStandardScheduleFallbackForAdditionalManualAdjustment && !preserveTouchedScheduleForAdditionalManualAdjustment) {
       seedSchedule = [];
-    } else if (Array.isArray(state.schedule) && state.schedule.length) {
+      seedScheduleAuthoritySource = 'additional_manual_explicit_empty';
+    } else if (stateScheduleTrustedForSeed && scheduleTouchedForSeed) {
       seedSchedule = tryParse(state.schedule);
+      seedScheduleAuthoritySource = 'state_user_touched';
+    } else if (hasExplicitActualScheduleForSeed) {
+      seedSchedule = parsedActualScheduleForSeed;
+      seedScheduleAuthoritySource = 'timesheet_actual';
+    } else if (contractWeekPlannedScheduleIsAuthoritative) {
+      const resolvedSchedule = (typeof resolveContractWeekScheduleForModal === 'function')
+        ? resolveContractWeekScheduleForModal(row || {}, details || {}, contractObj || {}, { resetFromContract: false })
+        : contractWeekPlannedSchedule;
+      seedSchedule = Array.isArray(resolvedSchedule) ? tryParse(resolvedSchedule) : [];
+      seedScheduleAuthoritySource = 'contract_week_planned';
+    } else if (stateScheduleTrustedForSeed) {
+      seedSchedule = tryParse(state.schedule);
+      seedScheduleAuthoritySource = 'state_preserved';
+    } else if (!hasExistingContractWeekForScheduleAuthority && !suppressStandardScheduleFallbackForAdditionalManualAdjustment && contractSchedule) {
+      seedSchedule = tryParse(contractSchedule);
+      seedScheduleAuthoritySource = 'contract_creation_seed';
+    } else if (hasExistingContractWeekForScheduleAuthority) {
+      seedSchedule = [];
+      seedScheduleAuthoritySource = 'existing_contract_week_missing_planned_schedule_defer';
     } else {
-      seedSchedule = tryParse(ts.actual_schedule_json);
-      if (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && (!seedSchedule || (Array.isArray(seedSchedule) && !seedSchedule.length)) && contractWeekPlannedSchedule) {
-        seedSchedule = tryParse(contractWeekPlannedSchedule);
-      }
-      if (!suppressStandardScheduleFallbackForAdditionalManualAdjustment && (!seedSchedule || (Array.isArray(seedSchedule) && !seedSchedule.length)) && contractSchedule) {
-        seedSchedule = tryParse(contractSchedule);
-      }
+      seedSchedule = [];
+      seedScheduleAuthoritySource = 'blank_no_source';
     }
     if (!(Array.isArray(seedSchedule) || (seedSchedule && typeof seedSchedule === 'object'))) seedSchedule = [];
+
+    state.__scheduleAuthoritySource = seedScheduleAuthoritySource || state.__scheduleAuthoritySource || '';
+    state.__scheduleLoadedFromAuthoritativeContractWeek = seedScheduleAuthoritySource === 'contract_week_planned' || state.__scheduleLoadedFromAuthoritativeContractWeek === true;
+    state.__scheduleLoadedFromTimesheetActual = seedScheduleAuthoritySource === 'timesheet_actual' || state.__scheduleLoadedFromTimesheetActual === true;
+    state.__scheduleLoadedFromCreationSeed = seedScheduleAuthoritySource === 'contract_creation_seed' || state.__scheduleLoadedFromCreationSeed === true;
+    state.__schedulePayloadPartialPlannedScheduleMissing = seedScheduleAuthoritySource === 'existing_contract_week_missing_planned_schedule_defer' || state.__schedulePayloadPartialPlannedScheduleMissing === true;
+    state.__contractWeekPlannedScheduleKeyPresent = seedScheduleAuthoritySource === 'contract_week_planned' || state.__contractWeekPlannedScheduleKeyPresent === true;
+    state.__authoritativeContractWeekScheduleEmpty = !!(seedScheduleAuthoritySource === 'contract_week_planned' && Array.isArray(seedSchedule) && seedSchedule.length === 0);
+
+    if ((contractWeekPlannedScheduleIsAuthoritative || hasExplicitActualScheduleForSeed) && !scheduleTouchedForSeed) {
+      const authoritativeBaseline = Array.isArray(seedSchedule) ? tryParse(seedSchedule) : [];
+      state.baselineSchedule = Array.isArray(authoritativeBaseline) ? authoritativeBaseline : [];
+    }
 
     const normDate = (seg) => String(seg?.date || seg?.date_ymd || seg?.work_date || '').trim();
 
@@ -305457,6 +305838,30 @@ function renderWeeklyManualScheduleEditor(opts) {
               });
             } catch {}
           },
+          _captureScrollSnapshot() {
+            const body = document.getElementById('modalBody') || document.querySelector('.modal-body');
+            const grid = document.querySelector('#tsWeeklyScheduleWrap') || document.querySelector('#tsWeeklySchedule') || null;
+            return {
+              bodyTop: body ? body.scrollTop : null,
+              bodyLeft: body ? body.scrollLeft : null,
+              gridTop: grid ? grid.scrollTop : null,
+              gridLeft: grid ? grid.scrollLeft : null
+            };
+          },
+          _restoreScrollSnapshot(snapshot) {
+            if (!snapshot || typeof snapshot !== 'object') return;
+            const restore = () => {
+              try {
+                const body = document.getElementById('modalBody') || document.querySelector('.modal-body');
+                const grid = document.querySelector('#tsWeeklyScheduleWrap') || document.querySelector('#tsWeeklySchedule') || null;
+                if (body && Number.isFinite(Number(snapshot.bodyTop))) body.scrollTop = Number(snapshot.bodyTop);
+                if (body && Number.isFinite(Number(snapshot.bodyLeft))) body.scrollLeft = Number(snapshot.bodyLeft);
+                if (grid && Number.isFinite(Number(snapshot.gridTop))) grid.scrollTop = Number(snapshot.gridTop);
+                if (grid && Number.isFinite(Number(snapshot.gridLeft))) grid.scrollLeft = Number(snapshot.gridLeft);
+              } catch {}
+            };
+            try { requestAnimationFrame(() => requestAnimationFrame(restore)); } catch { restore(); }
+          },
           _syncLineDom(date, idx, ln) {
             try {
               const d = String(date || '').trim();
@@ -305938,6 +306343,7 @@ function renderWeeklyManualScheduleEditor(opts) {
             const { st, fr, bulkState } = this._getState();
             if (!st) return;
             if (this._isReadOnly(st)) return;
+            const scrollSnapshot = this._captureScrollSnapshot();
             const d = String(date || '').trim();
             const i = Number(idx);
             if (!d || !Number.isFinite(i) || i < 0) return;
@@ -305968,6 +306374,7 @@ function renderWeeklyManualScheduleEditor(opts) {
                 fr.setTab('lines');
                 fr._suppressDirty = false;
                 fr._updateButtons && fr._updateButtons();
+                this._restoreScrollSnapshot(scrollSnapshot);
               } else if (fr && (String(fr.kind || '') === 'bulk-process-workbench' || String(fr.kind || '') === 'bulk-authorise-workbench')) {
                 this._notifyWeeklyPreviewRefresh(d, i, domRefs);
               }
@@ -305978,6 +306385,7 @@ function renderWeeklyManualScheduleEditor(opts) {
             const { st, fr, bulkState } = this._getState();
             if (!st) return;
             if (this._isReadOnly(st)) return;
+            const scrollSnapshot = this._captureScrollSnapshot();
             this._prepareBulkAuthorisePreMutationBaseline(fr, bulkState, 'manual-editor-weekly-clear-all', {
               reason: 'manual-editor-clear',
               source: 'renderWeeklyManualScheduleEditor.clearAllLines.preMutation',
@@ -305998,6 +306406,13 @@ function renderWeeklyManualScheduleEditor(opts) {
             }
             this._setClipboard(st, fr, null);
             this._markWeeklyScheduleTouched(st);
+            st.__scheduleExplicitlyCleared = true;
+            st.__scheduleResetFromContract = false;
+            st.__scheduleAuthoritySource = 'user_cleared_blank';
+            st.__scheduleLoadedFromAuthoritativeContractWeek = false;
+            st.__scheduleLoadedFromCreationSeed = false;
+            st.__schedulePayloadPartialPlannedScheduleMissing = false;
+            st.__authoritativeContractWeekScheduleEmpty = false;
             applyScheduleFromLines(st);
             this._markMutationDirty(fr, bulkState, 'manual-editor-weekly-clear-all');
             try {
@@ -306006,6 +306421,7 @@ function renderWeeklyManualScheduleEditor(opts) {
                 fr.setTab('lines');
                 fr._suppressDirty = false;
                 fr._updateButtons && fr._updateButtons();
+                this._restoreScrollSnapshot(scrollSnapshot);
               } else if (fr && (String(fr.kind || '') === 'bulk-process-workbench' || String(fr.kind || '') === 'bulk-authorise-workbench') && typeof bulkState?.__rerenderWorkbench === 'function') {
                 await bulkState.__rerenderWorkbench();
               }
@@ -306206,16 +306622,9 @@ function renderWeeklyManualScheduleEditor(opts) {
       ? currentContractObj.std_schedule_json
       : (!suppressResetStandardScheduleFallback ? contractSchedule : null);
 
-  const currentContractWeekPlannedRaw =
-    (!suppressResetStandardScheduleFallback && currentContractWeekObj && currentContractWeekObj.planned_schedule_json != null)
-      ? currentContractWeekObj.planned_schedule_json
-      : (!suppressResetStandardScheduleFallback ? contractWeekPlannedSchedule : null);
-
   const contractScheduleNormalised = suppressResetStandardScheduleFallback ? [] : normaliseResetScheduleSource(currentContractScheduleRaw);
-  const contractWeekFallbackNormalised = suppressResetStandardScheduleFallback ? [] : normaliseResetScheduleSource(currentContractWeekPlannedRaw);
 
   const hasContractSchedule = !suppressResetStandardScheduleFallback && Array.isArray(contractScheduleNormalised) && contractScheduleNormalised.length > 0;
-  const hasFallbackSchedule = !suppressResetStandardScheduleFallback && Array.isArray(contractWeekFallbackNormalised) && contractWeekFallbackNormalised.length > 0;
 
   let ok = false;
   if (typeof openUiConfirmModal === 'function') {
@@ -306223,9 +306632,7 @@ function renderWeeklyManualScheduleEditor(opts) {
       title: 'Reset schedule',
       message: hasContractSchedule
         ? 'Reset the weekly schedule back to the contract defaults for this week?'
-        : (hasFallbackSchedule
-            ? 'No live contract default schedule is available. Reset the weekly schedule to the stored planned week schedule instead?'
-            : 'No contract default schedule is available. Reset the weekly schedule to blank lines?')
+        : 'No contract default schedule is available. Reset the weekly schedule to blank lines?'
     });
     ok = !!(
       (res && res.confirmed === true) ||
@@ -306235,9 +306642,7 @@ function renderWeeklyManualScheduleEditor(opts) {
     ok = !!window.confirm(
       hasContractSchedule
         ? 'Reset the weekly schedule back to the contract defaults for this week?'
-        : (hasFallbackSchedule
-            ? 'No live contract default schedule is available. Reset the weekly schedule to the stored planned week schedule instead?'
-            : 'No contract default schedule is available. Reset the weekly schedule to blank lines?')
+        : 'No contract default schedule is available. Reset the weekly schedule to blank lines?'
     );
   }
   if (!ok) return;
@@ -306250,9 +306655,7 @@ function renderWeeklyManualScheduleEditor(opts) {
 
   const resetSource = suppressResetStandardScheduleFallback
     ? []
-    : (hasContractSchedule
-        ? contractScheduleNormalised
-        : contractWeekFallbackNormalised);
+    : (hasContractSchedule ? contractScheduleNormalised : []);
 
   if (suppressResetStandardScheduleFallback) {
     st.schedule = [];
@@ -306277,6 +306680,13 @@ function renderWeeklyManualScheduleEditor(opts) {
   }
 
   this._markWeeklyScheduleTouched(st);
+  st.__scheduleResetFromContract = true;
+  st.__scheduleExplicitlyCleared = false;
+  st.__scheduleAuthoritySource = hasContractSchedule ? 'contract_reset' : 'contract_reset_blank_no_template';
+  st.__scheduleLoadedFromAuthoritativeContractWeek = false;
+  st.__scheduleLoadedFromCreationSeed = false;
+  st.__schedulePayloadPartialPlannedScheduleMissing = false;
+  st.__authoritativeContractWeekScheduleEmpty = false;
   applyScheduleFromLines(st);
   st.__scheduleUpdatedAt = Date.now();
   this._markMutationDirty(fr, bulkState, 'manual-editor-weekly-reset');
@@ -310898,6 +311308,11 @@ async function openTimesheetEvidenceReplaceDialog(file) {
   }
 }
 
+
+
+
+
+// Replacement function: refreshTimesheetEvidenceIntoModalState (patched source lines 311213-311598)
 async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][EVIDENCE][REFRESH]');
   GC('refreshTimesheetEvidenceIntoModalState');
@@ -310908,6 +311323,24 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
   const data = (mc.data && typeof mc.data === 'object') ? mc.data : {};
   const details = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
   const meta = (mc.timesheetMeta && typeof mc.timesheetMeta === 'object') ? mc.timesheetMeta : {};
+  const stateForDirtyExpensePreserve = (mc.timesheetState && typeof mc.timesheetState === 'object') ? mc.timesheetState : {};
+  const preserveDirtyExpenses = (() => {
+    try {
+      if (typeof timesheetStateExpensesDirty !== 'function' || !timesheetStateExpensesDirty(stateForDirtyExpensePreserve)) return null;
+      return {
+        expensesDraft: cloneTimesheetFastOpenValue(stateForDirtyExpensePreserve.expensesDraft || {}),
+        expensesBaseline: cloneTimesheetFastOpenValue(stateForDirtyExpensePreserve.expensesBaseline || {}),
+        expensesDirty: true,
+        expensesDraftDirty: true,
+        hasStagedExpensesDirty: true,
+        stagedExpensesDirty: true,
+        __expensesDirty: true,
+        __expensesDraftDirty: true
+      };
+    } catch {
+      return null;
+    }
+  })();
 
   const realTimesheetId =
     data.timesheet_id ||
@@ -311116,6 +311549,16 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
       targetState.evidence = cloned;
       targetDetails.evidence = cloned;
       targetData.evidence = cloned;
+      if (preserveDirtyExpenses) {
+        targetState.expensesDraft = cloneTimesheetFastOpenValue(preserveDirtyExpenses.expensesDraft || {});
+        targetState.expensesBaseline = cloneTimesheetFastOpenValue(preserveDirtyExpenses.expensesBaseline || {});
+        targetState.expensesDirty = true;
+        targetState.expensesDraftDirty = true;
+        targetState.hasStagedExpensesDirty = true;
+        targetState.stagedExpensesDirty = true;
+        targetState.__expensesDirty = true;
+        targetState.__expensesDraftDirty = true;
+      }
 
       if (usePlannedWeekEndpoint) {
         targetState.stagedEvidence = cloned;
@@ -311256,7 +311699,6 @@ async function refreshTimesheetEvidenceIntoModalState(timesheetId) {
     throw err;
   }
 }
-
 
 
 
