@@ -121698,6 +121698,228 @@ function timesheetStateSegmentControlsTouched(state) {
     timesheetObjectHasKeys(st.nhspDeferrals)
   );
 }
+function collectTimesheetExpensesDraftFromDom(rootArg, options = {}) {
+  const opts = (options && typeof options === 'object') ? options : {};
+  const ctx = resolveTimesheetExpensesModalCtx(opts.ctx || null);
+  const root = rootArg || (typeof document !== 'undefined' ? document.getElementById('modalBody') : null);
+
+  if (!root || typeof root.querySelectorAll !== 'function') {
+    return { ok: false, reason: 'NO_ROOT', draft: null, inputCount: 0, ctx };
+  }
+
+  const inputs = Array.from(root.querySelectorAll('input[data-exp-field], textarea[data-exp-field]') || []);
+  if (!inputs.length) {
+    return { ok: false, reason: 'NO_EXPENSE_FIELDS', draft: null, inputCount: 0, ctx };
+  }
+
+  const state = (ctx.timesheetState && typeof ctx.timesheetState === 'object') ? ctx.timesheetState : {};
+  const baseDraft = (opts.baseDraft && typeof opts.baseDraft === 'object')
+    ? opts.baseDraft
+    : ((state.expensesDraft && typeof state.expensesDraft === 'object') ? state.expensesDraft : {});
+  const rawDraft = { ...(baseDraft || {}) };
+
+  const cleanNum = (value, dp = 2) => {
+    if (value == null) return 0;
+    const raw = String(value).replace(/[£,]/g, '').trim();
+    if (!raw) return 0;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 0;
+    const m = Math.pow(10, dp);
+    return Math.round(n * m) / m;
+  };
+  const cleanRate = (value) => {
+    if (value == null || String(value).trim() === '') return null;
+    const raw = String(value).replace(/[£,]/g, '').trim();
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.round(n * 10000) / 10000 : null;
+  };
+  const numericFields = new Set([
+    'mileage_units',
+    'travel_pay',
+    'travel_charge',
+    'accommodation_pay',
+    'accommodation_charge',
+    'other_pay',
+    'other_charge'
+  ]);
+  const normaliseFieldName = (field) => {
+    const f = String(field || '').trim();
+    return f === 'notes' ? 'note' : f;
+  };
+
+  inputs.forEach((input) => {
+    const field = normaliseFieldName(input && typeof input.getAttribute === 'function' ? input.getAttribute('data-exp-field') : '');
+    if (!field) return;
+    const raw = input && Object.prototype.hasOwnProperty.call(input, 'value') ? input.value : '';
+    if (field === 'note') {
+      rawDraft.note = String(raw == null ? '' : raw).trim();
+    } else if (numericFields.has(field)) {
+      rawDraft[field] = cleanNum(raw, field === 'mileage_units' ? 3 : 2);
+    }
+  });
+
+  const readRenderedRate = (attrName) => {
+    try {
+      const candidates = [
+        root,
+        root.querySelector(`[${attrName}]`),
+        root.querySelector('input[data-exp-field="mileage_units"]')
+      ].filter(Boolean);
+      for (const el of candidates) {
+        if (!el || typeof el.getAttribute !== 'function') continue;
+        const n = cleanRate(el.getAttribute(attrName));
+        if (n != null) return n;
+      }
+    } catch {}
+    return null;
+  };
+
+  const details = ctx.timesheetDetails || ctx.details || {};
+  const tsfin = details.tsfin || ctx.tsfin || {};
+  const mileagePayRate = cleanRate(
+    rawDraft.mileage_pay_rate ??
+    readRenderedRate('data-mileage-pay-rate') ??
+    tsfin.mileage_pay_rate ??
+    opts.mileage_pay_rate
+  );
+  const mileageChargeRate = cleanRate(
+    rawDraft.mileage_charge_rate ??
+    readRenderedRate('data-mileage-charge-rate') ??
+    tsfin.mileage_charge_rate ??
+    opts.mileage_charge_rate
+  );
+  rawDraft.mileage_pay_rate = mileagePayRate;
+  rawDraft.mileage_charge_rate = mileageChargeRate;
+
+  const normaliseOptions = {
+    row: ctx.data || ctx.row || {},
+    details,
+    tsfin,
+    state,
+    mileage_pay_rate: mileagePayRate,
+    mileage_charge_rate: mileageChargeRate
+  };
+
+  const draft = (typeof normaliseTimesheetExpensesDraft === 'function')
+    ? normaliseTimesheetExpensesDraft(rawDraft, normaliseOptions)
+    : rawDraft;
+
+  return { ok: true, reason: '', draft, inputCount: inputs.length, ctx, normaliseOptions };
+}
+function commitTimesheetExpensesDraftToModalState(ctxArg, draftArg, options = {}) {
+  const opts = (options && typeof options === 'object') ? options : {};
+  const ctx = resolveTimesheetExpensesModalCtx(ctxArg || opts.ctx || null);
+  if (!ctx || typeof ctx !== 'object') {
+    return { ok: false, reason: 'NO_CTX', ctx: null, state: null, draft: null, dirty: false };
+  }
+
+  ctx.timesheetState = (ctx.timesheetState && typeof ctx.timesheetState === 'object') ? ctx.timesheetState : {};
+  const state = ctx.timesheetState;
+  const details = ctx.timesheetDetails || ctx.details || {};
+  const tsfin = details.tsfin || ctx.tsfin || {};
+  const row = ctx.data || ctx.row || {};
+  const oldDraft = (state.expensesDraft && typeof state.expensesDraft === 'object') ? state.expensesDraft : {};
+  const incoming = (draftArg && typeof draftArg === 'object') ? draftArg : {};
+  const mergedDraft = { ...(oldDraft || {}), ...(incoming || {}) };
+
+  const normaliseOptions = {
+    row,
+    details,
+    tsfin,
+    state,
+    mileage_pay_rate: mergedDraft.mileage_pay_rate,
+    mileage_charge_rate: mergedDraft.mileage_charge_rate
+  };
+
+  const nextDraft = (typeof normaliseTimesheetExpensesDraft === 'function')
+    ? normaliseTimesheetExpensesDraft(mergedDraft, normaliseOptions)
+    : mergedDraft;
+
+  const baselineSource =
+    (state.expensesBaseline && typeof state.expensesBaseline === 'object')
+      ? state.expensesBaseline
+      : ((state.expenses_baseline && typeof state.expenses_baseline === 'object')
+          ? state.expenses_baseline
+          : oldDraft);
+
+  if (!state.expensesBaseline || typeof state.expensesBaseline !== 'object') {
+    state.expensesBaseline = (typeof normaliseTimesheetExpensesDraft === 'function')
+      ? normaliseTimesheetExpensesDraft(baselineSource || {}, normaliseOptions)
+      : { ...(baselineSource || {}) };
+  }
+
+  state.expensesDraft = nextDraft;
+
+  const policy = (ctx.timesheetEditDomains && typeof ctx.timesheetEditDomains === 'object')
+    ? ctx.timesheetEditDomains
+    : ((ctx.editDomains && typeof ctx.editDomains === 'object') ? ctx.editDomains : null);
+  const storageTarget = String(
+    opts.expenseStorageTarget ||
+    policy?.expenseStorageTarget ||
+    ctx.expenseStorageTarget ||
+    ctx.expense_storage_target ||
+    row.expenseStorageTarget ||
+    row.expense_storage_target ||
+    ''
+  ).trim().toUpperCase();
+
+  if (storageTarget === 'CONTRACT_WEEK_DRAFT') {
+    const cloneDraft = (() => {
+      try { return JSON.parse(JSON.stringify(nextDraft || {})); }
+      catch { return { ...(nextDraft || {}) }; }
+    })();
+    state.contractWeekExpensesDraft = cloneDraft;
+    state.contract_week_expenses_draft = (() => { try { return JSON.parse(JSON.stringify(cloneDraft)); } catch { return { ...cloneDraft }; } })();
+    state.__contractWeekExpensesDraft = (() => { try { return JSON.parse(JSON.stringify(cloneDraft)); } catch { return { ...cloneDraft }; } })();
+    state.__contract_week_expenses_draft = (() => { try { return JSON.parse(JSON.stringify(cloneDraft)); } catch { return { ...cloneDraft }; } })();
+  }
+
+  let dirtyResult = null;
+  try {
+    dirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+      ? isTimesheetExpensesDraftDirty(nextDraft, state.expensesBaseline || {}, normaliseOptions)
+      : null;
+  } catch {}
+  let dirty = !!(dirtyResult && dirtyResult.dirty);
+  if (!dirty && !dirtyResult) {
+    try {
+      dirty = JSON.stringify(nextDraft || {}) !== JSON.stringify(state.expensesBaseline || {});
+    } catch {
+      dirty = true;
+    }
+  }
+
+  if (opts.markDirty !== false) {
+    state.expensesDirty = dirty;
+    state.expensesDraftDirty = dirty;
+    state.hasStagedExpensesDirty = dirty;
+    state.stagedExpensesDirty = dirty;
+    state.expenseDirtyMarker = dirty;
+    state.__expensesDirty = dirty;
+    state.__expensesDraftDirty = dirty;
+
+    if (dirty) {
+      try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
+    }
+    try {
+      const fr = (typeof window !== 'undefined' && typeof window.__getModalFrame === 'function')
+        ? window.__getModalFrame()
+        : null;
+      if (dirty && fr && String(fr.entity || '').trim().toLowerCase() === 'timesheets') {
+        fr.isDirty = true;
+        if (typeof fr._updateButtons === 'function') fr._updateButtons();
+      }
+    } catch {}
+  }
+
+  if (typeof window !== 'undefined') {
+    if (!window.modalCtx || window.modalCtx === ctx || String(ctx.entity || '').trim().toLowerCase() === 'timesheets') {
+      window.modalCtx = ctx;
+    }
+  }
+
+  return { ok: true, reason: '', ctx, state, draft: nextDraft, dirty, dirtyResult };
+}
 
 
 // Replacement function: timesheetStateExpensesDirty (definition 1; revised 2026-06-11; post-save dirty guard)
@@ -142210,6 +142432,11 @@ async function fetchBulkProcessDataset(filters, options = {}) {
 }
 
 
+
+
+
+
+
 function renderTimesheetExpensesTab(ctx) {
   const c = normaliseTimesheetCtx(ctx);
   const row     = c.row || {};
@@ -142221,9 +142448,22 @@ function renderTimesheetExpensesTab(ctx) {
   const tf   = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : null;
   const cw   = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : null;
 
-  const editPolicy = (typeof classifyTimesheetEditDomains === 'function')
+  const originalCtx = (ctx && typeof ctx === 'object') ? ctx : {};
+  const suppliedEditPolicy = (
+    (c.timesheetEditDomains && typeof c.timesheetEditDomains === 'object') ? c.timesheetEditDomains :
+    (c.editDomains && typeof c.editDomains === 'object') ? c.editDomains :
+    (c.policy && typeof c.policy === 'object') ? c.policy :
+    (originalCtx.timesheetEditDomains && typeof originalCtx.timesheetEditDomains === 'object') ? originalCtx.timesheetEditDomains :
+    (originalCtx.editDomains && typeof originalCtx.editDomains === 'object') ? originalCtx.editDomains :
+    (originalCtx.policy && typeof originalCtx.policy === 'object') ? originalCtx.policy :
+    (typeof window !== 'undefined' && window.modalCtx && window.modalCtx.timesheetEditDomains && typeof window.modalCtx.timesheetEditDomains === 'object') ? window.modalCtx.timesheetEditDomains :
+    (typeof window !== 'undefined' && window.modalCtx && window.modalCtx.editDomains && typeof window.modalCtx.editDomains === 'object') ? window.modalCtx.editDomains :
+    null
+  );
+
+  const editPolicy = suppliedEditPolicy || ((typeof classifyTimesheetEditDomains === 'function')
     ? classifyTimesheetEditDomains({ row, details, tsfin: tf, timesheet: ts, contract_week: cw, state, ctx: c, related })
-    : null;
+    : null);
 
   const boolishExpense = (v) => {
     if (v === true) return true;
@@ -142714,10 +142954,28 @@ function renderTimesheetExpensesTab(ctx) {
 }
 
 
+function resolveTimesheetExpensesModalCtx(ctxArg = null) {
+  const supplied = (ctxArg && typeof ctxArg === 'object') ? ctxArg : null;
+  const live = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object')
+    ? window.modalCtx
+    : null;
 
+  const looksTimesheetCtx = (ctx) => !!(
+    ctx &&
+    typeof ctx === 'object' &&
+    (
+      String(ctx.entity || '').trim().toLowerCase() === 'timesheets' ||
+      ctx.timesheetDetails ||
+      ctx.timesheetState ||
+      (ctx.data && typeof ctx.data === 'object' && (ctx.data.timesheet_id || ctx.data.contract_week_id))
+    )
+  );
 
-
-
+  if (live && supplied && live === supplied) return live;
+  if (live && looksTimesheetCtx(live)) return live;
+  if (supplied && looksTimesheetCtx(supplied)) return supplied;
+  return live || supplied || {};
+}
 
 
 
@@ -269519,6 +269777,25 @@ persistCurrentTabState() {
 
   if (window.modalCtx !== activeCtx) window.modalCtx = activeCtx;
 
+  try {
+    if (
+      this.entity === 'timesheets' &&
+      this.currentTabKey === 'expenses' &&
+      typeof persistTimesheetExpensesDomToModalState === 'function'
+    ) {
+      const persistedExpenses = persistTimesheetExpensesDomToModalState({
+        ctx: activeCtx,
+        root: (typeof document !== 'undefined' ? document.getElementById('modalBody') : null),
+        source: 'persist-current-tab'
+      });
+      if (persistedExpenses && persistedExpenses.ok && persistedExpenses.ctx && this._ctxRef !== persistedExpenses.ctx) {
+        this._ctxRef = persistedExpenses.ctx;
+      }
+    }
+  } catch (e) {
+    L('persistCurrentTabState timesheets/expenses failed', e);
+  }
+
   const sentinel = activeCtx?.openToken || null;
   const initial  = (activeCtx.data?.id ?? sentinel);
   let fs = activeCtx.formState || { __forId: initial, main:{}, pay:{} };
@@ -272449,6 +272726,12 @@ if (this.entity === 'timesheets' && k === 'expenses') {
 
   try {
     const mc = window.modalCtx || {};
+    const getActiveExpensesModalCtx = () => {
+      if (typeof resolveTimesheetExpensesModalCtx === 'function') {
+        return resolveTimesheetExpensesModalCtx(mc);
+      }
+      return (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : mc;
+    };
 
      // ✅ If the tab is disabled, do not wire anything (keeps it inert even if called programmatically)
     const enabled = !!mc.expenses_tab_enabled;
@@ -272473,25 +272756,44 @@ if (this.entity === 'timesheets' && k === 'expenses') {
       mc.expense_storage_target ||
       mc.data?.expenseStorageTarget ||
       mc.data?.expense_storage_target ||
+      detailsForExpensesPolicy.expenseStorageTarget ||
+      detailsForExpensesPolicy.expense_storage_target ||
       ''
     ).trim().toUpperCase();
     const hasExpenseStorageTarget = (expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT');
+    const policyCanEditExpenses = !!(
+      policy &&
+      policy.canEditExpenses === true &&
+      policy.expensesReadOnly !== true &&
+      policy.expensesActionDisabled !== true
+    );
+    const policyCanOpenExpenses = !!(
+      policy &&
+      (policy.canOpenExpenses === true || policyCanEditExpenses) &&
+      policy.expensesTabDisabled !== true
+    );
+    const disabledByPolicy = !!(
+      policy &&
+      !policyCanEditExpenses &&
+      (policy.expensesTabDisabled === true || policy.expensesActionDisabled === true)
+    );
+    const disabledByCtx = !!(!policyCanEditExpenses && mc.expenses_tab_disabled === true);
     const expensesTabDisabled = !!(
-      (policy && (policy.expensesTabDisabled === true || policy.expensesActionDisabled === true)) ||
-      mc.expenses_tab_disabled === true ||
-      !hasExpenseStorageTarget
+      !hasExpenseStorageTarget ||
+      disabledByPolicy ||
+      disabledByCtx
     );
     const canEditExpenses = !!(
       policy
-        ? (policy.canEditExpenses === true && policy.expensesReadOnly !== true && !expensesTabDisabled)
-        : (enabled && hasExpenseStorageTarget && !expensesTabDisabled)
+        ? (policyCanEditExpenses && !expensesTabDisabled)
+        : (hasExpenseStorageTarget && !expensesTabDisabled)
     );
     const expensesTabCanOpen = !!(
       hasExpenseStorageTarget &&
       (
         policy
-          ? (policy.canOpenExpenses !== false && !expensesTabDisabled)
-          : (enabled && !expensesTabDisabled)
+          ? ((policyCanOpenExpenses || policyCanEditExpenses) && !expensesTabDisabled)
+          : !expensesTabDisabled
       )
     );
     if (!expensesTabCanOpen || !canEditExpenses) {
@@ -272584,10 +272886,12 @@ if (this.entity === 'timesheets' && k === 'expenses') {
       const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
          const resolveMileageRatesForExpenses = () => {
-        const det = mc.timesheetDetails || {};
+        const mcNow = getActiveExpensesModalCtx();
+        const det = mcNow.timesheetDetails || {};
         const tf  = det.tsfin || {};
-        const d = mc.timesheetState.expensesDraft || {};
-        const b = mc.timesheetState.expensesBaseline || {};
+        const stNow = (mcNow.timesheetState && typeof mcNow.timesheetState === 'object') ? mcNow.timesheetState : {};
+        const d = stNow.expensesDraft || {};
+        const b = stNow.expensesBaseline || {};
 
         const payRate =
           (d.mileage_pay_rate != null && Number.isFinite(Number(d.mileage_pay_rate)))
@@ -272615,7 +272919,9 @@ if (this.entity === 'timesheets' && k === 'expenses') {
       };
 
       const recomputeAndPaint = () => {
-        const d = mc.timesheetState.expensesDraft || {};
+        const mcNow = getActiveExpensesModalCtx();
+        const stNow = (mcNow.timesheetState && typeof mcNow.timesheetState === 'object') ? mcNow.timesheetState : {};
+        const d = stNow.expensesDraft || {};
         const resolvedRates = resolveMileageRatesForExpenses();
 
         if (d && typeof d === 'object') {
@@ -272661,73 +272967,30 @@ if (this.entity === 'timesheets' && k === 'expenses') {
         setText('[data-exp-out="total_charge"]',  `£${totChg.toFixed(2)}`);
       };
 
+      const commitVisibleExpenses = (source = 'expenses-input') => {
+        let persisted = null;
+        try {
+          const liveCtx = getActiveExpensesModalCtx();
+          persisted = (typeof persistTimesheetExpensesDomToModalState === 'function')
+            ? persistTimesheetExpensesDomToModalState({ ctx: liveCtx, root, source })
+            : null;
+        } catch (e) {
+          if (LOGM) LT('expenses DOM persist failed (non-fatal)', e?.message || e);
+        }
+        recomputeAndPaint();
+        return persisted;
+      };
+
       const inputs = root.querySelectorAll('input[data-exp-field], textarea[data-exp-field]');
       inputs.forEach(inp => {
         if (inp.__tsExpWired) return;
         inp.__tsExpWired = true;
 
         inp.addEventListener('input', () => {
-          const field = String(inp.getAttribute('data-exp-field') || '').trim();
-          if (!field) return;
-
-          const isNote = (field === 'note');
-          const raw = String(inp.value || '').trim();
-          const val = isNote ? raw : ((raw === '') ? 0 : Number(raw));
-          const n = isNote ? raw : (Number.isFinite(val) ? val : 0);
-
-          mc.timesheetState.expensesDraft[field] = n;
-
-          const rates = resolveMileageRatesForExpenses();
-          if (rates.mileage_pay_rate != null) {
-            mc.timesheetState.expensesDraft.mileage_pay_rate = rates.mileage_pay_rate;
-          }
-          if (rates.mileage_charge_rate != null) {
-            mc.timesheetState.expensesDraft.mileage_charge_rate = rates.mileage_charge_rate;
-          }
-
-          if (typeof normaliseTimesheetExpensesDraft === 'function') {
-            mc.timesheetState.expensesDraft = normaliseTimesheetExpensesDraft(mc.timesheetState.expensesDraft || {}, {
-              row: mc.data || {},
-              details: mc.timesheetDetails || {},
-              tsfin: mc?.timesheetDetails?.tsfin || {},
-              state: mc.timesheetState || {}
-            });
-          }
-
-          // Update computed display cells live (no re-render)
-          if (typeof recalculateTimesheetExpenseTotals === 'function') {
-            recalculateTimesheetExpenseTotals(mc.timesheetState.expensesDraft, rates);
-          }
-          recomputeAndPaint();
-          const dres = (typeof isTimesheetExpensesDraftDirty === 'function')
-            ? isTimesheetExpensesDraftDirty(
-                (typeof normaliseTimesheetExpensesDraft === 'function'
-                  ? normaliseTimesheetExpensesDraft(mc.timesheetState.expensesDraft || {}, {
-                      row: mc.data || {},
-                      details: mc.timesheetDetails || {},
-                      tsfin: mc?.timesheetDetails?.tsfin || {},
-                      state: mc.timesheetState || {}
-                    })
-                  : (mc.timesheetState.expensesDraft || {})),
-                (typeof normaliseTimesheetExpensesDraft === 'function'
-                  ? normaliseTimesheetExpensesDraft(mc.timesheetState.expensesBaseline || {}, {
-                      row: mc.data || {},
-                      details: mc.timesheetDetails || {},
-                      tsfin: mc?.timesheetDetails?.tsfin || {},
-                      state: mc.timesheetState || {}
-                    })
-                  : (mc.timesheetState.expensesBaseline || {})),
-                {
-                  row: mc.data || {},
-                  details: mc.timesheetDetails || {},
-                  tsfin: mc?.timesheetDetails?.tsfin || {},
-                  state: mc.timesheetState || {}
-                }
-              )
-            : { dirty: true };
-          if (dres && dres.dirty) {
-            try { window.dispatchEvent(new Event('modal-dirty')); } catch {}
-          }
+          commitVisibleExpenses('expenses-input');
+        });
+        inp.addEventListener('change', () => {
+          commitVisibleExpenses('expenses-change');
         });
       });
 
@@ -273948,14 +274211,31 @@ const resolveTabDisabledState = (tabLike) => {
         mc.expense_storage_target ||
         mc.data?.expenseStorageTarget ||
         mc.data?.expense_storage_target ||
+        det.expenseStorageTarget ||
+        det.expense_storage_target ||
         ''
       ).trim().toUpperCase();
       const hasExpenseStorageTarget = (expenseStorageTarget === 'TSFIN' || expenseStorageTarget === 'CONTRACT_WEEK_DRAFT');
-      const disabledByPolicy = !!(policy && (policy.expensesTabDisabled === true || policy.expensesActionDisabled === true));
-      const disabledByCtx = !!(hasCtxDisabled && mc.expenses_tab_disabled === true);
-      const explicitlyEnabledByPolicy = !!(policy && hasExpenseStorageTarget && policy.canOpenExpenses !== false && !disabledByPolicy);
+      const policyCanEditExpenses = !!(
+        policy &&
+        policy.canEditExpenses === true &&
+        policy.expensesReadOnly !== true &&
+        policy.expensesActionDisabled !== true
+      );
+      const policyCanOpenExpenses = !!(
+        policy &&
+        (policy.canOpenExpenses === true || policyCanEditExpenses) &&
+        policy.expensesTabDisabled !== true
+      );
+      const disabledByPolicy = !!(
+        policy &&
+        !policyCanEditExpenses &&
+        (policy.expensesTabDisabled === true || policy.expensesActionDisabled === true)
+      );
+      const disabledByCtx = !!(!policyCanEditExpenses && hasCtxDisabled && mc.expenses_tab_disabled === true);
+      const explicitlyEnabledByPolicy = !!(policy && hasExpenseStorageTarget && (policyCanOpenExpenses || policyCanEditExpenses) && !disabledByPolicy);
       const explicitlyEnabledByCtx = !!(hasExpenseStorageTarget && hasCtxEnabled && mc.expenses_tab_enabled === true && !disabledByCtx);
-      const explicitlyUnavailableByCtx = !!(hasCtxEnabled && mc.expenses_tab_enabled !== true);
+      const explicitlyUnavailableByCtx = !!(!policyCanEditExpenses && hasCtxEnabled && mc.expenses_tab_enabled !== true);
       const preciseExpenseReason = String(
         mc.expenses_tab_reason ||
         policy?.expensesTabDisabledReason ||
@@ -273975,6 +274255,9 @@ const resolveTabDisabledState = (tabLike) => {
       if (disabledByPolicy || disabledByCtx) {
         disabled = true;
         reason = preciseExpenseReason || 'This tab is currently unavailable.';
+      } else if (policyCanEditExpenses && hasExpenseStorageTarget) {
+        disabled = false;
+        reason = '';
       } else if (explicitlyEnabledByCtx || explicitlyEnabledByPolicy) {
         disabled = false;
         reason = '';
@@ -275327,6 +275610,18 @@ if (btnTsProcess) {
     const fr = (typeof currentFrame === 'function') ? currentFrame() : null;
     if (!fr || btnTsProcess.dataset.ownerToken !== fr._token) return;
 
+    try {
+      if (fr.entity === 'timesheets' && fr.currentTabKey === 'expenses' && typeof fr.persistCurrentTabState === 'function') {
+        fr.persistCurrentTabState();
+      } else if (typeof persistTimesheetExpensesDomToModalState === 'function') {
+        persistTimesheetExpensesDomToModalState({
+          ctx: window.modalCtx || {},
+          root: (typeof document !== 'undefined' ? document.getElementById('modalBody') : null),
+          source: 'timesheet-process-click'
+        });
+      }
+    } catch {}
+
     const mc = window.modalCtx || {};
     const det = mc.timesheetDetails || {};
     const tsfin = det.tsfin || {};
@@ -275694,6 +275989,18 @@ if (btnTsProcess) {
         const scheduleX = buildLiveWeeklyScheduleForProcess();
 
         const { week: auWeek, perDay: auPerDay } = buildAdditionalUnits();
+        try {
+          if (typeof persistTimesheetExpensesDomToModalState === 'function') {
+            const persistedProcessExpenses = persistTimesheetExpensesDomToModalState({
+              ctx: mc,
+              root: (typeof document !== 'undefined' ? document.getElementById('modalBody') : null),
+              source: 'timesheet-process-payload'
+            });
+            if (persistedProcessExpenses && persistedProcessExpenses.ok && persistedProcessExpenses.state) {
+              mc.timesheetState = persistedProcessExpenses.state;
+            }
+          }
+        } catch {}
         const stagedExpenses = normaliseExpensesDraft(mc?.timesheetState?.expensesDraft || {});
 
         const payload = {
@@ -296475,6 +296782,25 @@ async function openTimesheetEvidenceViewerSignatures(ev) {
   GE();
 }
 
+function persistTimesheetExpensesDomToModalState(options = {}) {
+  const opts = (options && typeof options === 'object') ? options : {};
+  const ctx = resolveTimesheetExpensesModalCtx(opts.ctx || null);
+  const root = opts.root || (typeof document !== 'undefined' ? document.getElementById('modalBody') : null);
+  const collected = collectTimesheetExpensesDraftFromDom(root, { ...opts, ctx });
+  if (!collected || !collected.ok) {
+    return {
+      ok: false,
+      reason: collected?.reason || 'NOT_COLLECTED',
+      ctx,
+      state: ctx?.timesheetState || null,
+      draft: null,
+      dirty: false,
+      inputCount: collected?.inputCount || 0
+    };
+  }
+  const committed = commitTimesheetExpensesDraftToModalState(ctx, collected.draft, opts);
+  return { ...committed, inputCount: collected.inputCount, source: opts.source || '' };
+}
 
 
 
@@ -296912,8 +297238,60 @@ function normaliseTimesheetCtx(ctx) {
     }
   }
 
-  return { row, details, related, state };
+  const policyLike = (value) => !!(
+    value &&
+    typeof value === 'object' &&
+    (
+      Object.prototype.hasOwnProperty.call(value, 'canEditExpenses') ||
+      Object.prototype.hasOwnProperty.call(value, 'canOpenExpenses') ||
+      Object.prototype.hasOwnProperty.call(value, 'expenseStorageTarget') ||
+      Object.prototype.hasOwnProperty.call(value, 'expense_storage_target')
+    )
+  );
+  const editDomains = (() => {
+    const sources = [
+      baseCtx.timesheetEditDomains,
+      baseCtx.editDomains,
+      baseCtx.policy,
+      mc.timesheetEditDomains,
+      mc.editDomains,
+      mc.policy,
+      details.timesheetEditDomains,
+      details.editDomains,
+      details.edit_domains,
+      details.action_flags
+    ];
+    for (const src of sources) {
+      if (policyLike(src)) return src;
+    }
+    return null;
+  })();
+  if (editDomains && !mc.timesheetEditDomains) mc.timesheetEditDomains = editDomains;
+  const expenseStorageTarget = String(
+    editDomains?.expenseStorageTarget ||
+    editDomains?.expense_storage_target ||
+    mc.expenseStorageTarget ||
+    mc.expense_storage_target ||
+    row.expenseStorageTarget ||
+    row.expense_storage_target ||
+    details.expenseStorageTarget ||
+    details.expense_storage_target ||
+    ''
+  ).trim().toUpperCase() || null;
+
+  return {
+    row,
+    details,
+    related,
+    state,
+    policy: editDomains,
+    editDomains,
+    timesheetEditDomains: editDomains,
+    expenseStorageTarget,
+    expense_storage_target: expenseStorageTarget
+  };
 }
+
 
 
 function renderTimesheetEvidenceTab(ctx) {
@@ -303968,7 +304346,39 @@ function timesheetStateSegmentControlsTouched(state) {
 
 
 function timesheetStateExpensesDirty(state) {
-  return hasTimesheetStateFlag(state, [
+  const st = (state && typeof state === 'object') ? state : {};
+  const draft = (st.expensesDraft && typeof st.expensesDraft === 'object') ? st.expensesDraft : null;
+  const baseline = (st.expensesBaseline && typeof st.expensesBaseline === 'object')
+    ? st.expensesBaseline
+    : ((st.expenses_baseline && typeof st.expenses_baseline === 'object') ? st.expenses_baseline : null);
+
+  if (draft && baseline) {
+    try {
+      const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+      const details = mc.timesheetDetails || {};
+      const opts = {
+        row: (mc.data && typeof mc.data === 'object') ? mc.data : {},
+        details,
+        tsfin: (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {},
+        state: st
+      };
+      const dirtyResult = (typeof isTimesheetExpensesDraftDirty === 'function')
+        ? isTimesheetExpensesDraftDirty(draft, baseline, opts)
+        : null;
+      if (dirtyResult && dirtyResult.dirty) return true;
+      const normalise = (value) => {
+        if (typeof normaliseTimesheetExpensesDraft === 'function') {
+          return normaliseTimesheetExpensesDraft(value, opts);
+        }
+        return value || {};
+      };
+      if (JSON.stringify(normalise(draft)) !== JSON.stringify(normalise(baseline))) return true;
+    } catch {
+      try { if (JSON.stringify(draft) !== JSON.stringify(baseline)) return true; } catch { return true; }
+    }
+  }
+
+  return hasTimesheetStateFlag(st, [
     'expensesDirty',
     'expensesDraftDirty',
     'hasStagedExpensesDirty',
@@ -303978,6 +304388,8 @@ function timesheetStateExpensesDirty(state) {
     '__expensesDraftDirty'
   ]);
 }
+
+
 
 
 function timesheetStateEvidenceDirty(state) {
