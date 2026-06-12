@@ -47342,7 +47342,6 @@ function refreshBankingNavAttentionFromCachedRows() {
 }
 
 
-
 function renderPayBatchListPanel() {
   try { installBankingPayBatchTimesheetSummaryShortcut(); } catch {}
   const enc = (typeof escapeHtml === 'function')
@@ -48398,6 +48397,56 @@ function renderPayBatchListPanel() {
     return {};
   };
 
+  const readBatchListIssueNumber = (issueSummary, key) => {
+    if (!isPlainObject(issueSummary)) return 0;
+    const n = Number(issueSummary[key]);
+    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+  };
+
+  const derivePostSettlementCommunicationWarning = (row) => {
+    const batchRow = isPlainObject(row) ? row : {};
+    const displaySummary = parseBatchListJsonObject(batchRow.display_summary || batchRow.displaySummary || batchRow.display_summary_json || batchRow.displaySummaryJson);
+    const issueSummary = parseBatchListJsonObject(
+      batchRow.issue_summary_counts ||
+      batchRow.issueSummaryCounts ||
+      displaySummary.issue_summary_counts ||
+      displaySummary.issueSummaryCounts ||
+      batchRow.issue_summary_json ||
+      batchRow.issueSummaryJson
+    );
+    const status = upperTrim(batchRow.status || batchRow.batch_status || displaySummary.batch_status || displaySummary.batchStatus || '');
+    const executionCommitState = upperTrim(batchRow.execution_commit_state || batchRow.executionCommitState || displaySummary.execution_commit_state || displaySummary.executionCommitState || '');
+    const settledOrCommitted = status === 'SETTLED' || executionCommitState === 'COMMITTED';
+    const postSettlementFlag = readActiveDraftCreateBool(issueSummary.post_settlement_communication_issue, false) || readActiveDraftCreateBool(issueSummary.postSettlementCommunicationIssue, false);
+    const remittanceTerminalFailureCount = readBatchListIssueNumber(issueSummary, 'remittance_operation_failed_count')
+      + readBatchListIssueNumber(issueSummary, 'remittance_requires_user_action_count')
+      + readBatchListIssueNumber(issueSummary, 'remittance_outbox_failed_count');
+    const remittanceFailed = remittanceTerminalFailureCount > 0
+      || (remittanceTerminalFailureCount > 0 && readBatchListIssueNumber(issueSummary, 'remittance_scope_without_outbox_count') > 0);
+    const completionFailed = readBatchListIssueNumber(issueSummary, 'completion_notice_skipped_count') > 0
+      || readBatchListIssueNumber(issueSummary, 'completion_notice_failed_count') > 0
+      || readBatchListIssueNumber(issueSummary, 'completion_notice_due_count') > 0;
+    const genericMailFailure = readBatchListIssueNumber(issueSummary, 'mail_outbox_failed_count') > 0;
+    const hasIssue = settledOrCommitted && (postSettlementFlag || remittanceFailed || completionFailed || genericMailFailure);
+    if (!hasIssue) return { hasIssue: false, label: '', message: '' };
+    const parts = [];
+    if (remittanceFailed) parts.push('remittance failed');
+    if (completionFailed) parts.push('final completion notice skipped/failed');
+    if (!parts.length && genericMailFailure) parts.push('email delivery failed');
+    const message = remittanceFailed && completionFailed
+      ? 'Payment settled, but post-payment communications need attention: remittance failed; final completion notice skipped/failed.'
+      : remittanceFailed
+        ? 'Payment settled, but remittance email failed and needs attention.'
+        : completionFailed
+          ? 'Payment settled, but final payment completion email was skipped/failed.'
+          : 'Payment settled, but post-payment communications need attention.';
+    return {
+      hasIssue: true,
+      label: parts.length > 1 ? 'Comms issues' : 'Comms issue',
+      message
+    };
+  };
+
   const activePaymentExecutionOperationTypes = new Set(['PAYMENT_EXECUTE', 'PAYMENT_RETRY_BLOCKED_FUNDS']);
   const activePaymentExecutionStatuses = new Set([
     'QUEUED', 'RUNNING', 'WAITING', 'RUNNABLE', 'CONTINUING', 'WAITING_RETRY',
@@ -48926,6 +48975,7 @@ function renderPayBatchListPanel() {
 
     const isActive = (id && selectedId && id === selectedId);
     const issueBadge = bankingPayNormaliseBatchIssueBadge(r);
+    const communicationWarning = derivePostSettlementCommunicationWarning(r);
     const cancelMode = (typeof bankingPayResolveBatchCancelMode === 'function')
       ? bankingPayResolveBatchCancelMode(r)
       : '';
@@ -48941,7 +48991,7 @@ function renderPayBatchListPanel() {
     const acknowledgedAlert = r?.banking_alert_acknowledged_for_user === true || issueBadge.acknowledged === true;
     const blockedFundsPublicLabel = String(issueBadge.label || '').trim() || 'Bank unavailable — retry available';
 
-    const issuePillsHtml = hasDraftCreationFailure
+    const baseIssuePillsHtml = hasDraftCreationFailure
       ? ` <span class="pill pill-bad" title="${enc('Draft creation failed and normal draft actions are blocked.')}">${enc('Creation failed')}</span>`
       : hasPaymentOutcome
         ? ''
@@ -48950,6 +49000,10 @@ function renderPayBatchListPanel() {
           : blockedFundsRow
             ? ` <span class="pill pill-warn" title="${enc(blockedFundsReason)}">${enc(blockedFundsPublicLabel === 'Bank unavailable — unsent payments can be retried' ? 'Bank unavailable — retry available' : blockedFundsPublicLabel)}</span>${acknowledgedAlert ? ' <span class="pill" title="This alert has been cleared from your Banking button only.">Cleared from my alerts</span>' : ''}`
             : issueBadges.map((label) => ` <span class="pill">${enc(label)}</span>`).join('');
+    const communicationPillHtml = communicationWarning.hasIssue
+      ? ` <span class="pill pill-warn" title="${enc(communicationWarning.message)}">${enc(communicationWarning.label || 'Comms issue')}</span>`
+      : '';
+    const issuePillsHtml = `${baseIssuePillsHtml}${communicationPillHtml}`;
 
     const pillClass = hasDraftCreationFailure
       ? 'pill-bad'
@@ -49083,14 +49137,14 @@ function renderPayBatchListPanel() {
         ${isActive ? 'class="active"' : ''}
         style="cursor:pointer;"
         data-batch-id="${enc(id)}"
-        data-has-payment-issue="${hasDraftCreationFailure ? '1' : (hasPaymentOutcome ? (paymentOutcome.hasIssues ? '1' : '0') : (issueBadge.hasPaymentIssue || paymentIssuesRequired ? '1' : '0'))}"
-        data-focus-payment-issue-panel="${hasDraftCreationFailure ? '1' : (hasPaymentOutcome ? (paymentOutcome.showCurrentPaymentStatusAction ? '1' : '0') : (issueBadge.focusPaymentIssuePanel || paymentIssuesRequired ? '1' : '0'))}"
+        data-has-payment-issue="${communicationWarning.hasIssue ? '1' : (hasDraftCreationFailure ? '1' : (hasPaymentOutcome ? (paymentOutcome.hasIssues ? '1' : '0') : (issueBadge.hasPaymentIssue || paymentIssuesRequired ? '1' : '0')))}"
+        data-focus-payment-issue-panel="${communicationWarning.hasIssue ? '1' : (hasDraftCreationFailure ? '1' : (hasPaymentOutcome ? (paymentOutcome.showCurrentPaymentStatusAction ? '1' : '0') : (issueBadge.focusPaymentIssuePanel || paymentIssuesRequired ? '1' : '0')))}"
         title="${enc(id)}"
       >
         <td class="mono">${enc(id ? (id.slice(0, 8) + '…') : '')}</td>
         <td>${enc(payDate ? fmtDateOnly(payDate) : '—')}</td>
         <td>${batchKind ? `<span class="pill pill-info" title="Batch kind">${enc(batchKind)}</span>` : `<span class="mini" style="opacity:.75;">—</span>`}</td>
-        <td><span class="pill ${enc(blockedFundsRow ? 'pill-warn' : pillClass)}">${enc(displayStatus)}</span>${authPill}${issuePillsHtml}${blockedFundsReason ? `<div class="mini" style="margin-top:4px;color:#991b1b;font-weight:700;">${enc(blockedFundsReason)}</div>` : ''}${lastFundsChecked && blockedFundsRow ? `<div class="mini" style="margin-top:2px;opacity:.82;">Last funds checked ${enc(lastFundsChecked)}</div>` : ''}</td>
+        <td><span class="pill ${enc(blockedFundsRow ? 'pill-warn' : pillClass)}">${enc(displayStatus)}</span>${authPill}${issuePillsHtml}${blockedFundsReason ? `<div class="mini" style="margin-top:4px;color:#991b1b;font-weight:700;">${enc(blockedFundsReason)}</div>` : ''}${communicationWarning.hasIssue ? `<div class="mini" style="margin-top:4px;color:#92400e;font-weight:700;">${enc(communicationWarning.message)}</div>` : ''}${lastFundsChecked && blockedFundsRow ? `<div class="mini" style="margin-top:2px;opacity:.82;">Last funds checked ${enc(lastFundsChecked)}</div>` : ''}</td>
         <td class="mini">${enc((prov || '—') + (env ? `/${env}` : ''))}</td>
         <td class="mini">${enc(created || '')}</td>
         <td style="white-space:nowrap;">${batchActionsHtml}</td>
@@ -49214,6 +49268,9 @@ function renderPayBatchListPanel() {
     </div>
   `;
 }
+
+
+
 
 
 
@@ -66381,6 +66438,7 @@ async function openBankingNoPaymentCancelConfirmationFlow(ctx = {}) {
 }
 
 
+
 function renderBankingPayBatchChildModalOverview() {
   try { installBankingPayBatchTimesheetSummaryShortcut(); } catch {}
   try { window.__CTMS_OVERVIEW_RUNTIME_PROOF_MARKER = 'renderBankingPayBatchChildModalOverview:overview-draft-not-sent:2026-05-26'; } catch {}
@@ -66996,6 +67054,43 @@ function renderBankingPayBatchChildModalOverview() {
   const env = upperTrim(batch.rail_env_snapshot || batch.rail_env || data.rail_env_snapshot || data.rail_env || '');
   const providerEnvHeader = `${batchKind || 'UNKNOWN'} · ${(provider || '—')}${env ? `/${env}` : ''}`;
   const payDate = trimStr(batch.pay_date || data.pay_date || batch.authoritative_payment_date || data.authoritative_payment_date || '');
+
+  const readIssueSummaryCount = (key) => {
+    const n = Number(issueSummaryCounts[key]);
+    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
+  };
+
+  const postSettlementCommunicationWarning = (() => {
+    const settledOrCommitted = status === 'SETTLED' || upperTrim(batch.execution_commit_state || data.execution_commit_state || displaySummary.execution_commit_state || '') === 'COMMITTED';
+    const remittanceTerminalFailureCount = readIssueSummaryCount('remittance_operation_failed_count')
+      + readIssueSummaryCount('remittance_requires_user_action_count')
+      + readIssueSummaryCount('remittance_outbox_failed_count');
+    const remittanceFailed = remittanceTerminalFailureCount > 0;
+    const completionFailed = readIssueSummaryCount('completion_notice_skipped_count') > 0
+      || readIssueSummaryCount('completion_notice_failed_count') > 0
+      || readIssueSummaryCount('completion_notice_due_count') > 0;
+    const genericMailFailure = readIssueSummaryCount('mail_outbox_failed_count') > 0;
+    const explicitIssue = readBool(issueSummaryCounts.post_settlement_communication_issue || issueSummaryCounts.postSettlementCommunicationIssue);
+    const hasIssue = settledOrCommitted && (explicitIssue || remittanceFailed || completionFailed || genericMailFailure);
+    if (!hasIssue) return { hasIssue: false, message: '' };
+    const message = remittanceFailed && completionFailed
+      ? 'Payment settled, but post-payment communications need attention: remittance failed; final completion notice skipped/failed.'
+      : remittanceFailed
+        ? 'Payment settled, but remittance email failed and needs attention.'
+        : completionFailed
+          ? 'Payment settled, but final payment completion email was skipped/failed.'
+          : 'Payment settled, but post-payment communications need attention.';
+    return { hasIssue: true, message };
+  })();
+
+  const postSettlementCommunicationWarningHtml = postSettlementCommunicationWarning.hasIssue
+    ? `
+      <div class="card" style="padding:12px;border:1px solid #f59e0b;background:#fffbeb;color:#78350f;">
+        <div style="font-weight:900;margin-bottom:4px;">Post-payment communication issue</div>
+        <div class="mini" style="font-weight:700;">${enc(postSettlementCommunicationWarning.message)}</div>
+      </div>
+    `
+    : '';
 
   const normalisePaymentStatusDisplayLabel = (value) => {
     const raw = trimStr(value);
@@ -68681,6 +68776,7 @@ function renderBankingPayBatchChildModalOverview() {
                 </div>
               </div>
               ${batchOutcomeHtml}
+              ${postSettlementCommunicationWarningHtml}
               ${providerSubmitOverviewHtml}
               ${webhookEvidenceHtml}
               ${liveProgressHtml}
@@ -68844,6 +68940,7 @@ function renderBankingPayBatchChildModalOverview() {
             </div>
 
             ${batchOutcomeHtml}
+            ${postSettlementCommunicationWarningHtml}
             ${providerSubmitOverviewHtml}
             ${webhookEvidenceHtml}
             ${liveProgressHtml}
@@ -68874,6 +68971,10 @@ function renderBankingPayBatchChildModalOverview() {
     </div>
   `;
 }
+
+
+
+
 
 
 
