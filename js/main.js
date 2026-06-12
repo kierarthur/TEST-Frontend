@@ -173261,11 +173261,14 @@ function bindBulkProcessPreviewPane(state) {
       const sourceLabel = upper(raw.source_label || raw.source_badge || raw.source || meta.source_label || meta.source_badge || '');
       const queueIdentity = trimStr(raw.queue_id || raw.queueId || raw.manual_timesheet_queue_id || raw.manualTimesheetQueueId || raw.manual_queue_id || raw.manualQueueId || meta.queue_id || meta.queueId || meta.manual_timesheet_queue_id || meta.manualTimesheetQueueId || meta.manual_queue_id || meta.manualQueueId || '');
       const staged = !!(
-        raw.is_staged_context === true ||
-        sourceLabel === 'STAGED' ||
-        upper(raw.status || raw.queue_status || meta.status || '') === 'STAGED' ||
-        trimStr(raw.staged_kind || raw.stagedKind || meta.staged_kind || meta.stagedKind || '') ||
-        (contractWeekId && !timesheetId && queueIdentity)
+        activeIsContractWeekOnly &&
+        (
+          raw.is_staged_context === true ||
+          sourceLabel === 'STAGED' ||
+          upper(raw.status || raw.queue_status || meta.status || '') === 'STAGED' ||
+          trimStr(raw.staged_kind || raw.stagedKind || meta.staged_kind || meta.stagedKind || '') ||
+          (contractWeekId && !timesheetId && queueIdentity)
+        )
       );
       const rowKey = trimStr(raw.row_key || raw.rowKey || meta.row_key || meta.rowKey || '');
       if (staged) {
@@ -174080,7 +174083,7 @@ function bindBulkProcessPreviewPane(state) {
     if (!item || !resolvePreviewFileCacheKey(item)) return false;
     const activeRowKey = trimStr(getPreviewActiveRowKey() || getActiveIdentity() || st.active_row_key || st.active_row?.row_key || '');
     const itemRowKey = getBulkProcessAttachedPreviewItemRowKey(item);
-    if (activeRowKey && itemRowKey) return activeRowKey === itemRowKey;
+    if (activeRowKey && itemRowKey && activeRowKey === itemRowKey) return true;
 
     const activeTimesheetId = trimStr(
       st.active_row?.timesheet_id ||
@@ -179682,6 +179685,45 @@ function renderBulkProcessEvidencePane(state) {
     pane.__evidence_loaded = true;
   }
 
+  const reconcileAttachedPreviewSelectionForRender = () => {
+    if (renderIsBulkAuthoriseContext || activeTab !== 'attached') return;
+    const rows = (Array.isArray(attachedRows) ? attachedRows : []).filter((item) => !!getRenderEvidenceFileKey(item));
+    if (!rows.length) return;
+    const selectionKeyFor = (item) => normaliseRenderAttachedSelectionKey(buildRenderAttachedSelectionKey(item || {}) || item?.__attached_selection_key || '');
+    const fileKeyFor = (item) => trimStr(getRenderEvidenceFileKey(item || '') || '');
+    const idFor = (item) => getRenderAttachedId(item || {}) || fileKeyFor(item) || '';
+    const activeItem = (pane.active_attached_item && typeof pane.active_attached_item === 'object') ? pane.active_attached_item : null;
+    const activeItemFileKey = fileKeyFor(activeItem);
+    const preferredKeys = Array.from(new Set([
+      normaliseRenderAttachedSelectionKey(pane.__active_attached_preview_target || ''),
+      normaliseRenderAttachedSelectionKey(pane.__preview_target_key || ''),
+      normaliseRenderAttachedSelectionKey(pane.__preview_load_requested_target_key || ''),
+      selectionKeyFor(activeItem)
+    ].filter(Boolean)));
+    let selected = null;
+    for (const key of preferredKeys) {
+      selected = rows.find((item) => selectionKeyFor(item) === key) || null;
+      if (selected) break;
+    }
+    if (!selected && activeItemFileKey) selected = rows.find((item) => fileKeyFor(item) === activeItemFileKey) || null;
+    if (!selected) selected = rows[0] || null;
+    const selectedKey = selectionKeyFor(selected);
+    const selectedFileKey = fileKeyFor(selected);
+    const selectedId = idFor(selected);
+    if (!selected || !selectedKey || !selectedFileKey || !selectedId) return;
+    const currentKey = selectionKeyFor(activeItem);
+    const needsSelectionUpdate = !activeItem || currentKey !== selectedKey || activeItemFileKey !== selectedFileKey || trimStr(pane.active_attached_id || '') !== selectedId;
+    if (needsSelectionUpdate) {
+      pane.active_attached_id = selectedId;
+      pane.active_attached_item = { ...(selected || {}) };
+      pane.active_attached_pdf_page = 1;
+    }
+    pane.__active_attached_preview_target = selectedKey;
+    pane.__preview_target_key = selectedKey;
+    pane.__preview_load_requested_target_key = selectedKey;
+  };
+  reconcileAttachedPreviewSelectionForRender();
+
   const allKinds = ['TIMESHEET', 'MILEAGE', 'TRAVEL', 'ACCOMMODATION', 'OTHER'];
   const evidenceDomainPolicy = (() => {
     if (typeof classifyTimesheetEditDomains !== 'function') return null;
@@ -179841,7 +179883,7 @@ function renderBulkProcessEvidencePane(state) {
         <div style="display:flex;gap:5px;align-items:center;justify-content:flex-start;flex-wrap:wrap;">
           <button type="button" class="btn btn-outline" id="bpQueuePrevBtn" ${queueLoadedForScope && !queueLoading && activeQueueItem ? '' : 'disabled'}>Previous</button>
           <button type="button" class="btn btn-outline" id="bpQueueNextBtn" ${queueLoadedForScope && !queueLoading && activeQueueItem ? '' : 'disabled'}>Next</button>
-          <span class="mini" style="opacity:.85;">Images in Queue - ${enc(queueCountLabel)}</span>
+          <span class="mini" style="opacity:.85;">${activeTab === 'attached' ? `Attached evidence - ${enc(String(attachedRows.length || 0))}` : `Images in Queue - ${enc(queueCountLabel)}`}</span>
         </div>
         <div role="tablist" aria-label="Evidence source" style="display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;">
           <button type="button" role="tab" class="${sourceBtnClass(activeTab === 'queue')}" style="${sourceBtnStyle(activeTab === 'queue')}" id="bulkProcessEvidenceTabQueue" ${sourceBtnStateAttrs(activeTab === 'queue')}>QUEUE</button>
