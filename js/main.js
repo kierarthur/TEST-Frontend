@@ -49269,6 +49269,213 @@ function renderPayBatchListPanel() {
   `;
 }
 
+function deriveTimesheetModalInvoicingState(ctx) {
+  const src = (ctx && typeof ctx === 'object') ? ctx : {};
+  const row = (src.row && typeof src.row === 'object') ? src.row : {};
+  const details = (src.details && typeof src.details === 'object') ? src.details : {};
+  const related = (src.related && typeof src.related === 'object') ? src.related : {};
+  const tsfin = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
+
+  const trim = (v) => String(v == null ? '' : v).trim();
+  const upper = (v) => trim(v).toUpperCase();
+  const own = (obj, key) => !!(obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key));
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const parseObject = (value) => {
+    if (!value) return null;
+    if (typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      const raw = value.trim();
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+      } catch {}
+    }
+    return null;
+  };
+
+  const invoiceBreakdown = (() => {
+    const candidates = [
+      details.invoiceBreakdown,
+      details.invoice_breakdown_json,
+      tsfin.invoice_breakdown_json,
+      row.invoiceBreakdown,
+      row.invoice_breakdown_json
+    ];
+    for (const candidate of candidates) {
+      const parsed = parseObject(candidate);
+      if (parsed) return parsed;
+    }
+    return null;
+  })();
+
+  const invoiceNoById = (() => {
+    const out = Object.create(null);
+    const add = (idRaw, noRaw) => {
+      const id = trim(idRaw);
+      const no = trim(noRaw);
+      if (id && no && !out[id]) out[id] = no;
+    };
+
+    const maps = [
+      related.invoice_no_by_invoice_id,
+      details.invoice_no_by_invoice_id,
+      row.invoice_no_by_invoice_id
+    ];
+    for (const map of maps) {
+      if (!map || typeof map !== 'object') continue;
+      for (const [id, no] of Object.entries(map)) add(id, no);
+    }
+
+    const invoiceRows = [];
+    if (Array.isArray(related.invoices)) invoiceRows.push(...related.invoices);
+    if (related.invoice && typeof related.invoice === 'object') invoiceRows.push(related.invoice);
+    if (Array.isArray(details.invoices)) invoiceRows.push(...details.invoices);
+    for (const inv of invoiceRows) {
+      if (!inv || typeof inv !== 'object') continue;
+      add(inv.invoice_id || inv.id, inv.invoice_no || inv.number || inv.invoice_number);
+    }
+
+    add(row.locked_by_invoice_id || tsfin.locked_by_invoice_id, row.locked_by_invoice_number || row.locked_invoice_number || tsfin.locked_by_invoice_number);
+    return out;
+  })();
+
+  const segmentRows = (() => {
+    const sources = [
+      Array.isArray(invoiceBreakdown?.segments) ? invoiceBreakdown.segments : null,
+      Array.isArray(details.invoiceBreakdown?.segments) ? details.invoiceBreakdown.segments : null,
+      Array.isArray(details.segments) ? details.segments : null
+    ];
+    for (const arr of sources) {
+      if (Array.isArray(arr) && arr.length) return arr.filter(x => x && typeof x === 'object');
+    }
+    return [];
+  })();
+
+  const invoiceIdsSet = new Set();
+  const wholeInvoiceId = trim(
+    tsfin.locked_by_invoice_id ||
+    details.locked_by_invoice_id ||
+    details.timesheet?.locked_by_invoice_id ||
+    row.locked_by_invoice_id ||
+    ''
+  );
+  if (wholeInvoiceId) invoiceIdsSet.add(wholeInvoiceId);
+
+  const issueStage = upper(
+    details.invoice_issue_stage ||
+    tsfin.invoice_issue_stage ||
+    row.invoice_issue_stage ||
+    details.locked_invoice_status ||
+    tsfin.locked_invoice_status ||
+    row.locked_invoice_status ||
+    ''
+  );
+
+  const lockedInvoiceStatus = upper(
+    details.locked_invoice_status ||
+    tsfin.locked_invoice_status ||
+    row.locked_invoice_status ||
+    ''
+  );
+
+  const paidStatus = new Set(['PAID', 'INVOICE_PAID', 'INVOICED_PAID']);
+  const issuedStatus = new Set(['ISSUED', 'INVOICED_ISSUED', 'PAID', 'INVOICE_PAID', 'INVOICED_PAID']);
+  const notIssuedStatus = new Set(['NOT_ISSUED', 'INVOICED_NOT_ISSUED', 'UNISSUED', 'DRAFT', 'CREATED']);
+
+  const statusIsPaid = paidStatus.has(lockedInvoiceStatus) || paidStatus.has(issueStage);
+  const statusIsIssued = issuedStatus.has(lockedInvoiceStatus) || issuedStatus.has(issueStage);
+  const statusIsNotIssued = notIssuedStatus.has(lockedInvoiceStatus) || notIssuedStatus.has(issueStage);
+
+  let totalSegments = null;
+  let lockedSegments = null;
+  let unlockedSegments = null;
+
+  if (segmentRows.length) {
+    totalSegments = segmentRows.length;
+    lockedSegments = 0;
+    for (const seg of segmentRows) {
+      const invoiceId = trim(
+        seg.invoice_locked_invoice_id ||
+        seg.locked_by_invoice_id ||
+        seg.invoice_id ||
+        ''
+      );
+      if (invoiceId) {
+        lockedSegments += 1;
+        invoiceIdsSet.add(invoiceId);
+      }
+    }
+    unlockedSegments = Math.max(0, totalSegments - lockedSegments);
+  } else {
+    const totalFromSummary = num(details.invoice_segments_total ?? row.invoice_segments_total);
+    const lockedFromSummary = num(details.invoice_segments_locked ?? row.invoice_segments_locked);
+    const unlockedFromSummary = num(details.invoice_segments_unlocked ?? row.invoice_segments_unlocked);
+
+    if (totalFromSummary != null && totalFromSummary > 0) totalSegments = totalFromSummary;
+    if (lockedFromSummary != null && lockedFromSummary >= 0) lockedSegments = lockedFromSummary;
+    if (unlockedFromSummary != null && unlockedFromSummary >= 0) unlockedSegments = unlockedFromSummary;
+    if (totalSegments != null && lockedSegments != null && unlockedSegments == null) {
+      unlockedSegments = Math.max(0, totalSegments - lockedSegments);
+    }
+  }
+
+  const segStage = upper(details.invoice_segment_stage || row.invoice_segment_stage || '');
+  const hasAnySegmentLock = !!(lockedSegments != null && lockedSegments > 0);
+  const hasAnyInvoiceLock = !!(wholeInvoiceId || hasAnySegmentLock || segStage === 'PARTIALLY_INVOICED' || segStage === 'FULLY_INVOICED');
+  const hasWholeInvoiceLock = !!wholeInvoiceId;
+
+  let state = 'NOT_INVOICED';
+
+  if (statusIsPaid && (wholeInvoiceId || hasAnyInvoiceLock)) {
+    state = 'INVOICE_PAID';
+  } else if (wholeInvoiceId) {
+    if (statusIsIssued) state = 'INVOICED_ISSUED';
+    else if (statusIsNotIssued) state = 'INVOICED_NOT_ISSUED';
+    else state = 'WHOLE_INVOICED';
+  } else if (totalSegments != null && totalSegments > 0 && lockedSegments != null) {
+    if (lockedSegments <= 0) {
+      state = 'NOT_INVOICED';
+    } else if (lockedSegments < totalSegments) {
+      state = 'PARTIALLY_INVOICED';
+    } else {
+      if (statusIsIssued) state = 'INVOICED_ISSUED';
+      else if (statusIsNotIssued) state = 'INVOICED_NOT_ISSUED';
+      else state = 'FULLY_INVOICED';
+    }
+  } else if (segStage === 'PARTIALLY_INVOICED') {
+    state = 'PARTIALLY_INVOICED';
+  } else if (segStage === 'FULLY_INVOICED') {
+    if (statusIsIssued) state = 'INVOICED_ISSUED';
+    else if (statusIsNotIssued) state = 'INVOICED_NOT_ISSUED';
+    else state = 'FULLY_INVOICED';
+  } else if (segStage === 'NOT_INVOICED') {
+    state = 'NOT_INVOICED';
+  } else if (!own(row, 'invoice_segment_stage') && !own(details, 'invoice_segment_stage') && !wholeInvoiceId && totalSegments == null) {
+    state = 'UNKNOWN';
+  }
+
+  const invoiceIds = Array.from(invoiceIdsSet).filter(Boolean);
+
+  return {
+    state,
+    hasAnyInvoiceLock,
+    hasWholeInvoiceLock,
+    totalSegments: totalSegments == null ? 0 : totalSegments,
+    lockedSegments: lockedSegments == null ? 0 : lockedSegments,
+    unlockedSegments: unlockedSegments == null ? 0 : unlockedSegments,
+    invoiceIds,
+    invoiceNoById,
+    issueStage,
+    lockedInvoiceStatus,
+    segmentStage: segStage,
+    wholeInvoiceId: wholeInvoiceId || null
+  };
+}
 
 
 
@@ -258470,8 +258677,6 @@ function deriveTimesheetInvoicingDisplay(row) {
   return 'INVOICED_NOT_ISSUED';
 }
 
-
-
 function renderTimesheetLinesTab(ctx) {
     const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -258694,9 +258899,15 @@ function renderTimesheetLinesTab(ctx) {
     return invNo ? `✅ Invoiced – ${invNo}` : '✅ Invoiced';
   };
 
+  const renderLineInvoiceMarkerHtml = (invoiceId, fallbackHint) => {
+    const hint = String(fallbackHint || (invoiceId ? fmtInvoiceHint(invoiceId) : '') || '').trim();
+    if (!hint) return '';
+    return `<span class="mini" title="${esc(hint)}">✓ Invoiced</span>`;
+  };
+
   // ✅ NEW: whole-timesheet invoice hint (single invoice id used for all lines)
   // Only show when the timesheet is actually locked to an invoice id.
-  const wholeInvoiceId = String(tsfin?.locked_by_invoice_id || '').trim();
+  const wholeInvoiceId = String(tsfin?.locked_by_invoice_id || details?.locked_by_invoice_id || row?.locked_by_invoice_id || '').trim();
   const wholeInvoiceHint = wholeInvoiceId ? fmtInvoiceHint(wholeInvoiceId) : '';
 
   const isNhspOrHrSelfBillBasis = [
@@ -259058,6 +259269,12 @@ function renderTimesheetLinesTab(ctx) {
       const rowStyle = rowIsFlagged ? ` style="background: rgba(192, 57, 43, 0.18);"` : '';
 
       const disabledExcludeAttr = (disabledAttr || lockedInvoiceId) ? 'disabled' : '';
+      const segmentInvoiceMarkerHtml = lockedInvoiceId
+        ? renderLineInvoiceMarkerHtml(lockedInvoiceId)
+        : (wholeInvoiceHint ? renderLineInvoiceMarkerHtml('', wholeInvoiceHint) : '');
+      const dateCellWithInvoiceHtml = segmentInvoiceMarkerHtml
+        ? `${dateCellHtml}<br>${segmentInvoiceMarkerHtml}`
+        : dateCellHtml;
 
       const startEnd = pickSegStartEnd(seg);
       const brMins = pickSegBreakMins(seg);
@@ -259065,7 +259282,7 @@ function renderTimesheetLinesTab(ctx) {
       if (!showSegmentsTimeView) {
          return `
           <tr data-segment-id="${seg.segment_id}"${rowStyle}>
-            <td>${dateCellHtml}</td>
+            <td>${dateCellWithInvoiceHtml}</td>
             <td>
               ${ref ? `<span class="mini">Ref: ${esc(ref)}</span>` : ''}
               ${reqId ? `<br><span class="mini">Req: ${esc(reqId)}</span>` : ''}
@@ -259094,7 +259311,7 @@ function renderTimesheetLinesTab(ctx) {
 
       return `
         <tr data-segment-id="${seg.segment_id}"${rowStyle}>
-          <td>${dateCellHtml}</td>
+          <td>${dateCellWithInvoiceHtml}</td>
           <td>
             ${ref ? `<span class="mini">Ref: ${esc(ref)}</span>` : ''}
             ${reqId ? `<br><span class="mini">Req: ${esc(reqId)}</span>` : ''}
@@ -259199,6 +259416,7 @@ function renderTimesheetLinesTab(ctx) {
       renderPayStatePill,
       invoiceNoById,
       wholeInvoiceHint,
+      fmtInvoiceHint,
       esc,
       fmtYmdDmy,
       enableWeeklyLineActions: true
@@ -260955,6 +261173,9 @@ function renderTimesheetLinesTab(ctx) {
     </div>
   `;
 }
+
+
+
 
 async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUTH]');
@@ -280022,352 +280243,44 @@ bindSave(btnSave, top);
   renderTop();
 }
 
-
-
 function ensureTsRefreshAndRepaintOverview() {
   if (typeof window.__tsRefreshAndRepaintOverview === 'function') {
     return window.__tsRefreshAndRepaintOverview;
   }
 
   window.__tsRefreshAndRepaintOverview = async function(tsTabKey, forcedTsId) {
-    const mc = window.modalCtx || {};
+    const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : {};
+    const openToken = String(mc.openToken || '').trim();
 
-    try {
-      if (!mc.__summaryCtx && typeof captureSummaryContextForModalOpen === 'function') {
-        mc.__summaryCtx = captureSummaryContextForModalOpen();
-      }
-    } catch {}
-
-    const forcedId = String(forcedTsId || '').trim() || null;
-
-    const initialTsId =
-      forcedId ||
-      mc.data?.timesheet_id ||
-      mc.timesheetDetails?.current_timesheet_id ||
-      mc.timesheetDetails?.timesheet?.timesheet_id ||
-      null;
-
-    const initialWeekId =
-      mc.data?.contract_week_id ||
-      mc.timesheetDetails?.contract_week_id ||
-      mc.timesheetDetails?.contract_week?.id ||
-      null;
-
-    let finalTsId = initialTsId ? String(initialTsId) : null;
-    let finalWeekId = initialWeekId ? String(initialWeekId) : null;
-
-    try {
-      if (finalTsId && typeof fetchTimesheetDetails === 'function') {
-        const fresh = await fetchTimesheetDetails(finalTsId);
-
-        const movedId = fresh?.current_timesheet_id ? String(fresh.current_timesheet_id) : null;
-        const resolvedTsId =
-          movedId ||
-          (fresh?.timesheet?.timesheet_id ? String(fresh.timesheet.timesheet_id) : null) ||
-          finalTsId;
-
-        const resolvedWeekId =
-          fresh?.contract_week_id ? String(fresh.contract_week_id) :
-          (fresh?.contract_week?.id ? String(fresh.contract_week.id) : finalWeekId);
-
-        const ts = (fresh?.timesheet && typeof fresh.timesheet === 'object') ? fresh.timesheet : {};
-        const cw = (fresh?.contract_week && typeof fresh.contract_week === 'object') ? fresh.contract_week : {};
-        const tsfin = (fresh?.tsfin && typeof fresh.tsfin === 'object') ? fresh.tsfin : {};
-
-        if (
-          resolvedTsId &&
-          String(mc.data?.id || mc.data?.timesheet_id || '') !== String(resolvedTsId) &&
-          typeof tsModalAdoptTimesheetId === 'function'
-        ) {
-          await tsModalAdoptTimesheetId(resolvedTsId, { refreshDetails: false });
-        }
-
-        mc.timesheetDetails = fresh;
-
-        mc.data = {
-          ...(mc.data || {}),
-          id: resolvedTsId || resolvedWeekId || mc.data?.id || null,
-          timesheet_id: resolvedTsId || null,
-          contract_week_id: resolvedWeekId || null,
-          submission_mode: String(ts.submission_mode || mc.data?.submission_mode || '').toUpperCase(),
-          submission_mode_snapshot: String(
-            cw.submission_mode_snapshot ||
-            fresh?.cw_submission_mode_snapshot ||
-            mc.data?.submission_mode_snapshot ||
-            ''
-          ).toUpperCase(),
-          authorised_at_server: ts.authorised_at_server || null,
-          paid_at_utc: tsfin.paid_at_utc || null,
-          locked_by_invoice_id: tsfin.locked_by_invoice_id || null
-        };
-
-        mc.timesheetMeta = (mc.timesheetMeta && typeof mc.timesheetMeta === 'object') ? mc.timesheetMeta : {};
-
-        const sheetScope =
-          String(fresh?.sheet_scope || ts.sheet_scope || mc.data?.sheet_scope || '').toUpperCase();
-
-        const cwModeSnapshot =
-          String(
-            cw.submission_mode_snapshot ||
-            fresh?.cw_submission_mode_snapshot ||
-            mc.data?.submission_mode_snapshot ||
-            ''
-          ).toUpperCase();
-
-        const hasTsNow = !!resolvedTsId;
-
-        const subModeTs =
-          String(ts.submission_mode || mc.data?.submission_mode || '').toUpperCase();
-
-        const subModeEff =
-          hasTsNow ? subModeTs : (cwModeSnapshot || '');
-
-        const hasWeekNow =
-          !!(resolvedWeekId || cw.id || fresh?.contract_week_id);
-
-        mc.timesheetMeta.sheetScope = sheetScope;
-        mc.timesheetMeta.subMode = subModeEff;
-        mc.timesheetMeta.cw_submission_mode_snapshot = cwModeSnapshot;
-        mc.timesheetMeta.hasTs = hasTsNow;
-        mc.timesheetMeta.isPlannedWeek = (!hasTsNow && hasWeekNow);
-        mc.timesheetMeta.isPaid = !!(tsfin.paid_at_utc || mc.data?.paid_at_utc);
-        mc.timesheetMeta.isInvoiced = !!(tsfin.locked_by_invoice_id || mc.data?.locked_by_invoice_id);
-        mc.timesheetMeta.isLocked = !!(tsfin.paid_at_utc || tsfin.locked_by_invoice_id);
-        mc.timesheetMeta.expected_timesheet_id = resolvedTsId || null;
-        mc.timesheetMeta.contract_week_id = resolvedWeekId || null;
-
-        finalTsId = resolvedTsId || null;
-        finalWeekId = resolvedWeekId || null;
-      } else if (!finalTsId && finalWeekId) {
-        try {
-          if (typeof authFetch === 'function' && typeof API === 'function') {
-            const qs = new URLSearchParams();
-
-            const contractId =
-              mc.data?.contract_id ||
-              mc.timesheetDetails?.contract_week?.contract_id ||
-              null;
-
-            if (contractId) qs.set('contract_id', contractId);
-
-            const we =
-              mc.data?.contract_week_ending_date ||
-              mc.data?.week_ending_date ||
-              mc.timesheetDetails?.contract_week?.week_ending_date ||
-              null;
-
-            if (we) {
-              qs.set('week_ending_from', we);
-              qs.set('week_ending_to', we);
-            }
-
-            qs.set('include_plan', 'true');
-
-            const res = await authFetch(API(`/api/contract-weeks?${qs.toString()}`));
-
-            let rows = [];
-            try {
-              if (typeof toList === 'function') rows = await toList(res);
-              else rows = await res.json();
-            } catch { rows = []; }
-
-            const cwFound =
-              (rows || []).find(w => String(w.id) === String(finalWeekId)) ||
-              (rows || [])[0] ||
-              null;
-
-            const existingDetails = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
-            const existingWeek = (existingDetails.contract_week && typeof existingDetails.contract_week === 'object')
-              ? existingDetails.contract_week
-              : {};
-
-            const snap =
-              String(
-                cwFound?.submission_mode_snapshot ||
-                existingWeek.submission_mode_snapshot ||
-                mc.data?.submission_mode_snapshot ||
-                ''
-              ).toUpperCase();
-
-            const detSheetScope =
-              String(
-                existingDetails.sheet_scope ||
-                mc.data?.sheet_scope ||
-                existingDetails.timesheet?.sheet_scope ||
-                ''
-              ).toUpperCase();
-
-            mc.timesheetDetails = {
-              ...existingDetails,
-              contract_week: {
-                ...existingWeek,
-                ...(cwFound && typeof cwFound === 'object' ? cwFound : {}),
-                id: finalWeekId
-              },
-              contract_week_id: finalWeekId,
-              timesheet: null,
-              tsfin: null,
-              current_timesheet_id: null,
-              requested_timesheet_id: null,
-              qr_status: null,
-              qr_generated_at: null,
-              qr_scanned_at: null,
-              qr_r2_key: null,
-              manual_pdf_r2_key: null,
-              cw_submission_mode_snapshot: snap
-            };
-
-            mc.data = {
-              ...(mc.data || {}),
-              ...(cwFound && typeof cwFound === 'object' ? cwFound : {}),
-              id: finalWeekId,
-              contract_week_id: finalWeekId,
-              timesheet_id: null,
-              submission_mode: '',
-              submission_mode_snapshot: snap,
-              processing_status: null,
-              ready_to_pay: null,
-              paid_at_utc: null,
-              locked_by_invoice_id: null,
-              locked_by_invoice_number: null,
-              total_hours: null,
-              total_pay_ex_vat: null,
-              total_charge_ex_vat: null,
-              margin_ex_vat: null,
-              pay_on_hold: null,
-              authorised_at_server: null,
-              is_qr: false,
-              qr_status: null
-            };
-
-            mc.timesheetMeta = (mc.timesheetMeta && typeof mc.timesheetMeta === 'object') ? mc.timesheetMeta : {};
-            mc.timesheetMeta.sheetScope = detSheetScope;
-            mc.timesheetMeta.subMode = snap;
-            mc.timesheetMeta.cw_submission_mode_snapshot = snap;
-            mc.timesheetMeta.hasTs = false;
-            mc.timesheetMeta.isPlannedWeek = true;
-            mc.timesheetMeta.isPaid = false;
-            mc.timesheetMeta.isInvoiced = false;
-            mc.timesheetMeta.isLocked = false;
-            mc.timesheetMeta.expected_timesheet_id = null;
-            mc.timesheetMeta.contract_week_id = finalWeekId;
-          }
-        } catch {}
-      }
-    } catch (e) {
-      console.warn('[TS][REFRESH] details refresh failed', e);
+    if (
+      openToken &&
+      mc.entity === 'timesheets' &&
+      typeof refreshTimesheetModalAfterLifecycleAction === 'function' &&
+      isActiveTimesheetModalToken(openToken)
+    ) {
+      return await refreshTimesheetModalAfterLifecycleAction(openToken, {
+        tabKey: tsTabKey || undefined,
+        timesheetId: forcedTsId || undefined,
+        source: 'ensureTsRefreshAndRepaintOverview'
+      });
     }
 
     try {
-      if (typeof hydrateTimesheetEditStateFromDetails === 'function') {
-        await hydrateTimesheetEditStateFromDetails(
-          (mc && mc.timesheetDetails) ? mc.timesheetDetails : {},
-          mc
-        );
-      }
-    } catch (e) {
-      console.warn('[TS][HYDRATE] refresh hydration failed (non-fatal)', e);
-    }
-
-    try {
-      const summaryTsId =
-        mc.data?.timesheet_id ||
-        finalTsId ||
-        null;
-
-      const summaryWeekId =
-        (!summaryTsId)
-          ? (
-              mc.data?.contract_week_id ||
-              finalWeekId ||
-              null
-            )
-          : null;
-
-      if (summaryTsId && typeof refreshTimesheetsSummaryAfterRotation === 'function') {
-        await refreshTimesheetsSummaryAfterRotation(summaryTsId);
-      } else if (summaryWeekId && typeof refreshContractWeekSummaryAfterPlannedChange === 'function') {
-        await refreshContractWeekSummaryAfterPlannedChange(summaryWeekId, mc.__summaryCtx || null);
+      if (forcedTsId && typeof refreshTimesheetsSummaryAfterRotation === 'function') {
+        await refreshTimesheetsSummaryAfterRotation(String(forcedTsId), { allowRenderAll: true, skipTabRefresh: true });
+      } else if (typeof renderAll === 'function') {
+        await renderAll();
       }
     } catch {}
 
-    try {
-      const id3 = mc.data?.timesheet_id || finalTsId || null;
-      if (id3 && typeof refreshTimesheetEvidenceListAndUi === 'function') {
-        await refreshTimesheetEvidenceListAndUi(id3);
-      }
-    } catch {}
-
-    let didSummaryPatch = false;
-    try {
-      const ctx = mc.__summaryCtx || null;
-
-      const fetchId =
-        mc.data?.timesheet_id ||
-        finalTsId ||
-        null;
-
-      const plannedWeekId =
-        (!fetchId)
-          ? (
-              mc.data?.contract_week_id ||
-              finalWeekId ||
-              null
-            )
-          : null;
-
-      if (
-        fetchId &&
-        ctx &&
-        typeof isSummaryContextStillActive === 'function' &&
-        typeof summaryFetchCanonicalRow === 'function' &&
-        typeof summaryApplySavedRecordToActiveSummary === 'function'
-      ) {
-        if (isSummaryContextStillActive(ctx)) {
-          let canonical = await summaryFetchCanonicalRow('timesheets', fetchId, ctx);
-
-          if (canonical && typeof normalizeSavedRecordForSummary === 'function') {
-            canonical = normalizeSavedRecordForSummary('timesheets', canonical) || canonical;
-          }
-
-          if (canonical && typeof canonical === 'object') {
-            try {
-              mc.data = { ...(mc.data || {}), ...(canonical || {}) };
-            } catch {}
-
-            const r = await summaryApplySavedRecordToActiveSummary('timesheets', canonical, ctx);
-            didSummaryPatch = !!(r && r.ok);
-          }
-        }
-      } else if (plannedWeekId && typeof refreshContractWeekSummaryAfterPlannedChange === 'function') {
-        const plannedRefreshResult = await refreshContractWeekSummaryAfterPlannedChange(plannedWeekId, ctx);
-        didSummaryPatch = !!(plannedRefreshResult && plannedRefreshResult.ok);
-      }
-    } catch (e) {
-      console.warn('[SUMMARY][TS] summary patch failed (will fall back to renderAll)', e);
-      didSummaryPatch = false;
-    }
-
-    if (!didSummaryPatch) {
-      try { await renderAll(); } catch {}
-    }
-
-    try {
-      const fr = (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null;
-      if (fr && fr.entity === 'timesheets') {
-        fr.mode = 'view';
-        fr.hasId = !!(forcedId || mc.data?.timesheet_id || finalTsId);
-        fr._suppressDirty = true;
-        const k = tsTabKey || fr.currentTabKey || 'overview';
-        await fr.setTab(k);
-        fr._suppressDirty = false;
-        fr._updateButtons && fr._updateButtons();
-      }
-    } catch {}
+    return false;
   };
 
   return window.__tsRefreshAndRepaintOverview;
 }
+
+
+
 
 async function applyTimesheetDeleteImpactToSummary(opts = {}) {
   const entity = String(opts.entity || 'timesheets');
@@ -302013,7 +301926,6 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
 
 
 
-
 function renderTimesheetOverviewTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OVERVIEW]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -302037,6 +301949,26 @@ function renderTimesheetOverviewTab(ctx) {
 
   const policy = (details && details.policy && typeof details.policy === 'object') ? details.policy : {};
 
+  const hydration = (
+    (ctx && ctx.hydration && typeof ctx.hydration === 'object')
+      ? ctx.hydration
+      : ((window.modalCtx && window.modalCtx.timesheetHydration && typeof window.modalCtx.timesheetHydration === 'object')
+          ? window.modalCtx.timesheetHydration
+          : {})
+  );
+  const detailsArePlaceholder = !!(details && (details.__placeholder || details.__loading));
+  const detailsLoading = !!(
+    detailsArePlaceholder ||
+    (hydration.fastOpen === true && hydration.detailsLoaded !== true && !hydration.detailsError)
+  );
+  const hasOwnNonBlank = (obj, key) => !!(
+    obj &&
+    typeof obj === 'object' &&
+    Object.prototype.hasOwnProperty.call(obj, key) &&
+    obj[key] != null &&
+    String(obj[key]).trim() !== ''
+  );
+
   const boolish = (v) => {
     if (v === true) return true;
     if (v === false) return false;
@@ -302057,23 +301989,39 @@ function renderTimesheetOverviewTab(ctx) {
     boolish(row?.bulk_authorise_mode)
   );
 
-  const sheetScope = (
+  const sheetScopeRawForOverview = (
     details.sheet_scope ||
     ts.sheet_scope ||
     baseSummary.sheet_scope ||
     row.sheet_scope ||
     ''
-  ).toUpperCase();
+  );
+  const hasExplicitScopeSummary = !!(
+    (!detailsArePlaceholder && (hasOwnNonBlank(details, 'sheet_scope') || hasOwnNonBlank(ts, 'sheet_scope'))) ||
+    hasOwnNonBlank(baseSummary, 'sheet_scope') ||
+    hasOwnNonBlank(row, 'sheet_scope')
+  );
+  const sheetScope = (detailsLoading && !hasExplicitScopeSummary)
+    ? ''
+    : String(sheetScopeRawForOverview || '').toUpperCase();
 
   // ✅ planned weeks use canonical submission_mode_snapshot first (not stale row.submission_mode)
-  const cwModeSnapshot =
+  const cwModeSnapshotRaw =
     String(
       details.cw_submission_mode_snapshot ||
       cw.submission_mode_snapshot ||
       baseSummary.submission_mode_snapshot ||
       row.submission_mode_snapshot ||
       ''
-    ).toUpperCase();
+    );
+  const hasExplicitModeSnapshotSummary = !!(
+    (!detailsArePlaceholder && (hasOwnNonBlank(details, 'cw_submission_mode_snapshot') || hasOwnNonBlank(cw, 'submission_mode_snapshot'))) ||
+    hasOwnNonBlank(baseSummary, 'submission_mode_snapshot') ||
+    hasOwnNonBlank(row, 'submission_mode_snapshot')
+  );
+  const cwModeSnapshot = (detailsLoading && !hasExplicitModeSnapshotSummary)
+    ? ''
+    : cwModeSnapshotRaw.toUpperCase();
 
   // ✅ Timesheet identity for "has real timesheet?" must NOT use details.current_timesheet_id
   // (it can be stale after unprocess and would incorrectly hide planned-week actions).
@@ -302090,7 +302038,13 @@ function renderTimesheetOverviewTab(ctx) {
 
   // ✅ define effective mode (real TS mode if TS exists; otherwise planned-week snapshot)
   const hasTsNow   = !!tsId;
-  const subModeTs  = String(ts.submission_mode || baseSummary.submission_mode || row.submission_mode || '').toUpperCase();
+  const hasExplicitSubmissionModeSummary = !!(
+    (!detailsArePlaceholder && hasOwnNonBlank(ts, 'submission_mode')) ||
+    hasOwnNonBlank(baseSummary, 'submission_mode') ||
+    hasOwnNonBlank(row, 'submission_mode')
+  );
+  const subModeTsRaw = String(ts.submission_mode || baseSummary.submission_mode || row.submission_mode || '');
+  const subModeTs  = (detailsLoading && !hasExplicitSubmissionModeSummary) ? '' : subModeTsRaw.toUpperCase();
   const subModeEff = hasTsNow ? subModeTs : cwModeSnapshot;
 
   // keep existing variable name used elsewhere in this function
@@ -302190,16 +302144,44 @@ function renderTimesheetOverviewTab(ctx) {
   const toolsStageRaw =
     String(details.tools_stage || baseSummary.tools_stage || row.tools_stage || '').toUpperCase();
 
+  const hasExplicitLifecycleSummary = !!(
+    (!detailsArePlaceholder && (hasOwnNonBlank(tsfin, 'processing_status') || hasOwnNonBlank(details, 'summary_stage') || hasOwnNonBlank(details, 'tools_stage') || hasOwnNonBlank(cw, 'summary_stage'))) ||
+    hasOwnNonBlank(baseSummary, 'processing_status') ||
+    hasOwnNonBlank(baseSummary, 'summary_stage') ||
+    hasOwnNonBlank(baseSummary, 'tools_stage') ||
+    hasOwnNonBlank(row, 'processing_status') ||
+    hasOwnNonBlank(row, 'summary_stage') ||
+    hasOwnNonBlank(row, 'tools_stage')
+  );
+
   const backendUnprocessed =
     !!(
-      stageRaw === 'UNPROCESSED' ||
-      stageRaw === 'UNASSIGNED' ||
-      summaryStageRaw === 'UNPROCESSED' ||
-      toolsStageRaw === 'UNPROCESSED'
+      (!detailsLoading || hasExplicitLifecycleSummary) &&
+      (
+        stageRaw === 'UNPROCESSED' ||
+        stageRaw === 'UNASSIGNED' ||
+        summaryStageRaw === 'UNPROCESSED' ||
+        toolsStageRaw === 'UNPROCESSED'
+      )
     );
 
+  const modalInvoiceState = (typeof deriveTimesheetModalInvoicingState === 'function')
+    ? deriveTimesheetModalInvoicingState({ row, details, related, state })
+    : {
+        state: 'UNKNOWN',
+        hasAnyInvoiceLock: !!(tsfin.locked_by_invoice_id || row.locked_by_invoice_id),
+        hasWholeInvoiceLock: !!(tsfin.locked_by_invoice_id || row.locked_by_invoice_id),
+        totalSegments: 0,
+        lockedSegments: 0,
+        unlockedSegments: 0,
+        invoiceIds: [],
+        invoiceNoById: {},
+        issueStage: '',
+        lockedInvoiceStatus: ''
+      };
+
   const isPaid     = !!(tsfin.paid_at_utc || row.paid_at_utc);
-  const isInvoiced = !!(tsfin.locked_by_invoice_id || row.locked_by_invoice_id);
+  const isInvoiced = !!(modalInvoiceState.hasWholeInvoiceLock || tsfin.locked_by_invoice_id || row.locked_by_invoice_id);
 
   // Candidate payment status alone must not lock hours/route amendment actions.
   // Invoice locks remain hard content locks.
@@ -302775,11 +302757,17 @@ function renderTimesheetOverviewTab(ctx) {
         ? 'This timesheet has been reset or currently has no valid hours recorded yet. Enter/submit hours to continue.'
         : 'This is a real timesheet row but it is currently unprocessed. Save/process hours to continue.'
     );
-  } else if (!hasTsfin) {
+  } else if (!hasTsfin && (!detailsLoading || hasExplicitLifecycleSummary || isPlannedOnly)) {
     addStage(
       'Unprocessed',
       'pill-info',
       'This timesheet is unprocessed. No real hours have been entered yet (the Lines tab shows the default contract schedule until you enter actual hours).'
+    );
+  } else if (!hasTsfin && detailsLoading) {
+    addStage(
+      'Loading timesheet state…',
+      'pill-info',
+      'Canonical timesheet details are still loading. Lifecycle badges will update when the current details arrive.'
     );
   }
 
@@ -302792,21 +302780,38 @@ function renderTimesheetOverviewTab(ctx) {
   // ─────────────────────────────────────────────────────────────
   const lockedInvoiceStatus =
     String(
-      (row && Object.prototype.hasOwnProperty.call(row, 'locked_invoice_status'))
+      modalInvoiceState.lockedInvoiceStatus ||
+      ((row && Object.prototype.hasOwnProperty.call(row, 'locked_invoice_status'))
         ? (row.locked_invoice_status ?? '')
-        : ''
+        : '')
     ).trim().toUpperCase();
 
-  const hasLockedInvoiceStatus = !!lockedInvoiceStatus;
-  const invoicePaid = hasLockedInvoiceStatus && (lockedInvoiceStatus === 'PAID');
-  const invoiceIssued = hasLockedInvoiceStatus && (lockedInvoiceStatus === 'ISSUED' || lockedInvoiceStatus === 'PAID');
+  const hasLockedInvoiceStatus = !!(lockedInvoiceStatus || modalInvoiceState.issueStage);
+  const invoicePaid = modalInvoiceState.state === 'INVOICE_PAID' || (hasLockedInvoiceStatus && (lockedInvoiceStatus === 'PAID'));
+  const invoiceIssued = modalInvoiceState.state === 'INVOICED_ISSUED' || (hasLockedInvoiceStatus && (lockedInvoiceStatus === 'ISSUED' || lockedInvoiceStatus === 'PAID'));
+  const invoicePartly = modalInvoiceState.state === 'PARTIALLY_INVOICED';
+  const invoiceFully = !!(
+    modalInvoiceState.state === 'FULLY_INVOICED' ||
+    modalInvoiceState.state === 'WHOLE_INVOICED' ||
+    modalInvoiceState.state === 'INVOICED_ISSUED' ||
+    modalInvoiceState.state === 'INVOICED_NOT_ISSUED'
+  );
 
   if (invoicePaid) {
     addStage('Invoice Paid', 'pill-ok', 'This timesheet is on an invoice that has been marked as paid.');
   } else {
     // Candidate payment badges are rendered only from authoritative pay_state above.
     // Do not fall back to legacy tsfin.paid_at_utc / summary cache for payment state.
-    if (isInvoiced) {
+    if (invoicePartly) {
+      const total = Number(modalInvoiceState.totalSegments || 0);
+      const lockedCount = Number(modalInvoiceState.lockedSegments || 0);
+      const title = (Number.isFinite(total) && total > 0 && Number.isFinite(lockedCount) && lockedCount > 0)
+        ? `${lockedCount} of ${total} line(s)/segment(s) have been invoiced.`
+        : 'Some timesheet lines/segments have been invoiced and others have not.';
+      addStage('Partly invoiced', 'pill-warn', title);
+    }
+
+    if ((isInvoiced || invoiceFully) && (!invoicePartly || modalInvoiceState.hasWholeInvoiceLock)) {
       if (hasLockedInvoiceStatus) {
         if (invoiceIssued) {
           addStage('Invoiced (Issued)', 'pill-warn', 'This timesheet is invoiced and the invoice has been issued.');
@@ -303003,7 +303008,13 @@ function renderTimesheetOverviewTab(ctx) {
     if (stageRaw !== 'PENDING_AUTH') addStage(stageRaw, 'pill-info');
   }
 
-  if (!stageBadges.length) addStage('Unknown', 'pill-info', 'No stage could be determined for this timesheet.');
+  if (!stageBadges.length) {
+    if (detailsLoading) {
+      addStage('Loading timesheet state…', 'pill-info', 'Canonical timesheet details are still loading. Lifecycle badges will update when the current details arrive.');
+    } else {
+      addStage('Unknown', 'pill-info', 'No stage could be determined for this timesheet.');
+    }
+  }
 
   // ─────────────────────────────────────────────────────────────
   // Route label (stable; never show action text here)
@@ -303028,7 +303039,8 @@ function renderTimesheetOverviewTab(ctx) {
     }
 
     if (subModeEff === 'ELECTRONIC') return 'Electronic';
-    return 'Manual';
+    if (subModeEff === 'MANUAL') return 'Manual';
+    return detailsLoading ? 'Loading…' : 'Manual';
   })();
 
   const routeTitle = (() => {
@@ -303078,7 +303090,7 @@ function renderTimesheetOverviewTab(ctx) {
   const scopeLabel =
     (sheetScope === 'WEEKLY') ? 'Weekly' :
     (sheetScope === 'DAILY')  ? 'Daily'  :
-    (sheetScope ? sheetScope : 'Unknown');
+    (sheetScope ? sheetScope : (detailsLoading ? 'Loading…' : 'Unknown'));
 
   const scopePillClass =
     (sheetScope === 'WEEKLY') ? 'pill-weekly' :
@@ -303477,7 +303489,6 @@ function renderTimesheetOverviewTab(ctx) {
     </div>
   `;
 }
-
 
 
 
@@ -306671,6 +306682,7 @@ async function completeTimesheetFastOpenHydration(openToken, payload = {}) {
 // Replacement function: renderWeeklyManualScheduleEditor (patched source lines 304008-307195)
 // Replacement function: renderWeeklyManualScheduleEditor (patched source lines 304008-307195)
 
+
 function renderWeeklyManualScheduleEditor(opts) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][LINES][WEEKLY]');
   const {
@@ -306703,6 +306715,7 @@ function renderWeeklyManualScheduleEditor(opts) {
     renderPayStatePill,
     invoiceNoById,
     wholeInvoiceHint,
+    fmtInvoiceHint,
     esc,
     fmtYmdDmy,
     isBulkProcess,
@@ -306723,9 +306736,13 @@ function renderWeeklyManualScheduleEditor(opts) {
     (details?.contract_week && details.contract_week.week_ending_date) ||
     null;
 
-    const frameMode =
-      (typeof window.__getModalFrame === 'function' ? window.__getModalFrame()?.mode : null) ||
-      'view';
+    const frameForWeeklyManualEditor =
+      (typeof window.__getModalFrame === 'function' ? window.__getModalFrame() : null) ||
+      null;
+
+    const frameMode = frameForWeeklyManualEditor?.mode || 'view';
+    const frameKind = String(frameForWeeklyManualEditor?.kind || '').trim();
+    const isBulkAuthoriseWorkbench = (frameKind === 'bulk-authorise-workbench');
 
     const isEditMode = (frameMode === 'edit' || frameMode === 'create');
 
@@ -306746,7 +306763,11 @@ function renderWeeklyManualScheduleEditor(opts) {
     const canEditSchedule = !!(
       policyCanEditHours === true &&
       !forceReadOnly &&
-      (isEditMode || isBulkProcess || enableWeeklyLineActions)
+      (
+        isEditMode ||
+        isBulkProcess ||
+        (isBulkAuthoriseWorkbench && enableWeeklyLineActions)
+      )
     );
     state.__weeklyScheduleReadOnly = !canEditSchedule;
     if (!canEditSchedule) {
@@ -309383,6 +309404,58 @@ function renderWeeklyManualScheduleEditor(opts) {
 
     const hasAnyErrors = !!(state.scheduleHasErrors || Object.keys(errorsByDate).length);
 
+    const formatInvoiceHintForWeekly = (invoiceId) => {
+      if (typeof fmtInvoiceHint === 'function') return fmtInvoiceHint(invoiceId);
+      const iid = trimStr(invoiceId || '');
+      const invNo = iid && invoiceNoById && invoiceNoById[iid] ? trimStr(invoiceNoById[iid]) : '';
+      return invNo ? `✅ Invoiced – ${invNo}` : '✅ Invoiced';
+    };
+
+    const renderWeeklyInvoiceMarkerHtml = (hint) => {
+      const text = trimStr(hint || '');
+      if (!text) return '';
+      return `<br><span class="mini" title="${esc(text)}">✓ Invoiced</span>`;
+    };
+
+    const resolveWeeklyLineInvoiceHint = (() => {
+      const wholeHint = trimStr(wholeInvoiceHint || '');
+      if (wholeHint) return () => wholeHint;
+
+      const lockedSegments = (Array.isArray(segs) ? segs : [])
+        .filter(seg => seg && typeof seg === 'object' && trimStr(seg.invoice_locked_invoice_id || seg.locked_by_invoice_id || ''));
+      if (!lockedSegments.length) return () => '';
+
+      const keyCounts = Object.create(null);
+      const keyHints = Object.create(null);
+      const makeKey = (dateRaw, refRaw, startRaw, endRaw) => {
+        const date = trimStr(dateRaw).slice(0, 10);
+        const ref = trimStr(refRaw);
+        const start = normaliseHHMM(startRaw);
+        const end = normaliseHHMM(endRaw);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !ref || !start || !end) return '';
+        return `${date}|${ref}|${start}|${end}`;
+      };
+
+      for (const seg of lockedSegments) {
+        const date = normDate(seg);
+        const ref = segRef(seg);
+        const start = normHHMM(seg, 'start', 'start_utc');
+        const end = normHHMM(seg, 'end', 'end_utc');
+        const key = makeKey(date, ref, start, end);
+        if (!key) continue;
+        keyCounts[key] = (keyCounts[key] || 0) + 1;
+        if (!keyHints[key]) {
+          keyHints[key] = formatInvoiceHintForWeekly(seg.invoice_locked_invoice_id || seg.locked_by_invoice_id || '');
+        }
+      }
+
+      return (ymd, ln) => {
+        const key = makeKey(ymd, ln?.ref || '', ln?.start || '', ln?.end || '');
+        if (!key || keyCounts[key] !== 1) return '';
+        return keyHints[key] || '';
+      };
+    })();
+
     const rowsHtml = weekDays.map((wd) => {
       const ymd = wd.ymd;
       const dayLines = state.weeklyLinesByDate?.[ymd] || [];
@@ -309402,6 +309475,8 @@ function renderWeeklyManualScheduleEditor(opts) {
         const breakWindowLockAttrs = breakWindowLocked ? 'readonly aria-readonly="true" title="Clear break length before entering break start/end times."' : '';
         const isSourceRow = clipboardActive && clipboardSourceDate === ymd && clipboardSourceIdx === lineIdx;
         const canPasteHere = clipboardActive && !isSourceRow;
+        const weeklyInvoiceHint = resolveWeeklyLineInvoiceHint(ymd, ln);
+        const weeklyInvoiceMarkerHtml = renderWeeklyInvoiceMarkerHtml(weeklyInvoiceHint);
         const actionCellHtml = !showWeeklyLineActions
           ? ''
           : `
@@ -309436,7 +309511,7 @@ function renderWeeklyManualScheduleEditor(opts) {
         return `
           <tr data-weekly-line="1" data-date="${esc(ymd)}" data-line-idx="${lineIdx}">
             <td>${esc(wd.dow || '') || '<span class="mini">—</span>'}</td>
-            <td>${dateCellHtml}</td>
+            <td>${dateCellHtml}${weeklyInvoiceMarkerHtml}</td>
 
             <td>
               <input type="text"
@@ -309904,6 +309979,387 @@ function renderWeeklyManualScheduleEditor(opts) {
         ${extrasCardHtml}
       </div>
     `;
+}
+
+async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
+  if (!isActiveTimesheetModalToken(openToken)) return false;
+
+  const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
+  if (!mc || mc.entity !== 'timesheets') return false;
+
+  const trim = (v) => String(v == null ? '' : v).trim();
+  const upper = (v) => trim(v).toUpperCase();
+  const clone = (v) => {
+    if (typeof cloneTimesheetFastOpenValue === 'function') return cloneTimesheetFastOpenValue(v);
+    try { return JSON.parse(JSON.stringify(v)); } catch {}
+    if (Array.isArray(v)) return v.slice();
+    return (v && typeof v === 'object') ? { ...v } : v;
+  };
+
+  const getFrame = () => {
+    try { return (typeof window.__getModalFrame === 'function') ? window.__getModalFrame() : null; } catch { return null; }
+  };
+
+  const currentFrame = getFrame();
+  const tabKey = trim(opts.tabKey || opts.preferredTab || currentFrame?.currentTabKey || 'overview') || 'overview';
+  const forcedTimesheetId = trim(opts.timesheetId || opts.forcedTimesheetId || opts.current_timesheet_id || '');
+
+  const currentDetails = (mc.timesheetDetails && typeof mc.timesheetDetails === 'object') ? mc.timesheetDetails : {};
+  const currentTs = (currentDetails.timesheet && typeof currentDetails.timesheet === 'object') ? currentDetails.timesheet : {};
+  const currentCw = (currentDetails.contract_week && typeof currentDetails.contract_week === 'object') ? currentDetails.contract_week : {};
+  const currentTsfin = (currentDetails.tsfin && typeof currentDetails.tsfin === 'object') ? currentDetails.tsfin : {};
+
+  const startingTimesheetId = trim(
+    forcedTimesheetId ||
+    mc.data?.current_timesheet_id ||
+    mc.data?.timesheet_id ||
+    currentDetails.current_timesheet_id ||
+    currentTs.current_timesheet_id ||
+    currentTs.timesheet_id ||
+    currentTsfin.timesheet_id ||
+    ''
+  );
+  const startingContractWeekId = trim(
+    mc.data?.contract_week_id ||
+    currentDetails.contract_week_id ||
+    currentCw.id ||
+    currentCw.contract_week_id ||
+    ''
+  );
+
+  if (!startingTimesheetId && !startingContractWeekId) return false;
+
+  const patchHydration = (patch) => {
+    if (!isActiveTimesheetModalToken(openToken)) return false;
+    const h = (mc.timesheetHydration && typeof mc.timesheetHydration === 'object') ? mc.timesheetHydration : {};
+    mc.timesheetHydration = {
+      ...(typeof makeInitialTimesheetHydrationState === 'function' ? makeInitialTimesheetHydrationState() : {}),
+      ...h,
+      fastOpen: true,
+      ...patch
+    };
+    window.modalCtx = mc;
+    return true;
+  };
+
+  patchHydration({ detailsLoading: true, detailsError: '' });
+
+  let details = null;
+  let fetchedFromPlannedWeek = false;
+  const baseFetchRow = {
+    ...(mc.data && typeof mc.data === 'object' ? mc.data : {}),
+    contract_week_id: startingContractWeekId || mc.data?.contract_week_id || null
+  };
+
+  const fetchByWorkbench = async (rowPatch) => {
+    const rowForFetch = { ...baseFetchRow, ...(rowPatch || {}) };
+    return await fetchTimesheetWorkbenchDetails(rowForFetch);
+  };
+
+  try {
+    if (startingTimesheetId) {
+      details = await fetchByWorkbench({
+        id: startingTimesheetId,
+        timesheet_id: startingTimesheetId,
+        current_timesheet_id: startingTimesheetId
+      });
+    } else {
+      fetchedFromPlannedWeek = true;
+      details = await fetchByWorkbench({
+        id: startingContractWeekId,
+        timesheet_id: null,
+        current_timesheet_id: null,
+        contract_week_id: startingContractWeekId
+      });
+    }
+  } catch (err) {
+    if (!isActiveTimesheetModalToken(openToken)) return false;
+    if (startingContractWeekId) {
+      try {
+        fetchedFromPlannedWeek = true;
+        details = await fetchByWorkbench({
+          id: startingContractWeekId,
+          timesheet_id: null,
+          current_timesheet_id: null,
+          contract_week_id: startingContractWeekId
+        });
+      } catch (err2) {
+        patchHydration({
+          detailsLoading: false,
+          detailsLoaded: false,
+          detailsError: String(err2?.message || err?.message || err2 || err || 'Failed to refresh timesheet details.')
+        });
+        try { await safeRerenderTimesheetModal(openToken, tabKey); } catch {}
+        return false;
+      }
+    } else {
+      patchHydration({
+        detailsLoading: false,
+        detailsLoaded: false,
+        detailsError: String(err?.message || err || 'Failed to refresh timesheet details.')
+      });
+      try { await safeRerenderTimesheetModal(openToken, tabKey); } catch {}
+      return false;
+    }
+  }
+
+  if (!isActiveTimesheetModalToken(openToken)) return false;
+
+  details = (details && typeof details === 'object') ? details : {};
+  const detTs = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : {};
+  const detTsfin = (details.tsfin && typeof details.tsfin === 'object') ? details.tsfin : {};
+  const detCw = (details.contract_week && typeof details.contract_week === 'object') ? details.contract_week : {};
+  const boolish = (v) => {
+    if (v === true || v === 1) return true;
+    if (v === false || v === 0 || v == null) return false;
+    const raw = String(v).trim().toLowerCase();
+    return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === 'on';
+  };
+
+  const revokedAt = trim(detTs.revoked_at || details.revoked_at || '');
+  const authorisedAtServer = revokedAt ? '' : trim(detTs.authorised_at_server || details.authorised_at_server || '');
+  const authorisedAtUtc = revokedAt
+    ? ''
+    : trim(detTsfin.authorised_at_utc || details.authorised_at_utc || detTs.authorised_at_utc || '');
+  const isAuthorisedNow = !!(
+    !revokedAt &&
+    (
+      authorisedAtServer ||
+      authorisedAtUtc ||
+      boolish(details.is_authorised) ||
+      boolish(detTs.is_authorised)
+    )
+  );
+  const effectiveAuthorisedAtServer = isAuthorisedNow ? (authorisedAtServer || null) : null;
+  const effectiveAuthorisedAtUtc = isAuthorisedNow ? (authorisedAtUtc || null) : null;
+
+  if (details && typeof details === 'object') {
+    details.authorised_at_server = effectiveAuthorisedAtServer;
+    details.authorised_at_utc = effectiveAuthorisedAtUtc;
+    details.is_authorised = isAuthorisedNow;
+    details.authorised = isAuthorisedNow;
+    details.revoked_at = revokedAt || null;
+    details.authorisation_revoked_at = revokedAt || null;
+  }
+  if (details.timesheet && typeof details.timesheet === 'object') {
+    details.timesheet.authorised_at_server = effectiveAuthorisedAtServer;
+    details.timesheet.authorised_at_utc = effectiveAuthorisedAtUtc;
+    details.timesheet.is_authorised = isAuthorisedNow;
+    details.timesheet.authorised = isAuthorisedNow;
+    details.timesheet.revoked_at = revokedAt || null;
+    details.timesheet.authorisation_revoked_at = revokedAt || null;
+  }
+  if (details.tsfin && typeof details.tsfin === 'object') {
+    details.tsfin.authorised_at_utc = effectiveAuthorisedAtUtc;
+  }
+
+  const resolvedTimesheetId = trim(
+    details.current_timesheet_id ||
+    detTs.current_timesheet_id ||
+    detTs.timesheet_id ||
+    detTsfin.timesheet_id ||
+    ''
+  );
+  const resolvedContractWeekId = trim(
+    details.contract_week_id ||
+    detCw.id ||
+    detCw.contract_week_id ||
+    startingContractWeekId ||
+    ''
+  );
+
+  if (resolvedTimesheetId) {
+    details.current_timesheet_id = resolvedTimesheetId;
+    details.requested_timesheet_id = resolvedTimesheetId;
+    details.expected_timesheet_id = resolvedTimesheetId;
+    if (details.timesheet && typeof details.timesheet === 'object') {
+      details.timesheet.timesheet_id = resolvedTimesheetId;
+      details.timesheet.current_timesheet_id = resolvedTimesheetId;
+    }
+
+    const activeBeforeAdopt = trim(mc.data?.current_timesheet_id || mc.data?.timesheet_id || '');
+    if (activeBeforeAdopt && activeBeforeAdopt !== resolvedTimesheetId && typeof adoptMovedTimesheetIdForFastOpen === 'function') {
+      await adoptMovedTimesheetIdForFastOpen(openToken, resolvedTimesheetId, {
+        refreshDetails: false,
+        skipTabRefresh: true,
+        tabKey
+      });
+      if (!isActiveTimesheetModalToken(openToken)) return false;
+    }
+  }
+
+  const payState = (details.pay_state && typeof details.pay_state === 'object' && !Array.isArray(details.pay_state))
+    ? clone(details.pay_state)
+    : ((details.payState && typeof details.payState === 'object' && !Array.isArray(details.payState))
+        ? clone(details.payState)
+        : null);
+
+  if (payState) {
+    details.pay_state = payState;
+    details.payState = payState;
+    if (!Array.isArray(payState.segment_snoozes) && Array.isArray(details.segment_snoozes)) {
+      payState.segment_snoozes = clone(details.segment_snoozes);
+    }
+  }
+
+  mc.timesheetDetails = details;
+  mc.timesheetPayState = payState;
+  mc.timesheetPayStateError = '';
+
+  const sheetScope = upper(details.sheet_scope || detTs.sheet_scope || mc.data?.sheet_scope || '');
+  const cwModeSnapshot = upper(detCw.submission_mode_snapshot || details.cw_submission_mode_snapshot || mc.data?.submission_mode_snapshot || '');
+  const subModeTs = upper(detTs.submission_mode || mc.data?.submission_mode || '');
+  const hasTsNow = !!resolvedTimesheetId;
+  const subModeEff = hasTsNow ? subModeTs : cwModeSnapshot;
+  const hasWeekNow = !!(resolvedContractWeekId || detCw.id || details.contract_week_id);
+
+  mc.data = {
+    ...(mc.data && typeof mc.data === 'object' ? mc.data : {}),
+    id: resolvedTimesheetId || resolvedContractWeekId || mc.data?.id || null,
+    timesheet_id: resolvedTimesheetId || null,
+    current_timesheet_id: resolvedTimesheetId || null,
+    contract_week_id: resolvedContractWeekId || null,
+    sheet_scope: sheetScope || mc.data?.sheet_scope || null,
+    submission_mode: hasTsNow ? (subModeTs || null) : null,
+    submission_mode_snapshot: cwModeSnapshot || null,
+    processing_status: detTsfin.processing_status || null,
+    summary_stage: details.summary_stage || detCw.summary_stage || null,
+    tools_stage: details.tools_stage || null,
+    authorised_at_server: effectiveAuthorisedAtServer,
+    authorised_at_utc: effectiveAuthorisedAtUtc,
+    is_authorised: isAuthorisedNow,
+    authorised: isAuthorisedNow,
+    revoked_at: revokedAt || null,
+    authorisation_revoked_at: revokedAt || null,
+    paid_at_utc: detTsfin.paid_at_utc || null,
+    locked_by_invoice_id: detTsfin.locked_by_invoice_id || null,
+    locked_invoice_status: details.locked_invoice_status || detTsfin.locked_invoice_status || mc.data?.locked_invoice_status || null,
+    invoice_segment_stage: details.invoice_segment_stage || mc.data?.invoice_segment_stage || null,
+    invoice_issue_stage: details.invoice_issue_stage || detTsfin.invoice_issue_stage || mc.data?.invoice_issue_stage || null,
+    invoice_segments_total: details.invoice_segments_total ?? mc.data?.invoice_segments_total ?? null,
+    invoice_segments_locked: details.invoice_segments_locked ?? mc.data?.invoice_segments_locked ?? null,
+    invoice_segments_unlocked: details.invoice_segments_unlocked ?? mc.data?.invoice_segments_unlocked ?? null,
+    ready_to_pay: (typeof details.ready_to_pay === 'boolean') ? details.ready_to_pay : null,
+    total_hours: detTsfin.total_hours ?? null,
+    total_pay_ex_vat: detTsfin.total_pay_ex_vat ?? null,
+    total_charge_ex_vat: detTsfin.total_charge_ex_vat ?? null,
+    margin_ex_vat: detTsfin.margin_ex_vat ?? null,
+    pay_on_hold: detTsfin.pay_on_hold ?? null,
+    action_flags: (details.action_flags && typeof details.action_flags === 'object') ? clone(details.action_flags) : null
+  };
+
+  mc.timesheetMeta = (mc.timesheetMeta && typeof mc.timesheetMeta === 'object') ? mc.timesheetMeta : {};
+  mc.timesheetMeta.sheetScope = sheetScope;
+  mc.timesheetMeta.subMode = subModeEff;
+  mc.timesheetMeta.cw_submission_mode_snapshot = cwModeSnapshot;
+  mc.timesheetMeta.hasTs = hasTsNow;
+  mc.timesheetMeta.isPlannedWeek = (!hasTsNow && hasWeekNow) || fetchedFromPlannedWeek;
+  mc.timesheetMeta.isPaid = !!(detTsfin.paid_at_utc || mc.data?.paid_at_utc);
+  mc.timesheetMeta.isInvoiced = !!(detTsfin.locked_by_invoice_id || mc.data?.locked_by_invoice_id);
+  mc.timesheetMeta.isLocked = !!(detTsfin.paid_at_utc || detTsfin.locked_by_invoice_id);
+  mc.timesheetMeta.isAuthorised = isAuthorisedNow;
+  mc.timesheetMeta.is_authorised = isAuthorisedNow;
+  mc.timesheetMeta.authorised_at_server = effectiveAuthorisedAtServer;
+  mc.timesheetMeta.authorised_at_utc = effectiveAuthorisedAtUtc;
+  mc.timesheetMeta.revoked_at = revokedAt || null;
+  mc.timesheetMeta.expected_timesheet_id = resolvedTimesheetId || null;
+  mc.timesheetMeta.contract_week_id = resolvedContractWeekId || null;
+
+  try {
+    const detailInvoiceMap = (typeof normaliseTimesheetInvoiceNoMap === 'function')
+      ? normaliseTimesheetInvoiceNoMap(details.invoice_no_by_invoice_id)
+      : (details.invoice_no_by_invoice_id || {});
+    if (typeof mergeTimesheetInvoiceNoMapIntoRelated === 'function') {
+      mc.timesheetRelated = mergeTimesheetInvoiceNoMapIntoRelated(
+        mc.timesheetRelated || (typeof makeInitialTimesheetRelatedPlaceholder === 'function' ? makeInitialTimesheetRelatedPlaceholder(mc.data || {}) : {}),
+        detailInvoiceMap
+      );
+    }
+  } catch {}
+
+  try {
+    if (typeof classifyTimesheetEditDomains === 'function') {
+      const refreshedPolicy = classifyTimesheetEditDomains({
+        row: mc.data || {},
+        details: mc.timesheetDetails || {},
+        timesheet: detTs || null,
+        tsfin: detTsfin || null,
+        financial_snapshot: details.financial_snapshot || null,
+        contract_week: detCw || null,
+        related: mc.timesheetRelated || {},
+        action_flags: details.action_flags || null,
+        state: mc.timesheetState || {}
+      });
+      if (typeof applyTimesheetEditDomainPolicyToModalCtxAfterSecondary === 'function') {
+        applyTimesheetEditDomainPolicyToModalCtxAfterSecondary(mc, refreshedPolicy);
+      } else if (typeof applyTimesheetEditDomainPolicyToModalCtx === 'function') {
+        applyTimesheetEditDomainPolicyToModalCtx(mc, refreshedPolicy);
+      }
+    }
+  } catch {}
+
+  patchHydration({
+    detailsLoading: false,
+    detailsLoaded: true,
+    detailsError: ''
+  });
+
+  try {
+    if (typeof hydrateTimesheetEditStateFromDetails === 'function') {
+      await hydrateTimesheetEditStateFromDetails(mc.timesheetDetails || {}, mc);
+    }
+  } catch (err) {
+    console.warn('[TS][HYDRATE] lifecycle refresh hydration failed (non-fatal)', err);
+  }
+
+  if (!isActiveTimesheetModalToken(openToken)) return false;
+  window.modalCtx = mc;
+
+  if (opts.skipSummaryRefresh !== true) {
+    let didSummaryPatch = false;
+    try {
+      if (!mc.__summaryCtx && typeof captureSummaryContextForModalOpen === 'function') {
+        mc.__summaryCtx = captureSummaryContextForModalOpen();
+      }
+    } catch {}
+
+    try {
+      const summaryCtx = mc.__summaryCtx || null;
+      if (resolvedTimesheetId && typeof refreshTimesheetsSummaryAfterRotation === 'function') {
+        const r = await refreshTimesheetsSummaryAfterRotation(resolvedTimesheetId, { allowRenderAll: false, skipTabRefresh: true });
+        didSummaryPatch = !!(r && r.ok);
+      } else if (resolvedContractWeekId && typeof refreshContractWeekSummaryAfterPlannedChange === 'function') {
+        const r = await refreshContractWeekSummaryAfterPlannedChange(resolvedContractWeekId, summaryCtx);
+        didSummaryPatch = !!(r && r.ok);
+      }
+    } catch {}
+
+    if (!didSummaryPatch) {
+      try { await renderAll(); } catch {}
+    }
+  }
+
+  if (!isActiveTimesheetModalToken(openToken)) return false;
+  const fr = getFrame();
+  if (fr && fr.entity === 'timesheets') {
+    fr.mode = 'view';
+    fr.hasId = !!(resolvedTimesheetId || resolvedContractWeekId);
+  }
+
+  await safeRerenderTimesheetModal(openToken, tabKey, { refreshTabs: true });
+
+  if (!isActiveTimesheetModalToken(openToken)) return false;
+  try {
+    const fr2 = getFrame();
+    if (fr2 && fr2.entity === 'timesheets') fr2._updateButtons && fr2._updateButtons();
+  } catch {}
+
+  return {
+    ok: true,
+    timesheet_id: resolvedTimesheetId || null,
+    contract_week_id: resolvedContractWeekId || null,
+    tabKey
+  };
 }
 
 
