@@ -301957,10 +301957,12 @@ function renderTimesheetOverviewTab(ctx) {
           : {})
   );
   const detailsArePlaceholder = !!(details && (details.__placeholder || details.__loading));
-  const detailsLoading = !!(
+  const openingDetailsPending = !!(
     detailsArePlaceholder ||
+    hydration.detailsLoading === true ||
     (hydration.fastOpen === true && hydration.detailsLoaded !== true && !hydration.detailsError)
   );
+  const detailsLoading = openingDetailsPending;
   const hasOwnNonBlank = (obj, key) => !!(
     obj &&
     typeof obj === 'object' &&
@@ -303083,20 +303085,32 @@ function renderTimesheetOverviewTab(ctx) {
   })();
 
   const routePillClass =
+    openingDetailsPending ? 'pill-info' :
     (routeLabel === 'Manual') ? 'pill-manual' :
     (routeLabel === 'Electronic') ? 'pill-elec' :
     'pill-info';
 
   const scopeLabel =
+    openingDetailsPending ? 'Loading…' :
     (sheetScope === 'WEEKLY') ? 'Weekly' :
     (sheetScope === 'DAILY')  ? 'Daily'  :
     (sheetScope ? sheetScope : (detailsLoading ? 'Loading…' : 'Unknown'));
 
   const scopePillClass =
+    openingDetailsPending ? 'pill-info' :
     (sheetScope === 'WEEKLY') ? 'pill-weekly' :
     (sheetScope === 'DAILY')  ? 'pill-daily'  :
     'pill-info';
 
+  const stageBadgesForDisplay = openingDetailsPending
+    ? [
+        `<span class="pill pill-info" style="font-weight:600;" title="${enc('Canonical timesheet details are still loading. Lifecycle badges will update when the current details arrive.')}">${enc('Loading timesheet state…')}</span>`
+      ]
+    : stageBadges;
+  const routeLabelForDisplay = openingDetailsPending ? 'Loading…' : routeLabel;
+  const routeTitleForDisplay = openingDetailsPending
+    ? 'Canonical timesheet details are still loading. Route and scope badges will update when the current details arrive.'
+    : routeTitle;
   const headerHtml = `
     <div class="card">
       <div class="row">
@@ -303449,7 +303463,9 @@ function renderTimesheetOverviewTab(ctx) {
     return '';
   })();
 
-  const routeActionsRowHtml = suppressActionButtons
+  const deletePolicyBadgeHtmlForDisplay = openingDetailsPending ? '' : deletePolicyBadgeHtml;
+
+  const routeActionsRowHtml = (suppressActionButtons || openingDetailsPending)
     ? ''
     : `
       <div class="row" data-view-only="true">
@@ -303463,15 +303479,15 @@ function renderTimesheetOverviewTab(ctx) {
       <div class="row">
         <label>Stage</label>
         <div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">
-          ${stageBadges.join('')}
+          ${stageBadgesForDisplay.join('')}
         </div>
       </div>
 
       <div class="row">
         <label>Route</label>
         <div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
-          ${deletePolicyBadgeHtml}
-          <span class="pill ${routePillClass}" style="font-weight:600;" ${routeTitle ? `title="${enc(routeTitle)}"` : ''}>${enc(routeLabel)}</span>
+          ${deletePolicyBadgeHtmlForDisplay}
+          <span class="pill ${routePillClass}" style="font-weight:600;" ${routeTitleForDisplay ? `title="${enc(routeTitleForDisplay)}"` : ''}>${enc(routeLabelForDisplay)}</span>
           <span class="pill ${scopePillClass}" style="font-weight:600;">${enc(scopeLabel)}</span>
         </div>
       </div>
