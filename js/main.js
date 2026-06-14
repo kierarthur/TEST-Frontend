@@ -163426,6 +163426,48 @@ async function openBulkProcessWorkbench(seed = {}) {
     return kind;
   };
 
+  const inferBulkProcessTimesheetEvidenceKindOpen = (candidateLike = {}, parentLike = {}, rawKindInput = '') => {
+    const rawKind = normaliseBulkProcessEvidenceKindOpen(rawKindInput);
+    if (rawKind && rawKind !== 'EVIDENCE') return rawKind;
+    const candidate = (candidateLike && typeof candidateLike === 'object') ? candidateLike : {};
+    const parent = (parentLike && typeof parentLike === 'object') ? parentLike : {};
+    const meta = (candidate.meta_json && typeof candidate.meta_json === 'object') ? candidate.meta_json : {};
+    const parentMeta = (parent.meta_json && typeof parent.meta_json === 'object') ? parent.meta_json : {};
+    const textBlob = bulkProcessUpper([
+      candidate.display_name,
+      candidate.displayName,
+      candidate.filename,
+      candidate.original_filename,
+      candidate.originalFilename,
+      candidate.label,
+      candidate.title,
+      candidate.description,
+      candidate.storage_key,
+      candidate.file_key,
+      candidate.download_storage_key,
+      candidate.r2_key,
+      candidate.primary_artifact_storage_key,
+      candidate.primaryArtifactStorageKey,
+      meta.display_name,
+      meta.filename,
+      meta.original_filename,
+      meta.storage_key,
+      meta.file_key,
+      parent.primary_artifact_storage_key,
+      parent.primaryArtifactStorageKey,
+      parent.artifact_hints?.primary_artifact_storage_key,
+      parent.artifact_hints?.primaryArtifactStorageKey
+    ].filter(Boolean).join(' '));
+    if (/(ACCOM|ACCOMMODATION|HOTEL|LODGING)/.test(textBlob)) return rawKind || '';
+    if (/(TRAVEL|TRAIN|TAXI|FLIGHT|PARKING|MILEAGE|MILES|EXPENSE|RECEIPT)/.test(textBlob)) return rawKind || '';
+    if (/(TIMESHEET|TIME_SHEET|TIME-SHEET|TSFIN|TS_DAY|SHIFT|SIGNED[_ -]?OFF)/.test(textBlob)) return 'TIMESHEET';
+    const candidateTs = trimStr(candidate.timesheet_id || candidate.current_timesheet_id || candidate.requested_timesheet_id || candidate.expected_timesheet_id || candidate.timesheetId || meta.timesheet_id || '');
+    const parentTs = trimStr(parent.timesheet_id || parent.current_timesheet_id || parent.requested_timesheet_id || parent.expected_timesheet_id || parent.timesheetId || parentMeta.timesheet_id || '');
+    const parentScope = bulkProcessUpper([parent.period_type, parent.sheet_scope, parent.basis, parent.route_family, parent.action_flags?.route_family].filter(Boolean).join(' '));
+    if ((candidateTs || parentTs) && (parentScope.includes('DAILY') || parentScope.includes('TIMESHEET') || parentScope.includes('TSFIN'))) return 'TIMESHEET';
+    return rawKind || '';
+  };
+
   const normaliseBulkProcessEvidenceRowsOpen = (...sources) => {
     const rows = [];
     const seen = new Set();
@@ -163437,8 +163479,7 @@ async function openBulkProcessWorkbench(seed = {}) {
       const fileKey = getBulkProcessEvidenceFileKeyOpen(candidate);
       const id = getBulkProcessEvidenceIdOpen(candidate);
       if (!id && !fileKey) return;
-      const kind = normaliseBulkProcessEvidenceKindOpen(
-        candidate.kind ||
+      const rawKind = candidate.kind ||
         candidate.evidence_kind ||
         candidate.evidenceKind ||
         candidate.staged_kind ||
@@ -163452,8 +163493,8 @@ async function openBulkProcessWorkbench(seed = {}) {
         parent.artifact_hints?.primaryArtifactKind ||
         parent.primary_artifact?.kind ||
         parent.artifact_hints?.primary_artifact?.kind ||
-        ''
-      ) || 'EVIDENCE';
+        '';
+      const kind = inferBulkProcessTimesheetEvidenceKindOpen(candidate, parent, rawKind) || 'EVIDENCE';
       const contractWeekId = trimStr(
         candidate.contract_week_id ||
         candidate.contractWeekId ||
@@ -164175,6 +164216,25 @@ async function openBulkProcessWorkbench(seed = {}) {
       evidenceLoadedAuthority: patch.evidenceLoadedAuthority === true || patch.evidenceLoaded === true || patch.evidence_loaded === true,
       allowEvidenceClear
     });
+    const targetIdentityKey = getBulkProcessRowIdentityKeyOpen(target);
+    const targetLooksTimesheetRow = /^timesheet:/i.test(targetIdentityKey) || hasOpenValue(target.timesheet_id) || hasOpenValue(target.current_timesheet_id);
+    const targetScope = bulkProcessUpper([target.period_type, target.sheet_scope, target.basis, target.route_type, target.route_family, target.action_flags?.route_family].filter(Boolean).join(' '));
+    const targetIsDailyTimesheet = targetLooksTimesheetRow && (targetScope.includes('DAILY') || /^timesheet:/i.test(targetIdentityKey));
+    const targetHadTimesheetBadge = (Array.isArray(target.evidence_badges) ? target.evidence_badges : [])
+      .some((badge) => badge && typeof badge === 'object' && normaliseBulkProcessEvidenceKindOpen(badge.kind || badge.evidence_kind || badge.evidenceKind || '') === 'TIMESHEET' && (boolishOpen(badge.present) || boolishOpen(badge.has_evidence) || Number(badge.count || 0) > 0));
+    if (targetIsDailyTimesheet && !allowEvidenceClear && targetHadTimesheetBadge) {
+      const hasIncomingTimesheetBadge = effectivePatch.evidenceBadges
+        .some((badge) => badge && typeof badge === 'object' && normaliseBulkProcessEvidenceKindOpen(badge.kind || badge.evidence_kind || badge.evidenceKind || '') === 'TIMESHEET' && (boolishOpen(badge.present) || boolishOpen(badge.has_evidence) || Number(badge.count || 0) > 0));
+      const genericBadge = effectivePatch.evidenceBadges
+        .find((badge) => badge && typeof badge === 'object' && normaliseBulkProcessEvidenceKindOpen(badge.kind || badge.evidence_kind || badge.evidenceKind || '') === 'EVIDENCE' && (boolishOpen(badge.present) || boolishOpen(badge.has_evidence) || Number(badge.count || 0) > 0));
+      if (genericBadge && !hasIncomingTimesheetBadge) {
+        genericBadge.kind = 'TIMESHEET';
+        if (Object.prototype.hasOwnProperty.call(genericBadge, 'evidence_kind')) genericBadge.evidence_kind = 'TIMESHEET';
+        if (Object.prototype.hasOwnProperty.call(genericBadge, 'evidenceKind')) genericBadge.evidenceKind = 'TIMESHEET';
+      } else if (!hasIncomingTimesheetBadge) {
+        effectivePatch.evidenceBadges.push({ kind: 'TIMESHEET', has_evidence: true, present: true, count: 1 });
+      }
+    }
     const evidenceLoaded = !!(patch.evidenceLoadedAuthority === true || patch.evidenceLoaded === true || patch.evidence_loaded === true || effectivePatch.hasAnyEvidence === true);
 
     if (!effectivePatch.hasAnyEvidence && allowEvidenceClear) {
@@ -164331,6 +164391,16 @@ async function openBulkProcessWorkbench(seed = {}) {
     ['client_is_nhsp', 'client_is_healthroster', '__bulkProcessExplicitNoTimesheet', 'no_timesheet_required', 'no_timesheet_image_required', 'suppress_standard_schedule_fallback', 'keep_additional_manual_adjustment_schedule_empty', 'manual_additional_route', 'additional_manual_route', 'supportsUnprocessedExpenseDraft', 'supports_unprocessed_expense_draft'].forEach((key) => {
       if (baseFlags[key] === true && out.action_flags[key] !== true) out.action_flags[key] = true;
     });
+    const baseBadges = Array.isArray(base.evidence_badges) ? base.evidence_badges : [];
+    const outBadges = Array.isArray(out.evidence_badges) ? out.evidence_badges : [];
+    const baseHasTimesheetBadge = baseBadges.some((badge) => badge && typeof badge === 'object' && normaliseBulkProcessEvidenceKindOpen(badge.kind || badge.evidence_kind || badge.evidenceKind || '') === 'TIMESHEET' && (boolishOpen(badge.present) || boolishOpen(badge.has_evidence) || Number(badge.count || 0) > 0));
+    const outHasTimesheetBadge = outBadges.some((badge) => badge && typeof badge === 'object' && normaliseBulkProcessEvidenceKindOpen(badge.kind || badge.evidence_kind || badge.evidenceKind || '') === 'TIMESHEET' && (boolishOpen(badge.present) || boolishOpen(badge.has_evidence) || Number(badge.count || 0) > 0));
+    const outGenericBadge = outBadges.find((badge) => badge && typeof badge === 'object' && normaliseBulkProcessEvidenceKindOpen(badge.kind || badge.evidence_kind || badge.evidenceKind || '') === 'EVIDENCE' && (boolishOpen(badge.present) || boolishOpen(badge.has_evidence) || Number(badge.count || 0) > 0));
+    const sameTimesheetIdentity = trimStr(base.timesheet_id || base.current_timesheet_id || '').toLowerCase() && trimStr(base.timesheet_id || base.current_timesheet_id || '').toLowerCase() === trimStr(out.timesheet_id || out.current_timesheet_id || '').toLowerCase();
+    if (sameTimesheetIdentity && baseHasTimesheetBadge && !outHasTimesheetBadge && !rowHasBulkProcessNoTimesheetAuthoritySignal(out)) {
+      if (outGenericBadge) outGenericBadge.kind = 'TIMESHEET';
+      else out.evidence_badges = [...outBadges, { kind: 'TIMESHEET', present: true, has_evidence: true, count: 1 }];
+    }
     if (baseIsNhspAdjustment && out.action_flags.client_is_nhsp !== true) out.action_flags.client_is_nhsp = true;
     return out;
   };
@@ -200256,6 +200326,25 @@ async function handleBulkProcessProcess(state) {
     if (raw === 'MILES' || raw === 'MILE') return 'MILEAGE';
     if (raw === 'EXPENSE' || raw === 'EXPENSES') return 'EXPENSE';
     if (raw === 'ACCOM') return 'ACCOMMODATION';
+    if (!raw || raw === 'EVIDENCE') {
+      const textBlob = upper([
+        item?.display_name,
+        item?.displayName,
+        item?.filename,
+        item?.original_filename,
+        item?.originalFilename,
+        item?.label,
+        item?.title,
+        item?.description,
+        evidenceStorageKeyOf(item),
+        meta.display_name,
+        meta.filename,
+        meta.original_filename,
+        meta.storage_key,
+        meta.file_key
+      ].filter(Boolean).join(' '));
+      if (!/(ACCOM|ACCOMMODATION|HOTEL|LODGING|TRAVEL|TRAIN|TAXI|FLIGHT|PARKING|MILEAGE|MILES|EXPENSE|RECEIPT)/.test(textBlob) && /(TIMESHEET|TIME_SHEET|TIME-SHEET|TSFIN|TS_DAY|SHIFT|SIGNED[_ -]?OFF)/.test(textBlob)) return 'TIMESHEET';
+    }
     return raw;
   };
   const resolveProcessRecordIdentityParts = (activeInput = null) => {
@@ -201037,6 +201126,50 @@ async function handleBulkProcessProcess(state) {
     target.primary_artifact_storage_key = patch.primaryArtifactStorageKey || null;
     target.primary_artifact_preview_mode = patch.primaryArtifactPreviewMode || null;
     reconcileProcessActionFlagsWithEvidenceTruth(target, patch);
+    return target;
+  };
+  const coerceDailyProcessGenericEvidenceBadgeToTimesheet = (target) => {
+    if (!target || typeof target !== 'object') return target;
+    const rowKey = trimStr(rowKeyOf(target) || target.row_key || '');
+    const timesheetId = trimStr(target.timesheet_id || target.current_timesheet_id || target.requested_timesheet_id || target.expected_timesheet_id || '');
+    if (!timesheetId && !/^timesheet:/i.test(rowKey)) return target;
+    if (isAuthoritativeNoTimesheetRequiredProcessRow({ row: target, details: target, ctx: { row: target } })) return target;
+    const scopeText = upper([target.period_type, target.sheet_scope, target.basis, target.route_type, target.route_family, target.action_flags?.route_family].filter(Boolean).join(' '));
+    const isDailyOrTimesheetRow = scopeText.includes('DAILY') || /^timesheet:/i.test(rowKey);
+    if (!isDailyOrTimesheetRow) return target;
+    const badgeContainers = [
+      target,
+      target.evidence_meta,
+      target.artifact_hints,
+      target.action_flags
+    ].filter((container) => container && typeof container === 'object' && Array.isArray(container.evidence_badges));
+    let converted = false;
+    for (const container of badgeContainers) {
+      const badges = container.evidence_badges;
+      const hasTimesheet = badges.some((badge) => badge && typeof badge === 'object' && normaliseKindForEvidenceRequiredMessage(badge.kind || badge.evidence_kind || badge.evidenceKind || '') === 'TIMESHEET' && processBadgeIndicatesEvidence(badge));
+      if (hasTimesheet) continue;
+      const generic = badges.find((badge) => badge && typeof badge === 'object' && normaliseKindForEvidenceRequiredMessage(badge.kind || badge.evidence_kind || badge.evidenceKind || '') === 'EVIDENCE' && processBadgeIndicatesEvidence(badge));
+      if (!generic) continue;
+      generic.kind = 'TIMESHEET';
+      if (Object.prototype.hasOwnProperty.call(generic, 'evidence_kind')) generic.evidence_kind = 'TIMESHEET';
+      if (Object.prototype.hasOwnProperty.call(generic, 'evidenceKind')) generic.evidenceKind = 'TIMESHEET';
+      converted = true;
+    }
+    const evidenceRows = Array.isArray(target.evidence) ? target.evidence : [];
+    for (const item of evidenceRows) {
+      if (!item || typeof item !== 'object') continue;
+      const kind = normaliseKindForEvidenceRequiredMessage(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || item.stagedKind || '');
+      if (kind === 'EVIDENCE' || !kind) {
+        item.kind = 'TIMESHEET';
+        item.evidence_kind = 'TIMESHEET';
+        converted = true;
+      }
+    }
+    if (converted) {
+      target.__bulk_process_generic_evidence_coerced_to_timesheet = true;
+      if (normaliseKindForEvidenceRequiredMessage(target.primary_artifact_kind || target.artifact_hints?.primary_artifact_kind || '') === 'EVIDENCE') target.primary_artifact_kind = 'TIMESHEET';
+      if (target.artifact_hints && typeof target.artifact_hints === 'object' && normaliseKindForEvidenceRequiredMessage(target.artifact_hints.primary_artifact_kind || '') === 'EVIDENCE') target.artifact_hints.primary_artifact_kind = 'TIMESHEET';
+    }
     return target;
   };
   const reconcileProcessEvidenceTruth = (activeInput = null, reconcileOptions = {}) => {
@@ -203105,6 +203238,7 @@ async function handleBulkProcessProcess(state) {
     const patchedRow = applyPatch(processResult, active.row, previousRowKey, 'PROCESSED');
     if (processEvidencePatchForSubmit.hasAnyEvidence === true) {
       applyProcessEvidenceAuthorityPatch(patchedRow, processEvidencePatchForSubmit);
+      coerceDailyProcessGenericEvidenceBadgeToTimesheet(patchedRow);
       try {
         const patchedRowKey = rowKeyOf(patchedRow);
         if (patchedRowKey) {
@@ -203116,6 +203250,7 @@ async function handleBulkProcessProcess(state) {
         }
       } catch {}
     }
+    coerceDailyProcessGenericEvidenceBadgeToTimesheet(patchedRow);
     stateAudit('apply-patch:after', { previous_row_key: previousRowKey || null, patched_row: stateAuditRowSummary(patchedRow || {}) });
     invalidateCaches(processResult, patchedRow, previousRowKey);
     const processCacheHints = (processResult?.cache_invalidation_hints && typeof processResult.cache_invalidation_hints === 'object') ? processResult.cache_invalidation_hints : {};
