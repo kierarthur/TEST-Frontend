@@ -178437,8 +178437,11 @@ function renderBulkProcessLists(state) {
     const dateText = formatBulkDate(
       row?.week_ending_date || row?.work_date || row?.date || row?.contract_week_ending_date || ''
     );
-    const statusText =
+    const rawStatusText =
       String(row?.summary_stage || row?.processing_status || row?.processing_status_display || '—').trim() || '—';
+    const statusText = (String(sectionName || '').toLowerCase() === 'processed' && String(rawStatusText || '').trim().toUpperCase() === 'PENDING_AUTH')
+      ? 'PROCESSED'
+      : rawStatusText;
     const badgesHtml = renderEvidenceBadges(row);
 
     return `
@@ -202079,6 +202082,84 @@ async function handleBulkProcessProcess(state) {
     return { active: patchedActive, signature: freshSignature, row: matchedRow, payload: affectedRefresh };
   };
 
+  const ensureFreshDailyProcessSignatureBeforeSubmit = async (activeInput = null, ensureReason = 'daily-process-submit-signature') => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const identity = resolveActiveProcessTimesheetIdentity(active);
+    const timesheetId = trimStr(identity.timesheetId || identity.currentTimesheetId || active.timesheetId || active.row?.current_timesheet_id || active.row?.timesheet_id || '');
+    const rowKey = trimStr(identity.rowKey || rowKeyOf(active.row) || rowKeyOf(st.active_row) || (timesheetId ? `timesheet:${timesheetId}` : ''));
+    if (!timesheetId || !rowKey) {
+      throw new Error('Bulk Process daily submit could not verify the current row signature. Refresh the row and try again.');
+    }
+    if (typeof refreshTimesheetLifecycleAffectedRows !== 'function') {
+      throw new Error('Bulk Process affected-row refresh is not available. Refresh the row and try again.');
+    }
+    sigLog('DAILY-SUBMIT-SIGNATURE-REFRESH-START', {
+      reason: trimStr(ensureReason || '') || null,
+      row_key: rowKey,
+      timesheet_id: timesheetId
+    });
+    const affectedRefresh = await refreshTimesheetLifecycleAffectedRows([{
+      row_key: rowKey,
+      timesheet_id: timesheetId,
+      current_timesheet_id: timesheetId,
+      requested_timesheet_id: timesheetId,
+      expected_timesheet_id: timesheetId,
+      contract_week_id: trimStr(identity.contractWeekId || active.contractWeekId || active.row?.contract_week_id || '') || null,
+      context: 'bulk_process'
+    }], {
+      context: 'bulk_process',
+      action: ensureReason || 'daily-process-submit-signature',
+      reason: ensureReason || 'daily-process-submit-signature',
+      state: st,
+      apply: false,
+      preserveActiveContext: true,
+      throwOnError: false
+    });
+    if (affectedRefresh?.refresh_failed === true || affectedRefresh?.ok === false) {
+      throw new Error(trimStr(affectedRefresh?.error || affectedRefresh?.message || 'Bulk Process affected-row signature refresh failed. Refresh the row and try again.'));
+    }
+    const flattenedRows = Array.isArray(affectedRefresh?.flattened_rows) ? affectedRefresh.flattened_rows : [];
+    const rows = flattenedRows.length ? flattenedRows : (Array.isArray(affectedRefresh?.rows) ? affectedRefresh.rows : []);
+    const matchedRow = rows.find((row) => {
+      if (!row || typeof row !== 'object') return false;
+      const returnedRowKey = trimStr(row.row_key || row.new_row_key || row.identity?.row_key || '');
+      const returnedTimesheetId = trimStr(row.current_timesheet_id || row.timesheet_id || row.identity?.timesheet_id || row.identity?.current_timesheet_id || '');
+      return (!!returnedTimesheetId && returnedTimesheetId === timesheetId) || (!!returnedRowKey && returnedRowKey === rowKey);
+    }) || null;
+    const freshSignature = resolveProcessRowSignatureFrom(matchedRow || {}, affectedRefresh);
+    if (!matchedRow || !freshSignature) {
+      sigWarn('DAILY-SUBMIT-SIGNATURE-REFRESH-MISSING', {
+        reason: trimStr(ensureReason || '') || null,
+        row_key: rowKey,
+        timesheet_id: timesheetId,
+        flattened_row_count: flattenedRows.length
+      });
+      throw new Error('Bulk Process daily submit could not obtain the current row signature. Refresh the row and try again.');
+    }
+    const patchedActive = patchProcessBaselineContainersFromActive(active, {
+      reason: ensureReason || 'daily-process-submit-signature',
+      baselineRow: matchedRow,
+      rowSignature: freshSignature,
+      backend_row_signature: freshSignature,
+      current_row_signature: freshSignature
+    });
+    rememberAllowedProcessStatusHeaderBaseline({
+      payload: affectedRefresh,
+      baselineRow: matchedRow,
+      rowSignature: freshSignature,
+      identity: { ...identity, rowKey, timesheetId, currentTimesheetId: timesheetId },
+      reason: ensureReason || 'daily-process-submit-signature',
+      url: '/api/timesheets/lifecycle-affected-rows'
+    }, ensureReason || 'daily-process-submit-signature');
+    sigLog('DAILY-SUBMIT-SIGNATURE-REFRESH-DONE', {
+      reason: trimStr(ensureReason || '') || null,
+      row_key: rowKey,
+      timesheet_id: timesheetId,
+      fresh_signature: freshSignature
+    });
+    return { active: patchedActive, signature: freshSignature, row: matchedRow, payload: affectedRefresh };
+  };
+
   const awaitProcessEditorBaselineRebaseBeforeSubmit = async (activeInput = null, rebaseOptions = {}) => {
     const opts = (rebaseOptions && typeof rebaseOptions === 'object') ? rebaseOptions : {};
     let active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
@@ -202732,10 +202813,12 @@ async function handleBulkProcessProcess(state) {
     let processResult = null;
     if (active.isDaily && active.submissionMode === 'MANUAL' && activeTimesheetId) {
       active = await awaitProcessEditorBaselineRebaseBeforeSubmit(active, { evidenceMutated, saveMutated: controlledSaveMutation });
+      const dailyFreshSignature = await ensureFreshDailyProcessSignatureBeforeSubmit(active, 'daily-process-submit-signature');
+      active = dailyFreshSignature.active || readActive();
       activeTimesheetId = active.timesheetId;
       activeContractWeekId = active.contractWeekId;
       expectedTimesheetId = active.expectedTimesheetId || activeTimesheetId;
-      const activeRowSignature = trimStr(collectActiveProcessBaselineSignature(active) || st.__bulk_process_process_status_header_row_signature || st.__bulk_process_fresh_process_row_signature || active.row?.row_signature || active.ctx?.row?.row_signature || '');
+      const activeRowSignature = trimStr(dailyFreshSignature.signature || active.row?.backend_row_signature || active.row?.row_signature || active.ctx?.row?.backend_row_signature || active.ctx?.row?.row_signature || '');
       sigLog('BEFORE-SUBMIT', {
         timesheet_id: String(activeTimesheetId),
         expected_timesheet_id: expectedTimesheetId || activeTimesheetId || null,
@@ -215829,9 +215912,18 @@ async function handleBulkProcessRowChange(nextRowKey, options = {}) {
 
     const gotCw = trimStr(got.contractWeekId || got.contract_week_id || '');
 
-    if (expKey && gotKey && expKey !== gotKey) return false;
+    if (expKey && gotKey && expKey !== gotKey) {
+      const expIsTimesheet = /^timesheet:/i.test(expKey);
+      const gotIsTimesheet = /^timesheet:/i.test(gotKey);
+      const expIsContractWeek = /^contract_week:/i.test(expKey);
+      const gotIsContractWeek = /^contract_week:/i.test(gotKey);
+      const isMaterialisedTransition = (expIsContractWeek && gotIsTimesheet) || (expIsTimesheet && gotIsContractWeek);
+      const sameContractWeek = !!(expCw && gotCw && expCw === gotCw);
+      const sameTimesheet = !!(expTs && gotTs && expTs === gotTs);
+      if (!isMaterialisedTransition || (!sameContractWeek && !sameTimesheet)) return false;
+    }
 
-    if (/^timesheet:/i.test(expKey) && gotCw && !gotTs) return false;
+    if (/^timesheet:/i.test(expKey) && gotCw && !gotTs && !(expCw && gotCw && expCw === gotCw)) return false;
 
     if (/^contract_week:/i.test(expKey) && gotTs && !gotCw) return false;
 
