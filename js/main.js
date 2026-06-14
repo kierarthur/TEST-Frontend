@@ -149324,12 +149324,12 @@ function renderBulkAuthoriseLists(state) {
       return '';
     };
     const labelForKind = (kind) => {
-      if (kind === 'TIMESHEET') return 'TIMESHEET';
-      if (kind === 'MILEAGE') return 'MILEAGE';
-      if (kind === 'TRAVEL') return 'TRAVEL';
-      if (kind === 'ACCOMMODATION') return 'ACCOMMODATION';
-      if (kind === 'OTHER') return 'OTHER';
-      if (kind === 'EVIDENCE') return 'EVIDENCE';
+      if (kind === 'TIMESHEET') return 'Timesheet';
+      if (kind === 'MILEAGE') return 'Mileage';
+      if (kind === 'TRAVEL') return 'Travel';
+      if (kind === 'ACCOMMODATION') return 'Accommodation';
+      if (kind === 'OTHER') return 'Other';
+      if (kind === 'EVIDENCE') return 'Evidence';
       return '';
     };
     const badgePresent = (badge) => {
@@ -149453,7 +149453,7 @@ function renderBulkAuthoriseLists(state) {
               <span>${enc(statusText)}</span>
             </div>
             ${evidenceChips.length
-              ? `<div class="mini" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:1px;">${evidenceChips.map((chip) => `<span title="${enc(chip.label)} evidence attached" style="display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,0.16);border-radius:999px;padding:1px 6px;font-size:9px;font-weight:700;letter-spacing:.02em;background:rgba(255,255,255,0.045);color:rgba(255,255,255,0.9);line-height:1.45;">${enc(chip.label)}</span>`).join('')}</div>`
+              ? `<div class="mini" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:1px;">${evidenceChips.map((chip) => `<span class="bulk-timesheet-evidence-badge${chip.kind === 'TIMESHEET' ? ' bulk-timesheet-evidence-badge--timesheet' : ''}" data-evidence-kind="${enc(chip.kind)}" title="${enc(chip.label)} evidence attached" style="display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,0.16);border-radius:999px;padding:1px 6px;font-size:9px;font-weight:700;letter-spacing:.02em;background:rgba(255,255,255,0.045);color:rgba(255,255,255,0.9);line-height:1.45;">${enc(chip.label)}</span>`).join('')}</div>`
               : ''}
           </div>
 
@@ -178511,16 +178511,42 @@ function renderBulkProcessLists(state) {
     return String(a?.row_key || '').localeCompare(String(b?.row_key || ''));
   };
 
+  const normaliseEvidenceBadgeKindForDisplay = (value) => {
+    const raw = String(value == null ? '' : value).trim().toUpperCase();
+    if (raw === 'TIMESHEET' || raw === 'TIME SHEET' || raw === 'TIME-SHEET') return 'TIMESHEET';
+    if (raw === 'MILEAGE') return 'MILEAGE';
+    if (raw === 'TRAVEL') return 'TRAVEL';
+    if (raw === 'ACCOMMODATION' || raw === 'ACCOM') return 'ACCOMMODATION';
+    if (raw === 'OTHER') return 'OTHER';
+    return raw;
+  };
+
+  const evidenceBadgeLabelForDisplay = (kind) => {
+    const normalised = normaliseEvidenceBadgeKindForDisplay(kind);
+    if (normalised === 'TIMESHEET') return 'Timesheet';
+    if (normalised === 'MILEAGE') return 'Mileage';
+    if (normalised === 'TRAVEL') return 'Travel';
+    if (normalised === 'ACCOMMODATION') return 'Accommodation';
+    if (normalised === 'OTHER') return 'Other';
+    return normalised ? normalised.charAt(0) + normalised.slice(1).toLowerCase() : 'Evidence';
+  };
+
+  const evidenceBadgeClassForDisplay = (kind) => {
+    const normalised = normaliseEvidenceBadgeKindForDisplay(kind);
+    return normalised === 'TIMESHEET' ? ' bulk-timesheet-evidence-badge--timesheet' : '';
+  };
+
   const renderEvidenceBadges = (row) => {
     const badges = Array.isArray(row?.evidence_badges) ? row.evidence_badges : [];
     const useful = badges.filter((badge) => !!badge?.has_evidence).slice(0, 3);
     if (!useful.length) return '';
 
     return useful.map((badge) => {
-      const kind = String(badge?.kind || '').trim();
-      const label = kind ? kind.charAt(0) + kind.slice(1).toLowerCase() : 'Evidence';
+      const kind = normaliseEvidenceBadgeKindForDisplay(badge?.kind || '');
+      const label = evidenceBadgeLabelForDisplay(kind);
+      const className = `pill bulk-timesheet-evidence-badge${evidenceBadgeClassForDisplay(kind)}`;
       return `
-        <span class="pill" style="font-size:11px;padding:2px 8px;">${enc(label)}</span>
+        <span class="${enc(className)}" data-evidence-kind="${enc(kind)}" style="font-size:11px;padding:2px 8px;">${enc(label)}</span>
       `;
     }).join(' ');
   };
