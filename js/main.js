@@ -199163,19 +199163,69 @@ async function handleBulkProcessProcess(state) {
   };
   const maybeAttachOrStageQueueItem = async (active) => {
     const pane = (st.evidence_pane_state && typeof st.evidence_pane_state === 'object') ? st.evidence_pane_state : null;
-    const queueItem = (pane && String(pane.active_tab || 'queue') === 'queue' && pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
-    const queueId = trimStr(queueItem?.id || queueItem?.queue_id || '');
+    const queueItem = (pane && String(pane.active_tab || 'queue').trim().toLowerCase() === 'queue' && pane.active_queue_item && typeof pane.active_queue_item === 'object') ? pane.active_queue_item : null;
+    const queueId = trimStr(
+      queueItem?.id ||
+      queueItem?.queue_id ||
+      queueItem?.queueId ||
+      queueItem?.manual_timesheet_queue_id ||
+      queueItem?.manualTimesheetQueueId ||
+      ''
+    );
     const queueKind = queueId ? (evidenceKindOf(queueItem) || 'TIMESHEET') : '';
-    sigLog('QUEUE-ATTACH-SUPPRESSED', {
-      reason: 'frontend-evidence-move-disabled-sql-owned',
-      queue_id: queueId || null,
-      queue_kind: queueKind || null,
-      active_tab: trimStr(pane?.active_tab || ''),
-      target_timesheet_id: trimStr(active?.timesheetId || '') || null,
-      target_contract_week_id: trimStr(active?.contractWeekId || '') || null,
-      expected_timesheet_id: trimStr(active?.expectedTimesheetId || '') || null
+    const timesheetId = trimStr(active?.timesheetId || active?.currentTimesheetId || active?.expectedTimesheetId || '');
+    const expectedTimesheetId = trimStr(active?.expectedTimesheetId || active?.timesheetId || active?.currentTimesheetId || '');
+
+    if (!queueId || queueKind !== 'TIMESHEET' || !timesheetId || !expectedTimesheetId) {
+      sigLog('QUEUE-ATTACH-SKIP', {
+        reason: !queueId ? 'no-selected-queue-item' : (queueKind !== 'TIMESHEET' ? 'selected-queue-item-not-timesheet' : 'missing-timesheet-identity'),
+        queue_id: queueId || null,
+        queue_kind: queueKind || null,
+        active_tab: trimStr(pane?.active_tab || ''),
+        target_timesheet_id: timesheetId || null,
+        target_contract_week_id: trimStr(active?.contractWeekId || '') || null,
+        expected_timesheet_id: expectedTimesheetId || null
+      });
+      return false;
+    }
+
+    if (typeof attachQueueItemToTimesheetEvidence !== 'function') {
+      throw new Error('Bulk Process queue attach helper is not available. Refresh and try again.');
+    }
+
+    sigLog('QUEUE-ATTACH-START', {
+      queue_id: queueId,
+      queue_kind: queueKind,
+      target_timesheet_id: timesheetId,
+      expected_timesheet_id: expectedTimesheetId
     });
-    return false;
+
+    const result = await attachQueueItemToTimesheetEvidence(queueId, {
+      queue_item: queueItem,
+      timesheet_id: timesheetId,
+      expected_timesheet_id: expectedTimesheetId,
+      kind: 'TIMESHEET'
+    });
+
+    if (!result || result.ok === false || result.attached === false) {
+      throw new Error(trimStr(result?.error || result?.message || 'Failed to attach selected queue Timesheet item.'));
+    }
+
+    if (Array.isArray(pane.queue_rows)) {
+      pane.queue_rows = pane.queue_rows.filter((item) => {
+        const id = trimStr(item?.id || item?.queue_id || item?.queueId || item?.manual_timesheet_queue_id || item?.manualTimesheetQueueId || '');
+        return id !== queueId;
+      });
+    }
+    pane.active_queue_id = null;
+    pane.active_queue_item = null;
+    pane.__bulk_process_last_attached_queue_id = queueId;
+
+    sigLog('QUEUE-ATTACH-SUCCESS', {
+      queue_id: queueId,
+      evidence_id_present: !!trimStr(result.evidence_id || result.evidenceId || '')
+    });
+    return true;
   };
 
   const refreshActiveAfterEvidenceMutation = async (rowKey, preservedStateCtx, reason) => {
@@ -202900,13 +202950,20 @@ async function handleBulkProcessProcess(state) {
       paneBeforeProcessEvidenceMutation.active_queue_item &&
       typeof paneBeforeProcessEvidenceMutation.active_queue_item === 'object'
     ) ? deep(paneBeforeProcessEvidenceMutation.active_queue_item) : null;
-    const selectedQueueBeforeProcessQueueId = trimStr(selectedQueueItemBeforeProcess?.id || selectedQueueItemBeforeProcess?.queue_id || '');
+    const selectedQueueBeforeProcessQueueId = trimStr(
+      selectedQueueItemBeforeProcess?.id ||
+      selectedQueueItemBeforeProcess?.queue_id ||
+      selectedQueueItemBeforeProcess?.queueId ||
+      selectedQueueItemBeforeProcess?.manual_timesheet_queue_id ||
+      selectedQueueItemBeforeProcess?.manualTimesheetQueueId ||
+      ''
+    );
     const selectedQueueBeforeProcessKind = selectedQueueBeforeProcessQueueId ? (evidenceKindOf(selectedQueueItemBeforeProcess) || 'TIMESHEET') : '';
     const selectedQueueBeforeProcess = !!selectedQueueBeforeProcessQueueId;
     const selectedQueueTimesheetBeforeProcess = !!(selectedQueueBeforeProcess && selectedQueueBeforeProcessKind === 'TIMESHEET');
     const deferQueueTimesheetAttachUntilWeeklyProcessSuccess = false;
     const deferredWeeklyQueueTimesheetItem = null;
-    const willAttachOrStageQueueItem = false;
+    const willAttachOrStageQueueItem = !!(selectedQueueTimesheetBeforeProcess && !suppressTimesheetAutoAttachForProcess);
     stateAudit('queue-evidence-mutation-decision', {
       selected_queue_before_process: selectedQueueBeforeProcess,
       selected_queue_id: selectedQueueBeforeProcessQueueId || null,
