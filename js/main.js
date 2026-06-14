@@ -120490,7 +120490,6 @@ const onSaveTimesheet = async () => {
     const payload = {
       expenses_draft: JSON.parse(JSON.stringify(stagedExpenses)),
       context: 'timesheet-modal',
-      return_bulk_patch: true,
       expected_row_signature: rowNow.expected_row_signature || rowNow.row_signature || det.expected_row_signature || det.row_signature || null,
       row_signature: rowNow.row_signature || det.row_signature || null
     };
@@ -120786,7 +120785,6 @@ const onSaveTimesheet = async () => {
           ? {
               expenses_draft: JSON.parse(JSON.stringify(stagedExpenses)),
               context: 'timesheet-modal',
-              return_bulk_patch: true,
               expected_row_signature: rowNow.expected_row_signature || rowNow.row_signature || det.expected_row_signature || det.row_signature || null,
               row_signature: rowNow.row_signature || det.row_signature || null
             }
@@ -121535,10 +121533,9 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
     } catch {}
   }
 
-  try {
-    const idToRefresh = finalTsId || tsIdSave || null;
-    if (idToRefresh) await refreshTimesheetsSummaryAfterRotation(idToRefresh);
-  } catch {}
+  // The save path has already refreshed/adopted the active modal details above.
+  // Do not also run a broad summary refresh here; list/workbench rows are updated
+  // by their bounded affected-row refresh paths or by explicit user refilter/open.
 
   if (!isActiveTimesheetModalToken(openToken)) {
     GE();
@@ -195603,8 +195600,6 @@ async function rerenderBulkProcessWorkbench(state, logPrefix) {
   }
 }
 
-
-
 async function handleBulkProcessSave(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][SAVE]');
   GC('handleBulkProcessSave');
@@ -197478,6 +197473,114 @@ async function handleBulkProcessSave(state) {
 
     let saveResult = null;
 
+    const buildBulkProcessSaveAffectedItems = (resultLike = null) => {
+      const source = (resultLike && typeof resultLike === 'object') ? resultLike : {};
+      const out = [];
+      const push = (itemLike) => {
+        if (!itemLike || typeof itemLike !== 'object') return;
+        const itemRowKey = trimStr(itemLike.row_key || itemLike.new_row_key || itemLike.rowKey || itemLike.newRowKey || '');
+        const itemTimesheetId = trimStr(
+          itemLike.timesheet_id ||
+          itemLike.current_timesheet_id ||
+          itemLike.expected_timesheet_id ||
+          itemLike.requested_timesheet_id ||
+          tsId ||
+          actualTimesheetId ||
+          ''
+        );
+        const itemContractWeekId = trimStr(itemLike.contract_week_id || itemLike.week_id || weekId || '');
+        const itemBookingId = trimStr(itemLike.booking_id || row?.booking_id || details?.booking_id || '');
+        const rowKey = itemRowKey || (itemTimesheetId ? `timesheet:${itemTimesheetId}` : (itemContractWeekId ? `contract_week:${itemContractWeekId}` : ''));
+        if (!rowKey && !itemTimesheetId && !itemContractWeekId && !itemBookingId) return;
+        out.push({
+          row_key: rowKey || null,
+          previous_row_key: trimStr(itemLike.previous_row_key || itemLike.row_key_before || itemLike.old_row_key || currentRowKey || '') || null,
+          timesheet_id: itemTimesheetId || null,
+          current_timesheet_id: itemTimesheetId || null,
+          requested_timesheet_id: trimStr(itemLike.requested_timesheet_id || itemTimesheetId || '') || null,
+          expected_timesheet_id: trimStr(itemLike.expected_timesheet_id || itemTimesheetId || '') || null,
+          contract_week_id: itemContractWeekId || null,
+          booking_id: itemBookingId || null,
+          context: 'bulk_process'
+        });
+      };
+
+      if (Array.isArray(source.affected_rows)) source.affected_rows.forEach(push);
+      if (Array.isArray(source.affectedRows)) source.affectedRows.forEach(push);
+      if (Array.isArray(source.row_patches)) source.row_patches.forEach(push);
+      push(source.row_patch);
+      push(source.data_row);
+      push(source.row);
+      push(source);
+      push(row);
+
+      const seen = new Set();
+      return out.filter((item) => {
+        const key = [item.row_key || '', item.timesheet_id || '', item.contract_week_id || '', item.booking_id || ''].join('|');
+        if (!key.replace(/\|/g, '') || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 4);
+    };
+
+    const markBulkProcessSaveRefreshRequired = (message, affectedItems = []) => {
+      const warning = trimStr(message || 'Saved, but the refreshed Bulk Process row could not be loaded. Recheck the row before continuing.');
+      st.warning_text = warning;
+      st.error_text = st.error_text || warning;
+      st.refresh_required = true;
+      st.lifecycle_refresh_failed = true;
+      st.lifecycle_refresh_error = warning;
+      if (st.active_row && typeof st.active_row === 'object') {
+        st.active_row.refresh_required = true;
+        st.active_row.row_stale = true;
+        st.active_row.lifecycle_refresh_failed = true;
+        st.active_row.lifecycle_refresh_error = warning;
+      }
+      for (const contextObj of [st.active_context, st.active_ctx]) {
+        if (!contextObj || typeof contextObj !== 'object') continue;
+        contextObj.refresh_required = true;
+        contextObj.row_stale = true;
+        contextObj.lifecycle_refresh_failed = true;
+        contextObj.lifecycle_refresh_error = warning;
+      }
+      return {
+        ok: true,
+        saved_but_stale: true,
+        refresh_required: true,
+        refresh_failed: true,
+        warning,
+        message: warning,
+        affected_rows: affectedItems
+      };
+    };
+
+    const refreshBulkProcessSaveAffectedRows = async (resultLike = null) => {
+      const affectedItems = buildBulkProcessSaveAffectedItems(resultLike);
+      if (typeof refreshTimesheetLifecycleAffectedRows !== 'function') {
+        return markBulkProcessSaveRefreshRequired('Saved, but affected-row refresh is not available. Recheck the row before continuing.', affectedItems);
+      }
+      try {
+        const refreshResult = await refreshTimesheetLifecycleAffectedRows(
+          { context: 'bulk_process', affected_rows: affectedItems },
+          {
+            context: 'bulk_process',
+            state: st,
+            apply: true,
+            source: 'bulk-process-save',
+            mutation: 'save',
+            max_items: 8,
+            throwOnError: false
+          }
+        );
+        if (!refreshResult || refreshResult.ok === false || refreshResult.refresh_failed === true) {
+          return markBulkProcessSaveRefreshRequired(refreshResult?.error || refreshResult?.message || 'Saved, but row refresh failed. Recheck the row before continuing.', affectedItems);
+        }
+        return { ok: true, refresh: refreshResult, affected_rows: affectedItems };
+      } catch (err) {
+        return markBulkProcessSaveRefreshRequired(String(err?.message || err || 'Saved, but row refresh failed. Recheck the row before continuing.'), affectedItems);
+      }
+    };
+
     if (isWeeklyManualContext && (scheduleChangedWeekly || extrasChangedWeekly || plannedContractWeekExpenseDraftSave)) {
       if (isPlannedWeeklyWithoutTs) {
         const plannedDraftExpensesOnly = !!(plannedContractWeekExpenseDraftSave && !scheduleChangedWeekly && !extrasChangedWeekly);
@@ -197490,7 +197593,9 @@ async function handleBulkProcessSave(state) {
               } : {}),
               expenses_draft: deep(stagedExpenses),
               bulk_process: true,
-              return_bulk_patch: true,
+              minimal_lifecycle_mutation: true,
+              requires_affected_row_refresh: true,
+              response_context: 'minimal_lifecycle_mutation',
               context: 'bulk_process',
               expected_row_signature: activeRowSignature || null,
               row_signature: activeRowSignature || null
@@ -197504,7 +197609,9 @@ async function handleBulkProcessSave(state) {
               additional_units_week: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasWeek || {}) } : { ...(currentExtrasWeek || {}) },
               additional_units_per_day: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasPerDay || {}) } : { ...(currentExtrasPerDay || {}) },
               bulk_process: true,
-              return_bulk_patch: true,
+              minimal_lifecycle_mutation: true,
+              requires_affected_row_refresh: true,
+              response_context: 'minimal_lifecycle_mutation',
               context: 'bulk_process',
               expected_row_signature: activeRowSignature || null,
               row_signature: activeRowSignature || null,
@@ -197526,7 +197633,9 @@ async function handleBulkProcessSave(state) {
           additional_units_week: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasWeek || {}) } : { ...(currentExtrasWeek || {}) },
           additional_units_per_day: hasExplicitAdditionalRatesDraft ? { ...(stagedExtrasPerDay || {}) } : { ...(currentExtrasPerDay || {}) },
           bulk_process: true,
-          return_bulk_patch: true,
+          minimal_lifecycle_mutation: true,
+          requires_affected_row_refresh: true,
+          response_context: 'minimal_lifecycle_mutation',
           context: 'bulk_process',
           expected_row_signature: activeRowSignature || null,
           row_signature: activeRowSignature || null,
@@ -197539,7 +197648,6 @@ async function handleBulkProcessSave(state) {
           bulkProcessOwnsTransition: true,
           suppressModalAdoption: true,
           suppressPendingFocus: true,
-          returnBulkPatch: true,
           expected_row_signature: activeRowSignature || null,
           row_signature: activeRowSignature || null,
           activeRow: row || null
@@ -197569,7 +197677,9 @@ async function handleBulkProcessSave(state) {
       const payload = {
         expected_timesheet_id: details.current_timesheet_id || ts.timesheet_id || tsId,
         bulk_process: true,
-        return_bulk_patch: true,
+        minimal_lifecycle_mutation: true,
+        requires_affected_row_refresh: true,
+        response_context: 'minimal_lifecycle_mutation',
         context: 'bulk_process',
         expected_row_signature: activeRowSignature || null,
         row_signature: activeRowSignature || null
@@ -197894,119 +198004,51 @@ async function handleBulkProcessSave(state) {
       return { ok: true, expense_result: expenseCommitResult || null, refreshed_context: refreshedAfterExpenseSave };
     }
 
-    const ds = ensureDataset();
-    const bucketHint = upper(row.bulk_process_bucket || row.summary_stage || '') || 'UNPROCESSED';
     const cacheHints = (saveResult?.cache_invalidation_hints && typeof saveResult.cache_invalidation_hints === 'object')
       ? saveResult.cache_invalidation_hints
       : ((saveResult?.cache_invalidation && typeof saveResult.cache_invalidation === 'object') ? saveResult.cache_invalidation : {});
-    const rowPatchListRaw = Array.isArray(saveResult?.row_patches)
-      ? saveResult.row_patches.filter((patch) => patch && typeof patch === 'object')
-      : (
-          saveResult?.row_patch && typeof saveResult.row_patch === 'object'
-            ? [saveResult.row_patch]
-            : (
-                saveResult?.data_row && typeof saveResult.data_row === 'object'
-                  ? [saveResult.data_row]
-                  : (
-                      saveResult?.row && typeof saveResult.row === 'object'
-                        ? [saveResult.row]
-                        : []
-                    )
-              )
-        );
-    if (didRunManualSave && !rowPatchListRaw.length) {
-      throw new Error('Bulk Process save did not return the required row_patch/row_patches response. Saving is disabled until the save endpoint returns the bulk patch contract.');
+    const refreshOutcome = await refreshBulkProcessSaveAffectedRows(saveResult || expenseCommitResult || row);
+
+    if (refreshOutcome?.saved_but_stale === true || refreshOutcome?.refresh_failed === true) {
+      st.saving = false;
+      st.save_in_flight = false;
+      st.__bulk_process_save_in_flight = false;
+      st.__suppress_dirty_marking = false;
+      await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][SAVE][REFRESH-FAILED]');
+      GE();
+      return {
+        ok: true,
+        saved: true,
+        saved_but_stale: true,
+        refresh_required: true,
+        refresh_failed: true,
+        warning: refreshOutcome.warning || refreshOutcome.message || 'Saved, but row refresh failed. Recheck the row before continuing.',
+        message: refreshOutcome.message || refreshOutcome.warning || 'Saved, but row refresh failed. Recheck the row before continuing.',
+        result: saveResult || null,
+        expense_result: expenseCommitResult || null,
+        affected_rows: refreshOutcome.affected_rows || []
+      };
     }
 
-    const patchedRow = replaceRowInDataset(ds, buildPatchedRowFromPayload(row, saveResult, bucketHint), bucketHint, currentRowKey);
-    const rowPatchList = rowPatchListRaw.map((patch) => preserveBulkProcessDisplayIdentityForSave(
-      patch,
-      patchedRow,
-      row,
-      st.active_row,
-      st.active_context?.row,
-      st.active_context?.data_row,
-      st.active_ctx?.row,
-      st.active_ctx?.data_row
-    ));
-    const postSaveEvidencePatch = buildSaveEvidenceAuthorityPatch(normaliseSaveEvidenceRows(preservedEvidenceRowsBeforeSave, patchedRow.evidence, st.active_row?.evidence, st.evidence_pane_state?.attached_rows, st.evidence_pane_state?.attached_all_rows));
-    if (postSaveEvidencePatch.hasAnyEvidence) applySaveEvidenceAuthorityPatch(patchedRow, postSaveEvidencePatch);
-    st.dataset = ds;
-
-    const manualChanged = !!(
-      cacheHints.manual_changed === true ||
-      cacheHints.invalidate_editor_context === true ||
-      scheduleChangedWeekly ||
-      extrasChangedWeekly ||
-      expensesChanged ||
-      (isDailyManualContext && dirtyNow)
-    );
-    const evidenceChanged = !!(
-      cacheHints.evidence_changed === true ||
-      cacheHints.storage_changed === true ||
-      cacheHints.invalidate_evidence === true ||
-      cacheHints.invalidate_preview === true
-    );
-
-    if (typeof applyBulkTimesheetRowPatches === 'function') {
-      try {
-        applyBulkTimesheetRowPatches(st, rowPatchList.length ? rowPatchList : [{ ...patchedRow, previous_row_key: currentRowKey }], {
-          mode: 'bulk_process',
-          action: 'save',
-          count_deltas: saveResult?.count_deltas || {},
-          result: saveResult,
-          cache_invalidation_hints: cacheHints,
-          preserveActiveContext: !manualChanged && !evidenceChanged
-        });
-      } catch (err) {
-        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][SAVE] patch helper failed; using local row patch', err);
-      }
-    }
-
-    if (typeof invalidateBulkTimesheetCachesForPatch === 'function') {
-      try {
-        invalidateBulkTimesheetCachesForPatch(st, rowPatchList[0] || patchedRow, {
-          mode: 'bulk_process',
-          action: 'save',
-          cache_invalidation_hints: cacheHints
-        });
-      } catch {}
-    }
-
-    if (typeof refreshBulkAuthoriseSummaryRowAfterMutation === 'function') {
-      try {
-        await refreshBulkAuthoriseSummaryRowAfterMutation(st, {
-          actionName: 'save',
-          rows: rowPatchList,
-          result: saveResult,
-          row_patches: rowPatchList,
-          source: 'bulk-process-save-patch-only'
-        });
-      } catch (err) {
-        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-PROCESS][SAVE] in-memory summary patch failed', err);
-      }
-    }
-
-    if (!manualChanged && !evidenceChanged) {
-      hydrateActiveFromPayload(patchedRow, saveResult, related);
-      if (st.active_context && typeof st.active_context === 'object') {
-        st.active_context.row = deep(st.active_row || patchedRow);
-        st.active_context.data_row = deep(st.active_row || patchedRow);
-        st.active_context.row_signature = trimStr((st.active_row || patchedRow)?.row_signature || st.active_context.row_signature || '');
-      }
-    } else {
-      st.active_row = deep(patchedRow);
-      if (postSaveEvidencePatch.hasAnyEvidence) applySaveEvidenceAuthorityPatch(st.active_row, postSaveEvidencePatch);
-      st.active_row_key = trimStr(patchedRow.row_key || makeRowKey(patchedRow)) || null;
+    const refreshedRows = Array.isArray(refreshOutcome?.refresh?.flattened_rows)
+      ? refreshOutcome.refresh.flattened_rows.filter((patch) => patch && typeof patch === 'object')
+      : [];
+    const refreshedPrimaryRow = refreshedRows[0] || null;
+    if (refreshedPrimaryRow) {
+      const postSaveEvidencePatch = buildSaveEvidenceAuthorityPatch(normaliseSaveEvidenceRows(preservedEvidenceRowsBeforeSave, refreshedPrimaryRow.evidence, st.active_row?.evidence, st.evidence_pane_state?.attached_rows, st.evidence_pane_state?.attached_all_rows));
+      if (postSaveEvidencePatch.hasAnyEvidence) applySaveEvidenceAuthorityPatch(refreshedPrimaryRow, postSaveEvidencePatch);
+      st.active_row = { ...((st.active_row && typeof st.active_row === 'object') ? st.active_row : {}), ...deep(refreshedPrimaryRow) };
+      st.active_row_key = trimStr(refreshedPrimaryRow.row_key || makeRowKey(refreshedPrimaryRow) || st.active_row_key || '') || null;
       st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
-      if (manualChanged) {
-        await refreshActiveContext({ profile: 'editor', context_profile: 'editor', includeEvidence: false, manualChanged: true });
+      if (st.active_context && typeof st.active_context === 'object') {
+        if (st.active_context.row && typeof st.active_context.row === 'object') st.active_context.row = { ...st.active_context.row, ...deep(refreshedPrimaryRow) };
+        if (st.active_context.data_row && typeof st.active_context.data_row === 'object') st.active_context.data_row = { ...st.active_context.data_row, ...deep(refreshedPrimaryRow) };
+        st.active_context.row_signature = trimStr(refreshedPrimaryRow.row_signature || refreshedPrimaryRow.backend_row_signature || st.active_context.row_signature || '');
       }
-      if (evidenceChanged) {
-        await refreshActiveContext({ profile: 'evidence', context_profile: 'evidence', includeEvidence: true, evidenceChanged: true });
-      }
-      if (!manualChanged && !evidenceChanged) {
-        await refreshActiveContext({ profile: 'status_header', context_profile: 'status_header', includeEvidence: false, statusOnly: true });
+      if (st.active_ctx && typeof st.active_ctx === 'object') {
+        if (st.active_ctx.row && typeof st.active_ctx.row === 'object') st.active_ctx.row = { ...st.active_ctx.row, ...deep(refreshedPrimaryRow) };
+        if (st.active_ctx.data_row && typeof st.active_ctx.data_row === 'object') st.active_ctx.data_row = { ...st.active_ctx.data_row, ...deep(refreshedPrimaryRow) };
+        st.active_ctx.row_signature = trimStr(refreshedPrimaryRow.row_signature || refreshedPrimaryRow.backend_row_signature || st.active_ctx.row_signature || '');
       }
     }
 
@@ -198025,9 +198067,7 @@ async function handleBulkProcessSave(state) {
       });
     }
 
-    if (evidenceChanged && typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
-      try { reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch {}
-    } else if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
+    if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') {
       try { reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch {}
     }
     installBulkProcessModalCtxPatch(st, { forceIdentityRebase: true });
@@ -198048,7 +198088,17 @@ async function handleBulkProcessSave(state) {
     st.__suppress_dirty_marking = false;
 
     GE();
-    return { ok: true };
+    return {
+      ok: true,
+      saved: true,
+      refresh_required: false,
+      result: saveResult || null,
+      expense_result: expenseCommitResult || null,
+      affected_refresh: refreshOutcome?.refresh || null,
+      row_patch: refreshedPrimaryRow || null,
+      row_patches: refreshedRows || [],
+      cache_invalidation_hints: cacheHints || {}
+    };
   } catch (err) {
     st.saving = false;
       st.save_in_flight = false;
@@ -209188,7 +209238,6 @@ async function bankingPayWorkbenchSessionClearAllDecisions(sessionId, payload = 
   }
 }
 
-
 async function handleBulkAuthoriseSave(state, options = {}) {
   const { GC, GE } = getTsLoggers('[TS][BULK-AUTH][SAVE]');
   GC('handleBulkAuthoriseSave');
@@ -209697,11 +209746,139 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     st.saving = true;
     st.error_text = '';
 
-    if (referenceChanged && typeof updateTimesheetReference === 'function') {
-      await updateTimesheetReference(String(timesheetId), stagedReference, ctx.current_timesheet_id || ts.timesheet_id || timesheetId);
-    }
-
     let saveResult = null;
+    let referenceUpdateResult = null;
+
+    const buildAuthoriseSaveAffectedItems = (resultLike = null) => {
+      const source = (resultLike && typeof resultLike === 'object') ? resultLike : {};
+      const out = [];
+      const push = (itemLike) => {
+        if (!itemLike || typeof itemLike !== 'object') return;
+        const itemRowKey = trimStr(
+          itemLike.row_key ||
+          itemLike.new_row_key ||
+          itemLike.rowKey ||
+          itemLike.newRowKey ||
+          ''
+        );
+        const itemTimesheetId = trimStr(
+          itemLike.timesheet_id ||
+          itemLike.current_timesheet_id ||
+          itemLike.expected_timesheet_id ||
+          itemLike.requested_timesheet_id ||
+          timesheetId ||
+          ''
+        );
+        const itemContractWeekId = trimStr(itemLike.contract_week_id || itemLike.week_id || contractWeekId || '');
+        const itemBookingId = trimStr(itemLike.booking_id || row?.booking_id || details?.booking_id || '');
+        const rowKey = itemRowKey || (itemTimesheetId ? `timesheet:${itemTimesheetId}` : (itemContractWeekId ? `contract_week:${itemContractWeekId}` : ''));
+        if (!rowKey && !itemTimesheetId && !itemContractWeekId && !itemBookingId) return;
+        out.push({
+          row_key: rowKey || null,
+          previous_row_key: trimStr(itemLike.previous_row_key || itemLike.row_key_before || itemLike.old_row_key || '') || null,
+          timesheet_id: itemTimesheetId || null,
+          current_timesheet_id: itemTimesheetId || null,
+          requested_timesheet_id: trimStr(itemLike.requested_timesheet_id || itemTimesheetId || '') || null,
+          expected_timesheet_id: trimStr(itemLike.expected_timesheet_id || itemTimesheetId || '') || null,
+          contract_week_id: itemContractWeekId || null,
+          booking_id: itemBookingId || null,
+          context: 'bulk_authorise'
+        });
+      };
+
+      if (Array.isArray(source.affected_rows)) source.affected_rows.forEach(push);
+      if (Array.isArray(source.affectedRows)) source.affectedRows.forEach(push);
+      if (Array.isArray(source.row_patches)) source.row_patches.forEach(push);
+      push(source.row_patch);
+      push(source.data_row);
+      push(source.row);
+      push(source.updatedRow);
+      push(source);
+      push(row);
+
+      const seen = new Set();
+      return out.filter((item) => {
+        const key = [item.row_key || '', item.timesheet_id || '', item.contract_week_id || '', item.booking_id || ''].join('|');
+        if (!key.replace(/\|/g, '') || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 4);
+    };
+
+    const markAuthoriseSaveRefreshRequired = (message, affectedItems = []) => {
+      const warning = trimStr(message || 'Saved, but the refreshed Bulk Authorise row could not be loaded. Recheck the row and try again.');
+      st.warning_text = warning;
+      st.error_text = st.error_text || warning;
+      st.refresh_required = true;
+      st.lifecycle_refresh_failed = true;
+      st.lifecycle_refresh_error = warning;
+      if (st.active_row && typeof st.active_row === 'object') {
+        st.active_row.refresh_required = true;
+        st.active_row.row_stale = true;
+        st.active_row.lifecycle_refresh_failed = true;
+        st.active_row.lifecycle_refresh_error = warning;
+      }
+      for (const contextObj of [st.active_context, st.active_ctx]) {
+        if (!contextObj || typeof contextObj !== 'object') continue;
+        contextObj.refresh_required = true;
+        contextObj.row_stale = true;
+        contextObj.lifecycle_refresh_failed = true;
+        contextObj.lifecycle_refresh_error = warning;
+      }
+      return {
+        ok: true,
+        saved_but_stale: true,
+        refresh_required: true,
+        refresh_failed: true,
+        safe_for_lifecycle: false,
+        warning,
+        message: warning,
+        affected_rows: affectedItems
+      };
+    };
+
+    const refreshAuthoriseSaveAffectedRows = async (resultLike = null) => {
+      const affectedItems = buildAuthoriseSaveAffectedItems(resultLike);
+      if (typeof refreshTimesheetLifecycleAffectedRows !== 'function') {
+        return markAuthoriseSaveRefreshRequired('Saved, but affected-row refresh is not available. Recheck the row and try again.', affectedItems);
+      }
+      try {
+        const refreshResult = await refreshTimesheetLifecycleAffectedRows(
+          { context: 'bulk_authorise', affected_rows: affectedItems },
+          {
+            context: 'bulk_authorise',
+            state: st,
+            apply: true,
+            source: 'bulk-authorise-save',
+            mutation: 'manual-save',
+            max_items: 8,
+            throwOnError: false
+          }
+        );
+        if (!refreshResult || refreshResult.ok === false || refreshResult.refresh_failed === true) {
+          return markAuthoriseSaveRefreshRequired(refreshResult?.error || refreshResult?.message || 'Saved, but row refresh failed. Recheck the row and try again.', affectedItems);
+        }
+        return { ok: true, refresh: refreshResult, affected_rows: affectedItems };
+      } catch (err) {
+        return markAuthoriseSaveRefreshRequired(String(err?.message || err || 'Saved, but row refresh failed. Recheck the row and try again.'), affectedItems);
+      }
+    };
+
+    if (referenceChanged && typeof updateTimesheetReference === 'function') {
+      referenceUpdateResult = await updateTimesheetReference(
+        String(timesheetId),
+        stagedReference,
+        ctx.current_timesheet_id || ts.timesheet_id || timesheetId,
+        {
+          context: 'bulk_authorise',
+          suppressDetailsRefresh: true,
+          suppressSummaryRefresh: true,
+          suppressModalAdoption: true,
+          expected_row_signature: activeBackendRowSignature || null
+        }
+      );
+      saveResult = referenceUpdateResult;
+    }
 
     if (shouldPersistWeeklyManual) {
       saveResult = await manualUpsertContractWeek(String(contractWeekId), {
@@ -209716,7 +209893,9 @@ async function handleBulkAuthoriseSave(state, options = {}) {
         record_identity: activeRecordIdentity || null,
         context: 'bulk_authorise',
         bulk_authorise: true,
-        return_bulk_patch: true,
+        minimal_lifecycle_mutation: true,
+        requires_affected_row_refresh: true,
+        response_context: 'minimal_lifecycle_mutation',
         suppressModalAdoption: true,
         suppressPendingFocus: true
       }, {
@@ -209738,7 +209917,9 @@ async function handleBulkAuthoriseSave(state, options = {}) {
           record_identity: activeRecordIdentity || null,
           context: 'bulk_authorise',
           bulk_authorise: true,
-          return_bulk_patch: true
+          minimal_lifecycle_mutation: true,
+          requires_affected_row_refresh: true,
+          response_context: 'minimal_lifecycle_mutation'
         }
       );
     }
@@ -209778,7 +209959,9 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       saveResult = await contractWeekManualDraftUpsert(String(contractWeekId), {
         expenses_draft: deep(stagedExpensesDraft),
         bulk_authorise: true,
-        return_bulk_patch: true,
+        minimal_lifecycle_mutation: true,
+        requires_affected_row_refresh: true,
+        response_context: 'minimal_lifecycle_mutation',
         context: 'bulk_authorise',
         expected_row_signature: activeBackendRowSignature || null,
         row_signature: activeBackendRowSignature || null,
@@ -209858,64 +210041,86 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       }
       clearExpenseDirtyAcrossAuthoriseState(deep(expenseCommitResult?.committedDraft || stagedExpensesDraft || {}));
     }
-    const saveCacheHints = (saveResult?.cache_invalidation_hints && typeof saveResult.cache_invalidation_hints === 'object') ? saveResult.cache_invalidation_hints : {};
-    const normaliseSaveRowPatch = (patchCandidate) => {
-      if (!patchCandidate || typeof patchCandidate !== 'object' || Array.isArray(patchCandidate)) return null;
-      if (patchCandidate.row_patch && typeof patchCandidate.row_patch === 'object' && !Array.isArray(patchCandidate.row_patch)) {
-        return { ...patchCandidate, ...patchCandidate.row_patch };
-      }
-      return patchCandidate;
-    };
-    const saveRowPatches = (() => {
-      const out = [];
-      const pushPatch = (patchCandidate) => {
-        const patch = normaliseSaveRowPatch(patchCandidate);
-        if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return;
-        out.push(patch);
-      };
-      if (Array.isArray(saveResult?.row_patches)) {
-        for (const patch of saveResult.row_patches) pushPatch(patch);
-      } else {
-        pushPatch(saveResult?.row_patch);
-        pushPatch(saveResult?.row);
-        pushPatch(saveResult?.data_row);
-      }
-      return out;
-    })();
-
-    if (!saveRowPatches.length) {
-      const syntheticPatch = {
-        row_key: trimStr(st.active_row_key || row?.row_key || ''),
-        new_row_key: trimStr(st.active_row_key || row?.row_key || ''),
+    if (!saveResult && expenseCommitResult?.ok) {
+      saveResult = {
+        ok: true,
+        success: true,
+        response_context: 'minimal_lifecycle_mutation',
+        minimal_lifecycle_mutation: true,
+        requires_affected_row_refresh: true,
+        refresh_required: true,
         timesheet_id: timesheetId || null,
         current_timesheet_id: timesheetId || null,
-        expected_timesheet_id: timesheetId || null,
+        expected_timesheet_id: expectedTimesheetId || timesheetId || null,
         contract_week_id: contractWeekId || null,
-        row_signature: trimStr(saveResult?.row_signature || activeBackendRowSignature || row?.row_signature || ''),
-        backend_row_signature: trimStr(saveResult?.row_signature || activeBackendRowSignature || row?.row_signature || '')
+        affected_rows: buildAuthoriseSaveAffectedItems(expenseCommitResult),
+        cache_invalidation_hints: {
+          row_keys: [trimStr(row?.row_key || (timesheetId ? `timesheet:${timesheetId}` : ''))].filter(Boolean),
+          timesheet_ids: [timesheetId].filter(Boolean),
+          datasets: ['bulk_authorise'],
+          manual_changed: true,
+          expenses_changed: true,
+          invalidate_context: false,
+          invalidate_row_context: false,
+          invalidate_editor_context: true,
+          invalidate_preview: false,
+          invalidate_evidence: false
+        }
       };
-      if (referenceChanged) syntheticPatch.reference_number = stagedReference || null;
-      saveRowPatches.push(syntheticPatch);
     }
 
-    const manualChangedAfterSave = !!(
-      saveCacheHints.manual_changed === true ||
-      saveCacheHints.invalidate_editor_context === true ||
-      referenceChanged ||
-      expensesMileageDirty ||
-      shouldPersistWeeklyManual ||
-      shouldPersistDailyManual ||
-      plannedContractWeekExpenseDraftSave
-    );
-    const evidenceChangedAfterSave = !!(
-      saveCacheHints.evidence_changed === true ||
-      saveCacheHints.storage_changed === true ||
-      saveCacheHints.invalidate_evidence === true ||
-      saveCacheHints.invalidate_preview === true
-    );
-    const identityChangedAfterSave = saveCacheHints.identity_changed === true;
-    const preferredSaveRowKey = trimStr(saveRowPatches[0]?.new_row_key || saveRowPatches[0]?.row_key_after || saveRowPatches[0]?.row_key || st.active_row_key || row?.row_key || '') || null;
+    const saveCacheHints = (saveResult?.cache_invalidation_hints && typeof saveResult.cache_invalidation_hints === 'object') ? saveResult.cache_invalidation_hints : {};
+    const refreshOutcome = await refreshAuthoriseSaveAffectedRows(saveResult || expenseCommitResult || referenceUpdateResult || row);
+    const refreshedRows = Array.isArray(refreshOutcome?.refresh?.flattened_rows)
+      ? refreshOutcome.refresh.flattened_rows.filter((patch) => patch && typeof patch === 'object')
+      : [];
+    const refreshedPrimaryRow = refreshedRows[0] || null;
+
+    if (refreshOutcome?.saved_but_stale === true || refreshOutcome?.refresh_failed === true) {
+      st.saving = false;
+      await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][SAVE][REFRESH-FAILED]');
+      GE();
+      return {
+        ok: true,
+        saved: true,
+        saved_but_stale: true,
+        refresh_required: true,
+        refresh_failed: true,
+        safe_for_lifecycle: false,
+        warning: refreshOutcome.warning || refreshOutcome.message || 'Saved, but row refresh failed. Recheck the row and try again.',
+        message: refreshOutcome.message || refreshOutcome.warning || 'Saved, but row refresh failed. Recheck the row and try again.',
+        result: saveResult || null,
+        expense_result: expenseCommitResult || null,
+        affected_rows: refreshOutcome.affected_rows || [],
+        row_patches: [],
+        row_patch: null
+      };
+    }
+
+    const saveRowPatches = refreshedRows.length
+      ? refreshedRows
+      : buildAuthoriseSaveAffectedItems(saveResult || expenseCommitResult || referenceUpdateResult || row).map((item) => ({
+          ...(row && typeof row === 'object' ? deep(row) : {}),
+          ...item,
+          row_key: item.row_key || trimStr(st.active_row_key || row?.row_key || ''),
+          new_row_key: item.row_key || trimStr(st.active_row_key || row?.row_key || ''),
+          row_signature: trimStr(saveResult?.backend_row_signature || saveResult?.row_signature || activeBackendRowSignature || row?.row_signature || ''),
+          backend_row_signature: trimStr(saveResult?.backend_row_signature || saveResult?.row_signature || activeBackendRowSignature || row?.row_signature || '')
+        }));
+
+    const preferredSaveRowKey = trimStr(
+      refreshedPrimaryRow?.new_row_key ||
+      refreshedPrimaryRow?.row_key ||
+      saveRowPatches[0]?.new_row_key ||
+      saveRowPatches[0]?.row_key ||
+      st.active_row_key ||
+      row?.row_key ||
+      ''
+    ) || null;
     const nextBackendRowSignature = trimStr(
+      refreshedPrimaryRow?.backend_row_signature ||
+      refreshedPrimaryRow?.row_backend_signature ||
+      refreshedPrimaryRow?.row_signature ||
       saveResult?.backend_row_signature ||
       saveResult?.row_backend_signature ||
       saveResult?.row_signature ||
@@ -209925,148 +210130,51 @@ async function handleBulkAuthoriseSave(state, options = {}) {
       activeBackendRowSignature ||
       ''
     );
-    const nextRenderSignature = trimStr(saveRowPatches[0]?.render_signature || activeRenderSignature || '');
-    const syncActiveSaveSignatureState = () => {
-      const backendSignature = trimStr(nextBackendRowSignature || '');
-      const rowKeyForSync = trimStr(preferredSaveRowKey || st.active_row_key || row?.row_key || '');
-      const existingRenderSignature = trimStr(
-        st.__bulk_authorise_active_render_signature ||
-        st.active_context?.render_signature ||
-        st.active_ctx?.render_signature ||
-        st.active_row?.render_signature ||
-        activeRenderSignature ||
-        ''
-      );
-      const renderSignature = trimStr(nextRenderSignature || existingRenderSignature || '');
-      const syncRowObject = (targetRow) => {
-        if (!targetRow || typeof targetRow !== 'object') return;
-        if (backendSignature) {
-          targetRow.row_signature = backendSignature;
-          targetRow.backend_row_signature = backendSignature;
-          targetRow.row_backend_signature = backendSignature;
-        }
-        if (renderSignature) targetRow.render_signature = renderSignature;
-      };
+    const nextRenderSignature = trimStr(
+      refreshedPrimaryRow?.render_signature ||
+      saveRowPatches[0]?.render_signature ||
+      activeRenderSignature ||
+      ''
+    );
 
-      syncRowObject(st.active_row);
-      for (const contextObj of [st.active_context, st.active_ctx]) {
-        if (!contextObj || typeof contextObj !== 'object') continue;
-        const contextRowKey = trimStr(
-          contextObj.row?.row_key ||
-          contextObj.data_row?.row_key ||
-          contextObj.row_key ||
-          ''
-        );
-        if (rowKeyForSync && contextRowKey && contextRowKey !== rowKeyForSync) continue;
-        syncRowObject(contextObj.row);
-        syncRowObject(contextObj.data_row);
-        if (backendSignature) {
-          contextObj.row_signature = backendSignature;
-          contextObj.backend_row_signature = backendSignature;
-          contextObj.row_backend_signature = backendSignature;
-        }
-        if (renderSignature) contextObj.render_signature = renderSignature;
-      }
+    if (refreshedPrimaryRow && st.active_row && typeof st.active_row === 'object') {
+      st.active_row = { ...st.active_row, ...deep(refreshedPrimaryRow) };
+      st.active_row_key = preferredSaveRowKey || st.active_row_key || null;
+    }
+    if (refreshedPrimaryRow && st.active_context && typeof st.active_context === 'object') {
+      if (st.active_context.row && typeof st.active_context.row === 'object') st.active_context.row = { ...st.active_context.row, ...deep(refreshedPrimaryRow) };
+      if (st.active_context.data_row && typeof st.active_context.data_row === 'object') st.active_context.data_row = { ...st.active_context.data_row, ...deep(refreshedPrimaryRow) };
+    }
+    if (refreshedPrimaryRow && st.active_ctx && typeof st.active_ctx === 'object') {
+      if (st.active_ctx.row && typeof st.active_ctx.row === 'object') st.active_ctx.row = { ...st.active_ctx.row, ...deep(refreshedPrimaryRow) };
+      if (st.active_ctx.data_row && typeof st.active_ctx.data_row === 'object') st.active_ctx.data_row = { ...st.active_ctx.data_row, ...deep(refreshedPrimaryRow) };
+    }
 
-      if (backendSignature) st.__bulk_authorise_active_backend_row_signature = backendSignature;
-      if (renderSignature) st.__bulk_authorise_active_render_signature = renderSignature;
-      if (activeRecordIdentity) st.__bulkAuthoriseRecordIdentity = activeRecordIdentity;
-      if (rowKeyForSync && st.__bulkAuthorisePreviewActiveRowKey === rowKeyForSync && backendSignature) {
-        st.__bulkAuthorisePreviewActiveRowSignature = backendSignature;
+    const syncRowObject = (targetRow) => {
+      if (!targetRow || typeof targetRow !== 'object') return;
+      if (nextBackendRowSignature) {
+        targetRow.row_signature = nextBackendRowSignature;
+        targetRow.backend_row_signature = nextBackendRowSignature;
+        targetRow.row_backend_signature = nextBackendRowSignature;
       }
-      if (st.__bulk_authorise_row_context_ready === true) {
-        if (backendSignature) st.__bulk_authorise_row_context_ready_backend_signature = backendSignature;
-        if (renderSignature) {
-          st.__bulk_authorise_row_context_ready_signature = renderSignature;
-          st.__bulk_authorise_row_context_ready_render_signature = renderSignature;
-        }
-      }
+      if (nextRenderSignature) targetRow.render_signature = nextRenderSignature;
     };
-
-    if (typeof applyBulkTimesheetRowPatches === 'function') {
-      try {
-        applyBulkTimesheetRowPatches(st, saveRowPatches, {
-          mode: 'bulk_authorise',
-          count_deltas: saveResult?.count_deltas || {},
-          action: 'manual-save',
-          result: saveResult || null,
-          preserveActiveContext: true
-        });
-      } catch (err) {
-        if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][SAVE] shared patch helper failed; using active-row fallback', err);
-      }
+    syncRowObject(st.active_row);
+    syncRowObject(st.active_context?.row);
+    syncRowObject(st.active_context?.data_row);
+    syncRowObject(st.active_ctx?.row);
+    syncRowObject(st.active_ctx?.data_row);
+    if (nextBackendRowSignature) st.__bulk_authorise_active_backend_row_signature = nextBackendRowSignature;
+    if (nextRenderSignature) st.__bulk_authorise_active_render_signature = nextRenderSignature;
+    if (activeRecordIdentity) st.__bulkAuthoriseRecordIdentity = activeRecordIdentity;
+    if (preferredSaveRowKey && st.__bulkAuthorisePreviewActiveRowKey === preferredSaveRowKey && nextBackendRowSignature) {
+      st.__bulkAuthorisePreviewActiveRowSignature = nextBackendRowSignature;
     }
-
-    syncActiveSaveSignatureState();
-
-    if (preferredSaveRowKey && typeof setActiveBulkAuthoriseRowFromVisibleRows === 'function') {
-      await setActiveBulkAuthoriseRowFromVisibleRows(st, preferredSaveRowKey, {
-        source: identityChangedAfterSave ? 'identity_patch' : 'status_patch',
-        cache_invalidation_hints: saveCacheHints,
-        rowSignature: nextRenderSignature || nextBackendRowSignature || undefined,
-        renderSignature: nextRenderSignature || undefined,
-        backendRowSignature: nextBackendRowSignature || undefined,
-        recordIdentity: activeRecordIdentity || undefined,
-        refreshContext: false,
-        scheduleHydration: false,
-        deferContextRefresh: true,
-        preserveActiveContext: true,
-        preserveExistingContext: true,
-        preserveSignedUrlCache: true,
-        allowedFallbackSections: ['processed_eligible', 'authorised_eligible'],
-        rerender: false
-      });
-    }
-
-    syncActiveSaveSignatureState();
-
-    try {
-      await refreshBulkAuthoriseSummaryRowAfterMutation(st, {
-        actionName: 'manual-save',
-        rows: saveRowPatches,
-        result: saveResult || null,
-        row_patches: saveRowPatches,
-        source: 'bulk-authorise-save-patch-only'
-      });
-    } catch {}
-
-    if (typeof refreshBulkAuthoriseActiveContext === 'function' && st.active_row) {
-      const refreshSavedAuthoriseLayer = async (profile, source) => {
-        const layer = trimStr(profile || 'status_header').toLowerCase();
-        const includeEvidenceForLayer = layer === 'evidence';
-        try {
-          await refreshBulkAuthoriseActiveContext(st, {
-            row: st.active_row,
-            recordIdentity: activeRecordIdentity || undefined,
-            backendRowSignature: nextBackendRowSignature || undefined,
-            renderSignature: nextRenderSignature || undefined,
-            rowSignature: nextRenderSignature || nextBackendRowSignature || undefined,
-            source: source || `${layer}_patch`,
-            profile: layer,
-            context_profile: layer,
-            include_evidence: includeEvidenceForLayer,
-            includeEvidence: includeEvidenceForLayer,
-            include_compare: false,
-            includeCompare: false,
-            include_import_source_rows: false,
-            includeImportSourceRows: false,
-            cache_invalidation_hints: saveCacheHints,
-            bypassCache: true,
-            invalidateCache: true,
-            rerender: false
-          });
-          return true;
-        } catch (err) {
-          if (window.__LOG_MODAL === true) console.warn('[TS][BULK-AUTH][SAVE] layered refresh degraded', { profile: layer, error: err });
-          return false;
-        }
-      };
-      await refreshSavedAuthoriseLayer('status_header', 'status_patch');
-      if (manualChangedAfterSave || identityChangedAfterSave) {
-        await refreshSavedAuthoriseLayer('editor', 'manual_patch');
-      }
-      if (evidenceChangedAfterSave) {
-        await refreshSavedAuthoriseLayer('evidence', 'evidence_patch');
+    if (st.__bulk_authorise_row_context_ready === true) {
+      if (nextBackendRowSignature) st.__bulk_authorise_row_context_ready_backend_signature = nextBackendRowSignature;
+      if (nextRenderSignature) {
+        st.__bulk_authorise_row_context_ready_signature = nextRenderSignature;
+        st.__bulk_authorise_row_context_ready_render_signature = nextRenderSignature;
       }
     }
 
@@ -210084,7 +210192,20 @@ async function handleBulkAuthoriseSave(state, options = {}) {
     st.saving = false;
     await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][SAVE]');
     GE();
-    return { ok: true, result: saveResult || null, expense_result: expenseCommitResult || null, row_patches: saveRowPatches, row_patch: saveRowPatches[0] || null };
+    return {
+      ok: true,
+      saved: true,
+      safe_for_lifecycle: true,
+      refresh_required: false,
+      result: saveResult || null,
+      expense_result: expenseCommitResult || null,
+      row_patches: saveRowPatches,
+      row_patch: saveRowPatches[0] || null,
+      backend_row_signature: nextBackendRowSignature || null,
+      row_signature: nextBackendRowSignature || null,
+      render_signature: nextRenderSignature || null,
+      cache_invalidation_hints: saveCacheHints || {}
+    };
   } catch (err) {
     st.saving = false;
     st.error_text = String(err?.message || err || 'Failed to save Bulk Authorise changes.');
@@ -211664,7 +211785,44 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
       const message = firstString(saveResult?.message, saveResult?.error, saveResult?.expense_result?.message, 'Save failed. Review the highlighted issue, then try again.');
       return { ok: false, error: message, message, saveResult };
     }
-    return { ok: true, saved: true, saveResult };
+
+    const savedButStale = !!(
+      saveResult.saved_but_stale === true ||
+      saveResult.refresh_required === true ||
+      saveResult.refresh_failed === true ||
+      saveResult.safe_for_lifecycle === false
+    );
+    const freshSignature = firstString(
+      saveResult.backend_row_signature,
+      saveResult.row_backend_signature,
+      saveResult.row_signature,
+      saveResult.row_patch?.backend_row_signature,
+      saveResult.row_patch?.row_backend_signature,
+      saveResult.row_patch?.row_signature,
+      st.active_row?.backend_row_signature,
+      st.active_row?.row_backend_signature,
+      st.active_row?.row_signature
+    );
+
+    if (savedButStale || !freshSignature) {
+      const message = firstString(
+        saveResult?.message,
+        saveResult?.warning,
+        saveResult?.refresh_error,
+        'Changes were saved, but the refreshed row signature is not available. Recheck the row and try Authorise again.'
+      );
+      return {
+        ok: false,
+        saved: true,
+        refresh_required: true,
+        safe_for_lifecycle: false,
+        error: message,
+        message,
+        saveResult
+      };
+    }
+
+    return { ok: true, saved: true, saveResult, backend_row_signature: freshSignature, row_signature: freshSignature };
   };
   const collectFailedKeys = (failedRows, sectionKeys) => {
     const set = new Set(sectionKeys || []);
@@ -211931,7 +212089,6 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     }
   }
 }
-
 
 async function handleBulkUnauthoriseSelected(state, options = {}) {
   const { GC, GE } = (typeof getTsLoggers === 'function')
@@ -313805,12 +313962,12 @@ async function toggleTimesheetPayHold(ctxOrId, onHold, reason = '', expectedTime
   return { ok: true, updatedRow, details: newDetails };
 }
 
-
-async function updateTimesheetReference(ctxOrId, newReference, expectedTimesheetId) {
+async function updateTimesheetReference(ctxOrId, newReference, expectedTimesheetId, options = {}) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][REF]');
   GC('updateTimesheetReference');
 
-  const mc  = window.modalCtx || {};
+  const opts = (options && typeof options === 'object') ? options : {};
+  const mc = window.modalCtx || {};
   const row = (mc.data && mc.data.timesheet_id) ? mc.data : (ctxOrId && ctxOrId.row ? ctxOrId.row : {});
   const tsId = (typeof ctxOrId === 'string') ? ctxOrId : (row.timesheet_id || row.id || mc.data?.id || null);
 
@@ -313825,62 +313982,120 @@ async function updateTimesheetReference(ctxOrId, newReference, expectedTimesheet
     (mc.timesheetMeta && mc.timesheetMeta.expected_timesheet_id) ||
     tsId;
 
-  const encId   = encodeURIComponent(tsId);
+  const encId = encodeURIComponent(tsId);
   const urlPath = `/api/timesheets/${encId}/reference`;
-
   const reference_number = newReference == null ? '' : String(newReference);
-  L('REQUEST', { url: API(urlPath), reference_number, expected_timesheet_id: expected });
+  const suppressDetailsRefresh = opts.suppressDetailsRefresh === true || opts.skipDetailsRefresh === true;
+  const suppressSummaryRefresh = opts.suppressSummaryRefresh === true || opts.skipSummaryRefresh === true;
+  const suppressModalAdoption = opts.suppressModalAdoption === true || opts.skipModalAdoption === true;
 
-  // ✅ PATCH is the canonical backend method for standalone reference updates
-  const json = await apiPatchJson(urlPath, { reference_number, expected_timesheet_id: expected });
+  const patchBody = { reference_number, expected_timesheet_id: expected };
+  if (opts.context) patchBody.context = String(opts.context);
+  if (opts.mode) patchBody.mode = String(opts.mode);
+  if (opts.expected_row_signature || opts.expectedRowSignature) {
+    patchBody.expected_row_signature = String(opts.expected_row_signature || opts.expectedRowSignature || '').trim();
+  }
 
+  L('REQUEST', {
+    url: API(urlPath),
+    reference_number,
+    expected_timesheet_id: expected,
+    suppressDetailsRefresh,
+    suppressSummaryRefresh
+  });
+
+  // PATCH remains the canonical backend method for standalone reference updates.
+  const json = await apiPatchJson(urlPath, patchBody);
   L('reference result', json);
 
-  // Refresh details
   const resolvedId =
     (json && (json.current_timesheet_id || json.timesheet_id))
       ? (json.current_timesheet_id || json.timesheet_id)
       : tsId;
 
   let newDetails = mc.timesheetDetails;
-  try {
-    newDetails = await fetchTimesheetDetails(resolvedId);
-    window.modalCtx.timesheetDetails = newDetails;
-  } catch (err) {
-    L('refresh details failed (non-fatal)', err);
+  let detailsRefreshFailed = false;
+  let detailsRefreshError = null;
+
+  if (!suppressDetailsRefresh && typeof fetchTimesheetDetails === 'function') {
+    try {
+      newDetails = await fetchTimesheetDetails(resolvedId);
+      window.modalCtx.timesheetDetails = newDetails;
+    } catch (err) {
+      detailsRefreshFailed = true;
+      detailsRefreshError = err;
+      L('refresh details failed (non-fatal)', err);
+    }
   }
 
-  const ts = newDetails?.timesheet || {};
+  const ts = newDetails?.timesheet || json?.timesheet || {};
   const updatedRow = {
     ...(mc.data || row),
-    reference_number: ts.reference_number || reference_number,
+    reference_number: ts.reference_number || json?.reference_number || reference_number,
     timesheet_id: resolvedId,
     id: resolvedId
   };
 
-  window.modalCtx.data = updatedRow;
+  if (!suppressModalAdoption) {
+    window.modalCtx.data = updatedRow;
 
-  // Keep staged state in sync
-  if (mc.timesheetState) {
-    mc.timesheetState.reference = updatedRow.reference_number;
-  }
-
-  if (window.modalCtx?.timesheetMeta) {
-    window.modalCtx.timesheetMeta.expected_timesheet_id = resolvedId;
-  }
-
-  // ✅ Keep the summary grid consistent
-  try {
-    if (typeof refreshTimesheetsSummaryAfterRotation === 'function') {
-      await refreshTimesheetsSummaryAfterRotation(resolvedId);
+    if (mc.timesheetState) {
+      mc.timesheetState.reference = updatedRow.reference_number;
     }
-  } catch (e) {
-    L('summary refresh failed (non-fatal)', e);
+
+    if (window.modalCtx?.timesheetMeta) {
+      window.modalCtx.timesheetMeta.expected_timesheet_id = resolvedId;
+    }
+  }
+
+  let summaryRefreshFailed = false;
+  let summaryRefreshError = null;
+  if (!suppressSummaryRefresh && typeof refreshTimesheetsSummaryAfterRotation === 'function') {
+    try {
+      await refreshTimesheetsSummaryAfterRotation(resolvedId);
+    } catch (err) {
+      summaryRefreshFailed = true;
+      summaryRefreshError = err;
+      L('summary refresh failed (non-fatal)', err);
+    }
   }
 
   L('UPDATED ROW', updatedRow);
   GE();
-  return { ok: true, updatedRow, details: newDetails };
+  return {
+    ok: true,
+    updatedRow,
+    details: newDetails,
+    result: json || null,
+    timesheet_id: resolvedId,
+    current_timesheet_id: resolvedId,
+    expected_timesheet_id: resolvedId,
+    reference_number: updatedRow.reference_number,
+    affected_rows: [{
+      row_key: `timesheet:${resolvedId}`,
+      timesheet_id: resolvedId,
+      current_timesheet_id: resolvedId,
+      expected_timesheet_id: resolvedId,
+      reference_number: updatedRow.reference_number
+    }],
+    cache_invalidation_hints: {
+      row_keys: [`timesheet:${resolvedId}`],
+      timesheet_ids: [resolvedId],
+      datasets: ['timesheets', 'bulk_process', 'bulk_authorise'],
+      reference_changed: true,
+      manual_changed: false,
+      status_only: false,
+      invalidate_context: false,
+      invalidate_row_context: false,
+      invalidate_editor_context: false,
+      invalidate_preview: false,
+      invalidate_evidence: false
+    },
+    details_refresh_failed: detailsRefreshFailed,
+    details_refresh_error: detailsRefreshError ? String(detailsRefreshError?.message || detailsRefreshError) : null,
+    summary_refresh_failed: summaryRefreshFailed,
+    summary_refresh_error: summaryRefreshError ? String(summaryRefreshError?.message || summaryRefreshError) : null
+  };
 }
 
 
