@@ -199938,16 +199938,38 @@ async function handleBulkProcessProcess(state) {
     return false;
   };
 
+  const hasCanonicalTimesheetEvidenceForProcess = (activeInput = null) => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    try {
+      return collectCanonicalRealEvidenceRowsForProcess(active).some((item) => evidenceKindOf(item) === 'TIMESHEET');
+    } catch {
+      return false;
+    }
+  };
+
   const getBulkProcessTimesheetImageProtection = (active) => {
     const isAuthoritativeNoTimesheetRequired = isAuthoritativeNoTimesheetRequiredProcessRow(active);
     const hasWorkedHours = activeHasEnteredWorkedHoursForProcess(active);
+    const hasCanonicalTimesheetEvidence = hasCanonicalTimesheetEvidenceForProcess(active);
     const isBlankNoHoursSchedule = !!(!isAuthoritativeNoTimesheetRequired && (active?.isWeekly || active?.isDaily) && !hasWorkedHours);
+    if (isBlankNoHoursSchedule && hasCanonicalTimesheetEvidence) {
+      return {
+        requiresConfirm: false,
+        suppressTimesheetAutoAttach: false,
+        isAuthoritativeNoTimesheetRequired: false,
+        isBlankNoHoursSchedule: true,
+        hasCanonicalTimesheetEvidence: true,
+        reason: 'blank-schedule-real-timesheet-evidence-present',
+        message: ''
+      };
+    }
     if (isAuthoritativeNoTimesheetRequired) {
       return {
         requiresConfirm: false,
         suppressTimesheetAutoAttach: true,
         isAuthoritativeNoTimesheetRequired: true,
         isBlankNoHoursSchedule: false,
+        hasCanonicalTimesheetEvidence,
         reason: 'authoritative-no-timesheet-required',
         message: 'No timesheet image will be attached to this record as Timesheets are not required for this timesheet type.'
       };
@@ -199958,6 +199980,7 @@ async function handleBulkProcessProcess(state) {
         suppressTimesheetAutoAttach: true,
         isAuthoritativeNoTimesheetRequired: false,
         isBlankNoHoursSchedule: true,
+        hasCanonicalTimesheetEvidence,
         reason: 'blank-schedule-no-worked-hours',
         message: 'No Timesheet Image will be attached to this record as no hours have been entered for the timesheet.'
       };
@@ -199967,6 +199990,7 @@ async function handleBulkProcessProcess(state) {
       suppressTimesheetAutoAttach: false,
       isAuthoritativeNoTimesheetRequired: false,
       isBlankNoHoursSchedule: false,
+      hasCanonicalTimesheetEvidence,
       reason: '',
       message: ''
     };
@@ -201926,6 +201950,85 @@ async function handleBulkProcessProcess(state) {
     });
     return readActive();
   };
+  const ensureFreshWeeklyProcessSignatureBeforeSubmit = async (activeInput = null, ensureReason = 'weekly-process-submit-signature') => {
+    const active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
+    const identity = resolveActiveProcessTimesheetIdentity(active);
+    const rowKey = trimStr(identity.rowKey || rowKeyOf(active.row) || rowKeyOf(st.active_row) || '');
+    const contractWeekId = trimStr(identity.contractWeekId || active.contractWeekId || active.row?.contract_week_id || st.active_row?.contract_week_id || '');
+    if (!contractWeekId || !rowKey) {
+      throw new Error('Bulk Process weekly submit could not verify the current row signature. Refresh the row and try again.');
+    }
+    if (typeof refreshTimesheetLifecycleAffectedRows !== 'function') {
+      throw new Error('Bulk Process affected-row refresh is not available. Refresh the row and try again.');
+    }
+    sigLog('WEEKLY-SUBMIT-SIGNATURE-REFRESH-START', {
+      reason: trimStr(ensureReason || '') || null,
+      row_key: rowKey,
+      contract_week_id: contractWeekId,
+      timesheet_id: null
+    });
+    const affectedRefresh = await refreshTimesheetLifecycleAffectedRows([{
+      row_key: rowKey,
+      timesheet_id: null,
+      current_timesheet_id: null,
+      requested_timesheet_id: null,
+      expected_timesheet_id: null,
+      contract_week_id: contractWeekId,
+      context: 'bulk_process'
+    }], {
+      context: 'bulk_process',
+      action: ensureReason || 'weekly-process-submit-signature',
+      reason: ensureReason || 'weekly-process-submit-signature',
+      state: st,
+      apply: false,
+      preserveActiveContext: true,
+      throwOnError: false
+    });
+    if (affectedRefresh?.refresh_failed === true || affectedRefresh?.ok === false) {
+      throw new Error(trimStr(affectedRefresh?.error || affectedRefresh?.message || 'Bulk Process affected-row signature refresh failed. Refresh the row and try again.'));
+    }
+    const flattenedRows = Array.isArray(affectedRefresh?.flattened_rows) ? affectedRefresh.flattened_rows : [];
+    const rows = flattenedRows.length ? flattenedRows : (Array.isArray(affectedRefresh?.rows) ? affectedRefresh.rows : []);
+    const matchedRow = rows.find((row) => {
+      if (!row || typeof row !== 'object') return false;
+      const returnedRowKey = trimStr(row.row_key || row.new_row_key || row.identity?.row_key || '');
+      const returnedContractWeekId = trimStr(row.contract_week_id || row.identity?.contract_week_id || '');
+      return (!!returnedContractWeekId && returnedContractWeekId === contractWeekId) || (!!returnedRowKey && returnedRowKey === rowKey);
+    }) || null;
+    const freshSignature = resolveProcessRowSignatureFrom(matchedRow || {}, affectedRefresh);
+    if (!matchedRow || !freshSignature) {
+      sigWarn('WEEKLY-SUBMIT-SIGNATURE-REFRESH-MISSING', {
+        reason: trimStr(ensureReason || '') || null,
+        row_key: rowKey,
+        contract_week_id: contractWeekId,
+        flattened_row_count: flattenedRows.length
+      });
+      throw new Error('Bulk Process weekly submit could not obtain the current row signature. Refresh the row and try again.');
+    }
+    const patchedActive = patchProcessBaselineContainersFromActive(active, {
+      reason: ensureReason || 'weekly-process-submit-signature',
+      baselineRow: matchedRow,
+      rowSignature: freshSignature,
+      backend_row_signature: freshSignature,
+      current_row_signature: freshSignature
+    });
+    rememberAllowedProcessStatusHeaderBaseline({
+      payload: affectedRefresh,
+      baselineRow: matchedRow,
+      rowSignature: freshSignature,
+      identity: { ...identity, rowKey, contractWeekId },
+      reason: ensureReason || 'weekly-process-submit-signature',
+      url: '/api/timesheets/lifecycle-affected-rows'
+    }, ensureReason || 'weekly-process-submit-signature');
+    sigLog('WEEKLY-SUBMIT-SIGNATURE-REFRESH-DONE', {
+      reason: trimStr(ensureReason || '') || null,
+      row_key: rowKey,
+      contract_week_id: contractWeekId,
+      fresh_signature: freshSignature
+    });
+    return { active: patchedActive, signature: freshSignature, row: matchedRow, payload: affectedRefresh };
+  };
+
   const awaitProcessEditorBaselineRebaseBeforeSubmit = async (activeInput = null, rebaseOptions = {}) => {
     const opts = (rebaseOptions && typeof rebaseOptions === 'object') ? rebaseOptions : {};
     let active = (activeInput && typeof activeInput === 'object') ? activeInput : readActive();
@@ -202758,14 +202861,19 @@ async function handleBulkProcessProcess(state) {
       const additionalRates = {};
       const additional_units_week = readSavedUnitsObject(active.timesheet?.additional_units_week || active.row?.additional_units_week || contractWeekTotalsForAdjustment.additional_units_week || active.contractWeek?.totals_json?.additional_units_week || active.details?.contract_week?.totals_json?.additional_units_week || null);
       const additional_units_per_day = readSavedUnitsObject(active.timesheet?.additional_units_per_day || active.row?.additional_units_per_day || contractWeekTotalsForAdjustment.additional_units_per_day || active.contractWeek?.totals_json?.additional_units_per_day || active.details?.contract_week?.totals_json?.additional_units_per_day || null);
-      const activeRowSignature = trimStr(active.row?.row_signature || active.ctx?.row?.row_signature || '');
+      const weeklyFreshSignature = await ensureFreshWeeklyProcessSignatureBeforeSubmit(active, 'weekly-process-submit-signature');
+      active = weeklyFreshSignature.active || readActive();
+      const activeRowSignature = trimStr(weeklyFreshSignature.signature || active.row?.backend_row_signature || active.row?.row_signature || active.ctx?.row?.backend_row_signature || active.ctx?.row?.row_signature || '');
+      const suppressTimesheetEvidenceForSubmit = weeklyProcessProtection.suppressTimesheetAutoAttach === true;
       stateAudit('weekly-submit:before', {
         contract_week_id: String(activeContractWeekId),
         expected_timesheet_id: expectedTimesheetId || activeTimesheetId || null,
         submitted_signature: activeRowSignature || null,
+        signature_source: 'affected-row-refresh',
         actual_schedule_rows: Array.isArray(savedScheduleForProcess) ? savedScheduleForProcess.length : 0,
         evidence_rows_for_submit_count: processEvidenceRowsForSubmit.length,
-        suppress_timesheet_auto_attach: weeklyProcessProtection.suppressTimesheetAutoAttach === true || shouldKeepScheduleEmptyForProcess === true
+        suppress_timesheet_auto_attach: suppressTimesheetEvidenceForSubmit === true,
+        keep_schedule_empty: shouldKeepScheduleEmptyForProcess === true
       });
       processResult = await manualUpsertContractWeek(String(activeContractWeekId), {
         expected_timesheet_id: expectedTimesheetId || activeTimesheetId || null,
@@ -202787,11 +202895,13 @@ async function handleBulkProcessProcess(state) {
         attached_evidence: processEvidenceRowsForSubmit.map((item) => deep(item)),
         staged_evidence: processEvidenceRowsForSubmit.filter((item) => item?.is_staged_context === true || upper(item?.status || '') === 'STAGED').map((item) => deep(item)),
         contract_week_staged_evidence: processEvidenceRowsForSubmit.filter((item) => item?.is_staged_context === true || upper(item?.status || '') === 'STAGED').map((item) => deep(item)),
-        ...(weeklyProcessProtection.suppressTimesheetAutoAttach === true || shouldKeepScheduleEmptyForProcess ? {
+        ...(suppressTimesheetEvidenceForSubmit === true ? {
           suppress_timesheet_evidence_materialisation: true,
           suppressTimesheetEvidenceMaterialisation: true,
           no_timesheet_image_required: weeklyProcessProtection.isAuthoritativeNoTimesheetRequired === true,
-          no_hours_timesheet_image_suppressed: weeklyProcessProtection.isBlankNoHoursSchedule === true || allowEmptyScheduleForNoHours === true,
+          no_hours_timesheet_image_suppressed: weeklyProcessProtection.isBlankNoHoursSchedule === true && weeklyProcessProtection.hasCanonicalTimesheetEvidence !== true
+        } : {}),
+        ...(shouldKeepScheduleEmptyForProcess ? {
           keep_additional_manual_adjustment_schedule_empty: true,
           suppress_standard_schedule_fallback: true
         } : {})
