@@ -184452,21 +184452,65 @@ function bindBulkProcessEvidencePane(state) {
         if (!selected) return;
 
         const selectedFileKey = getAttachedEvidenceFileKey(selected);
-        const selectedId = getAttachedEvidenceId(selected);
-        const selectedQueueId = pickFirst(selected.queue_id, selected.queueId, selected.manual_timesheet_queue_id, selected.manualTimesheetQueueId, selected.manual_queue_id, selected.manualQueueId, clickedQueueId, selectedId);
-        const selectedEvidenceId = pickFirst(selected.evidence_id, selected.evidenceId, selected.timesheet_evidence_id, selected.timesheetEvidenceId, clickedEvidenceId, selectedId);
         if (!selectedFileKey || selectedFileKey !== clickedFileKey) return;
+
+        const isSyntheticAttachedIdentity = (value) => /^synthetic-attached:/i.test(trimStr(value || ''));
+        const isUuidLikeIdentity = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimStr(value || ''));
+        const isInvalidEvidenceIdentity = (value) => {
+          const id = trimStr(value || '');
+          if (!id) return true;
+          if (isSyntheticAttachedIdentity(id)) return true;
+          if (id === selectedFileKey || id.includes('/') || id.includes('file_')) return true;
+          return false;
+        };
+        const realEvidenceIdFrom = (itemInput) => {
+          const item = (itemInput && typeof itemInput === 'object') ? itemInput : {};
+          const meta = parseEvidenceMetaObject(item.meta_json || item.metaJson || item.meta || item.queue_meta || item.queueMeta);
+          const explicit = pickFirst(
+            item.evidence_id,
+            item.evidenceId,
+            item.timesheet_evidence_id,
+            item.timesheetEvidenceId,
+            meta.evidence_id,
+            meta.evidenceId,
+            meta.timesheet_evidence_id,
+            meta.timesheetEvidenceId
+          );
+          if (explicit && !isInvalidEvidenceIdentity(explicit)) return explicit;
+          const genericId = pickFirst(item.id, meta.id);
+          if (genericId && !isInvalidEvidenceIdentity(genericId) && isUuidLikeIdentity(genericId)) return genericId;
+          return '';
+        };
+        const findRealAttachedEvidenceForMutation = () => {
+          const candidateRows = getAuthoritativeAttachedRows();
+          const clickedKindUpper = normaliseEvidenceKind(clickedKind || selected.kind || selected.staged_kind || '');
+          const matchesClickedFile = (item) => {
+            if (!item || typeof item !== 'object') return false;
+            const fileKey = getAttachedEvidenceFileKey(item);
+            if (!fileKey || fileKey !== selectedFileKey) return false;
+            const itemKind = normaliseEvidenceKind(item.kind || item.evidence_kind || item.evidenceKind || item.staged_kind || item.stagedKind || '');
+            return !clickedKindUpper || !itemKind || clickedKindUpper === itemKind;
+          };
+          return candidateRows.find((item) => matchesClickedFile(item) && realEvidenceIdFrom(item)) || null;
+        };
+
+        let selectedForMutation = realEvidenceIdFrom(selected) ? selected : (findRealAttachedEvidenceForMutation() || selected);
+        let selectedId = getAttachedEvidenceId(selectedForMutation);
+        let selectedQueueId = pickFirst(selectedForMutation.queue_id, selectedForMutation.queueId, selectedForMutation.manual_timesheet_queue_id, selectedForMutation.manualTimesheetQueueId, selectedForMutation.manual_queue_id, selectedForMutation.manualQueueId, clickedQueueId);
+        let selectedEvidenceId = realEvidenceIdFrom(selectedForMutation);
 
         const scope = resolveActiveContractWeekEvidenceScope();
         const activeRowKeyForRemove = trimStr(st.active_row_key || st.active_row?.row_key || scope.rowKey || '');
         const activeIsTimesheetRowForRemove = /^timesheet:/i.test(activeRowKeyForRemove) || !!scope.timesheetId;
-        const selectedTimesheetId = pickFirst(selected.timesheet_id, selected.timesheetId, selected.current_timesheet_id, selected.currentTimesheetId, scope.timesheetId);
-        const selectedWeekId = pickFirst(selected.contract_week_id, selected.contractWeekId, scope.contractWeekId);
+        const selectedTimesheetId = pickFirst(selectedForMutation.timesheet_id, selectedForMutation.timesheetId, selectedForMutation.current_timesheet_id, selectedForMutation.currentTimesheetId, selected.timesheet_id, selected.timesheetId, selected.current_timesheet_id, selected.currentTimesheetId, scope.timesheetId);
+        const selectedWeekId = pickFirst(selectedForMutation.contract_week_id, selectedForMutation.contractWeekId, selected.contract_week_id, selected.contractWeekId, scope.contractWeekId);
         const selectedHasExplicitStagedContext = !!(
+          selectedForMutation.is_staged_context === true ||
+          selectedForMutation.staged === true ||
           selected.is_staged_context === true ||
           selected.staged === true ||
-          upper(selected.status || selected.queue_status || '') === 'STAGED' ||
-          pickFirst(selected.staged_kind, selected.stagedKind) ||
+          upper(selectedForMutation.status || selectedForMutation.queue_status || selected.status || selected.queue_status || '') === 'STAGED' ||
+          pickFirst(selectedForMutation.staged_kind, selectedForMutation.stagedKind, selected.staged_kind, selected.stagedKind) ||
           removeControl.dataset.stagedContext === '1'
         );
         const isStagedSelected = !!(
@@ -184491,13 +184535,45 @@ function bindBulkProcessEvidencePane(state) {
         if (!confirmRes || confirmRes.via === 'close' || (confirmRes.confirmed !== true && confirmRes.via !== 'cancel')) return;
         const action = confirmRes.confirmed === true ? 'delete' : 'return-to-queue';
         const targetForPrune = {
-          selectionKey: clickedSelectionKey || buildAttachedPreviewSelectionKey(selected),
+          selectionKey: clickedSelectionKey || buildAttachedPreviewSelectionKey(selectedForMutation) || buildAttachedPreviewSelectionKey(selected),
           attachedId: selectedId || clickedAttachedId,
           evidenceId: selectedEvidenceId || clickedEvidenceId,
           queueId: selectedQueueId || clickedQueueId,
           storageKey: selectedFileKey,
           fileKey: selectedFileKey,
-          kind: clickedKind || selected.kind || selected.staged_kind || ''
+          kind: clickedKind || selectedForMutation.kind || selectedForMutation.staged_kind || selected.kind || selected.staged_kind || ''
+        };
+        const selectReturnedEvidenceQueueItem = () => {
+          if (action !== 'return-to-queue') return false;
+          const queueRows = Array.isArray(pane.queue_rows) ? pane.queue_rows : [];
+          const returned = queueRows.find((item) => cleanAttachedEvidenceFileKey(getAttachedEvidenceFileKey(item)) === selectedFileKey) || null;
+          if (!returned) return false;
+          const returnedId = pickFirst(
+            returned.id,
+            returned.queue_id,
+            returned.queueId,
+            returned.manual_timesheet_queue_id,
+            returned.manualTimesheetQueueId,
+            returned.manual_queue_id,
+            returned.manualQueueId
+          );
+          pane.active_tab = 'queue';
+          pane.__queue_manual_override = true;
+          pane.__queue_manual_override_scope = getQueueScope();
+          pane.__attached_manual_override = false;
+          pane.active_attached_id = null;
+          pane.active_attached_item = null;
+          pane.active_attached_pdf_page = 1;
+          pane.__active_attached_preview_target = '';
+          pane.active_queue_id = returnedId || getAttachedEvidenceFileKey(returned) || null;
+          pane.active_queue_item = { ...(deep(returned) || {}) };
+          pane.active_pdf_page = 1;
+          const queueFileKey = getAttachedEvidenceFileKey(returned);
+          const queueSelectionKey = queueFileKey ? `queue|${pane.active_queue_id || queueFileKey}|${queueFileKey}` : '';
+          pane.__preview_target_key = queueSelectionKey;
+          pane.__preview_load_requested_target_key = queueSelectionKey;
+          pane.__preview_signed_url = '';
+          return true;
         };
 
         try {
@@ -184511,7 +184587,13 @@ function bindBulkProcessEvidencePane(state) {
                     await deleteContractWeekStagedEvidence(String(selectedWeekId), String(selectedQueueId), {});
                   } else {
                     if (!selectedTimesheetId) throw new Error('Timesheet id missing.');
-                    if (!selectedEvidenceId) throw new Error('Evidence id missing.');
+                    if (!selectedEvidenceId || isInvalidEvidenceIdentity(selectedEvidenceId)) {
+                      try { await refreshAttachedContext({ softRefresh: true, reason: 'resolve-attached-evidence-id-before-delete' }); } catch {}
+                      selectedForMutation = findRealAttachedEvidenceForMutation() || selectedForMutation;
+                      selectedEvidenceId = realEvidenceIdFrom(selectedForMutation);
+                      selectedId = getAttachedEvidenceId(selectedForMutation);
+                    }
+                    if (!selectedEvidenceId || isInvalidEvidenceIdentity(selectedEvidenceId)) throw new Error('Attached evidence is still loading. Reopen the attached tab and try again.');
                     if (typeof apiDeleteJson !== 'function') throw new Error('apiDeleteJson is not available.');
                     await apiDeleteJson('/api/timesheets/' + encodeURIComponent(String(selectedTimesheetId)) + '/evidence/' + encodeURIComponent(String(selectedEvidenceId)), {
                       expected_timesheet_id: selectedTimesheetId
@@ -184525,7 +184607,13 @@ function bindBulkProcessEvidencePane(state) {
                     await returnContractWeekStagedEvidenceToQueue(String(selectedWeekId), String(selectedQueueId), {});
                   } else {
                     if (!selectedTimesheetId) throw new Error('Timesheet id missing.');
-                    if (!selectedEvidenceId) throw new Error('Evidence id missing.');
+                    if (!selectedEvidenceId || isInvalidEvidenceIdentity(selectedEvidenceId)) {
+                      try { await refreshAttachedContext({ softRefresh: true, reason: 'resolve-attached-evidence-id-before-return' }); } catch {}
+                      selectedForMutation = findRealAttachedEvidenceForMutation() || selectedForMutation;
+                      selectedEvidenceId = realEvidenceIdFrom(selectedForMutation);
+                      selectedId = getAttachedEvidenceId(selectedForMutation);
+                    }
+                    if (!selectedEvidenceId || isInvalidEvidenceIdentity(selectedEvidenceId)) throw new Error('Attached evidence is still loading. Reopen the attached tab and try again.');
                     if (typeof returnTimesheetEvidenceToQueue !== 'function') throw new Error('returnTimesheetEvidenceToQueue is not available.');
                     await returnTimesheetEvidenceToQueue(String(selectedTimesheetId), String(selectedEvidenceId), {
                       expected_timesheet_id: selectedTimesheetId
@@ -184551,11 +184639,13 @@ function bindBulkProcessEvidencePane(state) {
                   pane.__queue_last_error = '';
                 }
 
+                selectReturnedEvidenceQueueItem();
                 pruneRemovedAttachedEvidenceFromLocalState(targetForPrune);
                 if (!isStagedSelected || selectedTimesheetId) {
                   try { await refreshAttachedContext({ softRefresh: true, reason: 'evidence-remove-refresh' }); } catch {}
                 }
                 pruneRemovedAttachedEvidenceFromLocalState(targetForPrune);
+                selectReturnedEvidenceQueueItem();
                 syncActiveRowEvidencePresence();
                 reconcileEvidenceState();
               })
@@ -184568,7 +184658,13 @@ function bindBulkProcessEvidencePane(state) {
                     await deleteContractWeekStagedEvidence(String(selectedWeekId), String(selectedQueueId), {});
                   } else {
                     if (!selectedTimesheetId) throw new Error('Timesheet id missing.');
-                    if (!selectedEvidenceId) throw new Error('Evidence id missing.');
+                    if (!selectedEvidenceId || isInvalidEvidenceIdentity(selectedEvidenceId)) {
+                      try { await refreshAttachedContext({ softRefresh: true, reason: 'resolve-attached-evidence-id-before-delete' }); } catch {}
+                      selectedForMutation = findRealAttachedEvidenceForMutation() || selectedForMutation;
+                      selectedEvidenceId = realEvidenceIdFrom(selectedForMutation);
+                      selectedId = getAttachedEvidenceId(selectedForMutation);
+                    }
+                    if (!selectedEvidenceId || isInvalidEvidenceIdentity(selectedEvidenceId)) throw new Error('Attached evidence is still loading. Reopen the attached tab and try again.');
                     if (typeof apiDeleteJson !== 'function') throw new Error('apiDeleteJson is not available.');
                     await apiDeleteJson('/api/timesheets/' + encodeURIComponent(String(selectedTimesheetId)) + '/evidence/' + encodeURIComponent(String(selectedEvidenceId)), {
                       expected_timesheet_id: selectedTimesheetId
@@ -184582,7 +184678,13 @@ function bindBulkProcessEvidencePane(state) {
                     await returnContractWeekStagedEvidenceToQueue(String(selectedWeekId), String(selectedQueueId), {});
                   } else {
                     if (!selectedTimesheetId) throw new Error('Timesheet id missing.');
-                    if (!selectedEvidenceId) throw new Error('Evidence id missing.');
+                    if (!selectedEvidenceId || isInvalidEvidenceIdentity(selectedEvidenceId)) {
+                      try { await refreshAttachedContext({ softRefresh: true, reason: 'resolve-attached-evidence-id-before-return' }); } catch {}
+                      selectedForMutation = findRealAttachedEvidenceForMutation() || selectedForMutation;
+                      selectedEvidenceId = realEvidenceIdFrom(selectedForMutation);
+                      selectedId = getAttachedEvidenceId(selectedForMutation);
+                    }
+                    if (!selectedEvidenceId || isInvalidEvidenceIdentity(selectedEvidenceId)) throw new Error('Attached evidence is still loading. Reopen the attached tab and try again.');
                     if (typeof returnTimesheetEvidenceToQueue !== 'function') throw new Error('returnTimesheetEvidenceToQueue is not available.');
                     await returnTimesheetEvidenceToQueue(String(selectedTimesheetId), String(selectedEvidenceId), {
                       expected_timesheet_id: selectedTimesheetId
@@ -184606,11 +184708,13 @@ function bindBulkProcessEvidencePane(state) {
                   pane.__queue_loading_scope = '';
                   pane.__queue_last_error = '';
                 }
+                selectReturnedEvidenceQueueItem();
                 pruneRemovedAttachedEvidenceFromLocalState(targetForPrune);
                 if (!isStagedSelected || selectedTimesheetId) {
                   try { await refreshAttachedContext({ softRefresh: true, reason: 'evidence-remove-refresh' }); } catch {}
                 }
                 pruneRemovedAttachedEvidenceFromLocalState(targetForPrune);
+                selectReturnedEvidenceQueueItem();
                 syncActiveRowEvidencePresence();
                 reconcileEvidenceState();
               })());
