@@ -174325,6 +174325,7 @@ function bindBulkProcessPreviewPane(state) {
       if (liveTargetKey !== selectedSelectionKey || liveRequestedKey !== selectedSelectionKey || pane.__active_attached_preview_target !== selectedSelectionKey) {
         pane.active_tab = 'attached';
         pane.__attached_manual_override = true;
+        pane.__attached_manual_override_identity = getActiveIdentity();
         pane.__queue_manual_override = false;
         pane.active_queue_id = null;
         pane.active_queue_item = null;
@@ -220325,6 +220326,8 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
       : displayOnlyFallbackNonTimesheetEvidenceRows;
 
+    const activeIdentity = trimStr(reconcileResult.active_identity || getActiveRowIdentity());
+
     stateAudit('applyEvidencePaneFromContext:branch-decision', {
 
       active_row_explicit_no_timesheet: activeRowExplicitNoTimesheet,
@@ -220347,7 +220350,89 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
     });
 
-    if (activeRowExplicitNoTimesheet && nonTimesheetEvidenceRowsForPane.length) {
+    const activeRowLifecycleForPreview = trimStr(
+
+      st.active_row?.processing_status ||
+
+      st.active_row?.summary_stage ||
+
+      st.active_row?.tools_stage ||
+
+      st.active_details?.processing_status ||
+
+      st.active_context?.row?.processing_status ||
+
+      st.active_context?.data_row?.processing_status ||
+
+      ''
+
+    ).toUpperCase();
+
+    const activeRowMustDefaultQueueForPreview = !!(
+
+      activeRowLifecycleForPreview === 'UNPROCESSED' ||
+
+      activeRowLifecycleForPreview === 'QUEUED' ||
+
+      activeRowLifecycleForPreview === 'PENDING_PROCESS' ||
+
+      activeRowLifecycleForPreview === 'READY_TO_PROCESS' ||
+
+      st.active_row?.processed === false ||
+
+      st.active_row?.is_processed === false
+
+    );
+
+
+
+    if (activeRowMustDefaultQueueForPreview) {
+
+      pane.attached_rows = [];
+
+      pane.attached_all_rows = [];
+
+      pane.active_attached_id = null;
+
+      pane.active_attached_item = null;
+
+      pane.active_attached_pdf_page = 1;
+
+      pane.__active_attached_preview_target = '';
+
+      pane.active_tab = 'queue';
+
+      pane.__attached_manual_override = false;
+
+      pane.__queue_manual_override = true;
+
+      pane.__queue_manual_override_identity = activeIdentity || '';
+
+      pane.__queue_manual_override_scope = trimStr(pane.__queue_scope || pane.__queue_loaded_scope || 'global:QUEUED') || 'global:QUEUED';
+
+      if (applyOpts.prepareQueue !== false) {
+
+        const queueResult = await prepareQueueStateForActiveIdentity({ identity: activeIdentity, forceQueueRefresh: !!applyOpts.forceQueueRefresh, requestToken: requestTokenObj, modalOpenToken: modalToken, isCurrent: () => !stillCurrent || stillCurrent() });
+
+        reconcileResult.selected_preview_changed = !!(reconcileResult.selected_preview_changed || queueResult.selected_preview_changed);
+
+      }
+
+      reconcileResult.resolved_source = 'queue';
+
+      reconcileResult.requires_evidence_hydration = false;
+
+      stateAudit('applyEvidencePaneFromContext:branch:unprocessed-default-queue', {
+
+        lifecycle: activeRowLifecycleForPreview || null,
+
+        pane_after_branch: stateAuditPaneSummary(pane)
+
+      });
+
+
+
+    } else if (activeRowExplicitNoTimesheet && nonTimesheetEvidenceRowsForPane.length) {
 
       const selectedNonTimesheet = nonTimesheetEvidenceRowsForPane[0];
 
@@ -220447,15 +220532,41 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
       pane.attached_all_rows = clone(effectiveEvidenceRows);
 
+      const currentAttachedKey = buildBulkProcessAttachedSelectionKeyRowChange(pane.active_attached_item || {});
+
+      const currentAttachedStillAvailable = currentAttachedKey
+
+        ? effectiveEvidenceRows.find((item) => buildBulkProcessAttachedSelectionKeyRowChange(item) === currentAttachedKey) || null
+
+        : null;
+
+      const manualAttachedSelectionBelongsToActiveRow = !!(
+
+        pane.__attached_manual_override === true &&
+
+        currentAttachedStillAvailable &&
+
+        trimStr(pane.__attached_manual_override_identity || '') === trimStr(activeIdentity || '')
+
+      );
+
+      const selectedAttached = manualAttachedSelectionBelongsToActiveRow
+
+        ? currentAttachedStillAvailable
+
+        : effectiveTimesheetEvidence;
+
       pane.active_tab = 'attached';
 
-      pane.active_attached_item = clone(effectiveTimesheetEvidence);
+      pane.active_attached_item = clone(selectedAttached);
 
-      pane.active_attached_id = getBulkProcessEvidenceIdRowChange(effectiveTimesheetEvidence) || null;
+      pane.active_attached_id = getBulkProcessEvidenceIdRowChange(selectedAttached) || null;
 
-      const attachedKey = buildBulkProcessAttachedSelectionKeyRowChange(effectiveTimesheetEvidence);
+      const attachedKey = buildBulkProcessAttachedSelectionKeyRowChange(selectedAttached);
 
       pane.__active_attached_preview_target = attachedKey;
+
+      pane.__preview_target_key = attachedKey;
 
       pane.__preview_load_requested_target_key = attachedKey;
 
@@ -220463,7 +220574,11 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
 
       stateAudit('applyEvidencePaneFromContext:branch:timesheet-attached', {
 
-        selected: stateAuditEvidenceSummary(effectiveTimesheetEvidence),
+        selected: stateAuditEvidenceSummary(selectedAttached),
+
+        default_timesheet_available: !!effectiveTimesheetEvidence,
+
+        preserved_manual_attached_selection: manualAttachedSelectionBelongsToActiveRow,
 
         attached_key: attachedKey || null,
 
@@ -220486,8 +220601,6 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
       });
 
     }
-
-    const activeIdentity = trimStr(reconcileResult.active_identity || getActiveRowIdentity());
 
     const resolvedSource = trimStr(reconcileResult.resolved_source || pane.active_tab || '').toLowerCase() === 'attached' ? 'attached' : 'queue';
 
