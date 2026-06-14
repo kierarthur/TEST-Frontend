@@ -205037,7 +205037,7 @@ async function handleBulkProcessUnprocess(state) {
   const previousRowKey = rowKeyOf(activeRow);
   const isDailyManual = (periodType === 'DAILY' || sheetScope === 'DAILY') && submissionMode === 'MANUAL' && !!timesheetId;
   const isWeeklyManual = (periodType === 'WEEKLY' || sheetScope === 'WEEKLY' || !!contractWeekId) && submissionMode === 'MANUAL' && !!timesheetId && !!contractWeekId;
-  const rowSignature = pickSignature(activeRow, activeCtx.row, activeCtx, activeDetails, timesheet, st.active_context, st.active_row);
+  let rowSignature = pickSignature(activeRow, activeCtx.row, activeCtx, activeDetails, timesheet, st.active_context, st.active_row);
   const mutationKey = `bulk-process-unprocess:${previousRowKey || timesheetId || contractWeekId || 'row'}`;
 
   if (!(window.__timesheetLifecycleMutationInFlight instanceof Set)) window.__timesheetLifecycleMutationInFlight = new Set();
@@ -205051,6 +205051,81 @@ async function handleBulkProcessUnprocess(state) {
       GE();
       return { ok: false, error: 'Active row is not an unprocessable daily or weekly manual Bulk Process row.' };
     }
+
+    const ensureFreshUnprocessSignatureBeforeSubmit = async () => {
+      if (typeof refreshTimesheetLifecycleAffectedRows !== 'function') return rowSignature;
+      const refreshRowKey = previousRowKey || (timesheetId ? `timesheet:${timesheetId}` : (contractWeekId ? `contract_week:${contractWeekId}` : ''));
+      if (!refreshRowKey && !timesheetId && !contractWeekId) return rowSignature;
+      let affectedRefresh = null;
+      try {
+        affectedRefresh = await refreshTimesheetLifecycleAffectedRows([{
+          row_key: refreshRowKey || null,
+          timesheet_id: timesheetId || null,
+          current_timesheet_id: timesheetId || null,
+          requested_timesheet_id: timesheetId || null,
+          expected_timesheet_id: expectedTimesheetId || timesheetId || null,
+          contract_week_id: contractWeekId || null,
+          context: 'bulk_process'
+        }], {
+          context: 'bulk_process',
+          action: 'before-unprocess-submit-signature',
+          reason: 'before-unprocess-submit-signature',
+          state: st,
+          apply: false,
+          preserveActiveContext: true,
+          throwOnError: false
+        });
+      } catch (refreshErr) {
+        throw new Error(firstString(refreshErr?.message, 'Bulk Process affected-row signature refresh failed. Refresh the row and try again.'));
+      }
+      if (affectedRefresh?.refresh_failed === true || affectedRefresh?.ok === false) {
+        throw new Error(firstString(affectedRefresh?.error, affectedRefresh?.message, 'Bulk Process affected-row signature refresh failed. Refresh the row and try again.'));
+      }
+      const refreshedRows = Array.isArray(affectedRefresh?.flattened_rows) && affectedRefresh.flattened_rows.length
+        ? affectedRefresh.flattened_rows
+        : (Array.isArray(affectedRefresh?.rows) ? affectedRefresh.rows : []);
+      const matchedRow = refreshedRows.find((row) => rowMatchesIdentity(row, {
+        row_key: refreshRowKey,
+        timesheet_id: timesheetId,
+        current_timesheet_id: timesheetId,
+        contract_week_id: contractWeekId
+      })) || null;
+      const freshSignature = pickSignature(matchedRow || {}, affectedRefresh || {});
+      if (!matchedRow || !freshSignature) {
+        throw new Error('Bulk Process unprocess could not obtain the current row signature. Refresh the row and try again.');
+      }
+      const patchSignatureTarget = (target) => {
+        if (!target || typeof target !== 'object') return;
+        target.row_signature = freshSignature;
+        target.backend_row_signature = freshSignature;
+        target.expected_row_signature = freshSignature;
+        target.current_row_signature = freshSignature;
+      };
+      const patchRowTarget = (target) => {
+        if (!target || typeof target !== 'object') return;
+        Object.assign(target, clone(matchedRow));
+        patchSignatureTarget(target);
+      };
+      patchRowTarget(st.active_row);
+      patchRowTarget(st.active_ctx?.row);
+      patchRowTarget(st.active_ctx?.data_row);
+      patchRowTarget(st.active_context?.row);
+      patchRowTarget(st.active_context?.data_row);
+      patchSignatureTarget(st.active_ctx);
+      patchSignatureTarget(st.active_context);
+      patchSignatureTarget(st.active_details);
+      patchSignatureTarget(st.active_details?.timesheet);
+      if (window.modalCtx && window.modalCtx.bulkProcessState === st) {
+        patchRowTarget(window.modalCtx.data);
+        patchSignatureTarget(window.modalCtx.timesheetDetails);
+        patchSignatureTarget(window.modalCtx.timesheetDetails?.timesheet);
+        patchSignatureTarget(window.modalCtx.timesheetState);
+      }
+      rowSignature = freshSignature;
+      return freshSignature;
+    };
+
+    await ensureFreshUnprocessSignatureBeforeSubmit();
 
     window.__timesheetLifecycleMutationInFlight.add(mutationKey);
     st.__bulk_process_unprocess_in_flight = true;
