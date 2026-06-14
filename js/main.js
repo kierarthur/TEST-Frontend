@@ -174996,11 +174996,47 @@ function bindBulkProcessPreviewPane(state) {
         timesheetId ||
         ''
       );
-      const contractWeekId = trimStr(
+      const itemTimesheetId = trimStr(
+        itemObj.timesheet_id ||
+        itemObj.current_timesheet_id ||
+        itemObj.timesheetId ||
+        itemObj.currentTimesheetId ||
+        ''
+      );
+      const itemRowKey = trimStr(itemObj.row_key || itemObj.rowKey || '');
+      const activeRowKey = trimStr(st.active_row_key || st.active_row?.row_key || '');
+      const activeIsTimesheetRow = /^timesheet:/i.test(activeRowKey) || /^timesheet:/i.test(rowKey) || /^timesheet:/i.test(itemRowKey);
+      const activeSheetScope = upper(
+        st.active_row?.sheet_scope ||
+        st.active_row?.period_type ||
+        st.active_context?.row?.sheet_scope ||
+        st.active_context?.row?.period_type ||
+        st.active_context?.data_row?.sheet_scope ||
+        st.active_context?.data_row?.period_type ||
+        st.active_details?.sheet_scope ||
+        st.active_details?.period_type ||
+        window.modalCtx?.data?.sheet_scope ||
+        window.modalCtx?.data?.period_type ||
+        ''
+      );
+      const hasTimesheetIdentity = !!(timesheetId || expectedTimesheetId || itemTimesheetId || activeIsTimesheetRow || activeSheetScope === 'DAILY');
+      const rawContractWeekId = trimStr(
+        itemObj.contract_week_id ||
+        itemObj.contractWeekId ||
         st.active_row?.contract_week_id ||
         st.active_details?.contract_week_id ||
         st.active_details?.contract_week?.id ||
         ''
+      );
+      const contractWeekId = (hasTimesheetIdentity && rawContractWeekId && (rawContractWeekId === timesheetId || rawContractWeekId === expectedTimesheetId || rawContractWeekId === itemTimesheetId))
+        ? ''
+        : rawContractWeekId;
+      const isGenuineContractWeekStagedContext = !!(
+        itemObj.is_staged_context === true &&
+        contractWeekId &&
+        !hasTimesheetIdentity &&
+        !activeIsTimesheetRow &&
+        !/^timesheet:/i.test(itemRowKey)
       );
       return {
         evidenceId,
@@ -175008,7 +175044,7 @@ function bindBulkProcessPreviewPane(state) {
         evidenceEvidenceId: trimStr(itemObj.evidence_id || ''),
         evidenceQueueId: trimStr(itemObj.queue_id || ''),
         storageKey: trimStr(itemObj.storage_key || itemObj.r2_key || itemObj.file_key || ''),
-        isStagedContext: !!itemObj.is_staged_context,
+        isStagedContext: isGenuineContractWeekStagedContext,
         kind: trimStr(itemObj.kind || itemObj.staged_kind || ''),
         ownerIdentity,
         rowKey,
