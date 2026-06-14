@@ -181626,10 +181626,22 @@ function bindBulkProcessEvidencePane(state) {
     const timesheetId = pickFirst(
       activeRow.timesheet_id,
       activeRow.current_timesheet_id,
+      activeCtx.row?.timesheet_id,
+      activeCtx.row?.current_timesheet_id,
+      activeCtx.data_row?.timesheet_id,
+      activeCtx.data_row?.current_timesheet_id,
       activeCtx.timesheet_id,
       activeCtx.current_timesheet_id,
+      activeCtx.details?.current_timesheet_id,
+      activeCtx.details?.timesheet?.timesheet_id,
+      activeContext.row?.timesheet_id,
+      activeContext.row?.current_timesheet_id,
+      activeContext.data_row?.timesheet_id,
+      activeContext.data_row?.current_timesheet_id,
       activeContext.timesheet_id,
       activeContext.current_timesheet_id,
+      activeContext.details?.current_timesheet_id,
+      activeContext.details?.timesheet?.timesheet_id,
       activeDetails.current_timesheet_id,
       activeDetails?.timesheet?.timesheet_id
     );
@@ -184313,15 +184325,23 @@ function bindBulkProcessEvidencePane(state) {
         if (!selectedFileKey || selectedFileKey !== clickedFileKey) return;
 
         const scope = resolveActiveContractWeekEvidenceScope();
+        const activeRowKeyForRemove = trimStr(st.active_row_key || st.active_row?.row_key || scope.rowKey || '');
+        const activeIsTimesheetRowForRemove = /^timesheet:/i.test(activeRowKeyForRemove) || !!scope.timesheetId;
         const selectedTimesheetId = pickFirst(selected.timesheet_id, selected.timesheetId, selected.current_timesheet_id, selected.currentTimesheetId, scope.timesheetId);
         const selectedWeekId = pickFirst(selected.contract_week_id, selected.contractWeekId, scope.contractWeekId);
-        const isStagedSelected = !!(
+        const selectedHasExplicitStagedContext = !!(
           selected.is_staged_context === true ||
           selected.staged === true ||
           upper(selected.status || selected.queue_status || '') === 'STAGED' ||
           pickFirst(selected.staged_kind, selected.stagedKind) ||
-          removeControl.dataset.stagedContext === '1' ||
-          (scope.isContractWeekOnly && selectedWeekId && selectedWeekId === scope.contractWeekId && !selectedTimesheetId && selectedQueueId)
+          removeControl.dataset.stagedContext === '1'
+        );
+        const isStagedSelected = !!(
+          !activeIsTimesheetRowForRemove &&
+          (
+            selectedHasExplicitStagedContext ||
+            (scope.isContractWeekOnly && selectedWeekId && selectedWeekId === scope.contractWeekId && !selectedTimesheetId && selectedQueueId)
+          )
         );
 
         const confirmRes = (typeof openUiConfirmModal === 'function')
@@ -203083,6 +203103,19 @@ async function handleBulkProcessProcess(state) {
 
     stateAudit('apply-patch:before', { previous_row_key: previousRowKey || null, process_result: { row_key: trimStr(processResult?.row_key || processResult?.new_row_key || processResult?.data_row?.row_key || processResult?.row_patch?.row_key || '') || null, signature: trimStr(processResult?.row_signature || processResult?.data_row?.row_signature || processResult?.row_patch?.row_signature || '') || null } });
     const patchedRow = applyPatch(processResult, active.row, previousRowKey, 'PROCESSED');
+    if (processEvidencePatchForSubmit.hasAnyEvidence === true) {
+      applyProcessEvidenceAuthorityPatch(patchedRow, processEvidencePatchForSubmit);
+      try {
+        const patchedRowKey = rowKeyOf(patchedRow);
+        if (patchedRowKey) {
+          const ds = ensureDataset();
+          for (const bucketRows of [ds.unprocessed_rows, ds.processed_rows]) {
+            const index = Array.isArray(bucketRows) ? bucketRows.findIndex((row) => rowKeyOf(row) === patchedRowKey) : -1;
+            if (index >= 0) bucketRows[index] = { ...bucketRows[index], ...deep(patchedRow) };
+          }
+        }
+      } catch {}
+    }
     stateAudit('apply-patch:after', { previous_row_key: previousRowKey || null, patched_row: stateAuditRowSummary(patchedRow || {}) });
     invalidateCaches(processResult, patchedRow, previousRowKey);
     const processCacheHints = (processResult?.cache_invalidation_hints && typeof processResult.cache_invalidation_hints === 'object') ? processResult.cache_invalidation_hints : {};
@@ -205133,6 +205166,25 @@ async function handleBulkProcessUnprocess(state) {
     }
 
     resetBusy('success');
+
+    const activeRowKeyAfterUnprocess = rowKeyOf(localApply?.activeRow || st.active_row || {}) || st.active_row_key || '';
+    if (activeRowKeyAfterUnprocess && typeof handleBulkProcessRowChange === 'function' && !affectedRefreshError) {
+      try {
+        await handleBulkProcessRowChange(st, activeRowKeyAfterUnprocess, {
+          force: true,
+          mutationRefresh: true,
+          skipDirtyGuard: true,
+          suppressAdjacentPrefetch: true,
+          source: 'bulk-process-unprocess-post-mutation-hydrate'
+        });
+      } catch (hydrateErr) {
+        st.lifecycle_refresh_failed = true;
+        st.lifecycle_refresh_error = firstString(hydrateErr?.message, st.lifecycle_refresh_error, 'Post-unprocess row context refresh failed; row state may be stale.');
+      }
+    }
+    try { if (typeof reconcileBulkProcessEvidenceStateAfterContextRefresh === 'function') reconcileBulkProcessEvidenceStateAfterContextRefresh(st); } catch {}
+    try { if (typeof installBulkProcessModalCtxPatch === 'function') installBulkProcessModalCtxPatch(st, { forceIdentityRebase: true, source_context: 'bulk_process' }); } catch {}
+
     if (typeof rerenderBulkProcessWorkbench === 'function') {
       try { await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][UNPROCESS][AFFECTED-REFRESHED]'); } catch {}
     }
