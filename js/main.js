@@ -223018,6 +223018,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
       st.active_row = null;
 
       st.active_row_key = null;
+      st.activeRowKey = null;
 
       st.active_details = null;
 
@@ -223288,6 +223289,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
       st.active_row = deep(previousStateBeforeRowChange.active_row || null);
 
       st.active_row_key = previousStateBeforeRowChange.active_row_key || null;
+      st.activeRowKey = previousStateBeforeRowChange.active_row_key || null;
 
       st.selected_row_keys = Array.isArray(previousStateBeforeRowChange.selected_row_keys) ? deep(previousStateBeforeRowChange.selected_row_keys) : [];
 
@@ -223340,6 +223342,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
     st.active_row = mergeBulkProcessRowAuthoritySignals(nextRow, deep(nextRow));
 
     st.active_row_key = cacheKey || null;
+    st.activeRowKey = st.active_row_key || null;
 
     st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
 
@@ -224260,6 +224263,7 @@ const applyEvidencePaneFromContext = async (applyOptions = {}) => {
     st.active_row = mergeBulkProcessRowAuthoritySignals(nextRow, finalContext.row || nextRow);
 
     st.active_row_key = trimStr(st.active_row?.row_key || cacheKey || '') || cacheKey || null;
+    st.activeRowKey = st.active_row_key || null;
 
     st.selected_row_keys = st.active_row_key ? [st.active_row_key] : [];
 
