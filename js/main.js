@@ -200152,7 +200152,6 @@ async function handleBulkProcessSave(state) {
   }
 }
 
-
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -201979,7 +201978,6 @@ async function handleBulkProcessProcess(state) {
       st.error_text = message;
       st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
       st.__bulk_process_last_process_missing_expense_evidence_kinds = missingExpenseKinds;
-      await showBulkProcessProcessBlockedModal(message);
       return false;
     }
 
@@ -205095,6 +205093,8 @@ async function handleBulkProcessProcess(state) {
 
   let processAutoAttachedQueueEvidenceForRollback = null;
   let processBackendQueueEvidenceForRefresh = null;
+  let processSelectedQueueEvidenceForFailureMapping = null;
+  let processSubmitSucceededForRollback = false;
 
   const rollbackProcessAutoAttachedQueueEvidenceForBlockingReturn = async (reason = 'process-block-before-submit', originalMessage = 'Process was blocked.') => {
     const originalText = trimStr(originalMessage || 'Process was blocked.') || 'Process was blocked.';
@@ -205459,6 +205459,18 @@ async function handleBulkProcessProcess(state) {
       };
     })();
     processBackendQueueEvidenceForRefresh = weeklyQueueTimesheetMaterialisationInstruction ? deep(weeklyQueueTimesheetMaterialisationInstruction) : null;
+    processSelectedQueueEvidenceForFailureMapping = selectedQueueTimesheetBeforeProcess ? {
+      queue_id: selectedQueueBeforeProcessQueueId || null,
+      storage_key: selectedQueueBeforeProcessStorageKey || null,
+      kind: 'TIMESHEET',
+      preview_selection_key: previewedQueueForAutoAttach?.selectionKey || null,
+      preview_identity: previewedQueueForAutoAttach?.previewIdentity || null,
+      active_identity: previewedQueueForAutoAttach?.activeIdentity || null,
+      direct_attach_to_existing_timesheet: willAttachOrStageQueueItem === true,
+      backend_weekly_materialisation: willPassQueueTimesheetToWeeklyProcess === true,
+      contract_week_id: activeContractWeekId || null,
+      timesheet_id: activeTimesheetId || null
+    } : null;
     stateAudit('queue-evidence-mutation-decision', {
       preview_authoritative_queue_before_refresh: stateAuditClone(previewedQueueBeforeRefresh || null),
       preview_authoritative_timesheet_before_refresh: stateAuditClone(previewedQueueTimesheetBeforeRefresh || null),
@@ -205556,10 +205568,14 @@ async function handleBulkProcessProcess(state) {
     stateAudit('after-confirm-no-evidence', { evidence_ok: evidenceOk === true, error_text: trimStr(st.error_text || '') || null });
     if (!evidenceOk) {
       const originalBlockMessage = st.error_text || 'Process cancelled.';
+      const shouldShowEvidenceBlockModalAfterRollback = st.__bulk_process_last_process_block_reason === 'EXPENSE_EVIDENCE_REQUIRED';
       const rollbackBeforeReturn = await rollbackProcessAutoAttachedQueueEvidenceForBlockingReturn('process-blocked-evidence-confirm-false', originalBlockMessage);
       if (rollbackBeforeReturn.ok !== true) {
         st.error_text = rollbackBeforeReturn.message || originalBlockMessage;
         await showBulkProcessProcessBlockedModal(st.error_text, rollbackBeforeReturn.rollbackFailed ? 'Timesheet image rollback failed' : 'Image Queue refresh failed');
+      } else if (shouldShowEvidenceBlockModalAfterRollback) {
+        st.error_text = originalBlockMessage;
+        await showBulkProcessProcessBlockedModal(st.error_text);
       }
       await rerenderBulkProcessWorkbenchAfterProcessBlock('process-cancelled-after-blocked-modal');
       stateAudit('return:block:evidence-confirm-false', {
@@ -205608,11 +205624,13 @@ async function handleBulkProcessProcess(state) {
       st.error_text = message;
       st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
       st.__bulk_process_last_process_missing_expense_evidence_kinds = missingEvidenceKindsBeforeSubmit;
-      await showBulkProcessProcessBlockedModal(message);
       const rollbackBeforeReturn = await rollbackProcessAutoAttachedQueueEvidenceForBlockingReturn('process-blocked-missing-exact-evidence-kind', message);
       if (rollbackBeforeReturn.ok !== true) {
         st.error_text = rollbackBeforeReturn.message || message;
         await showBulkProcessProcessBlockedModal(st.error_text, rollbackBeforeReturn.rollbackFailed ? 'Timesheet image rollback failed' : 'Image Queue refresh failed');
+      } else {
+        st.error_text = message;
+        await showBulkProcessProcessBlockedModal(st.error_text);
       }
       await rerenderBulkProcessWorkbenchAfterProcessBlock('process-blocked-missing-exact-evidence-kind');
       stateAudit('return:block:missing-exact-evidence-kind', {
@@ -205627,11 +205645,13 @@ async function handleBulkProcessProcess(state) {
       const message = 'Evidence is expected for this row but the evidence rows have not loaded yet. Please refresh the evidence pane and try again.';
       st.error_text = message;
       st.__bulk_process_last_process_block_reason = 'EVIDENCE_EXPECTED_NOT_LOADED';
-      await showBulkProcessProcessBlockedModal(message);
       const rollbackBeforeReturn = await rollbackProcessAutoAttachedQueueEvidenceForBlockingReturn('process-blocked-evidence-expected-not-loaded', message);
       if (rollbackBeforeReturn.ok !== true) {
         st.error_text = rollbackBeforeReturn.message || message;
         await showBulkProcessProcessBlockedModal(st.error_text, rollbackBeforeReturn.rollbackFailed ? 'Timesheet image rollback failed' : 'Image Queue refresh failed');
+      } else {
+        st.error_text = message;
+        await showBulkProcessProcessBlockedModal(st.error_text);
       }
       await rerenderBulkProcessWorkbenchAfterProcessBlock('process-blocked-evidence-expected-not-loaded');
       stateAudit('return:block:evidence-expected-not-loaded', {
@@ -205692,6 +205712,10 @@ async function handleBulkProcessProcess(state) {
           no_hours_timesheet_image_suppressed: processTimesheetImageProtection.isBlankNoHoursSchedule === true || processTimesheetImageProtection.isTrueExpensesOnly === true
         } : {})
       });
+      if (!processResult || processResult.ok === false) {
+        throw new Error(trimStr(processResult?.error || processResult?.message || 'Daily Bulk Process submit failed.'));
+      }
+      processSubmitSucceededForRollback = true;
       stateAudit('daily-submit:after', { process_result_patch_shape: hasRequiredBulkProcessPatchShape(processResult), process_result_row_key: trimStr(processResult?.row_key || processResult?.new_row_key || processResult?.data_row?.row_key || processResult?.row_patch?.row_key || '') || null, process_result_signature: trimStr(processResult?.row_signature || processResult?.data_row?.row_signature || processResult?.row_patch?.row_signature || '') || null });
     } else if (active.isWeekly && activeContractWeekId) {
       const stateCtx = active.stateCtx || {};
@@ -205893,6 +205917,10 @@ async function handleBulkProcessProcess(state) {
         row_signature: activeRowSignature || null,
         activeRow: buildCanonicalProcessActiveRowForSubmit(active, processEvidencePatchForSubmit)
       });
+      if (!processResult || processResult.ok === false) {
+        throw new Error(trimStr(processResult?.error || processResult?.message || 'Weekly Bulk Process submit failed.'));
+      }
+      processSubmitSucceededForRollback = true;
       stateAudit('weekly-submit:after', { process_result_patch_shape: hasRequiredBulkProcessPatchShape(processResult), process_result_row_key: trimStr(processResult?.row_key || processResult?.new_row_key || processResult?.data_row?.row_key || processResult?.row_patch?.row_key || '') || null, process_result_signature: trimStr(processResult?.row_signature || processResult?.data_row?.row_signature || processResult?.row_patch?.row_signature || '') || null });
       if (!hasRequiredBulkProcessPatchShape(processResult)) {
         sigLog('WEEKLY-MINIMAL-RESULT-PENDING-AFFECTED-REFRESH', {
@@ -206029,47 +206057,78 @@ async function handleBulkProcessProcess(state) {
     return { ok: true, result: processResult, row_patch: processResult?.row_patch || patchedRow, data_row: processResult?.data_row || patchedRow };
   } catch (err) {
     let rawProcessErrorText = String(err?.message || err || 'Failed to process Bulk Process row.');
+    const initialRawProcessErrorText = rawProcessErrorText;
+    let processErrorRollbackFailed = false;
+    let processErrorQueueRefreshFailed = false;
     releaseProcessMutationToken('process-error');
     if (processAutoAttachedQueueEvidenceForRollback && processAutoAttachedQueueEvidenceForRollback.restored !== true) {
-      let rollbackFailedText = '';
-      try {
-        const rb = await returnTimesheetEvidenceToQueue(processAutoAttachedQueueEvidenceForRollback.timesheet_id, processAutoAttachedQueueEvidenceForRollback.evidence_id, {
-          expected_timesheet_id: processAutoAttachedQueueEvidenceForRollback.expected_timesheet_id || processAutoAttachedQueueEvidenceForRollback.timesheet_id,
-          expected_storage_key: processAutoAttachedQueueEvidenceForRollback.storage_key || null,
-          storage_key: processAutoAttachedQueueEvidenceForRollback.storage_key || null,
-          queue_id: processAutoAttachedQueueEvidenceForRollback.queue_id || null,
-          source: 'bulk_process_process_failure_rollback'
-        });
-        if (!rb || rb.ok === false || rb.returned_to_queue === false) {
-          throw new Error(trimStr(rb?.error || rb?.message || 'Timesheet image rollback did not confirm that the image was returned to the queue.'));
+      if (processSubmitSucceededForRollback === true) {
+        try {
+          await refreshBulkProcessQueueForProcess(readActive(), 'process-error-after-submit-succeeded-queue-reconcile', processAutoAttachedQueueEvidenceForRollback);
+        } catch (refreshErr) {
+          processErrorQueueRefreshFailed = true;
+          const refreshFailedText = trimStr(refreshErr?.message || refreshErr || 'Image Queue refresh failed after Process submit succeeded.');
+          rawProcessErrorText = `Process submitted successfully, but the Image Queue could not be refreshed: ${refreshFailedText}. Original post-submit error: ${rawProcessErrorText}`;
         }
-        processAutoAttachedQueueEvidenceForRollback.restored = true;
-      } catch (rollbackErr) {
-        rollbackFailedText = trimStr(rollbackErr?.message || rollbackErr || 'Timesheet image rollback failed.');
-        rawProcessErrorText = `Process failed and the Timesheet image could not be fully restored to the queue: ${rollbackFailedText}. Original Process error: ${rawProcessErrorText}`;
-      }
-      try {
-        await refreshBulkProcessQueueForProcess(readActive(), rollbackFailedText ? 'process-error-queue-auto-attach-rollback-failed' : 'process-error-queue-auto-attach-rollback', processAutoAttachedQueueEvidenceForRollback);
-      } catch (refreshErr) {
-        const refreshFailedText = trimStr(refreshErr?.message || refreshErr || 'Image Queue refresh failed after rollback.');
-        rawProcessErrorText = `Process failed and the Image Queue could not be refreshed after the Timesheet image rollback: ${refreshFailedText}. Original Process error: ${rawProcessErrorText}`;
-      }
-      try {
-        if (typeof requestNarrowProcessEvidenceHydration === 'function') {
-          await requestNarrowProcessEvidenceHydration(readActive(), 'after-process-queue-auto-attach-rollback');
+        try {
+          if (typeof requestNarrowProcessEvidenceHydration === 'function') {
+            await requestNarrowProcessEvidenceHydration(readActive(), 'after-process-submit-succeeded-queue-auto-attach-reconcile');
+          }
+        } catch {}
+      } else {
+        let rollbackFailedText = '';
+        try {
+          const rb = await returnTimesheetEvidenceToQueue(processAutoAttachedQueueEvidenceForRollback.timesheet_id, processAutoAttachedQueueEvidenceForRollback.evidence_id, {
+            expected_timesheet_id: processAutoAttachedQueueEvidenceForRollback.expected_timesheet_id || processAutoAttachedQueueEvidenceForRollback.timesheet_id,
+            expected_storage_key: processAutoAttachedQueueEvidenceForRollback.storage_key || null,
+            storage_key: processAutoAttachedQueueEvidenceForRollback.storage_key || null,
+            queue_id: processAutoAttachedQueueEvidenceForRollback.queue_id || null,
+            source: 'bulk_process_process_failure_rollback'
+          });
+          if (!rb || rb.ok === false || rb.returned_to_queue === false) {
+            throw new Error(trimStr(rb?.error || rb?.message || 'Timesheet image rollback did not confirm that the image was returned to the queue.'));
+          }
+          processAutoAttachedQueueEvidenceForRollback.restored = true;
+        } catch (rollbackErr) {
+          processErrorRollbackFailed = true;
+          rollbackFailedText = trimStr(rollbackErr?.message || rollbackErr || 'Timesheet image rollback failed.');
+          rawProcessErrorText = `Process failed and the Timesheet image could not be fully restored to the queue: ${rollbackFailedText}. Original Process error: ${rawProcessErrorText}`;
         }
-      } catch {}
+        try {
+          await refreshBulkProcessQueueForProcess(readActive(), rollbackFailedText ? 'process-error-queue-auto-attach-rollback-failed' : 'process-error-queue-auto-attach-rollback', processAutoAttachedQueueEvidenceForRollback);
+        } catch (refreshErr) {
+          processErrorQueueRefreshFailed = true;
+          const refreshFailedText = trimStr(refreshErr?.message || refreshErr || 'Image Queue refresh failed after rollback.');
+          rawProcessErrorText = `Process failed and the Image Queue could not be refreshed after the Timesheet image rollback: ${refreshFailedText}. Original Process error: ${rawProcessErrorText}`;
+        }
+        try {
+          if (typeof requestNarrowProcessEvidenceHydration === 'function') {
+            await requestNarrowProcessEvidenceHydration(readActive(), 'after-process-queue-auto-attach-rollback');
+          }
+        } catch {}
+      }
     } else if (processBackendQueueEvidenceForRefresh) {
       try {
         await refreshBulkProcessQueueForProcess(readActive(), 'process-error-backend-queue-materialisation-reconcile', processBackendQueueEvidenceForRefresh);
       } catch (refreshErr) {
+        processErrorQueueRefreshFailed = true;
         const refreshFailedText = trimStr(refreshErr?.message || refreshErr || 'Image Queue refresh failed after backend queue materialisation error.');
         rawProcessErrorText = `Process failed and the Image Queue could not be refreshed after backend queue materialisation: ${refreshFailedText}. Original Process error: ${rawProcessErrorText}`;
       }
     }
-    stateAudit('catch:entry', { raw_error_text: rawProcessErrorText, error_stack: String(err?.stack || '').slice(0, 2000), submitted_signature: trimStr(st.__bulk_process_last_submitted_process_signature || '') || null });
+    stateAudit('catch:entry', { raw_error_text: rawProcessErrorText, initial_raw_error_text: initialRawProcessErrorText, error_stack: String(err?.stack || '').slice(0, 2000), submitted_signature: trimStr(st.__bulk_process_last_submitted_process_signature || '') || null });
     const backendMissingEvidenceKinds = extractProcessBackendMissingEvidenceKinds(err);
-    const previewQueueImageMissing = !!(err?.__bulk_process_preview_image_missing === true || rawProcessErrorText.includes(BULK_PROCESS_MISSING_PREVIEW_QUEUE_IMAGE_MESSAGE));
+    const queueImageFailureMappingContext = processSelectedQueueEvidenceForFailureMapping || processBackendQueueEvidenceForRefresh || ((!processSubmitSucceededForRollback && processAutoAttachedQueueEvidenceForRollback) ? processAutoAttachedQueueEvidenceForRollback : null);
+    const queueImageFailureInitialText = trimStr(initialRawProcessErrorText || rawProcessErrorText || '');
+    const queueImageFailureLooksLikeStaleOrMissing = !!(
+      queueImageFailureMappingContext &&
+      !processErrorRollbackFailed &&
+      !processErrorQueueRefreshFailed &&
+      !/EVIDENCE_REQUIRED/i.test(queueImageFailureInitialText) &&
+      /(?:no longer|not found|missing|gone|consumed|deleted|already attached|already moved|unavailable|not available|not queued|not in queue|stale|claim failed|could not claim|claim was refused|claimed by another|reservation failed|reserved by another|lease expired|taken|moved)/i.test(queueImageFailureInitialText) &&
+      /(?:queue|image|timesheet image|manual timesheet queue|storage|file)/i.test(queueImageFailureInitialText)
+    );
+    const previewQueueImageMissing = !!(err?.__bulk_process_preview_image_missing === true || rawProcessErrorText.includes(BULK_PROCESS_MISSING_PREVIEW_QUEUE_IMAGE_MESSAGE) || queueImageFailureLooksLikeStaleOrMissing);
     const processEvidenceRequired = !previewQueueImageMissing && (isProcessEvidenceRequiredError(err) || /EVIDENCE_REQUIRED/i.test(rawProcessErrorText));
     const resolvedMissingEvidenceKinds = (() => {
       if (backendMissingEvidenceKinds.length) return backendMissingEvidenceKinds;
@@ -206104,7 +206163,7 @@ async function handleBulkProcessProcess(state) {
     st.__suppress_dirty_marking = false;
     try { reconcileProcessEvidenceTruth(readActive(), { reason: 'process-error-preserve-evidence' }); } catch {}
     if (previewQueueImageMissing) {
-      try { await refreshBulkProcessQueueForProcess(readActive(), 'process-error-preview-queue-image-missing', err?.details || null); } catch {}
+      try { await refreshBulkProcessQueueForProcess(readActive(), 'process-error-preview-queue-image-missing', err?.details || processSelectedQueueEvidenceForFailureMapping || processBackendQueueEvidenceForRefresh || null); } catch {}
     }
     st.error_text = previewQueueImageMissing ? BULK_PROCESS_MISSING_PREVIEW_QUEUE_IMAGE_MESSAGE : (friendlyEvidenceRequiredMessage || rawProcessErrorText);
     if (processEvidenceRequired) {
