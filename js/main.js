@@ -182259,7 +182259,6 @@ function ensureBulkAuthoriseManualDraftState(state) {
   return controller;
 }
 
-
 function bindBulkProcessEvidencePane(state) {
   const st = (state && typeof state === 'object')
     ? state
@@ -182703,7 +182702,18 @@ function bindBulkProcessEvidencePane(state) {
     pane.__queue_manual_override = true;
     pane.__queue_manual_override_identity = '';
     pane.__queue_manual_override_scope = getQueueScopeForEvidencePaneAnchor();
-    if (opts.markRequested !== false) pane.__preview_load_requested_target_key = selectionKey;
+    if (opts.markRequested !== false) {
+      const previousPreviewTargetKey = trimStr(pane.__preview_target_key || '');
+      pane.__preview_load_requested_target_key = selectionKey;
+      if (activeTab === 'queue' || opts.markTarget === true || opts.mark_target === true) {
+        pane.__preview_target_key = selectionKey;
+        if (previousPreviewTargetKey && previousPreviewTargetKey !== selectionKey) {
+          pane.__preview_signed_url = '';
+          pane.__preview_signed_url_stored_at_ms = 0;
+          pane.__preview_signed_url_expires_at_ms = 0;
+        }
+      }
+    }
     rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item, {
       selectionKey,
       index: resolved.index,
@@ -183266,9 +183276,11 @@ function bindBulkProcessEvidencePane(state) {
     return false;
   };
 
-  const rerenderWorkbench = async (reason = 'evidence-pane') => {
+  const rerenderWorkbench = async (reason = 'evidence-pane', renderOptions = {}) => {
+    const opts = (renderOptions && typeof renderOptions === 'object') ? renderOptions : {};
+    const forceRender = opts.force === true || opts.forceRender === true || opts.force_render === true;
     if (typeof st.__rerenderWorkbench === 'function') {
-      await st.__rerenderWorkbench({ reason: trimStr(reason || 'evidence-pane') || 'evidence-pane', force: false });
+      await st.__rerenderWorkbench({ reason: trimStr(reason || 'evidence-pane') || 'evidence-pane', force: forceRender });
       return;
     }
     await rerenderBulkProcessWorkbench(st, '[TS][BULK-PROCESS][EVIDENCE]');
@@ -184945,6 +184957,37 @@ function bindBulkProcessEvidencePane(state) {
   };
 
   const getLiveEvidencePaneRoot = () => document.getElementById('bulkProcessEvidencePaneRoot');
+  const getEvidenceSourceDomActiveTab = () => {
+    const liveRoot = getLiveEvidencePaneRoot();
+    if (!liveRoot) return '';
+    const readActive = (selector) => {
+      const btn = liveRoot.querySelector(selector);
+      if (!btn) return false;
+      const ariaSelected = trimStr(btn.getAttribute('aria-selected') || '').toLowerCase();
+      const ariaPressed = trimStr(btn.getAttribute('aria-pressed') || '').toLowerCase();
+      const dataActive = trimStr(btn.getAttribute('data-active') || '').toLowerCase();
+      const dataState = trimStr(btn.getAttribute('data-state') || '').toLowerCase();
+      const className = ` ${trimStr(btn.className || '')} `;
+      return !!(
+        ariaSelected === 'true' ||
+        ariaPressed === 'true' ||
+        dataActive === 'true' ||
+        dataState === 'active' ||
+        /\s(active|is-active|selected)\s/.test(className)
+      );
+    };
+    const queueActive = readActive('#bulkProcessEvidenceTabQueue');
+    const attachedActive = readActive('#bulkProcessEvidenceTabAttached');
+    if (queueActive && !attachedActive) return 'queue';
+    if (attachedActive && !queueActive) return 'attached';
+    if (queueActive && attachedActive) return 'both';
+    return '';
+  };
+  const isEvidenceSourceDomAlignedWithPane = () => {
+    const paneTab = trimStr(pane.active_tab || 'queue').toLowerCase() === 'attached' ? 'attached' : 'queue';
+    const domTab = getEvidenceSourceDomActiveTab();
+    return !!domTab && domTab === paneTab;
+  };
   const bindEvidenceSourceTabControls = (reason = '') => {
     const liveRoot = getLiveEvidencePaneRoot();
     if (!liveRoot) return;
@@ -184954,26 +184997,30 @@ function bindBulkProcessEvidencePane(state) {
     if (queueTabBtn && queueTabBtn.dataset.bound !== '1') {
       queueTabBtn.dataset.bound = '1';
       queueTabBtn.addEventListener('click', async () => {
-        const beforeSignature = capturePaneSignature();
-        const activeIdentity = getActiveIdentity();
-        pane.active_tab = 'queue';
-        pane.__attached_manual_override = false;
-        pane.__queue_manual_override = true;
-        pane.__queue_manual_override_identity = '';
-        pane.__queue_manual_override_scope = getQueueScope();
-        restoreLastViewedQueueItemForEvidencePane({ reason: 'queue-tab-before-load', markRequested: true });
+        const applyExplicitQueueTabState = () => {
+          pane.active_tab = 'queue';
+          pane.__attached_manual_override = false;
+          pane.__queue_manual_override = true;
+          pane.__queue_manual_override_identity = '';
+          pane.__queue_manual_override_scope = getQueueScope();
+          pane.__active_attached_preview_target = '';
+          pane.__preview_signed_url = '';
+          pane.__preview_signed_url_stored_at_ms = 0;
+          pane.__preview_signed_url_expires_at_ms = 0;
+        };
+        applyExplicitQueueTabState();
+        restoreLastViewedQueueItemForEvidencePane({ reason: 'queue-tab-before-load', markRequested: true, markTarget: true });
         try {
           await ensureQueueLoadedForActiveTab();
-          restoreLastViewedQueueItemForEvidencePane({ reason: 'queue-tab-after-load', markRequested: true });
+          applyExplicitQueueTabState();
+          restoreLastViewedQueueItemForEvidencePane({ reason: 'queue-tab-after-load', markRequested: true, markTarget: true });
           reconcileEvidenceState();
-          restoreLastViewedQueueItemForEvidencePane({ reason: 'queue-tab-after-reconcile', markRequested: true });
-          const afterSignature = capturePaneSignature();
-          if (beforeSignature !== afterSignature) {
-            await rerenderWorkbench(`evidence-queue-tab${reason ? `-${reason}` : ''}`);
-          }
+          applyExplicitQueueTabState();
+          restoreLastViewedQueueItemForEvidencePane({ reason: 'queue-tab-after-reconcile', markRequested: true, markTarget: true });
+          await rerenderWorkbench(`evidence-queue-tab${reason ? `-${reason}` : ''}`, { force: true });
         } catch (e) {
           st.error_text = String(e?.message || e || 'Failed to load queue images.');
-          await rerenderWorkbench(`evidence-queue-tab-error${reason ? `-${reason}` : ''}`);
+          await rerenderWorkbench(`evidence-queue-tab-error${reason ? `-${reason}` : ''}`, { force: true });
         }
       });
     }
@@ -184982,7 +185029,6 @@ function bindBulkProcessEvidencePane(state) {
     if (attachedTabBtn && attachedTabBtn.dataset.bound !== '1') {
       attachedTabBtn.dataset.bound = '1';
       attachedTabBtn.addEventListener('click', async () => {
-        const beforeSignature = capturePaneSignature();
         pane.__attached_manual_override = true;
         rememberLastViewedQueueItemForEvidencePane(pane.active_queue_item || null, { reason: 'attached-tab-before-switch' });
         pane.__queue_manual_override = false;
@@ -185025,10 +185071,7 @@ function bindBulkProcessEvidencePane(state) {
           ? rowsAfterRefresh.find((item) => buildAttachedPreviewSelectionKey(item) === wantedAttachedKey) || null
           : null;
         selectAttachedEvidenceItem(selectedAfterRefresh || rowsAfterRefresh[0] || null, { forceAttached: true, clearQueue: true });
-        const afterSignature = capturePaneSignature();
-        if (beforeSignature !== afterSignature) {
-          await rerenderWorkbench(`evidence-attached-tab${reason ? `-${reason}` : ''}`);
-        }
+        await rerenderWorkbench(`evidence-attached-tab${reason ? `-${reason}` : ''}`, { force: true });
       });
     }
   };
@@ -185314,6 +185357,11 @@ function bindBulkProcessEvidencePane(state) {
 
     if (signatureBefore !== signatureAfter && !harmlessBulkAuthorisePaneChange) {
       await rerenderWorkbench('evidence-init-state-changed');
+      if (!isActiveBind()) return;
+    }
+
+    if (!isEvidenceSourceDomAlignedWithPane()) {
+      await rerenderWorkbench('evidence-init-dom-resync', { force: true });
       if (!isActiveBind()) return;
     }
 
@@ -186133,8 +186181,6 @@ function bindBulkProcessEvidencePane(state) {
     console.warn('[TS][BULK-PROCESS][EVIDENCE] bind failed', e);
   });
 }
-
-
 
 function normaliseBankingPayOperationProgress(operationPayload = {}) {
   const trimStr = (value) => String(value == null ? '' : value).trim();
@@ -253958,7 +254004,6 @@ async function handleInvoiceRenderPdf(modalCtx) {
   if (!invoiceId) { alert('Invoice id missing'); return; }
 
   const safeJson = async (res) => { try { return await res.clone().json(); } catch { return null; } };
-  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   const extractPdfKeyFromRenderResponse = (j) => {
     const k1 = (j && typeof j.pdf_key === 'string') ? j.pdf_key.trim() : '';
@@ -253988,34 +254033,19 @@ async function handleInvoiceRenderPdf(modalCtx) {
       (j && typeof j.expected_pdf_key === 'string')
         ? String(j.expected_pdf_key).trim().replace(/^\/+/, '')
         : '';
+    const renderError =
+      (j && typeof j.render_error === 'string')
+        ? String(j.render_error).trim()
+        : '';
 
     return {
       ready,
       queued,
       pdfKey,
       expectedPdfKey,
+      renderError,
       raw: j || {}
     };
-  };
-
-  const waitForInvoiceRenderReady = async (opts = {}) => {
-    const timeoutMs = Math.max(10000, Number(opts.timeoutMs || 120000));
-    const intervalMs = Math.max(1000, Number(opts.intervalMs || 2500));
-    const startedAt = Date.now();
-
-    await sleep(Math.min(1500, intervalMs));
-
-    while ((Date.now() - startedAt) <= timeoutMs) {
-      const state = await requestInvoiceRenderState();
-
-      if (state.ready && state.pdfKey) {
-        return state.pdfKey;
-      }
-
-      await sleep(intervalMs);
-    }
-
-    return '';
   };
 
   const presignDownload = async (key) => {
@@ -254050,10 +254080,9 @@ async function handleInvoiceRenderPdf(modalCtx) {
     };
   };
 
-  // ✅ Correct queued-render flow:
-  //   1) Ask backend to render or queue the invoice PDF.
-  //   2) If queued, poll the render endpoint until it reports ready:true with pdf_key.
-  //   3) Only then call presign-download once, so the user never sees a normal queued-render 404.
+  // Open/preview makes exactly one render request. The backend should return
+  // ready:true for cached PDFs and for newly generated draft PDFs. If it falls
+  // back to queue, do not keep POSTing /render; tell the user it is in progress.
   let pdfKey = null;
   let signedUrl = null;
 
@@ -254063,23 +254092,20 @@ async function handleInvoiceRenderPdf(modalCtx) {
     if (firstState.ready && firstState.pdfKey) {
       pdfKey = firstState.pdfKey;
     } else if (firstState.queued) {
-      const waitedKey = await waitForInvoiceRenderReady({
-        timeoutMs: 120000,
-        intervalMs: 2500
-      });
-
-      if (!waitedKey) {
-        alert('Invoice PDF generation is still in progress. Please try again shortly.');
-        return;
-      }
-
-      pdfKey = waitedKey;
+      const msg = firstState.renderError
+        ? `Invoice PDF generation has been queued after immediate generation failed: ${firstState.renderError}. Please try again shortly.`
+        : 'Invoice PDF generation has been queued and is not ready yet. Please try again shortly.';
+      alert(msg);
+      return;
     } else {
       const fallbackKey = extractPdfKeyFromRenderResponse(firstState.raw);
       if (fallbackKey) {
         pdfKey = fallbackKey;
       } else {
-        alert('Invoice PDF generation has started but is not ready yet. Please try again shortly.');
+        const msg = firstState.renderError
+          ? `Invoice PDF generation failed: ${firstState.renderError}`
+          : 'Invoice PDF generation has started but is not ready yet. Please try again shortly.';
+        alert(msg);
         return;
       }
     }
@@ -254151,6 +254177,7 @@ async function handleInvoiceRenderPdf(modalCtx) {
     }
   );
 }
+
 
 
 async function handleInvoiceEmail(modalCtx) {
