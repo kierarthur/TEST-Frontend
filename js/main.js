@@ -200152,6 +200152,8 @@ async function handleBulkProcessSave(state) {
   }
 }
 
+
+
 async function handleBulkProcessProcess(state) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][BULK-PROCESS][PROCESS]');
   GC('handleBulkProcessProcess');
@@ -201981,7 +201983,6 @@ async function handleBulkProcessProcess(state) {
       st.error_text = message;
       st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
       st.__bulk_process_last_process_missing_expense_evidence_kinds = missingExpenseKinds;
-      await showBulkProcessProcessBlockedModal(message);
       return false;
     }
 
@@ -205638,6 +205639,8 @@ async function handleBulkProcessProcess(state) {
       if (rollbackBeforeReturn.ok !== true) {
         st.error_text = rollbackBeforeReturn.message || originalBlockMessage;
         await showBulkProcessProcessBlockedModal(st.error_text, rollbackBeforeReturn.rollbackFailed ? 'Timesheet image rollback failed' : 'Image Queue refresh failed');
+      } else if (st.__bulk_process_last_process_block_reason === 'EXPENSE_EVIDENCE_REQUIRED') {
+        await showBulkProcessProcessBlockedModal(originalBlockMessage);
       }
       await rerenderBulkProcessWorkbenchAfterProcessBlock('process-cancelled-after-blocked-modal');
       stateAudit('return:block:evidence-confirm-false', {
@@ -205686,11 +205689,12 @@ async function handleBulkProcessProcess(state) {
       st.error_text = message;
       st.__bulk_process_last_process_block_reason = 'EXPENSE_EVIDENCE_REQUIRED';
       st.__bulk_process_last_process_missing_expense_evidence_kinds = missingEvidenceKindsBeforeSubmit;
-      await showBulkProcessProcessBlockedModal(message);
       const rollbackBeforeReturn = await rollbackProcessAutoAttachedQueueEvidenceForBlockingReturn('process-blocked-missing-exact-evidence-kind', message);
       if (rollbackBeforeReturn.ok !== true) {
         st.error_text = rollbackBeforeReturn.message || message;
         await showBulkProcessProcessBlockedModal(st.error_text, rollbackBeforeReturn.rollbackFailed ? 'Timesheet image rollback failed' : 'Image Queue refresh failed');
+      } else {
+        await showBulkProcessProcessBlockedModal(message);
       }
       await rerenderBulkProcessWorkbenchAfterProcessBlock('process-blocked-missing-exact-evidence-kind');
       stateAudit('return:block:missing-exact-evidence-kind', {
@@ -205705,11 +205709,12 @@ async function handleBulkProcessProcess(state) {
       const message = 'Evidence is expected for this row but the evidence rows have not loaded yet. Please refresh the evidence pane and try again.';
       st.error_text = message;
       st.__bulk_process_last_process_block_reason = 'EVIDENCE_EXPECTED_NOT_LOADED';
-      await showBulkProcessProcessBlockedModal(message);
       const rollbackBeforeReturn = await rollbackProcessAutoAttachedQueueEvidenceForBlockingReturn('process-blocked-evidence-expected-not-loaded', message);
       if (rollbackBeforeReturn.ok !== true) {
         st.error_text = rollbackBeforeReturn.message || message;
         await showBulkProcessProcessBlockedModal(st.error_text, rollbackBeforeReturn.rollbackFailed ? 'Timesheet image rollback failed' : 'Image Queue refresh failed');
+      } else {
+        await showBulkProcessProcessBlockedModal(message);
       }
       await rerenderBulkProcessWorkbenchAfterProcessBlock('process-blocked-evidence-expected-not-loaded');
       stateAudit('return:block:evidence-expected-not-loaded', {
@@ -206274,6 +206279,8 @@ async function handleBulkProcessProcess(state) {
     };
   }
 }
+
+
 
 
 
