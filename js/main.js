@@ -179725,7 +179725,20 @@ function renderBulkProcessEvidencePane(state) {
     ''
   ).toLowerCase();
   const activeRowEvidenceRows = Array.isArray(activeRow?.evidence) ? activeRow.evidence : [];
+  const activeContextEvidenceRowsForRender = [
+    activeCtx?.state?.evidence,
+    activeCtx?.evidence,
+    activeContext?.evidence,
+    activeContext?.details?.evidence,
+    activeDetails?.evidence
+  ].some((rows) => Array.isArray(rows) && rows.some((item) => {
+    if (!item || typeof item !== 'object') return false;
+    const evidenceId = trimStr(item.evidence_id || item.evidenceId || item.timesheet_evidence_id || item.timesheetEvidenceId || item.id || '');
+    if (!evidenceId || /^synthetic-attached:/i.test(evidenceId)) return false;
+    return !!getRenderEvidenceFileKey(item);
+  }));
   const evidenceLayerAuthoritative = !!(
+    activeContextEvidenceRowsForRender ||
     activeRowEvidenceRows.length > 0 ||
     activeRow.evidence_loaded === true ||
     activeRow.evidence_authoritative === true ||
